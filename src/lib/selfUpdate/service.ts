@@ -142,10 +142,11 @@ export interface ServiceDeps {
   prune?(record: LauncherRecord, rollbackPointer: string | null): Promise<void>;
 }
 
-/** A refusal carries a code the client words; `error` is the same in
-    English for API readers and logs, and `detail` is machine output (the
-    runtime host's own refusal). */
-export type ActionResult = { ok: true; replaySnapshot?: Snapshot } | { ok: false; status: number; code: RefusalCode | "auto-persistence-failed" | "auto-switch-superseded"; error: string; detail?: string };
+/** The client localizes the refusal code and can show the underlying CI verdict.
+    The English error and machine detail are also available to API readers. */
+export type ActionResult =
+  | { ok: true; replaySnapshot?: Snapshot; optionalCheckFailures?: string[] }
+  | { ok: false; status: number; code: RefusalCode | "auto-persistence-failed" | "auto-switch-superseded"; error: string; detail?: string; green?: GreenVerdict };
 type DeploymentResult = ActionResult & { deliveryUncertain?: boolean };
 
 export function refuse(status: number, code: RefusalCode | "auto-persistence-failed" | "auto-switch-superseded", error: string, detail?: string): ActionResult {
@@ -154,6 +155,10 @@ export function refuse(status: number, code: RefusalCode | "auto-persistence-fai
 
 function busy(state: Exclude<Busy, null>): ActionResult {
   return refuse(409, `busy-${state}`, `Busy: ${state}`);
+}
+
+function revisionRefusal(green: GreenVerdict): ActionResult {
+  return { ok: false, status: 409, code: "deployment-refused", error: "The selected revision is not green", detail: green.state, green };
 }
 
 function restoreFile(file: string, bytes: Buffer | null): void {
@@ -1567,11 +1572,12 @@ export class SelfUpdateService {
     if ((!rebuild && this.slice.check.state !== "update-available") || !available) return refuse(409, "no-update", "No update is available; run a check first");
     if (!/^[a-f0-9]{40}$/.test(available.sha)) return refuse(409, "cannot-update", "The published package names no revision; update it with the package manager it came from");
     if ((decision.mode === "checkout" || decision.mode === "package") && decision.record) {
-      const refusal = await this.operatorRevisionAdmission(decision.record, available.sha);
-      if (refusal) return refusal;
+      const admission = await this.operatorRevisionAdmission(decision.record, available.sha);
+      if (!admission.ok) return admission;
       const fresh = await this.snapshot();
       if (fresh.busy) return busy(fresh.busy);
-      return this.startCheckout(decision.record, available);
+      const started = this.startCheckout(decision.record, available);
+      return started.ok ? admission : started;
     }
     if (decision.mode === "managed") return this.deploy(available, clientKey);
     return refuse(409, "cannot-update", "This install cannot update itself");
@@ -1585,15 +1591,15 @@ export class SelfUpdateService {
       const snapshot = await this.snapshot();
       if (snapshot.busy) return busy(snapshot.busy);
       if (runner.state.state !== "failed" && this.apply.current?.state !== "failed") return refuse(409, "not-failed", "Only a failed update can be retried");
-      const refusal = await this.operatorRevisionAdmission(decision.record, runner.state.target!);
-      if (refusal) return refusal;
+      const admission = await this.operatorRevisionAdmission(decision.record, runner.state.target!);
+      if (!admission.ok) return admission;
       const fresh = await this.snapshot();
       if (fresh.busy) return busy(fresh.busy);
       const occupied = this.reserve(decision.record, () => this.apply.begin(decision.record!, runner.state.target!, "operator"));
       if (occupied) return occupied;
       const attempt = runner.state.state === "failed" ? runner.retry() : runner.start(runner.state.target!, { short: runner.state.targetShort ?? undefined, version: runner.state.targetVersion ?? undefined, trigger: "operator" });
       void attempt.then(() => this.applyBuilt()).catch(error => this.failApply(error)).finally(() => this.afterUpdate());
-      return { ok: true };
+      return admission;
     }
     if (decision.mode === "managed") {
       await this.refreshManaged(true);
@@ -1622,21 +1628,20 @@ export class SelfUpdateService {
     return refuse(409, "cannot-update", "This install cannot update itself");
   }
 
-  private async operatorRevisionAdmission(record: LauncherRecord, target: string): Promise<ActionResult | null> {
-    if (!githubRepositoryOfRemote(this.deps.remote)) return record.checkout ? null
-      : refuse(409, "deployment-refused", "The selected revision is not green", "unknown");
-    const green = await this.installRevisionGreen(record, target);
-    return green.state === "green" ? null : refuse(409, "deployment-refused", "The selected revision is not green", green.state);
+  private async operatorRevisionAdmission(record: LauncherRecord, target: string): Promise<ActionResult> {
+    if (!githubRepositoryOfRemote(this.deps.remote)) return record.checkout ? { ok: true } : revisionRefusal({ state: "unknown" });
+    const green = await this.installRevisionGreen(record, target, "manual-update");
+    if (green.state !== "green") return revisionRefusal(green);
+    return { ok: true, ...(green.optionalCheckFailures?.length ? { optionalCheckFailures: green.optionalCheckFailures } : {}) };
   }
 
-  private async installRevisionGreen(record: LauncherRecord, target: string, fresh = false): Promise<GreenVerdict> {
+  private async installRevisionGreen(record: LauncherRecord, target: string, policy: "manual-update" | "exact-deploy"): Promise<GreenVerdict> {
     const repo = record.checkout ?? await this.deps.prepareCheckRepo();
     if (!record.checkout) {
       try { await ensureCommit(repo, this.deps.remote, this.deps.branch, target); }
       catch (error) { return { state: "unknown", detail: error instanceof Error ? error.message : String(error) }; }
     }
-    return fresh ? this.greenReader.read(this.deps.remote, this.deps.branch, target, repo, undefined, true, "exact-deploy")
-      : this.greenReader.read(this.deps.remote, this.deps.branch, target, repo);
+    return this.greenReader.read(this.deps.remote, this.deps.branch, target, repo, undefined, true, policy);
   }
 
   private startCheckout(record: LauncherRecord, target: Revision, trigger: "operator" | "seat" = "operator", deploymentId?: string): ActionResult {
@@ -1737,14 +1742,15 @@ export class SelfUpdateService {
     const action = await this.actionFor(decision);
     if (!action || !action.button || action.id === "update-first") return refuse(409, "cannot-restart", "The install action must be performed from its terminal");
     const record = decision.record;
+    let admission: ActionResult = { ok: true };
     if (record && action.id === "restart-service") {
       let intent = this.apply.current;
       if (!intent || ["done", "failed"].includes(intent.state)) {
         const release = await new ReleasePointer(record.releasePointer, record.checkout ?? packageRoot(record)).current();
         if (!/^[a-f0-9]{40}$/.test(release.sha)) return refuse(409, "cannot-restart", "Build the launcher upgrade first");
         if (githubRepositoryOfRemote(this.deps.remote)) {
-          const green = await this.installRevisionGreen(record, release.sha);
-          if (green.state !== "green") return refuse(409, "deployment-refused", "The selected revision is not green", green.state);
+          admission = await this.operatorRevisionAdmission(record, release.sha);
+          if (!admission.ok) return admission;
         }
         if (this.active() || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state)) return busy("update");
         // Old code may have published the candidate and switched only web.
@@ -1873,7 +1879,7 @@ export class SelfUpdateService {
       }
       return refuse(503, "cannot-restart", "The user service manager did not accept the action");
     }
-    return { ok: true };
+    return admission;
   }
 
   /** This observes custody, never a completed apply's display identity. */
@@ -2010,7 +2016,7 @@ export class SelfUpdateService {
         revision = await registryRevision();
         if (revision.sha !== target) throw new Error("The requested revision has no published package; deploy its published revision");
       }
-      const observedGreen = await this.installRevisionGreen(record, target, true);
+      const observedGreen = await this.installRevisionGreen(record, target, "exact-deploy");
       // Running CI remains pending after the automatic check-wait budget expires.
       const green: GreenVerdict = observedGreen.state === "checks-timeout" ? { ...observedGreen, state: "pending" } : observedGreen;
       if (green.state !== "green") return checkoutAdmission(this.deps.dir, request, authorize, () => ({ state: "refused" as const, revision: target, code: "deploy_not_green" as const,
