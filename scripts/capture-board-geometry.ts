@@ -8805,20 +8805,24 @@ async function checkBoardFirstScreen(browser: Browser, url: string, reportPath: 
   const desktopBoard = "[data-kanban-board] [data-kanban-card] .title";
   const phoneBoard = "[data-phone-kanban] [data-phone-card-title]";
   const preview = "[data-board-first-card]";
-  const hasRecord = ({ layout, scope }: { layout?: "desktop" | "phone"; scope?: string } = {}) => new Promise<boolean>((resolve, reject) => {
-    const open = indexedDB.open("delegatus-boot", 1);
-    open.onerror = () => reject(open.error);
-    open.onsuccess = () => {
-      const db = open.result;
-      const tx = db.transaction("snapshot");
-      const read = tx.objectStore("snapshot").get("project-first-screens");
-      read.onsuccess = () => resolve(Array.isArray(read.result) && read.result.some(row =>
-        (!scope || row?.scope === scope) && (!layout || (row?.seat?.name
-          && row[layout]?.columns?.some((column: { titles: string[] }) => column.titles.length > 0)))));
-      read.onerror = () => reject(read.error);
-      tx.oncomplete = () => db.close();
-    };
-  });
+  /* Runs in the page: the filter is optional, as `evaluate` passes none. */
+  const hasRecord = (filter?: { layout?: string; scope?: string } | void) => {
+    const { layout, scope } = (filter ?? {}) as { layout?: string; scope?: string };
+    return new Promise<boolean>((resolve, reject) => {
+      const open = indexedDB.open("delegatus-boot", 1);
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const db = open.result;
+        const tx = db.transaction("snapshot");
+        const read = tx.objectStore("snapshot").get("project-first-screens");
+        read.onsuccess = () => resolve(Array.isArray(read.result) && read.result.some(row =>
+          (!scope || row?.scope === scope) && (!layout || (row?.seat?.name
+            && row[layout]?.columns?.some((column: { titles: string[] }) => column.titles.length > 0)))));
+        read.onerror = () => reject(read.error);
+        tx.oncomplete = () => db.close();
+      };
+    });
+  };
   const note = (label: string) => {
     checks.push(label);
     fs.writeFileSync(reportPath, JSON.stringify(checks, null, 2) + "\n");
