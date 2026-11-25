@@ -45,11 +45,37 @@ resumes above the retained history floor.
 Ownership revisions and root bindings are checked again after awaited reads.
 Schema and index creation uses `assertStateStartupMutation`.
 
-The ordinary tick selects up to 32 due roots by recorded expiry. The disk
-watch sends pressure-triggered retirement through the leased Cleaner pass.
-Pressure inventory uses measured filesystem allocation to prioritize roots;
-the bounded pass measures each visited root and advances its durable cursor
-across protected or deferred roots.
+The ordinary tick selects up to 32 due roots in expiry and directory order.
+It checkpoints each visit before awaiting the root so successive ticks reach
+the rest of the backlog, even when earlier roots are ready to retry. A root
+that would get a partial window after another visit starts on the next tick.
+The cursor wraps after the due range ends.
+An independent allocation queue visits up to four registered roots per tick
+within a five-second preparation window inside the 40-second root tick.
+Live roots and roots with zero allocation or measurements at least an hour
+old remain measurable during retirement backoff.
+Absent paths, replaced inodes and refused observations advance that queue.
+An absent path with surviving quarantine custody keeps its recorded allocation
+until recovery resolves it. A removal visit that uses recorded bytes leaves the
+last measurement time available to the allocation queue.
+The disk watch sends pressure-triggered retirement through the leased Cleaner
+pass. That pass visits registered roots in directory order, 16 per page, and
+measures each visited root. A pass outside the Cleaner lease orders its
+inventory by the recorded ledger size, which can be stale; every visit still
+measures the root again. The inventory is built a page at a time across ticks,
+never in one transaction, and a tick whose budget is spent builds none of it.
+A root is admitted only when its canonical parent is the real scratch
+namespace or the real config namespace: a parent redirected through a symlink
+(for example into the backups directory) holds the root under a reason code at
+registration and at every dispatch.
+A process whose working directory lies under `/proc` (a sandboxed browser
+renderer keeps one inside the entry of an exited helper) or no longer exists
+names no checkout and holds no root; its open files, command line and any
+working directory inside the root still count. A discovery recorded earlier
+for a live process stays, so the final dispatch fence still sees a change.
+A removal reports the filesystem space it freed apart from the root's
+attributed ledger bytes, so a stale ledger value neither shrinks nor inflates
+the reclaim figure.
 Temporary preservation holds suppress the allocation forecast while
 retaining the owner's deadline. That date nominates a future visit.
 Identity, live consumers, check custody, keep markers and ownership fence
