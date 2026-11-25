@@ -3,6 +3,7 @@ import { shortId } from "@/lib/shortIds";
    takes, in the operator's language. The component renders what these
    answer; the DOM tests read the same answers through the rendered page. */
 import type { Locale, MessageKey, TFunction } from "@/lib/i18n";
+import type { GreenVerdict } from "@/lib/selfUpdate/green";
 import { REFUSAL_CODES, type CheckState, type ProcessError, type ProcessView, type RefusalCode, type Revision, type Snapshot, type Step, type StepName } from "@/lib/selfUpdate/types";
 
 export type IconKind = "pending" | "running" | "done" | "failed" | "warning";
@@ -166,15 +167,30 @@ export function runningStepNumber(steps: Step[]): number {
     or what the page itself saw (403 from the operator gate, another HTTP
     status, no answer at all). `detail` is machine output. */
 export type ActionError =
-  | { code: RefusalCode; detail?: string }
+  | { code: RefusalCode | "runtime-host-refused" | "deployment-unavailable"; detail?: string }
   | { code: "forbidden" }
   | { code: "http"; status: number }
   | { code: "offline" };
 
+export type ActionResponse = Partial<Snapshot> & {
+  code?: string;
+  detail?: string;
+  snapshot?: Snapshot;
+  green?: GreenVerdict;
+  optionalCheckFailures?: string[];
+};
+
 /** A refusal as the page words it: the server's code when it sent one,
     else what the page saw. The server's English `error` is for API readers. */
-export function actionError(status: number, payload: { code?: string; detail?: string } | null): ActionError {
+export function actionError(status: number, payload: ActionResponse | null): ActionError {
   const code = payload?.code;
+  if (code === "deployment-refused") {
+    const detail = payload?.detail;
+    const green = payload?.green;
+    if (green) return { code, detail: green.checks?.join(", ") || green.detail || green.state };
+    if (status === 503) return { code: "runtime-host-refused", detail };
+    if (!detail) return { code: "deployment-unavailable" };
+  }
   if (code && (REFUSAL_CODES as readonly string[]).includes(code)) {
     return { code: code as RefusalCode, ...(payload?.detail ? { detail: payload.detail } : {}) };
   }
@@ -185,6 +201,7 @@ export function actionError(status: number, payload: { code?: string; detail?: s
 export function refusalText(error: ActionError, t: TFunction): string {
   if (error.code === "http") return t("selfUpdate.refusal.http", { status: error.status });
   const text = t(`selfUpdate.refusal.${error.code}` as MessageKey);
+  if (error.code === "deployment-refused") return error.detail ? `${text} (${error.detail}).` : `${text}.`;
   return "detail" in error && error.detail ? `${text}: ${error.detail}` : text;
 }
 

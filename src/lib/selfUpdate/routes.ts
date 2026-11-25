@@ -29,12 +29,18 @@ const noStore = { "cache-control": "no-store" };
 
 /* A refusal answers `code` (worded by the surface in the operator's
    language), `error` (the same in English, for API readers) and `detail`
-   (machine output), with the snapshot. */
+   (machine output), with the snapshot and any CI verdict. Successful
+   manual updates can also carry the names of failing optional checks. */
 async function answer(result: ActionResult): Promise<NextResponse> {
   const snapshot = result.ok && result.replaySnapshot ? result.replaySnapshot : await selfUpdateService().observe();
-  return result.ok
-    ? NextResponse.json(snapshot, { status: 202, headers: noStore })
-    : NextResponse.json({ error: result.error, code: result.code, ...(result.detail ? { detail: result.detail } : {}), snapshot }, { status: result.status, headers: noStore });
+  if (result.ok) {
+    return NextResponse.json(result.optionalCheckFailures ? { ...snapshot, optionalCheckFailures: result.optionalCheckFailures } : snapshot,
+      { status: 202, headers: noStore });
+  }
+  return NextResponse.json({
+    error: result.error, code: result.code, ...(result.detail ? { detail: result.detail } : {}),
+    ...(result.green ? { green: result.green } : {}), snapshot,
+  }, { status: result.status, headers: noStore });
 }
 
 /* A malformed request is refused before anything is read. */

@@ -107,7 +107,7 @@ test.skipIf(listsAsOwner)("a tree with a subtree this user cannot list is measur
   } finally { if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath; }
 });
 
-test.skipIf(process.platform !== "linux")("a consumer cwd removed after its process exited no longer holds the root; a live one still does", async () => {
+test.skipIf(process.platform !== "linux")("a consumer cwd that no longer exists names no checkout, whether its process lives or has exited", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-consumed"); fs.mkdirSync(directory);
   const exited = Bun.spawnSync(["true"]).pid;
   expect(fs.existsSync(`/proc/${exited}`)).toBeFalse();
@@ -121,7 +121,7 @@ test.skipIf(process.platform !== "linux")("a consumer cwd removed after its proc
   // Read from /proc: the namespace is what proves the process was there.
   const scan = (pid: number, cwd: string): ProcessScan => ({ ownNamespace: null, processes: [{ pid, namespace: "mnt:[fixture]", stamped: false, paths: [cwd] }] });
   expect(await attemptReferencesClear(directory, directory, scan(exited, gone), containers)).toBeTrue();
-  await expect(attemptReferencesClear(directory, directory, scan(process.pid, gone), containers)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await attemptReferencesClear(directory, directory, scan(process.pid, gone), containers)).toBeTrue();
   // A cwd removed between the observation and the dispatch fence.
   for (const [pid, unchanged] of [[exited, true], [process.pid, false]] as const) {
     const later = consumer(`later-${pid}`), inventory = new RepositoryLinkInventory();
@@ -130,9 +130,9 @@ test.skipIf(process.platform !== "linux")("a consumer cwd removed after its proc
     fs.rmSync(path.join(parent, `later-${pid}`), { recursive: true });
     expect(inventory.unchangedAll()).toBe(unchanged);
   }
-  // A process the scan did not read from /proc cannot be proven gone.
+  // Without proof of exit the vanished cwd still names no checkout to read.
   const synthetic: ProcessScan = { ownNamespace: null, processes: [{ pid: exited, namespace: null, stamped: false, paths: [gone] }] };
-  await expect(attemptReferencesClear(directory, directory, synthetic, containers)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await attemptReferencesClear(directory, directory, synthetic, containers)).toBeTrue();
 });
 
 test.skipIf(process.platform !== "linux")("a bound Unix socket keeps its attempt root", async () => {
@@ -187,15 +187,16 @@ test("a settled root retires beside more than 32 unrelated checkouts; a linking 
   expect(await attemptReferencesClear(directory, directory, scan(), async () => true)).toBeFalse();
 });
 
-test("a missing process cwd cannot become a cached no-checkout result", async () => {
+test("a missing process cwd names no checkout and leaves no cached discovery", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-unproven-cwd"); fs.mkdirSync(directory);
   const repository = path.join(parent, "checkout"), cwd = path.join(repository, "work");
   fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(cwd);
   const inventory = new RepositoryLinkInventory();
   const scan = { ownNamespace: null, processes: [{ pid: 41, namespace: null, stamped: false, paths: [cwd] }] };
   fs.rmSync(cwd, { recursive: true });
-  await expect(attemptReferencesClear(directory, directory, scan, async () => true, inventory)).rejects.toThrow();
+  expect(await attemptReferencesClear(directory, directory, scan, async () => true, inventory)).toBeTrue();
   expect(inventory.walks).toHaveLength(0);
+  expect(inventory.unchangedAll()).toBeTrue();
 });
 
 test("an unreadable process cwd cannot become a cached no-checkout result", async () => {
@@ -1205,7 +1206,7 @@ test("an entry made in a checkout directory above a process cwd fells the fence"
   expect(inventory.unchangedAll()).toBeFalse();
 });
 
-test("the vanished cwd of an exited process stops counting; that of a live process still refuses", async () => {
+test("the vanished cwd of any process, exited or live, names no checkout", async () => {
   const parent = root(), first = path.join(parent, "llv-stage-first"), later = path.join(parent, "llv-stage-later");
   fs.mkdirSync(first); fs.mkdirSync(later);
   const gone = path.join(parent, "short-lived"), stays = path.join(parent, "stays"); fs.mkdirSync(gone); fs.mkdirSync(stays);
@@ -1216,6 +1217,6 @@ test("the vanished cwd of an exited process stops counting; that of a live proce
   // The next root's scan no longer lists the process that held the cwd.
   expect(await attemptReferencesClear(later, later, holder(57, stays), async () => true, inventory)).toBeTrue();
   expect(inventory.unchangedAll()).toBeTrue();
-  // A process the scan still lists, with a cwd that cannot be read, proves nothing.
-  await expect(attemptReferencesClear(later, later, holder(56, gone), async () => true, inventory)).rejects.toThrow();
+  // A process the scan still lists, whose cwd no longer exists, names no checkout either.
+  expect(await attemptReferencesClear(later, later, holder(56, gone), async () => true, inventory)).toBeTrue();
 });

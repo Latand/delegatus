@@ -5,6 +5,8 @@
  * `&refuse=1` refuses every write. Dates read 4 Nov 2026 on the page's clock.
  */
 
+import type { PlanStatus } from "@/lib/chatgptPlan/public";
+
 const params = new URLSearchParams(location.search);
 export const SETTINGS_SCENE = params.get("settings");
 const REFUSE = params.get("refuse") === "1";
@@ -86,6 +88,35 @@ const VOICE_SCENES: Record<string, Record<string, unknown>> = {
   "voice-timer": { timerTelegram: true },
 };
 const voice: Record<string, unknown> = { ...voiceBase, ...(VOICE_SCENES[SETTINGS_SCENE ?? ""] ?? {}) };
+const PLAN_SCENES: Record<string, PlanStatus> = {
+  disconnected: { state: "not_connected" },
+  connecting: { state: "connecting" },
+  connected: { state: "connected", account: { email: "Example account" }, acknowledged: true },
+  firstUse: { state: "connected", acknowledged: false },
+  missingModel: { state: "connected", planModels: { voiceBackend: false } },
+  disabled: { state: "plan_disabled" },
+  notEligible: { state: "plan_disabled", reason: "not_eligible" },
+  requestInvalid: { state: "plan_disabled", reason: "request_invalid" },
+  reconnect: { state: "reconnect_required", reason: "client_rejected" },
+  limit: { state: "plan_limit", usageUrl: "https://chatgpt.com/settings/usage" },
+  "retry-later": { state: "retry_later", usageUrl: "https://chatgpt.com/settings/usage" },
+  remote: { state: "remote_browser" },
+  staging: { state: "off_staging" },
+  unconfigured: { state: "off_unconfigured" },
+  unsupported: { state: "off_unsupported_platform" },
+  declined: { state: "not_connected", reason: "declined" },
+  unconfirmed: { state: "not_connected", revocationConfirmed: false },
+  "connected-unconfirmed": { state: "connected", revocationConfirmed: false },
+  error: { state: "error", reason: "credential_file" },
+  // Exercise a plan status retained while the Keys page switches to a member.
+  member: { state: "connected", account: { email: "Example account" } },
+};
+const planScene = params.get("chatgptplan") ?? "";
+let planStatus = PLAN_SCENES[planScene] ?? { state: "not_connected" };
+if (planScene === "billing") voice.planBilling = { source: "plan" };
+if (planScene === "fallback") voice.planBilling = { source: "key", reason: "plan_limit" };
+if (planScene === "blocked") voice.planBilling = { source: "blocked", reason: "policy_denied" };
+
 
 const summary = (over: Record<string, unknown>) => ({ version: 1, state: "final", startedAt: NOW - 3_900_000, endedAt: NOW - 3_600_000, projects: ["atlas"], asked: [L("Review the current layout.", "Перевірити поточний макет.")], done: [], decided: [L("Keep the compact header.", "Лишити компактний заголовок.")], open: [L("Wait for the build report.", "Чекати на звіт збірки.")], privateOmitted: false, through: 10, model: "fixture", durationMs: 1000, inputTokens: 1000, outputTokens: 100, attempts: 1, ...over });
 const CALLS = () => params.get("calls") === "empty" ? [] : [
@@ -139,7 +170,7 @@ let services = [
   feature("voice", String(voice.backend === "api" ? "api" : "codex"), ["codex", "api"]),
 ];
 
-const KEYS = () => ({ staging: false, owner: true, keys: [
+const KEYS = () => ({ staging: planScene === "staging", owner: planScene !== "member", keys: [
   { id: "openrouter", variable: "OPENROUTER_API_KEY", source: "missing", masked: null },
   { id: "openai", variable: "OPENAI_API_KEY", source: voice.keySource, masked: voice.keySource === "missing" ? null : "sk-proj-••••••••2222" },
   { id: "elevenlabs", variable: "ELEVENLABS_API_KEY", source: "missing", masked: null },
@@ -153,6 +184,18 @@ export async function settingsEvidenceRoute(url: URL, method: string, init?: Req
   if (!SETTINGS_SCENE) return null;
   const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
   const write = method !== "GET";
+  if (url.pathname === "/api/chatgpt-plan") {
+    if (method === "GET") return json(planStatus);
+    if (REFUSE) return json({ reason: "retry_later" }, 503);
+    if (method === "DELETE") {
+      planStatus = { state: "not_connected", revocationConfirmed: true };
+      return json({ revocationConfirmed: true });
+    }
+    if (body.action === "cancel") planStatus = { state: "not_connected" };
+    if (body.action === "acknowledge") planStatus = { ...planStatus, acknowledged: true };
+    return json({ ok: true });
+  }
+
   if (url.pathname === "/api/telemetry") {
     if (write && REFUSE) return json({ error: "read-only" }, 500);
     if (write) Object.assign(telemetry, body);

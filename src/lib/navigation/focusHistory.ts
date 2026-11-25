@@ -1,4 +1,4 @@
-import { formatConversationHash } from "@/lib/accounts/identity";
+import { formatConversationHash, parseConversationHash } from "@/lib/accounts/identity";
 
 /**
  * Per-tab browser history over deliberate card focus (issue #866).
@@ -181,6 +181,35 @@ export function recordProjectNavigation(url: string): void {
     return;
   }
   write(decideProjectAction(currentFocusEntry()), null, url);
+}
+
+/** Whether the tab's URL or its typed history entry names this conversation:
+    the `#c=` id, the `#f=` path, or the identity its entry was typed with. */
+export function standsOnConversation(file: FocusNavigationFile): boolean {
+  if (typeof window === "undefined") return false;
+  const hash = parseConversationHash(window.location.hash);
+  if (file.conversationId && hash.conversationId === file.conversationId) return true;
+  if (hash.filePath !== null && hash.filePath === file.path) return true;
+  const entry = currentFocusEntry();
+  return entry !== null && sameFocusTarget(entry, focusEntryFor(file, entry.project));
+}
+
+/**
+ * The operator closed this conversation (its reader, its window, its card): a
+ * reload must not bring it back. When the tab's URL or typed entry names it,
+ * that entry is rewritten IN PLACE to the board's URL — a replace, never a
+ * push. Pushing the board over the conversation would leave the closed
+ * conversation one Back away, which is the resurrection this removes; the
+ * replaced entry has nothing to replay, and Back goes to whatever the operator
+ * stood on before. A tab standing elsewhere is left alone, and so is the
+ * phone, whose navigation store owns every entry and pops the conversation's
+ * own screen when it closes. Returns whether an entry was rewritten.
+ */
+export function releaseFocusNavigation(file: FocusNavigationFile, boardUrl: string): boolean {
+  if (typeof window === "undefined" || owner) return false;
+  if (!standsOnConversation(file)) return false;
+  window.history.replaceState(null, "", boardUrl);
+  return true;
 }
 
 /** Project-alias canonicalization is a rename, not a navigation: a typed entry

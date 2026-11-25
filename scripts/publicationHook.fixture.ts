@@ -5,13 +5,14 @@ import path from "node:path";
 import { createHookFixture } from "./local-gate.fixture";
 import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 
-const guardImport = `import { fixtureWritePath } from ${JSON.stringify(path.join(import.meta.dir, "fixture-write-path.ts"))};`;
-
 type StubFixture = Pick<ReturnType<typeof createHookFixture>, "dir" | "writablePath">;
 
 function stubCheck(f: StubFixture, name: string) {
+  // Runtime checks can execute the stub in an exported copy. The command log
+  // still belongs to the fixture that installed it.
   fs.writeFileSync(f.writablePath(`scripts/${name}.ts`),
-    `import fs from "node:fs"; ${guardImport}
+    `import fs from "node:fs";
+    import { fixtureWritePath } from "./fixture-write-path.ts";
     fs.appendFileSync(fixtureWritePath(${JSON.stringify(f.dir)}, process.env.HOOK_LOG ?? ""), JSON.stringify({ args: process.argv.slice(1), names: [] }) + "\\n");\n`);
 }
 
@@ -70,8 +71,9 @@ function nativeFixture(coldBun = false) {
   const target = `node_modules/@openai/codex-linux-${process.arch}/vendor/${process.arch === "x64" ? "x86_64" : "aarch64"}-unknown-linux-musl/bin/codex`;
   const codex = path.join(f.env.XDG_CACHE_HOME, `delegatus-gate/codex-${SUPPORTED_CODEX_VERSIONS[0]}`, target);
   const installer = f.writablePath(".git/install-native.ts");
-  fs.writeFileSync(installer, `import fs from "node:fs"; import path from "node:path"; ${guardImport}
-    const writablePath = (file: string) => fixtureWritePath(${JSON.stringify(f.dir)}, file);
+  fs.writeFileSync(installer, `import fs from "node:fs"; import path from "node:path";
+    import { fixtureWritePath } from "../scripts/fixture-write-path.ts";
+    const writablePath = (file: string) => fixtureWritePath(path.dirname(import.meta.dir), file);
     if (process.env.HOOK_FAIL === "native-install") process.exit(1);
     const args = process.argv.slice(2), prefix = args[args.indexOf("--prefix") + 1]!;
     const bun = args.at(-1)!.startsWith("bun@");
@@ -105,11 +107,6 @@ async function httpFixture(f: ReturnType<typeof fixture>, expireDuringChecks = t
   f.git("init", "--bare", "--template=", bare);
   const events = f.writablePath(".git/events.jsonl"), clock = f.writablePath(".git/clock");
   fs.writeFileSync(clock, "0"); fs.writeFileSync(events, "");
-  const record = f.writablePath("record.ts");
-  fs.appendFileSync(record, `\nif (process.argv[2] === "tsc") {
-    appendFileSync(fixtureWritePath(import.meta.dir, process.env.CREDENTIAL_EVENTS ?? ""), JSON.stringify({ kind: "checks", at: 0 }) + "\\n");
-    require("node:fs").writeFileSync(fixtureWritePath(import.meta.dir, process.env.CREDENTIAL_CLOCK ?? ""), ${JSON.stringify(expireDuringChecks ? "7200000" : "0")});
-  }\n`);
   const helper = f.writablePath("credential.ts");
   fs.writeFileSync(helper, `import fs from "node:fs";
     import { fixtureWritePath } from "./scripts/fixture-write-path.ts";
@@ -121,7 +118,7 @@ async function httpFixture(f: ReturnType<typeof fixture>, expireDuringChecks = t
   f.git("config", "core.hooksPath", "/dev/null"); f.git("add", "record.ts", "credential.ts"); f.git("commit", "-m", "HTTP fixture");
   f.git("config", "core.hooksPath", ".githooks");
   f.head = f.git("rev-parse", "HEAD").toString().trim(); f.env.LLV_GATE_PUSH_HEAD = f.head;
-  Object.assign(f.env, { CREDENTIAL_CLOCK: clock, CREDENTIAL_EVENTS: events,
+  Object.assign(f.env, { CREDENTIAL_CLOCK: clock, CREDENTIAL_EVENTS: events, CREDENTIAL_ADVANCE_MS: expireDuringChecks ? "7200000" : "0",
     LLV_GATE_CHECK_ENV: f.env.LLV_GATE_CHECK_ENV + ",CREDENTIAL_CLOCK,CREDENTIAL_EVENTS" });
   f.git("config", "http.receivepack", "true");
   const bareConfig = spawnSync("git", ["--git-dir", bare, "config", "http.receivepack", "true"], { env: f.env });
