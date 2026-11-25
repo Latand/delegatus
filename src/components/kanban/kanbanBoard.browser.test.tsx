@@ -5729,9 +5729,13 @@ describe("self-update confirmation modal", () => {
      scrolling: measured from its text rects against the dialog's own scroll
      container at 390x844, 390x640 and the landscape 844x390 (the dialog's
      phone query matches by height too), and at 1440x900 where the header shows
-     it. A second action started while Update's answer is out must not move it:
-     Check now's failure stays in the header and Update's refusal stays in the
-     card, whichever answer comes back first. */
+     it. The install action's confirmation (Restart launcher, offered above the
+     header while a built revision waits for the older launcher) answers the
+     same two ways through the same admission, and its card, which it scrolls
+     to, shows the answer on every layout. A second action started while
+     Update's answer is out must not move it: Check now's failure stays in the
+     header and Update's refusal stays in the card, whichever answer comes
+     back first. */
   browserTest("a confirmed Update's refusal and optional-check warning stay in view once, on phones and desktop, in both locales and themes", async () => {
     const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "self-update-action-outcome");
     fs.mkdirSync(out, { recursive: true });
@@ -5753,6 +5757,8 @@ describe("self-update confirmation modal", () => {
     };
     const running = { ...initial, busy: "update", update: { ...idleUpdate(CHECKOUT_STEPS), state: "running", trigger: "operator", target, targetShort: target.slice(0, 7), targetVersion: "1.11.0", startedAt: at,
       steps: idleUpdate(CHECKOUT_STEPS).steps.map((step, index) => ({ ...step, state: index === 0 ? "running" : "pending", startedAt: index === 0 ? at : null })) } };
+    /* The built revision waits for the older launcher's restart: the install card offers it above the header. */
+    const awaitingLauncher = { ...initial, action: { id: "restart-service", button: true, unit: "delegatus.service" } };
     const requiredRefusal = { code: "deployment-refused", detail: "red", green: { state: "red", detail: "typecheck", checks: ["privacy-publication", "typecheck"] }, snapshot: initial };
     const readings: Record<string, unknown>[] = [];
     try {
@@ -5765,7 +5771,7 @@ describe("self-update confirmation modal", () => {
         const pageErrors: string[] = [];
         page.on("pageerror", error => pageErrors.push(error.message));
         try {
-          await page.addInitScript(({ lang, initial, running }) => {
+          await page.addInitScript(({ lang, initial, running, awaitingLauncher }) => {
             localStorage.setItem("llv_lang", lang);
             const streams: { listeners: Record<string, ((event: { data: string }) => void)[]> }[] = [];
             let Source = window.EventSource;
@@ -5783,8 +5789,8 @@ describe("self-update confirmation modal", () => {
               } as typeof EventSource; },
             });
             /* Each POST has its own answer and can be held until the driver releases it. */
-            const answers: Record<string, { status: number; body: unknown }> = { update: { status: 202, body: running }, check: { status: 200, body: initial } };
-            const holds: Record<string, { on: boolean; release: () => void }> = { update: { on: false, release: () => {} }, check: { on: false, release: () => {} } };
+            const answers: Record<string, { status: number; body: unknown }> = { update: { status: 202, body: running }, check: { status: 200, body: initial }, action: { status: 202, body: awaitingLauncher } };
+            const holds: Record<string, { on: boolean; release: () => void }> = { update: { on: false, release: () => {} }, check: { on: false, release: () => {} }, action: { on: false, release: () => {} } };
             const gate = (name: string) => holds[name]!.on ? new Promise<void>(done => { holds[name]!.release = () => done(); }) : Promise.resolve();
             const reply = (name: string) => gate(name).then(() => new Response(JSON.stringify(answers[name]!.body), { status: answers[name]!.status, headers: { "content-type": "application/json" } }));
             const interceptFetch = (next: typeof fetch) => ((input: RequestInfo | URL, init?: RequestInit) => {
@@ -5793,6 +5799,7 @@ describe("self-update confirmation modal", () => {
               const pathname = new URL(url, location.href).pathname;
               if (pathname === "/api/self-update/update" && method === "POST") return reply("update");
               if (pathname === "/api/self-update/check" && method === "POST") return reply("check");
+              if (pathname === "/api/self-update/action" && method === "POST") return reply("action");
               if (pathname === "/api/self-update") return Promise.resolve(new Response(JSON.stringify(initial), { status: 200, headers: { "content-type": "application/json" } }));
               return next(input, init);
             }) as typeof fetch;
@@ -5806,7 +5813,7 @@ describe("self-update confirmation modal", () => {
               selfUpdateAnswer: (name: string, status: number, body: unknown) => { answers[name] = { status, body }; },
               selfUpdateHold: (name: string, on: boolean) => { holds[name]!.on = on; if (!on) holds[name]!.release(); },
             });
-          }, { lang, initial, running });
+          }, { lang, initial, running, awaitingLauncher });
           await page.goto(server.base);
           await page.waitForSelector("[data-phone-card], [data-mobile2-shell], [data-mobile-shell], [data-kanban-board]", { timeout: 15_000 }).catch(() => {});
           await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
@@ -5844,17 +5851,19 @@ describe("self-update confirmation modal", () => {
               section: element.closest("[data-section]")?.getAttribute("data-section") ?? null,
             };
           }, { selector, needle });
-          const confirmUpdate = async () => {
-            await dialog.locator('[data-action="update"]:not([disabled])').click();
+          /* «Update» and the install card's «Restart launcher» ask the same question and apply the same way. */
+          const confirmVia = async (via: "update" | "install-action") => {
+            await dialog.locator(`[data-action="${via}"]:not([disabled])`).click();
             const confirmation = page.locator("[data-team-dialog='self-update-confirm']");
             await confirmation.locator('[data-action="confirm-apply"]').click();
             await confirmation.waitFor({ state: "detached" });
           };
-          /* The confirmation's own scroll to the Update card settles first. */
-          const show = async (status: number, body: unknown, selector: string, needle: string, label: string) => {
-            await answer("update", status, body);
-            await emit(initial);
-            await confirmUpdate();
+          const confirmUpdate = () => confirmVia("update");
+          /* The confirmation's own scroll to its card settles first. */
+          const show = async (status: number, body: unknown, selector: string, needle: string, label: string, via: "update" | "install-action" = "update") => {
+            await answer(via === "update" ? "update" : "action", status, body);
+            await emit(via === "update" ? initial : awaitingLauncher);
+            await confirmVia(via);
             await dialog.locator(`${selector}:visible`).first().waitFor();
             await settled();
             const reading = await read(selector, needle);
@@ -5863,13 +5872,17 @@ describe("self-update confirmation modal", () => {
             expect(reading.inDom, `${name} is in the page once`).toBe(1);
             expect(reading.text, `${name} names the checks`).toContain(needle);
             expect(reading.whole, `${name} is whole inside the scroll container without scrolling: ${JSON.stringify(reading)}`).toBe(true);
-            /* The phone layout shows it beside the Update button just pressed; every other layout, in the header. */
-            expect(reading.section, `${name} sits in the ${phone ? "Update card" : "header"}`).toBe(phone ? "update" : "header");
+            /* The Update card's outcome is beside the button just pressed on the phone layout and in the header
+               elsewhere; the install action's is in its own card on every layout. */
+            const section = via === "install-action" ? "install-action" : phone ? "update" : "header";
+            expect(reading.section, `${name} sits in the ${section} section`).toBe(section);
             await page.screenshot({ path: path.join(out, `${name}.png`) });
             readings.push({ lang, width, height, scheme, label, phone, ...reading, frame: `${name}.png` });
           };
           await show(409, requiredRefusal, '[data-error="action"]', "privacy-publication, typecheck", "required-ci-refusal");
           await show(202, { ...running, optionalCheckFailures: ["Windows (native)", "Minimum macOS SQLite"] }, '[data-warning="optional-checks"]', "Windows (native), Minimum macOS SQLite", "optional-ci-warning");
+          await show(409, { ...requiredRefusal, snapshot: awaitingLauncher }, '[data-error="action"]', "privacy-publication, typecheck", "launcher-required-ci-refusal", "install-action");
+          await show(202, { ...awaitingLauncher, optionalCheckFailures: ["Windows (native)", "Minimum macOS SQLite"] }, '[data-warning="optional-checks"]', "Windows (native), Minimum macOS SQLite", "launcher-optional-ci-warning", "install-action");
 
           /* A second action while Update's answer is out: Update is confirmed and held, Check now is pressed
              (it scrolls to the header), the person goes back to the Update card, and the answers come back in

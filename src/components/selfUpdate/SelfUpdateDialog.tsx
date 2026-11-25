@@ -52,10 +52,11 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const [openLogs, setOpenLogs] = useState<Set<string>>(() => new Set());
   const [pending, setPending] = useState<Set<string>>(() => new Set());
   /* What each action ended in, kept with the action that produced it: the
-     Update card's own (Update and Retry, key "update") apart from every other
-     action's. An answer is written when it arrives, possibly after the person
-     started another action, so it cannot go by whichever action began last. */
-  const [outcomes, setOutcomes] = useState<Partial<Record<"update" | "header", ActionOutcome>>>({});
+     Update card's own (Update and Retry, key "update") and the install
+     action's apart from every other action's. An answer is written when it
+     arrives, possibly after the person started another action, so it cannot go
+     by whichever action began last. */
+  const [outcomes, setOutcomes] = useState<Partial<Record<"update" | "install-action" | "header", ActionOutcome>>>({});
   const [webRestart, setWebRestart] = useState<{ pid: number | null } | null>(null);
   const [firstWebPid, setFirstWebPid] = useState<number | null | undefined>(undefined);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -74,7 +75,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
 
 
   const act = useCallback(async (key: string, path: string, body?: unknown) => {
-    const place = key === "update" ? "update" : "header";
+    const place = key === "update" || key === "install-action" ? key : "header";
     const record = (outcome: ActionOutcome) => setOutcomes((value) => ({ ...value, [place]: outcome }));
     setPending((value) => new Set(value).add(key));
     setOutcomes({});
@@ -124,7 +125,9 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     ? t("selfUpdate.confirmApply.retryTarget", { target: targetText(s.update.targetShort, s.update.targetVersion) })
     : null;
 
-  /* «Update now» closes the question; the Update card shows the progress. */
+  /* «Update now» closes the question; the Update card shows the progress. The
+     install action has no progress: its own card, which draws its outcome,
+     stays on screen instead. */
   const apply = () => {
     const action = confirming;
     setConfirming(null);
@@ -132,7 +135,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
        disabled while the update starts, so focus stays in this dialog. */
     requestAnimationFrame(() => {
       const panel = panelRef.current;
-      panel?.querySelector('[data-section="update"]')?.scrollIntoView({ block: "nearest" });
+      panel?.querySelector(`[data-section="${action === "install-action" ? "install-action" : "update"}"]`)?.scrollIntoView({ block: "nearest" });
       if (panel && !panel.contains(document.activeElement)) panel.focus({ preventScroll: true });
     });
     if (action === "install-action") void act("install-action", "/api/self-update/action");
@@ -187,6 +190,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     error: outcomes.header?.error ?? null,
     optionalCheckFailures: outcomes.header?.optionalCheckFailures,
     updateOutcome: outcomes.update,
+    installOutcome: outcomes["install-action"],
     phone: isMobile,
     waitingForWeb: webRestart !== null && (feed.offline || !web || web.pid === webRestart.pid),
     reloadTo: replaced ? (s?.serving.web?.short || s?.installed.short || null) : null,

@@ -392,3 +392,72 @@ describe("an action's answer lands with the action that asked", () => {
     });
   }
 });
+
+/* The install action (Restart launcher) has its own card above the header. Its
+   confirmation scrolls to that card and the card draws the answer, at every
+   layout, so the answer is where the person is looking. */
+describe("the install action's confirmation keeps its answer in its own card", () => {
+  const WARNED = "Optional CI checks failed for this update (Windows (native)).";
+  const REFUSED = "The selected revision is not green (typecheck).";
+  const VIEWPORTS = [["a portrait phone", 390, 844], ["a landscape phone", 844, 390], ["a desktop", 1440, 900]] as const;
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const needsRestart = (): Snapshot => ({ ...snapshot("ready"), action: { id: "restart-service", button: true, unit: "delegatus.service" } } as unknown as Snapshot);
+  const lines = (scope: { querySelectorAll(selector: string): Iterable<{ textContent: string | null }> } | null) =>
+    [...(scope?.querySelectorAll("[data-error='action'], [data-warning='optional-checks']") ?? [])].map((line) => line.textContent);
+  const where = (name: string) => dom.document.querySelector(`[data-section='${name}']`);
+  const wait = (ms: number) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
+
+  let viewport = { width: 1024, height: 768 };
+  const scrolledTo: (string | null)[] = [];
+  const proto = (dom.window as unknown as { Element: { prototype: { scrollIntoView?: unknown } } }).Element.prototype;
+  let originalScroll: unknown;
+  beforeAll(() => {
+    (dom as unknown as { matchMedia: unknown }).matchMedia = (query: string) => ({
+      matches: query === MOBILE_LAYOUT_QUERY ? mobileLayoutViewport(viewport) : false,
+      media: query, addEventListener() {}, removeEventListener() {},
+    });
+    originalScroll = proto.scrollIntoView;
+    proto.scrollIntoView = function (this: { getAttribute(name: string): string | null }) { scrolledTo.push(this.getAttribute("data-section")); };
+  });
+  afterAll(() => {
+    delete (dom as unknown as { matchMedia?: unknown }).matchMedia;
+    proto.scrollIntoView = originalScroll;
+  });
+  afterEach(() => { viewport = { width: 1024, height: 768 }; scrolledTo.length = 0; });
+
+  for (const [name, width, height] of VIEWPORTS) for (const [answer, response, expected] of [
+    ["admitted with a warning", () => json(202, { ...needsRestart(), optionalCheckFailures: ["Windows (native)"] }), [WARNED]],
+    ["refused for a red required check", () => json(409, { code: "deployment-refused", detail: "red", snapshot: needsRestart(),
+      green: { state: "red", detail: "typecheck", checks: ["typecheck"] } }), [REFUSED]],
+  ] as const) {
+    test(`${name}: the answer to a confirmed Restart launcher, ${answer}, is in the install card, which the confirmation scrolls to`, async () => {
+      viewport = { width, height };
+      const posts: string[] = [];
+      globals.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "POST") { posts.push(String(input)); return response(); }
+        return json(200, needsRestart());
+      }) as typeof fetch;
+      await mount(<SelfUpdateDialog onClose={() => {}} />);
+      for (let tries = 0; tries < 40 && !dom.document.querySelector("[data-action='install-action']"); tries++) await wait(25);
+      await act(async () => { button(dom.document, "[data-action='install-action']").click(); });
+      await act(async () => { button(confirmDialog(), "[data-action='confirm-apply']").click(); });
+      await wait(30);
+
+      expect(posts).toEqual(["/api/self-update/action"]);
+      expect(scrolledTo).toEqual(["install-action"]);
+      expect(lines(where("install-action"))).toEqual(expected);
+      expect(lines(where("header"))).toEqual([]);
+      expect(lines(dom.document.body)).toHaveLength(1);
+    });
+  }
+
+  test("an Update confirmation still scrolls to the Update card", async () => {
+    globals.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST" ? json(202, snapshot("ready")) : json(200, snapshot("ready"))) as typeof fetch;
+    await mount(<SelfUpdateDialog onClose={() => {}} />);
+    for (let tries = 0; tries < 40 && !dom.document.querySelector("[data-action='update']"); tries++) await wait(25);
+    await act(async () => { button(dom.document, "[data-action='update']").click(); });
+    await act(async () => { button(confirmDialog(), "[data-action='confirm-apply']").click(); });
+    await wait(30);
+    expect(scrolledTo).toEqual(["update"]);
+  });
+});

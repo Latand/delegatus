@@ -1112,6 +1112,56 @@ describe("the rest of the surface", () => {
     });
   });
 
+  /* The install action's card sits above the header, and its confirmation
+     scrolls to that card, so the card draws the action's outcome itself on
+     every layout and the header draws none of it. */
+  describe("an install action's outcome is drawn in its own card", () => {
+    const refusal = actionError(409, { code: "deployment-refused", detail: "red",
+      green: { state: "red" as const, detail: "typecheck", checks: ["privacy-publication", "typecheck"] } });
+    const installOutcome = { error: refusal, optionalCheckFailures: ["Windows (native)"] };
+    const REFUSED = "The selected revision is not green (privacy-publication, typecheck).";
+    const WARNED = "Optional CI checks failed for this update (Windows (native)).";
+    const outcomeLines = (root: Element | null) => [...(root?.querySelectorAll('[data-error="action"], [data-warning="optional-checks"]') ?? [])].map(text);
+    const action = { id: "restart-service" as const, button: true, unit: "delegatus.service" };
+    const states: [string, Snapshot][] = [
+      ["a built revision awaiting the launcher's restart", snapshot({ ...available(), action })],
+      ["an unsupported layout with a start action", snapshot({ mode: "unsupported", unsupportedReason: "no-launcher", action: { id: "start-service", button: true, unit: "delegatus.service" } })],
+    ];
+
+    test.each(states)("%s: the card draws it once, whatever the layout", (_name, s) => {
+      for (const phone of [true, false]) {
+        const el = render(s, { phone, installOutcome });
+        expect(outcomeLines(section(el, "install-action"))).toEqual([REFUSED, WARNED]);
+        expect(outcomeLines(section(el, "header"))).toEqual([]);
+        expect(outcomeLines(el)).toHaveLength(2);
+        flushSync(() => root!.unmount()); root = null; host?.remove();
+      }
+    });
+
+    test("the outcome heads the card, above the words and the button it answers", () => {
+      const card = section(render(snapshot({ ...available(), action }), { phone: true, installOutcome }), "install-action")!;
+      expect(card.firstElementChild?.getAttribute("data-error")).toBe("action");
+      expect(card.querySelector('[data-action="install-action"]')).not.toBeNull();
+    });
+
+    test.each([true, false])("the card's outcome and another action's stay apart (phone: %p)", (phone) => {
+      const el = render(snapshot({ ...available(), action }), { phone, installOutcome, error: actionError(502, null) });
+      expect(outcomeLines(section(el, "install-action"))).toEqual([REFUSED, WARNED]);
+      expect(outcomeLines(section(el, "header"))).toEqual(["The request failed (HTTP 502)."]);
+    });
+
+    test("without an install outcome the card draws no outcome line", () => {
+      expect(outcomeLines(section(render(snapshot({ ...available(), action }), { phone: true, updateOutcome: { error: refusal } }), "install-action"))).toEqual([]);
+    });
+
+    test("Ukrainian wording reaches the card", () => {
+      setLocale("uk");
+      const card = section(render(snapshot({ ...available(), action }), { phone: true, installOutcome }), "install-action")!;
+      expect(text(card.querySelector('[data-error="action"]'))).toBe("Вибрана ревізія ще не має зеленого статусу CI (privacy-publication, typecheck).");
+      expect(text(card.querySelector('[data-warning="optional-checks"]'))).toBe("Необов’язкові перевірки CI для цього оновлення не пройшли (Windows (native)).");
+    });
+  });
+
   test("Ukrainian: a memory-guard failure and a 409 refusal carry no English sentence", () => {
     setLocale("uk");
     const failedSteps = steps(["done", "done", "failed"], { 2: { tail: [], exitCode: null, failure: { kind: "memory", availableMb: 2048, neededMb: 4096 } } });

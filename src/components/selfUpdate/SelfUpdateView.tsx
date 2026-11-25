@@ -50,13 +50,18 @@ export interface ViewState {
   armed: boolean;
   openLogs: ReadonlySet<string>;
   pending: ReadonlySet<string>;
-  /** The outcome of the last action started outside the Update card (Check
-      now, the restarts, the auto switch). The header shows it. */
+  /** The outcome of the last action started outside the Update and install
+      cards (Check now, the restarts, the auto switch). The header shows it. */
   error: ActionError | null;
   optionalCheckFailures?: readonly string[];
   /** The outcome of the Update card's own actions (Update, Retry), kept apart
       from the other actions' so a late answer lands where its button is. */
   updateOutcome?: ActionOutcome;
+  /** The outcome of the install action (Restart launcher and its kin). Its card
+      draws it, on every layout, and the confirmation scrolls to that card: the
+      card sits above the header, so the header is off screen after the scroll
+      to the Update card, and in the unsupported layout it has no outcome line. */
+  installOutcome?: ActionOutcome;
   /** The dialog is in its phone layout (the viewport query that also makes it
       a full screen, wide or tall). The confirmation scrolls that layout to the
       Update card, which sits below the header, so the card shows its own
@@ -255,9 +260,10 @@ const ERROR_LINE = "m-0 rounded-[8px] bg-danger-soft px-2 py-1.5 font-mono text-
     checks that failed for an update the server admitted. The header draws it,
     except the Update card's own on the phone layout, which that card draws
     (`UpdateOutcome`), because the confirmation leaves the scroller at the
-    card and the header sits above it. The choice is made here from the
-    dialog's own phone decision and not by the stylesheet, so each layout draws
-    one copy at every size. */
+    card and the header sits above it, and the install action's, which its
+    card draws on every layout. The choice is made here from the dialog's own
+    phone decision and not by the stylesheet, so each layout draws one copy at
+    every size. */
 function OutcomeLines({ outcome, t }: { outcome: ActionOutcome | undefined; t: TFunction }) {
   if (!outcome) return null;
   return <>
@@ -748,6 +754,7 @@ function InstallActionCard({ s, actions, state, t }: { s: Snapshot; actions: Vie
   const action = s.action;
   if (!action) return null;
   return <section data-section="install-action" className={CARD}>
+    <OutcomeLines outcome={state.installOutcome} t={t} />
     <p className="m-0 text-ui text-secondary">{t(action.terminalEveryUpdate ? "selfUpdate.action.restart-terminal-windows" : `selfUpdate.action.${action.id}`, { unit: action.unit ?? "" })}</p>
     {action.command ? <code className="text-label text-primary [overflow-wrap:anywhere] whitespace-pre-wrap">{action.command}</code> : null}
     {action.button ? <Button action="install-action" tone="primary" disabled={state.pending.has("install-action")}
