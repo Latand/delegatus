@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { hostControlFactsFromHealth, sameHostControlRoute, type HostControlFacts } from "@/lib/agentState/control";
 import { DELIVERY_ATTEMPT_LIMIT } from "@/lib/accounts/migration/contracts";
 import type { ConfirmedSendEvidence } from "./confirmedSend";
@@ -52,6 +53,7 @@ interface StructuredOperationStatus {
   status: string;
   revision?: number;
   reason?: string | null;
+  turnId?: string | null;
   deliveryUnverified?: boolean;
   /** Immutable admission time on current receipts; `at` supports older rows. */
   admittedAt?: string;
@@ -455,7 +457,8 @@ function expiredControlSettlement(
   const deadlineAt = controlSettlementDeadlineAt(receipt);
   if (deadlineAt === null || now < deadlineAt) return null;
   const action = effect.kind;
-  if (receipt.status === "delivering" || receipt.status === "applying") {
+  if (receipt.status === "delivering" || receipt.status === "applying"
+    || receipt.reason?.startsWith(CONTROL_RECOVERY_PREFIX)) {
     return {
       status: "uncertain",
       reason: `${action} control exceeded its 2-minute settlement deadline after actuation began; verify the conversation state before retrying`,
@@ -774,6 +777,7 @@ export const DELIVERY_FENCED_BY_SETTLEMENT =
  * answer but can never withhold one.
  */
 const DELIVERING_OWNERSHIP_PREFIX = "delivering-owner:";
+const CONTROL_RECOVERY_PREFIX = "control-recovery:";
 
 /** The recorded claim of a row whose writer could not read one. Not a claim any
     projection can ever produce — claims are `<owner>:<epoch>` — so it can never
@@ -811,7 +815,7 @@ function isMessageEffect(effect: DeliveryEffect): effect is SendEffect | InjectE
 }
 
 function mayRetrySendTurn(effect: SendEffect, steerByInterrupt: boolean): boolean {
-  return effect.turnId === undefined && !effect.onlyIfIdle
+  return typeof effect.turnId !== "string"
     && ((effect.kind === "send" && effect.policy !== "steer-if-active") || steerByInterrupt);
 }
 
@@ -2877,7 +2881,7 @@ export class StructuredDeliveryQueue {
       }
       if (error instanceof StructuredSendRefusedError && reason === "stale-turn"
         && mayRetrySendTurn(effect, context.steerByInterrupt)) {
-        // A pre-write refusal lets an unfenced send choose its route again.
+        // A pre-write refusal lets the send retry under its original fence.
         const current = await this.readStatus(effect.operationId);
         if (!current.readable || !current.value) { this.retrySoon(); return "stop"; }
         if (context.priorDeliveryUnverified || current.value.deliveryUnverified === true) {
@@ -4024,27 +4028,30 @@ export class StructuredDeliveryQueue {
       }
     }
     const ownsLane = () => !lane?.released && !this.retirementExecutor.retired && !this.port.handoffHeld?.();
-    if (durable?.status === "delivering") {
-      // Legacy controls carry no executor stamp. Their outcome is unknown, so
-      // settle the receipt without issuing another native control.
-      if (deliveringOwnership(durable.reason)
-        && await this.deliveringOwnerDisposition(effect.conversationId, durable.reason) !== "abandoned") {
-        return { blocked: true, terminated: false };
-      }
+    const wasDelivering = durable?.status === "delivering";
+    const requeuedRecovery = durable?.status === "queued" && durable.reason?.startsWith(CONTROL_RECOVERY_PREFIX);
+    const recovering = wasDelivering || requeuedRecovery;
+    if (wasDelivering && deliveringOwnership(durable.reason)
+      && await this.deliveringOwnerDisposition(effect.conversationId, durable.reason) !== "abandoned") {
+      return { blocked: true, terminated: false };
+    }
+    const unverified = `${effect.kind} control outcome is unverified after an earlier delivery attempt; verify the conversation state before retrying`;
+    const settleRecovery = async (status: "queued" | "uncertain", reason: string): Promise<ControlDrainResult> => {
       if (!ownsLane()) return { blocked: true, terminated: false };
       try {
-        await this.transitionUnlessSettled(effect.operationId, "uncertain",
-          { reason: `${effect.kind} control outcome is unverified after an earlier delivery attempt; verify the conversation state before retrying` },
-          { fromStatuses: ["delivering"] }, ownsLane);
+        await this.transitionUnlessSettled(effect.operationId, status, { reason },
+          { fromStatuses: [wasDelivering ? "delivering" : "queued"] }, ownsLane);
       } catch {
         // Settlement or a retry can win while ownership is being read.
         this.retrySoon();
         return { blocked: true, terminated: false };
       }
-      return { blocked: false, terminated: false };
-    }
+      if (status === "queued") this.retrySoon();
+      return { blocked: status === "queued", terminated: false };
+    };
     const host = this.resolveHost(effect.conversationId);
     if (!host) {
+      if (recovering) return settleRecovery("uncertain", unverified);
       /* Holding the control was right while a host might still come back to
          answer it, and wrong once nothing can: the effect stays pending, the
          group never drains, and every message queued behind it waits on a turn
@@ -4078,47 +4085,73 @@ export class StructuredDeliveryQueue {
     }
     const health = state.value;
     if (health.status === "dead" || health.status === "unhosted") {
+      if (recovering) return settleRecovery("uncertain", unverified);
       await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "dead-host" });
       return { blocked: true, terminated: false };
     }
     const writer = this.port.currentHostClaim
       ? { readable: true as const, value: this.port.currentHostClaim(effect.conversationId) }
       : await this.readHostClaim(effect.conversationId);
-    if (effect.binding) {
+    if ((effect.binding || recovering) && !writer.readable) {
+      this.retrySoon();
+      return { blocked: true, terminated: false };
+    }
+    if (effect.binding && writer.readable) {
       const key = this.port.currentHostSessionKey?.(effect.conversationId);
-      if (!writer.readable) {
-        this.retrySoon();
-        return { blocked: true, terminated: false };
-      }
       if ((key?.sessionId ?? health.sessionKey) !== effect.binding.sessionId
         || (key && effect.binding.engine && key.engine !== effect.binding.engine)
         || writer.value !== effect.binding.writerClaim) {
+        if (recovering) return settleRecovery("uncertain", unverified);
         await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "stale-generation" });
         return { blocked: false, terminated: false };
       }
+    }
+    const turnId = effect.turnId ?? (recovering ? durable?.turnId : health.turnId);
+    const pendingTarget = (facts: HostControlFacts) => effect.kind === "answer" ? !!request
+      : !!turnId && facts.turnId === turnId && (facts.status === "active" || facts.status === "attention");
+    // Legacy effects may carry only their request or turn ID. Retain the host
+    // session and writer that proved the target pending across the requeue.
+    const recoveryFence = recovering && writer.readable && writer.value
+      ? CONTROL_RECOVERY_PREFIX + createHash("sha256").update(JSON.stringify([health.sessionKey, writer.value])).digest("hex")
+      : null;
+    if (recovering) {
+      if (!recoveryFence || !pendingTarget(health) || (requeuedRecovery && durable.reason !== recoveryFence)) {
+        return settleRecovery("uncertain", unverified);
+      }
+      if (wasDelivering) return settleRecovery("queued", recoveryFence);
     }
     if (!ownsLane()) return { blocked: true, terminated: false };
     try {
       if (!await this.transitionUnlessSettled(effect.operationId, "delivering", {
         reason: deliveringOwnershipReason(this.executorId, writer),
-        ...(effect.kind === "interrupt" ? { turnId: effect.turnId ?? health.turnId } : {}),
+        ...(effect.kind === "interrupt" ? { turnId } : {}),
       }, { fromStatuses: ["pending", "queued"] })) return { blocked: false, terminated: false };
     } catch {
       // A concurrent claimant may already be delivering this operation.
       this.retrySoon();
       return { blocked: true, terminated: false };
     }
-    if (!ownsLane()) {
+    const deferControl = async (reason: string): Promise<ControlDrainResult> => {
       // This executor committed the fence and has made no host call.
-      await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "automatic-update-handoff" },
+      await this.transitionUnlessSettled(effect.operationId, "queued", { reason: recoveryFence ?? reason },
         { fromStatuses: ["delivering"] });
+      this.retrySoon();
       return { blocked: true, terminated: false };
-    }
+    };
+    if (!ownsLane()) return deferControl("automatic-update-handoff");
+    let hostCallStarted = false;
     try {
-      assertOwner();
       // Blocking attention can change while the control still targets the same turn.
-      const current = host.agentControlState?.();
-      if (current && (current.sessionKey !== health.sessionKey || current.turnId !== health.turnId)) {
+      let current = host.agentControlState?.();
+      if (recovering && !current) {
+        const refreshed = await this.readHealth(host);
+        if (!refreshed.readable) return deferControl("structured host state is unavailable");
+        current = refreshed.value;
+      }
+      if (!ownsLane()) return deferControl("automatic-update-handoff");
+      assertOwner();
+      if (current && (current.sessionKey !== health.sessionKey || current.turnId !== health.turnId
+        || (recovering && (current.status === "dead" || current.status === "unhosted" || !pendingTarget(current))))) {
         throw new StructuredSendRefusedError("stale-turn");
       }
       if (effect.kind === "answer" && host.agentAttentionRequest
@@ -4126,20 +4159,26 @@ export class StructuredDeliveryQueue {
         throw new StructuredAnswerError("attention changed before dispatch", "unavailable");
       }
       if (effect.kind === "answer") {
+        hostCallStarted = true;
         await host.answer(effect.attentionId!, effect.resolution);
         await this.transitionUnlessSettled(effect.operationId, "answered");
       } else {
-        const turnId = effect.turnId ?? health.turnId;
         if (!turnId || (health.turnId && health.turnId !== turnId)) {
           await this.transitionUnlessSettled(effect.operationId, "failed", { reason: "stale-turn" });
           return { blocked: false, terminated: false };
         }
+        hostCallStarted = true;
         await host.interrupt(turnId);
         await this.transitionUnlessSettled(effect.operationId, "interrupted", { turnId });
       }
       return { blocked: false, terminated: false };
     } catch (error) {
       const reason = failureReason(error);
+      if (!hostCallStarted && error instanceof StructuredDispatchDeferredError) return deferControl(reason);
+      if (recovering) {
+        await this.transitionUnlessSettled(effect.operationId, "uncertain", { reason: unverified }, { fromStatuses: ["delivering"] });
+        return { blocked: false, terminated: false };
+      }
       if (error instanceof StructuredSendRefusedError || error instanceof StructuredDispatchDeferredError) {
         await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
         return { blocked: false, terminated: false };

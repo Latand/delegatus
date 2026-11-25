@@ -212,32 +212,34 @@ test.each(["settlement", "journal", "wire"] as const)("a turn-fenced native add 
   } finally { f.journal.close(); }
 });
 
-test.each([
+for (const [action, fence] of [
   ["start", null],
   ["send-now", null],
   ["send-now", "active-a"],
-] as const)("native %s with turn fence %s refuses a turn change at the wire", async (action, fence) => {
-  const f = fixture();
-  try {
-    const seed = command("seed");
-    f.journal.executeOperation(seed);
-    await f.executor.execute(seed);
-    if (fence === null) f.idle();
-    let turnId: string | null = fence;
-    f.host.agentControlState = () => nativeControlState(turnId);
-    const start = f.queue.start.bind(f.queue), remove = f.queue.delete.bind(f.queue);
-    const beforeWrite = (authorize?: () => void) => () => { turnId = "active-b"; authorize?.(); };
-    f.queue.start = (id, authorize) => start(id, beforeWrite(authorize));
-    f.queue.delete = (id, authorize) => remove(id, beforeWrite(authorize));
-    const c = command("dispatch", { action, turnId: fence, entryId: seed.operationId, expectedRevision: 1 });
-    const before = f.calls.length;
-    f.journal.executeOperation(c);
-    await f.executor.execute(c);
-    expect(f.journal.operationResult(c.operationId)?.receipt).toMatchObject({ status: "failed", reason: "stale-turn" });
-    expect(f.calls.slice(before)).toEqual([]);
-    expect(f.items).toHaveLength(1);
-  } finally { f.journal.close(); }
-});
+] as const) {
+  test(`native ${action} with turn fence ${fence ?? "idle"} refuses a turn change at the wire`, async () => {
+    const f = fixture();
+    try {
+      const seed = command("seed");
+      f.journal.executeOperation(seed);
+      await f.executor.execute(seed);
+      if (fence === null) f.idle();
+      let turnId: string | null = fence;
+      f.host.agentControlState = () => nativeControlState(turnId);
+      const start = f.queue.start.bind(f.queue), remove = f.queue.delete.bind(f.queue);
+      const beforeWrite = (authorize?: () => void) => () => { turnId = "active-b"; authorize?.(); };
+      f.queue.start = (id, authorize) => start(id, beforeWrite(authorize));
+      f.queue.delete = (id, authorize) => remove(id, beforeWrite(authorize));
+      const c = command("dispatch", { action, turnId: fence, entryId: seed.operationId, expectedRevision: 1 });
+      const before = f.calls.length;
+      f.journal.executeOperation(c);
+      await f.executor.execute(c);
+      expect(f.journal.operationResult(c.operationId)?.receipt).toMatchObject({ status: "failed", reason: "stale-turn" });
+      expect(f.calls.slice(before)).toEqual([]);
+      expect(f.items).toHaveLength(1);
+    } finally { f.journal.close(); }
+  });
+}
 
 test.each(["add", "start", "update", "send-now"] as const)("native %s checks account admission after the prepared journal write", async action => {
   const f = fixture();

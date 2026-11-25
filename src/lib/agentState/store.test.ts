@@ -188,6 +188,7 @@ test("delivery reads the settled incident turn across restart and keeps equal su
   expect(cachedAgentObservation(subjectId(entry))).not.toBeNull();
   expect(readControlProjection(registry, entry, FIXTURE_CONVERSATION)?.facts.turn)
     .toMatchObject({ determined: true, value: { state: "closed" } });
+  expect(settlementDeadlineForRow(registry, { delivery })?.policy).toBe("settlement-window");
 
   const foreignPath = path.join(f.root, "other-registry.json");
   const foreignSource = structuredClone(f.source);

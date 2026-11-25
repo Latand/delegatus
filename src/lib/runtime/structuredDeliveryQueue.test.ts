@@ -112,9 +112,18 @@ test.each(["current", "antigravity", "turn", "writer", "generation", "attention"
       },
     }, () => adapter);
 
-    await queue.drain();
-    expect(writes).toEqual(accepted ? ["answer"] : []);
-    expect(statuses).toEqual(["delivering", accepted ? "answered" : "failed"]);
+    try {
+      await queue.drain();
+      expect(writes).toEqual(accepted ? ["answer"] : []);
+      if (replacement === "writer" || replacement === "generation") {
+        expect(statuses).toEqual(["delivering", "queued"]);
+        await queue.drain();
+        expect(statuses).toEqual(["delivering", "queued", "failed"]);
+        expect(writes).toEqual([]);
+      } else {
+        expect(statuses).toEqual(["delivering", accepted ? "answered" : "failed"]);
+      }
+    } finally { queue.retire(); }
   },
 );
 
@@ -249,7 +258,7 @@ for (const policy of ["queue", "steer-or-queue", "interrupt-active"] as const) {
     ] as const)(`an operator ${policy} send retries a %s during ${boundary}`, async (_change, initial, next) => {
       let turnId: string | null = initial;
       let changed = false;
-      let status: StructuredDeliveryTransition = "queued";
+      let status = "queued" as StructuredDeliveryTransition;
       const writes: Array<string | null> = [];
       const changeTurn = () => { if (!changed) { turnId = next; changed = true; } };
       const health = (): HostState => ({ ...idleState(), status: turnId ? "active" : "idle", activeTurnRef: turnId });
@@ -297,7 +306,7 @@ for (const kind of ["interrupt", "answer"] as const) {
   test.each(["retirement", "update handoff"] as const)(
     `the ${kind} control retries after %s during its delivering write`,
     async handoff => {
-      let status: StructuredDeliveryTransition | "pending" = "pending";
+      let status = "pending" as StructuredDeliveryTransition | "pending";
       let reason: string | null | undefined;
       let held = false;
       let writer = "writer:1";
@@ -1800,6 +1809,57 @@ test("an idle queue admission keeps its null turn fence when a turn starts befor
   ]);
 });
 
+test.each(["receipt", "pre-write refusal", "route change", "idle continuation"] as const)(
+  "an idle-fenced send requeues a stale turn at %s",
+  async boundary => {
+    let row: { status: string; reason?: string | null } = { status: "pending" };
+    let turnId: string | null = null;
+    const transitions: string[] = [];
+    const fences: Array<string | null | undefined> = [];
+    const adapter = host(async (entry, _dispatch, authorize) => {
+      authorize?.();
+      fences.push(entry.expectedTurnId);
+      if (fences.length === 1) {
+        if (boundary === "pre-write refusal") throw new StructuredSendRefusedError("stale-turn");
+        if (boundary !== "route change") return { outcome: "rejected", reason: "stale-turn" };
+      }
+      return { outcome: "turn-started", turnId: "turn-delivered" };
+    });
+    adapter.agentControlState = () => hostControlFactsFromHealth({
+      ...idleState(), status: turnId ? "active" : "idle", activeTurnRef: turnId,
+    });
+    const queue = new StructuredDeliveryQueue({
+      effects: async () => [{
+        id: "effect:idle-fenced", kind: "runtime.send", eventSeq: 1,
+        payload: { operationId: "idle-fenced", conversationId: "conversation-one", text: "Continue", policy: "queue", turnId: null,
+          ...(boundary === "idle continuation" ? { onlyIfIdle: { revision: 1, writerClaim: "writer:1" } } : {}) },
+      }],
+      status: async () => row,
+      idleContinuationCurrent: async () => true,
+      transition: async (_id, status, details) => {
+        row = { status, reason: details?.reason };
+        transitions.push(status);
+        if (transitions.length === 1 && boundary === "route change") turnId = "turn-intervening";
+      },
+    }, () => adapter);
+    try {
+      await queue.drain();
+      expect(row).toEqual({ status: "queued", reason: "stale-turn" });
+      expect(fences).toEqual(boundary === "route change" ? [] : [null]);
+      turnId = boundary === "idle continuation" ? "turn-intervening" : null;
+      await queue.drain();
+      if (boundary === "idle continuation") {
+        expect(row).toEqual({ status: "failed", reason: "idle-continuation-cancelled" });
+        expect(transitions).toEqual(["delivering", "queued", "failed"]);
+        expect(fences).toEqual([null]);
+      } else {
+        expect(transitions).toEqual(["delivering", "queued", "delivering", "delivered"]);
+        expect(fences).toEqual(boundary === "route change" ? [null] : [null, null]);
+      }
+    } finally { queue.retire(); }
+  },
+);
+
 test("interrupt-active stops the current turn before starting the user message", async () => {
   const actions: string[] = [];
   const transitions: Array<[string, string, string | null | undefined]> = [];
@@ -2263,45 +2323,170 @@ test("interrupt actuates a deliberately held fake-host turn", async () => {
   ]);
 });
 
+test("a control deferred before dispatch retries on the replacement host", async () => {
+  let status = "pending" as StructuredDeliveryTransition | "pending";
+  const transitions: string[] = [];
+  const calls: string[] = [];
+  const controlHost = (name: string): EngineHost => {
+    const adapter = host(async () => { throw new Error("expected an interrupt"); });
+    adapter.health = async () => ({ ...idleState(), status: "active", activeTurnRef: "turn-one" });
+    adapter.interrupt = async turnId => { calls.push(`${name}:${turnId}`); };
+    return adapter;
+  };
+  let target = controlHost("first");
+  const second = controlHost("second");
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => [{
+      id: "effect:control", kind: "runtime.interrupt", eventSeq: 1,
+      payload: { operationId: "control", conversationId: "conversation-one", turnId: "turn-one",
+        controlBinding: { engine: "codex", sessionId: "session-one", writerClaim: "writer:1" } },
+    }],
+    status: async () => ({ status }),
+    currentHostClaim: () => "writer:1",
+    currentHostSessionKey: () => ({ engine: "codex", sessionId: "session-one" }),
+    transition: async (_id, next, _details, options) => {
+      if (options?.fromStatuses) expect(options.fromStatuses).toContain(status);
+      transitions.push(next);
+      status = next;
+      if (next === "delivering") target = second;
+    },
+  }, () => target);
+  try {
+    await queue.drain();
+    expect(transitions).toEqual(["delivering", "queued"]);
+    expect(calls).toEqual([]);
+    await queue.drain();
+    expect(transitions).toEqual(["delivering", "queued", "delivering", "interrupted"]);
+    expect(calls).toEqual(["second:turn-one"]);
+  } finally { queue.retire(); }
+});
+
 for (const kind of ["answer", "interrupt"] as const) {
-  test.each(["legacy", "previous writer", "live writer", "unreadable writer"] as const)(
-    `a delivering ${kind} respects its executor fence (%s)`,
-    async owner => {
-      let status: StructuredDeliveryTransition = "delivering";
+  test.each([
+    ["legacy", "pending"],
+    ["previous writer", "pending"],
+    ["legacy", "gone"],
+    ["previous writer", "gone"],
+    ["previous writer", "gone while requeuing"],
+    ["previous writer", "gone during claim"],
+    ["previous writer", "different binding"],
+    ["live writer", "pending"],
+    ["unreadable writer", "pending"],
+  ] as const)(
+    `a delivering ${kind} respects its executor fence (%s, %s)`,
+    async (owner, fence) => {
+      let row: { status: StructuredDeliveryTransition; reason?: string | null } = {
+        status: "delivering", reason: owner === "legacy" ? null : "delivering-owner:other-executor@writer:1",
+      };
+      let pending = fence !== "gone";
       const transitions: string[] = [];
       const actuations: string[] = [];
+      const request = {};
       const adapter = host(async () => ({ outcome: "turn-started", turnId: "turn-next" }));
-      adapter.health = async () => ({ ...idleState(), status: "attention",
-        activeTurnRef: "turn-one", pendingAttention: ["permission-one"] });
-      adapter.answer = async () => { actuations.push("answer"); };
-      adapter.interrupt = async () => { actuations.push("interrupt"); };
+      adapter.agentControlState = () => hostControlFactsFromHealth({
+        ...idleState(), status: "attention",
+        activeTurnRef: pending || kind === "answer" ? "turn-one" : "turn-two",
+        pendingAttention: pending ? ["permission-one"] : ["different-permission"],
+      });
+      adapter.agentAttentionRequest = id => pending && id === "permission-one" ? request : undefined;
+      adapter.answer = async id => { actuations.push(id); };
+      adapter.interrupt = async id => { actuations.push(id); };
       const queue = new StructuredDeliveryQueue({
         effects: async () => [{
           id: "effect:control", kind: `runtime.${kind}`, eventSeq: 1,
           payload: { operationId: "control", conversationId: "conversation-one",
             ...(kind === "answer" ? { attentionId: "permission-one", resolution: { behavior: "allow" } }
-              : { turnId: "turn-one" }) },
+              : { turnId: "turn-one" }),
+            ...(owner === "previous writer" ? {
+              controlBinding: { engine: "codex", sessionId: "session-one", writerClaim: fence === "different binding" ? "writer:1" : "writer:2" },
+            } : {}) },
         }],
-        status: async () => ({ status, reason: owner === "legacy" ? null : "delivering-owner:other-executor@writer:1" }),
+        status: async () => row,
         hostClaim: async () => {
           if (owner === "unreadable writer") throw new Error("host claim unavailable");
           return owner === "previous writer" ? "writer:2" : "writer:1";
         },
-        transition: async (_id, next, _details, options) => {
-          if (options?.fromStatuses && !options.fromStatuses.includes(status)) throw new Error("runtime operation moved before its transition");
+        transition: async (_id, next, details, options) => {
+          if (options?.fromStatuses) expect(options.fromStatuses).toContain(row.status);
           transitions.push(next);
-          status = next;
+          row = { status: next, reason: details?.reason };
+          if ((next === "queued" && fence === "gone while requeuing")
+            || (next === "delivering" && fence === "gone during claim")) pending = false;
         },
       }, () => adapter);
-      await queue.drain();
-      expect(queue.lastTargetError("conversation-one")).toBeNull();
-      const held = owner === "live writer" || owner === "unreadable writer";
-      expect(status).toBe(held ? "delivering" : "uncertain");
-      expect(transitions).toEqual(held ? [] : ["uncertain"]);
-      expect(actuations).toEqual([]);
+      try {
+        await queue.drain();
+        await queue.drain();
+        expect(queue.lastTargetError("conversation-one")).toBeNull();
+        const held = owner === "live writer" || owner === "unreadable writer";
+        const delivered = !held && fence === "pending";
+        const completed = kind === "answer" ? "answered" : "interrupted";
+        const expected = held ? [] : fence === "pending" ? ["queued", "delivering", completed]
+          : fence === "gone during claim" ? ["queued", "delivering", "uncertain"]
+          : fence === "gone while requeuing" ? ["queued", "uncertain"] : ["uncertain"];
+        expect(transitions).toEqual(expected);
+        expect(row.status).toBe(held ? "delivering" : delivered ? completed : "uncertain");
+        expect(actuations).toEqual(delivered ? [kind === "answer" ? "permission-one" : "turn-one"] : []);
+      } finally { queue.retire(); }
     },
   );
 }
+
+test.each(["same writer", "replacement writer"] as const)(
+  "a requeued legacy control keeps its recovery fence across journal restart (%s)",
+  async ownership => {
+    setSystemTime(new Date("2026-11-25T00:00:00Z"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "control-replay-"));
+    const filename = path.join(root, "journal.sqlite");
+    let journal = new RuntimeJournal(filename, { structuredHosts: true });
+    let writerClaim = "writer:1";
+    const calls: string[] = [];
+    const conversationId = "conversation-one";
+    const operationId = "legacy-interrupt";
+    const adapter = host(async () => { throw new Error("expected an interrupt"); });
+    adapter.agentControlState = () => hostControlFactsFromHealth({
+      ...idleState(), status: "active", activeTurnRef: "turn-one",
+    });
+    adapter.interrupt = async turnId => { calls.push(turnId); };
+    const executor = () => new StructuredDeliveryQueue({
+      effects: async () => journal.effectBatch(100, ["runtime.interrupt"]),
+      status: async id => journal.operationResult(id)?.receipt ?? null,
+      hostClaim: () => writerClaim,
+      currentHostClaim: () => writerClaim,
+      transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+    }, () => adapter);
+    const predecessor = executor();
+    const successor = executor();
+    try {
+      journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+        conversationId, sessionKey: { engine: "codex", sessionId: "session-one" },
+        hostKind: "codex-app-server", host: "hosted", turn: "running", activeTurnId: "turn-one",
+        writerClaim: null, provenance: "structured", capabilities: { steer: true, structuredAttention: true },
+      } });
+      journal.executeOperation({ kind: "interrupt", conversationId, operationId, idempotencyKey: operationId, turnId: "turn-one" });
+      journal.transitionOperation(operationId, "delivering", { turnId: "turn-one" });
+      await predecessor.drain();
+      expect(journal.operationResult(operationId)?.receipt.status).toBe("queued");
+      expect(calls).toEqual([]);
+
+      predecessor.retire();
+      journal.close();
+      journal = new RuntimeJournal(filename, { structuredHosts: true });
+      if (ownership === "replacement writer") writerClaim = "writer:2";
+      await successor.drain();
+      await successor.drain();
+      expect(journal.operationResult(operationId)?.receipt.status)
+        .toBe(ownership === "same writer" ? "interrupted" : "uncertain");
+      expect(calls).toEqual(ownership === "same writer" ? ["turn-one"] : []);
+      expect(journal.effectBatch(100, ["runtime.interrupt"])).toEqual([]);
+    } finally {
+      predecessor.retire();
+      successor.retire();
+      journal.close();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("an interrupt for a conversation with no host settles once the host is proven severed", async () => {
   const transitions: Array<[string, string, string | undefined]> = [];
