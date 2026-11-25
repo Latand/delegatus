@@ -23,6 +23,43 @@ function isFinalBudgetFix(attempt: PipelineStageAttempt): boolean {
   return attempt.activatedBy?.edge === "fail" && attempt.activatedBy.budgetSpent === true;
 }
 
+function terminalRecheck(pipeline: Pipeline, head: string): PipelineStageAttempt | undefined {
+  return pipeline.runs.flatMap(run => run.attempts)
+    .filter(a => !a.historical && a.activatedBy?.budgetRecheck
+      && (a.reviewHeadSha ?? a.reviewedHead ?? a.report?.provenance.head) === head
+      && a.completedAt && a.verdict && !a.verdict.blocked
+      && ["passed", "failed", "needs_decision"].includes(a.state))
+    .sort((a, b) => b.completedAt!.localeCompare(a.completedAt!))[0];
+}
+
+function recheckResult(attempt: PipelineStageAttempt): string {
+  if (attempt.verdict?.status === "pass") return "**Last fix re-checked and passed.**";
+  const findings = attempt.verdict?.findings ?? [];
+  const counts = ["P0", "P1", "P2", "P3"].map(severity =>
+    [severity, findings.filter(finding => new RegExp(`^${severity}\\b`).test(finding)).length] as const);
+  const classified = counts.reduce((sum, [, count]) => sum + count, 0);
+  const severities = counts.filter(([, count]) => count).map(([severity, count]) => `${severity}: ${count}`);
+  if (classified < findings.length) severities.push(`unspecified severity: ${findings.length - classified}`);
+  return `**Last fix re-checked with ${findings.length} findings left${severities.length ? ` (${severities.join(", ")})` : ""}.**`;
+}
+
+const RESULT_START = "<!-- delegatus:latest-pipeline-result -->";
+const RESULT_END = "<!-- /delegatus:latest-pipeline-result -->";
+function replaceLatestResult(body: string, update: string, legacyReports: string[]): string {
+  const start = body.indexOf(RESULT_START);
+  const end = start < 0 ? -1 : body.indexOf(RESULT_END, start);
+  if (end >= 0) return body.slice(0, start) + update + body.slice(end + RESULT_END.length + (body.startsWith("\n\n", end + RESULT_END.length) ? 2 : 0));
+  // Recover an unmarked block only when its complete persisted report matches.
+  const legacy = /## Latest pipeline result\n\nHead: `[0-9a-f]{40}`\n\n\*\*Last fix was not re-reviewed: review budget spent\.\*\*\n\nFix stage report \(supersedes earlier head, checks and review-status statements\):\n\n/.exec(body);
+  if (legacy) {
+    for (const report of legacyReports) {
+      const prefix = legacy[0] + report + "\n\n---\n\n";
+      if (body.startsWith(prefix, legacy.index)) return body.slice(0, legacy.index) + update + body.slice(legacy.index + prefix.length);
+    }
+  }
+  return update + body;
+}
+
 export function stagePullRequestProducer(pipeline: Pipeline, attempt: PipelineStageAttempt): PipelineStageAttempt {
   return isFinalBudgetFix(attempt) || attempt.effectiveRole.access !== "read-only" ? attempt : pipeline.runs.flatMap(run => run.attempts)
     .filter(a => !a.historical && a.effectiveRole.access !== "read-only" && (a.report?.summary || a.output))
@@ -126,7 +163,7 @@ async function inspectRepositoryText(part: "title" | "body", file: string, gate:
 const HEAD_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 14_000];
 const HEAD_RETRY_BUDGET_MS = 30_000;
 type HeadRetryTiming = { now(): number; sleep(ms: number): Promise<void> };
-export type StagePullRequestRecovery = { allowCompletedRefresh?: boolean; authorize?: () => boolean };
+export type StagePullRequestRecovery = { allowTerminalRefresh?: boolean; authorize?: () => boolean };
 
 /** Called under the settlement's lane lock and cancellation fence, outside
  * the state mutation lease. Discovery recovers a create whose reply was lost. */
@@ -135,8 +172,12 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
   const delivery = pipeline.delivery;
   const pendingRefresh = delivery && delivery.pendingPullRequestRefresh?.epoch === delivery.epoch
     && delivery.pendingPullRequestRefresh.sha === acceptedHead ? delivery.pendingPullRequestRefresh : undefined;
-  const completedRefresh = recovery.allowCompletedRefresh === true && pipeline.state === "completed" && Boolean(pendingRefresh);
-  if (!delivery || delivery.publish !== "enabled" || (!delivery.active && !completedRefresh) || delivery.disposition !== "owner"
+  const terminalRefresh = recovery.allowTerminalRefresh === true && Boolean(pendingRefresh)
+    && (pipeline.state === "completed" || pipeline.state === "needs_decision");
+  const releasedCompletedRefresh = terminalRefresh && pipeline.state === "completed"
+    && !delivery?.active && delivery?.publish === "disabled";
+  if (!delivery || (delivery.publish !== "enabled" && !releasedCompletedRefresh)
+    || (!delivery.active && !releasedCompletedRefresh) || delivery.disposition !== "owner"
     || delivery.ownerId !== pipeline.id || (acceptedHead === pipeline.baseRef && delivery.target.pr === undefined)) return { ok: true };
   /* A fork PR lives in the upstream `prRepository`, and its head in the fork
      the delivery remote pushes to. */
@@ -150,7 +191,12 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
   const crossRepository = repository !== pushRepository;
   if (crossRepository && delivery.target.pr === undefined) return { ok: false, error: "a fork delivery names no pull request; the lane cannot open one in the fork" };
   const branch = delivery.target.branch.replace(/^refs\/heads\//, "");
-  const refresh = isFinalBudgetFix(attempt) || Boolean(pendingRefresh);
+  const recheck = terminalRecheck(pipeline, acceptedHead);
+  const refresh = isFinalBudgetFix(attempt) || Boolean(recheck) || Boolean(pendingRefresh);
+  // Summary/output are internal reports. Deferred refreshes also derive the
+  // public result from the durable producer, including records from old controllers.
+  const publicResult = (producer = stagePullRequestProducer(pipeline, attempt)) =>
+    recheck ? recheckResult(recheck) : producer.report?.result?.trim() || "Fix stage passed.";
   // Only this attempt's accepted publication can explain a temporarily stale
   // PR head. Other settlements skip backoff and need fresh Git proof below.
   const operation = delivery.operation;
@@ -166,7 +212,8 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     epoch: delivery.epoch, operation: delivery.operation?.id, repository: delivery.target.repository,
     prRepository: delivery.target.prRepository, baseBranch: pipeline.baseBranch, worktreeDir: pipeline.worktreeDir,
     lastPassedCommit: pipeline.lastPassedCommit };
-  const ownsPublication = () => pipeline.delivery === delivery && (delivery.active || completedRefresh) && delivery.publish === "enabled"
+  const ownsPublication = () => pipeline.delivery === delivery && (delivery.active || releasedCompletedRefresh)
+    && (delivery.publish === "enabled" || releasedCompletedRefresh)
     && delivery.disposition === "owner" && delivery.ownerId === pipeline.id && delivery.epoch === proofTarget.epoch
     && delivery.operation?.id === proofTarget.operation && delivery.target.remote === proofTarget.remote
     && delivery.target.branch === proofTarget.branch && delivery.target.pr === proofTarget.pr
@@ -308,8 +355,7 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
       // keeps the advisory across storage/restart without changing its verdict.
       const number = found.retryHead ? found.number! : delivery.target.pr ?? null;
       if (refresh && number !== null) {
-        const producer = stagePullRequestProducer(pipeline, attempt);
-        const summary = pendingRefresh?.summary ?? (producer.report?.summary?.trim() || producer.output?.trim() || "");
+        const summary = publicResult();
         if (summary.length > 60 * 1024) return refused("body", "size", "size");
         delivery.pendingPullRequestRefresh = { epoch: delivery.epoch, sha: acceptedHead, number,
           summary };
@@ -338,19 +384,28 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     if (number !== null && attempt.pullRequestInspection) attempt.error = attempt.pullRequestInspection.detail;
     if (number === null || refresh) {
       const producer = stagePullRequestProducer(pipeline, attempt);
-      const rawSummary = pendingRefresh?.summary ?? (producer.report?.summary?.trim() || producer.output?.trim() || "");
-      const summary = publicationSummary(rawSummary);
-      const update = `## Latest pipeline result\n\nHead: \`${acceptedHead}\`\n\n**Last fix was not re-reviewed: review budget spent.**\n\n`
-        + `Fix stage report (supersedes earlier head, checks and review-status statements):\n\n${summary}\n\n---\n\n`;
+      const rawSummary = producer.report?.summary?.trim() || producer.output?.trim() || "";
+      const rawResult = publicResult(producer);
+      const summary = refresh || producer.activatedBy?.edge === "fail" ? rawResult : rawSummary;
+      const result = publicationSummary(rawResult);
+      const update = `${RESULT_START}\n## Latest pipeline result\n\nHead: \`${acceptedHead}\`\n\n`
+        + (recheck ? result : `**Last fix was not re-reviewed: review budget spent.**\n\nFix result: ${result}`)
+        + `\n${RESULT_END}\n\n`;
       // Preserve the producer's description and attribution footer byte for
-      // byte. The exact prefix also recovers a lost edit acknowledgement.
-      const alreadyUpdated = refresh && number !== null && found.body?.startsWith(update);
+      // byte. Comparing the whole body also recovers a lost edit acknowledgement.
+      const legacyReports = pipeline.runs.flatMap(run => run.attempts).filter(isFinalBudgetFix)
+        .map(a => a.report?.summary?.trim() || a.output?.trim() || "");
+      if (pendingRefresh) legacyReports.push(pendingRefresh.summary);
+      // Older publication code could normalize the report before writing it.
+      const updatedBody = replaceLatestResult(found.body ?? "", update,
+        legacyReports.flatMap(report => [report, publicationSummary(report)]));
+      const alreadyUpdated = refresh && number !== null && found.body === updatedBody;
       const incomplete = refresh && number !== null && (typeof found.body !== "string" || typeof found.title !== "string");
       if (pendingRefresh && incomplete) return { ok: false, error: "the deferred pull request body refresh needs a complete PR body and title read" };
-      const body = alreadyUpdated ? found.body! : refresh ? update + (found.body ?? "") : summary;
-      const title = found.title ?? publicationTitle(pipeline.task, rawSummary, pipeline.prTitle);
+      const body = alreadyUpdated ? found.body! : refresh ? updatedBody : publicationSummary(summary);
+      const title = found.title ?? publicationTitle(pipeline.task, summary, pipeline.prTitle);
       const hints = [...publicationLanguageHints("title", title), ...publicationLanguageHints("body", body),
-        ...publicationLanguageHints("body", rawSummary)];
+        ...publicationLanguageHints("body", rawSummary), ...publicationLanguageHints("body", summary)];
       if (hints.length) attempt.publicationLanguageHints = { at: attempt.publicationLanguageHints?.at ?? new Date().toISOString(),
         hints: [...new Map(hints.map(hint => [`${hint.part}:${hint.line}`, hint])).values()] };
       for (const [part, value] of [["title", title], ["body", body]] as const) {
