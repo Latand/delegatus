@@ -53,7 +53,7 @@ export interface CodexAppServerOptions {
   generateProtocolSchemas?: CodexSchemaGenerator;
   /** Thread migration and voice declare the methods and fields they need.
       Status/sign-in clients stay on the stable surface. */
-  protocolProfile?: "account" | "thread-control" | "voice";
+  protocolProfile?: "account" | "quota" | "thread-control" | "voice";
 }
 
 export interface DeviceCodeChallenge {
@@ -299,8 +299,12 @@ export class CodexAppServerClient {
   }
 
   static async start(options: CodexAppServerOptions): Promise<CodexAppServerClient> {
-    const { withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
-    return withCodexCliLaunch(options.launchBinary ?? codexAccountBinary(), () => this.startWithCliGuard(options));
+    const { withCodexCliLaunch, withCodexQuotaLaunch } = await import("@/lib/codexUpdate/installation");
+    const binary = options.launchBinary ?? codexAccountBinary();
+    const start = () => this.startWithCliGuard(options);
+    return options.protocolProfile === "quota"
+      ? withCodexQuotaLaunch(binary, options.home, start)
+      : withCodexCliLaunch(binary, start);
   }
 
   private static async startWithCliGuard(options: CodexAppServerOptions): Promise<CodexAppServerClient> {
