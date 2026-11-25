@@ -19685,8 +19685,8 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
   const CASES = {
     "t-upload": { state: "one provider", marks: [["codex", "num", 1]], pop: [/Codex ≈1%/, /650.*1.200/, /(published sources|відкритими джерелами)/] },
     "t-search": { state: "two providers", marks: [["claude", "num", 1], ["codex", "num", 1]], pop: [/Claude ≈3%/, /Codex ≈2%/, /(account usage and the plan budget|темпом акаунта й бюджетом плану)/, /900.*2.300/, /226/] },
-    "t-export": { state: "several accounts", marks: [["claude", "tiny", 0], ["codex", "num", 2]], pop: [/Claude <1%/, /Codex ≈7%/] },
-    "t-links": { state: "tiny", marks: [["claude", "tiny", 0]], pop: [/Claude <1%/] },
+    "t-export": { state: "several accounts", marks: [["claude", "tiny", 0], ["codex", "num", 2]], pop: [/Claude ≈/, /Codex ≈7%/] },
+    "t-links": { state: "tiny", marks: [["claude", "tiny", 0]], pop: [/Claude ≈0[.,]3%/] },
     "t-interrupt": { state: "large, estimate with incomplete history", marks: [["claude", "floor", 2], ["codex", "num", 4]], pop: [/Claude ≈12%/, /Codex ≈34%/] },
     "t-disk": { state: "plan unreported", marks: [["claude", "tokens", null], ["codex", "num", 1]], pop: [/Claude 41/, /(reported account plan is needed|потрібен план акаунта)/, /Codex ≈1%/] },
   } as const;
@@ -19829,7 +19829,7 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               }
             }
             /* The task screen covers two providers, a lower bound and an unreported plan. */
-            for (const [tab, id] of [["assigned", "t-search"], ["done", "t-interrupt"], ["assigned", "t-disk"]] as const) {
+            for (const [tab, id] of [["assigned", "t-search"], ["done", "t-interrupt"], ["assigned", "t-disk"], ["assigned", "t-links"]] as const) {
               await page.locator(`[data-phone-kanban-tab="${tab}"]`).click();
               await page.locator(`[data-phone-card="task:${id}"] [data-phone-card-title]`).click();
               const section = page.locator(`[data-phone-task-spend="${id}"]`);

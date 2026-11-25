@@ -99,7 +99,8 @@ test("a provisional measured rate and its plan tier survive the loss of its samp
   const date = "2026-11-19", start = Date.parse(date), now = start + 12 * HOUR;
   const first = start - 6 * DAY;
   const account = "claude:a";
-  const plan = { plan: "max", planTier: "default_claude_max_20x", session: null, weekly: null, capturedAt: null };
+  const plan: { plan: string; planTier: string | undefined; session: null; weekly: null; capturedAt: null } =
+    { plan: "max", planTier: "default_claude_max_20x", session: null, weekly: null, capturedAt: null };
   const reading = (at: number, remaining: number) => ({ t: at / 1000, remaining });
   let series = { "claude|a|weekly": [reading(first, 100), reading(start + HOUR, 80), reading(now, 80)] };
   const run = (at: number, observation: typeof plan | null) => refreshLimitRates(store.db, at,
@@ -120,7 +121,7 @@ test("a provisional measured rate and its plan tier survive the loss of its samp
     const latestDay = new Date(now + 3 * DAY).toISOString().slice(0,10);
     const carried = store.db.query("SELECT plan,plan_tier FROM usage_limit_rates WHERE account=? AND day=? AND window='weekly'").get(account, latestDay);
     expect(carried).toEqual({ plan: "max", plan_tier: "default_claude_max_20x" });
-    await run(now + 3 * DAY, { ...plan, plan: "pro", planTier: null });
+    await run(now + 3 * DAY, { ...plan, plan: "pro", planTier: undefined });
     expect(store.db.query("SELECT plan,plan_tier FROM usage_limit_rates WHERE account=? AND day=? AND window='weekly'").get(account, latestDay))
       .toEqual({ plan: "pro", plan_tier: null });
   } finally {

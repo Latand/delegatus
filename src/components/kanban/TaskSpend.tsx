@@ -6,7 +6,7 @@ import { intlLocale } from "@/components/activity/format";
 import { compact, money } from "@/components/activity/tokenParts";
 import { EngineMark } from "@/components/EngineMark";
 import { TooltipBubble } from "@/components/TooltipBubble";
-import type { SpendRange, TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
+import type { SpendBudget, SpendRange, TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
 import { useLocale, type Locale, type TFunction } from "@/lib/i18n";
 
 import { useTaskSpend } from "./taskSpendSummaries";
@@ -38,11 +38,16 @@ function floorText(pp: number, locale: Locale): string {
   return pp >= 1 ? `${Math.floor(pp)}%` : `${decimal(Math.floor(pp * 10) / 10, locale)}%`;
 }
 
+function estimatePercent(pp: number, locale: Locale): string {
+  if (pp < 0.1) return "<0.1%";
+  return pp < 1 ? `${decimal(Math.round(pp * 10) / 10, locale)}%` : `${Math.round(pp)}%`;
+}
+
 /** The provider's headline figure: «≈3%», «<1%», «≥12%». */
 function headline(provider: TaskSpendProvider, locale: Locale): string {
   const kind = providerKind(provider);
   if (kind === "floor") return `≈${floorText(provider.weeklyPp, locale)}`;
-  if (kind === "tiny") return "<1%";
+  if (kind === "tiny") return `≈${estimatePercent(provider.weeklyPp, locale)}`;
   return `≈${Math.round(provider.weeklyPp)}%`;
 }
 
@@ -59,7 +64,7 @@ function accountBudget(account: TaskSpendAccount, locale: Locale, t: TFunction):
   return t("taskSpend.budget", { low: number.format(account.budget.low), high: number.format(account.budget.high), grade: t(`taskSpend.grade.${account.budget.grade}`) });
 }
 
-function budgetText(budget: SpendRange & { grade: string }, locale: Locale, t: TFunction): string {
+function budgetText(budget: SpendBudget, locale: Locale, t: TFunction): string {
   const number = new Intl.NumberFormat(intlLocale(locale), { maximumFractionDigits: 0 });
   return t("taskSpend.budget", { low: number.format(budget.low), high: number.format(budget.high), grade: t(`taskSpend.grade.${budget.grade}`) });
 }
@@ -70,7 +75,7 @@ export function taskSpendAria(t: TFunction, summary: TaskSpendSummary, locale: L
     const engine = ENGINE_NAME[provider.engine];
     const kind = providerKind(provider);
     if (kind === "tokens") return t("taskSpend.aria.tokens", { engine, tokens: compact(provider.tokens, locale) });
-    if (kind === "tiny") return t("taskSpend.aria.tiny", { engine });
+    if (kind === "tiny") return t("taskSpend.aria.approx", { engine, value: estimatePercent(provider.weeklyPp, locale) });
     if (kind === "floor") return t("taskSpend.aria.approx", { engine, value: `${floorText(provider.weeklyPp, locale)} (estimate)` });
     return t("taskSpend.aria.approx", { engine, value: `${Math.round(provider.weeklyPp)}%` });
   });
@@ -152,12 +157,12 @@ function SpendLines({ summary, accountDetails = false }: { summary: TaskSpendSum
             {accountDetails ? provider.accounts?.map(account => {
               const label = account.key === "unknown" ? t("taskSpend.unattributed") : account.label;
               const plan = accountPlan(account);
-              const share = account.weeklyPp === null ? t("taskSpend.tokens", { tokens: compact(account.tokens, locale) }) : `≈${Math.round(account.weeklyPp)}%`;
+              const share = account.weeklyPp === null ? t("taskSpend.tokens", { tokens: compact(account.tokens, locale) }) : `≈${estimatePercent(account.weeklyPp, locale)}`;
               return <span key={account.key} className="pop-sub meter-note" data-spend-account={account.key}>
                 {label}{plan ? ` · ${plan}` : ""} · {t("taskSpend.accountShare", { value: share })}
                 {accountBudget(account,locale,t) ? ` · ${accountBudget(account,locale,t)}` : ""}
                 {account.week ? ` · ${t("taskSpend.week", { value: `${Math.round(account.week.usedPercent)}%` })}` : ""}
-                {account.sessionPp !== null && account.sessionPp > 0 ? ` · ${t("taskSpend.sessionEstimate", { value: `≈${Math.round(account.sessionPp)}%` })}` : ""}
+                {account.sessionPp !== null && account.sessionPp > 0 ? ` · ${t("taskSpend.sessionEstimate", { value: `≈${estimatePercent(account.sessionPp, locale)}` })}` : ""}
               </span>;
             }) : null}
             {provider.unpricedTokens > 0 ? <span className="pop-sub meter-note">

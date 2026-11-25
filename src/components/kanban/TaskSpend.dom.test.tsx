@@ -56,6 +56,7 @@ const TASKS: Record<string, TaskSpendSummary> = {
   floor46: { providers: [provider("claude", [account("claude:a", "A", "max", 4.6, 200e6, 50)], "floor", "before-counting")] },
   floor146: { providers: [provider("claude", [account("claude:a", "A", "max", 14.6, 600e6, 60)], "floor", "before-counting")] },
   long: { providers: [provider("claude", [account("claude:a", "Research workstation in the second office, shared by the whole data team on site", "max", 2, 90e6, 40)])] },
+  tiny: { providers: [provider("claude", [account("claude:a", "A", "max", 0.3, 17e6, null, 0.3)])] },
 };
 
 const previousFetch = globalThis.fetch;
@@ -244,6 +245,20 @@ test("the compact popover marks estimates and shows one total token line", async
   const trigger = document.querySelector<HTMLElement>("[data-spend='two']")!;
   await act(async () => trigger.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
   expect(document.querySelector("[data-spend-pop='two']")).toBeNull();
+});
+
+test("small weekly and five-hour shares retain estimate precision on desktop and phone", async () => {
+  await mount(<><TaskSpendMarks taskId="tiny" interactive /><PhoneTaskSpend taskId="tiny" headingClass="h" /></>);
+  const pop = await open("tiny");
+  expect(pop.textContent).toContain("Claude ≈0.3% of the week");
+  let phone = document.querySelector("[data-phone-task-spend='tiny']")!.textContent!;
+  expect(phone).toContain("task estimate ≈0.3% of week");
+  expect(phone).toContain("5-hour estimate ≈0.3%");
+  setLocale("uk");
+  await mount(<><TaskSpendMarks taskId="tiny" interactive /><PhoneTaskSpend taskId="tiny" headingClass="h" /></>);
+  expect((await open("tiny")).textContent).toContain("Claude ≈0,3% тижня");
+  phone = document.querySelector("[data-phone-task-spend='tiny']")!.textContent!;
+  expect(phone).toContain("оцінка за 5 годин ≈0,3%");
 });
 
 test("a lower bound and an unreported plan have distinct explanations in Ukrainian", async () => {
