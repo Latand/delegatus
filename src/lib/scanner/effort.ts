@@ -30,6 +30,10 @@ function pickEffort(entry: FileEntry, obj: Record<string, unknown>): string | nu
   if (entry.root === "copilot-sessions" && (obj.type === "session.start" || obj.type === "session.model_change")) {
     return stringValue(recordValue(obj.data)?.reasoningEffort);
   }
+  if (entry.root === "antigravity-sessions" && (obj.type === "session.start" || obj.type === "session.resume" || obj.type === "session.model_change")) {
+    const data = recordValue(obj.data);
+    return stringValue(data?.effort) ?? stringValue(data?.reasoningEffort);
+  }
   if (entry.root === "openclaw-sessions" && obj.type === "thinking_level_change") {
     return stringValue(obj.thinkingLevel);
   }
@@ -72,7 +76,7 @@ export interface EntryEffortResult {
 
 export function entryEffortResult(entry: FileEntry): EntryEffortResult {
   if (
-    (entry.root !== "claude-projects" && entry.root !== "codex-sessions" && entry.root !== "openclaw-sessions" && entry.root !== "copilot-sessions")
+    (entry.root !== "claude-projects" && entry.root !== "codex-sessions" && entry.root !== "openclaw-sessions" && entry.root !== "copilot-sessions" && entry.root !== "antigravity-sessions")
     || !entry.path.endsWith(".jsonl")
   ) {
     return { value: null, complete: true };

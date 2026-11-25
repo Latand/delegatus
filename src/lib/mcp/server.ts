@@ -5,6 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { FLOW_RETIREMENT } from "@/lib/flows/retirement";
 import { ISSUE_REPORT_RESPONSE_RULE } from "@/lib/issueReports/approvalForm";
 import { cloneFileCallBudgetMs } from "@/lib/externalRelay/cloneToolBudget";
+import { telegramReactionMessageIdSchema, telegramReactionSchema } from "@/lib/telegram/bot/reactions";
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
 import { trackMcpClaim, installMcpLifecycle, logMcpLifecycle, drainMcpClaims } from "../../../bin/mcp-lifecycle.mjs";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
@@ -154,6 +155,8 @@ export const MCP_TOOL_NAMES = [
   "telegram_bot_send",
   "telegram_bot_send_media",
   "telegram_bot_send_document",
+  "telegram_bot_reactions",
+  "telegram_bot_set_reaction",
   "telegram_bot_messages",
   "relay_owner_history",
   "relay_trusted_requesters",
@@ -243,11 +246,11 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      replayed clientRequestId must answer with what the first call recorded
      rather than switch and record a second time. */
   "auto_updates",
-  /* Posts into a Telegram chat. A replayed clientRequestId must answer with
-     the message ids the first call posted, never post a second time. */
+  /* Posts or reacts in a Telegram chat. Replay the first receipt under the same key. */
   "telegram_bot_send",
   "telegram_bot_send_media",
   "telegram_bot_send_document",
+  "telegram_bot_set_reaction",
   /* Records a preview and files one issue (#2518). A replayed clientRequestId
      must answer with the issue the first call filed, never file a second. */
   "issue_report",
@@ -3852,7 +3855,8 @@ export function createMcpToolService(
           /* bridge_report's one refusal (a report with nothing left after the
              privacy scrub) names its code the same way: the same call fails the
              same way, so it is not retryable as sent. */
-          const botRefusal = (typedTool === "telegram_bot_send" || typedTool === "telegram_bot_send_media" || typedTool === "telegram_bot_send_document" || typedTool === "bridge_report") && error instanceof McpToolRefusal
+          const botRefusal = (typedTool === "telegram_bot_send" || typedTool === "telegram_bot_send_media" || typedTool === "telegram_bot_send_document"
+            || typedTool === "telegram_bot_reactions" || typedTool === "telegram_bot_set_reaction" || typedTool === "bridge_report") && error instanceof McpToolRefusal
             && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
             ? { code: error.details.code, retryable: error.details.retryable } : null;
           /* Named issue, workspace, cross-project and orchestrator refusals preserve the
@@ -4145,7 +4149,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   lifecycle_events: "Query the durable lifecycle event journal by lineage and cursor, or poll a bounded relay digest of what changed since the last one.",
   request_attention: [
     'Use waitFor:"accepted" to return after durable acceptance with accepted:true, arrival:"pending" and handoff:null. The default waits for durable browser arrival.',
-    "Move the operator's one active Delegatus view to a typed target immediately and verify the arrival — no confirmation prompt, no pending offer. Execution is gated on server-derived authority: only the operator's root/gateway session or the target project's designated orchestrator seat may direct it; workers and unidentified callers are refused (ATTENTION_NOT_PERMITTED) with nothing recorded. The latest-interaction active view is chosen deterministically (down to the one executing browser tab); success is returned only after that view's camera/focus actually landed, and a missing view, lost target, or timeout is an explicit bounded failure. Durably attributed to the calling session, idempotent by clientRequestId across restarts, and the operator keeps a one-action Return control that restores exactly where they were. On a phone the request shows as a notice; the phone's view never moves. With no desktop to move and a phone open, the call answers at once with delivered: \"notice\" and no handoff.",
+    "Move the operator's one active Delegatus view to a typed target immediately and verify the arrival — no confirmation prompt, no pending offer. Execution is gated on server-derived authority: only the operator's root/gateway session or the target project's designated orchestrator seat may direct it; workers and unidentified callers are refused (ATTENTION_NOT_PERMITTED) with nothing recorded. The latest-interaction active view is chosen deterministically (down to the one executing browser tab); success is returned only after that view's camera/focus actually landed, and a missing view, lost target, or timeout is an explicit bounded failure. Durably attributed to the calling session, idempotent by clientRequestId across restarts, and the operator keeps a one-action Return control that restores exactly where they were. On a phone the request shows as a notice; the phone's view never moves. With no desktop to move and a phone open, the call answers at once with delivered: \"notice\" and no handoff. The same answer comes when the operator's active view is in a different project than the target's: the view stays where it is and they get the notification, whose click opens the target; only a target in the project they are in moves their view.",
     `Targets are typed and discriminated by \`kind\`, one shape per kind: ${FOCUS_TARGET_SHAPES.map((shape) => `${shape.kind} — ${shape.example}`).join("; ")}.`,
     "A conversation target takes either its durable conversationId (resolved server-side to that conversation's current transcript, and the form to prefer because it survives resume and migration) or that transcript's path.",
     "A draft target also needs the top-level project argument; region and point accept intent \"show\" only. A rejected target names the kind it read and the fields that kind expects.",
@@ -4257,6 +4261,15 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Read the operator's Telegram groups where Celestia or a clone is present. action groups lists them; action messages reads one page for chat and today or inclusive from/to dates. The existing owner-tools switch defaults OFF. The operator's stored time zone is sent to Celestia. Messages are oldest first; sentAt is when Celestia stored them. A short page may continue: pass nextCursor alone as cursor, retaining the original dates and zone; nextCursor null ends the range. oldestStoredAt marks retained history. editsReported says whether the service reports edits; editedAt marks one. Media includes kind, fileName, mimeType, size, duration, dimensions and fetch availability when the service supplies them. Older services cannot report edits or all media facts. Telegram-side deletions may remain stored. Author ids are excluded. Live relay agents replying in Telegram cannot read this history. No MCP receipt is stored, even with an explicit clientRequestId.",
     "action media takes chat, messageId and optional directory: pass your LLV_EVIDENCE_DIR, an existing directory under the installation's evidence root; the default is evidence/relay-media. It streams one photo, document or video through the paired service, up to 2 GiB, and returns done with path, kind, mimeType, size and SHA-256 only after verification. Repeat the identical call on in_progress to join the same job. not_offered means the paired service must implement relay_owner_media first; too_large names the limit and how to lift it. Files, their contents and original names stay private to this conversation: never copy them into reports, messages to other agents, tasks, commits, pull requests, issues, lessons, Telegram hand-off folders or other chats.",
     "Use history only to answer the operator in this conversation. Never copy message text, names, usernames, chat titles or chat ids into bridge reports, requests or messages to other agents or seats, spawn prompts, task text or details, files, commits, pull requests, issues or lessons. A report may say the answer is in this conversation.",
+  ].join(" "),
+  telegram_bot_reactions: [
+    "Read the reactions available in an allowlisted Telegram chat using a connected Bot API bot. Use the chat alias or ID from telegram_bot_chats.",
+    "The result's catalog is {kind: 'explicit', reactions: [...]} when the chat sets a list, including an empty list when no reactions are allowed. {kind: 'standard'} means Telegram's standard emoji reactions are available. Paid entries in an explicit catalog are visible but cannot be set by bots.",
+  ].join(" "),
+  telegram_bot_set_reaction: [
+    "Set one reaction on a specific message in an allowlisted Telegram chat using a connected Bot API bot. Supply the chat alias or ID and the message ID within that chat.",
+    "Use {type: 'emoji', emoji: '👍'} or an explicitly allowed {type: 'custom_emoji', custom_emoji_id: '…'} from telegram_bot_reactions. The bot's reaction replaces its prior reaction on that message. Paid reactions return reaction_paid_unsupported. Unavailable reactions return reaction_not_allowed. Telegram's per-message limit returns reaction_limit_reached. If delivery is uncertain, reaction_uncertain means Telegram may have applied the change.",
+    "Telegram applies an album reaction to the first surviving message in the album.",
   ].join(" "),
   telegram_bot_messages: [
     "Read recent messages the operator's Telegram bot received in one chat, newest first, from Delegatus's local store — a bot has no history API, so only what arrived while it was connected exists.",
@@ -5235,7 +5248,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   account_limits: z.object({
     clientRequestId: clientRequestIdSchema.optional(),
-    engine: z.enum(["claude", "codex", "copilot"]).optional().describe("Only this engine's accounts."),
+    engine: z.enum(["claude", "codex", "copilot", "antigravity"]).optional().describe("Only this engine's accounts."),
     accountId: z.string().trim().min(1).optional().describe("Only this account."),
   }).passthrough(),
   issue_report: z.object({
@@ -5288,6 +5301,16 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     replyToMessageId: z.number().int().positive().optional(),
     topicId: z.number().int().positive().optional().describe("Forum topic (message_thread_id) to post into."),
     silent: z.boolean().optional().describe("Send without a notification sound."),
+  }).passthrough(),
+  telegram_bot_reactions: z.object({
+    clientRequestId: clientRequestIdSchema,
+    chat: z.string().trim().min(1).describe("The allowlisted chat's alias or ID."),
+  }).passthrough(),
+  telegram_bot_set_reaction: z.object({
+    clientRequestId: clientRequestIdSchema,
+    chat: z.string().trim().min(1).describe("The allowlisted chat's alias or ID."),
+    messageId: telegramReactionMessageIdSchema.describe("ID of the message within the specified chat."),
+    reaction: telegramReactionSchema.describe("One reaction. Telegram bots can set standard or explicitly allowed custom emoji."),
   }).passthrough(),
   relay_answer: relayAnswerSchema,
   relay_service_tools: relayServiceToolsSchema,

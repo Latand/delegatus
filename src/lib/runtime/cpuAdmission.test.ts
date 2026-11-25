@@ -638,6 +638,175 @@ test("a live owner the kernel verifies keeps the head however long it stays sile
   expect(f.read("SELECT key FROM suspended")).toEqual([]);
 });
 
+for (const platform of ["linux", "win32"] as const) test.skipIf(platform === "linux" && process.platform !== "linux")(
+  `an unpolled bounded gate and its peers keep a one-slot queue consistent (${platform})`, async () => {
+    const f = ownerFixture();
+    // Like the wrapper, keep each owner alive while fresh helpers open SQLite
+    // for its polls and claims. Simulate portable admission on the same host
+    // by switching only the queue policy after initializing native PID probes.
+    const startOwner = () => Bun.spawn([process.execPath, "-e", "for await (const chunk of Bun.stdin.stream()) void chunk"], { stdin: "pipe" });
+    const workers = { head: startOwner(), peer: startOwner(), later: startOwner(), restarted: undefined as ReturnType<typeof startOwner> | undefined };
+    const script = `
+      const [file, runtime, legacyRuntime, identityModule, platform, at, elapsed, action, key, pid] = process.argv.slice(1);
+      const { CpuAdmissionQueue, ACTIVE_GATE_PREFIX } = await import(runtime);
+      const { captureProcessIdentity } = await import(identityModule);
+      const owner = captureProcessIdentity(Number(pid));
+      if (!owner.startIdentity || !owner.bootEpoch) throw new Error("missing kernel owner identity");
+      Object.defineProperty(process, "platform", { value: platform });
+      if (action === "legacy-poll") {
+        const { V2CpuAdmissionQueue } = await import(legacyRuntime);
+        const legacy = new V2CpuAdmissionQueue(file, () => Number(at));
+        try { console.log(JSON.stringify(legacy.check(key, true, owner, false, undefined, true))); }
+        finally { legacy.close(); }
+        process.exit(0);
+      }
+      const queue = new CpuAdmissionQueue(file, () => Number(at), undefined, undefined, undefined, undefined, undefined,
+        () => ({ domain: "fixture-boot", ms: Number(elapsed) }));
+      try {
+        let wait = null;
+        if (action === "release") queue.releaseGateSlot(ACTIVE_GATE_PREFIX + key, JSON.stringify(owner));
+        else wait = queue.check(key, true, owner, action === "claim", undefined, true,
+          action === "claim" ? { lastBeforeProbe: queue.lastAdmission(), slot: null, cap: 1 } : undefined);
+        console.log(JSON.stringify({ wait, slots: queue.activeGateSlots().map(slot => slot.key) }));
+      } finally { queue.close(); }
+    `;
+    const run = (name: keyof typeof workers, at: number, action = "claim", elapsed = at) => {
+      const result = spawnSync(process.execPath, ["-e", script, f.file, path.join(import.meta.dir, "cpuAdmission.ts"),
+        path.join(import.meta.dir, "cpuAdmission.v2.fixture.ts"), path.resolve(import.meta.dir, "../processIdentity.ts"), platform, String(at), String(elapsed), action,
+        `command:bounded:${name}`, String(workers[name]!.pid)], { encoding: "utf8", timeout: 5_000 });
+      expect(result.status, result.stderr).toBe(0);
+      return JSON.parse(result.stdout);
+    };
+    const activePeer = ["command:gate-active:command:bounded:peer"];
+    const pastBound = CPU_QUEUE_UNPOLLED_MS + 1;
+    try {
+      const headWall = 300_000;
+      const rolledBack = platform === "linux" ? 300_000 : 0;
+      const wall = (elapsed: number) => headWall + elapsed - rolledBack;
+      expect(run("head", headWall, "poll", 0)).toEqual({ wait: null, slots: [] });
+      expect(run("peer", wall(CPU_QUEUE_UNPOLLED_MS), "claim", CPU_QUEUE_UNPOLLED_MS))
+        .toMatchObject({ wait: { position: 2, since: wall(CPU_QUEUE_UNPOLLED_MS) }, slots: [] });
+      if (platform === "win32") {
+        expect(run("peer", wall(pastBound), "claim", pastBound)).toMatchObject({ wait: { position: 2 }, slots: [] });
+        expect(f.read("SELECT key FROM unpolled")).toEqual([]);
+        workers.head.stdin.end();
+        expect(await workers.head.exited).toBe(0);
+        expect(run("peer", wall(pastBound), "claim", pastBound)).toEqual({ wait: null, slots: activePeer });
+        return;
+      }
+
+      expect(run("peer", wall(pastBound), "claim", pastBound)).toEqual({ wait: null, slots: activePeer });
+      expect(f.read("SELECT key FROM unpolled")).toEqual([{ key: "command:bounded:head" }]);
+      const whileHeld = wall(pastBound) + CPU_QUEUE_SPACING_MS;
+      expect(run("later", pastBound, "poll")).toMatchObject({ wait: { position: 1 } });
+      expect(run("head", whileHeld)).toMatchObject({ wait: { position: 1, since: headWall, heldBy: "queue" }, slots: activePeer });
+      expect(run("later", whileHeld)).toMatchObject({ wait: { position: 2 }, slots: activePeer });
+      expect(f.read("SELECT key FROM unpolled")).toEqual([]);
+
+      workers.head.stdin.end();
+      expect(await workers.head.exited).toBe(0);
+      workers.restarted = startOwner();
+      expect(run("restarted", whileHeld)).toMatchObject({ wait: { position: 2, since: whileHeld }, slots: activePeer });
+      expect(f.read("SELECT key FROM tickets WHERE key = 'command:bounded:head'")).toEqual([]);
+      expect(run("later", whileHeld)).toMatchObject({ wait: { position: 1, heldBy: "queue" }, slots: activePeer });
+      expect(run("peer", whileHeld, "release")).toEqual({ wait: null, slots: [] });
+      expect(run("later", whileHeld)).toEqual({ wait: null, slots: ["command:gate-active:command:bounded:later"] });
+
+      // A mixed-version writer may repeat exactly the prior wall timestamp.
+      // Its real poll still invalidates the old boot-relative sample.
+      expect(run("later", whileHeld, "release")).toEqual({ wait: null, slots: [] });
+      const replayWall = whileHeld + CPU_QUEUE_SPACING_MS;
+      expect(run("restarted", replayWall, "poll")).toEqual({ wait: null, slots: [] });
+      const sample = () => f.read("SELECT linux_poll FROM tickets WHERE key = 'command:bounded:restarted'");
+      expect(sample()).toEqual([{ linux_poll: `fixture-boot:${replayWall}` }]);
+      expect(run("restarted", replayWall, "legacy-poll")).toBeNull();
+      expect(sample()).toEqual([{ linux_poll: null }]);
+      const observed = replayWall + CPU_QUEUE_UNPOLLED_MS + 1;
+      expect(run("peer", replayWall, "poll", observed)).toMatchObject({ wait: { position: 2 } });
+      expect(sample()).toEqual([{ linux_poll: `fixture-boot:${observed}` }]);
+    } finally {
+      for (const worker of Object.values(workers)) if (worker?.exitCode === null) worker.kill();
+      await Promise.all(Object.values(workers).map(worker => worker?.exited));
+    }
+  }, 15_000);
+
+// Each poller converts its boot clock out of its own time namespace, so a
+// silent head ages on one clock however its peers were launched. A boot-clock
+// offset would also shift the start times procfs reports to that poller, so the
+// shifted poller moves only its monotonic clock.
+const timeNamespaces = process.platform === "linux" && spawnSync("unshare",
+  ["--user", "--map-root-user", "--time", "--monotonic", "1", "--fork", "true"], { timeout: 5_000 }).status === 0;
+test.skipIf(!timeNamespaces)("pollers in different time namespaces pass over a silent head at the bound and its next poll restores its place", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cpu-admission-timens-")); directories.push(dir);
+  const file = path.join(dir, "queue.sqlite"), bound = 1_200;
+  const worker = `
+    const [file, key, runtime, identityModule, sandboxModule, bound] = process.argv.slice(1);
+    const { CpuAdmissionQueue } = await import(runtime);
+    const { captureProcessIdentity } = await import(identityModule);
+    const { cpuOwnerStatus, cpuOwnerExited } = await import(sandboxModule);
+    const queue = new CpuAdmissionQueue(file, Date.now, 0, undefined, Number(bound), { status: cpuOwnerStatus, exited: cpuOwnerExited });
+    const owner = captureProcessIdentity(process.pid);
+    console.log(JSON.stringify({ domain: require("node:fs").readlinkSync("/proc/self/ns/time") }));
+    for await (const _ of console) {
+      const wait = queue.check("command:bounded:" + key, true, owner, false, undefined, true);
+      console.log(JSON.stringify({ position: wait?.position ?? 1 }));
+    }
+    queue.close();
+  `;
+  const started: Bun.Subprocess<"pipe", "pipe", "inherit">[] = [];
+  const start = async (key: string, namespace: string[]) => {
+    const child = Bun.spawn([...namespace, process.execPath, "-e", worker, file, key, path.join(import.meta.dir, "cpuAdmission.ts"),
+      path.resolve(import.meta.dir, "../processIdentity.ts"), path.join(import.meta.dir, "signalSandboxContext.ts"), String(bound)],
+    { stdin: "pipe", stdout: "pipe", stderr: "inherit" });
+    started.push(child);
+    const reader = child.stdout.getReader(), decoder = new TextDecoder();
+    let buffered = "";
+    const next = async () => {
+      while (!buffered.includes("\n")) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error(`${key} exited`);
+        buffered += decoder.decode(chunk.value, { stream: true });
+      }
+      const line = buffered.slice(0, buffered.indexOf("\n"));
+      buffered = buffered.slice(line.length + 1);
+      return JSON.parse(line);
+    };
+    const { domain } = await next() as { domain: string };
+    return { domain, poll: async () => { child.stdin.write("poll\n"); child.stdin.flush(); return (await next() as { position: number }).position; } };
+  };
+  const unshare = (...extra: string[]) => ["unshare", "--user", "--map-root-user", "--time", ...extra, "--fork"];
+  const passedOver = () => {
+    const db = new Database(file, { readonly: true });
+    try { return db.query<{ key: string }, []>("SELECT key FROM unpolled ORDER BY key").all().map(row => row.key); }
+    finally { db.close(); }
+  };
+  try {
+    const head = await start("head", unshare("--pid", "--mount-proc"));
+    const host = await start("host", []);
+    const shifted = await start("shifted", unshare("--monotonic", "500000"));
+    expect(new Set([head.domain, host.domain, shifted.domain]).size).toBe(3);
+    expect(await head.poll()).toBe(1);
+    const headPolled = performance.now();
+    // Within the bound the silent head keeps its place for both pollers.
+    expect([await host.poll(), await shifted.poll()]).toEqual([2, 3]);
+    expect(passedOver()).toEqual([]);
+    let pair: number[] = [];
+    while (performance.now() - headPolled < bound + 600) {
+      await Bun.sleep(200);
+      pair = [await host.poll(), await shifted.poll()];
+    }
+    expect(pair).toEqual([1, 2]);
+    expect(passedOver()).toEqual(["command:bounded:head"]);
+    // The head's next poll returns it to the front of the queue.
+    expect(await head.poll()).toBe(1);
+    expect(passedOver()).toEqual([]);
+    expect([await host.poll(), await shifted.poll()]).toEqual([2, 3]);
+  } finally {
+    for (const child of started) child.stdin.end();
+    await Promise.all(started.map(child => Promise.race([child.exited, Bun.sleep(3_000).then(() => { child.kill(); return child.exited; })])));
+  }
+}, 20_000);
+
 test("an unverifiable owner silent for a day is removed with one reason line", () => {
   const f = ownerFixture(), q = f.open(), { foreign } = owners();
   q.check("command:foreign", false, foreign);
@@ -857,7 +1026,7 @@ test("releases racing to open an older queue describe it once and keep its live 
   // Every racer queued behind the command in its lane, none in its place.
   expect(waits.sort()).toEqual([2, 3, 4, 5, 6, 7]);
   expect(m.row(LIVE)).toEqual(first);
-  expect(m.read<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'")).toEqual([{ n: 8 }]);
+  expect(m.read<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'")).toEqual([{ n: 9 }]);
   expect(older.check(LIVE, true)).toMatchObject({ since: 0, position: 2 });
 });
 
@@ -875,7 +1044,7 @@ test("a queue the first cut of this change left half-described keeps its live ti
   expect(q.check("stage:later", true)).toMatchObject({ position: 2 });
   expect(m.row(LIVE)).toEqual(first);
   expect(m.read("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name")).toEqual(
-    ["legacy_gate_retired", "suspended_hold", "suspended_keep", "suspended_release", "tickets_fifo", "tickets_gone", "tickets_poll", "tickets_queued"].map(name => ({ name })));
+    ["legacy_gate_retired", "suspended_hold", "suspended_keep", "suspended_release", "tickets_fifo", "tickets_gone", "tickets_linux_poll_reset", "tickets_poll", "tickets_queued"].map(name => ({ name })));
   m.at(2 * CPU_QUEUE_ABANDONED_MS + CPU_QUEUE_UNPOLLED_MS + 1);
   expect(q.check("stage:later", true)).toBeNull();
 });

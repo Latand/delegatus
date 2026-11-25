@@ -41,6 +41,8 @@ export interface ExecOptions {
   inheritFd?: number;
   /** Independent resource owners survive wrappers that replace inheritFd. */
   additionalInheritedFds?: readonly number[];
+  /** Called once with the child's PID right after it is spawned. */
+  onSpawn?: (pid: number) => void;
 }
 
 export type ExecPort = (command: string, args: string[], cwd: string, env?: Partial<NodeJS.ProcessEnv>, options?: ExecOptions) => ExecResult | Promise<ExecResult>;
@@ -59,6 +61,8 @@ export const realExec: ExecPort = (command, args, cwd, env, options = {}) => new
     stdio: ["ignore", "pipe", "pipe", ...(options.inheritFd === undefined ? [] : [options.inheritFd]), ...options.additionalInheritedFds ?? []],
     env: budget.env,
   });
+  // An observer's failure never orphans the child this promise owns.
+  if (child.pid) try { options.onSpawn?.(child.pid); } catch { /* observation only */ }
   const stop = (reason: string) => {
     if (stopped) return;
     stopped = reason;

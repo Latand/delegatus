@@ -494,6 +494,7 @@ function feedEngine(engine: string): FeedEngine {
   if (engine === "codex") return "codex";
   if (engine === "openclaw") return "openclaw";
   if (engine === "copilot") return "copilot";
+  if (engine === "antigravity") return "antigravity";
   return "claude";
 }
 
@@ -520,6 +521,50 @@ const COPILOT_TOOL_NAMES: Readonly<Record<string, string>> = {
 export function copilotFeedToolName(name: string): string {
   if (name.startsWith("viewer-") && name.length > "viewer-".length) return `mcp__viewer__${name.slice("viewer-".length)}`;
   return COPILOT_TOOL_NAMES[name] ?? name;
+}
+
+const ANTIGRAVITY_TOOL_NAMES: Readonly<Record<string, string>> = {
+  bash: "Bash",
+  run_command: "Bash",
+  execute: "Bash",
+  read_file: "Read",
+  view_file: "Read",
+  view: "Read",
+  write_file: "Write",
+  write_to_file: "Write",
+  create: "Write",
+  edit_file: "Edit",
+  replace_file_content: "Edit",
+  multi_replace_file_content: "Edit",
+  edit: "Edit",
+  grep_search: "Grep",
+  rg: "Grep",
+  grep: "Grep",
+  find_by_name: "Glob",
+  glob: "Glob",
+  list_dir: "Glob",
+  web_fetch: "WebFetch",
+  read_url_content: "WebFetch",
+  search_web: "WebSearch",
+};
+
+/** An Antigravity tool name mapped onto the feed's shared taxonomy, normalizing
+    Viewer MCP prefixes (`mcp_viewer_<tool>` and `viewer-<tool>`) to `mcp__viewer__<tool>`. */
+export function antigravityFeedToolName(name: string): string {
+  if (name.startsWith("mcp_viewer_") && name.length > "mcp_viewer_".length) return `mcp__viewer__${name.slice("mcp_viewer_".length)}`;
+  if (name.startsWith("viewer-") && name.length > "viewer-".length) return `mcp__viewer__${name.slice("viewer-".length)}`;
+  return ANTIGRAVITY_TOOL_NAMES[name] ?? name;
+}
+
+function antigravityToolArgs(args: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...args,
+    ...(args.file_path === undefined && typeof args.path === "string" ? { file_path: args.path } : {}),
+    ...(args.file_path === undefined && typeof args.AbsolutePath === "string" ? { file_path: args.AbsolutePath } : {}),
+    ...(args.file_path === undefined && typeof args.TargetFile === "string" ? { file_path: args.TargetFile } : {}),
+    ...(args.command === undefined && typeof args.CommandLine === "string" ? { command: args.CommandLine } : {}),
+    ...(args.command === undefined && typeof args.cmd === "string" ? { command: args.cmd } : {}),
+  };
 }
 
 /** Copilot's argument names mapped onto the ones the shared summaries read. */
@@ -1814,7 +1859,7 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
   const normalize = <T,>(kind: string, input: unknown, compute: () => T): T => history ? history.normalize(kind, input, compute) : compute();
   const readCodexOutput = (input: unknown) => normalize("output", input, () => toolOutput(input));
   const readCodexUser = (input: unknown) => normalize("user", input, () => normalizeCodexUserContent(input));
-  const jsonl = cfg.fmt === "claude" || cfg.fmt === "codex" || cfg.fmt === "openclaw" || cfg.fmt === "copilot";
+  const jsonl = cfg.fmt === "claude" || cfg.fmt === "codex" || cfg.fmt === "openclaw" || cfg.fmt === "copilot" || cfg.fmt === "antigravity";
 
   const entries: StoredEntry[] = [];
   const initialFrontier: {
@@ -3909,6 +3954,66 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
       return addSvc(`${type === "session.start" ? "Copilot session" : "Copilot resumed"}${label ? ` · ${label}` : ""}`);
     }
   };
+  /* Antigravity CLI (`agy acp`) host-written `events.jsonl`
+     (docs/design/antigravity-engine.md §3.2 & §3.5): `{type, data, timestamp}`
+     records with normalized Viewer MCP names and explicit stop-reason notes. */
+  const registerAntigravityCall = (ts: unknown, callId: string, name: string, rawArgs: unknown) => {
+    if (!callId || calls.has(callId)) return;
+    const tool = antigravityFeedToolName(name || "tool");
+    const args = antigravityToolArgs(rec(rawArgs));
+    const family = familyOf(tool);
+    const command = family === "shell" ? textPart(args.command) || undefined : undefined;
+    const lang = family === "read" ? extLang(textPart(args.file_path)) : undefined;
+    const mcpIdentity = viewerMcpToolUse(tool);
+    const mcp = mcpIdentity ? { ...mcpIdentity, args, result: null } : undefined;
+    registerCall(newToolEvent({ ts, id: callId, tool, args, engine: "antigravity", command, lang, mcp }));
+  };
+  const renderAntigravity = (obj: Record<string, unknown>) => {
+    const ts = obj.timestamp;
+    const data = rec(obj.data);
+    const type = textPart(obj.type);
+    if (type === "user.message") {
+      return addUserText(ts, textPart(data.content));
+    }
+    if (type === "assistant.message") {
+      const content = textPart(data.content);
+      if (content.trim()) addProse(ts, content, textPart(data.messageId) || textPart(obj.id) || undefined);
+      for (const request of arr(data.toolRequests)) {
+        registerAntigravityCall(ts, textPart(request.toolCallId), textPart(request.name), request.arguments);
+      }
+      return;
+    }
+    if (type === "tool.execution_start") {
+      return registerAntigravityCall(ts, textPart(data.toolCallId), textPart(data.toolName) || textPart(data.kind), data.arguments);
+    }
+    if (type === "tool.execution_complete") {
+      const result = rec(data.result);
+      const exitCode = num(data.exitCode) ?? num(rec(data.shellExecution).exitCode);
+      const failed = data.isError === true || data.status === "failed" || data.success === false || (exitCode !== undefined && exitCode !== 0);
+      const text = textPart(data.output) || textPart(result.content) || textPart(result.detailedContent) || textPart(data.error);
+      return addOutput(textPart(data.toolCallId), text, failed, undefined, ts);
+    }
+    if (type === "abort") return void push({ kind: "note", text: tr("render.turnInterrupted") });
+    if (type === "session.quota_exhausted") {
+      const message = redactTranscriptText(textPart(data.message)) || "Antigravity quota reached";
+      const resetsAt = typeof data.resetsAt === "number" && Number.isFinite(data.resetsAt)
+        ? new Date(data.resetsAt * 1000).toISOString()
+        : "";
+      return void push({ kind: "note", text: resetsAt ? `${message} (resets at ${resetsAt})` : message });
+    }
+    if (type === "session.error") {
+      const message = redactTranscriptText(textPart(data.message) || textPart(data.error)) || "Antigravity turn error";
+      return void push({ kind: "note", text: message });
+    }
+    if (type === "session.model_change") {
+      const label = [textPart(data.model) || textPart(data.newModel) || textPart(data.baseModel), textPart(data.effort) || textPart(data.reasoningEffort)].filter(Boolean).join(" · ");
+      return addSvc(label ? `model · ${label}` : "model_change");
+    }
+    if (type === "session.start" || type === "session.resume") {
+      const label = [textPart(data.model) || textPart(data.baseModel) || textPart(data.selectedModel), textPart(data.effort) || textPart(data.reasoningEffort)].filter(Boolean).join(" · ");
+      return addSvc(`${type === "session.start" ? "Antigravity session" : "Antigravity resumed"}${label ? ` · ${label}` : ""}`);
+    }
+  };
   /* Job .output logs echo the final review/citation block as bare lines after the
      [codex] stream ends; collect that run so it renders as one structured card
      instead of per-line raw rows. Falls back to the old raw rows when the block
@@ -4008,6 +4113,7 @@ function createReducerSession(cfg: FeedSessionConfig, history: CodexHistory | nu
           if (cfg.fmt === "claude") renderClaude(record);
           else if (cfg.fmt === "openclaw") renderOpenclaw(record);
           else if (cfg.fmt === "copilot") renderCopilot(record);
+          else if (cfg.fmt === "antigravity") renderAntigravity(record);
           else renderCodex(record);
           if (facts?.fails) finishTurn(true);
           else if (facts?.closes) finishTurn(false);

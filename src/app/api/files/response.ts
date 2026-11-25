@@ -393,7 +393,8 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     const placeholder = {
       path: parentPath,
       root: parentConversation.engine === "codex" ? "codex-sessions" as const
-        : parentConversation.engine === "copilot" ? "copilot-sessions" as const : "claude-projects" as const,
+        : parentConversation.engine === "copilot" ? "copilot-sessions" as const
+          : parentConversation.engine === "antigravity" ? "antigravity-sessions" as const : "claude-projects" as const,
       name: rootPath ? path.relative(rootPath, parentPath) : path.basename(parentPath),
       /* Cross-project lineage stub: the foreign parent groups under ITS owning
          project (ownership → canonical cwd → profile hint), falling back to
@@ -488,7 +489,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     });
   }
   for (const file of files) {
-    if (file.engine !== "claude" && file.engine !== "codex" && file.engine !== "copilot") continue;
+    if (file.engine !== "claude" && file.engine !== "codex" && file.engine !== "copilot" && file.engine !== "antigravity") continue;
     if (file.spawn) continue;
     const conversation = conversationForPath(file.path);
     if (!conversation || conversation.engine !== file.engine) continue;

@@ -168,6 +168,40 @@ function openclawTurnState(records: RecordLike[]): TurnState {
   return { state: "unknown", source: "empty", terminalAt: null };
 }
 
+/** Tracks Antigravity host-written NDJSON transcript records (`events.jsonl`).
+    Like Copilot, user/assistant/tool records open or sustain a turn, while
+    `assistant.turn_end`, `abort`, `session.shutdown`, `session.error`, and
+    `session.quota_exhausted` terminate it. */
+export function antigravityTurnState(records: RecordLike[]): TurnState {
+  let state: TurnState = { state: "unknown", source: "empty", terminalAt: null };
+  let toolsPending = false;
+  for (const record of records) {
+    const type = stringValue(record.type);
+    const at = timestamp(record);
+    const data = recordValue(record.data) ?? {};
+    if (type === "user.message" || type === "assistant.turn_start") {
+      state = { state: "busy", source: "lifecycle", terminalAt: null };
+      if (type === "user.message") toolsPending = false;
+    } else if (type === "assistant.message") {
+      const requests = data.toolRequests;
+      toolsPending = Array.isArray(requests) && requests.length > 0;
+      state = { state: "busy", source: "assistant", terminalAt: null };
+    } else if (type === "tool.execution_start" || type === "tool.execution_complete") {
+      state = { state: "busy", source: "tool", terminalAt: null };
+    } else if (type === "assistant.turn_end") {
+      state = toolsPending
+        ? { state: "busy", source: "lifecycle", terminalAt: null }
+        : { state: "terminal", source: "lifecycle", terminalAt: at };
+    } else if (type === "abort" || type === "session.error" || type === "session.quota_exhausted" || type === "session.shutdown") {
+      if (state.state !== "unknown" || type !== "session.shutdown") {
+        state = { state: "terminal", source: "lifecycle", terminalAt: at };
+      }
+      toolsPending = false;
+    }
+  }
+  return state;
+}
+
 /** The newest authoritative lifecycle or tool event wins. Assistant prose
     cannot close an active turn on its own account — it commonly precedes tool
     work — so what closes one is the record's own stop reason, and only on a
@@ -175,6 +209,7 @@ function openclawTurnState(records: RecordLike[]): TurnState {
 export function turnStateFromRecords(records: RecordLike[], engine: TranscriptEngine, authoritative = false): TurnState {
   if (engine === "openclaw") return openclawTurnState(records);
   if (engine === "copilot") return copilotTurnState(records);
+  if (engine === "antigravity") return antigravityTurnState(records);
   if (engine === "codex") {
     let turnOpen = false;
     let nativeTurnId: string | null = null;

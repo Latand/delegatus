@@ -347,11 +347,11 @@ function NeedBadge({ item }: { item: PhoneCard }) {
 }
 
 /** The engine mark and the model, the way a board row names an agent. */
-function Agent({ file }: { file: FileEntry }) {
+function Agent({ file, working = false }: { file: FileEntry; working?: boolean }) {
   const model = fileModelLabel(file);
   return (
     <>
-      <span data-mobile2-engine={file.engine} className="inline-flex shrink-0"><EngineMark engine={file.engine} size={16} /></span>
+      <span data-mobile2-engine={file.engine} className="inline-flex shrink-0"><EngineMark engine={file.engine} size={16} working={working} /></span>
       {model ? <span className="shrink-0">{model}</span> : null}
     </>
   );
@@ -414,7 +414,7 @@ function LooseLine({ item, now }: { item: PhoneCard; now: number }) {
   const age = askAge(t, item) ?? (at > 0 && !quiet?.stalled ? ageText(t, at, now * 1000) : null);
   return (
     <span data-phone-card-meta="" className="flex min-w-0 items-center gap-[5px] text-label tabular-nums text-muted">
-      {file ? <><Agent file={file} /><Sep /></> : null}
+      {file ? <><Agent file={file} working={mobileRowState(file, now).key === "working"} /><Sep /></> : null}
       {detail ? <><span className="min-w-0 truncate">{detail}</span><Sep /></> : null}
       {quiet ? <><span data-phone-card-state="" className={`min-w-0 truncate ${quiet.tone}`}>{quiet.text}</span><Sep /></> : null}
       <span className="shrink-0">{t("mobile2.kanban.notOnTask")}</span>

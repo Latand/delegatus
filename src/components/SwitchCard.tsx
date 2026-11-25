@@ -124,7 +124,7 @@ export function SwitchCard({ file, title, project, currentProject, descendants, 
           tooltip), the #961 status word, and where the card lives. */}
       <div data-card-row="identity" className="relative flex min-w-0 items-center gap-1.5">
         <span className={`h-2 w-2 shrink-0 rounded-full ${providerStatusLine ? "bg-warning" : activityDot(file.activity)}`} />
-        <CardIdentityChip file={file} />
+        <CardIdentityChip file={file} working={displayedTone === "working"} />
         <EffortPills file={file} />
         {/* The operator-facing status word (issue #961): same vocabulary and
             tones as the board cards, so a switch column reads identically. */}

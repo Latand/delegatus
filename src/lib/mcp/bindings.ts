@@ -85,6 +85,7 @@ import { projectWorkerCounts } from "@/lib/orchestrator/workerCount";
 import { activeClaudeAccountId, claudeAccountsForPrivacy, listClaudeAccounts } from "@/lib/accounts/claude";
 import { activeCodexAccountId, codexAccountsForPrivacy, listCodexAccounts } from "@/lib/accounts/codex";
 import { activeCopilotAccountId, copilotAccountsForPrivacy, listCopilotAccounts } from "@/lib/accounts/copilot";
+import { activeAntigravityAccountId, listAntigravityAccounts } from "@/lib/accounts/antigravity";
 import { projectEngineAccounts } from "@/lib/accounts/projectAccountsView";
 import {
   accountProjectBindings,
@@ -260,13 +261,14 @@ import {
   type SessionRecord,
   type SessionRecordKind,
 } from "@/lib/session/reader";
+import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import {
   decodeMessagesCursor,
   encodeMessagesCursor,
   InvalidMessagesCursorError,
   messagesCursorScope,
   readMessagesPage,
-  readMessageAuthorContext,
+  readMessageAuthorContextWithStats,
   StaleMessagesCursorError,
 } from "@/lib/session/messagesPage";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
@@ -274,7 +276,7 @@ import { overlaySessionTitles } from "@/lib/session/titleProjection";
 import { linkedContext, withOwnership } from "@/lib/links/linked";
 import { applyAssignmentPatches, createTask, patchTask, taskDuePatch, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
-import { agentBrowserAccess, TeamError, recordAuthors, type AgentBrowserSeat, type RecordAuthor } from "@/lib/team";
+import { agentBrowserAccess, hasConversationMessageAuthors, TeamError, recordAuthors, type AgentBrowserSeat, type RecordAuthor } from "@/lib/team";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
 import { normalizedBoardQuery, pullRequestQuery, titleHasPullRequest } from "./pullRequestQuery";
 import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, pipelineStageRuntimeSetting, setPipelineStageRuntime, validPipelineStageRuntime, type EffectiveReportTelegram } from "@/lib/projects/settings";
@@ -582,6 +584,8 @@ async function getViewerControl(
       status: response.status,
       ...(text(result.code) ? { code: text(result.code) } : {}),
       ...(text(result.check) ? { check: text(result.check) } : {}),
+      ...(pathname.startsWith("/api/telegram/bot/agent?op=reactions&") && typeof result.retryAfterSeconds === "number"
+        ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
       ...(requestHealth ? { runtimeHostRequests: requestHealth } : {}),
     });
   }
@@ -3512,7 +3516,7 @@ async function listConversations(
   const conversations = source.items
     .filter(objectRecord) as unknown as FileEntry[];
   const rows = conversations
-    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
+    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot" || entry.engine === "antigravity")
     .slice(0, limit)
     .map((entry) => ({
       conversationId: entry.conversationId ?? null,
@@ -3803,10 +3807,11 @@ async function conversationDeliverability(
 const CONVERSATION_MESSAGE_KINDS = ["message", "reasoning", "tool_call", "tool_result", "trace"] as const;
 const CONVERSATION_MESSAGE_ROLES = ["user", "assistant", "system", "tool"] as const;
 
-function conversationEngineForRoot(rootName: PinnedTranscript["rootName"]): "claude" | "codex" | "copilot" | null {
+function conversationEngineForRoot(rootName: PinnedTranscript["rootName"]): "claude" | "codex" | "copilot" | "antigravity" | null {
   if (rootName === "codex-sessions") return "codex";
   if (rootName === "claude-projects") return "claude";
   if (rootName === "copilot-sessions") return "copilot";
+  if (rootName === "antigravity-sessions") return "antigravity";
   return null;
 }
 
@@ -3934,16 +3939,20 @@ async function conversationMessages(
         code: "conversation_messages_transcript_changed",
       });
     }
+    /* sign-in-and-team §7.1: a human message names its member. */
+    const authored = withRecordAuthors(conversationId, transcriptPath, page.records, {
+      descriptor: pinned.descriptor, size: pinned.stat.size, engine, redactText: context.redactText,
+    });
+    const scanned = authored.scannedBytes > 0
+      ? { ...page.scanned, bytes: page.scanned.bytes + authored.scannedBytes }
+      : page.scanned;
     return redactPayload({
       conversationId,
       ...(args.full === true || args.includeMetadata === true ? { transcriptPath, engine, lastRecordAt: page.lastRecordAt } : {}),
-      /* sign-in-and-team §7.1: a human message names its member. */
-      records: withRecordAuthors(conversationId, transcriptPath, page.records, {
-        descriptor: pinned.descriptor, size: pinned.stat.size, engine, redactText: context.redactText,
-      }),
+      records: authored.records,
       hasMore: page.hasMore,
       cursor: page.cursor ? encodeMessagesCursor(page.cursor, scope) : null,
-      ...(args.full === true || args.includeMetadata === true || page.scanned.capped ? { scanned: page.scanned } : {}),
+      ...(args.full === true || args.includeMetadata === true || scanned.capped ? { scanned } : {}),
       ...selectedContextEcho(selected.target),
     });
   } finally {
@@ -3956,9 +3965,14 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
   transcriptPath: string,
   records: T[],
   source: { descriptor: number; size: number; engine: "claude" | "codex" | "copilot" | "antigravity"; redactText?: (text: string) => string },
-): Array<T & { author?: RecordAuthor | AgentRecordAuthor }> {
-  if (!records.some((record) => record.role === "user")) return records;
-  const context = readMessageAuthorContext(source, records);
+): { records: Array<T & { author?: RecordAuthor | AgentRecordAuthor }>; scannedBytes: number } {
+  if (!records.some((record) => record.role === "user")) return { records, scannedBytes: 0 };
+  const needsOccurrenceContext = hasConversationMessageAuthors(conversationId)
+    || deliveredMessageOccurrences(transcriptPath).length > 0;
+  const authorContext = needsOccurrenceContext
+    ? readMessageAuthorContextWithStats(source, records)
+    : { records: null, scannedBytes: 0 };
+  const context = authorContext.records;
   const authorRecords = context ?? records;
   const claudeOrigins = source.engine === "claude" ? claudeMessageProvenance(transcriptPath) : undefined;
   const agentAuthors = agentRecordAuthors(transcriptPath, source.engine, authorRecords, context, claudeOrigins);
@@ -3966,11 +3980,13 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
     value => hardenedRedact(source.redactText ? source.redactText(value) : value)) : new Map();
   const contextPartAuthors = claudeOrigins ? agentRecordPartAuthors(transcriptPath, authorRecords, claudeOrigins) : new Map();
   const humanBySeq = new Map<number, RecordAuthor>();
-  for (const [index, author] of recordAuthors(conversationId, authorRecords.map((record, index) => ({
-    role: agentAuthors.has(index) || contextPartAuthors.has(index) ? "system" : record.role,
-    ts: record.ts,
-    text: record.sourceText ?? record.text,
-  })))) humanBySeq.set(authorRecords[index]!.seq, author);
+  if (context) {
+    for (const [index, author] of recordAuthors(conversationId, context.map((record, index) => ({
+      role: agentAuthors.has(index) || contextPartAuthors.has(index) ? "system" : record.role,
+      ts: record.ts,
+      text: record.sourceText ?? record.text,
+    })))) humanBySeq.set(context[index]!.seq, author);
+  }
   const agentBySeq = new Map<number, AgentRecordAuthor>();
   for (const [index, author] of agentAuthors) agentBySeq.set(authorRecords[index]!.seq, author);
   const authors = new Map<number, RecordAuthor | AgentRecordAuthor>();
@@ -3980,9 +3996,12 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
     if (human) authors.set(index, human);
     else if (agent) authors.set(index, agent);
   });
-  return records.map((record, index) => partAuthors.has(index)
-    ? { ...record, parts: partAuthors.get(index)! }
-    : authors.has(index) ? { ...record, author: authors.get(index)! } : record);
+  return {
+    records: records.map((record, index) => partAuthors.has(index)
+      ? { ...record, parts: partAuthors.get(index)! }
+      : authors.has(index) ? { ...record, author: authors.get(index)! } : record),
+    scannedBytes: authorContext.scannedBytes,
+  };
 }
 
 type ViewerSeatRefusal = "deputy" | "not-designated" | "no-seat" | "cross-project" | "foreign-project";
@@ -5974,11 +5993,13 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
       claude: listClaudeAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent })),
       codex: listCodexAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent, spendCredits: account.spendCredits === true })),
       copilot: listCopilotAccounts().map((account) => ({ accountId: account.id })),
+      antigravity: listAntigravityAccounts().map((account) => ({ accountId: account.id })),
     },
     active: {
       claude: snapshot.engineRouting.claude.activeAccountId ?? activeClaudeAccountId(),
       codex: snapshot.engineRouting.codex.activeAccountId ?? activeCodexAccountId(),
       copilot: snapshot.engineRouting.copilot.activeAccountId ?? activeCopilotAccountId(),
+      antigravity: snapshot.engineRouting.antigravity.activeAccountId ?? activeAntigravityAccountId(),
     },
     observations: snapshot.quotaObservations,
     project,
@@ -5995,15 +6016,17 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
  */
 function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   const engine = text(args.engine);
-  if (engine && engine !== "claude" && engine !== "codex" && engine !== "copilot") throw new Error("engine must be claude, codex or copilot");
+  if (engine && engine !== "claude" && engine !== "codex" && engine !== "copilot" && engine !== "antigravity") {
+    throw new Error("engine must be claude, codex, copilot or antigravity");
+  }
   const accountId = text(args.accountId);
   const source = (dependencies.accountLimitsSource ?? productionAccountLimitsSource)();
   const accounts = accountLimitRows({
     ...source,
-    ...(engine ? { engine: engine as "claude" | "codex" | "copilot" } : {}),
+    ...(engine ? { engine: engine as "claude" | "codex" | "copilot" | "antigravity" } : {}),
     ...(accountId ? { accountId } : {}),
   });
-  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude, codex or copilot"} account has the id ${accountId}`);
+  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude, codex, copilot or antigravity"} account has the id ${accountId}`);
   return redactPayload({ count: accounts.length, accounts });
 }
 
@@ -6023,7 +6046,7 @@ async function relayOwnerHistory(args: McpToolArgs, control: ViewerControlDepend
 
 /*
  * The Telegram bot account (docs/design/telegram-bot-account.md, Decision 6).
- * The Viewer is the only process that holds the bot token, so all three tools
+ * The Viewer is the only process that holds the bot token, so the bot tools
  * reach it through the agent route; none of them carries the token or the
  * bot's id either way. The send forwards the calling session's capability,
  * which is how the route attributes the post to this conversation.
@@ -6040,6 +6063,33 @@ async function telegramBotMessages(args: McpToolArgs, control: ViewerControlDepe
     if (typeof value === "number" || (typeof value === "string" && value !== "")) query.set(field, String(value));
   }
   return redactPayload(await readViewerControl(control, `/api/telegram/bot/agent?${query}`));
+}
+
+function telegramReactionRefusal(error: unknown): never {
+  if ((error instanceof McpToolRefusal || error instanceof McpDispatchVerdictError) && typeof error.details.code === "string") {
+    const { code, retryAfterSeconds } = error.details;
+    throw new McpToolRefusal(error.message, {
+      code,
+      retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+      ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
+    });
+  }
+  throw error;
+}
+
+async function telegramBotReactions(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  const query = new URLSearchParams({ op: "reactions", chat: required(args, "chat") });
+  return redactPayload(await readViewerControl(control, `/api/telegram/bot/agent?${query}`).catch(telegramReactionRefusal));
+}
+
+async function telegramBotSetReaction(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  return redactPayload(await dispatchControl(control)("/api/telegram/bot/agent", {
+    op: "set_reaction",
+    clientRequestId: requestId(args),
+    chat: required(args, "chat"),
+    messageId: args.messageId,
+    reaction: args.reaction,
+  }, callerCapabilityHeaders()).catch(telegramReactionRefusal));
 }
 
 async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
@@ -6472,7 +6522,7 @@ async function boardSnapshot(
   }
   const files = (await dependencies.completedFileScan()).snapshot.files;
   const conversations = files
-    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
+    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot" || entry.engine === "antigravity")
     .filter((entry) => !project || entry.project === project)
     .filter((entry) => !activity || entry.activity === activity)
     .filter((entry) => !liveOnly || entry.activity === "live" || entry.activity === "stalled")
@@ -8079,7 +8129,14 @@ async function requestAttention(
        the answer: two tabs share a device id, and only the named tab may run
        the move. */
     const view = resolveDirectedAttentionView();
-    if (!view && (dependencies.noticeCapableViewOpen ?? noticeCapableViewOpen)()) {
+    /* The project boundary: the operator is in another project than the
+       target's, so the request reaches them as the notification and moves
+       nothing. Both keys are canonical, so an alias of the same project is the
+       same project. A view with no project open (the overview) has none to
+       protect. */
+    const crossesProject = view !== null && view.project !== null
+      && canonicalOrchestratorProject(view.project) !== project;
+    if ((!view && (dependencies.noticeCapableViewOpen ?? noticeCapableViewOpen)()) || crossesProject) {
       dependencies.adoptRootSession();
       const raised = dependencies.raiseAttentionRequest({
         origin: "root-agent",
@@ -8158,6 +8215,10 @@ async function requestAttention(
     timeoutMs: budget,
     ...(context.signal ? { signal: context.signal } : {}),
   });
+  /* The directed view stood down at the project boundary after this call
+     chose it (the operator changed project while the request was in flight):
+     the request is the notice, the view did not move. */
+  if (outcome.kind === "notice") return noticeAnswer(outcome.request, created);
   const deviceId = request.acknowledgedBy ?? null;
   if (outcome.kind === "failed") {
     const messages: Record<typeof outcome.code, string> = {
@@ -9520,6 +9581,8 @@ export function viewerMcpBindings(
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_reactions: (args, context) => telegramBotReactions(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_set_reaction: (args, context) => telegramBotSetReaction(args, viewerControlForCall(controlDependencies, context)),
     relay_answer: async (args) => {
       const caller = attributionOf(domainDependencies);
       try {
