@@ -18,20 +18,21 @@ function sqliteInstrumentationFrame<Work extends (...args: never[]) => unknown>(
   return Object.assign(work, { displayName: "delegatusSqliteInstrumentation" });
 }
 
-/** On an observed statement's iterator: the next rows, at most `limit`, read
- * under one measurement. Fewer rows than the limit means the read is done. */
+/** On an observed statement's iterator: the next rows, read under one measurement. */
 export const SQLITE_ROW_BATCH = Symbol("sqliteRowBatch");
 
 /** The next rows of an iterator, at most `limit`. An observed iterator reads
- * them under one measurement; any other is read a row at a time. */
-export function nextSqliteRows<Row>(rows: Iterator<Row>, limit: number): Row[] {
-  const batch = (rows as { [SQLITE_ROW_BATCH]?: (limit: number) => Row[] })[SQLITE_ROW_BATCH];
-  if (batch) return batch(limit);
+ * them under one measurement. An optional bound can stop a batch after a row;
+ * callers using it read again until the iterator returns an empty batch. */
+export function nextSqliteRows<Row>(rows: Iterator<Row>, limit: number, stopAfter?: (row: Row) => boolean): Row[] {
+  const batch = (rows as { [SQLITE_ROW_BATCH]?: (limit: number, stopAfter?: (row: Row) => boolean) => Row[] })[SQLITE_ROW_BATCH];
+  if (batch) return batch(limit, stopAfter);
   const read: Row[] = [];
   while (read.length < limit) {
     const next = rows.next();
     if (next.done) break;
     read.push(next.value);
+    if (stopAfter?.(next.value)) break;
   }
   return read;
 }
@@ -87,12 +88,13 @@ export function observeSqlite<T extends Database>(db: T, reader: string): T {
         if (property === Symbol.iterator) return function (this: unknown) { return this; };
         // One measurement for a run of rows: a row measured alone costs more
         // in its measurement than in SQLite.
-        if (property === SQLITE_ROW_BATCH) return (limit: number) => measure(label, sqliteInstrumentationFrame(() => {
+        if (property === SQLITE_ROW_BATCH) return (limit: number, stopAfter?: (row: unknown) => boolean) => measure(label, sqliteInstrumentationFrame(() => {
           const rows: unknown[] = [];
           while (rows.length < limit) {
             const next = target.next();
             if (next.done) break;
             rows.push(next.value);
+            if (stopAfter?.(next.value)) break;
           }
           return rows;
         }));

@@ -22,7 +22,7 @@ import { ATTEMPT_SCRATCH_AUDIT_INTERVAL_MS, ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS, AT
 const checkoutReads: RetainedCheckoutReads = new Map();
 
 export async function attemptTempAuthority(owner: AttemptTempOwner, _inventory = new RepositoryLinkInventory(), now = Date.now,
-  retentionMs = FINISHED_LANE_RETENTION_MS, scratch = false): Promise<AttemptTempAuthority> {
+  retentionMs = FINISHED_LANE_RETENTION_MS, policy: "lane" | "attempt" | "scratch" = "lane"): Promise<AttemptTempAuthority> {
   if (!owner.pipelineId) {
     // A missing process snapshot cannot end a standalone host: reconnect and
     // resume keep its durable launch alive. Pin the keyed facts through dispatch.
@@ -50,8 +50,9 @@ export async function attemptTempAuthority(owner: AttemptTempOwner, _inventory =
     || attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId);
   const run = pipeline.runs.find(run => run.attempts.some(matches));
   const attempt = run?.attempts.find(matches);
+  if (policy === "attempt" && !attempt) return observed("unknown");
   if (attempt?.launchId === owner.launchId && attempt.state === "running") return observed("live");
-  if (scratch) {
+  if (policy === "scratch") {
     const expiry = attemptScratchExpiry(pipeline, owner);
     if (expiry !== null) return { ...observed(now() >= expiry ? "expired" : "closed", expiry),
       ...(pipeline.state === "closed" || pipeline.state === "completed" ? {} : { checkout: pipeline.worktreeDir ?? pipeline.repoDir }) };
@@ -71,7 +72,7 @@ export async function attemptTempState(owner: AttemptTempOwner, inventory = new 
 /** The common authority above retains the evidence clock. Ordinary scratch
  * and approved scratch lists use this separate, strict completion-age clock. */
 export function attemptScratchAuthority(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory(), now = Date.now) {
-  return attemptTempAuthority(owner, inventory, now, ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS, true);
+  return attemptTempAuthority(owner, inventory, now, ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS, "scratch");
 }
 /** The sweep's state port. Every read that finds the lane finished also
  * records when its retention ends, including for a root that a later
@@ -255,7 +256,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
         + (last ? `Last pass ${last.ended === "complete" ? "completed" : "ended when pressure cleared"} in ${minutes(last.durationMs)} over ${last.ticks} ticks, `
           + `${last.visited} visits, ${last.removed} roots removed (${gb(last.removedBytes)}). ` : "")
         + (full && last?.ended !== "complete" ? `Last full pass completed in ${minutes(full.durationMs)} over ${full.ticks} ticks. ` : "");
-      const summary = passText + `${report.lowSpace ? "Low free space: prioritize expired attempt scratch regardless of cap. " : ""}`
+      const summary = passText + `${report.lowSpace ? "Scratch free space is below the working reserve. " : ""}`
         + `${report.spaceError ? `Scratch free-space observation failed: ${report.spaceError}. ` : ""}`
         + `Recorded allocation ${gb(report.bytes)}; cap ${gb(report.capBytes)}; ${mode === "dry-run" ? "would reclaim" : "reclaimed"} ${gb(report.removedBytes)} attributed; `
         + `budget deferred ${gb(report.deferredBytes)}; held live ${gb(report.liveHeldBytes)}; held by evidence ${gb(report.evidenceHeldBytes)}; `

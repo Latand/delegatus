@@ -49,7 +49,6 @@ import { TelegramBotStore, type BotRow, type ChatRow, type TgChat, type TgUpdate
 import { admitReportReplies, drainReportReplies, productionReportReplyPorts, type ReportReplyPorts } from "./reportReplies";
 import { outboundPostingAllowed, recordOutbound, outboundState, type OutboundMessage, type PublicationTarget } from "./outbound";
 import { OutboundPublication } from "./outboundPublication";
-import { ReviewPollQueue, type ReviewPollInput } from "./reviewPolls";
 import { telegramReactionCatalogSchema, telegramReactionMessageIdSchema, telegramReactionSchema, type TelegramReactionCatalog } from "./reactions";
 import {
   createBotApiTransport,
@@ -76,7 +75,6 @@ export interface TelegramRichMessage {
   markdown: string;
   plainText?: string;
   images: Array<{ id: string; blob: Blob }>;
-  review?: ReviewPollInput;
 }
 
 export interface TelegramBotDependencies {
@@ -299,9 +297,6 @@ function lookupFailure(result: Extract<BotCallResult, { ok: false }>): TelegramB
 }
 
 export class TelegramBotService {
-  private readonly reviewPolls = new ReviewPollQueue();
-  async waitForReviewPolls(): Promise<void> { await this.reviewPolls.idle(); }
-  hasReviewPollWork(reviewId: string, key: string): boolean { return this.reviewPolls.owns(reviewId, key); }
   readonly #sendingTransports = new Map<string, { fingerprint: string; transport: BotTransport }>();
   private selectorCache: BotSelector | null = null;
   private transportCache: BotTransport | null = null;
@@ -1340,18 +1335,7 @@ export class TelegramBotService {
     };
     authorize();
     store.recordLookedUpChat(found.result, null, this.deps.now());
-    const result = await this.sendRich({ ...input, chat: selected.chatId }, { authorize, chat: store.chat(selected.chatId)! });
-    if (input.message.review && result.messageIds[0]) {
-      // Optional polls cannot prevent reconciliation of the form's receipt.
-      // Resolve their custody before enqueueing any new Telegram work.
-      try {
-        const pollPublication = this.publicationMetadata(botId, "poll", `review:${input.clientRequestId}`);
-        this.reviewPolls.enqueue({ review: input.message.review,
-          key: input.clientRequestId, chatId: result.chatId, messageId: result.messageIds[0], transport, authorize,
-          publish: (message, text) => this.publishConfirmed(botId, message, result.chatId, null, text, { ...pollPublication, replyToMessageId: result.messageIds[0]! }) });
-      } catch { console.warn("Telegram review polls unavailable", "publication_unavailable"); }
-    }
-    return result;
+    return this.sendRich({ ...input, chat: selected.chatId }, { authorize, chat: store.chat(selected.chatId)! });
   }
 
   /** One prototype message under a durable claim; ambiguous sends retain it. */
