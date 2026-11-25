@@ -207,6 +207,10 @@ export interface KanbanBoardProps {
       reader is the operator's own act: the page keeps its conversation in its
       card when its work finishes, until the reader is closed. */
   onReadersChange?: (paths: readonly string[]) => void;
+  /** A conversation stopped being on screen because the operator closed its
+      reader, left its window or closed every agent. The page takes it out of
+      the address, so a reload does not bring back what was closed. */
+  onReaderClosed?: (file: FileEntry) => void;
   /** The project's checkout, carried into the seat the board draws. */
   projectCwd?: string;
   /** The project's seat as its owner read it: every conversation the seat
@@ -630,6 +634,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
      an attention handoff and a row's × leave focus where it is. */
   const focusOnShow = useRef(false);
   const windowAgentRef = useRef<string | null>(null);
+  /* The keys of the agents in the window, kept by the list below. */
+  const windowKeysRef = useRef<readonly string[]>([]);
   /* The control outside the board's cards the window was opened from (the
      seat's expand button): closing the window gives it the keyboard back. */
   const openedFrom = useRef<HTMLElement | null>(null);
@@ -638,12 +644,24 @@ export function KanbanBoard(props: KanbanBoardProps) {
     openedFrom.current = null;
     queueMicrotask(() => (from?.isConnected ? from : rootRef.current?.querySelector<HTMLElement>(fallback))?.focus({ preventScroll: true }));
   }, []);
+  /* The reader or window the operator just closed, told to the page by the
+     conversation it showed. A stage's first message is no conversation yet. */
+  const readerClosed = useStableCallback((key: string | null) => {
+    if (!key || isStageDraftAgent(key)) return;
+    const file = files.find((entry) => conversationIdentity(entry) === key);
+    const path = file?.path ?? openReadersRef.current.find((reader) => reader.key === key)?.path;
+    if (file) props.onReaderClosed?.(file);
+    else if (path) props.onReaderClosed?.({ path } as FileEntry);
+  });
   const leaveWindow = useCallback(() => {
     if (!windowAgentRef.current) return;
+    /* Nothing stays on screen, so the address must name none of the window's
+       agents: a link opened one, and a switch since may have shown another. */
+    for (const key of new Set([windowAgentRef.current, ...windowKeysRef.current])) readerClosed(key);
     setWindow(null, null);
     /* The pill brings the window back; it takes the keyboard. */
     focusAfterWindow("[data-open-agents-pill]");
-  }, [setWindow, focusAfterWindow]);
+  }, [readerClosed, setWindow, focusAfterWindow]);
   const parkRef = useCallback((park: HTMLDivElement | null) => placement.setPark(park), [placement]);
   const filesByIdentity = useMemo(() => new Map(files.map((file) => [conversationIdentity(file), file] as const)), [files]);
   /* A conversation that has left this board's files keeps its reader mounted
@@ -747,7 +765,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
     })),
   ], [openConversations, shownDrafts, t]);
   const windowAgents = useMemo(() => (closing ? openNow.filter((agent) => agent.key !== closing.key) : openNow), [openNow, closing]);
-  const windowKeysRef = useRef<readonly string[]>([]);
   windowKeysRef.current = windowAgents.map((agent) => agent.key);
   /* The agent in the reader. One whose conversation is gone from the list
      (closed elsewhere, or its file left the board) is not shown. */
@@ -2454,6 +2471,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
      way a switch does, and the agent closed stays in the reader until then,
      out of the list. The last one closes the window. */
   const closeReaderFor = useCallback((key: string) => {
+    readerClosed(key);
     disown(key);
     /* A stage's first message leaves the window's drafts; a conversation leaves the reader memory. */
     const close = isStageDraftAgent(key)
@@ -2476,7 +2494,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       if (!next) focusAfterWindow(".board-frame");
     }
     close();
-  }, [memory, disown, setWindow, placement, focusAfterWindow]);
+  }, [readerClosed, memory, disown, setWindow, placement, focusAfterWindow]);
   const openReaderMenu = useCallback((key: string, anchor: HTMLElement, stop: ReaderStop) => menu.setOpen({ anchor, value: { kind: "reader", key, stop } }), [menu]);
 
   /* A conversation the Viewer was asked to open lands in its reader. */
@@ -2667,13 +2685,16 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [jumpToAgent]);
   const closeAllAgents = useCallback(() => {
     const keys = new Set(windowKeysRef.current);
-    for (const key of keys) disown(key);
+    for (const key of keys) {
+      readerClosed(key);
+      disown(key);
+    }
     setWindow(null, null);
     memory.update((readers) => readers.filter((reader) => !keys.has(reader.key)));
     setOpenDrafts((current) => ([...current.keys()].some((key) => keys.has(key)) ? new Map([...current].filter(([key]) => !keys.has(key))) : current));
     /* The window and the pill go with the last agent; the board keeps the keyboard. */
     focusAfterWindow(".board-frame");
-  }, [memory, disown, setWindow, focusAfterWindow]);
+  }, [readerClosed, memory, disown, setWindow, focusAfterWindow]);
   const agentStepRef = useRef({ stepAgent, reopenWindow });
   agentStepRef.current = { stepAgent, reopenWindow };
   /* Alt+J and Alt+K walk the open agents, from inside a composer too; with
