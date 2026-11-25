@@ -46,7 +46,8 @@ function verifiedHook(target: string, body: Buffer, digest: string): boolean {
  * and config, and refuse branch-history replacements that discard another author.
  * This is a cooperative agent guard, not a sandbox against hostile shell code.
  */
-export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, email: string, coauthor?: string): Record<string, string | undefined> {
+export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, email: string, coauthor?: string,
+  policy: { refusal?: string; omitCoauthor?: string; verifyCommitter?: boolean } = {}): Record<string, string | undefined> {
   let count = Number(source.GIT_CONFIG_COUNT ?? 0);
   if (!Number.isSafeInteger(count) || count < 0 || count > 1024) throw new Error("Invalid agent Git environment");
   if (count > 0 && source.GIT_CONFIG_KEY_0 === undefined) throw new Error("Invalid agent Git environment");
@@ -60,6 +61,16 @@ export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, ema
       env[key] = source[key];
     }
   }
+  const ident = quote(name + " <" + email + ">");
+  const refusal = policy.refusal ? `echo ${quote("Delegatus: " + policy.refusal)} >&2; exit 1` : "";
+  const committerCheck = policy.verifyCommitter ? `identity=$(git var GIT_COMMITTER_IDENT) || refuse
+  [ "\${identity%>*}>" = ${ident} ] || refuse` : "";
+  const stripCoauthor = policy.omitCoauthor ? `temporary=$(mktemp "$1.delegatus-XXXXXX") || exit 1
+  trap 'rm -f "$temporary"' EXIT
+  awk -v trailer=${quote(policy.omitCoauthor)} 'tolower($0) != tolower(trailer)' "$1" > "$temporary" || exit 1
+  cat "$temporary" > "$1" || exit 1
+  rm -f "$temporary"
+  trap - EXIT` : "";
   const script = `#!/bin/sh
 set -eu
 refuse() {
@@ -84,23 +95,28 @@ stage_final_check() {
 if [ "$hook" = prepare-commit-msg ]; then
   # commit exports its effective author, including -C/-c inheritance. The
   # cherry-pick sequencer needs its own source check. --no-verify runs this hook.
+  ${refusal}
   identity=$(git var GIT_AUTHOR_IDENT) || refuse
-  [ "\${identity%>*}>" = ${quote(name + " <" + email + ">")} ] || refuse
+  [ "\${identity%>*}>" = ${ident} ] || refuse
+  ${committerCheck}
   if picked=$(git rev-parse --verify -q CHERRY_PICK_HEAD); then check_author "$picked"; fi
-  ${coauthor ? `git interpret-trailers --in-place --if-exists addIfDifferent --trailer ${quote(coauthor)} "$1" || exit 1` : ""}
+  ${coauthor ? `git interpret-trailers --in-place --if-exists addIfDifferent --trailer ${quote(coauthor)} "$1" || exit 1` : stripCoauthor}
 fi
 if [ "$hook" = applypatch-msg ]; then
   # git am owns this message hook; amend the mailbox message before commit
   # creation. --no-verify skips this hook, so reference-transaction below
   # independently refuses an unattributed commit.
   :
+  ${refusal}
   ${coauthor ? `count=$(git interpret-trailers --parse "$1" | grep -Fxc -- ${quote(coauthor)} || true)
   [ "$count" -le 1 ] || refuse
-  if [ "$count" = 0 ]; then git interpret-trailers --in-place --trailer ${quote(coauthor)} "$1" || exit 1; fi` : ""}
+  if [ "$count" = 0 ]; then git interpret-trailers --in-place --trailer ${quote(coauthor)} "$1" || exit 1; fi` : stripCoauthor}
 fi
 if [ "$hook" = pre-applypatch ]; then
   # am keeps its author in the sequencer's quoted data, rather than exporting
   # it to hooks. Compare those assignments literally; never source the file.
+  ${refusal}
+  ${committerCheck}
   author_file=$(git rev-parse --git-path rebase-apply/author-script) || refuse
   author_data=$(sed -n '1,2p' "$author_file") || refuse
   [ "$author_data" = ${quote("GIT_AUTHOR_NAME=" + quote(name) + "\nGIT_AUTHOR_EMAIL=" + quote(email))} ] || refuse
@@ -121,10 +137,17 @@ if [ "$hook" = reference-transaction ]; then
       # older tip rather than appending a patch, and must remain available.
       applying=$(git rev-parse --git-path rebase-apply/applying) || refuse
       if [ -f "$applying" ]; then
+        check_applied_identity() {
+          ${refusal || ":"}
+          check_author "$1"
+          ${policy.verifyCommitter ? `committer=$(git show -s --no-show-signature --no-color --no-notes --format='%cn%n%ce' "$1") || refuse
+          [ "$committer" = ${quote(name + "\n" + email)} ] || refuse` : ""}
+          ${coauthor ? 'check_coauthor "$1"' : ""}
+        }
         parents=$(git show -s --no-show-signature --no-color --no-notes --format=%P "$new") || refuse
         case "$old" in
-          *[!0]*) [ "$parents" != "$old" ] || { check_author "$new"; ${coauthor ? `check_coauthor "$new";` : ""} } ;;
-          *) check_author "$new"; ${coauthor ? `check_coauthor "$new";` : ""} ;;
+          *[!0]*) [ "$parents" != "$old" ] || check_applied_identity "$new" ;;
+          *) check_applied_identity "$new" ;;
         esac
       fi
       case "$old" in *[!0]*) ;; *) continue ;; esac

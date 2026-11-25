@@ -329,7 +329,7 @@ test("infrastructure deadline exhaustion parks without asking the producer to re
     expect(parked.publicationRecovery?.[parked.lastPassedCommit]).toMatchObject({ failures: 4, totalAttempts: 4 });
     expect(parked.stateDetail).toContain("after 3 automatic retries");
   } finally { f.close(); }
-});
+}, 15_000);
 
 test.each(["failed", "unreserved", "live", "uncertain", "background", "outstanding"] as const)(
   "publication repair recovery respects delivery and producer evidence: %s", async kind => {

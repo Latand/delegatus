@@ -44,13 +44,13 @@ run tells you where to look without republishing what it found.
 
 ## Commits from launched agents
 
-Delegatus sets the author and committer environment for every launched agent,
-including pipeline stages and plain spawns. User repositories use their
-configured Git user identity with Delegatus as a no-reply co-author. Missing or
-incomplete user configuration retains the Delegatus machine identity. This
-repository's checked-in publication configuration retains its machine identity
-and existing attribution policy. Git configuration stays untouched. See
-[Pipeline dependencies and commit identity](docs/design/pipeline-package-installs.md).
+Delegatus sets the Git author and committer for launched agents. In user
+repositories both use the GitHub noreply address of the installation's active
+GitHub CLI account. Sign in with `gh auth login --hostname github.com` to enable
+commits. Settings → Privacy controls the Delegatus co-author trailer, which is
+on by default. This repository's checked-in publication policy keeps its
+machine identity and existing attribution. Delegatus leaves Git configuration
+untouched. See [Pipeline dependencies and commit identity](docs/design/pipeline-package-installs.md).
 
 An agent must add a new commit on top of work authored by someone else. The
 launch environment installs Git hooks that refuse

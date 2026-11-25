@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { updateOperatorSettings } from "@/lib/operator/settings";
+import { fixtureForgeAccount, fixtureNoreply, seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { realExec } from "@/lib/workflows/provision";
 import { controllerCommitIdentityEnv } from "./controllerCommitIdentity";
 import { DELEGATUS_COAUTHOR, REPOSITORY_IDENTITY, repositoryCommitIdentity, repositoryPublicationSource } from "./repositoryCommitIdentity";
@@ -23,7 +25,14 @@ async function fixture(repositoryName = "renamed-project") {
     expect(r.code, r.stderr).toBe(0); return r.stdout.trim();
   };
   await run(["init", "-q", "-b", "main"]);
-  return { root, repo, source, run, close: () => fs.rmSync(root, { recursive: true, force: true }) };
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = source.LLV_STATE_DIR;
+  seedForgeCommitAccount();
+  return { root, repo, source, run, close: () => {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(root, { recursive: true, force: true });
+  } };
 }
 const email = ["fixture", "example.invalid"].join("@");
 
@@ -40,10 +49,10 @@ test.each(["configured", "privacy"] as const)("generated merger instruction hono
     }
     const source = await repositoryPublicationSource(f.repo, f.source);
     const expected = policy === "configured"
-      ? { GIT_AUTHOR_NAME: "Repository Fixture", GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: "Repository Fixture", GIT_COMMITTER_EMAIL: email }
+      ? { GIT_AUTHOR_NAME: "Repository Fixture", GIT_AUTHOR_EMAIL: fixtureNoreply, GIT_COMMITTER_NAME: "Repository Fixture", GIT_COMMITTER_EMAIL: fixtureNoreply }
       : controllerCommitIdentityEnv();
     expect(source[REPOSITORY_IDENTITY]).toBe(policy === "configured"
-      ? JSON.stringify({ env: expected, coauthor: DELEGATUS_COAUTHOR }) : undefined);
+      ? JSON.stringify({ policy: "repository", env: expected, coauthor: DELEGATUS_COAUTHOR }) : undefined);
     // A later configuration change cannot replace the identity selected at launch.
     await f.run(["config", "user.name", "Later Fixture"]);
     await f.run(["config", "user.email", ["later", "example.invalid"].join("@")]);
@@ -90,17 +99,20 @@ test.each(["local", "global", "included", "worktree"] as const)("repository iden
     const readSource = { ...f.source, GIT_DIR: path.join(f.root, "unrelated-git"), GIT_WORK_TREE: path.join(f.root, "unrelated-tree"),
       GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "user.name", GIT_CONFIG_VALUE_0: "Injected Fixture" };
     const identity = await repositoryCommitIdentity(cwd, realExec, readSource);
-    expect(identity).toEqual({ env: { GIT_AUTHOR_NAME: "Repository Fixture", GIT_AUTHOR_EMAIL: email,
-      GIT_COMMITTER_NAME: "Repository Fixture", GIT_COMMITTER_EMAIL: email }, coauthor: DELEGATUS_COAUTHOR });
+    expect(identity).toEqual({ policy: "repository", env: { GIT_AUTHOR_NAME: "Repository Fixture", GIT_AUTHOR_EMAIL: fixtureNoreply,
+      GIT_COMMITTER_NAME: "Repository Fixture", GIT_COMMITTER_EMAIL: fixtureNoreply }, coauthor: DELEGATUS_COAUTHOR });
     expect(await f.run(["config", "--local", "--list"])).toBe(before);
   } finally { f.close(); }
 });
 
-test.each(["absent", "partial"])("repository identity keeps the machine fallback for %s user config", async kind => {
+test.each(["absent", "partial"])("repository identity supplies the account identity with %s Git user config", async kind => {
   const f = await fixture();
   try {
     if (kind === "partial") await f.run(["config", "user.name", "Repository Fixture"]);
-    expect(await repositoryCommitIdentity(f.repo, realExec, f.source)).toEqual({ env: controllerCommitIdentityEnv(), coauthor: DELEGATUS_COAUTHOR });
+    const name = kind === "partial" ? "Repository Fixture" : fixtureForgeAccount.login;
+    expect(await repositoryCommitIdentity(f.repo, realExec, f.source)).toEqual({ policy: "repository",
+      env: { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: fixtureNoreply, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: fixtureNoreply },
+      coauthor: DELEGATUS_COAUTHOR });
   } finally { f.close(); }
 });
 
@@ -115,7 +127,7 @@ test.each(["renamed-project", "renamed-project "])("checked-in privacy configura
     user[REPOSITORY_IDENTITY] = JSON.stringify({ env: { GIT_AUTHOR_NAME: "Unrelated Fixture", GIT_AUTHOR_EMAIL: email }, coauthor: DELEGATUS_COAUTHOR });
     const source = await repositoryPublicationSource(f.repo, user);
     expect(source[REPOSITORY_IDENTITY]).toBeUndefined();
-    expect(await repositoryCommitIdentity(f.repo, realExec, f.source)).toEqual({ env: controllerCommitIdentityEnv() });
+    expect(await repositoryCommitIdentity(f.repo, realExec, f.source)).toEqual({ policy: "machine", env: controllerCommitIdentityEnv() });
     const env = agentPublicationIdentityEnv(source);
     expect(env.GIT_AUTHOR_NAME).toBe("Delegatus");
     await f.run(["commit", "--allow-empty", "-qm", "policy preserved"], { ...f.source, ...env });
@@ -138,7 +150,7 @@ test.each(["claude", "codex"] as const)("%s settings and sandbox keep repository
     }
     await f.run(["commit", "--allow-empty", "-qm", "user work"], env);
     await f.run(["commit", "--amend", "--allow-empty", "--no-edit"], env);
-    expect(await f.run(["log", "-1", "--format=%an%n%ae%n%cn%n%ce"])).toBe(["Repository Fixture", email, "Repository Fixture", email].join("\n"));
+    expect(await f.run(["log", "-1", "--format=%an%n%ae%n%cn%n%ce"])).toBe(["Repository Fixture", fixtureNoreply, "Repository Fixture", fixtureNoreply].join("\n"));
     expect((await f.run(["log", "-1", "--format=%B"])).split(DELEGATUS_COAUTHOR)).toHaveLength(2);
     expect(await f.run(["config", "--local", "--list"])).toBe(before);
   } finally { f.close(); }
@@ -149,7 +161,7 @@ test("identity read errors and hostile multiline values refuse without exposing 
   try {
     await expect(repositoryCommitIdentity(f.repo, async () => ({ code: 128, stdout: "", stderr: "private diagnostic" }), f.source)).rejects.toThrow("values withheld");
     await f.run(["config", "user.name", "Fixture\nspoofed trailer"]); await f.run(["config", "user.email", email]);
-    await expect(repositoryCommitIdentity(f.repo, realExec, f.source)).rejects.toThrow("Invalid repository Git identity (values withheld)");
+    expect((await repositoryCommitIdentity(f.repo, realExec, f.source)).env.GIT_AUTHOR_NAME).toBe(fixtureForgeAccount.login);
     fs.writeFileSync(path.join(f.repo, "package.json"), "{broken");
     await expect(repositoryCommitIdentity(f.repo, realExec, f.source)).rejects.toThrow("publication configuration could not be read");
   } finally { f.close(); }
@@ -178,7 +190,7 @@ process.exit(r.status ?? 1);
     const boot = withSpawnCapability(spec, "a".repeat(43));
     const result = await realExec("sh", ["-c", boot.command], f.repo, f.source);
     expect(result.code, result.stderr).toBe(0);
-    expect(await f.run(["log", "-1", "--format=%an%n%ae"])).toBe(name + "\n" + email);
+    expect(await f.run(["log", "-1", "--format=%an%n%ae"])).toBe(name + "\n" + fixtureNoreply);
     expect(await f.run(["log", "-1", "--format=%B"])).toContain(DELEGATUS_COAUTHOR);
     expect(fs.existsSync(path.join(f.repo, "unexpected"))).toBe(false);
   } finally { f.close(); }
@@ -193,12 +205,59 @@ test("headless publication rebinds identity without losing existing engine restr
     expect(prepared.env.GIT_AUTHOR_NAME).toBe("Repository Fixture");
     const settings = JSON.parse(prepared.args[1]);
     expect(settings.permissions).toEqual({ deny: ["Edit"] }); expect(settings.autoMemoryEnabled).toBe(false);
-    expect(settings.env.GIT_AUTHOR_EMAIL).toBe(email);
+    expect(settings.env.GIT_AUTHOR_EMAIL).toBe(fixtureNoreply);
     fs.mkdirSync(path.join(f.repo, "scripts")); fs.writeFileSync(path.join(f.repo, "scripts/privacy-known-value-fingerprints.json"), "{}");
     fs.writeFileSync(path.join(f.repo, "package.json"), JSON.stringify({ scripts: { "privacy:check": "bun scripts/privacy-publication-gate.ts" } }));
     const rebound = await prepareHeadlessPublication(prepared, f.repo);
     expect(rebound.env.GIT_AUTHOR_NAME).toBe("Delegatus");
     expect(rebound.env[REPOSITORY_IDENTITY]).toBeUndefined();
     expect(JSON.parse(rebound.args[1]).env[REPOSITORY_IDENTITY]).toBeUndefined();
+  } finally { f.close(); }
+});
+
+test("opt-out keeps the owner's author and committer and removes Delegatus attribution on amend", async () => {
+  const f = await fixture();
+  try {
+    const environment = async () => ({ ...f.source, ...agentPublicationIdentityEnv(await repositoryPublicationSource(f.repo, f.source)) });
+    await f.run(["commit", "--allow-empty", "-qm", "initial work"], await environment());
+    expect(await f.run(["log", "-1", "--format=%B"])).toContain(DELEGATUS_COAUTHOR);
+    updateOperatorSettings({ commitAttribution: false }, "2026-11-26T16:10:00Z");
+    const env = await environment();
+    await f.run(["commit", "--amend", "--allow-empty", "--no-edit"], env);
+    expect(await f.run(["log", "-1", "--format=%ae%n%ce"])).toBe([fixtureNoreply, fixtureNoreply].join("\n"));
+    expect(await f.run(["log", "-1", "--format=%B"])).toBe("initial work");
+    for (const key of ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"]) {
+      const rejected = await realExec("git", ["commit", "--allow-empty", "--no-verify", "-m", "overridden"], f.repo, { ...env, [key]: email });
+      expect(rejected.code).not.toBe(0);
+      expect(rejected.stderr).toContain("configured identity");
+    }
+  } finally { f.close(); }
+});
+
+test.each(["commit", "merge", "cherry-pick", "am", "am --no-verify"])("unresolved account guards %s with an actionable refusal", async operation => {
+  const f = await fixture();
+  try {
+    await f.run(["config", "--global", "user.email", email]);
+    await f.run(["commit", "--allow-empty", "-qm", "base"]);
+    const before = await f.run(["rev-parse", "HEAD"]);
+    await f.run(["checkout", "-qb", "other"]);
+    fs.writeFileSync(path.join(f.repo, "change.txt"), "change\n");
+    await f.run(["add", "."]);
+    // The old identity deliberately matches am's unresolved placeholder.
+    await f.run(["commit", "-qm", "change"]);
+    const patch = path.join(f.root, "patch");
+    await f.run(["format-patch", "-1", "-o", f.root]);
+    fs.renameSync(path.join(f.root, "0001-change.patch"), patch);
+    await f.run(["checkout", "main"]);
+    fs.unlinkSync(path.join(process.env.LLV_STATE_DIR!, "forge-commit-account.json"));
+    const env = { ...f.source, ...agentPublicationIdentityEnv(await repositoryPublicationSource(f.repo, f.source)) };
+    const args = operation === "commit" ? ["commit", "--allow-empty", "-m", "change"]
+      : operation === "merge" ? ["merge", "--no-ff", "--no-edit", "other"]
+      : operation === "cherry-pick" ? ["cherry-pick", "other"] : [...operation.split(" "), patch];
+    const result = await realExec("git", args, f.repo, env);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("gh auth login --hostname github.com");
+    expect(result.stderr).not.toContain(email);
+    expect(await f.run(["rev-parse", "HEAD"])).toBe(before);
   } finally { f.close(); }
 });

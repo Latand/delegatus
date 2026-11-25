@@ -164,13 +164,23 @@ through injected platform values on the test runner.
 
 ## Repository authorship
 
-User repositories use the configured `user.name` and `user.email` for both
-author and committer. Git resolves repository, worktree, global and included
-configuration. Inherited author variables and role-specific identity overrides
-cannot replace that choice. Delegatus adds its no-reply co-author trailer.
-Missing or incomplete user configuration retains the existing Delegatus
-machine author, with the same co-author trailer. No Git configuration is
-written. Invalid values and failed reads refuse without exposing values.
+In user repositories the Git author and committer use the installation owner's
+GitHub noreply address. Delegatus derives it from the authenticated GitHub CLI
+account's user ID and login. The effective `user.name` supplies a display name
+when valid, with the login as a fallback. This leaves Git configuration untouched.
+Older GitHub accounts can obtain the ID-based form by toggling email privacy in
+their GitHub settings. See [GitHub's email address reference](https://docs.github.com/en/account-and-profile/reference/email-addresses-reference).
+
+Delegatus caches the validated account locally and refreshes it in the background
+after 24 hours. With no resolved account, sign in using
+`gh auth login --hostname github.com` and retry. Git refuses new agent commits
+until the account is resolved. Pipeline publication checks new author and committer
+mailboxes before pushing. An existing lane with unpublished personal-email commits
+will need to replace those commits before publication.
+
+Settings → Privacy controls the Delegatus co-author trailer across the
+installation. It is on by default and applies on the next launch and to
+controller commits. Engines can add their own attribution.
 
 The checked-in publication policy opts a project into machine authorship:
 `package.json` declares a `privacy:check` script using the publication gate,

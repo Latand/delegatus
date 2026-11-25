@@ -1,3 +1,4 @@
+import { fixtureNoreply, seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { cpuPriorityFromEnv } from "../runtime/cpuPriority";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS } from "./controllerArtifacts";
@@ -184,6 +185,7 @@ beforeEach(() => {
   previousState = process.env.LLV_STATE_DIR;
   publicationState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-git-state-"));
   process.env.LLV_STATE_DIR = publicationState;
+  seedForgeCommitAccount();
 });
 afterEach(() => {
   closeAgentRegistryForTests();
@@ -2243,6 +2245,73 @@ async function publishSandbox(withOrigin = true): Promise<PublishSandbox> {
   };
 }
 
+test.each(["author", "committer", "name", "quoted mailbox", "forge single parent", "policy added by lane"] as const)(
+  "publication refuses an inadmissible %s identity before a push", async kind => {
+    const box = await publishSandbox();
+    try {
+      const personal = ["person", "example.invalid"].join("@");
+      const commit = async (identity: NodeJS.ProcessEnv) => {
+        const cwd = box.subject.worktreeDir;
+        expect(await realExec("git", ["commit", "--allow-empty", "-m", "new work"], cwd,
+          { ...controllerCommitIdentityEnv(), ...identity })).toMatchObject({ code: 0 });
+        return git(cwd, "rev-parse", "HEAD");
+      };
+      if (kind === "policy added by lane") {
+        const cwd = box.subject.worktreeDir;
+        fs.mkdirSync(path.join(cwd, "scripts"));
+        fs.writeFileSync(path.join(cwd, "package.json"), JSON.stringify({ scripts: { "privacy:check": "bun scripts/privacy-publication-gate.ts" } }));
+        fs.writeFileSync(path.join(cwd, "scripts/privacy-known-value-fingerprints.json"), "{}");
+        await git(cwd, "add", "package.json", "scripts");
+      }
+      const identity: NodeJS.ProcessEnv = kind === "name" ? { GIT_AUTHOR_NAME: `Person (${personal})` }
+        : kind === "committer" ? { GIT_COMMITTER_EMAIL: personal }
+        : kind === "forge single parent" ? { GIT_COMMITTER_EMAIL: ["noreply", "github.com"].join("@") }
+        : kind === "quoted mailbox" ? { GIT_AUTHOR_EMAIL: ['"fixture"', "users.noreply.github.com"].join("@") }
+        : { GIT_AUTHOR_EMAIL: personal };
+      const sha = await commit(identity);
+      const field = kind === "forge single parent" || kind === "committer" ? "committer" : "author";
+      const result = await publishPipelineBranch(box.subject, realExec, { acceptedSha: sha });
+      expect(result).toMatchObject({ ok: false, error: expect.stringContaining(`${shortId(sha)} ${field} identity`) });
+      expect(JSON.stringify(result)).not.toContain(personal);
+      expect(await box.originHead()).toBe("");
+    } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+  });
+
+test("publication excludes the remote base and lane tips and admits a forge committer on a merge", async () => {
+  const box = await publishSandbox();
+  try {
+    const branch = box.subject.delivery!.target.branch;
+    const cwd = box.subject.worktreeDir;
+    const personal = ["person", "example.invalid"].join("@");
+    for (const [repo, ref] of [[box.repo, "refs/heads/main"], [cwd, branch]]) {
+      expect(await realExec("git", ["commit", "--allow-empty", "-m", "already published"], repo,
+        { ...controllerCommitIdentityEnv(), GIT_AUTHOR_EMAIL: personal, GIT_COMMITTER_EMAIL: personal })).toMatchObject({ code: 0 });
+      await git(repo, "push", "origin", `HEAD:${ref}`);
+    }
+    const upperCaseHost = fixtureNoreply.split("@").map((part, index) => index === 1 ? part.toUpperCase() : part).join("@");
+    const upstream = await git(box.repo, "rev-parse", "HEAD");
+    expect(await realExec("git", ["merge", "--no-ff", "-m", "merge upstream", upstream], cwd, {
+      GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: upperCaseHost,
+      GIT_COMMITTER_NAME: "Forge", GIT_COMMITTER_EMAIL: ["noreply", "github.com"].join("@"),
+    })).toMatchObject({ code: 0 });
+    const sha = await git(cwd, "rev-parse", "HEAD");
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: sha })).toMatchObject({ ok: true, remote: "published", sha });
+    expect(await box.originHead()).toBe(sha);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("publication without a GitHub account refuses even a safe commit in a user repository", async () => {
+  const box = await publishSandbox();
+  try {
+    const sha = await box.commit("change.txt", "accepted work\n");
+    fs.unlinkSync(path.join(publicationState, "forge-commit-account.json"));
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: sha })).toMatchObject({
+      ok: false, error: expect.stringContaining("gh auth login --hostname github.com"),
+    });
+    expect(await box.originHead()).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
 test.each(["pure", "assertion", "privacy", "started", "cleanup"] as const)("admission recovery classifies both streams before redaction: %s", async kind => {
   const box = await publishSandbox();
   try {
@@ -2932,7 +3001,7 @@ test.each([
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
-test("stage reconciliation accepts squashed content, preserves the tree, and uses the controller identity", async () => {
+test("stage reconciliation accepts squashed content and uses the owner noreply identity", async () => {
   const box = (await rebasedStageSandbox());
   try {
     (await box.commit("build.txt", "new builder work\n"));
@@ -2945,9 +3014,9 @@ test("stage reconciliation accepts squashed content, preserves the tree, and use
     if (!result.ok) throw new Error(result.error);
     expect((await git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}"))).toBe(tree);
     expect((await git(box.subject.worktreeDir, "rev-list", "--parents", "-n", "1", result.sha))).toBe(`${result.sha} ${head} ${box.accepted}`);
-    const identity = controllerCommitIdentityEnv();
+    const name = await git(box.subject.worktreeDir, "config", "user.name");
     expect((await git(box.subject.worktreeDir, "show", "-s", "--format=%an|%ae|%cn|%ce", result.sha)))
-      .toBe(`${identity.GIT_AUTHOR_NAME}|${identity.GIT_AUTHOR_EMAIL}|${identity.GIT_COMMITTER_NAME}|${identity.GIT_COMMITTER_EMAIL}`);
+      .toBe([name, fixtureNoreply, name, fixtureNoreply].join("|"));
     expect((await git(box.subject.worktreeDir, "status", "--porcelain"))).toBe("");
     expect((await box.originHead())).toBe("");
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
@@ -3996,7 +4065,7 @@ test("an unreachable remote gets one time-bounded read per publication call (#99
     detail: "checking the remote pipeline branch: git remote read timed out after 5s",
   });
   expect(calls.filter((call) => call.includes("ls-remote"))).toEqual([
-    `git ls-remote --heads origin refs/heads/${pipeline().branch}`,
+    `git ls-remote --heads origin refs/heads/${pipeline().branch} refs/heads/main`,
   ]);
   expect(calls.some((call) => call.startsWith("sleep "))).toBe(false);
 });

@@ -18,6 +18,7 @@ const L = (en: string, ukrainian: string) => uk() ? ukrainian : en;
 const telemetry = { enabled: true, locked: SETTINGS_SCENE === "privacy-locked", noticeDismissed: SETTINGS_SCENE !== "privacy-notice", swarmRules: SETTINGS_SCENE === "privacy-swarm" };
 if (telemetry.locked) telemetry.enabled = false;
 let consent = true;
+let commitAttribution: { value: boolean; changedAt: string } | null = null;
 
 /* ---- Telegram ---- */
 const MAIN = { name: "Delegatus Atlas", username: "atlas_delegatus_bot", receiving: true, tokenState: "ok" as const };
@@ -156,6 +157,18 @@ export async function settingsEvidenceRoute(url: URL, method: string, init?: Req
     if (write && REFUSE) return json({ error: "read-only" }, 500);
     if (write) Object.assign(telemetry, body);
     return json(telemetry);
+  }
+  if (url.pathname === "/api/operator/settings") {
+    if (write && typeof body.commitAttribution === "boolean") {
+      if (REFUSE) return json({}, 403);
+      commitAttribution = { value: body.commitAttribution, changedAt: iso(0) };
+    }
+    return json({
+      ok: true, locale: null, timeZone: null, commitAttribution,
+      commitAccount: SETTINGS_SCENE === "privacy-commit-account-unresolved"
+        ? { state: "unresolved" }
+        : { state: "resolved", login: "fixture-lane" },
+    });
   }
   if (url.pathname === "/api/subscription-api-consent") {
     if (SETTINGS_SCENE === "privacy-consent-failed") return json({}, 500);

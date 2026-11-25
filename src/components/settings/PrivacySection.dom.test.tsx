@@ -86,5 +86,48 @@ test("the swarm line names the anonymous counts, and the rows hold no native che
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
   expect(document.querySelector("[data-swarm-setting]")?.textContent).toContain(translate("en", "settings.privacy.swarmHint"));
   expect(document.querySelector("input")).toBeNull();
-  expect([...document.querySelectorAll('[role="switch"]')]).toHaveLength(3);
+  expect([...document.querySelectorAll('[role="switch"]')]).toHaveLength(4);
+});
+
+
+test.each(["en", "uk"] as const)("%s: attribution defaults on, persists off, and reads back a refused write", async locale => {
+  setLocale(locale);
+  let setting: boolean | null = null;
+  let refused = false;
+  globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+    if (url !== "/api/operator/settings") return Response.json({ enabled: false });
+    if (init?.method === "PUT") {
+      if (refused) return Response.json({}, { status: 403 });
+      setting = JSON.parse(String(init.body)).commitAttribution;
+    }
+    return Response.json({
+      commitAttribution: setting === null ? null : { value: setting, changedAt: "2026-11-26T16:10:00Z" },
+      commitAccount: { state: "resolved", login: "fixture-lane" },
+    });
+  }) as unknown as typeof fetch;
+  const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  await act(async () => { root!.render(<PrivacySection />); });
+  const toggle = document.querySelector<HTMLButtonElement>('[data-commit-attribution] [role="switch"]')!;
+  const checked = () => toggle.getAttribute("aria-checked");
+  expect(toggle.getAttribute("aria-label")).toBe(translate(locale, "settings.privacy.commitAttribution"));
+  expect(checked()).toBe("true");
+  expect(document.querySelector("[data-commit-account]")?.textContent).toContain("fixture-lane");
+  await act(async () => { toggle.click(); });
+  expect(setting).toBe(false);
+  expect(checked()).toBe("false");
+  refused = true;
+  await act(async () => { toggle.click(); });
+  expect(setting).toBe(false);
+  expect(checked()).toBe("false");
+  expect(document.querySelector('[data-commit-attribution] [role="alert"]')?.textContent).toBe(translate(locale, "settings.privacy.commitAttributionError"));
+});
+
+test("Privacy shows how to enable commits when the GitHub account is unresolved", async () => {
+  globalThis.fetch = (async (url: unknown) => url === "/api/operator/settings"
+    ? Response.json({ commitAttribution: null, commitAccount: { state: "unresolved" } })
+    : Response.json({ enabled: false })) as unknown as typeof fetch;
+  const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  await act(async () => { root!.render(<PrivacySection />); });
+  expect(document.querySelector("[data-commit-account=unresolved]")?.textContent).toContain("gh auth login --hostname github.com");
+  expect(document.querySelector('[data-commit-attribution] [role="switch"]')?.getAttribute("aria-checked")).toBe("true");
 });

@@ -13,7 +13,8 @@ import os from "node:os";
 import path from "node:path";
 import { realExec, type ExecPort, type ExecResult } from "@/lib/workflows/provision";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
-import { repositoryCommitIdentity } from "@/lib/git/repositoryCommitIdentity";
+import { COMMIT_ACCOUNT_REFUSAL, resolveForgeCommitAccount } from "@/lib/git/forgeCommitAccount";
+import { repositoryCommitIdentity, repositoryHasPrivacyPolicy } from "@/lib/git/repositoryCommitIdentity";
 import { canonicalSensitiveText } from "@/lib/privacy/canonicalText";
 import { compactSensitiveText, staticSensitiveClasses } from "@/lib/privacy/staticDetectors";
 import { mailboxPattern } from "@/lib/privacy/mailbox";
@@ -855,8 +856,10 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
       return { ok: false, error: "the stage commit tree differs from its declared output paths; preserve the index and worktree" };
     }
   }
-  const marker = `Delegatus-Stage-Settlement: ${crypto.randomUUID()}`;
   const identity = await repositoryCommitIdentity(cwd, exec);
+  if (identity.refusal) return { ok: false, error: identity.refusal };
+  const markerKey = identity.policy === "repository" && !identity.coauthor ? "Stage-Settlement" : "Delegatus-Stage-Settlement";
+  const marker = `${markerKey}: ${crypto.randomUUID()}`;
   await beforeCommit?.();
   const commit = await exec("git", ["commit", ...[...messages, marker, ...(identity.coauthor ? [identity.coauthor] : [])].flatMap(message => ["-m", message])], cwd,
     pipelineLiteralGitEnv({ ...identity.env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { timeoutMs: STAGE_COMMIT_TIMEOUT_MS });
@@ -1345,26 +1348,25 @@ export async function pipelinePublicationTextSafe(text: string): Promise<string 
   }
 }
 
-/** Admit the literal attribution mailboxes the publication boundary allows.
-    Names also pass the publication detectors and the trusted fingerprint
-    catalog: a role mailbox alone cannot make a private name publishable. */
-function admittedPublicationIdentity(name: string, email: string, field: "author" | "committer", parentCount: number): boolean {
+function admittedMailbox(local: string, domain: string, machinePolicy: boolean): boolean {
+  return local === "noreply" || local === "no-reply" || domain === "users.noreply.github.com"
+    || (machinePolicy && local === "support" && domain === "github.com");
+}
+
+/** Compare the complete literal mailbox and check for addresses embedded in
+ * the display name. Forge-authored merge commits have a distinct committer. */
+function admittedCommitMailbox(name: string, email: string, field: "author" | "committer", parentCount: number, machinePolicy: boolean): boolean {
   if (!name.trim() || /[\x00-\x1f\x7f]/.test(name)) return false;
-  const mailboxes = [...email.matchAll(mailboxPattern(true))];
-  const mailbox = mailboxes.length === 1 ? mailboxes[0] : undefined;
+  const mailbox = mailboxPattern(true).exec(email);
   if (!mailbox || mailbox.index !== 0 || mailbox[0].length !== email.length) return false;
   const local = mailbox[1].toLowerCase(), domain = mailbox[2].toLowerCase();
-  const admittedMailbox = (local: string, domain: string) => local === "noreply" || local === "no-reply"
-    || domain === "users.noreply.github.com" || (local === "support" && domain === "github.com");
-  if (!admittedMailbox(local, domain)) return false;
-  // The forge's committer mailbox needs the same merge-graph proof as the
-  // publication gate. An author's forge account remains independently read.
-  if (local === "noreply" && domain === "github.com" && field === "committer" && parentCount < 2) return false;
-  if (publicationTextSafe(`${name} ${email}`) === null) return false;
+  if ((!machinePolicy && local.startsWith('"')) || !admittedMailbox(local, domain, machinePolicy)) return false;
+  if (local === "noreply" && domain === "github.com" && (!machinePolicy || field === "committer")
+    && (field !== "committer" || parentCount < 2)) return false;
   const decodedName = canonicalSensitiveText(name, true);
   if (decodedName.error) return false;
   for (const mailbox of decodedName.text.normalize("NFKC").toLowerCase().matchAll(mailboxPattern(true))) {
-    if (!admittedMailbox(mailbox[1], mailbox[2])) return false;
+    if (!admittedMailbox(mailbox[1], mailbox[2], machinePolicy)) return false;
   }
   return true;
 }
@@ -1406,6 +1408,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
   if (!local.ok) return local;
   if (local.sha !== head) return { ok: false, error: "the stage head moved before history reconciliation" };
   const repositoryIdentity = await repositoryCommitIdentity(pipeline.worktreeDir, exec);
+  if (repositoryIdentity.refusal) return { ok: false, error: repositoryIdentity.refusal };
   // Check every commit this parent would reintroduce, including an unsafe
   // ancestor behind an admitted accepted tip. Unknown identities are refused
   // conservatively; values and partial metadata reads never enter the reason.
@@ -1416,7 +1419,9 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
     const [commit, parents, ...fields] = line.split("\0");
     if (!/^[0-9a-f]{40}$/.test(commit) || !/^(?:[0-9a-f]{40}(?: [0-9a-f]{40})*)?$/.test(parents) || fields.length !== 4) return unreadableIdentity;
     for (const offset of [0, 2]) {
-      if (!repositoryIdentity.coauthor && !admittedPublicationIdentity(fields[offset], fields[offset + 1], offset === 0 ? "author" : "committer", parents ? parents.split(" ").length : 0)) return { ok: false,
+      if (repositoryIdentity.policy === "machine"
+        && (!admittedCommitMailbox(fields[offset], fields[offset + 1], offset === 0 ? "author" : "committer", parents ? parents.split(" ").length : 0, true)
+          || publicationTextSafe(`${fields[offset]} ${fields[offset + 1]}`) === null)) return { ok: false,
         error: `history reconciliation refused to restore ${commit.slice(0, 12)} ${offset === 0 ? "author" : "committer"} identity; restored commits require publication-safe attribution (values withheld)` };
     }
     // Formatting with %B truncates at NUL and transcodes declared encodings.
@@ -1429,7 +1434,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
     if (messageStart < 0) return unreadableMessage;
     const encoding = /^encoding (.+)$/m.exec(bytes.subarray(0, messageStart).toString("ascii"))?.[1];
     if (encoding && !/^utf-?8$/i.test(encoding)) return unreadableMessage;
-    if (!repositoryIdentity.coauthor && !admittedPublicationMessage(bytes.subarray(messageStart + 2).toString("utf8"))) return { ok: false,
+    if (repositoryIdentity.policy === "machine" && !admittedPublicationMessage(bytes.subarray(messageStart + 2).toString("utf8"))) return { ok: false,
       error: `history reconciliation refused to restore ${commit.slice(0, 12)} commit message; restored commits require publication-safe messages (values withheld)` };
   }
   const branch = (await exec("git", ["symbolic-ref", "HEAD"], pipeline.worktreeDir));
@@ -1842,14 +1847,27 @@ async function readRemotePipelineBranch(
   pipeline: Pipeline,
   exec: ExecPort,
   step: string,
-): Promise<{ ok: true; sha: string } | { ok: false; error: string }> {
+  baseRef?: string,
+): Promise<{ ok: true; sha: string; baseSha?: string } | { ok: false; error: string }> {
   if (pipeline.delivery && !pipeline.delivery.target.remote) return { ok: true, sha: "" };
+  const branchRef = pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`;
   const result = (await exec(
     "git",
-    ["ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`],
+    ["ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", branchRef, ...(baseRef && baseRef !== branchRef ? [baseRef] : [])],
     pipeline.worktreeDir, undefined, { timeoutMs: parseInt(REMOTE_READ_TIMEOUT) * 1_000 },
   ));
-  if (result.code === 0) return { ok: true, sha: result.stdout.trim().split(/\s+/)[0] ?? "" };
+  if (result.code === 0) {
+    if (!baseRef) return { ok: true, sha: result.stdout.trim().split(/\s+/)[0] ?? "" };
+    const refs = new Map<string, string>();
+    for (const row of result.stdout.trim().split("\n").filter(Boolean)) {
+      const [sha, ref, extra] = row.trim().split(/\s+/);
+      if (!/^[0-9a-f]{40}$/i.test(sha) || extra || (ref !== branchRef && ref !== baseRef) || refs.has(ref)) {
+        return { ok: false, error: `${step}: the remote did not return exact branch tips` };
+      }
+      refs.set(ref, sha);
+    }
+    return { ok: true, sha: refs.get(branchRef) ?? "", baseSha: refs.get(baseRef) ?? "" };
+  }
   if (killedAtBound(result)) {
     return { ok: false, error: `${step}: git remote read timed out after ${REMOTE_READ_TIMEOUT}` };
   }
@@ -2410,6 +2428,46 @@ function publicationPhaseDetail(timing: PipelinePublishResult["phaseTimings"]): 
   return `; phases preparation=${timing.preparationMs}ms checks=${timing.checksMs}ms transport=${timing.transportMs}ms${peak}`;
 }
 
+async function checkPublicationMailboxes(pipeline: Pipeline, acceptedSha: string, remoteSha: string,
+  baseSha: string, exec: ExecPort): Promise<string | null> {
+  const cwd = pipeline.worktreeDir;
+  const machine = await repositoryHasPrivacyPolicy(cwd);
+  if (!machine && !await resolveForgeCommitAccount()) return COMMIT_ACCOUNT_REFUSAL;
+  const unreadable = "publication refused because new commit identities could not be verified (values withheld)";
+  const git = withLiteralGitObjects(exec);
+  // The publication probe reports the base alongside the destination. The
+  // original lane base is already local. A moved remote base may need fetching.
+  if (baseSha && baseSha !== pipeline.baseRef && baseSha !== remoteSha
+    && (await git("git", ["cat-file", "-e", `${baseSha}^{commit}`], cwd)).code !== 0) {
+    const remote = pipeline.delivery?.target.remote || "origin";
+    const fetched = await git("git", ["fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", remote, baseSha], cwd,
+      undefined, { timeoutMs: 10_000 });
+    if (fetched.code !== 0) return unreadable;
+  }
+  const excluded = [...new Set([remoteSha, baseSha].filter(Boolean))];
+  const history = await git("git", ["log", "-z", "--no-use-mailmap", "--no-show-signature",
+    "--format=%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce", acceptedSha, "--not", ...excluded, "--"], cwd,
+  undefined, { timeoutMs: 10_000 });
+  if (history.code !== 0 || (history.stdout && !history.stdout.endsWith("\0"))) return unreadable;
+  const fields = history.stdout.split("\0");
+  fields.pop();
+  if (fields.length % 6 !== 0) return unreadable;
+  for (let i = 0; i < fields.length; i += 6) {
+    const [sha, parents, author, authorEmail, committer, committerEmail] = fields.slice(i, i + 6);
+    if (!/^[0-9a-f]{40}$/.test(sha) || !/^(?:[0-9a-f]{40}(?: [0-9a-f]{40})*)?$/.test(parents)) return unreadable;
+    const count = parents ? parents.split(" ").length : 0;
+    // Validate even when the checkout declares a privacy gate. A lane can
+    // change its own policy files, but cannot exempt its new mailboxes.
+    if (!admittedCommitMailbox(author, authorEmail, "author", count, machine)) {
+      return `publication refused for ${shortId(sha)} author identity. New commits require a noreply mailbox (values withheld)`;
+    }
+    if (!admittedCommitMailbox(committer, committerEmail, "committer", count, machine)) {
+      return `publication refused for ${shortId(sha)} committer identity. New commits require a noreply mailbox (values withheld)`;
+    }
+  }
+  return null;
+}
+
 async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {
   const acceptedSha = request.acceptedSha;
   if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) {
@@ -2432,7 +2490,9 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     : (await exec("git", ["remote", "get-url", "origin"], pipeline.worktreeDir));
   if (origin.code !== 0 || !origin.stdout.trim()) return { ok: true, sha: acceptedSha, remote: "unavailable" };
 
-  const probe = (await readRemotePipelineBranch(pipeline, exec, "checking the remote pipeline branch"));
+  const base = pipeline.baseBranch || DEFAULT_PIPELINE_BASE_BRANCH;
+  if (!validBaseBranch(base)) return { ok: false, error: INVALID_BASE_BRANCH };
+  const probe = await readRemotePipelineBranch(pipeline, exec, "checking the remote pipeline branch", `refs/heads/${base}`);
   if (!probe.ok) return { ok: true, sha: acceptedSha, remote: "unreachable", detail: probe.error };
   const remoteSha = probe.sha;
   if (remoteSha === acceptedSha) return { ok: true, sha: acceptedSha, remote: "published" };
@@ -2464,6 +2524,9 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     }
     if (remoteIsAncestor.code !== 0) return failure("comparing local and remote pipeline revisions", remoteIsAncestor);
   }
+
+  const mailboxRefusal = await checkPublicationMailboxes(pipeline, acceptedSha, remoteSha, probe.baseSha ?? "", exec);
+  if (mailboxRefusal) return { ok: false, error: mailboxRefusal };
 
   const runtime = preparation === 3 && process.execPath === "/usr/local/bin/bun-container" ? process.execPath : "bun";
   // Read-only stages can pass without dependencies. Prepare a Bun worktree before

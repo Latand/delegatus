@@ -2,7 +2,8 @@ import { controllerCommitIdentityEnv } from "./controllerCommitIdentity";
 import { agentHistoryGuardEnv, type AgentEnvironment } from "./agentHistoryGuard";
 import { agentForgeWriteEnv } from "./agentForgeCredentials";
 import { agentLessonPublicationEnv } from "@/lib/memory/roleStore";
-import { DELEGATUS_COAUTHOR, REPOSITORY_IDENTITY, type RepositoryCommitIdentity } from "./repositoryCommitIdentity";
+import { DELEGATUS_COAUTHOR, REPOSITORY_IDENTITY, validRepositoryAuthorName, type RepositoryCommitIdentity } from "./repositoryCommitIdentity";
+import { COMMIT_ACCOUNT_REFUSAL, isOwnerNoreplyAddress } from "./forgeCommitAccount";
 import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV } from "../runtime/gateCheckRecord";
 import type { GateCheckRoot } from "../runtime/gateCheckTool";
 import { installedGateAdmissionEnv } from "../runtime/agentSignalSandbox";
@@ -16,13 +17,23 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
     try { repository = JSON.parse(source[REPOSITORY_IDENTITY]!); }
     catch { throw new Error("Invalid repository Git identity (values withheld)"); }
     const name = repository?.env?.GIT_AUTHOR_NAME, email = repository?.env?.GIT_AUTHOR_EMAIL;
-    if (repository?.coauthor !== DELEGATUS_COAUTHOR || typeof name !== "string" || typeof email !== "string"
-      || !name || !email || name.length > 1024 || email.length > 1024 || /[\x00-\x1f\x7f<>]/.test(name + email)
+    const defaults = controllerCommitIdentityEnv();
+    const refused = repository?.refusal === COMMIT_ACCOUNT_REFUSAL;
+    if (repository?.policy !== "repository"
+      || (repository.coauthor !== undefined && repository.coauthor !== DELEGATUS_COAUTHOR)
+      || (repository.refusal !== undefined && !refused)
+      || typeof name !== "string" || typeof email !== "string"
+      || (refused ? name !== defaults.GIT_AUTHOR_NAME || email !== defaults.GIT_AUTHOR_EMAIL || repository.coauthor !== undefined
+        : !validRepositoryAuthorName(name) || !isOwnerNoreplyAddress(email))
       || repository.env.GIT_COMMITTER_NAME !== name || repository.env.GIT_COMMITTER_EMAIL !== email) {
       throw new Error("Invalid repository Git identity (values withheld)");
     }
     const forge = agentForgeWriteEnv(source);
-    const guard = agentHistoryGuardEnv({ ...source, ...forge }, name, email, repository.coauthor);
+    const guard = agentHistoryGuardEnv({ ...source, ...forge }, name, email, repository.coauthor, {
+      refusal: repository.refusal,
+      omitCoauthor: !refused && repository.coauthor === undefined ? DELEGATUS_COAUTHOR : undefined,
+      verifyCommitter: true,
+    });
     return { GIT_AUTHOR_NAME: name, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: name, GIT_COMMITTER_EMAIL: email,
       [REPOSITORY_IDENTITY]: source[REPOSITORY_IDENTITY],
       ...agentLessonPublicationEnv(), ...forge, ...guard, ...installedGateAdmissionEnv({ ...source, ...forge, ...guard }) };

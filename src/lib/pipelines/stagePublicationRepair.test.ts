@@ -1,3 +1,4 @@
+import { seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -13,6 +14,7 @@ const inheritedGit = Object.fromEntries(Object.entries(process.env).filter(([key
 for (const key of Object.keys(inheritedGit)) delete process.env[key];
 const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-publication-repair-state-"));
 process.env.LLV_STATE_DIR = state;
+seedForgeCommitAccount();
 const { defaultPipelinePorts, tickPipelines, settlePendingStageGit } = await import("./engine");
 const { savePipelines, findPipelineRecord } = await import("./store");
 const { pipelineCorpus } = await import("./fixtures/corpus");

@@ -1,3 +1,4 @@
+import { seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { afterAll, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -15,6 +16,7 @@ if (group !== "controls" && group !== "recovery") {
 const previousState = process.env.LLV_STATE_DIR;
 const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-parked-publication-"));
 process.env.LLV_STATE_DIR = state;
+seedForgeCommitAccount();
 const { pipelineCorpus } = await import("./fixtures/corpus");
 const { savePipelines, findPipelineRecord } = await import("./store");
 const { defaultPipelinePorts, patchPipeline, tickPipelines } = await import("./engine");

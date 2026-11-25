@@ -1,3 +1,4 @@
+import { seedForgeCommitAccount, fixtureNoreply, fixtureForgeAccount } from "@/test-helpers/forgeCommitAccount";
 import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -7,6 +8,7 @@ import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIden
 import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-wf-prov-test-"));
+seedForgeCommitAccount();
 const { buildWorkflow, normalizeTemplate, setupStdoutPath, workflowArtifactsDir } = await import("./store");
 const { finishMerge, finishPr, provisionWorktree, prTitle, realExec, runFinish, setupStatus, startSetup } = await import("./provision");
 const { readWorktreeProvenance } = await import("@/lib/pipelines/worktreeProvenance");
@@ -310,15 +312,14 @@ test("finishMerge preserves staged operator changes made after merge failure", a
   if (!result.ok) expect(result.recoveryRequired).toBe(true);
 });
 
-test("finishMerge supplies a controller identity when Git has none", async () => {
+test("finishMerge uses the GitHub account when Git has no user config", async () => {
   const box = (await makeIdentityIsolatedRepo());
   expect((await box.exec("git", ["var", "GIT_AUTHOR_IDENT"], box.repo)).code).not.toBe(0);
   expect((await box.exec("git", ["var", "GIT_COMMITTER_IDENT"], box.repo)).code).not.toBe(0);
 
   expect((await finishMerge(box.wf, box.exec)).ok).toBe(true);
-  const fallbackEmail = ["noreply", "delegatus.invalid"].join("@");
   expect((await box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce"))).toBe(
-    ["Delegatus", fallbackEmail, "Delegatus", fallbackEmail].join("\n"),
+    [fixtureForgeAccount.login, fixtureNoreply, fixtureForgeAccount.login, fixtureNoreply].join("\n"),
   );
   expect((await box.exec("git", ["config", "--local", "--get", "user.name"], box.repo)).code).not.toBe(0);
   expect((await box.exec("git", ["config", "--local", "--get", "user.email"], box.repo)).code).not.toBe(0);
@@ -337,7 +338,7 @@ test("finishMerge uses repository user identity despite inherited identities", a
 
   expect((await finishMerge(box.wf, box.exec)).ok).toBe(true);
   expect((await box.run("log", "-1", "--format=%an%n%ae%n%cn%n%ce"))).toBe(
-    ["Configured Test", email, "Configured Test", email].join("\n"),
+    ["Configured Test", fixtureNoreply, "Configured Test", fixtureNoreply].join("\n"),
   );
   expect(await box.run("log", "-1", "--format=%B")).toContain("Co-Authored-By: Delegatus <" + ["noreply", "delegatus.invalid"].join("@") + ">");
   expect((await box.run("rev-parse", "HEAD^2"))).toBe(agentHead);
@@ -392,9 +393,8 @@ test("integration: provision + commit + local merge against a throwaway repo", a
   const merged = (await runFinish(wf, "body", realExec));
   if (!merged.ok) throw new Error(merged.error);
   expect(fs.existsSync(path.join(repoDir, "greeting.txt"))).toBe(true);
-  const configuredEmail = ["test", "example.com"].join("@");
   expect((await realExec("git", ["log", "-1", "--format=%an%n%ae%n%cn%n%ce"], repoDir)).stdout.trim()).toBe(
-    ["Test", configuredEmail, "Test", configuredEmail].join("\n"),
+    ["Test", fixtureNoreply, "Test", fixtureNoreply].join("\n"),
   );
 });
 

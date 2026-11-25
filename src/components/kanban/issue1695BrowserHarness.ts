@@ -2103,6 +2103,13 @@ const SETTINGS_FRAMES: SettingsFrame[] = [
   { surface: "privacy", name: "ping-refused", scene: "privacy-rest", query: "refuse=1", section: "privacy", steps: async (page) => page.locator("[data-telemetry-ping]").click(), defining: "[role=alert]" },
   { surface: "privacy", name: "direct-refused", scene: "privacy-rest", query: "refuse=1", section: "privacy", steps: async (page) => page.locator("[data-subscription-api] [role=switch]").click(), defining: "[data-subscription-api] [role=alert]" },
   { surface: "privacy", name: "swarm-refused", scene: "privacy-rest", query: "refuse=1", section: "privacy", steps: async (page) => page.locator("[data-swarm-setting] [role=switch]").click(), defining: "[data-swarm-setting] [role=alert]" },
+  { surface: "privacy", name: "commit-account-resolved", scene: "privacy-rest", section: "privacy",
+    defining: "[data-commit-account=resolved]" },
+  { surface: "privacy", name: "commit-account-unresolved", scene: "privacy-commit-account-unresolved", section: "privacy",
+    defining: "[data-commit-account=unresolved]" },
+  { surface: "privacy", name: "commit-attribution-off", scene: "privacy-rest", section: "privacy",
+    steps: async page => page.locator("[data-commit-attribution] [role=switch]").click(),
+    defining: "[data-commit-attribution] [role=switch][aria-checked=false]" },
   { surface: "privacy", name: "details", scene: "privacy-rest", section: "privacy", details: true, defining: "[data-settings-details]" },
   /* Telegram. */
   { surface: "telegram", name: "no-bot", scene: "telegram-none", section: "telegram", defining: "[data-telegram-bot-token='missing']" },

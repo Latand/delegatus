@@ -1,3 +1,4 @@
+import { fixtureForgeAccount, seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,7 +29,7 @@ const put = (body: unknown, origin = ORIGIN) => PUT(new NextRequest(`${ORIGIN}/a
 }));
 
 test("nothing is set until a client writes; a detection is kept until a choice replaces it, and never after", async () => {
-  expect(await (await GET()).json()).toEqual({ ok: true, locale: null, timeZone: null });
+  expect(await (await GET()).json()).toMatchObject({ ok: true, locale: null, timeZone: null, commitAttribution: null, commitAccount: { state: "unresolved" } });
 
   const detected = await put({ locale: "en", source: "detected", timeZone: "Europe/Kyiv" });
   expect(detected.status).toBe(200);
@@ -44,4 +45,16 @@ test("a malformed write is refused, and so is a cross-origin one", async () => {
   expect((await put({ timeZone: "Not/AZone" })).status).toBe(400);
   expect((await put({})).status).toBe(400);
   expect((await put({ locale: "en" }, "http://evil.invalid")).status).toBe(403);
+});
+
+test("the attribution opt-out round-trips and only accepts booleans", async () => {
+  expect((await put({ commitAttribution: "false" })).status).toBe(400);
+  expect((await put({ commitAttribution: false }, "http://evil.invalid")).status).toBe(403);
+  seedForgeCommitAccount(SANDBOX);
+  const saved = await put({ commitAttribution: false });
+  expect(saved.status).toBe(200);
+  expect(await saved.json()).toMatchObject({ commitAttribution: { value: false } });
+  expect(await (await GET()).json()).toMatchObject({
+    commitAttribution: { value: false }, commitAccount: { state: "resolved", login: fixtureForgeAccount.login },
+  });
 });

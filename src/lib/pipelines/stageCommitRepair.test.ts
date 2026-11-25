@@ -1,3 +1,4 @@
+import { seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { afterAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -21,6 +22,7 @@ afterAll(() => Object.assign(process.env, inheritedGitConfig));
 /* Isolated state only: this suite drives the production pipeline controller
    over a store of its own and must never read or write the operator's. */
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-commit-repair-"));
+seedForgeCommitAccount();
 const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline, tickPipelines } = await import("./engine");
 const { commitPipelineStage, provisionPipelineWorktree, provisionPipelineWorktreeAsync } = await import("./git");
 const { findPipelineRecord, loadPipelines, pipelineArtifactsDir, savePipelines } = await import("./store");
