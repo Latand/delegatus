@@ -29,7 +29,8 @@ for (const scenario of ["slow privacy", "changed input", "capped budget", "over 
     f.env.HOOK_PRIVACY = path.join(root, "scripts/privacy-publication-gate.ts");
     fs.copyFileSync(path.join(root, "scripts/privacy-known-value-fingerprints.json"), path.join(f.dir, "scripts/privacy-known-value-fingerprints.json"));
     const preparationMs = ["capped budget", "over cap"].includes(scenario) ? 600_000 : 70_000;
-    const transportMs = scenario === "over cap" ? DEFAULT_PUBLICATION_PUSH_MS - PUBLICATION_PACK_MARGIN_MS + 1 : preparationMs;
+    const transportMs = scenario === "over cap" ? PUBLICATION_TRANSPORT_HOOK_MS + 1
+      : scenario === "capped budget" ? 70_000 : preparationMs;
     // After each real scan, its child advances the shared clock. The over-cap
     // child stays pending until the hook cancels it, keeping the verdict stable.
     fs.appendFileSync(path.join(f.dir, "record.ts"), `\nif (process.argv[2] === "scripts/privacy-publication-gate.ts") {
@@ -50,8 +51,9 @@ for (const scenario of ["slow privacy", "changed input", "capped budget", "over 
       subject.delivery = { target: { repository: "repo-fixture", remote: http.remote, branch: "refs/heads/main" },
         disposition: "owner", publish: "enabled", active: true, ownerId: subject.id, epoch: 1, journal: [] };
       savePipelines([subject]);
-      let pushes = 0, transportBudget = 0, hookAllowance = 0;
+      let pushes = 0, transportBudget = 0, hookAllowance = 0, preparationTimeout = 0;
       const exec: ExecPort = async (command, args, cwd, env, options) => {
+        if (command === "bun" && args.includes("--publication-prepare")) preparationTimeout = options?.timeoutMs ?? 0;
         if (command === "git" && args[0] === "push") {
           pushes++;
           transportBudget = options?.timeoutMs ?? 0;
@@ -70,10 +72,9 @@ for (const scenario of ["slow privacy", "changed input", "capped budget", "over 
         expect(result).toMatchObject({ ok: true, sha: f.head, remote: "published" });
         expect(spawnSync("git", ["--git-dir", http.bare, "rev-parse", "refs/heads/main"], { env: f.env, encoding: "utf8" }).stdout.trim()).toBe(f.head);
       }
-      expect(transportBudget).toBeGreaterThanOrEqual(Math.min(DEFAULT_PUBLICATION_PUSH_MS, 2 * preparationMs + PUBLICATION_PACK_MARGIN_MS));
-      expect(transportBudget).toBeLessThanOrEqual(DEFAULT_PUBLICATION_PUSH_MS);
-      if (scenario === "capped budget") expect(transportBudget).toBe(DEFAULT_PUBLICATION_PUSH_MS);
-      expect(hookAllowance).toBe(transportBudget - PUBLICATION_PACK_MARGIN_MS);
+      expect(preparationTimeout).toBe(DEFAULT_PUBLICATION_PUSH_MS);
+      expect(transportBudget).toBe(PUBLICATION_TRANSPORT_HOOK_MS + PUBLICATION_PACK_MARGIN_MS);
+      expect(hookAllowance).toBe(PUBLICATION_TRANSPORT_HOOK_MS);
       expect(pushes).toBe(1);
       expect(http.rpc()).toBe(["slow privacy", "capped budget"].includes(scenario) ? 1 : 0);
       expect(f.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toHaveLength(scenario === "changed input" ? 1 : 2);
