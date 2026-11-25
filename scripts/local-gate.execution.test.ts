@@ -99,7 +99,6 @@ test.skipIf(process.platform !== "linux" || !process.env.LLV_OWNED_TEST_RUN_CGRO
       process.exit(0);
     ` : `
       import { test, expect } from "bun:test";
-      import { spawn } from "node:child_process";
       test("decisive native assertion", () => {
         writeFileSync(${JSON.stringify(record)}, JSON.stringify(captureProcessIdentity(process.pid)));
         expect(1).toBe(${kind === "assertion" ? 2 : 1});
