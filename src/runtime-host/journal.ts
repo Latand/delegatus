@@ -81,6 +81,9 @@ import { parseStructuredImageRefs, structuredContent } from "@/lib/runtime/struc
 import { runtimeImageCapability } from "@/lib/runtime/runtimeImageStore";
 import { normalizeCodexProtocolReceipt } from "@/lib/runtime/codexProtocolReceipt";
 
+import type { RuntimeStartupOperationCursor } from "@/lib/runtime/contracts";
+import { activeStartupOperation, startupPendingOperationPage } from "@/lib/runtime/startupOperationLedger";
+
 function nativeQueueReceipt(entry: NativeQueueRecord): NonNullable<RuntimeOperationReceipt["nativeQueue"]> {
   return { entryId: entry.entryId, nativeSubmissionId: entry.nativeSubmissionId, revision: entry.revision,
     dispatchedRevision: entry.dispatchedRevision, profilePolicy: entry.profilePolicy };
@@ -88,6 +91,9 @@ function nativeQueueReceipt(entry: NativeQueueRecord): NonNullable<RuntimeOperat
 
 const STARTUP_EFFECT_REVISION = "startup_effect_revision";
 const startupEffectWriteTriggers = [
+  ["active_operation_insert", `AFTER INSERT ON operations WHEN ${activeStartupOperation("NEW.")}`],
+  ["active_operation_update", `AFTER UPDATE OF receipt_json, operation_id, conversation_id ON operations WHEN ${activeStartupOperation("OLD.")} OR ${activeStartupOperation("NEW.")}`],
+  ["active_operation_delete", `AFTER DELETE ON operations WHEN ${activeStartupOperation("OLD.")}`],
   ["outbox_insert", "AFTER INSERT ON outbox WHEN NEW.state = 'pending'"],
   ["outbox_update", "AFTER UPDATE ON outbox WHEN OLD.state = 'pending' OR NEW.state = 'pending'"],
   ["outbox_delete", "AFTER DELETE ON outbox WHEN OLD.state = 'pending'"],
@@ -575,6 +581,7 @@ export class RuntimeJournal {
           receipt_json TEXT NOT NULL, event_seq INTEGER NOT NULL, orphaned_since INTEGER,
           UNIQUE(conversation_id, idempotency_key)
         )`,
+        `CREATE INDEX IF NOT EXISTS startup_active_operations_by_event ON operations(event_seq) WHERE ${activeStartupOperation()}`,
         `CREATE TABLE IF NOT EXISTS delivery_operation_actions (
           operation_id TEXT PRIMARY KEY,
           winner TEXT NOT NULL CHECK(winner IN ('discard', 'retry')),
@@ -2356,7 +2363,7 @@ export class RuntimeJournal {
     }).immediate();
   }
 
-  startupSessionEvidence(conversationIds: readonly string[], includeEvidence = false) {
+  startupSessionEvidence(conversationIds: readonly string[], includeEvidence = false, pendingOperationsAfter?: RuntimeStartupOperationCursor) {
     this.assertHealthy();
     // Existing rows with no write tick predate the tracking schema.
     const read = this.db.query<{ stamp: number }, [string]>(`
@@ -2368,6 +2375,11 @@ export class RuntimeJournal {
       const version = this.effectPageVersion();
       const sessions = conversationIds.map(id => read.get(id)?.stamp ?? null);
       const result = { generation: this.effectReaderGeneration, version, effectsVersion, sessions };
+      if (pendingOperationsAfter !== undefined) {
+        // Native queue receipts can still be queued after their effect is
+        // completed. Only the active receipt index can attest to these.
+        return { ...result, ...startupPendingOperationPage(this.db, pendingOperationsAfter) };
+      }
       if (!includeEvidence) return result;
       const session = this.entity<RuntimeSession>("session", conversationIds[0]!, false);
       const evidence = session && {

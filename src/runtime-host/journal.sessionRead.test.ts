@@ -5,6 +5,7 @@ import { afterAll, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { RuntimeJournal } from "./journal";
 import { RuntimeHost } from "./host";
+import { readStartupPendingOperations } from "@/lib/runtime/deploymentLedger";
 import { runtimeScope, type RuntimeStartupSessionEvidence } from "@/lib/runtime/contracts";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-session-read-"));
@@ -201,4 +202,180 @@ test("an event bound to a session revision is recorded only while the row still 
     expect(() => journal.append({ scope: runtimeScope("system", "fence"), kind: "session-status", payload: {}, expectedSessionRevision: 1 })).toThrow();
     expect(journal.readSession({ conversationId: "conversation_absent" })).toBeNull();
   } finally { journal.close(); }
+});
+
+test("startup operation pages retain native work after acknowledgement removes its outbox effect", async () => {
+  const filename = path.join(root, "startup-native-queue.sqlite");
+  const journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const host = new RuntimeHost(journal, undefined, undefined, true);
+  const conversationId = "conversation_startup_native";
+  const sessionKey = { engine: "codex" as const, sessionId: "startup-native-session" };
+  const page = async (pendingOperationsAfter = { eventSeq: 0, rowId: 0 }) => {
+    const response = await host.handle({ id: "startup-active-operations", method: "startup-session-evidence",
+      params: { conversationIds: [], pendingOperationsAfter } });
+    expect(response.ok).toBe(true);
+    return response.result as RuntimeStartupSessionEvidence;
+  };
+  try {
+    journal.append({ scope: runtimeScope("session", conversationId), kind: "session-status", payload: {
+      conversationId, sessionKey, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+      writerClaim: "synthetic:1", capabilities: { nativeQueue: true, steer: true, structuredAttention: true },
+    } });
+    const empty = await page();
+    const operationId = "startup-native-work";
+    journal.executeOperation({ kind: "send", conversationId, operationId, idempotencyKey: operationId,
+      policy: "queue", text: "Synthetic native work" });
+    journal.nativeQueueTransition(operationId, { phase: "prepared", input: [{ type: "text", text: "Synthetic native work" }] });
+    journal.nativeQueueTransition(operationId, { phase: "observed-queued", submission: {
+      id: "synthetic-native", clientUserMessageId: operationId, input: [{ type: "text", text: "Synthetic native work" }],
+    } });
+    expect(journal.effectBatch(100, ["runtime.native-queue"])).toHaveLength(0);
+    expect(journal.operationResult(operationId)?.receipt.status).toBe("queued");
+    const pending = await page();
+    expect(pending.effectsVersion).not.toBe(empty.effectsVersion);
+    expect(pending.pendingOperations).toEqual([expect.objectContaining({ operationId, conversationId, status: "queued" })]);
+    expect(readStartupPendingOperations({ eventSeq: 0, rowId: 0 }, { ...process.env, LLV_RUNTIME_JOURNAL: filename }).pendingOperations)
+      .toEqual(pending.pendingOperations!);
+    expect((await page({ eventSeq: journal.publishedSeq(), rowId: Number.MAX_SAFE_INTEGER })).pendingOperations).toEqual([]);
+    journal.nativeQueueTransition(operationId, { phase: "proven", proof: {
+      threadId: sessionKey.sessionId, clientUserMessageId: operationId, revision: 1, turnId: "synthetic-turn",
+      itemId: "synthetic-item", input: [{ type: "text", text: "Synthetic native work" }],
+    } });
+    const ended = await page();
+    expect(ended.effectsVersion).not.toBe(pending.effectsVersion);
+    expect(ended.pendingOperations).toEqual([]);
+
+    const ids = Array.from({ length: 103 }, (_, index) => `startup-queued-work-${index}`);
+    for (const id of ids) journal.executeOperation({
+      kind: "send", conversationId, operationId: id, idempotencyKey: id, text: "Synthetic queued work",
+    });
+    const firstPage = await page();
+    expect(firstPage.pendingOperations).toHaveLength(100);
+    expect(firstPage.pendingOperationsNext).toBeDefined();
+    const lastPage = await page(firstPage.pendingOperationsNext);
+    expect(lastPage.pendingOperationsNext).toBeUndefined();
+    expect([...firstPage.pendingOperations!, ...lastPage.pendingOperations!].map(receipt => receipt.operationId)).toEqual(ids);
+  } finally { journal.close(); }
+});
+
+/* A runtime host of the preceding release keeps serving until host handoff,
+   after this Viewer is promoted. It answers session evidence without
+   operation pages, and its journal carries no operation receipt triggers. */
+function predecessorJournalClient(journal: RuntimeJournal, predecessor: boolean) {
+  return {
+    snapshot: async () => journal.snapshot(),
+    events: async (after: number) => journal.replay(after),
+    waitEvents: async (after: number) => journal.replay(after),
+    operationStatus: async (id: string) => journal.operationResult(id),
+    effectBatch: async (kinds: string[], after: number) => journal.effectBatch(100, kinds, after),
+    readSession: async (identity: { conversationId: string }) => journal.readSession(identity),
+    startupListenerIdentity: () => "listener-predecessor",
+    startupGeneration: async () => "listener-predecessor",
+    startupSessionEvidence: async (ids: readonly string[], options?: { includeEvidence?: boolean; pendingOperationsAfter?: { eventSeq: number; rowId: number } }) =>
+      journal.startupSessionEvidence(ids, options?.includeEvidence === true, predecessor ? undefined : options?.pendingOperationsAfter),
+  } as unknown as import("@/lib/runtime/client").RuntimeHostClient;
+}
+
+function dropActiveOperationTriggers(filename: string): void {
+  const db = new Database(filename);
+  try {
+    for (const { name } of db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'startup_effect_active_operation_%'").all()) {
+      db.exec(`DROP TRIGGER "${name}"`);
+    }
+  } finally { db.close(); }
+}
+
+async function withPredecessorStartup<T>(name: string, run: (context: {
+  filename: string;
+  journal: RuntimeJournal;
+  registry: import("@/lib/agent/registry").AgentRegistry;
+}) => Promise<T>): Promise<T> {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const directory = fs.mkdtempSync(path.join(root, `${name}-`));
+  const filename = path.join(directory, "runtime-events.sqlite");
+  const previous = process.env.LLV_RUNTIME_JOURNAL;
+  process.env.LLV_RUNTIME_JOURNAL = filename;
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const journal = new RuntimeJournal(filename, { structuredHosts: true });
+  dropActiveOperationTriggers(filename);
+  try { return await run({ filename, journal, registry }); }
+  finally {
+    journal.close(); registry.close();
+    if (previous === undefined) delete process.env.LLV_RUNTIME_JOURNAL; else process.env.LLV_RUNTIME_JOURNAL = previous;
+  }
+}
+
+test.each([false, true])("startup signals complete while another session streams events (predecessor host: %p)", async (predecessor) => {
+  const { structuredStartupSignals } = await import("@/lib/runtime/startup");
+  await withPredecessorStartup(`unrelated-writes-${predecessor}`, async ({ journal, registry }) => {
+    let iterations = 0;
+    const signals = await structuredStartupSignals(registry, predecessorJournalClient(journal, predecessor), new Set(), null, undefined, {
+      beforeUse: async () => {
+        if (++iterations > 5) throw new Error("startup signals kept retrying on unrelated writes");
+        journal.append({ scope: runtimeScope("session", "conversation_unrelated_live"), kind: "session-status",
+          payload: { host: "hosted", hostKind: "codex-app-server", turn: "running", artifactPath: `/live/${iterations}.jsonl` } });
+      },
+    });
+    expect(iterations).toBe(1);
+    expect([...signals.pendingOperationConversationIds]).toEqual([]);
+    // The returned proof also survives unrelated writes after the pass.
+    journal.append({ scope: runtimeScope("session", "conversation_unrelated_live"), kind: "session-status",
+      payload: { host: "hosted", hostKind: "codex-app-server", turn: "idle", artifactPath: "/live/after.jsonl" } });
+    expect(await signals.evidenceIsCurrent!()).toBe(true);
+  });
+});
+
+test("a predecessor host's operation that ends during the startup read is read again", async () => {
+  const { structuredStartupSignals } = await import("@/lib/runtime/startup");
+  await withPredecessorStartup("operation-ends", async ({ journal, registry }) => {
+    const conversationId = "conversation_predecessor_native";
+    const sessionKey = { engine: "codex" as const, sessionId: "predecessor-native-session" };
+    const operationId = "predecessor-native-work";
+    const input = [{ type: "text" as const, text: "Synthetic native work" }];
+    journal.append({ scope: runtimeScope("session", conversationId), kind: "session-status", payload: {
+      conversationId, sessionKey, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+      writerClaim: "synthetic:1", capabilities: { nativeQueue: true, steer: true, structuredAttention: true },
+    } });
+    journal.executeOperation({ kind: "send", conversationId, operationId, idempotencyKey: operationId, policy: "queue", text: input[0].text });
+    journal.nativeQueueTransition(operationId, { phase: "prepared", input });
+    journal.nativeQueueTransition(operationId, { phase: "observed-queued", submission: { id: "synthetic-native", clientUserMessageId: operationId, input } });
+    expect(journal.operationResult(operationId)?.receipt.status).toBe("queued");
+    let iterations = 0;
+    let effectsVersions: string[] = [];
+    const signals = await structuredStartupSignals(registry, predecessorJournalClient(journal, true), new Set(), null, undefined, {
+      beforeUse: async () => {
+        iterations++;
+        if (iterations !== 1) return;
+        const before = journal.startupSessionEvidence([]).effectsVersion;
+        journal.nativeQueueTransition(operationId, { phase: "proven", proof: {
+          threadId: sessionKey.sessionId, clientUserMessageId: operationId, revision: 1, turnId: "synthetic-turn", itemId: "synthetic-item", input,
+        } });
+        effectsVersions = [before, journal.startupSessionEvidence([]).effectsVersion];
+      },
+    });
+    expect(journal.operationResult(operationId)?.receipt.status).not.toBe("queued");
+    // The preceding host's effect revision did not see the receipt end; the
+    // second read of the operation set did.
+    expect(effectsVersions[0]).toBe(effectsVersions[1]);
+    expect(iterations).toBe(2);
+    expect(signals.pendingOperationConversationIds.has(conversationId)).toBe(false);
+  });
+});
+
+test("a predecessor host's operation that starts after the startup read invalidates the evidence", async () => {
+  const { structuredStartupSignals } = await import("@/lib/runtime/startup");
+  await withPredecessorStartup("operation-starts", async ({ filename, journal, registry }) => {
+    const signals = await structuredStartupSignals(registry, predecessorJournalClient(journal, true));
+    expect(await signals.evidenceIsCurrent!()).toBe(true);
+    // A preceding host writing an active receipt that has no pending effect.
+    const db = new Database(filename);
+    try {
+      db.query("INSERT INTO operations (operation_id, conversation_id, idempotency_key, request_hash, request_json, receipt_json, event_seq) VALUES (?, ?, ?, ?, ?, ?, ?)").run(
+        "predecessor-late-work", "conversation_predecessor_late", "predecessor-late-work", "synthetic", "{}",
+        JSON.stringify({ operationId: "predecessor-late-work", conversationId: "conversation_predecessor_late", kind: "send", status: "queued" }),
+        journal.publishedSeq() + 1,
+      );
+    } finally { db.close(); }
+    expect(await signals.evidenceIsCurrent!()).toBe(false);
+  });
 });
