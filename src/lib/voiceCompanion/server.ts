@@ -9,6 +9,7 @@ import { CodexLiveProvider } from "./codexProvider";
 import { CompanionLiveSessions } from "./liveSession";
 import { voiceToolSessions } from "@/lib/voiceTools/sessions";
 import { existingTeamStore } from "@/lib/team/store";
+import { teamMode } from "@/lib/team";
 import { voiceTimers } from "./voiceTimersServer";
 
 const globals = globalThis as typeof globalThis & { __delegatusVoiceSessions?: CompanionLiveSessions };
@@ -20,6 +21,12 @@ export function companionSessions(): CompanionLiveSessions {
     const admission = new CompanionAdmission(storage, companionDeliveryPaths);
     const service = new CompanionLiveSessions(storage, admission, new CompanionBoardReads(companionBoardReadPaths),
       new OpenAILiveProvider(), { codexProvider: new CodexLiveProvider(), memory: new CallMemory(storage, admission.records), voiceTimers: voiceTimers(),
+        plan: { eligible: async model => (await import("@/lib/chatgptPlan/session")).chatgptPlan().eligible(model),
+          voiceBilling: async model => (await import("@/lib/chatgptPlan/session")).chatgptPlan().voiceBilling(model), owner: starter => {
+          if ("operator" in starter) return teamMode() === "solo";
+          const member = existingTeamStore()?.member(starter.memberId);
+          return member?.role === "owner" && member.status === "active";
+        } },
         // Added servers belong to the owner in v1: a member's call takes them only as the active team owner.
         voiceTools: voiceToolSessions(memberId => { const member = existingTeamStore()?.member(memberId); return member?.role === "owner" && member.status === "active"; }) });
     // A session a previous Viewer minted has no owner here. Close it at once; no browser has to ask for it.
@@ -27,4 +34,5 @@ export function companionSessions(): CompanionLiveSessions {
     return service;
   })();
 }
+export function existingCompanionSessions(): CompanionLiveSessions | undefined { return globals.__delegatusVoiceSessions; }
 export function setCompanionSessionsForTests(value: CompanionLiveSessions | undefined): void { globals.__delegatusVoiceSessions = value; }

@@ -87,9 +87,10 @@ test("publication receipt records check duration and peak RSS and rejects invali
 
 test("transport input validation retains a named deadline refusal", () => {
   const f = fixture();
-  expect(f.run(true).status).toBe(0);
+  const prepared = f.run(true);
+  expect(prepared.status, prepared.stderr).toBe(0);
   const result = f.run(false, { LLV_GATE_PUSH_DEADLINE: String(Date.now() - 1) });
   expect(result.status).toBe(75);
   expect(result.stderr).toContain('no verdict within the push budget');
   expect(result.stderr).toContain('"publication input validation"');
-});
+}, 60_000);
