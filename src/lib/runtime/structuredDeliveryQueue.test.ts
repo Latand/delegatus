@@ -101,9 +101,10 @@ test.each(["current", "antigravity", "turn", "writer", "generation", "attention"
       status: async () => ({ status: "pending", revision: 1 }),
       currentHostClaim: () => writer,
       currentHostSessionKey: () => ({ engine, sessionId: "session-one" }),
-      transition: async (_id, status) => {
+      transition: async (_id, status, details) => {
         statuses.push(status);
         if (status !== "delivering") return;
+        expect(details?.reason).toMatch(/^delivering-owner:.+@writer:1$/);
         if (replacement === "turn") turn = "turn-two";
         if (replacement === "writer") writer = "writer:2";
         if (replacement === "generation") engine = "claude";
@@ -114,6 +115,53 @@ test.each(["current", "antigravity", "turn", "writer", "generation", "attention"
     await queue.drain();
     expect(writes).toEqual(accepted ? ["answer"] : []);
     expect(statuses).toEqual(["delivering", accepted ? "answered" : "failed"]);
+  },
+);
+
+test.each(["journal write", "host preparation", "new turn"] as const)(
+  "an ordinary queue send rechecks the running turn after %s",
+  async boundary => {
+    let status: StructuredDeliveryTransition = "queued";
+    let attention = false;
+    let turnId = "turn-one";
+    let writes = 0;
+    const verdicts = [Promise.withResolvers<string>(), Promise.withResolvers<string>()];
+    let verdict = 0;
+    const adapter = Object.assign(host(async (_entry, _dispatch, authorize) => {
+      if (boundary === "host preparation") {
+        await Promise.resolve();
+        attention = true;
+      }
+      authorize?.();
+      writes++;
+      return { outcome: "queued-next-turn", turnId };
+    }), { supportsQueuedSend: true });
+    adapter.agentControlState = () => hostControlFactsFromHealth({
+      ...idleState(), status: attention ? "attention" : "active", activeTurnRef: turnId,
+      pendingAttention: attention ? ["permission-one"] : [],
+    });
+    const queue = new StructuredDeliveryQueue({
+      effects: async () => [{
+        id: "effect:follow-up", kind: "runtime.send", eventSeq: 1,
+        payload: { operationId: "follow-up", conversationId: "conversation-one", text: "Follow-up", policy: "queue" },
+      }],
+      status: async () => ({ status }),
+      transition: async (_id, next) => {
+        status = next;
+        if (next === "delivering") {
+          if (boundary === "journal write") attention = true;
+          if (boundary === "new turn") { attention = true; turnId = "turn-two"; }
+        } else verdicts[verdict++]!.resolve(next);
+      },
+    }, () => adapter);
+    await queue.drain();
+    expect(await verdicts[0]!.promise).toBe(boundary === "new turn" ? "failed" : "queued");
+    expect(writes).toBe(0);
+    if (boundary !== "new turn") {
+      await queue.drain();
+      expect(await verdicts[1]!.promise).toBe("delivered");
+      expect(writes).toBe(1);
+    }
   },
 );
 
@@ -2036,6 +2084,46 @@ test("interrupt actuates a deliberately held fake-host turn", async () => {
     ["interrupt", "interrupted"],
   ]);
 });
+
+for (const kind of ["answer", "interrupt"] as const) {
+  test.each(["legacy", "previous writer", "live writer", "unreadable writer"] as const)(
+    `a delivering ${kind} respects its executor fence (%s)`,
+    async owner => {
+      let status: StructuredDeliveryTransition = "delivering";
+      const transitions: string[] = [];
+      const actuations: string[] = [];
+      const adapter = host(async () => ({ outcome: "turn-started", turnId: "turn-next" }));
+      adapter.health = async () => ({ ...idleState(), status: "attention",
+        activeTurnRef: "turn-one", pendingAttention: ["permission-one"] });
+      adapter.answer = async () => { actuations.push("answer"); };
+      adapter.interrupt = async () => { actuations.push("interrupt"); };
+      const queue = new StructuredDeliveryQueue({
+        effects: async () => [{
+          id: "effect:control", kind: `runtime.${kind}`, eventSeq: 1,
+          payload: { operationId: "control", conversationId: "conversation-one",
+            ...(kind === "answer" ? { attentionId: "permission-one", resolution: { behavior: "allow" } }
+              : { turnId: "turn-one" }) },
+        }],
+        status: async () => ({ status, reason: owner === "legacy" ? null : "delivering-owner:other-executor@writer:1" }),
+        hostClaim: async () => {
+          if (owner === "unreadable writer") throw new Error("host claim unavailable");
+          return owner === "previous writer" ? "writer:2" : "writer:1";
+        },
+        transition: async (_id, next, _details, options) => {
+          if (options?.fromStatuses && !options.fromStatuses.includes(status)) throw new Error("runtime operation moved before its transition");
+          transitions.push(next);
+          status = next;
+        },
+      }, () => adapter);
+      await queue.drain();
+      expect(queue.lastTargetError("conversation-one")).toBeNull();
+      const held = owner === "live writer" || owner === "unreadable writer";
+      expect(status).toBe(held ? "delivering" : "uncertain");
+      expect(transitions).toEqual(held ? [] : ["uncertain"]);
+      expect(actuations).toEqual([]);
+    },
+  );
+}
 
 test("an interrupt for a conversation with no host settles once the host is proven severed", async () => {
   const transitions: Array<[string, string, string | undefined]> = [];
@@ -4123,6 +4211,27 @@ function inboxHarness(count = 8, overrides: Partial<StructuredDeliveryQueuePort>
   const queue = new StructuredDeliveryQueue(port, () => engine);
   return { queue, port, engine, inputs, rows, sends, bindings, idle: () => { running = false; }, interrupts: () => interrupts };
 }
+
+test("a composed queue send retains its members when the running turn asks for permission", async () => {
+  let attention = false;
+  const h = inboxHarness(2, { bindDeliveryBatch: async () => {
+    await Promise.resolve();
+    attention = true;
+    return true;
+  } });
+  for (const input of h.inputs) input.payload.policy = "queue";
+  Object.assign(h.engine, { supportsQueuedSend: true, usesNativeInputIdentity: true, acceptsInputDuringTurn: true });
+  h.engine.agentControlState = () => hostControlFactsFromHealth({
+    ...idleState(), status: attention ? "attention" : "active", activeTurnRef: "incumbent",
+    pendingAttention: attention ? ["permission-one"] : [],
+  });
+
+  await h.queue.drain();
+
+  expect(h.sends).toEqual([]);
+  expect(h.rows.get("inbox-0")?.status).toBe("queued");
+  expect(h.rows.get("inbox-1")?.status).toBe("queued");
+});
 
 test.each([undefined, null, "named-turn", "incumbent"])("native seat composition retains caller fence %j", async turnId => {
   const h = inboxHarness(2);

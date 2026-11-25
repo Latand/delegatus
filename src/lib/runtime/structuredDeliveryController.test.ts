@@ -6,13 +6,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { expect, spyOn, test } from "bun:test";
+import { expect, setSystemTime, spyOn, test } from "bun:test";
 
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import { captureProcessIdentity } from "@/lib/processIdentity";
+import { procBackend } from "@/lib/proc";
 import { registryLockHolder } from "@/lib/agent/registryLockHolderFixture";
 import { migrationDeliveryFixture } from "@/test-helpers/migrationDelivery";
 import type { RuntimeHostClient } from "./client";
@@ -26,6 +27,73 @@ import {
   publishStructuredDeliveryHost,
   terminateStructuredDeliveryHost,
 } from "./structuredDeliveryController";
+
+test.each(["dead", "silent since launch", "working"] as const)(
+  "the production delivery binding settles hostless controls using transcript liveness (%s)",
+  async processState => {
+    const f = migrationDeliveryFixture();
+    const now = Date.parse("2026-11-20T12:00:00.000Z");
+    const turnId = "turn-inherited";
+    const attentionId = "permission-one";
+    const pid = 2_000_000_000;
+    const startIdentity = `${pid}:${(now - 120_000) / 1_000}:0`;
+    const pidAlive = procBackend.pidAlive.bind(procBackend);
+    const processIdentity = procBackend.processIdentity.bind(procBackend);
+    const processCpuMs = procBackend.processCpuMs.bind(procBackend);
+    const alive = spyOn(procBackend, "pidAlive").mockImplementation(p => p === pid ? processState !== "dead" : pidAlive(p));
+    const identity = spyOn(procBackend, "processIdentity").mockImplementation(p => p === pid ? startIdentity : processIdentity(p));
+    const cpu = spyOn(procBackend, "processCpuMs").mockImplementation(p => p === pid ? 0 : processCpuMs(p));
+    setSystemTime(new Date(now));
+    try {
+      const existing = f.registry.hostEntry(f.key)!;
+      fs.writeFileSync(existing.artifactPath, JSON.stringify({
+        timestamp: new Date(now - (processState === "working" ? 60_000 : 180_000)).toISOString(),
+        type: "response_item", payload: { type: "function_call", call_id: "call-inherited" },
+      }) + "\n");
+      f.registry.upsert({ ...existing, status: "live", structuredHost: {
+        ...existing.structuredHost!, process: { pid, startIdentity }, activeTurnRef: turnId, pendingAttention: [attentionId],
+      } });
+      expect(f.registry.agentStateRead(file => Object.keys(file.agentStates))).toEqual([]);
+      const scope = { type: "session" as const, id: f.conversation.id };
+      f.journal.append({ scope, kind: "session-status", producer: { kind: "codex-app-server" }, payload: {
+        conversationId: f.conversation.id, sessionKey: f.key, hostKind: "codex-app-server", host: "hosted", turn: "running",
+        provenance: "structured", accountId: null, parentConversationId: null, cwd: f.root, artifactPath: existing.artifactPath,
+        capabilities: { steer: true, structuredAttention: true }, activeTurnId: turnId,
+      } });
+      f.journal.append({ scope, kind: "attention", payload: {
+        id: attentionId, conversationId: f.conversation.id, kind: "question", state: "open", unowned: false,
+        createdAt: new Date(now).toISOString(), request: { question: { prompt: "Proceed?" } }, turnId,
+      } });
+      const answer = f.journal.executeOperation({ kind: "answer", operationId: "answer", idempotencyKey: "answer",
+        conversationId: f.conversation.id, attentionId, resolution: { behavior: "allow" } });
+      const interrupt = f.journal.executeOperation({ kind: "interrupt", operationId: "interrupt", idempotencyKey: "interrupt",
+        conversationId: f.conversation.id, turnId });
+      expect(answer.receipt.status).toBe("pending");
+      expect(interrupt.receipt.status).toBe("pending");
+
+      await bindStructuredDeliveryQueue([], { registry: f.registry, client: f.client,
+        watchdogIntervalMs: 0, settlementSweepMs: 0, hostlessSettleIntervalMs: 0 });
+      await kickStructuredDeliveryQueue();
+
+      const answerReceipt = f.journal.operationResult("answer")?.receipt;
+      const interruptReceipt = f.journal.operationResult("interrupt")?.receipt;
+      if (processState === "working") {
+        expect(answerReceipt?.status).toBe("pending");
+        expect(interruptReceipt?.status).toBe("pending");
+      } else {
+        const reason = processState === "dead" ? "no longer exists" : "written nothing since its own launch";
+        expect(answerReceipt).toMatchObject({ status: "failed", reason: expect.stringContaining(reason) });
+        expect(interruptReceipt).toMatchObject({ status: "interrupted", reason: expect.stringContaining(reason) });
+      }
+    } finally {
+      setSystemTime();
+      cpu.mockRestore();
+      identity.mockRestore();
+      alive.mockRestore();
+      await f.cleanup();
+    }
+  },
+);
 
 for (const revoked of [false, true]) test(`an addressed startup host retains its dispatch proof when recovery publishes before returning (${revoked})`, async () => {
   const f = migrationDeliveryFixture();

@@ -1633,10 +1633,6 @@ export async function bindStructuredDeliveryQueue(
       }),
     }),
     async (conversationId) => {
-      if (dependencies.liveness) {
-        const liveness = await conversationTurnLiveness(registry, conversationId, dependencies.liveness);
-        return liveness?.state === "severed" ? liveness.reason : null;
-      }
       const conversation = registry.conversation(conversationId as ViewerConversationId);
       const generation = conversation?.generations.at(-1);
       if (!conversation || !generation) return null;
@@ -1647,7 +1643,22 @@ export async function bindStructuredDeliveryQueue(
         && projection.facts.turn.determined) {
         return projection.facts.turn.value.state === "open" ? "the process owning the open turn ended" : "the recorded host ended after its turn settled";
       }
-      return null;
+      // A missing or inconclusive projection can coexist with a severed turn.
+      // Read the transcript and process evidence for this conversation only.
+      const liveness = await conversationTurnLiveness(registry, conversationId, {
+        ...dependencies.liveness,
+        snapshot: registry.conversationDeliverySnapshot({ conversationId }),
+      });
+      if (liveness?.state !== "severed") return null;
+      const current = registry.conversation(conversationId as ViewerConversationId);
+      const currentGeneration = current?.generations.at(-1);
+      if (current?.engine !== liveness.key.engine || currentGeneration?.id !== liveness.key.sessionId
+        || currentGeneration.path !== liveness.transcriptPath) return null;
+      const currentEntry = registry.hostEntry(liveness.key);
+      const currentProcess = currentEntry?.structuredHost?.process;
+      if (currentEntry?.claimOwner !== entry.claimOwner || currentEntry?.claimEpoch !== entry.claimEpoch
+        || !currentProcess || !liveness.process || !sameRecordedProcessIdentity(currentProcess, liveness.process)) return null;
+      return liveness.reason;
     },
     (conversationId) => conversationId.startsWith("conversation_")
       && branchSharesRootHost(registry, registry.conversation(conversationId as `conversation_${string}`))

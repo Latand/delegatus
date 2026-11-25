@@ -2167,7 +2167,7 @@ export class StructuredDeliveryQueue {
       if (isControlEffect(effect)) {
         const result = isCompactEffect(effect)
           ? await this.drainCompact(effect)
-          : await this.drainControl(effect);
+          : await this.drainControl(effect, durableStatuses.get(effect.operationId), lane);
         if (result.blocked) {
           this.scheduleControlSettlementCheck(durableStatuses.get(effect.operationId) ?? null);
           blockRest("conversation-busy", "event", `a ${effect.kind} control on this conversation is still settling`);
@@ -2719,7 +2719,7 @@ export class StructuredDeliveryQueue {
       }
       const assertCurrent = () => {
         assertOwner();
-        this.assertHostRoute(host, health);
+        this.assertHostRoute(host, health, effect.kind === "send" && effect.policy === "queue" && !effect.onlyIfIdle);
       };
       const authorize = () => {
         recoveryGuard?.();
@@ -3301,11 +3301,15 @@ export class StructuredDeliveryQueue {
     };
   }
 
-  private assertHostRoute(host: EngineHost, observed: HostControlFacts): void {
+  private assertHostRoute(host: EngineHost, observed: HostControlFacts, deferOnAttentionChange = false): void {
     const current = host.agentControlState?.();
-    if (current && !sameHostControlRoute(observed, current)) {
-      throw new StructuredSendRefusedError("stale-turn");
+    if (!current || sameHostControlRoute(observed, current)) return;
+    if (deferOnAttentionChange && current.sessionKey === observed.sessionKey && current.turnId && current.turnId === observed.turnId
+      && ((observed.status === "active" && current.status === "attention")
+        || (observed.status === "attention" && current.status === "active"))) {
+      throw new StructuredDispatchDeferredError("attention changed before queued delivery");
     }
+    throw new StructuredSendRefusedError("stale-turn");
   }
 
   /**
@@ -3896,7 +3900,11 @@ export class StructuredDeliveryQueue {
     this.retrySoon();
   }
 
-  private async drainControl(effect: ControlEffect): Promise<ControlDrainResult> {
+  private async drainControl(
+    effect: ControlEffect,
+    durable: StructuredOperationStatus | null | undefined,
+    lane: DeliveryLane | undefined,
+  ): Promise<ControlDrainResult> {
     if (effect.kind === "kill") {
       if (effect.onlyIfIdle && this.retirementExecutor.retired) return { blocked: true, terminated: false };
       if (effect.onlyIfIdle) {
@@ -3991,6 +3999,26 @@ export class StructuredDeliveryQueue {
         throw error;
       }
     }
+    const ownsLane = () => !lane?.released && !this.retirementExecutor.retired && !this.port.handoffHeld?.();
+    if (durable?.status === "delivering") {
+      // Legacy controls carry no executor stamp. Their outcome is unknown, so
+      // settle the receipt without issuing another native control.
+      if (deliveringOwnership(durable.reason)
+        && await this.deliveringOwnerDisposition(effect.conversationId, durable.reason) !== "abandoned") {
+        return { blocked: true, terminated: false };
+      }
+      if (!ownsLane()) return { blocked: true, terminated: false };
+      try {
+        await this.transitionUnlessSettled(effect.operationId, "uncertain",
+          { reason: `${effect.kind} control outcome is unverified after an earlier delivery attempt; verify the conversation state before retrying` },
+          { fromStatuses: ["delivering"] }, ownsLane);
+      } catch {
+        // Settlement or a retry can win while ownership is being read.
+        this.retrySoon();
+        return { blocked: true, terminated: false };
+      }
+      return { blocked: false, terminated: false };
+    }
     const host = this.resolveHost(effect.conversationId);
     if (!host) {
       /* Holding the control was right while a host might still come back to
@@ -4006,7 +4034,7 @@ export class StructuredDeliveryQueue {
         this.retrySoon();
         return { blocked: true, terminated: false };
       }
-      if (!severed.value || this.resolveHost(effect.conversationId)) return { blocked: true, terminated: false };
+      if (!ownsLane() || !severed.value || this.resolveHost(effect.conversationId)) return { blocked: true, terminated: false };
       await this.transitionUnlessSettled(
         effect.operationId,
         effect.kind === "interrupt" ? "interrupted" : "failed",
@@ -4029,11 +4057,11 @@ export class StructuredDeliveryQueue {
       await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "dead-host" });
       return { blocked: true, terminated: false };
     }
+    const writer = this.port.currentHostClaim
+      ? { readable: true as const, value: this.port.currentHostClaim(effect.conversationId) }
+      : await this.readHostClaim(effect.conversationId);
     if (effect.binding) {
       const key = this.port.currentHostSessionKey?.(effect.conversationId);
-      const writer = this.port.currentHostClaim
-        ? { readable: true as const, value: this.port.currentHostClaim(effect.conversationId) }
-        : await this.readHostClaim(effect.conversationId);
       if (!writer.readable) {
         this.retrySoon();
         return { blocked: true, terminated: false };
@@ -4045,9 +4073,18 @@ export class StructuredDeliveryQueue {
         return { blocked: false, terminated: false };
       }
     }
-    if (!await this.transitionUnlessSettled(effect.operationId, "delivering", {
-      ...(effect.kind === "interrupt" ? { turnId: effect.turnId ?? health.turnId } : {}),
-    }, { fromStatuses: ["pending", "queued"] })) return { blocked: false, terminated: false };
+    if (!ownsLane()) return { blocked: true, terminated: false };
+    try {
+      if (!await this.transitionUnlessSettled(effect.operationId, "delivering", {
+        reason: deliveringOwnershipReason(this.executorId, writer),
+        ...(effect.kind === "interrupt" ? { turnId: effect.turnId ?? health.turnId } : {}),
+      }, { fromStatuses: ["pending", "queued"] })) return { blocked: false, terminated: false };
+    } catch {
+      // A concurrent claimant may already be delivering this operation.
+      this.retrySoon();
+      return { blocked: true, terminated: false };
+    }
+    if (!ownsLane()) return { blocked: true, terminated: false };
     try {
       assertOwner();
       this.assertHostRoute(host, health);
