@@ -1037,6 +1037,83 @@ test("retained lanes share the seat agenda's prerequisite rows and live assignme
   } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
 });
 
+test.each(["task", "pr", "postponed", "limit", "operator-form", "operator-seat-form", "operator-step"] as const)(
+  "a dismissed lane leaves the %s wait with its prerequisite until it clears", async kind => {
+    const { seatAgendaInWorker } = await import("./filesResponseWorker");
+    const { emptyRepositoryEntry, updateForgeCache } = await import("@/lib/forge/cache");
+    type BoardTask = import("@/lib/tasks/types").BoardTask;
+    const state = scratchState();
+    const project = "project-a";
+    const repository = "fixture/repo";
+    const now = Date.parse("2026-11-20T06:47:00Z");
+    const at = (minutes: number) => new Date(now + minutes * 60_000).toISOString();
+    const since = at(-60);
+    const base: BoardTask = { id: "held-task", project, text: "Wait for the prerequisite", status: "assigned", placement: "unplaced",
+      assignments: [], createdAt: since, updatedAt: since };
+    const prerequisite: BoardTask = { ...base, id: "open-prerequisite", status: "inbox" };
+    const hold = { kind: kind.startsWith("operator-") ? "operator" : kind, by: "agent", since, note: "" } as NonNullable<BoardTask["hold"]>;
+    const held: BoardTask = { ...base, hold };
+    const pr = { number: 41, url: "https://github.com/fixture/repo/pull/41", headRefName: "fixture-change", createdAt: since, checkedAt: at(0), closes: [] };
+    const storePr = (prState: "open" | "closed" | "merged") => updateForgeCache(cache => {
+      cache.repositories[repository] = { ...emptyRepositoryEntry(), prs: { [pr.number]: { ...pr, state: prState } } };
+    }, path.join(state, "forge-links.json"));
+    if (kind === "task") hold.ref = prerequisite.id;
+    if (kind === "pr") hold.ref = String(pr.number);
+    if (kind === "postponed" || kind === "limit") hold.until = at(1);
+    if (kind === "operator-form") {
+      hold.ref = "fixture-round";
+      held.prototypeReview = { latestReviewId: hold.ref, waitingReviewId: hold.ref, createdAt: since, title: "Choose an option", rounds: 1 };
+    }
+    if (kind === "operator-seat-form") hold.ref = "seat-round";
+    if (kind === "operator-step") {
+      hold.ref = "choose-setting";
+      held.steps = [{ id: hold.ref, text: "Choose a setting", state: "open", ref: "linked-step" }];
+    }
+    const pipeline = { id: "dismissed-lane", task: "Earlier work", project, taskIds: [held.id],
+      state: "needs_decision", stages: [], runs: [], dismissedAt: at(-1), createdAt: since };
+    const seatNotice = { id: "prototype:seat-round", project, taskId: null, reviewId: "seat-round", title: "Choose an option",
+      createdAt: since, target: { kind: "seat-decision", project, reviewId: "seat-round" } } as const;
+    let seatDecisions: import("@/lib/prototypeReview/types").PrototypeReviewNotice[] = kind === "operator-seat-form" ? [seatNotice] : [];
+    let linkedLane = { id: "linked-step", task: "Linked step", project, taskIds: [held.id], state: "running", stages: [], runs: [], createdAt: since };
+    const read = (clock: number) => seatAgendaInWorker(JSON.stringify({
+      files: [], tasks: [held, prerequisite], pipelines: [pipeline, ...(kind === "operator-step" ? [linkedLane] : [])], seatDecisions,
+      workLinks: { pipelines: {}, tasks: { [held.id]: { repository, links: [], noPr: false } } },
+    }), project, clock / 1000, runtimeFor(state));
+    try {
+      if (kind === "pr") storePr("open");
+      expect((await read(now)).asks).toEqual([]);
+      if (kind === "task") prerequisite.status = "done";
+      if (kind === "pr") {
+        hold.ref = "https://github.com/fixture/other-repo/pull/41";
+        expect((await read(now)).asks).toEqual([expect.objectContaining({
+          id: held.id, label: expect.stringContaining("its lane wait was dismissed"),
+        })]);
+        hold.ref = pr.url;
+        expect((await read(now)).asks).toEqual([]);
+        storePr("closed");
+        expect((await read(now)).asks).toEqual([expect.objectContaining({
+          id: held.id, label: expect.stringContaining("recorded prerequisite cleared"),
+        })]);
+        storePr("merged");
+        expect((await read(now)).asks).toEqual([expect.objectContaining({
+          id: held.id, label: expect.stringContaining("recorded prerequisite cleared"),
+        })]);
+      }
+      if (kind === "operator-form") {
+        held.prototypeReview!.waitingReviewId = null;
+        held.prototypeReview!.decision = { at: at(1), chosen: [], comment: "", delivery: "sent" };
+      }
+      if (kind === "operator-seat-form") seatDecisions = [];
+      if (kind === "operator-step") linkedLane = { ...linkedLane, state: "completed" };
+      const reason = kind === "operator-form" ? "answered the task’s decision form"
+        : kind === "operator-seat-form" ? "no longer points to a published form or open step" : "recorded prerequisite cleared";
+      expect((await read(now + 120_000)).asks).toEqual([expect.objectContaining({
+        id: held.id, waitingTaskIds: [held.id], label: expect.stringContaining(reason),
+      })]);
+    } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
+  },
+);
+
 test("a cold project build gets a longer cap than a seat source read, and a runtime's own cap governs both", () => {
   const seat = { type: "seat-reports" as const, project: "fixture" };
   expect(filesResponseWorkerTimeoutMs(request, {})).toBe(FILES_PROJECTION_BUILD_TIMEOUT_MS);
