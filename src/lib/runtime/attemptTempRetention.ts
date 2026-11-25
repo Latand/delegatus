@@ -648,7 +648,7 @@ export type AttemptTempSweepOptions = {
   /** Routine production visits require an expired deadline from the ledger. */
   scheduledOnly?: true;
   /** Schedule and repair deadlines under the same admission as selection. */
-  prepare?: () => Promise<void>;
+  prepare?: (remaining: () => number) => Promise<void>;
   /** Owned recursive cleanup subprocess usage, measured by the child itself. */
   accountCpuSeconds?: (seconds: number) => void;
   scan: (directories: readonly string[]) => ProcessScan;
@@ -674,16 +674,20 @@ export type AttemptTempSweepOptions = {
     watches: string[] };
 };
 export async function sweepAttemptTemps(store: AttemptTempStore, options: AttemptTempSweepOptions) {
+  const budgetNow = options.budgetNow ?? options.now ?? sweepMonotonicNow;
+  const deadline = budgetNow() + attemptTempRemaining(options.runBudgetMs ?? 40_000);
+  const remaining = () => attemptTempRemaining(deadline - budgetNow());
   // Serving generations may overlap. One process-shared owner must retain the
   // journal through every await; the existing async lock recovers dead owners.
   return withFileTransactionAsync(store.filename + ".sweep", "attempt-temp sweep admission", async () => {
-    await options.prepare?.();
-    return sweepOwnedAttemptTemps(store, options);
+    if (remaining() > 0) await options.prepare?.(remaining);
+    return sweepOwnedAttemptTemps(store, options, budgetNow, deadline, remaining);
   },
-    { waitMs: attemptTempRemaining(options.runBudgetMs ?? 40_000) });
+    { waitMs: remaining() });
 }
 
-async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptTempSweepOptions) {
+async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptTempSweepOptions,
+  budgetNow: () => number, deadline: number, remaining: () => number) {
   if (options.requireExpired) {
     if (options.selection && store.scratchRetentionVersion() !== 1) throw new Error("ordinary attempt-temp owner must upgrade scratch retention before exact-list execution");
     if (!options.selection) store.upgradeScratchRetention();
@@ -692,9 +696,6 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   const retentionMs = options.retentionMs ?? FINISHED_LANE_RETENTION_MS;
   const observeOwner = async (owner: AttemptTempOwner): Promise<AttemptTempAuthority> => options.authority
     ? options.authority(owner, inventory) : { state: await options.state(owner, inventory), revision: "", isCurrent: () => true };
-  const budgetNow = options.budgetNow ?? options.now ?? sweepMonotonicNow;
-  const deadline = budgetNow() + attemptTempRemaining(options.runBudgetMs ?? 40_000);
-  const remaining = () => attemptTempRemaining(deadline - budgetNow());
   const checkBudget = () => { checkAttemptTempDeadline(); if (remaining() <= 0) throw new AttemptTempBudgetDeferred("run budget exhausted"); };
   // A continuation already owns its fixed inventory. Discover legacy roots
   // once at the next pass boundary, rather than sorting scratch every tick.

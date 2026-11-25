@@ -52,8 +52,9 @@ that would get a partial window after another visit starts on the next tick.
 The cursor wraps after the due range ends. Under pressure a separate durable
 cursor visits expired roots in allocation order.
 An independent allocation queue visits up to four registered roots per tick
-within the five-second preparation window. Live roots and roots with zero or
-stale allocation remain measurable during retirement backoff.
+within a five-second preparation window inside the 40-second root tick.
+Live roots and roots with zero allocation or measurements at least an hour
+old remain measurable during retirement backoff.
 Absent paths, replaced inodes and refused observations advance that queue.
 An absent path with surviving quarantine custody keeps its recorded allocation
 until recovery resolves it. A removal visit that uses recorded bytes leaves the

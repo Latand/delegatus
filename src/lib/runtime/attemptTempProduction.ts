@@ -207,9 +207,9 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
       state: recordingAttemptTempState(store), authority: attemptScratchAuthority, evidenceAuthority: attemptTempAuthority,
       requireExpired: true, scheduledOnly: true, mode, ...ports, checkoutReads,
       accountCpuSeconds: seconds => { if (Number.isFinite(seconds) && seconds > 0) cleanupChildCpuSeconds += seconds; },
-      prepare: async () => {
+      prepare: async rootRemaining => {
         store.upgradeScratchRetention();
-        const end = sweepMonotonicNow() + attemptTempRemaining(ALLOCATION_WINDOW_MS);
+        const end = sweepMonotonicNow() + Math.min(ALLOCATION_WINDOW_MS, rootRemaining());
         const feedEnd = Math.min(end, sweepMonotonicNow() + 250);
         scheduleAttemptTempChanges(store, () => feedEnd - sweepMonotonicNow());
         if (attemptScratchAuditDue(store.schedulePosition().auditAfter, Date.now())) {

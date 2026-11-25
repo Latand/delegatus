@@ -194,7 +194,7 @@ test("retained change rows below the feed floor cannot restart the audit every t
   process.env.LLV_STATE_DIR = state;
   const store = new AttemptTempStore();
   try {
-    const completedAt = "2035-01-13T00:00:00Z", lane = finishedLane(root, completedAt);
+    const completedAt = "2035-01-13T00:00:00Z", lane = finishedLane(path.join(root, "repo"), completedAt);
     lane.state = "needs_decision";
     fs.mkdirSync(path.join(lane.worktreeDir!, ".git"), { recursive: true });
     lane.runs = [{ stageId: "build", attempts: [{ n: 1, state: "failed", launchId: "finished", effectiveRole: lane.stages[0]!.effectiveRole,

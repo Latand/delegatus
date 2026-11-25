@@ -704,7 +704,7 @@ test("absent allocation entries and recurring deferrals leave a path to the tail
   try {
     for (const [index, directory] of absent.entries()) {
       fs.mkdirSync(directory);
-      store.register({ directory, pipelineId: null, launchId: `absent-${index}`,
+      store.register({ directory, pipelineId: "young-lane", launchId: `absent-${index}`,
         retainUntilClose: false, createdAt: WORK_TICK - 20 * 86400_000 });
       fs.rmSync(directory, { recursive: true });
     }
@@ -759,9 +759,12 @@ test("registered live allocation turns on pressure and a pending quarantine keep
   const clock = spyOn(Date, "now").mockReturnValue(WORK_TICK);
   const payloadBytes = 2 * 1024 ** 2, quarantineBytes = 32 * 1024;
   try {
+    const lane = finishedLane(path.dirname(live), new Date(WORK_TICK - 3 * 86400_000).toISOString());
+    lane.state = "running";
+    savePipelines([lane]);
     for (const directory of [live, gone]) {
       fs.mkdirSync(directory);
-      store.register({ directory, pipelineId: null, launchId: path.basename(directory),
+      store.register({ directory, pipelineId: lane.id, launchId: path.basename(directory),
         retainUntilClose: false, createdAt: WORK_TICK - 1 });
     }
     fs.writeFileSync(path.join(live, "payload"), Buffer.alloc(payloadBytes, 1));
