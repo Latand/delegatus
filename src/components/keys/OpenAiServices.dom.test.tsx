@@ -14,10 +14,10 @@ import { setLocale, translate } from "@/lib/i18n";
 /*
  * What a saved OpenAI key serves (docs/design/openai-key-services.md, variant 3):
  * the list under the OpenAI row and each feature's page, over the real
- * `/api/openai-services`, `/api/keys` and voice settings routes and the real
- * provider policy, in a throw-away config directory. The page's requests go
- * to the route handlers with the operator's own session cookie, so what a row
- * names is what the policy resolves for the next request.
+ * `/api/openai-services`, `/api/keys`, ChatGPT plan and voice settings routes
+ * and the real provider policy, in a throw-away config directory. The routes
+ * receive the page's browser session so the UI reads the same policy as the
+ * next request.
  */
 
 const dom = new Window({ url: "http://localhost/", width: 1440, height: 900 });
@@ -45,6 +45,7 @@ const { VoiceSection } = await import("@/components/settings/VoiceSection");
 const VoiceCompanionSetting = () => <VoiceSection sub={null} go={() => {}} back={() => {}} />;
 const services = await import("@/app/api/openai-services/route");
 const keysList = await import("@/app/api/keys/route");
+const planStatus = await import("@/app/api/chatgpt-plan/route");
 const keyWrite = await import("@/app/api/keys/[id]/route");
 const voiceSettings = await import("@/app/api/voice-companion/settings/route");
 const asksYouRoute = await import("@/app/api/asks-you/route");
@@ -61,7 +62,9 @@ const { resolveService } = await import("@/lib/openaiServices/policy");
 const { writeTtsBackend } = await import("@/lib/ttsBackend");
 const { writeTranscribeBackend } = await import("@/lib/transcribeBackend");
 const { CompanionStorage } = await import("@/lib/voiceCompanion/storage");
-const { resetTeamStoreForTests } = await import("@/lib/team/store");
+const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/members");
+const { MEMBER_COOKIE } = await import("@/lib/team/sessions");
+const { resetTeamStoreForTests, teamStore } = await import("@/lib/team/store");
 const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
 
 /* Placeholders built at run time from runs of one character; a row shows only a masked tail. */
@@ -135,25 +138,27 @@ const bearer = (init?: RequestInit) => {
   return (headers.authorization ?? headers.Authorization ?? "").replace(/^Bearer /, "");
 };
 const origin = "http://127.0.0.1";
-const asOperator = (url: string, init?: RequestInit) => new NextRequest(origin + url, {
+let memberCookie: string | undefined;
+const browserRequest = (url: string, init?: RequestInit) => new NextRequest(origin + url, {
   method: init?.method ?? "GET",
-  headers: { host: "127.0.0.1", origin, cookie: `llv_operator=${soloBrowserSession()}`, "content-type": String((init?.headers as Record<string, string> | undefined)?.["content-type"] ?? "application/json") },
+  headers: { host: "127.0.0.1", origin, cookie: memberCookie ?? `llv_operator=${soloBrowserSession()}`, "content-type": String((init?.headers as Record<string, string> | undefined)?.["content-type"] ?? "application/json") },
   body: typeof init?.body === "string" ? init.body : undefined,
 });
 async function route(url: string, call: Call, state: Owned, init?: RequestInit): Promise<Response> {
   const refused = refuse?.(call);
   if (refused) return refused;
-  if (url === "/api/openai-services") return call.method === "PUT" ? services.PUT(asOperator(url, init)) : services.GET(asOperator(url, init));
-  if (url === "/api/keys") return keysList.GET(asOperator(url, init));
+  if (url === "/api/openai-services") return call.method === "PUT" ? services.PUT(browserRequest(url, init)) : services.GET(browserRequest(url, init));
+  if (url === "/api/keys") return keysList.GET(browserRequest(url, init));
+  if (url === "/api/chatgpt-plan" && call.method === "GET") return planStatus.GET(browserRequest(url, init));
   if (url.startsWith("/api/keys/")) {
     const params = { params: Promise.resolve({ id: url.slice("/api/keys/".length) }) };
-    return call.method === "DELETE" ? keyWrite.DELETE(asOperator(url, init), params) : keyWrite.PUT(asOperator(url, init), params);
+    return call.method === "DELETE" ? keyWrite.DELETE(browserRequest(url, init), params) : keyWrite.PUT(browserRequest(url, init), params);
   }
-  if (url === "/api/voice-companion/settings") return call.method === "PUT" ? voiceSettings.PUT(asOperator(url, init)) : voiceSettings.GET(asOperator(url, init));
-  if (url === "/api/transcribe/token") return transcribeToken.POST(asOperator(url, init));
-  if (url === "/api/asks-you") return call.method === "PUT" ? asksYouRoute.PUT(asOperator(url, init)) : asksYouRoute.GET();
-  if (url.startsWith("/api/memory/settings")) return call.method === "PUT" ? memorySettings.PUT(asOperator(url, init)) : memorySettings.GET(asOperator(url, init));
-  if (url === "/api/transcribe/backend") return call.method === "POST" ? transcribeBackend.POST(asOperator(url, init)) : transcribeBackend.GET();
+  if (url === "/api/voice-companion/settings") return call.method === "PUT" ? voiceSettings.PUT(browserRequest(url, init)) : voiceSettings.GET(browserRequest(url, init));
+  if (url === "/api/transcribe/token") return transcribeToken.POST(browserRequest(url, init));
+  if (url === "/api/asks-you") return call.method === "PUT" ? asksYouRoute.PUT(browserRequest(url, init)) : asksYouRoute.GET();
+  if (url.startsWith("/api/memory/settings")) return call.method === "PUT" ? memorySettings.PUT(browserRequest(url, init)) : memorySettings.GET(browserRequest(url, init));
+  if (url === "/api/transcribe/backend") return call.method === "POST" ? transcribeBackend.POST(browserRequest(url, init)) : transcribeBackend.GET();
   /* Vendor stand-ins: only the transports leave this process in production. */
   if (holdMint && (url === "https://api.openai.com/v1/realtime/client_secrets" || url.startsWith("https://api.elevenlabs.io/"))) await hold(state, holdMint);
   if (url === "https://api.openai.com/v1/realtime/client_secrets") {
@@ -212,7 +217,7 @@ afterEach(async () => {
   /* An «Open Keys» request no menu took would open the next test's menu on «Keys». */
   settleKeys();
   document.body.innerHTML = ""; setLocale("en");
-  globalThis.fetch = originalFetch; refuse = null;
+  globalThis.fetch = originalFetch; refuse = null; memberCookie = undefined;
   resetTeamStoreForTests();
   for (const [name, value] of Object.entries(saved)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -267,8 +272,10 @@ for (const lang of ["en", "uk"] as const) for (const size of ["menu", "sheet"] a
   serve();
   const opened: string[] = [];
   const host = await mount(<KeysMenuPage size={size} onImport={() => {}} onOpenService={(feature) => opened.push(feature)} />);
-  /* Directly under the OpenAI row, inside the key list. */
-  expect(host.querySelector("[data-keys-row='openai']")!.nextElementSibling?.hasAttribute("data-openai-services")).toBe(true);
+  const plan = host.querySelector("[data-keys-row='openai']")!.nextElementSibling!;
+  expect(plan.getAttribute("data-keys-row")).toBe("chatgpt-plan");
+  expect(plan.getAttribute("data-chatgpt-plan-state")).toBe("off_unconfigured");
+  expect(plan.nextElementSibling?.hasAttribute("data-openai-services")).toBe(true);
   expect(words(host.querySelector("[data-openai-services] p"))).toBe(say(lang, "openaiServices.group"));
   expect(listed(host)).toEqual(["asks: OpenRouter", "memory: OpenRouter", "rules: OpenRouter", "dictation: Soniox", "read: ElevenLabs", "voice: Codex V3"]);
   expect(host.querySelector("[data-openai-services-codex]")).toBeNull();
@@ -546,10 +553,18 @@ test("Voice Delegatus keeps its own «Show the voice» switch on its page", asyn
 });
 
 test("a team member's page has no list: the route refuses and the rest of «Keys» stays", async () => {
+  const store = teamStore();
+  const device = { surface: "desktop", browser: "chrome" } as const;
+  const owner = claimInstall(store, "Owner fixture", device);
+  const member = redeemJoin(store, createInvite(store, owner.member, null).code, "Member fixture", device);
+  memberCookie = `${MEMBER_COOKIE}=${member.cookie}`;
   serve();
-  refuse = (call) => call.url === "/api/openai-services" ? Response.json({ error: "only the owner can do this", code: "owner_required" }, { status: 403 }) : null;
   const host = await mount(<KeysMenuPage onImport={() => {}} onOpenService={() => {}} />);
-  expect(host.querySelectorAll("[data-keys-row]").length).toBe(6);
+  expect(host.querySelectorAll("[data-keys-source]")).toHaveLength(6);
+  const plan = host.querySelector("[data-keys-row='chatgpt-plan']")!;
+  expect(words(plan)).toContain(say("en", "chatgptPlan.ownerOnly"));
+  expect(plan.querySelector("button")).toBeNull();
+  expect(calls.some((call) => call.url === "/api/openai-services")).toBe(true);
   expect(host.querySelector("[data-openai-services]")).toBeNull();
 });
 
@@ -778,7 +793,7 @@ const ELEVENLABS = `sk_${"1".repeat(48)}`;
 const ELEVENLABS_NEXT = `sk_${"5".repeat(48)}`;
 async function onOpenAi() {
   file("openai-api-key", `${OPENAI}\n`);
-  await services.PUT(asOperator("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature: "dictation", provider: "openai" }) }));
+  await services.PUT(browserRequest("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature: "dictation", provider: "openai" }) }));
   expect(resolveService("dictation").effective).toBe("openai");
 }
 async function onElevenLabs() {
@@ -786,7 +801,7 @@ async function onElevenLabs() {
   writeTranscribeBackend("elevenlabs");
   expect(resolveService("dictation").effective).toBe("elevenlabs");
 }
-const keyRoute = (id: string, init: RequestInit) => own(keyWrite[init.method === "DELETE" ? "DELETE" : "PUT"](asOperator(`/api/keys/${id}`, init), { params: Promise.resolve({ id }) }));
+const keyRoute = (id: string, init: RequestInit) => own(keyWrite[init.method === "DELETE" ? "DELETE" : "PUT"](browserRequest(`/api/keys/${id}`, init), { params: Promise.resolve({ id }) }));
 
 for (const where of ["here", "on another tab"] as const) {
   test(`a key removed ${where} after the mic warmed a secret: the next press records instead of reaching OpenAI`, () => withMic(async (mic) => {
@@ -921,7 +936,7 @@ test("dictation moved onto OpenAI while a press waits on the mic's pending Eleve
 async function heldOn(baseline: "elevenlabs" | "local") {
   file("openai-api-key", `${OPENAI}\n`);
   writeTranscribeBackend(baseline);
-  await services.PUT(asOperator("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature: "dictation", provider: "openai" }) }));
+  await services.PUT(browserRequest("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature: "dictation", provider: "openai" }) }));
   await keyRoute("openai", { method: "DELETE" });
   expect(resolveService("dictation")).toMatchObject({ effective: baseline, requested: "openai", held: true });
 }
@@ -1082,7 +1097,7 @@ for (const lang of ["en", "uk"] as const) for (const enabled of [false, true]) t
 
   expect(await explanations()).toEqual(expected("openrouter"));
 
-  for (const feature of ["asks", "memory"]) await services.PUT(asOperator("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature, provider: "openai" }) }));
+  for (const feature of ["asks", "memory"]) await services.PUT(browserRequest("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature, provider: "openai" }) }));
   const onOpenAi = await explanations();
   expect(onOpenAi).toEqual(expected("openai"));
   expect(`${onOpenAi.asks} ${onOpenAi.memory}`).not.toMatch(/OpenRouter|Jev/);
@@ -1181,7 +1196,7 @@ for (const outcome of ["kept", "refused"] as const) test(`a provider chosen unde
   await click(host.querySelector("[data-memory-switch]"));
   expect(released).toHaveLength(2);
   /* Both are chosen under «Keys» while the switches' answers, computed before the choice, are still on their way. */
-  for (const feature of ["asks", "memory"]) await services.PUT(asOperator("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature, provider: "openai" }) }));
+  for (const feature of ["asks", "memory"]) await services.PUT(browserRequest("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature, provider: "openai" }) }));
   await act(async () => { serviceSettled("asks"); serviceSettled("memory"); });
   await settle();
   holdSwitch = null;
