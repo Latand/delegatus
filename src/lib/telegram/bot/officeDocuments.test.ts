@@ -188,6 +188,8 @@ test("an archive comment cannot hide a second archive from inspection", () => {
 /* ---- computed spreadsheet text -------------------------------------------- */
 
 const column = (number: number) => String.fromCharCode(64 + number);
+/** The column letters of a column number: 1 is A, 27 is AA. */
+const letters = (number: number): string => (number > 26 ? letters(Math.floor((number - 1) / 26)) : "") + column(((number - 1) % 26) + 1);
 /* A source that reports what was asked: `<ref>` for a cell of this sheet, `<Sheet!ref>` for one of another, `[from-to]` for a range. */
 const echo: FormulaSource = {
   cell: (sheet, reference) => `<${sheet === null ? "" : `${sheet}!`}${reference}>`,
@@ -292,7 +294,6 @@ test("a range reads rows in order, and only the columns it names", () => {
 test("a range over more cells than the package may visit asks for consent", () => {
   /* 3 600 distinct ranges over a sheet of 6 000 text cells visit 21 600 000 cells, past the package's 20 000 000, though each reads no text. */
   const heavy = Array.from({ length: 6000 }, (_, row) => `<row r="${row + 1}"><c r="A${row + 1}" t="inlineStr"><is><t>x</t></is></c></row>`).join("");
-  const letters = (number: number) => (number > 26 ? letters(Math.floor((number - 1) / 26)) : "") + column(((number - 1) % 26) + 1);
   const many = (count: number) => Array.from({ length: count }, (_, at) => `<row r="${at + 1}"><c r="C${at + 1}"><f>LEN('Key Sheet'!B1:${letters(at + 2)}6000)</f></c></row>`).join("");
   expect(readParts(twoSheets(many(3000), heavy, [])).get("xl/worksheets/sheet1.xml")!.consent).toBe(false);
   expect(readParts(twoSheets(many(3600), heavy, [])).get("xl/worksheets/sheet1.xml")!.consent).toBe(true);
@@ -339,7 +340,6 @@ test("formula cells that name one another in a loop, or in a chain too deep to f
   expect(consent('<row r="1"><c r="A1"><f>B1</f></c><c r="B1"><f>A1</f></c></row>')).toBe(true);
   expect(consent('<row r="1"><c r="A1"><f>A1</f></c></row>')).toBe(true);
   const chain = (length: number) => `<row r="1">${Array.from({ length }, (_, at) => `<c r="${letters(at + 1)}1"><f>${letters(at + 2)}1</f></c>`).join("")}</row>`;
-  function letters(number: number): string { return (number > 26 ? letters(Math.floor((number - 1) / 26)) : "") + column(((number - 1) % 26) + 1); }
   expect(consent(chain(20))).toBe(false);
   expect(consent(chain(80))).toBe(true);
 });
