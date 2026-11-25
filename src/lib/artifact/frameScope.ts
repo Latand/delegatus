@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import path from "node:path";
 import { sessionIsLive } from "@/lib/team/sessions";
 import { existingTeamStore } from "@/lib/team/store";
 
@@ -39,21 +40,24 @@ function sign(payload: string): string {
 interface FrameGrant {
   directory: string;
   kind: "project" | "evidence";
+  sessionId: string | null;
+  workspaceProject: string | null;
 }
 
 /** A signed canonical directory, admission kind, expiry and minting session (or `-` for a solo install). */
-export function mintFrameScope(directory: string, now: number = Date.now(), sessionId: string | null = null, kind: FrameGrant["kind"] = "project"): string {
-  const payload = `${Buffer.from(directory, "utf8").toString("base64url")}.${(now + FRAME_SCOPE_TTL_MS).toString(36)}.${sessionId ?? "-"}.${kind}`;
+export function mintFrameScope(directory: string, now: number = Date.now(), sessionId: string | null = null, kind: FrameGrant["kind"] = "project", workspaceProject: string | null = null): string {
+  const encodedProject = workspaceProject === null ? "-" : Buffer.from(workspaceProject, "utf8").toString("base64url");
+  const payload = `${Buffer.from(directory, "utf8").toString("base64url")}.${(now + FRAME_SCOPE_TTL_MS).toString(36)}.${sessionId ?? "-"}.${kind}.${encodedProject}`;
   return `${payload}.${sign(payload)}`;
 }
 
 /** The verified grant, or null when it is forged, altered or expired. */
 export function verifyFrameScope(scope: string, now: number = Date.now()): FrameGrant | null {
   const parts = scope.split(".");
-  if (parts.length !== 5) return null;
-  const [dir, expiry, sessionId, kind, signature] = parts as [string, string, string, string, string];
+  if (parts.length !== 6) return null;
+  const [dir, expiry, sessionId, kind, encodedProject, signature] = parts as [string, string, string, string, string, string];
   if (kind !== "project" && kind !== "evidence") return null;
-  const expected = Buffer.from(sign(`${dir}.${expiry}.${sessionId}.${kind}`));
+  const expected = Buffer.from(sign(`${dir}.${expiry}.${sessionId}.${kind}.${encodedProject}`));
   const given = Buffer.from(signature);
   if (expected.length !== given.length || !timingSafeEqual(expected, given)) return null;
   const expiresAt = parseInt(expiry, 36);
@@ -68,7 +72,10 @@ export function verifyFrameScope(scope: string, now: number = Date.now()): Frame
     }
   } catch { return null; } // Unreadable authority grants no file access.
   const directory = Buffer.from(dir, "base64url").toString("utf8");
-  return directory.startsWith("/") ? { directory, kind } : null;
+  const workspaceProject = encodedProject === "-" ? null : Buffer.from(encodedProject, "base64url").toString("utf8");
+  return path.isAbsolute(directory) || path.win32.isAbsolute(directory)
+    ? { directory, kind, sessionId: sessionId === "-" ? null : sessionId, workspaceProject }
+    : null;
 }
 
 /** The frame URL for `fileName` inside the scoped directory. */
@@ -100,4 +107,12 @@ export function frameMime(ext: string, fallback: string): string {
  * scripts cannot read the viewer's DOM, storage or cookies, and every request
  * it makes to the viewer's API arrives cross-origin and is refused.
  */
-export const FRAME_CSP = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals";
+export const FRAME_SANDBOX = "allow-scripts";
+
+/** Evidence pages may load only resources routed through their signed directory. */
+export function frameCsp(scope: string, origin: string, evidence: boolean): string {
+  const sandbox = `sandbox ${FRAME_SANDBOX}`;
+  if (!evidence) return sandbox;
+  const resourceRoot = `${origin}/api/artifact/frame/${scope}/`;
+  return `${sandbox}; default-src 'none'; base-uri 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; form-action 'none'; script-src ${resourceRoot} 'unsafe-inline'; style-src ${resourceRoot} 'unsafe-inline'; img-src ${resourceRoot} data:; font-src ${resourceRoot} data:; media-src ${resourceRoot}; connect-src ${resourceRoot}`;
+}

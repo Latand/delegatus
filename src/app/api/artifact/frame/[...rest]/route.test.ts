@@ -8,8 +8,11 @@ import { KEEP_PNG, legacyReportPictureFixture, localFileKeepFixture } from "@/li
 
 import { FRAME_SCOPE_TTL_MS, mintFrameScope } from "@/lib/artifact/frameScope";
 import { FRAME_SANDBOX } from "@/components/preview/DocumentPanes";
+import { resolveLink } from "@/lib/artifact/linkTarget";
 import { claimInstall, signOutSession } from "@/lib/team/members";
 import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
+import { createWorkspace } from "@/lib/team/workspaces";
+import { conversationCatalogSnapshot, replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-artifact-frame-"));
 const { GET: serve } = await import("./route");
@@ -105,7 +108,14 @@ test("evidence frame serves HTML and local rasters with the report sandbox", asy
   const page = await asset("index.html");
   expect(page.status).toBe(200);
   expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
-  expect(page.headers.get("content-security-policy")).toBe(`sandbox ${FRAME_SANDBOX}`);
+  const csp = page.headers.get("content-security-policy")!;
+  expect(csp).toContain(`sandbox ${FRAME_SANDBOX}`);
+  expect(csp).toContain(`/api/artifact/frame/${new URL(frame, "http://127.0.0.1").pathname.split("/")[4]}/`);
+  expect(csp).toContain("base-uri 'none'");
+  expect(csp).toContain("form-action 'none'");
+  expect(csp).toContain("frame-src 'none'");
+  expect(csp).not.toContain("allow-popups");
+  expect(csp).not.toContain("allow-forms");
   expect(await page.text()).toBe(html);
   const chart = await asset("chart.png");
   expect(chart.status).toBe(200);
@@ -128,6 +138,54 @@ test("evidence frame serves HTML and local rasters with the report sandbox", asy
   fs.symlinkSync(path.dirname(sibling), directory, "dir");
   expect((await asset("index.html")).status).toBe(403);
   expect((await asset("chart.png")).status).toBe(403);
+});
+
+test.skipIf(process.platform !== "win32")("a native drive-letter evidence link opens its HTML frame", async () => {
+  const report = write("state/evidence/agents/native-windows/index.html", "<h1>Native Windows report</h1>");
+  expect(resolveLink(report)).toMatchObject({ kind: "file", path: report });
+  const url = new URL("http://127.0.0.1:8898/api/artifact");
+  url.searchParams.set("path", report);
+  url.searchParams.set("mode", "meta");
+  const metaResponse = await GET_ARTIFACT(new NextRequest(url, { headers: { host: "127.0.0.1:8898" } }));
+  expect(metaResponse.status).toBe(200);
+  const { frame } = await metaResponse.json() as { frame: string };
+  const page = await GET(frameRequest(frame));
+  expect(page.status).toBe(200);
+  expect(await page.text()).toContain("Native Windows report");
+});
+
+test("workspace removal revokes a live session's evidence document and raster grant", async () => {
+  const store = teamStore();
+  const owner = claimInstall(store, "Fixture owner", { surface: "desktop", browser: "chrome" });
+  const member = {
+    id: "m_evidence_member", name: "Fixture member", role: "member", status: "active", color: "teal",
+    telegram: null, createdAt: new Date().toISOString(), createdBy: "claim", revokedAt: null,
+  } as const;
+  store.insertMember(member);
+  const { mintSession } = await import("@/lib/team/sessions");
+  const signedIn = mintSession(store, member.id, "approval", { surface: "desktop", browser: "chrome" });
+  const priorCatalog = conversationCatalogSnapshot();
+  replaceConversationCatalog([...priorCatalog, {
+    path: "evidence-workspace.jsonl", root: "codex-sessions", name: "fixture", project: "repo-evidence",
+    title: "fixture", firstPrompt: "", engine: "codex", kind: "session", fmt: "codex", mtime: 0, size: 0,
+  }]);
+  const workspaceId = `w_${"c".repeat(32)}`;
+  createWorkspace(store, owner.member, { id: workspaceId, name: "Evidence workspace", projects: ["repo-evidence"] });
+  store.putWorkspaceMember(workspaceId, member.id, "member", owner.member.id, new Date().toISOString());
+  const dir = path.join(home, "state/evidence/agents/workspace-fixture");
+  write("state/evidence/agents/workspace-fixture/index.html", "<h1>Workspace report</h1>");
+  write("state/evidence/agents/workspace-fixture/chart.png", KEEP_PNG);
+  const scope = mintFrameScope(dir, Date.now(), signedIn.session.id, "evidence", "repo-evidence");
+  const target = (name: string) => `/api/artifact/frame/${scope}/${name}`;
+  try {
+    expect((await GET(frameRequest(target("index.html")))).status).toBe(200);
+    expect((await GET(frameRequest(target("chart.png")))).status).toBe(200);
+    store.removeWorkspaceMember(workspaceId, member.id);
+    expect((await GET(frameRequest(target("index.html")))).status).toBe(403);
+    expect((await GET(frameRequest(target("chart.png")))).status).toBe(403);
+  } finally {
+    replaceConversationCatalog(priorCatalog);
+  }
 });
 
 test("an evidence grant cannot acquire a project's non-raster asset permissions", async () => {
@@ -228,13 +286,13 @@ test("a symlink inside the report that points out of it is refused", async () =>
 test("forged, altered and expired scopes are refused", async () => {
   const dir = reportDir();
   const scope = mintFrameScope(dir);
-  const [encodedDir, expiry, signature] = scope.split(".");
+  const [encodedDir, expiry, sessionId, kind, project, signature] = scope.split(".");
   const other = Buffer.from(path.join(home, "checkout"), "utf8").toString("base64url");
   for (const bad of [
     "forged",
-    `${other}.${expiry}.${signature}`,
-    `${encodedDir}.${(Date.now() + 10 * FRAME_SCOPE_TTL_MS).toString(36)}.${signature}`,
-    `${encodedDir}.${expiry}.${signature!.slice(0, -2)}AA`,
+    `${other}.${expiry}.${sessionId}.${kind}.${project}.${signature}`,
+    `${encodedDir}.${(Date.now() + 10 * FRAME_SCOPE_TTL_MS).toString(36)}.${sessionId}.${kind}.${project}.${signature}`,
+    `${encodedDir}.${expiry}.${sessionId}.${kind}.${project}.${signature!.slice(0, -2)}AA`,
     mintFrameScope(dir, Date.now() - 2 * FRAME_SCOPE_TTL_MS),
   ]) {
     const res = await GET(frameRequest(`/api/artifact/frame/${bad}/index.html`));

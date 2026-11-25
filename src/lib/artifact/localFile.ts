@@ -45,7 +45,7 @@ export function underRoot(candidate: string, root: string): boolean {
    historical OS temp location remains readable for existing report links. */
 export function evidenceRoots(): string[] {
   const configured = process.env.LLV_EVIDENCE_ROOTS;
-  const roots = configured === undefined ? [statePath("evidence"), "/var/tmp"] : configured.split(":");
+  const roots = configured === undefined ? [statePath("evidence"), "/var/tmp"] : configured.split(path.delimiter);
   return roots.map((root) => root.trim()).filter((root) => path.isAbsolute(root)).map((root) => path.resolve(root));
 }
 

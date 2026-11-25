@@ -11,7 +11,7 @@ import { frameUrl, mintFrameScope } from "@/lib/artifact/frameScope";
 import { requestSession } from "@/lib/team/sessions";
 import { existingTeamStore } from "@/lib/team/store";
 import { artifactEtag, artifactLimits, artifactResponseHeaders, parseByteRange, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
-import { admittedAs, evidenceFrameAdmission, lexicalAllowedRoots, keptPictureProject, openAdmitted, readablePlace, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
+import { admittedAs, evidenceFrameAdmission, lexicalAllowedRoots, keptPictureProject, openAdmitted, readablePlace, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow, underRoot } from "@/lib/artifact/localFile";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -85,11 +85,32 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
   const admission = admittedAs(abs, roots) ?? (metadata && abs === requested && isHtmlReport(abs) ? evidenceFrameAdmission(abs, roots) : null);
   if (!admission) return fail("access-denied", "path is outside the allowed roots");
   const evidenceHtml = admission === "evidence-html";
+  const evidenceRoot = evidenceHtml
+    ? roots.evidence.filter(root => underRoot(abs, root)).sort((a, b) => b.length - a.length)[0]
+    : undefined;
 
   const classified = classifyArtifact(abs);
   if (!classified) return fail("unsupported", "not a previewable artifact type");
   const { kind, mime } = classified;
   const name = path.basename(abs);
+
+  let evidenceBoundary: { root: string; reportDirectory: string } | null = null;
+  if (evidenceHtml) {
+    /* Resolve the admitted root and report directory before following the
+       report link. A retargeted managed root or report alias cannot choose
+       the canonical directory that the frame grant later signs. */
+    try {
+      if (!evidenceRoot) return fail("access-denied", "path is outside the allowed roots");
+      const [root, reportDirectory, entry] = await Promise.all([
+        fs.realpath(evidenceRoot), fs.realpath(path.dirname(abs)), fs.lstat(abs),
+      ]);
+      if (!underRoot(reportDirectory, root) || entry.isSymbolicLink())
+        return fail("access-denied", "evidence report alias is outside its admitted directory");
+      evidenceBoundary = { root, reportDirectory };
+    } catch {
+      return fail("access-denied", "evidence report directory is unavailable");
+    }
+  }
 
   /* Resolve symlinks, then re-check containment: ~/x.pdf → /anywhere must not
      read outside the roots. The roots themselves are realpathed so a symlinked
@@ -101,11 +122,14 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
     return fail("not-found", "file not found");
   }
   if (!realpathAdmitted(admission, real, await realAllowedRoots())) return fail("access-denied", "path is outside the allowed roots");
+  if (evidenceBoundary && (!underRoot(real, evidenceBoundary.root) || path.dirname(real) !== evidenceBoundary.reportDirectory))
+    return fail("access-denied", "evidence report alias is outside its admitted directory");
 
   const workspace = requestWorkspaceScope(req);
   /* A kept copy belongs to the project its picture lay in. */
   const kept = keptPictureProject(requested, abs);
-  if (workspace && !workspace.canReadFile(kept === undefined ? projectForCwd(path.dirname(real)) : kept)) return workspaceDenied();
+  const workspaceProject = kept === undefined ? projectForCwd(path.dirname(real)) : kept;
+  if (workspace && !workspace.canReadFile(workspaceProject)) return workspaceDenied();
   /* realpath resolved every link above; a link appearing at the final
      component or at any directory above it between then and now is a race,
      refused. A FIFO does not wedge the open — its fstat below rejects it. */
@@ -155,7 +179,7 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
       if (isHtmlReport(real) && existingTeamStore()?.hasActiveOwner() && !live)
         return NextResponse.json({ error: "sign in to open a report frame", code: "member_required" }, { status: 401 });
       const frame = isHtmlReport(real)
-        ? frameUrl(mintFrameScope(path.dirname(real), Date.now(), live?.session.id ?? null, evidenceHtml ? "evidence" : "project"), path.basename(real))
+        ? frameUrl(mintFrameScope(path.dirname(real), Date.now(), live?.session.id ?? null, evidenceHtml ? "evidence" : "project", workspaceProject), path.basename(real))
         : undefined;
       return NextResponse.json(
         { name, kind, mime, size: stat.size, mtimeMs: Math.round(stat.mtimeMs), etag,

@@ -5,10 +5,12 @@ import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 
 import { classifyArtifact } from "@/lib/artifact/classify";
-import { FRAME_CSP, frameMime, verifyFrameScope } from "@/lib/artifact/frameScope";
+import { frameCsp, frameMime, verifyFrameScope } from "@/lib/artifact/frameScope";
 import { admittedAs, evidenceFrameAdmission, lexicalAllowedRoots, realpathAdmitted, openAdmitted, realAllowedRoots, streamWindow, underRoot } from "@/lib/artifact/localFile";
 import { artifactEtag, artifactLimits, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { rejectForeignHost } from "@/lib/sameOrigin";
+import { existingTeamStore } from "@/lib/team/store";
+import { workspaceScope } from "@/lib/team/workspaceAccess";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,7 +46,7 @@ const HEADERS_BASE = {
   "x-content-type-options": "nosniff",
   "cache-control": "private, no-store",
   "referrer-policy": "no-referrer",
-  "content-security-policy": FRAME_CSP,
+  "content-security-policy": "sandbox allow-scripts",
 };
 
 function refuse(status: number, message: string): NextResponse {
@@ -87,6 +89,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const grant = verifyFrameScope(scope);
   if (!grant) return refuse(403, "this report link has expired; reopen the preview");
   const { directory, kind } = grant;
+  const forwardedProtocol = req.headers.get("x-forwarded-proto")?.split(",", 1)[0]?.trim();
+  const protocol = forwardedProtocol === "https" ? "https" : new URL(req.url).protocol.slice(0, -1);
+  const requestHost = req.headers.get("host");
+  const cspOrigin = requestHost ? `${protocol}://${requestHost}` : new URL(req.url).origin;
+  const csp = frameCsp(scope, cspOrigin, kind === "evidence");
 
   const abs = path.resolve(directory, ...inside);
   const roots = lexicalAllowedRoots();
@@ -106,6 +113,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // The metadata route signs the canonical directory. A later symlink in
   // its place cannot move that grant to a different directory.
   if (!underRoot(real, directory)) return refuse(403, "outside the report directory");
+
+  /* A signed session proves who opened the report, not that the member still
+     has access to its workspace. Re-evaluate file permission for every page
+     and asset request so removing a workspace placement revokes live grants. */
+  if (grant.sessionId) {
+    const store = existingTeamStore();
+    const session = store?.session(grant.sessionId);
+    if (!store || !session || !workspaceScope(store, session.memberId).canReadFile(grant.workspaceProject))
+      return refuse(403, "workspace file access was revoked");
+  }
 
   /* Kept only when the open file lies at the resolved path: a directory
      swapped for a link after the checks above reads nothing. */
@@ -141,6 +158,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
     const headers = new Headers({
       ...HEADERS_BASE,
+      "content-security-policy": csp,
       ...corsFor(req),
       "content-type": frameMime(path.extname(real).slice(1), classified.mime),
       "content-length": String(stat.size),
