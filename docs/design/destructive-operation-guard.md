@@ -710,6 +710,18 @@ fresh files and reported in the stage evidence:
 | Launch-time verification (section 6.5) | ≤ 20 ms, login-shell probe excluded (cached) |
 | Journal ingest per line | ≤ 5 ms, no whole-journal read per tick |
 
+`destructiveGuard.performance.test.ts` runs inside the publication gate beside
+other test files, under a CPU quota and uncontrolled host load. It therefore
+holds each time budget scaled by a host factor taken from the same run:
+max(1, median plain `rm -f` of 3 000 files ÷ 24 ms), the idle measurement
+above. Contention slows both sides of every pair, and the factor loosens the
+absolute bounds in the same proportion. The one-call fast path is held to
+1.5 × plain plus one wrapper start (30 ms), because a 24 ms baseline cannot
+absorb a fixed start cost as a ratio. The 3 000 separate calls are held to the
+fast path's 2 ms added per call. The slow path is judged on its median. The
+"well under a second" bound for 3 000 targets stays unscaled. The report line
+`guard-performance` carries the factor with the raw runs.
+
 ## 10. Item 7: role rules
 
 All in `src/lib/roles/defaults.ts`. One constant carries the rule so every role
