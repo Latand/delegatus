@@ -37,6 +37,58 @@ function fixture(engine: FixtureEngine = "codex", backgroundWork?: (transcriptPa
   return { root, registry, service, transcript, entry: () => registry.hostEntry({ engine, sessionId: FIXTURE_SESSION })!,
     demote: () => { owns = false; }, advance: (ms: number) => { clock += ms; }, publications: () => publications };
 }
+test("cycle discovery reuses verified processless archive versions and observes peer changes", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "central-discovery-"));
+  roots.push(root);
+  const seed = fixtureRegistry(root, "codex", captureProcessIdentity(process.pid), null);
+  const live = seed.entries[`codex:${FIXTURE_SESSION}`]!;
+  for (let index = 0; index < 48; index++) {
+    const sessionId = `archived-${index}`;
+    seed.entries[`codex:${sessionId}`] = { ...structuredClone(live), key: { engine: "codex", sessionId },
+      status: "dead", structuredHost: { ...live.structuredHost!, process: null } };
+  }
+  const filename = path.join(root, "registry.json");
+  fs.writeFileSync(filename, JSON.stringify(seed));
+  let reads = 0;
+  const open = () => new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite"),
+    onSqliteRowPayloadRead: (collection, count) => { if (collection === "entries") reads += count; } });
+  const registry = open(), peer = open();
+  registries.push(registry, peer);
+  expect(peer.archiveInactiveRows(128)).toBe(48);
+  const service = new AgentStateService({ registry, now: () => FIXTURE_NOW, owns: () => true,
+    process: () => "unverified", memory: () => null, publish: async () => false, release: "fixture" });
+  const visited: string[] = [];
+  spyOn(service, "reconcile").mockImplementation(async entry => { visited.push(entry.key.sessionId); return null; });
+  const pass = async () => {
+    reads = 0;
+    visited.length = 0;
+    await service.request();
+    return { visited: [...visited], reads };
+  };
+  expect((await pass()).visited).toEqual([FIXTURE_SESSION]);
+  const warm = await pass();
+  expect(warm.visited).toEqual([FIXTURE_SESSION]);
+
+  peer.agentStateWrite(file => { file.entries["codex:archived-7"]!.structuredHost!.process = captureProcessIdentity(process.pid); });
+  const expected = [FIXTURE_SESSION, "archived-7"];
+  expect((await pass()).visited).toEqual([...expected].sort((a, b) => a.localeCompare(b)));
+
+  // A restored mapping can point the same key at another immutable version.
+  using db = new Database(path.join(root, "registry.sqlite"));
+  const replaceArchived = (sessionId: string, hostPatch: object) => db.transaction(() => {
+    const key = `codex:${sessionId}`;
+    const version = db.query<{ id: number }, [string, string]>(`INSERT INTO registry_archive(collection,row_key,row_order,value_json)
+      SELECT collection,row_key,row_order,json_patch(value_json,?) FROM registry_rows
+      WHERE collection='entries' AND row_key=? RETURNING id`).get(JSON.stringify({ structuredHost: hostPatch }), key)!;
+    db.run("UPDATE registry_cold SET archive_id=? WHERE collection='entries' AND row_key=?", [version.id, key]);
+  })();
+  replaceArchived("archived-8", { process: captureProcessIdentity(process.pid) });
+  expect((await pass()).visited).toEqual([...expected, "archived-8"].sort((a, b) => a.localeCompare(b)));
+  replaceArchived("archived-9", { eventCursor: -1 });
+  await expect(pass()).rejects.toThrow("structured host event cursor is invalid");
+  expect(warm.reads).toBeLessThan(10);
+});
+
 for (const drift of ["owner", "turn", "attention", "artifact", "demotion"] as const) {
   test(`a ${drift} change after native acquisition refuses the old proposal before any repair or publication`, async () => {
     const f = fixture(), original = f.service.cache.acquire.bind(f.service.cache);

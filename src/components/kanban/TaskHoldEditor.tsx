@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useLocale } from "@/lib/i18n";
+import { holdEditorDraft, holdEditorPatch } from "@/lib/tasks/hold";
 import { TASK_HOLD_KINDS, type TaskHold, type TaskHoldKind } from "@/lib/tasks/types";
 
 export function TaskHoldEditor({ hold, onSave, onCancel }: { hold?: TaskHold; onSave: (hold: Partial<TaskHold> | null) => void; onCancel: () => void }) {
@@ -15,8 +16,12 @@ export function TaskHoldEditor({ hold, onSave, onCancel }: { hold?: TaskHold; on
   return <form className="hold-editor" data-hold-editor="" onPointerDown={event => event.stopPropagation()} onKeyDown={event => {
     event.stopPropagation();
     if (event.key === "Escape") { event.preventDefault(); onCancel(); }
-  }} onSubmit={event => { event.preventDefault(); onSave({ kind, note, ...(ref ? { ref } : {}), ...(until ? { until } : {}) }); }}>
-    <label>{t("kanban.hold.editKind")}<select ref={select} value={kind} onChange={event => setKind(event.target.value as TaskHoldKind)}>
+  }} onSubmit={event => { event.preventDefault(); onSave(holdEditorPatch({ kind, note, ref, until })); }}>
+    <label>{t("kanban.hold.editKind")}<select ref={select} value={kind} onChange={event => {
+      const next = event.target.value as TaskHoldKind;
+      const draft = holdEditorDraft(hold, next);
+      setKind(next); setRef(draft.ref); setUntil(draft.until);
+    }}>
       {TASK_HOLD_KINDS.map(value => <option key={value} value={value}>{t(`kanban.hold.kind.${value}`)}</option>)}
     </select></label>
     <label>{t("kanban.hold.editNote")}<input value={note} maxLength={200} onChange={event => setNote(event.target.value)} /></label>

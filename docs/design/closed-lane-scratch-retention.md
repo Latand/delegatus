@@ -45,20 +45,11 @@ resumes above the retained history floor.
 Ownership revisions and root bindings are checked again after awaited reads.
 Schema and index creation uses `assertStateStartupMutation`.
 
-The ordinary tick selects up to 32 due roots in expiry and directory order.
-It checkpoints each visit before awaiting the root so successive ticks reach
-the rest of the backlog, even when earlier roots are ready to retry. A root
-that would get a partial window after another visit starts on the next tick.
-The cursor wraps after the due range ends. Under pressure a separate durable
-cursor visits expired roots in allocation order.
-An independent allocation queue visits up to four registered roots per tick
-within a five-second preparation window inside the 40-second root tick.
-Live roots and roots with zero allocation or measurements at least an hour
-old remain measurable during retirement backoff.
-Absent paths, replaced inodes and refused observations advance that queue.
-An absent path with surviving quarantine custody keeps its recorded allocation
-until recovery resolves it. A removal visit that uses recorded bytes leaves the
-last measurement time available to the allocation queue.
+The ordinary tick selects up to 32 due roots by recorded expiry. The disk
+watch sends pressure-triggered retirement through the leased Cleaner pass.
+Pressure inventory uses measured filesystem allocation to prioritize roots;
+the bounded pass measures each visited root and advances its durable cursor
+across protected or deferred roots.
 Temporary preservation holds suppress the allocation forecast while
 retaining the owner's deadline. That date nominates a future visit.
 Identity, live consumers, check custody, keep markers and ownership fence
@@ -68,9 +59,9 @@ and any ledger retry time. See [Attempt temp under disk pressure](attempt-temp-p
 The effective scratch cap is the smaller of its configured cap and half the
 sum of measured scratch allocation and available filesystem space, leaving at
 least the existing 20 GiB working reserve. With 80 GiB of scratch and 75 GiB
-free, the effective cap is 77.5 GiB. Pressure cleanup can retire expired
-scratch without making another evidence copy. A failed free-space
-observation is reported and preserves the configured cap.
+free, the effective cap is 77.5 GiB. This cap and the working reserve are
+reported by the ordinary tick. A failed free-space observation preserves
+the configured cap.
 
 ## Finished host event journals
 

@@ -231,14 +231,14 @@ for (const state of STATES) {
       root = null;
       dom.document.body.replaceChildren();
     }
-    /* A silent zero would make every assertion above vacuous. On a finger the
-       command's control ends its meta row instead (#2148), so only the code
-       block and the output anchor one there. */
-    expect(checked, state.coarse ? "code block + output block each anchor one action" : "code block + command block + output block each anchor one action").toBe(state.coarse ? 2 : 3);
+    /* A silent zero would make every assertion above vacuous. The command's
+       control ends its meta row at every pointer (#2148), so only the code
+       block and the output anchor one. */
+    expect(checked, "code block + output block each anchor one action").toBe(2);
   });
 }
 
-test("the command's one copy control: pinned in its gutter for a mouse, ending the meta row for a finger (#2148)", async () => {
+test("the command's one copy control ends its meta row at every pointer, clear of the output's own control (#2148)", async () => {
   const event = toolEvent({ command: "rg --files src", outputPreview: "src/index.ts", exitCode: 0 });
   const commandCopies = (host: Element) => Array.from(host.querySelectorAll("button")).filter((button) => button.getAttribute("aria-label") === en("tools.copyCommand"));
   const commandBlock = (host: Element) => Array.from(host.querySelectorAll("pre")).find((pre) => (pre.textContent ?? "").includes("rg --files src"))!;
@@ -249,21 +249,18 @@ test("the command's one copy control: pinned in its gutter for a mouse, ending t
     const controls = commandCopies(host);
     expect(controls, "exactly one control copies the command").toHaveLength(1);
     const block = commandBlock(host);
-    if (coarse) {
-      /* It ends the row above the command and is the full 44 px target... */
-      const row = controls[0]!.closest("[data-command-copy]");
-      expect(row?.getAttribute("data-command-copy")).toBe("meta");
-      expect(resolveControlPx(controls[0]!)).toBe(ACTION_SIZE_COARSE_PX);
-      expect(block.contains(controls[0]!)).toBe(false);
-      /* ...so the command block is the height of its text: no reserved band,
-         no gutter. */
-      expect(classOf(block.parentElement!)).not.toMatch(/min-h-/);
-      expect(classOf(block)).not.toMatch(/(?:^|\s|:)pr-/);
-    } else {
-      expect(controls[0]!.closest("[data-command-copy]")).toBeNull();
-      expect(block.parentElement!.contains(controls[0]!)).toBe(true);
-      expect(classOf(controls[0]!)).toContain("absolute");
-    }
+    /* It ends the row above the command, never inside the command's block... */
+    const row = controls[0]!.closest("[data-command-copy]");
+    expect(row?.getAttribute("data-command-copy")).toBe("meta");
+    /* It shares the right edge of the output's control: the same inset from the block's edge. */
+    expect(classOf(row!)).toContain(`mr-[${ACTION_INSET_PX}px]`);
+    expect(resolveControlPx(controls[0]!)).toBe(coarse ? ACTION_SIZE_COARSE_PX : ACTION_SIZE_FINE_PX);
+    expect(block.contains(controls[0]!)).toBe(false);
+    expect(classOf(controls[0]!)).not.toContain("absolute");
+    /* ...so the command block is the height of its text: no reserved band,
+       no gutter, and nothing anchored in it to meet the output's control. */
+    expect(classOf(block.parentElement!)).not.toMatch(/min-h-/);
+    expect(classOf(block)).not.toMatch(/(?:^|\s|:)pr-/);
     click(controls[0]!);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(copied.at(-1)).toBe("rg --files src");

@@ -1500,6 +1500,13 @@ test("a signal alone is agenda enough for the interval to wake", () => {
   expect(reasonsOf(decision.verdict)).toEqual(["interval"]);
 });
 
+test("a Cleaner completion wakes the seat immediately and carries its report signal", () => {
+  const signal = { id: "disk-cleaner:fixture-pass-1", actionable: true, label: "Cleaner pass completed" };
+  const decision = seatTickDecision(input({ signals: [signal], state: stateWith({ lastWakeAt: new Date(NOW - 2 * MINUTE).toISOString() }) }));
+  expect(reasonsOf(decision.verdict)).toEqual(["disk-cleaner"]);
+  expect(decision.verdict.kind === "wake" && decision.verdict.items).toContainEqual(expect.objectContaining({ kind: "signal", id: signal.id, label: signal.label }));
+});
+
 test("standing reasons wait out the wake interval instead of firing every five minutes", () => {
   const decision = seatTickDecision(input({
     pipelines: [lane({ state: "inert" })],

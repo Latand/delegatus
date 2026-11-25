@@ -39,13 +39,13 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
       if (clearsCap) store.measure(held.directory, 2e9);
       process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace || clearsCap ? "1000000000" : "0";
       process.env.LLV_PRESSURE_FIXTURE = config;
-      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+      fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: lowSpace ? 0 : 1e12,
         slowProof: { phase, prefix: count + Number(costlyTail), timeoutPrefix, requiredCost } }));
       const before = store.bytes();
       let report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
       for (let tick = 1; !clearsCap && report.removed === 0 && tick < Math.ceil(timeoutPrefix / 7) + 2; tick++) {
         expect(report.errors).toBe(0); expect(clock.elapsed).toBeLessThanOrEqual(40_001);
-        fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+        fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: lowSpace ? 0 : 1e12,
           slowProof: { phase, prefix: count + Number(costlyTail), timeoutPrefix, requiredCost } }));
         report = await realParentPass(); clock = JSON.parse(fs.readFileSync(config, "utf8"));
       }
@@ -92,7 +92,7 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
         // The helper restarts on later ticks. Let recorded proof backoff
         // elapse before asking a new pass to reach the earlier deferrals.
         recoveryAt = Math.max(recoveryAt + 60_000, ...retryAt);
-        fs.writeFileSync(config, JSON.stringify({ now: recoveryAt, freeBytes: 1e12 }));
+        fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: recoveryAt, freeBytes: 1e12 }));
         return realParentPass();
       };
       const nativeRefused = new Set<string>();
