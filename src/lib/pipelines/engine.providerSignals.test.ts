@@ -82,8 +82,12 @@ test.each([
   expect(parked.terminalReap?.settledAttempts).toContain(`${stageId}:${source.n}`);
   expect(f.h.spawnInputs).toHaveLength(launches);
   expect(f.sends).toEqual([]);
+  f.h.ports.spawnReceipt = launchId => launchId === source.launchId ? {
+    state: "completed", launchId, conversationId: source.conversationId!,
+    sessionId: source.sessionId, transcript: source.agentPath, paneId: null,
+  } : null;
   const retry = await patchPipeline(original.id, { action: "retry-stage", expectedStageId: stageId, expectedAttempt: source.n }, f.h.ports);
-  expect(retry.pipeline).toMatchObject({ state: "running", cursor: { stageId, state: "pending" } });
+  expect(retry).toMatchObject({ pipeline: { state: "running", cursor: { stageId, state: "pending" } } });
 });
 
 // A parked retry's confirmation wait goes with its chain when the next chain,
