@@ -98,6 +98,16 @@ function readingSeries(reading: EngineLimits | null, key: WindowKey, now: number
   return buildSeries([], [], live, now, windowSeconds, null, reading?.capturedAt ?? null);
 }
 
+/** A legend key drawn with the chart's own dash pattern: a border on a 12 px
+    box renders solid however it is styled, so the key is a short SVG line. */
+function LegendKey({ kind, color, dash }: { kind: string; color: string; dash?: string }) {
+  return (
+    <svg data-burndown-key={kind} width={14} height={4} viewBox="0 0 14 4" aria-hidden className="shrink-0">
+      <line x1={0} y1={2} x2={14} y2={2} stroke={color} strokeWidth={dash === "4 3" ? 1.5 : 2} strokeDasharray={dash} opacity={dash === "4 3" ? 0.7 : undefined} />
+    </svg>
+  );
+}
+
 /** Floating burndown panel for one account of one engine, anchored off the rail
     like the cleanup panel: ideal-pace vs remaining quota for the 5h and weekly
     windows. Any listed account opens it, active or not. The chart always draws;
@@ -111,6 +121,7 @@ export function BurndownPanel({
   accountId,
   accountLabel,
   reading,
+  sheet = false,
   onClose,
 }: {
   engine: "claude" | "codex";
@@ -123,6 +134,8 @@ export function BurndownPanel({
   /** The reading the account's footer line shows: the chart's fallback when
       the history request fails. */
   reading: EngineLimits | null;
+  /** Always the bottom sheet: the phone's accounts screen has no rail to anchor beside. */
+  sheet?: boolean;
   onClose: () => void;
 }) {
   const { t, locale } = useLocale();
@@ -197,10 +210,11 @@ export function BurndownPanel({
     <div
       role="dialog"
       aria-modal="true"
+      data-burndown-dialog=""
       aria-label={t("burndown.openAria", { engine: who })}
       tabIndex={-1}
       onKeyDown={(event) => handleOverlayEscape(event, onClose)}
-      className={`fixed bottom-3 left-1/2 ${Z.modal} flex w-[min(430px,calc(100vw-16px))] -translate-x-1/2 flex-col rounded-[12px] border border-border bg-card shadow-2 sm:absolute sm:bottom-1 sm:left-full sm:ml-2 sm:translate-x-0`}
+      className={`fixed bottom-3 left-1/2 ${Z.modal} flex w-[min(430px,calc(100vw-16px))] -translate-x-1/2 flex-col rounded-[12px] border border-border bg-card shadow-2 ${sheet ? "" : "sm:absolute sm:bottom-1 sm:left-full sm:ml-2 sm:translate-x-0"}`}
     >
       <header className="flex items-center gap-2 border-b border-border px-3 py-2">
         <span className="min-w-0 truncate text-[12.5px] font-bold" style={{ color: tint }}>{who}</span>
@@ -244,18 +258,18 @@ export function BurndownPanel({
             <BurndownChart series={series} segments={segments} tint={tint} now={now} />
             <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] text-muted">
               <span className="flex items-center gap-1">
-                <span className="inline-block h-0 w-3 border-t-2 border-dashed border-muted" aria-hidden />
+                <LegendKey kind="ideal" color="var(--color-muted)" dash="4 3" />
                 {t("burndown.ideal")}
               </span>
               <span className="flex items-center gap-2">
                 {segments.estimated.length > 0 ? (
                   <span className="flex items-center gap-1">
-                    <span className="inline-block h-0 w-3 border-t-2 border-dashed" style={{ borderColor: tint }} aria-hidden />
+                    <LegendKey kind="estimated" color={tint} dash="2 3" />
                     {t("burndown.estimated")}
                   </span>
                 ) : null}
                 <span className="flex items-center gap-1">
-                  <span className="inline-block h-0 w-3 border-t-2" style={{ borderColor: tint }} aria-hidden />
+                  <LegendKey kind="actual" color={tint} />
                   {t("burndown.actual")}
                 </span>
               </span>

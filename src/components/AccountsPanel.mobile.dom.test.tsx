@@ -669,3 +669,78 @@ test("the phone's device sign-in line shows until the next read says the account
   await view.rerender([engineState("codex", [codexMain, { ...codexSpare }], "cx-main")]);
   expect(line()).toBeNull();
 });
+
+/** The history route's answer for the phone's chart: nothing observed, so the
+    panel draws from the account's own reading. */
+function historyFetch(urls: string[]): typeof fetch {
+  return (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith("/api/transfer/accounts")) return Response.json({ ok: true, result: [] });
+    urls.push(url);
+    return new Response("{}", { status: 500 });
+  }) as typeof fetch;
+}
+
+const dialog = () => document.body.querySelector("[data-burndown-dialog]");
+
+test.each(["en", "uk"] as const)("a non-active phone row opens its own burndown chart from its reading, and switches nothing, in %s", async (locale) => {
+  const previous = getLocale();
+  setLocale(locale);
+  try {
+    const urls: string[] = [];
+    globalThis.fetch = historyFetch(urls);
+    let selections = 0;
+    const view = await mount([engineState("claude", [claudeMain, claudeLab], claudeMain.id, { select: async () => { selections++; return true; } })]);
+    const press = view.host.querySelector('[data-mobile2-account="cl-lab"] [data-account-chart="cl-lab"]') as HTMLElement;
+    expect(press).not.toBeNull();
+    expect(press.getAttribute("aria-label")).toBe(translate(locale, "burndown.openAria", { engine: "Claude · Lab" }));
+    // The press covers the reading, so no extra chrome stands beside it.
+    expect(press.parentElement?.querySelector('[data-account-limits="cl-lab"]')).not.toBeNull();
+    await click(press);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    const panel = dialog();
+    expect(panel).not.toBeNull();
+    expect(panel?.getAttribute("aria-label")).toBe(translate(locale, "burndown.openAria", { engine: "Claude · Lab" }));
+    expect(panel?.className).not.toContain("sm:absolute");
+    expect(urls).toEqual(["/api/limits/history?engine=claude&account=cl-lab"]);
+    // The chart still draws, from the row's own reading, though the history failed.
+    expect(panel?.querySelector('svg[role="img"]')).not.toBeNull();
+    expect(press.getAttribute("aria-expanded")).toBe("true");
+    // The tap opened a chart: the row stayed closed and nothing was switched.
+    expect(view.host.querySelector('[data-account-toggle="cl-lab"]')?.getAttribute("aria-expanded")).toBe("false");
+    expect(selections).toBe(0);
+  } finally {
+    setLocale(previous);
+  }
+});
+
+test("a phone row with no reading still opens a chart, and a second press, Escape or an outside tap close it", async () => {
+  globalThis.fetch = historyFetch([]);
+  const bare = account({ id: "cl-bare", label: "Bare" });
+  const view = await mount([engineState("claude", [claudeMain, bare], claudeMain.id)]);
+  expect(view.host.querySelector('[data-mobile2-account="cl-bare"] [data-account-limits]')).toBeNull();
+  const press = () => view.host.querySelector('[data-mobile2-account="cl-bare"] [data-account-chart="cl-bare"]') as HTMLElement;
+  await click(press());
+  expect(dialog()?.getAttribute("aria-label")).toContain("Bare");
+  await click(press());
+  expect(dialog()).toBeNull();
+  await click(press());
+  expect(dialog()).not.toBeNull();
+  await act(async () => { dialog()?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  expect(dialog()).toBeNull();
+  await click(press());
+  await act(async () => { view.host.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); });
+  expect(dialog()).toBeNull();
+});
+
+test("opening another account's chart replaces the first, and a provider row with no reading gets no chart line", async () => {
+  globalThis.fetch = historyFetch([]);
+  const provider = account({ id: "cl-provider", label: "Provider", provider: { baseUrl: "https://example.invalid/anthropic", model: "large", smallFastModel: null } });
+  const view = await mount([engineState("claude", [claudeMain, claudeLab, provider], claudeMain.id)]);
+  await click(view.host.querySelector('[data-account-chart="cl-main"]'));
+  expect(dialog()?.getAttribute("aria-label")).toContain("Main");
+  await click(view.host.querySelector('[data-account-chart="cl-lab"]'));
+  expect(document.body.querySelectorAll("[data-burndown-dialog]").length).toBe(1);
+  expect(dialog()?.getAttribute("aria-label")).toContain("Lab");
+  expect(view.host.querySelector('[data-account-chart="cl-provider"]')).toBeNull();
+});

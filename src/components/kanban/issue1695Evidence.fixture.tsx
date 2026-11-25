@@ -4326,7 +4326,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/files", "/api/tasks", "/api/board/work-time"].includes(url.pathname)) return serverFetch(input, init);
 
   if (SCENARIO === "spend-credits" && url.pathname.startsWith("/api/accounts")) return serverFetch(input, init);
-  if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings)/.test(url.pathname)) return serverFetch(input, init);
+  if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings|limits\/history)/.test(url.pathname)) return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
   if (FIRST_RUN) {
     const answered = firstRunAnswer(url, method);

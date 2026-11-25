@@ -280,3 +280,21 @@ test("a plan with no weekly window opens on the 5h tab", async () => {
   expect((selected?.textContent ?? "").trim()).toBe("5h");
   expect(drawn(host, "known")).toBe(1);
 });
+
+test("the legend keys draw the chart's own dashes: estimated and even pace dashed, remaining solid", async () => {
+  payload = {
+    claude: null,
+    codex: { session: unreportedSeries(5 * 3600), weekly: weeklySeries() },
+    claudeAccountId: null,
+    codexAccountId: "account-a",
+    historySince: null,
+  };
+  const host = await render();
+  const dash = (kind: string) => host.querySelector(`[data-burndown-key="${kind}"] line`)?.getAttribute("stroke-dasharray") ?? null;
+  expect(drawn(host, "estimated")).toBeGreaterThan(0);
+  expect(dash("estimated")).toBe("2 3");
+  expect(dash("ideal")).toBe("4 3");
+  expect(dash("actual")).toBeNull();
+  // The estimated key shows exactly the dash the chart's estimated segment carries.
+  expect(host.querySelector("svg[role=img] [data-burndown-estimated]")?.getAttribute("stroke-dasharray")).toBe(dash("estimated"));
+});
