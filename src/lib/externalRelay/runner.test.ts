@@ -6,7 +6,7 @@ import { createHash, randomBytes } from "node:crypto";
 import http from "node:http";
 import dns from "node:dns/promises";
 import { callBody, toolSleep, type ToolLoopRuntime } from "./toolLoop";
-import { requestSchema, handoffAnswerSchema, answerSchema, replyAnswerSchema, type ToolCallResult } from "./protocol";
+import { requestSchema, handoffAnswerSchema, answerSchema, replyAnswerSchema, type ExternalRelayAnswer, type ToolCallResult } from "./protocol";
 import { ownerRequest, pendingRetryAfterSeconds, x1Request, x1Results, x1Errors, x1Dir } from "./toolLoop.fixture";
 import { relayClaimCapabilities, sweepExternalRelayOrphans } from "./poller";
 import { setRelaySwitch } from "./switches";
@@ -4335,17 +4335,18 @@ test.each(["negotiated", "legacy", "locally refused"] as const)("owner Markdown 
       stop: async () => { throw new Error("a settled reply needs no cancellation"); },
       pollMs: 1,
     } });
+    const format: ExternalRelayAnswer["format"] = rich ? mode === "negotiated" ? "rich_markdown" : "plain" : undefined;
     const expected = {
       action: "reply", reply_to: request.input.respond_to,
       text: mode === "negotiated" ? markdown : plain,
-      ...(rich ? { format: mode === "negotiated" ? "rich_markdown" : "plain" } : {}),
+      ...(format === undefined ? {} : { format }),
     };
     expect(result).toMatchObject({ outcome: "answered", answer: expected });
     expect(completions).toHaveLength(1);
     expect(completions[0]).toMatchObject({ outcome: "answered", answer: expected });
     const record = readAnswerRecord(paired.id, request.target_id, request.request_id);
     expect(record).toMatchObject({ delivery: "accepted", answer: expected });
-    expect(record?.answer?.format).toBe(rich ? expected.format : undefined);
+    expect(record?.answer?.format).toBe(format);
     expect(record?.drops ?? []).toEqual(mode === "locally refused" ? [{ part: "text", reason: "blocks" }] : []);
     expect(record?.completionRefusals).toBeUndefined();
   } finally { await service.close(); }
