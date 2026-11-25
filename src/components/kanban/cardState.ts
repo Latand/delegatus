@@ -176,14 +176,15 @@ function stageName(t: TFunction, pipeline: Pipeline, stageId: string | null): st
 
 /** Why a lane stopped, by its stop kind. `short` drops the stage, for a
     chronology entry that already names it. */
-export function laneStopWhy(t: TFunction, pipeline: Pipeline, stop: LaneStop, short = false): string {
+export function laneStopWhy(t: TFunction, pipeline: Pipeline, stop: LaneStop, short = false, nameOf?: (stageId: string) => string | null): string {
   if (stop.kind === "merge") {
     const pr = pipeline.merge?.prNumber;
     const reason = mergeReasonText(t, pipeline.merge?.reason ?? null);
     return pr ? t("cardState.why.merge", { pr, reason }) : t("cardState.why.mergeNoPr", { reason });
   }
   if (short) return t(`cardState.whyShort.${stop.kind}`);
-  const stage = stageName(t, pipeline, stop.stageId);
+  /* A window that shows the stage under its own name (the Stages window) says that name, whole; the card's label is a shorthand with the attempt. */
+  const stage = (stop.stageId ? nameOf?.(stop.stageId) : null) ?? stageName(t, pipeline, stop.stageId);
   return stage ? t(`cardState.why.${stop.kind}`, { stage }) : t(`cardState.whyShort.${stop.kind}`);
 }
 

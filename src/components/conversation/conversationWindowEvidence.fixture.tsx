@@ -2329,10 +2329,10 @@ if (root && requested === "memory-cap") {
   createRoot(root).render(<main className="kb min-h-dvh w-full overflow-y-auto bg-canvas p-3 text-primary">
     {surface === "stages" ? <div data-memory-surface="stages" className="fixed inset-0"><StagesSheet
       title={pipeline.task} summary={summary}
-      panes={[{ stage: pipeline.stages[0]!, folded: false, attempts: pipeline.runs[0]!.attempts, shown: pipeline.runs[0]!.attempts[0]!, file: null, readerKey: null }]}
-      flowsById={new Map()} initialFocus="build" windowReader={null} placement={new ReaderPlacement()}
-      drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onFold={noop} onFoldMany={noop} onChooseAttempt={noop}
-      onStageMenu={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
+      panes={[{ stage: pipeline.stages[0]!, attempts: pipeline.runs[0]!.attempts, shown: pipeline.runs[0]!.attempts[0]!, file: null, readerKey: null }]}
+      flowsById={new Map()} selected="build" onSelect={noop} nowMs={ADMITTED_AT} windowReader={null} placement={new ReaderPlacement()}
+      drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onChooseAttempt={noop}
+      onStageMenu={noop} onAnswer={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
     /></div> : surface === "placeholder"
       ? <div data-memory-surface="placeholder" className="mx-auto h-[350px] max-w-2xl"><StagePlaceholderPane slot={slot} interactive={false} /></div>
       : <div data-memory-surface="screen" className="mx-auto max-w-2xl"><PipelineBlock summary={summary} density="screen" nowMs={ADMITTED_AT} /></div>}
@@ -2450,10 +2450,10 @@ function SetupStagesSheet({ pipeline }: { pipeline: Pipeline }) {
   const noop = () => {};
   return <StagesSheet
     title={pipeline.task} summary={summarizePipeline(pipeline)}
-    panes={[{ stage: pipeline.stages[0]!, folded: false, attempts, shown: attempts.find(attempt => attempt.n === shown)!, file: null, readerKey: null }]}
-    flowsById={new Map()} initialFocus="build" windowReader={null} placement={new ReaderPlacement()}
-    drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onFold={noop} onFoldMany={noop} onChooseAttempt={(_stage, n) => setShown(n)}
-    onStageMenu={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
+    panes={[{ stage: pipeline.stages[0]!, attempts, shown: attempts.find(attempt => attempt.n === shown)!, file: null, readerKey: null }]}
+    flowsById={new Map()} selected="build" onSelect={noop} nowMs={ADMITTED_AT} windowReader={null} placement={new ReaderPlacement()}
+    drafts={new StageDrafts(() => ADMITTED_AT)} ports={ports} onChooseAttempt={(_stage, n) => setShown(n)}
+    onStageMenu={noop} onAnswer={noop} onOpenRecorded={noop} onLeaveWindow={noop} onClose={noop}
   />;
 }
 
