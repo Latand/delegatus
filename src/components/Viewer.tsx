@@ -45,6 +45,7 @@ import { needsYouCounts } from "./attention/needsYouPanel";
 import { AttentionToast } from "./attention/AttentionToast";
 import { SoundCaptions } from "./SoundCaptions";
 import type { CaptionTarget } from "@/lib/audio/captions";
+import { openCaptionTarget as openCaptionTargetIn } from "@/lib/audio/captionNavigation";
 import { attentionEntryProject, buildNeedsYouQueue, laneFocusId, laneFocusPath, type MobileAttentionEntry } from "./attention/attentionQueue";
 import { MobileAttentionSheet, type MobileNoticeRow } from "./attention/MobileAttentionSheet";
 import { roleNameById } from "./builderCopy";
@@ -1640,27 +1641,8 @@ function ViewerApp() {
   /* A sound caption's click (docs/design/sound-captions.md §4): the entry it
      announced when it is still waiting, else the conversation or lane behind it. */
   const openCaptionTarget = useCallback(
-    (first: CaptionTarget): void => {
-      let target: CaptionTarget | null = first;
-      if (target.kind === "needs-you") {
-        const { entryId } = target;
-        const entry = needsYou.find((candidate) => candidate.id === entryId);
-        if (entry) {
-          jumpToEntry(entry);
-          return;
-        }
-        target = target.then;
-      }
-      if (!target || target.kind === "needs-you") return;
-      if (target.kind === "lane") {
-        focusLane(target.pipelineId, target.project);
-        return;
-      }
-      const { path, conversationId } = target;
-      const file = allFiles.find((candidate) => (path && candidate.path === path) || (conversationId && candidate.conversationId === conversationId));
-      if (file) openFile(file);
-    },
-    [needsYou, jumpToEntry, focusLane, allFiles, openFile],
+    (first: CaptionTarget): void => openCaptionTargetIn(first, { needsYou, files: allFiles, jumpToEntry, focusLane, selectProject, openFile }),
+    [needsYou, jumpToEntry, focusLane, selectProject, allFiles, openFile],
   );
   /* A caption that names only a conversation takes that conversation's title. */
   const captionConversationTitle = useCallback(
@@ -2080,7 +2062,7 @@ function ViewerApp() {
       {/* #688: polls the attention record for this device and renders the
           root agent's focus handoff when there is one to answer. Renders
           nothing at all the rest of the time. */}
-      <AttentionHost mobile={isMobile} />
+      <AttentionHost mobile={isMobile} projectAliases={projectAliases} />
       <ReviewHistoryHost files={allFiles} />
       {/* A short toast for each event sound that plays, beside the needs-you
           chip. Fixed at the toast layer so an opened task does not cover it;

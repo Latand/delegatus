@@ -65,6 +65,26 @@ test.each([0, 7])("the documented source-check CLI passes arguments and cleans u
   expect(fs.existsSync(path.dirname(result.cwd))).toBeFalse();
 }, 30_000);
 
+// Review regression: the admission worker reports a signalled command as the
+// kernel signal. A completed signal is still completion evidence, so the
+// export is removed and the status is the shell's 128+N.
+for (const [signal, status] of [[15, 143], [34, 162]] as const) test.skipIf(process.platform !== "linux")(`a source check removes its export after the command dies of signal ${signal}`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "source-check-signal-")); roots.push(root);
+  const source = path.join(root, "source"), observed = path.join(root, "cwd");
+  fs.mkdirSync(source); execFileSync("git", ["init", "-q"], { cwd: source, env: fixtureGitEnv() });
+  fs.writeFileSync(path.join(source, "input.txt"), "signal input");
+  const command = ["python3", "-I", "-c", `import os,signal,sys
+open(sys.argv[1],"w").write(os.getcwd())
+signal.signal(${signal},signal.SIG_DFL)
+os.kill(os.getpid(),${signal})`, observed];
+  const error = await checkSource(source, command).then(() => null, failure => String(failure));
+  expect(error).toContain(`failed (${status})`);
+  expect(error).not.toContain("completion is unconfirmed");
+  const cwd = fs.readFileSync(observed, "utf8");
+  expect(cwd).toStartWith(os.tmpdir());
+  expect(fs.existsSync(cwd)).toBeFalse();
+}, 30_000);
+
 for (const loss of ["exit 1", "SIGKILL"] as const) test.skipIf(process.platform === "win32")(
   `the external owned runner retains a live command's input after nested supervisor ${loss}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "source-check-external-owner-")); roots.push(root);
