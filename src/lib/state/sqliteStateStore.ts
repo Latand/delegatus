@@ -1757,12 +1757,13 @@ export function readStateProjectKeys(
   try {
     const placeholders = collections.map(() => "?").join(", ");
     const bindings = [...collections] as [string, ...string[]];
-    // SQLite needs the literal partial-index predicate alongside the bound
-    // subset. A caller requesting other collections keeps the generic read.
-    const scope = collections.every(name => projectKeyCollections.includes(name)) ? `AND ${projectKeyScope}` : "";
+    // The literal scope proves the partial-index predicate. The nonempty
+    // project range lets SQLite 3.39 seek the second index column as well.
+    const scope = collections.every(name => projectKeyCollections.includes(name))
+      ? `AND ${projectKeyScope} AND ${projectKeyValue} > ''` : "";
     return db.query<{ project: string | null }, [string, ...string[]]>(`
       SELECT DISTINCT ${projectKeyValue} AS project FROM state_rows
-      WHERE collection IN (${placeholders}) ${scope} AND ${projectKeyText}
+      WHERE collection IN (${placeholders}) AND ${projectKeyText} ${scope}
     `).all(...bindings).flatMap(row => row.project ? [row.project] : []);
   } catch (error) {
     if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return [];

@@ -73,12 +73,14 @@ test("seat project membership reads the compact index and follows committed proj
     put.run("pipelines", "lane-a", JSON.stringify({ project: "hot-key" }));
     put.run("pipelines_archive", "archive-a", JSON.stringify({ project: "archived-key" }));
     put.run("tasks", "t:blank", '{"project":""}');
+    put.run("flows", "space", '{"project":" "}');
+    put.run("flows", "zero", '{"project":"0"}');
     put.run("flows", "flow-number", '{"project":42}');
     put.run("flows", "no-project", '{}');
     const sql = spyOn(Database.prototype, "query");
     let membershipSql: string | undefined;
     try {
-      expect(readStateProjectKeys(filename, ["tasks", "pipelines", "flows"]).sort()).toEqual(["hot-key", "shared-key"]);
+      expect(readStateProjectKeys(filename, ["tasks", "pipelines", "flows"]).sort()).toEqual([" ", "0", "hot-key", "shared-key"]);
       membershipSql = sql.mock.calls.map(([statement]) => statement)
         .find(statement => /SELECT DISTINCT.*AS project/i.test(statement));
     } finally { sql.mockRestore(); }
@@ -91,7 +93,7 @@ test("seat project membership reads the compact index and follows committed proj
     expect(program.some(row => /json_(?:valid|type|extract)\(/i.test(row.p4 ?? ""))).toBe(false);
 
     peer.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key='lane-a'").run('{"project":"new-key"}');
-    expect(readStateProjectKeys(filename).sort()).toEqual(["archived-key", "new-key", "shared-key"]);
+    expect(readStateProjectKeys(filename).sort()).toEqual([" ", "0", "archived-key", "new-key", "shared-key"]);
     peer.exec("DELETE FROM state_rows WHERE collection='pipelines_archive' AND row_key='archive-a'");
     expect(readStateProjectKeys(filename, ["pipelines_archive"])).toEqual([]);
   } finally { peer.close(); }
