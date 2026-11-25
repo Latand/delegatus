@@ -1763,6 +1763,7 @@
 .kb .lane:focus { outline: none; }
 .kb .lane-conn { flex: 0 0 22px; display: flex; justify-content: center; padding-top: 18px; font-size: var(--text-ui); color: var(--color-muted); }
 .kb .lane-conn.loose { opacity: 0.4; }
+.kb .lane-conn[data-whole="0"] { visibility: hidden; }
 
 /* A pane is as wide as a normal conversation column, so its agent's prose
    keeps the conversation's 68ch measure; the lane scrolls sideways to the rest. */
@@ -1824,6 +1825,11 @@
 .kb :is(.pane, .stage-detail) .ch-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: var(--text-label); color: var(--color-secondary); min-width: 0; }
 .kb .pane .ch-meta.pane-id { margin-top: -2px; }
 .kb .pane .ch-meta .spacer { flex: 1; }
+/* A conversation's identity row in a pane: the chips share the width and wrap
+   among themselves, the controls keep their own group at the row's end. */
+.kb .pane .ch-meta.pane-id:has(> .ch-controls) { flex-wrap: nowrap; align-items: flex-start; }
+.kb .pane .ch-meta.pane-id > .ch-chips { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.kb .pane .ch-meta.pane-id > .ch-controls { flex: none; display: flex; align-items: center; gap: 4px 6px; }
 
 .kb .pane .ch-model { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-primary); background: var(--surface-well); border-radius: 999px; padding: 2px 7px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .kb .stage-detail :is(.ch-stage, .ch-ctx) { font-size: var(--text-caption); color: var(--color-muted); white-space: nowrap; }

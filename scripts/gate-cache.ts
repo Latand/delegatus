@@ -115,9 +115,12 @@ export function gateToolFiles(root: string): string[] {
 
 /** Isolation replaces these before a check reads them, or they only record
  * how this process was started. */
-const ROOTS = new Set(["HOME", "BASH_ENV", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "TMPDIR", "LLV_GATE_TEMP_ROOT", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR",
+const ROOTS = new Set(["HOME", "BASH_ENV", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "TMPDIR", "LLV_GATE_TEMP_ROOT", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR",
   "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "NODE_ENV", "LLV_VIEWER_CONTROL_URL"]);
 const BOOKKEEPING = new Set(["PWD", "OLDPWD", "SHLVL", "_", "INVOCATION_ID", "JOURNAL_STREAM", "SYSTEMD_EXEC_PID", "MANAGERPID",
+  // The native entry proves each worker's supervisor. The recorder collects
+  // its queue timing separately. Those bindings belong to one execution.
+  "LLV_CHECK_ENTRY_SUPERVISOR", "LLV_RECORDED_CHECK_WAIT_ROOT",
   "TERM", "COLORTERM", "PAGER", "GIT_PAGER", "GH_PAGER", "NO_COLOR", "FORCE_COLOR"]);
 /** What a check may read, so its value is part of the key. */
 const KEYED = /^(?:PATH|LANG|LANGUAGE|LC_[A-Z]+|TZ|USER|LOGNAME|SHELL|NODE_OPTIONS|BUN_[A-Z0-9_]+|CI|CHROME_BIN|PLAYWRIGHT_BROWSERS_PATH|GIT_CONFIG_(?:GLOBAL|SYSTEM|NOSYSTEM)|LLV_GATE_(?:BUN|CHECK_ENV))$/;

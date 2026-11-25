@@ -1,7 +1,7 @@
 import { createServer, expect, fixture, path, readFileSync, root, source, spawn, test, writeFileSync } from "./local-gate-tests.fixture";
+import { ownFixtureTree, stopFixtureTree } from "../src/lib/testing/fixtureProcess";
 
-
-test.each(["recovers", "stable", "missing-peer"] as const)("real confirmation processes rendezvous on both sides: %s", async mode => {
+test.each(["recovers", "stable", "withheld-release"] as const)("real confirmation processes rendezvous on both sides: %s", async mode => {
   const f = fixture(source(true));
   const marker = path.join(f.dir, "paired-samples");
   const scheduled = `import { test, expect } from "bun:test";
@@ -13,7 +13,7 @@ const prefix = ${JSON.stringify(marker)} + "-" + process.env.GATE_CONFIRMATION_F
 const counter = prefix + "-" + side;
 const run = existsSync(counter) ? Number(readFileSync(counter, "utf8")) + 1 : 1;
 writeFileSync(counter, String(run));
-if (run === 2 && side === "head" && process.env.GATE_CONFIRMATION_FIXTURE_RUN === "0" && ${JSON.stringify(mode)} !== "missing-peer") await Bun.sleep(31000);
+if (run === 2 && side === "head" && process.env.GATE_CONFIRMATION_FIXTURE_RUN === "0" && ${JSON.stringify(mode)} === "recovers") await Bun.sleep(31000);
 if (run > 1) {
   await new Promise<void>((resolve, reject) => {
     const socket = createConnection({ host: "127.0.0.1", port: Number(process.env.GATE_RENDEZVOUS_PORT) });
@@ -26,12 +26,19 @@ test("paired target", () => expect(side === "base" || (${JSON.stringify(mode)} =
   writeFileSync(path.join(f.dir, "example.test.ts"), scheduled);
   f.git("add", "example.test.ts"); f.git("commit", "-m", "paired process schedule");
   const base = f.git("rev-parse", "HEAD");
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < (mode === "withheld-release" ? 1 : 2); attempt++) {
     f.env.GATE_CONFIRMATION_FIXTURE_RUN = String(attempt);
     const server = createServer();
     const ready = new Map<number, Map<string, import("node:net").Socket>>();
     const sockets = new Set<import("node:net").Socket>();
-    let missingPeerReady: (() => void) | undefined;
+    let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+    let outputWhileHeld: string | undefined;
+    let stdout = "", stderr = "";
+    const releasePair = (run: number, peers: Map<string, import("node:net").Socket>) => {
+      if (!peers.has("base") || !peers.has("head")) return;
+      for (const peer of peers.values()) peer.end("release");
+      ready.delete(run);
+    };
     server.on("connection", socket => {
       sockets.add(socket);
       socket.once("close", () => sockets.delete(socket));
@@ -44,66 +51,55 @@ test("paired target", () => expect(side === "base" || (${JSON.stringify(mode)} =
         const peers = ready.get(message.run) ?? new Map<string, import("node:net").Socket>();
         ready.set(message.run, peers);
         peers.set(message.side, socket);
-        if (mode === "missing-peer") missingPeerReady?.();
-        if (peers.has("base") && peers.has("head") && mode !== "missing-peer") {
-          for (const peer of peers.values()) peer.end("release");
-          ready.delete(message.run);
+        if (mode === "withheld-release" && outputWhileHeld === undefined) {
+          // Observe the withheld response only after both real workers arrive.
+          // Then let the comparator join its workers and close their services.
+          if (!releaseTimer && peers.has("base") && peers.has("head")) {
+            releaseTimer = setTimeout(() => {
+              outputWhileHeld = stdout;
+              for (const [run, waiting] of ready) releasePair(run, waiting);
+            }, 1_000);
+          }
+        } else {
+          releasePair(message.run, peers);
         }
       });
     });
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
     f.env.GATE_RENDEZVOUS_PORT = String((server.address() as import("node:net").AddressInfo).port);
-    const child = spawn(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, "./example.test.ts"], {
-      cwd: f.dir, env: f.env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32",
-    });
-    let stdout = "", stderr = "";
+    const child = ownFixtureTree(spawn(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, "./example.test.ts"], {
+      cwd: f.dir, env: f.env, stdio: ["ignore", "pipe", "pipe"],
+    }));
     child.stdout.setEncoding("utf8").on("data", chunk => { stdout += chunk; });
     child.stderr.setEncoding("utf8").on("data", chunk => { stderr += chunk; });
     let watchdog: ReturnType<typeof setTimeout> | undefined;
-    let outcome: { status: number | null; stdout: string; stderr: string } | undefined;
-    let watchdogError: unknown;
-    try { outcome = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-      let settled = false;
-      let timedOut = false;
-      const finish = (error?: Error, status: number | null = null) => {
-        if (settled) return;
-        settled = true;
-        if (watchdog) clearTimeout(watchdog);
-        if (error) reject(error); else resolve({ status, stdout, stderr });
-      };
-      child.once("error", error => finish(error));
-      child.once("close", (status, signal) => finish(timedOut ? new Error("rendezvous control exceeded its outer watchdog") : undefined, status ?? (signal ? 1 : null)));
-      const halt = () => {
-        timedOut = true;
-        if (child.pid && process.platform !== "win32") process.kill(-child.pid, "SIGTERM");
-        else child.kill("SIGTERM");
-      };
-      watchdog = setTimeout(halt, 45000);
-      // Start the missing-peer window after a real retry reaches the barrier.
-      // Toolchain fingerprinting and baseline setup precede that observation.
-      missingPeerReady = () => {
-        if (watchdog) clearTimeout(watchdog);
-        watchdog = setTimeout(halt, 1000);
-      };
-    }); } catch (error) { watchdogError = error; }
-    finally {
+    let status: number | null;
+    try {
+      status = await new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", (code, signal) => {
+          if (signal) reject(new Error(`rendezvous comparator exited on ${signal}`));
+          else resolve(code);
+        });
+        // Allow the two services to start before the deliberate 31-second wait.
+        watchdog = setTimeout(() => reject(new Error("rendezvous control exceeded its outer watchdog")),
+          mode === "recovers" && attempt === 0 ? 80_000 : 45_000);
+      });
+    } finally {
+      clearTimeout(watchdog);
+      clearTimeout(releaseTimer);
       for (const socket of sockets) socket.destroy();
-      await new Promise<void>(resolve => server.close(() => resolve()));
+      try { await stopFixtureTree(child); }
+      finally { await new Promise<void>(resolve => server.close(() => resolve())); }
     }
-    if (mode === "missing-peer") {
-      expect(watchdogError).toBeInstanceOf(Error);
-      expect((watchdogError as Error).message).toContain("outer watchdog");
-      expect(outcome).toBeUndefined();
-      expect(stdout).not.toContain("NEW example.test.ts");
-      expect(stdout).not.toContain("PRE-EXISTING example.test.ts");
-      expect(ready.size).toBeGreaterThan(0);
-      break;
+    if (mode === "withheld-release") {
+      expect(outputWhileHeld).toBeDefined();
+      expect(outputWhileHeld).not.toMatch(/(?:NEW|PRE-EXISTING|FLAKY) example\.test\.ts/);
     }
-    expect(watchdogError).toBeUndefined();
-    expect(outcome?.status, (outcome?.stdout ?? "") + (outcome?.stderr ?? "")).toBe(mode === "recovers" ? 0 : 1);
-    expect(outcome?.stderr).not.toContain("gate error");
-    expect(outcome?.stdout).toContain(mode === "recovers" ? "FLAKY example.test.ts: paired target (base 2 pass/0 fail; head 1 pass/1 fail)" : "NEW example.test.ts: paired target");
+    expect(status, stdout + stderr).toBe(mode === "recovers" ? 0 : 1);
+    expect(stderr).not.toContain("gate error");
+    expect(stdout).toContain(mode === "recovers" ? "FLAKY example.test.ts: paired target (base 2 pass/0 fail; head 1 pass/1 fail)" : "NEW example.test.ts: paired target");
     expect(ready.size).toBe(0);
     for (const side of ["base", "head"]) expect(readFileSync(`${marker}-${attempt}-${side}`, "utf8")).toBe(mode === "recovers" ? "2" : "4");
   }
-});
+}, 135_000);

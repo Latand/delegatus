@@ -4,63 +4,291 @@
     "height": 844
   },
   "uk-light": {
-    "quiet": "Completed launch\nготово · 30 хв 1 с\n·\ngpt-6.1-sol\n·\nзапущено 30 хв тому",
-    "dead": "Dead mid-turn\nвбито · 30 хв 1 с\n·\ngpt-6.1-sol\n·\nзапущено 30 хв тому",
-    "live": "Live agent\nпрацює 1:01\n·\ngpt-6.1-sol",
+    "quiet": "Completed launch\nготово · 30 хв тому\n·\ngpt-6.1-sol",
+    "dead": "Dead mid-turn\nзупинено · 30 хв тому\n·\ngpt-6.1-sol",
+    "live": "Live agent\nпрацює 1:05\n·\ngpt-6.1-sol",
+    "rows": {
+      "quiet": {
+        "phrase": "готово · 30 хв тому",
+        "started": null,
+        "text": "готово · 30 хв тому · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "dead": {
+        "phrase": "зупинено · 30 хв тому",
+        "started": null,
+        "text": "зупинено · 30 хв тому · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "live": {
+        "phrase": "працює 1:05",
+        "started": null,
+        "text": "працює 1:05 · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "finished": {
+        "phrase": "завершив хід · 4 хв тому",
+        "started": null,
+        "text": "завершив хід · 4 хв тому · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "finishedSub": {
+        "phrase": "завершив хід · 4 хв тому",
+        "started": null,
+        "text": "завершив хід · 4 хв тому · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      }
+    },
     "quietChat": {
       "state": "готово · 30 хв тому",
       "launchChips": 0,
       "placeholder": "написати агенту…"
     },
     "deadChat": {
-      "state": "вбито · 30 хв тому",
+      "state": "зупинено · 30 хв тому",
       "launchChips": 0,
-      "placeholder": "вбито · текст чекає в черзі до перезапуску"
+      "placeholder": "зупинено · текст чекає в черзі до перезапуску"
+    },
+    "finishedChat": {
+      "state": "завершив хід · 4 хв тому",
+      "cut": false,
+      "inside": true
+    },
+    "finishedSubChat": {
+      "state": "завершив хід · 4 хв тому",
+      "cut": false,
+      "inside": true
     }
   },
   "uk-dark": {
-    "quiet": "Completed launch\nготово · 30 хв 2 с\n·\ngpt-6.1-sol\n·\nзапущено 30 хв тому",
-    "dead": "Dead mid-turn\nвбито · 30 хв 2 с\n·\ngpt-6.1-sol\n·\nзапущено 30 хв тому",
-    "live": "Live agent\nпрацює 1:02\n·\ngpt-6.1-sol",
+    "quiet": "Completed launch\nготово · 30 хв тому\n·\ngpt-6.1-sol",
+    "dead": "Dead mid-turn\nзупинено · 30 хв тому\n·\ngpt-6.1-sol",
+    "live": "Live agent\nпрацює 1:07\n·\ngpt-6.1-sol",
+    "rows": {
+      "quiet": {
+        "phrase": "готово · 30 хв тому",
+        "started": null,
+        "text": "готово · 30 хв тому · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "dead": {
+        "phrase": "зупинено · 30 хв тому",
+        "started": null,
+        "text": "зупинено · 30 хв тому · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "live": {
+        "phrase": "працює 1:07",
+        "started": null,
+        "text": "працює 1:07 · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "finished": {
+        "phrase": "завершив хід · 4 хв тому",
+        "started": null,
+        "text": "завершив хід · 4 хв тому · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "finishedSub": {
+        "phrase": "завершив хід · 4 хв тому",
+        "started": null,
+        "text": "завершив хід · 4 хв тому · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      }
+    },
     "quietChat": {
       "state": "готово · 30 хв тому",
       "launchChips": 0,
       "placeholder": "написати агенту…"
     },
     "deadChat": {
-      "state": "вбито · 30 хв тому",
+      "state": "зупинено · 30 хв тому",
       "launchChips": 0,
-      "placeholder": "вбито · текст чекає в черзі до перезапуску"
+      "placeholder": "зупинено · текст чекає в черзі до перезапуску"
+    },
+    "finishedChat": {
+      "state": "завершив хід · 4 хв тому",
+      "cut": false,
+      "inside": true
+    },
+    "finishedSubChat": {
+      "state": "завершив хід · 4 хв тому",
+      "cut": false,
+      "inside": true
     }
   },
   "en-light": {
-    "quiet": "Completed launch\ndone · 30m 3s\n·\ngpt-6.1-sol\n·\nstarted 30m ago",
-    "dead": "Dead mid-turn\nkilled · 30m 3s\n·\ngpt-6.1-sol\n·\nstarted 30m ago",
-    "live": "Live agent\nworking 1:03\n·\ngpt-6.1-sol",
+    "quiet": "Completed launch\ndone · 30m ago\n·\ngpt-6.1-sol",
+    "dead": "Dead mid-turn\nstopped · 30m ago\n·\ngpt-6.1-sol",
+    "live": "Live agent\nworking 1:10\n·\ngpt-6.1-sol",
+    "rows": {
+      "quiet": {
+        "phrase": "done · 30m ago",
+        "started": null,
+        "text": "done · 30m ago · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "dead": {
+        "phrase": "stopped · 30m ago",
+        "started": null,
+        "text": "stopped · 30m ago · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "live": {
+        "phrase": "working 1:10",
+        "started": null,
+        "text": "working 1:10 · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "finished": {
+        "phrase": "finished the turn · 4m ago",
+        "started": null,
+        "text": "finished the turn · 4m ago · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "finishedSub": {
+        "phrase": "finished the turn · 4m ago",
+        "started": null,
+        "text": "finished the turn · 4m ago · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      }
+    },
     "quietChat": {
       "state": "done · 30m ago",
       "launchChips": 0,
       "placeholder": "message the agent…"
     },
     "deadChat": {
-      "state": "killed · 30m ago",
+      "state": "stopped · 30m ago",
       "launchChips": 0,
-      "placeholder": "killed · text queues until a respawn"
+      "placeholder": "stopped · text queues until a respawn"
+    },
+    "finishedChat": {
+      "state": "finished the turn · 4m ago",
+      "cut": false,
+      "inside": true
+    },
+    "finishedSubChat": {
+      "state": "finished the turn · 4m ago",
+      "cut": false,
+      "inside": true
     }
   },
   "en-dark": {
-    "quiet": "Completed launch\ndone · 30m 4s\n·\ngpt-6.1-sol\n·\nstarted 30m ago",
-    "dead": "Dead mid-turn\nkilled · 30m 4s\n·\ngpt-6.1-sol\n·\nstarted 30m ago",
-    "live": "Live agent\nworking 1:04\n·\ngpt-6.1-sol",
+    "quiet": "Completed launch\ndone · 30m ago\n·\ngpt-6.1-sol",
+    "dead": "Dead mid-turn\nstopped · 30m ago\n·\ngpt-6.1-sol",
+    "live": "Live agent\nworking 1:12\n·\ngpt-6.1-sol",
+    "rows": {
+      "quiet": {
+        "phrase": "done · 30m ago",
+        "started": null,
+        "text": "done · 30m ago · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "dead": {
+        "phrase": "stopped · 30m ago",
+        "started": null,
+        "text": "stopped · 30m ago · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "live": {
+        "phrase": "working 1:12",
+        "started": null,
+        "text": "working 1:12 · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "finished": {
+        "phrase": "finished the turn · 4m ago",
+        "started": null,
+        "text": "finished the turn · 4m ago · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      },
+      "finishedSub": {
+        "phrase": "finished the turn · 4m ago",
+        "started": null,
+        "text": "finished the turn · 4m ago · gpt-6.1-sol",
+        "lineCut": false,
+        "cutChildren": [],
+        "outside": [],
+        "height": 16.5
+      }
+    },
     "quietChat": {
       "state": "done · 30m ago",
       "launchChips": 0,
       "placeholder": "message the agent…"
     },
     "deadChat": {
-      "state": "killed · 30m ago",
+      "state": "stopped · 30m ago",
       "launchChips": 0,
-      "placeholder": "killed · text queues until a respawn"
+      "placeholder": "stopped · text queues until a respawn"
+    },
+    "finishedChat": {
+      "state": "finished the turn · 4m ago",
+      "cut": false,
+      "inside": true
+    },
+    "finishedSubChat": {
+      "state": "finished the turn · 4m ago",
+      "cut": false,
+      "inside": true
     }
   }
 }

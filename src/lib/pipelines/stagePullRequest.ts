@@ -372,6 +372,12 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     if (!found.ok) return { ok: false, error: found.error, ...(found.privacy ? { privacy: found.privacy } : {}) };
     if (found.gitEvidence) {
       if (found.number !== null) delivery.target.pr = found.number;
+      else if (!refresh && pipeline.cursor?.stageId && attempt.n > 0) {
+        const pending = delivery.pendingFirstPullRequest;
+        delivery.pendingFirstPullRequest = pending?.epoch === delivery.epoch && pending.sha === acceptedHead
+          ? pending
+          : { epoch: delivery.epoch, sha: acceptedHead, stageId: pipeline.cursor.stageId, attempt: attempt.n };
+      }
       delete attempt.pullRequestInspection;
       return { ok: true };
     }
@@ -489,6 +495,12 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
         if (!recovered.ok) return { ok: false, error: recovered.error };
         if (recovered.gitEvidence && !refresh) {
           if (recovered.number !== null) delivery.target.pr = recovered.number;
+          else if (pipeline.cursor?.stageId && attempt.n > 0) {
+            const pending = delivery.pendingFirstPullRequest;
+            delivery.pendingFirstPullRequest = pending?.epoch === delivery.epoch && pending.sha === acceptedHead
+              ? pending
+              : { epoch: delivery.epoch, sha: acceptedHead, stageId: pipeline.cursor.stageId, attempt: attempt.n };
+          }
           delete attempt.pullRequestInspection;
           return { ok: true };
         }
@@ -501,6 +513,7 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
       } finally { await fs.rm(directory, { recursive: true, force: true }); }
     }
     delivery.target.pr = number;
+    delete delivery.pendingFirstPullRequest;
     if (refresh) delete delivery.pendingPullRequestRefresh;
     delete attempt.pullRequestInspection;
     return { ok: true };

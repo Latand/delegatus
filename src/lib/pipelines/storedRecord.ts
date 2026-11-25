@@ -392,6 +392,7 @@ function isAttempt(value: unknown, index: number): boolean {
     isRoleMemoryDelivery(attempt.roleMemoryDelivery) &&
     (attempt.fencedMessageRetries === undefined || typeof attempt.fencedMessageRetries === "number"
       && Number.isSafeInteger(attempt.fencedMessageRetries) && attempt.fencedMessageRetries >= 0) &&
+    (attempt.spawnWriterRetried === undefined || attempt.spawnWriterRetried === true) &&
     isUnresolvedTermination(attempt.unresolvedTermination) &&
     isPriorWriterStop(attempt.priorWriterStop) &&
     (attempt.priorWriterStops === undefined || Array.isArray(attempt.priorWriterStops)
@@ -857,7 +858,12 @@ function isDelivery(value: unknown): value is NonNullable<Pipeline["delivery"]> 
       && /^[0-9a-f]{40}$/i.test(delivery.pendingPullRequestRefresh.sha)
       && Number.isSafeInteger(delivery.pendingPullRequestRefresh.number) && delivery.pendingPullRequestRefresh.number > 0
       && typeof delivery.pendingPullRequestRefresh.summary === "string" && delivery.pendingPullRequestRefresh.summary.length <= 60 * 1024
-      && (delivery.pendingPullRequestRefresh.nextAttemptAt === undefined || Number.isFinite(Date.parse(delivery.pendingPullRequestRefresh.nextAttemptAt)))));
+      && (delivery.pendingPullRequestRefresh.nextAttemptAt === undefined || Number.isFinite(Date.parse(delivery.pendingPullRequestRefresh.nextAttemptAt)))))
+    && (delivery.pendingFirstPullRequest === undefined || Boolean(delivery.pendingFirstPullRequest
+      && Number.isSafeInteger(delivery.pendingFirstPullRequest.epoch) && delivery.pendingFirstPullRequest.epoch === delivery.epoch
+      && /^[0-9a-f]{40}$/i.test(delivery.pendingFirstPullRequest.sha)
+      && typeof delivery.pendingFirstPullRequest.stageId === "string" && delivery.pendingFirstPullRequest.stageId.length > 0
+      && Number.isSafeInteger(delivery.pendingFirstPullRequest.attempt) && delivery.pendingFirstPullRequest.attempt > 0));
 }
 
 /** #1938: the needs_review record and its continue-review grants. */

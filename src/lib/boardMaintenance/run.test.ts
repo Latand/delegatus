@@ -91,6 +91,30 @@ test("the launch classifies this project's Waiting cards and the settled run car
     { taskId: "aabbccdd", reason: "lane settled", action: "check the running build" },
   ] } });
 });
+for (const pullRequest of ["open", "merged"] as const) test(`the launch brief classifies waits with the prerequisite evidence the seat tick reads: PR ${pullRequest}`, async () => {
+  const { updateForgeCache, emptyRepositoryEntry } = await import("@/lib/forge/cache");
+  const { insertSeatRound, clearSeatRoundsForTests } = await import("@/lib/prototypeReview/seatRounds");
+  const h = harness();
+  const at = new Date(NOW).toISOString();
+  const roundId = `pr_${"a".repeat(32)}`;
+  const pr = { number: 41, url: "https://github.com/fixture/repo/pull/41", headRefName: "fixture-change", createdAt: at, checkedAt: at, closes: [] };
+  updateForgeCache(cache => { cache.repositories["fixture/repo"] = { ...emptyRepositoryEntry(), prs: { 41: { ...pr, state: pullRequest } } }; });
+  const blocked = (id: string, hold: Partial<NonNullable<BoardTask["hold"]>>): BoardTask => ({
+    id, project: PROJECT, text: "Review fixture status", status: "blocked", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
+    hold: { kind: "operator", since: at, note: "Fixture wait", by: "agent", ...hold },
+  });
+  clearSeatRoundsForTests();
+  try {
+    insertSeatRound({ id: roundId, taskId: null, project: PROJECT, title: "Choose", createdAt: at, publicationKey: "maintenance-form", inputDigest: "fixture", source: { conversationId: null }, variants: [] });
+    saveTasks([blocked("aabbcc01", { ref: roundId }), blocked("aabbcc02", { kind: "pr", ref: pr.url }), blocked("aabbcc03", { ref: "no-such-round" })], statePath("tasks.json"));
+    await h.controller.launchIfDue(input());
+    const brief = String(h.bodies[0]!.prompt);
+    expect(brief).toContain("1 need the operator, 2 routed to the seat or agents");
+    expect(brief).toContain(pullRequest === "open" ? "aabbcc02 | agents/dependency" : "aabbcc02 | seat/wait-cleared");
+    expect(brief).toContain("aabbcc03 | seat/unowned");
+    expect(brief).not.toContain("aabbcc01 |");
+  } finally { clearSeatRoundsForTests(); }
+});
 test("card exists before spawn, with icon, colour, description and task binding in body", async () => {
   const h = harness(); await h.controller.launchIfDue(input());
   const run = h.run(), card = tasks().find(t => t.id === run.taskId)!;
