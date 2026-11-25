@@ -25,6 +25,8 @@ export interface CuratorPass extends CuratorPassView {
   launchId: string | null;
   transcriptPath: string | null;
   launchedAt: string | null;
+  /** The previous refusal's episode, reused if this pass also has no account. */
+  noAccountEpisode?: string;
   /** Captured under fresh launch admission; a matching receipt proves custody. */
   admittedHost?: { conversationId: string; seatEpoch: number; designatedAt: string | null };
   launchBody?: Record<string, unknown>;
@@ -34,6 +36,7 @@ export interface CuratorPass extends CuratorPassView {
   budgetSweep?: { scope: string; candidates: number; restored: number; integrated: number; remaining: number }[];
 }
 type ProjectRow = { kind: "project"; project: string; current: string | null; lastClaimAt: string; claimRevisions?: Record<string, number>; lastAt: string | null; passes: string[] };
+type NoAccountWarning = { kind: "no-account-warning"; project: string; episode: string; passId: string };
 export interface CurationOperation {
   kind: "operation";
   version: 1;
@@ -75,8 +78,8 @@ export function validCurationOperation(value: unknown): value is CurationOperati
     && !!row.counts && countFields.every(field => integer(row.counts[field])) && row.counts.calls === 1
     && !!row.maintenance && [row.maintenance.counts, row.maintenance.knownValues, row.maintenance.cleanup].every(value => value === "pending" || value === "complete");
 }
-type Row = CurationOperation | CuratorPass | ProjectRow | { kind: "machine"; current: string | null; budgetSweepAttemptedAt?: string; budgetSweepEndedAt?: string; budgetSweepCompletedAt?: string } | { kind: "conversation"; conversationId: string; pass: string };
-const key = (row: Row) => row.kind === "operation" ? `o:${row.id}` : row.kind === "pass" ? `r:${row.id}` : row.kind === "project" ? `p:${row.project}` : row.kind === "machine" ? "machine" : `c:${row.conversationId}`;
+type Row = CurationOperation | CuratorPass | ProjectRow | NoAccountWarning | { kind: "machine"; current: string | null; budgetSweepAttemptedAt?: string; budgetSweepEndedAt?: string; budgetSweepCompletedAt?: string } | { kind: "conversation"; conversationId: string; pass: string };
+const key = (row: Row) => row.kind === "operation" ? `o:${row.id}` : row.kind === "pass" ? `r:${row.id}` : row.kind === "project" ? `p:${row.project}` : row.kind === "no-account-warning" ? `w:${row.project}` : row.kind === "machine" ? "machine" : `c:${row.conversationId}`;
 const seed = { collection: "role_memory_curation", schemaVersion: 1, migrationId: "role-memory-curation-v1", key, loadRecords: (): Row[] => [] };
 const cache = new Map<string, SqliteStateCollection<Row>>();
 export function curationCollection(create = false) {
@@ -88,7 +91,9 @@ export function curationCollection(create = false) {
     decode: value => {
       const row = value as Row | null;
       return row && (row.kind === "operation" && validCurationOperation(row) || row.kind === "pass" && typeof row.id === "string" && Array.isArray(row.scopes)
-        || row.kind === "project" && Array.isArray(row.passes) || row.kind === "machine" || row.kind === "conversation" && typeof row.pass === "string") ? row : null;
+        || row.kind === "project" && Array.isArray(row.passes)
+        || row.kind === "no-account-warning" && typeof row.project === "string" && typeof row.episode === "string" && typeof row.passId === "string"
+        || row.kind === "machine" || row.kind === "conversation" && typeof row.pass === "string") ? row : null;
     } });
   cache.set(file, held); return held;
 }
@@ -103,6 +108,25 @@ export function readPassAuthority(id: string): CuratorPass | null {
     const row = curationCollection()?.get(`r:${id}`);
     return row?.kind === "pass" ? row : null;
   });
+}
+/** Tick-safe keyed lookups over keys resolved by the caller's project snapshot. */
+export function curationNoAccountWarning(projects: string | readonly string[]) {
+  const collection = curationCollection();
+  const keys = typeof projects === "string" ? [projects] : projects;
+  for (const project of keys) {
+    const row = collection?.get(`w:${project}`);
+    if (row?.kind === "no-account-warning") return { project: row.project, episode: row.episode, passId: row.passId };
+  }
+  return null;
+}
+/** A delivered seat wake acknowledges the exact retained warning episode. */
+export function acknowledgeCurationNoAccountWarning(project: string, episode: string): boolean {
+  return curationCollection()?.boundedPatch(4, tx => {
+    const row = tx.get(`w:${project}`);
+    if (row?.kind !== "no-account-warning" || row.episode !== episode) return false;
+    tx.delete(`w:${project}`);
+    return true;
+  }) ?? false;
 }
 type CountMemo = { sourceVersion: string; stamp: string; rowStamp: string; scopeKeys: string[]; familyKeys: string[]; counts: CuratorPass["counts"]; bytes: number };
 const countOwner = process as typeof process & { __llvCurationCounts?: Map<string, CountMemo> };
@@ -511,7 +535,7 @@ async function curationReadCooperatively<T>(create: (fence: CurationReadFence) =
     return next;
   });
   const pause = async () => {
-    await yieldToRuntime();
+    await yieldToRuntime(signal);
     // Give Bun timers a turn as well as immediates.
     await new Promise<void>(resolve => setTimeout(resolve, 0));
     check();
@@ -587,6 +611,7 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
     const id = `curate_${createHash("sha256").update(`${project}:${claimedAt}`).digest("hex").slice(0, 24)}`;
     if (tx.get(`r:${id}`)) return null;
     const pass: CuratorPass = { kind: "pass", id, project, repoDir: input.repoDir, scopes, clientAttemptId: id, claimedAt, state: "claimed", endedAt: null, failure: null, conversationId: null, launchId: null, transcriptPath: null, launchedAt: null,
+      ...(completed?.failure === "no-account" ? { noAccountEpisode: completed.noAccountEpisode ?? completed.id } : {}),
       ...(importBatch ? { importBatch } : {}),
       ...(sweepCandidates ? { budgetSweepCandidates: sweepCandidates } : {}),
       counts: { calls: 0, changed: 0, rewritten: 0, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 } };
@@ -617,6 +642,15 @@ export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass 
     if (!passIsLive(next)) Object.assign(next, sweepCounts(next));
     tx.put(next);
     if (next.conversationId) tx.put({ kind: "conversation", conversationId: next.conversationId, pass: id });
+    if (next.state === "failed" && next.failure === "no-account") {
+      const warningKey = `w:${next.project}`;
+      const warning = tx.get(warningKey);
+      const episode = next.noAccountEpisode ?? next.id;
+      if (warning?.kind !== "no-account-warning" || warning.episode !== episode) tx.put({
+        kind: "no-account-warning", project: next.project,
+        episode, passId: next.id,
+      });
+    }
     if (!passIsLive(next)) {
       const machine = tx.get("machine"); if (machine?.kind === "machine" && machine.current === id) tx.put({ ...machine, current: null,
         ...(held.budgetSweepCandidates ? { budgetSweepEndedAt: next.endedAt ?? held.claimedAt } : {}),
@@ -653,40 +687,47 @@ export function curationView(project: string, now = Date.now(), scopeRows = cura
   return { lastAt, nextAt, newLessons, passes };
 }
 
-/** Panel polling reads two pass records, independent of retained history size. */
-function panelPasses(project: string, fence?: CurationReadFence) {
+/** Normally just the current and last pass of each physical project. */
+function* panelPassSteps(project: string, fence?: CurationReadFence, maxVisits = Infinity): Generator<null,
+  { live: CuratorPass | null; last: CuratorPass | null; lastDeferred?: true }> {
   const rows = projectRows(project, fence);
+  const live = rows.map(row => row.current ? observedPass(row.current, fence) : null).find(passIsLive) ?? null;
   let latestCompleted: CuratorPass | null = null;
+  let visits = 0;
+  yield null;
   for (const row of rows) {
     // Pass ids are appended in claim order. The newest entry can be the live
     // pass, so walk back only to this row's newest completed pass; never
     // materialize the retained history for a panel read.
     for (let index = row.passes.length - 1; index >= 0; index--) {
+      if (visits++ >= maxVisits) return { live, last: null, lastDeferred: true };
       const pass = observedPass(row.passes[index]!, fence);
+      yield null;
       if (!pass) continue;
       if (passIsLive(pass)) continue;
       if (!latestCompleted || pass.claimedAt > latestCompleted.claimedAt) latestCompleted = pass;
       break;
     }
   }
-  const current = rows.map(row => row.current ? observedPass(row.current, fence) : null).find(passIsLive) ?? null;
-  return { live: current, last: latestCompleted };
+  return { live, last: latestCompleted };
 }
 export function curationPanelRuns(project: string) {
-  const selected = panelPasses(project);
+  const selected = finishRead(panelPassSteps(project));
   return { live: selected.live ? readPass(selected.live.id) : null, last: selected.last ? readPass(selected.last.id) : null };
 }
 /** Run identities remain readable when history-derived counts or scheduling
  * exceed the panel deadline. The caller marks their counts unavailable. */
 export function curationPanelRunMetadata(project: string) {
-  return panelPasses(project);
+  // Save the live run first. Bound the search for the last run if a damaged
+  // history contains a long suffix of missing or unfinished pass rows.
+  return finishRead(panelPassSteps(project, undefined, 32));
 }
 /** One deadline and freshness fence cover both displayed pass counts and status. */
 export async function curationPanelDataCooperatively(project: string, now: number, setting: ReturnType<typeof effectiveCurationSetting>, signal?: AbortSignal) {
   return curationReadCooperatively(function* (fence) {
     let runs: ReturnType<typeof curationPanelRuns> = { live: null, last: null };
     try {
-      const selected = panelPasses(project, fence);
+      const selected = yield* panelPassSteps(project, fence);
       const live = selected.live ? yield* readPassSteps(selected.live.id, fence) : null;
       yield null;
       const last = selected.last ? yield* readPassSteps(selected.last.id, fence) : null;

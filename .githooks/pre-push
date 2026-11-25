@@ -44,4 +44,9 @@ if [ ! -t 0 ]; then
     fi
   done
 fi
+# The image's plain bun is a host CLI shim. The hook and its private scratch
+# must stay in the mount namespace that Git is publishing from.
+if [[ -f /.dockerenv && -x /usr/local/bin/bun-container && $(command -v bun) == /usr/local/bin/bun ]]; then
+  exec /usr/local/bin/bun-container scripts/local-gate.ts pre-push
+fi
 exec bun scripts/local-gate.ts pre-push

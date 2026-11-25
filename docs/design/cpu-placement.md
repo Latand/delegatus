@@ -122,7 +122,10 @@ its recorded cause and pushes nothing; a gate exits 69; a workflow parks with
 it before its setup starts; a release install or build fails its update step
 with it as the step's last line and starts no child. Operator hosts never wait
 on CPU placement and run without it, with a one-time warning. On macOS and
-inside a container CPU placement does not apply and nothing is refused.
+inside a container CPU placement does not apply and nothing is refused. On macOS
+and Windows the one-line note that placement is off is information, not a
+warning, because the platform has no cgroups; on Linux, containers included, it
+stays a warning (`src/lib/runtime/platformLimit.ts`).
 
 | Setting | Default | Effect |
 |---|---|---|
@@ -246,9 +249,16 @@ it as for a stage ticket. The poll trigger stamps owned tickets too, so a
 release that predates this records them as well. An unverified owner that has
 not checked in for 60 seconds is passed over, and after 24 hours removed. A
 dead owner is removed as before. Each of these writes one line naming the
-ticket and the reason. An owner the kernel shows alive keeps its place however
-long it stays silent. Passing a ticket over changes only the order: a start
-still needs its slot lock and the spacing.
+ticket and the reason. A bounded Linux gate waiter also yields its place after 60
+seconds without a poll, even when its wrapper is still alive. Linux helpers
+persist the poll on the host's boot clock, converted out of their own time
+namespace, so pollers in different namespaces age it alike. A helper that
+cannot read its namespace offset uses the poll's wall-clock age. A poll by
+an older helper clears that sample and the next observer starts a fresh
+interval. A returning waiter
+restores its original order and age. Other verified command owners keep their
+places. A start still needs its slot lock and the spacing when a ticket is
+passed over.
 
 When the head of a ticket's lane is past its ten-minute bound and nothing has
 been admitted on the machine for a minute since, the wait no longer promises minutes: the state detail reads
@@ -728,10 +738,45 @@ slot lock. The new wrapper waits for that pool to drain before its first
 claim. It checks the kernel's process view for wrappers that have consumed
 their tickets, owned runners and their cleanup supervisors. Signal-sandboxed
 callers use the verified host process view. A waiting shell still has its
-ticket and does not keep the pool from draining. A held slot whose admission
-already passed the drain check carries that proof forward. The same final
-claim transaction rejects a drain observation if another caller admitted
-work during the check.
+ticket. A hook that starts its cleanup runner directly binds the launch to its
+live parent identity and exact command. The ordinary pre-push wrapper records
+its kernel identity when it takes the bypass branch. A unique service unit and
+its live launcher carry that proof into detached cleanup. The publication
+preparer also records its parent, mode and the entry it started. That record
+must agree with the launch, and it lets the preparer start the checkout root's
+copy of the hook. On its own it exempts nothing. During cutover, the known
+deployed dispatchers (the base of this protocol and main after #4376) can
+still establish the direct launch from their live parent identity. An older
+ordinary wrapper from the same releases takes its bypass for the hook's argv
+and execs the runner in place, on the service and on the portable fallback.
+Where the journal covers that runner it must show no retirement. Before that,
+the runner must not be a child of a live wrapper shell, which is how those
+releases run an admitted command. A nested gate's ticket identifies only the
+nested gate. Possible legacy holders continue to fence the first claim until
+they exit.
+A held slot whose admission already passed the drain check carries that proof
+forward.
+The same final claim transaction rejects a drain observation if another caller
+admitted work during the check.
+
+Managed Linux stages supply the installed gate helper through a host-local Bun
+launcher in `LLV_GATE_BUN`. The launcher retains an explicit interpreter;
+without one it runs `bun` from the caller's `PATH`, as gate-slot does, so a
+host agent bridged from the image never receives the container-only
+interpreter. Ordinary hook commands resolve Bun through their own `PATH`.
+Check keys and Cloud check inputs read the interpreter the launcher recorded,
+never its per-release path, so routing neither refuses Cloud publication nor
+changes a check's reuse key across releases. Wrappers send
+both readiness and final claim through the installed helper, including from
+older checkouts. Each new engine launch receives this routing automatically.
+An already-running waiter keeps its launch environment and completes under the
+helper it started with. Slotless wrappers retain their original claim format.
+Wrappers from #3353 up to #4174 pass their queue start after
+`--wait key pid`; the helper reads a fourth argument as a slot only on
+`--claim`, so those waits keep working under routing. A fixture that starts
+its own gates (`withoutInheritedGate`) replaces a routed `LLV_GATE_BUN` with
+the interpreter the launcher recorded, so a test of a changed helper runs the
+checkout's own `cpu-admission.ts`.
 
 Older installed and checkout wrappers can keep polling during the transition.
 After reaching the wait bound, a current ticket can pass older pressure-only

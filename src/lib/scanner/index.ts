@@ -32,7 +32,7 @@ import { pendingQuestionFor } from "./questions";
 import { pendingWakeupFor } from "./wakeup";
 import { assignTranscriptPids } from "./transcripts";
 import { scanRootEntries } from "./roots";
-import { createTranscriptPathCanonicalizer, type TranscriptPathCanonicalizer } from "./transcriptIdentity";
+import { createTranscriptPathCanonicalizer } from "./transcriptIdentity";
 import { observeCodexSubagentTranscripts } from "../runtime/codexSubagentDetection";
 import { machineCpuPressurePollMs } from "../runtime/cpuPressure";
 
@@ -284,11 +284,10 @@ function withDeputyTranscripts(demoted: ReadonlySet<string>): ReadonlySet<string
 }
 
 function archivedPredecessorPaths(): ReadonlySet<string> {
-  const archived = sessionProjectProjection(true).archivedPaths;
-  if (!archived.size) return archived;
+  const { archivedPaths: archived, latestPaths } = sessionProjectProjection(true);
+  if (!archived.size || !latestPaths.length) return archived;
   const canonicalize = createTranscriptPathCanonicalizer(scanRootEntries().map(([, root]) => root));
-  const current = currentTranscriptPaths(canonicalize);
-  if (!current.size) return archived;
+  const current = new Set(latestPaths.map(canonicalize));
   const predecessors = new Set<string>();
   for (const pathname of archived) {
     if (!current.has(canonicalize(pathname))) predecessors.add(pathname);
@@ -296,29 +295,19 @@ function archivedPredecessorPaths(): ReadonlySet<string> {
   return predecessors;
 }
 
-/** Canonical path of every conversation's current generation. */
-function currentTranscriptPaths(canonicalize: TranscriptPathCanonicalizer): ReadonlySet<string> {
-  const paths = new Set<string>();
-  try {
-    for (const conversation of Object.values(agentRegistry().readOnlySnapshot().conversations)) {
-      const latest = conversation.generations.at(-1)?.path;
-      if (latest) paths.add(canonicalize(latest));
-    }
-  } catch (error) {
-    /* An unreadable registry leaves demotion exactly as the projection saw it. */
-    if (!(error instanceof RegistryReadError)) throw error;
-  }
-  return paths;
-}
+const HOSTED_TRANSCRIPT_PATH: RegistryRowProjector<"entries", string | null> = {
+  id: "scanner.hosted-transcript-path.v1",
+  collection: "entries",
+  project: entry => entry.status === "dead" || entry.status === "unhosted" ? null : entry.artifactPath || null,
+};
 
 /** Transcripts a registered host is running right now (issue #942). The scheme
     window keeps their cards whatever the caps say. */
 export function hostedTranscriptPaths(): ReadonlySet<string> {
   const paths = new Set<string>();
   try {
-    for (const entry of Object.values(agentRegistry().readOnlySnapshot().entries)) {
-      if (entry.status === "dead" || entry.status === "unhosted") continue;
-      if (entry.artifactPath) paths.add(entry.artifactPath);
+    for (const [, pathname] of registryRowProjection(agentRegistry().readOnlySnapshot(), HOSTED_TRANSCRIPT_PATH)) {
+      if (pathname) paths.add(pathname);
     }
   } catch (error) {
     if (!(error instanceof RegistryReadError)) throw error;
@@ -368,7 +357,7 @@ async function listFilesInternal(
     entry.activity = verdict.state;
     entry.activityReason = verdict.reason;
     entry.derivationComplete = verdict.complete;
-    if (entry.path.endsWith(".jsonl") && (entry.engine === "claude" || entry.engine === "codex" || entry.engine === "openclaw" || entry.engine === "copilot")) {
+    if (entry.path.endsWith(".jsonl") && (entry.engine === "claude" || entry.engine === "codex" || entry.engine === "openclaw" || entry.engine === "copilot" || entry.engine === "antigravity")) {
       const authoritative = transcriptTurnResult(entry.path, entry.size, entry.mtime * 1000, entry.engine);
       entry.derivationComplete &&= authoritative.complete;
       if (authoritative.complete) {

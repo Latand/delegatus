@@ -223,7 +223,7 @@ export interface RateLimitProjectionSnapshot {
   }>;
   conversations: Record<string, {
     id: string;
-    engine: HostedEngine | "copilot";
+    engine: HostedEngine | "copilot" | "antigravity";
     generations: Array<{ path: string; accountId: string | null }>;
   }>;
   quotaObservations: Record<HostedEngine, Record<string, DurableQuotaObservation>>;
@@ -293,8 +293,8 @@ export function projectRateLimitReadModel(
 ): { files: ProviderThrottleFileEntry[]; flows: Flow[] } {
   const hosts = new Map<string, { conversationId: string; engine: HostedEngine; accountId: string | null }>();
   for (const conversation of Object.values(snapshot.conversations)) {
-    /* Copilot reports no quota observation (design 3.11). */
-    if (conversation.engine === "copilot") continue;
+    /* Copilot reports no quota observation (design 3.11); Antigravity quota lands in Slice 4. */
+    if (conversation.engine === "copilot" || conversation.engine === "antigravity") continue;
     const engine = conversation.engine;
     for (const generation of conversation.generations) {
       hosts.set(generation.path, {

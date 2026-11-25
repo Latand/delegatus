@@ -30,7 +30,7 @@ import { lanePullRequest, pipelineRepository } from "./resolve";
 import { type PullRequestState } from "./workLinks";
 import { readBatchLanding, readCarriedBranchLanding } from "./batchLanding";
 import { engineForgeWriteEnv, isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
-import { githubReadBackoff, githubReadFailure } from "./githubReadFailure";
+import { githubReadBackoff, githubReadFailure, isTransientMergeReadFailure } from "./githubReadFailure";
 import { issueDeliverySince, sweepIssueDelivery, type IssueDeliveryPorts } from "./issueDelivery";
 import { githubRepositoryOfRemote } from "./workLinks";
 
@@ -1205,9 +1205,8 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     }
     if (decision.kind === "refresh") decision = { kind: "block", reason: refreshRefusal };
   } catch (error) {
-    const transientRead = githubReadFailure(error).transient;
     const gitReady = gitOnlyDeliveryReady(read);
-    if (transientRead && read.delivery?.target.pr !== undefined && gitReady
+    if (isTransientMergeReadFailure(error) && read.delivery?.target.pr !== undefined && gitReady
       && !read.proactiveTaskIds?.length) {
       if (view) {
         if (merge.effectUncertain) {
@@ -1938,12 +1937,22 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
 
 const DEFERRED_PR_REFRESH_RETRY_MS = 60_000;
 
+function hasParkedTerminalBudgetRecheck(pipeline: Pipeline): boolean {
+  const latest = pipeline.runs.flatMap(run => run.attempts.map(attempt => ({ run, attempt })))
+    .filter(row => !row.attempt.historical).at(-1);
+  return Boolean(latest?.attempt.activatedBy?.budgetRecheck === true && latest.attempt.completedAt
+    && ["failed", "needs_decision"].includes(latest.attempt.state)
+    && pipeline.stages.find(stage => stage.id === latest.run.stageId)?.next === null);
+}
+
 /** Completed lanes retain their refresh intent until an exact PR read and
  * privacy-checked body read-back succeed. Each sweep handles a bounded batch;
  * failed rows receive a persisted retry time so peers continue to progress. */
 async function sweepDeferredPullRequestRefreshes(rows: readonly Pipeline[], ports: AutoMergePorts, now: number): Promise<void> {
   if (!ports.exec) return;
-  const due = rows.filter(pipeline => pipeline.state === "completed" && pipeline.delivery?.pendingPullRequestRefresh
+  const due = rows.filter(pipeline => (pipeline.state === "completed"
+    || pipeline.state === "needs_decision" && hasParkedTerminalBudgetRecheck(pipeline))
+    && pipeline.delivery?.pendingPullRequestRefresh
     && (!pipeline.delivery.pendingPullRequestRefresh.nextAttemptAt
       || Date.parse(pipeline.delivery.pendingPullRequestRefresh.nextAttemptAt) <= now))
     .sort((a, b) => (a.delivery!.pendingPullRequestRefresh!.nextAttemptAt ?? "").localeCompare(b.delivery!.pendingPullRequestRefresh!.nextAttemptAt ?? "")
@@ -1951,17 +1960,22 @@ async function sweepDeferredPullRequestRefreshes(rows: readonly Pipeline[], port
   for (const original of due) {
     const pending = original.delivery!.pendingPullRequestRefresh!;
     const working = structuredClone(original);
-    const latest = working.runs.flatMap(run => run.attempts.map(attempt => ({ run, attempt })))
-      .filter(row => !row.attempt.historical).at(-1)?.attempt;
-    if (!latest) continue;
+    const latestRow = working.runs.flatMap(run => run.attempts.map(attempt => ({ run, attempt })))
+      .filter(row => !row.attempt.historical).at(-1);
+    if (!latestRow) continue;
+    const { attempt: latest } = latestRow;
     const pullRequests = await import("@/lib/pipelines/stagePullRequest");
     const producer = pullRequests.stagePullRequestProducer(working, latest);
     const authorized = () => {
       const rows = ports.loadPipelines();
       const live = rows.find(pipeline => pipeline.id === original.id);
       const record = live?.delivery?.pendingPullRequestRefresh;
-      return Boolean(live?.state === "completed" && live.delivery?.disposition === "owner"
-        && live.delivery.publish === "enabled" && live.delivery.ownerId === live.id && live.delivery.epoch === pending.epoch
+      const releasedCompletion = live?.state === "completed" && !live.delivery?.active && live.delivery?.publish === "disabled";
+      return Boolean((live?.state === "completed"
+        || live?.state === "needs_decision" && hasParkedTerminalBudgetRecheck(live))
+        && live.delivery?.disposition === "owner"
+        && ((live.delivery.publish === "enabled" && live.delivery.active) || releasedCompletion)
+        && live.delivery.ownerId === live.id && live.delivery.epoch === pending.epoch
         && !rows.some(other => other.id !== live.id && other.delivery?.disposition === "owner"
           && other.delivery.publish === "enabled" && other.delivery.ownerId === other.id
           && other.delivery.epoch > pending.epoch
@@ -1975,7 +1989,7 @@ async function sweepDeferredPullRequestRefreshes(rows: readonly Pipeline[], port
     let refreshed = false;
     try {
       const result = await pullRequests.ensureStagePullRequest(working, producer, ports.exec, pending.sha,
-        undefined, { allowCompletedRefresh: true, authorize: authorized });
+        undefined, { allowTerminalRefresh: true, authorize: authorized });
       refreshed = result.ok && !working.delivery?.pendingPullRequestRefresh;
     } catch { /* durable retry below */ }
     if (refreshed) {
@@ -2246,13 +2260,14 @@ export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<Auto
           const headerScheme = ["ba", "sic"].join("");
           Object.assign(fetchEnv, {
             GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "2",
+            GIT_ASKPASS: "", GIT_CONFIG_PARAMETERS: undefined,
             GIT_CONFIG_KEY_0: `http.https://github.com/${repository}.git.extraheader`,
             GIT_CONFIG_VALUE_0: `${headerName}: ${headerScheme} ${Buffer.from(`${gitUsername}:${token}`).toString("base64")}`,
             GIT_CONFIG_KEY_1: "credential.helper", GIT_CONFIG_VALUE_1: "",
           });
         }
         return readCarriedBranchLanding(repository, pr, base, {
-          head: lane.merge?.reviewedHead || lane.lastPassedCommit || head,
+          head,
           repoDir: lane.repoDir!,
           ...hint,
         }, issueRead, contentsRead, fetchEnv);

@@ -169,6 +169,7 @@ function engineForRoot(rootName: RawEntry["rootName"]): ProjectCatalogFile["engi
   if (rootName === "claude-projects") return "claude";
   if (rootName === "openclaw-sessions") return "openclaw";
   if (rootName === "copilot-sessions") return "copilot";
+  if (rootName === "antigravity-sessions") return "antigravity";
   return "shell";
 }
 
@@ -177,6 +178,7 @@ function fmtForRoot(rootName: RawEntry["rootName"]): ProjectCatalogFile["fmt"] {
   if (rootName === "claude-projects") return "claude";
   if (rootName === "openclaw-sessions") return "openclaw";
   if (rootName === "copilot-sessions") return "copilot";
+  if (rootName === "antigravity-sessions") return "antigravity";
   return "plain";
 }
 
@@ -187,6 +189,7 @@ function fallbackTitle(raw: RawEntry, kind: string): string {
   if (raw.rootName === "claude-projects") return "Claude session";
   if (raw.rootName === "openclaw-sessions") return "OpenClaw session";
   if (raw.rootName === "copilot-sessions") return "Copilot session";
+  if (raw.rootName === "antigravity-sessions") return "Antigravity session";
   return "Background task " + filename.split(".")[0];
 }
 
@@ -531,7 +534,7 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
       kind: file.kind,
       fmt: file.fmt,
     });
-    if (!file.session || (file.engine !== "codex" && file.engine !== "claude" && file.engine !== "openclaw" && file.engine !== "copilot")) return;
+    if (!file.session || (file.engine !== "codex" && file.engine !== "claude" && file.engine !== "openclaw" && file.engine !== "copilot" && file.engine !== "antigravity")) return;
     conversationCatalog.push({
       path: file.path,
       root: file.rootName,
@@ -641,8 +644,8 @@ export async function projectCatalogSnapshotFromRaw(raw: RawEntry[], options: {
         console.error("[project catalog] project identity succession deferred; a later scan will retry");
       }
     }
-    /* Network work, so detached from the scan and after its persistence; an
-       unanswered lookup decides nothing and the next scan asks again. */
+    /* Network work stays detached from the scan. Unanswered checks can retry
+       after the forge cooldown while the catalog keeps using local identity. */
     scheduleForgeRenames(forgeCandidates);
     if (boardHealed) {
       try {

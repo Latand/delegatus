@@ -53,7 +53,7 @@ export interface TranscriptVersion {
 }
 export interface AgentFacts {
   subject: string;
-  engine: "codex" | "claude" | "copilot";
+  engine: "codex" | "claude" | "copilot" | "antigravity";
   revision: string;
   process: Fact<{ status: "alive" | "dead"; identity: ProcessIdentity }>;
   owner: Fact<"held" | "other" | "absent">;
@@ -126,6 +126,8 @@ export interface AgentProjection {
   verdict: AgentVerdict;
   revision: number;
   pendingPublication: boolean;
+  /** Cleared with the publication acknowledgement. Older pending rows owe a refresh. */
+  pendingFilesRevision?: boolean;
   publishable?: boolean;
   divergence: string | null;
   divergenceKey?: string | null;
@@ -162,7 +164,7 @@ export interface AgentStateMetrics {
   unownedRssMeasured: number;
   unownedRssUnknown: number;
   stuckTurns: number;
-  stuckByEngine: { codex: number; claude: number; copilot: number };
+  stuckByEngine: { codex: number; claude: number; copilot: number; antigravity: number };
   stuckByReason: { silent: number; checking: number; providerWait: number };
   subjectsObserved: number;
   subjectsUnverified: number;
@@ -177,9 +179,41 @@ export interface AgentStateMetrics {
 }
 export function emptyAgentStateMetrics(): AgentStateMetrics {
   return { version: 1, revision: 0, at: 0, registryTranscriptDivergencesTotal: 0, registryTranscriptDivergencesCurrent: 0,
-    unownedHosts: 0, unownedRssBytes: null, unownedRssMeasured: 0, unownedRssUnknown: 0, stuckTurns: 0, stuckByEngine: { codex: 0, claude: 0, copilot: 0 }, stuckByReason: { silent: 0, checking: 0, providerWait: 0 },
+    unownedHosts: 0, unownedRssBytes: null, unownedRssMeasured: 0, unownedRssUnknown: 0, stuckTurns: 0, stuckByEngine: { codex: 0, claude: 0, copilot: 0, antigravity: 0 }, stuckByReason: { silent: 0, checking: 0, providerWait: 0 },
     subjectsObserved: 0, subjectsUnverified: 0, subjectsDeferred: 0, pendingProjectionPublications: 0,
     lastCompleteReconciliationAt: null, afterKey: null, journalRows: 0, terminalSubjects: 0, physicalAliasesUnverified: 0 };
+}
+
+export type StoredAgentStateMetrics = Omit<AgentStateMetrics, "stuckByEngine"> & {
+  stuckByEngine: { codex: number; claude: number; copilot: number };
+};
+
+export type AgentStateMetricsRow = Omit<AgentStateMetrics, "stuckByEngine"> & {
+  stuckByEngine: Partial<AgentStateMetrics["stuckByEngine"]>;
+};
+
+const legacyAgentStateMetricKeys = new Set([
+  "version", "revision", "at", "registryTranscriptDivergencesTotal", "registryTranscriptDivergencesCurrent",
+  "unownedHosts", "unownedRssBytes", "unownedRssMeasured", "unownedRssUnknown", "stuckTurns", "stuckByEngine",
+  "stuckByReason", "subjectsObserved", "subjectsUnverified", "subjectsDeferred", "physicalAliasesUnverified",
+  "pendingProjectionPublications", "journalRows", "terminalSubjects", "lastCompleteReconciliationAt", "afterKey",
+  "physicalSubjects",
+]);
+
+/** Keep persisted metrics readable by releases before Antigravity was added. */
+export function agentStateMetricsForStorage(metrics: AgentStateMetricsRow): StoredAgentStateMetrics {
+  const stored: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(metrics)) {
+    if (!legacyAgentStateMetricKeys.has(key)) continue;
+    stored[key] = key === "stuckByEngine"
+      ? {
+        codex: metrics.stuckByEngine.codex ?? 0,
+        claude: metrics.stuckByEngine.claude ?? 0,
+        copilot: metrics.stuckByEngine.copilot ?? 0,
+      }
+      : value;
+  }
+  return stored as StoredAgentStateMetrics;
 }
 
 export interface AgentStateDisplay {
@@ -212,7 +246,7 @@ export function validAgentFacts(value: unknown): value is AgentFacts {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
   if (typeof row.subject !== "string" || !/^[a-f0-9]{48}$/.test(row.subject)
-    || !["codex", "claude", "copilot"].includes(row.engine as string) || typeof row.revision !== "string" || row.revision.length > 128) return false;
+    || !["codex", "claude", "copilot", "antigravity"].includes(row.engine as string) || typeof row.revision !== "string" || row.revision.length > 128) return false;
   for (const key of ["process", "owner", "turn", "attention", "transcript", "obligations", "activity"]) {
     const field = row[key] as { determined?: unknown; evidence?: Evidence; value?: unknown; why?: unknown } | undefined;
     if (!field || typeof field.determined !== "boolean" || !field.evidence || !validAgentEvidence(field.evidence)) return false;

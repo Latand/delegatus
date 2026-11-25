@@ -231,6 +231,64 @@ test("a queued kill whose operation terminally failed leaves the host still runn
   setAgentRegistryForTests(null);
 });
 
+test("queued stop confirmation gives each status read only its remaining budget", async () => {
+  const fixture = hostedConversation();
+  queuedKill();
+  let clock = 0;
+  const budgets: number[] = [];
+  const client = {
+    operationStatus: async (_id: string, options?: { timeoutMs?: number; signal?: AbortSignal }) => {
+      expect(options?.signal?.aborted).toBe(false);
+      const remaining = options?.timeoutMs ?? 2_800;
+      budgets.push(remaining);
+      clock += Math.min(600, remaining);
+      return { receipt: { status: "queued" } };
+    },
+  } as unknown as RuntimeHostClient;
+  try {
+    const result = await stopPipelineStageAgent(target(fixture.conversationId), {
+      client, budgetMs: 1_500, intervalMs: 250, now: () => clock,
+      sleep: async (ms) => { clock += ms; },
+    });
+    expect(result).toMatchObject({ outcome: "unconfirmed", operationId: "kill-op-queued" });
+    expect(budgets).toEqual([1_500, 650]);
+    expect(clock).toBe(1_500);
+    expect(killed).toHaveLength(1);
+  } finally { setAgentRegistryForTests(null); }
+});
+
+test("cancellation releases an unresponsive confirmation and keeps its accepted operation", async () => {
+  const fixture = hostedConversation();
+  queuedKill();
+  const abort = new AbortController();
+  let enter!: () => void, reply!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const pending = new Promise<void>(resolve => { reply = resolve; });
+  let reads = 0, signal: AbortSignal | undefined;
+  const client = {
+    operationStatus: async (_id: string, options?: { signal?: AbortSignal }) => {
+      reads++;
+      signal = options?.signal;
+      enter();
+      await pending;
+      return { receipt: { status: "queued" } };
+    },
+  } as unknown as RuntimeHostClient;
+  const result = stopPipelineStageAgent(target(fixture.conversationId), { client, signal: abort.signal });
+  try {
+    await entered;
+    abort.abort();
+    expect(await result).toMatchObject({ outcome: "unconfirmed", operationId: "kill-op-queued" });
+    expect(signal?.aborted).toBe(true);
+    expect(reads).toBe(1);
+    expect(killed).toHaveLength(1);
+  } finally {
+    reply();
+    await result;
+    setAgentRegistryForTests(null);
+  }
+});
+
 test("a stage whose host is already gone reports not-running without dispatching a kill (#670)", async () => {
   /* Gone means the recorded process is gone too: a pid no machine hands out. */
   const dead = hostedConversation({ status: "dead", process: { pid: 2_000_000_123, startIdentity: "exited-host" } });
@@ -347,7 +405,7 @@ test("the residency probe reads host state without dispatching anything (#670)",
   setAgentRegistryForTests(null);
 });
 
-test("an unstamped attempt requires positive idle evidence before retiring a host without a stream", async () => {
+test.each([true, false])("owned orphan retirement checks the recorded attempt authority (idle evidence required %s)", async requireIdleEvidence => {
   const pid = 2_000_000_124;
   const signals: number[] = [];
   let alive = true;
@@ -360,15 +418,18 @@ test("an unstamped attempt requires positive idle evidence before retiring a hos
     const processRef = captureProcessIdentity(pid);
     const fixture = hostedConversation({ status: "dead", process: processRef });
     const { retirePipelineStageAgent } = await import("./engine");
-    const result = await retirePipelineStageAgent({ ...target(fixture.conversationId, fixture.path), launchId: fixture.launchId }, {
-      requireIdleEvidence: true,
+    const { terminalIdleStopKey } = await import("./stageControlCustody");
+    const recorded = { ...target(fixture.conversationId, fixture.path), launchId: fixture.launchId };
+    const result = await retirePipelineStageAgent(recorded, {
+      operationId: terminalIdleStopKey(recorded),
+      ...(requireIdleEvidence ? { requireIdleEvidence: true as const } : {}),
       termination: { processIdentity: identity, bootEpoch: () => processRef.bootEpoch ?? null, pidAlive: living,
         ppidMap: () => new Map(), processGroupId: () => null,
         signal: candidate => { signals.push(candidate); alive = false; }, sleep: async () => {}, terminateOwnedHost: async () => false,
         retireRegistryEntry: () => true },
     });
-    expect(signals).toEqual([]);
-    expect(result).toEqual({ outcome: "deferred" });
+    expect(signals).toEqual(requireIdleEvidence ? [] : [pid]);
+    expect(result.outcome).toBe(requireIdleEvidence ? "deferred" : "stopped");
     expect(killed).toEqual([]);
   } finally { identitySpy.mockRestore(); aliveSpy.mockRestore(); }
 });

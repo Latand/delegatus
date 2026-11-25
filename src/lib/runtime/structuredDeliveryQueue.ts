@@ -1,3 +1,4 @@
+import { DELIVERY_ATTEMPT_LIMIT } from "@/lib/accounts/migration/contracts";
 import type { ConfirmedSendEvidence } from "./confirmedSend";
 import { SEND_SETTLEMENT_WINDOW_MS } from "./sendSettlement";
 import { DELIVERY_UNVERIFIED_AFTER_ACTUATION, INJECTION_UNVERIFIED_AFTER_ACTUATION } from "./unverifiedDeliveryReasons";
@@ -16,10 +17,11 @@ import { parseSelectedContextRef, type SelectedContextRef } from "@/lib/selectio
 
 import { parseMessageOrigin, type MessageOrigin } from "./messageOrigin";
 import { SEAT_QUOTA_RECOVERY_ROLE } from "./recoveryNotices";
+import { CHECKOUT_MERGER_OPERATION_PREFIX } from "./checkoutMergerRecovery";
 import type { RuntimeRetirementClaim, RuntimeTransitionOptions, RuntimeInjectionBinding, RuntimeSendSettings, RuntimeTransitionDetails } from "./contracts";
 import { captureProcessIdentity, processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { evidenceAgrees, readEvidence, readEvidenceWithin, readOptionalEvidence, type Evidence } from "./evidence";
-import type { CompactCapableHost, DeliveryReceipt, DeliveryTimingMark, DeliveryTimingObserver, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome, RuntimeSteerOutcome } from "./engineHost";
+import type { CompactCapableHost, DeliveryAcceptanceObservation, DeliveryReceipt, DeliveryTimingMark, DeliveryTimingObserver, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome, RuntimeSteerOutcome } from "./engineHost";
 import { NATIVE_INJECT_CAPABILITY } from "./codexCapabilityFlags";
 import { hostSupportsCompact, hostSupportsInject, StructuredDispatchDeferredError, StructuredAnswerError, StructuredCompactError, StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
 import {
@@ -28,6 +30,7 @@ import {
   type StructuredMessageContent,
 } from "./structuredContent";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
+import { withLiveReconfigureHost } from "./structuredReconfigure";
 import { StructuredOrphanGraceError, StructuredOrphanStopRefusedError, StructuredStageHostGoneError, StructuredRecoveryHeldForUpdateError, StructuredRecoverySynchronizingError, type StructuredRecoveryRequest } from "./structuredRecovery";
 import { StageAttemptSettledError } from "./stageGitEnvironment";
 import type { DeliveryProgressNote, DeliveryProgressRecord, DeliveryProgressSink } from "./deliveryProgress";
@@ -59,6 +62,8 @@ interface StructuredOperationStatus {
 }
 
 export interface StructuredDeliveryQueuePort {
+  /** Restore the immutable admission cohort before a recovered kill can end. */
+  fencePendingSends?(operationIds: readonly string[]): Promise<void>;
   /** Only affirmative current-seat authority opts a conversation in. */
   coalescesConversation?(conversationId: string): boolean | undefined;
   bindDeliveryBatch?(batchId: string, operationIds: readonly string[], generationId: string): boolean | Promise<boolean>;
@@ -69,6 +74,7 @@ export interface StructuredDeliveryQueuePort {
   /** Re-read the idle revision after claiming an automatic continuation. */
   idleContinuationCurrent?(conversationId: string, fence: import("./contracts").RuntimeIdleKillFence): Promise<boolean>;
   seatQuotaDispatchGuard?(operationId: string, conversationId: string, project: string): Promise<() => void>;
+  checkoutMergerDispatchGuard?(operationId: string, conversationId: string): Promise<() => void>;
   /** Pause durable effects while an automatic release handoff owns admission. */
   handoffHeld?(): boolean;
   /** Hold a fresh autonomous turn while original accepted work settles. */
@@ -88,11 +94,11 @@ export interface StructuredDeliveryQueuePort {
   nativeQueueReconcile?(): Promise<void>;
   /** Startup owns recovery for hosts it has not registered yet. Leave their
    * original operations pending while already registered hosts keep serving. */
-  deferTarget?(conversationId: string): boolean;
+  deferTarget?(conversationId: string): boolean | Promise<boolean>;
   /** After restart-cut recognition, explicit sends may use normal keyed
    * recovery without waiting for unrelated startup rows. This grants no
    * engine-write authority and never admits automatic idle continuations. */
-  canRecoverDeferredTarget?(conversationId: string): boolean;
+  canRecoverDeferredTarget?(conversationId: string): boolean | Promise<boolean>;
   /** A reconfigure withdrawn before its claim, or whose claimed switch was cancelled (#1705). */
   reconfigureCancelled?(effect: StructuredReconfigureEffect): boolean;
   /** The failed account switch holding this conversation's messages, or null (#1846). */
@@ -264,7 +270,7 @@ const UNPROJECTED_TERMINAL_LIMIT = 128;
     (#1716). Attempts are spaced 1s, 2s, 4s, 8s and then 15s apart, about two
     minutes in all, after which the operation settles failed with the busy
     reason. */
-const CONTENDED_RECOVERY_ATTEMPTS = 12;
+const CONTENDED_RECOVERY_ATTEMPTS = DELIVERY_ATTEMPT_LIMIT;
 const CONTENDED_RECOVERY_FIRST_SPACING_MS = 1_000;
 const CONTENDED_RECOVERY_MAX_SPACING_MS = 15_000;
 const TERMINAL_DELIVERY_STATUSES = new Set([
@@ -342,7 +348,8 @@ interface ControlEffect {
   attentionId?: string;
   resolution?: unknown;
   turnId?: string | null;
-  sessionKey?: { engine: "codex" | "claude"; sessionId: string };
+  sessionKey?: { engine: "codex" | "claude" | "copilot" | "antigravity"; sessionId: string };
+  pendingSendIds?: string[];
   eventSeq: number;
 }
 
@@ -360,7 +367,7 @@ export interface StructuredReconfigureEffect {
   operationId: string;
   conversationId: string;
   kind: "reconfigure";
-  sessionKey?: { engine: "codex" | "claude" | "copilot"; sessionId: string };
+  sessionKey?: { engine: "codex" | "claude" | "copilot" | "antigravity"; sessionId: string };
   model: string;
   effort: string;
   fast: boolean | null;
@@ -492,7 +499,7 @@ function sendEffect(effect: StructuredDeliveryEffect): SendEffect | null {
     && (!operationId.startsWith("spawn_message_") || typeof roleMemoryRevision !== "string" || !/^[a-f0-9]{64}$/.test(roleMemoryRevision))) return null;
   let onlyIfIdle: import("./contracts").RuntimeIdleKillFence | undefined;
   try {
-    if (effect.payload.onlyIfIdle !== undefined) onlyIfIdle = parseRuntimeIdleKillFence(effect.payload.onlyIfIdle);
+    if (effect.payload.onlyIfIdle !== undefined && origin?.role !== "owner-relay") onlyIfIdle = parseRuntimeIdleKillFence(effect.payload.onlyIfIdle);
   } catch { return null; }
   if (onlyIfIdle && (effect.kind !== "runtime.send" || policy !== "queue" || turnId !== null)) return null;
   return {
@@ -569,12 +576,17 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
     const key = effect.payload.sessionKey;
     if (!key || typeof key !== "object" || Array.isArray(key)) return null;
     const candidate = key as Record<string, unknown>;
-    if ((candidate.engine !== "codex" && candidate.engine !== "claude") || typeof candidate.sessionId !== "string") return null;
+    if ((candidate.engine !== "codex" && candidate.engine !== "claude" && candidate.engine !== "copilot" && candidate.engine !== "antigravity")
+      || typeof candidate.sessionId !== "string") return null;
+    const pendingSendIds = effect.payload.pendingSendIds;
+    if (pendingSendIds !== undefined && (!Array.isArray(pendingSendIds)
+      || pendingSendIds.some(id => typeof id !== "string" || !id || id.length > 200))) return null;
     return {
       operationId,
       conversationId,
       kind: "kill",
       sessionKey: { engine: candidate.engine, sessionId: candidate.sessionId },
+      ...(pendingSendIds !== undefined ? { pendingSendIds: [...new Set(pendingSendIds as string[])] } : {}),
       ...(effect.payload.onlyIfIdle !== undefined
         ? { onlyIfIdle: parseRuntimeIdleKillFence(effect.payload.onlyIfIdle) } : {}),
       ...(effect.payload.providerRecovery !== undefined
@@ -615,7 +627,7 @@ function reconfigureEffect(effect: StructuredDeliveryEffect): StructuredReconfig
   const accountId = typeof effect.payload.accountId === "string" ? effect.payload.accountId : undefined;
   const key = effect.payload.sessionKey;
   const sessionKey = key && typeof key === "object" && !Array.isArray(key)
-    && ((key as Record<string, unknown>).engine === "codex" || (key as Record<string, unknown>).engine === "claude" || (key as Record<string, unknown>).engine === "copilot")
+    && ((key as Record<string, unknown>).engine === "codex" || (key as Record<string, unknown>).engine === "claude" || (key as Record<string, unknown>).engine === "copilot" || (key as Record<string, unknown>).engine === "antigravity")
     && typeof (key as Record<string, unknown>).sessionId === "string"
     ? key as StructuredReconfigureEffect["sessionKey"]
     : undefined;
@@ -940,7 +952,7 @@ export class StructuredDeliveryQueue {
     private readonly resolveHost: StructuredHostResolver,
     private readonly terminateHost: (
       conversationId: string,
-      sessionKey: { engine: "codex" | "claude"; sessionId: string },
+      sessionKey: { engine: "codex" | "claude" | "copilot" | "antigravity"; sessionId: string },
       onlyIfIdle?: import("./contracts").RuntimeIdleKillFence,
       authority?: { operationId: string; claim: RuntimeRetirementClaim },
       providerRecovery?: import("./contracts").RuntimeProviderRecoveryRef,
@@ -1198,7 +1210,7 @@ export class StructuredDeliveryQueue {
         continue;
       }
       targets.push([conversationId, this.startLane(conversationId, async (lane) => {
-        if (this.port.deferTarget?.(conversationId)) {
+        if (await this.port.deferTarget?.(conversationId)) {
           const deferred = grouped.get(conversationId) ?? [];
           // Termination uses the recorded session identity without adopting
           // its host. Conditional kills still prove idleness and ownership at
@@ -1209,7 +1221,7 @@ export class StructuredDeliveryQueue {
           // that the ordinary per-conversation drain would process first. An
           // explicit interrupt rides with the sends: the ordinary drain gives
           // it its settlement ceiling, so it cannot hold them indefinitely.
-          const recoverSends = this.port.canRecoverDeferredTarget?.(conversationId)
+          const recoverSends = await this.port.canRecoverDeferredTarget?.(conversationId)
             && deferred.every(effect => (effect.kind === "send" && !effect.onlyIfIdle)
               || (effect.kind === "kill" && !effect.onlyIfIdle) || effect.kind === "interrupt");
           const heldControls: ControlEffect[] = [];
@@ -1831,6 +1843,17 @@ export class StructuredDeliveryQueue {
         this.contendedRecoveries.delete(effect.operationId);
         continue;
       }
+      // The acknowledgement may have vanished after journal admission. Recover
+      // an unconditional kill's saved cohort before expiry or any actuation.
+      // A refused fence leaves the kill owed, including across another restart.
+      if (effect.kind === "kill" && !effect.onlyIfIdle && effect.pendingSendIds?.length) {
+        const fenced = await readEvidence(async () => {
+          if (!this.port.fencePendingSends) throw new Error("pending delivery fence is unavailable");
+          await this.port.fencePendingSends(effect.pendingSendIds!);
+        }, "pending delivery fence is unavailable");
+        if (!fenced.readable) return this.fenceUnavailable();
+        if (lane?.released || this.retirementExecutor.retired || this.port.handoffHeld?.()) return true;
+      }
       if (effect.kind === "kill" && effect.onlyIfIdle && durable.value?.status === "delivering") {
         const owner = durable.value.retirementClaim;
         const localOwner = owner ? retirementExecutors.get(owner.executorId) : undefined;
@@ -1882,7 +1905,7 @@ export class StructuredDeliveryQueue {
     const canCoalesce = (effect: DeliveryEffect): boolean => {
       if (effect.kind !== "send") return false;
       const host = this.resolveHost(effect.conversationId);
-      return !effect.onlyIfIdle && (effect.turnId === undefined || effect.turnId === null)
+      return !effect.operationId.startsWith(CHECKOUT_MERGER_OPERATION_PREFIX) && !effect.onlyIfIdle && (effect.turnId === undefined || effect.turnId === null)
         && ["queue", "steer-or-queue", "interrupt-active"].includes(effect.policy ?? "")
         && host?.coalescesQueuedInput === true && host.sendWaitsForRunningTurn === true
         && host.supportsSteer === false
@@ -2438,6 +2461,7 @@ export class StructuredDeliveryQueue {
       const nativeJoinsRunningTurn = host.supportsQueuedSend === true && host.coalescesQueuedInput === true
         && host.sendWaitsForRunningTurn === true && host.acceptsInputDuringTurn === true && effect.kind === "send"
         && (effect.turnId === undefined || effect.turnId === health.activeTurnRef) && !effect.onlyIfIdle
+        && effect.origin?.role !== "owner-relay"
         && (effect.policy === "queue" || steerOrQueue || waitsForTurn)
         && health.status === "active" && Boolean(health.activeTurnRef);
       const joinsRunningTurn = nativeJoinsRunningTurn || (waitsForTurn && host.acceptsInputDuringTurn === true && effect.kind === "send"
@@ -2654,14 +2678,20 @@ export class StructuredDeliveryQueue {
           ?? (recordsRoute && durable?.delivery === "interrupt-then-turn-started" ? durable.interruptedTurnId ?? null : null),
       };
       let sent: { receipt: DeliveryReceipt } | { error: unknown };
-      let quotaGuard: (() => void) | undefined;
-      if (effect.origin?.role === SEAT_QUOTA_RECOVERY_ROLE) {
+      let recoveryGuard: (() => void) | undefined;
+      const checkoutMerger = effect.operationId.startsWith(CHECKOUT_MERGER_OPERATION_PREFIX);
+      if (checkoutMerger || effect.origin?.role === SEAT_QUOTA_RECOVERY_ROLE) {
         try {
-          if (!effect.onlyIfIdle || !effect.origin.project || !this.port.seatQuotaDispatchGuard) {
-            throw new StructuredSendRefusedError("seat quota dispatch authority unavailable");
-          }
-          quotaGuard = await this.checking(lane, effect, "revalidating seat quota recovery",
-            () => this.port.seatQuotaDispatchGuard!(effect.operationId, effect.conversationId, effect.origin!.project!));
+          recoveryGuard = await this.checking(lane, effect, checkoutMerger ? "revalidating checkout merger recovery" : "revalidating seat quota recovery", () => {
+            if (checkoutMerger) {
+              if (!this.port.checkoutMergerDispatchGuard) throw new StructuredSendRefusedError("checkout merger dispatch authority unavailable");
+              return this.port.checkoutMergerDispatchGuard(effect.operationId, effect.conversationId);
+            }
+            if (!effect.onlyIfIdle || !effect.origin?.project || !this.port.seatQuotaDispatchGuard) {
+              throw new StructuredSendRefusedError("seat quota dispatch authority unavailable");
+            }
+            return this.port.seatQuotaDispatchGuard(effect.operationId, effect.conversationId, effect.origin.project);
+          });
         } catch (error) {
           // Preparation has not called the host. Unreadable authority is a
           // deferred check, with the same key and no uncertain native effect.
@@ -2672,7 +2702,7 @@ export class StructuredDeliveryQueue {
         }
       }
       const authorize = () => {
-        quotaGuard?.();
+        recoveryGuard?.();
         if (host.coalescesQueuedInput === true && (lane?.released || this.retirementExecutor.retired
           || this.port.handoffHeld?.() || this.resolveHost(effect.conversationId) !== host)) {
           throw new StructuredDispatchDeferredError("native hand-over deferred");
@@ -2788,7 +2818,7 @@ export class StructuredDeliveryQueue {
         }
         if (context.priorDeliveryUnverified || current.value?.deliveryUnverified === true
           || current.value?.reason === "delivery-auto-retry") {
-          await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`);
+          await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`, context.clearedRoute);
           return "next";
         }
         // This refusal is raised by the last authorization check before the
@@ -2796,7 +2826,7 @@ export class StructuredDeliveryQueue {
         // immutable: replay cannot authorize them. Record non-execution so
         // launch recovery can retire this launch and prepare a current one;
         // other callers receive the same truthful, safely failed receipt.
-        await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason, ...context.clearedRoute });
         return "next";
       }
       if (error instanceof StructuredDispatchDeferredError) {
@@ -2812,7 +2842,7 @@ export class StructuredDeliveryQueue {
         const current = await this.readStatus(effect.operationId);
         if (!current.readable || !current.value) { this.retrySoon(); return "stop"; }
         if (context.priorDeliveryUnverified || current.value.deliveryUnverified === true) {
-          await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`);
+          await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`, context.clearedRoute);
           return "next";
         }
         await this.transitionUnlessSettled(effect.operationId, "queued", { reason });
@@ -2827,7 +2857,7 @@ export class StructuredDeliveryQueue {
           this.retrySoon();
           return "stop";
         }
-        await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason, ...context.clearedRoute });
         return "next";
       }
       /* The one resend below is allowed only where the host is READ to be
@@ -2867,7 +2897,7 @@ export class StructuredDeliveryQueue {
          engine": the distinction settlement reads to decide whether a resend
          is safe. The cost is that a precondition the host refused by throwing
          reads as unverified too; one verification is the cheaper error. */
-      await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`);
+      await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`, context.clearedRoute);
       /* A host that is gone takes the rest of this conversation's queue with
          it; a live one keeps draining behind the send it could not answer. */
       if (hostIsGone) return "stop";
@@ -2891,6 +2921,16 @@ export class StructuredDeliveryQueue {
       this.noteWait(effect, "awaiting-turn", { detail: receipt.refusal ?? receipt.reason ?? "the host declined the hand-over" });
       return "stop";
     }
+    if (receipt.outcome === "turn-started" && receipt.observeAcceptance) {
+      const settling = this.settleObservedAcceptance(effect, receipt.observeAcceptance, context).finally(() => {
+        this.activeSteers.delete(effect.operationId);
+        this.retrySoon();
+      });
+      this.activeSteers.set(effect.operationId, { conversationId: effect.conversationId, turnId: receipt.turnId, settling });
+      this.noteWait(effect, "dispatching", { wake: "none", detail: "handed over; awaiting engine delivery confirmation" });
+      void settling.catch(() => undefined);
+      return "next";
+    }
     await this.transitionUnlessSettled(effect.operationId, "delivered", {
       turnId: receipt.turnId,
       /* A message that ended a running turn to start its own says so; the
@@ -2902,6 +2942,35 @@ export class StructuredDeliveryQueue {
         : {}),
     });
     return "next";
+  }
+
+  private async settleObservedAcceptance(
+    effect: SendEffect,
+    observe: () => Promise<DeliveryAcceptanceObservation>,
+    context: SendSettlementContext,
+  ): Promise<void> {
+    let observed: DeliveryAcceptanceObservation;
+    try { observed = await observe(); }
+    catch (error) { observed = { outcome: "uncertain", reason: failureReason(error) }; }
+    if (observed.outcome === "accepted") {
+      await this.transitionUnlessSettled(effect.operationId, "delivered", {
+        turnId: observed.turnId,
+        ...(context.interruptedTurnId
+          ? { delivery: "interrupt-then-turn-started" as const, interruptedTurnId: context.interruptedTurnId }
+          : {}),
+      });
+    } else if (observed.outcome === "rejected") {
+      await this.transitionUnlessSettled(effect.operationId, "failed", {
+        reason: observed.reason,
+        ...context.clearedRoute,
+      });
+    } else {
+      await this.terminalizeUnverified(
+        effect.operationId,
+        `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${observed.reason}`,
+        context.clearedRoute,
+      );
+    }
   }
 
   private async settleObservedSteer(effect: SendEffect, outcome: RuntimeSteerOutcome): Promise<void> {
@@ -3495,11 +3564,12 @@ export class StructuredDeliveryQueue {
    * before #862 rejects it; the operation must still settle rather than wedge
    * the conversation's queue behind a receipt no pass can ever clear.
    */
-  private async terminalizeUnverified(operationId: string, reason: string): Promise<void> {
+  private async terminalizeUnverified(operationId: string, reason: string, extra?: RuntimeTransitionDetails): Promise<void> {
+    const details: RuntimeTransitionDetails = { ...extra, reason };
     try {
-      await this.transitionUnlessSettled(operationId, "uncertain", { reason });
+      await this.transitionUnlessSettled(operationId, "uncertain", details);
     } catch {
-      await this.transitionUnlessSettled(operationId, "failed", { reason });
+      await this.transitionUnlessSettled(operationId, "failed", details);
     }
   }
 
@@ -3553,10 +3623,10 @@ export class StructuredDeliveryQueue {
     if (!await this.transitionReconfigure(effect, "applying")) return false;
     let outcome: Awaited<ReturnType<typeof this.reconfigure>>;
     try {
-      outcome = await this.reconfigure(effect, {
+      outcome = await withLiveReconfigureHost(host, () => this.reconfigure(effect, {
         isCurrent: () => this.isCurrentReconfigure(effect),
         ...(carriedSends.length ? { carriedSends } : {}),
-      });
+      }));
     } catch (error) {
       /* A registry write the lock refused changed nothing: the switch is
          neither failed nor applied, and it stays listed for a later pass
@@ -3647,6 +3717,25 @@ export class StructuredDeliveryQueue {
    */
   private async recoverUnavailableHost(effect: DeliveryEffect & { origin?: MessageOrigin }, status?: StructuredOperationStatus | null): Promise<void> {
     if (!this.recoverHost) return;
+    // The progress ledger survives executor replacement. The local map below
+    // controls spacing; it cannot grant a fresh budget after a Viewer restart.
+    const recordedAttempts = this.port.progress?.get(effect.operationId)?.attempt ?? 0;
+    if (recordedAttempts >= CONTENDED_RECOVERY_ATTEMPTS) {
+      // A working engine may still own this turn without a registered
+      // transport. Stop attempting recovery; its durable settlement deadline
+      // decides expiry and can be renewed by verified native work.
+      this.noteWait(effect, "awaiting-host", { wake: "retry",
+        detail: `host recovery reached its ${CONTENDED_RECOVERY_ATTEMPTS} attempt limit; awaiting host publication or settlement` });
+      this.retrySoon();
+      return;
+    }
+    this.noteWait(effect, "recovering-host", { attempted: true, wake: "retry" });
+    if (this.port.progress?.flush && ((this.port.progress.get(effect.operationId)?.attempt ?? 0) <= recordedAttempts
+      || !this.port.progress.flush())) { this.retrySoon(); return; }
+    const reserved = this.port.progress?.get(effect.operationId);
+    const releaseAdmissionWait = () => {
+      if (reserved) this.port.progress?.releaseRecoveryAttempt?.(effect.operationId, reserved.attempt, reserved.executorId);
+    };
     try {
       const recovered = await this.recoverHost(effect.conversationId, {
         operationId: effect.operationId,
@@ -3658,7 +3747,8 @@ export class StructuredDeliveryQueue {
         this.rerun = true;
         return;
       }
-      if (this.port.deferTarget?.(effect.conversationId)) {
+      if (await this.port.deferTarget?.(effect.conversationId)) {
+        releaseAdmissionWait();
         // A live predecessor may still be on its way to registration. A
         // refused competing recovery must not fail its original message.
         this.noteWait(effect, "startup", { wake: "retry" });
@@ -3683,18 +3773,21 @@ export class StructuredDeliveryQueue {
         }
         return;
       }
-      if (error instanceof StructuredRecoverySynchronizingError && this.port.deferTarget?.(effect.conversationId)) {
+      if (error instanceof StructuredRecoverySynchronizingError && await this.port.deferTarget?.(effect.conversationId)) {
+        releaseAdmissionWait();
         this.noteWait(effect, "startup", { wake: "retry" });
         this.retrySoon();
         return;
       }
       if (error instanceof StructuredRecoveryHeldForUpdateError) {
+        releaseAdmissionWait();
         this.retrySoon();
         return;
       }
       /* An orphan with work in flight is stopped once its grace ends; the
          operation stays queued and names the wait. */
       if (error instanceof StructuredOrphanGraceError) {
+        releaseAdmissionWait();
         this.noteWait(effect, "recovering-host", { wake: "retry", detail: error.message });
         this.retrySoon();
         return;
@@ -3703,13 +3796,15 @@ export class StructuredDeliveryQueue {
          in case the refusal clears (a pending action ends, survivors exit);
          past it the send fails with that refusal as its reason. */
       if (error instanceof StructuredOrphanStopRefusedError && error.holding) {
+        releaseAdmissionWait();
         this.noteWait(effect, "recovering-host", { wake: "retry", detail: error.message });
         this.retrySoon();
         return;
       }
       let reason = `structured host recovery failed: ${failureReason(error)}`;
       if (error instanceof StructuredRecoveryContendedError) {
-        const attempts = (this.contendedRecoveries.get(effect.operationId)?.attempts ?? 0) + 1;
+        const attempts = this.port.progress?.get(effect.operationId)?.attempt
+          ?? (this.contendedRecoveries.get(effect.operationId)?.attempts ?? 0) + 1;
         if (attempts < CONTENDED_RECOVERY_ATTEMPTS) {
           this.deferContendedRecovery(effect, attempts);
           return;
@@ -3784,6 +3879,14 @@ export class StructuredDeliveryQueue {
         return settled;
       };
       const authority = effect.onlyIfIdle ? { operationId: effect.operationId, claim: this.retirementClaim } : undefined;
+      // An idle-only retirement can still be refused at the signal boundary.
+      // Its cohort may be cancelled only after termination is confirmed.
+      const fenceRetiredSends = async () => {
+        if (effect.onlyIfIdle && effect.pendingSendIds?.length) {
+          if (!this.port.fencePendingSends) throw new Error("pending delivery fence is unavailable");
+          await this.port.fencePendingSends(effect.pendingSendIds);
+        }
+      };
       const refusal = await this.killRefusal(effect.conversationId);
       if (refusal) {
         await transition("failed", { reason: refusal });
@@ -3814,6 +3917,7 @@ export class StructuredDeliveryQueue {
           if (!effect.onlyIfIdle && !await transition("delivering")) {
             return { blocked: false, terminated: true };
           }
+          await fenceRetiredSends();
           await transition("delivered");
           return { blocked: false, terminated: true };
         } catch (error) {
@@ -3829,6 +3933,7 @@ export class StructuredDeliveryQueue {
           await transition("failed", { reason: "structured host termination is unavailable" });
           return { blocked: false, terminated: false };
         }
+        await fenceRetiredSends();
         await transition("delivered");
         return { blocked: false, terminated: true };
       } catch (error) {

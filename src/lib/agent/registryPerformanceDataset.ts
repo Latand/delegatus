@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { STAGED_RECOVERY_PREFIX } from "@/lib/runtime/stagedRecovery";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 
 import { IDENTITY_WAVE_MIGRATION } from "./identityWaveMigration";
@@ -53,6 +54,15 @@ export interface RegistryPerformanceDatasetShape {
       its receipt the way a spawn records them. A live installation keeps one
       for most launches it ever made. Defaults to none. */
   spawnMessages?: number;
+  startupCensus?: {
+    archived: number;
+    failedDead: number;
+    failedUnhosted: number;
+    closedStaged: number;
+    live: number;
+    idle: number;
+    unhosted: number;
+  };
 }
 
 /** Retained census used for managed-update qualification. */
@@ -213,6 +223,10 @@ export function buildRegistryPerformanceDataset(
     for (let index = total - 1; index >= 0 && picked.size < wanted; index--) if (claims(index % count)) picked.add(index);
     return picked;
   };
+  const census = shape.startupCensus;
+  if (census && Object.values(census).reduce((total, count) => total + count, 0) !== shape.entries) {
+    throw new Error("startup census counts must cover the entry collection");
+  }
   const activeIndexes = newestClaiming(shape.entries, shape.activeEntries + shape.workers);
   const workerIndexes = new Set([...activeIndexes].sort((left, right) => right - left).slice(0, shape.workers));
   const outstandingIndexes = newestClaiming(shape.receipts, shape.outstandingReceipts);
@@ -261,6 +275,47 @@ export function buildRegistryPerformanceDataset(
       workers.push({ key, sessionId: sessionKey.sessionId, transcript: transcriptOf(index) });
       file.conversations[conversationId(index)]!.turn = { state: "busy", source: "lifecycle", terminalAt: null, observedAt: new Date(seededAt).toISOString() };
     }
+  }
+  if (census) {
+    file.conversations[conversationId(2)]!.agentRole = "merger";
+    const checkout = file.entries[`codex:${uuid(2)}`]!;
+    checkout.claimEpoch = 1;
+    checkout.hostExitProcess = { pid: 2_147_483_647, startIdentity: "synthetic-start", bootEpoch: "synthetic-boot" };
+    const ends = [census.archived, census.failedDead, census.failedUnhosted, census.closedStaged, census.live, census.idle]
+      .map((_, index, counts) => counts.slice(0, index + 1).reduce((sum, count) => sum + count, 0));
+    const older = new Date(seededAt - 7 * 86_400_000).toISOString();
+    for (let index = 0; index < shape.entries; index++) {
+      const censusClass = ends.findIndex(end => index < end);
+      const entry = file.entries[`codex:${uuid(index)}`]!;
+      entry.status = censusClass === 4 ? "live" : censusClass === 5 ? "idle"
+        : censusClass === 2 || censusClass === -1 ? "unhosted" : "dead";
+      entry.structuredHost = {
+        kind: "codex-app-server", endpoint: censusClass === 0 && index === 8 ? "stdio:retained" : "stdio:released",
+        process: null, eventCursor: 0, protocolVersion: "synthetic protocol metadata ".repeat(64),
+        writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+      };
+      if (censusClass < 1 || censusClass > 3) continue;
+      const launchId = `census-launch-${index}`;
+      entry.pendingAction = "spawn";
+      entry.structuredHostOperationId = launchId;
+      file.receipts[launchId] = {
+        ...structuredClone(receipt), launchId, conversationId: conversationId(index), transport: "structured",
+        key: entry.key, artifactPath: entry.artifactPath, state: censusClass === 3 ? "path-pending" : "failed",
+        cwd: entry.cwd, createdAt: older, admissionOwner: null,
+        ...(censusClass === 3 ? { error: STAGED_RECOVERY_PREFIX + JSON.stringify({
+          phase: "uncertain", startedAt: Date.parse(older), checks: 5, nextTryAt: Date.parse(older),
+          reason: "synthetic closed stage", stopped: true,
+        }) } : { failureRepairState: "handled" as const }),
+      };
+      if (censusClass === 3) file.memberships[conversationId(index)] = [{
+        conversationId: conversationId(index), kind: "pipeline", containerId: "census-closed-pipeline", role: "builder",
+        slot: "build", stageId: "build", stageOrder: 0, round: 1, parentConversationId: null, createdAt: older,
+      }];
+    }
+    file.memberships[conversationId(7)] = [{
+      conversationId: conversationId(7), kind: "pipeline", containerId: "census-read-fenced", role: "builder",
+      slot: "build", stageId: "build", stageOrder: 0, round: 1, parentConversationId: null, createdAt: older,
+    }];
   }
   const grantSubjects: RegistryPerformanceDataset["grantSubjects"] = [];
   for (let index = 0; index < shape.receipts; index++) {
@@ -426,7 +481,7 @@ export function buildRegistryPerformanceDataset(
     const counter = new Database(filename, { readonly: true });
     const rows = counter.query<{ rows: number }, []>("SELECT COUNT(*) AS rows FROM registry_rows").get()!.rows;
     counter.close();
-    let remaining = Math.max(0, rows - shape.hotTerminalRows);
+    let remaining = census?.archived ?? Math.max(0, rows - shape.hotTerminalRows);
     while (remaining > 0) {
       const moved = store.archiveInactive(Math.min(10_000, remaining));
       if (!moved) break;

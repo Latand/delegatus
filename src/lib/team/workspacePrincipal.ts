@@ -6,6 +6,7 @@ import { existingTeamStore, type TeamStore } from "./store";
 import { workspaceDirectory } from "./workspaces";
 import { workspaceScope } from "./workspaceAccess";
 import { orchestratorWorkspacePrincipalsOrUnknown } from "@/lib/orchestrator/seats";
+import { authorizedManagerSeats } from "@/lib/orchestrator/authority";
 import { TeamError } from "./members";
 
 export type WorkspacePrincipal = NonNullable<LaunchProfile["workspace"]>;
@@ -28,14 +29,16 @@ export function conversationWorkspacePrincipal(snapshot: RegistryFile | ((id: st
 /**
  * A project's seat states its own reach, so resolution ends at it:
  * - a seat designated for a member keeps that binding whoever writes later;
- * - a seat that inherited a member's message through a rotation
- *   (`workspaceFromMessage`) is fenced until a person writes to it, and then
- *   that person decides, as on any conversation a member wrote to;
- * - a seat with no binding answers to the latest person who wrote to it.
+ * - a seat that inherited a member's reach through a rotation keeps that
+ *   binding until an authorized designation changes it;
+ * - an installation seat keeps its installation authority across human input.
  * Its parent link is the handover to the seat it replaced and carries no
  * authority: whoever designated the successor already decided that.
  */
 export function conversationWorkspaceReach(snapshot: RegistryFile | ((id: string) => RegistryConversation | null), id: string | null, store = existingTeamStore()): WorkspaceReach {
+  const callerId = id;
+  const lookup = (key: string) => typeof snapshot === "function" ? snapshot(key)
+    : Object.hasOwn(snapshot.conversations, key) ? snapshot.conversations[key] : null;
   const seen = new Set<string>();
   // One lazy, identity-cached seat map per resolution. Solo installations skip it;
   // persisted launch bindings still fail closed if their team store vanishes.
@@ -64,12 +67,28 @@ export function conversationWorkspaceReach(snapshot: RegistryFile | ((id: string
   };
   while (id && !seen.has(id)) {
     seen.add(id);
-    const conversation = typeof snapshot === "function" ? snapshot(id) : Object.hasOwn(snapshot.conversations, id) ? snapshot.conversations[id] : undefined;
+    const conversation = lookup(id);
     const profile = conversation?.generations.at(-1)?.launchProfile;
     const seat = seatBinding(id, Boolean(profile?.workspace));
-    // A person's designation for a member outranks everything a message left
-    // behind. The launch marker keeps a message's answer once the conversation
-    // leaves the seat map.
+    // A designation owns the seat's authority. Human messages carry requests;
+    // they do not redesignate the seat. Preserve an explicit launch restriction
+    // as well, including when an installation seat adopts a member's worker.
+    if (id === callerId && seat && authorizedManagerSeats({
+      ...seat.authority,
+      resolveAlias: key => lookup(key)?.id ?? key,
+      conversationFacts: key => {
+        const row = lookup(key);
+        const project = row?.projectOwnership?.project;
+        return row ? { superseded: Boolean(row.supersededBy), hasGeneration: row.generations.length > 0,
+          project: project ? canonicalProject(project) : null } : null;
+      },
+    }, id).length > 0) {
+      const launched = profile?.workspace && !profile.workspace.fromMessage ? profile.workspace : undefined;
+      const principal = launched ?? seat.workspace;
+      return principal ? bound(principal, !launched && seat.fromMessage) : { principal: null, fromMessage: false };
+    }
+    // Ancestors and rejected designations retain the ordinary precedence:
+    // fixed bindings, then the latest author, then inherited message authority.
     const designated = seat?.fromMessage ? undefined : seat?.workspace;
     const marked = profile?.workspace?.fromMessage ? profile.workspace : undefined;
     const inherited = designated ? undefined : seat?.fromMessage ? seat.workspace : marked;

@@ -1,3 +1,4 @@
+import { settlementDeadlineForRow } from "./sendSettlement";
 import { assertProactiveTaskExecution, proactiveConversationTaskIds, proactiveConversationContext } from "@/lib/tasks/proactiveExecution";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { spawnDiagnosticError, spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
@@ -63,7 +64,7 @@ import {
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { ownedDeliveryProgressStore, type DeliveryProgressRecord } from "./deliveryProgress";
 import type { DeliveryWaitReason } from "./deliveryWaitReason";
-import { admissionRecordStanding, recordAdmissionWait, recordWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort, type RecordedWait } from "./recordWait";
+import { switchWaitReason, admissionRecordStanding, recordAdmissionWait, recordWait, stillAtStep, stillOwnsRecord, type DeliveryProgressPort, type RecordedWait } from "./recordWait";
 import { STRUCTURED_DELIVERY_TIMING } from "./structuredDeliveryQueue";
 import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
 import { isInterruptionObligationId } from "./interruptionObligations";
@@ -89,6 +90,9 @@ export interface StructuredMessageRequest {
   admissionGuardAsync?: () => Promise<void>;
   /** The autonomous caller's authority fence during replacement host publication. */
   recoveryAuthorityGuard?: () => void;
+  /** A persisted checkout cut carries a unique, one-time admission proof for
+      its deterministic recovery key, including on legacy conversation rows. */
+  freshCheckoutCutAdmission?: true;
   path: string;
   conversationId?: string | null;
   clientMessageId?: string | null;
@@ -135,7 +139,7 @@ export type StructuredMessageResult =
      operation id — so it answers with that id like every other accepted send.
      Without it a hold was the one acceptance a caller could never ask about
      afterwards, which put `queued` back at the end of the story. */
-  | { ok: true; structured: true; target: string | null; outcome: "held"; operationId: string; spawned?: boolean }
+  | { ok: true; structured: true; target: string | null; outcome: "held"; operationId: string; spawned?: boolean; waitReason?: string; detail?: string; deadlineAt?: string }
   | { ok: false; structured: true; outcome: "failed"; error: string; status: number; operationId?: string; receipt?: RuntimeOperationReceipt; successorConversationId?: string; transportUncertain?: true; code?: string; seatConversationId?: string; admission?: "refused" };
 
 export interface StructuredMessageDependencies {
@@ -215,7 +219,7 @@ function settleRecord(progress: DeliveryProgressPort | null, operationId: string
  */
 export function payloadRefusal(
   capability: RuntimeImageCapability,
-  engine: "claude" | "codex" | "copilot",
+  engine: "claude" | "codex" | "copilot" | "antigravity",
   refs: readonly StructuredImageRef[],
   wantsImages = refs.length > 0,
 ): { error: string; status: number } | null {
@@ -256,7 +260,7 @@ async function endReservationForRequest(
   return { ended: true, error };
 }
 
-function acceptedHeld(operationId: string, target: string | null = null, spawned = false): StructuredMessageResult {
+function acceptedHeld(operationId: string, target: string | null = null, spawned = false): Extract<StructuredMessageResult, { outcome: "held" }> {
   return { ok: true, structured: true, target, outcome: "held", operationId, ...(spawned ? { spawned: true } : {}) };
 }
 
@@ -531,11 +535,37 @@ function refusedIdempotencyKey(key: string): Extract<StructuredMessageResult, { 
   });
 }
 
-function commandInput(request: StructuredMessageRequest) {
+/** Automated senders targeting a busy Antigravity conversation default to
+    `queue` so they never cancel an active turn unless they explicitly asked
+    to interrupt or steer (docs/design/antigravity-engine.md §3.3). */
+export function defaultStructuredSendPolicy(
+  request: Pick<StructuredMessageRequest, "kind" | "policy" | "origin">,
+  engine: AgentEngine | null | undefined,
+): NonNullable<StructuredMessageRequest["policy"]> {
+  if (request.policy) return request.policy;
+  if (
+    engine === "antigravity"
+    && request.kind !== "steer"
+    && request.kind !== "inject"
+    && request.origin
+    && request.origin.kind !== "operator"
+  ) {
+    return "queue";
+  }
+  return "interrupt-active";
+}
+
+function commandInput(request: StructuredMessageRequest, engine?: AgentEngine | null) {
+  const resolvedPolicy = request.policy ?? (engine && request.kind !== "inject"
+    ? (() => {
+      const effective = defaultStructuredSendPolicy(request, engine);
+      return effective === "interrupt-active" ? undefined : effective;
+    })()
+    : undefined);
   return {
     ...(request.operationId ? { operationId: request.operationId } : {}),
     ...(request.kind ? { kind: request.kind } : {}),
-    ...(request.policy ? { policy: request.policy } : {}),
+    ...(resolvedPolicy ? { policy: resolvedPolicy } : {}),
     ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
     ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
     ...(request.origin ? { origin: request.origin } : {}),
@@ -712,7 +742,7 @@ async function holdDuringRuntimeSynchronization(
       payloadKind,
       refs,
       contentDigest,
-      commandInput(request),
+      commandInput(request, conversation.engine),
     );
     if (replay?.state === "delivered") {
       return deliveredReservationReplay(replay, idempotencyKey, conversation.id, false);
@@ -740,7 +770,7 @@ async function holdDuringRuntimeSynchronization(
         payloadKind,
         refs,
         contentDigest,
-        commandInput(request),
+        commandInput(request, conversation.engine),
         { recoveryIntent: allowReclaimed ? "reclaimed-host" : null, admissionGuard: request.admissionGuard,
           ...(needsAccountReseat ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
         request.admissionGuardAsync,
@@ -765,7 +795,7 @@ async function holdDuringRuntimeSynchronization(
         payloadKind,
         refs,
         contentDigest,
-        commandInput(request),
+        commandInput(request, conversation.engine),
       );
       if (raced) return raced;
       (admission.storeImages ?? ((images) => runtimeImageStore().putMany(images)))(rawImages);
@@ -1549,7 +1579,8 @@ export async function enqueueStructuredMessage(
         return continuationRefused("runtime session is not the conversation's current generation");
       }
       const key = request.clientMessageId?.trim();
-      if (key && registry.deliveryAdmissionForKey(owner.conversation.id, key).outcome !== "not-executed") {
+      if (key && registry.deliveryAdmissionForKey(owner.conversation.id, key).outcome !== "not-executed"
+        && !(request.freshCheckoutCutAdmission && request.operationId?.startsWith("checkout_merger_"))) {
         return continuationRefused("an earlier continuation admission must be reconciled before host recovery");
       }
       const overlong = key ? refusedIdempotencyKey(key) : null;
@@ -1683,7 +1714,7 @@ export async function enqueueStructuredMessage(
       refs.length ? "runtime-images" : "text",
       refs,
       content.contentDigest,
-      commandInput(request),
+      commandInput(request, conversation.engine),
     );
     if (!terminalReplay && request.admissionGuard
       && registry.deliveryAdmissionForKey(conversation.id, idempotencyKey).outcome !== "admitted") request.admissionGuard();
@@ -1751,7 +1782,7 @@ export async function enqueueStructuredMessage(
       refs.length ? "runtime-images" : "text",
       refs,
       content.contentDigest,
-      commandInput(request),
+      commandInput(request, conversation.engine),
     );
     if (replay) return replay;
     if (request.admissionGuard
@@ -1777,7 +1808,7 @@ export async function enqueueStructuredMessage(
         refs.length ? "runtime-images" : "text",
         refs,
         content.contentDigest,
-        commandInput(request),
+        commandInput(request, conversation.engine),
         { admissionGuard: request.admissionGuard,
           ...(needsAccountReseat && request.kind !== "inject" ? { reseatToActiveAccount: { launchId: request.launchId } } : {}) },
         request.admissionGuardAsync,
@@ -2066,7 +2097,13 @@ export async function enqueueStructuredMessage(
       recordWait(progress, registry, reservation, { reason: "switching-accounts" });
       (dependencies.requestMigrationTick ?? requestAccountMigrationTick)();
       requestDeliveryDrain(dependencies.kick ?? kickStructuredDeliveryQueue);
-      return acceptedHeld(reservation.command.operationId, recoveredHost ? null : conversation.id, recoveredHost);
+      const waitReason = switchWaitReason(registry, reservation.conversationId);
+      const deadline = settlementDeadlineForRow(registry, { delivery: reservation });
+      return { ...acceptedHeld(reservation.command.operationId, recoveredHost ? null : conversation.id, recoveredHost),
+        waitReason, detail: waitReason === "switch-after-turn" || Boolean(activeSession.activeTurnId)
+          ? "Delivery waits until the current turn ends and the account switch completes; the wait is renewed while the target is working."
+          : "Delivery waits for the account switch; it fails when its settlement deadline expires.",
+        ...(deadline ? { deadlineAt: deadline.deadlineAt } : {}) };
     }
     if (reservation.state === "delivered") {
       return deliveredReservationReplay(
@@ -2201,7 +2238,7 @@ export async function enqueueStructuredMessage(
            the send default here refused every injection at the journal, with
            `thread/inject_items` never called. The default stays exactly what it
            was for every other kind. */
-        ...(assigned.command.kind === "inject" ? {} : { policy: request.policy ?? "interrupt-active" }),
+        ...(assigned.command.kind === "inject" ? {} : { policy: assigned.command.policy ?? defaultStructuredSendPolicy(request, conversation.engine) }),
         ...(request.turnId !== undefined ? { turnId: request.turnId } : {}),
         ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
         ...(request.runtime ? { runtime: request.runtime } : {}),

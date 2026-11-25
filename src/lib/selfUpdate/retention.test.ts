@@ -178,6 +178,26 @@ test.each([true, false])("a fresh install without a releases directory has nothi
   expect(exists(h.record.releasesDir)).toBeFalse();
 });
 
+test("a directory fsync failure after the report rename remains in the writer verdict", async () => {
+  const h = fixture(0);
+  fs.rmSync(h.record.releasesDir, { recursive: true });
+  h.ports.scan = () => retentionProcessScan(h.record.releasesDir, path.join(h.root, "absent-proc"));
+  h.ports.env = { LLV_RETENTION_RUN_ID: "retention-run-fixture" };
+  const original = fs.fsyncSync;
+  const flush = spyOn(fs, "fsyncSync").mockImplementation((descriptor: number) => {
+    if (fs.fstatSync(descriptor).isDirectory()) throw new Error("fixture directory fsync failure");
+    original(descriptor);
+  });
+  try {
+    const report = await h.run();
+    expect(report.runId).toBe(h.ports.env.LLV_RETENTION_RUN_ID);
+    expect(report.errors).toContain("cannot write retention report: Error: fixture directory fsync failure");
+    const persisted = JSON.parse(fs.readFileSync(h.ports.reportFile!, "utf8"));
+    expect(persisted.runId).toBe(report.runId);
+    expect(persisted.errors).toEqual([]);
+  } finally { flush.mockRestore(); }
+});
+
 test.each(["releases", "journal"])("a missing process inventory still refuses a pass with %s", async state => {
   const h = fixture(0);
   h.record.checkout = null;

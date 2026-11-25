@@ -13,7 +13,7 @@ function sessionStatus(
   journal: RuntimeJournal,
   conversationId: string,
   sessionId: string,
-  host: "hosted" | "dead",
+  host: "hosted" | "recovering" | "dead",
 ): void {
   journal.append({
     scope: { type: "session", id: conversationId },
@@ -328,7 +328,7 @@ test("stale orphaned spawn and kill effects settle while live work remains pendi
   now += RUNTIME_PENDING_EFFECT_STALE_MS + 1;
   const states = new Map<string, "current" | "dead">([
     ["conversation_stale_kill", "dead"],
-    ["conversation_live_kill", "dead"],
+    ["conversation_live_kill", "current"],
     ["conversation_registered_spawn", "current"],
   ]);
   expect(journal.settleStalePendingEffects(states)).toEqual({ scanned: 4, settled: 0 });
@@ -353,6 +353,60 @@ test("stale orphaned spawn and kill effects settle while live work remains pendi
 
   journal.close();
   fs.rmSync(directory, { recursive: true, force: true });
+});
+
+test.each([
+  ["hosted", "dead", "registry host is dead"],
+  ["hosted", "superseded", "registry conversation is superseded"],
+  ["recovering", "dead", "registry host is dead"],
+  ["recovering", "superseded", "registry conversation is superseded"],
+] as const)("a %s journal session settles after continuous %s registry evidence", (host, state, reason) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-journal-retention-"));
+  let now = 1_000;
+  const journal = new RuntimeJournal(path.join(directory, "events.sqlite"), {
+    structuredHosts: true,
+    now: () => now,
+  });
+  const conversationId = "conversation_stale_projection";
+  const operationId = "operation_stale_projection";
+  const pending = { scanned: 1, settled: 0 };
+  const states = new Map([[conversationId, state]]);
+  try {
+    const sessionId = "thread-stale-projection";
+    sessionStatus(journal, conversationId, sessionId, host);
+    journal.executeOperation({
+      kind: "kill",
+      conversationId,
+      operationId,
+      idempotencyKey: "stale-projection",
+      sessionKey: { engine: "codex", sessionId },
+    });
+    expect(journal.readSession({ conversationId })?.host).toBe(host);
+
+    now += RUNTIME_PENDING_EFFECT_STALE_MS;
+    expect(journal.settleStalePendingEffects(new Map())).toEqual(pending);
+    now += RUNTIME_PENDING_EFFECT_STALE_MS;
+    expect(journal.settleStalePendingEffects(new Map())).toEqual(pending);
+    expect(journal.settleStalePendingEffects(states)).toEqual(pending);
+
+    now += RUNTIME_PENDING_EFFECT_STALE_MS;
+    expect(journal.settleStalePendingEffects(new Map([[conversationId, "current"]]))).toEqual(pending);
+    expect(journal.settleStalePendingEffects(states)).toEqual(pending);
+    now += RUNTIME_PENDING_EFFECT_STALE_MS - 1;
+    expect(journal.settleStalePendingEffects(states)).toEqual(pending);
+    expect(journal.operationResult(operationId)?.receipt.status).toBe("queued");
+
+    now += 1;
+    expect(journal.settleStalePendingEffects(states)).toEqual({ scanned: 1, settled: 1 });
+    expect(journal.operationResult(operationId)?.receipt).toMatchObject({
+      status: "failed",
+      reason: expect.stringContaining(reason),
+    });
+    expect(journal.effectBatch()).toEqual([]);
+  } finally {
+    journal.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 

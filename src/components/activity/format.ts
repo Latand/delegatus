@@ -1,3 +1,4 @@
+import { dateTimeFormatter } from "@/lib/dateTimeFormatter";
 import type { HostReport } from "@/lib/activity/hostSources";
 import type { DayActivity } from "@/lib/activity/method";
 import type { ActivityProjectRow, ActivityResponse } from "@/lib/activity/report";
@@ -102,26 +103,8 @@ export function agentParts(split: { wallMs: number; supervisedMs: number; unatte
 
 const NOON = 12 * 60 * MINUTE;
 
-/* A formatter costs about a millisecond to build and a microsecond to use, and a card's
-   state line and chronology build one per time they print: a board of cards that re-render
-   when a poll lands (or while a card is dragged) spent tens of milliseconds a render
-   here. Locales, zones and the five option shapes below are few; the cap is a backstop. */
-const FORMATTERS = new Map<string, Intl.DateTimeFormat>();
-const FORMATTER_CAP = 64;
-
-function formatter(locale: string, tz: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
-  const key = `${locale}|${tz}|${JSON.stringify(options)}`;
-  let found = FORMATTERS.get(key);
-  if (!found) {
-    if (FORMATTERS.size >= FORMATTER_CAP) FORMATTERS.clear();
-    found = new Intl.DateTimeFormat(locale, { ...options, timeZone: tz });
-    FORMATTERS.set(key, found);
-  }
-  return found;
-}
-
 function format(locale: Locale, tz: string, options: Intl.DateTimeFormatOptions, at: number): string {
-  return formatter(intlLocale(locale), tz, options).format(new Date(at));
+  return dateTimeFormatter(intlLocale(locale), tz, options).format(new Date(at));
 }
 
 let zone: { name: string; readAt: number } | null = null;
@@ -173,7 +156,7 @@ export function rangeText(data: ActivityResponse, locale: Locale): string {
   const last = data.days.at(-1);
   if (!first || !last) return "";
   if (data.range.key === "today") return format(locale, tz, { weekday: "long", day: "numeric", month: "short" }, first.start + NOON);
-  const dayFormatter = formatter(intlLocale(locale), tz, { day: "numeric", month: "short" });
+  const dayFormatter = dateTimeFormatter(intlLocale(locale), tz, { day: "numeric", month: "short" });
   return dayFormatter.formatRange(new Date(first.start + NOON), new Date(last.start + NOON));
 }
 
@@ -187,7 +170,7 @@ export function datesText(dates: readonly string[], days: readonly DayActivity[]
     if (last && position === last[1] + 1) last[1] = position;
     else runs.push([position, position]);
   }
-  const dayFormatter = formatter(intlLocale(locale), tz, { day: "numeric", month: "short" });
+  const dayFormatter = dateTimeFormatter(intlLocale(locale), tz, { day: "numeric", month: "short" });
   return runs.map(([from, to]) => from === to
     ? dayFormatter.format(new Date(days[from]!.start + NOON))
     : dayFormatter.formatRange(new Date(days[from]!.start + NOON), new Date(days[to]!.start + NOON))).join(", ");
@@ -219,7 +202,7 @@ export function nameList(names: readonly string[], t: TFunction): string {
   return t("activity.list.andMore", { a: names[0]!, b: names[1]!, count: names.length - 2 });
 }
 
-export const ENGINE_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", copilot: "Copilot" };
+export const ENGINE_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", copilot: "Copilot", antigravity: "Antigravity" };
 
 export function roleName(role: string, t: TFunction): string {
   if (role === "unregistered") return t("activity.role.unregistered");

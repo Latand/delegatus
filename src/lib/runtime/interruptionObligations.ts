@@ -9,9 +9,9 @@ import type { DeliveryOperationOwner, RegistryFile } from "@/lib/agent/registry"
 import { killedBackgroundWorkNotice } from "@/lib/pipelines/backgroundTasks";
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { databaseFileIdentity } from "@/lib/state/currentDatabase";
-import { initializeStateCollections, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, SqliteStateCollection, stateEvidenceVersion } from "@/lib/state/sqliteStateStore";
 import { writeJsonDurably, fsyncPath } from "@/lib/state/durableJson";
-import { withFileTransaction, withFileTransactionAsync, withFileTransactionAttempt, withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { FileTransactionAdmissionError, withFileTransaction, withFileTransactionAsync, withFileTransactionAttempt, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
 import { VIEWER_RELEASE_INTERRUPTION_OPENING, VIEWER_RESTART_INTERRUPTION_OPENING } from "./recoveryNotices";
@@ -188,6 +188,31 @@ function withCutRows<T>(directory: string, read: (rows: SqliteStateCollection<In
   try { return read(rows); } finally { rows.close(); }
 }
 
+// Cache only complete list results. Each miss reads one SQLite snapshot and
+// closes its handle. A concurrent commit prevents publishing that snapshot
+// for reuse, while the current reader can still use its consistent rows.
+type CutListSnapshot = { version: string; records: InterruptionObligation[] };
+const cutListSnapshots = new Map<string, CutListSnapshot>();
+
+function sealedCutList(directory: string): InterruptionObligation[] {
+  const key = path.resolve(directory);
+  const database = cutDatabase(key);
+  const version = stateEvidenceVersion(database);
+  let cached = cutListSnapshots.get(key);
+  cutListSnapshots.delete(key);
+  if (!cached || cached.version !== version) {
+    const records = withCutRows(key, rows => rows.snapshot());
+    // The directory reader visits sorted filenames before its stable date sort.
+    records.sort((a, b) => a.recordedAt.localeCompare(b.recordedAt)
+      || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    if (stateEvidenceVersion(database) !== version) return records;
+    cached = { version, records };
+  }
+  cutListSnapshots.set(key, cached);
+  if (cutListSnapshots.size > 16) cutListSnapshots.delete(cutListSnapshots.keys().next().value!);
+  return structuredClone(cached.records);
+}
+
 function fileStamp(filename: string): string | null {
   try {
     const stat = fs.statSync(filename, { bigint: true });
@@ -207,19 +232,54 @@ function createEmptyPending(directory: string): string {
   return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
 }
 
+const INCOMPLETE_RECIPIENT_EVIDENCE = "recipient interruption evidence is unavailable or incomplete";
+const RECIPIENT_FILESYSTEM_ERROR_CODES = new Set([
+  "EACCES", "EDQUOT", "EEXIST", "EIO", "EISDIR", "EMFILE", "ENFILE", "ENOENT", "ENOMEM", "ENOSPC", "ENOTDIR",
+  "EPERM", "EROFS", "ETXTBSY", "ELOOP",
+]);
+
+function isRecipientFilesystemError(cause: unknown): cause is NodeJS.ErrnoException {
+  return cause instanceof Error && typeof (cause as NodeJS.ErrnoException).code === "string"
+    && RECIPIENT_FILESYSTEM_ERROR_CODES.has((cause as NodeJS.ErrnoException).code!);
+}
+
 function unavailableRecipientCuts(): never {
-  throw new Error("recipient interruption evidence is unavailable or incomplete");
+  throw new Error(INCOMPLETE_RECIPIENT_EVIDENCE);
+}
+
+export class RecipientInterruptionEvidenceError extends Error {
+  constructor(readonly category: "journal lock busy" | "source marker missing or mismatched"
+    | "pending journal changed" | "pending journal inspection failed" | "journal lock setup failed"
+    | "recipient index invalid or unavailable", options?: ErrorOptions) {
+    super(`${INCOMPLETE_RECIPIENT_EVIDENCE} (${category})`, options);
+    this.name = "RecipientInterruptionEvidenceError";
+  }
+}
+
+function recipientCutSource(directory: string): CutSource {
+  try { return cutSource(directory) ?? unavailableRecipientCuts(); }
+  catch (cause) { throw new RecipientInterruptionEvidenceError("source marker missing or mismatched", { cause }); }
 }
 
 /** Reads only the selected conversations, including resolved cuts used to
  * recognize a repeated restart. A persisted completeness witness is mandatory;
  * a cold recipient never imports journals or backfills other conversations. */
 function readRecipientInterruptionEvidence(directory: string, conversationIds: Iterable<string>) {
-  const source = cutSource(directory);
-  if (!source || fileStamp(`${directory}.pending.jsonl`) !== source.pendingStamp) unavailableRecipientCuts();
-  const records = withCutRows(directory, rows => rows.interruptionRecipients([...new Set(conversationIds)], RECIPIENT_RECORD_LIMIT));
-  if (JSON.stringify(cutSource(directory)) !== JSON.stringify(source)
-    || fileStamp(`${directory}.pending.jsonl`) !== source.pendingStamp) unavailableRecipientCuts();
+  const source = recipientCutSource(directory);
+  const pending = `${directory}.pending.jsonl`;
+  const pendingStamp = () => {
+    try { return fileStamp(pending); }
+    catch (cause) { throw new RecipientInterruptionEvidenceError("pending journal inspection failed", { cause }); }
+  };
+  if (pendingStamp() !== source.pendingStamp) throw new RecipientInterruptionEvidenceError("pending journal changed");
+  let records: InterruptionObligation[];
+  try {
+    records = withCutRows(directory, rows => rows.interruptionRecipients([...new Set(conversationIds)], RECIPIENT_RECORD_LIMIT));
+  } catch (cause) { throw new RecipientInterruptionEvidenceError("recipient index invalid or unavailable", { cause }); }
+  if (JSON.stringify(recipientCutSource(directory)) !== JSON.stringify(source)) {
+    throw new RecipientInterruptionEvidenceError("source marker missing or mismatched");
+  }
+  if (pendingStamp() !== source.pendingStamp) throw new RecipientInterruptionEvidenceError("pending journal changed");
   return { records, revision: digest(JSON.stringify([source.epoch, source.databaseIdentity, records])) };
 }
 
@@ -227,8 +287,13 @@ export function recipientInterruptionEvidence(directory: string, conversationIds
   try {
     return withFileTransactionAttempt(`${directory}.pending.jsonl`, "recipient interruption evidence is busy", () =>
       readRecipientInterruptionEvidence(directory, conversationIds));
-  } catch (error) {
-    throw new Error("recipient interruption evidence is unavailable or incomplete", { cause: error });
+  } catch (cause) {
+    if (cause instanceof RecipientInterruptionEvidenceError) throw cause;
+    if (cause instanceof FileTransactionAdmissionError) {
+      throw new RecipientInterruptionEvidenceError("journal lock busy", { cause });
+    }
+    if (isRecipientFilesystemError(cause)) throw new RecipientInterruptionEvidenceError("journal lock setup failed", { cause });
+    throw new Error(INCOMPLETE_RECIPIENT_EVIDENCE, { cause });
   }
 }
 
@@ -237,12 +302,24 @@ export function recipientInterruptionEvidence(directory: string, conversationIds
  * a missing or changed witness refuses before any writer runs. */
 export function recipientInterruptionObligationStore(directory: string, conversationIds: Iterable<string>): InterruptionObligationStore {
   const ids = new Set(conversationIds);
-  const run = <T>(operation: (store: ReturnType<typeof createInterruptionObligationStore>, records: InterruptionObligation[]) => T) =>
-    withFileTransactionAttempt(`${directory}.pending.jsonl`, "recipient interruption evidence is busy", () => {
-      const { records } = readRecipientInterruptionEvidence(directory, ids);
-      const store = createInterruptionObligationStore(directory, {}, true, false, records);
-      return store.mutation(() => operation(store, records));
-    });
+  const run = <T>(operation: (store: ReturnType<typeof createInterruptionObligationStore>, records: InterruptionObligation[]) => T) => {
+    try {
+      return withFileTransactionAttempt(`${directory}.pending.jsonl`, "recipient interruption evidence is busy", () => {
+        const { records } = readRecipientInterruptionEvidence(directory, ids);
+        const store = createInterruptionObligationStore(directory, {}, true, false, records);
+        return store.mutation(() => operation(store, records));
+      });
+    } catch (cause) {
+      if (cause instanceof RecipientInterruptionEvidenceError) throw cause;
+      if (cause instanceof FileTransactionAdmissionError) {
+        throw new RecipientInterruptionEvidenceError("journal lock busy", { cause });
+      }
+      if (isRecipientFilesystemError(cause)) {
+        throw new RecipientInterruptionEvidenceError("journal lock setup failed", { cause });
+      }
+      throw new Error(INCOMPLETE_RECIPIENT_EVIDENCE, { cause });
+    }
+  };
   return {
     list: () => recipientInterruptionEvidence(directory, ids).records,
     record: input => run(store => {
@@ -467,6 +544,9 @@ export function submittedContinuationOutcome(
     as a severed turn — and must still owe one continuation. */
 function coversSameCut(existing: InterruptionObligation, input: InterruptionObligationInput): boolean {
   if (existing.conversationId !== input.conversationId || existing.hostKey !== input.hostKey) return false;
+  // A checkout census proves a more specific boundary for a standalone
+  // assignment. Its reader reconciles any ordinary pre-stop release record.
+  if (input.boundary.startsWith("checkout-merger:") && existing.reason === "viewer-release" && !existing.seat && !existing.stage) return false;
   /* Between two restart records of a conversation that is no seat, the id is
      the whole identity: each names its cut by the turn that was cut. */
   if (restartRecordOfNoSeat(existing) && restartRecordOfNoSeat(input)) return false;
@@ -771,13 +851,38 @@ function createInterruptionObligationStore(
   };
   const list = (page?: { after: string; limit: number; nextCursor: string | null; names?: string[] }): InterruptionObligation[] => {
     if (recipientRecords) return recipientRecords;
+    if (!guardOnly && !page && !held) {
+      const sealed = source();
+      if (sealed && sealed.pendingStamp === fileStamp(pendingFile) && activeClaims().length === 0) {
+        const now = Date.now();
+        const records = sealedCutList(directory);
+        const hasExpired = records.some((obligation) => {
+          const resolvedAt = obligation.resolvedAt ? Date.parse(obligation.resolvedAt) : NaN;
+          return !interruptionObligationUnresolved(obligation) && now - resolvedAt > RESOLVED_RETENTION_MS;
+        });
+        if (!hasExpired) {
+          const current = source();
+          if (current && JSON.stringify(current) === JSON.stringify(sealed)
+            && fileStamp(pendingFile) === sealed.pendingStamp && activeClaims().length === 0) {
+            return records;
+          }
+        }
+      }
+    }
     importPending();
     return transaction(() => {
       let names: string[];
+      let snapshotByName: Map<string, InterruptionObligation> | null = null;
       try {
-        names = page?.names ?? (!guardOnly && source()
-          ? withCutRows(directory, rows => rows.snapshot().map(record => `${record.id}.json`))
-          : fs.readdirSync(guardOnly ? indexDirectory : directory));
+        if (page?.names) {
+          names = page.names;
+        } else if (!guardOnly && source()) {
+          const rows = withCutRows(directory, collection => collection.snapshot());
+          snapshotByName = new Map(rows.map(record => [`${record.id}.json`, record]));
+          names = [...snapshotByName.keys()];
+        } else {
+          names = fs.readdirSync(guardOnly ? indexDirectory : directory);
+        }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         names = [];
@@ -795,7 +900,7 @@ function createInterruptionObligationStore(
       // Advance over inspected keys even when a record is temporarily unreadable.
       if (page) page.nextCursor = candidates.length > selected.length ? selected.at(-1)!.slice(0, -5) : null;
       for (const name of selected) {
-        const obligation = read(path.join(directory, name));
+        const obligation = snapshotByName ? (snapshotByName.get(name) ?? null) : read(path.join(directory, name));
         if (!obligation) {
           if (guardOnly && !pending.some(item => `${item.id}.json` === name)) {
             // A failed read can be temporary. Only a proven absent canonical
@@ -1155,7 +1260,16 @@ export function interruptionObligationDirectory(registryFilename: string): strin
  * more than the Viewer knows: background or external work may have survived
  * the handover, so it asks for inspection before anything is re-run.
  */
-export function interruptionContinuationText(obligation: InterruptionObligation): string {
+export function interruptionContinuationText(obligation: InterruptionObligation, checkoutBatchDirectory?: string): string {
+  if (obligation.boundary.startsWith("checkout-merger:")) {
+    return [
+      "Checkout handover interrupted your standalone merger assignment. Reconcile the original batch under your existing assignment.",
+      checkoutBatchDirectory ? `The original batch uses TMPDIR ${JSON.stringify(checkoutBatchDirectory)}.` : "Locate the original batch directory from your previous turn.",
+      "Read merge-batch.json, its lock, recorder ownership and terminal receipts, then verify the worktree, current main and exact forge state.",
+      "An interrupted gate or a missing receipt grants no pass. Leave live operations with their owners and hold uncertain operations for reconciliation. Use terminal results only for their exact batch tuple.",
+      "Before continuing, establish exclusive batch custody and prove the next action is still owed. Preserve the original batch and report any outcome you cannot establish to the project seat.",
+    ].join(" ");
+  }
   const at = obligation.checkpoint.lastEventAt === null
     ? "an unrecorded time"
     : new Date(obligation.checkpoint.lastEventAt).toISOString();

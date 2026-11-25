@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { codexFixture, endingOf, fetchMain, NATIVE_GROUP, NoVerdict, runSteps, type Step } from "./local-gate";
 import { fixtureGitEnv } from "./local-gate.fixture";
-import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayRun, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { stopFixtureIdentity } from "../src/lib/testing/fixtureProcess";
 import { createGateTestFixtures } from "./gateTest.fixture";
 const root = path.resolve(import.meta.dir, "..");
@@ -157,7 +157,10 @@ test.skipIf(!userManager)("a stopped step's own work scope goes with it, helpers
   // A neighbour scope this run must leave alone.
   const neighbourDir = mkdtempSync(path.join(tmpdir(), "gate-neighbour-")); roots.push(neighbourDir);
   const neighbourFile = path.join(neighbourDir, "pid");
-  const neighbour = Bun.spawn({ cmd: ["systemd-run", "--user", "--scope", "-q", "--collect", "--", "bash", "-c", `echo $$ > '${neighbourFile}'; exec sleep 60`], stdio: ["ignore", "ignore", "ignore"] });
+  // A scope launcher may expand dollars in argv before Bash sees them.
+  const neighbourScript = path.join(neighbourDir, "run.sh");
+  writeFileSync(neighbourScript, `echo $$ > '${neighbourFile}'; exec sleep 60`);
+  const neighbour = Bun.spawn({ cmd: ["systemd-run", "--user", "--scope", "-q", "--collect", "--", "bash", neighbourScript], stdio: ["ignore", "ignore", "ignore"] });
   try {
     const [neighbourIdentity] = await recordFixtureIdentities([neighbourFile]);
     // Exercise actual transient scopes directly and below an intermediate.
@@ -168,7 +171,9 @@ test.skipIf(!userManager)("a stopped step's own work scope goes with it, helpers
       // One helper keeps the step's environment and one starts from an empty
       // one; both are reparented away from the step's process tree.
       const script = `echo $$ > '${dir}/root.pid'; cat /proc/$$/cgroup > '${dir}/scope'; ( sleep 60 & echo $! > '${dir}/kept.pid' ) ; ( env -i sleep 60 & echo $! > '${dir}/bare.pid' ) ; touch '${dir}/ready'; sleep 60`;
-      const scoped = ["systemd-run", "--user", "--scope", "-q", "--collect", "--", "bash", "-c", script];
+      const scriptFile = path.join(dir, "run.sh");
+      writeFileSync(scriptFile, script);
+      const scoped = ["systemd-run", "--user", "--scope", "-q", "--collect", "--", "bash", scriptFile];
       const command = wrapped ? ["bash", "-c", `"$@"; exit $?`, "step", ...scoped] : scoped;
       const started = performance.now();
       const pending = runSteps("pre-push", [{ name: "touched tests", command: [] }], { root, deadline: soon(4_000), logDir: dir, say: () => {},
@@ -193,6 +198,94 @@ test.skipIf(!userManager)("a stopped step's own work scope goes with it, helpers
     await neighbour.exited;
   }
 }, 40_000);
+test.skipIf(process.platform !== "linux" || !Bun.which("python3"))("a deadline is retryable while a stopped token holder awaits reaping", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-unreaped-")); roots.push(dir);
+  const token = path.join(dir, "token"), pidFile = path.join(dir, "pid");
+  // The fixture parent is outside the step. It lets the hook kill the token
+  // holder, keeps the exit observable, then reaps its own child on EOF.
+  const parent = Bun.spawn([Bun.which("python3")!, "-I", "-c", `
+import os, subprocess, sys
+token = sys.stdin.readline().strip()
+if not token:
+    sys.exit(0)
+child = subprocess.Popen(["sleep", "60"], env={**os.environ, "LLV_GATE_STEP": token})
+try:
+    with open(sys.argv[1] + ".tmp", "w") as pidfile:
+        pidfile.write(str(child.pid))
+    os.replace(sys.argv[1] + ".tmp", sys.argv[1])
+    sys.stdin.read()
+finally:
+    if child.poll() is None:
+        child.kill()
+    child.wait()
+`, pidFile], { stdin: "pipe", stdout: "ignore", stderr: "inherit" });
+  const now = Date.now;
+  let expired = false;
+  Date.now = () => now() + (expired ? 60_000 : 0);
+  const pending = runSteps("pre-push", [{ name: "touched tests", command: [], group: "push checks" }], {
+    root: dir, deadline: soon(30_000), logDir: dir, say: () => {}, prepare: () => ({ env: process.env,
+      command: ["bash", "-c", 'printf "%s\\n" "$LLV_GATE_STEP" > "$1.tmp"; mv "$1.tmp" "$1"; exec sleep 60', "step", token],
+    }),
+  }).then(() => null, (error: unknown) => error);
+  try {
+    const readyBy = now() + 5_000;
+    while (!existsSync(token) && now() < readyBy) await Bun.sleep(10);
+    parent.stdin.write(readFileSync(token));
+    parent.stdin.flush();
+    const [identity] = await recordFixtureIdentities([pidFile], 5_000);
+    expired = true;
+    const result = await pending;
+    expect(processIdentityStatus(identity!)).toBe("alive");
+    expect(processIdentityMayRun(identity!)).toBeFalse();
+    expect(result).toBeInstanceOf(NoVerdict);
+    const ending = endingOf("pre-push", result);
+    expect(ending.code).toBe(75);
+    expect(ending.line).toContain('"touched tests"');
+  } finally {
+    expired = true;
+    await pending;
+    Date.now = now;
+    parent.stdin.end();
+    await parent.exited;
+  }
+}, 20_000);
+
+test.skipIf(process.platform !== "linux" || !Bun.which("python3"))("a deadline stops the threads of a step whose leader has exited", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-exited-leader-")); roots.push(dir);
+  const pidFile = path.join(dir, "pid");
+  const command = [Bun.which("python3")!, "-I", "-c", `
+import ctypes, os, sys, threading
+def run():
+    with open(sys.argv[1] + ".tmp", "w") as pidfile:
+        pidfile.write(str(os.getpid()))
+    os.replace(sys.argv[1] + ".tmp", sys.argv[1])
+    threading.Event().wait(60)
+threading.Thread(target=run).start()
+ctypes.CDLL(None).pthread_exit(None)
+`, pidFile];
+  const now = Date.now;
+  let expired = false;
+  Date.now = () => now() + (expired ? 60_000 : 0);
+  const pending = runSteps("pre-push", [{ name: "touched tests", command: [] }], {
+    root: dir, deadline: soon(30_000), logDir: dir, say: () => {},
+    prepare: () => ({ command, env: process.env }),
+  }).then(() => null, (error: unknown) => error);
+  try {
+    const [identity] = await recordFixtureIdentities([pidFile], 5_000);
+    const readyBy = now() + 5_000;
+    while (alive(identity!.pid) && now() < readyBy) await Bun.sleep(10);
+    expect(alive(identity!.pid), "the leader has exited").toBeFalse();
+    expect(processIdentityMayRun(identity!), "the worker thread is still running").toBeTrue();
+    expired = true;
+    expect(await pending).toBeInstanceOf(NoVerdict);
+    expect(processIdentityMayRun(identity!)).toBeFalse();
+  } finally {
+    expired = true;
+    await pending;
+    Date.now = now;
+  }
+}, 20_000);
+
 test("a root that refuses the stop is reported within the cleanup allowance, and the hook exits without waiting for it", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "gate-refused-")); roots.push(dir);
   const harness = path.join(dir, "harness.ts"), output = path.join(dir, "stderr"), rootPid = path.join(dir, "root.pid");

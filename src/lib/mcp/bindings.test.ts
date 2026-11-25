@@ -4587,20 +4587,27 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
     });
     const operatorRead = await call("get_task", { clientRequestId: "step-operator-read", taskId: normalizedCreate.taskId });
     const statuses = [];
+    let clamped;
     for (const status of ["inbox", "assigned", "blocked", "done"]) {
       const changed = await call("update_task", { clientRequestId: "legacy-status-" + status, taskId: created.taskId, full: true, status });
       statuses.push(changed.task.status);
+      if (status === "blocked") clamped = changed;
     }
+    const parked = await call("update_task", {
+      clientRequestId: "operator-task-hold", taskId: normalizedCreate.taskId, full: true, hold: { kind: "operator", note: "Choose release" },
+    });
     console.log(JSON.stringify({ createdTask, updatedTask: updated.task, readTask: read.task,
       createNotes: normalizedCreate.notes, updateNotes: unknownUpdate.notes, normalizedCreate: normalizedCreate.task, unknownUpdate: unknownUpdate.task, normalizedUpdate: normalizedUpdate.task,
-      operatorUpdate: operatorUpdate.task, operatorRead: operatorRead.task, statuses, overageRefusals, overageNoWrites }));
+      operatorUpdate: operatorUpdate.task, operatorRead: operatorRead.task, statuses, clamped, parked: parked.task, overageRefusals, overageNoWrites }));
     } finally { await client.close(); await server.close(); }
   `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
   const output = await new Response(child.stdout).text();
   const error = await new Response(child.stderr).text();
   // Cold schema admission can finish successfully after the telemetry threshold.
   assertStateChildSuccess(await child.exited, error);
-  const result = JSON.parse(output) as { createNotes: string[]; updateNotes: string[]; createdTask: BoardTask; updatedTask: BoardTask; readTask: BoardTask; normalizedCreate: BoardTask; unknownUpdate: BoardTask; normalizedUpdate: BoardTask; operatorUpdate: BoardTask; operatorRead: BoardTask; statuses: string[]; overageRefusals: Array<{ ok: boolean; code: string; retryable: boolean; error: string; details: { field: string } }>; overageNoWrites: boolean[] };
+  const result = JSON.parse(output) as { createNotes: string[]; updateNotes: string[]; createdTask: BoardTask; updatedTask: BoardTask; readTask: BoardTask; normalizedCreate: BoardTask; unknownUpdate: BoardTask; normalizedUpdate: BoardTask; operatorUpdate: BoardTask; operatorRead: BoardTask; statuses: string[]; clamped: { task: BoardTask; notes: string[] }; parked: BoardTask; overageRefusals: Array<{ ok: boolean; code: string; retryable: boolean; error: string; details: { field: string } }>; overageNoWrites: boolean[] };
+  expect(result.createdTask.status).toBe("inbox");
+  expect(result.updatedTask.status).toBe("inbox");
   expect(result.createdTask.hold).toMatchObject({ kind: "pr", by: "agent", conversationId: "conversation_create_bound", note: "Waiting for capacity" });
   expect(result.updatedTask.hold).toMatchObject({ kind: "issue", by: "agent", conversationId: "conversation_update_bound", note: "Capacity is still full" });
   expect(result.updatedTask.hold?.since).toBe(result.createdTask.hold?.since);
@@ -4628,7 +4635,10 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
     expect(refusal.error).toContain("200 UTF-16 code units");
     expect(refusal.error).toContain("actual length is 201");
   }
-  expect(result.statuses).toEqual(["inbox", "assigned", "blocked", "done"]);
+  expect(result.statuses).toEqual(["inbox", "assigned", "inbox", "done"]);
+  expect(result.clamped.task.hold).toMatchObject({ kind: "unstated", by: "agent" });
+  expect(result.clamped.notes).toEqual([expect.stringContaining('Use hold kind "operator"')]);
+  expect(result.parked).toMatchObject({ status: "blocked", hold: { kind: "operator", by: "agent", note: "Choose release" } });
 });
 
 
@@ -4884,6 +4894,43 @@ test("list_pipelines names the successor carrying an automatic refresh", async (
   const bindings = viewerMcpBindings(undefined, undefined, { getPipelines: () => ({ pipelines: [pipeline] }) } as never);
   const answer = await bindings.list_pipelines({ clientRequestId: "list-refresh-successor", compact: false, project: "fixture" });
   expect(answer.pipelines).toMatchObject([{ id: "refresh-parent", merge: { state: "refreshing", refresh: "refresh-successor" } }]);
+});
+
+test("send_message immediately explains a hold behind a running Codex turn", async () => {
+  const notice = "Delivery waits until the current turn ends and the account switch completes.";
+  const bindings = viewerMcpBindings(undefined, { post: async () => ({ ok: true, outcome: "held", operationId: "busy-codex-send",
+    waitReason: "switch-after-turn", detail: notice, deadlineAt: "2026-11-17T12:10:00.000Z" }) });
+  expect(await bindings.send_message({ clientRequestId: "busy-codex-send", conversationId: "conversation_busy_codex", text: "new requirement" }))
+    .toMatchObject({ outcome: "held", settled: false, notice, waitReason: "switch-after-turn", deadlineAt: "2026-11-17T12:10:00.000Z" });
+});
+
+test("board reads keep main's exact-key selection only for a domain without a catalog source", async () => {
+  const tasks = [{ id: "task_unlisted", project: "unlisted-key", status: "inbox", placement: "unplaced", text: "Unlisted" }];
+  const pipelines = [{ id: "pipeline_unlisted", project: "unlisted-key", state: "running" }];
+  let rowReads = 0;
+  const bindings = (extra: Record<string, unknown> = {}) => viewerMcpBindings(undefined, undefined, {
+    listTaskRecords: () => { rowReads++; return tasks; }, loadTasks: () => tasks,
+    listPipelineRecords: () => { rowReads++; return pipelines; }, getPipelines: () => ({ pipelines }),
+    ...extra,
+  } as never);
+  const seat = { callerAttribution: () => ({ kind: "manager", conversationId: "conversation_seat" }),
+    authorizedSeats: () => [{ conversationId: "conversation_seat", project: "viewer" }] };
+  const catalog = { lastCompletedCatalog: () => ({ files: [], projectCatalog: [{ project: "viewer", smt: 1, conversations: 1 }] }) };
+
+  // No catalog source: a key the resolver cannot name reads exactly, as on main.
+  await expect(bindings().list_tasks({ project: "unlisted-key" })).resolves.toMatchObject({ count: 1, tasks: [{ id: "task_unlisted" }] });
+  await expect(bindings().list_pipelines({ project: "unlisted-key" })).resolves.toMatchObject({ count: 1, pipelines: [{ id: "pipeline_unlisted" }] });
+
+  rowReads = 0;
+  for (const tool of ["list_tasks", "list_pipelines"] as const) {
+    // The seat fence still compares that key before any row is read.
+    await expect((async () => bindings(seat)[tool]({ project: "unlisted-key" }))()).rejects.toMatchObject({ details: { code: "cross_project_refused", retryable: false } });
+    // A catalog source keeps the unknown-name refusal, also before any row is read.
+    for (const extra of [catalog, { ...catalog, ...seat }]) {
+      await expect((async () => bindings(extra)[tool]({ project: "unlisted-key" }))()).rejects.toMatchObject({ details: { code: "unknown_project", retryable: false } });
+    }
+  }
+  expect(rowReads).toBe(0);
 });
 
 for (const model of ["gpt-6.2-sol", "gpt-6.2-astra"]) {

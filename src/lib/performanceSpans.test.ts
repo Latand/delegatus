@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { requestWorkload } from "./requestWorkload";
 import { createPerformanceSpans } from "./performanceSpans";
 import { startLoopWatchdog } from "./loopWatchdog";
 import { createLoopLogSink, createViewerLoopMonitor } from "./viewerLoopMonitor";
@@ -124,10 +126,12 @@ test("journal backpressure bounds queued logs and counts discarded evidence", as
   expect(sink.dropped()).toBe(99);
 });
 
+const requestId = (i: number) => `00000000-0000-4000-8000-${i.toString(16).padStart(12, "0")}`;
+
 test("request retention is bounded and exposes overflow without retaining arguments", () => {
-  const recorder = createPerformanceSpans();
+  const recorder = createPerformanceSpans(() => 0);
   for (let i = 0; i < 2000; i++) {
-    const id = `00000000-0000-4000-8000-${i.toString(16).padStart(12, "0")}`;
+    const id = requestId(i);
     recorder.request(id, "arbitrary-private-method", 1000);
     recorder.event("rpc.dispatch", id);
     recorder.event("rpc.deadline", id, 0, true);
@@ -135,9 +139,57 @@ test("request retention is bounded and exposes overflow without retaining argume
   const requests = recorder.requests();
   expect(requests.records).toHaveLength(16);
   expect(requests.omitted).toBe(240);
-  expect(requests.dropped).toBe(1744);
+  expect(requests).toMatchObject({ dropped: 1744, droppedExpired: 0, droppedOverflow: 1744 });
   expect(JSON.stringify(requests)).not.toContain("arbitrary-private-method");
   expect(requests.records.every(row => row.events.at(-1)?.failed)).toBe(true);
+});
+
+test("request expiry and event overflow are counted separately and reset on clear", () => {
+  let at = 0;
+  const recorder = createPerformanceSpans(() => at);
+  const expired = requestId(1);
+  const retained = requestId(2);
+  recorder.request(expired, "snapshot");
+  at = 1;
+  recorder.request(retained, "snapshot");
+  for (let i = 0; i < 17; i++) recorder.event("rpc.receive", retained, i);
+
+  at = 60_000;
+  const atCutoff = recorder.requests();
+  expect(atCutoff).toMatchObject({ dropped: 1, droppedExpired: 0, droppedOverflow: 1, omitted: 0 });
+  expect(atCutoff.records.map(row => row.id)).toEqual([expired, retained]);
+  expect(atCutoff.records[1]!.events.map(event => event.bytes)).toEqual(Array.from({ length: 16 }, (_, i) => i + 1));
+
+  at++;
+  const afterExpiry = recorder.requests();
+  expect(afterExpiry).toMatchObject({ dropped: 2, droppedExpired: 1, droppedOverflow: 1, omitted: 0 });
+  expect(afterExpiry.records.map(row => row.id)).toEqual([retained]);
+  expect(recorder.requests().droppedExpired).toBe(1);
+
+  recorder.clear();
+  expect(recorder.requests()).toEqual({ dropped: 0, droppedExpired: 0, droppedOverflow: 0, omitted: 0, records: afterExpiry.records });
+  at++;
+  expect(recorder.requests()).toEqual({ dropped: 1, droppedExpired: 1, droppedOverflow: 0, omitted: 0, records: [] });
+});
+
+test("request drop counters start at zero in each recorder process", () => {
+  const script = `
+    import { performanceSpans } from "./performanceSpans.ts";
+    const counts = () => {
+      const { dropped, droppedExpired, droppedOverflow } = performanceSpans.requests();
+      return [dropped, droppedExpired, droppedOverflow];
+    };
+    const before = counts();
+    const id = ${JSON.stringify(requestId(1))};
+    performanceSpans.request(id, "snapshot");
+    for (let i = 0; i < 17; i++) performanceSpans.event("rpc.receive", id);
+    console.log(JSON.stringify([before, counts()]));
+  `;
+  for (let i = 0; i < 2; i++) {
+    const child = spawnSync(process.execPath, ["-e", script], { cwd: import.meta.dir, encoding: "utf8", timeout: 5_000 });
+    expect(child.status).toBe(0);
+    expect(JSON.parse(child.stdout)).toEqual([[0, 0, 0], [1, 0, 1]]);
+  }
 });
 
 test("unwrapped CPU work remains an unknown site while the watchdog observes running time", async () => {
@@ -156,3 +208,25 @@ test("unwrapped CPU work remains an unknown site while the watchdog observes run
     expect(after.runNs).toBeGreaterThan(before.runNs);
   } finally { await watcher.stop(); }
 }, 15_000);
+
+test("a pause groups keyed reads by active operation and gives request labels precedence", () => {
+  let at = 0;
+  const recorder = createPerformanceSpans(() => at);
+  const lines: string[] = [];
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, recorder);
+  const fast = () => { at += 0.25; };
+  recorder.sync("registry.keyed", fast, 0, 0, "agents.reconcile");
+  recorder.sync("registry.keyed", fast, 0, 0, "seat.panel");
+  recorder.sync("registry.keyed", fast, 0, 0, "seat.panel");
+  requestWorkload.withRoute("/api/files", () => recorder.sync("registry.keyed", fast, 0, 0, "seat.panel"));
+  recorder.sync("registry.keyed", () => { at += 1000; }, 0, 0, "registry.read");
+  monitor.tick();
+  const rows = JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length)).attribution.slices;
+  expect(rows).toContainEqual(expect.objectContaining({ registryOperation: "agents.reconcile", count: 1, totalMs: 0.25 }));
+  expect(rows).toContainEqual(expect.objectContaining({ registryOperation: "seat.panel", count: 2, totalMs: 0.5 }));
+  const route = rows.find((row: { requestClass?: string }) => row.requestClass === "http:/api/files");
+  expect(route.totalMs).toBe(0.25);
+  expect(route.registryOperation).toBeUndefined();
+  const bare = rows.find((row: { totalMs: number }) => row.totalMs === 1000);
+  expect(bare.registryOperation).toBeUndefined();
+});

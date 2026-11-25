@@ -480,7 +480,7 @@ its order and fields; the component orders within groups.
 
 | Key | uk | en |
 | --- | --- | --- |
-| `timeline.legend` (rewritten) | Лінія — задача відкрита; відрізки — працювали етапи; колір знизу — останній відомий хід; ⚑ — строк. | Line: task open. Blocks: stages ran. Colour underneath: last observed turn. ⚑: due date. |
+| `timeline.legend` (rewritten) | Лінія — задача відкрита; товста лінія — етапи йшли (календарний час); контур — календарний проміжок етапу; заливка — час роботи агента (його ходи); ⚑ — строк. | Line: task open. Thick line: stages ran (calendar time). Outline: calendar span of a stage. Fill: agent working time (its turns). ⚑: due date. |
 | `timeline.since` | з {start} · {duration} | since {start} · {duration} |
 | `timeline.due` | до {date} | due {date} |
 | `timeline.overdueBy` | прострочено на {duration} | overdue by {duration} |
@@ -729,3 +729,49 @@ row until the person opens it, and opening or closing it is remembered.
   groups fit at 1440 and 1024 and five working tasks at 390. The kanban browser case
   asserts these floors, then opens one task, reloads and checks that it is still open
   (`default`, `expanded` and `expanded-reload` frames).
+
+## 20. Changes after the installed check (2026-11-19)
+
+The check of the installed release found two P2 and five P3 defects. Each has one
+cause and one fix; the forecast stays deferred.
+
+- **F1, overdue notes share one ink.** A rule that coloured the first item of a
+  row's meta in normal ink beat the danger colour of the overdue note whenever the
+  note led the meta: always in «Чекають на вас» and in the nested «Стоять довше
+  3 днів» line, and in «Стоять» when no task is quiet that long. The rule now skips
+  the note.
+- **F2, waiting is the thin line.** `TimelineAttempt.workEndAtMs` is the last
+  instant at which work is evidenced: the settled end, the clock for a live attempt,
+  the end of the observed closed turn for an open idle one, otherwise null.
+  Task-row segments end there; an attempt with no work end draws a 3 px tick at its
+  start. `endAtMs` stays the lifecycle end that stage rows, the fold and the
+  elapsed words read. This reverses §6 for an open attempt without a working agent,
+  which used to be drawn thick up to the clock (a paused lane whose fix attempt was
+  still spawning drew a 591 px bar). A settled attempt is still one segment from its
+  start to its end; waits inside it are not intervals in the board read.
+- **F3, the Ukrainian maximum.** «прострочено: N · найдовше 4 д»; «до» is the due-date
+  word. English keeps «up to».
+- **F4, minutes.** Every duration the chart writes is floored to whole minutes,
+  «<1 хв» / «<1m» under a minute; two days or more stay in days. The shared
+  `humanizeDuration` is unchanged.
+- **F5, a live row without a verified start.** A standalone agent whose opening turn
+  left the scanner's bounded transcript tail and whose launch facts retired has no
+  start. The row says «початок невідомий» / «start unknown», stage rows say
+  «Минуло: невідомо», and a fixed-width mark (10 px, 8 px on the phone) ends on the
+  now line in the running tone. Its width is pixels, never a span of time, and it is
+  not a segment. A working card with no projected row names its agents and
+  «працює» instead of «Очікує на агента». A stable start needs a scanner-side record
+  of the open turn and is deferred.
+- **F6, the return control costs no row.** The axis keeps its height. «Зараз 08:10 ›»
+  sits at its right edge in the time-label row (24 px; the full 44 px axis on the
+  phone), 104 px wide, and the time labels, and on the phone the day labels, that
+  would reach it give way. This reverses §18's own row.
+- **F7, the right-edge flag.** The window end is rounded up to the hour, so a due
+  time on the hour lands on the edge. The pole is clamped inside the lane and its
+  head points left within 7 px of the edge.
+
+Rendered evidence: the `kanbanBoard.browser.test.tsx` case «waiting reads as the thin
+line…» runs the fixture with five tasks changed to the shapes above at 390, 1000,
+1200 and 1440 px, in both languages and themes, and frames the closed and open
+groups, the waiting and live rows expanded, a running stage, 6 hours, 3 days and
+1 week, and the paged and returned window.

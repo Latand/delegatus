@@ -70,15 +70,25 @@ export class CheckAdmission {
     return this.db.transaction(() => {
       if (this.observer.status(owner) !== "alive" || this.observer.exited(owner)) throw new CheckAdmissionOwnerExitedError();
       const eligible = new Set<string>([identity]);
+      const rows: Row[] = [];
       for (const row of this.db.query<Row, []>("SELECT * FROM checks ORDER BY seq").all()) {
         const previous = JSON.parse(row.owner) as ProcessIdentity;
         const status = this.ownerStatus(previous);
         if (status === "dead") this.db.query("DELETE FROM checks WHERE seq = ?").run(row.seq);
-        else if (status === "alive") eligible.add(row.owner);
+        else {
+          rows.push(row);
+          if (status === "alive") eligible.add(row.owner);
+        }
       }
-      this.db.query("INSERT OR IGNORE INTO checks(owner, capacity, lineage) VALUES (?, ?, ?)").run(identity, capacity, JSON.stringify(lineage));
-      const rows = this.db.query<Row, []>("SELECT * FROM checks ORDER BY seq").all();
-      const own = rows.find(row => row.owner === identity)!;
+      let own = rows.find(row => row.owner === identity);
+      if (!own) {
+        // Even an ignored AUTOINCREMENT insert writes sqlite_sequence.
+        // Register once under the same writer lock used for reclamation.
+        own = this.db.query<Row, [string, number, string]>(
+          "INSERT INTO checks(owner, capacity, lineage) VALUES (?, ?, ?) RETURNING seq, owner, capacity, held, lineage",
+        ).get(identity, capacity, JSON.stringify(lineage))!;
+        rows.push(own);
+      }
       // A stricter concurrent caller cannot be overridden by a sibling's env.
       const limit = Math.min(...rows.map(row => row.capacity));
       let free = limit - rows.filter(row => row.held).length;

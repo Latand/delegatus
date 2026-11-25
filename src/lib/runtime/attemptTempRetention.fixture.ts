@@ -39,13 +39,45 @@ if (process.argv[2] === "--load") {
 }
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
-import { attemptTempAuthority, backfillAttemptTempRetention, runAttemptTempSweep } from "./attemptTempProduction";
+import { attemptTempAuthority, attemptScratchAuthority, backfillAttemptTempRetention, runAttemptTempSweep } from "./attemptTempProduction";
+import { runTemporaryDataSweep } from "./temporaryDataProduction";
+import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
+import * as mutationFence from "./attemptMutationFence";
+
+if (process.argv[2] === "--legacy-copy-tick") {
+  Date.now = () => Number(process.argv[3]);
+  const live = process.argv[4];
+  const report = await runTemporaryDataSweep({
+    scan: () => ({ ownNamespace: null, processes: live ? [{ pid: 41, namespace: null, stamped: false, paths: [live] }] : [] }),
+    containerReferences: async () => true,
+  }, { ...process.env, LLV_TEMP_SWEEP: "on" });
+  process.stdout.write(JSON.stringify(report));
+  process.exit(0);
+}
 
 if (process.argv[2] === "--production-report") {
   Date.now = () => Number(process.argv[3]);
-  const report = await runAttemptTempSweep({ scan: () => ({ ownNamespace: null, processes: [] }) },
+  const resourceRefused = process.argv.find(arg => arg.startsWith("--checkout-budget-root="))?.split("=")[1];
+  const live = process.argv.find(arg => arg.startsWith("--live-root="))?.slice("--live-root=".length);
+  const fenceMode = process.argv.find(arg => arg.startsWith("--fixture-mutation-fence="))?.split("=")[1];
+  let fixtureMutationFences = 0;
+  if (fenceMode) {
+    const { spyOn } = await import("bun:test");
+    const fence = mutationFence.attemptMutationCurrent;
+    spyOn(mutationFence, "attemptMutationCurrent").mockImplementation((watches, validate, budget, authority) => {
+      fixtureMutationFences++;
+      return fence(watches, validate, fenceMode === "timeout" ? 0 : budget, authority);
+    });
+  }
+  const report = await runAttemptTempSweep({ scan: () => ({ ownNamespace: null, processes:
+    live ? [{ pid: 41, namespace: null, stamped: false, paths: [live] }] : [] }),
+    ...(process.argv.includes("--fixture-container-inventory")
+      ? { availableBytes: () => 412e9, references: (original, current, scan) => {
+        if (path.basename(original) === resourceRefused) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
+        return attemptReferencesClear(original, current, scan, async () => true);
+      } } : {}) },
     { ...process.env, LLV_TEMP_SWEEP: "on" });
-  process.stdout.write(JSON.stringify(report) + "\n");
+  process.stdout.write(JSON.stringify(fenceMode ? { ...report, fixtureMutationFences } : report) + "\n");
   process.exit(0);
 }
 
@@ -59,15 +91,19 @@ const store = new AttemptTempStore(process.argv[2]!);
 if (process.argv[4] === "backfill") {
   try {
     process.stdout.write(JSON.stringify(await backfillAttemptTempRetention(store, { limit: Number(process.argv[5] ?? 2),
-      authority: owner => attemptTempAuthority(owner, undefined, () => Number(process.argv[3])) })));
+      authority: owner => attemptScratchAuthority(owner, undefined, () => Number(process.argv[3])) })));
   } finally { store.close(); }
   process.exit(0);
 }
 if (process.argv[4] === "pressure-cursor") {
   try {
-    const page = store.pressurePage(32);
-    for (const owner of page) store.checkpointPressure(owner);
-    process.stdout.write(JSON.stringify(page.map(owner => path.basename(owner.directory))));
+    // Each restart reads the durable pass and advances it by 32 roots.
+    const pass = store.pressurePass(Number(process.argv[3])), page: string[] = [];
+    for (let next = store.pressurePassRoot(pass.position); next && page.length < 32; next = store.pressurePassRoot(pass.position)) {
+      pass.position = next.seq; page.push(path.basename(next.directory));
+    }
+    store.savePressurePass(pass);
+    process.stdout.write(JSON.stringify(page));
   } finally { store.close(); }
   process.exit(0);
 }
@@ -127,6 +163,7 @@ try {
   const repository = path.join(path.dirname(process.argv[2]!), "budget-repository");
   const report = await sweepAttemptTemps(store, {
     now: () => now, runBudgetMs: budgetMode && process.argv[4] === "budget-run" ? 40_000 : undefined,
+    availableBytes: () => 1e12,
     ...(process.argv[4] === "production" ? { authority: (owner, inventory) => attemptTempAuthority(owner, inventory, () => now) } : {}),
     maxRoots: process.argv[4] === "expired-pressure" ? 32 : process.argv[4] === "pressure" ? 4 : budgetMode ? 2 : process.argv.includes("--default-budget") ? undefined : 1,
     capBytes: process.argv[4] === "expired-pressure" || process.argv[4] === "pressure" || budgetMode ? 0 : undefined,

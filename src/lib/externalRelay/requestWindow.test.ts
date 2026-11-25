@@ -35,7 +35,7 @@ function fixture(id: string, deadlineMs?: number, hardCapMinutes = 30, holdStop 
   const paired: PairedRelay = {
     id: "window_fixture", origin, api_base: `${origin}/v1`,
     name: "Fixture", description: "", credential: "x".repeat(43),
-    owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null },
     pairedAt: new Date(epoch).toISOString(), paused: false,
     limits: { max_response_bytes: 1_048_576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback, enabled: true,

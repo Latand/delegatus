@@ -81,6 +81,15 @@ async function waitForFileCount(directory: string, prefix: string, count: number
   return fs.readdirSync(directory).filter((entry) => entry.startsWith(prefix)).length >= count;
 }
 
+/* Bun sizes its worker pool from the CPU quota of its own cgroup: one thread
+   per CPU when the service carries no quota of its own. Twenty children loading
+   modules at once then exceed the gate's task limit (768) whatever the change
+   under test, so the concurrent fixtures cap the pool and keep their task
+   count independent of the host's CPU count and quota. */
+function concurrentChildEnv(stateDir: string): Record<string, string | undefined> {
+  return { ...process.env, LLV_STATE_DIR: stateDir, UV_THREADPOOL_SIZE: "2" };
+}
+
 function recoveryArtifacts(directory: string): string[] {
   return fs.readdirSync(directory)
     .filter((entry) => entry.includes(".recovering") || entry.includes(".recovery-owner"));
@@ -201,7 +210,8 @@ describe("MCP tool service", () => {
         String(index),
       ],
       cwd: import.meta.dir,
-      env: { ...process.env, LLV_STATE_DIR: path.join(directory, "state", String(index)) },
+      // Keep all contenders inside the gate's task budget and isolate state.
+      env: concurrentChildEnv(path.join(directory, "state", String(index))),
       stdout: "pipe",
       stderr: "pipe",
     })));
@@ -319,7 +329,8 @@ describe("MCP tool service", () => {
           path.join(directory, `${schema.name}-result-${index}.json`), String(index), key,
         ],
         cwd: import.meta.dir,
-        env: { ...process.env, LLV_STATE_DIR: path.join(directory, "state", schema.name, String(index)) },
+        // Keep all contenders inside the gate's task budget and isolate state.
+        env: concurrentChildEnv(path.join(directory, "state", schema.name, String(index))),
         stdout: "pipe",
         stderr: "pipe",
       })));
@@ -1987,15 +1998,18 @@ describe("MCP tool service", () => {
         "telegram_bot_send",
         "telegram_bot_send_media",
         "telegram_bot_send_document",
+        "telegram_bot_reactions",
+        "telegram_bot_set_reaction",
         "telegram_bot_messages",
         "relay_owner_history",
+        "relay_trusted_requesters",
         "relay_answer",
         "relay_service_tools",
         "issue_report",
         "github_app_connect",
       ]);
       expect(listed.tools.map(tool => tool.name)).not.toContain("suggest_replies");
-      const optionalReadKeys = new Set(["claude_cloud_task", "codex_cloud_environment", "relay_owner_history", "relay_answer", "relay_service_tools", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_pipelines", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
+      const optionalReadKeys = new Set(["claude_cloud_task", "codex_cloud_environment", "relay_owner_history", "relay_trusted_requesters", "relay_answer", "relay_service_tools", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_pipelines", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
       for (const tool of listed.tools) {
         if (optionalReadKeys.has(tool.name)) expect(tool.inputSchema.required ?? []).not.toContain("clientRequestId");
         else expect(tool.inputSchema.required).toContain("clientRequestId");
@@ -2076,7 +2090,7 @@ test("a real MCP client sees typed graph edits and forwards their JSON values", 
       maxRounds: { type: "integer" },
       onExhausted: { enum: ["advance", "stop-after-fix", "park"] },
       role: {},
-      engine: { enum: ["claude", "codex"] },
+      engine: { enum: ["claude", "codex", "antigravity"] },
       access: { enum: ["read-only", "read-write"] },
     });
     expect(JSON.stringify(schema.properties!.to)).toContain("null");

@@ -9,7 +9,13 @@ const startupStore = process as typeof process & {
 
 export type StructuredHostStartupPhase =
   | "waiting for structured startup"
+  | "probing runtime host generation"
+  | "binding structured delivery controller"
+  | "reading structured startup registry"
+  | "recognizing interrupted hosts"
+  | "reading startup memberships"
   | "refreshing transcripts"
+  | "reading runtime startup signals"
   | "adopting Codex hosts"
   | "adopting Claude hosts"
   | "reconciling structured hosts"
@@ -27,6 +33,7 @@ export type StructuredHostStartupPhase =
 
 export interface StructuredHostStartupProgress {
   recovery?: { examined: number; total: number; completed: number; deferred: number };
+  membership?: { completed: number; remaining: number };
   phase: StructuredHostStartupPhase;
   completedHosts: number;
   totalHosts: number | null;
@@ -38,6 +45,11 @@ export interface StructuredHostStartupStatus extends StructuredHostStartupProgre
   phaseStartedAt?: string;
   pid?: number;
   failureCategory?: string | null;
+  failurePhase?: StructuredHostStartupPhase | null;
+  remainingHosts: number | null;
+  deadline: string | null;
+  hostKey: string | null;
+  nextRetryAt: string | null;
 }
 
 function pendingStatus(): StructuredHostStartupStatus {
@@ -46,6 +58,10 @@ function pendingStatus(): StructuredHostStartupStatus {
     phase: "waiting for structured startup",
     completedHosts: 0,
     totalHosts: null,
+    remainingHosts: null,
+    deadline: null,
+    hostKey: null,
+    nextRetryAt: null,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -86,7 +102,12 @@ function setStatus(
     updatedAt: now,
     phaseStartedAt: changed ? now : previous?.phaseStartedAt ?? now,
     pid: process.pid,
+    remainingHosts: progress.totalHosts === null ? null : progress.totalHosts - progress.completedHosts,
     failureCategory: state === "ready" ? null : previous?.failureCategory ?? null,
+    failurePhase: state === "ready" ? null : previous?.failurePhase ?? null,
+    deadline: state === "ready" ? null : previous?.deadline ?? null,
+    hostKey: state === "ready" ? null : previous?.hostKey ?? null,
+    nextRetryAt: state === "ready" ? null : previous?.nextRetryAt ?? null,
   };
 }
 
@@ -94,17 +115,32 @@ export function markStructuredHostStartupProgress(progress: StructuredHostStartu
   setStatus(startupStore.__llvStructuredHostStartupFailed === true ? "failed" : "pending", progress);
 }
 
-export function markStructuredHostStartupFailed(category?: string): void {
+export function markStructuredHostStartupFailed(
+  category?: string,
+  details?: { deadline: string | null; hostKey: string | null; nextRetryAt: string | null },
+): void {
   startupStore.__llvStructuredHostStartupFailed = true;
   const current = startupStore.__llvStructuredHostStartupProgress ?? pendingStatus();
   setStatus("failed", current);
-  if (category) startupStore.__llvStructuredHostStartupProgress!.failureCategory = category;
+  Object.assign(startupStore.__llvStructuredHostStartupProgress!, {
+    failurePhase: current.phase,
+    deadline: details?.deadline ?? null,
+    hostKey: details?.hostKey ?? null,
+    nextRetryAt: details?.nextRetryAt ?? null,
+    ...(category ? { failureCategory: category } : {}),
+  });
+}
+
+export function markStructuredHostStartupRetryStarted(): void {
+  markStructuredHostStartupProgress({ phase: "probing runtime host generation", completedHosts: 0, totalHosts: null });
+  const status = startupStore.__llvStructuredHostStartupProgress;
+  if (status) status.nextRetryAt = null;
 }
 
 export function markStructuredHostStartupReady(): void {
   startupStore.__llvStructuredHostStartupFailed = false;
   const current = startupStore.__llvStructuredHostStartupProgress ?? pendingStatus();
-  setStatus("ready", { ...current, phase: "ready" });
+  setStatus("ready", { phase: "ready", completedHosts: current.completedHosts, totalHosts: current.totalHosts, recovery: current.recovery });
 }
 
 /** A keyed session read proves delivery ownership only. It cannot complete
