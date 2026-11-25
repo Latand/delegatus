@@ -5417,7 +5417,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const windowStart = now - Math.round(windowSeconds * spentShare);
       return { windowStart, resetsAt: windowStart + windowSeconds, windowSeconds, samples: Array.from({ length: 12 }, (_, index) => ({ t: windowStart + Math.round(((now - windowStart) * index) / 11), remaining: Math.round(100 - ((100 - left) * index) / 11) })) };
     };
-    return json({ claude: { session: series(18_000, 0.6, 88), weekly: series(604_800, 0.45, 70) }, codex: { session: series(18_000, 0.8, 60), weekly: series(604_800, 0.7, 90) }, claudeAccountId: "default", codexAccountId: null, historySince: iso(3 * 24 * 60 * MIN) });
+    /* A request for one account is answered stamped with that account, as the route does. */
+    const requested = url.searchParams.get("account");
+    const forEngine = url.searchParams.get("engine");
+    return json({ claude: { session: series(18_000, 0.6, 88), weekly: series(604_800, 0.45, 70) }, codex: { session: series(18_000, 0.8, 60), weekly: series(604_800, 0.7, 90) }, claudeAccountId: forEngine === "claude" && requested ? requested : forEngine === "codex" ? null : "default", codexAccountId: forEngine === "codex" && requested ? requested : null, historySince: iso(3 * 24 * 60 * MIN) });
   }
   if (RAIL_STATE === "stale" && url.pathname === "/api/limits") {
     return json({
