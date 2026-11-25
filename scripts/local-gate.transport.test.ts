@@ -126,7 +126,7 @@ test("retired publication marker 2 refuses without transport or uploaded objects
 }, 90_000);
 
 for (const capability of ["absent", "unsupported", "malformed"] as const) {
-  test(`a gate with ${capability} preparation capability keeps one ordinary gated push`, async () => {
+  test(`a gate with ${capability} preparation capability uses canonical checks and one gated push`, async () => {
     const f = fixture();
     delete f.env.LLV_GATE_PUBLICATION_RECEIPT;
     const marker = f.writablePath("scripts/local-gate-capabilities.json");
@@ -145,16 +145,20 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
       savePipelines([subject]);
       let preparations = 0, pushes = 0;
       const exec: ExecPort = (command, args, cwd, env, options) => {
-        if (command === "bun" && args.includes("--publication-prepare")) preparations++;
+        if ((command === "bun" || command === "bun-container") && args.includes("--publication-prepare")) {
+          preparations++;
+          expect(args[0]).not.toBe("scripts/local-gate.ts");
+          expect(env?.LLV_GATE_CANONICAL_TOOLS).toBe("1");
+        }
         if (command === "git" && args[0] === "push") {
           pushes++;
-          expect(env?.LLV_GATE_PUBLICATION_RECEIPT).toBeUndefined();
+          expect(env?.LLV_GATE_PUBLICATION_RECEIPT).toBeDefined();
         }
         return realExec(command, args, cwd, { ...f.env, ...env }, options);
       };
       expect(await publishPipelineBranch(subject, exec, { acceptedSha: f.head })).toMatchObject({ ok: true, remote: "published" });
-      expect(preparations).toBe(0); expect(pushes).toBe(1); expect(http.rpc()).toBe(1);
-      expect(http.events().map(event => event.kind)).toEqual(["mint", "checks", "rpc"]);
+      expect(preparations).toBe(1); expect(pushes).toBe(1); expect(http.rpc()).toBe(1);
+      expect(http.events().map(event => event.kind)).toEqual(["checks", "mint", "rpc"]);
       expect(spawnSync("git", ["--git-dir", http.bare, "rev-parse", "refs/heads/main"], { env: f.env, encoding: "utf8" }).stdout.trim()).toBe(f.head);
     } finally { savePipelines(previous); http.close(); }
   }, 90_000);
@@ -231,6 +235,8 @@ for (const [scenario, capability] of [["slow privacy", 1], ["changed input", 3],
 
 test.each([["short preparation", 70_000], ["long preparation", 600_000]] as const)("an overrun after %s ends with its deadline verdict before Git's pack timeout", async (_label, preparationMs) => {
   const f = fixture();
+  fs.writeFileSync(f.writablePath("scripts/local-gate-capabilities.json"), '{"publicationPrepare":3,"publicationCheckpoints":1}\n');
+  commitFixtureInputs(f);
   const clock = path.join(f.dir, ".git", "transport-clock");
   const preload = path.join(f.dir, ".git", "transport-clock.ts");
   const startedAt = Date.UTC(2030, 0, 1);
@@ -256,6 +262,7 @@ test.each([["short preparation", 70_000], ["long preparation", 600_000]] as cons
       if (command === "git" && args[0] === "push") pushes++;
       const result = await realExec(command, args, cwd, { ...f.env, ...env }, options);
       if (command === "bun" && args.includes("--publication-prepare") && result.code === 0) {
+        expect(options?.timeoutMs).toBeGreaterThan(240_000);
         elapsedMonotonicMs = preparationMs;
       }
       if (command === "git" && args[0] === "push") {

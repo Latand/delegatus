@@ -53,6 +53,9 @@ Which glyph a model gets is `modelGlyphKind` (`modelGlyph.ts`):
   `opus-5-5` and `claude-opus-5` all draw Opus.
 - Codex reads by the name after the version: `gpt-6-sol` and `gpt-5.6-sol`
   are both Sol, because the operator named the line.
+- Antigravity reads by the catalogue's naming: the element line, Flash,
+  GPT-OSS, the orchestrators as their base element, and a Claude model it
+  serves as that Claude family (see "Antigravity's models").
 - Anything else (another engine, `gpt-5.5`, Copilot's `claude-sonnet-5`, a
   blank record) has no glyph and keeps exactly the dot or mark its host drew.
   A folded "✓3" count has no model and keeps its check.
@@ -86,6 +89,43 @@ rounded, equal and stand off the disc, Astra's eight are pointed, long and
 short in turn, and grow out of it. The second round's twelve equal teeth read
 as a cog at 1×; alternating the lengths is what makes a star of it. Astra draws
 at least as much ink as Sol, which the driver measures.
+
+## Antigravity's models
+
+Antigravity serves many models, so its engine mark names the engine and the
+stage glyph names the model (`src/components/EngineMark.tsx` draws an arch for
+the engine and no longer wears the Neon tile). Each row of
+`ENGINE_MODELS.antigravity` has a glyph. `modelGlyphKind` reads them by the
+catalogue's own naming, so a suffix or a version bump keeps its glyph:
+
+| Model | Glyph | Drawing |
+|---|---|---|
+| Gemini 4 Neon | `neon` | the periodic-table cell for element 10, `Ne`, in cyan |
+| Gemini 4 Argon | `argon` | the cell for element 18, `Ar`, in violet |
+| Gemini 4 Hydrogen | `hydrogen` | the cell for element 1, `H`, in rose |
+| Orchestrator (Neon), Orchestrator (Argon) | `orch-neon`, `orch-argon` | the base element's cell with a hub and two satellites in its open top-right corner; the Argon one is the `g1-pro` build |
+| Gemini 3.8 Flash | `flash` | a green bolt and a four-point spark; it flickers while the agent works |
+| GPT-OSS 120B | `oss` | an open hexagon (its last side left out) with a seed inside, in copper; it turns like Sol while the agent works |
+| Claude Opus 5.5, Claude Sonnet 5.5 | `opus`, `sonnet` | the Claude glyphs themselves: the same model draws the same figure on either engine |
+
+The cells share one frame, one gas chamber that pulses while the agent works,
+and the lifted badge corner (`.g-cell` in `modelGlyph.css`); only the number,
+the symbol and the token pair differ, so the family reads as one line of
+elements and the elements part by symbol and by tint. The orchestrator cue sits
+inside the cell, where the badge never lands. `data-glyph-engine` stays
+`antigravity` for the Claude glyphs, so a reading names the engine that runs the
+stage.
+
+New tokens, in all three blocks of `tokens.css`, each ink clearing 3:1 on the
+card, canvas, well and sunken surfaces in both themes and in the drained
+waiting treatment (`tokens.contrast.test.ts`):
+
+| Token | Light | Dark |
+|---|---|---|
+| `--glyph-argon`, `--glyph-argon-glow` | `#6d3fd1`, `#8d63f2` | `#b49cff` |
+| `--glyph-hydrogen`, `--glyph-hydrogen-glow` | `#c0265f`, `#ee4f89` | `#ff7aa8` |
+| `--glyph-flash`, `--glyph-flash-glow` | `#1f8a4c`, `#2fc46b` | `#4fe08c` |
+| `--glyph-oss`, `--glyph-oss-glow` | `#8c5a2e`, `#c98a4d` | `#e0a468` |
 
 ## Colours per theme
 

@@ -1,5 +1,11 @@
 # Controller publication retry fixture contract
 
+Historical path note (2026-11-23): this audit's references to
+`scripts/local-gate.transport.test.ts` describe its layout at the audited
+revision. Its cases now live in `scripts/local-gate.transport.native.test.ts`,
+`scripts/local-gate.transport.budget.test.ts`, and
+`scripts/local-gate.transport.custody.test.ts`.
+
 Requirement, paraphrased from the secondary board record dated 2026-11-03:
 publishing an unchanged commit after an environment change must obtain fresh
 applicable checks; an explicit retry of a refused publication must renew its

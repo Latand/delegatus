@@ -35,9 +35,10 @@ export interface PlanEnvironment {
   linuxTests: readonly string[];
   runtimeTests: readonly string[];
   codexVersions: readonly string[];
+  comparator?: string;
 }
 export const isTest = (file: string) => /\.test\.[cm]?[jt]sx?$/.test(file) && !file.includes(".browser.test.");
-const checkpointTest = /^scripts\/local-gate\.checkpoints(?:\.[^.]+)?\.test\.ts$/;
+const checkpointTest = /^scripts\/local-gate\.checkpoints(?:-retry)?(?:\.[^.]+)?\.test\.ts$/;
 const lintable = (file: string) => /\.(?:ts|tsx|js|mjs|cjs)$/.test(file);
 /** Prose the compiler never reads. Anything else can change what it checks. */
 export const proseOnly = (file: string) => /\.(?:md|mdx|txt)$/i.test(file);
@@ -49,6 +50,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   changedFiles = [...new Set(changedFiles)];
   const files = changedFiles.filter(file => env.existing.has(file));
   const steps: Step[] = [];
+  const comparator = env.comparator ?? "scripts/local-gate-tests.ts";
   if (mode === "pre-commit") steps.push({ name: "staged whitespace", command: ["git", "diff", "--cached", "--check"] });
   if (mode === "pre-push") {
     steps.push({ name: "privacy", command: ["bun", "scripts/privacy-publication-gate.ts", "--base", env.base,
@@ -74,7 +76,7 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   const touched = new Set(env.privacySelfTests);
   if (changedFiles.some(file => ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"].includes(file))) {
     for (const test of env.tests) if (checkpointTest.test(test)
-      || /^scripts\/(?:local-gate(?:\.(?:receipts|hooks|publication|transport|git|lint|native|binding|runtime|execution|groups|invalidation)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+      || /^scripts\/(?:local-gate(?:\.(?:receipts|hooks|publication|transport(?:\.[^.]+)?|git|lint|native|binding|runtime|execution|groups|invalidation)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
   }
   if (changedFiles.some(file => ["scripts/owned-runner.integration.fixture.ts", "scripts/owned-runner.cleanup.ts"].includes(file))) {
     for (const test of env.tests) if (/^scripts\/owned-runner(?:\.[^.]+)+\.test\.ts$/.test(test)) touched.add(test);
@@ -101,12 +103,12 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   }
   // Both selections run the same per-file comparator against the same base.
   if (env.linux) for (const file of env.linuxTests) touched.delete(file);
-  if (touched.size) steps.push({ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", env.base, ...[...touched].map(file => `./${file}`)], capped: true, isolated: true });
+  if (touched.size) steps.push({ name: "touched tests", command: ["bun", comparator, "--base", env.base, ...[...touched].map(file => `./${file}`)], capped: true, isolated: true });
   if (env.linux) {
     steps.push({ name: "Linux backend", command: ["bun", "scripts/verify-platform-backend.ts", "--expect", "linux"], capped: true, isolated: true });
     // The same verdict rules as touched tests: a platform test that already
     // fails on the merge base is PRE-EXISTING and never blocks this push.
-    steps.push({ name: "Linux tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", env.base, ...env.linuxTests.map(file => `./${file}`)], capped: true, isolated: true });
+    steps.push({ name: "Linux tests", command: ["bun", comparator, "--base", env.base, ...env.linuxTests.map(file => `./${file}`)], capped: true, isolated: true });
   }
   if (env.runtime) {
     steps.push(
@@ -503,8 +505,10 @@ export function gatePlan(root: string, operation: Operation, env: NodeJS.Process
   // produced by the dependencies gate when it runs.
   const compilerInput = batch ? "after dependencies" : compilerNeeded ? dependencyTreeFingerprint(root, "node_modules/typescript") : "not-selected";
   const tools = [env.PATH, checkEnv.PATH].map(PATH => ["bun", "bunx", "node", "git"].map(tool => Bun.which(tool, { PATH: PATH ?? "" })));
+  const comparator = profile === "pre-push" ? env.LLV_GATE_CANONICAL_COMPARATOR
+    ?? (env.LLV_GATE_CANONICAL_TOOLS === "1" ? path.join(import.meta.dir, "local-gate-tests.ts") : undefined) : undefined;
   const runtimeBinding = [process.platform, process.arch, Bun.version, execPath, SUPPORTED_CODEX_VERSIONS,
-    environmentFingerprint(checkEnv), compilerInput, tools];
+    environmentFingerprint(checkEnv), compilerInput, tools, comparator && [comparator, fileFingerprint(path.resolve(root, comparator))]];
   const requestId = fingerprint([VERSION, profile, subject, base, tree, changedPaths, selector, trustPolicy, runtimeBinding,
     files, [...existing], siblings, batch?.browser ?? false, batch?.detectorBrowser ?? false,
     batch?.reviewed?.map(row => [row.number, row.base, row.head])]);
@@ -574,7 +578,7 @@ export function gatePlan(root: string, operation: Operation, env: NodeJS.Process
   const steps = batch ? stepsForBatch(base, files, existing, batch.browser ?? false, detectorBrowser)
     : plan(profile as Mode, files, { ...discover(root, base, files, profile as Mode, siblings,
       { privacy: privacyInputs, platform: platformInputs, platformText, runtimeText }),
-      existing, base: profile === "pre-commit" ? "HEAD" : base, lintBase: base });
+      existing, base: profile === "pre-commit" ? "HEAD" : base, lintBase: base, comparator });
   const checks = identifyChecks(inputs, steps, bindings, compilerInput, env, execPath, detectors, bunPin);
   const built = { ...inputs, requestId, discoveryInputs: sourceInputs, checks, ...(detectors ? { detectors } : {}), planId: planId(checks, detectors) };
   cache.write(key, built);

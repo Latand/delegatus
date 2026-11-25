@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { checkEnvironment } from "./gate-cache";
@@ -22,7 +22,7 @@ export function fixtureCheckAdmissionEnv(directory: string) {
   const file = path.join(directory, ".git", "check-admission.sqlite");
   return { LLV_CHECK_ADMISSION_FILE: file, LLV_GATE_CHECK_ADMISSION_FILE: file };
 }
-export function createHookFixture(root: string, roots: string[], realLint = false, controlledClock = false, name?: string) {
+export function createHookFixture(root: string, roots: string[], realLint = false, controlledClock = false, name?: string, linkComparator = false) {
   const tempRoot = realpathSync(mkdtempSync(path.join(tmpdir(), "hooks-e2e-")));
   roots.push(tempRoot);
   const dir = name === undefined ? tempRoot : fixtureWritePath(tempRoot, name);
@@ -33,6 +33,7 @@ export function createHookFixture(root: string, roots: string[], realLint = fals
   for (const hook of ["pre-commit", "pre-push"]) copyFileSync(path.join(root, ".githooks", hook), writablePath(`.githooks/${hook}`));
   copyFileSync(path.join(import.meta.dir, "fixture-write-path.ts"), writablePath("scripts/fixture-write-path.ts"));
   symlinkSync(path.join(root, "scripts/local-gate.ts"), writablePath("scripts/local-gate.ts"));
+  if (linkComparator) symlinkSync(path.join(root, "scripts/local-gate-tests.ts"), writablePath("scripts/local-gate-tests.ts"));
   copyFileSync(path.join(root, "scripts/local-gate-capabilities.json"), writablePath("scripts/local-gate-capabilities.json"));
   copyFileSync(path.join(root, "scripts/privacy-known-value-fingerprints.json"), writablePath("scripts/privacy-known-value-fingerprints.json"));
   if (realLint) {
@@ -43,7 +44,7 @@ export function createHookFixture(root: string, roots: string[], realLint = fals
   for (const file of ["gate-slot.sh", "verify-native-codex-runtime.ts"]) copyFileSync(path.join(root, "scripts", file), writablePath(`scripts/${file}`));
   const gateSlot = writablePath("scripts/gate-slot.sh");
   if (controlledClock) {
-    const gateSlotSource = readFileSync(gateSlot, "utf8").replace("run() {\n", "run() {\n  if [[ \"${2:-}\" == scripts/local-gate.ts ]]; then set -- \"$1\" --preload \"$HOOK_CLOCK\" \"${@:2}\"; fi\n");
+    const gateSlotSource = readFileSync(gateSlot, "utf8").replace("run() {\n", "run() {\n  if [[ \"${2:-}\" == scripts/local-gate.ts || \"${2:-}\" == */scripts/local-gate.ts ]]; then set -- \"$1\" --preload \"$HOOK_CLOCK\" \"${@:2}\"; fi\n");
     writeFileSync(gateSlot, gateSlotSource);
   }
   symlinkSync(path.join(root, "scripts/owned-runner.ts"), writablePath("scripts/owned-runner.ts"));
@@ -52,13 +53,38 @@ export function createHookFixture(root: string, roots: string[], realLint = fals
   const log = writablePath(".git/commands.jsonl");
   const clock = writablePath("controlled-clock.ts");
   writeFileSync(clock, "Date.now = () => Number(process.env.HOOK_CLOCK_NOW);\n");
-  writeFileSync(writablePath("record.ts"), `import { appendFileSync, mkdtempSync, rmSync } from "node:fs"; import { execFileSync } from "node:child_process"; import { tmpdir } from "node:os"; import path from "node:path";
+  writeFileSync(writablePath("record.ts"), `import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"; import { execFileSync } from "node:child_process"; import { tmpdir } from "node:os"; import path from "node:path";
     import { fixtureWritePath } from "./scripts/fixture-write-path.ts";
+    if (process.argv[2] === "--record-bun-container") {
+      appendFileSync(fixtureWritePath(import.meta.dir, (process.env.HOOK_LOG ?? "") + ".bun-container"), process.argv[3] + "\\n");
+      process.exit(0);
+    }
+    if (process.argv[2] === "--advance-publication-clock") {
+      const clock = fixtureWritePath(import.meta.dir, process.env.CREDENTIAL_CLOCK ?? "");
+      const at = Number(readFileSync(clock, "utf8"));
+      appendFileSync(fixtureWritePath(import.meta.dir, process.env.CREDENTIAL_EVENTS ?? ""), JSON.stringify({ kind: "checks", at }) + "\\n");
+      writeFileSync(clock, String(at + Number(process.env.CREDENTIAL_ADVANCE_MS ?? 0)) + "\\n");
+      process.exit(0);
+    }
     const fixture = mkdtempSync(path.join(tmpdir(), "hook-child-git-")); try { execFileSync("git", ["init", "--bare", "--template=", fixture], { stdio: "pipe" }); } finally { rmSync(fixture, { recursive: true, force: true }); }
     appendFileSync(fixtureWritePath(import.meta.dir, process.env.HOOK_LOG ?? ""), JSON.stringify({ args: process.argv.slice(2), now: Date.now(), state: process.env.LLV_STATE_DIR, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME, tmp: process.env.TMPDIR, known: process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE, gitDir: process.env.GIT_DIR, index: process.env.GIT_INDEX_FILE, workTree: process.env.GIT_WORK_TREE, commonDir: process.env.GIT_COMMON_DIR, configCount: process.env.GIT_CONFIG_COUNT, configKey: process.env.GIT_CONFIG_KEY_0, deadline: process.env.LLV_GATE_PUSH_DEADLINE, ownedBudget: process.env.LLV_OWNED_RUN_TIMEOUT_MS, names: Object.keys(process.env).sort(), path: process.env.PATH }) + "\\n"); if (process.env.HOOK_FAIL && process.argv.includes(process.env.HOOK_FAIL)) process.exit(19);`);
-  for (const name of ["bun", "bunx"]) {
+  for (const name of ["bun", "bunx", "bun-container"]) {
     const shim = writablePath(`shims/${name}`);
-    writeFileSync(shim, '#!/bin/bash\nif [[ "$1" == scripts/local-gate.ts ]]; then if [[ -n "${HOOK_CLOCK:-}" ]]; then exec "$HOOK_BUN" --preload "$HOOK_CLOCK" "$@"; fi; exec "$HOOK_BUN" "$@"; fi\nif [[ "$1" == scripts/eslint-changes.ts && "$HOOK_REAL_LINT" == 1 ]]; then exec "$HOOK_BUN" "$@"; fi\nif [[ -n "${HOOK_CLOCK:-}" ]]; then exec "$HOOK_BUN" --preload "$HOOK_CLOCK" "$HOOK_RECORD" "$@"; fi\nexec "$HOOK_BUN" "$HOOK_RECORD" "$@"\n'); chmodSync(shim, 0o755);
+    writeFileSync(shim, [
+      "#!/bin/bash",
+      'if [[ "$0" == */bun-container ]]; then "$HOOK_BUN" "$HOOK_RECORD" --record-bun-container "$*" || exit $?; fi',
+      'if [[ "$1" == scripts/local-gate.ts || "$1" == */scripts/local-gate.ts ]]; then',
+      '  if [[ -n "${CREDENTIAL_EVENTS:-}" && "$2" == pre-push && ( "$3" == --publication-prepare || ( -z "$3" && -z "${LLV_GATE_PUBLICATION_RECEIPT:-}" ) ) ]]; then',
+      '    "$HOOK_BUN" "$HOOK_RECORD" --advance-publication-clock || exit $?',
+      '  fi',
+      '  if [[ -n "${HOOK_CLOCK:-}" ]]; then exec "$HOOK_BUN" --preload "$HOOK_CLOCK" "$@"; fi',
+      '  exec "$HOOK_BUN" "$@"',
+      'fi',
+      'if [[ "$1" == scripts/eslint-changes.ts && "$HOOK_REAL_LINT" == 1 ]]; then exec "$HOOK_BUN" "$@"; fi',
+      'if [[ -n "${HOOK_CLOCK:-}" ]]; then exec "$HOOK_BUN" --preload "$HOOK_CLOCK" "$HOOK_RECORD" "$@"; fi',
+      'exec "$HOOK_BUN" "$HOOK_RECORD" "$@"',
+      "",
+    ].join("\n"), { mode: 0o755 });
   }
   const gitEnv = fixtureGitEnv();
   const env: NodeJS.ProcessEnv = { ...gitEnv, ...fixtureCheckAdmissionEnv(dir), PATH: `${path.join(dir, "shims")}:${gitEnv.PATH ?? ""}`, HOOK_LOG: log, HOOK_RECORD: path.join(dir, "record.ts"), ...(controlledClock ? { HOOK_CLOCK: clock, HOOK_CLOCK_NOW: "1900000000000" } : {}), HOOK_BUN: process.execPath, LLV_GATE_EXECUTION: "local", LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: path.join(dir, ".git", "cpu-gate"), GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "noreply@example.invalid", LLV_SKIP_HOOKS: "0",

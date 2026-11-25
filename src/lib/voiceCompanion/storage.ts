@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { configFilePath, statePath } from "@/lib/configDir";
 import { withFileTransaction, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import type { CompanionEvent, CompanionPlan, CompanionUsage, Delivery, Locale, Proposal } from "./contract";
+import type { PlanBilling } from "@/lib/chatgptPlan/public";
 import type { BackendTokens } from "./usage";
 import type { DelegationCode } from "./delegationOutcome";
 import type { OperatorInput } from "./gate";
@@ -34,6 +35,7 @@ export interface CompanionSettings {
   /** A mint whose answer was lost may have opened a provider session nobody
    * can name; no new voice session starts until the operator releases it. */
   uncertainSession: boolean;
+  planBilling?: PlanBilling;
   lastSession?: { usd: number; seconds: number; endedAt: number; incomplete: boolean };
   /** The latest Codex call that ended: its length and the plan window it left. */
   lastCodexSession?: { seconds: number; endedAt: number; plan: CompanionPlan | null };
