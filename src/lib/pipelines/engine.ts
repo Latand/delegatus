@@ -2375,7 +2375,8 @@ export function defaultPipelinePorts(
         if (before.transport !== "structured" || before.purpose !== "launch"
           || before.key || before.pane || before.verifiedHost || before.artifactPath
           || before.hostSetup && (!before.hostSetup.cleanupConfirmed
-            || before.hostSetup.phase === "executing" || before.hostSetup.processes.length > 0)
+            || before.hostSetup.execPermitGranted === true || before.hostSetup.phase === "executing"
+            || before.hostSetup.processes.some(process => processIdentityStatus(process) !== "dead"))
           || before.admissionOwner && processIdentityMayRun(before.admissionOwner)
           || registry.conversation(before.conversationId)) return false;
         if (!before.hostSetup && !before.hostSetupStartedAt && durablePreHostProof

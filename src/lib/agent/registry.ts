@@ -414,7 +414,7 @@ export interface SpawnReceipt {
   preHostWriterRefusal?: true;
   /** Pre-session custody. `preparing` proves no engine exec was admitted;
       `executing` without process evidence remains an uncertain launch. */
-  hostSetup?: { phase: "preparing" | "executing"; processes: ProcessIdentity[]; cleanupConfirmed?: true; adoptionClaimEpoch?: number };
+  hostSetup?: { phase: "preparing" | "executing"; processes: ProcessIdentity[]; cleanupConfirmed?: true; execPermitGranted?: true; adoptionClaimEpoch?: number };
   /** Revocation tombstone observed by the admission writer. Legacy means none. */
   memberRevocationId?: string | null;
   state: "starting" | "pane-bound" | "host-verified" | "prompt-delivered" | "path-pending" | "completed" | "failed" | "conflicted";
@@ -4899,6 +4899,7 @@ function normalizePendingOrchestratorSeatIdentity(value: unknown): IdentityWaveS
 function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnReceipt {
   if (value.hostSetup && (!["preparing", "executing"].includes(value.hostSetup.phase)
     || !Array.isArray(value.hostSetup.processes)
+    || value.hostSetup.execPermitGranted !== undefined && value.hostSetup.execPermitGranted !== true
     || value.hostSetup.adoptionClaimEpoch !== undefined && (!Number.isSafeInteger(value.hostSetup.adoptionClaimEpoch)
       || value.hostSetup.adoptionClaimEpoch < 1))) throw new Error("structured setup custody is malformed");
   if (value.proactiveTaskIds !== undefined && (!Array.isArray(value.proactiveTaskIds)
@@ -4917,6 +4918,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     hostSetup: value.hostSetup ? { phase: value.hostSetup.phase,
       processes: normalizeStructuredTerminationSurvivors(value.hostSetup.processes)!,
       ...(value.hostSetup.adoptionClaimEpoch === undefined ? {} : { adoptionClaimEpoch: value.hostSetup.adoptionClaimEpoch }),
+      ...(value.hostSetup.execPermitGranted === true ? { execPermitGranted: true } : {}),
       ...(value.hostSetup.cleanupConfirmed === true ? { cleanupConfirmed: true } : {}) } : undefined,
     memoryCap: memoryCap ?? undefined,
     clientAttemptId: typeof value.clientAttemptId === "string" ? value.clientAttemptId : null,
@@ -8702,13 +8704,38 @@ export class AgentRegistry {
           if (entry?.claimOwner !== structuredClaimOwner(owner) || entry.claimEpoch !== receipt.hostSetup.adoptionClaimEpoch)
             throw new Error("structured adoption custody changed");
         } else if (receipt.state !== "starting") throw new Error("structured setup is no longer admitted");
+        receipt.hostSetup.phase = "executing";
+        receipt.hostSetup.execPermitGranted = true;
+        delete receipt.hostSetup.cleanupConfirmed;
         return;
       }
       receipt.hostSetup.phase = "executing";
+      receipt.hostSetup.execPermitGranted = true;
       delete receipt.hostSetup.cleanupConfirmed;
       if (native && !receipt.hostSetup.processes.some(process => sameRecordedProcessIdentity(process, native))) {
         receipt.hostSetup.processes.push(clone(native));
       }
+    }));
+    if (!written.acquired) throw new RegistryWriterBusyError("spawn.setup-custody");
+  }
+
+  /** Retain a native waiter before granting the engine exec permit. Its death
+      can prove a pre-exec refusal safe without confusing the waiter for the
+      engine process itself. */
+  recordStructuredHostSetupWaiter(launchId: string, owner: ProcessIdentity, waiter: ProcessIdentity): void {
+    normalizeStructuredTerminationSurvivors([waiter]);
+    const written = this.deliveryWriteNow({ label: "spawn.setup-custody", operationId: launchId }, () => this.mutate(file => {
+      const receipt = file.receipts[launchId];
+      if (!receipt?.hostSetup || !receipt.admissionOwner
+        || !sameRecordedProcessIdentity(receipt.admissionOwner, owner)) throw new Error("structured setup waiter custody changed");
+      assertMemberLaunchAllowed(receipt);
+      if (receipt.hostSetup.adoptionClaimEpoch !== undefined) {
+        const entry = receipt.key ? file.entries[sessionKeyId(receipt.key)] : null;
+        if (entry?.claimOwner !== structuredClaimOwner(owner) || entry.claimEpoch !== receipt.hostSetup.adoptionClaimEpoch)
+          throw new Error("structured adoption custody changed");
+      } else if (receipt.state !== "starting") throw new Error("structured setup is no longer admitted");
+      if (!receipt.hostSetup.processes.some(process => sameRecordedProcessIdentity(process, waiter)))
+        receipt.hostSetup.processes.push(clone(waiter));
     }));
     if (!written.acquired) throw new RegistryWriterBusyError("spawn.setup-custody");
   }

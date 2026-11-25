@@ -5,6 +5,7 @@ import { NextRequest } from "next/server";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
 import { registryLockHolder, sqliteRegistryFixture } from "@/lib/agent/registryLockHolderFixture";
 import { REGISTRY_WRITER_BUSY } from "@/lib/agent/registry";
+import { captureProcessIdentity } from "@/lib/processIdentity";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "@/lib/runtime/client";
 import { expect, test, spyOn, crypto, path, harness, create, frozenWallClock, REMOTE_BRANCH,
@@ -274,7 +275,7 @@ async function connect(f: Awaited<ReturnType<typeof fixture>>) {
   };
 }
 
-test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-down", "owner-change", "pre-host-writer", "waiter-refused", "native-turn", "compacted-prehost"].map(delivery => ({ explicit, delivery }))))
+test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-down", "owner-change", "pre-host-writer", "waiter-refused", "waiter-permitted", "waiter-unconfirmed", "native-turn", "compacted-prehost"].map(delivery => ({ explicit, delivery }))))
 ("MCP retry-stage reconciles a stuck replacement: %j", async ({ explicit, delivery }) => {
   const f = await fixture();
   let sdk: Awaited<ReturnType<typeof connect>> | undefined;
@@ -303,15 +304,19 @@ test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-dow
     const failure = ["pre-host-writer", "compacted-prehost", "native-turn"].includes(delivery) ? EARLY_FAILURE : FAILURE;
     if (!["pre-host-writer", "compacted-prehost", "native-turn"].includes(delivery)) {
       f.registry.beginStructuredHostSetup(active.launchId, active.admissionOwner!, Date.parse(f.h.ports.now()));
-      if (delivery === "waiter-refused") {
-        f.registry.recordStructuredHostSetup(active.launchId, active.admissionOwner!);
-        f.registry.confirmStructuredHostSetupCleanup(active.launchId, active.admissionOwner!);
+      if (["waiter-refused", "waiter-permitted", "waiter-unconfirmed"].includes(delivery)) {
+        const waiter = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"]);
+        f.registry.recordStructuredHostSetupWaiter(active.launchId, active.admissionOwner!, captureProcessIdentity(waiter.pid));
+        if (delivery === "waiter-permitted") f.registry.recordStructuredHostSetup(active.launchId, active.admissionOwner!);
+        waiter.kill("SIGKILL");
+        await waiter.exited;
+        if (delivery !== "waiter-unconfirmed") f.registry.confirmStructuredHostSetupCleanup(active.launchId, active.admissionOwner!);
       }
     }
     f.journal.transitionOperation(active.launchId, "failed", { reason: failure });
     await f.registry.failStructuredSpawnOffLoop(active.launchId, failure);
     attempt.error = failure;
-    f.registry.confirmStructuredHostSetupCleanup(active.launchId, active.admissionOwner!);
+    if (delivery !== "waiter-unconfirmed") f.registry.confirmStructuredHostSetupCleanup(active.launchId, active.admissionOwner!);
     f.registry.releaseStructuredSpawnAdmissionOwner(active.launchId, active.admissionOwner!);
     Object.assign(attempt, { launchId: active.launchId, conversationId: active.conversationId, spawnCalls: 1 });
     lane.runs[0]!.attempts.push(attempt);
@@ -344,6 +349,8 @@ test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-dow
     f.h.ports.unpublishedLaunchRetrySafe = production.unpublishedLaunchRetrySafe;
     // The SDK uses the current launch, including its explicit receipt selector.
     expect(f.h.ports.spawnReceipt(active.launchId)).toMatchObject({ state: "failed", error: failure });
+    if (["waiter-permitted", "waiter-unconfirmed"].includes(delivery))
+      expect(await f.h.ports.unpublishedLaunchRetrySafe!(active.launchId)).toBe(false);
     const current = { ...f, launch: () => active.launchId };
     sdk = await connect(current);
     const answer = await sdk.retry(explicit);

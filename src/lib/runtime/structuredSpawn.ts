@@ -3533,7 +3533,7 @@ export async function spawnStructuredConversation(
       durableSetupDeadline - now(),
       admissionDeadline === null ? Infinity : admissionDeadline - now(),
     );
-    const writeSetupCustodyOffLoop = async (native?: ProcessIdentity) => {
+    const writeSetupCustodyOffLoop = async (native?: ProcessIdentity, waiter = false) => {
       for (;;) {
         // Native evidence grants no publication. Keep recording cleanup custody
         // even when authority was withdrawn during host.health().
@@ -3547,7 +3547,8 @@ export async function spawnStructuredConversation(
           || (writerRefusal && writerRemaining() <= 0))
           throw writerRefusal ?? new Error("structured spawn setup deadline expired before native exec");
         try {
-          input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner!, native);
+          if (waiter && native) input.registry.recordStructuredHostSetupWaiter(operationId, foregroundAdmissionOwner!, native);
+          else input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner!, native);
           writerRefusal = undefined;
           return;
         } catch (error) {
@@ -3560,8 +3561,9 @@ export async function spawnStructuredConversation(
           if (writerDeadline === undefined) {
             // Before exec the same admission can wait through a full writer
             // window. After native setup begins, keep cleanup custody prompt.
-            const preparing = !native && input.receipt.purpose === "launch"
-              && input.registry.spawnReceipt(operationId)?.hostSetup?.phase === "preparing";
+            const setup = input.registry.spawnReceipt(operationId)?.hostSetup;
+            const preparing = input.receipt.purpose === "launch"
+              && setup?.phase === "preparing" && setup.execPermitGranted !== true;
             const budgetMs = preparing ? PRE_EXEC_WRITER_RETRY_MS : SETUP_WRITER_RETRY_MS;
             writerBudgetMs = Math.min(budgetMs, input.setupCustodyRetryMs ?? Infinity);
             writerDeadline = now() + writerBudgetMs;
@@ -3579,7 +3581,8 @@ export async function spawnStructuredConversation(
         beforeExec: () => input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner),
         beforeExecOffLoop: () => writeSetupCustodyOffLoop(),
         record: (native: ProcessIdentity) => input.registry.recordStructuredHostSetup(operationId, foregroundAdmissionOwner, native),
-        recordOffLoop: (native: ProcessIdentity) => writeSetupCustodyOffLoop(native) }
+        recordOffLoop: (native: ProcessIdentity) => writeSetupCustodyOffLoop(native),
+        recordWaiterOffLoop: (native: ProcessIdentity) => writeSetupCustodyOffLoop(native, true) }
       : null;
     // Register cleanup evidence even if member authority was withdrawn while
     // the engine awaited its protocol identity. Evidence grants no publication.

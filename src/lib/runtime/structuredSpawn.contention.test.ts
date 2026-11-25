@@ -50,6 +50,7 @@ interface CustodyControl {
 async function fixture(held: "released" | "late-release" | "expired" | "revoked" | "owner-released" | "pipeline" | "stalled" | "repeat" | "retained" | "retained-concurrent" | "retained-expired" | "retained-revoked" | "retained-owner-released" | "native-retained" | "native-retained-expired" | "native-retained-concurrent" | "socket-retained" | "socket-retained-expired" | "native-retained-fence" | "native-retained-fence-expired" | "socket-retained-fence" | "socket-retained-fence-expired" = "released", retryMs?: number, queuedDeadlineMs?: number, control?: CustodyControl, preHostWriter?: PreHostWriter) {
   const retainingFence = held.includes("-fence");
   const retainingSocket = held.startsWith("socket-retained");
+  const custodyRetryLimitMs = retainingSocket ? 5_000 : 2_000;
   const retainingNative = held.startsWith("native-retained") || retainingSocket;
   const retaining = held.startsWith("retained") || retainingNative;
   const nativeProcesses: ReturnType<typeof captureProcessIdentity>[] = [];
@@ -96,23 +97,32 @@ async function fixture(held: "released" | "late-release" | "expired" | "revoked"
   };
   cleanups.push(releaseNativeWriter);
   if (retainingNative) {
-    const record = registry.recordStructuredHostSetup.bind(registry);
+    const recordPermit = registry.recordStructuredHostSetup.bind(registry);
+    const recordWaiter = registry.recordStructuredHostSetupWaiter.bind(registry);
     let collided = false, waiterSeen = false;
-    const records = spyOn(registry, "recordStructuredHostSetup").mockImplementation((launchId, owner, native) => {
-      if (native && !waiterSeen) {
-        nativeProcesses.push(native); waiterSeen = true;
-        cleanups.push(() => { if (processIdentityStatus(native) === "alive") process.kill(native.pid, "SIGKILL"); });
-      }
-      if (!collided && (retainingFence ? !native && waiterSeen : native)) {
+    const permits = spyOn(registry, "recordStructuredHostSetup").mockImplementation((launchId, owner, native) => {
+      if (!collided && retainingFence && !native && waiterSeen) {
         collided = true;
-        // Contend exactly at the production waiter's first PID write, after
-        // the outer pre-exec fence has passed. No engine permit exists yet.
+        // Contend at the actual permit write after the waiter was retained.
         nativeWriter = new Database(storage.sqliteFilename);
         nativeWriter.exec("BEGIN IMMEDIATE");
       }
-      return record(launchId, owner, native);
+      return recordPermit(launchId, owner, native);
     });
-    cleanups.push(() => records.mockRestore());
+    const waiters = spyOn(registry, "recordStructuredHostSetupWaiter").mockImplementation((launchId, owner, waiter) => {
+      if (!waiterSeen) {
+        nativeProcesses.push(waiter); waiterSeen = true;
+        cleanups.push(() => { if (processIdentityStatus(waiter) === "alive") process.kill(waiter.pid, "SIGKILL"); });
+      }
+      if (!collided && !retainingFence) {
+        collided = true;
+        // Refuse the production waiter's custody write before its mutation.
+        nativeWriter = new Database(storage.sqliteFilename);
+        nativeWriter.exec("BEGIN IMMEDIATE");
+      }
+      return recordWaiter(launchId, owner, waiter);
+    });
+    cleanups.push(() => { permits.mockRestore(); waiters.mockRestore(); });
   }
 
   const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { structuredHosts: true });
@@ -198,7 +208,11 @@ async function fixture(held: "released" | "late-release" | "expired" | "revoked"
                 hostSetup: { phase: "preparing", processes: [] } });
             } else {
               expect(registry.spawnReceipt(input.receipt.launchId)).toMatchObject({ state: "starting",
-                hostSetup: retainingNative && !retainingFence ? { phase: "preparing", processes: [] } : { phase: "executing", processes: [{}] } });
+                hostSetup: retainingSocket
+                  ? retainingFence ? { phase: "preparing", processes: [{}] } : { phase: "preparing", processes: [] }
+                  : retainingNative && !retainingFence
+                    ? { phase: "executing", execPermitGranted: true, processes: [] }
+                    : { phase: "executing", execPermitGranted: true, processes: [{}] } });
             }
             delays.push(ms); waits++;
             if (control) {
@@ -212,7 +226,7 @@ async function fixture(held: "released" | "late-release" | "expired" | "revoked"
             if (held === "stalled") clock += 5_000;
             if (held === "revoked" || held === "retained-revoked") authorized = false;
             if (retainingNative) {
-              if (!held.endsWith("expired") || clock >= Date.parse("2026-11-13T12:00:02Z")) releaseNativeWriter();
+              if (!held.endsWith("expired") || clock >= Date.parse("2026-11-13T12:00:00Z") + custodyRetryLimitMs) releaseNativeWriter();
             } else if (held === "late-release" ? clock >= Date.parse("2026-11-13T12:00:02.250Z")
               : held !== "expired" && held !== "retained-expired"
                 || retaining && clock >= Date.parse("2026-11-13T12:00:02Z")) await holder.release();
@@ -559,6 +573,7 @@ async function assignFixtureTask(root: string) {
 for (const adapter of ["native", "socket"] as const)
 for (const boundary of ["PID", "fence"] as const)
 for (const expired of [false, true]) test.skipIf(adapter === "socket" && process.platform !== "linux")(`native PID custody retries only its write: ${adapter} ${boundary} expired=${expired}`, async () => {
+  const retryLimitMs = adapter === "socket" ? 5_000 : 2_000;
   const f = await fixture(`${adapter}-retained${boundary === "fence" ? "-fence" : ""}${expired ? "-expired" : ""}`);
   const taskId = await assignFixtureTask(f.root);
   const sdk = await connect(f);
@@ -568,7 +583,7 @@ for (const expired of [false, true]) test.skipIf(adapter === "socket" && process
   const receipts = Object.values(f.registry.readOnlySnapshot().receipts);
   expect(receipts).toHaveLength(1);
   expect(receipts[0]).toMatchObject({ launchId: original.launchId, conversationId: original.conversationId,
-    state: expired ? "failed" : "completed", error: expired ? FAILURE : null });
+    state: expired ? "failed" : "completed", error: expired ? expect.stringContaining(FAILURE) : null });
   expect(f.counts().attempts).toBe(1);
   expect(f.counts().starts).toBe(expired ? 0 : 1);
   expect(f.counts().sends).toBe(expired ? 0 : 1);
@@ -576,7 +591,7 @@ for (const expired of [false, true]) test.skipIf(adapter === "socket" && process
   if (expired) expect(fs.existsSync(path.join(f.root, "native-starts"))).toBe(false);
   else expect(fs.readFileSync(path.join(f.root, "native-starts"), "utf8")).toBe(`${original.launchId}\n`);
   if (expired) {
-    expect(f.delays.reduce((sum, ms) => sum + ms, 0)).toBe(2_000);
+    expect(f.delays.reduce((sum, ms) => sum + ms, 0)).toBe(retryLimitMs);
     expect(f.nativeProcesses.every(process => processIdentityStatus(process) === "dead")).toBe(true);
   } else expect(receipts[0]!.hostSetup!.processes).toHaveLength(2);
   const replay = await replayInNewProcess(f.submitted());
@@ -697,7 +712,7 @@ for (const release of ["before", "after"] as const) test.skipIf(phase === "socke
   expect(pinned).toHaveLength(1);
   const launchId = pinned[0].launchId;
   const cutoff = phase === "caller" ? Date.parse(pinned[0].queuedPinnedSpawn.admissionDeadlineAt)
-    : Date.parse("2026-11-13T12:00:02Z");
+    : Date.parse("2026-11-13T12:00:00Z") + (phase === "socket-PID" ? 5_000 : 2_000);
   if (phase === "caller") {
     expect(cutoff).toBe(Date.parse("2026-11-13T12:00:00.100Z"));
     send(0);
@@ -709,10 +724,13 @@ for (const release of ["before", "after"] as const) test.skipIf(phase === "socke
   const initial = receipts();
   expect(initial).toHaveLength(1);
   expect(initial[0]).toMatchObject({ state: "starting", hostSetup: phase === "post-health"
-    ? { phase: "executing", processes: [{}] } : { phase: "preparing", processes: [] } });
+    ? { phase: "executing", execPermitGranted: true, processes: [{}] }
+    : phase === "native-PID" ? { phase: "executing", execPermitGranted: true, processes: [] }
+      : { phase: "preparing", processes: [] } });
   if (phase === "caller" || phase === "post-health") send(0);
   const waiting = phase === "native-PID" || phase === "socket-PID" ? first : await next();
-  expect(waiting).toMatchObject({ action: "wait", ms: 25, now: cutoff - (phase === "caller" ? 100 : 2_000) });
+  expect(waiting).toMatchObject({ action: "wait", ms: 25,
+    now: cutoff - (phase === "caller" ? 100 : phase === "socket-PID" ? 5_000 : 2_000) });
   // The parent owns the lock and clock independently of the launch process.
   // Its wake crosses the original writer deadline without another child loop.
   const wake = cutoff + (release === "after" ? 1 : -1);
@@ -731,7 +749,7 @@ for (const release of ["before", "after"] as const) test.skipIf(phase === "socke
   expect(final).toHaveLength(1);
   expect(final[0].launchId).toBe(launchId);
   const expected = release === "after"
-    ? { state: "failed", error: FAILURE, hostSetup: { processes: phase === "post-health" ? [{}] : [] } }
+    ? { state: "failed", error: expect.stringContaining(FAILURE), hostSetup: { processes: phase === "post-health" ? [{}] : [] } }
     : { state: "completed", hostSetup: { processes: phase === "native-PID" || phase === "socket-PID" ? [{}, {}] : [{}] } };
   expect(final[0]).toMatchObject(expected);
   expect(result).toMatchObject({ replay: { receipts: [{ state: expected.state }] } });
@@ -739,10 +757,10 @@ for (const release of ["before", "after"] as const) test.skipIf(phase === "socke
   expect(fs.existsSync(path.join(root, "native-starts"))).toBe(release === "before" || phase === "post-health");
   expect(final[0].conversationId).toBe(pinned[0].conversationId);
   if (release === "after") {
-    expect(result).toMatchObject({ replay: { receipts: [{ error: FAILURE }] } });
+    expect(result).toMatchObject({ replay: { receipts: [{ error: expect.stringContaining(FAILURE) }] } });
     expect((result as unknown as { nativeProcesses: Parameters<typeof processIdentityStatus>[0][] })
       .nativeProcesses.every(identity => processIdentityStatus(identity) === "dead")).toBe(true);
-    expect(final[0].hostSetup.cleanupConfirmed).toBe(true);
+    expect(final[0].hostSetup.cleanupConfirmed).toBe(phase === "native-PID" ? undefined : true);
   }
   else expect(fs.readFileSync(path.join(root, "native-starts"), "utf8")).toBe(`${launchId}\n`);
   send(0);
