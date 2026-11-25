@@ -88,7 +88,7 @@ function nativeFixture(coldBun = false) {
     const binary = writablePath(path.join(prefix, bun ? "node_modules/.bin/bun" : ${JSON.stringify(target)}));
     fs.mkdirSync(path.dirname(binary), { recursive: true });
     fs.writeFileSync(binary, bun ? ${JSON.stringify(`#!/bin/sh\nif [ "$1" = --version ]; then\n  "${process.execPath}" -e 'if (Object.keys(process.env).some(name => name.startsWith("LLV_GATE_PUBLICATION_"))) process.exit(23)' || exit 23\n  echo ${bun}; exit 0\nfi\nexec "${process.execPath}" "$@"\n`)} : "#!/bin/sh\\nexit 0\\n", { mode: 0o755 });
-    fs.appendFileSync(writablePath(process.env.HOOK_LOG ?? ""), JSON.stringify({ args: ["native-install", bun ? "bun" : "codex", args.at(-1)], names: [] }) + "\\n");`);
+    fs.appendFileSync(writablePath(process.env.HOOK_LOG ?? ""), JSON.stringify({ args: ["native-install", bun ? "bun" : "codex", args.at(-1)], names: Object.keys(process.env).sort(), home: process.env.HOME }) + "\\n");`);
   write("shims/npm", `#!/bin/sh\nexec "${process.execPath}" "${installer}" "$@"\n`);
   fs.chmodSync(f.writablePath("shims/npm"), 0o755);
   f.git("-c", "core.hooksPath=/dev/null", "add", ".");

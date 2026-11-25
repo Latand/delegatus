@@ -243,7 +243,7 @@ The account-switch lane (identifier ending `e38e0604`) touches retirement, deliv
 
 Roll out new domains for newly started native processes after synthetic and real-engine checks pass. Existing active hosts keep their recorded policy and may finish under an explicit legacy status. Do not restart the operator's conversations to retrofit namespaces or claim they are protected. Resume/adopt must distinguish a native session resumed in a new protected process from adoption of an already running legacy process. Rollback preserves running-domain ownership metadata or refuses adoption safely; an older normalizer must not silently discard the identities and leak the process tree.
 
-Linux enforcement is the qualified target. Other platforms launch as before and report the boundary off instead of claiming protection. Container-host bridging and the declared `bwrap` dependency are installation checks, not reasons to change machine privileges during this stage.
+Linux enforcement is the qualified target. Other platforms launch as before and report the boundary off instead of claiming protection. On macOS and Windows that report is a log line at information severity, since the platform limit is expected; every other cause of an off boundary stays a warning. Container-host bridging and the declared `bwrap` dependency are installation checks, not reasons to change machine privileges during this stage.
 
 ## Test and release plan
 

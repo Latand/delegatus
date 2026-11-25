@@ -13,7 +13,8 @@ export type RootKey =
   | "claude-projects"
   | "claude-tasks"
   | "openclaw-sessions"
-  | "copilot-sessions";
+  | "copilot-sessions"
+  | "antigravity-sessions";
 
 export type Engine = "codex" | "claude" | "shell" | "openclaw" | "copilot" | "antigravity";
 export type Activity = "live" | "recent" | "stalled" | "idle";
@@ -750,6 +751,8 @@ export interface LimitsPayload {
   codex: EngineLimits | null;
   /** Optional on legacy browser/test payloads; the server now always sends it. */
   copilot?: EngineLimits | null;
+  /** Active Antigravity 5-hour quota exhaustion window, or null when not exhausted. */
+  antigravity?: EngineLimits | null;
   /** The Claude account whose values appear in this payload. */
   claudeAccountId: string | null;
   /** The account whose Codex values appear in this payload. The server always
@@ -758,7 +761,14 @@ export interface LimitsPayload {
   codexAccountId: string | null;
   /** The Copilot account whose latest transcript snapshot appears here. */
   copilotAccountId?: string | null;
-  provenance: { claude: LimitsProvenance; codex: LimitsProvenance; copilot?: LimitsProvenance };
+  /** The Antigravity account whose latest quota observation appears here. */
+  antigravityAccountId?: string | null;
+  provenance: {
+    claude: LimitsProvenance;
+    codex: LimitsProvenance;
+    copilot?: LimitsProvenance;
+    antigravity?: LimitsProvenance;
+  };
   /** ISO timestamp from the first failed refresh behind this fallback payload. */
   staleSince?: string | null;
 }

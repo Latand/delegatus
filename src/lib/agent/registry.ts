@@ -31,7 +31,7 @@ import { statePath } from "@/lib/configDir";
 import { stagedLaunchRecovery } from "@/lib/runtime/stagedRecovery";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { assertNotOperatorStateUnderTest, assertStateStartupMutation, mayRunStateStartupMutation, MCP_PROBE_READ_ONLY_ENV } from "@/lib/stateOwnership";
-import { hotStateWriterRevision } from "@/lib/state/hotStateAuthority";
+import { hotStateWriterRevision, withHotStateAuthorityAttempt } from "@/lib/state/hotStateAuthority";
 import { assertStateMutationAllowed, stateMutationActivationOpen } from "@/lib/state/stateMutationBarrier";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import {
@@ -47,6 +47,7 @@ import { accountMutationHeld } from "@/lib/accounts/accountMutationContext";
 import { readRetiredAccountIds, retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { noteWriterAdmitted } from "@/lib/state/admissionWitness";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
+import type { CarrierSource } from "@/lib/accounts/projectAccountsView";
 import { accountProjectBindings, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import { admitAutomaticAccountTarget, placedAccountHolds } from "@/lib/accounts/projectSelection";
 import {
@@ -118,11 +119,18 @@ import {
   type RegistryBackendResolution,
 } from "./registryBackendIdentity";
 import {
+  ANTIGRAVITY_AGENT_STATES_ACCESS,
+  ANTIGRAVITY_JSON_STATES,
+  antigravityStatesHandleForRecord,
+  registryConversationForStorage,
+  registryEntryForStorage,
+  type AntigravityAgentStatesMutable,
+  type AntigravityAgentStatesView,
   SqliteAgentRegistryStore,
   registryCollectionPage, type RowCollection,
   registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryOpenDeliveryKeys, registryHasDeliveryPredecessor, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryConversationKeysForEntryKey, registryHasEntryKeyIndex,
-  sqliteRegistryStoreImported, registryLivenessRows, registryRowProjection,
+  sqliteRegistryStoreImported, registryLivenessRows, registryRowProjection, type StartupFallbackSweep, type SpawnMarkerBackup, SpawnMarkerBackupChangedError,
   type RegistryDeliveryCompactionChanges, type RegistryRowProjector,
   type SqliteRegistryReplacement,
   type SqliteRegistrySnapshot,
@@ -2816,13 +2824,23 @@ function nativeGenerationId(pathname: string): string {
   return path.basename(pathname).match(/([0-9a-f-]{36})(?:\.jsonl)?$/i)?.[1] ?? crypto.randomUUID();
 }
 
-function normalizeGeneration(value: NativeGeneration, policy?: McpGrantPolicy): NativeGeneration {
-  return {
+function normalizeGeneration(value: NativeGeneration, policy?: McpGrantPolicy, engine?: AgentEngine): NativeGeneration {
+  const raw = value as NativeGeneration & { antigravityAccountId?: unknown };
+  const restoredAccountId = engine === "antigravity"
+    && value.accountId === null
+    && typeof raw.antigravityAccountId === "string"
+    && raw.antigravityAccountId.length > 0
+    ? raw.antigravityAccountId
+    : value.accountId;
+  const normalized: NativeGeneration & { antigravityAccountId?: unknown } = {
     ...value,
+    accountId: restoredAccountId,
     launchProfile: emptyLaunchProfile(value.launchProfile ?? {}, policy),
     historyHash: typeof value.historyHash === "string" ? value.historyHash : null,
     host: value.host && typeof value.host === "object" ? value.host : null,
   };
+  delete normalized.antigravityAccountId;
+  return normalized;
 }
 
 function normalizeProviderRetry(value: unknown): ProviderRetryEvidence | null {
@@ -2965,8 +2983,20 @@ export function storedPaneAgentRuns(
 
 function normalizeEntry(value: AgentRegistryEntry, policy?: McpGrantPolicy): AgentRegistryEntry {
   const terminationSurvivors = normalizeStructuredTerminationSurvivors(value.structuredTerminationSurvivors);
-  return {
+  const raw = value as AgentRegistryEntry & { antigravityAccountId?: unknown };
+  const restoredAccountId = value.key?.engine === "antigravity"
+    && value.accountId === null
+    && typeof raw.antigravityAccountId === "string"
+    && raw.antigravityAccountId.length > 0
+    ? raw.antigravityAccountId
+    : value.accountId;
+  const normalized: AgentRegistryEntry & {
+    antigravityAccountId?: unknown;
+    antigravityProjection?: unknown;
+    antigravityProjections?: unknown;
+  } = {
     ...value,
+    accountId: restoredAccountId,
     ...(value.launchProfile ? { launchProfile: emptyLaunchProfile(value.launchProfile, policy) } : {}),
     /* A row written while agents ran in terminal panes names a pane as its
        host. Nothing can reach that pane any more, so the row loads without a
@@ -2979,6 +3009,10 @@ function normalizeEntry(value: AgentRegistryEntry, policy?: McpGrantPolicy): Age
     ...(value.structuredHost?.exitProcess ? { hostExitProcess: value.structuredHost.exitProcess } : {}),
     ...(terminationSurvivors === undefined ? {} : { structuredTerminationSurvivors: terminationSurvivors }),
   };
+  delete normalized.antigravityAccountId;
+  delete normalized.antigravityProjection;
+  delete normalized.antigravityProjections;
+  return normalized;
 }
 
 function normalizeLineageEdge(value: SpawnLineageEdge): SpawnLineageEdge {
@@ -3122,7 +3156,7 @@ function normalizeSwitchHold(value: unknown): ConversationSwitchHold | null {
 
 function normalizeConversation(value: RegistryConversation, policy?: McpGrantPolicy): RegistryConversation {
   const generations = Array.isArray(value.generations)
-    ? value.generations.map((generation) => normalizeGeneration(generation, policy))
+    ? value.generations.map((generation) => normalizeGeneration(generation, policy, value.engine))
     : [];
   const current = generations.at(-1);
   const legacyContinuity = (value.migration as (ConversationMigration & { continuityPaths?: unknown }) | null)?.continuityPaths;
@@ -5168,7 +5202,41 @@ export function normalizeRegistry(
         : {},
       pendingSupersedence: normalizePendingSupersedence(parsed.pendingSupersedence),
   });
-  return deferStoredGrantDecision ? normalized : reboundStoredMcpGrants(normalized, policy);
+  const result = deferStoredGrantDecision ? normalized : reboundStoredMcpGrants(normalized, policy);
+  const rawAgStates = (parsed as { antigravityAgentStates?: unknown }).antigravityAgentStates;
+  const entryMirroredRaw: Record<string, unknown> = {};
+  for (const rawEntry of Object.values(parsed.entries)) {
+    const entryObj = rawEntry as {
+      antigravityProjection?: { subject?: unknown };
+      antigravityProjections?: Record<string, { subject?: unknown }>;
+    } | null | undefined;
+    const single = entryObj?.antigravityProjection;
+    if (single && typeof single === "object" && typeof single.subject === "string" && single.subject.length > 0) {
+      entryMirroredRaw[single.subject] = single;
+    }
+    const multi = entryObj?.antigravityProjections;
+    if (multi && typeof multi === "object" && !Array.isArray(multi)) {
+      for (const [key, candidate] of Object.entries(multi)) {
+        if (candidate && typeof candidate === "object" && typeof candidate.subject === "string" && candidate.subject.length > 0) {
+          entryMirroredRaw[candidate.subject] = candidate;
+        } else if (key.length > 0 && candidate && typeof candidate === "object") {
+          entryMirroredRaw[key] = candidate;
+        }
+      }
+    }
+  }
+  const hasEntryMirrors = Object.keys(entryMirroredRaw).length > 0;
+  if (rawAgStates !== undefined || hasEntryMirrors) {
+    const fromEntries = hasEntryMirrors ? normalizeAgentStateRows(entryMirroredRaw, "projection") : {};
+    const fromTopLevel = rawAgStates !== undefined ? normalizeAgentStateRows(rawAgStates, "projection") : {};
+    Object.defineProperty(result, ANTIGRAVITY_JSON_STATES, {
+      configurable: true,
+      enumerable: false,
+      writable: true,
+      value: { ...fromEntries, ...fromTopLevel },
+    });
+  }
+  return result;
 }
 
 /* A registry persisted before an engine existed (Copilot, #2045) carries no
@@ -5266,25 +5334,59 @@ function compactLaunchProfile(profile: LaunchProfile): Partial<LaunchProfile> {
 }
 
 function serializeRegistry(value: RegistryFile, sqliteRevision?: number): string {
+  const agStates = (value as RegistryFile & { [ANTIGRAVITY_JSON_STATES]?: Record<string, AgentProjection> })[ANTIGRAVITY_JSON_STATES];
+  const hasAgStates = Boolean(agStates && Object.keys(agStates).length > 0);
+  // In pure JSON (`off`) mode (`sqliteRevision === undefined`), also mirror all
+  // Antigravity projections onto their owning entry (`antigravityProjections`,
+  // keyed by subjectId so multiple retained process generations under one
+  // `entryKey` all survive!) because prior releases spread `{ ...value }` in
+  // `normalizeEntry`, preserving them even when they drop unknown top-level keys.
+  // Omit from `entries` in SQLite/dual-write modes so prior releases'
+  // `assertSqliteParity` matches SQLite byte-for-byte.
+  const entryProjectionsByKey = new Map<string, Record<string, AgentProjection>>();
+  if (sqliteRevision === undefined && hasAgStates && agStates) {
+    for (const [subject, projection] of Object.entries(agStates)) {
+      if (projection && typeof projection.entryKey === "string") {
+        let bucket = entryProjectionsByKey.get(projection.entryKey);
+        if (!bucket) {
+          bucket = {};
+          entryProjectionsByKey.set(projection.entryKey, bucket);
+        }
+        bucket[subject] = projection;
+      }
+    }
+  }
   const storage = {
     _jsonStoreId: value._jsonStoreId,
     ...value,
     ...(sqliteRevision === undefined ? {} : { _sqliteRevision: sqliteRevision }),
-    entries: Object.fromEntries(Object.entries(value.entries).map(([id, entry]) => [id, {
-      ...entry,
-      ...(entry.launchProfile ? { launchProfile: compactLaunchProfile(entry.launchProfile) } : {}),
-    }])),
+    agentStates: Object.fromEntries(
+      Object.entries(value.agentStates).filter(([, row]) => row?.facts?.engine !== "antigravity"),
+    ),
+    ...(hasAgStates ? { antigravityAgentStates: agStates } : {}),
+    entries: Object.fromEntries(Object.entries(value.entries).map(([id, entry]) => {
+      const storedEntry = registryEntryForStorage(entry);
+      const mirroredProjections = entryProjectionsByKey.get(id);
+      return [id, {
+        ...storedEntry,
+        ...(storedEntry.launchProfile ? { launchProfile: compactLaunchProfile(storedEntry.launchProfile) } : {}),
+        ...(mirroredProjections ? { antigravityProjections: mirroredProjections } : {}),
+      }];
+    })),
     receipts: Object.fromEntries(Object.entries(value.receipts).map(([id, receipt]) => [id, {
       ...receipt,
       launchProfile: compactLaunchProfile(receipt.launchProfile),
     }])),
-    conversations: Object.fromEntries(Object.entries(value.conversations).map(([id, conversation]) => [id, {
-      ...conversation,
-      generations: conversation.generations.map((generation) => ({
-        ...generation,
-        launchProfile: compactLaunchProfile(generation.launchProfile),
-      })),
-    }])),
+    conversations: Object.fromEntries(Object.entries(value.conversations).map(([id, conversation]) => {
+      const storedConversation = registryConversationForStorage(conversation);
+      return [id, {
+        ...storedConversation,
+        generations: storedConversation.generations.map((generation) => ({
+          ...generation,
+          launchProfile: compactLaunchProfile(generation.launchProfile),
+        })),
+      }];
+    })),
   };
   return JSON.stringify(storage) + "\n";
 }
@@ -5643,10 +5745,12 @@ export class AgentRegistry {
     if (this.sqliteMode === "off" && mayRunStartupMaintenance) {
       this.cleanupStaleTempFiles();
       this.compactAtStartup();
+      this.migrateLegacyJsonAntigravityAccountIds();
     }
     if (this.sqliteMode === "dual-write" && mayRunStartupMaintenance) {
       this.cleanupStaleTempFiles();
       this.synchronizeDualWriteStartup(storage.beforeDualWriteStartupReplace);
+      this.migrateLegacyJsonAntigravityAccountIds();
     }
     if (this.sqliteMode === "read") {
       const sqlite = this.sqliteStore!.snapshot();
@@ -5683,6 +5787,40 @@ export class AgentRegistry {
        install an identity a reader would then trust. */
     if ((backend.source === "environment" || backend.source === "default") && mayRunStartupMaintenance) {
       publishRegistryBackendIdentity(filename, this.sqliteMode, sqliteFilename);
+    }
+  }
+
+  private migrateLegacyJsonAntigravityAccountIds(): void {
+    try {
+      if (!fs.existsSync(this.filename)) return;
+      const rawText = fs.readFileSync(this.filename, "utf8");
+      if (!rawText.includes('"antigravity"')) return;
+      const parsed = JSON.parse(rawText) as {
+        antigravityAgentStates?: Record<string, unknown>;
+        entries?: Record<string, {
+          key?: { engine?: string };
+          accountId?: unknown;
+          antigravityProjection?: unknown;
+          antigravityProjections?: unknown;
+        }>;
+        conversations?: Record<string, { engine?: string; generations?: Array<{ accountId?: unknown }> }>;
+      };
+      const needsEntryMigration = Object.values(parsed.entries ?? {}).some(
+        (entry) => entry?.key?.engine === "antigravity" && typeof entry.accountId === "string" && entry.accountId.length > 0,
+      );
+      const needsConvMigration = Object.values(parsed.conversations ?? {}).some(
+        (conv) => conv?.engine === "antigravity" && Array.isArray(conv.generations)
+          && conv.generations.some((gen) => typeof gen?.accountId === "string" && gen.accountId.length > 0),
+      );
+      const needsTopLevelProjectionRestore = this.sqliteMode === "off"
+        && (!parsed.antigravityAgentStates || Object.keys(parsed.antigravityAgentStates).length === 0)
+        && Object.values(parsed.entries ?? {}).some(
+          (entry) => entry?.antigravityProjection !== undefined || entry?.antigravityProjections !== undefined,
+        );
+      if (!needsEntryMigration && !needsConvMigration && !needsTopLevelProjectionRestore) return;
+      this.mutate(() => {}, { deliveryOnly: true });
+    } catch {
+      /* Best-effort compatibility rewrite; normal reads/writes still normalize safely. */
     }
   }
 
@@ -6007,6 +6145,17 @@ export class AgentRegistry {
       this.assertSqliteParity(sqlite);
       this.compactAtStartupLocked(sqlite.revision);
       const file = readFile(this.filename, this.mcpGrantPolicy);
+      if (!(ANTIGRAVITY_JSON_STATES in file)) {
+        const recovered = this.sqliteStore!.readAllAntigravityAgentStates();
+        if (Object.keys(recovered).length > 0) {
+          Object.defineProperty(file, ANTIGRAVITY_JSON_STATES, {
+            configurable: true,
+            enumerable: false,
+            writable: true,
+            value: recovered,
+          });
+        }
+      }
       beforeReplace?.();
       const replacement = this.sqliteStore!.replace(file, sqlite.revision, { noWait: accountMutationHeld() });
       if (!replacement.replaced) {
@@ -6353,7 +6502,7 @@ export class AgentRegistry {
     }
   }
 
-  private mutate<T>(fn: (file: RegistryFile) => T, options: { deliveryOnly?: boolean } = {}): T {
+  private mutate<T>(fn: (file: RegistryFile) => T, options: { deliveryOnly?: boolean; spawnMarkerRepair?: { key: string; launchId: string; backup: SpawnMarkerBackup } } = {}): T {
     noteWriterAdmitted();
     const startedAt = performance.now();
     const result = this.mutateStorage(fn, options);
@@ -6367,7 +6516,7 @@ export class AgentRegistry {
     return result;
   }
 
-  private mutateStorage<T>(fn: (file: RegistryFile) => T, options: { deliveryOnly?: boolean }): T {
+  private mutateStorage<T>(fn: (file: RegistryFile) => T, options: { deliveryOnly?: boolean; spawnMarkerRepair?: { key: string; launchId: string; backup: SpawnMarkerBackup } }): T {
     /* Host-state mutations sweep staged supersedence edges (issue #383) after
        their own writes, so whichever transition marks a predecessor host dead —
        terminate, recovery, reconcile — retires its round in that same
@@ -6381,7 +6530,7 @@ export class AgentRegistry {
     };
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
       const operationName = new Error().stack?.split("\n")[3]?.match(/at (\w+)/)?.[1] ?? "anonymous";
-      const mutation = this.sqliteStore!.mutate(mutator, false, { operationName, noWait: accountMutationHeld() });
+      const mutation = this.sqliteStore!.mutate(mutator, false, { operationName, noWait: accountMutationHeld(), spawnMarkerRepair: options.spawnMarkerRepair });
       if (this.sqliteMode === "read") {
         this.mirrorDirty = this.lastMirroredRevision === null || mutation.revision > this.lastMirroredRevision;
         if (this.mirrorDirty) this.scheduleRollbackMirrorForCadence();
@@ -7456,6 +7605,14 @@ export class AgentRegistry {
     }, { skipColdKeyInitialization: true });
   }
 
+  startupFallbackSweep(journal: string | null): StartupFallbackSweep | null {
+    return this.sqliteMode === "sqlite" || this.sqliteMode === "read" ? this.sqliteStore!.startupFallbackSweep(journal) : null;
+  }
+
+  finishStartupFallbackSweep(sweep: StartupFallbackSweep): boolean {
+    return (this.sqliteMode === "sqlite" || this.sqliteMode === "read") && this.sqliteStore!.finishStartupFallbackSweep(sweep);
+  }
+
   /** Existing reaper hygiene owns these bounded storage-only moves. */
   archiveInactiveRows(limit?: number): number {
     assertStateStartupMutation(path.dirname(this.filename),"agent registry archive");
@@ -7486,8 +7643,31 @@ export class AgentRegistry {
     });
   }
 
-  agentStateRead<T>(read: (file: RegistryFile) => T): T {
-    return this.readKeyed(read);
+  private jsonAntigravityStatesRecord(file: RegistryFile): Record<string, AgentProjection> {
+    const tagged = file as RegistryFile & { [ANTIGRAVITY_JSON_STATES]?: Record<string, AgentProjection> };
+    if (!tagged[ANTIGRAVITY_JSON_STATES]) {
+      const recovered = this.sqliteMode === "dual-write" && this.sqliteStore
+        ? this.sqliteStore.readAllAntigravityAgentStates()
+        : {};
+      Object.defineProperty(file, ANTIGRAVITY_JSON_STATES, {
+        configurable: true,
+        enumerable: false,
+        writable: true,
+        value: recovered,
+      });
+    }
+    return tagged[ANTIGRAVITY_JSON_STATES]!;
+  }
+
+  agentStateRead<T>(read: (file: RegistryFile, antigravityStates: AntigravityAgentStatesView) => T): T {
+    return this.readKeyed(file => {
+      const sqliteHandle = (file as RegistryFile & { [ANTIGRAVITY_AGENT_STATES_ACCESS]?: AntigravityAgentStatesView })[ANTIGRAVITY_AGENT_STATES_ACCESS];
+      if (sqliteHandle) return read(file, sqliteHandle);
+      const tagged = file as RegistryFile & { [ANTIGRAVITY_JSON_STATES]?: Record<string, AgentProjection> };
+      const jsonRecord = tagged[ANTIGRAVITY_JSON_STATES]
+        ?? (this.sqliteMode === "dual-write" && this.sqliteStore ? this.sqliteStore.readAllAntigravityAgentStates() : {});
+      return read(file, antigravityStatesHandleForRecord(jsonRecord));
+    });
   }
 
   agentStateMetricsRead(): AgentStateMetrics {
@@ -7500,7 +7680,7 @@ export class AgentRegistry {
     return metrics;
   }
 
-  agentStateWrite<T>(write: (file: RegistryFile, readMetrics: () => AgentStateMetrics) => T): T {
+  agentStateWrite<T>(write: (file: RegistryFile, readMetrics: () => AgentStateMetrics, antigravityStates: AntigravityAgentStatesMutable) => T): T {
     let nextAntigravityCount: number | undefined;
     const result = this.mutate(file => {
       // SQLite tracks changed rows lazily. For a whole-file write, compare to
@@ -7508,7 +7688,9 @@ export class AgentRegistry {
       const previous = this.sqliteMode === "off" || this.sqliteMode === "dual-write"
         ? clone(file.agentStateMetrics) : null;
       const storedCount = file.agentStateMetrics.current?.stuckByEngine.antigravity;
-      const result = write(file, () => this.currentAgentStateMetrics(file));
+      const sqliteHandle = (file as RegistryFile & { [ANTIGRAVITY_AGENT_STATES_ACCESS]?: AntigravityAgentStatesMutable })[ANTIGRAVITY_AGENT_STATES_ACCESS];
+      const antigravityStates = sqliteHandle ?? antigravityStatesHandleForRecord(this.jsonAntigravityStatesRecord(file));
+      const result = write(file, () => this.currentAgentStateMetrics(file), antigravityStates);
       const count = file.agentStateMetrics.current?.stuckByEngine.antigravity;
       nextAntigravityCount = count === storedCount ? this.antigravityStuckCount ?? count : count;
       if (previous) {
@@ -9121,66 +9303,70 @@ export class AgentRegistry {
     launchId: string,
     evidence?: Omit<AgentRegistryEntry, "updatedAt">,
   ): SpawnSettlement {
-    return this.mutate((file) => {
-      const receipt = file.receipts[launchId];
-      if (!receipt) throw new Error("unknown spawn receipt");
-      if (receipt.state === "conflicted" || receipt.retryClaim) {
-        return { kind: "conflict", receipt: clone(receipt), code: "spawn_identity_conflict" };
-      }
-      // An unstaged resume can lose admission to startup adoption before it
-      // records a key. Its recovery evidence identifies the existing entry;
-      // that entry's writer fence still governs late receipt settlement.
-      const storedKey = receipt.key ?? evidence?.key;
-      const stored = storedKey ? file.entries[sessionKeyId(storedKey)] : null;
-      let storedEvidence: Omit<AgentRegistryEntry, "updatedAt"> | null = null;
-      if (stored) {
-        const { updatedAt, ...entry } = stored;
-        void updatedAt;
-        storedEvidence = entry;
-      }
-      if (storedEvidence && (storedEvidence.structuredHost?.process || storedEvidence.claimOwner)
-        && receipt.accountId !== storedEvidence.accountId
-        && (receipt.transport !== "structured" || storedEvidence.structuredHostOperationId !== launchId)) {
-        // Only this launch's staged writer can retain an admitted fallback.
-        // A stale receipt cannot rebind another operation's owned writer.
-        return { kind: "conflict", receipt: clone(receipt), code: "spawn_identity_conflict" };
-      }
-      /* Runtime snapshots prove delivery and session identity, while the
-         registry remains authoritative for an active writer claim. Merge the
-         live claim inside this mutation so synthesized evidence cannot clear
-         ownership between its read and late-success settlement. */
-      const candidate = evidence && storedEvidence ? {
-        ...evidence,
-        ...(storedEvidence.structuredHostOperationId !== undefined
-          ? { structuredHostOperationId: storedEvidence.structuredHostOperationId }
-          : {}),
-        ...(storedEvidence.structuredHost?.process || storedEvidence.claimOwner ? {
-          host: storedEvidence.host,
-          structuredHost: storedEvidence.structuredHost,
-          claimEpoch: storedEvidence.claimEpoch,
-          claimOwner: storedEvidence.claimOwner,
-          pendingAction: storedEvidence.pendingAction,
-        } : {}),
-      } : evidence ?? storedEvidence;
-      if (!candidate
-        || (receipt.key && sessionKeyId(receipt.key) !== sessionKeyId(candidate.key))
-        || (receipt.artifactPath && receipt.artifactPath !== candidate.artifactPath)) {
-        return { kind: "conflict", receipt: clone(receipt), code: "spawn_identity_conflict" };
-      }
-      /* A route-recovered launch is terminal. Preserve only a handoff marker
-         that the incumbent writer deliberately set; every other action was
-         the launch's own stale publication marker and must not make the
-         completed host look as though it is still registering. */
-      const settledCandidate = {
-        ...candidate,
-        pendingAction: storedEvidence?.pendingAction === "handoff" ? "handoff" as const : null,
-      };
-      if (receipt.state === "failed") {
-        receipt.state = receipt.key ? "path-pending" : "starting";
-        receipt.error = null;
-      }
-      return this.settleSpawnInFile(file, launchId, settledCandidate, "route-recovered");
-    });
+    return this.mutate(file => this.recoverStructuredSpawnEvidenceInFile(file, launchId, evidence));
+  }
+
+  private recoverStructuredSpawnEvidenceInFile(
+    file: RegistryFile, launchId: string, evidence?: Omit<AgentRegistryEntry, "updatedAt">,
+  ): SpawnSettlement {
+    const receipt = file.receipts[launchId];
+    if (!receipt) throw new Error("unknown spawn receipt");
+    if (receipt.state === "conflicted" || receipt.retryClaim) {
+      return { kind: "conflict", receipt: clone(receipt), code: "spawn_identity_conflict" };
+    }
+    // An unstaged resume can lose admission to startup adoption before it
+    // records a key. Its recovery evidence identifies the existing entry;
+    // that entry's writer fence still governs late receipt settlement.
+    const storedKey = receipt.key ?? evidence?.key;
+    const stored = storedKey ? file.entries[sessionKeyId(storedKey)] : null;
+    let storedEvidence: Omit<AgentRegistryEntry, "updatedAt"> | null = null;
+    if (stored) {
+      const { updatedAt, ...entry } = stored;
+      void updatedAt;
+      storedEvidence = entry;
+    }
+    if (storedEvidence && (storedEvidence.structuredHost?.process || storedEvidence.claimOwner)
+      && receipt.accountId !== storedEvidence.accountId
+      && (receipt.transport !== "structured" || storedEvidence.structuredHostOperationId !== launchId)) {
+      // Only this launch's staged writer can retain an admitted fallback.
+      // A stale receipt cannot rebind another operation's owned writer.
+      return { kind: "conflict", receipt: clone(receipt), code: "spawn_identity_conflict" };
+    }
+    /* Runtime snapshots prove delivery and session identity, while the
+       registry remains authoritative for an active writer claim. Merge the
+       live claim inside this mutation so synthesized evidence cannot clear
+       ownership between its read and late-success settlement. */
+    const candidate = evidence && storedEvidence ? {
+      ...evidence,
+      ...(storedEvidence.structuredHostOperationId !== undefined
+        ? { structuredHostOperationId: storedEvidence.structuredHostOperationId }
+        : {}),
+      ...(storedEvidence.structuredHost?.process || storedEvidence.claimOwner ? {
+        host: storedEvidence.host,
+        structuredHost: storedEvidence.structuredHost,
+        claimEpoch: storedEvidence.claimEpoch,
+        claimOwner: storedEvidence.claimOwner,
+        pendingAction: storedEvidence.pendingAction,
+      } : {}),
+    } : evidence ?? storedEvidence;
+    if (!candidate
+      || (receipt.key && sessionKeyId(receipt.key) !== sessionKeyId(candidate.key))
+      || (receipt.artifactPath && receipt.artifactPath !== candidate.artifactPath)) {
+      return { kind: "conflict", receipt: clone(receipt), code: "spawn_identity_conflict" };
+    }
+    /* A route-recovered launch is terminal. Preserve only a handoff marker
+       that the incumbent writer deliberately set; every other action was
+       the launch's own stale publication marker and must not make the
+       completed host look as though it is still registering. */
+    const settledCandidate = {
+      ...candidate,
+      pendingAction: storedEvidence?.pendingAction === "handoff" ? "handoff" as const : null,
+    };
+    if (receipt.state === "failed") {
+      receipt.state = receipt.key ? "path-pending" : "starting";
+      receipt.error = null;
+    }
+    return this.settleSpawnInFile(file, launchId, settledCandidate, "route-recovered");
   }
 
   settleSpawn(launchId: string, entry: Omit<AgentRegistryEntry, "updatedAt">, completionMode: NonNullable<SpawnReceipt["completionMode"]> = "route-completed"): SpawnSettlement {
@@ -9423,108 +9609,168 @@ export class AgentRegistry {
     error: string,
     options: StructuredSpawnFailureOptions,
   ): StructuredSpawnFailureClaim {
-    return this.mutate((file) => {
-      const receipt = file.receipts[launchId];
-      if (!receipt) return { claimed: false, receipt: null, cleanup: null };
-      if (receipt.state === "completed" || receipt.state === "failed" || receipt.state === "conflicted") {
+    return this.mutate(file => this.claimStructuredSpawnFailure(file, launchId, error, options));
+  }
+
+  private claimStructuredSpawnFailure(
+    file: RegistryFile, launchId: string, error: string, options: StructuredSpawnFailureOptions,
+  ): StructuredSpawnFailureClaim {
+    const receipt = file.receipts[launchId];
+    if (!receipt) return { claimed: false, receipt: null, cleanup: null };
+    if (receipt.state === "completed" || receipt.state === "failed" || receipt.state === "conflicted") {
+      return { claimed: false, receipt: clone(receipt), cleanup: null };
+    }
+    if (options.recoveryFence && !options.recoveryFence(file, receipt)) {
+      return { claimed: false, receipt: clone(receipt), cleanup: null };
+    }
+    if (options.startingRecovery) {
+      // Recovery's journal read yielded. The current receipt and admission
+      // owner decide inside this mutation, before any runtime failure write.
+      const { now: recoveryNow, timeoutMs } = options.startingRecovery;
+      const createdAt = structuredSetupStartedAt(receipt);
+      const withinSetupBound = !Number.isFinite(createdAt) || recoveryNow - createdAt < timeoutMs;
+      if (receipt.state !== "starting" || receipt.key || receipt.queuedPinnedSpawn
+        || (withinSetupBound && receipt.admissionOwner && this.ownerAlive(receipt.admissionOwner))) {
         return { claimed: false, receipt: clone(receipt), cleanup: null };
       }
-      if (options.recoveryFence && !options.recoveryFence(file, receipt)) {
-        return { claimed: false, receipt: clone(receipt), cleanup: null };
-      }
-      if (options.startingRecovery) {
-        // Recovery's journal read yielded. The current receipt and admission
-        // owner decide inside this mutation, before any runtime failure write.
-        const { now: recoveryNow, timeoutMs } = options.startingRecovery;
-        const createdAt = structuredSetupStartedAt(receipt);
-        const withinSetupBound = !Number.isFinite(createdAt) || recoveryNow - createdAt < timeoutMs;
-        if (receipt.state !== "starting" || receipt.key || receipt.queuedPinnedSpawn
-          || (withinSetupBound && receipt.admissionOwner && this.ownerAlive(receipt.admissionOwner))) {
-          return { claimed: false, receipt: clone(receipt), cleanup: null };
-        }
-      }
-      receipt.state = "failed";
-      receipt.error = error;
-      markFailedLaunchReporting(receipt, options.announce !== false);
-      if (receipt.queuedPinnedSpawn) {
-        receipt.launchProfile = emptyLaunchProfile(
-          receipt.queuedPinnedSpawn.spec.launchProfile,
-          this.mcpGrantPolicy,
-        );
-        receipt.queuedPinnedSpawn = null;
-      }
-      /* A structured spawn that fails can never deliver its initial message, so
-         its still-`held` `spawn_<launchId>` reservation is terminalized in the
-         same transaction (issue #653) rather than left as an eternal owed
-         delivery. */
-      terminalizeFailedSpawnDeliveriesInFile(file, launchId);
-      if (!receipt.key || !receipt.artifactPath) {
-        return { claimed: true, receipt: clone(receipt), cleanup: null };
-      }
-      const entry = file.entries[sessionKeyId(receipt.key)];
-      if (!entry || entry.artifactPath !== receipt.artifactPath) {
-        return { claimed: true, receipt: clone(receipt), cleanup: null };
-      }
-      if (typeof entry.structuredHostOperationId === "string"
-        && entry.structuredHostOperationId !== launchId) {
-        return { claimed: true, receipt: clone(receipt), cleanup: null };
-      }
-      const releaseRegisteredHost = entry.structuredHostOperationId === launchId;
-      const legacyOwner = entry.structuredHostOperationId == null && entry.pendingAction === "spawn";
-      if (!releaseRegisteredHost && !legacyOwner) {
-        return { claimed: true, receipt: clone(receipt), cleanup: null };
-      }
-      const cleanup = {
-        key: clone(receipt.key),
-        process: clone(entry.structuredHost?.process ?? null),
-        releaseRegisteredHost,
-      };
-      const retainedSurvivors = entry.structuredTerminationSurvivors ?? [];
-      /* A foreground launch can prove its transcript will never materialize
-         while the host still refuses release. The receipt must settle so the
-         stage can retry, and the exact process identity must remain listed
-         so the Viewer can finish the reap without an operator searching the
-         process table. Only this launch's registered live host qualifies.
-         A captured descendant has the same preservation requirement: clearing
-         the root row would strand its identity and let a resume start a twin. */
-      if (retainedSurvivors.length > 0
-        || recordedAgentScope(entry.structuredHost)
-        || (entry.structuredHost?.signalDomain && entry.structuredHost.signalDomain.retired !== true)
-        || (options.retainRegisteredHost === true
-        && releaseRegisteredHost
-        && entry.structuredHost?.process)) {
-        entry.pendingAction = null;
-        entry.updatedAt = now();
-        return { claimed: true, receipt: clone(receipt), cleanup };
-      }
-      const preservesResumeCursor = receipt.purpose === "resume-successor"
-        && receipt.resumeSourcePath === receipt.artifactPath
-        && (entry.structuredHost?.eventCursor ?? 0) > 0;
-      const terminalStructuredHost = preservesResumeCursor && entry.structuredHost ? {
-        ...entry.structuredHost,
-        endpoint: "stdio:released",
-        process: null,
-        activeTurnRef: null,
-        pendingAttention: [],
-        activeFlags: [],
-      } : null;
-      const changedHostPaths = activeHostPathsChangedByEntry(file, sessionKeyId(receipt.key), {
-        ...entry,
-        host: null,
-        structuredHost: terminalStructuredHost,
-        status: "dead",
-        claimOwner: null,
-        pendingAction: null,
-      });
-      const readinessBefore = migrationReadinessSignature(file, receipt.key.engine, changedHostPaths);
-      entry.host = null;
-      entry.structuredHost = terminalStructuredHost;
-      entry.status = "dead";
-      entry.claimOwner = null;
+    }
+    receipt.state = "failed";
+    receipt.error = error;
+    markFailedLaunchReporting(receipt, options.announce !== false);
+    if (receipt.queuedPinnedSpawn) {
+      receipt.launchProfile = emptyLaunchProfile(
+        receipt.queuedPinnedSpawn.spec.launchProfile,
+        this.mcpGrantPolicy,
+      );
+      receipt.queuedPinnedSpawn = null;
+    }
+    /* A structured spawn that fails can never deliver its initial message, so
+       its still-`held` `spawn_<launchId>` reservation is terminalized in the
+       same transaction (issue #653) rather than left as an eternal owed
+       delivery. */
+    terminalizeFailedSpawnDeliveriesInFile(file, launchId);
+    const cleanup = this.settleFailedLaunchEntry(file, receipt, options.retainRegisteredHost === true);
+    return { claimed: true, receipt: clone(receipt), cleanup };
+  }
+
+  private settleFailedLaunchEntry(
+    file: RegistryFile, receipt: SpawnReceipt, retainRegisteredHost = false,
+  ): StructuredSpawnFailureClaim["cleanup"] {
+    const launchId = receipt.launchId;
+    if (!receipt.key || !receipt.artifactPath) return null;
+    const entry = file.entries[sessionKeyId(receipt.key)];
+    if (!entry || entry.artifactPath !== receipt.artifactPath) {
+      return null;
+    }
+    if (typeof entry.structuredHostOperationId === "string"
+      && entry.structuredHostOperationId !== launchId) {
+      return null;
+    }
+    const releaseRegisteredHost = entry.structuredHostOperationId === launchId;
+    const legacyOwner = entry.structuredHostOperationId == null && entry.pendingAction === "spawn";
+    if (!releaseRegisteredHost && !legacyOwner) {
+      return null;
+    }
+    const cleanup = {
+      key: clone(receipt.key),
+      process: clone(entry.structuredHost?.process ?? null),
+      releaseRegisteredHost,
+    };
+    const retainedSurvivors = entry.structuredTerminationSurvivors ?? [];
+    /* A foreground launch can prove its transcript will never materialize
+       while the host still refuses release. The receipt must settle so the
+       stage can retry, and the exact process identity must remain listed
+       so the Viewer can finish the reap without an operator searching the
+       process table. Only this launch's registered live host qualifies.
+       A captured descendant has the same preservation requirement: clearing
+       the root row would strand its identity and let a resume start a twin. */
+    if (retainedSurvivors.length > 0
+      || recordedAgentScope(entry.structuredHost)
+      || (entry.structuredHost?.signalDomain && entry.structuredHost.signalDomain.retired !== true)
+      || (retainRegisteredHost
+      && releaseRegisteredHost
+      && entry.structuredHost?.process)) {
       entry.pendingAction = null;
       entry.updatedAt = now();
-      advanceMigrationScopeRevision(file, receipt.key.engine, readinessBefore, changedHostPaths);
-      return { claimed: true, receipt: clone(receipt), cleanup };
+      return cleanup;
+    }
+    const preservesResumeCursor = receipt.purpose === "resume-successor"
+      && receipt.resumeSourcePath === receipt.artifactPath
+      && (entry.structuredHost?.eventCursor ?? 0) > 0;
+    const terminalStructuredHost = preservesResumeCursor && entry.structuredHost ? {
+      ...entry.structuredHost,
+      endpoint: "stdio:released",
+      process: null,
+      activeTurnRef: null,
+      pendingAttention: [],
+      activeFlags: [],
+    } : null;
+    const changedHostPaths = activeHostPathsChangedByEntry(file, sessionKeyId(receipt.key), {
+      ...entry,
+      host: null,
+      structuredHost: terminalStructuredHost,
+      status: "dead",
+      claimOwner: null,
+      pendingAction: null,
+    });
+    const readinessBefore = migrationReadinessSignature(file, receipt.key.engine, changedHostPaths);
+    entry.host = null;
+    entry.structuredHost = terminalStructuredHost;
+    entry.status = "dead";
+    entry.claimOwner = null;
+    entry.pendingAction = null;
+    entry.updatedAt = now();
+    advanceMigrationScopeRevision(file, receipt.key.engine, readinessBefore, changedHostPaths);
+    return cleanup;
+  }
+
+  staleSpawnMarkerMatchesBackup(key: string, launchId: string, backup: SpawnMarkerBackup): boolean {
+    return this.sqliteMode === "sqlite" && this.sqliteStore!.spawnMarkerMatchesBackup({ key, launchId, backup });
+  }
+
+  settleStaleSpawnMarker(
+    key: string, launchId: string, backup: SpawnMarkerBackup, outcome: "clear" | "recover" | "fail",
+    recheck: (file: RegistryFile, receipt: SpawnReceipt) => string | null,
+  ): string {
+    assertStateStartupMutation(path.dirname(this.filename), "registry spawn marker settlement");
+    assertStateMutationAllowed(path.dirname(this.filename));
+    if (process.env.LLV_STATE_OWNER === "viewer" && (!stateMutationActivationOpen() || !viewerReleaseOwnsTraffic())) {
+      throw new Error("spawn marker settlement requires the current Viewer release");
+    }
+    if (this.sqliteMode !== "sqlite") return "registry-unavailable";
+    const conflict = new Error("staged launch transcript evidence conflicts with the registry");
+    try {
+      return this.mutate(file => {
+        const receipt = file.receipts[launchId];
+        if (!receipt || (outcome === "clear" ? !["failed", "conflicted"].includes(receipt.state) : receipt.state !== "path-pending")) return "receipt-changed";
+        const refusal = recheck(file, receipt);
+        if (refusal) return refusal;
+        if (!this.staleSpawnMarkerMatchesBackup(key, launchId, backup)) return "changed-since-backup";
+        if (outcome === "clear") return this.settleFailedLaunchEntry(file, receipt) ? "settled" : "owner-changed";
+        if (outcome === "recover") {
+          if (this.recoverStructuredSpawnEvidenceInFile(file, launchId).kind !== "settled") throw conflict;
+          return "recovered";
+        }
+        const failed = this.claimStructuredSpawnFailure(file, launchId, "closed pipeline launch ended before its first turn", { announce: false });
+        return failed.claimed ? "failed" : "receipt-changed";
+      }, { deliveryOnly: true, spawnMarkerRepair: { key, launchId, backup } });
+    } catch (error) {
+      if (error === conflict) return "evidence-conflicted";
+      if (error instanceof SpawnMarkerBackupChangedError) return "changed-since-backup";
+      throw error;
+    }
+  }
+
+  restoreSettledSpawnMarkers(launchId: string): ReturnType<SqliteAgentRegistryStore["restoreSettledSpawnMarkers"]> {
+    const directory = path.dirname(this.filename);
+    assertStateStartupMutation(directory, "registry spawn marker restore");
+    assertStateMutationAllowed(directory);
+    if (this.sqliteMode !== "sqlite") return "missing-journal";
+    return withHotStateAuthorityAttempt(directory, () => {
+      if (process.env.LLV_STATE_OWNER === "viewer" && (!stateMutationActivationOpen() || !viewerReleaseOwnsTraffic())) {
+        throw new Error("spawn marker restore requires the current Viewer release");
+      }
+      return this.sqliteStore!.restoreSettledSpawnMarkers(launchId);
     });
   }
 
@@ -11167,6 +11413,34 @@ export class AgentRegistry {
       route.revision += 1;
       return route.revision;
     }));
+  }
+
+  busyAccountCarriers(): CarrierSource[] {
+    return this.readKeyed(file => {
+      if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
+        return this.sqliteStore.busyAccountCarriers();
+      }
+      return Object.values(file.conversations).flatMap((row): CarrierSource[] => {
+        const latest = row.generations.at(-1);
+        if (row.turn.state !== "busy" || !latest?.accountId || (row.engine !== "claude" && row.engine !== "codex")) return [];
+        return [{
+          engine: row.engine,
+          busy: true,
+          path: latest.path,
+          accountId: latest.accountId,
+          ownership: row.projectOwnership,
+          launchProfile: latest.launchProfile,
+        }];
+      });
+    }, { skipColdKeyInitialization: true });
+  }
+
+  /** Both engines must choose from routing and quota at the same revision. */
+  projectAccountSelectionFacts() {
+    return this.readKeyed(file => ({
+      engineRouting: file.engineRouting,
+      quotaObservations: file.quotaObservations,
+    }), { skipColdKeyInitialization: true });
   }
 
   engineRouting(engine: AgentEngine): { activeAccountId: string | null; revision: number } {

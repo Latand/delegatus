@@ -556,6 +556,7 @@ const DEFAULT_TERMINATION_CAPTURE_RETRY_MS = 1_000;
 
 /** Records the tree a stop read, and true only once it is durable (#2790). */
 export type TerminationCaptureListener = (root: number, tree: readonly ProcessIdentity[]) => boolean | Promise<boolean>;
+type ReleaseGuard = () => Promise<{ status: 403 | 409 | 500; error: string } | null>;
 
 export { claudeHostEndText };
 
@@ -954,6 +955,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private readonly captureProcessTree: (root: number) => ProcessTreeCapture;
   private readonly terminationCaptureRetryMs: number;
   private terminationCapture: TerminationCaptureListener | null = null;
+  private releaseGuard: ReleaseGuard | null = null;
   private treeCaptured = false;
   private captureRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly childStartIdentity: string | null;
@@ -2194,7 +2196,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   /** Resource cleanup may release only the exact child the operator's row
       authorized. The kernel identity is checked here and again inside the
       synchronous signal boundary. */
-  async releaseIfOwned(expected: Readonly<ProcessIdentity>): Promise<boolean> {
+  async releaseIfOwned(expected: Readonly<ProcessIdentity>, authorizeAsync?: ReleaseGuard): Promise<boolean> {
     const pid = nativeProcessId(this.child);
     if (this.released || this.releasing || this.releasePromise !== null
       || !pid || expected.startIdentity === null
@@ -2202,10 +2204,12 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       || this.childStartIdentity !== expected.startIdentity
       || this.processIdentity(pid) !== expected.startIdentity) return false;
     this.releaseFence = expected;
+    this.releaseGuard = authorizeAsync ?? null;
     try {
       await this.release();
       return true;
     } finally {
+      this.releaseGuard = null;
       if (this.releaseFence === expected) this.releaseFence = null;
     }
   }
@@ -3069,6 +3073,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       return true;
     }
     if (this.terminationStarted || this.reaped) return true;
+    // Capture admission can await a durable registry writer. Recheck the
+    // caller's retirement authority after that boundary, immediately before
+    // closing stdin or signalling the native process.
+    if (this.releaseGuard && await this.releaseGuard()) return false;
     if (!this.releaseFenceHolds()) return false;
     this.clearCaptureRetry();
     let withdrawEof: (() => void) | undefined;

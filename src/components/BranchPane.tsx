@@ -40,7 +40,7 @@ import { RateLimitBadge } from "./RateLimitBadge";
 import { TaskRelationStrip } from "./tasks/TaskRelationStrip";
 import type { TaskRelation } from "./tasks/taskRelations";
 import { WakeupChip, wakeupChipKey } from "./WakeupChip";
-import { EngineBadge } from "./EngineMark";
+import { EngineBadge, EngineMark } from "./EngineMark";
 import { activityDot, cleanTitle, effortTint, effortTitle, engineBadge, engineEdge, conversationModelLabel, fmtAge } from "./utils";
 import { isLaunchedConversation } from "./launchedConversations";
 
@@ -402,14 +402,15 @@ function BranchPaneBody({ file, tasks, isRoot, onClose, dragHandle, noComposer: 
                     strip; the chip and the effort bars are identity. */}
                 {conversationModelLabel(file) ? (
                   <span
-                    className="shrink-0 rounded-full px-1.5 py-0.5 font-mono text-[9.5px] font-semibold"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 font-mono text-[9.5px] font-semibold"
                     style={{ backgroundColor: effortTint(file).soft, color: effortTint(file).color }}
                     title={[badge.label, effortTitle(file)].filter(Boolean).join(" · ")}
                   >
-                    {conversationModelLabel(file)}
+                    {file.engine === "antigravity" ? <EngineMark engine="antigravity" size={12} tone="engine" working={state === "live"} /> : null}
+                    <span>{conversationModelLabel(file)}</span>
                   </span>
                 ) : (
-                  <EngineBadge engine={file.engine} className="px-2 py-0.5 text-[10px] font-bold" title={effortTitle(file)} />
+                  <EngineBadge engine={file.engine} className="px-2 py-0.5 text-[10px] font-bold" title={effortTitle(file)} working={state === "live"} />
                 )}
                 <EffortPills file={file} />
                 <RateLimitBadge file={file} />

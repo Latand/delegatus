@@ -819,7 +819,7 @@ function SessionRow({
           className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
           style={{ backgroundColor: tint.soft, color: tint.color }}
         >
-          {session.engine === "codex" ? "Codex" : session.engine === "claude" ? "Claude" : session.engine === "copilot" ? "Copilot" : "?"}
+          {session.engine === "codex" ? "Codex" : session.engine === "claude" ? "Claude" : session.engine === "copilot" ? "Copilot" : session.engine === "antigravity" ? "Antigravity" : "?"}
         </span>
         <span
           className="min-w-0 flex-1"

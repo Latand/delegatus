@@ -105,6 +105,7 @@ export function isConversation(rootName: RawEntry["rootName"], kind: string): bo
   return rootName === "codex-sessions"
     || rootName === "openclaw-sessions"
     || rootName === "copilot-sessions"
+    || rootName === "antigravity-sessions"
     || (rootName === "claude-projects" && (kind === "session" || kind === "subagent"));
 }
 
@@ -115,7 +116,7 @@ export function decodeCatalogFile(value: unknown): CachedProjectFile | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const file = value as Partial<CachedProjectFile>;
   if (
-    (file.rootName !== "codex-sessions" && file.rootName !== "claude-projects" && file.rootName !== "claude-tasks" && file.rootName !== "openclaw-sessions" && file.rootName !== "copilot-sessions") ||
+    (file.rootName !== "codex-sessions" && file.rootName !== "claude-projects" && file.rootName !== "claude-tasks" && file.rootName !== "openclaw-sessions" && file.rootName !== "copilot-sessions" && file.rootName !== "antigravity-sessions") ||
     typeof file.size !== "number" ||
     typeof file.mtimeMs !== "number" ||
     (file.stateKey !== undefined && typeof file.stateKey !== "string") ||
@@ -127,8 +128,8 @@ export function decodeCatalogFile(value: unknown): CachedProjectFile | null {
   ) {
     return null;
   }
-  const engine = file.engine === "codex" || file.engine === "claude" || file.engine === "shell" || file.engine === "openclaw" || file.engine === "copilot" ? file.engine : undefined;
-  const fmt = file.fmt === "codex" || file.fmt === "claude" || file.fmt === "plain" || file.fmt === "openclaw" || file.fmt === "copilot" ? file.fmt : undefined;
+  const engine = file.engine === "codex" || file.engine === "claude" || file.engine === "shell" || file.engine === "openclaw" || file.engine === "copilot" || file.engine === "antigravity" ? file.engine : undefined;
+  const fmt = file.fmt === "codex" || file.fmt === "claude" || file.fmt === "plain" || file.fmt === "openclaw" || file.fmt === "copilot" || file.fmt === "antigravity" ? file.fmt : undefined;
   const nullable = <T>(field: unknown, kind: "string" | "number"): T | null | undefined =>
     typeof field === kind ? field as T : field === null ? null : undefined;
   const cwd = nullable<string>(file.cwd, "string");

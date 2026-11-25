@@ -107,6 +107,694 @@ test("Copilot quota probe reads its transcript and never starts an engine probe"
   }
 });
 
+test("Antigravity quota probe reads transcript exhaustion with zero process spawns and clears after resetsAt", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-quota-antigravity-transcript-"));
+  const { liveQuotaProbe } = await import("./quotaController");
+  const { managedCodexRuntime } = await import("@/lib/accounts/codexRuntime");
+  const runtime = managedCodexRuntime();
+  const spawnProbe = spyOn(runtime, "probeQuota").mockImplementation(async () => { throw new Error("Antigravity quota checks must not spawn a process"); });
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite",
+    sqliteFilename: path.join(root, "registry.sqlite"),
+  });
+  const secondReader = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite",
+    sqliteFilename: path.join(root, "registry.sqlite"),
+  });
+  try {
+    const home = path.join(root, "home");
+    const sessions = path.join(home, "sessions");
+    const session = path.join(sessions, crypto.randomUUID());
+    fs.mkdirSync(session, { recursive: true });
+    const observedMs = Date.parse("2026-11-24T01:00:00.000Z");
+    const observedSec = Math.floor(observedMs / 1000);
+    const resetsAt = observedSec + 7200;
+    fs.writeFileSync(
+      path.join(session, "events.jsonl"),
+      `${JSON.stringify({
+        type: "session.quota_exhausted",
+        timestamp: new Date(observedMs).toISOString(),
+        data: {
+          message: "RESOURCE_EXHAUSTED: Individual quota reached. Resets in 2h",
+          resetsAt,
+          windowMinutes: 300,
+          usedPercent: 100,
+          observedAt: observedSec,
+        },
+      })}\n`,
+    );
+    const account = {
+      id: "default",
+      label: "Default",
+      kind: "legacy" as const,
+      home,
+      sessionsDir: sessions,
+      createdAt: 0,
+      auth: "signed_in" as const,
+      tierName: "Pro",
+    };
+
+    const activeObs = await liveQuotaProbe.probe("antigravity", account, observedMs + 60_000);
+    expect(activeObs).toMatchObject({
+      engine: "antigravity",
+      accountId: "default",
+      authenticated: true,
+      limitReached: true,
+      provenance: { source: "transcript" },
+      limits: { session: { usedPercent: 100, resetsAt, windowMinutes: 300 }, plan: "Pro" },
+    });
+    expect(spawnProbe).not.toHaveBeenCalled();
+
+    let clock = observedMs + 60_000;
+    const controller = new QuotaController(registry, {
+      list: () => [account],
+      active: () => account.id,
+      credentialIdentity: () => "ag-cred-v1",
+      probe: (engine, candidate, now) => liveQuotaProbe.probe(engine, candidate, now),
+    }, "boot-ag", () => clock);
+
+    await controller.tick("antigravity");
+    expect(secondReader.quotaObservations("antigravity")[0]).toMatchObject({
+      engine: "antigravity",
+      accountId: "default",
+      limitReached: true,
+      limits: { session: { usedPercent: 100, resetsAt } },
+    });
+
+    // Once resetsAt elapses, a subsequent tick clears the expired 100% exhaustion.
+    clock = resetsAt * 1000 + 1000;
+    await controller.tick("antigravity");
+    expect(secondReader.quotaObservations("antigravity")[0]).toMatchObject({
+      engine: "antigravity",
+      accountId: "default",
+      limitReached: false,
+      limits: null,
+      provenance: { source: "unavailable", reason: "antigravity quota reset window elapsed" },
+    });
+  } finally {
+    registry.close();
+    secondReader.close();
+    spawnProbe.mockRestore();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity EIO isolation preserves auth & HTTP 200, keeps host exhaustion past 5 newer files/older events, aligns 5h cutoff, and avoids readOnlySnapshot", async () => {
+  const { setSystemTime } = await import("bun:test");
+  const { GET } = await import("@/app/api/limits/route");
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { accountManager } = await import("@/lib/accounts/manager");
+  const { antigravityDefaultSessionsDir, recordAntigravityAuthState } = await import("@/lib/accounts/antigravity");
+  const { accountLimitRows } = await import("@/lib/mcp/compactAnswers");
+  const { liveQuotaProbe } = await import("./quotaController");
+
+  const root = fs.mkdtempSync(path.join(QUOTA_SANDBOX, "ag-hardening-"));
+  const prevStateDir = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = root;
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite",
+    sqliteFilename: path.join(root, "registry.sqlite"),
+  });
+  setAgentRegistryForTests(registry);
+
+  const at = Date.parse("2026-11-24T01:00:00.000Z");
+  const atSec = Math.floor(at / 1000);
+  let clock = at + 60_000;
+  setSystemTime(new Date(clock));
+  recordAntigravityAuthState({ authenticated: true, checkedAt: new Date(at).toISOString(), tierName: "Pro", tierId: null });
+
+  const sessionsDir = antigravityDefaultSessionsDir();
+  const primaryDir = path.join(sessionsDir, "fixture-primary");
+  fs.mkdirSync(primaryDir, { recursive: true });
+  const primaryFile = path.join(primaryDir, "events.jsonl");
+
+  const hostObs = {
+    engine: "antigravity" as const,
+    accountId: "default",
+    authenticated: true,
+    authCheckedAt: new Date(at).toISOString(),
+    observedAt: new Date(at).toISOString(),
+    bootId: "antigravity-acp-host",
+    provenance: { source: "transcript" as const, reason: null, staleSince: null },
+    limits: {
+      session: { usedPercent: 100, resetsAt: atSec + 12_000, windowMinutes: 300, observedAt: atSec, source: "account" as const },
+      weekly: null,
+      tiers: [],
+      plan: "Pro",
+      capturedAt: atSec,
+    },
+    resetCredits: null,
+    limitReached: true,
+  };
+  const controller = new QuotaController(registry, liveQuotaProbe, "ag-hardening", () => clock);
+
+  try {
+    // 1. Neither GET /api/limits nor accountManager.status("antigravity", "default") calls readOnlySnapshot().
+    registry.recordQuotaObservation(hostObs);
+    fs.writeFileSync(primaryFile, "{}\n");
+    let snapshots = 0;
+    const origSnap = registry.readOnlySnapshot.bind(registry);
+    registry.readOnlySnapshot = function () { snapshots += 1; return origSnap(); };
+    try {
+      const resp = await GET();
+      expect(resp.status).toBe(200);
+      expect(snapshots).toBe(0);
+      await accountManager.status("antigravity", "default", false);
+      expect(snapshots).toBe(0);
+    } finally {
+      registry.readOnlySnapshot = origSnap;
+    }
+
+    // 2. Five newer-mtime session files with an OLDER expired event MUST NOT erase an active host exhaustion.
+    fs.utimesSync(primaryFile, 1, 1);
+    for (let i = 0; i < 5; i += 1) {
+      const d = path.join(sessionsDir, `recent-${i}`);
+      fs.mkdirSync(d, { recursive: true });
+      const f = path.join(d, "events.jsonl");
+      const oldMs = at - 7_200_000;
+      const line = i === 0
+        ? { type: "session.quota_exhausted", timestamp: new Date(oldMs).toISOString(), data: { message: "Individual quota reached", resetsAt: atSec - 10, observedAt: Math.floor(oldMs / 1000), windowMinutes: 300 } }
+        : { type: "session.start", data: {} };
+      fs.writeFileSync(f, `${JSON.stringify(line)}\n`);
+      fs.utimesSync(f, 10 + i, 10 + i);
+    }
+    await controller.tick("antigravity");
+    const afterSixth = registry.quotaObservations("antigravity").find((row) => row.accountId === "default");
+    expect(afterSixth?.limitReached).toBe(true);
+    expect(afterSixth?.limits?.session?.usedPercent).toBe(100);
+    const httpSixth = await (await GET()).json() as { antigravity?: { session?: { usedPercent: number } } | null };
+    expect(httpSixth.antigravity?.session?.usedPercent).toBe(100);
+
+    // 3. EIO on one transcript MUST NOT fail GET /api/limits or flip stored authenticated=true to false.
+    registry.recordQuotaObservation({ ...hostObs, limits: null, limitReached: false });
+    const recent0 = path.join(sessionsDir, "recent-0", "events.jsonl");
+    fs.appendFileSync(recent0, "{}\n");
+    const r0Stat = fs.statSync(recent0);
+    const origRead = fs.readSync;
+    fs.readSync = function (fd: number, ...args: unknown[]) {
+      const s = fs.fstatSync(fd);
+      if (s.ino === r0Stat.ino && s.dev === r0Stat.dev) {
+        throw Object.assign(new Error("fixture quota read"), { code: "EIO" });
+      }
+      return (origRead as (...a: unknown[]) => number).call(fs, fd, ...args);
+    } as typeof fs.readSync;
+    try {
+      const res = await GET();
+      expect(res.status).toBe(200);
+      await controller.tick("antigravity");
+    } finally {
+      fs.readSync = origRead;
+    }
+    const afterIo = registry.quotaObservations("antigravity").find((row) => row.accountId === "default");
+    expect(afterIo?.authenticated).toBe(true);
+
+    // 4. Unified 5-hour cutoff when resetsAt is null across GET /api/limits, MCP account_limits, and accountManager.status
+    //    (including after a failing probe a day later).
+    const noResetObs = {
+      ...hostObs,
+      limits: { ...hostObs.limits, session: { ...hostObs.limits.session, resetsAt: null } },
+    };
+    registry.recordQuotaObservation(noResetObs);
+    for (const [deltaSec, expected] of [[17_999, 100], [18_000, null], [18_001, null]] as const) {
+      clock = at + deltaSec * 1000;
+      setSystemTime(new Date(clock));
+      const apiBody = await (await GET()).json() as { antigravity?: { session?: { usedPercent: number } } | null };
+      const statusSummary = await accountManager.status("antigravity", "default", false);
+      const obsRow = registry.quotaObservations("antigravity").find((row) => row.accountId === "default");
+      const mcpRows = accountLimitRows({
+        engine: "antigravity",
+        accounts: { claude: [], codex: [], copilot: [], antigravity: [{ accountId: "default", authPresent: true }] },
+        active: { claude: null, codex: null, copilot: null, antigravity: "default" },
+        observations: { claude: {}, codex: {}, copilot: {}, antigravity: obsRow ? { default: obsRow } : {} },
+        now: clock,
+      });
+      expect(apiBody.antigravity?.session?.usedPercent ?? null).toBe(expected);
+      expect(statusSummary.limits.session?.usedPercent ?? null).toBe(expected);
+      expect(mcpRows[0]?.session?.usedPercent ?? null).toBe(expected);
+    }
+
+    // Even a day later with a failing probe, accountManager.status and GET /api/limits still clear the expired window.
+    clock = at + 86_400_000;
+    setSystemTime(new Date(clock));
+    const failingController = new QuotaController(
+      registry,
+      { ...liveQuotaProbe, probe: async () => { throw new Error("test disk error"); } },
+      "ag-hardening-fail",
+      () => clock,
+    );
+    await failingController.tick("antigravity");
+    expect(((await (await GET()).json()) as { antigravity?: unknown }).antigravity ?? null).toBeNull();
+    expect((await accountManager.status("antigravity", "default", false)).limits.session).toBeNull();
+
+    // 5. After a newer observation's reset passes, an older transcript with a LATER reset
+    //    must NEVER resurrect exhaustion on GET /api/limits, QuotaController.tick, or MCP,
+    //    and must NEVER move observedAt backwards.
+    for (const entry of fs.readdirSync(sessionsDir)) {
+      fs.rmSync(path.join(sessionsDir, entry), { recursive: true, force: true });
+    }
+    const olderObservedMs = Date.parse("2026-11-24T06:27:54.000Z");
+    const olderObservedSec = Math.floor(olderObservedMs / 1000);
+    const olderResetSec = olderObservedSec + 5 * 3600; // 11:27:54 UTC (still in future!)
+    const newerObservedMs = Date.parse("2026-11-24T06:59:54.000Z");
+    const newerObservedSec = Math.floor(newerObservedMs / 1000);
+    const newerResetSec = newerObservedSec + 30 * 60; // 07:29:54 UTC
+
+    const oldSessionDir = path.join(sessionsDir, "older-longer-reset");
+    fs.mkdirSync(oldSessionDir, { recursive: true });
+    const oldSessionFile = path.join(oldSessionDir, "events.jsonl");
+    fs.writeFileSync(
+      oldSessionFile,
+      `${JSON.stringify({
+        type: "session.quota_exhausted",
+        timestamp: new Date(olderObservedMs).toISOString(),
+        data: {
+          code: "RESOURCE_EXHAUSTED",
+          message: "Individual quota reached. Resets in 5h",
+          resetsAt: olderResetSec,
+          windowMinutes: 300,
+          usedPercent: 100,
+          observedAt: olderObservedSec,
+        },
+      })}\n`,
+    );
+    fs.utimesSync(oldSessionFile, olderObservedSec, olderObservedSec);
+    registry.recordQuotaObservation({
+      engine: "antigravity",
+      accountId: "default",
+      authenticated: true,
+      authCheckedAt: new Date(newerObservedMs).toISOString(),
+      observedAt: new Date(newerObservedMs).toISOString(),
+      bootId: "antigravity-acp-host",
+      provenance: { source: "transcript", reason: null, staleSince: null },
+      limits: {
+        session: { usedPercent: 100, resetsAt: newerResetSec, windowMinutes: 300, observedAt: newerObservedSec, source: "account" },
+        weekly: null,
+        tiers: [],
+        plan: "Pro",
+        capturedAt: newerObservedSec,
+      },
+      resetCredits: null,
+      limitReached: true,
+    });
+
+    // 1 second AFTER newer reset (07:29:55 UTC), STILL 4 hours BEFORE older transcript's reset (11:27:54 UTC).
+    clock = (newerResetSec + 1) * 1000;
+    setSystemTime(new Date(clock));
+    const httpBeforeTick = await (await GET()).json() as { antigravity?: unknown };
+    expect(httpBeforeTick.antigravity ?? null).toBeNull();
+
+    await controller.tick("antigravity");
+    const afterResurrectionTick = registry.quotaObservations("antigravity").find((row) => row.accountId === "default");
+    expect(afterResurrectionTick?.limitReached).toBe(false);
+    expect(afterResurrectionTick?.limits).toBeNull();
+    expect(Date.parse(afterResurrectionTick!.observedAt)).toBeGreaterThanOrEqual(newerObservedMs);
+
+    const httpAfterTick = await (await GET()).json() as { antigravity?: unknown };
+    expect(httpAfterTick.antigravity ?? null).toBeNull();
+    const mcpAfterTick = accountLimitRows({
+      engine: "antigravity",
+      accounts: { claude: [], codex: [], copilot: [], antigravity: [{ accountId: "default", authPresent: true }] },
+      active: { claude: null, codex: null, copilot: null, antigravity: "default" },
+      observations: { claude: {}, codex: {}, copilot: {}, antigravity: afterResurrectionTick ? { default: afterResurrectionTick } : {} },
+      now: clock,
+    });
+    expect(mcpAfterTick[0]?.session ?? null).toBeNull();
+    expect(afterResurrectionTick?.lastQuotaEventAt).toBe(newerObservedSec);
+
+    // 5b. An intervening empty poll (5 newer sessions push the older transcript out of top-5)
+    //     changes provenance.reason to "no quota exhaustion in newest 5 session files"
+    //     WITHOUT clearing `lastQuotaEventAt`, so when the older transcript later re-enters
+    //     top-5, neither GET /api/limits (before tick) nor QuotaController.tick nor MCP
+    //     can resurrect the already-reset account.
+    const fillerDirs: string[] = [];
+    for (let i = 1; i <= 5; i += 1) {
+      const fillerDir = path.join(sessionsDir, `filler-empty-${i}`);
+      fillerDirs.push(fillerDir);
+      fs.mkdirSync(fillerDir, { recursive: true });
+      const fillerFile = path.join(fillerDir, "events.jsonl");
+      fs.writeFileSync(fillerFile, '{"type":"session.start","data":{}}\n');
+      fs.utimesSync(fillerFile, newerResetSec + 100 + i, newerResetSec + 100 + i);
+    }
+    clock = (newerResetSec + 200) * 1000;
+    setSystemTime(new Date(clock));
+    await controller.tick("antigravity");
+    const afterEmptyPoll = registry.quotaObservations("antigravity").find((row) => row.accountId === "default");
+    expect(afterEmptyPoll?.provenance.reason).toBe("no quota exhaustion in newest 5 session files");
+    expect(afterEmptyPoll?.lastQuotaEventAt).toBe(newerObservedSec);
+    expect(afterEmptyPoll?.limitReached).toBe(false);
+
+    // Remove the 5 fillers so `older-longer-reset` re-enters the top-5 window.
+    for (const fillerDir of fillerDirs) fs.rmSync(fillerDir, { recursive: true, force: true });
+    clock = (newerResetSec + 300) * 1000;
+    setSystemTime(new Date(clock));
+
+    // BEFORE tick: GET /api/limits MUST still return null (not 100% from older transcript).
+    expect(((await (await GET()).json()) as { antigravity?: unknown }).antigravity ?? null).toBeNull();
+
+    // ON tick: durable observation stays cleared, observedAt never moves backwards, watermark preserved.
+    await controller.tick("antigravity");
+    const afterReenter = registry.quotaObservations("antigravity").find((row) => row.accountId === "default");
+    expect(afterReenter?.limitReached).toBe(false);
+    expect(afterReenter?.limits).toBeNull();
+    expect(afterReenter?.lastQuotaEventAt).toBe(newerObservedSec);
+    expect(Date.parse(afterReenter!.observedAt)).toBeGreaterThanOrEqual(newerObservedMs);
+    expect(((await (await GET()).json()) as { antigravity?: unknown }).antigravity ?? null).toBeNull();
+    const mcpAfterReenter = accountLimitRows({
+      engine: "antigravity",
+      accounts: { claude: [], codex: [], copilot: [], antigravity: [{ accountId: "default", authPresent: true }] },
+      active: { claude: null, codex: null, copilot: null, antigravity: "default" },
+      observations: { claude: {}, codex: {}, copilot: {}, antigravity: afterReenter ? { default: afterReenter } : {} },
+      now: clock,
+    });
+    expect(mcpAfterReenter[0]?.session ?? null).toBeNull();
+
+    // 5c. A genuine newer exhaustion occurring AFTER the expired window (+120s)
+    //     but BEFORE an empty poll (+240s) and stale rejection (+250s) MUST NOT
+    //     be hidden by the empty poll's `observedAt` clock: `lastQuotaEventAt`
+    //     and `observedAt` stay separate clocks so +180s is accepted immediately.
+    const lateEventSec = newerObservedSec + 180;
+    const lateResetSec = newerObservedSec + 3700;
+    fs.writeFileSync(
+      oldSessionFile,
+      `${JSON.stringify({
+        type: "session.quota_exhausted",
+        timestamp: new Date(lateEventSec * 1000).toISOString(),
+        data: {
+          code: "RESOURCE_EXHAUSTED",
+          message: "Individual quota reached. Resets in 1h",
+          resetsAt: lateResetSec,
+          windowMinutes: 300,
+          usedPercent: 100,
+          observedAt: lateEventSec,
+        },
+      })}\n`,
+    );
+    fs.utimesSync(oldSessionFile, lateEventSec, lateEventSec);
+    clock = (newerResetSec + 400) * 1000;
+    setSystemTime(new Date(clock));
+
+    const httpBeforeLateTick = await (await GET()).json() as { antigravity?: { session?: { usedPercent?: number } } | null };
+    expect(httpBeforeLateTick.antigravity?.session?.usedPercent).toBe(100);
+
+    await controller.tick("antigravity");
+    const afterLateTick = registry.quotaObservations("antigravity").find((row) => row.accountId === "default");
+    expect(afterLateTick?.limitReached).toBe(true);
+    expect(afterLateTick?.limits?.session?.usedPercent).toBe(100);
+    expect(afterLateTick?.lastQuotaEventAt).toBe(lateEventSec);
+    const mcpAfterLateTick = accountLimitRows({
+      engine: "antigravity",
+      accounts: { claude: [], codex: [], copilot: [], antigravity: [{ accountId: "default", authPresent: true }] },
+      active: { claude: null, codex: null, copilot: null, antigravity: "default" },
+      observations: { claude: {}, codex: {}, copilot: {}, antigravity: afterLateTick ? { default: afterLateTick } : {} },
+      now: clock,
+    });
+    expect(mcpAfterLateTick[0]?.session?.usedPercent).toBe(100);
+
+    // 5d. First read of an already-expired quota event MUST still carry and
+    //     persist its event time (`lastQuotaEventAt`) in BOTH cases:
+    //     (a) with prior history (0s -> expired event at +180s first seen at +240s
+    //         blocks an older +100s active event), and
+    //     (b) on a fresh empty registry (expired event at 0s first seen at +240s
+    //         persists `lastQuotaEventAt=0` so a genuine +180s active event is NOT hidden).
+    for (const withHistory of [true, false]) {
+      const subRoot = fs.mkdtempSync(path.join(os.tmpdir(), `llv-expired-first-seen-${withHistory}-`));
+      const subState = path.join(subRoot, "state");
+      const subHome = path.join(subRoot, "agy-home");
+      const subSessions = path.join(subHome, "sessions");
+      fs.mkdirSync(subSessions, { recursive: true });
+      fs.writeFileSync(path.join(subHome, "auth.json"), JSON.stringify({ refresh_token: "fixture" }));
+      const subReg = new AgentRegistry(path.join(subState, "registry.json"));
+      const prevEnv: string | undefined = process.env.LLV_STATE_DIR;
+      process.env.LLV_STATE_DIR = subState;
+      setAgentRegistryForTests(subReg);
+      try {
+        const t0 = Math.floor(Date.parse("2026-11-24T09:00:00.000Z") / 1000);
+        let subClock = t0 * 1000;
+        const subAccount = {
+          id: "default",
+          label: "Default",
+          kind: "legacy" as const,
+          home: subHome,
+          sessionsDir: subSessions,
+          auth: "signed_in" as const,
+          tierName: "Pro",
+          createdAt: 0,
+        };
+        const subController = new QuotaController(subReg, {
+          list: () => [subAccount],
+          active: () => "default",
+          credentialIdentity: () => "stable-ag-cred",
+          probe: async (_e, acc, now) => {
+            const read = (await import("@/lib/limits/antigravityTranscriptLimits")).readAntigravityTranscriptLimits(
+              subAccount.sessionsDir,
+              now,
+              { tierName: subAccount.tierName },
+            );
+            return {
+              engine: "antigravity",
+              accountId: acc.id,
+              authenticated: true,
+              authCheckedAt: now,
+              limits: read.data,
+              provenance: { source: read.source, reason: read.reason, staleSince: null },
+              observedAt: read.data?.capturedAt ? read.data.capturedAt * 1000 : now,
+              limitReached: read.data !== null,
+              ...(read.lastQuotaEventAt === undefined ? {} : { lastQuotaEventAt: read.lastQuotaEventAt }),
+            };
+          },
+        }, "boot-expired-first-seen", () => subClock);
+
+        const subFile = path.join(subSessions, "sess-main", "events.jsonl");
+        fs.mkdirSync(path.dirname(subFile), { recursive: true });
+        const writeEvt = (evSec: number, resSec: number) => {
+          fs.writeFileSync(
+            subFile,
+            `${JSON.stringify({
+              type: "session.quota_exhausted",
+              timestamp: new Date(evSec * 1000).toISOString(),
+              data: {
+                code: "RESOURCE_EXHAUSTED",
+                message: "Individual quota reached",
+                resetsAt: resSec,
+                windowMinutes: 300,
+                usedPercent: 100,
+                observedAt: evSec,
+              },
+            })}\n`,
+          );
+          fs.utimesSync(subFile, evSec, evSec);
+        };
+
+        if (withHistory) {
+          subReg.recordQuotaObservation({
+            engine: "antigravity",
+            accountId: "default",
+            authenticated: true,
+            authCheckedAt: new Date(t0 * 1000).toISOString(),
+            limits: {
+              session: { usedPercent: 100, resetsAt: t0 + 60, windowMinutes: 300, observedAt: t0, source: "account" },
+              weekly: null,
+              tiers: [],
+              plan: "Pro",
+              capturedAt: t0,
+            },
+            provenance: { source: "transcript", reason: null, staleSince: null },
+            observedAt: new Date(t0 * 1000).toISOString(),
+            bootId: "boot-prev",
+            limitReached: true,
+          });
+        }
+
+        const expiredSec = withHistory ? t0 + 180 : t0;
+        const expiredReset = withHistory ? t0 + 200 : t0 + 120;
+        writeEvt(expiredSec, expiredReset);
+        subClock = (t0 + 240) * 1000;
+        setSystemTime(new Date(subClock));
+        await subController.tick("antigravity");
+        const afterExpired = subReg.quotaObservations("antigravity").find((r) => r.accountId === "default");
+        expect(afterExpired?.lastQuotaEventAt).toBe(expiredSec);
+        expect(afterExpired?.limitReached).toBe(false);
+
+        const incomingSec = withHistory ? t0 + 100 : t0 + 180;
+        writeEvt(incomingSec, t0 + 3700);
+        subClock = (t0 + 250) * 1000;
+        setSystemTime(new Date(subClock));
+        await subController.tick("antigravity");
+        const afterIncoming = subReg.quotaObservations("antigravity").find((r) => r.accountId === "default");
+        if (withHistory) {
+          expect(afterIncoming?.limitReached).toBe(false);
+          expect(afterIncoming?.lastQuotaEventAt).toBe(t0 + 180);
+        } else {
+          expect(afterIncoming?.limitReached).toBe(true);
+          expect(afterIncoming?.limits?.session?.usedPercent).toBe(100);
+          expect(afterIncoming?.lastQuotaEventAt).toBe(t0 + 180);
+        }
+      } finally {
+        subReg.close();
+        process.env.LLV_STATE_DIR = prevEnv;
+        setAgentRegistryForTests(registry);
+        fs.rmSync(subRoot, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    setSystemTime();
+    setAgentRegistryForTests(null);
+    registry.close();
+    if (prevStateDir === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = prevStateDir;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity newest quota event decides: a newer confirmed reset overrides an older active window while older expired or empty polls keep it", async () => {
+  const { setSystemTime } = await import("bun:test");
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { antigravityDefaultSessionsDir, recordAntigravityAuthState } = await import("@/lib/accounts/antigravity");
+  const { readLimits } = await import("@/lib/limits");
+  const { accountLimitRows } = await import("@/lib/mcp/compactAnswers");
+  const { readAntigravityTranscriptLimits } = await import("@/lib/limits/antigravityTranscriptLimits");
+  const prevStateDir: string | undefined = process.env.LLV_STATE_DIR;
+  try {
+    for (const variant of ["overlap-newer", "overlap-older", "empty-sample"] as const) {
+      const ovRoot = fs.mkdtempSync(path.join(os.tmpdir(), `llv-ag-${variant}-`));
+      const ovState = path.join(ovRoot, "state");
+      fs.mkdirSync(ovState, { recursive: true });
+      const ovReg = new AgentRegistry(path.join(ovState, "registry.json"));
+      process.env.LLV_STATE_DIR = ovState;
+      setAgentRegistryForTests(ovReg);
+      try {
+        const ovSessions = antigravityDefaultSessionsDir();
+        const ovHome = path.dirname(ovSessions);
+        fs.mkdirSync(ovSessions, { recursive: true });
+        fs.writeFileSync(path.join(ovHome, "auth.json"), JSON.stringify({ refresh_token: "fixture" }));
+        const t0 = Math.floor(Date.parse("2026-11-24T10:00:00.000Z") / 1000);
+        const ovClock = (t0 + 240) * 1000;
+        setSystemTime(new Date(ovClock));
+        recordAntigravityAuthState({ authenticated: true, checkedAt: new Date(ovClock).toISOString(), tierName: "Pro", tierId: null });
+        ovReg.recordQuotaObservation({
+          engine: "antigravity",
+          accountId: "default",
+          authenticated: true,
+          authCheckedAt: new Date(t0 * 1000).toISOString(),
+          limits: {
+            session: { usedPercent: 100, resetsAt: t0 + 3700, windowMinutes: 300, observedAt: t0, source: "account" },
+            weekly: null,
+            tiers: [],
+            plan: "Pro",
+            capturedAt: t0,
+          },
+          provenance: { source: "transcript", reason: null, staleSince: null },
+          observedAt: new Date(t0 * 1000).toISOString(),
+          bootId: "boot-active-old",
+          limitReached: true,
+          lastQuotaEventAt: t0,
+        });
+
+        const ovFile = path.join(ovSessions, "sess-overlap", "events.jsonl");
+        fs.mkdirSync(path.dirname(ovFile), { recursive: true });
+        if (variant === "empty-sample") {
+          fs.writeFileSync(ovFile, `${JSON.stringify({ type: "session.start", timestamp: new Date((t0 + 200) * 1000).toISOString(), data: { sessionId: "sess-overlap" } })}\n`);
+          fs.utimesSync(ovFile, t0 + 200, t0 + 200);
+        } else {
+          const evSec = variant === "overlap-newer" ? t0 + 180 : t0 - 180;
+          const resSec = variant === "overlap-newer" ? t0 + 200 : t0 - 160;
+          fs.writeFileSync(
+            ovFile,
+            `${JSON.stringify({
+              type: "session.quota_exhausted",
+              timestamp: new Date(evSec * 1000).toISOString(),
+              data: {
+                code: "RESOURCE_EXHAUSTED",
+                message: "Individual quota reached",
+                resetsAt: resSec,
+                windowMinutes: 300,
+                usedPercent: 100,
+                observedAt: evSec,
+              },
+            })}\n`,
+          );
+          fs.utimesSync(ovFile, evSec, evSec);
+        }
+
+        const ovAccount = {
+          id: "default",
+          label: "Default",
+          kind: "legacy" as const,
+          home: ovHome,
+          sessionsDir: ovSessions,
+          auth: "signed_in" as const,
+          tierName: "Pro",
+          createdAt: 0,
+        };
+        const ovController = new QuotaController(ovReg, {
+          list: () => [ovAccount],
+          active: () => "default",
+          credentialIdentity: () => "stable-ag-overlap",
+          probe: async (_e, acc, now) => {
+            const read = readAntigravityTranscriptLimits(
+              ovAccount.sessionsDir,
+              now,
+              { tierName: ovAccount.tierName },
+            );
+            return {
+              engine: "antigravity",
+              accountId: acc.id,
+              authenticated: true,
+              authCheckedAt: now,
+              limits: read.data,
+              provenance: { source: read.source, reason: read.reason, staleSince: null },
+              observedAt: read.data?.capturedAt ? read.data.capturedAt * 1000 : now,
+              limitReached: read.data !== null,
+              ...(read.lastQuotaEventAt === undefined ? {} : { lastQuotaEventAt: read.lastQuotaEventAt }),
+            };
+          },
+        }, "boot-overlap", () => ovClock);
+
+        const readHttp = () => readLimits({
+          codexLiveReader: async () => { throw new Error("skip-codex-probe"); },
+          now: () => ovClock,
+        });
+        const httpBefore = await readHttp();
+        await ovController.tick("antigravity");
+        const durable = ovReg.quotaObservations("antigravity").find((r) => r.accountId === "default");
+        const httpAfter = await readHttp();
+        const mcpAfter = accountLimitRows({
+          engine: "antigravity",
+          accounts: { claude: [], codex: [], copilot: [], antigravity: [{ accountId: "default", authPresent: true }] },
+          active: { claude: null, codex: null, copilot: null, antigravity: "default" },
+          observations: { claude: {}, codex: {}, copilot: {}, antigravity: durable ? { default: durable } : {} },
+          now: ovClock,
+        });
+
+        if (variant === "overlap-newer") {
+          expect(httpBefore.antigravity).toBeNull();
+          expect(durable?.limitReached).toBe(false);
+          expect(durable?.limits).toBeNull();
+          expect(durable?.lastQuotaEventAt).toBe(t0 + 180);
+          expect(httpAfter.antigravity).toBeNull();
+          expect(mcpAfter[0]?.session ?? null).toBeNull();
+        } else {
+          expect(httpBefore.antigravity?.session?.usedPercent).toBe(100);
+          expect(durable?.limitReached).toBe(true);
+          expect(durable?.limits?.session?.usedPercent).toBe(100);
+          expect(durable?.lastQuotaEventAt).toBe(t0);
+          expect(httpAfter.antigravity?.session?.usedPercent).toBe(100);
+          expect(mcpAfter[0]?.session?.usedPercent).toBe(100);
+        }
+      } finally {
+        ovReg.close();
+        setAgentRegistryForTests(null);
+        fs.rmSync(ovRoot, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    setSystemTime();
+    setAgentRegistryForTests(null);
+    if (prevStateDir === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = prevStateDir;
+  }
+}, 15_000);
+
 test("quota visibility remains fresh when automatic balancing is disabled", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-quota-controller-"));
   try {
