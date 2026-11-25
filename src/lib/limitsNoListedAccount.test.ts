@@ -81,7 +81,7 @@ test("with Codex Main removed and no Codex account left, /api/limits and its his
     expect(payload.claudeAccountId).toBe("default");
     expect(payload.claude?.session?.usedPercent).toBe(30);
 
-    const history = await historyRoute.GET();
+    const history = await historyRoute.GET(new Request("http://127.0.0.1/api/limits/history"));
     expect(history.status).toBe(200);
     const burndown = await history.json();
     expect(burndown.codex).toBeNull();

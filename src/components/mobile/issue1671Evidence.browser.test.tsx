@@ -15758,3 +15758,127 @@ describe("redesign S2 the Stages window on the phone", () => {
     } finally { await browser.close(); stop(); }
   }, 3_600_000);
 });
+
+describe("account burndown chart on the phone", () => {
+  /* Any account's reading on the phone's accounts screen opens that account's chart as a bottom sheet: a non-active
+     account with partial history (solid readings, dashed gaps), and a signed-in account with no reading at all (axes,
+     window and a dashed level). At 390 and 430 px, in both languages and schemes. Fails on a target under 44 px, a sheet
+     leaving the viewport, a readout cut or covered, a legend key that is not dashed where the chart's line is, a chart
+     that does not close, or a history request for another account. `LLV_ACCOUNT_CHART_OUT=<dir>` keeps the frames. */
+  browserTest("the accounts screen opens a non-active and a no-reading account's chart, dashed where estimated", async () => {
+    const { accountRowRoutes } = await import("@/components/accountRowFrames");
+    const out = path.resolve(process.env.LLV_ACCOUNT_CHART_OUT ?? ".artifacts/account-chart", "phone"); fs.mkdirSync(out, { recursive: true });
+    const rows = accountRowRoutes();
+    const asked: string[] = [];
+    const routes = {
+      ...rows.routes,
+      /* One reading hours ago, one a day ago: the span between them and the span since the last are assumed. */
+      "/api/limits/history": (request: Request) => {
+        const url = new URL(request.url);
+        const engine = url.searchParams.get("engine") === "codex" ? "codex" : "claude";
+        const account = url.searchParams.get("account") ?? "";
+        asked.push(`${engine}:${account}`);
+        const now = Math.floor(Date.now() / 1000);
+        const empty = { windowStart: null, resetsAt: null, windowSeconds: 7 * 86_400, samples: [] };
+        const weekly = account === "no-reading" ? empty : {
+          windowStart: now - 3 * 86_400, resetsAt: now + 4 * 86_400, windowSeconds: 7 * 86_400,
+          samples: [{ t: now - 2.5 * 86_400, remaining: 98 }, { t: now - 1.2 * 86_400, remaining: 97 }],
+        };
+        const series = { session: { ...empty, windowSeconds: 5 * 3_600 }, weekly };
+        return Response.json({
+          claude: engine === "claude" ? series : null, codex: engine === "codex" ? series : null,
+          claudeAccountId: engine === "claude" ? account : null, codexAccountId: engine === "codex" ? account : null, historySince: null,
+        });
+      },
+    };
+    const server = await serveEvidenceFixture(out, undefined, routes);
+    const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const failures: string[] = [];
+    const press = (id: string) => `[data-account-chart="${id}"]`;
+    try {
+      for (const width of [390, 430]) for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        for (const scene of [{ set: "core" as const, engine: "claude", id: "backup", label: "backup" }, { set: "edge" as const, engine: "codex", id: "no-reading", label: "no-reading" }]) {
+          rows.control.reset(scene.set);
+          asked.length = 0;
+          const key = `phone-${width}-${locale}-${theme}-${scene.id}`;
+          const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=account-row&surface=phone&engine=${scene.engine}`, { width, height: 844 }, theme, locale, "no-preference", true);
+          try {
+            /* A row with a reading carries the press over its reading. A signed-in row with none shows no extra line: its open row's
+               «no data yet» is the press, so the row is opened first and no press exists before that. */
+            const rowSelector = `[data-account-row="${scene.id}"]`;
+            if (scene.id === "no-reading") {
+              await page.locator(`${rowSelector} [data-account-toggle]`).waitFor({ timeout: 15_000 });
+              if (await page.locator(press(scene.id)).count() !== 0) failures.push(`${key}: the closed no-reading row already carries a chart press`);
+              if ((await page.locator(rowSelector).innerText()).includes(translate(locale, "burndown.title").replace(/^./u, (c) => c.toUpperCase()))) failures.push(`${key}: the closed row gained a «${translate(locale, "burndown.title")}» line`);
+              await page.locator(`${rowSelector} [data-account-toggle]`).scrollIntoViewIfNeeded();
+              await page.locator(`${rowSelector} [data-account-toggle]`).tap();
+            }
+            await page.locator(press(scene.id)).waitFor({ timeout: 15_000 });
+            await page.locator(press(scene.id)).scrollIntoViewIfNeeded();
+            const target = await page.locator(press(scene.id)).boundingBox();
+            if (!target || target.height < 43.5) failures.push(`${key}: the chart press is ${target?.height ?? "missing"} px high, under 44`);
+            await page.locator(press(scene.id)).tap();
+            await page.locator("[data-burndown-dialog] svg[role=img]").waitFor({ timeout: 10_000 });
+            await page.waitForFunction(() => !document.body.textContent?.includes("…"), undefined, { timeout: 5_000 }).catch(() => {});
+            await page.waitForTimeout(150);
+            const reading = await page.evaluate((id) => {
+              const dialog = document.querySelector<HTMLElement>("[data-burndown-dialog]")!;
+              const box = dialog.getBoundingClientRect();
+              const readout = dialog.querySelector<HTMLElement>("[data-burndown-readout]");
+              const range = document.createRange();
+              if (readout) range.selectNodeContents(readout);
+              const rects = [...range.getClientRects()];
+              const ink = rects.length ? { left: Math.min(...rects.map((r) => r.left)), right: Math.max(...rects.map((r) => r.right)), top: Math.min(...rects.map((r) => r.top)), bottom: Math.max(...rects.map((r) => r.bottom)) } : null;
+              const probe = ink ? document.elementFromPoint((ink.left + ink.right) / 2, (ink.top + ink.bottom) / 2) : null;
+              const dash = (kind: string) => dialog.querySelector(`[data-burndown-key="${kind}"] line`)?.getAttribute("stroke-dasharray") ?? null;
+              const keySize = dialog.querySelector('[data-burndown-key="estimated"]')?.getBoundingClientRect();
+              return {
+                label: dialog.getAttribute("aria-label") ?? "",
+                box: { left: box.left, right: box.right, top: box.top, bottom: box.bottom },
+                inner: { w: innerWidth, h: innerHeight },
+                readout: readout?.textContent ?? "", ink, covered: probe ? !dialog.contains(probe) || !readout?.contains(probe) && !probe.contains(readout) && probe !== readout : true,
+                estimated: dialog.querySelectorAll("svg[role=img] [data-burndown-estimated]").length,
+                known: dialog.querySelectorAll("svg[role=img] [data-burndown-known]").length,
+                keys: { estimated: dash("estimated"), ideal: dash("ideal"), actual: dash("actual") }, keyWidth: keySize?.width ?? 0,
+                keyPresent: { estimated: dialog.querySelector('[data-burndown-key="estimated"]') !== null, ideal: dialog.querySelector('[data-burndown-key="ideal"]') !== null, actual: dialog.querySelector('[data-burndown-key="actual"]') !== null },
+                scrim: (() => { const rect = document.querySelector("[data-burndown-scrim]")?.getBoundingClientRect(); return rect ? { w: rect.width, h: rect.height } : null; })(),
+                level: (() => { const frame = dialog.querySelector("svg[role=img] rect")?.getBoundingClientRect(); const line = dialog.querySelector("svg[role=img] [data-burndown-estimated]")?.getBoundingClientRect(); return frame && line ? { top: line.top - frame.top, bottom: frame.bottom - line.bottom } : null; })(),
+                pressOpen: document.querySelector(`[data-account-chart="${id}"]`)?.getAttribute("aria-expanded"),
+                dialogs: document.querySelectorAll("[data-burndown-dialog]").length,
+              };
+            }, scene.id);
+            if (!reading.label.includes(scene.label)) failures.push(`${key}: the dialog is named «${reading.label}»`);
+            if (reading.box.left < -0.5 || reading.box.right > reading.inner.w + 0.5 || reading.box.top < -0.5 || reading.box.bottom > reading.inner.h + 0.5) failures.push(`${key}: the sheet leaves the viewport ${JSON.stringify(reading.box)}`);
+            if (!reading.ink || reading.ink.left < reading.box.left - 0.5 || reading.ink.right > reading.box.right + 0.5 || reading.ink.bottom > reading.box.bottom + 0.5) failures.push(`${key}: the readout is cut (${JSON.stringify(reading.ink)})`);
+            if (reading.covered) failures.push(`${key}: the readout is covered`);
+            if (reading.estimated < 1) failures.push(`${key}: no dashed estimated segment is drawn`);
+            if (scene.id === "backup" && reading.known < 1) failures.push(`${key}: no solid reading is drawn`);
+            // The legend keys only the lines the chart draws: a chart with no reading draws a dashed level and nothing else.
+            const noReading = scene.id === "no-reading";
+            if (reading.keys.estimated !== "2 3" || reading.keys.ideal !== (noReading ? null : "4 3") || reading.keys.actual !== null) failures.push(`${key}: legend keys read ${JSON.stringify(reading.keys)}`);
+            if (reading.keyPresent.estimated !== true || reading.keyPresent.ideal !== !noReading || reading.keyPresent.actual !== !noReading) failures.push(`${key}: legend lists ${JSON.stringify(reading.keyPresent)}`);
+            // Docked to the bottom edge over a scrim that covers the screen: no background text shows beneath the sheet.
+            if (Math.abs(reading.box.bottom - reading.inner.h) > 0.5 || Math.abs(reading.box.left) > 0.5 || Math.abs(reading.box.right - reading.inner.w) > 0.5) failures.push(`${key}: the sheet is not docked ${JSON.stringify(reading.box)}`);
+            if (!reading.scrim || reading.scrim.w < reading.inner.w - 0.5 || reading.scrim.h < reading.inner.h - 0.5) failures.push(`${key}: no scrim dims the screen behind the sheet`);
+            // A level is a line inside the plot, clear of the frame's top and bottom edges.
+            if (!reading.level || reading.level.top < 4) failures.push(`${key}: the dashed level sits on the frame (${JSON.stringify(reading.level)})`);
+            if (reading.keyWidth < 13) failures.push(`${key}: the estimated key is ${reading.keyWidth} px wide`);
+            if (reading.pressOpen !== "true" || reading.dialogs !== 1) failures.push(`${key}: press expanded=${reading.pressOpen}, ${reading.dialogs} dialogs`);
+            if (scene.id === "no-reading" && !reading.readout.includes(translate(locale, "burndown.noReading"))) failures.push(`${key}: the readout says «${reading.readout}»`);
+            if (!asked.includes(`${scene.engine}:${scene.id}`) || asked.some((entry) => entry !== `${scene.engine}:${scene.id}`)) failures.push(`${key}: history asked for ${asked.join(", ")}`);
+            await page.screenshot({ path: path.join(out, `${key}.png`) });
+            // A tap outside closes it, and the row stays closed: nothing was switched or opened.
+            await page.touchscreen.tap(width / 2, 8);
+            await page.locator("[data-burndown-dialog]").waitFor({ state: "detached", timeout: 3_000 }).catch(() => failures.push(`${key}: a tap outside did not close the chart`));
+            if (rows.control.calls.length > 0) failures.push(`${key}: opening the chart sent ${rows.control.calls.map((call) => call.method + call.path).join(", ")}`);
+            // The no-reading row was opened on purpose to reach its press; every other row must stay closed.
+            const rowOpen = await page.locator(`[data-account-row="${scene.id}"] [data-account-toggle]`).getAttribute("aria-expanded") === "true";
+            if (rowOpen !== (scene.id === "no-reading")) failures.push(`${key}: the row is ${rowOpen ? "open" : "closed"} after the chart closed`);
+            if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
+          } finally { await context.close(); }
+        }
+      }
+    } finally { await browser.close(); server.stop(); }
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
