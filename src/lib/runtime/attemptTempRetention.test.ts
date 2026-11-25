@@ -788,7 +788,7 @@ test("legacy adoption resumes its cursor in another process without losing the i
   } finally { process.env.LLV_STATE_DIR = priorState; }
 });
 
-test("legacy adoption attributes a real producer manifest through its still-recorded owner", async () => {
+test("legacy adoption attributes a real producer manifest and retains the copy", async () => {
   const f = fixture(), directory = f.make("legacy-owner"), priorState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(f.root, "copy-state");
   try {
@@ -797,8 +797,8 @@ test("legacy adoption attributes a real producer manifest through its still-reco
     expect(evidence.destination).toBeDefined();
     const report = await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "expired",
       scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
-    expect(report.adopted).toBe(1); expect(report.removed).toBe(1); expect(report.unattributed.count).toBe(0);
-    expect(fs.existsSync(evidence.destination!)).toBeFalse(); expect(fs.existsSync(directory)).toBeTrue();
+    expect(report).toMatchObject({ adopted: 1, sourceAttributed: 1, removed: 0, unattributed: { count: 0, bytes: 0 } });
+    expect(fs.existsSync(evidence.destination!)).toBeTrue(); expect(fs.existsSync(directory)).toBeTrue();
   } finally { process.env.LLV_STATE_DIR = priorState; f.store.close(); }
 });
 
