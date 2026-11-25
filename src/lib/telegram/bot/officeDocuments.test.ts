@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { formulaReading, inspectOfficePackage, inspectOfficeZip, officeXmlText, wordStyles } from "./officeDocuments";
+import { formulaReading, type FormulaSource, inspectOfficePackage, type RangeBox, inspectOfficeZip, officeXmlText, wordStyles } from "./officeDocuments";
 import { commentHidingArchive, hiddenSeparators, officeParts, officeWordRun as wordRun, officeZip } from "./officeDocuments.fixture";
 
 const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
@@ -187,30 +187,60 @@ test("an archive comment cannot hide a second archive from inspection", () => {
 
 /* ---- computed spreadsheet text -------------------------------------------- */
 
-const CELLS: Record<string, string> = { B2: "Anna", C2: "Kovalenko", D2: "160", A1: "Alpha", B1: "Beta", C3: "Gamma" };
-const reading = (formula: string) => formulaReading(formula, reference => CELLS[reference]);
+const column = (number: number) => String.fromCharCode(64 + number);
+/* A source that reports what was asked: `<ref>` for a cell of this sheet, `<Sheet!ref>` for one of another, `[from-to]` for a range. */
+const echo: FormulaSource = {
+  cell: (sheet, reference) => `<${sheet === null ? "" : `${sheet}!`}${reference}>`,
+  range: (sheet, box) => `[${sheet === null ? "" : `${sheet}!`}${column(box.column1)}${box.row1}-${column(box.column2)}${box.row2}]`,
+};
+const reading = (formula: string) => formulaReading(formula, echo);
 
 test.each([
-  ['B2&" "&C2', "Anna Kovalenko", 2],
-  ["SUM(B2:B10)", "", 0],
-  ['IF(D2>0,"yes","no")', "160yesno", 1],
-  ["$A$1&A$1&$B1", "AlphaAlphaBeta", 3],
-  ["a1&b1", "AlphaBeta", 2],
-  ['"say ""hi"" "&A1', 'say "hi" Alpha', 1],
-  ["LOG10(A1)&ATAN2(B1,C3)", "AlphaBetaGamma", 3],
-  ['Sheet2!A1&"-"&B1', "-Beta", 1],
-  ["'Q 1'!A1&C3", "Gamma", 1],
-  ["'It''s'!A1&C3&[1]Other!A1", "Gamma", 1],
-  ["A1:B2&C3", "Gamma", 1],
-  ["Staff[Name]&A1", "Alpha", 1],
+  ['B2&" "&C2', "<B2> <C2>", 2],
+  ["SUM(B2:B10)", "[B2-B10]", 1],
+  ['IF(D2>0,"yes","no")', "<D2>yesno", 1],
+  ["$A$1&A$1&$B1", "<A1><A1><B1>", 3],
+  ["a1&b1", "<A1><B1>", 2],
+  ['"say ""hi"" "&A1', 'say "hi" <A1>', 1],
+  ["LOG10(A1)&ATAN2(B1,C3)", "<A1><B1><C3>", 3],
+  ['Sheet2!A1&"-"&B1', "<Sheet2!A1>-<B1>", 2],
+  ["'Q 1'!A1&C3", "<Q 1!A1><C3>", 2],
+  ["'It''s'!A1&C3", "<It's!A1><C3>", 2],
+  ["Keys!A1:B2&C3", "[Keys!A1-B2]<C3>", 2],
+  ["'Q 1'!$A$1:$B$2", "[Q 1!A1-B2]", 1],
+  ["B2:A1", "[A1-B2]", 1],
+  ["A:B", "[A1-B1048576]", 1],
+  ["TEXTJOIN(\"\",TRUE,A1:B1)", "[A1-B1]", 1],
+  ["Staff[Name]&A1", "<A1>", 1],
   ["A1.5+1E3", "", 0],
-] as const)("the reading of =%s is %j with %d cell references", (formula, text, references) => {
+] as const)("the reading of =%s is %j with %d references", (formula, text, references) => {
   expect(reading(formula)).toEqual({ text, references });
 });
 
+test("a range of whole rows spans every column", () => {
+  const boxes: RangeBox[] = [];
+  formulaReading("Keys!3:1", { ...echo, range: (_sheet, box) => { boxes.push(box); return ""; } });
+  expect(boxes).toEqual([{ column1: 1, row1: 1, column2: 16384, row2: 3 }]);
+});
+
+test.each([
+  "[1]Other!A1&C3",
+  "'[1]Other'!A1&C3",
+  "Sheet1:Sheet3!A1&C3",
+])("the reading of =%s leaves out what lives in another workbook or in several sheets", formula => {
+  expect(reading(formula)?.text).toBe("<C3>");
+});
+
 test("a formula that names more cells than the bound cannot be read", () => {
-  expect(reading(Array(64).fill("A1").join("&"))).toEqual({ text: "Alpha".repeat(64), references: 64 });
+  expect(reading(Array(64).fill("A1").join("&"))).toEqual({ text: "<A1>".repeat(64), references: 64 });
   expect(reading(Array(65).fill("A1").join("&"))).toBeNull();
+  expect(reading(Array(65).fill("A1:B2").join("&"))).toBeNull();
+});
+
+test("a reading that passes the character limit, or a source out of work, cannot be read", () => {
+  expect(formulaReading("A1&A1", echo, 7)).toBeNull();
+  expect(formulaReading("A1&A1", echo, 8)).toEqual({ text: "<A1><A1>", references: 2 });
+  expect(formulaReading("A1:B2", { ...echo, range: () => null })).toBeNull();
 });
 
 test("a part reads the text its formulas join from shared strings, inline strings and later cells", () => {
@@ -220,6 +250,51 @@ test("a part reads the text its formulas join from shared strings, inline string
   expect(text).toContain("-42");
   /* A phonetic guide is not part of what a cell shows, so a formula does not join it. */
   expect(text).not.toContain("StartMidHidden-9");
+});
+
+/* A two-sheet workbook written the way library writers do: text in the shared strings, no stored result for any formula. */
+const twoSheets = (report: string, keys: string, strings: string[], flag = '<calcPr fullCalcOnLoad="1"/>') => officeZip({
+  ...officeParts("xlsx"),
+  "xl/workbook.xml": `<workbook ${S} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Report" sheetId="1" r:id="rId1"/><sheet name="Key Sheet" sheetId="2" r:id="rId2"/></sheets>${flag}</workbook>`,
+  "xl/worksheets/sheet1.xml": `<worksheet ${S}><sheetData>${report}</sheetData></worksheet>`,
+  "xl/worksheets/sheet2.xml": `<worksheet ${S}><sheetData>${keys}</sheetData></worksheet>`,
+  "xl/sharedStrings.xml": `<sst ${S}>${strings.map(text => `<si><t>${text}</t></si>`).join("")}</sst>`,
+  "xl/_rels/workbook.xml.rels": '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>',
+});
+const readParts = (bytes: Buffer) => {
+  const parts = new Map<string, { lines: string[]; consent: boolean }>();
+  inspectOfficePackage(bytes, 1 << 22, (name, _content, text, consent) => { parts.set(name, { lines: text?.split("\n") ?? [], consent }); });
+  return parts;
+};
+
+test("a formula reads the text cells of a range and of a sheet named in the workbook", () => {
+  const strings = ["Left", "Middle", "Right", "Other"];
+  const report = '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c><c r="D1"><v>7</v></c>'
+    + '<c r="E1"><f>CONCAT(A1:C1)</f></c><c r="F1"><f>SUM(D1:D9)&amp;"|"</f></c><c r="G1"><f>\'Key Sheet\'!A1&amp;\'key sheet\'!B2</f></c><c r="H1"><f>TEXTJOIN("",TRUE,\'Key Sheet\'!A1:B2)</f></c></row>';
+  const keys = '<row r="1"><c r="A1" t="s"><v>3</v></c><c r="B1"><v>5</v></c></row><row r="2"><c r="A2" t="s"><v>0</v></c><c r="B2" t="inlineStr"><is><t>Tail</t></is></c></row>';
+  const part = readParts(twoSheets(report, keys, strings)).get("xl/worksheets/sheet1.xml")!;
+  expect(part.consent).toBe(false);
+  expect(part.lines).toContain("LeftMiddleRight");
+  expect(part.lines).toContain("OtherTail");
+  expect(part.lines).toContain("OtherLeftTail");
+});
+
+test("a range reads rows in order, and only the columns it names", () => {
+  const strings = ["a", "b", "c", "d"];
+  const report = '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="D1" t="s"><v>2</v></c></row><row r="2"><c r="A2" t="s"><v>3</v></c><c r="C2" t="s"><v>3</v></c></row>'
+    + '<row r="9"><c r="A9"><f>A1:C2</f></c><c r="B9"><f>B:C</f></c><c r="C9"><f>1:1</f></c></row>';
+  const lines = readParts(twoSheets(report, "", strings)).get("xl/worksheets/sheet1.xml")!.lines;
+  expect(lines).toContain("abdd");
+  expect(lines).toContain("bd");
+  expect(lines).toContain("abc");
+});
+
+test("a range over more cells than the package may visit asks for consent", () => {
+  /* 3 600 ranges over a sheet of 6 000 text cells visit 21 600 000 cells, past the package's 20 000 000, though each reads no text. */
+  const heavy = Array.from({ length: 6000 }, (_, row) => `<row r="${row + 1}"><c r="A${row + 1}" t="inlineStr"><is><t>x</t></is></c></row>`).join("");
+  const many = (count: number) => Array.from({ length: count }, (_, at) => `<row r="${at + 1}"><c r="C${at + 1}"><f>LEN('Key Sheet'!B1:B6000)</f></c></row>`).join("");
+  expect(readParts(twoSheets(many(3000), heavy, [])).get("xl/worksheets/sheet1.xml")!.consent).toBe(false);
+  expect(readParts(twoSheets(many(3600), heavy, [])).get("xl/worksheets/sheet1.xml")!.consent).toBe(true);
 });
 
 test("the recalculation flag alone asks for no consent, and computed text beyond the reading bound does", () => {

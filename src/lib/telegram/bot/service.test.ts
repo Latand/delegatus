@@ -491,13 +491,14 @@ test("Office imported parts and alternate displayed text stay behind confirmatio
   ];
   const xlsxEntries = officeParts("xlsx");
   /* `strings` makes the workbook keep its text in `xl/sharedStrings.xml`, as library writers do. */
-  const xlsx = (sheet: string, extraStyles = "", forceRecalc = false, strings: string[] | null = null) => officeZip({
+  const xlsx = (sheet: string, extraStyles = "", forceRecalc = false, strings: string[] | null = null, keys: string | null = null) => officeZip({
     ...xlsxEntries,
-    "xl/workbook.xml": `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Report" sheetId="1" r:id="rId1"/></sheets>${forceRecalc ? '<calcPr fullCalcOnLoad="1"/>' : ""}</workbook>`,
+    "xl/workbook.xml": `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Report" sheetId="1" r:id="rId1"/>${keys ? '<sheet name="Keys" sheetId="2" r:id="rId2"/>' : ""}</sheets>${forceRecalc ? '<calcPr fullCalcOnLoad="1"/>' : ""}</workbook>`,
     "xl/worksheets/sheet1.xml": sheet,
+    ...(keys ? { "xl/worksheets/sheet2.xml": keys } : {}),
     "xl/styles.xml": extraStyles || '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>',
     ...(strings ? { "xl/sharedStrings.xml": `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${strings.length}" uniqueCount="${strings.length}">${strings.map(text => `<si><t>${text}</t></si>`).join("")}</sst>` } : {}),
-    "xl/_rels/workbook.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>${strings ? '<Relationship Id="rIdT" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>' : ""}</Relationships>`,
+    "xl/_rels/workbook.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>${keys ? '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>' : ""}<Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>${strings ? '<Relationship Id="rIdT" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>' : ""}</Relationships>`,
   });
   const sheetOf = (rows: string) => `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rows}</sheetData></worksheet>`;
   fixtures.push(
@@ -509,6 +510,20 @@ test("Office imported parts and alternate displayed text stay behind confirmatio
     ["shared-split-reversed.xlsx", "xlsx", xlsx(sheetOf('<row r="1"><c r="A1"><f>$B$1&amp;A2</f></c><c r="B1" t="s"><v>0</v></c><c r="A2" t="s"><v>1</v></c></row>'), "", true, [fixtureText.slice(0, 15), fixtureText.slice(15)])],
     ["shared-literal.xlsx", "xlsx", xlsx(sheetOf('<row r="1"><c r="A1" t="s"><v>0</v></c></row>'), "", true, [fixtureText])],
   );
+  /* An openpyxl-style workbook keeps no stored result, so a formula that joins a range or a cell of another sheet
+     is the only place the whole secret exists. Each refuses with the recalculation flag set and without it. */
+  const halves = [fixtureText.slice(0, 15), fixtureText.slice(15)];
+  const rangeRow = (formula: string) => `<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1"><f>${formula}</f></c></row>`;
+  for (const flag of [true, false]) {
+    const suffix = flag ? "recalc" : "plain";
+    fixtures.push(
+      [`range-concat-${suffix}.xlsx`, "xlsx", xlsx(sheetOf(rangeRow("CONCAT(A1:B1)")), "", flag, halves)],
+      [`range-textjoin-${suffix}.xlsx`, "xlsx", xlsx(sheetOf(rangeRow('TEXTJOIN(&quot;&quot;,TRUE,A1:B1)')), "", flag, halves)],
+      [`cross-sheet-${suffix}.xlsx`, "xlsx", xlsx(
+        sheetOf('<row r="1"><c r="A1" t="s"><v>0</v></c><c r="C1"><f>Report!A1&amp;Keys!A1</f></c></row>'), "", flag, halves,
+        sheetOf('<row r="1"><c r="A1" t="s"><v>1</v></c></row>'))],
+    );
+  }
   for (const [name, extension, bytes] of fixtures) {
     const file = documentFile(path.join(HANDOFF, name), bytes);
     const error = await refusal(() => sendDocument({ path: file }, { clientRequestId: name }));

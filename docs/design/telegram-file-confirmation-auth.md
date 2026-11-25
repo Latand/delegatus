@@ -228,9 +228,12 @@ Ship (a) alone. Reasons:
    shared verifier that four other surfaces use.
 4. After (a), the cost is two Telegram steps, once per browser.
 
-Answer to the boundary question: a file send is confirmed only by the owner
-member's browser session that was itself created by a Telegram sign-in of
-the account paired for owner reviews.
+Answer to the boundary question: a file send is confirmed only by an owner
+session created by a Telegram sign-in (method `telegram`) while the owner's
+linked Telegram account is the one paired for owner reviews. Linking proves
+control of that account. A session records its method and no Telegram id, so
+the check reads the owner's current link (`ownerTelegramGap` in
+`src/lib/team/actor.ts`).
 
 ## (c) `computed_text` on ordinary spreadsheets
 
@@ -271,8 +274,10 @@ The whole change is in `officeDocuments.ts`. `documents.ts` stays unchanged.
    stops counting as evidence of a secret.
 2. Read computed text directly. For each worksheet formula, build a
    **formula reading**: walk the formula as written, in order, and append
-   each string literal and the stored text of each same-sheet single-cell
-   reference (`A1`, `$A$1`), with no separators. Then append each reading as
+   each string literal and the stored text of each single-cell reference
+   (`A1`, `$A$1`), with no separators, and the text cells of each range
+   (`A1:B9`, `A:B`, `1:3`), row by row. A reference may name a sheet of the
+   same workbook (`Keys!A1`, `'Q 1'!A1:B2`). Then append each reading as
    its own line to that part's text, which `documentSecret` scans as it does
    today, under the class that matches.
    - Stored text: for `t="s"`, the shared string by index, read from the
@@ -281,12 +286,17 @@ The whole change is in `officeDocuments.ts`. `documents.ts` stays unchanged.
    - Shared strings are resolved per package prefix before the sheets are
      read, as Word styles already are (`:350-355`). All members are in
      memory at that point.
-   - Ranges, references to other sheets, defined names, and dependents of a
-     shared formula (`<f t="shared">` without text) are not read.
+   - Sheet names resolve through `xl/workbook.xml` and its relationships per
+     package, as shared strings do; each foreign sheet is parsed once. Text
+     cells (`s`, `inlineStr`, `str`) count inside a range, so `SUM` over
+     numbers reads as nothing. References to other workbooks, 3-D spans,
+     defined names, table references and dependents of a shared formula
+     (`<f t="shared">` without text) are not read.
    - Bounds: at most 64 references per formula. Total reading characters
      per package must stay within the displayed-reading budget the parser
      already uses (`4 × length + 1 MiB`, `:637`). If the budget runs out,
-     set `requiresConsent` and stop reading further formulas. `computed_text`
+     set `requiresConsent` and stop reading further formulas. Ranges also
+     share a package bound of 20 000 000 visited cells, with the same result. `computed_text`
      then keeps one honest meaning: computed text that could not be inspected
      within the limits.
 
@@ -309,7 +319,10 @@ In `service.test.ts`, next to the fixtures at `:493-515`:
 - the same split secret over **shared-string** cells, without
   `fullCalcOnLoad`, refuses as `document_secret`. This proves that the
   reading resolves shared strings and no longer depends on the flag;
-- a literal secret in a shared string still refuses.
+- a literal secret in a shared string still refuses;
+- the split secret joined by `CONCAT(A1:B1)`, by `TEXTJOIN("",TRUE,A1:B1)` and
+  by `Report!A1&Keys!A1` across two sheets refuses as `document_secret`, with
+  `fullCalcOnLoad` and without it.
 
 A focused case in `src/lib/telegram/bot/officeDocuments.test.ts` covers the
 budget: a workbook whose formula readings exceed it reports `requiresConsent`.
@@ -330,6 +343,11 @@ typecheck stays with CI. The review runs on Claude.
   by a Telegram-method session of the same owner could count as Telegram.
   That needs a new session field and a store migration. It would not help the
   observed owner, who has never had a Telegram session.
+- **Telegram sessions that outlive a relink.** A Telegram session minted while
+  the owner was linked to another account stays valid after the owner links
+  the paired account, because a session carries no Telegram id. Binding the
+  signing id to the session needs a new session field and a migration.
+  `route.test.ts` pins today's behaviour.
 - **Link and sign in as one step.** `completeTelegram` could mint a Telegram
   session after a link confirmed from the same member's browser. The proof
   is as strong as a sign-in and saves one Start press. It changes every link
@@ -340,6 +358,7 @@ typecheck stays with CI. The review runs on Claude.
   state again and the old request expires in 10 minutes.
 - **A deep link from the `pairing` state to the relay settings.** There is no
   stable route for that dialog today. The state names where to go in text.
-- **Formula readings across sheets, ranges, defined names and shared-formula
-  dependents.** Library writers emit each formula in full. Excel stores a
-  cached value for every formula cell, and the scan already reads it.
+- **Formula readings through defined names, table references, other
+  workbooks, 3-D sheet spans and shared-formula dependents.** Ranges and
+  cells of a sheet named in the same workbook are read (text cells only; a
+  numeric cell adds nothing to a range).

@@ -284,12 +284,12 @@ function styleVanish(styles: WordStyles | undefined, type: string, id: string | 
   return undefined;
 }
 
-function relationships(bytes: Buffer): Array<{ type: string; target: string }> {
-  const found: Array<{ type: string; target: string }> = [];
+function relationships(bytes: Buffer): Array<{ id: string; type: string; target: string }> {
+  const found: Array<{ id: string; type: string; target: string }> = [];
   parseOfficeXml(bytes, {
     open(tag) {
       const type = plainValue(tag, "Type"), target = plainValue(tag, "Target");
-      if (tag.local === "Relationship" && type && target && plainValue(tag, "TargetMode") !== "External") found.push({ type, target });
+      if (tag.local === "Relationship" && type && target && plainValue(tag, "TargetMode") !== "External") found.push({ id: plainValue(tag, "Id") ?? "", type, target });
     },
     text() {},
     close() {},
@@ -339,16 +339,45 @@ function rejectWordImports(members: Array<[string, Buffer, string]>): void {
   }
 }
 
-/** The shared strings a workbook's cells index, from the part its relationships name. */
-function packageSharedStrings(members: Map<string, Buffer>): string[] | undefined {
+/** What a workbook's formulas may read from outside the sheet they sit on: its
+ * shared strings, and its sheets by name, each parsed once on first use. */
+function packageWorkbook(members: Map<string, Buffer>, budget: number): WorkbookContext {
+  const context: WorkbookContext = { budget: { left: budget }, work: { left: MAX_RANGE_WORK } };
   const root = members.get("_rels/.rels");
   const main = root && relationships(root).find(relationship => /\/officeDocument$/.test(relationship.type));
-  if (!main) return undefined;
+  if (!main) return context;
   const workbook = partName("", main.target);
   const workbookRelationships = members.get(relationshipsName(workbook));
-  const strings = workbookRelationships && relationships(workbookRelationships).find(relationship => /\/sharedStrings$/.test(relationship.type));
-  const part = strings && members.get(partName(workbook, strings.target));
-  return part && sharedStringTable(part);
+  const related = workbookRelationships ? relationships(workbookRelationships) : [];
+  const strings = related.find(relationship => /\/sharedStrings$/.test(relationship.type));
+  const stringsPart = strings && members.get(partName(workbook, strings.target));
+  context.sharedStrings = stringsPart && sharedStringTable(stringsPart);
+  const workbookPart = members.get(workbook);
+  if (workbookPart) {
+    const parts = new Map<string, string>();
+    parseOfficeXml(workbookPart, {
+      open(tag) {
+        if (!SHEET.has(tag.uri) || tag.local !== "sheet") return;
+        const name = plainValue(tag, "name");
+        const id = Object.values(tag.attributes).find(a => a.local === "id" && a.uri.includes("/relationships"))?.value;
+        const target = id === undefined ? undefined : related.find(relationship => relationship.id === id && /\/worksheet$/.test(relationship.type))?.target;
+        if (name !== undefined && target !== undefined) parts.set(name.toLowerCase(), partName(workbook, target));
+      },
+      text() {},
+      close() {},
+    });
+    const tables = new Map<string, SheetTable | undefined>();
+    context.sheet = name => {
+      const part = parts.get(name.toLowerCase());
+      if (part === undefined) return undefined;
+      if (!tables.has(part)) {
+        const bytes = members.get(part);
+        tables.set(part, bytes && sheetTable(sheetCells(bytes, context.sharedStrings)));
+      }
+      return tables.get(part);
+    };
+  }
+  return context;
 }
 
 /** The text of each `si` of a shared-strings part, by index: rich runs joined, phonetic guides left out. */
@@ -391,7 +420,7 @@ export function inspectOfficePackage(bytes: Buffer, maxBytes: number, visit: (na
       const byName = new Map(parts.map(([member, data]) => [member.slice(prefix.length).toLowerCase(), data] as const));
       own = {
         styles: packageWordStyles(byName),
-        workbook: { sharedStrings: packageSharedStrings(byName), budget: { left: formulaReadingBudget(parts.reduce((total, [, data]) => total + data.length, 0)) } },
+        workbook: packageWorkbook(byName, formulaReadingBudget(parts.reduce((total, [, data]) => total + data.length, 0))),
       };
       packages.set(prefix, own);
     }
@@ -584,29 +613,108 @@ function displayedText(styles: WordStyles | undefined) {
 }
 
 /* What the cells of one workbook hold, for reading the text its formulas join. */
+type SheetCell = { text: string; /** A text cell (`s`, `inlineStr`, `str`) rather than a number, boolean or error. */ textual: boolean };
+/** The text cells of a sheet in row-major order, for reading a range, and every stored cell by reference. */
+type SheetTable = { cells: Map<string, SheetCell>; textual: Array<{ row: number; column: number; text: string }> };
 type WorkbookContext = {
   sharedStrings?: readonly string[];
+  /** The cells of the sheet a name in a formula points at, when the workbook has one by that name. */
+  sheet?: (name: string) => SheetTable | undefined;
   /** Characters of formula readings the whole package may produce. */
   budget?: { left: number };
+  /** Cells the whole package may visit while reading ranges. */
+  work?: { left: number };
 };
 /** The characters of formula readings a package may produce: the displayed-reading allowance. */
 const formulaReadingBudget = (length: number) => 4 * length + (1 << 20);
 const MAX_FORMULA_REFERENCES = 64;
-const CELL_REFERENCE = /^\$?([A-Za-z]{1,3})\$?([0-9]+)$/;
+const MAX_RANGE_WORK = 20_000_000;
+
+const columnNumber = (letters: string) => [...letters.toUpperCase()].reduce((total, letter) => total * 26 + letter.charCodeAt(0) - 64, 0);
+const MAX_ROW = 1_048_576;
+
+/** What a stored cell shows as text, from the parts of its `c` element. */
+const storedCellText = (type: string, value: string, inline: string, sharedStrings: readonly string[] | undefined) =>
+  type === "inlineStr" ? inline : type === "s" ? (/^\s*\d+\s*$/.test(value) ? sharedStrings?.[Number(value)] : undefined) ?? "" : value;
+const TEXT_CELL_TYPES = new Set(["s", "inlineStr", "str"]);
+
+function sheetTable(cells: Map<string, SheetCell>): SheetTable {
+  const textual: SheetTable["textual"] = [];
+  for (const [reference, cell] of cells) {
+    const parsed = /^([A-Z]{1,3})([0-9]+)$/.exec(reference);
+    if (cell.textual && parsed) textual.push({ row: Number(parsed[2]), column: columnNumber(parsed[1]!), text: cell.text });
+  }
+  textual.sort((one, other) => one.row - other.row || one.column - other.column);
+  return { cells, textual };
+}
+
+/** The stored cells of a worksheet part, by reference. */
+function sheetCells(bytes: Buffer, sharedStrings: readonly string[] | undefined): Map<string, SheetCell> {
+  const cells = new Map<string, SheetCell>();
+  let cell: { reference: string; type: string; value: string; inline: string } | null = null;
+  let inValue = 0, inInline = 0, inText = 0, inPhonetic = 0;
+  parseOfficeXml(bytes, {
+    open(tag) {
+      if (!SHEET.has(tag.uri)) return;
+      if (tag.local === "c") cell = { reference: (plainValue(tag, "r") ?? "").toUpperCase(), type: plainValue(tag, "t") ?? "n", value: "", inline: "" };
+      else if (tag.local === "v") inValue++;
+      else if (tag.local === "is") inInline++;
+      else if (tag.local === "t") inText++;
+      else if (tag.local === "rPh") inPhonetic++;
+    },
+    text(text) {
+      if (!cell) return;
+      if (inValue) cell.value += text;
+      else if (inInline && inText && !inPhonetic) cell.inline += text;
+    },
+    close(tag) {
+      if (!SHEET.has(tag.uri)) return;
+      if (tag.local === "v") inValue--;
+      else if (tag.local === "is") inInline--;
+      else if (tag.local === "t") inText--;
+      else if (tag.local === "rPh") inPhonetic--;
+      else if (tag.local === "c" && cell) {
+        const text = storedCellText(cell.type, cell.value, cell.inline, sharedStrings);
+        if (cell.reference && text) cells.set(cell.reference, { text, textual: TEXT_CELL_TYPES.has(cell.type) });
+        cell = null;
+      }
+    },
+  });
+  return cells;
+}
+
+export type RangeBox = { column1: number; row1: number; column2: number; row2: number };
+/** Where a formula's references are looked up. `sheet` is null for the sheet the formula sits on. */
+export type FormulaSource = {
+  /** The stored text of one cell. */
+  cell(sheet: string | null, reference: string): string | undefined;
+  /** The stored text of the text cells inside a range, row by row; null when reading it would pass the work bound. */
+  range(sheet: string | null, box: RangeBox): string | null;
+};
+
+/* A cell (`A1`), a range of cells (`A1:B9`), of columns (`A:B`) or of rows (`1:3`), with or without `$`. */
+const REFERENCE = /\$?([A-Za-z]{1,3})\$?([0-9]+)(?::\$?([A-Za-z]{1,3})\$?([0-9]+))?|\$?([A-Za-z]{1,3}):\$?([A-Za-z]{1,3})|\$?([0-9]+):\$?([0-9]+)/y;
+const NAME_CHARACTER = /[A-Za-z0-9_.$\\]/;
 
 /**
  * The text a formula puts together, as Excel would show it before any
- * function runs: each string literal and the stored text of each same-sheet
- * single-cell reference (`A1`, `$A$1`), in the order written and with nothing
- * between them. Ranges, references to another sheet or workbook, table
- * references and names are not read. Null when the formula names more cells
- * than {@link MAX_FORMULA_REFERENCES}, which cannot be read within the bound.
+ * function runs: each string literal and the stored text of each reference it
+ * makes, in the order written and with nothing between them. A reference is a
+ * cell (`A1`, `$A$1`), whose stored text counts whatever its type, or a range
+ * (`A1:B9`, `A:B`, `1:3`), whose text cells count row by row. Either may name a
+ * sheet of the same workbook (`Keys!A1`, `'Q 1'!A1:B2`). References to another
+ * workbook, to several sheets at once, and table references and defined names
+ * are not read. Null when the formula names more references than
+ * {@link MAX_FORMULA_REFERENCES}, when its reading passes `limit` characters or
+ * when `source` runs out of work, none of which can be read within the bound.
  */
-export function formulaReading(formula: string, cellText: (reference: string) => string | undefined): { text: string; references: number } | null {
+export function formulaReading(formula: string, source: FormulaSource, limit = Infinity): { text: string; references: number } | null {
   let text = "";
   let references = 0;
-  /* After a sheet qualifier or a range operator, the next token belongs to another sheet or a range. */
-  let foreign = false;
+  /* The sheet a qualifier named for the next reference, and whether that reference cannot be read. */
+  let sheet: string | null = null;
+  let unreadable = false;
+  let externalPrefix = false;
   let index = 0;
   const quoted = (quote: string, from: number) => {
     let literal = "", end = from;
@@ -618,37 +726,77 @@ export function formulaReading(formula: string, cellText: (reference: string) =>
     }
     return { literal, next: end + 1 };
   };
+  const qualify = (name: string, next: number) => {
+    sheet = name;
+    unreadable = unreadable || externalPrefix;
+    externalPrefix = false;
+    index = next + 1;
+  };
+  const reset = () => { sheet = null; unreadable = false; externalPrefix = false; };
+  /** Reads the reference at `index`, or reports that none starts there. */
+  const reference = (): boolean | null => {
+    REFERENCE.lastIndex = index;
+    const match = REFERENCE.exec(formula);
+    if (!match) return false;
+    const end = index + match[0].length;
+    if (/[A-Za-z0-9_.$\\([!]/.test(formula[end] ?? "")) return false;
+    index = end;
+    const at = sheet;
+    const skip = unreadable;
+    reset();
+    if (++references > MAX_FORMULA_REFERENCES) return null;
+    if (skip) return true;
+    let added: string | null | undefined;
+    if (match[1] !== undefined && match[3] === undefined) added = source.cell(at, `${match[1].toUpperCase()}${match[2]}`);
+    else {
+      const [column1, row1, column2, row2] = match[1] !== undefined
+        ? [columnNumber(match[1]), Number(match[2]), columnNumber(match[3]!), Number(match[4])]
+        : match[5] !== undefined
+          ? [columnNumber(match[5]), 1, columnNumber(match[6]!), MAX_ROW]
+          : [1, Number(match[7]), 16384, Number(match[8])];
+      added = source.range(at, { column1: Math.min(column1!, column2!), row1: Math.min(row1!, row2!), column2: Math.max(column1!, column2!), row2: Math.max(row1!, row2!) });
+      if (added === null) return null;
+    }
+    text += added ?? "";
+    return text.length > limit ? null : true;
+  };
   while (index < formula.length) {
     const char = formula[index]!;
     if (char === '"') {
       const { literal, next } = quoted('"', index + 1);
       text += literal;
       index = next;
-      foreign = false;
+      reset();
     } else if (char === "'") {
-      index = quoted("'", index + 1).next;
-      foreign = true;
+      const { literal, next } = quoted("'", index + 1);
+      if (formula[next] === "!") {
+        externalPrefix ||= literal.startsWith("[");
+        qualify(literal, next);
+      } else { index = next; reset(); }
     } else if (char === "[") {
+      /* A bracket that follows no name opens a workbook index: what it qualifies lives in another file. */
+      if (!NAME_CHARACTER.test(formula[index - 1] ?? "") && !/[)\]]/.test(formula[index - 1] ?? "")) externalPrefix = true;
       let depth = 0;
       for (; index < formula.length; index++) {
         if (formula[index] === "[") depth++;
         else if (formula[index] === "]" && --depth === 0) { index++; break; }
       }
-    } else if (/[A-Za-z0-9_.$\\]/.test(char)) {
+    } else if (NAME_CHARACTER.test(char)) {
       let end = index + 1;
-      while (end < formula.length && /[A-Za-z0-9_.$\\]/.test(formula[end]!)) end++;
-      const token = formula.slice(index, end);
-      const after = formula[end];
+      while (end < formula.length && NAME_CHARACTER.test(formula[end]!)) end++;
+      if (formula[end] === "!") { qualify(formula.slice(index, end), end); continue; }
+      const found = reference();
+      if (found === null) return null;
+      if (found) continue;
       index = end;
-      if (after === "!" || after === ":") { foreign = true; index++; continue; }
-      if (foreign || after === "(" || after === "[") { foreign = false; continue; }
-      if (!CELL_REFERENCE.test(token)) continue;
-      if (++references > MAX_FORMULA_REFERENCES) return null;
-      text += cellText(token.replace(/\$/g, "").toUpperCase()) ?? "";
+      /* A name before a colon starts a span of sheets or a name range: neither is read. */
+      const spans = formula[end] === ":";
+      reset();
+      unreadable = spans;
     } else {
       index++;
-      if (char === ":" || char === "!") foreign = true;
-      else if (!/\s/.test(char)) foreign = false;
+      if (char === ":") unreadable = true;
+      else if (!/\s/.test(char)) reset();
     }
   }
   return { text, references };
@@ -683,7 +831,7 @@ function officeXmlTextInspection(name: string, bytes: Buffer, styles?: WordStyle
   type Cell = { reference: string; type: string; value: string; inline: string; formula: string };
   let cell: Cell | null = null;
   let inValue = 0, inInline = 0, inText = 0, inPhonetic = 0;
-  const storedText = new Map<string, string>();
+  const storedText = new Map<string, SheetCell>();
   const formulas: string[] = [];
   const open: SaxesTagNS[] = [];
   const hasChild: boolean[] = [];
@@ -761,8 +909,8 @@ function officeXmlTextInspection(name: string, bytes: Buffer, styles?: WordStyle
           if (cell && formulaText.trim()) cell.formula = formulaText;
           formulaText = "";
         } else if (tag.local === "c" && cell) {
-          const stored = cell.type === "inlineStr" ? cell.inline : cell.type === "s" ? (/^\s*\d+\s*$/.test(cell.value) ? workbook?.sharedStrings?.[Number(cell.value)] : undefined) ?? "" : cell.value;
-          if (cell.reference && stored) storedText.set(cell.reference, stored);
+          const stored = storedCellText(cell.type, cell.value, cell.inline, workbook?.sharedStrings);
+          if (cell.reference && stored) storedText.set(cell.reference, { text: stored, textual: TEXT_CELL_TYPES.has(cell.type) });
           if (cell.formula) formulas.push(cell.formula);
           cell = null;
         }
@@ -777,9 +925,33 @@ function officeXmlTextInspection(name: string, bytes: Buffer, styles?: WordStyle
   /* What each formula joins from cells, one line each. A budget that runs out, or a
      formula too wide to read, leaves computed text nobody inspected: that needs consent. */
   const budget = workbook?.budget ?? { left: formulaReadingBudget(length) };
+  const work = workbook?.work ?? { left: MAX_RANGE_WORK };
+  let own: SheetTable | undefined;
+  const source: FormulaSource = {
+    cell: (sheet, reference) => (sheet === null ? storedText : workbook?.sheet?.(sheet)?.cells)?.get(reference)?.text,
+    range(sheet, box) {
+      const table = sheet === null ? own ??= sheetTable(storedText) : workbook?.sheet?.(sheet);
+      if (!table) return "";
+      /* The first row of the range, found by halving, then the text cells row by row. */
+      let low = 0, high = table.textual.length;
+      while (low < high) {
+        const middle = (low + high) >> 1;
+        if (table.textual[middle]!.row < box.row1) low = middle + 1;
+        else high = middle;
+      }
+      let joined = "";
+      for (let at = low; at < table.textual.length && table.textual[at]!.row <= box.row2; at++) {
+        if (--work.left < 0) return null;
+        const item = table.textual[at]!;
+        if (item.column >= box.column1 && item.column <= box.column2) joined += item.text;
+        if (joined.length > budget.left) return joined;
+      }
+      return joined;
+    },
+  };
   const formulaReadings: string[] = [];
   for (const formula of formulas) {
-    const reading = formulaReading(formula, reference => storedText.get(reference));
+    const reading = formulaReading(formula, source, budget.left);
     if (!reading || reading.text.length > budget.left) { requiresConsent = true; break; }
     budget.left -= reading.text.length;
     if (reading.references && reading.text) formulaReadings.push(reading.text);

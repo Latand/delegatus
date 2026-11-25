@@ -149,6 +149,26 @@ test.each([
   expect(service.fileConfirmation(view.id)).toMatchObject({ id: view.id, state: "pending" });
 });
 
+/* A session records its sign-in method and no Telegram id, so the rule is the owner's account as linked now:
+   a Telegram session minted while the owner was linked to another account confirms once the owner links the paired one. */
+test("a Telegram session minted while linked to another account confirms after the owner relinks the paired account", async () => {
+  const { view } = await pending();
+  const decision = { id: view.id, digest: view.digest, approve: true };
+  linkOwner("700002");
+  const other = mint("telegram");
+  const headers = { cookie: `${MEMBER_COOKIE}=${other}` };
+  const refused = await GET(request("GET", undefined, headers, view.id));
+  expect({ status: refused.status, body: await refused.json() }).toEqual({ status: 401, body: { code: "OPERATOR_REQUIRED", missing: "telegram_account" } });
+  expect((await POST(request("POST", decision, headers))).status).toBe(401);
+  expect(transport.callsOf("sendDocument")).toHaveLength(0);
+
+  linkOwner(OWNER);
+  expect((await GET(request("GET", undefined, headers, view.id))).status).toBe(200);
+  transport.script("sendDocument", ok({ message_id: 100, date: 1 }));
+  expect((await POST(request("POST", decision, headers))).status).toBe(200);
+  expect(transport.callsOf("sendDocument")).toHaveLength(1);
+});
+
 test("a browser nobody is signed in on is told to sign in, and learns nothing about the owner", async () => {
   const { view } = await pending();
   for (const headers of [{ cookie: "" }, { cookie: `${MEMBER_COOKIE}=${"x".repeat(43)}` }]) {
