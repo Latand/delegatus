@@ -3,7 +3,7 @@ import { incomingDeliveryOutcome, normalizeIncomingDeliveryHealth, type Incoming
 import { invalidateAgentState } from "@/lib/agentState/invalidation";
 import type { AgentProjection, AgentStateJournal, AgentStateMetrics, AgentStateMetricsRow } from "@/lib/agentState/model";
 import { agentStateMetricsForStorage, emptyAgentStateMetrics, validNativePromptAnchor } from "@/lib/agentState/model";
-import { normalizeAgentStateMetrics, normalizeAgentStateRows } from "@/lib/agentState/store";
+import { copyAgentStateRow, normalizeAgentStateMetrics, normalizeAgentStateRows } from "@/lib/agentState/store";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "@/lib/runtime/engineHost";
 import { recordedAgentScope, recordedScopeProcess, normalizeAgentScope, sameAgentScope, type AgentScopeIdentity } from "@/lib/runtime/agentScope";
 import { registryWriterDetail } from "./registryWriter";
@@ -7729,6 +7729,15 @@ export class AgentRegistry {
         ?? (this.sqliteMode === "dual-write" && this.sqliteStore ? this.sqliteStore.readAllAntigravityAgentStates() : {});
       return read(file, antigravityStatesHandleForRecord(jsonRecord));
     });
+  }
+
+  agentStateProcessEntries(): AgentRegistryEntry[] {
+    const kinds = ["codex-app-server", "claude-broker", "copilot-acp", "antigravity-acp"];
+    if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
+      return measureRegistryRead("registry.keyed", () => this.sqliteStore!.readAgentStateProcessEntries(kinds, copyAgentStateRow), true);
+    }
+    return this.readKeyed(file => registryRowsMatching(file, "entries", "structuredHost.kind", kinds)
+      .filter(entry => entry.structuredHost?.process).map(entry => copyAgentStateRow(entry)));
   }
 
   agentStateMetricsRead(): AgentStateMetrics {

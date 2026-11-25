@@ -130,9 +130,20 @@ export function matchPrototypeAnswer(text: string, tasks: readonly BoardTask[] =
   seatRounds: readonly PrototypeReviewRound[] = loadSeatRounds(), replyToText?: string): PrototypeAnswerMatch | null {
   const explicit = /#proto-[a-f0-9]{8}\b/i.test(normalizeTelegramAnswer(text));
   const identity = explicit ? text : replyToText ?? "";
-  const references = normalizeTelegramAnswer(identity).match(/#proto-[a-f0-9]{8}\b/gi) ?? [];
+  const normalizedIdentity = normalizeTelegramAnswer(identity);
+  const allReferences = normalizedIdentity.match(/#proto-[a-f0-9]{8}\b/gi) ?? [];
+  // Current decision forms place their canonical reference on a dedicated
+  // line. Ignore incidental references in project/task names on that parent.
+  const identityLines = normalizedIdentity.split("\n").map(line => line.trim());
+  // Current forms reserve line 2 for the canonical reference, independently
+  // of the project and task lines. Keep project text out
+  // of identity parsing even when its valid display name contains a ref.
+  const currentHeaderReference = /^#?\s*🧪 /.test(identityLines[0] ?? "")
+    && /^#proto-[a-f0-9]{8}$/i.test(identityLines[1] ?? "") ? identityLines[1] : undefined;
+  const headerReference = currentHeaderReference;
+  const references = !explicit && headerReference ? [headerReference] : allReferences;
   if (!explicit && new Set(references.map(ref => ref.toLowerCase())).size !== 1) return null;
-  const line = normalizeTelegramAnswer(identity).split("\n").find(line => /#proto-[a-f0-9]{8}\b/i.test(line));
+  const line = !explicit && headerReference ? headerReference : references[0];
   const ref = line?.match(/#proto-[a-f0-9]{8}\b/i)?.[0].toLowerCase();
   if (!ref) return null;
   const matches: Array<{ task?: BoardTask; round: PrototypeReviewRound }> = [
