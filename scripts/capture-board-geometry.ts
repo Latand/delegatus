@@ -869,6 +869,26 @@ function measureOnboarding(phone: boolean) {
     const usable = cell.getBoundingClientRect().right - parseFloat(getComputedStyle(cell).paddingRight || "0");
     return { overflow: Math.round(el.getBoundingClientRect().right - usable) };
   });
+  /* Each state dot against its own mark and its neighbours' boxes, and the tray's empty width beside its segments. */
+  const dotReadings = Array.from(dialog.querySelectorAll<HTMLElement>("[data-engine-state-dot]")).map((dot) => {
+    const own = dot.closest<HTMLElement>("[data-engine-segment]")!;
+    const mark = own.querySelector<HTMLElement>("[data-engine-mark]")!;
+    const d = dot.getBoundingClientRect();
+    const m = mark.getBoundingClientRect();
+    const dx = Math.max(m.left - d.right, d.left - m.right, 0);
+    const dy = Math.max(m.top - d.bottom, d.top - m.bottom, 0);
+    const strangers = Array.from(own.parentElement!.querySelectorAll<HTMLElement>("[data-engine-segment]")).filter((other) => other !== own).some((other) => {
+      const o = other.getBoundingClientRect();
+      return d.left < o.right && d.right > o.left && d.top < o.bottom && d.bottom > o.top;
+    });
+    return { engine: dot.dataset.engineStateDot ?? "", distance: Math.round(Math.hypot(dx, dy) * 10) / 10, onNeighbour: strangers };
+  });
+  const trayGaps = Array.from(dialog.querySelectorAll<HTMLElement>("[role=radiogroup]")).map((tray) => {
+    const parts = Array.from(tray.querySelectorAll<HTMLElement>("[data-engine-segment]")).map((segment) => segment.getBoundingClientRect());
+    const t = tray.getBoundingClientRect();
+    const biggest = parts.length ? Math.max(t.right - Math.max(...parts.map((p) => p.right)), Math.min(...parts.map((p) => p.left)) - t.left) : 0;
+    return { empty: Math.round(biggest), segment: Math.round(Math.max(0, ...parts.map((p) => p.width))) };
+  });
   /* Whether an engine mark or segment sits over a model or effort select of its own row. */
   const intersects = (a: DOMRect, b: DOMRect) => a.left < b.right - 0.5 && a.right > b.left + 0.5 && a.top < b.bottom - 0.5 && a.bottom > b.top + 0.5;
   const markSelectOverlaps = rows.reduce((count, row) => {
@@ -913,6 +933,8 @@ function measureOnboarding(phone: boolean) {
     roleLabels,
     footerButtons,
     segmentOverflow: Math.max(0, ...segments.map((segment) => segment.overflow)),
+    dotReadings,
+    trayGaps,
     markSelectOverlaps,
     modelClear,
     connectActions,
@@ -1181,7 +1203,9 @@ async function captureAgyAccounts(ctx: { baseUrl: string; browser: Browser; rese
         const acknowledge = page.getByRole("button", { name: translate(locale, "telemetry.dismiss"), exact: true });
         if (await acknowledge.waitFor({ timeout: 4_000 }).then(() => true, () => false)) await acknowledge.click();
         const expected = state === "signed-in" ? translate(locale, "onboarding.engines.connected", { plan: "Google AI Pro" }) : null;
-        const root = viewport.phone ? '[data-mobile2-accounts-engine="antigravity"]' : "[data-antigravity-panel]";
+        /* A signed-in engine opens no flyout on the desktop: its row already says Connected and the tier. */
+        const rowOnly = !viewport.phone && state === "signed-in";
+        const root = viewport.phone ? '[data-mobile2-accounts-engine="antigravity"]' : rowOnly ? '[data-engine-limits="antigravity"]' : "[data-antigravity-panel]";
         if (viewport.phone) {
           /* The accounts screen is a route of its own on the phone. */
           await page.goto(`${baseUrl}/#accounts`, { waitUntil: "domcontentloaded", timeout: 60_000 });
@@ -1189,9 +1213,13 @@ async function captureAgyAccounts(ctx: { baseUrl: string; browser: Browser; rese
         } else {
           await page.waitForSelector('[data-engine-limits="antigravity"] [data-meter-line]', { timeout: 60_000 });
           await page.click('[data-engine-limits="antigravity"] [data-meter-line]');
+          if (rowOnly) {
+            await page.waitForTimeout(350);
+            must((await page.locator("[data-antigravity-panel]").count()) === 0, `${tag} ${state}: a connected row opened a flyout that only repeats it`);
+          }
         }
         await page.waitForSelector(root, { timeout: 30_000 });
-        await page.waitForFunction((want: string | null) => !want || (document.querySelector("[data-antigravity-panel], [data-mobile2-accounts-engine=antigravity]")?.textContent ?? "").includes(want.split(" ")[0]!), expected, { timeout: 30_000 });
+        await page.waitForFunction(({ want, selector }) => !want || (document.querySelector(selector)?.textContent ?? "").includes(want.split(" ")[0]!), { want: expected, selector: root }, { timeout: 30_000 });
         await page.locator(root).scrollIntoViewIfNeeded();
         await page.waitForTimeout(350);
         const reading = await page.evaluate(({ rootSelector, phone }) => {
@@ -1212,6 +1240,10 @@ async function captureAgyAccounts(ctx: { baseUrl: string; browser: Browser; rese
             text: (node.textContent ?? "").replace(/\s+/g, " ").trim(),
             /* The sidebar row keeps the engine's name whole; its state line may end in an ellipsis (the flyout carries the full text). */
             footerNameCut: (() => { const name = document.querySelector<HTMLElement>('[data-engine-limits="antigravity"] [data-meter-name]'); return name ? name.scrollWidth > name.clientWidth + 1 : false; })(),
+            /* The row's state text is whole, in the colour its flyout title takes, beside the engine's own mark. */
+            rowState: (() => { const el = document.querySelector<HTMLElement>('[data-engine-limits="antigravity"] [data-antigravity-state]'); return el ? { cut: el.scrollWidth > el.clientWidth + 1, text: el.textContent ?? "", color: getComputedStyle(el).color } : null; })(),
+            panelStateColor: (() => { const el = document.querySelector<HTMLElement>("[data-antigravity-panel] [data-onboarding-engine-header]"); return el ? getComputedStyle(el).color : null; })(),
+            rowMark: document.querySelector('[data-engine-limits="antigravity"] [data-engine-mark="antigravity"]') !== null,
             check: node.querySelector("[data-antigravity-check]")?.textContent ?? null,
             installCommand: node.querySelector("code")?.textContent ?? null,
           };
@@ -1223,13 +1255,18 @@ async function captureAgyAccounts(ctx: { baseUrl: string; browser: Browser; rese
         must(reading.documentOverflowX <= 0, `${tag} ${state}: the page scrolls sideways by ${reading.documentOverflowX}px`);
         must(reading.sideways <= 1, `${tag} ${state}: the surface overflows sideways by ${reading.sideways}px`);
         must(!reading.footerNameCut, `${tag} ${state}: the sidebar row's engine name is cut`);
+        if (!viewport.phone) {
+          must(reading.rowMark, `${tag} ${state}: the sidebar row carries no engine mark`);
+          must(!!reading.rowState && !reading.rowState.cut, `${tag} ${state}: the sidebar row's state text is cut or missing: ${JSON.stringify(reading.rowState)}`);
+          if (reading.panelStateColor && state !== "signed-in") must(reading.rowState?.color === reading.panelStateColor, `${tag} ${state}: the row's state is ${reading.rowState?.color} and its flyout's ${reading.panelStateColor}`);
+        }
         must(reading.cut.length === 0, `${tag} ${state}: cut state text ${JSON.stringify(reading.cut)}`);
         must(reading.small.length === 0, `${tag} ${state}: targets under 44px: ${reading.small.join("; ")}`);
         if (state === "missing") must(reading.text.includes(translate(locale, "onboarding.engines.missing")), `${tag}: the missing surface reads ${reading.text}`);
         if (state === "missing") must(reading.installCommand === ANTIGRAVITY_INSTALL_COMMAND.command, `${tag}: the missing surface shows ${reading.installCommand} as its install command`);
         if (state === "signed-out") must(reading.check === translate(locale, "onboarding.engines.checkSignin"), `${tag}: the signed-out surface offers ${reading.check}`);
         if (state === "signed-in") must(reading.text.includes("Google AI Pro"), `${tag}: the signed-in surface does not show the tier: ${reading.text}`);
-        if (!viewport.phone) {
+        if (!viewport.phone && !rowOnly) {
           await page.keyboard.press("Escape");
           must((await page.locator("[data-antigravity-panel]").count()) === 0, `${tag} ${state}: Escape left the flyout open`);
           must(await page.evaluate(() => document.activeElement?.closest('[data-engine-limits="antigravity"]') !== null), `${tag} ${state}: focus did not return to the Antigravity row`);
@@ -1358,6 +1395,8 @@ async function captureOnboarding(): Promise<void> {
             for (const label of reading.roleLabels) must(!label.clipped, `${tag} ${name}: role label "${label.text}" is clipped at ${label.w}px`);
             for (const button of reading.footerButtons) must(!button.clipped && button.inside, `${tag} ${name}: footer button "${button.text}" is clipped or outside the footer`);
             must(reading.segmentOverflow <= 0, `${tag} ${name}: an engine control overflows its cell by ${reading.segmentOverflow}px`);
+            for (const dot of reading.dotReadings) must(dot.distance <= 8 && !dot.onNeighbour, `${tag} ${name}: the ${dot.engine} state dot is ${dot.distance}px from its mark or sits on a neighbour's segment`);
+            for (const gap of reading.trayGaps) must(gap.empty <= gap.segment, `${tag} ${name}: an engine tray leaves ${gap.empty}px empty beside segments of ${gap.segment}px`);
             must(reading.markSelectOverlaps === 0, `${tag} ${name}: ${reading.markSelectOverlaps} engine controls sit over a select of their row`);
             for (const clear of reading.modelClear) must(clear >= 0, `${tag} ${name}: a model select starts ${clear}px inside its row's engine group`);
             for (const action of reading.connectActions) must(action.whole && action.text.trim() !== "", `${tag} ${name}: the ${action.engine} action "${action.text}" is cut or empty`);

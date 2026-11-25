@@ -281,10 +281,10 @@ function compositeHex(foreground: string, background: string, alpha: number): st
 
 /* Antigravity chips (`CardIdentityChip`, `BranchPane`) and `EngineBadge` derive
    their chip fill and label ink through `effortTint` / `engineBadgeFor`, while
-   the Ne tile inside uses `--color-antigravity-mark` and pulses `--glyph-neon-glow`
+   the engine mark inside uses `--color-antigravity-mark` and pulses `--glyph-neon-glow`
    behind the letters. Every tier in the Antigravity scale must clear 3:1 over the
    actual composited chip fill (and peak working gas) in both themes. */
-test("Antigravity chips, badges, and Ne tile ink clear 3:1 across every effort tier and working gas peak in both schemes", () => {
+test("Antigravity chips, badges, and mark ink clear 3:1 across every effort tier and working gas peak in both schemes", () => {
   const surfaces = ["surface-card", "surface-canvas", "surface-well", "surface-sunken"].map(values);
   const mark = values("color-antigravity-mark");
   const glow = values("glyph-neon-glow");
@@ -324,12 +324,12 @@ test("Antigravity chips, badges, and Ne tile ink clear 3:1 across every effort t
         ).toBeGreaterThanOrEqual(3);
         expect(
           contrast(mark[scheme], chipFill),
-          `${chip.name} Ne tile ${mark[scheme]} on chip ${chipFill} (scheme ${scheme})`,
+          `${chip.name} mark ${mark[scheme]} on chip ${chipFill} (scheme ${scheme})`,
         ).toBeGreaterThanOrEqual(3);
         const peakGasBg = compositeHex(glow[scheme], chipFill, peakGasOpacity);
         expect(
           contrast(mark[scheme], peakGasBg),
-          `${chip.name} Ne tile ${mark[scheme]} over peak gas ${peakGasBg} (scheme ${scheme})`,
+          `${chip.name} mark ${mark[scheme]} over peak gas ${peakGasBg} (scheme ${scheme})`,
         ).toBeGreaterThanOrEqual(3);
       }
     }

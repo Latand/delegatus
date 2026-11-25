@@ -91,6 +91,20 @@ test("missing and signed-out engines carry one and the same mark, so colour alon
   expect(segment(host, "builder", "antigravity").getAttribute("aria-label")).toBe("Antigravity is not connected");
 });
 
+test("the state dot stands on its own engine's mark in both layouts, and card segments share the tray", async () => {
+  for (const layout of ["table", "card"] as const) {
+    const host = await mount({ claude: ready, codex: { connected: false, missing: true, account: null }, antigravity: { connected: false, account: null } }, layout);
+    for (const engine of ["codex", "antigravity"] as const) {
+      const dot = segment(host, "builder", engine).querySelector("[data-engine-state-dot]")!;
+      expect(dot.parentElement!.querySelector(`[data-engine-mark=${engine}]`)).not.toBeNull();
+      expect(dot.parentElement!.parentElement).toBe(segment(host, "builder", engine));
+    }
+    if (layout === "card") {
+      for (const engine of ["claude", "codex", "antigravity"] as const) expect(segment(host, "builder", engine).className).toContain("flex-1");
+    }
+  }
+});
+
 test("a missing engine reads not installed on its card segment too", async () => {
   const host = await mount({ claude: ready, codex: { connected: false, missing: true, account: null }, antigravity: ready }, "card");
   const codex = segment(host, "builder", "codex");

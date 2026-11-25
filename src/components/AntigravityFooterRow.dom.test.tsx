@@ -52,7 +52,7 @@ async function mount(): Promise<HTMLDivElement> {
 test("an installed agy that is signed out shows a row, and the row opens Check sign-in", async () => {
   const host = await mount();
   const row = host.querySelector("[data-engine-limits=antigravity]")!;
-  expect(row.querySelector("[data-antigravity-state]")?.textContent).toBe("Installed, signed out");
+  expect(row.querySelector("[data-antigravity-state]")?.textContent).toBe("Signed out");
   expect(row.querySelector("[data-antigravity-panel]")).toBeNull();
   await act(async () => { row.querySelector<HTMLButtonElement>("[data-meter-line]")!.click(); await settle(); });
   const panel = row.querySelector("[data-antigravity-panel]")!;
@@ -63,10 +63,30 @@ test("an installed agy that is signed out shows a row, and the row opens Check s
   expect(row.querySelector("[data-antigravity-state]")?.textContent).toBe("Connected · Google AI Pro");
 });
 
+test("a signed-in agy reads Connected in a row that opens nothing, and the row carries the engine mark every other row has", async () => {
+  recorded = { cli: "found", auth: "signed_in", plan: "Google AI Pro" };
+  const host = await mount();
+  const row = host.querySelector("[data-engine-limits=antigravity]")!;
+  expect(row.querySelector("[data-antigravity-state]")?.textContent).toBe("Connected · Google AI Pro");
+  expect(row.querySelector("button")).toBeNull();
+  expect(row.querySelector("[data-engine-mark=antigravity]")?.getAttribute("aria-label")).toBe("Antigravity");
+  await act(async () => { row.querySelector<HTMLElement>("[data-meter-line]")!.click(); await settle(); });
+  expect(row.querySelector("[data-antigravity-panel]")).toBeNull();
+});
+
+test("the state takes one colour in the row and in its flyout", async () => {
+  recorded = { cli: "missing", auth: "unknown", plan: null };
+  const host = await mount();
+  const row = host.querySelector("[data-engine-limits=antigravity]")!;
+  const rowTone = row.querySelector("[data-antigravity-state]")!.className.match(/text-(danger|warning|success|muted)/)![0];
+  await act(async () => { row.querySelector<HTMLButtonElement>("[data-meter-line]")!.click(); await settle(); });
+  expect(row.querySelector("[data-antigravity-panel] [data-onboarding-engine-header]")!.className).toContain(rowTone);
+});
+
 test("a check made elsewhere (the setup guide) updates the row without a reload", async () => {
   const host = await mount();
   const row = host.querySelector("[data-engine-limits=antigravity]")!;
-  expect(row.querySelector("[data-antigravity-state]")?.textContent).toBe("Installed, signed out");
+  expect(row.querySelector("[data-antigravity-state]")?.textContent).toBe("Signed out");
   recorded = { cli: "found", auth: "signed_in", plan: "Google AI Ultra" };
   await act(async () => { window.dispatchEvent(new Event("llv:antigravity-auth")); await settle(); });
   expect(row.querySelector("[data-antigravity-state]")?.textContent).toBe("Connected · Google AI Ultra");

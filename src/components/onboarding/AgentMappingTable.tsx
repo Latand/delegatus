@@ -278,11 +278,14 @@ function EngineSegments({ value, label, locked, statuses, compact, onChange }: {
             title={name}
             disabled={refused}
             onClick={() => { if (!checked && !refused) onChange(engine); }}
-            className={`relative inline-flex items-center rounded-[6px] text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${compact ? "h-7 w-7 shrink-0 justify-center" : "min-w-0 gap-1 px-1.5 max-sm:min-h-11 max-sm:flex-1 max-sm:justify-center"} ${checked ? "bg-card text-primary shadow-1 ring-1 ring-inset ring-strong" : refused ? "cursor-not-allowed text-muted opacity-50" : "text-muted hover:text-primary"}`}
+            className={`inline-flex items-center rounded-[6px] text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${compact ? "h-7 w-7 shrink-0 justify-center" : "min-h-7 min-w-0 flex-1 justify-center gap-1.5 px-1.5 max-sm:min-h-11"} ${checked ? "bg-card text-primary shadow-1 ring-1 ring-inset ring-strong" : refused ? "cursor-not-allowed text-muted opacity-50" : "text-muted hover:text-primary"}`}
           >
-            <EngineMark engine={engine} size={compact ? 14 : 12} />
+            {/* The state dot stands on its own engine's mark, so a neighbour's border never holds it. */}
+            <span className="relative flex shrink-0">
+              <EngineMark engine={engine} size={compact ? 14 : 12} />
+              {!ready ? <span aria-hidden data-engine-state-dot={engine} className="absolute -right-[3px] -top-[3px] h-1.5 w-1.5 rounded-full bg-warning ring-1 ring-card" /> : null}
+            </span>
             {compact ? null : ENGINE_NAME[engine]}
-            {!ready ? <span aria-hidden data-engine-state-dot={engine} className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-warning" /> : null}
           </button>
         );
       })}

@@ -157,11 +157,17 @@ export function AntigravitySignIn({ agy }: { agy: AntigravityAccount }) {
 }
 
 /** The state line a card or a row reads: Not installed, Connected · tier, Installed signed out, Could not check. */
-export function antigravityStateLine(t: ReturnType<typeof useLocale>["t"], state: ReturnType<typeof antigravityCardState>, plan: string | null): string | null {
+export function antigravityStateLine(t: ReturnType<typeof useLocale>["t"], state: ReturnType<typeof antigravityCardState>, plan: string | null, surface: "card" | "row" = "card"): string | null {
   if (state === "loading") return null;
   if (state === "missing") return t("onboarding.engines.missing");
   if (state === "connected") return plan ? t("onboarding.engines.connected", { plan }) : t("onboarding.engines.connectedNoPlan");
-  return state === "signed-out" ? t("onboarding.engines.signedOut") : t("onboarding.engines.authUnknown");
+  if (state === "signed-out") return t(surface === "row" ? "onboarding.engines.signedOutRow" : "onboarding.engines.signedOut");
+  return t("onboarding.engines.authUnknown");
+}
+
+/** The colour a state's words take on every surface that shows them (the row, its flyout, the card). */
+export function antigravityStateTone(state: ReturnType<typeof antigravityCardState>): string {
+  return state === "connected" ? "text-success" : state === "missing" ? "text-danger" : "text-warning";
 }
 
 /** The body shared by the footer popover and the phone accounts screen: state line and the action it calls for. */
@@ -169,7 +175,7 @@ export function AntigravityBody({ agy }: { agy: AntigravityAccount }) {
   const state = antigravityCardState(agy);
   const { t } = useLocale();
   const line = antigravityStateLine(t, state, agy.plan);
-  const tone = state === "connected" ? "text-success" : state === "missing" ? "text-danger" : "text-warning";
+  const tone = antigravityStateTone(state);
   return (
     <div data-antigravity-body="" data-engine-state={state} className="flex min-w-0 flex-col gap-2">
       <span data-onboarding-engine-header="" className={`text-ui ${tone}`}>{line}</span>
@@ -189,7 +195,7 @@ export function AntigravityCard({ agy, cli, recheck }: { agy: AntigravityAccount
   const loading = state === "loading";
   const missing = state === "missing";
   const stateLine = antigravityStateLine(t, state, agy.plan);
-  const tone = state === "connected" ? "text-success" : missing ? "text-danger" : "text-warning";
+  const tone = antigravityStateTone(state);
   return (
     <div
       data-onboarding-engine="antigravity"

@@ -6,9 +6,10 @@ import { useLocale } from "@/lib/i18n";
 import { isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
 import type { EngineLimits, LimitsProvenance } from "@/lib/types";
 
+import { EngineMark } from "./EngineMark";
 import { Z } from "./layers";
 import { barColor, LimitWindowLine, quotaAsOfHint } from "./LimitRow";
-import { AntigravityBody, antigravityCardState, antigravityStateLine, useAntigravityAccount } from "./onboarding/AntigravityCard";
+import { AntigravityBody, antigravityCardState, antigravityStateLine, antigravityStateTone, useAntigravityAccount } from "./onboarding/AntigravityCard";
 import { windowLabel } from "./rateLimit";
 import { LINE_EDGE, ReserveBar, type SidebarFooterDensity } from "./railFooterDensity";
 import { engineTintOf } from "./utils";
@@ -77,41 +78,53 @@ export function AntigravityFooterRow({ limits, limitsAccountId, now, provenance,
   const left = quota && session ? Math.max(0, Math.min(100, 100 - session.usedPercent)) : null;
   const color = left === null ? tint.color : barColor(left, tint.color);
   const label = quota && session ? windowLabel(t, "session", session.windowMinutes) : "";
-  const stateText = antigravityStateLine(t, state, agy.plan);
+  const stateText = antigravityStateLine(t, state, agy.plan, "row");
+  /* A signed-in engine with no quota reading has nothing to open: the row already says Connected and the tier.
+     A flyout the person opened to sign in stays until they close it, so the check's result lands where they are looking. */
+  const interactive = open || !(state === "connected" && left === null);
   const summary = [
     "Antigravity",
     limits?.plan ?? agy.plan,
     left === null ? stateText : `${label} ${t("limits.left")} ${Math.round(left)}%`,
   ].filter(Boolean).join(" · ");
 
+  const rowClass = `flex h-[26px] w-full items-center gap-1.5 ${LINE_EDGE} text-left`;
+  const rowInner = (
+    <>
+      <span className="flex min-w-max flex-1 items-center gap-1.5">
+        <span data-meter-name="" className="text-[11.5px] font-semibold text-primary">Antigravity</span>
+        <EngineMark engine="antigravity" size={12} label="Antigravity" />
+      </span>
+      {left === null ? (
+        <span data-antigravity-state={state} title={stateText ?? undefined} className={`min-w-0 shrink truncate text-[10px] ${state === "connected" ? "text-muted" : antigravityStateTone(state)}`}>{stateText}</span>
+      ) : (
+        <>
+          <span data-meter-value="" className="shrink-0 text-[11px] tabular-nums text-muted">
+            {t("limits.left")} <span className="font-bold text-primary">{Math.round(left)}%</span>
+          </span>
+          <ReserveBar percent={left} color={color} />
+        </>
+      )}
+    </>
+  );
+
   return (
     <div ref={containerRef} className="relative" data-engine-limits="antigravity" data-limits-source={provenance?.source ?? "transcript"}>
-      <button
-        ref={rowButtonRef}
-        type="button"
-        data-meter-line=""
-        aria-expanded={open}
-        title={summary}
-        onClick={() => { setOpen((value) => !value); if (!open) void agy.reload(); }}
-        className={`flex h-[26px] w-full items-center gap-1.5 ${LINE_EDGE} text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
-      >
-        <span className="flex min-w-max flex-1 items-center gap-1.5">
-          <span data-meter-name="" className="text-[11.5px] font-semibold text-primary">Antigravity</span>
-          <span role="img" aria-label="Antigravity" title="Antigravity" className="grid h-3 w-3 shrink-0 place-items-center">
-            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: tint.color }} />
-          </span>
-        </span>
-        {left === null ? (
-          <span data-antigravity-state={state} title={stateText ?? undefined} className={`min-w-0 shrink truncate text-[10px] ${state === "connected" ? "text-muted" : "text-warning"}`}>{stateText}</span>
-        ) : (
-          <>
-            <span data-meter-value="" className="shrink-0 text-[11px] tabular-nums text-muted">
-              {t("limits.left")} <span className="font-bold text-primary">{Math.round(left)}%</span>
-            </span>
-            <ReserveBar percent={left} color={color} />
-          </>
-        )}
-      </button>
+      {interactive ? (
+        <button
+          ref={rowButtonRef}
+          type="button"
+          data-meter-line=""
+          aria-expanded={open}
+          title={summary}
+          onClick={() => { setOpen((value) => !value); if (!open) void agy.reload(); }}
+          className={`${rowClass} hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
+        >
+          {rowInner}
+        </button>
+      ) : (
+        <div data-meter-line="" title={summary} className={rowClass}>{rowInner}</div>
+      )}
       {density === "detail" && quota && session ? (
         <div data-limits-windows="" className={`${LINE_EDGE} pb-1`}>
           {limits?.plan ? (
