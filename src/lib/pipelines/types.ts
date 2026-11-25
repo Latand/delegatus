@@ -795,6 +795,8 @@ export type PipelineStageAttempt = {
   /** Proven fenced first messages replaced in this attempt. Retained across
       successful spawn handshakes and controller restarts; at most three. */
   fencedMessageRetries?: number;
+  /** A failed setup writer already received its automatic replacement. */
+  spawnWriterRetried?: true;
   /** Socketless recovery hands a failed launch back to its runnable Viewer
       for at most ten minutes. Ownership changes and controller restarts keep
       this deadline; successful retirement clears it before replacement. */

@@ -388,6 +388,7 @@ function isAttempt(value: unknown, index: number): boolean {
     isRoleMemoryDelivery(attempt.roleMemoryDelivery) &&
     (attempt.fencedMessageRetries === undefined || typeof attempt.fencedMessageRetries === "number"
       && Number.isSafeInteger(attempt.fencedMessageRetries) && attempt.fencedMessageRetries >= 0) &&
+    (attempt.spawnWriterRetried === undefined || attempt.spawnWriterRetried === true) &&
     isUnresolvedTermination(attempt.unresolvedTermination) &&
     isPriorWriterStop(attempt.priorWriterStop) &&
     (attempt.priorWriterStops === undefined || Array.isArray(attempt.priorWriterStops)
