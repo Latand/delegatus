@@ -47,6 +47,7 @@ import { accountMutationHeld } from "@/lib/accounts/accountMutationContext";
 import { readRetiredAccountIds, retiredAccountIds } from "@/lib/accounts/accountsStore";
 import { noteWriterAdmitted } from "@/lib/state/admissionWitness";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
+import type { CarrierSource } from "@/lib/accounts/projectAccountsView";
 import { accountProjectBindings, projectAccountRefusalDetail } from "@/lib/accounts/projectBindings";
 import { admitAutomaticAccountTarget, placedAccountHolds } from "@/lib/accounts/projectSelection";
 import {
@@ -11468,6 +11469,34 @@ export class AgentRegistry {
       route.revision += 1;
       return route.revision;
     }));
+  }
+
+  busyAccountCarriers(): CarrierSource[] {
+    return this.readKeyed(file => {
+      if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
+        return this.sqliteStore.busyAccountCarriers();
+      }
+      return Object.values(file.conversations).flatMap((row): CarrierSource[] => {
+        const latest = row.generations.at(-1);
+        if (row.turn.state !== "busy" || !latest?.accountId || (row.engine !== "claude" && row.engine !== "codex")) return [];
+        return [{
+          engine: row.engine,
+          busy: true,
+          path: latest.path,
+          accountId: latest.accountId,
+          ownership: row.projectOwnership,
+          launchProfile: latest.launchProfile,
+        }];
+      });
+    }, { skipColdKeyInitialization: true });
+  }
+
+  /** Both engines must choose from routing and quota at the same revision. */
+  projectAccountSelectionFacts() {
+    return this.readKeyed(file => ({
+      engineRouting: file.engineRouting,
+      quotaObservations: file.quotaObservations,
+    }), { skipColdKeyInitialization: true });
   }
 
   engineRouting(engine: AgentEngine): { activeAccountId: string | null; revision: number } {

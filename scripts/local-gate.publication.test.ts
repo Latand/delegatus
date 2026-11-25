@@ -34,6 +34,25 @@ test("prepared checks reach native transport when the caller already has Git's e
   expect(fs.existsSync(f.receipt)).toBeFalse();
 }, 60_000);
 
+test("publication preparation certifies a prose-only tree with a dangling dependency root", () => {
+  const f = fixture();
+  f.git("update-ref", "refs/remotes/origin/main", "HEAD");
+  fs.mkdirSync(f.writablePath(".git/info"), { recursive: true });
+  fs.writeFileSync(f.writablePath(".git/info/exclude"), "/node_modules\n");
+  fs.symlinkSync("missing-dependencies", f.writablePath("node_modules"));
+  fs.writeFileSync(f.writablePath("release.md"), "Publication fixture.\n");
+  commitFixtureInputs(f);
+  const prepared = f.run(true);
+  expect(prepared.status, prepared.stderr).toBe(0);
+  expect(fs.existsSync(f.receipt)).toBeTrue();
+  const transported = f.run(false);
+  expect(transported.status, transported.stderr).toBe(0);
+  expect(f.calls().map(call => call.args[0])).toEqual([
+    "scripts/privacy-publication-gate.ts", "scripts/privacy-publication-gate.ts",
+  ]);
+  expect(fs.existsSync(f.receipt)).toBeFalse();
+}, 60_000);
+
 test.each(["during checks", "before transport", "during transport"])("another writer refreshing privacy known values %s retains checked work", when => {
   const f = fixture();
   const known = path.join(f.dir, ".git", "known-values.txt");
