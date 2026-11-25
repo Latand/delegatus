@@ -274,7 +274,7 @@ for (const lang of ["en", "uk"] as const) for (const size of ["menu", "sheet"] a
   const host = await mount(<KeysMenuPage size={size} onImport={() => {}} onOpenService={(feature) => opened.push(feature)} />);
   const plan = host.querySelector("[data-keys-row='openai']")!.nextElementSibling!;
   expect(plan.getAttribute("data-keys-row")).toBe("chatgpt-plan");
-  expect(plan.getAttribute("data-chatgpt-plan-state")).toBe("not_connected");
+  expect(plan.getAttribute("data-chatgpt-plan-state")).toBe("off_unconfigured");
   expect(plan.nextElementSibling?.hasAttribute("data-openai-services")).toBe(true);
   expect(words(host.querySelector("[data-openai-services] p"))).toBe(say(lang, "openaiServices.group"));
   expect(listed(host)).toEqual(["asks: OpenRouter", "memory: OpenRouter", "rules: OpenRouter", "dictation: Soniox", "read: ElevenLabs", "voice: Codex V3"]);
