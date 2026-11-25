@@ -1306,6 +1306,7 @@ const SEAT_BADGE: Record<SeatBadge, { tone: string; key: MessageKey }> = {
   resumable: { tone: QUIET_BADGE, key: "orchPanel.badgeResumable" },
   dead: { tone: DANGER_BADGE, key: "orchPanel.badgeDead" },
   resolving: { tone: QUIET_BADGE, key: "orchPanel.badgeResolving" },
+  missing: { tone: DANGER_BADGE, key: "orchPanel.badgeTranscriptMissing" },
 };
 
 /**

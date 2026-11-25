@@ -50,7 +50,17 @@ async function readSeatTranscript(request: Request): Promise<Response> {
     if (!root) return answer(null);
     // Native metadata for this one file is enough here. Resolving project
     // overlays can read every persisted flow and workflow on a cold catalog.
-    const description = describe(root[0], root[1], pathname, metadata, undefined, undefined, { readOnly: true });
+    let description: ReturnType<typeof describe>;
+    try {
+      description = describe(root[0], root[1], pathname, metadata, undefined, undefined, { readOnly: true });
+    } catch (error) {
+      // The single-file header read can lose a race with transcript cleanup
+      // after stat. Treat only a now-absent path as the normal missing result;
+      // keep other incomplete descriptions visible to the caller.
+      const stillExists = await stat(pathname).then((current) => current.isFile()).catch(() => false);
+      if (!stillExists) return answer(null);
+      throw error;
+    }
     const engine = transcriptEngineForRoot(root[0]);
     if (description.engine !== engine) return answer(null);
     entry = {

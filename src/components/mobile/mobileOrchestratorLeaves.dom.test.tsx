@@ -66,6 +66,7 @@ const G = globalThis as Record<string, unknown>;
 let boardRevision = 1;
 let boardPrefs: Record<string, unknown> = {};
 let seatAnswer: unknown = { seat: null, pending: null, exists: true, viewerMcpRegistered: false };
+let incumbentAnswer: unknown = {};
 let seatTranscript: FileEntry | null = null;
 let transcriptReads = 0;
 const seatPosts: Record<string, unknown>[] = [];
@@ -112,6 +113,7 @@ const OVERRIDES: Record<string, unknown> = {
       transcriptReads += 1;
       return jsonResponse({ conversationId: seatTranscript?.conversationId, file: seatTranscript });
     }
+    if (url.startsWith("/api/orchestrator/seat/status")) return jsonResponse(incumbentAnswer);
     if (url.startsWith("/api/orchestrator/seat")) {
       if ((init?.method ?? "GET") === "POST") {
         seatPosts.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
@@ -177,6 +179,7 @@ beforeEach(() => {
   boardPrefs = {};
   catalogRows = [];
   seatAnswer = { seat: null, pending: null, exists: true, viewerMcpRegistered: false };
+  incumbentAnswer = {};
   seatTranscript = null;
   transcriptReads = 0;
   seatPosts.length = 0;
@@ -299,6 +302,9 @@ test("recovered seat actions follow the current transcript after the activation 
     pending: null,
     exists: false,
   };
+  incumbentAnswer = { project: PROJECT, designated: true, conversationId: "conversation_old_seat",
+    transcriptPath: "/repo/atlas/deleted-activation.jsonl", engine: "claude", model: "opus",
+    liveness: { hostState: "alive", lifecycle: "running" } };
   const host = mount({
     files: [current], catalogKnown: true, catalogConversationCount: 1,
     focusRequest: { path: current.path, nonce: 1, catalog: true },
@@ -311,6 +317,9 @@ test("recovered seat actions follow the current transcript after the activation 
   flushSync(() => menuButton!.click());
   expect(await waitFor(() => host.querySelector('[data-mobile2-sheet="menu"] [data-mobile2-menu-row="reports"]') !== null)).toBe(true);
   expect(host.querySelector('[data-mobile2-sheet="menu"] [data-mobile2-menu-row="seat"]')).not.toBeNull();
+  flushSync(() => (host.querySelector('[data-mobile2-sheet="menu"] [data-mobile2-menu-row="seat"]') as HTMLButtonElement).click());
+  expect(await waitFor(() => host.querySelector('[data-mobile2-sheet="seat"] [data-orchestrator-confirm]') !== null)).toBe(true);
+  expect(host.querySelector('[data-mobile2-sheet="seat"] [data-orchestrator-confirm]')?.textContent).toContain(translate("en", "mobile2.seat.open"));
 });
 
 test("a project with nothing in it still offers the invitation — the leaf where an orchestrator is most wanted", async () => {

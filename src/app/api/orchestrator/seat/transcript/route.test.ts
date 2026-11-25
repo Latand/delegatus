@@ -198,6 +198,28 @@ test("the cold route accepts the scanner's Antigravity events.jsonl transcript e
   });
 });
 
+test("a designated transcript removed after stat returns a private missing response", async () => {
+  designate(seatPath);
+  const open = fs.openSync.bind(fs);
+  let removed = false;
+  const openSync = spyOn(fs, "openSync").mockImplementation(((...args: Parameters<typeof fs.openSync>) => {
+    if (!removed && args[0] === seatPath) {
+      removed = true;
+      fs.rmSync(seatPath);
+    }
+    return open(...args);
+  }) as typeof fs.openSync);
+  try {
+    const response = await GET(new Request(`${route}?project=${project}`));
+    expect(removed).toBe(true);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.json()).toEqual({ conversationId, file: null });
+  } finally {
+    openSync.mockRestore();
+  }
+});
+
 test("a stale catalog row or a caller-supplied path cannot substitute for the designated file", async () => {
   const missing = path.join(transcriptRoot, "missing.jsonl");
   designate(missing);

@@ -487,7 +487,7 @@ export function rotateMandateLine(t: TFunction, view: RotateMandateView): string
  *  - `dead` — the host is gone, retired or unresumable; recovery is the
  *    banner's, and rotation is the way forward.
  */
-export type SeatLiveness = "resolving" | "live" | "waiting" | "stalled" | "resumable" | "dead";
+export type SeatLiveness = "resolving" | "live" | "waiting" | "stalled" | "resumable" | "dead" | "missing";
 
 /** What the dock's badge says from shared task motion, while retaining stronger
     lifecycle words for stalled, resumable, dead and unresolved seats. */
@@ -578,7 +578,11 @@ export function resolveSeatFile(input: {
   // targeted transcript endpoint fill a board-window miss.
   if (input.currentPath) {
     const current = input.files.find((file) => file.path === input.currentPath);
-    return current && !isArchivedPredecessor(current) ? current : null;
+    if (current && !isArchivedPredecessor(current)) return current;
+    // The incumbent can still name a deleted or archived activation generation
+    // while the board already holds its replacement under the same durable id.
+    const recovered = currentConversationFile(input.files, input.conversationId);
+    return recovered && !isArchivedPredecessor(recovered) ? recovered : null;
   }
   const byId = currentConversationFile(input.files, input.conversationId);
   if (byId && !isArchivedPredecessor(byId)) return byId;
@@ -673,7 +677,7 @@ export function deriveOrchestratorPanelState(input: {
   const failureTime = pending?.intent.error ? undefined : failure?.terminalizedAt;
 
   if (active?.conversationId) {
-    const liveness = seatLivenessOf({
+    const liveness = input.transcriptMissing ? "missing" : seatLivenessOf({
       file: input.file,
       surface: input.surface,
       incumbent: input.incumbent ?? null,

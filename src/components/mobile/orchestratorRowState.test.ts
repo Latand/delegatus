@@ -50,6 +50,7 @@ function rowFor(input: {
   submitting?: boolean;
   file?: FileEntry | null;
   surface?: StripSurface | null;
+  transcriptMissing?: boolean;
 }) {
   const file = input.file ?? null;
   const state = deriveOrchestratorPanelState({
@@ -59,6 +60,7 @@ function rowFor(input: {
     submitFailure: null,
     file,
     surface: input.surface ?? (file ? "live-root" : null),
+    transcriptMissing: input.transcriptMissing,
   });
   return orchestratorRowView(state, { conversationReady: Boolean(file) });
 }
@@ -156,13 +158,18 @@ describe("the seat card mirrors every seat state", () => {
        the board link; a tap that pins nothing would be a dead control. */
     expect(row.tap).toBe("sheet");
   });
+
+  test("a terminal missing transcript has its own actionable state", () => {
+    const row = rowFor({ status: { seat: seat(), pending: null, exists: false }, transcriptMissing: true });
+    expect(row).toMatchObject({ state: "missing", tap: "sheet", attention: true });
+  });
 });
 
 describe("what rides alongside a live incumbent", () => {
   test("a rotation advisory shows on the row without moving where a tap lands", () => {
     const row = rowFor({
       status: { seat: seat(), pending: null, exists: true },
-      file: { ...conversation, ctx: { pct: 71 } } as unknown as FileEntry,
+      file: { ...conversation, ctx: { pct: 91, windowTokens: 100, usedTokens: 91 } } as unknown as FileEntry,
     });
     expect(row.rotation).toBe("strongly_recommend");
     expect(row.state).toBe("live");
@@ -195,7 +202,7 @@ describe("what rides alongside a live incumbent", () => {
 
 describe("every designed seat state has a badge tone and a word", () => {
   const states: OrchestratorRowState[] = [
-    "loading", "unavailable", "draft", "creating", "intent-error", "live", "waiting", "stalled", "resumable", "dead", "resolving",
+    "loading", "unavailable", "draft", "creating", "intent-error", "live", "waiting", "stalled", "resumable", "dead", "missing", "resolving",
   ];
 
   test("tone and label cover the union exactly", () => {

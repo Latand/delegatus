@@ -979,6 +979,7 @@ test("a restart-time status read that fails is retried, and the dock binds itsel
   expect(panelState(host)).toBe("live");
   expect(bindReason(host)).toBe("catalog");
   expect(host.textContent).toContain("Transcript not found");
+  expect(host.querySelector('[data-orchestrator-badge="missing"]')?.textContent).toContain("transcript missing");
   const failed = incumbentReads;
   expect(failed).toBeGreaterThan(0);
 
@@ -1049,6 +1050,7 @@ test("a hung transcript read times out with its path and can be rebound", async 
   expect(bindReason(host)).toBe("catalog");
   expect(signal?.aborted).toBe(true);
   expect(host.textContent).toContain("Transcript not found");
+  expect(host.querySelector('[data-orchestrator-badge="missing"]')?.textContent).toContain("transcript missing");
   expect(host.textContent).toContain("/transcripts/orch.jsonl");
   expect(host.textContent).not.toContain("Opening the conversation");
   expect(host.querySelector("[data-orchestrator-rotate]")).not.toBeNull();

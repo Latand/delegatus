@@ -703,6 +703,19 @@ describe("the dock binds the seat by its durable conversation id (#1182)", () =>
     /* No seat at all binds nothing, whatever the catalog holds. */
     expect(resolveSeatFile({ files: [successor], conversationId: null, seatPath: successorPath, currentPath: successorPath })).toBeNull();
   });
+
+  test("a missing incumbent path recovers the current transcript by conversation id", () => {
+    const successor = file({ path: successorPath, name: "orchestrator.successor.jsonl" });
+    expect(resolveSeatFile({
+      files: [successor], conversationId: "conversation_orchestrator", seatPath: "/transcripts/activation.jsonl",
+      currentPath: "/transcripts/activation.jsonl",
+    })).toBe(successor);
+    const archived = file({ migratedTo: successorPath, path: "/transcripts/archived.jsonl" } as Partial<FileEntry>);
+    expect(resolveSeatFile({ files: [archived, successor], conversationId: "conversation_orchestrator", seatPath: archived.path,
+      currentPath: "/transcripts/activation.jsonl" })).toBe(successor);
+    expect(resolveSeatFile({ files: [archived, successor], conversationId: "conversation_orchestrator", seatPath: archived.path,
+      currentPath: archived.path })).toBe(successor);
+  });
 });
 
 describe("«opening» is bounded once the status read says the host is alive (#1182)", () => {
@@ -730,12 +743,12 @@ describe("«opening» is bounded once the status read says the host is alive (#1
   });
 });
 
-test("a missing activation path remains a resolving seat until the targeted transcript read ends", () => {
+test("a missing activation path remains resolving while lookup is pending, then becomes terminal", () => {
   const statusWithMissingActivation = status({ seat: seat(), exists: false });
   expect(deriveOrchestratorPanelState({ ...base, status: statusWithMissingActivation, transcriptPending: true }))
     .toMatchObject({ kind: "live", conversationId: seat().conversationId, bindFailure: null });
   expect(deriveOrchestratorPanelState({ ...base, status: statusWithMissingActivation, transcriptMissing: true }))
-    .toMatchObject({ kind: "live", conversationId: seat().conversationId, bindFailure: "catalog" });
+    .toMatchObject({ kind: "live", conversationId: seat().conversationId, liveness: "missing", bindFailure: "catalog" });
   expect(deriveOrchestratorPanelState({ ...base, status: status() })).toMatchObject({ kind: "draft", vacated: false });
 });
 

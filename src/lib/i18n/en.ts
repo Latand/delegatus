@@ -4138,6 +4138,7 @@ export const en = {
   "orchPanel.badgeResumable": "finished",
   "orchPanel.badgeDead": "host gone",
   "orchPanel.badgeResolving": "opening",
+  "orchPanel.badgeTranscriptMissing": "transcript missing",
   "orchPanel.badgeCreating": "creating",
   "orchPanel.badgeFailed": "failed",
   "orchPanel.badgeNone": "none yet",

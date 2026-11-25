@@ -4096,6 +4096,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "orchPanel.badgeResumable": "завершив",
   "orchPanel.badgeDead": "хост зник",
   "orchPanel.badgeResolving": "відкриваю",
+  "orchPanel.badgeTranscriptMissing": "транскрипт відсутній",
   "orchPanel.badgeCreating": "створюю",
   "orchPanel.badgeFailed": "помилка",
   "orchPanel.badgeNone": "ще немає",

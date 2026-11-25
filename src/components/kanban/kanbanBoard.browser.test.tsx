@@ -103,6 +103,8 @@ describe("#4273 seat transcript recovery rendering", () => {
     };
     let mode: "loading" | "opened" | "missing" = "loading";
     const server = await serveEvidenceFixture(out, "src/components/kanban/issue1695Evidence.fixture.tsx", {
+      "/api/files": () => Response.json({ files: [], projectCatalog: [{ project: "atlas", conversations: 0, smt: 0 }],
+        projectCwds: { atlas: "/repo/atlas" }, flows: [], pipelines: [], tasks: [], workflows: [], systemHealth: {} }),
       "/api/orchestrator/seat": () => Response.json({ seat, pending: null, exists: false, lastFailure: null, previous: [], currentTask: null, all: null }),
       "/api/orchestrator/seat/status": () => Response.json({ project: "atlas", designated: true, conversationId,
         transcriptPath: seatPath, engine: "claude", model: "opus", liveness: { lifecycle: "idle", hostState: "alive", silentForMs: 0 } }),
@@ -115,13 +117,19 @@ describe("#4273 seat transcript recovery rendering", () => {
     const browser = await chromium.launch(LAUNCH);
     const readings: Array<Record<string, unknown>> = [];
     try {
-      for (const phone of [false, true]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+      const surfaces = [
+        { phone: true, width: 390 },
+        { phone: true, width: 915 },
+        { phone: false, width: 915 },
+        { phone: false, width: 1440 },
+      ];
+      for (const { phone, width } of surfaces) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
         for (const state of ["loading", "opened", "missing"] as const) {
           mode = state;
-          const width = phone ? 390 : 1440;
-          const label = `${phone ? "phone" : "desktop"}-${lang}-${theme}-${state}`;
+          const label = `${phone ? "phone" : "desktop"}-${width}-${lang}-${theme}-${state}`;
           const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&seat=gone&seat-driver=1#p=atlas`,
-            { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
+            { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone, 1,
+            undefined, state === "loading" ? new Date("2026-11-01T10:00:00.000Z") : undefined);
           try {
             if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
             let rootSelector = phone ? "[data-mobile2-sheet='seat']" : "[data-kanban-seat] [data-orchestrator-panel]";
@@ -136,6 +144,11 @@ describe("#4273 seat transcript recovery rendering", () => {
               await root.waitFor();
             } else if (state === "opened") await page.locator(`[data-orchestrator-conversation="${conversationId}"]`).waitFor();
             if (state === "missing") await page.getByText(translate(lang, "orchPanel.transcriptNotFound")).waitFor();
+            if (state === "missing") {
+              const terminalBadge = phone ? page.locator('[data-mobile2-seat-badge="danger"]') : page.locator('[data-orchestrator-badge="missing"]');
+              await terminalBadge.getByText(translate(lang, "orchPanel.badgeTranscriptMissing")).waitFor();
+              expect(await page.getByText(translate(lang, "orchPanel.badgeResolving")).count(), label).toBe(0);
+            }
             await root.scrollIntoViewIfNeeded();
             const geometry = await root.evaluate((element) => {
               const bounds = element.getBoundingClientRect();

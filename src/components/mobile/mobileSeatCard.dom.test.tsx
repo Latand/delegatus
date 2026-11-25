@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
+import { translate } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 /*
@@ -903,6 +904,7 @@ test("a missing seat transcript keeps the path, board link, rotation and Re-bind
   expect(sheet(host)).not.toBeNull();
   expect(host.querySelector('[data-orchestrator-bind-failure="catalog"]')).not.toBeNull();
   expect(sheet(host)!.textContent).toContain("Transcript not found");
+  expect(host.querySelector('[data-mobile2-seat-badge="danger"]')?.textContent).toBe(translate("en", "orchPanel.badgeTranscriptMissing"));
   expect(sheet(host)!.textContent).toContain(orchestrator.path);
   expect(sheet(host)!.textContent).not.toContain("Opening the conversation");
   expect(host.querySelector("[data-orchestrator-open-board]")?.getAttribute("href")).toBe("#c=conv_orchestrator");
@@ -1029,6 +1031,7 @@ test("a stalled mobile transcript body aborts at the deadline and exposes recove
   }
   expect(signal?.aborted).toBe(true);
   expect(sheet(host)?.textContent).toContain("Transcript not found");
+  expect(host.querySelector('[data-mobile2-seat-badge="danger"]')?.textContent).toBe(translate("en", "orchPanel.badgeTranscriptMissing"));
   expect(sheet(host)?.textContent).toContain("/orchestrator.jsonl");
   expect(host.querySelector("[data-orchestrator-open-board]")).not.toBeNull();
   expect(host.querySelector("[data-orchestrator-rotate]")).not.toBeNull();
