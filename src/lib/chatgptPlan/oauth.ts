@@ -19,6 +19,10 @@ type Attempt = {
   grantCheckpoint?: Promise<void>;
   revocation?: Promise<boolean>;
   guard: () => boolean;
+  configuredClientId: string;
+  completion?: Promise<void>;
+  exchangeStarted?: boolean;
+  exchangeFinished?: boolean;
 };
 const random = () => randomBytes(32).toString("base64url");
 const same = (a: string, b: string) => Buffer.byteLength(a) === Buffer.byteLength(b)
@@ -82,9 +86,22 @@ export class PlanOAuth {
     return confirmed;
   }
 
-  cancel(): void {
-    if (this.attempt) this.settle(this.attempt);
+  async cancel(): Promise<boolean> {
+    const attempt = this.attempt;
+    if (attempt) {
+      this.settle(attempt);
+      await attempt.completion?.catch(() => undefined);
+      if (attempt.refreshToken) await this.revokeGrant(attempt, attempt.refreshToken);
+      if (attempt.exchangeStarted && !attempt.exchangeFinished) {
+        await this.store.transaction("credentials", async () => {
+          const row = await this.store.credentials();
+          if (row?.clientId) this.store.write("credentials", { ...row, revocationConfirmed: false });
+        }).catch(() => undefined);
+        return false;
+      }
+    }
     this.reason = undefined;
+    return !attempt || !attempt.refreshToken || await attempt.revocation === true;
   }
 
   private check(attempt: Attempt): void {
@@ -98,7 +115,7 @@ export class PlanOAuth {
     if (!configured || (configured !== DYNAMIC_CLIENT && !clientIdValid(configured))) throw new PlanError("plan_disabled");
     this.reason = undefined;
     const attempt: Attempt = {
-      abort: new AbortController(), guard,
+      abort: new AbortController(), guard, configuredClientId: configured,
       timer: setTimeout(() => this.settle(attempt, "expired"), this.timeoutMs),
     };
     attempt.timer.unref();
@@ -140,7 +157,7 @@ export class PlanOAuth {
       attempt.retryUrl = undefined;
       reply(200, "Return to Delegatus. You can close this tab.");
       this.closeListener(attempt);
-      void this.complete(attempt, params, saved, host, consent, mayRetry, nonce, verifier, redirect);
+      attempt.completion = this.complete(attempt, params, saved, host, consent, mayRetry, nonce, verifier, redirect);
     });
     let address = "", redirect = "";
     attempt.server = server;
@@ -162,9 +179,10 @@ export class PlanOAuth {
     address = `127.0.0.1:${bound.port}`;
     redirect = `http://${address}${CALLBACK}`;
     const url = new URL(config.authorization_endpoint);
+    const dynamicRegistration = attempt.configuredClientId === DYNAMIC_CLIENT && (!saved || saved.registrationMode === "dynamic");
     url.search = new URLSearchParams({
-      client_id: saved?.clientId ?? configuredClientId()!,
-      ...(!saved ? { agent_name_hint: "Delegatus" } : {}),
+      client_id: dynamicRegistration ? DYNAMIC_CLIENT : saved?.clientId ?? attempt.configuredClientId,
+      ...(dynamicRegistration ? { agent_name_hint: "Delegatus" } : {}),
       ext_agent_host_id: host, response_type: "code", redirect_uri: redirect, resource: RESOURCE,
       scope: SCOPES, state, nonce, code_challenge_method: "S256",
       code_challenge: createHash("sha256").update(verifier).digest("base64url"),
@@ -181,8 +199,12 @@ export class PlanOAuth {
       const code = one(params, "code");
       const issued = one(params, "client_id");
       if (!code) throw new PlanError("registration_incomplete");
-      if (saved && params.has("client_id") && issued !== saved.clientId) throw new PlanError("account_mismatch");
-      const clientId = saved?.clientId ?? issued;
+      const dynamicRegistration = attempt.configuredClientId === DYNAMIC_CLIENT && (!saved || saved.registrationMode === "dynamic");
+      if (saved && !dynamicRegistration && params.has("client_id") && issued !== saved.clientId) throw new PlanError("account_mismatch");
+      if (!dynamicRegistration && !saved && attempt.configuredClientId !== DYNAMIC_CLIENT && params.has("client_id")
+        && issued !== attempt.configuredClientId) throw new PlanError("account_mismatch");
+      if (dynamicRegistration && !issued) throw new PlanError("registration_incomplete");
+      const clientId = dynamicRegistration ? issued : saved?.clientId ?? attempt.configuredClientId;
       if (!clientIdValid(clientId)) throw new PlanError("registration_incomplete");
       if (!saved) {
         const registration: Credentials = { version: 1, issuer: ISSUER, clientId, savedAt: this.now(), pendingRegistration: true };
@@ -195,17 +217,23 @@ export class PlanOAuth {
         saved = registration;
       }
       this.check(attempt);
-      const deadline = AbortSignal.any([attempt.abort.signal, AbortSignal.timeout(15_000)]);
+      // Once the provider accepts the code, finish the bounded exchange so
+      // its rotating grant can be checkpointed and revoked after cancellation.
+      const exchangeDeadline = AbortSignal.timeout(15_000);
+      attempt.exchangeStarted = true;
       const result = await this.oidc.exchange({ grant_type: "authorization_code", client_id: clientId,
-        code, code_verifier: verifier, redirect_uri: redirect }, deadline);
+        code, code_verifier: verifier, redirect_uri: redirect }, exchangeDeadline);
+      attempt.exchangeFinished = true;
+      const deadline = AbortSignal.any([attempt.abort.signal, AbortSignal.timeout(15_000)]);
       const refreshToken = object(result.body)?.refresh_token;
       if (typeof refreshToken === "string" && refreshToken.length > 0) {
         attempt.refreshToken = refreshToken;
         attempt.grantClientId = clientId;
         attempt.grantCheckpoint = this.store.transaction("credentials", async () => {
           const current = await this.store.credentials();
-          if (current?.clientId === clientId) {
-            saved = { ...current, pendingGrantRefresh: refreshToken, revocationConfirmed: false };
+          if (current?.clientId === clientId || (dynamicRegistration && current?.registrationMode === "dynamic" && current.clientId === saved?.clientId)) {
+            saved = { ...current, clientId, registrationMode: undefined, pendingRegistration: true,
+              pendingGrantRefresh: refreshToken, revocationConfirmed: false };
             this.store.write("credentials", saved);
           }
         });
@@ -244,6 +272,14 @@ export class PlanOAuth {
       console.info("[chatgpt-plan] connected");
     } catch (error) {
       if (this.attempt !== attempt) return;
+      if (error instanceof PlanError && error.reason === "client_rejected") {
+        await this.store.transaction("credentials", async () => {
+          const current = await this.store.credentials();
+          if (current?.clientId === (saved?.clientId ?? attempt.configuredClientId) && !current.tokens) {
+            this.store.write("credentials", { ...current, pendingRegistration: undefined, reconnect: "client_rejected" });
+          }
+        }).catch(() => undefined);
+      }
       this.settle(attempt, error instanceof PlanError ? error.reason : "retry_later");
       console.info("[chatgpt-plan] declined");
     }

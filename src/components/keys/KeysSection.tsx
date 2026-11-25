@@ -665,7 +665,7 @@ function useChatGPTPlan(open: boolean) {
 }
 
 const visiblePlanReasons = ["declined", "client_rejected", "account_mismatch", "registration_incomplete",
-  "credential_file", "host_file", "expired", "retry_later", "busy"] as const;
+  "credential_file", "host_file", "expired", "retry_later", "busy", "not_eligible", "request_invalid"] as const;
 
 function ChatGPTPlanRow({ size, owner, plan }: { size: Size; owner: boolean; plan: ReturnType<typeof useChatGPTPlan> }) {
   const { t } = useLocale();

@@ -23,4 +23,5 @@ export type PlanStatus = {
   authorizeUrl?: string;
 };
 
-export type PlanBilling = { source: "plan" } | { source: "key"; reason: PlanFallback };
+export type PlanBilling = { source: "plan" } | { source: "key"; reason: PlanFallback }
+  | { source: "blocked"; reason: "policy_denied" | "not_eligible" };

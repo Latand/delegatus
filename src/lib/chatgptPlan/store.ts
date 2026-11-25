@@ -16,11 +16,13 @@ export type Credentials = {
   version: 1; issuer: typeof ISSUER; clientId: string; savedAt: number;
   subject?: string; email?: string; tokens?: TokenSet; models?: string[];
   pendingRegistration?: true; pendingRotation?: true;
+  registrationMode?: "dynamic";
   signedOut?: true; revocationConfirmed?: boolean; acknowledged?: boolean;
   reconnect?: "reconnect_required" | "client_rejected";
   planPauseUntil?: number;
   planPauseReason?: "plan_limit" | "retry_later";
   pendingGrantRefresh?: string;
+  planRestriction?: "not_eligible" | "request_invalid";
 };
 
 const hasOwner = (uid: number) => !process.getuid || process.getuid() === uid;
@@ -91,11 +93,14 @@ export class PlanStore {
       || (row.planPauseUntil !== undefined && !epoch(row.planPauseUntil))
       || (row.planPauseReason !== undefined && row.planPauseReason !== "plan_limit" && row.planPauseReason !== "retry_later")
       || (row.pendingGrantRefresh !== undefined && !textField(row.pendingGrantRefresh))
+      || (row.planRestriction !== undefined && row.planRestriction !== "not_eligible" && row.planRestriction !== "request_invalid")
+      || (row.registrationMode !== undefined && row.registrationMode !== "dynamic")
       || (row.models !== undefined && (!Array.isArray(row.models) || row.models.length > 200 || !row.models.every(modelSlug)))
       || ["pendingRotation", "pendingRegistration", "signedOut"].some(key => row[key] !== undefined && row[key] !== true)
       || ["acknowledged", "revocationConfirmed"].some(key => row[key] !== undefined && typeof row[key] !== "boolean")
       || (row.reconnect !== undefined && row.reconnect !== "reconnect_required" && row.reconnect !== "client_rejected")
       || (row.pendingRotation && !tokens)
+      || (row.registrationMode && !row.pendingRegistration)
       || (row.tokens !== undefined && (!tokens || !textField(row.subject) || !textField(tokens.accessToken)
         || !textField(tokens.idToken) || !epoch(tokens.expiresAt) || !epoch(tokens.refreshedAt)
         || (tokens.earliestRefreshAt !== undefined && !epoch(tokens.earliestRefreshAt))

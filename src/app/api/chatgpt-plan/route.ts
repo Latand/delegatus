@@ -5,7 +5,7 @@ import { keysJson, keysOwnerGate, keysOwnerRequest, readBoundedJson } from "@/li
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { isStagingMode } from "@/lib/staging";
 import { PlanError } from "@/lib/chatgptPlan/errors";
-import { configuredClientId } from "@/lib/chatgptPlan/constants";
+import { configuredClientId, credentialStorageSupported, planConfigured } from "@/lib/chatgptPlan/constants";
 import { chatgptPlan } from "@/lib/chatgptPlan/session";
 import { LIVE_BACKEND_MODEL } from "@/lib/voiceCompanion/sessionConfig";
 
@@ -17,6 +17,8 @@ const localBrowser = (req: NextRequest) =>
 
 function writeGate(req: NextRequest) {
   return keysOwnerGate(req) ?? (isStagingMode() ? keysJson({ state: "off_staging" }, 409)
+    : !credentialStorageSupported() ? keysJson({ state: "off_unsupported_platform" }, 409)
+    : !planConfigured() ? keysJson({ state: "off_unconfigured" }, 409)
     : !localBrowser(req) ? keysJson({ state: "remote_browser" }, 409) : null);
 }
 
@@ -53,9 +55,10 @@ export async function POST(req: NextRequest) {
         if (denied) return denied;
         return keysJson({ authorizeUrl });
       }
-      case "cancel":
-        session.oauth.cancel();
-        return keysJson({ ok: true });
+      case "cancel": {
+        const revocationConfirmed = await session.oauth.cancel();
+        return keysJson({ ok: true, revocationConfirmed });
+      }
       case "replace-registration":
         await session.replaceRejectedRegistration(configuredClientId() ?? "", guard);
         return writeGate(req) ?? keysJson({ ok: true });

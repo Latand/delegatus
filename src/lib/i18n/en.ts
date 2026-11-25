@@ -40,6 +40,8 @@ export const en = {
   "chatgptPlan.reason.expired": "Sign-in timed out. Try again.",
   "chatgptPlan.reason.retry_later": "ChatGPT is temporarily unavailable. Try again later.",
   "chatgptPlan.reason.busy": "The connection changed during sign-in. Try again.",
+  "chatgptPlan.reason.not_eligible": "This account or workspace is not eligible. Check the connected ChatGPT account before trying again.",
+  "chatgptPlan.reason.request_invalid": "The plan rejected a request capability. Plan requests are paused for this registration; reconnect after correcting the unsupported option.",
   "chatgptPlan.voiceService": "API · text turns on ChatGPT plan",
   "chatgptPlan.backendTurns": "Backend turns",
   "chatgptPlan.fallback": "API key ({reason})",

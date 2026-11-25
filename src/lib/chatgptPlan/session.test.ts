@@ -13,7 +13,7 @@ const body = { model, input: [{ role: "user", content: "Read the board" }] };
 const signal = () => AbortSignal.timeout(4_000);
 const owner = () => true;
 const responsesUrl = `${RESOURCE}/responses`;
-function create(handle?: Parameters<typeof planFixture>[0], response?: () => Response) {
+function create(handle?: Parameters<typeof planFixture>[0], response?: () => Response | Promise<Response>) {
   process.env.LLV_CHATGPT_PLAN_CLIENT_ID = "dynamic_agent_client";
   fixture = planFixture((url, init) => url === responsesUrl ? response?.() ?? stream(complete({ output: [] })) : handle!(url, init));
   return new PlanSession(fixture.store, fixture.oidc, () => now);
@@ -90,6 +90,62 @@ test("temporary provider failure persists its shorter retry pause across session
   const row = await fixture.store.credentials();
   expect(row?.planPauseUntil).toBe(now + 30_000);
   expect(row?.planPauseReason).toBe("retry_later");
+});
+
+test.each([[429, 503], [503, 429]] as const)("overlapping %i and %i responses preserve the longer same-grant pause", async (firstStatus, secondStatus) => {
+  let releaseFirst!: (response: Response) => void;
+  let firstStarted!: () => void;
+  let secondStarted!: () => void;
+  const firstResponse = new Promise<Response>(resolve => { releaseFirst = resolve; });
+  const started = new Promise<void>(resolve => { firstStarted = resolve; });
+  const secondStartedPromise = new Promise<void>(resolve => { secondStarted = resolve; });
+  let calls = 0;
+  const failure = (status: number) => Response.json({ error: { code: status === 429
+    ? "subscription_sharing_usage_limit_exceeded" : "temporary_unavailable" } }, { status });
+  const session = create(undefined, async () => ++calls === 1 ? (firstStarted(), firstResponse) : (secondStarted(), failure(secondStatus)));
+  fixture.seed();
+  const first = session.respond(body, signal(), owner).catch(error => error);
+  await started;
+  const second = session.respond(body, signal(), owner).catch(error => error);
+  await secondStartedPromise;
+  await second;
+  releaseFirst(failure(firstStatus));
+  await first;
+  const restarted = new PlanSession(new PlanStore(() => fixture.directory), fixture.oidc, () => now);
+  expect(await fixture.store.credentials()).toMatchObject({ planPauseUntil: now + 60 * 60_000, planPauseReason: "plan_limit" });
+  await expect(restarted.respond(body, signal(), owner)).rejects.toThrow("plan_limit");
+  expect(inferences()).toHaveLength(2);
+});
+
+test("a late failure from an old account cannot pause its replacement registration", async () => {
+  let release!: (response: Response) => void;
+  let requestStarted!: () => void;
+  const held = new Promise<Response>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { requestStarted = resolve; });
+  const session = create(undefined, () => { requestStarted(); return held; });
+  const old = fixture.seed();
+  const pending = session.respond(body, signal(), owner).catch(error => error);
+  await started;
+  fixture.store.write("credentials", { ...old, clientId: "replacement-client", subject: "replacement-subject" });
+  release(Response.json({ error: { code: "subscription_sharing_usage_limit_exceeded" } }, { status: 429 }));
+  await pending;
+  expect(await fixture.store.credentials()).toMatchObject({ clientId: "replacement-client", subject: "replacement-subject" });
+  expect(await fixture.store.credentials()).not.toHaveProperty("planPauseUntil");
+});
+
+test.each([
+  ["subscription_sharing_user_not_eligible", "not_eligible"],
+  ["subscription_sharing_unsupported_capability", "request_invalid"],
+] as const)("%s persists a restriction and never resubmits the plan request", async (code, restriction) => {
+  const session = create(undefined, () => Response.json({ error: { code } }, { status: code.endsWith("unsupported_capability") ? 400 : 403 }));
+  fixture.seed();
+  await expect(session.respond(body, signal(), owner)).rejects.toThrow(restriction);
+  expect(await fixture.store.credentials()).toMatchObject({ planRestriction: restriction });
+  const restarted = new PlanSession(new PlanStore(() => fixture.directory), fixture.oidc, () => now);
+  expect(await restarted.eligible(model)).toBe(false);
+  await expect(restarted.respond(body, signal(), owner)).rejects.toThrow("plan_disabled");
+  expect(inferences()).toHaveLength(1);
+  expect((await restarted.status(model, true, true))).toMatchObject({ state: "plan_disabled", reason: restriction });
 });
 
 test("above the refresh window reuses the token and below it serializes independent sessions", async () => {
@@ -229,4 +285,21 @@ test.each([200, 503])("revocation status %i stops plan use and retains the regis
   const row = await fixture.store.credentials();
   expect(row).toMatchObject({ signedOut: true, clientId, revocationConfirmed: status === 200 });
   expect(row?.tokens).toBeUndefined();
+});
+
+test("sign-out attempts both active and checkpointed grants and clears both locally", async () => {
+  const attempted: string[] = [];
+  const session = create(async (url, init) => {
+    expect(url).toBe(discovery.revocation_endpoint);
+    const token = (init?.body as URLSearchParams).get("token")!;
+    attempted.push(token);
+    return new Response(null, { status: token === synth("prior-refresh") ? 200 : 503 });
+  });
+  fixture.seed({ pendingGrantRefresh: synth("pending-refresh") });
+  expect(await session.signOut(owner)).toBe(false);
+  expect(attempted).toContain(synth("pending-refresh"));
+  expect(attempted).toContain(synth("prior-refresh"));
+  expect(await fixture.store.credentials()).toMatchObject({ signedOut: true, revocationConfirmed: false });
+  expect(await fixture.store.credentials()).not.toHaveProperty("pendingGrantRefresh");
+  expect(await fixture.store.credentials()).not.toHaveProperty("tokens");
 });

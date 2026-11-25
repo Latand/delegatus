@@ -818,6 +818,10 @@ export class CompanionLiveSessions {
       // Tool rounds, then one answer with tools off, so what the reads returned is still spoken.
       for (let round = 0; round <= BACKEND_ROUNDS; round += 1) {
         if (active.ended || active.closePromise) return;
+        if (active.planBilling?.source === "blocked") {
+          reply(delegationSpeech("This ChatGPT account is not authorized for this request. No request was sent.", facts));
+          return;
+        }
         const final = round === BACKEND_ROUNDS;
         if (final) input.push({ role: "user", content: "The tool budget for this delegation is spent. Answer now from what the tools returned, in at most three short sentences, and say plainly what is still unknown. Call no tool." });
         const options = { final, locale: stored.locale, tools: active.voiceTools };
@@ -832,9 +836,11 @@ export class CompanionLiveSessions {
             usedPlan = true;
           } catch (error) {
             if (active.ended || active.closePromise || active.abort.signal.aborted) return;
-            active.planBilling = { source: "key", reason: fallbackReason(error) };
+            const reason = fallbackReason(error);
+            active.planBilling = reason === "policy_denied" || reason === "not_eligible"
+              ? { source: "blocked", reason } : { source: "key", reason };
             if (this.lastPlanBilling?.id === active.id) this.lastPlanBilling.billing = active.planBilling;
-            if (active.planBilling.reason === "policy_denied") {
+            if (reason === "policy_denied" || reason === "not_eligible") {
               reply(delegationSpeech("This ChatGPT account is not authorized for this request. No request was sent.", facts));
               return;
             }

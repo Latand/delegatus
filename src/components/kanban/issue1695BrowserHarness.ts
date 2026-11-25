@@ -2109,6 +2109,8 @@ const PLAN_FRAMES = [
   }),
   planKeys("remote", "[data-chatgpt-plan-state='remote_browser']", noPlanAction),
   planKeys("staging", "[data-chatgpt-plan-state='off_staging']", noPlanAction),
+  planKeys("unconfigured", "[data-chatgpt-plan-state='off_unconfigured']", noPlanAction),
+  planKeys("unsupported", "[data-chatgpt-plan-state='off_unsupported_platform']", noPlanAction),
   planKeys("declined", "[data-chatgpt-plan-state='not_connected'] [data-chatgpt-plan-start]"),
   planKeys("unconfirmed", " a[href='https://chatgpt.com/settings']"),
   planKeys("error", "[data-chatgpt-plan-state='error']", noPlanAction),
@@ -2606,8 +2608,8 @@ export async function captureChatGPTPlanFrames(phone: boolean) {
       args: ["--no-sandbox", "--disable-dev-shm-usage"], ignoreDefaultArgs: ["--hide-scrollbars"] });
     try {
       const { readings, failures } = await captureSettingsWindowFrames(browser, server.base, out, phone,
-        frame => frame.includes(phone ? "-phone-" : "-desktop-"), PLAN_FRAMES);
-      expect(readings).toHaveLength(PLAN_FRAMES.length * 4);
+        frame => phone ? frame.includes("-phone-") : frame.includes("-desktop-") || frame.includes("-mid-"), PLAN_FRAMES);
+      expect(readings).toHaveLength(PLAN_FRAMES.length * (phone ? 4 : 6));
       expect(failures).toEqual([]);
     } finally { await browser.close(); }
   } finally { sockets.close(); server.stop(); }

@@ -32,8 +32,9 @@ Claude accounts keep their existing authentication.
   credential file, refresh, sign-out, a streamed Responses client, error
   mapping, one row in the Keys section). Then bill the backend turns of voice
   calls the owner starts to the ChatGPT plan. Everything else keeps the API key.
-  The API key also stays the fallback inside a voice call when the plan
-  refuses a turn (§6, §8).
+  Retryable errors may fall back to the API key; policy refusals block further
+  paid dispatch in that call, while ineligible accounts and unsupported
+  capabilities disable plan use for that registration until owner recovery.
 - **The devkit is reference material only.** Its licence allows noncommercial
   use only, so Delegatus (MIT) implements the flow from the public
   documentation and copies no devkit code or brand assets (§4.12).
@@ -471,8 +472,9 @@ row 8 for owner-started calls.**
    delegation turn (row 8) to the plan. This applies only when the call runs
    on the API backend and the owner started it.
 3. The live audio session of the same call (row 7) keeps the API key. So does
-   every other row. If the plan refuses a delegation turn, the call carries on
-   with the API key it already holds (§8.9).
+   every other row. Retryable errors may use the API key; policy refusals block
+   further paid dispatch for that call, and terminal account or capability
+   restrictions remain visible until owner recovery (§8.9).
 
 Why this slice:
 
@@ -571,9 +573,10 @@ flow has none:
   enabled", "Reconnect needed", or "Not available on a staging Viewer". No
   feature changes its provider while off, so existing tests never enter the
   plan path: their state directories hold no credential file.
-- No environment override for a client ID is added. A partner-issued client
-  from the commercial form (§10) would arrive with its own contract, which is
-  unknown today (Deferred).
+- The owner explicitly opts in by setting `LLV_CHATGPT_PLAN_CLIENT_ID` to the
+  documented OSS registration value or to an issued client ID. With the value
+  absent, status is `off_unconfigured`; discovery, storage, sign-in and plan
+  billing remain disabled. OSS registration belongs to the installation owner.
 
 ### 8.3 Host ID
 
@@ -851,16 +854,21 @@ For each plan-billed delegation turn (the loop at `liveSession.ts:799-813`):
   and `liveSession.ts:1145`, `:1331`, `:1484` and `:1513-1514`. They keep
   seeing only API-key turns, so the ledger schema and the monthly cap are
   unchanged. An older release that reads the document sees nothing new.
-- **Fallback.** A plan refusal of any class in §8.11 switches this call's
-  remaining turns to the API key. The same turn is asked again once on the
-  key, through today's path with its reservation. Asking again is safe because
+- **Fallback.** Transient and request-specific errors may switch this call's
+  remaining turns to the API key. Authorization policy refusals block further
+  plan and key dispatch for the rest of this call. Ineligibility and unsupported
+  capabilities are persisted against the registration and remain visible until
+  owner recovery restores plan use. The same turn is retried on the key only for
+  retryable fallback classes, through today's path with its reservation. Asking
+  again is safe because
   tools run only from a completed response's output: a plan stream that failed
   or broke before `response.completed` executed nothing, so asking again cannot
   send to the orchestrator twice. The plan turn may still have consumed plan
   usage, and the key turn is billed as today. The docs require no silent
   switch (§4.11). In this design the owner chose the API backend, which
   already bills the key, and the voice settings row shows when a call fell
-  back and why (§8.10). The next call tries the plan again.
+  back and why (§8.10). Later calls retry the plan only when no registration
+  restriction was recorded.
 
 Existing voice tests never reach this path: their state directories hold no
 credential file, so `planAccess` answers `not_connected` and the call bills
@@ -946,9 +954,9 @@ kept.
 | Refresh, token | `invalid_client` | `client_rejected` | Reconnect needed, reason shown |
 | Responses | `subscription_sharing_usage_limit_exceeded` (429) | `plan_limit` | Plan paused for this call; key fallback; "Manage usage" primary in the voice row |
 | Responses | `subscription_sharing_usage_unavailable`, `subscription_sharing_user_unavailable` (503); admission 503 | `retry_later` | Credentials kept; key fallback for this call; the next call tries again |
-| Responses | `subscription_sharing_user_not_eligible` (403) | `not_eligible` | Key fallback; row "ChatGPT plan use is not available for this account or workspace"; no OAuth loop |
-| Responses | `subscription_sharing_unsupported_capability` (400) | `request_invalid` | Key fallback; `param` logged; the same body is never re-sent on the plan |
-| Responses | `subscription_sharing_route_not_supported`, `chatpass_v2_scope_not_authorized`, `chatpass_v2_invalid_authorization_context` (403); admission 403 | `policy_denied` | Key fallback; row names the restriction |
+| Responses | `subscription_sharing_user_not_eligible` (403) | `not_eligible` | Persist plan restriction for the registration; show owner recovery reason; key may serve the current call |
+| Responses | `subscription_sharing_unsupported_capability` (400) | `request_invalid` | Persist restriction so the capability is never resubmitted; show owner recovery reason; key may serve the current call |
+| Responses | `subscription_sharing_route_not_supported`, `chatpass_v2_scope_not_authorized`, `chatpass_v2_invalid_authorization_context` (403); admission 403 | `policy_denied` | Plan and key dispatch blocked; show owner recovery reason |
 | Responses | `subscription_sharing_invalid_user` (401); admission 401 | `credential_rejected` | Key fallback; credentials kept until a refresh or revocation confirms. The docs say not to erase on a single failure. |
 | Responses | `response.incomplete`, stream ended early, network, timeout | `interrupted` | Key fallback for this turn (§8.9) |
 | Revocation | non-200 after retries | `revocation_unconfirmed` | Local tokens cleared; row says so |
@@ -1035,7 +1043,10 @@ Checks the builder runs:
 
 **Production check** after merge and deploy. These steps need no account:
 
-- the Keys row renders "Not connected";
+- with no owner configuration, status is `off_unconfigured`, the Keys row
+  explains that setup is disabled, and it shows no sign-in action;
+- with explicit owner configuration, the Keys row starts `not_connected` and
+  offers sign-in;
 - `POST sign-in` returns an authorize URL whose host is `auth.openai.com`, and
   that URL answers 302 to the login page (the §4.3 probe);
 - cancel closes the listener (its port refuses connections).

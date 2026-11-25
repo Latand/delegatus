@@ -3,6 +3,7 @@ import { request } from "node:http";
 import { afterEach, expect, test } from "bun:test";
 import { CALLBACK, DYNAMIC_CLIENT, RESOURCE, SCOPES } from "./constants";
 import { PlanOAuth } from "./oauth";
+import { PlanSession } from "./session";
 import { hostId } from "./hostId";
 import { clientId, discovery, grant, jwks, jwt, model, modelsUrl, now, planFixture, synth, until } from "./plan.fixture";
 
@@ -162,7 +163,7 @@ test("cancel and deadline close the real loopback listener", async () => {
   const fixture = create(undefined, 300);
   const first = params(await fixture.oauth.start(false, allowed));
   await expect(fixture.oauth.start(false, allowed)).rejects.toThrow("busy");
-  fixture.oauth.cancel();
+  await fixture.oauth.cancel();
   await expect(http(callback(first))).rejects.toThrow();
   const second = params(await fixture.oauth.start(false, allowed));
   await until(() => (fixture.oauth.reason) === "expired");
@@ -176,6 +177,64 @@ test("Windows disables sign-in before credential files, discovery, or a listener
   expect(fixture.requests).toHaveLength(0);
   expect(await fixture.store.read("host")).toBeUndefined();
   windows.cancel();
+});
+
+test.each(["omitted", "matching", "different"] as const)("empty state with an issued client handles a %s callback client_id", async shape => {
+  let nonce = "";
+  process.env.LLV_CHATGPT_PLAN_CLIENT_ID = clientId;
+  const fixture = planFixture(async url => {
+    if (url === discovery.jwks_uri) return jwks();
+    if (url === modelsUrl) return Response.json({ models: [] });
+    return Response.json(grant(nonce));
+  });
+  const oauth = new PlanOAuth(fixture.store, fixture.oidc, () => now);
+  dispose.push(fixture.dispose, () => oauth.cancel());
+  const authorize = params(await oauth.start(false, allowed));
+  nonce = authorize.get("nonce")!;
+  const target = callback(authorize, shape === "omitted" ? { client_id: null }
+    : shape === "different" ? { client_id: "other-client" } : { client_id: clientId });
+  await http(target);
+  await until(() => !oauth.pending);
+  if (shape === "different") {
+    expect(await fixture.store.credentials()).toBeUndefined();
+    expect(fixture.requests.some(row => row.url === discovery.token_endpoint)).toBe(false);
+  } else expect(await fixture.store.credentials()).toMatchObject({ clientId, tokens: expect.any(Object) });
+});
+
+test("exchange invalid_client recovery restarts OSS registration and retains the installation host ID", async () => {
+  process.env.LLV_CHATGPT_PLAN_CLIENT_ID = DYNAMIC_CLIENT;
+  let nonce = "";
+  let rejectFirst = true;
+  const fixture = planFixture(async (url, init) => {
+    if (url === discovery.jwks_uri) return jwks();
+    if (url === modelsUrl) return Response.json({ models: [] });
+    if (url === discovery.token_endpoint && (init?.body as URLSearchParams).get("grant_type") === "authorization_code" && rejectFirst) {
+      rejectFirst = false;
+      return Response.json({ error: "invalid_client" }, { status: 400 });
+    }
+    return Response.json(grant(nonce));
+  });
+  dispose.push(fixture.dispose);
+  const session = new PlanSession(fixture.store, fixture.oidc, () => now);
+  const host = await hostId(fixture.store);
+  const first = params(await session.start(false, allowed));
+  nonce = first.get("nonce")!;
+  await http(callback(first));
+  await until(() => !session.oauth.pending);
+  expect(session.oauth.reason).toBe("client_rejected");
+  expect(await fixture.store.credentials()).toMatchObject({ reconnect: "client_rejected", clientId });
+  expect(await fixture.store.credentials()).not.toHaveProperty("pendingRegistration");
+
+  await session.replaceRejectedRegistration(DYNAMIC_CLIENT, allowed);
+  expect(await fixture.store.credentials()).toMatchObject({ registrationMode: "dynamic", pendingRegistration: true });
+  const retry = params(await session.start(false, allowed));
+  expect(retry.get("client_id")).toBe(DYNAMIC_CLIENT);
+  expect(retry.get("agent_name_hint")).toBe("Delegatus");
+  nonce = retry.get("nonce")!;
+  await http(callback(retry));
+  await until(() => !session.oauth.pending);
+  expect(await fixture.store.credentials()).toMatchObject({ clientId, tokens: expect.any(Object) });
+  expect(await hostId(fixture.store)).toBe(host);
 });
 
 test("cancel after the grant is issued revokes the uncommitted refresh token", async () => {
@@ -207,4 +266,59 @@ test("cancel after the grant is issued revokes the uncommitted refresh token", a
   }
   expect(await fixture.store.credentials()).toMatchObject({ pendingRegistration: true, revocationConfirmed: true });
   expect(fixture.requests.filter(row => row.url === discovery.revocation_endpoint)).toHaveLength(1);
+});
+
+test("cancel during an admitted token exchange lets it checkpoint and revokes its returned grant", async () => {
+  let nonce = "";
+  let releaseExchange!: (response: Response) => void;
+  let exchangeStarted!: () => void;
+  const held = new Promise<Response>(resolve => { releaseExchange = resolve; });
+  const started = new Promise<void>(resolve => { exchangeStarted = resolve; });
+  const fixture = create(async (url, init) => {
+    if (url === discovery.jwks_uri) return jwks();
+    if (url === modelsUrl) return Response.json({ models: [] });
+    if (url === discovery.token_endpoint && (init?.body as URLSearchParams).get("grant_type") === "authorization_code") {
+      exchangeStarted();
+      return held;
+    }
+    if (url === discovery.revocation_endpoint) {
+      expect((init?.body as URLSearchParams).get("token")).toBe(synth("refresh"));
+      return new Response(null, { status: 200 });
+    }
+    return Response.json(grant(nonce));
+  });
+  const authorize = params(await fixture.oauth.start(false, allowed));
+  nonce = authorize.get("nonce")!;
+  await http(callback(authorize));
+  await started;
+  const cancellation = fixture.oauth.cancel();
+  releaseExchange(Response.json(grant(nonce)));
+  expect(await cancellation).toBe(true);
+  expect(await fixture.store.credentials()).toMatchObject({ pendingRegistration: true, revocationConfirmed: true });
+  expect(fixture.requests.filter(row => row.url === discovery.revocation_endpoint)).toHaveLength(1);
+});
+
+test("cancel reports uncertain revocation when an admitted exchange outcome is unknown", async () => {
+  let nonce = "";
+  let rejectExchange!: (error: Error) => void;
+  let exchangeStarted!: () => void;
+  const held = new Promise<Response>((_resolve, reject) => { rejectExchange = reject; });
+  const started = new Promise<void>(resolve => { exchangeStarted = resolve; });
+  const fixture = create(async (url, init) => {
+    if (url === discovery.jwks_uri) return jwks();
+    if (url === discovery.token_endpoint && (init?.body as URLSearchParams).get("grant_type") === "authorization_code") {
+      exchangeStarted();
+      return held;
+    }
+    if (url === discovery.revocation_endpoint) return new Response(null, { status: 200 });
+    return Response.json(grant(nonce));
+  });
+  const authorize = params(await fixture.oauth.start(false, allowed));
+  nonce = authorize.get("nonce")!;
+  await http(callback(authorize));
+  await started;
+  const cancelled = fixture.oauth.cancel();
+  rejectExchange(new Error("unknown exchange outcome"));
+  expect(await cancelled).toBe(false);
+  expect(await fixture.store.credentials()).toMatchObject({ pendingRegistration: true, revocationConfirmed: false });
 });

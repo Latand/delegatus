@@ -40,6 +40,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "chatgptPlan.reason.expired": "Час на вхід вичерпано. Спробуйте ще раз.",
   "chatgptPlan.reason.retry_later": "ChatGPT тимчасово недоступний. Спробуйте пізніше.",
   "chatgptPlan.reason.busy": "Підключення змінилося під час входу. Спробуйте ще раз.",
+  "chatgptPlan.reason.not_eligible": "Цей акаунт або робочий простір не відповідає умовам. Перевірте підключений акаунт ChatGPT.",
+  "chatgptPlan.reason.request_invalid": "План відхилив параметр запиту. Запити плану призупинено для цієї реєстрації; підключіть ChatGPT знову після виправлення параметра.",
   "chatgptPlan.voiceService": "API · текстові запити за планом ChatGPT",
   "chatgptPlan.backendTurns": "Запити делегації",
   "chatgptPlan.fallback": "Ключ API ({reason})",

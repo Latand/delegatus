@@ -99,6 +99,8 @@ const PLAN_SCENES: Record<string, PlanStatus> = {
   "retry-later": { state: "retry_later", usageUrl: "https://chatgpt.com/settings/usage" },
   remote: { state: "remote_browser" },
   staging: { state: "off_staging" },
+  unconfigured: { state: "off_unconfigured" },
+  unsupported: { state: "off_unsupported_platform" },
   declined: { state: "not_connected", reason: "declined" },
   unconfirmed: { state: "not_connected", revocationConfirmed: false },
   error: { state: "error", reason: "credential_file" },

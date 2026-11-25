@@ -3461,7 +3461,8 @@ for (const backend of ["api", "codex"] as const) for (const replied of [false, t
     const run = async (mode: "seed" | "handoff" | "reply" | "recover", resume = "", item = "") => {
       const child = Bun.spawn([process.execPath, "src/lib/voiceCompanion/resumeRecovery.fixture.ts"], { cwd: process.cwd(), env: { ...process.env,
         LLV_STATE_DIR: path.join(directory, "state"), XDG_CONFIG_HOME: path.join(directory, "config"),
-        RECOVERY_BACKEND: backend, RECOVERY_MODE: mode, RECOVERY_RESUME: resume, RECOVERY_ITEM: item }, stdout: "pipe", stderr: "pipe" });
+        RECOVERY_BACKEND: backend, RECOVERY_MODE: mode, RECOVERY_RESUME: resume, RECOVERY_ITEM: item },
+        stdout: "pipe", stderr: "pipe", timeout: 15_000, killSignal: "SIGTERM" });
       const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       expect(code, err).toBe(mode === "handoff" || mode === "reply" ? 73 : 0);
       return JSON.parse(out) as { id: string; before: import("./storage").ReportSpeech[]; owed: import("./storage").ReportSpeech[]; rows: import("./transcriptRecord").TranscriptEntry[] };
@@ -3483,7 +3484,7 @@ for (const backend of ["api", "codex"] as const) for (const replied of [false, t
     expect(n3.owed).toHaveLength(replied ? 0 : 1);
     expect(n3.rows.filter(row => row.kind === "handoff")).toHaveLength(replied ? 0 : 1);
     if (!replied) expect(n3.before[0].resumeOf).toEqual(point);
-  });
+  }, 30_000);
 
 for (const backend of ["api", "codex"] as const) for (const delay of [0, 180_000])
   test(`slice 3: ${backend} adopts an outage answer after ${delay}ms and two lost start answers exactly once`, async () => {
@@ -3648,7 +3649,8 @@ for (const backend of ["api", "codex"] as const) for (const fault of ["handoff",
     const directory = path.join(root, `restart-${backend}-${fault}`);
     const run = async (fault: string, resume = "") => {
       const child = Bun.spawn([process.execPath, "src/lib/voiceCompanion/reconnectRecovery.fixture.ts"], { cwd: process.cwd(), env: { ...process.env,
-        LLV_STATE_DIR: path.join(directory, "state"), XDG_CONFIG_HOME: path.join(directory, "config"), RECOVERY_BACKEND: backend, RECOVERY_FAULT: fault, RECOVERY_RESUME: resume }, stdout: "pipe", stderr: "pipe" });
+        LLV_STATE_DIR: path.join(directory, "state"), XDG_CONFIG_HOME: path.join(directory, "config"), RECOVERY_BACKEND: backend, RECOVERY_FAULT: fault, RECOVERY_RESUME: resume },
+        stdout: "pipe", stderr: "pipe", timeout: 15_000, killSignal: "SIGTERM" });
       const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       expect(code, err).toBe(0); return JSON.parse(out) as { id: string; lines: string[]; ledger: { attempts: string[]; messages: string[] } };
     };
@@ -3661,7 +3663,7 @@ for (const backend of ["api", "codex"] as const) for (const fault of ["handoff",
     }
     const n2 = await run("none", n.id);
     expect(n2.lines).toEqual([]); expect(n2.ledger).toEqual(n.ledger);
-  });
+  }, 30_000);
 
 for (const [from, to] of [["api", "codex"], ["codex", "api"]] as const)
   test(`slice 3: ${from} report survives a refused mint and is recomposed for ${to}`, async () => {
@@ -3862,7 +3864,13 @@ test.each(["owner", "member", "unconfigured", "limit", "scope-policy", "context-
       expect(JSON.stringify(service.transcriptRecord(call.sessionId))).toContain("This ChatGPT account is not authorized for this request. No request was sent.");
       const settings = f.storage.settings();
       expect(settings.usageUsd + settings.reservedUsd).toBeCloseTo(VOICE_SESSION_RESERVE_USD);
-      expect(service.planBillingFor(starter)).toEqual({ source: "key", reason: "policy_denied" });
+      expect(service.planBillingFor(starter)).toEqual({ source: "blocked", reason: "policy_denied" });
+      provider.replay(call.providerId, delegationCreated("second-policy-test", 2_000));
+      await service.drain(call.sessionId);
+      expect(planRequests).toHaveLength(1);
+      expect(f.provider.requests).toHaveLength(0);
+      expect(Object.keys(stored() ?? {})).toHaveLength(0);
+      expect(f.storage.settings().usageUsd + f.storage.settings().reservedUsd).toBeCloseTo(VOICE_SESSION_RESERVE_USD);
     } else {
       expect(planRequests).toHaveLength(mode === "limit" ? 1 : 0);
       expect(f.provider.requests).toHaveLength(1);

@@ -55,10 +55,36 @@ test("the plan is off with no issued client ID and cannot be used on staging", a
   expect((await POST(raw("POST", { action: "sign-in" }))).status).toBe(409);
   expect((await DELETE(raw("DELETE"))).status).toBe(409);
   delete process.env.LLV_STAGING;
-  expect((await POST(raw("POST", { action: "replace-registration", clientId: "forged-client" }))).status).toBe(400);
+  expect((await POST(raw("POST", { action: "replace-registration", clientId: "forged-client" }))).status).toBe(409);
   expect(await f.store.credentials()).toBeUndefined();
   expect(await f.store.read("host")).toBeUndefined();
   expect(f.requests).toHaveLength(0);
+});
+
+test("unconfigured writes refuse before storage work with fresh and saved credentials", async () => {
+  delete process.env.LLV_CHATGPT_PLAN_CLIENT_ID;
+  const beforeRequests = f.requests.length;
+  for (const action of ["acknowledge", "replace-registration"] as const) {
+    expect((await POST(raw("POST", { action }))).status).toBe(409);
+  }
+  expect((await DELETE(raw("DELETE"))).status).toBe(409);
+  expect(await f.store.credentials()).toBeUndefined();
+  f.seed();
+  const saved = await f.store.credentials();
+  for (const action of ["acknowledge", "replace-registration"] as const) {
+    expect((await POST(raw("POST", { action }))).status).toBe(409);
+  }
+  expect((await DELETE(raw("DELETE"))).status).toBe(409);
+  expect(await f.store.credentials()).toEqual(saved);
+  expect(f.requests).toHaveLength(beforeRequests);
+});
+
+test("cancel reports an unconfirmed OAuth exchange outcome", async () => {
+  const session = globals.__delegatusChatGPTPlan!;
+  const cancel = spyOn(session.oauth, "cancel").mockResolvedValue(false);
+  const response = await POST(raw("POST", { action: "cancel" }));
+  expect(await response.json()).toEqual({ ok: true, revocationConfirmed: false });
+  cancel.mockRestore();
 });
 
 test("an allowed remote browser can read the reason and cannot open a loopback listener", async () => {
