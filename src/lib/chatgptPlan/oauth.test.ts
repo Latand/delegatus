@@ -329,6 +329,39 @@ test("cancel during an admitted token exchange lets it checkpoint and revokes it
   expect(fixture.requests.filter(row => row.url === discovery.revocation_endpoint)).toHaveLength(1);
 });
 
+test("sign-out waits for an admitted OAuth exchange and clears its late grant", async () => {
+  let nonce = "";
+  let releaseExchange!: (response: Response) => void;
+  let exchangeStarted!: () => void;
+  const held = new Promise<Response>(resolve => { releaseExchange = resolve; });
+  const started = new Promise<void>(resolve => { exchangeStarted = resolve; });
+  const fixture = create(async (url, init) => {
+    if (url === discovery.token_endpoint && (init?.body as URLSearchParams).get("grant_type") === "authorization_code") {
+      exchangeStarted();
+      return held;
+    }
+    if (url === discovery.jwks_uri) return jwks();
+    if (url === modelsUrl) return Response.json({ models: [] });
+    if (url === discovery.revocation_endpoint) return new Response(null, { status: 200 });
+    return Response.json(grant(nonce));
+  });
+  const session = new PlanSession(fixture.store, fixture.oidc, () => now);
+  const authorize = params(await session.start(false, allowed));
+  nonce = authorize.get("nonce")!;
+  await http(callback(authorize));
+  await started;
+  let settled = false;
+  const signOut = session.signOut(allowed).then(confirmed => { settled = true; return confirmed; });
+  await Bun.sleep(20);
+  expect(settled).toBe(false);
+  releaseExchange(Response.json(grant(nonce)));
+  expect(await signOut).toBe(true);
+  expect(await fixture.store.credentials()).toMatchObject({ signedOut: true, revocationConfirmed: true });
+  expect(await fixture.store.credentials()).not.toHaveProperty("tokens");
+  expect(await fixture.store.credentials()).not.toHaveProperty("pendingGrantRefresh");
+  expect(fixture.requests.filter(row => row.url === discovery.revocation_endpoint)).toHaveLength(1);
+});
+
 test("cancel reports uncertain revocation when an admitted exchange outcome is unknown", async () => {
   let nonce = "";
   let rejectExchange!: (error: Error) => void;
