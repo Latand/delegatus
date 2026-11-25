@@ -1,6 +1,11 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 
 export type AttemptEvidenceBinding = { original: string; identity: string; pipelineId?: string | null; launchId?: string | null };
+
+export function attemptEvidenceKey(original: string, identity: string) {
+  return createHash("sha256").update(original).update("\0").update(identity).digest("hex");
+}
 
 /** The evidence writer publishes ownership before its final `files` array.
  * Read just that bounded header, even for a multi-megabyte manifest. The file

@@ -45,6 +45,24 @@ test("pressure prioritizes two largest roots across the cursor page", async () =
   } finally { f.store.close(); }
 });
 
+test("routine scratch expiry keeps its per-tick budget below the reserve without starting a pressure pass", async () => {
+  const f = fixture(), lane = finishedLane(f.root, "2035-01-12T00:00:00Z");
+  const due = Array.from({ length: 6 }, (_, i) => f.make(i, 4096, lane.id));
+  try {
+    savePipelines([lane]);
+    for (const directory of due) f.store.retainRoot(directory, NOW - 1000);
+    const report = await sweepAttemptTemps(f.store, {
+      ...f.options, availableBytes: () => 1, scheduledOnly: true, requireExpired: true, maxRoots: 4,
+      state: async () => "expired", authority: async () => ({
+        state: "expired", expiresAt: NOW - 1000, revision: "fixture", isCurrent: () => true,
+      }),
+    });
+    expect(report).toMatchObject({ lowSpace: true, pressure: false, pass: null, rootPageLimit: 4, checked: 4, removed: 4, errors: 0 });
+    expect(due.filter(directory => fs.existsSync(directory))).toHaveLength(2);
+    expect(f.store.activePressurePass()).toBeNull();
+  } finally { f.store.close(); }
+});
+
 test.each(["closed", "completed", "running", "paused", "needs_decision"] as const)("disk pressure below the configured cap protects %s lane ownership", async state => {
   const f = fixture(), pipeline = finishedLane(f.root, "2035-01-14T00:00:00Z");
   pipeline.state = state; savePipelines([pipeline]);

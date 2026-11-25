@@ -1,4 +1,7 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { withHostStopOrigin } from "./hostExit";
+import type { EngineHost } from "./engineHost";
 import { requestAccountMigrationTick } from "@/lib/accounts/migration/controllerSignal";
 import { accountManager } from "@/lib/accounts/manager";
 import { advanceConversationMigration } from "@/lib/accounts/migration/coordinator";
@@ -31,6 +34,30 @@ export class StructuredReconfigureCancelledError extends Error {
     super("cancelled");
     this.name = "StructuredReconfigureCancelledError";
   }
+}
+
+class AntigravityLiveReconfigureRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AntigravityLiveReconfigureRefusedError";
+  }
+}
+
+class AntigravityLiveReconfigureRollbackError extends Error {
+  readonly rollbackFailed = true;
+  constructor(message: string) {
+    super(message);
+    this.name = "AntigravityLiveReconfigureRollbackError";
+  }
+}
+
+const liveReconfigureHostStorage = new AsyncLocalStorage<EngineHost | null>();
+
+/** Binds the currently resolved live host for an in-flight reconfigure call so
+    idle Antigravity hosts can apply `session/set_config_option` in place without
+    restarting the child process. */
+export function withLiveReconfigureHost<T>(host: EngineHost | null, fn: () => T): T {
+  return liveReconfigureHostStorage.run(host, fn);
 }
 
 const settledElsewhere = (error: unknown) => error instanceof StructuredReconfigureSupersededError || error instanceof StructuredReconfigureCancelledError;
@@ -91,11 +118,52 @@ async function releaseStructuredHost(key: SessionKey, assertCurrent?: () => void
   return await releaseStructuredDeliveryHost(key);
 }
 
+async function reconfigureIdleHostInstance(
+  host: EngineHost,
+  key: SessionKey,
+  settings: { model?: string | null; effort?: string | null },
+): Promise<boolean> {
+  if (typeof host.reconfigure !== "function") return false;
+  let health;
+  try { health = await host.health(); }
+  catch { return false; }
+  if (health.status !== "idle" || health.activeTurnRef !== null || health.sessionKey !== key.sessionId) return false;
+  try {
+    await host.reconfigure(settings);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if ((error as Error & { rollbackFailed?: unknown }).rollbackFailed === true) {
+      throw new AntigravityLiveReconfigureRollbackError(message);
+    }
+    const rpcCode = (error as Error & { rpcCode?: unknown }).rpcCode;
+    if (typeof rpcCode === "number") {
+      throw new AntigravityLiveReconfigureRefusedError(message);
+    }
+    return false;
+  }
+}
+
+async function tryLiveAntigravityReconfigure(
+  key: SessionKey,
+  settings: { model?: string | null; effort?: string | null },
+  override?: (key: SessionKey, settings: { model?: string | null; effort?: string | null }) => Promise<boolean>,
+): Promise<boolean> {
+  if (override) return await override(key, settings);
+  const scopedHost = liveReconfigureHostStorage.getStore();
+  if (scopedHost) {
+    return await reconfigureIdleHostInstance(scopedHost, key, settings);
+  }
+  const { reconfigureLiveStructuredDeliveryHost } = await import("./structuredDeliveryController");
+  return await reconfigureLiveStructuredDeliveryHost(key, settings);
+}
+
 export interface StructuredReconfigureDependencies {
   registry?: AgentRegistry;
   validateAccount?: (engine: "claude" | "codex", accountId: string) => Promise<void>;
   resolveAccount?: typeof accountManager.resolveSpawn;
   preflightSource?: typeof preflightCodexSource;
+  reconfigureLiveHost?: (key: SessionKey, settings: { model?: string | null; effort?: string | null }) => Promise<boolean>;
   releaseHost?: (key: SessionKey) => Promise<boolean>;
   recover?: typeof recoverDeadStructuredConversation;
   ownsOperation?: () => Promise<boolean>;
@@ -175,6 +243,9 @@ export async function applyStructuredReconfigure(
   const switchingAccount = Boolean(effect.accountId && effect.accountId !== generation.accountId);
   if (engine === "copilot" && switchingAccount) {
     throw new Error("a Copilot session stays in its account's COPILOT_HOME; account changes require a new conversation");
+  }
+  if (engine === "antigravity" && switchingAccount) {
+    throw new Error("an Antigravity session uses the host's signed-in account; account changes are not supported");
   }
   const ownsOperation = dependencies.ownsOperation ?? (async () => true);
   const release = (key: SessionKey, assertCurrent?: () => void) => withHostStopOrigin({ path: "structured-reconfigure", operationId: effect.operationId }, () => {
@@ -466,6 +537,46 @@ export async function applyStructuredReconfigure(
       // Admission may have ticked while this executor still owned the switch.
       // Wake again after commit so its assigned messages dispatch immediately.
       if (committedSuccessorId) requestAccountMigrationTick();
+    }
+  }
+
+  if (engine === "antigravity") {
+    try {
+      if (!await ownsDurableReconfigure("applying")) throw new StructuredReconfigureSupersededError();
+      const appliedLive = await tryLiveAntigravityReconfigure(
+        key,
+        { model: effect.model, effort: effect.effort },
+        dependencies.reconfigureLiveHost,
+      );
+      if (appliedLive) {
+        if (!await ownsDurableReconfigure("applying")) throw new StructuredReconfigureSupersededError();
+        await settle("applied");
+        return "applied";
+      }
+    } catch (error) {
+      if (settledElsewhere(error) || registryBusy(error)) throw error;
+      const rollbackFailed = error instanceof AntigravityLiveReconfigureRollbackError
+        || (error as Error & { rollbackFailed?: unknown })?.rollbackFailed === true;
+      if (rollbackFailed) {
+        await settle("failed", error);
+        const custody = captureReleasedHostCustody(registry, key);
+        await release(key);
+        await terminateReleasedHost(registry, key, conversationId, custody, (current) =>
+          current?.reconfigure?.operationId === effect.operationId
+          && current.reconfigure.revision === effect.eventSeq
+          && current.reconfigure.status === "failed");
+        await recover({ path: generation.path, conversationId }, {
+          registry,
+          ownership: recoveryOwnership("failed"),
+        }).catch(() => null);
+        throw error;
+      }
+      const rpcCode = (error as Error & { rpcCode?: unknown })?.rpcCode;
+      if (error instanceof AntigravityLiveReconfigureRefusedError || typeof rpcCode === "number") {
+        await settle("failed", error);
+        throw error;
+      }
+      // If the host died or became unavailable mid-reconfigure, fall back to restart recovery below.
     }
   }
 

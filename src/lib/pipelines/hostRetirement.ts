@@ -1,7 +1,7 @@
 import type { RuntimeEngine, RuntimeProviderRecoveryRef } from "@/lib/runtime/contracts";
 import { durableStageTurnEvidence } from "./durableEvidence";
 import { liveBackgroundTasks } from "./backgroundTasks";
-import { classifyProviderCondition } from "./providerConditions";
+import { classifyProviderCondition, CODEX_CYBERSECURITY_REFUSAL } from "./providerConditions";
 import { pipelineAttemptMayBeWorking } from "./attemptWorking";
 import type { Pipeline, PipelineStageAttempt, PipelineStageHostRef } from "./types";
 import { recordedHostHeld } from "@/lib/recordedChecks/store";
@@ -24,6 +24,15 @@ export function pipelineAttemptReleased(pipeline: Pipeline, attempt: PipelineSta
 }
 
 type HostIdentity = Pick<PipelineStageHostRef, "conversationId" | "agentPath" | "paneId" | "launchId"> & { sessionId?: string | null };
+
+function parkedCodexRefusal(attempt: PipelineStageAttempt): boolean {
+  const wait = attempt.providerWait;
+  const recovery = attempt.providerRecoveries?.at(-1);
+  return attempt.effectiveRole.engine === "codex" && Boolean(attempt.completedAt)
+    && !attempt.report && !attempt.verdict && !wait?.stageRetry
+    && wait?.condition.kind === "other" && wait.condition.label === CODEX_CYBERSECURITY_REFUSAL
+    && recovery?.action === "park" && recovery.condition.label === CODEX_CYBERSECURITY_REFUSAL;
+}
 
 /** A repair may be reserved by a later stage and dispatched to an earlier
  * producer. A decision park keeps its ordinary idle interval until the engine
@@ -54,7 +63,10 @@ export function pipelineRetirementOwnership(pipeline: Pipeline) {
     const pendingDispatch = switches.length > 0 || producers.has(attempt)
       || current && (attempt.commitRepair && !attempt.commitRepair.settledAt && !attempt.commitRepair.outcome
         || attempt.publicationTextRepair?.state === "pending");
-    const decision = current && (attempt.state === "needs_decision" || attempt.verdict?.status === "needs_decision");
+    // A completed provider refusal can use the ordinary idle reap while the
+    // lane waits for a decision. Live work and pending dispatch still fence it.
+    const decision = current && (attempt.verdict?.status === "needs_decision"
+      || attempt.state === "needs_decision" && !parkedCodexRefusal(attempt));
     const working = pipelineAttemptMayBeWorking(attempt);
     const fenced = Boolean(publishing || pendingDispatch || attempt.activation && attempt.activation.phase !== "settled");
     const reason: PipelineRetirementReason | null = fenced || decision || attempt.historical ? null

@@ -1,7 +1,53 @@
-import { expect, fixture, path, root, source, spawnSync, test, writeFileSync } from "./local-gate-tests.fixture";
+import { expect, fixture, path, readFileSync, root, source, spawnSync, test, writeFileSync } from "./local-gate-tests.fixture";
 
 const serviceTest = test.skipIf(process.platform !== "linux"
   || spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" }).status !== 0);
+
+serviceTest("a delayed service start lets a file deadline complete owned cleanup", () => {
+  const f = fixture(source(true));
+  const marker = path.join(f.dir, "baseline-started");
+  const serviceLog = path.join(f.dir, "baseline-service.log");
+  writeFileSync(path.join(f.dir, "example.test.ts"), `import { test } from "bun:test";
+import { writeFileSync } from "node:fs";
+test("contract", () => {
+  process.on("SIGTERM", () => {});
+  writeFileSync(${JSON.stringify(marker)}, "started");
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);
+});`);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "Slow service baseline");
+  const base = f.git("rev-parse", "HEAD");
+  writeFileSync(path.join(f.dir, "example.test.ts"),
+    'import { test, expect } from "bun:test"; test("contract", () => expect(false).toBe(true));');
+  const launcher = path.join(f.dir, "systemd-run");
+  writeFileSync(launcher, `#!/bin/bash
+if [[ $PWD == */baseline ]]; then
+  sleep 7
+  "$REAL_SYSTEMD_RUN" "$@" 2>&1 | tee "$BASELINE_SERVICE_LOG"
+  exit "\${PIPESTATUS[0]}"
+fi
+exec "$REAL_SYSTEMD_RUN" "$@"
+`, { mode: 0o700 });
+  const driver = path.join(f.dir, "driver.ts");
+  writeFileSync(driver, `import { touchedTests, comparatorEnding } from ${JSON.stringify(path.join(root, "scripts/local-gate-tests.ts"))};
+import { publicationDeadlineOnly } from ${JSON.stringify(path.join(root, "src/lib/pipelines/publication.ts"))};
+try { await touchedTests(${JSON.stringify(f.dir)}, ${JSON.stringify(base)}, ["example.test.ts"], { budgets: { fileMs: 8000, runMs: 60000 } }); }
+catch (error) {
+  const ending = comparatorEnding(error);
+  console.log(ending.line);
+  console.log("retryable=" + publicationDeadlineOnly(ending.line));
+  process.exitCode = ending.code;
+}`);
+  const result = spawnSync(process.execPath, [driver], { cwd: f.dir,
+    env: { ...f.env, PATH: `${f.dir}${path.delimiter}${f.env.PATH}`,
+      REAL_SYSTEMD_RUN: Bun.which("systemd-run")!, BASELINE_SERVICE_LOG: serviceLog },
+    encoding: "utf8", timeout: 45_000 });
+  expect(readFileSync(marker, "utf8")).toBe("started");
+  expect(readFileSync(serviceLog, "utf8")).toContain("owned runner: deadline expired");
+  expect(result.status, result.stdout + result.stderr).toBe(75);
+  expect(result.stdout).toContain("retryable=true");
+  expect(result.stdout).not.toContain("surviving owned processes:");
+}, 60_000);
+
 serviceTest.each(["timeout first", "cleanup first", "only timeouts"] as const)("filtered worker refusals survive comparator restarts: %s", mode => {
   const timeout = 'import { test } from "bun:test"; test("contract", () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20000));';
   const cleanup = `import { test } from "bun:test";

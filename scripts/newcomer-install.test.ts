@@ -36,6 +36,16 @@ const expected = {
 const at = "2026-11-14T11:45:29.000Z";
 const cleanReceipt = { at, removed: [], kept: [], reclaimedCacheBytes: 0, errors: [] };
 
+function writeInstalledPackage(bunInstall: string, supportsRunId: boolean) {
+  const pkg = join(bunInstall, "install/global/node_modules/delegatus-cli");
+  const chunks = join(pkg, "dist/standalone/.next/server/chunks");
+  mkdirSync(chunks, { recursive: true });
+  writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "delegatus-cli", version: "2.3.0" }));
+  writeFileSync(join(chunks, "retention.js"), supportsRunId
+    ? "const runId = options.env.LLV_RETENTION_RUN_ID;"
+    : "const keep = options.env.LLV_SELF_UPDATE_KEEP_RELEASES;");
+}
+
 test.each([
   ["clean", { status: "completed", at, errorCount: 0 }, null],
   ["error", { status: "completed", at, errorCount: 1 }, "retention completed with 1 error(s)"],
@@ -50,7 +60,36 @@ test.each([
   ["post-rename-fsync", { status: "completed", at, errorCount: 1 }, "retention completed with 1 error(s)"],
   ["exited", { status: "unavailable", reason: "launcher exited before retention receipt" }, "launcher exited before retention receipt"],
   ["later-start", undefined, null],
-] as const)("startup rehearsal records HTTP and handles retention for %s", async (scenario, retention, failure) => {
+] as const)("startup rehearsal records HTTP and handles retention for %s", checkRetentionCase);
+
+test("a fresh legacy receipt passes and a capable package requires this launch's receipt and marker", async () => {
+  await checkRetentionCase("foreign-receipt", { status: "unavailable", reason: "retention receipt belongs to another launch" },
+    "retention receipt belongs to another launch");
+  await checkRetentionCase("foreign-marker", { status: "unavailable", reason: "retention completion belongs to another launch" },
+    "retention completion belongs to another launch");
+  await checkRetentionCase("legacy-clean", { status: "completed", completionProtocol: "unavailable", errorCount: 0 }, null);
+});
+
+test("legacy receipts reject foreign run IDs and retention write diagnostics", async () => {
+  await checkRetentionCase("legacy-foreign-receipt", {
+    status: "unavailable", reason: "legacy retention receipt contains a run ID", completionProtocol: "unavailable",
+  }, "legacy retention receipt contains a run ID");
+  await checkRetentionCase("legacy-post-rename-fsync", {
+    status: "completed", completionProtocol: "unavailable", errorCount: 1,
+  }, "retention completed with 1 error(s)");
+});
+
+test.each([
+  ["legacy-error", { status: "completed", errorCount: 1 }, "retention completed with 1 error(s)"],
+  ["legacy-missing", { status: "unavailable", reason: "retention receipt timed out" }, "retention receipt timed out"],
+  ["legacy-preexisting", { status: "unavailable", reason: "retention receipt predates launcher" }, "retention receipt predates launcher"],
+  ["legacy-old-mtime", { status: "unavailable", reason: "retention receipt predates launcher" }, "retention receipt predates launcher"],
+  ["legacy-old-timestamp", { status: "unavailable", reason: "retention receipt predates launcher" }, "retention receipt predates launcher"],
+] as const)("a package without the completion protocol fails on %s", async (scenario, retention, failure) => {
+  await checkRetentionCase(scenario, { ...retention, completionProtocol: "unavailable" }, failure);
+});
+
+async function checkRetentionCase(scenario: string, retention: object | undefined, failure: string | null) {
   const fixture = mkdtempSync(join(tmpdir(), "newcomer-case-"));
   try {
     const home = join(fixture, "home");
@@ -60,28 +99,32 @@ test.each([
     const receipt = join(state, "self-update/retention.json");
     const launcher = join(bunInstall, "bin/delegatus");
     for (const dir of [directory, dirname(receipt), dirname(launcher)]) mkdirSync(dir, { recursive: true });
+    const legacy = scenario.startsWith("legacy-");
+    writeInstalledPackage(bunInstall, !legacy);
     const unrelatedReceipt = join(fixture, "other-state/self-update/retention.json");
     mkdirSync(dirname(unrelatedReceipt), { recursive: true });
     writeFileSync(unrelatedReceipt, JSON.stringify(cleanReceipt));
-    if (scenario === "stale") writeFileSync(receipt, JSON.stringify(cleanReceipt));
+    if (scenario === "stale" || scenario === "legacy-preexisting") writeFileSync(receipt, JSON.stringify(cleanReceipt));
     const syntheticError = `Synthetic permission error at ${receipt}`;
     // The fixture answers the real HTTP probes before publishing an atomic
     // receipt. The missing scenario writes a clean receipt only on teardown.
     writeFileSync(launcher, `#!/usr/bin/env node
 const { createServer } = require("node:http");
-const { mkdirSync, renameSync, writeFileSync } = require("node:fs");
+const { mkdirSync, renameSync, utimesSync, writeFileSync } = require("node:fs");
 const file = ${JSON.stringify(receipt)};
 const staleFile = file + ".stale";
 const clean = ${JSON.stringify(cleanReceipt)};
 const scenario = ${JSON.stringify(scenario)};
 const runId = process.env.LLV_RETENTION_RUN_ID;
-function publish(report) {
+function publish(report, mtime) {
   writeFileSync(file + ".tmp", JSON.stringify(report));
+  if (mtime !== undefined) utimesSync(file + ".tmp", mtime, mtime);
   renameSync(file + ".tmp", file);
 }
 function complete(report, errors = report.errors.length) {
-  publish({ ...report, runId });
-  console.error("[self-update] retention pass " + runId + " complete; " + errors + " error(s)");
+  publish({ ...report, runId: scenario === "foreign-receipt" ? "foreign-run" : runId });
+  const markerRunId = scenario === "foreign-marker" ? "foreign-run" : runId;
+  console.error("[self-update] retention pass " + markerRunId + " complete; " + errors + " error(s)");
 }
 function stop() {
   if (scenario === "missing") publish(clean);
@@ -102,6 +145,19 @@ const server = createServer((request, response) => {
   }
   if (scenario === "post-rename-fsync") setTimeout(() => complete({ ...clean, errors: [] }, 1), 75);
   if (scenario === "pending-close") setTimeout(() => publish({ ...clean, runId }), 75);
+  if (scenario === "foreign-receipt" || scenario === "foreign-marker") complete(clean);
+  if (["legacy-clean", "legacy-error", "legacy-old-mtime", "legacy-old-timestamp", "legacy-foreign-receipt", "legacy-post-rename-fsync"].includes(scenario)) {
+    publish({
+      ...clean,
+      at: scenario === "legacy-old-timestamp" ? clean.at : new Date().toISOString(),
+      ...(scenario === "legacy-foreign-receipt" && { runId: "other-launch" }),
+      errors: scenario === "legacy-error" ? [${JSON.stringify(syntheticError)}] : [],
+    }, scenario === "legacy-old-mtime" ? 1 : undefined);
+    if (scenario === "legacy-post-rename-fsync") {
+      console.error("[self-update] cannot write retention report: synthetic directory fsync failure");
+      console.log("[self-update] retention removed 0; reclaimed 0 cache bytes; 1 error(s)");
+    }
+  }
   if (scenario === "late-stale" || scenario === "late-fresh") {
     setTimeout(() => {
       writeFileSync(staleFile, JSON.stringify(clean));
@@ -124,12 +180,13 @@ server.listen(Number(process.argv[4]), "127.0.0.1", () => {
     const label = scenario === "later-start" ? "path-claude" : "neither-cli";
     const errorFile = join(directory, `${label}-error.txt`);
     const result = startCase(label, env, expected, {
-      directory, rows, retentionTimeoutMs: ["missing", "pending-close", "late-stale"].includes(scenario) ? 300 : 3_000,
+      directory, rows, retentionTimeoutMs: ["missing", "pending-close", "late-stale", "legacy-missing"].includes(scenario) ? 300 : legacy ? 1_000 : 3_000,
     }).catch((error: Error) => error.message);
     expect(await result).toBe(failure ? `neither-cli: ${failure}` : undefined);
+    const completedLegacy = legacy && ["legacy-clean", "legacy-error", "legacy-post-rename-fsync"].includes(scenario);
     expect(rows).toEqual([{
       case: label, rootStatus: 200, cli: expected.presence, message: expected.message, passed: failure === null,
-      ...(retention && { retention }),
+      ...(retention && { retention: { ...retention, ...(completedLegacy && { at: JSON.parse(readFileSync(receipt, "utf8")).at }) } }),
     }]);
     expect(readFileSync(`${receipt}.stopped`, "utf8")).toBe("yes");
     const log = readFileSync(join(directory, `${label}.log`), "utf8");
@@ -141,7 +198,7 @@ server.listen(Number(process.argv[4]), "127.0.0.1", () => {
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }
-});
+}
 
 test("a failed first retention case remains in the report while the other cases and audit run", async () => {
   const fixture = mkdtempSync(join(tmpdir(), "newcomer-driver-"));

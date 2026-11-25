@@ -177,6 +177,7 @@ export function transcriptEngineForRoot(root: RootKey): TranscriptEngine {
   if (root === "codex-sessions") return "codex";
   if (root === "openclaw-sessions") return "openclaw";
   if (root === "copilot-sessions") return "copilot";
+  if (root === "antigravity-sessions") return "antigravity";
   return "claude";
 }
 

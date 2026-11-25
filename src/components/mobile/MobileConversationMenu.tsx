@@ -49,6 +49,8 @@ import { chatStateBits, type StagePosition } from "./mobileChatState";
  */
 export function MobileConversationMenu({
   file,
+  seatWaiting = false,
+  decisionWaiting = false,
   stage,
   pipelineCount = 0,
   crowned,
@@ -76,6 +78,11 @@ export function MobileConversationMenu({
   onClose,
 }: {
   file: FileEntry;
+  /** This is the seat's conversation and its turn is idle with the host alive:
+      the head reads «waiting», as the conversation bar does. */
+  seatWaiting?: boolean;
+  /** This is the seat's conversation and a decision form of its project is open. */
+  decisionWaiting?: boolean;
   /** Where this conversation sits in its pipeline, when it is a stage. */
   stage: StagePosition | null;
   /** Active pipelines on the board, for the generic first row when this
@@ -126,7 +133,7 @@ export function MobileConversationMenu({
   const { t } = useLocale();
   const actions = useAgentControlActions(file);
   const kill = useProcessKill(file);
-  const bits = chatStateBits(t, file);
+  const bits = chatStateBits(t, file, { seatWaiting, decisionWaiting });
   const badge = engineBadge(file);
   const controls = actions.caps.controls;
   const title = cleanTitle(file.title, 90);
@@ -174,7 +181,7 @@ export function MobileConversationMenu({
             «Details & host». */}
         <div className="flex min-h-9 flex-wrap items-center gap-x-2 gap-y-1 px-4 pb-1 text-label font-medium text-secondary" data-mobile2-chat-identity>
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${bits.tone === "success" ? "bg-success" : bits.tone === "warning" ? "bg-warning" : bits.tone === "danger" ? "bg-danger" : bits.tone === "accent" ? "bg-accent" : "bg-strong"}`} aria-hidden />
-          <span className="shrink-0">{bits.phrase}</span>
+          <span data-mobile2-state-phrase={bits.tone} className="shrink-0">{bits.phrase}</span>
           <span aria-hidden className="text-muted">·</span>
           <span className="min-w-0 truncate" title={effortTitle(file)}>
             {conversationModelLabel(file) ? (file.effort ? t("mobile2.chat.identity", { model: conversationModelLabel(file)!, effort: file.effort }) : conversationModelLabel(file)) : badge.label}

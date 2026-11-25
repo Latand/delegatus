@@ -36,13 +36,13 @@ for (const lowSpace of [false, true]) for (const phase of ["allocation", "protec
       }
       process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace ? "1000000000" : "0";
       process.env.LLV_PRESSURE_FIXTURE = config;
-      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+      fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: lowSpace ? 0 : 1e12,
         slowProof: { phase, prefix: 49, timeoutPrefix: 8, requiredCost: 1500 } }));
       const before = store.bytes();
       let report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
       for (let tick = 1; fs.existsSync(directories[8]!.directory) && tick < 5; tick++) {
         expect(report.errors).toBe(0); expect(clock.elapsed).toBeLessThanOrEqual(40_001);
-        fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+        fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: lowSpace ? 0 : 1e12,
           slowProof: { phase, prefix: 49, timeoutPrefix: 8, requiredCost: 1500 } }));
         report = await realParentPass(); clock = JSON.parse(fs.readFileSync(config, "utf8"));
       }
@@ -84,7 +84,7 @@ test.each([false, true])("real parent resumes behind a held suffix without an em
     const identity = store.owner(held)!.identity, heldBytes = store.owner(held)!.bytes;
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace ? "1000000000" : "0";
     process.env.LLV_PRESSURE_FIXTURE = config;
-    fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+    fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: lowSpace ? 0 : 1e12,
       slowProof: { phase: "allocation", prefix: 2, requiredCost: 1500 } }));
     const report = await realParentPass();
     expect(report).toMatchObject({ removed: 1, removedBytes: 12288, checked: 2, deferred: 0, errors: 0, bytes: heldBytes });

@@ -16,12 +16,12 @@ import type { FileEntry } from "@/lib/types";
  * The mark itself is the Viewer's one shared `EngineMark` (#1743): the phone
  * and the desktop draw the same Claude and Codex.
  */
-export function ChatEngineMark({ file }: { file: FileEntry }) {
+export function ChatEngineMark({ file, working = false }: { file: FileEntry; working?: boolean }) {
   /* `data-mobile2-engine` stays the phone's own selector for this mark (mobile
      v2 README §3.2); what changed under it is the drawing. */
   return (
     <span data-mobile2-engine={file.engine} className="inline-flex shrink-0" aria-hidden>
-      <EngineMark engine={file.engine} size={14} />
+      <EngineMark engine={file.engine} size={14} working={working} />
     </span>
   );
 }

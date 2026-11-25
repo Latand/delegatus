@@ -50,6 +50,7 @@ const { groupWorkRows, publishBlockerNames, workRows } = await import("./blocker
 const { SelfUpdateConfirm } = await import("./SelfUpdateConfirm");
 const { SelfUpdateDialog } = await import("./SelfUpdateDialog");
 const { setLocale, translate } = await import("@/lib/i18n");
+const { MOBILE_LAYOUT_QUERY, mobileLayoutViewport } = await import("@/lib/attention/eligibility");
 
 /* Opaque keys of the scanner's shape, built here so no literal looks like one. */
 const DELEGATUS = `repo-${"ab".repeat(10)}`;
@@ -321,5 +322,240 @@ describe("the automatic-updates switch", () => {
     await act(async () => { refuse(); await new Promise((resolve) => setTimeout(resolve, 10)); });
     expect(toggle().textContent).toBe("Turn on");
     expect(dom.document.querySelector("[data-error='action']")).not.toBeNull();
+  });
+});
+
+/* An answer is drawn where its own action's button is, however many actions
+   the person started before it came back: the Update card's refusal belongs in
+   that card at every window size, because the confirmation scrolls the dialog
+   to that card, and Check now's answer always belongs in the header. */
+describe("an action's answer lands with the action that asked", () => {
+  const REFUSED = "The selected revision is not green (typecheck).";
+  const CHECK_FAILED = "The request failed (HTTP 500).";
+  const VIEWPORTS = [
+    ["a portrait phone", 390, 844],
+    ["a landscape phone", 844, 390],
+    ["a short desktop window in one column", 800, 650],
+    ["a desktop", 1440, 900],
+  ] as const;
+
+  const held = () => {
+    let release: (response: Response) => void = () => {};
+    const promise = new Promise<Response>((resolve) => { release = resolve; });
+    return { promise, release };
+  };
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const refusal = () => json(409, { code: "deployment-refused", detail: "red", snapshot: snapshot("ready"),
+    green: { state: "red", detail: "typecheck", checks: ["typecheck"] } });
+  const lines = (scope: { querySelectorAll(selector: string): Iterable<{ textContent: string | null }> } | null) =>
+    [...(scope?.querySelectorAll("[data-error='action']") ?? [])].map((line) => line.textContent);
+  const where = (name: string) => dom.document.querySelector(`[data-section='${name}']`);
+  const wait = (ms: number) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
+
+  /* happy-dom reads the query list's comma as AND, so the phone query is
+     answered here by the project's own predicate for the viewport under test. */
+  let viewport = { width: 1024, height: 768 };
+  beforeAll(() => {
+    (dom as unknown as { matchMedia: unknown }).matchMedia = (query: string) => ({
+      matches: query === MOBILE_LAYOUT_QUERY ? mobileLayoutViewport(viewport) : false,
+      media: query, addEventListener() {}, removeEventListener() {},
+    });
+  });
+  afterAll(() => { delete (dom as unknown as { matchMedia?: unknown }).matchMedia; });
+  afterEach(() => { viewport = { width: 1024, height: 768 }; });
+
+  for (const [name, width, height] of VIEWPORTS) for (const order of ["update first", "check first"] as const) {
+    test(`${name}: Update's refusal and Check now's failure keep their own places (${order})`, async () => {
+      viewport = { width, height };
+      const update = held();
+      const check = held();
+      globals.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        if (init?.method === "POST") return path.endsWith("/update") ? update.promise : check.promise;
+        return json(200, snapshot("ready"));
+      }) as typeof fetch;
+      await mount(<SelfUpdateDialog onClose={() => {}} />);
+      for (let tries = 0; tries < 40 && !dom.document.querySelector("[data-action='update']"); tries++) await wait(25);
+
+      await act(async () => { button(dom.document, "[data-action='update']").click(); });
+      await act(async () => { button(confirmDialog(), "[data-action='confirm-apply']").click(); });
+      /* Update's answer is still out when Check now is pressed. */
+      await act(async () => { button(dom.document, "[data-action='check']").click(); });
+
+      const answers = order === "update first"
+        ? [() => update.release(refusal()), () => check.release(json(500, {}))]
+        : [() => check.release(json(500, {})), () => update.release(refusal())];
+      for (const answer of answers) { await act(async () => { answer(); await new Promise((resolve) => setTimeout(resolve, 10)); }); }
+
+      expect(lines(where("update"))).toEqual([REFUSED]);
+      expect(lines(where("header"))).toEqual([CHECK_FAILED]);
+      expect(lines(dom.document.body)).toHaveLength(2);
+    });
+  }
+});
+
+/* A confirmed action's answer is drawn in the card the confirmation scrolls
+   to, at every layout, and scrolled into the dialog's scroller once drawn, so
+   the answer is where the person is looking. The install action (Restart
+   launcher) has its own card above the header; Update has the Update card. */
+describe("a confirmed action keeps its answer in its own card and on screen", () => {
+  const WARNED = "Optional CI checks failed for this update (Windows (native)).";
+  const REFUSED = "The selected revision is not green (typecheck).";
+  const VIEWPORTS = [["a portrait phone", 390, 844], ["a landscape phone", 844, 390], ["a short desktop window in one column", 800, 650], ["a desktop", 1440, 900]] as const;
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const needsRestart = (): Snapshot => ({ ...snapshot("ready"), action: { id: "restart-service", button: true, unit: "delegatus.service" } } as unknown as Snapshot);
+  const lines = (scope: { querySelectorAll(selector: string): Iterable<{ textContent: string | null }> } | null) =>
+    [...(scope?.querySelectorAll("[data-error='action'], [data-warning='optional-checks']") ?? [])].map((line) => line.textContent);
+  const where = (name: string) => dom.document.querySelector(`[data-section='${name}']`);
+  const wait = (ms: number) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
+
+  let viewport = { width: 1024, height: 768 };
+  const scrolledTo: (string | null)[] = [];
+  const proto = (dom.window as unknown as { Element: { prototype: { scrollIntoView?: unknown } } }).Element.prototype;
+  let originalScroll: unknown;
+  beforeAll(() => {
+    (dom as unknown as { matchMedia: unknown }).matchMedia = (query: string) => ({
+      matches: query === MOBILE_LAYOUT_QUERY ? mobileLayoutViewport(viewport) : false,
+      media: query, addEventListener() {}, removeEventListener() {},
+    });
+    originalScroll = proto.scrollIntoView;
+    /* A card is recorded by its section; an outcome line by the card that drew it. */
+    proto.scrollIntoView = function (this: { getAttribute(name: string): string | null; closest(selector: string): { getAttribute(name: string): string | null } | null }) {
+      scrolledTo.push(this.getAttribute("data-section") ?? `outcome:${this.closest("[data-section]")?.getAttribute("data-section")}`);
+    };
+  });
+  afterAll(() => {
+    delete (dom as unknown as { matchMedia?: unknown }).matchMedia;
+    proto.scrollIntoView = originalScroll;
+  });
+  afterEach(() => { viewport = { width: 1024, height: 768 }; scrolledTo.length = 0; });
+
+  for (const [name, width, height] of VIEWPORTS) for (const [answer, response, expected] of [
+    ["admitted with a warning", () => json(202, { ...needsRestart(), optionalCheckFailures: ["Windows (native)"] }), [WARNED]],
+    ["refused for a red required check", () => json(409, { code: "deployment-refused", detail: "red", snapshot: needsRestart(),
+      green: { state: "red", detail: "typecheck", checks: ["typecheck"] } }), [REFUSED]],
+  ] as const) {
+    test(`${name}: the answer to a confirmed Restart launcher, ${answer}, is in the install card, which the confirmation scrolls to`, async () => {
+      viewport = { width, height };
+      const posts: string[] = [];
+      globals.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "POST") { posts.push(String(input)); return response(); }
+        return json(200, needsRestart());
+      }) as typeof fetch;
+      await mount(<SelfUpdateDialog onClose={() => {}} />);
+      for (let tries = 0; tries < 40 && !dom.document.querySelector("[data-action='install-action']"); tries++) await wait(25);
+      await act(async () => { button(dom.document, "[data-action='install-action']").click(); });
+      await act(async () => { button(confirmDialog(), "[data-action='confirm-apply']").click(); });
+      await wait(30);
+
+      expect(posts).toEqual(["/api/self-update/action"]);
+      /* The confirmation scrolls to the card; the answer then scrolls its own lines in. */
+      expect(scrolledTo).toEqual(["install-action", "outcome:install-action"]);
+      expect(lines(where("install-action"))).toEqual([...expected]);
+      expect(lines(where("header"))).toEqual([]);
+      expect(lines(dom.document.body)).toHaveLength(1);
+    });
+  }
+
+  /* The Update card's answer, at every size where the dialog scrolls. The
+     confirmation scrolls to the card before the answer exists, and the answer
+     adds lines under the button, so the lines are scrolled in once drawn. */
+  for (const [name, width, height] of VIEWPORTS) for (const [answer, response, expected] of [
+    ["admitted with a warning", () => json(202, { ...snapshot("ready"), optionalCheckFailures: ["Windows (native)"] }), [WARNED]],
+    ["refused for a red required check", () => json(409, { code: "deployment-refused", detail: "red", snapshot: snapshot("ready"),
+      green: { state: "red", detail: "typecheck", checks: ["typecheck"] } }), [REFUSED]],
+  ] as const) {
+    test(`${name}: the answer to a confirmed Update, ${answer}, is in the Update card and scrolled into view`, async () => {
+      viewport = { width, height };
+      globals.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST" ? response() : json(200, snapshot("ready"))) as typeof fetch;
+      await mount(<SelfUpdateDialog onClose={() => {}} />);
+      for (let tries = 0; tries < 40 && !dom.document.querySelector("[data-action='update']"); tries++) await wait(25);
+      await act(async () => { button(dom.document, "[data-action='update']").click(); });
+      await act(async () => { button(confirmDialog(), "[data-action='confirm-apply']").click(); });
+      await wait(30);
+
+      expect(scrolledTo).toEqual(["update", "outcome:update"]);
+      expect(lines(where("update"))).toEqual([...expected]);
+      expect(lines(where("header"))).toEqual([]);
+      expect(lines(dom.document.body)).toHaveLength(1);
+    });
+  }
+
+  /* A confirmed Restart launcher relaunches the Viewer. The snapshot that
+     answers afterwards comes from a different web process and carries no
+     action (a relaunch-capable launcher needs none), so the card that held the
+     answer loses its action. The answer stays, once, beside the new-version
+     banner, and is scrolled in again because the banner moved the card. */
+  const relaunched = (): Snapshot => ({ ...snapshot("ready"), processes: { web: { ...proc(51377), port: 45123 }, runtimeHost: proc(48190) }, action: null } as unknown as Snapshot);
+  const afterRelaunch = async (response: () => Response) => {
+    let reconnected = false;
+    globals.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") { reconnected = true; return response(); }
+      return json(200, reconnected ? relaunched() : needsRestart());
+    }) as typeof fetch;
+    await mount(<SelfUpdateDialog onClose={() => {}} />);
+    for (let tries = 0; tries < 40 && !dom.document.querySelector("[data-action='install-action']"); tries++) await wait(25);
+    await act(async () => { button(dom.document, "[data-action='install-action']").click(); });
+    await act(async () => { button(confirmDialog(), "[data-action='confirm-apply']").click(); });
+    await wait(30);
+    // The answer is drawn, and the action is still offered.
+    expect(dom.document.querySelector("[data-banner='reload']")).toBeNull();
+    for (let tries = 0; tries < 60 && !dom.document.querySelector("[data-banner='reload']"); tries++) await wait(50);
+  };
+
+  for (const [name, width, height] of VIEWPORTS) {
+    test(`${name}: a Restart launcher's optional-check warning stays once, beside the new-version banner, when the action disappears`, async () => {
+      viewport = { width, height };
+      await afterRelaunch(() => json(202, { ...needsRestart(), optionalCheckFailures: ["Windows (native)"] }));
+
+      const banner = dom.document.querySelector("[data-banner='reload']");
+      const card = where("install-action");
+      expect(banner).not.toBeNull();
+      expect(dom.document.querySelector("[data-action='install-action']")).toBeNull();
+      expect(card).not.toBeNull();
+      expect(lines(card)).toEqual([WARNED]);
+      expect(lines(dom.document.body)).toHaveLength(1);
+      // Banner first, then the card holding only the answer.
+      expect(banner!.compareDocumentPosition(card as never) & 4).toBe(4);
+      expect(card!.textContent).toBe(WARNED);
+      // The confirmation, the answer, then the new-version banner each brought the lines into the scroller.
+      expect(scrolledTo).toEqual(["install-action", "outcome:install-action", "outcome:install-action"]);
+    });
+  }
+
+  test("a Restart launcher's refusal stays once when the action it was refused for disappears", async () => {
+    await afterRelaunch(() => json(409, { code: "deployment-refused", detail: "red", snapshot: needsRestart(),
+      green: { state: "red", detail: "typecheck", checks: ["typecheck"] } }));
+    expect(dom.document.querySelector("[data-action='install-action']")).toBeNull();
+    expect(lines(where("install-action"))).toEqual([REFUSED]);
+    expect(lines(dom.document.body)).toHaveLength(1);
+  });
+
+  test("an install card with no action and no answer is not drawn", async () => {
+    globals.fetch = (async (_input: RequestInfo | URL, _init?: RequestInit) => json(200, relaunched())) as typeof fetch;
+    await mount(<SelfUpdateDialog onClose={() => {}} />);
+    await wait(60);
+    expect(dom.document.querySelector("[data-section='header']")).not.toBeNull();
+    expect(where("install-action")).toBeNull();
+  });
+
+  test("an answer that carries no lines scrolls nothing beyond the card", async () => {
+    globals.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST" ? json(202, snapshot("ready")) : json(200, snapshot("ready"))) as typeof fetch;
+    await mount(<SelfUpdateDialog onClose={() => {}} />);
+    for (let tries = 0; tries < 40 && !dom.document.querySelector("[data-action='update']"); tries++) await wait(25);
+    await act(async () => { button(dom.document, "[data-action='update']").click(); });
+    await act(async () => { button(confirmDialog(), "[data-action='confirm-apply']").click(); });
+    await wait(30);
+    expect(scrolledTo).toEqual(["update"]);
+  });
+
+  test("an Update confirmation still scrolls to the Update card", async () => {
+    globals.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST" ? json(202, snapshot("ready")) : json(200, snapshot("ready"))) as typeof fetch;
+    await mount(<SelfUpdateDialog onClose={() => {}} />);
+    for (let tries = 0; tries < 40 && !dom.document.querySelector("[data-action='update']"); tries++) await wait(25);
+    await act(async () => { button(dom.document, "[data-action='update']").click(); });
+    await act(async () => { button(confirmDialog(), "[data-action='confirm-apply']").click(); });
+    await wait(30);
+    expect(scrolledTo).toEqual(["update"]);
   });
 });

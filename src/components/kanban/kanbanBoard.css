@@ -299,9 +299,11 @@
 /* Keep promoted glyphs paused while their temporary text layers are released. */
 .kb [data-layout-animating="content"].mglyph::before,
 .kb [data-layout-animating="content"] .mglyph::before,
-.kb [data-layout-animating="content"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase),
+.kb [data-layout-animating="content"] .emark-neon::before,
+.kb [data-layout-animating="content"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase, .mg-neon-gas),
 .kb [data-column-text-held] .mglyph::before,
-.kb [data-column-text-held] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase),
+.kb [data-column-text-held] .emark-neon::before,
+.kb [data-column-text-held] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase, .mg-neon-gas),
 .kb :is([data-layout-animating="content"], [data-column-text-held]) :is(.pedge, .pdot, .pmark),
 .kb :is([data-layout-animating="content"], [data-column-text-held]) .pmark::before { animation-play-state: paused !important; }
 .kb .column.wide {
@@ -433,7 +435,8 @@
    `*` or attribute-substring subject, which would restyle every element on the
    page when the attribute is set (a 4000-element recalculation). */
 [data-card-drag] .mglyph[data-live="1"]::before,
-[data-card-drag] .mglyph[data-live="1"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase),
+[data-card-drag] .emark-neon[data-live="1"]::before,
+[data-card-drag] :is(.mglyph[data-live="1"], .emark-neon[data-live="1"]) :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase, .mg-neon-gas),
 [data-card-drag] .animate-pulse,
 [data-card-drag] .motion-safe\:animate-pulse,
 [data-card-drag] .pedge.live,
@@ -671,6 +674,7 @@
 .pident { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--color-muted); }
 .pident[data-engine="claude"] { color: var(--color-claude-mark); }
 .pident[data-engine="codex"] { color: var(--color-codex-mark); }
+.pident[data-engine="antigravity"] { color: var(--color-antigravity-mark); }
 .pident[data-identity="configured"] { color: var(--color-muted); }
 .pident .imodel { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-secondary); min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iplace { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; font-size: var(--text-caption); font-weight: 500; color: var(--color-secondary); white-space: nowrap; }
@@ -731,16 +735,6 @@
    which in this vocabulary is the pass count (#1743). */
 .cfired { display: inline-flex; flex-shrink: 0; border-radius: 999px; }
 .cfired.spent { padding: 2px; background: var(--surface-card); box-shadow: 0 0 0 2px var(--color-danger); }
-/* The loop chip is one 22 px line and must stay one: on a 256 px column card
-   the budget sentence wrapped to two lines and painted outside the pill. The
-   stage names are what gives way — they are on the chips beside it — while the
-   count, the budget and "none left" never shrink (#1743). */
-.kb .ploop { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; height: 22px; padding: 0 8px; border-radius: 999px; font-size: var(--text-caption); font-weight: 600; line-height: 22px; white-space: nowrap; color: var(--color-danger); background: var(--color-danger-soft); }
-.kb .ploop.spent { background: var(--color-danger); color: var(--surface-card); }
-.kb .ploop.spent .ccircle { --tone: var(--surface-card); color: var(--color-danger); background: var(--surface-card); }
-.kb .ploop .lnames { min-width: 3ch; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
-.kb .ploop .lbudget, .kb .ploop .lnone, .kb .ploop .lglyph { flex-shrink: 0; }
-.kb .ploop .lnone { font-weight: 700; }
 
 .kb .pdot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; display: inline-block; background: transparent; box-shadow: inset 0 0 0 1.5px var(--color-muted); }
 /* The colour is the stage's tone (the one tone map, pipelineBlock.css). */
@@ -1667,12 +1661,18 @@
 .kb .pstrip .sname { min-width: 3ch; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-primary); }
 .kb .pstrip.fix-idle .sname, .kb .pstrip.shape-return .sname, .kb .pstrip.shape-self .sname { color: var(--color-secondary); }
 .kb .pstrip .srework { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-success); }
-.kb .pstrip .sdots { margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: 3px; }
-.kb .pstrip .sdots.text { font-variant-numeric: tabular-nums; color: var(--color-secondary); }
-.kb .pstrip .sdot { width: 7px; height: 7px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--color-muted) 70%, transparent); }
-.kb .pstrip .sdot.bad { background: var(--color-danger); box-shadow: none; }
-.kb .pstrip .sdot.ok { background: var(--color-success); box-shadow: none; }
-.kb .pstrip .sdot.next { box-shadow: inset 0 0 0 2px var(--color-accent); }
+.kb :is(.pstrip, .stab) .sdots { margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: 3px; }
+.kb :is(.pstrip, .stab) .sdots.text { font-variant-numeric: tabular-nums; color: var(--color-secondary); }
+/* A round is a mark with its own shape, so the budget reads without its colour: ✕ fired, ✓ the source passed, ● under way, ○ left. */
+.kb :is(.pstrip, .stab) .sdot { width: auto; height: auto; min-width: 8px; font-style: normal; font-size: 11px; font-weight: 700; line-height: 1; text-align: center; color: var(--color-muted); }
+.kb :is(.pstrip, .stab) .sdot::before { content: "○"; }
+.kb :is(.pstrip, .stab) .sdot.bad { color: var(--color-danger); }
+.kb :is(.pstrip, .stab) .sdot.bad::before { content: "✕"; }
+.kb :is(.pstrip, .stab) .sdot.ok { color: var(--color-success); }
+.kb :is(.pstrip, .stab) .sdot.ok::before { content: "✓"; }
+.kb :is(.pstrip, .stab) .sdots-n { margin-left: 2px; font-size: var(--text-caption); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--color-secondary); white-space: nowrap; }
+.kb :is(.pstrip, .stab) .sdot.next { color: var(--color-accent); }
+.kb :is(.pstrip, .stab) .sdot.next::before { content: "●"; }
 .kb .dir-TB .pstrip .pport.out { bottom: -5px; left: calc(50% - 4.5px); }
 .kb .card .history { display: flex; flex-direction: column; gap: 4px; }
 .kb .card .history summary { list-style: none; display: inline-flex; max-width: 100%; align-items: center; gap: 6px; font-size: var(--text-label); color: var(--color-muted); cursor: pointer; border-radius: 4px; padding: 2px 4px; margin-left: -4px; min-height: 22px; }
@@ -1726,46 +1726,83 @@
 /* The sheet: over the board and under its menus, receipts and the full-window reader. */
 .kb .gsheet-scrim { position: fixed; inset: 0; z-index: 62; background: rgb(10 10 16 / 0.32); display: flex; align-items: stretch; justify-content: center; padding: 12px; }
 .kb .gsheet { width: min(1480px, 100%); display: flex; flex-direction: column; min-height: 0; border-radius: var(--radius-surface); background: var(--surface-raised); border: 1px solid var(--border-default); box-shadow: var(--shadow-2); overflow: hidden; }
-.kb .gsheet header { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 16px; border-bottom: 1px solid var(--border-default); min-height: 52px; }
+.kb .gsheet header { display: flex; align-items: center; gap: 6px 10px; padding: 8px 10px 8px 16px; border-bottom: 1px solid var(--border-default); min-height: 52px; }
 .kb .gsheet header .kind { height: 20px; padding: 0 7px; display: inline-flex; align-items: center; border-radius: 999px; font-size: var(--text-caption); font-weight: 700; color: var(--color-muted); border: 1px solid var(--border-default); flex-shrink: 0; }
-.kb .gsheet header h2 { margin: 0; font-size: var(--text-title); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.kb .gsheet header .progress { font-size: var(--text-ui); color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.kb .gsheet header { flex-wrap: wrap; }
+/* The title wraps rather than ends in an ellipsis: it is the one fact that names the lane. */
+.kb .gsheet header h2 { margin: 0; font-size: var(--text-title); font-weight: 600; min-width: 0; flex: 0 1 auto; white-space: normal; overflow-wrap: anywhere; }
 .kb .gsheet header .grow { flex: 1; }
+/* Whom the lane waits on: a dot in the owner's tone and one line, a row of its own under the title. */
+.kb .gs-waits { order: 20; flex: 1 0 100%; display: inline-flex; align-items: center; gap: 8px; min-height: 28px; padding: 0; text-align: left; font-size: var(--text-ui); color: var(--color-secondary); border-radius: var(--radius-control); }
+.kb .gs-waits:hover { color: var(--color-primary); }
+.kb .gs-waits:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.kb .gs-waits .card-state-dot { margin-top: 0; }
+.kb .gs-waits .gs-waits-words { min-width: 0; overflow-wrap: anywhere; }
+.kb .gs-waits-pop { order: 30; flex: 1 0 100%; margin: 0; padding: 6px 10px; border-radius: var(--radius-control); background: var(--surface-sunken); color: var(--color-secondary); font-size: var(--text-label); overflow-wrap: anywhere; }
 .kb .gsheet .zoom { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-control); border: 1px solid var(--border-default); }
 .kb .btn.gtoggle { height: 32px; }
 .kb .btn.gtoggle svg { width: 15px; height: 15px; }
 .kb .btn.gtoggle[aria-pressed="true"] { color: var(--color-accent); background: var(--color-accent-soft); }
-.kb .gs-nav { display: flex; align-items: center; gap: 6px; padding: 8px 12px; overflow-x: auto; border-bottom: 1px solid var(--border-default); scrollbar-width: thin; flex-shrink: 0; }
-.kb .navchip { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px 0 4px; border-radius: 999px; border: 1px solid var(--border-default); background: var(--surface-card); font-size: var(--text-ui); font-weight: 600; color: var(--color-primary); }
-.kb .navchip .nlbl { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 3ch; }
-.kb .navchip .nidx { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: var(--text-caption); font-weight: 700; color: var(--color-muted); background: var(--surface-well); }
-/* A review at work takes the full review tone on its border: its glyph moves
-   like a running one, so the border is what tells the two apart. */
-.kb .navchip.tone-review { border-color: var(--color-info); }
-.kb .navchip.in-view { border-color: color-mix(in srgb, var(--color-accent) 40%, var(--border-default)); }
-.kb .navchip[aria-current="true"] { border-color: var(--color-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 18%, transparent); }
-.kb .navchip[aria-current="true"] .nidx { color: #fff; background: var(--color-accent); }
-.kb .gs-nav .ploop { flex-shrink: 0; }
+/* The lane as tabs (redesign S2, variant 3): plain text on a rule. The open tab carries the accent underline and the heavier weight, the finished ones keep their check, the waiting ones are lighter. A stage that only runs when another fails is a smaller tab in its source's cell. */
+.kb .gs-tabs { display: flex; flex-wrap: nowrap; align-items: stretch; gap: 0 2px; padding: 0 12px; border-bottom: 1px solid var(--border-default); flex-shrink: 0; }
+.kb .gs-unit { display: flex; align-items: stretch; min-width: 0; }
+/* One line of tabs while it fits: a name is never cut, so the row neither shrinks a tab nor wraps its name. The sheet measures the row and turns it into the grid below only when it would overflow. */
+.kb .gs-tabs[data-layout="row"] > .gs-unit, .kb .gs-tabs[data-layout="row"] .stab { flex: none; }
+.kb .gs-tabs[data-layout="row"] .slbl { white-space: nowrap; }
+.kb .stab { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px 0 6px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; font-size: var(--text-ui); font-weight: 500; color: var(--color-muted); min-width: 0; text-align: left; }
+.kb .stab:hover { background: var(--dc-hover, var(--surface-well)); }
+.kb .stab:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.kb .stab.tone-ok { color: var(--color-secondary); }
+.kb .stab.tone-active, .kb .stab.tone-review { color: var(--color-primary); font-weight: 600; }
+.kb .stab.tone-needs { color: var(--color-warning); font-weight: 600; }
+.kb .stab.tone-bad { color: var(--color-danger); }
+.kb .stab[aria-selected="true"] { border-bottom-color: var(--color-accent); color: var(--color-primary); font-weight: 700; }
+.kb .stab .snum { min-width: 12px; font-size: var(--text-caption); font-weight: 700; color: inherit; }
+.kb .stab[aria-selected="true"] .snum { color: var(--color-accent); }
+.kb .stab .slbl { min-width: 0; overflow-wrap: anywhere; }
+.kb .stab .smark { display: none; }
+.kb .stab-skip { color: var(--color-muted); font-weight: 700; }
+/* Under its source, in the same row: smaller, muted, with the budget as dots. */
+.kb .stab-cond, .kb .stab-off { font-size: var(--text-label); font-weight: 500; color: var(--color-muted); padding-left: 4px; }
+.kb .stab .sret { color: var(--color-muted); font-size: var(--text-label); }
+.kb .stab .sdots { margin-left: 0; }
+.kb .stab-unreached .slbl { font-style: italic; }
+/* The return mark and count of a fired edge, after the failing stage's name (the card's own mark, outside the card). */
+.kb .stab .pret { display: inline-flex; align-items: center; gap: 1px; flex-shrink: 0; font-size: var(--text-caption); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-warning); }
+.kb .stab .pret[data-arc-state="exhausted"] { color: var(--color-danger); }
+.kb .stab .pret[data-arc-live="1"] { padding: 0 3px; border-radius: 999px; background: var(--color-accent-soft); }
+.kb .gs-tabs .pident, .kb .gs-tabs [data-effort-pills] { display: none; }
+/* One line per fail edge the tabs do not carry. */
+.kb .gs-rules { margin: 0; padding: 6px 16px; list-style: none; display: flex; flex-direction: column; gap: 2px; border-bottom: 1px solid var(--border-default); flex-shrink: 0; }
+.kb .gs-rule { font-size: var(--text-label); color: var(--color-muted); overflow-wrap: anywhere; }
+.kb .gs-rule[data-arc-state="exhausted"] { color: var(--color-warning); }
 .kb .gs-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.kb .gs-graph { flex-shrink: 0; max-height: 34%; overflow: auto; padding: 10px 12px; border-bottom: 1px solid var(--border-default); background-color: var(--surface-canvas); background-image: radial-gradient(var(--kb-grid-dot) 1px, transparent 1px); background-size: 18px 18px; }
+.kb .gs-graph { flex-shrink: 0; max-height: 46%; overflow: auto; padding: 10px 12px; border-bottom: 1px solid var(--border-default); background-color: var(--surface-canvas); background-image: radial-gradient(var(--kb-grid-dot) 1px, transparent 1px); background-size: 18px 18px; }
 .kb .gs-graph .pgraph-box { overflow: visible; margin: 0; padding: 0; }
-.kb .lane-bar { display: flex; align-items: center; gap: 6px; padding: 6px 12px 0; flex-shrink: 0; }
-/* In the sheet's head: no padding of its own, a hairline before the Graph toggle. */
+.kb .lane-bar { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+/* In the sheet's head: a hairline before the Graph toggle. */
 .kb .gsheet header .lane-bar { padding: 0 10px 0 0; margin-right: 2px; border-right: 1px solid var(--border-default); }
 .kb .gs-body > .lane { padding-top: 12px; }
-.kb .lane-bar .btn { height: 28px; white-space: nowrap; }
+/* The phone's screen holds the window in its own body: no dialog chrome, the whole width, and the pane takes what the tabs leave. */
+.kb .gsheet.screen { width: 100%; border: 0; border-radius: 0; box-shadow: none; background: transparent; flex: 1 0 auto; min-height: 100%; overflow: visible; }
+.kb .gsheet.screen .gs-body { overflow: visible; }
+.kb .gsheet.screen .lane { min-height: 360px; padding: 6px 8px 10px; overflow: visible; }
+/* The pane's conversation has a height of its own: its feed scrolls inside it and the composer stays at its foot, one scroll of the screen from the tabs. */
+.kb .gsheet.screen .pane-conv { flex: none; height: max(360px, 70dvh); }
+.kb .gsheet.screen .pane-conv.away, .kb .gsheet.screen .pane-conv.draft { height: auto; min-height: 120px; }
+.kb .gs-lead { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; margin: 6px 0 2px; padding: 0 8px 0 12px; }
+.kb .gs-lead > .gs-waits { order: 0; flex: 1 1 190px; min-width: 0; padding: 0; margin: 0; }
+.kb .gs-tools { display: flex; align-items: center; gap: 6px; margin-left: auto; flex-shrink: 0; }
+.kb .gsheet.screen > .gs-waits-pop { order: 0; flex: 0 0 auto; margin: 0 12px 6px; }
 .kb .chev.flip { transform: rotate(180deg); }
-.kb .lane { flex: 1; min-height: 0; display: flex; align-items: stretch; gap: 0; overflow-x: auto; overflow-y: hidden; padding: 8px 12px 12px; scroll-snap-type: x proximity; scroll-padding-left: 12px; scrollbar-width: thin; }
+.kb .lane { flex: 1; min-height: 0; display: flex; align-items: stretch; overflow: hidden; padding: 8px 12px 12px; }
 .kb .lane:focus { outline: none; }
-.kb .lane-conn { flex: 0 0 22px; display: flex; justify-content: center; padding-top: 18px; font-size: var(--text-ui); color: var(--color-muted); }
-.kb .lane-conn.loose { opacity: 0.4; }
 
-/* A pane is as wide as a normal conversation column, so its agent's prose
-   keeps the conversation's 68ch measure; the lane scrolls sideways to the rest. */
-.kb .pane { --pane-w: clamp(600px, 44vw, 700px); --role: #7a5bd0; flex: 0 0 var(--pane-w); min-width: 0; max-width: var(--pane-w); min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px 12px 12px; scroll-snap-align: start; border-radius: var(--radius-surface); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1); container-type: inline-size; }
+/* One pane under the tabs, on the whole width the window has. */
+.kb .pane { --role: #7a5bd0; flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px 12px 12px; border-radius: var(--radius-surface); background: var(--surface-card); border: 1px solid var(--border-default); box-shadow: var(--shadow-1); container-type: inline-size; }
 .kb .pane:focus { outline: none; }
-.kb .pane.focus { border-color: color-mix(in srgb, var(--color-accent) 50%, var(--border-default)); }
-.kb .pane:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 26%, transparent); }
+/* The pane is the one frame of its stage: focus lands on it so the keyboard starts there, but it draws no second ring over its tone's rule. */
+.kb .pane:focus-visible { box-shadow: var(--shadow-1); }
 .kb .pane.tone-active { border-top: 3px solid var(--color-success); }
 .kb .pane.tone-review { border-top: 3px solid var(--color-info); }
 .kb .pane.tone-needs { border-top: 3px solid var(--color-warning); }
@@ -1774,8 +1811,6 @@
    kept for what needs the operator or failed. */
 .kb .gsheet .pane:is(.tone-active, .tone-review) { border-top: 1px solid var(--border-default); }
 .kb .pane.tone-idle { background: color-mix(in srgb, var(--surface-card) 75%, var(--surface-canvas)); border-style: dashed; }
-.kb .pane.pane-flash { animation: kb-pane-flash 600ms var(--ease-standard) 2; }
-@keyframes kb-pane-flash { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 45%, transparent); border-color: var(--color-accent); } }
 .kb .pane.role-builder, .kb .stage-detail.role-builder { --role: #7a5bd0; }
 .kb .pane.role-reviewer, .kb .stage-detail.role-reviewer { --role: #13897c; }
 .kb .pane.role-verifier, .kb .stage-detail.role-verifier { --role: #3474c9; }
@@ -1795,6 +1830,10 @@
 .kb .pane.tone-needs .pane-head .pstate { color: var(--color-warning); }
 .kb .pane.tone-bad .pane-head .pstate { color: var(--color-danger); }
 .kb .pane-head .spacer { flex: 1; }
+/* A stage with no conversation (skipped) is as tall as what it says, not a box that fills the sheet. */
+.kb .pane.lean { align-self: flex-start; }
+.kb .pane .pane-primary { align-self: flex-start; }
+.kb .pane-title .prole .prole-sep { flex-shrink: 0; color: var(--color-muted); }
 .kb .pane .icon-btn.sm { width: 24px; height: 24px; }
 .kb .pane .icon-btn.sm svg { width: 14px; height: 14px; }
 .kb .pane-sub { font-size: var(--text-label); color: var(--color-muted); margin-top: -4px; }
@@ -1806,20 +1845,23 @@
 .kb .pane .rounds .rchip { font-size: var(--text-label); font-weight: 600; height: 22px; padding: 0 8px; border-radius: 999px; display: inline-flex; align-items: center; background: var(--surface-well); color: var(--color-muted); }
 .kb .pane .rounds .rchip.ok { color: var(--color-success); background: var(--color-success-soft); }
 .kb .pane .rounds .rchip.bad { color: var(--color-danger); background: var(--color-danger-soft); }
-.kb .pane.folded { --pane-w: 56px; padding: 6px 0; align-items: center; }
-.kb .pane-strip { flex: 1; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 4px 0; border-radius: var(--radius-control); }
-.kb .pane-strip:hover { background: var(--dc-hover, var(--surface-well)); }
-.kb .pane-strip .vlabel { writing-mode: vertical-rl; font-size: var(--text-ui); font-weight: 600; color: var(--color-secondary); white-space: nowrap; }
 .kb .pane-conv { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .kb .pane-conv .reader-slot, .kb .pane-conv .reader-host { flex: 1; min-height: 0; display: flex; max-width: none; }
 .kb .pane-conv .reader.conv.in-sheet { max-height: none; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; gap: 8px; }
 .kb .pane-conv .reader.conv.in-sheet:focus { box-shadow: none; }
+/* A stage that waits on the operator carries the attention colour once, on its pane's rule: the conversation inside it draws no orbiting ring of its own. */
+.kb .pane .pane-attention-ring { display: none; }
 .kb .pane-conv.away { align-items: center; justify-content: center; text-align: center; border: 1px dashed var(--border-strong); border-radius: var(--radius-control); padding: 12px; }
 .kb .pane-conv.away.line { flex: none; align-items: flex-start; text-align: start; border: 0; padding: 0; }
 .kb .pane-note { margin: 0; font-size: var(--text-label); color: var(--color-muted); }
 .kb :is(.pane, .stage-detail) .ch-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: var(--text-label); color: var(--color-secondary); min-width: 0; }
 .kb .pane .ch-meta.pane-id { margin-top: -2px; }
 .kb .pane .ch-meta .spacer { flex: 1; }
+/* A conversation's identity row in a pane: the chips share the width and wrap
+   among themselves, the controls keep their own group at the row's end. */
+.kb .pane .ch-meta.pane-id:has(> .ch-controls) { flex-wrap: nowrap; align-items: flex-start; }
+.kb .pane .ch-meta.pane-id > .ch-chips { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.kb .pane .ch-meta.pane-id > .ch-controls { flex: none; display: flex; align-items: center; gap: 4px 6px; }
 
 .kb .pane .ch-model { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-primary); background: var(--surface-well); border-radius: 999px; padding: 2px 7px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .kb .stage-detail :is(.ch-stage, .ch-ctx) { font-size: var(--text-caption); color: var(--color-muted); white-space: nowrap; }
@@ -1884,39 +1926,49 @@
 @media (max-width: 699px) {
   .kb .gsheet-scrim { padding: 0; }
   .kb .gsheet { border-radius: 0; border: 0; }
-  .kb .gsheet header { padding: 6px 6px 6px 12px; gap: 6px; }
-  .kb .gsheet header .kind, .kb .gsheet header .progress, .kb .gsheet header .pstate-chip { display: none; }
+  .kb .gsheet header { padding: 6px 6px 6px 12px; gap: 4px 6px; }
+  .kb .gsheet header .kind { display: none; }
   .kb .gsheet header h2 { font-size: var(--text-body); }
   .kb .btn.gtoggle span { display: none; }
   .kb .gs-graph { max-height: 42%; }
-  .kb .lane .pane { --pane-w: calc(100vw - 56px); }
-  .kb .lane .pane.folded { --pane-w: 56px; }
-  .kb .lane { scroll-snap-type: x mandatory; padding: 8px 10px 10px; }
-  .kb .lane-conn { flex-basis: 8px; font-size: 0; }
-  .kb .lane-bar .btn.quiet { padding: 0 8px; }
+  .kb .lane { padding: 8px 10px 10px; }
 }
-/* Below a desktop width the head cannot hold the title and the lane's
-   controls in one row (at 820 px the title kept 40 px), so the controls take
-   a line of their own, at its end (#2148). Everything else stays on the first
-   line: the title and the progress start from nothing and grow to at most
-   their own width, so they ellipsize rather than wrap, and the space left over
-   goes before the Graph toggle. */
-@media (max-width: 1023px) {
-  .kb .gsheet header { flex-wrap: wrap; }
-  .kb .gsheet header h2 { flex: 2 1 0; max-width: max-content; }
-  .kb .gsheet header .progress { flex: 1 1 0; max-width: max-content; }
-  .kb .gsheet header .grow { display: none; }
-  .kb .gsheet header .gtoggle { margin-left: auto; }
-  .kb .gsheet header .lane-bar { order: 10; flex-basis: 100%; justify-content: flex-end; padding-right: 0; margin-right: 0; border-right: 0; }
+/* A row that would overflow, and every phone, is a grid of four: a step and the stages
+   under it share one cell, so every name is whole. */
+.kb .gs-tabs[data-layout="grid"] { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; padding: 0 8px; }
+.kb .gs-tabs[data-layout="grid"] .gs-unit { flex-direction: column; }
+.kb .gs-tabs[data-layout="grid"] .stab { padding: 0 6px; min-width: 0; }
+.kb .gs-tabs[data-layout="grid"] .stab-cond { min-height: 28px; border-bottom-width: 0; }
+.kb .gs-tabs[data-layout="grid"] .stab-cond[aria-selected="true"] { border-bottom-width: 2px; }
+/* A detached stage is the first line of its own cell: a step's height and size, so it sits on its row's line and never reads as a third line of the cell above. */
+.kb .gs-tabs[data-layout="grid"] .stab-off { font-size: var(--text-ui); }
+/* Narrow: two lines, the state's mark and the number, then the name. */
+@media (max-width: 699px) {
+  .kb .gs-tabs[data-layout] { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; padding: 0 8px; }
+  .kb .gs-tabs[data-layout] .gs-unit { flex-direction: column; }
+  .kb .gs-tabs[data-layout] .stab { flex: initial; padding: 0 6px; min-width: 0; }
+  .kb .gs-tabs[data-layout] .slbl { white-space: normal; }
+  .kb .gs-tabs[data-layout] .stab-cond { min-height: 28px; border-bottom-width: 0; }
+  .kb .gs-tabs[data-layout] .stab-cond[aria-selected="true"] { border-bottom-width: 2px; }
+  .kb .stab { flex-wrap: wrap; align-content: center; align-items: flex-start; gap: 0 3px; font-size: var(--text-label); }
+  .kb .stab .sglyph { display: none; }
+  .kb .stab .sdots { gap: 2px; order: 4; align-self: center; }
+  .kb .stab .smark { display: inline; order: 1; }
+  .kb .stab .snum, .kb .stab .sret { order: 2; }
+  /* The state's mark already says «skipped» (↷) here: a second one beside the number would double it. */
+  .kb .stab .stab-skip { display: none; }
+  .kb .stab .pret { order: 4; align-self: center; }
+  /* The marks already count the rounds; a phone tab says it once. */
+  .kb .stab .sdots-n { display: none; }
+  .kb .stab .slbl { order: 3; flex: 1 0 100%; }
+  .kb .stab-cond .slbl { flex: 0 1 auto; }
+  .kb .gs-tabs[data-layout] .stab-off { font-size: var(--text-label); }
 }
 @media (pointer: coarse) {
-  .kb .navchip { height: 44px; }
-  .kb .pane .attempts button, .kb .lane-bar .btn, .kb .btn.gtoggle, .kb .pane-strip { min-height: 44px; }
+  .kb .stab-cond { min-height: 44px; }
+  .kb .pane .attempts button, .kb .lane-bar .btn, .kb .btn.gtoggle, .kb .gs-waits { min-height: 44px; }
   .kb .msg.user.draft .bedit, .kb .draft-acts .btn, .kb .draft-notice button, .kb .draft-added summary { min-height: 44px; min-width: 44px; }
   .kb .msg.user.draft .bubble { padding-right: 80px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .kb .pane.pane-flash { animation: none; }
 }
 
 /* ── K6: account chip and picker (prototype `accountChip` + `openAccountPicker`) ── */

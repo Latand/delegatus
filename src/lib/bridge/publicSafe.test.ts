@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { privateClasses, type PublicDenyList } from "./publicSafe";
+import { privateClasses, privateMatches, type PublicDenyList } from "./publicSafe";
 import { renderReport } from "./reportRender";
 
 test("a bridge item copying a fleet account row retains the account privacy classification", () => {
@@ -67,6 +67,13 @@ for (const [text, kind] of FOUND) {
     expect(privateClasses(text, DENY)).toContain(kind as never);
   });
 }
+
+test("home-relative path matches include nested directories and filenames", () => {
+  const text = "Keep ~/private-fixture/nested/secret-notes.md for later";
+  const match = privateMatches(text, DENY).find(item => item.class === "path");
+  expect(match).toBeDefined();
+  expect(text.slice(match!.start, match!.end).trimStart()).toBe("~/private-fixture/nested/secret-notes.md");
+});
 
 const CLEAN: readonly string[] = [
   "release 1.5.0 is on prod and npm is still catching up",
