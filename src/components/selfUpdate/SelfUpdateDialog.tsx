@@ -10,8 +10,8 @@ import type { Snapshot } from "@/lib/selfUpdate/types";
 
 import { OPEN_SELF_UPDATE_EVENT } from "./openSelfUpdate";
 import { SelfUpdateConfirm } from "./SelfUpdateConfirm";
-import { actionError, targetText, type ActionError } from "./selfUpdateCopy";
-import { SelfUpdateView, type ViewActions, type ViewState } from "./SelfUpdateView";
+import { actionError, targetText, type ActionResponse } from "./selfUpdateCopy";
+import { SelfUpdateView, type ActionOutcome, type ViewActions, type ViewState } from "./SelfUpdateView";
 import { selfUpdateTicket, useSelfUpdateFeed } from "./useSelfUpdateFeed";
 
 /**
@@ -41,6 +41,18 @@ function useClock(serverTime?: string): number {
   return now + calibration.offset;
 }
 
+/** Scrolls the outcome lines a card drew into the dialog's scroller by the
+    shortest move, so a card already in view travels no further than the
+    answer needs. */
+function showOutcome(panel: HTMLElement | null, section: "update" | "install-action") {
+  const lines = panel?.querySelectorAll(`[data-section="${section}"] [data-error="action"], [data-section="${section}"] [data-warning="optional-checks"]`);
+  if (!lines?.length) return;
+  const first = lines[0]!;
+  const last = lines[lines.length - 1]!;
+  first.scrollIntoView({ block: "nearest" });
+  if (last !== first) last.scrollIntoView({ block: "nearest" });
+}
+
 export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
@@ -51,7 +63,12 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const [confirming, setConfirming] = useState<"update" | "retry" | "install-action" | null>(null);
   const [openLogs, setOpenLogs] = useState<Set<string>>(() => new Set());
   const [pending, setPending] = useState<Set<string>>(() => new Set());
-  const [error, setError] = useState<ActionError | null>(null);
+  /* What each action ended in, kept with the action that produced it: the
+     Update card's own (Update and Retry, key "update") and the install
+     action's apart from every other action's. An answer is written when it
+     arrives, possibly after the person started another action, so it cannot go
+     by whichever action began last. */
+  const [outcomes, setOutcomes] = useState<Partial<Record<"update" | "install-action" | "header", ActionOutcome>>>({});
   const [webRestart, setWebRestart] = useState<{ pid: number | null } | null>(null);
   const [firstWebPid, setFirstWebPid] = useState<number | null | undefined>(undefined);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -70,8 +87,10 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
 
 
   const act = useCallback(async (key: string, path: string, body?: unknown) => {
+    const place = key === "update" || key === "install-action" ? key : "header";
+    const record = (outcome: ActionOutcome) => setOutcomes((value) => ({ ...value, [place]: outcome }));
     setPending((value) => new Set(value).add(key));
-    setError(null);
+    setOutcomes({});
     /* The snapshot this action answers with is ordered from now: a stream
        state that arrives while it runs is newer and stays. Its outcome (the
        error, the restart it began) is the action's own and always shown. */
@@ -82,13 +101,14 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
         headers: body === undefined ? {} : { "content-type": "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
-      const payload = await response.json().catch(() => null) as ({ error?: string; code?: string; detail?: string; snapshot?: Snapshot } & Partial<Snapshot>) | null;
-      if (!response.ok) setError(actionError(response.status, payload));
+      const payload = await response.json().catch(() => null) as ActionResponse | null;
+      if (!response.ok) record({ error: actionError(response.status, payload) });
+      else if (payload?.optionalCheckFailures?.length) record({ error: null, optionalCheckFailures: payload.optionalCheckFailures });
       const next = response.ok ? payload as Snapshot | null : payload?.snapshot;
       if (next && next.meta) feed.accept(next, ticket);
       return response.ok;
     } catch {
-      setError({ code: "offline" });
+      record({ error: { code: "offline" } });
       return false;
     } finally {
       setPending((value) => {
@@ -117,7 +137,9 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     ? t("selfUpdate.confirmApply.retryTarget", { target: targetText(s.update.targetShort, s.update.targetVersion) })
     : null;
 
-  /* «Update now» closes the question; the Update card shows the progress. */
+  /* «Update now» closes the question; the Update card shows the progress. The
+     install action has no progress: its own card, which draws its outcome,
+     stays on screen instead. */
   const apply = () => {
     const action = confirming;
     setConfirming(null);
@@ -125,13 +147,28 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
        disabled while the update starts, so focus stays in this dialog. */
     requestAnimationFrame(() => {
       const panel = panelRef.current;
-      panel?.querySelector('[data-section="update"]')?.scrollIntoView({ block: "nearest" });
+      panel?.querySelector(`[data-section="${action === "install-action" ? "install-action" : "update"}"]`)?.scrollIntoView({ block: "nearest" });
       if (panel && !panel.contains(document.activeElement)) panel.focus({ preventScroll: true });
     });
     if (action === "install-action") void act("install-action", "/api/self-update/action");
     else if (action === "update") void act("update", "/api/self-update/update", { key: newKey() });
     else if (action === "retry") void act("update", "/api/self-update/update", { key: newKey(), retry: true });
   };
+
+  /* The answer lands after the confirmation scrolled to its card, and it adds
+     lines under the button just pressed. Bring those lines into the scroller
+     too, so the whole answer is on screen wherever the dialog scrolls: the
+     card sits low in a single column (a phone, or a desktop window under two
+     columns) and the scroller is short in a landscape window. */
+  const updateOutcome = outcomes.update;
+  const installOutcome = outcomes["install-action"];
+  useEffect(() => { if (updateOutcome) showOutcome(panelRef.current, "update"); }, [updateOutcome]);
+  useEffect(() => { if (installOutcome) showOutcome(panelRef.current, "install-action"); }, [installOutcome]);
+  /* The new-version banner lands above the install card when the relaunched
+     Viewer answers, and moves the card (which then holds only its answer, the
+     action having gone with the relaunch). The answer stays whole in the
+     scroller beside the banner. */
+  useEffect(() => { if (replaced) showOutcome(panelRef.current, "install-action"); }, [replaced]);
 
   const actions: ViewActions = {
     installAction: () => setConfirming("install-action"),
@@ -177,7 +214,10 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     armed,
     openLogs,
     pending,
-    error,
+    error: outcomes.header?.error ?? null,
+    optionalCheckFailures: outcomes.header?.optionalCheckFailures,
+    updateOutcome: outcomes.update,
+    installOutcome: outcomes["install-action"],
     waitingForWeb: webRestart !== null && (feed.offline || !web || web.pid === webRestart.pid),
     reloadTo: replaced ? (s?.serving.web?.short || s?.installed.short || null) : null,
   };

@@ -1,6 +1,7 @@
 /* Straight from lucide: `@/components/icons` imports this module for the engine
    glyph names, and a cycle through it would be needless. */
 import { MessageCircle, Terminal } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { engineBadgeFor } from "@/components/utils";
 
@@ -29,14 +30,15 @@ import { engineBadgeFor } from "@/components/utils";
  * outlined square of the shell's terminal glyph is a silhouette difference, not
  * a fill-and-hue one, so the two never read alike at 12 px.
  *
- * **Antigravity** is drawn for this product as the periodic-table tile for Neon
- * (atomic number 10 in the top-left corner above Ne) — the exact same drawing
- * `StageGlyph` uses for the `neon` model glyph (`NeonTileSvg`), painted in
- * `--color-antigravity-mark` / `--glyph-neon` and sharing the CSS neon glow
- * (`modelGlyph.css`) whenever `working` is true.
+ * **Antigravity** is drawn for this product as a rounded arch with a floating
+ * dot under its apex, after the product's own arch logo, painted in
+ * `--color-antigravity-mark` and sharing the halo rule (`.emark-neon`,
+ * `modelGlyph.css`) whenever `working` is true. The periodic-table Neon tile
+ * (`NeonTileSvg`) names one model this engine serves, so only `StageGlyph`'s
+ * `neon` model glyph draws it; an engine that serves many models never wears it.
  *
  * Colour never carries the engine alone: Claude's open spark, Codex's solid
- * disc and Antigravity's periodic-table Ne tile differ in silhouette, so they
+ * disc and Antigravity's open arch differ in silhouette, so they
  * read in monochrome and for colour-blind operators. `--color-claude-mark`,
  * `--color-codex-mark` and `--color-antigravity-mark` are the mark tokens
  * (each clearing the 3:1 floor for a graphical object on light and dark
@@ -55,8 +57,8 @@ export type EngineMarkSize = 12 | 14 | 16 | 18 | 24;
 const NEON_NUM = "M3.15 2.75V4.85";
 const NEON_SYM = "M3.2 12.6V6.8L7.3 12.6V6.8M9.55 10.6H12.9C12.9 9.25 12.15 8.4 11.2 8.4C10.15 8.4 9.45 9.3 9.45 10.55C9.45 11.8 10.2 12.6 11.35 12.6C12 12.6 12.5 12.38 12.8 12.05";
 
-/** Shared Neon periodic-table tile SVG drawn by both `EngineMark` and `StageGlyph`. */
-export function NeonTileSvg({ style }: { style?: { width: string; height: string } }) {
+/** The Neon periodic-table tile, the model glyph `StageGlyph` draws for the `neon` model. */
+export function NeonTileSvg({ style, children }: { style?: { width: string; height: string }; children?: ReactNode }) {
   return (
     <svg viewBox="0 0 16 16" style={style} aria-hidden="true">
       <rect className="mg-neon-gas" x="2.1" y="2.1" width="11.8" height="11.8" rx="1.4" />
@@ -64,6 +66,7 @@ export function NeonTileSvg({ style }: { style?: { width: string; height: string
       <path className="mg-neon-num" d={NEON_NUM} />
       <rect className="mg-neon-num" x="4.4" y="2.75" width="1.7" height="2.1" rx="0.8" />
       <path className="mg-neon-sym" d={NEON_SYM} />
+      {children}
     </svg>
   );
 }
@@ -110,6 +113,21 @@ export function EngineMark({ engine, size = 12, tone = "engine", label, working 
    design note requires the vendor's own geometry. */
 const CLAUDE_SPARK = "m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z";
 
+/* The Antigravity engine mark: the product's rounded arch with a weightless dot
+   floating under its apex, drawn for this product like the Codex mark. Stroked
+   in the engine token at a weight that holds at 12 px. The Neon tile above names
+   one model of this engine and stays the model glyph's alone. */
+const AGY_ARCH = "M2.9 13C4.6 10.2 6.3 3 8 3C9.7 3 11.4 10.2 13.1 13";
+
+function AntigravityMarkSvg({ style }: { style: { width: string; height: string } }) {
+  return (
+    <svg viewBox="0 0 16 16" style={style} aria-hidden>
+      <path d={AGY_ARCH} fill="none" stroke="currentColor" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="8" cy="10.6" r="1.25" fill="currentColor" />
+    </svg>
+  );
+}
+
 function EngineGlyph({ engine, size }: { engine: string; size: number }) {
   const box = { width: `${size}px`, height: `${size}px` } as const;
   if (engine === "claude") {
@@ -134,7 +152,7 @@ function EngineGlyph({ engine, size }: { engine: string; size: number }) {
       </svg>
     );
   }
-  if (engine === "antigravity") return <NeonTileSvg style={box} />;
+  if (engine === "antigravity") return <AntigravityMarkSvg style={box} />;
   if (engine === "openclaw") return <MessageCircle style={box} aria-hidden />;
   if (engine === "shell") return <Terminal style={box} aria-hidden />;
   /* An engine this build has no mark for: a neutral dot, never a wrong mark. */

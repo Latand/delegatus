@@ -79,7 +79,7 @@ function makeAntigravityFile(overrides: Partial<FileEntry> = {}): FileEntry {
   } as unknown as FileEntry;
 }
 
-test("EngineMark draws the same Ne periodic-table tile as StageGlyph and stays distinct from Claude, Codex, and Shell", () => {
+test("EngineMark draws the Antigravity arch, not the Neon model tile StageGlyph draws, and stays distinct from Claude, Codex, and Shell", () => {
   const host = mount(
     <>
       <EngineMark engine="antigravity" size={12} label="Antigravity" />
@@ -103,12 +103,12 @@ test("EngineMark draws the same Ne periodic-table tile as StageGlyph and stays d
   const codexSvg = host.querySelector('[data-engine-mark="codex"] svg')!;
   const shellSvg = host.querySelector('[data-engine-mark="shell"] svg')!;
 
-  /* EngineMark and StageGlyph share the exact periodic-table Ne tile geometry. */
-  expect(agySvg.innerHTML).toBe(neonGlyphSvg.innerHTML);
-  expect(agySvg.querySelector("rect.mg-tile")).not.toBeNull();
-  expect(agySvg.querySelector("rect.mg-neon-gas")).not.toBeNull();
-  expect(agySvg.querySelectorAll(".mg-neon-num")).toHaveLength(2);
-  expect(agySvg.querySelector("path.mg-neon-sym")).not.toBeNull();
+  /* The engine mark is the Antigravity arch, never the Neon tile that names one model of it. */
+  expect(agySvg.innerHTML).not.toBe(neonGlyphSvg.innerHTML);
+  expect(agySvg.querySelector("rect.mg-tile")).toBeNull();
+  expect(agySvg.querySelector(".mg-neon-sym, .mg-neon-num, .mg-neon-gas")).toBeNull();
+  expect(agySvg.querySelector("path")?.getAttribute("stroke")).toBe("currentColor");
+  expect(neonGlyphSvg.querySelector("rect.mg-tile")).not.toBeNull();
 
   /* Distinct monochrome silhouettes vs Claude, Codex, and Shell. */
   expect(new Set([agySvg.innerHTML, claudeSvg.innerHTML, codexSvg.innerHTML, shellSvg.innerHTML]).size).toBe(4);
@@ -179,7 +179,7 @@ test("shared CSS neon glow uses GLYPH_TURN_MS, respects prefers-reduced-motion, 
   expect(tokensCss.match(/--color-antigravity-mark:\s*#[0-9a-f]{6}/gi)?.length).toBe(3);
 
   /* Steady lit gas chamber and halo survive reduced motion for both StageGlyph and EngineMark. */
-  expect(glyphCss).toContain(':is(.mglyph.g-neon, .emark-neon)[data-live="1"] .mg-neon-gas { opacity: 0.34; }');
+  expect(glyphCss).toContain(':is(.mglyph.g-cell, .emark-neon)[data-live="1"] .mg-neon-gas { opacity: 0.34; }');
   expect(glyphCss).toContain('.emark-neon[data-live="1"]::before { opacity: 1; }');
   /* Halo and gas keep one shared period (`--mg-turn`, GLYPH_TURN_MS) with no 3.2 s drift. */
   expect(glyphCss).toContain('--mg-period: var(--mg-turn);');
@@ -189,7 +189,7 @@ test("shared CSS neon glow uses GLYPH_TURN_MS, respects prefers-reduced-motion, 
   const motionBlockMatch = /@media \(prefers-reduced-motion: no-preference\)\s*\{([\s\S]*?)\n\}/.exec(glyphCss);
   expect(motionBlockMatch).not.toBeNull();
   const motionBlock = motionBlockMatch![1];
-  expect(motionBlock).toContain('.mglyph.g-neon[data-live="1"]::before,');
+  expect(motionBlock).toContain('.mglyph.g-cell[data-live="1"]::before,');
   expect(motionBlock).toContain('.emark-neon[data-live="1"]::before { animation: mg-halo var(--mg-turn) ease-in-out infinite; }');
   expect(motionBlock).toContain('.emark-neon[data-live="1"] .mg-neon-gas { animation: mg-neon var(--mg-turn) ease-in-out infinite; }');
 
@@ -209,7 +209,7 @@ test("shared CSS neon glow uses GLYPH_TURN_MS, respects prefers-reduced-motion, 
   expect(boardCss.match(/\.mg-neon-gas/g)?.length).toBe(3);
 });
 
-test("Antigravity chips and EngineBadge use one neon cyan hue and paint the Ne tile with the engine mark token", () => {
+test("Antigravity chips and EngineBadge use one neon cyan hue and paint the engine mark with its token", () => {
   const lowFile = makeAntigravityFile({ effort: "low" });
   const lowTint = effortTint(lowFile);
   const badgeTint = engineBadgeFor("antigravity");
@@ -242,8 +242,8 @@ test("Antigravity chips and EngineBadge use one neon cyan hue and paint the Ne t
 
   for (const key of ["badge", "card"]) {
     const mark = host.querySelector<HTMLElement>(`[data-case="${key}"] [data-engine-mark="antigravity"]`);
-    expect(mark, `${key} renders Antigravity Ne tile`).not.toBeNull();
-    expect(mark!.style.color, `${key} paints Ne tile in --color-antigravity-mark`).toBe("var(--color-antigravity-mark)");
+    expect(mark, `${key} renders the Antigravity mark`).not.toBeNull();
+    expect(mark!.style.color, `${key} paints the mark in --color-antigravity-mark`).toBe("var(--color-antigravity-mark)");
     expect(mark!.dataset.live).toBe("1");
   }
 });

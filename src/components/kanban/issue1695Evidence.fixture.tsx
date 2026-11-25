@@ -50,6 +50,7 @@ import { VoiceConversationPanel } from "@/components/VoiceConversation";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleCallHistory, sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
 import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
+import { buildStageShapes } from "./stageShapes.fixture";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { attachVoiceOutput, openVoiceMicrophone, type VoiceMicrophone } from "@/lib/audio/voiceDevices";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
@@ -385,6 +386,11 @@ const MARKS = SCENARIO === "issue1743";
    model, a draft of the same nine waiting, and the settled states on a few;
    the ninth model is uncatalogued and keeps the dot. */
 const GLYPHS = SCENARIO === "model-glyphs";
+/* The same, for Antigravity's catalogue: one running lane per model (the Gemini
+   4 elements, Flash, GPT-OSS, both orchestrators, and the two Claude models it
+   serves), a draft of all nine waiting, two lanes that settle every model, and
+   a tenth stage on an uncatalogued model that keeps its dot. */
+const GLYPHS_AGY = SCENARIO === "model-glyphs-agy";
 /* #1865: the header lane the operator read — design → build → critique, where
    design and critique share the architect preset and critique ran twice — so
    each stage's conversation can be read for which stage it is. */
@@ -1172,6 +1178,52 @@ const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
   ];
 })() : [];
 
+/* [stage id = glyph kind, role, model, lane title]. */
+const GLYPH_AGY_MODELS = [
+  ["neon", "architect", "gemini-4-neon", L("Lay out the import dialog", "Спроєктувати діалог імпорту")],
+  ["argon", "builder", "gemini-4-argon", L("Build the import dialog", "Зібрати діалог імпорту")],
+  ["hydrogen", "reviewer", "gemini-4-hydrogen", L("Review the import dialog", "Переглянути діалог імпорту")],
+  ["flash", "cleaner", "gemini-3.8-flash", L("Tidy the import module", "Прибрати модуль імпорту")],
+  ["opus", "architect", "claude-opus-5-5", L("Critique the import flow", "Покритикувати процес імпорту")],
+  ["sonnet", "builder", "claude-sonnet-5-5", L("Write the import guide", "Написати посібник з імпорту")],
+  ["oss", "verifier", "gpt-oss-120b-medium", L("Verify the import on a large file", "Перевірити імпорт на великому файлі")],
+  ["orch-neon", "orchestrator", "gemini-pro-orchestrator-neon", L("Plan the import release", "Спланувати випуск імпорту")],
+  ["orch-argon", "orchestrator", "gemini-pro-orchestrator-g1-pro", L("Coordinate the import fixes", "Скоординувати виправлення імпорту")],
+  ["fix", "builder", "gemini-9-krypton", L("Fix the import's file name", "Виправити назву файлу імпорту")],
+] as const;
+const glyphAgyPipelines: Pipeline[] = GLYPHS_AGY ? (() => {
+  type Entry = (typeof GLYPH_AGY_MODELS)[number];
+  const entry = (id: string) => GLYPH_AGY_MODELS.find(([stageId]) => stageId === id)!;
+  const chain = (models: ReadonlyArray<Entry>) => models.map(([id, roleId, model], index) =>
+    marksStage(id, roleId, models[index + 1]?.[0] ?? null, "antigravity", model, "high"));
+  const ran = (id: string, state: string, ago: number, over: Record<string, unknown> = {}, file: FileEntry | null = null) => {
+    const [, roleId, model] = entry(id);
+    return { stageId: id, attempts: [attempt(1, state, file, { effectiveRole: runRole(roleId, "antigravity", model, "high"), startedAt: iso(ago * MIN), ...over })] };
+  };
+  const done = (ago: number) => ({ completedAt: iso((ago - 6) * MIN) });
+  const lane = (ids: string[]) => chain(ids.map(entry));
+  const agentAt = (id: string, name: string, title: string) => {
+    const [, , model] = entry(id);
+    return add(conversation(name, title, { model, engine: "antigravity", root: "antigravity-sessions", fmt: "antigravity", ...working() }));
+  };
+  return [
+    ...GLYPH_AGY_MODELS.filter(([id]) => id !== "fix").map((model, index) => {
+      const [id, , , title] = model;
+      return pipeline(`p-glyph-agy-${id}`, title, "t-glyphs-agy-run", "running", chain([model]),
+        [ran(id, "running", 30 - index, {}, agentAt(id, `glyphs-agy-run-${id}`, title))], { stageId: id, state: "running", input: null, activatedBy: null }, { createdAt: iso((40 - index) * MIN) });
+    }),
+    pipeline("p-glyphs-agy-wait", L("Plan the import release", "Спланувати випуск імпорту"), "t-glyphs-agy", "draft", chain(GLYPH_AGY_MODELS.filter(([id]) => id !== "fix")),
+      [], { stageId: "neon", state: "pending", input: null, activatedBy: null }, { createdAt: iso(20 * MIN) }),
+    /* Passed, passed, failed, waiting on the operator, not yet run. */
+    pipeline("p-glyphs-agy-settled", L("Ship the import dialog", "Випустити діалог імпорту"), "t-glyphs-agy", "needs_decision", lane(["neon", "argon", "hydrogen", "flash", "oss"]),
+      [ran("neon", "passed", 90, done(90)), ran("argon", "passed", 70, done(70)), ran("hydrogen", "failed", 50, done(50)), ran("flash", "needs_decision", 30)],
+      { stageId: "flash", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(100 * MIN) }),
+    pipeline("p-glyphs-agy-settled-more", L("Ship the import guide", "Випустити посібник з імпорту"), "t-glyphs-agy", "needs_decision", lane(["opus", "sonnet", "orch-neon", "orch-argon", "fix"]),
+      [ran("opus", "passed", 120, done(120)), ran("sonnet", "passed", 100, done(100)), ran("orch-neon", "failed", 80, done(80)), ran("orch-argon", "needs_decision", 60)],
+      { stageId: "orch-argon", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(130 * MIN) }),
+  ];
+})() : [];
+
 const loopsPipelines: Pipeline[] = LOOPS ? (() => {
   const conv = (id: string, title: string, ago: number, over: Record<string, unknown> = {}) => add(conversation(id, title, { mtime: now - ago * MIN, ...over }));
   const failVia = (stageId: string, n: number, budgetSpent = false) => ({ activatedBy: { stageId, attempt: n, edge: "fail", ...(budgetSpent ? { budgetSpent: true } : {}) } });
@@ -1858,7 +1910,25 @@ const stagePlacePipelines: Pipeline[] = STAGE_PLACE ? [pipeline("lane-stage-plac
     { stageId: "review", attempts: [attempt(1, "running", null, { definition: { runtime: "claude-cloud" }, cloud: { phase: "failed", fallback: { at: iso(5 * MIN), reason: "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)" } } })] },
   ],
   { stageId: "review", state: "running", input: null, activatedBy: null })] : [];
+/* `?scenario=stageshapes` (redesign S2): one lane per graph shape the Stages window must draw, each on a task of
+   its own, with invented stage ids and text (`stageShapes.fixture.ts`, which the phone's fixture reads too). */
+const STAGE_SHAPES = SCENARIO === "stageshapes";
+const stageShapeLanes = STAGE_SHAPES ? buildStageShapes({
+  project: PROJECT, iso, L,
+  file: (id, title, state) => {
+    const made = add(conversation(`shape-${id}`, title, state === "working" ? working({ plan: { current: "Reading the findings" } }) : state === "asking" ? {
+      mtime: now - 9 * MIN, lastTurn: { startedAt: (now - 14 * MIN) * 1_000, endedAt: (now - 10 * MIN) * 1_000 },
+      pendingQuestion: { kind: "question", toolUseId: `tool-shape-${id}`, transcriptPath: `/repo/shape-${id}.jsonl`, pid: 1, askedAt: iso(9 * MIN), questions: [{ question: L("Should the report keep the header row when it is exported as CSV?", "Чи лишати рядок заголовків у звіті, коли його експортують у CSV?"), header: "Export", multiSelect: false, options: [] }] },
+    } : { mtime: now - 300 * MIN }));
+    return { path: made.path, conversationId: made.conversationId! };
+  },
+}) : [];
+const shapePipelines: Pipeline[] = stageShapeLanes.map((entry) => entry.pipeline);
+const shapeTasks = (): BoardTask[] => stageShapeLanes.map((entry, index) => task(`t-shape-${entry.slug}`, "assigned", entry.pipeline.task, "", (index + 1) * MIN));
+
+
 const pipelines: Pipeline[] = [
+  ...shapePipelines,
   ...stagePlacePipelines,
   ...cloudChecksPipelines,
   ...wallPipelines,
@@ -1875,6 +1945,7 @@ const pipelines: Pipeline[] = [
   ...labelPipelines,
   ...marksPipelines,
   ...glyphPipelines,
+  ...glyphAgyPipelines,
   ...loopsPipelines,
   ...manyPipelines,
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
@@ -2142,6 +2213,7 @@ const tasks: BoardTask[] = [
     task("t-rem-old", "assigned", L("A task from a peer that predates lane rows", "Задача від вузла, що ще не знає про рядки етапів"), "", 31 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
     task("t-rem-done", "done", L("Publish the linked boards guide", "Опублікувати посібник зі зв’язаних дошок"), "", 3 * 60 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
   ] : []),
+  ...(STAGE_SHAPES ? shapeTasks() : []),
   ...(SOUND_CAPTIONS ? [task("t-captions", "assigned", L("Sound captions: say what each sound means", "Підписи до звуків: що означає кожен"), "", 3 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
@@ -2149,6 +2221,10 @@ const tasks: BoardTask[] = [
     task("t-glyphs-run", "assigned", L("Every model at work", "Кожна модель у роботі"), L("Nine lanes, each running one model; the ninth has no glyph.", "Дев’ять конвеєрів, кожен запускає одну модель; дев’ята без гліфа."), 1 * MIN),
     task("t-glyphs", "assigned", L("Every model waiting, and the settled states", "Кожна модель чекає, і завершені стани"), L("A draft of nine stages, and two lanes that settled every model.", "Чернетка з дев’яти етапів і два конвеєри, де завершилася кожна модель."), 2 * MIN),
     task("t-glyphs-live", "assigned", L("Reviewing, committing, and working again", "Рев’ю, коміт і знову в роботі"), L("A review at work, a commit landing, and a passed stage whose conversation works again.", "Рев’ю в роботі, коміт, що завершується, і пройдений етап, чия розмова знову працює."), 3 * MIN),
+  ] : []),
+  ...(GLYPHS_AGY ? [
+    task("t-glyphs-agy-run", "assigned", L("Every Antigravity model at work", "Кожна модель Antigravity у роботі"), L("Nine lanes, each running one model.", "Дев’ять конвеєрів, кожен запускає одну модель."), 3 * MIN),
+    task("t-glyphs-agy", "assigned", L("Every Antigravity model waiting, and the settled states", "Кожна модель Antigravity чекає, і завершені стани"), L("A draft of nine stages, and two lanes that settled them.", "Чернетка з дев’яти етапів і два конвеєри, що їх завершили."), 2 * MIN),
   ] : []),
   ...(LOOPS ? [
     task("t-loops-done", "assigned", L("Show a spent review budget on the lane", "Показати вичерпаний бюджет рев’ю на лінії"), "", 4 * 60 * MIN),
@@ -4410,7 +4486,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (SCENARIO === "role-defaults" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => {
     const variants = ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS];
-    return { ...role, variants, promptPreview: role.promptScaffold, shipped: { config: role.config, variants } };
+    /* `agy=1`: the builder row is mapped to Antigravity on its longest listed model, so the table measures that engine's own labels. */
+    const config = role.id === "builder" && new URLSearchParams(location.search).has("agy") ? { engine: "antigravity", model: "gpt-oss-120b-medium", effort: "high" } : role.config;
+    return { ...role, config, variants, promptPreview: role.promptScaffold, shipped: { config: role.config, variants } };
   }) });
   /* A draft's stage configuration names the stage's own role in its select. */
   if (FROM_CONVERSATION && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, shipped: { config: role.config } })) });

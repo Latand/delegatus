@@ -1,6 +1,6 @@
-import { expect, test, spyOn } from "bun:test";
+import { afterEach, describe, expect, test, spyOn } from "bun:test";
 import fs from "node:fs";
-import { CPU_WAIT_MAX_ENTRIES, CPU_WAIT_MAX_TOTAL_BYTES, cpuWaitConfirmedElapsed, cpuInheritedWaitMs, cpuWaitBudget, cpuWaitElapsed } from "./cpuAdmissionBudget";
+import { CPU_WAIT_MAX_ENTRIES, CPU_WAIT_MAX_TOTAL_BYTES, cpuWaitConfirmedElapsed, cpuInheritedWaitMs, cpuWaitBudget, cpuWaitElapsed, reportCpuWait } from "./cpuAdmissionBudget";
 import { realExec } from "../workflows/provision";
 
 test("bounded wait observations stop at their entry limit and retain interval union accounting", () => {
@@ -135,4 +135,79 @@ test("the surviving executor confirms its publication ancestor beyond the observ
     expect(result.code, result.stderr).toBe(0);
     expect(cpuWaitConfirmedElapsed(budget.directory)).toBe(720_000);
   } finally { budget.close(); }
+});
+
+/* Windows refuses to rename over a file another handle holds open (EPERM or
+   EBUSY while a reader totals the ledger). A record replaced under such a
+   reader failed the worker admission of the native Windows launcher test, so
+   the rename is simulated here to refuse the way that platform does. */
+describe("a heartbeat replaces its record while a reader holds it open", () => {
+  const realRename = fs.renameSync.bind(fs);
+  const refuse = (code: string, from: unknown, to: unknown) =>
+    Object.assign(new Error(`${code}: operation not permitted, rename '${String(from)}' -> '${String(to)}'`), { code, syscall: "rename" });
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const on = (value: NodeJS.Platform) => Object.defineProperty(process, "platform", { ...platform, value });
+  afterEach(() => Object.defineProperty(process, "platform", platform));
+
+  /** Refuses the first `refusals` renames onto a ledger record, then lets the real one through. */
+  const refusing = (code: string, refusals: number) => {
+    const state = { refused: 0, calls: 0 };
+    const spy = spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => {
+      if (!String(to).endsWith(".json")) return realRename(from, to);
+      state.calls++;
+      if (state.refused < refusals) { state.refused++; throw refuse(code, from, to); }
+      return realRename(from, to);
+    }) as typeof fs.renameSync);
+    return { state, spy };
+  };
+  const records = (dir: string) => fs.readdirSync(dir).filter(name => name.endsWith(".json")).map(name => JSON.parse(fs.readFileSync(`${dir}/${name}`, "utf8")));
+
+  test.each(["EPERM", "EBUSY"])("on Windows a %s on the opening and the closing write is retried until the record is replaced", code => {
+    const budget = cpuWaitBudget({ NODE_ENV: "test" });
+    const { state, spy } = refusing(code, 3);
+    try {
+      on("win32");
+      const end = reportCpuWait(budget.env);
+      expect(state.refused).toBe(3);
+      expect(records(budget.directory)).toEqual([{ start: expect.any(Number), end: expect.any(Number), closed: false }]);
+      state.refused = 0;
+      end();
+      expect(state.refused).toBe(3);
+      const [record] = records(budget.directory);
+      expect(record.closed).toBe(true);
+      expect(record.end).toBeGreaterThanOrEqual(record.start);
+      expect(fs.readdirSync(budget.directory).filter(name => name.endsWith(".next"))).toEqual([]);
+      expect(Number.isFinite(cpuWaitElapsed(budget.directory))).toBe(true);
+    } finally { spy.mockRestore(); budget.close(); }
+  });
+
+  test("a handle held past the bound still fails the heartbeat with the platform's error", () => {
+    const budget = cpuWaitBudget({ NODE_ENV: "test" });
+    const { state, spy } = refusing("EPERM", Number.POSITIVE_INFINITY);
+    try {
+      on("win32");
+      expect(() => reportCpuWait(budget.env)).toThrow("EPERM");
+      expect(state.calls).toBe(101);
+    } finally { spy.mockRestore(); budget.close(); }
+  });
+
+  test("another error code is never retried", () => {
+    const budget = cpuWaitBudget({ NODE_ENV: "test" });
+    const { state, spy } = refusing("ENOSPC", Number.POSITIVE_INFINITY);
+    try {
+      on("win32");
+      expect(() => reportCpuWait(budget.env)).toThrow("ENOSPC");
+      expect(state.calls).toBe(1);
+    } finally { spy.mockRestore(); budget.close(); }
+  });
+
+  test("off Windows an EPERM is a real permission fault and is not retried", () => {
+    const budget = cpuWaitBudget({ NODE_ENV: "test" });
+    const { state, spy } = refusing("EPERM", Number.POSITIVE_INFINITY);
+    try {
+      on("linux");
+      expect(() => reportCpuWait(budget.env)).toThrow("EPERM");
+      expect(state.calls).toBe(1);
+    } finally { spy.mockRestore(); budget.close(); }
+  });
 });

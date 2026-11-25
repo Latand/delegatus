@@ -1,0 +1,263 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "issue1695Evidence.fixture.tsx?scenario=loose",
+  "readings": {
+    "1440x900-en-light-escape": {
+      "opened": {
+        "visible": true,
+        "text": "AgentReviewer: two presets share a namedone · 12m agoCodexgpt-5.6defaultReviewer",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "AgentReviewer: two presets share a namedone · 12m agoCodexgpt-5.6defaultReviewer",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    },
+    "1440x900-en-dark-escape": {
+      "opened": {
+        "visible": true,
+        "text": "AgentReviewer: two presets share a namedone · 12m agoCodexgpt-5.6defaultReviewer",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "AgentReviewer: two presets share a namedone · 12m agoCodexgpt-5.6defaultReviewer",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    },
+    "1440x900-uk-light-escape": {
+      "opened": {
+        "visible": false,
+        "text": "",
+        "inViewport": false
+      },
+      "reopened": {
+        "visible": true,
+        "text": "АгентReviewer: two presets share a nameготово · 12 хв томуCodexgpt-5.6defaultRev",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    },
+    "1440x900-uk-dark-escape": {
+      "opened": {
+        "visible": true,
+        "text": "АгентReviewer: two presets share a nameготово · 12 хв томуCodexgpt-5.6defaultRev",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "АгентReviewer: two presets share a nameготово · 12 хв томуCodexgpt-5.6defaultRev",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    },
+    "1000x700-en-light-escape": {
+      "opened": {
+        "visible": true,
+        "text": "AgentReviewer: two presets share a namedone · 12m agoCodexgpt-5.6defaultReviewer",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "AgentReviewer: two presets share a namedone · 12m agoCodexgpt-5.6defaultReviewer",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    },
+    "1000x700-en-dark-escape": {
+      "opened": {
+        "visible": true,
+        "text": "AgentReviewer: two presets share a namedone · 12m agoCodexgpt-5.6defaultReviewer",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "AgentReviewer: two presets share a namedone · 12m agoCodexgpt-5.6defaultReviewer",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    },
+    "1000x700-uk-light-escape": {
+      "opened": {
+        "visible": true,
+        "text": "АгентReviewer: two presets share a nameготово · 12 хв томуCodexgpt-5.6defaultRev",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "АгентReviewer: two presets share a nameготово · 12 хв томуCodexgpt-5.6defaultRev",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    },
+    "1000x700-uk-dark-escape": {
+      "opened": {
+        "visible": true,
+        "text": "АгентReviewer: two presets share a nameготово · 12 хв томуCodexgpt-5.6defaultRev",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "АгентReviewer: two presets share a nameготово · 12 хв томуCodexgpt-5.6defaultRev",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    }
+  },
+  "failures": []
+}
