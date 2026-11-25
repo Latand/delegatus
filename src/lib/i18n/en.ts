@@ -6214,6 +6214,7 @@ export const en = {
   "seatTick.reason.permissionRequest": "a permission request waits",
   "seatTick.reason.workerAsk": "a worker's question waits on the orchestrator",
   "seatTick.reason.diskPressure": "disk space is low",
+  "seatTick.reason.diskCleaner": "disk cleanup finished",
   "seatTick.outcome.landed": "landed",
   "seatTick.outcome.deferred": "deferred, an attempt outstanding",
   "seatTick.outcome.queued": "queued",
