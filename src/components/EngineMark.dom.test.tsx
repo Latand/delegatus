@@ -179,7 +179,7 @@ test("shared CSS neon glow uses GLYPH_TURN_MS, respects prefers-reduced-motion, 
   expect(tokensCss.match(/--color-antigravity-mark:\s*#[0-9a-f]{6}/gi)?.length).toBe(3);
 
   /* Steady lit gas chamber and halo survive reduced motion for both StageGlyph and EngineMark. */
-  expect(glyphCss).toContain(':is(.mglyph.g-neon, .emark-neon)[data-live="1"] .mg-neon-gas { opacity: 0.34; }');
+  expect(glyphCss).toContain(':is(.mglyph.g-cell, .emark-neon)[data-live="1"] .mg-neon-gas { opacity: 0.34; }');
   expect(glyphCss).toContain('.emark-neon[data-live="1"]::before { opacity: 1; }');
   /* Halo and gas keep one shared period (`--mg-turn`, GLYPH_TURN_MS) with no 3.2 s drift. */
   expect(glyphCss).toContain('--mg-period: var(--mg-turn);');
@@ -189,7 +189,7 @@ test("shared CSS neon glow uses GLYPH_TURN_MS, respects prefers-reduced-motion, 
   const motionBlockMatch = /@media \(prefers-reduced-motion: no-preference\)\s*\{([\s\S]*?)\n\}/.exec(glyphCss);
   expect(motionBlockMatch).not.toBeNull();
   const motionBlock = motionBlockMatch![1];
-  expect(motionBlock).toContain('.mglyph.g-neon[data-live="1"]::before,');
+  expect(motionBlock).toContain('.mglyph.g-cell[data-live="1"]::before,');
   expect(motionBlock).toContain('.emark-neon[data-live="1"]::before { animation: mg-halo var(--mg-turn) ease-in-out infinite; }');
   expect(motionBlock).toContain('.emark-neon[data-live="1"] .mg-neon-gas { animation: mg-neon var(--mg-turn) ease-in-out infinite; }');
 

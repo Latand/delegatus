@@ -5,6 +5,10 @@ import type { StageChipState } from "@/components/pipelines/pipelineModel";
  * Which drawn glyph stands for the model a stage runs on
  * (docs/design/model-glyphs.md). Pure: no DOM, no React.
  *
+ * Antigravity reads by what the catalogue names: the Gemini 4 line by its
+ * element (Neon, Argon, Hydrogen), Flash, GPT-OSS, the two orchestrators as
+ * their base element, and a Claude model it serves as that Claude family.
+ *
  * Claude reads by family, through the same projection resume and migration
  * use, so `opus`, `opus-5-5` and `claude-opus-5` all draw Opus. Codex reads by
  * the name after the version (`gpt-6-sol` and `gpt-5.6-sol` are both Sol),
@@ -13,19 +17,46 @@ import type { StageChipState } from "@/components/pipelines/pipelineModel";
  * surface keeps the stage dot it always drew.
  */
 
-export type ModelGlyphKind = "opus" | "fable" | "sonnet" | "haiku" | "sol" | "astra" | "terra" | "luna" | "neon";
+export type ModelGlyphKind =
+  | "opus" | "fable" | "sonnet" | "haiku" | "sol" | "astra" | "terra" | "luna"
+  | "neon" | "argon" | "hydrogen" | "orch-neon" | "orch-argon" | "flash" | "oss";
 
-export const MODEL_GLYPH_KINDS: readonly ModelGlyphKind[] = ["opus", "fable", "sonnet", "haiku", "sol", "astra", "terra", "luna", "neon"];
+export const MODEL_GLYPH_KINDS: readonly ModelGlyphKind[] = [
+  "opus", "fable", "sonnet", "haiku", "sol", "astra", "terra", "luna",
+  "neon", "argon", "hydrogen", "orch-neon", "orch-argon", "flash", "oss",
+];
+
+/** The kinds drawn as a periodic-table cell: they share one frame, one gas chamber and one badge corner. */
+export const CELL_GLYPH_KINDS: readonly ModelGlyphKind[] = ["neon", "argon", "hydrogen", "orch-neon", "orch-argon"];
 
 const CODEX_FAMILY = /^gpt-\d+(?:\.\d+)?-(sol|astra|terra|luna)$/;
 const ANTIGRAVITY_NEON = /^gemini-[a-z0-9._-]+-neon(?:-[a-z0-9._-]+)?$/;
+const ANTIGRAVITY_ARGON = /^gemini-[a-z0-9._-]+-argon(?:-[a-z0-9._-]+)?$/;
+const ANTIGRAVITY_HYDROGEN = /^gemini-[a-z0-9._-]+-hydrogen(?:-[a-z0-9._-]+)?$/;
+const ANTIGRAVITY_FLASH = /^gemini-[a-z0-9._-]+-flash(?:-[a-z0-9._-]+)?$/;
+const ANTIGRAVITY_OSS = /^gpt-oss-[a-z0-9._-]+$/;
+
+/* The two orchestrator models read as their base element. Their ids carry the
+   catalogue's own naming: `…-orchestrator-neon` is Neon, and the Argon one is
+   the `g1-pro` build of the same orchestrator. */
+function antigravityKind(id: string): ModelGlyphKind | null {
+  if (/^gemini-[a-z0-9._-]*orchestrator-neon$/.test(id)) return "orch-neon";
+  if (/^gemini-[a-z0-9._-]*orchestrator-(?:argon|g1-pro)$/.test(id)) return "orch-argon";
+  if (ANTIGRAVITY_NEON.test(id)) return "neon";
+  if (ANTIGRAVITY_ARGON.test(id)) return "argon";
+  if (ANTIGRAVITY_HYDROGEN.test(id)) return "hydrogen";
+  if (ANTIGRAVITY_FLASH.test(id)) return "flash";
+  if (ANTIGRAVITY_OSS.test(id)) return "oss";
+  /* A Claude model served through Antigravity draws the Claude family glyph it draws on its own engine. */
+  return normalizeClaudeLaunchModel(id);
+}
 
 export function modelGlyphKind(engine: string, model: string | null | undefined): ModelGlyphKind | null {
   const id = (model ?? "").trim().toLowerCase();
   if (!id) return null;
   if (engine === "claude") return normalizeClaudeLaunchModel(id);
   if (engine === "codex") return (CODEX_FAMILY.exec(id)?.[1] as ModelGlyphKind | undefined) ?? null;
-  if (engine === "antigravity") return ANTIGRAVITY_NEON.test(id) ? "neon" : null;
+  if (engine === "antigravity") return antigravityKind(id);
   return null;
 }
 

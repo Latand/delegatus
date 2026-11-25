@@ -1,6 +1,7 @@
 /* Straight from lucide: `@/components/icons` imports this module for the engine
    glyph names, and a cycle through it would be needless. */
 import { MessageCircle, Terminal } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { engineBadgeFor } from "@/components/utils";
 
@@ -57,7 +58,7 @@ const NEON_NUM = "M3.15 2.75V4.85";
 const NEON_SYM = "M3.2 12.6V6.8L7.3 12.6V6.8M9.55 10.6H12.9C12.9 9.25 12.15 8.4 11.2 8.4C10.15 8.4 9.45 9.3 9.45 10.55C9.45 11.8 10.2 12.6 11.35 12.6C12 12.6 12.5 12.38 12.8 12.05";
 
 /** The Neon periodic-table tile, the model glyph `StageGlyph` draws for the `neon` model. */
-export function NeonTileSvg({ style }: { style?: { width: string; height: string } }) {
+export function NeonTileSvg({ style, children }: { style?: { width: string; height: string }; children?: ReactNode }) {
   return (
     <svg viewBox="0 0 16 16" style={style} aria-hidden="true">
       <rect className="mg-neon-gas" x="2.1" y="2.1" width="11.8" height="11.8" rx="1.4" />
@@ -65,6 +66,7 @@ export function NeonTileSvg({ style }: { style?: { width: string; height: string
       <path className="mg-neon-num" d={NEON_NUM} />
       <rect className="mg-neon-num" x="4.4" y="2.75" width="1.7" height="2.1" rx="0.8" />
       <path className="mg-neon-sym" d={NEON_SYM} />
+      {children}
     </svg>
   );
 }
