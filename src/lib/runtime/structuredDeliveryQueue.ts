@@ -4089,7 +4089,11 @@ export class StructuredDeliveryQueue {
     if (!ownsLane()) return { blocked: true, terminated: false };
     try {
       assertOwner();
-      this.assertHostRoute(host, health);
+      // Blocking attention can change while the control still targets the same turn.
+      const current = host.agentControlState?.();
+      if (current && (current.sessionKey !== health.sessionKey || current.turnId !== health.turnId)) {
+        throw new StructuredSendRefusedError("stale-turn");
+      }
       if (effect.kind === "answer" && host.agentAttentionRequest
         && (!request || request !== host.agentAttentionRequest(effect.attentionId!))) {
         throw new StructuredAnswerError("attention changed before dispatch", "unavailable");

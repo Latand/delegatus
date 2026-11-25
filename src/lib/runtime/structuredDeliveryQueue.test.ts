@@ -119,6 +119,56 @@ test.each(["current", "antigravity", "turn", "writer", "generation", "attention"
 );
 
 test.each([
+  ["interrupt", "active", "attention", "interrupted"],
+  ["interrupt", "attention", "active", "interrupted"],
+  ["answer", "active", "attention", "answered"],
+  ["answer", "attention", "active", "answered"],
+] as const)(
+  "%s reaches the host when the same turn changes from %s to %s",
+  async (kind, initialStatus, dispatchStatus, settledStatus) => {
+    let status: "active" | "attention" = initialStatus;
+    const question = { blocking: false };
+    const resolution = { answer: "yes" };
+    const calls: unknown[][] = [];
+    const transitions: string[] = [];
+    const readHostState = (): HostState => ({
+      ...idleState(), status, activeTurnRef: "turn-one",
+      pendingAttention: status === "attention" ? ["question-one", "permission-one"] : ["question-one"],
+    });
+    const adapter = Object.assign(host(async () => { throw new Error("expected a control"); }), {
+      health: async () => readHostState(),
+      agentControlState: () => ({
+        sessionKey: "session-one", status, turnId: "turn-one", idle: false, attentionPending: true, activeFlags: [],
+      }),
+      agentAttentionRequest: (id: string) => id === "question-one" ? question : undefined,
+      answer: async (id: string, value: unknown) => { calls.push(["answer", id, value, status]); },
+      interrupt: async (turnId: string) => { calls.push(["interrupt", turnId, status]); },
+    });
+    const queue = new StructuredDeliveryQueue({
+      effects: async () => [{
+        id: "effect:control", kind: `runtime.${kind}`, eventSeq: 1,
+        payload: { operationId: "control", conversationId: "conversation-one",
+          controlBinding: { engine: "codex", sessionId: "session-one", writerClaim: "writer:1" },
+          ...(kind === "answer" ? { attentionId: "question-one", resolution } : { turnId: "turn-one" }) },
+      }],
+      status: async () => ({ status: "pending", revision: 1 }),
+      currentHostClaim: () => "writer:1",
+      currentHostSessionKey: () => ({ engine: "codex", sessionId: "session-one" }),
+      transition: async (_id, next, details) => {
+        transitions.push(details?.reason && next !== "delivering" ? `${next}:${details.reason}` : next);
+        if (next === "delivering") status = dispatchStatus;
+      },
+    }, () => adapter);
+
+    await queue.drain();
+    expect(transitions).toEqual(["delivering", settledStatus]);
+    expect(calls).toEqual(kind === "answer"
+      ? [["answer", "question-one", resolution, dispatchStatus]]
+      : [["interrupt", "turn-one", dispatchStatus]]);
+  },
+);
+
+test.each([
   ["queue", "journal write"],
   ["steer-or-queue", "journal write"],
   ["interrupt-active", "journal write"],
