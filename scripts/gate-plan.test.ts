@@ -34,6 +34,29 @@ const linux = process.platform === "linux" ? ["Linux backend", "Linux tests"] : 
 const runtime = ["runtime verdict tests", "Viewer build", "MCP size budgets", "Viewer runtime", "runtime host", "runtime negative controls",
   ...SUPPORTED_CODEX_VERSIONS.map(version => `native Codex ${version}`), "native Codex shared contracts"];
 
+test("a canonical comparator selects a historical retry file and has its own plan identity", () => {
+  const f = fixture();
+  const retry = "scripts/local-gate.checkpoints-retry.test.ts";
+  write(f, retry);
+  commit(f);
+  f.git("update-ref", "refs/remotes/origin/main", "HEAD");
+  write(f, "scripts/local-gate-tests.ts");
+  commit(f);
+  const ordinary = gatePlan(f.dir, { profile: "pre-push" }, f.env);
+  const comparator = f.writablePath(".git/canonical-comparator.ts");
+  writeFileSync(comparator, "// canonical comparator\n");
+  const env = { ...f.env, LLV_GATE_CANONICAL_TOOLS: "1", LLV_GATE_CANONICAL_COMPARATOR: comparator };
+  const canonical = gatePlan(f.dir, { profile: "pre-push" }, env, process.execPath, ordinary.planId);
+  expect(canonical.planId).not.toBe(ordinary.planId);
+  expect(canonical.checks.find(check => check.step.name === "touched tests")).toMatchObject({
+    step: { command: ["bun", comparator, "--base", canonical.base, `./${retry}`] },
+    files: [retry],
+  });
+  expect(gatePlan(f.dir, { profile: "pre-push" }, env, process.execPath, canonical.planId).planId).toBe(canonical.planId);
+  writeFileSync(comparator, "// changed comparator\n");
+  expect(gatePlan(f.dir, { profile: "pre-push" }, env, process.execPath, canonical.planId).planId).not.toBe(canonical.planId);
+});
+
 test.each([
   { profile: "empty", file: "", push: ["privacy"], commit: ["staged whitespace"], batch: ["dependencies", "tsc", "privacy"] },
   { profile: "prose", file: "guide.md", push: ["privacy"], commit: ["staged whitespace"], batch: ["dependencies", "tsc", "privacy"] },

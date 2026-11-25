@@ -1,12 +1,13 @@
 import { hasActiveGateSandbox, recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
 import { gateTaskDiagnostics } from "./gate-tasks";
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { decodeXML } from "entities";
 import { gateInputSnapshot, gateTemporaryRoot, ISOLATED_DIRECTORY_KEYS, isolatedEnvironment, SUPERVISOR_MARGIN_MS } from "./local-gate";
 import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
+import { decisiveRefusal } from "../src/lib/pipelines/publication";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
 export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number }
@@ -38,13 +39,20 @@ const mergeObservedSites = (first: readonly TestSite[], retry: readonly TestSite
   return merged;
 };
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
-const RUN_BUDGET_MS = 15 * 60 * 1000;
+const MIN_PHASE_BUDGET_MS = 15 * 60_000;
+const COMPARISON_BUDGET_MS = 40 * 60_000;
 const FILE_BUDGET_MS = 5 * 60 * 1000;
 // Engine selections took eleven minutes at six workers, leaving no room for
 // confirmations after a slow full-file baseline. Bound head work to eight owned
 // runners in the shared CPU work slice; baseline and retries retain three.
 const HEAD_FILE_WORKERS = 8;
 const NESTED_FILE_WORKERS = 2;
+
+/** Expand larger selections gradually. Head, baseline and confirmations
+ * also share the comparison ceiling. */
+export function comparisonPhaseBudgetMs(fileCount: number): number {
+  return Math.min(COMPARISON_BUDGET_MS, MIN_PHASE_BUDGET_MS + Math.ceil(Math.max(0, fileCount - 30) / 4) * 60_000);
+}
 
 const nestedComparisonFile = (file: string): boolean =>
   /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|privacy-)/.test(file.split(path.sep).join("/"));
@@ -270,8 +278,9 @@ export function parseReport(xml: string, output: string, file: string, root: str
   return { failures, passed };
 }
 
-function command(command: string[], cwd: string, env: NodeJS.ProcessEnv, timeout = FILE_BUDGET_MS): string {
+function command(command: string[], cwd: string, env: NodeJS.ProcessEnv, timeout = FILE_BUDGET_MS, deadlineMessage?: string): string {
   const result = spawnSync(command[0]!, command.slice(1), { cwd, env, encoding: "utf8", timeout, killSignal: "SIGKILL", maxBuffer: 32 * 1024 * 1024 });
+  if (deadlineMessage && result.error && "code" in result.error && result.error.code === "ETIMEDOUT") throw new BudgetExhausted(deadlineMessage);
   if (result.error || result.status !== 0) throw new Error(`${command[0]} ${command[1]} failed (${result.status ?? result.signal}): ${result.error?.message ?? result.stderr.trim()}`);
   return result.stdout;
 }
@@ -317,20 +326,39 @@ export function testNameFilter(sites: readonly TestSite[]): string[] {
 }
 
 interface TestBudgets { fileMs: number; runMs: number }
-const DEFAULT_TEST_BUDGETS: TestBudgets = { fileMs: FILE_BUDGET_MS, runMs: RUN_BUDGET_MS };
+interface FileRunOptions {
+  now: () => number;
+  budgets: TestBudgets;
+  comparisonDeadline: number;
+  log: (line: string) => void;
+  sites?: readonly TestSite[];
+  confirmationDeadline?: number;
+  workers?: number;
+  reserveFileBudget?: boolean;
+  onFailure?: () => void;
+  onFile?: (run: TestRun, cleanupConfirmed: boolean) => void;
+}
+export function confirmedFileCleanup(input: { platform: string; exitCode: number; survivors?: string; taskPeak?: string | null;
+  output: string; cloudCleanup: boolean; receipt?: string; token: string }): boolean {
+  if (input.platform !== "linux" || input.exitCode !== 0 || input.survivors) return false;
+  if (input.cloudCleanup) return input.receipt === input.token;
+  return !!input.taskPeak && !input.output.includes("portable cleanup")
+    && !input.output.includes("no reachable systemd user manager");
+}
 const fileRunnerPath = (env: NodeJS.ProcessEnv) => `${path.dirname(process.execPath)}${path.delimiter}${env.PATH ?? ""}`;
 const sharesPortableRunner = () => process.platform === "linux" && Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) > 0;
-async function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: { sites?: readonly TestSite[]; deadline?: number; onFailure?: () => void; onFile?: (run: TestRun, cleanupConfirmed: boolean) => void; now?: () => number; budgets?: TestBudgets; log?: (line: string) => void; workers?: number; reserveFileBudget?: boolean } = {}): Promise<TestRun> {
+async function runFiles(root: string, files: readonly string[], sandbox: string, inherited: NodeJS.ProcessEnv, label: string, options: FileRunOptions): Promise<TestRun> {
   const started = performance.now(), failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
-  const now = options.now ?? (() => performance.now());
-  const budgetStart = now(), budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
+  const { now, budgets } = options;
+  const deadline = Math.min(now() + budgets.runMs, options.comparisonDeadline, options.confirmationDeadline ?? Infinity);
+  const budgetLabel = deadline === options.comparisonDeadline ? "comparison" : options.confirmationDeadline === undefined ? "phase" : "flaky rerun";
   const results: TestRun[] = new Array(files.length);
   const runFile = async (index: number) => {
     const file = files[index]!;
     const fileStarted = performance.now();
     const failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
-    const remaining = Math.floor(Math.min(budgets.runMs - (now() - budgetStart), (options.deadline ?? Infinity) - now()));
-    if (remaining <= 0) throw new BudgetExhausted(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : "15 minute"} budget; ${results.filter(run => run?.completed.length).length} of ${files.length} files completed`);
+    const remaining = Math.floor(deadline - now());
+    if (remaining <= 0) throw new BudgetExhausted(`${label}: test run exceeded its ${budgetLabel} budget; ${results.filter(run => run?.completed.length).length} of ${files.length} files completed`);
     if (options.reserveFileBudget && remaining < budgets.fileMs + SUPERVISOR_MARGIN_MS) {
       throw new BudgetExhausted(`${label}: remaining run budget cannot fit a full file and its cleanup; ${results.filter(run => run?.completed.length).length} of ${files.length} pending files completed`);
     }
@@ -350,6 +378,9 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     env.PATH = fileRunnerPath(env);
     env.NO_COLOR = "1"; env.FORCE_COLOR = "0";
     const report = path.join(privateRoot, "junit.xml"), log = path.join(privateRoot, "output.log");
+    const cleanupReceipt = path.join(privateRoot, "owned-cleanup.complete"), cleanupToken = randomUUID();
+    env.LLV_OWNED_RUN_COMPLETION_RECEIPT = cleanupReceipt;
+    env.LLV_OWNED_RUN_COMPLETION_TOKEN = cleanupToken;
     const fd = openSync(log, "w");
     let result: Bun.Subprocess;
     let exitCode: number;
@@ -366,14 +397,22 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       });
       exitCode = await result.exited;
     } finally { closeSync(fd); }
+    const cutShort = exitCode === 124 && remaining < budgets.fileMs;
     // The owned runner ends the service cgroup. A group number after the root
     // exits is neither a bound handle nor proof against PID reuse.
     try {
-      const output = readFileSync(log, "utf8");
-      survivors = output.split("\n").find(line => line.startsWith("owned runner: surviving owned processes:"));
+      const output = readFileSync(log, "utf8"), lines = output.split("\n");
+      survivors = lines.find(line => line.startsWith("owned runner: surviving owned processes:"));
       const task = gateTaskDiagnostics(output);
       taskPeak = task.peak;
       if (exitCode !== 0 && task.failure) throw new Error(task.failure);
+      if (cutShort) {
+        // A file cut short by the phase has no comparable sample. A timed-out
+        // baseline must not turn that incomplete head file into a green result.
+        const refusal = lines.find(line => decisiveRefusal(line.trim()));
+        if (refusal) throw new Error(`${label}: ${file}: runner did not finish (124); ${refusal.trim()}`);
+        throw new BudgetExhausted(`${label}: ${file}: runner did not finish (124); ${budgetLabel} budget exhausted`);
+      }
       if (result.signalCode || ![0, 1].includes(exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? exitCode})`);
       const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, filtered);
       // A complete report still needs the service's ownership verdict.
@@ -386,17 +425,19 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       }
       // Portable cleanup is best effort and can miss detached descendants.
       // Its result remains observable but cannot certify later file reuse.
-      cleanupConfirmed = process.platform === "linux" && exitCode === 0 && !!task.peak && !survivors
-        && !output.includes("portable cleanup") && !output.includes("no reachable systemd user manager");
+      cleanupConfirmed = confirmedFileCleanup({ platform: process.platform, exitCode, survivors, taskPeak: task.peak, output,
+        cloudCleanup: env.LLV_GATE_CHECKPOINT_CLEANUP === "cloud-owned-runner",
+        receipt: existsSync(cleanupReceipt) ? readFileSync(cleanupReceipt, "utf8") : undefined, token: cleanupToken });
       failures.push(...parsed.failures); passed.push(...parsed.passed); completed.push(file);
       if (parsed.failures.length) options.onFailure?.();
     } catch (error) {
+      if (cutShort) throw error;
       const cause = error instanceof Error ? error.message : String(error);
       const message = survivors && !cause.includes(survivors) ? `${cause}; ${survivors}` : cause;
       if (filtered) {
         const detail = `${label}: ${file}: ${message}; elapsed ${(performance.now() - started).toFixed(0)}ms`;
         if (message === "runner did not finish (124)") {
-          const budget = options.deadline === undefined ? "test run" : "flaky rerun";
+          const budget = options.confirmationDeadline === undefined ? "test run" : "flaky rerun";
           throw new BudgetExhausted(`${detail}; ${budget} budget exhausted`);
         }
         throw new Error(detail);
@@ -410,13 +451,13 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       ? `; over half the ${budgets.fileMs / 1000} s file budget; split it` : "";
     results[index] = { failures, passed, completed, elapsedMs: 0 };
     options.onFile?.(results[index]!, cleanupConfirmed);
-    options.log?.(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}${taskPeak ? `; ${taskPeak}` : ""}`);
+    options.log(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}${taskPeak ? `; ${taskPeak}` : ""}`);
   };
   const parallelism = comparisonFileWorkers(files, options.workers ?? 3, sharesPortableRunner());
   const ordinary: number[] = [], nested: number[] = [];
   files.forEach((file, index) => (nestedComparisonFile(file) ? nested : ordinary).push(index));
   let nextOrdinary = 0, nextNested = 0, nestedRunning = 0;
-  if (files.length) options.log?.(`touched-tests: ${label} selected ${files.length} files with ${parallelism} file workers`);
+  if (files.length) options.log(`touched-tests: ${label} selected ${files.length} files with ${parallelism} file workers`);
   const workers = await Promise.allSettled(Array.from({ length: parallelism }, async () => {
     for (;;) {
       const ordinaryIndex = ordinary[nextOrdinary];
@@ -536,6 +577,10 @@ function headCheckpointEnvironment(root: string, sandbox: string, inherited: Nod
  * local bus, manager connection and cleanup tools. */
 function serviceCleanupIdentity(root: string, isolated: NodeJS.ProcessEnv): string | undefined {
   if (process.platform !== "linux") return;
+  if (isolated.LLV_GATE_CHECKPOINT_CLEANUP === "cloud-owned-runner") {
+    return fingerprint(["cloud-owned-runner", Bun.version, process.platform, process.arch,
+      fileFingerprint(process.execPath), isolated.LLV_GATE_EXECUTION ?? null]);
+  }
   const PATH = fileRunnerPath(isolated);
   const env: NodeJS.ProcessEnv = { ...isolated, PATH };
   const search = { PATH, cwd: root };
@@ -583,9 +628,8 @@ export async function touchedTests(root: string, baseRef: string, selected: read
   const log = options.log ?? console.log;
   const budget = cpuWaitBudget(options.env ?? process.env);
   const inherited = budget.env;
-  const budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
   const now = () => performance.now() - budget.elapsed();
-  const runOptions = { now, budgets, log };
+  const comparisonDeadline = now() + COMPARISON_BUDGET_MS;
   const logTiming = () => {
     const wall = performance.now() - started, wait = budget.elapsed();
     log(`touched-tests: timing ${wall.toFixed(0)}ms wall; ${wait.toFixed(0)}ms CPU admission; ${Math.max(0, wall - wait).toFixed(0)}ms execution`);
@@ -601,6 +645,8 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const files = [...new Set(selected.map(file => path.relative(root, path.resolve(root, file))))].sort();
     if (!files.length) throw new Error("refusing an empty test list");
     for (const file of files) if (file.startsWith("../") || path.isAbsolute(file) || !/\.test\.[cm]?[jt]sx?$/.test(file) || file.includes(".browser.test.") || !statSync(path.join(root, file)).isFile()) throw new Error(`missing or invalid test path: ${file}`);
+    const budgets = options.budgets ?? { fileMs: FILE_BUDGET_MS, runMs: comparisonPhaseBudgetMs(files.length) };
+    const runOptions = { now, budgets, comparisonDeadline, log };
     // A single file already gets whole-step reuse after passing; partial
     // checkpoints cannot help it, so avoid another input traversal there.
     const cleanupIdentity = files.length > 1 ? serviceCleanupIdentity(root, env) : undefined;
@@ -609,7 +655,9 @@ export async function touchedTests(root: string, baseRef: string, selected: read
       [{ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", base, ...files] }], checkpointEnvironment.env) : undefined;
     const initial = inputs?.snapshot();
     const headCache = initial ? headFileCache(root) : undefined;
-    const headKey = (file: string) => fingerprint([4, initial?.key, checkpointEnvironment?.key, cleanupIdentity, files, budgets, file]);
+    // A green file already ran to completion under its individual limit.
+    // The aggregate execution allowance only controls how far this attempt gets.
+    const headKey = (file: string) => fingerprint([5, initial?.key, checkpointEnvironment?.key, cleanupIdentity, files, budgets.fileMs, file]);
     const reused: TestRun[] = [], pending: string[] = [];
     for (const file of files) {
       const cached = headCache?.read(headKey(file));
@@ -654,14 +702,16 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const remote = oldFiles.length ? git("config", "--get", "remote.origin.url").trim() : "";
     const baselineStarted = performance.now();
     let checkout: string | undefined;
-    const prepareBaseline = (deadline = Infinity) => {
+    const prepareBaseline = (confirmationDeadline = Infinity) => {
       if (checkout) return checkout;
       const setupStarted = performance.now();
       const target = path.join(sandbox, "baseline");
+      const deadline = Math.min(comparisonDeadline, confirmationDeadline);
+      const exhausted = `baseline: ${confirmationDeadline < comparisonDeadline ? "flaky rerun" : "comparison"} budget exhausted during setup`;
       const execute = (args: string[], cwd = root) => {
-        const remaining = Math.floor(Math.min(budgets.fileMs, deadline - now()));
-        if (remaining <= 0) throw new BudgetExhausted("baseline: flaky rerun budget exhausted during setup");
-        return command(args, cwd, env, remaining);
+        const remaining = Math.floor(deadline - now());
+        if (remaining <= 0) throw new BudgetExhausted(exhausted);
+        return command(args, cwd, env, Math.min(budgets.fileMs, remaining), remaining < budgets.fileMs ? exhausted : undefined);
       };
       // A detached clone retains Git metadata without changing the pushing
       // repository's worktrees/refs. Both initial and retry samples use it.
@@ -742,7 +792,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
       else reruns++;
       const retryFiles = [...new Set(sites.map(site => site.file))].filter(file => side === "head" || baseFiles.has(file));
       if (!retryFiles.length) return { failures: [], passed: [], completed: [], elapsedMs: 0 };
-      return await runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { ...runOptions, ...(sites.some(site => site.kind === "error") ? {} : { sites }), deadline });
+      return await runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { ...runOptions, ...(sites.some(site => site.kind === "error") ? {} : { sites }), confirmationDeadline: deadline });
     });
     // Observed intermittency cannot become a frozen baseline allowance.
     for (const file of new Set(comparison.flaky.map(site => site.file))) cache.remove(cacheKey(file));
