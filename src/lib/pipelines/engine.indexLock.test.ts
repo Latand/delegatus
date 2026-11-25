@@ -1,8 +1,9 @@
 import { once } from "node:events";
-import { afterEach, beforeEach, setDefaultTimeout, spyOn } from "bun:test";
+import { afterEach, beforeEach, setDefaultTimeout } from "bun:test";
 import { expect, test, fs, path, spawn, stopFixtureProcess, loadPipelines, realWorktreeLane, finishReported, tickPipelines } from "./engine.fixture";
 import { pipelineArtifactsDir } from "./store";
 import { recoverLaneIndexLock, withLaneIndexLockRecovery } from "./indexLock";
+import { fixtureIndexLockCensus } from "./indexLock.fixture";
 import { realExec } from "@/lib/workflows/provision";
 import type { ExecPort } from "@/lib/workflows/provision";
 
@@ -12,19 +13,10 @@ const stages = [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt:
 const journalPath = (id: string) => path.join(pipelineArtifactsDir(id), "git-recovery.ndjson");
 const fixturePids = new Set<number>();
 let opaquePid: number | undefined;
-let readdir: ReturnType<typeof spyOn<typeof fs.promises, "readdir">>;
+let readdir: ReturnType<typeof fixtureIndexLockCensus>;
 beforeEach(() => {
-  // Enumerate only fixture processes. The census still reads their actual
-  // identities, Git arguments, cwd and descriptor inodes from the kernel.
   fixturePids.add(process.pid);
-  const read = fs.promises.readdir;
-  readdir = spyOn(fs.promises, "readdir").mockImplementation(((...args: unknown[]) => {
-    if (args[0] === "/proc" && args.length === 1) return Promise.resolve([...fixturePids].map(String));
-    if (opaquePid !== undefined && args[0] === `/proc/${opaquePid}/fd`) {
-      return Promise.reject(Object.assign(new Error("fixture descriptor table unavailable"), { code: "EACCES" }));
-    }
-    return Reflect.apply(read, fs.promises, args);
-  }) as typeof fs.promises.readdir);
+  readdir = fixtureIndexLockCensus(fixturePids, () => opaquePid);
 });
 afterEach(() => { readdir.mockRestore(); fixturePids.clear(); opaquePid = undefined; });
 

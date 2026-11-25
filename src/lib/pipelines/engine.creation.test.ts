@@ -1,4 +1,5 @@
 import { startAutoAndSettle } from "./engineEnvironment.fixture";
+import { fixtureIndexLockCensus } from "./indexLock.fixture";
 import { expect, spyOn, test, crypto, spawn, spawnSync, fs, os, path, monitorEventLoopDelay, Database, laneMovedAt, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, idleUpdate, stoppedProcess, endRestartGate, restartGateFile, realExec, engineModule, adoptAttempt, defaultPipelinePorts, ensureTaskPipelineForAssignment, pipelineAttemptTargetForSource, setPipelineDismissal, tickPipelines, AgentRegistry, setAgentRegistryForTests, rawCreatePipelineFromRequest, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, saveTasks, loadTasks, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, finishReported, realWorktreeLane, create, boardTask, FETCHED_SHA, slowRemote, provisionRetryClock, DNS_FAILURE, realProvisioningRepo } from "./engine.fixture";
 import type { ServiceDeps, Snapshot, LauncherRecord, PipelinePorts, BoardTask, Pipeline } from "./engine.fixture";
 
@@ -2078,7 +2079,9 @@ test("a checkout killed at its bound is finished by the retry instead of parking
     (await git(repo, "config", "filter.slow.smudge", "cat"));
     (await git(repo, "config", "filter.slow.clean", "cat"));
     advance(5_000);
-    await tickPipelines([], h.ports);
+    const census = fixtureIndexLockCensus();
+    try { await tickPipelines([], h.ports); }
+    finally { census.mockRestore(); }
     expect(loadPipelines()[0]).toMatchObject({ state: "running", baseRef: base, stateDetail: null });
     expect(fs.readFileSync(path.join(lane.worktreeDir, "tracked.txt"), "utf8")).toBe("complete file\n");
     expect(fs.readFileSync(path.join(lane.worktreeDir, "keep.txt"), "utf8")).toBe("untracked work survives\n");
