@@ -795,6 +795,8 @@ export type PipelineStageAttempt = {
   /** Proven fenced first messages replaced in this attempt. Retained across
       successful spawn handshakes and controller restarts; at most three. */
   fencedMessageRetries?: number;
+  /** A failed setup writer already received its automatic replacement. */
+  spawnWriterRetried?: true;
   /** Socketless recovery hands a failed launch back to its runnable Viewer
       for at most ten minutes. Ownership changes and controller restarts keep
       this deadline; successful retirement clears it before replacement. */
@@ -1131,6 +1133,9 @@ export type PipelineDelivery = {
   /** A final-fix body refresh deferred while Git proved publication. The body
       is reconstructed from this summary and the PR's later verified body. */
   pendingPullRequestRefresh?: { epoch: number; sha: string; number: number; summary: string; nextAttemptAt?: string };
+  /** A Git-verified pass handed off to review while the forge could not list
+      its first PR. The controller retries discovery/creation from this pass. */
+  pendingFirstPullRequest?: { epoch: number; sha: string; stageId: string; attempt: number };
   operation?: {
     id: string;
     /** Pending reservation consumed by this execution. Keeps logical recovery

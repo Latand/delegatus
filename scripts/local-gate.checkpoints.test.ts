@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { isolatedEnvironment, plan, type PlanEnvironment } from "./local-gate";
 import { headFileCache } from "./local-gate-tests";
+import { fixtureCheckAdmissionEnv } from "./local-gate.fixture";
+import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -56,7 +58,8 @@ function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), "gate-head-checkpoint-")); roots.push(root);
   const repo = path.join(root, "repo"); mkdirSync(repo);
   const env = isolatedEnvironment(path.join(root, "environment"), process.env);
-  Object.assign(env, { GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+  Object.assign(env, fixtureCheckAdmissionEnv(repo), { LLV_GATE_LOCK_DIR: path.join(root, "cpu-gate"),
+    GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
     GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_EMAIL: "noreply@example.invalid" });
   const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, env, encoding: "utf8", stdio: "pipe" }).trim();
   git("init", "-b", "main"); git("config", "core.hooksPath", "/dev/null");
@@ -79,15 +82,23 @@ test("fixture contract", () => { ${interrupted ? "process.exit(124);" : "expect(
   const samples = () => readFileSync(marker, "utf8").trim().split("\n").reduce((counts, name) => {
     counts[name] = (counts[name] ?? 0) + 1; return counts;
   }, {} as Record<string, number>);
-  return { root, repo, git, source, run, samples };
+  return { root, repo, env, git, source, run, samples };
 }
 
-serviceTest("an incomplete head run retains only complete green files across fresh processes", () => {
+serviceTest("an incomplete head run retains only complete green files across fresh isolated workers", () => {
   const f = fixture();
-  const first = f.run();
+  const run = (supervisor: number) => {
+    const sandbox = recordGateSandbox(mkdtempSync(path.join(f.root, "delegatus-local-gate-")));
+    try {
+      return f.run({ ...isolatedEnvironment(sandbox, { NODE_ENV: "test" }), LLV_CHECK_ENTRY_SUPERVISOR: String(supervisor) });
+    } finally {
+      releaseGateSandbox(sandbox);
+    }
+  };
+  const first = run(100);
   expect(first.status, first.output).toBe(1);
   expect(f.samples()).toEqual({ a: 1, b: 1 });
-  const repeated = f.run();
+  const repeated = run(101);
   expect(repeated.status, repeated.output).toBe(1);
   expect(repeated.output).toContain("reused complete green head file a.test.ts");
   expect(repeated.output).not.toContain("reused complete green head file b.test.ts");
@@ -220,7 +231,7 @@ import { existsSync, readFileSync } from "node:fs";
 const mode = process.argv.at(-1);
 const expires = mode !== "continue";
 const [elapsed, runMs] = mode === "phase" ? [20_000, 15_000] : mode === "comparison"
-  ? [41 * 60_000, 45 * 60_000] : mode === "remaining" ? [650_000, 900_000] : [0, 30_000];
+  ? [41 * 60_000, 45 * 60_000] : mode === "remaining" ? [580_000, 900_000] : [0, 30_000];
 // The parent clock advances after eight children start. The workers keep
 // their real clocks and execution bounds.
 Object.defineProperty(performance, "now", { value: () => expires && existsSync(${JSON.stringify(marker)})
@@ -232,7 +243,7 @@ try { await comparator.touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(
 }
 `);
   const run = (mode: string) => spawnSync(process.execPath, [driver, mode],
-    { cwd: f.repo, env: process.env, encoding: "utf8", timeout: 30_000 });
+    { cwd: f.repo, env: f.env, encoding: "utf8", timeout: 30_000 });
   const stopped = run(limit);
   expect(stopped.status, stopped.stdout + stopped.stderr).toBe(75);
   const reason = limit === "remaining" ? "remaining run budget cannot fit a full file and its cleanup" : `test run exceeded its ${limit} budget`;
@@ -337,7 +348,7 @@ console.log("retryable=" + publicationDeadlineOnly(lines.join("\\n") + "\\nowned
   for (const mode of ["single", "aggregate"]) {
     rmSync(marker, { force: true });
     const result = spawnSync(process.execPath, [driver], { cwd: f.repo,
-      env: { ...process.env, CLEANUP_CONTROL_MODE: mode }, encoding: "utf8", timeout: 30_000 });
+      env: { ...f.env, CLEANUP_CONTROL_MODE: mode }, encoding: "utf8", timeout: 30_000 });
     const output = result.stdout + result.stderr;
     expect(result.status, output).toBe(1);
     expect(output).toContain("<ownership error> owned runner: surviving owned processes:");
@@ -400,6 +411,30 @@ serviceTest("service checkpoints are not consumed after switching to portable ex
   expect(portable.output).not.toContain("reused complete green head file");
   expect(portable.output).toContain("NEW a.test.ts");
   expect(portable.output).toContain("NEW b.test.ts");
+}, 60_000);
+
+serviceTest("recorded runs share green checkpoints across timing directories and bind the test input", () => {
+  const f = fixture();
+  for (const file of ["a", "b"]) writeFileSync(path.join(f.repo, `${file}.test.ts`), f.source(file).replace("expect(1).toBe(1);",
+    'expect(process.env.CHECKPOINT_TEST_MODE).toBe("green");'));
+  f.git("add", "."); f.git("commit", "-m", "Recorded comparison fixture");
+  const firstTiming = path.join(f.root, "first-recorder", "queue-timing");
+  const secondTiming = path.join(f.root, "second-recorder", "queue-timing");
+  for (const timing of [firstTiming, secondTiming]) mkdirSync(timing, { recursive: true });
+  const run = (timing: string, mode: string) => f.run({ LLV_RECORDED_CHECK_WAIT_ROOT: timing, CHECKPOINT_TEST_MODE: mode });
+  const first = run(firstTiming, "green");
+  expect(first.status, first.output).toBe(0);
+  const second = run(secondTiming, "green");
+  expect(second.status, second.output).toBe(0);
+  expect(second.output.match(/reused complete green head file/g)).toHaveLength(2);
+  expect(first.output).toContain("CPU admission;");
+  expect(second.output).toContain("CPU admission;");
+  expect(f.samples()).toEqual({ a: 1, b: 1 });
+  const changed = run(secondTiming, "red");
+  expect(changed.status, changed.output).toBe(1);
+  expect(changed.output).not.toContain("reused complete green head file");
+  expect(changed.output).toContain("NEW a.test.ts");
+  expect(changed.output).toContain("NEW b.test.ts");
 }, 60_000);
 
 serviceTest("declared transport inputs invalidate warm receipts like a fresh comparator", () => {

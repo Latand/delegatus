@@ -10,7 +10,7 @@ import WebSocket from "ws";
 import { procBackend } from "@/lib/proc";
 import { redactBounded } from "@/lib/monitor/redact";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
-import { beforeStructuredSetupExecOffLoop, retainStructuredSetupProcessOffLoop, structuredSetupCustodyActive } from "./structuredSetupCustody";
+import { beforeStructuredSetupExecOffLoop, retainStructuredSetupWaiterOffLoop, structuredSetupCustodyActive } from "./structuredSetupCustody";
 import { signalProcessGroup } from "@/lib/processGroup";
 import type { ProcessIdentity } from "@/lib/agent/registry";
 import { startupStderrText } from "./startupStderr";
@@ -249,7 +249,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
         const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
         let permitted = !awaitAdmission;
         supervisionReady = (async () => {
-          await retainStructuredSetupProcessOffLoop(child.pid);
+          await retainStructuredSetupWaiterOffLoop(child.pid);
           if (awaitAdmission) {
             await beforeStructuredSetupExecOffLoop();
             fs.writeFileSync(path.join(directory, "start.json"), "true", { mode: 0o600 });

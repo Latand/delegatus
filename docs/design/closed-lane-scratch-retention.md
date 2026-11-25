@@ -41,8 +41,8 @@ reading directory contents. Its durable cursor also visits open lanes.
 Ownership revisions and root bindings are checked again after awaited reads.
 Schema and index creation uses `assertStateStartupMutation`.
 
-The ordinary tick selects up to 32 due roots by recorded expiry. Under
-pressure a durable cursor visits expired roots in allocation order.
+The ordinary tick selects up to 32 due roots by recorded expiry. The disk
+watch sends pressure-triggered retirement through the leased Cleaner pass.
 Temporary preservation holds suppress the allocation forecast while
 retaining the owner's deadline. That date nominates a future visit.
 Identity, live consumers, check custody, keep markers and ownership fence
@@ -52,9 +52,9 @@ and any ledger retry time. See [Attempt temp under disk pressure](attempt-temp-p
 The effective scratch cap is the smaller of its configured cap and half the
 sum of measured scratch allocation and available filesystem space, leaving at
 least the existing 20 GiB working reserve. With 80 GiB of scratch and 75 GiB
-free, the effective cap is 77.5 GiB. Pressure cleanup can retire expired
-scratch without making another evidence copy. A failed free-space
-observation is reported and preserves the configured cap.
+free, the effective cap is 77.5 GiB. This cap and the working reserve are
+reported by the ordinary tick. A failed free-space observation preserves
+the configured cap.
 
 ## Finished host event journals
 

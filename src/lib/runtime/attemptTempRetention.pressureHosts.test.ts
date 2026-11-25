@@ -110,7 +110,7 @@ test("real parent and restarted helper reclaim a thousand-root inventory five ti
       if (n === 1) held.push(directory);
     }
     const cap = store.bytes() / 5, config = path.join(root, "fixture.json");
-    fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 100 * ATTEMPT_TEMP_LOW_SPACE_BYTES }));
+    fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: 100 * ATTEMPT_TEMP_LOW_SPACE_BYTES }));
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = String(cap); process.env.LLV_PRESSURE_FIXTURE = config;
     const preload = path.join(import.meta.dir, "attemptTempPressure.preload.ts");
     let passes = 0, reclaimed = 0;

@@ -134,8 +134,7 @@ export interface PrototypeReviewRound {
   mediaRemovedAt?: string;
   /** Local Telegram receipt. Reasons are codes, never provider descriptions. */
   telegramPost?: PrototypeTelegramPost;
-  /** Local advisory poll schedule and outcomes; empty questions records a queued
-   * job. Absent on forms predating polls. Votes carry no decision authority. */
+  /** Historical local advisory poll outcomes, retained for existing rounds. */
   telegramPolls?: { key: string; questions: PrototypeTelegramPoll[] };
 }
 export interface PrototypeTelegramPoll {

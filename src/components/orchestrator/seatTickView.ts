@@ -72,6 +72,7 @@ const REASONS: Record<SeatTickWakeReasonKind, MessageKey> = {
   "permission-request": "seatTick.reason.permissionRequest",
   "worker-ask": "seatTick.reason.workerAsk",
   "disk-pressure": "seatTick.reason.diskPressure",
+  "disk-cleaner": "seatTick.reason.diskCleaner",
 };
 
 /** Every reason key, so the parity test can hold all of them in both locales. */

@@ -627,3 +627,68 @@ test("a search result on the Overview opens its conversation over it, and ‹ co
   expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }]);
   expect(dom.location.hash).toBe("");
 });
+
+/* F5 after closing a conversation: the phone's close is ‹, and the address it
+   lands on must no longer name the conversation, or a reload reopens it. */
+async function reloadPhone(): Promise<HTMLElement> {
+  const entry = dom.history.state;
+  const href = dom.location.href;
+  await act(async () => { mounted!.unmount(); });
+  mounted = null;
+  resetMobileNavForTests();
+  resetFilesClientCacheForTests();
+  dom.history.replaceState(entry, "", href);
+  dom.document.body.replaceChildren();
+  const again = dom.document.createElement("div");
+  dom.document.body.append(again);
+  const root = createRoot(again as unknown as HTMLElement);
+  mounted = root;
+  await act(async () => { root.render(<Viewer />); });
+  await act(async () => { await Bun.sleep(300); });
+  return again as unknown as HTMLElement;
+}
+
+test("F5 on an open conversation reopens it; after ‹ closes it, F5 shows the Overview", async () => {
+  const host = await mountOverview();
+  await tap(host.querySelector('[data-phone-kanban-tab="inbox"]'));
+  await tap(cardTitled(host, "Sweep the stale mesh caches"));
+  await until(() => Boolean(conversationScreen(host, MESH_LOOSE)));
+  expect(dom.location.hash).toContain("#c=");
+
+  const reopened = await reloadPhone();
+  await until(() => Boolean(conversationScreen(reopened, MESH_LOOSE)));
+  expect(dom.location.hash).toContain("#c=");
+
+  await back(reopened);
+  await until(() => Boolean(reopened.querySelector("[data-phone-kanban]")));
+  await act(async () => { await Bun.sleep(120); });
+  expect(dom.location.hash).not.toContain("#c=");
+
+  const afterClose = await reloadPhone();
+  await until(() => Boolean(afterClose.querySelector("[data-phone-kanban]")));
+  expect(conversationScreen(afterClose, MESH_LOOSE)).toBeNull();
+  expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }]);
+  expect(dom.location.hash).not.toContain("#c=");
+});
+
+test("a link opened in a fresh tab: ‹ closes the conversation and F5 shows the Overview", async () => {
+  dom.history.replaceState(null, "", transcriptFocusHash(MESH_LOOSE));
+  const mountedHost = dom.document.createElement("div");
+  dom.document.body.append(mountedHost);
+  const root = createRoot(mountedHost as unknown as HTMLElement);
+  mounted = root;
+  await act(async () => { root.render(<Viewer />); });
+  const host = mountedHost as unknown as HTMLElement;
+  await until(() => Boolean(conversationScreen(host, MESH_LOOSE)));
+  await act(async () => { await Bun.sleep(120); });
+
+  await back(host);
+  await until(() => Boolean(host.querySelector("[data-phone-kanban]")));
+  await act(async () => { await Bun.sleep(120); });
+  expect(dom.location.hash).not.toContain("#f=");
+  expect(dom.location.hash).not.toContain("#c=");
+
+  const reloaded = await reloadPhone();
+  await until(() => Boolean(reloaded.querySelector("[data-phone-kanban]")));
+  expect(conversationScreen(reloaded, MESH_LOOSE)).toBeNull();
+});
