@@ -80,6 +80,23 @@ test("writes exact bytes at mode 600 and consumes entry once across a lost answe
   }
 });
 
+test("writes through a parent link into a separately authorized root", async () => {
+  const authorized = path.join(root, "authorized");
+  const alias = path.join(project, "alias");
+  fs.mkdirSync(authorized);
+  fs.symlinkSync(authorized, alias, "dir");
+  process.env.LLV_SECRET_ROOTS = `${project}:${authorized}`;
+
+  const request = await create({ kind: "file", path: path.join(alias, "entry") }, "cross-root-link");
+  expect(request.destination).toMatchObject({
+    path: path.join(authorized, "entry"),
+    authorizedRoot: { path: authorized },
+  });
+  await writeSecretRequest(request.id, request.destinationRevision, Buffer.from("fixture"), fixedClock);
+  expect(fs.readFileSync(path.join(authorized, "entry"), "utf8")).toBe("fixture\n");
+  expect(fs.statSync(path.join(authorized, "entry")).mode & 0o777).toBe(0o600);
+});
+
 test("writes an env entry with no canary in records, refusals, exceptions, logs or spare files", async () => {
   const filename = path.join(project, ".env");
   fs.writeFileSync(filename, "OTHER=untouched\nexport ENTRY=old\n", { mode: 0o644 });
@@ -302,6 +319,35 @@ test("a later writer recovers a committed inode before replacing the same path",
   expect(await readSecretRequest(first.id, NOW)).toMatchObject({ state: "entered" });
   expect(await readSecretRequest(second.id, NOW)).toMatchObject({ state: "entered" });
   expect(fs.readFileSync(filename, "utf8")).toBe("later\n");
+});
+
+test("releases a renamed write after its pinned parent moves and lets a later request proceed", async () => {
+  const parent = path.join(project, "parent");
+  const moved = path.join(project, "moved-parent");
+  fs.mkdirSync(parent);
+  const filename = path.join(parent, "entry");
+  const destination = { kind: "file", path: filename } as const;
+  const first = await create(destination, "moved-first");
+  const second = await create(destination, "moved-second");
+
+  await crashAt(first, "renamed");
+  fs.renameSync(parent, moved);
+  fs.mkdirSync(parent);
+
+  const recovered = await readSecretRequest(first.id, NOW);
+  expect(recovered).toMatchObject({
+    state: "pending", refusals: [{ code: "secret_destination_changed" }],
+    transitions: [{ state: "pending" }, { state: "writing" }, { state: "pending" }],
+  });
+  const stranded = path.join(moved, "entry");
+  expect(fs.readFileSync(stranded, "utf8")).toBe("new fixture\n");
+  expect(fs.statSync(stranded).mode & 0o777).toBe(0o600);
+
+  await writeSecretRequest(second.id, second.destinationRevision, Buffer.from("later"), fixedClock);
+  expect(await readSecretRequest(first.id, NOW)).toEqual(recovered);
+  expect(await readSecretRequest(second.id, NOW)).toMatchObject({ state: "entered" });
+  expect(fs.readFileSync(filename, "utf8")).toBe("later\n");
+  expect(fs.readFileSync(stranded, "utf8")).toBe("new fixture\n");
 });
 
 test.skipIf(process.platform !== "linux")("settles an installed inode even if the rename reports failure", async () => {

@@ -188,7 +188,7 @@ export async function inspectDestination(project: string, target: SecretDestinat
     if (!lexicalRoots.length) {
       throw new SecretRequestError("secret_destination_outside_roots");
     }
-    if (authorizedRoot && !lexicalRoots.some(root => root.real === authorizedRoot.path
+    if (authorizedRoot && !roots.some(root => root.real === authorizedRoot.path
       && root.identity.device === authorizedRoot.identity.device && root.identity.inode === authorizedRoot.identity.inode)) {
       throw new SecretRequestError("secret_destination_changed");
     }
@@ -211,7 +211,10 @@ export async function inspectDestination(project: string, target: SecretDestinat
     }
     const real = path.join(realParent, name);
     checkName(real);
-    const matchingRoot = lexicalRoots.find(root => real !== root.real && underRoot(real, root.real)
+    // A lexical path admitted by one root can resolve through a parent link
+    // into another independently authorized root. Keep the lexical admission
+    // above, then bind the resolved destination to the root that contains it.
+    const matchingRoot = roots.find(root => real !== root.real && underRoot(real, root.real)
       && (!authorizedRoot || (root.real === authorizedRoot.path
         && root.identity.device === authorizedRoot.identity.device && root.identity.inode === authorizedRoot.identity.inode)));
     if (!matchingRoot) throw new SecretRequestError("secret_destination_link");

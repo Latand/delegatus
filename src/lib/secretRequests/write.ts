@@ -114,7 +114,13 @@ async function recoverLocked(record: Writing, now: number, refusal?: SecretRefus
       await staged.directory.unlink(temporaryName(record));
       await staged.directory.handle.sync();
     }
-    if (!dir && !leftover) throw new SecretRequestError("secret_destination_changed");
+    if (!dir && !leftover) {
+      // The pinned parent moved after a rename. Without that directory
+      // descriptor or the staged inode, the installed file's new name cannot
+      // be proven. Record the refusal and release the durable writing state;
+      // leave the moved file untouched for its owner to inspect.
+      return await interrupt(record, refusal ?? "secret_destination_changed", refusal ? "operator" : "recovery", now);
+    }
     return await interrupt(record, refusal ?? "secret_entry_interrupted", refusal ? "operator" : "recovery", now);
   } finally { await dir?.handle.close(); await staged.directory.handle.close(); }
 }
