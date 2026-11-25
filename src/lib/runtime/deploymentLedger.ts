@@ -5,7 +5,8 @@ import type { Database } from "bun:sqlite";
 
 import { statePath } from "@/lib/configDir";
 
-import type { ViewerDeploymentStatus } from "./contracts";
+import type { RuntimeOperationReceipt, RuntimeStartupOperationCursor, ViewerDeploymentStatus } from "./contracts";
+import { startupPendingOperationPage } from "./startupOperationLedger";
 
 export type DeploymentLedgerRead<T> =
   | { state: "ok"; value: T }
@@ -31,7 +32,7 @@ const UNREADABLE_LEDGER = "deployment ledger is unreadable";
  * lock, and never create the table if it is absent.
  */
 
-function ledgerPath(env: NodeJS.ProcessEnv = process.env): string {
+export function runtimeJournalPath(env: NodeJS.ProcessEnv = process.env): string {
   return env.LLV_RUNTIME_JOURNAL?.trim() || statePath("runtime-events.sqlite");
 }
 
@@ -44,12 +45,53 @@ function openLedger(env: NodeJS.ProcessEnv = process.env): Database | null {
   const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
   if (!sqlite) return null;
   try {
-    return observeSqlite(new sqlite.Database(ledgerPath(env), { readonly: true, create: false }), "deployment-ledger");
+    return observeSqlite(new sqlite.Database(runtimeJournalPath(env), { readonly: true, create: false }), "deployment-ledger");
   } catch {
     /* No journal on this host, or it is not readable from here. The caller
        reports that as unreadable rather than as an empty ledger. */
     return null;
   }
+}
+
+/** A successor Viewer can read active operations while the preceding host
+    still serves the session-evidence protocol without operation paging. */
+export function readStartupPendingOperations(after: RuntimeStartupOperationCursor, env = process.env) {
+  const db = openLedger(env);
+  if (!db) throw new Error("runtime journal is unavailable for startup operation evidence");
+  try { return startupPendingOperationPage(db, after); }
+  finally { db.close(); }
+}
+
+/** Every active operation of a preceding host's journal, read in one SQLite
+    read transaction so the pages describe one moment. The preceding host's
+    effect revision does not move with operation receipts, so a caller proves
+    the answer current by reading it again and comparing the two answers:
+    unrelated session writes leave it alone. */
+export function readStartupPendingOperationSet(env = process.env): RuntimeOperationReceipt[] {
+  const db = openLedger(env);
+  if (!db) throw new Error("runtime journal is unavailable for startup operation evidence");
+  try {
+    db.exec("BEGIN");
+    try {
+      const operations: RuntimeOperationReceipt[] = [];
+      let after: RuntimeStartupOperationCursor = { eventSeq: 0, rowId: 0 };
+      for (;;) {
+        const page = startupPendingOperationPage(db, after);
+        operations.push(...page.pendingOperations);
+        const next = page.pendingOperationsNext;
+        if (!next) return operations;
+        if (next.eventSeq < after.eventSeq || next.eventSeq === after.eventSeq && next.rowId <= after.rowId) {
+          throw new Error("structured startup operation cursor did not advance");
+        }
+        after = next;
+      }
+    } finally { db.exec("COMMIT"); }
+  } finally { db.close(); }
+}
+
+/** The facts startup reads from an active operation receipt. */
+export function startupPendingOperationSetDigest(operations: readonly RuntimeOperationReceipt[]): string {
+  return JSON.stringify(operations.map(receipt => [receipt.operationId, receipt.conversationId, receipt.kind, receipt.status]).sort());
 }
 
 function unreadable<T>(): DeploymentLedgerRead<T> {

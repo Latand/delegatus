@@ -4017,7 +4017,7 @@ describe("ClaudeStreamBrokerHost", () => {
     await expect(host.release()).resolves.toBeUndefined();
   });
 
-  for (const outcome of ["accepted", "refused", "replaced", "new descendant"] as const) {
+  for (const outcome of ["accepted", "refused", "replaced", "new descendant", "authority changed"] as const) {
     test(`a promise-based termination capture is awaited and revalidated (${outcome})`, async () => {
       const ledger = new RecordingDeliveryLedger();
       const child = new FakeClaude(ledger);
@@ -4035,7 +4035,13 @@ describe("ClaudeStreamBrokerHost", () => {
       const entered = new Promise<void>(resolve => { enter = resolve; });
       const admitted = new Promise<boolean>(resolve => { finish = resolve; });
       host.setTerminationCapture(() => { enter(); return admitted; });
-      const stopped = host.releaseIfOwned(root);
+      let authorityChecks = 0;
+      const stopped = host.releaseIfOwned(root, async () => {
+        authorityChecks++;
+        return outcome === "authority changed" && authorityChecks > 0
+          ? { status: 409, error: "scope retirement target changed: verdict turn-settled: conversation turn changed" }
+          : null;
+      });
       try {
         await entered;
         expect(child.signals).toEqual([]);
@@ -4046,6 +4052,11 @@ describe("ClaudeStreamBrokerHost", () => {
         if (outcome === "accepted") expect(await stopped).toBe(true);
         else await expect(stopped).rejects.toThrow();
         expect(child.signals.length > 0).toBe(outcome === "accepted");
+        if (outcome === "authority changed") {
+          expect(authorityChecks).toBe(1);
+          expect(child.stdin.writableEnded).toBe(false);
+          expect(child.signals).toEqual([]);
+        }
       } finally {
         identity = "5150:owned";
         host.setTerminationCapture(null);
