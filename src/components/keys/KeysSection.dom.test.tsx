@@ -399,6 +399,16 @@ test("a list that cannot be read says so with a retry", async () => {
   expect(row(host, "chatgpt-plan").getAttribute("data-chatgpt-plan-state")).toBe("not_connected");
 });
 
+for (const state of ["plan_limit", "retry_later"] as const) test(`${state}: plan usage stays reachable during its persisted pause`, async () => {
+  serve(answer(), call => call.url === "/api/chatgpt-plan"
+    ? Response.json({ state, usageUrl: "https://chatgpt.com/settings/usage" }) : undefined);
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  const plan = row(host, "chatgpt-plan");
+  expect(plan.getAttribute("data-chatgpt-plan-state")).toBe(state);
+  await click(plan.querySelector("[data-chatgpt-plan-menu]"));
+  expect(plan.querySelector("[data-keys-menu-item='plan-usage']")?.textContent).toBe(translate("en", "chatgptPlan.manage"));
+});
+
 for (const lang of ["en", "uk"] as const) test(`${lang}: import shows the pasted lines masked and the server's preview, and Apply confirms exactly the rows shown`, async () => {
   setLocale(lang);
   const preview: ImportPreview = {

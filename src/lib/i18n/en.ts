@@ -17,6 +17,7 @@ export const en = {
   "chatgptPlan.state.off_unconfigured": "Sign-in is disabled until an owner configures a client ID.",
   "chatgptPlan.state.off_unsupported_platform": "Sign-in is unavailable on this platform.",
   "chatgptPlan.state.plan_limit": "ChatGPT plan usage is paused. Check usage in ChatGPT settings.",
+  "chatgptPlan.state.retry_later": "ChatGPT is temporarily unavailable. Try again shortly.",
   "chatgptPlan.replaceRegistration": "Replace rejected registration and try again",
   "chatgptPlan.state.error": "ChatGPT plan status unavailable.",
   "chatgptPlan.modelMissing": "Your plan does not offer the voice backend model. Voice keeps using the API key.",

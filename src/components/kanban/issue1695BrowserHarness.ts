@@ -2099,6 +2099,14 @@ const PLAN_FRAMES = [
   planKeys("missingModel", "[data-chatgpt-plan-state='connected']"),
   planKeys("disabled", "[data-chatgpt-plan-state='plan_disabled'] [data-chatgpt-plan-start]"),
   planKeys("reconnect", "[data-chatgpt-plan-state='reconnect_required'] [data-chatgpt-plan-start]"),
+  planKeys("limit", "[data-chatgpt-plan-state='plan_limit'] [data-keys-menu]", async row => {
+    await row.locator("[data-chatgpt-plan-menu]").click();
+    await row.locator("[data-keys-menu-item='plan-usage'][role=menuitem]").waitFor();
+  }),
+  planKeys("retry-later", "[data-chatgpt-plan-state='retry_later'] [data-keys-menu]", async row => {
+    await row.locator("[data-chatgpt-plan-menu]").click();
+    await row.locator("[data-keys-menu-item='plan-usage'][role=menuitem]").waitFor();
+  }),
   planKeys("remote", "[data-chatgpt-plan-state='remote_browser']", noPlanAction),
   planKeys("staging", "[data-chatgpt-plan-state='off_staging']", noPlanAction),
   planKeys("declined", "[data-chatgpt-plan-state='not_connected'] [data-chatgpt-plan-start]"),

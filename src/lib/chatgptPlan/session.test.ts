@@ -48,6 +48,7 @@ test("rejected client registration can be replaced by the owner while retaining 
   const session = create();
   const host = await (await import("./hostId")).hostId(fixture.store);
   const row = fixture.seed({ reconnect: "client_rejected", tokens: undefined });
+  process.env.LLV_CHATGPT_PLAN_CLIENT_ID = "replacement-client";
   await session.replaceRejectedRegistration("replacement-client", owner);
   expect(await fixture.store.credentials()).toMatchObject({ clientId: "replacement-client", pendingRegistration: true });
   expect(await (await import("./hostId")).hostId(fixture.store)).toBe(host);
@@ -55,14 +56,40 @@ test("rejected client registration can be replaced by the owner while retaining 
   expect(credentialStorageSupported("win32")).toBe(false);
 });
 
+test("registration replacement requires the configured client ID", async () => {
+  const session = create();
+  fixture.seed({ reconnect: "client_rejected", tokens: undefined });
+  delete process.env.LLV_CHATGPT_PLAN_CLIENT_ID;
+  await expect(session.replaceRejectedRegistration("attacker-client", owner)).rejects.toThrow("plan_disabled");
+  expect(await fixture.store.credentials()).toMatchObject({ reconnect: "client_rejected", clientId });
+});
+
 test("plan limit persists a bounded pause across calls", async () => {
   const session = create(undefined, () => Response.json({ error: { code: "subscription_sharing_usage_limit_exceeded" } }, { status: 429 }));
   fixture.seed();
   await expect(session.respond(body, signal(), owner)).rejects.toThrow("plan_limit");
   expect(await session.eligible(model)).toBe(false);
+  const restarted = new PlanSession(new PlanStore(() => fixture.directory), fixture.oidc, () => now);
+  expect(await restarted.eligible(model)).toBe(false);
+  await expect(restarted.respond(body, signal(), owner)).rejects.toThrow("plan_limit");
+  expect(inferences()).toHaveLength(1);
   await expect(session.respond(body, signal(), owner)).rejects.toThrow("plan_limit");
   expect(inferences()).toHaveLength(1);
   expect((await session.status(model, true, true))).toMatchObject({ state: "plan_limit", usageUrl: "https://chatgpt.com/settings/usage" });
+});
+
+test("temporary provider failure persists its shorter retry pause across sessions", async () => {
+  const session = create(undefined, () => Response.json({ error: { code: "temporary_unavailable" } }, { status: 503 }));
+  fixture.seed();
+  await expect(session.respond(body, signal(), owner)).rejects.toThrow("retry_later");
+  const restarted = new PlanSession(new PlanStore(() => fixture.directory), fixture.oidc, () => now);
+  expect(await restarted.eligible(model)).toBe(false);
+  await expect(restarted.respond(body, signal(), owner)).rejects.toThrow("retry_later");
+  expect(inferences()).toHaveLength(1);
+  expect(await restarted.status(model, true, true)).toMatchObject({ state: "retry_later", usageUrl: "https://chatgpt.com/settings/usage" });
+  const row = await fixture.store.credentials();
+  expect(row?.planPauseUntil).toBe(now + 30_000);
+  expect(row?.planPauseReason).toBe("retry_later");
 });
 
 test("above the refresh window reuses the token and below it serializes independent sessions", async () => {

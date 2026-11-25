@@ -19,6 +19,7 @@ export type Credentials = {
   signedOut?: true; revocationConfirmed?: boolean; acknowledged?: boolean;
   reconnect?: "reconnect_required" | "client_rejected";
   planPauseUntil?: number;
+  planPauseReason?: "plan_limit" | "retry_later";
   pendingGrantRefresh?: string;
 };
 
@@ -88,6 +89,7 @@ export class PlanStore {
       || (row.email !== undefined && (typeof row.email !== "string" || row.email.length > 320))
       || (row.subject !== undefined && !textField(row.subject))
       || (row.planPauseUntil !== undefined && !epoch(row.planPauseUntil))
+      || (row.planPauseReason !== undefined && row.planPauseReason !== "plan_limit" && row.planPauseReason !== "retry_later")
       || (row.pendingGrantRefresh !== undefined && !textField(row.pendingGrantRefresh))
       || (row.models !== undefined && (!Array.isArray(row.models) || row.models.length > 200 || !row.models.every(modelSlug)))
       || ["pendingRotation", "pendingRegistration", "signedOut"].some(key => row[key] !== undefined && row[key] !== true)

@@ -1089,7 +1089,7 @@ OpenAI's commercial interest form has the following fields as of
 | Company name (`Company`) | Yes | Owner only |
 | Website URL (`mkto_website_form_fill`) | Yes | Owner only |
 | Job title (`Title`) | No | Owner only |
-| What capabilities would you like to implement? (`mkto_sign_in_use_case[]`, radio) | Yes | Sign in and ChatGPT plan use for AI requests |
+| What capabilities would you like to implement? (`mkto_sign_in_use_case[]`, radio) | Yes | Proposed selection: **Sign in and ChatGPT plan use for AI requests** (exact form option) |
 | Which of your products would use Sign in with ChatGPT? (Briefly describe each product) (`mkto_describe_use_case`, up to 2,000 characters) | Yes | Proposed: Delegatus is an open-source, locally hosted agent orchestration workspace. An operator may sign in with ChatGPT to use eligible subscription credits for text-only Responses API inference. The account is used only by the local operator; agent accounts, workspace members, credentials and account details remain owner-only. |
 
 ## Deferred

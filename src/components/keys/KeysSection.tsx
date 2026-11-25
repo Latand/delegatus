@@ -680,7 +680,7 @@ function ChatGPTPlanRow({ size, owner, plan }: { size: Size; owner: boolean; pla
   const modelMissing = connected && status.planModels?.voiceBackend === false;
   const authenticationUrl = state === "connecting" ? authorizeLink(status.authorizeUrl) ?? manualUrl : undefined;
   const canStart = state === "not_connected" || state === "reconnect_required" || state === "plan_disabled";
-  const canSignOut = connected || state === "plan_disabled" || state === "reconnect_required";
+  const canSignOut = connected || state === "plan_disabled" || state === "reconnect_required" || state === "plan_limit" || state === "retry_later";
   const button = `${coarse ? "min-h-11 text-label" : "min-h-7 text-ui"} self-start rounded-control px-2 py-1 font-semibold disabled:opacity-60 ${FOCUS}`;
   const items = [
     { label: t("chatgptPlan.manage"), data: "plan-usage", run: () => openPlanLink(PLAN_USAGE_URL) },

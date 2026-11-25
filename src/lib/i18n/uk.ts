@@ -17,6 +17,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "chatgptPlan.state.off_unconfigured": "Вхід вимкнено, доки власник не налаштує client ID.",
   "chatgptPlan.state.off_unsupported_platform": "Вхід недоступний на цій платформі.",
   "chatgptPlan.state.plan_limit": "Використання плану ChatGPT призупинено. Перевірте його в налаштуваннях ChatGPT.",
+  "chatgptPlan.state.retry_later": "ChatGPT тимчасово недоступний. Спробуйте трохи пізніше.",
   "chatgptPlan.replaceRegistration": "Замінити відхилену реєстрацію",
   "chatgptPlan.state.error": "Стан плану ChatGPT недоступний.",
   "chatgptPlan.modelMissing": "У вашому плані немає моделі для голосової делегації. Вона й далі використовуватиме ключ API.",

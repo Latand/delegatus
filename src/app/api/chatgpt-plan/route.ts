@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
   const body = await readBoundedJson(req, 1_024);
   const recheck = writeGate(req);
   if (recheck) return recheck;
-  if (!body || !((Object.keys(body).length === 1) || (body.action === "replace-registration" && Object.keys(body).length === 2))) return keysJson({ reason: "invalid_request" }, 400);
+  if (!body || Object.keys(body).length !== 1) return keysJson({ reason: "invalid_request" }, 400);
   const session = chatgptPlan();
   const guard = () => !writeGate(req);
   try {
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
         session.oauth.cancel();
         return keysJson({ ok: true });
       case "replace-registration":
-        await session.replaceRejectedRegistration(typeof body.clientId === "string" ? body.clientId : configuredClientId() ?? "", guard);
+        await session.replaceRejectedRegistration(configuredClientId() ?? "", guard);
         return writeGate(req) ?? keysJson({ ok: true });
       case "acknowledge":
         await session.acknowledge(guard);

@@ -54,6 +54,10 @@ test("the plan is off with no issued client ID and cannot be used on staging", a
   expect(await (await GET(raw("GET"))).json()).toEqual({ state: "off_staging" });
   expect((await POST(raw("POST", { action: "sign-in" }))).status).toBe(409);
   expect((await DELETE(raw("DELETE"))).status).toBe(409);
+  delete process.env.LLV_STAGING;
+  expect((await POST(raw("POST", { action: "replace-registration", clientId: "forged-client" }))).status).toBe(400);
+  expect(await f.store.credentials()).toBeUndefined();
+  expect(await f.store.read("host")).toBeUndefined();
   expect(f.requests).toHaveLength(0);
 });
 

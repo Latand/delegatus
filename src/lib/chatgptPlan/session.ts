@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { isStagingMode } from "@/lib/staging";
-import { clientIdValid, credentialStorageSupported, PLAN_SCOPE, planConfigured } from "./constants";
+import { clientIdValid, configuredClientId, credentialStorageSupported, PLAN_SCOPE, planConfigured } from "./constants";
 import { PlanError, unusableRefresh } from "./errors";
 import { validateIdentity } from "./idToken";
 import { PlanOAuth } from "./oauth";
@@ -23,7 +23,7 @@ export class PlanSession {
   private unavailable(row: Credentials | undefined, model?: string) {
     if (isStagingMode() || this.signingOut || !row || row.signedOut || row.pendingRegistration) return "not_connected";
     if (row.reconnect || (row.tokens && row.tokens.refreshedAt + REFRESH_LIFETIME <= this.now())) return "reconnect_required";
-    if (row.planPauseUntil && row.planPauseUntil > this.now()) return "plan_limit";
+    if (row.planPauseUntil && row.planPauseUntil > this.now()) return row.planPauseReason ?? "plan_limit";
     if (!row.tokens) return "not_connected";
     if (!row.tokens.scopes.includes(PLAN_SCOPE) && !row.pendingRotation) return "plan_disabled";
     if (model && row.models && !row.models.includes(model)) return "plan_disabled";
@@ -150,7 +150,9 @@ export class PlanSession {
         const pause = reason === "plan_limit" ? 60 * 60_000 : 30_000;
         await this.store.transaction("credentials", async () => {
           const current = await this.store.credentials();
-          if (current?.tokens && !current.signedOut) this.store.write("credentials", { ...current, planPauseUntil: this.now() + pause });
+          if (current?.tokens && !current.signedOut) this.store.write("credentials", {
+            ...current, planPauseUntil: this.now() + pause, planPauseReason: reason,
+          });
         }).catch(() => undefined);
       }
       throw error;
@@ -163,7 +165,8 @@ export class PlanSession {
   }
 
   async replaceRejectedRegistration(clientId: string, guard: () => boolean): Promise<void> {
-    if (!clientIdValid(clientId)) throw new PlanError("invalid_request");
+    if (!planConfigured()) throw new PlanError("plan_disabled");
+    if (!clientIdValid(clientId) || configuredClientId() !== clientId) throw new PlanError("invalid_request");
     await this.store.transaction("credentials", async () => {
       const row = await this.store.credentials();
       if (!guard()) throw new PlanError("declined");

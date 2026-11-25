@@ -95,6 +95,8 @@ const PLAN_SCENES: Record<string, PlanStatus> = {
   missingModel: { state: "connected", planModels: { voiceBackend: false } },
   disabled: { state: "plan_disabled" },
   reconnect: { state: "reconnect_required", reason: "client_rejected" },
+  limit: { state: "plan_limit", usageUrl: "https://chatgpt.com/settings/usage" },
+  "retry-later": { state: "retry_later", usageUrl: "https://chatgpt.com/settings/usage" },
   remote: { state: "remote_browser" },
   staging: { state: "off_staging" },
   declined: { state: "not_connected", reason: "declined" },
