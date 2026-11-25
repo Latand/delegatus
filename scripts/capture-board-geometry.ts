@@ -106,9 +106,12 @@
  * and `account`. The rail footer at 1440, 1360 and 1280 wide, en and uk, light
  * and dark. It requires a chart for every account, the dashed spans each state
  * names, the readout whole on the first screen, the dialog inside the
- * viewport, no "No history yet" text and 4.5:1 contrast on the readout. The
- * phone's projects sheet carries only the resources footer, no account lines,
- * so no chart opens there and no phone shot exists.
+ * viewport, no "No history yet" text, 4.5:1 contrast on the readout and the
+ * legend keys drawn with the chart's dashes (estimated and even pace dashed,
+ * remaining solid). The phone's projects sheet carries only the resources
+ * footer, so no chart opens there; the phone's accounts screen opens each
+ * account's chart, and `src/components/mobile/issue1671Evidence.browser.test.tsx`
+ * ("account burndown chart on the phone") covers it.
  *
  * With BOARD_CAPTURE_CASE=activity it renders the activity dashboard
  * (docs/design/activity-dashboard-v2.md) on a home seeded with the design's
@@ -5894,6 +5897,11 @@ function readLimitsChart() {
     known: chart?.querySelectorAll("[data-burndown-known]").length ?? 0,
     estimated: chart?.querySelectorAll("[data-burndown-estimated]").length ?? 0,
     readout: readout?.textContent ?? null,
+    /* The legend keys are lines drawn with the chart's own dashes: a bordered box reads solid at this size. */
+    keys: Object.fromEntries(["ideal", "estimated", "actual"].map((kind) => {
+      const key = dialog?.querySelector(`[data-burndown-key="${kind}"]`);
+      return [kind, key ? { dash: key.querySelector("line")?.getAttribute("stroke-dasharray") ?? null, width: Math.round(key.getBoundingClientRect().width) } : null];
+    })) as Record<"ideal" | "estimated" | "actual", { dash: string | null; width: number } | null>,
     readoutRects: rects,
     readoutCovered: rects.some((r) => { const hit = document.elementFromPoint(r.x + r.w / 2, r.y + r.h / 2); return !hit || !dialog?.contains(hit); }),
     text: dialog?.textContent ?? "",
@@ -5961,6 +5969,9 @@ async function limitsChartMain(): Promise<void> {
         must(open.known === account.known && open.estimated === account.estimated, `${tag}: ${open.known} solid and ${open.estimated} dashed spans, expected ${account.known} and ${account.estimated}`);
         must(!/No history yet|Історії ще немає/.test(open.text), `${tag}: the dialog says there is no history`);
         must(Boolean(open.readout), `${tag}: no readout`);
+        must(open.keys.actual !== null && open.keys.actual.dash === null, `${tag}: the remaining key is not a solid line`);
+        must(open.keys.ideal?.dash === "4 3", `${tag}: the even-pace key reads ${JSON.stringify(open.keys.ideal)}, not the chart's 4 3 dash`);
+        must(account.estimated === 0 ? open.keys.estimated === null : open.keys.estimated?.dash === "2 3" && open.keys.estimated.width >= 12, `${tag}: the estimated key reads ${JSON.stringify(open.keys.estimated)} with ${account.estimated} dashed spans`);
         must(!open.readoutCovered, `${tag}: another element covers the readout`);
         must(open.contrast !== null && open.contrast >= 4.5, `${tag}: readout contrast ${open.contrast}`);
         must(open.pageOverflowX <= 0, `${tag}: the page overflows sideways by ${open.pageOverflowX}px`);
