@@ -7188,6 +7188,10 @@ export class AgentRegistry {
         result.deliveryOperationOwners[operationId] = clone(owner);
         const delivery = file.heldDeliveries[owner.deliveryId];
         if (delivery) result.heldDeliveries[delivery.id] = clone(delivery);
+        if (owner.retryOfOperationId) {
+          const originalOwner = file.deliveryOperationOwners[owner.retryOfOperationId];
+          if (originalOwner) result.deliveryOperationOwners[owner.retryOfOperationId] = clone(originalOwner);
+        }
       }
       for (const delivery of registryRowsMatching(file, "heldDeliveries", "command.operationId", operationId)) result.heldDeliveries[delivery.id] = clone(delivery);
       /* Receipt-only readers need a held conversation's switch phase.
