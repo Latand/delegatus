@@ -361,7 +361,8 @@ test("evidence HTML metadata never exposes a direct body or download", async () 
   const body = await meta.text();
   expect(JSON.parse(body)).toMatchObject({ name: "report.HTM", kind: "text", frameOnly: true });
   expect(body).not.toContain(content);
-  for (const params of [{ path: abs }, { path: abs, download: "1" }]) {
+  const queries: Record<string, string>[] = [{ path: abs }, { path: abs, download: "1" }];
+  for (const params of queries) {
     const res = await GET(request(params, { range: "bytes=0-9" }));
     expect(res.status).toBe(403);
     expect(await errorCode(res)).toBe("access-denied");
