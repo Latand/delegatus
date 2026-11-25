@@ -42,6 +42,7 @@ import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
 import { attemptTempAuthority, attemptScratchAuthority, backfillAttemptTempRetention, runAttemptTempSweep } from "./attemptTempProduction";
 import { runTemporaryDataSweep } from "./temporaryDataProduction";
 import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
+import * as mutationFence from "./attemptMutationFence";
 
 if (process.argv[2] === "--legacy-copy-tick") {
   Date.now = () => Number(process.argv[3]);
@@ -57,14 +58,26 @@ if (process.argv[2] === "--legacy-copy-tick") {
 if (process.argv[2] === "--production-report") {
   Date.now = () => Number(process.argv[3]);
   const resourceRefused = process.argv.find(arg => arg.startsWith("--checkout-budget-root="))?.split("=")[1];
-  const report = await runAttemptTempSweep({ scan: () => ({ ownNamespace: null, processes: [] }),
+  const live = process.argv.find(arg => arg.startsWith("--live-root="))?.slice("--live-root=".length);
+  const fenceMode = process.argv.find(arg => arg.startsWith("--fixture-mutation-fence="))?.split("=")[1];
+  let fixtureMutationFences = 0;
+  if (fenceMode) {
+    const { spyOn } = await import("bun:test");
+    const fence = mutationFence.attemptMutationCurrent;
+    spyOn(mutationFence, "attemptMutationCurrent").mockImplementation((watches, validate, budget, authority) => {
+      fixtureMutationFences++;
+      return fence(watches, validate, fenceMode === "timeout" ? 0 : budget, authority);
+    });
+  }
+  const report = await runAttemptTempSweep({ scan: () => ({ ownNamespace: null, processes:
+    live ? [{ pid: 41, namespace: null, stamped: false, paths: [live] }] : [] }),
     ...(process.argv.includes("--fixture-container-inventory")
-      ? { references: (original, current, scan) => {
+      ? { availableBytes: () => 412e9, references: (original, current, scan) => {
         if (path.basename(original) === resourceRefused) throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
         return attemptReferencesClear(original, current, scan, async () => true);
       } } : {}) },
     { ...process.env, LLV_TEMP_SWEEP: "on" });
-  process.stdout.write(JSON.stringify(report) + "\n");
+  process.stdout.write(JSON.stringify(fenceMode ? { ...report, fixtureMutationFences } : report) + "\n");
   process.exit(0);
 }
 

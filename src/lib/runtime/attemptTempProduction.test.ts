@@ -14,6 +14,7 @@ import { withAgentConfigSandbox } from "./agentConfigSandbox";
 import { runTempSweep, scanProcesses, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
 import { statePath } from "@/lib/configDir";
 import * as attemptTempFilesystem from "./attemptTempFilesystem";
+import * as mutationFence from "./attemptMutationFence";
 import { attemptReferencesClear, RepositoryLinkInventory } from "./attemptTempFilesystem";
 import { holdFinishedRoot, finishedLane, nameInReport } from "./attemptTempRetention.testSupport";
 import { ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS, attemptScratchExpiry } from "./attemptScratchPolicy";
@@ -654,6 +655,15 @@ const emptyScan = () => ({ ownNamespace: null, processes: [] });
 const workPorts = { scan: emptyScan, availableBytes: () => 412e9 };
 const workMode = { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" };
 
+async function productionFixtureTick(at: number, args: readonly string[] = [], env?: NodeJS.ProcessEnv) {
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"),
+    "--production-report", String(at), "--fixture-container-inventory", ...args],
+  { stdout: "pipe", stderr: "pipe", env });
+  const [output, errors, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(code, errors).toBe(0);
+  return JSON.parse(output.trim().split("\n").at(-1)!);
+}
+
 function workScratchFixture(total: number, overdue: number) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-work-shape-"));
   roots.push(root);
@@ -831,22 +841,70 @@ test.each(["report-linked payload", "replaced destination"] as const)("an attrib
     const payload = path.join(copy, "frame.png");
     fs.writeFileSync(payload, "legacy payload");
     writeEnvelope(path.join(copy, "manifest.json"), { original, identity });
-    store.checkpointCopies("", true);
+    expect(store.copyCursor().done).toBe(0);
     if (control === "report-linked payload") nameInReport(payload);
-    expect(await runAttemptTempSweep({ ...workPorts, references }, workMode)).toMatchObject({ removed: 1 });
-    expect(fs.existsSync(original!)).toBeFalse();
-    expect(store.copy(copy)?.kind).toBe("unattributed");
+    const discovery = await runAttemptTempSweep({ ...workPorts, references: async () => false }, workMode);
+    expect(discovery).toMatchObject({ held: 1, removed: 0, copies: { adopted: 1, removed: 0 } });
+    expect(fs.readFileSync(path.join(original!, "payload"), "utf8")).toBe("fixture");
+    expect(fs.readFileSync(payload, "utf8")).toBe("legacy payload");
+    const retryAt = store.owner(original!)!.checkedAt;
     if (control === "replaced destination") {
       fs.renameSync(copy, copy + "-previous");
       fs.mkdirSync(copy);
-      fs.writeFileSync(path.join(copy, "frame.png"), "replacement inode");
+      fs.writeFileSync(payload, "replacement inode");
     }
-    now += 60 * 60_000;
-    await runAttemptTempSweep({ ...workPorts, references }, workMode);
-    expect(fs.readFileSync(path.join(copy, "frame.png"), "utf8"))
-      .toBe(control === "replaced destination" ? "replacement inode" : "legacy payload");
+    now += 2 * 60_000;
+    expect(retryAt).toBeGreaterThan(now);
+    const beforeRetry = await runAttemptTempSweep({ ...workPorts, references }, workMode);
+    now = retryAt;
+    const retired = await runAttemptTempSweep({ ...workPorts, references }, workMode);
+    expect(retired?.removed).toBe(1);
     expect(fs.existsSync(original!)).toBeFalse();
+    expect([beforeRetry?.copies.removed, retired?.copies.removed, fs.existsSync(payload)]).toEqual([0, 0, true]);
+    expect(fs.readFileSync(payload, "utf8"))
+      .toBe(control === "replaced destination" ? "replacement inode" : "legacy payload");
+    if (control === "replaced destination")
+      expect(fs.readFileSync(path.join(copy + "-previous", "frame.png"), "utf8")).toBe("legacy payload");
+    expect(store.copy(copy)).toMatchObject({ kind: "unattributed", pipelineId: null, expiresAt: null });
   } finally { clock.mockRestore(); store.close(); }
+});
+
+test.each([true, false])("a source registered after the copy cursors seal is checked across helper restarts (binding matches=%s)", async matches => {
+  const { store } = workScratchFixture(0, 0);
+  const original = statePath("scratch", "llv-stage-late-source");
+  fs.mkdirSync(original, { mode: 0o700 });
+  fs.writeFileSync(path.join(original, "payload"), "late source");
+  const stat = fs.lstatSync(original), identity = `${stat.dev}:${stat.ino}`;
+  const name = createHash("sha256").update(original).update("\0").update(identity).digest("hex");
+  const copy = statePath("evidence", "attempt-temp", name);
+  fs.mkdirSync(copy, { recursive: true });
+  writeEnvelope(path.join(copy, "manifest.json"), { original, identity, launchId: matches ? "late-launch" : "other-launch" });
+  const capture = path.join(copy, "frame.png");
+  fs.writeFileSync(capture, Buffer.alloc(8192, 1));
+  store.registerCopy({ destination: copy, pipelineId: null, launchId: "legacy", kind: "unattributed",
+    createdAt: WORK_TICK, expiresAt: null, checkedAt: WORK_TICK, bytes: 8192 });
+  try {
+    const unbound = { count: 1, bytes: 8192 };
+    expect((await productionFixtureTick(WORK_TICK)).copies.unattributed).toEqual(unbound);
+    expect((await productionFixtureTick(WORK_TICK + 60_000)).copies.unattributed).toEqual(unbound);
+    expect(store.copyCursor().done).toBe(1);
+    expect(store.copySourceCursor().done).toBe(1);
+
+    const pipeline = finishedLane(path.dirname(original), new Date(WORK_TICK - 10 * 86400_000).toISOString());
+    savePipelines([pipeline]);
+    store.register({ directory: original, pipelineId: pipeline.id, launchId: "late-launch",
+      retainUntilClose: true, createdAt: WORK_TICK - 10 * 86400_000 });
+    store.retainRoot(original, Date.parse(pipeline.closedAt!) + ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS);
+    const liveArgs = [`--live-root=${original}`];
+    const repaired = await productionFixtureTick(WORK_TICK + 120_000, liveArgs);
+    const restarted = await productionFixtureTick(WORK_TICK + 180_000, liveArgs);
+    const unattributed = matches ? { count: 0, bytes: 0 } : unbound;
+    expect(repaired).toMatchObject({ held: 1, removed: 0, copies: { sourceAttributed: matches ? 1 : 0, removed: 0, unattributed } });
+    expect(restarted.copies).toMatchObject({ sourceAttributed: 0, removed: 0, unattributed });
+    expect(store.copy(copy)).toMatchObject({ kind: "unattributed", bytes: 8192, expiresAt: null });
+    expect(fs.readFileSync(path.join(original, "payload"), "utf8")).toBe("late source");
+    expect(fs.readFileSync(capture)).toEqual(Buffer.alloc(8192, 1));
+  } finally { store.close(); }
 });
 
 test("expensive expired proofs keep their next retry across fresh helpers", async () => {
@@ -937,6 +995,68 @@ test("a full namespace proof failure under cap pressure persists its retry acros
   }
 }, 15_000);
 
+test("a mutation fence deadline under cap pressure backs off across fresh helpers", async () => {
+  const { store, directories: [directory] } = workScratchFixture(1, 1);
+  const env = { ...process.env, LLV_ATTEMPT_TEMP_CAP_BYTES: "1" };
+  const timeout = ["--fixture-mutation-fence=timeout"];
+  try {
+    const retryAt = WORK_TICK + 15 * 60_000;
+    const failed = await productionFixtureTick(WORK_TICK, timeout, env);
+    const persisted = store.owner(directory!)?.checkedAt;
+    let extraProofs = 0;
+    for (const minutes of [1, 2, 3, 4, 14]) {
+      const idle = await productionFixtureTick(WORK_TICK + minutes * 60_000, timeout, env);
+      expect(idle).toMatchObject({ pressure: true, lowSpace: false, removed: 0, reclaimedBytes: 0 });
+      extraProofs += idle.fixtureMutationFences;
+    }
+    expect(fs.readFileSync(path.join(directory!, "payload"), "utf8")).toBe("fixture");
+    expect(fs.existsSync(attemptTempJournalPath(directory!))).toBeFalse();
+    const due = await productionFixtureTick(retryAt, ["--fixture-mutation-fence=observe"], env);
+    expect(due).toMatchObject({ pressure: true, checked: 1, removed: 1, errors: 0 });
+    expect(due.fixtureMutationFences).toBeGreaterThan(0);
+    expect(fs.existsSync(directory!)).toBeFalse();
+    expect(extraProofs).toBe(0);
+    expect(failed).toMatchObject({ pressure: true, lowSpace: false, checked: 1, deferred: 1, removed: 0, fixtureMutationFences: 1,
+      outcomes: [expect.objectContaining({ reasonCode: "mutation_fence_budget", retryAt })] });
+    expect(persisted).toBe(retryAt);
+  } finally { store.close(); }
+}, 15_000);
+
+function quarantineWorkRoot(store: AttemptTempStore, directory: string) {
+  const owner = store.owner(directory)!;
+  const name = createHash("sha256").update(directory).update("\0").update(owner.identity).digest("hex");
+  const copy = statePath("evidence", "attempt-temp", name);
+  fs.mkdirSync(copy, { recursive: true });
+  writeEnvelope(path.join(copy, "manifest.json"), { original: directory, identity: owner.identity,
+    pipelineId: owner.pipelineId, launchId: owner.launchId });
+  store.registerCopy({ destination: copy, pipelineId: null, launchId: "legacy", kind: "unattributed",
+    createdAt: WORK_TICK, expiresAt: null, checkedAt: WORK_TICK, bytes: 4096 });
+  store.queueTrashIntent(directory, owner.identity);
+  const trash = path.join(path.dirname(directory), `.delegatus-trash-${path.basename(directory)}-fixture`);
+  fs.renameSync(directory, trash);
+  writeEnvelope(attemptTempJournalPath(directory), { directory, trash, uid: fs.lstatSync(trash).uid,
+    identity: owner.identity, disposable: true });
+  return trash;
+}
+
+test("mutation fence backoff allows prompt resumption of journaled trash under cap pressure", async () => {
+  const { store, directories: [directory] } = workScratchFixture(1, 1);
+  const env = { ...process.env, LLV_ATTEMPT_TEMP_CAP_BYTES: "1" };
+  try {
+    store.defer(directory!, WORK_TICK + 15 * 60_000);
+    const trash = quarantineWorkRoot(store, directory!);
+    const starting = await productionFixtureTick(WORK_TICK + 60_000, ["--fixture-mutation-fence=observe"], env);
+    expect(starting).toMatchObject({ pressure: true, removed: 0, fixtureMutationFences: 0,
+      outcomes: [expect.objectContaining({ reasonCode: "recovery_binding_scan" })] });
+    const resumed = await productionFixtureTick(WORK_TICK + 120_000, ["--fixture-mutation-fence=observe"], env);
+    expect(resumed).toMatchObject({ pressure: true, checked: 1, removed: 1, errors: 0 });
+    expect(resumed.fixtureMutationFences).toBeGreaterThan(0);
+    expect(fs.existsSync(trash)).toBeFalse();
+    expect(fs.existsSync(attemptTempJournalPath(directory!))).toBeFalse();
+    expect(store.has(directory!)).toBeFalse();
+  } finally { store.close(); }
+}, 15_000);
+
 test("a process first seen by retirement scan reports its live reference", async () => {
   const { store, directories: [directory] } = workScratchFixture(1, 1);
   const clock = spyOn(Date, "now").mockReturnValue(WORK_TICK);
@@ -951,6 +1071,41 @@ test("a process first seen by retirement scan reports its live reference", async
       disposition: "live", reasonCode: "process_reference",
     })] });
     expect(fs.readFileSync(path.join(directory!, "payload"), "utf8")).toBe("fixture");
+  } finally { clock.mockRestore(); store.close(); }
+});
+
+test.each([false, true])("a process first seen by the quarantine scan reports its live reference (journal replay=%s)", async replay => {
+  const { store, directories: [directory] } = workScratchFixture(1, 1);
+  let now = WORK_TICK;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    const trash = replay ? quarantineWorkRoot(store, directory!) : null;
+    if (trash) {
+      store.defer(directory!, now + 15 * 60_000);
+      const starting = await runAttemptTempSweep({ ...workPorts, references }, workMode);
+      expect(starting).toMatchObject({ removed: 0, outcomes: [expect.objectContaining({ reasonCode: "recovery_binding_scan" })] });
+      now += 60_000;
+    }
+    let quarantineReads = 0, quarantine: string | undefined, injected = false;
+    const report = await runAttemptTempSweep({ ...workPorts,
+      references: async (_original, current) => {
+        if (current !== directory) { quarantine = current; quarantineReads++; }
+        return true;
+      },
+      scan: () => {
+        // Fresh retirement runs one quarantine eligibility check and replay
+        // runs two. Each check observes references twice before the scan.
+        if (!quarantine || injected || quarantineReads !== (replay ? 4 : 2)) return emptyScan();
+        injected = true;
+        return { ownNamespace: null, processes: [{ pid: 41, namespace: null, stamped: false, paths: [quarantine] }] };
+      },
+    }, workMode);
+    expect(injected).toBeTrue();
+    expect(quarantineReads).toBe(replay ? 4 : 2);
+    expect(fs.readFileSync(path.join(trash ?? directory!, "payload"), "utf8")).toBe("fixture");
+    expect(report).toMatchObject({ removed: 0, errors: 0, liveHeld: 1, outcomes: [expect.objectContaining({
+      directory, disposition: "live", reasonCode: "process_reference",
+    })] });
   } finally { clock.mockRestore(); store.close(); }
 });
 
@@ -997,6 +1152,36 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_WORK_BENCHMARK !== "1")("work-shaped me
       deferred: samples.reduce((sum, sample) => sum + sample.deferred, 0), first: samples[0] }));
   } finally { clearInterval(timer); clock.mockRestore(); store.close(); }
 }, 60_000);
+
+test.skipIf(process.env.LLV_ATTEMPT_TEMP_WORK_BENCHMARK !== "1")("work-shaped idle CPU under cap pressure with mutation fence timeouts", async () => {
+  const { store, directories } = workScratchFixture(812, 4);
+  let now = WORK_TICK, proofs = 0, cpuSeconds = 0;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  const fence = mutationFence.attemptMutationCurrent;
+  const deadline = spyOn(mutationFence, "attemptMutationCurrent").mockImplementation((watches, validate, _budget, authority) => {
+    proofs++;
+    return fence(watches, validate, 0, authority);
+  });
+  try {
+    const budgetRoots = new Set(directories.slice(0, 2));
+    for (const directory of budgetRoots) {
+      for (let n = 0; n < 384; n++) fs.mkdirSync(path.join(directory, String(n).padStart(4, "0")));
+    }
+    for (let n = 0; n < 692; n++) store.registerCopy({
+      destination: statePath("evidence", "attempt-temp", n.toString(16).padStart(64, "0")), pipelineId: null, launchId: "legacy",
+      kind: "unattributed", createdAt: now, expiresAt: null, checkedAt: now, bytes: 67_052_024,
+    });
+    store.checkpointCopies("", true);
+    for (let n = 0; n < 60; n++) {
+      now = WORK_TICK + 60_000 * n;
+      const report = (await runAttemptTempSweep({ ...workPorts, references: async original => budgetRoots.has(original) },
+        { ...workMode, LLV_ATTEMPT_TEMP_CAP_BYTES: "1" }))!;
+      expect(report).toMatchObject({ pressure: true, lowSpace: false, removed: 0, reclaimedBytes: 0 });
+      cpuSeconds += report.cleanup.sweepCpuSeconds;
+    }
+    console.log(JSON.stringify({ fixture: "work-cap-pressure-idle", ticks: 60, proofs, cpuSeconds, reclaimedBytes: 0 }));
+  } finally { deadline.mockRestore(); clock.mockRestore(); store.close(); }
+}, 120_000);
 
 test.skipIf(process.env.LLV_ATTEMPT_TEMP_WORK_BENCHMARK !== "1")("work-shaped Viewer-side heartbeat during an overdue page", async () => {
   const { store } = workScratchFixture(812, 279);

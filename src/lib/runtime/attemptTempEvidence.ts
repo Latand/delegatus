@@ -9,6 +9,7 @@ import { attemptTreeHasNoEvidence, ledgerLinkedEvidence } from "./attemptTempFil
 import { statePath } from "@/lib/configDir";
 import { fsyncPath, writeJsonDurably } from "@/lib/state/durableJson";
 import { isPreservedMedia } from "@/lib/artifact/evidenceFormats";
+import { attemptEvidenceKey } from "./attemptEvidenceBinding";
 
 const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
 
@@ -84,7 +85,7 @@ export async function preserveAttemptEvidence(directory: string, original: strin
     if (!current()) throw new Error("attempt evidence source changed");
     return { current, namespaceOnly: true };
   }
-  const key = createHash("sha256").update(original).update("\0").update(identity).digest("hex");
+  const key = attemptEvidenceKey(original, identity);
   const destination = statePath("evidence", "attempt-temp", key);
   const evidenceParent = path.dirname(statePath("evidence"));
   const digest = async (file: string, identifyBlob = false) => {

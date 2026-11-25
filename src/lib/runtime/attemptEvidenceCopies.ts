@@ -1,7 +1,6 @@
 import { attemptTempRemaining } from "./attemptTempDeadline";
 import fs from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { readEnvelope } from "@/lib/recordedChecks/wire";
 import { attemptTempJournalPath, finishTreeTrash, removeTreeViaTrash } from "@/lib/tempSweep";
@@ -12,7 +11,7 @@ import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { claimAttemptRetirement } from "@/lib/pipelines/store";
 import { restoreRefusedAttemptTrash } from "@/lib/pipelines/retirementClaim";
 import { discoverAttemptCopies } from "./attemptCopyDiscovery";
-import { readAttemptEvidenceBinding } from "./attemptEvidenceBinding";
+import { attemptEvidenceKey, readAttemptEvidenceBinding } from "./attemptEvidenceBinding";
 
 const HOUR = 3600000;
 /** Pin the nearest existing ancestor as well as each absent segment. A missing
@@ -37,10 +36,6 @@ function copyParentProof() {
   if (!current()) throw new Error("indirect attempt evidence parent");
   return { parent, exists: missing.length === 0, current };
 }
-function copyParent() {
-  const proof = copyParentProof();
-  return proof.exists ? proof.parent : null;
-}
 function copyPath(destination: string, parent: string) {
   if (path.dirname(destination) !== parent || !/^[a-f0-9]{64}$/.test(path.basename(destination))) throw new Error("unowned attempt evidence destination");
 }
@@ -48,35 +43,29 @@ function copyPath(destination: string, parent: string) {
 /** One bounded legacy page. Unattributable copies are explicit retained data;
  * directory age and a familiar name grant no removal authority. */
 async function adoptCopies(store: AttemptTempStore, now: () => number, deadline: number) {
-  const parent = copyParent(), cursor = store.copyCursor();
-  if (!parent || cursor.done) return 0;
+  let adopted = 0, sourceAttributed = 0;
+  const cursor = store.copyCursor();
+  if (cursor.done) return { adopted, sourceAttributed };
+  const proof = copyParentProof(), { parent } = proof;
+  if (!proof.exists) return { adopted, sourceAttributed };
   const page = discoverAttemptCopies(parent, cursor.cursor, () => attemptTempRemaining() <= 0 ? deadline : now(), deadline);
-  let adopted = 0;
   for (const name of page.names) {
-    if ((now() >= deadline || attemptTempRemaining() <= 0)) return adopted;
+    if (now() >= deadline || attemptTempRemaining() <= 0) return { adopted, sourceAttributed };
     if (!/^[a-f0-9]{64}$/.test(name)) continue;
     const destination = path.join(parent, name);
-    if (store.copy(destination)) continue;
+    if (store.copy(destination)) {
+      if (store.copySourcePending(destination) && copyHasRegisteredSource(store, destination, proof))
+        sourceAttributed += store.attributeCopySource(destination);
+      continue;
+    }
     const stat = fs.lstatSync(destination, { throwIfNoEntry: false });
     if (!stat?.isDirectory() || stat.isSymbolicLink() || process.getuid && stat.uid !== process.getuid()) continue;
-    try {
-      const manifest = readAttemptEvidenceBinding(path.join(destination, "manifest.json"));
-      if (typeof manifest.original !== "string" || typeof manifest.identity !== "string" || !/^\d+:\d+$/.test(manifest.identity)
-        || createHash("sha256").update(manifest.original).update("\0").update(manifest.identity).digest("hex") !== name)
-        throw new Error("attempt evidence manifest has no matching creation identity");
-      const owner = typeof manifest.original === "string" ? store.owner(manifest.original) : null;
-      const pipelineId = typeof manifest.pipelineId === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(manifest.pipelineId)
-        ? manifest.pipelineId : owner?.identity === manifest.identity ? owner?.pipelineId ?? null : null;
-      const launchId = typeof manifest.launchId === "string" ? manifest.launchId
-        : owner?.identity === manifest.identity ? owner.launchId : "legacy";
-      store.registerCopy({ destination, pipelineId, launchId, kind: pipelineId ? "lane" : "unattributed",
-        createdAt: now(), expiresAt: null, checkedAt: now(), bytes: 0 });
-      adopted++;
-    } catch {
-      store.registerCopy({ destination, pipelineId: null, launchId: "legacy", kind: "unattributed",
-        createdAt: now(), expiresAt: null, checkedAt: now(), bytes: 0 });
-      adopted++;
-    }
+    // The manifest describes the source. Only a producer's ledger
+    // registration grants retirement authority over the destination.
+    store.registerCopy({ destination, pipelineId: null, launchId: "legacy", kind: "unattributed",
+      createdAt: now(), expiresAt: null, checkedAt: now(), bytes: 0 });
+    adopted++;
+    if (copyHasRegisteredSource(store, destination, proof)) sourceAttributed += store.attributeCopySource(destination);
     // Measuring is bounded by the same owned native-command deadline as roots.
     const row = store.copy(destination)!;
     try { store.registerCopy({ ...row, bytes: await allocatedAttemptBytes(destination) }); }
@@ -88,7 +77,7 @@ async function adoptCopies(store: AttemptTempStore, now: () => number, deadline:
   // Commit only after the entire bounded page is registered. A crash replays
   // at most this page and the primary key makes that replay idempotent.
   store.checkpointCopies(page.cursor, page.done);
-  return adopted;
+  return { adopted, sourceAttributed };
 }
 
 function copyHasRegisteredSource(store: AttemptTempStore, destination: string, proof: ReturnType<typeof copyParentProof>) {
@@ -99,7 +88,7 @@ function copyHasRegisteredSource(store: AttemptTempStore, destination: string, p
     const stat = fs.lstatSync(destination, { throwIfNoEntry: false });
     if (!stat?.isDirectory() || stat.isSymbolicLink() || process.getuid && stat.uid !== process.getuid()) return false;
     binding = readAttemptEvidenceBinding(path.join(destination, "manifest.json"));
-    const name = createHash("sha256").update(binding.original).update("\0").update(binding.identity).digest("hex");
+    const name = attemptEvidenceKey(binding.original, binding.identity);
     const after = fs.lstatSync(destination);
     if (name !== path.basename(destination) || after.dev !== stat.dev || after.ino !== stat.ino || !proof.current()) return false;
   } catch { return false; }
@@ -112,7 +101,7 @@ function copyHasRegisteredSource(store: AttemptTempStore, destination: string, p
 /** Capture the binding before the root's ledger row can disappear, even if
  * the independent legacy copy cursor has yet to reach this destination. */
 export function attributeCopyBeforeRootRetirement(store: AttemptTempStore, original: string, identity: string) {
-  const name = createHash("sha256").update(original).update("\0").update(identity).digest("hex");
+  const name = attemptEvidenceKey(original, identity);
   const destination = statePath("evidence", "attempt-temp", name);
   let proof: ReturnType<typeof copyParentProof>;
   try { proof = copyParentProof(); } catch { return 0; }
@@ -131,14 +120,22 @@ export function attributeCopyBeforeRootRetirement(store: AttemptTempStore, origi
   return store.attributeCopySource(destination);
 }
 
-/** Old ledgers can have sealed discovery before this source was registered.
- * This cursor repairs reporting even when ordinary copy adoption is done. */
+/** New bindings queue only their matching copy. The separate cursor checks
+ * copies already in the ledger at upgrade. Each pass has its own page. */
 function attributeRegisteredSources(store: AttemptTempStore, remaining: () => boolean) {
   const position = store.copySourceCursor(), limit = 32;
-  if (position.done || !remaining()) return 0;
+  if (!remaining()) return 0;
+  const pending = store.pendingCopySourceRepairs(limit);
+  if (position.done && !pending.length) return 0;
   const proof = copyParentProof();
+  let attributed = 0;
+  for (const { destination } of pending) {
+    if (!remaining()) return attributed;
+    attributed += store.finishCopySourceRepair(destination, copyHasRegisteredSource(store, destination, proof));
+  }
+  if (position.done) return attributed;
   const rows = store.copySourcePage(position.cursor, limit);
-  let attributed = 0, cursor = position.cursor;
+  let cursor = position.cursor;
   for (const { destination } of rows) {
     if (!remaining()) return attributed;
     attributed += store.checkpointCopySource(destination, false, copyHasRegisteredSource(store, destination, proof));
@@ -163,8 +160,10 @@ async function sweepOwnedCopies(store: AttemptTempStore, options: AttemptTempSwe
     unattributed: { count: 0, bytes: 0 } };
   if (options.mode !== "dry-run") {
     try {
-      report.adopted = await adoptCopies(store, now, deadline);
-      report.sourceAttributed = attributeRegisteredSources(store, () => now() < deadline && attemptTempRemaining() > 0);
+      const discovery = await adoptCopies(store, now, deadline);
+      report.adopted = discovery.adopted;
+      report.sourceAttributed = discovery.sourceAttributed;
+      report.sourceAttributed += attributeRegisteredSources(store, () => now() < deadline && attemptTempRemaining() > 0);
       store.copyFailure(statePath("evidence", "attempt-temp"), null);
     }
     catch (error) {

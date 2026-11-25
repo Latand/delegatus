@@ -767,12 +767,14 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   const conversationHolds = (candidate: string, via = "") => (options.conversationCwds?.() ?? []).some(entry =>
     inside(path.resolve(entry), via && candidate.startsWith(via) ? candidate.slice(via.length) : candidate)
       || inside(resolvePhysicalPath(via + entry), resolvePhysicalPath(candidate)));
-  const trashHolds = (root: TempSweepRoot, trash: string) => {
+  const trashHolds = (root: TempSweepRoot, trash: string, original: string, bytes = 0) => {
     if (!namespaceStill(root.anchor, procRoot) || conversationHolds(trash, root.via)) return true;
     const physical = resolvePhysicalPath(trash);
     const canonical = root.via && trash.startsWith(root.via) ? trash.slice(root.via.length) : trash;
-    return readScan().processes.some(proc => proc.paths.some(entry => inside(path.resolve(entry), canonical)
+    const processReferenced = readScan().processes.some(proc => proc.paths.some(entry => inside(path.resolve(entry), canonical)
       || inside(resolvePhysicalPath(root.via + entry), physical)));
+    if (processReferenced) report.held!.push({ path: original, via: root.via, reason: "process_reference", bytes });
+    return processReferenced;
   };
   const pinned = (directory: string) => {
     try { fs.lstatSync(path.join(directory, ".delegatus-keep")); return true; } catch { return false; }
@@ -824,8 +826,10 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         if (options.onlyDirectories && !options.onlyDirectories.includes(row.directory)) continue;
         if (options.eligible && !await options.eligible(row.trash)) continue;
         if (path.dirname(row.directory) !== root.via + root.path || !isOwnedTempName(path.basename(row.directory))) continue;
-        if (await finishTreeTrash(journal, async trash => (options.eligible && !await options.eligible(trash)) || trashHolds(root, trash), options.remove,
-          trash => !trashPolicyHolds(root, trash, path.resolve(row.directory)) && (!options.dispatchGuard || options.dispatchGuard(trash)), options.disposable, undefined, options.keepRefusedTrash)) report.trashFinished!++;
+        const original = path.resolve(row.directory);
+        const candidate = path.join(root.path, path.basename(original));
+        if (await finishTreeTrash(journal, async trash => (options.eligible && !await options.eligible(trash)) || trashHolds(root, trash, candidate), options.remove,
+          trash => !trashPolicyHolds(root, trash, original) && (!options.dispatchGuard || options.dispatchGuard(trash)), options.disposable, undefined, options.keepRefusedTrash)) report.trashFinished!++;
       } catch (error) { report.errors.push(String(error)); }
     }
     for (const name of names.sort()) {
@@ -978,7 +982,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         if (options.eligible && !await options.eligible(reachable)) { await keep("inUse", bytes); continue; }
         if (options.mode !== "dry-run" && !await removeTreeViaTrash(reachable, {
           journal: trashJournal(root, candidate), remove: options.remove, disposable: options.disposable,
-          held: async trash => (options.eligible && !await options.eligible(trash)) || trashHolds(root, trash),
+          held: async trash => (options.eligible && !await options.eligible(trash)) || trashHolds(root, trash, candidate, bytes),
           validate: trash => !trashPolicyHolds(root, trash, path.resolve(candidate)) && (!options.dispatchGuard || options.dispatchGuard(trash)),
         })) { await keep("inUse", bytes); continue; }
         report.removed.push({ path: candidate, via: root.via, bytes, ageHours: Math.round((now - newest) / HOUR_MS) });

@@ -11,6 +11,7 @@ import { allocatedAttemptBytes, attemptReferencesClear, attemptTreeHold, attempt
   type BlockedSubtree, type RetainedCheckoutReads, type AttemptNamespaceProtection, type AttemptProtection } from "./attemptTempFilesystem";
 import { AttemptTempBudgetDeferred, attemptTempDeferralCode, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { preserveAttemptEvidence, type AttemptEvidenceSelection } from "./attemptTempEvidence";
+import { attemptEvidenceKey } from "./attemptEvidenceBinding";
 import { recordedRootHeld, readRecorded, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
 import { trackSqliteMemory } from "@/lib/sqliteMemoryDiagnostics";
 import { AttemptRetentionReporting } from "./attemptRetentionReporting";
@@ -145,6 +146,7 @@ export class AttemptTempStore {
       this.db.exec("CREATE TABLE IF NOT EXISTS copy_retention_failures(destination TEXT PRIMARY KEY, failure TEXT NOT NULL)");
       this.db.exec("CREATE TABLE IF NOT EXISTS copy_adoption(id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL, done INTEGER NOT NULL)");
       this.db.exec("CREATE TABLE IF NOT EXISTS copy_inspection(id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL)");
+      this.db.exec("CREATE TABLE IF NOT EXISTS copy_source_repairs(seq INTEGER PRIMARY KEY, destination TEXT NOT NULL UNIQUE)");
       this.recovery = new AttemptTrashRecovery(this.db, path.join(path.dirname(filename), "scratch"));
       attemptTempIndexes.install(this.db, path.dirname(filename));
       this.db.exec("CREATE TABLE IF NOT EXISTS totals (id INTEGER PRIMARY KEY CHECK(id=1), bytes REAL NOT NULL)");
@@ -181,8 +183,10 @@ export class AttemptTempStore {
         const stat = fs.lstatSync(owner.directory);
         if (!stat.isDirectory() || stat.isSymbolicLink() || !/^llv-(?:read-only-stage|stage|stage-config)-/.test(path.basename(owner.directory)))
           throw new Error("Attempt temp root is not an owned directory");
+        const directory = path.resolve(owner.directory), identity = `${stat.dev}:${stat.ino}`;
         this.db.query("INSERT INTO roots(directory,pipelineId,launchId,retainUntilClose,createdAt,identity,checkedAt) VALUES(?,?,?,?,?,?,?)")
-          .run(path.resolve(owner.directory), owner.pipelineId, owner.launchId, Number(owner.retainUntilClose), owner.createdAt, `${stat.dev}:${stat.ino}`, owner.createdAt);
+          .run(directory, owner.pipelineId, owner.launchId, Number(owner.retainUntilClose), owner.createdAt, identity, owner.createdAt);
+        this.queueCopySourceRepair(directory, identity);
         fs.writeFileSync(path.join(owner.directory, ".delegatus-attempt-owner"), "attempt-temp.sqlite\n", { mode: 0o600, flag: "wx" });
       }
     }).immediate();
@@ -253,7 +257,10 @@ export class AttemptTempStore {
         VALUES(?,?,?,0,?,?,?) ON CONFLICT(directory) DO UPDATE SET pipelineId=excluded.pipelineId,launchId=excluded.launchId,createdAt=excluded.createdAt
         WHERE roots.pipelineId IS NULL AND roots.launchId='adopted' AND roots.identity=excluded.identity`)
         .run(directory, binding.pipelineId, binding.launchId, createdAt, identity, now);
-      if (result.changes) this.retainRoot(directory, attemptScratchExpiry(pipeline, { ...binding, createdAt, retainUntilClose: false }));
+      if (result.changes) {
+        this.retainRoot(directory, attemptScratchExpiry(pipeline, { ...binding, createdAt, retainUntilClose: false }));
+        this.queueCopySourceRepair(directory, identity);
+      }
       return result.changes > 0;
     }).immediate();
   }
@@ -516,6 +523,23 @@ export class AttemptTempStore {
     return !!this.db.query(`SELECT 1 FROM copies WHERE destination=? AND kind='unattributed' AND NOT EXISTS
       (SELECT 1 FROM copy_registered_sources a WHERE a.destination=copies.destination)`).get(destination);
   }
+  private queueCopySourceRepair(original: string, identity: string) {
+    const destination = statePath("evidence", "attempt-temp", attemptEvidenceKey(original, identity));
+    this.db.query(`INSERT OR IGNORE INTO copy_source_repairs(destination) SELECT destination FROM copies
+      WHERE destination=? AND kind='unattributed' AND NOT EXISTS
+        (SELECT 1 FROM copy_registered_sources a WHERE a.destination=copies.destination)`).run(destination);
+  }
+  pendingCopySourceRepairs(limit: number) {
+    return this.db.query<{ destination: string }, [number]>(
+      "SELECT destination FROM copy_source_repairs ORDER BY seq LIMIT ?").all(limit);
+  }
+  finishCopySourceRepair(destination: string, attributed: boolean) {
+    return this.db.transaction(() => {
+      const changed = attributed ? this.attributeCopySource(destination) : 0;
+      this.db.query("DELETE FROM copy_source_repairs WHERE destination=?").run(destination);
+      return changed;
+    })();
+  }
   attributeCopySource(destination: string) {
     return Number(!!this.db.query(`INSERT OR IGNORE INTO copy_registered_sources
       SELECT destination FROM copies WHERE destination=? AND kind='unattributed'
@@ -551,6 +575,7 @@ export class AttemptTempStore {
       this.db.query("DELETE FROM copies WHERE destination=?").run(destination);
       this.db.query("DELETE FROM copy_eligibility WHERE destination=?").run(destination);
       this.db.query("DELETE FROM copy_retention_failures WHERE destination=?").run(destination);
+      this.db.query("DELETE FROM copy_source_repairs WHERE destination=?").run(destination);
     })();
   }
   copyFailure(destination: string, failure: string | null) {
@@ -1222,7 +1247,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           reason = "live reference or changed retirement guard";
           reasonCode = "dispatch_reference_or_changed";
         }
-        const absent = !stat && !fs.existsSync(attemptTempJournalPath(owner.directory));
+        const absent = !stat && !fs.existsSync(attemptTempJournalPath(owner.directory)) && !fs.existsSync(owner.directory);
         outcome(owner.directory, deferred ? "deferred" : result.errors.length ? "failed" : disposition, bytes,
           result.errors.join("; ") || (absent ? "absent; forgotten" : reason),
           deferred ? attemptTempDeferralCode(result.errors.join("; "), deadlineCode) : result.errors.length ? "retirement_failed" : absent ? "root_missing" : reasonCode);
@@ -1284,8 +1309,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
           const actionable = ["tick_budget", "protection_checkpoint", "ledger_busy", "admission_busy"].includes(last.reasonCode)
             || last.reasonCode === "root_budget" && AttemptProtectionInventory.exists(owner.directory);
           const quarantined = !fs.existsSync(owner.directory) && fs.existsSync(attemptTempJournalPath(owner.directory));
-          const fullProofWithoutProgress = last.reasonCode === "checkout_budget" || last.reasonCode === "namespace_budget"
-            || last.reasonCode === "root_budget";
+          const fullProofWithoutProgress = ["checkout_budget", "namespace_budget", "root_budget", "mutation_fence_budget"].includes(last.reasonCode);
           const retryMs = last.disposition !== "deferred" ? EXPIRED_HOLD_RETRY_MS
             : !quarantined && !actionable && (options.scheduledOnly && !pressure || pressure && fullProofWithoutProgress)
               ? EXPIRED_PROOF_RETRY_MS : 0;
