@@ -327,8 +327,10 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     if (found.gitEvidence) {
       if (found.number !== null) delivery.target.pr = found.number;
       else if (!refresh && pipeline.cursor?.stageId && attempt.n > 0) {
-        delivery.pendingFirstPullRequest = { epoch: delivery.epoch, sha: acceptedHead,
-          stageId: pipeline.cursor.stageId, attempt: attempt.n };
+        const pending = delivery.pendingFirstPullRequest;
+        delivery.pendingFirstPullRequest = pending?.epoch === delivery.epoch && pending.sha === acceptedHead
+          ? pending
+          : { epoch: delivery.epoch, sha: acceptedHead, stageId: pipeline.cursor.stageId, attempt: attempt.n };
       }
       delete attempt.pullRequestInspection;
       return { ok: true };
@@ -439,8 +441,10 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
         if (recovered.gitEvidence && !refresh) {
           if (recovered.number !== null) delivery.target.pr = recovered.number;
           else if (pipeline.cursor?.stageId && attempt.n > 0) {
-            delivery.pendingFirstPullRequest = { epoch: delivery.epoch, sha: acceptedHead,
-              stageId: pipeline.cursor.stageId, attempt: attempt.n };
+            const pending = delivery.pendingFirstPullRequest;
+            delivery.pendingFirstPullRequest = pending?.epoch === delivery.epoch && pending.sha === acceptedHead
+              ? pending
+              : { epoch: delivery.epoch, sha: acceptedHead, stageId: pipeline.cursor.stageId, attempt: attempt.n };
           }
           delete attempt.pullRequestInspection;
           return { ok: true };

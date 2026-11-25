@@ -17670,7 +17670,10 @@ async function applyPipelinePatch(
       && snapshot.state === "needs_decision" && restoreParkedPublishedPass(snapshot)) {
       const resumed = await withDeliveryMutationAsync<PipelinePatchResult>(tx => {
         const current = tx.get(id);
-        if (!current || !restoreParkedPublishedPass(current)) return { error: "the lane changed during publication recovery; read it again", status: 409 };
+        if (!current) return { error: "the lane changed during publication recovery; read it again", status: 409 };
+        const expectation = expectedStageRefusal(current, req, true);
+        if (expectation) return expectation;
+        if (!restoreParkedPublishedPass(current)) return { error: "the lane changed during publication recovery; read it again", status: 409 };
         tx.put(current);
         return { pipeline: current };
       });

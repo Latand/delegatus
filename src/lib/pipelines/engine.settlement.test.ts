@@ -109,6 +109,15 @@ test.each(["automatic", "publish", "retry-stage", "dirty-tick", "dirty-publish",
         if (action === "dirty-publish") {
           expect((await rawPatchPipeline(lane.id, { action: "publish" }, h.ports, seat)).error).toBeUndefined();
         } else if (action === "dirty-retry-stage") {
+          const beforeMismatch = loadPipelines()[0]!;
+          expect(await rawPatchPipeline(lane.id, { action: "retry-stage", expectedStageId: "build",
+            expectedAttempt: attempt.n + 1 }, h.ports, seat))
+            .toMatchObject({ code: "STAGE_CHANGED", field: "expectedAttempt" });
+          expect(loadPipelines()[0]).toEqual(beforeMismatch);
+          expect(await rawPatchPipeline(lane.id, { action: "retry-stage", expectedStageId: "review",
+            expectedAttempt: attempt.n }, h.ports, seat))
+            .toMatchObject({ code: "STAGE_CHANGED", field: "expectedStageId" });
+          expect(loadPipelines()[0]).toEqual(beforeMismatch);
           expect((await rawPatchPipeline(lane.id, { action: "retry-stage", expectedStageId: "build",
             expectedAttempt: attempt.n }, h.ports, seat)).error).toBeUndefined();
         }
@@ -180,6 +189,7 @@ test("Git proof hands off to review and retains a first-PR obligation after a tr
   const exec = h.ports.exec;
   const remote = "https://github.com/fixture/project.git";
   let forgeReady = false;
+  let forgeFailuresRemaining = 2;
   let createCalls = 0;
   const forgeCalls: string[] = [];
   h.ports.exec = async (command, args, cwd, env, options) => {
@@ -187,7 +197,10 @@ test("Git proof hands off to review and retains a first-PR obligation after a tr
       return { code: 0, stdout: `${remote}\n`, stderr: "" };
     if (command === "gh" && args[0] === "pr" && args[1] === "list") {
       forgeCalls.push(`${forgeReady}: ${args.join(" ")}`);
-      if (!forgeReady) return { code: 1, stdout: "", stderr: "temporary forge outage" };
+      if (!forgeReady && forgeFailuresRemaining > 0) {
+        forgeFailuresRemaining--;
+        return { code: 1, stdout: "", stderr: "temporary forge outage" };
+      }
       return { code: 0, stdout: JSON.stringify([{ number: 42,
         headRefName: loadPipelines()[0]!.branch, baseRefName: "main", state: "OPEN",
         headRefOid: box.passedSha, isCrossRepository: false }]), stderr: "" };
@@ -210,6 +223,12 @@ test("Git proof hands off to review and retains a first-PR obligation after a tr
     delivery: { pendingFirstPullRequest: { sha: box.passedSha, stageId: "build", attempt: 1 } } });
   expect(createCalls).toBe(0);
 
+  await tickPipelinesController([], h.ports);
+  await settlePipelineControllerJobs();
+  expect(forgeFailuresRemaining).toBe(0);
+  expect(loadPipelines()[0]!.delivery!.pendingFirstPullRequest).toEqual({
+    epoch: handedOff.delivery!.epoch, sha: box.passedSha, stageId: "build", attempt: 1,
+  });
   forgeReady = true;
   for (let tick = 0; tick < 3; tick++) {
     await tickPipelines([], h.ports);
@@ -221,6 +240,7 @@ test("Git proof hands off to review and retains a first-PR obligation after a tr
   expect(final).toMatchObject({ cursor: { stageId: "review" }, delivery: { target: { pr: 42 } } });
   expect(final.delivery!.pendingFirstPullRequest).toBeUndefined();
   expect(h.spawnInputs).toHaveLength(2);
+  expect(final.cursor?.activatedBy).toMatchObject({ stageId: "build", attempt: 1, edge: "pass" });
 });
 
 test("a same-owner publication waits through another tick, then advances once settled (#1939)", async () => {
