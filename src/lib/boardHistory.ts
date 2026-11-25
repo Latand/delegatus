@@ -1,8 +1,7 @@
-import { gzipBody } from "./http/gzipBody";
 import { MeasuredCache } from "./cacheTelemetry";
 
 type Link = { etag: string; body: string; bytes: number; at: number };
-type Answer = { body: string; gzip?: Promise<Uint8Array>; charged: number };
+type Answer = { body: string; charged: number };
 type Scope = { links: Map<string, Link>; answers: Map<string, Answer>; at: number };
 export const BOARD_HISTORY_LIMITS = { scopes: 32, links: 32, path: 16, bytes: 16 * 1024 * 1024, ageMs: 120_000 };
 
@@ -88,10 +87,5 @@ export class BoardHistory {
     scope.answers.set(key, answer);
     this.trim(now);
     return { answer };
-  }
-
-  gzip(answer: Answer): Promise<Uint8Array> {
-    answer.gzip ??= gzipBody(answer.body).catch(error => { answer.gzip = undefined; throw error; });
-    return answer.gzip;
   }
 }

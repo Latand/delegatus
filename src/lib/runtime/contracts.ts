@@ -24,33 +24,45 @@ export interface RuntimeScope {
 export type RuntimeScopeString = `${RuntimeScopeKind}:${string}`;
 export type RuntimeScopeInput = RuntimeScope | RuntimeScopeString;
 
-export type RuntimeEngine = "codex" | "claude" | "copilot";
-export type RuntimeHostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "unhosted";
+export type RuntimeEngine = "codex" | "claude" | "copilot" | "antigravity";
+export type RuntimeHostKind = "codex-app-server" | "claude-broker" | "copilot-acp" | "antigravity-acp" | "unhosted";
 
 /** The structured host kind each engine runs under. */
-export function runtimeHostKindForEngine(engine: RuntimeEngine): Extract<RuntimeHostKind, "codex-app-server" | "claude-broker" | "copilot-acp"> {
-  return engine === "codex" ? "codex-app-server" : engine === "copilot" ? "copilot-acp" : "claude-broker";
+export function runtimeHostKindForEngine(
+  engine: RuntimeEngine,
+): Extract<RuntimeHostKind, "codex-app-server" | "claude-broker" | "copilot-acp" | "antigravity-acp"> {
+  if (engine === "codex") return "codex-app-server";
+  if (engine === "copilot") return "copilot-acp";
+  if (engine === "antigravity") return "antigravity-acp";
+  return "claude-broker";
 }
 
 /** Whether a host kind is a structured (pane-less) engine host. */
-export function isStructuredHostKind(kind: string | null | undefined): kind is "codex-app-server" | "claude-broker" | "copilot-acp" {
-  return kind === "codex-app-server" || kind === "claude-broker" || kind === "copilot-acp";
+export function isStructuredHostKind(
+  kind: string | null | undefined,
+): kind is "codex-app-server" | "claude-broker" | "copilot-acp" | "antigravity-acp" {
+  return kind === "codex-app-server" || kind === "claude-broker" || kind === "copilot-acp" || kind === "antigravity-acp";
 }
 
 /** The engine a structured host kind belongs to, or null for a non-structured one. */
 export function runtimeEngineForHostKind(kind: string | null | undefined): RuntimeEngine | null {
-  return kind === "codex-app-server" ? "codex" : kind === "copilot-acp" ? "copilot" : kind === "claude-broker" ? "claude" : null;
+  if (kind === "codex-app-server") return "codex";
+  if (kind === "copilot-acp") return "copilot";
+  if (kind === "antigravity-acp") return "antigravity";
+  if (kind === "claude-broker") return "claude";
+  return null;
 }
 
 /**
- * How a message for a running turn reaches this engine (docs/design/copilot-engine.md 3.4).
- * Codex steers into the turn. Copilot's ACP has no steer, so a steer is
- * delivered by interrupt-and-resend. Claude's broker declares neither and
- * refuses a steer.
+ * How a message for a running turn reaches this engine (docs/design/copilot-engine.md 3.4,
+ * docs/design/antigravity-engine.md 3.3).
+ * Codex steers into the turn. Copilot and Antigravity ACP have no documented steer,
+ * so a steer is delivered by interrupt-and-resend. Claude's broker declares neither
+ * and refuses a steer.
  */
 export function runtimeSteerCapability(engine: RuntimeEngine): { steer: boolean; steerMode?: "interrupt" } {
   if (engine === "codex") return { steer: true };
-  if (engine === "copilot") return { steer: false, steerMode: "interrupt" };
+  if (engine === "copilot" || engine === "antigravity") return { steer: false, steerMode: "interrupt" };
   return { steer: false };
 }
 export type RuntimeHostAxis = "registering" | "hosted" | "recovering" | "unhosted" | "conflict" | "dead";
@@ -293,6 +305,8 @@ export interface RuntimeOperationReceipt {
   /** A send may already have reached the engine. Retained across requeues;
       the current reason only describes the latest wait or transition. */
   deliveryUnverified?: boolean;
+  /** Pending sends captured by the first kill admission, retained on replay. */
+  pendingSendIds?: string[];
   imageCount?: number;
   /** The per-turn runtime settings snapshot a send/steer was admitted with
       (issue #499): the durable audit record that the selected model/effort/fast
@@ -465,6 +479,8 @@ export interface RuntimeInterruptCommand extends RuntimeCommandBase {
 export interface RuntimeIdleKillFence {
   revision: number;
   writerClaim: string;
+  /** Explicitly fences the dead/unhosted registry fallback projection. */
+  releasedSession?: true;
 }
 
 /** Engine recovery authority for one provider-cut attempt. Requires an idle fence. */
@@ -481,16 +497,20 @@ export function runtimeIdleKillMatches(
   key: RuntimeKillCommand["sessionKey"],
   fence: RuntimeIdleKillFence,
 ): boolean {
-  if (!session || session.host !== "hosted") return false;
+  if (!session || session.sessionKey.engine !== key.engine || session.sessionKey.sessionId !== key.sessionId
+    || session.revision !== fence.revision || session.retirementBlocked === true) return false;
   const control = runtimeControlFacts(session);
-  return control.idle && !control.attentionPending
-    && session.sessionKey.engine === key.engine && session.sessionKey.sessionId === key.sessionId
-    && session.revision === fence.revision && session.writerClaim === fence.writerClaim
-    && session.retirementBlocked !== true;
+  if (control.attentionPending) return false;
+  return fence.releasedSession === true
+    ? fence.writerClaim === "released-session" && session.writerClaim === null
+      && (session.host === "dead" || session.host === "unhosted") && control.turn === "unknown" && control.turnId === null
+    : session.host === "hosted" && control.idle && session.writerClaim === fence.writerClaim;
 }
 
 export interface RuntimeKillCommand extends RuntimeCommandBase {
   kind: "kill";
+  /** Viewer-derived cohort; the first admission owns it across retries. */
+  pendingSendIds?: string[];
   /** Authenticated control authorship; an automatic recovery is system custody. */
   origin?: MessageOrigin;
   onlyIfIdle?: RuntimeIdleKillFence;
@@ -561,8 +581,8 @@ export interface RuntimeControlCapability {
  * button that lies about the engine.
  */
 export function runtimeCompactCapability(engine: RuntimeEngine): RuntimeControlCapability {
-  if (engine === "copilot") {
-    return { control: "compact", engine, supported: false, reason: "the Copilot ACP host exposes no compact control" };
+  if (engine === "copilot" || engine === "antigravity") {
+    return { control: "compact", engine, supported: false, reason: `the ${engine === "antigravity" ? "Antigravity" : "Copilot"} ACP host exposes no compact control` };
   }
   return engine === "codex"
     ? { control: "compact", engine, supported: true, confirmation: "observed" }
@@ -1126,7 +1146,7 @@ export interface RuntimeSocketRequest {
   /** Opt in to serial reuse; older listeners close after the answer. */
   keepAlive?: boolean;
   id: string;
-  method: "runtime-host-health" | "files-revision" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-transition-pristine" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-reconcile" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
+  method: "runtime-host-health" | "files-revision" | "session-read" | "startup-session-evidence" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-transition-pristine" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-reconcile" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 
@@ -1272,4 +1292,17 @@ export function assertRuntimeEvent(input: RuntimeEventInput): void {
 export interface RuntimeSessionRead {
   conversationId?: string;
   artifactPath?: string;
+}
+
+export const STARTUP_SESSION_VERSION_BATCH = 128;
+export type StartupRuntimeSession = Pick<RuntimeSession, "conversationId" | "host" | "turn" | "recentReceipts">;
+export type RuntimeStartupOperationCursor = { eventSeq: number; rowId: number };
+export interface RuntimeStartupSessionEvidence {
+  generation: string;
+  version: string;
+  effectsVersion: string;
+  sessions: (number | null)[];
+  evidence?: StartupRuntimeSession | null;
+  pendingOperations?: RuntimeOperationReceipt[];
+  pendingOperationsNext?: RuntimeStartupOperationCursor;
 }

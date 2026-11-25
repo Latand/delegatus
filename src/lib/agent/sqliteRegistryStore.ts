@@ -1,5 +1,7 @@
-import { compareDeliveryAdmission, seatViewerMcpOwner, seatViewerMcpObservation, type SeatTickConversation } from "./registry";
+import { measureRegistryRead } from "./registryReadPerformance";
+import { compareDeliveryAdmission, seatViewerMcpOwner, seatViewerMcpObservation, type RegistryConversation, type SeatTickConversation } from "./registry";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
+import { beginRegistryTransaction } from "./registryTransaction";
 import { observeRegistryWriter } from "./registryWriter";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { nextSqliteRows, observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
@@ -12,19 +14,99 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
-import type { Database as BunDatabase } from "bun:sqlite";
+import type { Database as BunDatabase, SQLQueryBindings } from "bun:sqlite";
 
 import { yieldToRuntime } from "@/lib/cooperative";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { databaseFileIdentity, DatabaseReplacedError, openCurrentDatabase } from "@/lib/state/currentDatabase";
 import { recordBlockingWait, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
-import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import { normalizeProjectOwnership, type HeldDelivery, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
+import type { CarrierSource } from "@/lib/accounts/projectAccountsView";
+import { agentStateMetricsForStorage, type AgentProjection, type AgentStateJournal, type AgentStateMetricsRow } from "@/lib/agentState/model";
+
+/** Non-enumerable per-transaction accessor attached to lazy `RegistryFile` views
+ * so Antigravity `AgentProjection` rows persist in `registry_antigravity_agent_states`
+ * inside the exact same SQLite transaction as `agentStateJournal` and
+ * `agentStateMetrics`, while remaining invisible to older releases and JSON exports. */
+export const ANTIGRAVITY_AGENT_STATES_ACCESS = Symbol.for("delegatus.antigravityAgentStatesAccess");
+
+/** Non-enumerable container attached to JSON-backed `RegistryFile` views (`off`
+ * and `dual-write` modes) so Antigravity projections persist atomically inside
+ * `agent-registry.json` under top-level `antigravityAgentStates` (ignored by
+ * older releases' `normalizeRegistry`) rather than in-memory or a sidecar file. */
+export const ANTIGRAVITY_JSON_STATES = Symbol.for("delegatus.antigravityJsonStates");
+
+export interface AntigravityAgentStatesView {
+  get(subject: string): AgentProjection | undefined;
+  page(after: string, limit: number): Array<[string, AgentProjection]>;
+}
+
+export interface AntigravityAgentStatesMutable extends AntigravityAgentStatesView {
+  set(subject: string, projection: AgentProjection): void;
+  delete(subject: string): void;
+}
+
+/** Keyed view/mutator over an in-memory map used by JSON-backed registry modes (`off` / `dual-write`). */
+export function antigravityStatesHandleForRecord(
+  record: Record<string, AgentProjection>,
+): AntigravityAgentStatesMutable {
+  return {
+    get: (subject: string) => record[subject],
+    page: (after: string, limit: number) => {
+      if (limit <= 0) return [];
+      return Object.keys(record)
+        .filter((subject) => subject > after)
+        .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0))
+        .slice(0, limit)
+        .map((subject) => [subject, record[subject]!] as [string, AgentProjection]);
+    },
+    set: (subject: string, projection: AgentProjection) => {
+      record[subject] = projection;
+    },
+    delete: (subject: string) => {
+      delete record[subject];
+    },
+  };
+}
+
+/** Persists Antigravity entries with `accountId: null` and sibling `antigravityAccountId`
+ * so prior releases (which index `quotaObservations[engine][accountId]` over only 3 engines)
+ * never throw on rollback while candidate readers restore `accountId` losslessly. */
+export function registryEntryForStorage(
+  entry: AgentRegistryEntry,
+): AgentRegistryEntry & { antigravityAccountId?: string } {
+  if (entry.key?.engine !== "antigravity" || typeof entry.accountId !== "string" || entry.accountId.length === 0) return entry;
+  return { ...entry, accountId: null, antigravityAccountId: entry.accountId };
+}
+
+/** Persists Antigravity conversation generations with `accountId: null` and sibling
+ * `antigravityAccountId` so prior releases never index `quotaObservations["antigravity"]`. */
+export function registryConversationForStorage(
+  conversation: RegistryConversation,
+): RegistryConversation {
+  if (conversation.engine !== "antigravity") return conversation;
+  if (!conversation.generations.some((generation) => typeof generation.accountId === "string" && generation.accountId.length > 0)) return conversation;
+  return {
+    ...conversation,
+    generations: conversation.generations.map((generation) =>
+      typeof generation.accountId === "string" && generation.accountId.length > 0
+        ? ({ ...generation, accountId: null, antigravityAccountId: generation.accountId } as RegistryConversation["generations"][number])
+        : generation),
+  };
+}
+
+function rowForStorage(collection: RowCollection, row: unknown): unknown {
+  if (collection === "entries") return registryEntryForStorage(row as AgentRegistryEntry);
+  if (collection === "conversations") return registryConversationForStorage(row as RegistryConversation);
+  return row;
+}
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
-import type { AgentRegistryEntry, ConversationAuthorityFacts, RegistryFile, SeatChildrenAnchor, SeatChildrenPage, SnapshotSpawnProjection, SnapshotTitleConversationProjection } from "./registry";
+import type { AgentRegistryEntry, ConversationAuthorityFacts, McpCallerRegistryRows, RegistryFile, SeatChildrenAnchor, SeatChildrenPage, SnapshotSpawnProjection, SnapshotTitleConversationProjection } from "./registry";
 import { sessionKeyId } from "./sessionKey";
+import { NativeCallerArtifacts } from "./nativeCallerArtifacts";
 import { drainRegistryEndingChanges, endingInstant, OWNER_ENDINGS_CURSOR, prepareRegistryEndingsBatch, registryEndingChangesPending, registryEndingsPrepared, RETIRED_ENDING_TRIGGERS } from "./registryEndings";
 import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
 import { protectionConversation, protectionDelivery, protectionEntry, type WorktreeProtection } from "./worktreeProtection";
@@ -99,7 +181,7 @@ function registryArchiveSchemaInstalled(db: BunDatabase, Database: typeof import
 /** Startup owns these transactions. Explicit statements also pass through the
  * writer observer; Bun's transaction callback API bypasses Database.exec. */
 function withStartupTransaction<T>(db: BunDatabase, write: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
+  beginRegistryTransaction(db, true);
   try {
     const result = write();
     db.exec("COMMIT");
@@ -249,10 +331,110 @@ function installTerminationProjection(db: BunDatabase, source: string): void {
   db.exec("INSERT OR REPLACE INTO registry_meta(key,value) VALUES ('termination_projection_version','4')");
 }
 
+// Termination can retain a retired signal domain, and a failed same-path
+// resume can retain its event cursor without a domain. Neither released
+// record represents custody once the process, scope and claims are cleared.
+// A failed resume can still have a recorded process exit to reconcile.
+const nativeCallerHostV1Index = "registry_caller_native_host_artifact";
+const nativeCallerHostIndex = "registry_caller_native_host_artifact_v2";
+const nativeCallerHostPath = "json_extract(value_json,'$.artifactPath')";
+const nativeCallerHostCustodyFilter = `AND NOT COALESCE((
+    json_extract(value_json,'$.status')='dead'
+    AND json_extract(value_json,'$.structuredHost.endpoint')='stdio:released'
+    AND (
+      (json_extract(value_json,'$.structuredHost.signalDomain.policyVersion')=1
+        AND json_type(value_json,'$.structuredHost.signalDomain.retired')='true')
+      OR (json_extract(value_json,'$.structuredHost.signalDomain') IS NULL
+        AND json_type(value_json,'$.structuredHost.eventCursor') IN ('integer','real')
+        AND json_extract(value_json,'$.structuredHost.eventCursor')>0
+        AND json_extract(value_json,'$.structuredHost.exitProcess') IS NULL
+        AND json_extract(value_json,'$.hostExitProcess') IS NULL
+        AND COALESCE(json_array_length(value_json,'$.pendingHostExits'),0)=0)
+    )
+    AND json_extract(value_json,'$.host') IS NULL
+    AND json_extract(value_json,'$.structuredHost.process') IS NULL
+    AND json_extract(value_json,'$.structuredHost.scope') IS NULL
+    AND json_extract(value_json,'$.structuredHost.memory.unit') IS NULL
+    AND json_extract(value_json,'$.claimOwner') IS NULL
+    AND json_extract(value_json,'$.pendingAction') IS NULL
+    AND COALESCE(json_array_length(value_json,'$.structuredTerminationSurvivors'),0)=0
+  ),0)`;
+// Keep the v1 partial index intact so rolling back to the previous release
+// still satisfies `INDEXED BY registry_caller_native_host_artifact`.
+const nativeCallerHostV1 = `collection='entries'
+  AND json_extract(value_json,'$.structuredHost.kind') IN ('codex-app-server','claude-broker','copilot-acp')
+  ${nativeCallerHostCustodyFilter}`;
+const nativeCallerHost = `collection='entries'
+  AND json_extract(value_json,'$.structuredHost.kind') IN ('codex-app-server','claude-broker','copilot-acp','antigravity-acp')
+  ${nativeCallerHostCustodyFilter}`;
+const NATIVE_CALLER_ARTIFACTS_V1_VERSION = "1";
+const NATIVE_CALLER_ARTIFACTS_REVISION = "2";
 const registryCallerIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_caller_roots_latest ON registry_caller_roots(updated_at DESC,row_order DESC)",
   "CREATE INDEX IF NOT EXISTS registry_caller_structured_pid ON registry_rows(collection,json_extract(value_json,'$.structuredHost.process.pid'),row_order)",
+  `CREATE INDEX IF NOT EXISTS registry_caller_exit_pid ON registry_rows(json_extract(value_json,'$.structuredHost.exitProcess.pid'))
+    WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.exitProcess.pid') IS NOT NULL
+      AND (json_extract(value_json,'$.structuredHost.scope.unit') IS NOT NULL
+        OR json_extract(value_json,'$.structuredHost.memory.unit') IS NOT NULL)`,
 ]);
+
+// An oversized identity cohort cannot establish the caller. Read one extra
+// candidate to distinguish a complete result from a truncated one.
+const MCP_CALLER_CANDIDATE_LIMIT = 256;
+const NATIVE_ARTIFACT_BATCH = 64;
+const NATIVE_ARTIFACT_JOURNAL_LIMIT = 32_768;
+
+function installNativeCallerArtifacts(db: BunDatabase): void {
+  const pathFrom = (row: "OLD" | "NEW") => `json_extract(${row}.value_json,'$.artifactPath')`;
+  const eligible = (row: "OLD" | "NEW") => `COALESCE((${nativeCallerHost
+    .replaceAll("collection", `${row}.collection`).replaceAll("value_json", `${row}.value_json`)}
+    AND json_type(${row}.value_json,'$.artifactPath')='text' AND ${pathFrom(row)}<>''),0)`;
+  const add = `INSERT INTO registry_native_host_paths(path)
+    SELECT ${pathFrom("NEW")} WHERE ${eligible("NEW")} ON CONFLICT(path) DO NOTHING;`;
+  const remove = `DELETE FROM registry_native_host_paths WHERE path=${pathFrom("OLD")} AND ${eligible("OLD")}
+    AND NOT EXISTS (SELECT 1 FROM registry_rows INDEXED BY ${nativeCallerHostIndex}
+      WHERE ${nativeCallerHost} AND ${nativeCallerHostPath}=${pathFrom("OLD")});`;
+  const hadV1 = db.query<{ value: string }, []>(
+    "SELECT value FROM registry_meta WHERE key='native_caller_artifacts_version'",
+  ).get()?.value === NATIVE_CALLER_ARTIFACTS_V1_VERSION;
+  const backfill = `INSERT OR IGNORE INTO registry_native_host_paths
+    SELECT DISTINCT ${nativeCallerHostPath} FROM registry_rows INDEXED BY ${nativeCallerHostIndex}
+    WHERE ${nativeCallerHost} AND json_type(value_json,'$.artifactPath')='text' AND ${nativeCallerHostPath}<>'';`;
+  const triggers = `
+    CREATE TRIGGER registry_native_host_paths_insert AFTER INSERT ON registry_rows WHEN ${eligible("NEW")} BEGIN ${add} END;
+    CREATE TRIGGER registry_native_host_paths_delete AFTER DELETE ON registry_rows WHEN ${eligible("OLD")} BEGIN ${remove} END;
+    CREATE TRIGGER registry_native_host_paths_update AFTER UPDATE ON registry_rows
+      WHEN (${eligible("OLD")} OR ${eligible("NEW")})
+        AND (${pathFrom("OLD")} IS NOT ${pathFrom("NEW")} OR ${eligible("OLD")} IS NOT ${eligible("NEW")})
+      BEGIN ${remove} ${add} END;
+    ${["INSERT", "DELETE"].map(event => `CREATE TRIGGER registry_native_host_path_changes_${event.toLowerCase()}
+      AFTER ${event} ON registry_native_host_paths BEGIN
+        INSERT INTO registry_native_host_path_changes(path) VALUES (${event === "INSERT" ? "NEW" : "OLD"}.path);
+        DELETE FROM registry_native_host_path_changes WHERE seq <= last_insert_rowid()-${NATIVE_ARTIFACT_JOURNAL_LIMIT};
+      END;`).join("\n")}
+  `;
+  // Keep native_caller_artifacts_version='1' untouched for rollback safety:
+  // the previous release checks `!== '1'` and runs non-IF-NOT-EXISTS DDL.
+  // Track this schema revision separately under native_caller_artifacts_revision.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS ${nativeCallerHostV1Index} ON registry_rows(${nativeCallerHostPath}) WHERE ${nativeCallerHostV1};
+    CREATE INDEX IF NOT EXISTS ${nativeCallerHostIndex} ON registry_rows(${nativeCallerHostPath}) WHERE ${nativeCallerHost};
+    CREATE TABLE IF NOT EXISTS registry_native_host_paths (path TEXT PRIMARY KEY) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS registry_native_host_path_changes (seq INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL);
+    DROP TRIGGER IF EXISTS registry_native_host_paths_insert;
+    DROP TRIGGER IF EXISTS registry_native_host_paths_delete;
+    DROP TRIGGER IF EXISTS registry_native_host_paths_update;
+    DROP TRIGGER IF EXISTS registry_native_host_path_changes_insert;
+    DROP TRIGGER IF EXISTS registry_native_host_path_changes_delete;
+    ${hadV1 ? `${triggers}\n${backfill}` : `${backfill}\n${triggers}`}
+    INSERT INTO registry_meta(key,value) VALUES ('native_caller_artifacts_version','${NATIVE_CALLER_ARTIFACTS_V1_VERSION}')
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value;
+    INSERT INTO registry_meta(key,value) VALUES ('native_caller_artifacts_revision','${NATIVE_CALLER_ARTIFACTS_REVISION}')
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value;
+  `);
+}
+
+type NativeArtifactRead = { index: NativeCallerArtifacts; after: string | null; sequence: number };
 
 /** State and recipient are equality seeks before the keyset bound and LIMIT. */
 export function openDeliverySelection(conversationId: string, state: string, after: string, limit: number) {
@@ -282,16 +464,34 @@ export function deliveryPredecessorSelections(conversationId: string, delivery: 
       { sql: prefix + " = ?", values: [...values, delivery.admissionSeq] }];
 }
 
+// Keep the turn state in the leading equality keys so SQLite can prefer this
+// covering index to the general collection/row_order index.
+const carrierTurn = "json_extract(value_json,'$.turn.state')";
+const busyCarrierRows = `collection='conversations' AND ${carrierTurn}='busy'`;
+const carrierColumns = {
+  engine: "json_extract(value_json,'$.engine')",
+  accountId: "json_extract(value_json,'$.generations[#-1].accountId')",
+  path: "json_extract(value_json,'$.generations[#-1].path')",
+  ownershipProject: "json_extract(value_json,'$.projectOwnership.project')",
+  ownershipSource: "json_extract(value_json,'$.projectOwnership.source')",
+  project: "json_extract(value_json,'$.generations[#-1].launchProfile.project')",
+  cwd: "json_extract(value_json,'$.generations[#-1].launchProfile.cwd')",
+};
+const carrierSelect = Object.entries(carrierColumns).map(([name, expr]) => `${expr} AS ${name}`).join(",");
 const registryRowIndexes = declaredIndexes([
+  `CREATE INDEX IF NOT EXISTS registry_busy_carriers ON registry_rows(collection,${carrierTurn},row_order,row_key,${Object.values(carrierColumns).join(",")}) WHERE ${busyCarrierRows}`,
   "CREATE INDEX IF NOT EXISTS registry_rows_collection_order ON registry_rows(collection, row_order)",
   "CREATE INDEX IF NOT EXISTS registry_state_page ON registry_rows(collection,json_extract(value_json,'$.state'),row_key)",
   "CREATE INDEX IF NOT EXISTS registry_migration_page ON registry_rows(collection,json_extract(value_json,'$.migration.phase'),row_key)",
   "CREATE INDEX IF NOT EXISTS registry_delivery_claim ON registry_rows(json_extract(value_json,'$.conversationId'),json_extract(value_json,'$.state'),json_extract(value_json,'$.generationId'),json_extract(value_json,'$.admissionSeq'),json_extract(value_json,'$.createdAt'),json_extract(value_json,'$.id'),row_key) WHERE collection='heldDeliveries'",
   "CREATE INDEX IF NOT EXISTS registry_receipt_claim_owner ON registry_rows(collection,json_extract(value_json,'$.conversationId'),json_extract(value_json,'$.engine'),json_extract(value_json,'$.state'),row_order)",
+  "CREATE INDEX IF NOT EXISTS registry_pending_delivery_owner_origin ON registry_rows(json_extract(value_json,'$.conversationId'),row_order) WHERE collection='deliveryOperationOwners' AND json_extract(value_json,'$.terminalState') IS NULL",
+  "CREATE INDEX IF NOT EXISTS registry_pending_delivery_owner_runtime ON registry_rows(json_extract(value_json,'$.runtimeConversationId'),row_order) WHERE collection='deliveryOperationOwners' AND json_extract(value_json,'$.terminalState') IS NULL",
   "CREATE INDEX IF NOT EXISTS registry_open_delivery_page ON registry_rows(collection,json_extract(value_json,'$.conversationId'),json_extract(value_json,'$.state'),row_key)",
   "CREATE INDEX IF NOT EXISTS registry_migration_intent_phase ON registry_rows(collection,json_extract(value_json,'$.migration.intentId'),json_extract(value_json,'$.migration.phase'),row_order)",
   "CREATE INDEX IF NOT EXISTS registry_migration_intent_custody ON registry_rows(collection,json_extract(value_json,'$.migration.intentId'),CASE WHEN json_extract(value_json,'$.migration.phase') IN ('committed','rolled-back','failed-recoverable') THEN 'terminal' ELSE 'pending' END,row_order)",
   "CREATE INDEX IF NOT EXISTS registry_seat_children_order ON registry_rows(json_extract(value_json, '$.parentConversationId'), row_order) WHERE collection = 'lineageEdges' AND json_extract(value_json, '$.source') = 'viewer-spawn'",
+  "CREATE INDEX IF NOT EXISTS registry_agent_state_journal_subject_order ON registry_rows(json_extract(value_json,'$.subject'),json_extract(value_json,'$.at') DESC,row_order DESC) WHERE collection='agentStateJournal'",
 ]);
 const registryLivenessIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS registry_liveness_receipts_order ON registry_liveness_receipts(row_order)",
@@ -310,7 +510,7 @@ const registryFailureRepairIndexes = declaredIndexes([
 const DEFERRED_LOOKUP_INDEXES = new Set([
   "clientMessageId",
   "launchId", "requestDigest", "supersedes.conversationId", "structuredHost.kind",
-  "parentConversationId", "launchProfile.parentConversationId", "pendingSpawnCapability.operationId",
+  "parentConversationId", "launchProfile.parentConversationId", "pendingSpawnCapability.operationId", "runtimeConversationId",
 ]);
 function registryLookupIndexes(): ReturnType<typeof declaredIndexes> {
   return declaredIndexes(Object.entries(LOOKUP_PATHS)
@@ -380,18 +580,20 @@ const ROW_COLLECTION_KEYS: ReadonlySet<string> = new Set(ROW_COLLECTIONS);
 /** The rows whose MCP grant lists a complete load decides from other rows. */
 const READER_GRANT_COLLECTIONS: ReadonlySet<RowCollection> = new Set(["entries", "receipts", "conversations"]);
 type LookupValue = string | readonly string[];
-export type RegistryKeyFilter = { field: "engine" | "migration.custodyState" | "migration.phase" | "migration.intentId" | "clientMessageId" | "launchId" | "parentConversationId" | "launchProfile.parentConversationId" | "pendingSpawnCapability.operationId" | "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind" | "custodyState"; value: LookupValue };
+export type RegistryKeyFilter = { field: "engine" | "migration.custodyState" | "migration.phase" | "migration.intentId" | "clientMessageId" | "launchId" | "parentConversationId" | "launchProfile.parentConversationId" | "pendingSpawnCapability.operationId" | "conversationId" | "runtimeConversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind" | "custodyState"; value: LookupValue };
 type LookupField = RegistryKeyFilter["field"];
-const LOOKUP_PATHS: Record<LookupField, string> = { engine: "$.engine", "migration.custodyState": "$.migration.phase", "migration.phase": "$.migration.phase", "migration.intentId": "$.migration.intentId", custodyState: "$.terminalState", clientMessageId: "$.clientMessageId", launchId: "$.launchId", parentConversationId: "$.parentConversationId", "launchProfile.parentConversationId": "$.launchProfile.parentConversationId", "pendingSpawnCapability.operationId": "$.pendingSpawnCapability.operationId", conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId", requestDigest: "$.requestDigest", "supersedes.conversationId": "$.supersedes.conversationId", "structuredHost.kind": "$.structuredHost.kind" };
+const LOOKUP_PATHS: Record<LookupField, string> = { engine: "$.engine", "migration.custodyState": "$.migration.phase", "migration.phase": "$.migration.phase", "migration.intentId": "$.migration.intentId", custodyState: "$.terminalState", clientMessageId: "$.clientMessageId", launchId: "$.launchId", parentConversationId: "$.parentConversationId", "launchProfile.parentConversationId": "$.launchProfile.parentConversationId", "pendingSpawnCapability.operationId": "$.pendingSpawnCapability.operationId", conversationId: "$.conversationId", runtimeConversationId: "$.runtimeConversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId", requestDigest: "$.requestDigest", "supersedes.conversationId": "$.supersedes.conversationId", "structuredHost.kind": "$.structuredHost.kind" };
 function lookupSql(field: LookupField): string {
   if (field === "custodyState") return "CASE WHEN json_extract(value_json,'$.terminalState') IS NULL THEN 'pending' ELSE 'terminal' END";
   if (field === "migration.custodyState") return "CASE WHEN json_extract(value_json,'$.migration.phase') IN ('committed','rolled-back','failed-recoverable') THEN 'terminal' ELSE 'pending' END";
   return `json_extract(value_json,'${LOOKUP_PATHS[field]}')`;
 }
 
-type KeyedReader = (collection: RowCollection, field: LookupField, value: LookupValue) => string[];
+type KeyedReader = (collection: RowCollection, field: LookupField, value: LookupValue, hotOnly?: boolean) => string[];
 type BoundedKeyReader = (collection: RowCollection, filters: readonly { field: LookupField; value: LookupValue }[], limit: number) => string[];
 type ProjectionReader = (collection: RowCollection, projector: RegistryRowProjector<RowCollection, unknown>) => Array<[string, unknown]>;
+type RetiredHostSelection = { keys: string[]; overflow: boolean; assertCurrent?: () => void };
+
 interface RegistryFileReaders {
   keyed: WeakMap<object, KeyedReader>;
   bounded: WeakMap<object, BoundedKeyReader>;
@@ -402,9 +604,13 @@ interface RegistryFileReaders {
   entryKey: WeakMap<RegistryFile, (entryKey: string) => string[]>;
   coldKey: WeakMap<RegistryFile, (collection: RowCollection) => ReadonlySet<string> | undefined>;
   endedOwner: WeakMap<RegistryFile, (since: string, page?: { limit: number; after?: string }) => string[]>;
-  startupSelection: WeakMap<RegistryFile, () => boolean>;
+  startupSelection: WeakMap<RegistryFile, () => StartupSelectionProof | null>;
   projection: WeakMap<object, ProjectionReader>;
   liveness: WeakMap<RegistryFile, () => { entries: AgentRegistryEntry[]; receipts: RegistryFile["receipts"][string][] }>;
+  retiredHosts?: WeakMap<object, (limit: number, cutBoundary?: string) => RetiredHostSelection>;
+  structuredProcess?: WeakMap<object, (pids: readonly number[]) => boolean>;
+  latestAgentStateJournal?: WeakMap<object, (subject: string) => AgentStateJournal | undefined>;
+  jsonAgentStateJournalBySubject?: WeakMap<object, Map<string, AgentStateJournal>>;
 }
 /* Next standalone evaluates instrumentation and route handlers in separate
    bundle realms, each with its own copy of this module, while the process
@@ -417,10 +623,11 @@ interface RegistryFileReaders {
    registry itself does. */
 const readerState = process as typeof process & { __llvRegistryFileReaders?: RegistryFileReaders };
 const fileReaders = readerState.__llvRegistryFileReaders ??= {
-  keyed: new WeakMap(), bounded: new WeakMap(), path: new WeakMap(), entryKey: new WeakMap(), coldKey: new WeakMap(), endedOwner: new WeakMap(), startupSelection: new WeakMap(), projection: new WeakMap(), liveness: new WeakMap(),
+  keyed: new WeakMap(), bounded: new WeakMap(), path: new WeakMap(), entryKey: new WeakMap(), coldKey: new WeakMap(), endedOwner: new WeakMap(), startupSelection: new WeakMap(), projection: new WeakMap(), liveness: new WeakMap(), retiredHosts: new WeakMap(),
 };
 const keyedReaders = fileReaders.keyed;
 const boundedReaders = fileReaders.bounded;
+const retiredHostReaders = fileReaders.retiredHosts ??= new WeakMap();
 const deliveryPredecessorReaders = fileReaders.deliveryPredecessor ??= new WeakMap();
 const openDeliveryReaders = fileReaders.openDelivery ??= new WeakMap();
 const pageReaders = fileReaders.page ??= new WeakMap();
@@ -431,6 +638,80 @@ const endedOwnerReaders = fileReaders.endedOwner;
 const startupSelectionReaders = fileReaders.startupSelection ??= new WeakMap();
 const projectionReaders = fileReaders.projection;
 const livenessReaders = fileReaders.liveness;
+const structuredProcessReaders = fileReaders.structuredProcess ??= new WeakMap();
+const latestAgentStateJournalReaders = fileReaders.latestAgentStateJournal ??= new WeakMap();
+const jsonAgentStateJournalIndexes = fileReaders.jsonAgentStateJournalBySubject ??= new WeakMap();
+
+function isLaterJournalRowInWriteOrder(candidate: AgentStateJournal, current: AgentStateJournal | undefined): boolean {
+  // Among equal-millisecond transitions, write order (JSON insertion position
+  // / SQLite `row_order`) decides — never lexicographical `id` hash suffix.
+  return !current || candidate.at >= current.at;
+}
+
+/** Attach a prebuilt per-subject latest-journal index for a JSON-loaded
+ * `agentStateJournal` record so hot-path lookups never rescan the collection. */
+export function attachAgentStateJournalSubjectIndex(
+  journal: Record<string, AgentStateJournal>,
+  index: Map<string, AgentStateJournal>,
+): void {
+  jsonAgentStateJournalIndexes.set(journal, index);
+}
+
+/** Maintain the JSON per-subject latest-journal index in O(1) on append.
+ * No-op for SQLite proxy collections (which use the SQLite index directly). */
+export function noteAgentStateJournalRow(
+  journal: Record<string, AgentStateJournal>,
+  row: AgentStateJournal,
+): void {
+  const index = jsonAgentStateJournalIndexes.get(journal);
+  if (!index) return;
+  if (isLaterJournalRowInWriteOrder(row, index.get(row.subject))) index.set(row.subject, row);
+}
+
+/** Maintain the JSON per-subject latest-journal index in O(1) when pruning the
+ * oldest journal entry. No-op for SQLite proxy collections (avoids extra reads). */
+export function removeAgentStateJournalRowFromIndex(
+  journal: Record<string, AgentStateJournal>,
+  key: string,
+): void {
+  const index = jsonAgentStateJournalIndexes.get(journal);
+  if (!index) return;
+  const existing = journal[key];
+  if (existing && index.get(existing.subject)?.id === key) {
+    // Rare case: the single oldest entry in a >16,384-row journal was also this
+    // subject's latest entry; invalidate so any remaining equal-timestamp entry
+    // for that subject is still discoverable on next lookup.
+    jsonAgentStateJournalIndexes.delete(journal);
+  }
+}
+
+/** Point lookup of the newest `agentStateJournal` row for one exact `subject`.
+ * Uses `registry_agent_state_journal_subject_order` (`ORDER BY at DESC, row_order DESC LIMIT 1`)
+ * in SQLite mode and a per-subject `Map` built once per collection in JSON mode. */
+export function registryLatestAgentStateJournalBySubject(
+  file: RegistryFile,
+  subject: string,
+): AgentStateJournal | undefined {
+  const reader = latestAgentStateJournalReaders.get(file);
+  if (reader) return reader(subject);
+  let index = jsonAgentStateJournalIndexes.get(file.agentStateJournal);
+  if (!index) {
+    index = new Map<string, AgentStateJournal>();
+    for (const row of Object.values(file.agentStateJournal)) {
+      if (isLaterJournalRowInWriteOrder(row, index.get(row.subject))) index.set(row.subject, row);
+    }
+    jsonAgentStateJournalIndexes.set(file.agentStateJournal, index);
+  }
+  return index.get(subject);
+}
+
+/** An extant process slot, including scope custody on a terminal row, belongs
+ * to registered host recovery. Never seize it through orphan discovery. */
+export function registryHasStructuredProcess(file: RegistryFile, pids: readonly number[]): boolean {
+  // A caller without a keyed view cannot prove vacancy within the sweep's
+  // bound. Leave custody with the registry until an indexed read is available.
+  return structuredProcessReaders.get(file)?.(pids) ?? true;
+}
 
 /**
  * A narrow, immutable reading of every row of one collection (#2761).
@@ -587,6 +868,10 @@ class RegistryReaderViews {
     if (entryKeys) entryKeyReaders.set(frozen, entryKeys);
     const projections = projectionReaders.get(file);
     if (projections) projectionReaders.set(frozen, projections);
+    const retiredHosts = retiredHostReaders.get(file);
+    if (retiredHosts) retiredHostReaders.set(frozen, retiredHosts);
+    const latestJournal = latestAgentStateJournalReaders.get(file);
+    if (latestJournal) latestAgentStateJournalReaders.set(frozen, latestJournal);
     return frozen;
   }
 
@@ -652,6 +937,24 @@ export function registryLivenessRows(file: RegistryFile): { entries: AgentRegist
   return read ? read() : { entries: Object.values(file.entries ?? {}), receipts: Object.values(file.receipts ?? {}) };
 }
 
+/** Bounded retired-host candidates for deploy-cut reconciliation. SQLite
+ * selects keys before registry payloads are decoded, so unrelated terminal
+ * history does not add work to a census. The extra row makes overflow explicit. */
+export function registryRetiredHostRows(file: RegistryFile, limit: number, cutBoundary?: string): { entries: AgentRegistryEntry[]; overflow: boolean } {
+  if (!Number.isInteger(limit) || limit < 1) throw new Error("retired host limit must be positive");
+  const reader = retiredHostReaders.get(file);
+  const selected: RetiredHostSelection = reader ? reader(limit, cutBoundary) : (() => {
+    const cutoff = cutBoundary && Number.isFinite(Date.parse(cutBoundary)) ? cutBoundary : "";
+    const entries = Object.entries(file.entries).filter(([, entry]) => entry.hostExitProcess != null
+      && typeof entry.updatedAt === "string" && entry.updatedAt >= cutoff)
+      .slice(0, limit + 1);
+    return { keys: entries.map(([key]) => key), overflow: entries.length > limit };
+  })();
+  const entries = selected.keys.slice(0, limit).map(key => file.entries[key]!).filter(Boolean);
+  selected.assertCurrent?.();
+  return { entries, overflow: selected.overflow };
+}
+
 /** Whether this view can select rows without expanding the whole collection. */
 export function registryHasLookupIndex(file: object): boolean {
   return keyedReaders.has(file);
@@ -659,6 +962,13 @@ export function registryHasLookupIndex(file: object): boolean {
 
 export function registryKeysMatching<C extends RowCollection>(file: Pick<RegistryFile, C>, collection: C, field: LookupField, value: LookupValue): string[] {
   return keyedReaders.get(file)?.(collection, field, value) ?? Object.entries(file[collection] ?? {}).filter(([, row]) => (typeof value === "string" ? [value] : value).includes(lookupValue(row, field) as string)).map(([key]) => key);
+}
+
+/** Indexed kind selection against the hot rows of this immutable view. */
+export function registryHotKeysMatching(file: RegistryFile, collection: "entries", field: "structuredHost.kind", value: LookupValue): string[] {
+  const cold = coldKeyReaders.get(file)?.(collection);
+  const indexed = coldKeyReaders.has(file) ? keyedReaders.get(file)?.(collection, field, value, true) : undefined;
+  return (indexed ?? registryKeysMatching(file, collection, field, value)).filter(key => !cold?.has(key));
 }
 
 /** A separate seek for each state keeps settled history outside the scan.
@@ -778,10 +1088,20 @@ export function archivedOwnersEndedSince(file: RegistryFile, since: string, page
     Unrelated host progress does not change a selection. A missing or capped
     journal proves nothing, so the caller must prepare another view. */
 export function registryStartupSelectionUnchanged(file: RegistryFile): boolean | undefined {
+  const proof = registryStartupSelectionProof(file);
+  return proof === undefined ? undefined : proof?.changes.length === 0;
+}
+
+const startupSelectionCollections = ["entries", "conversations", "receipts", "memberships", "conversationAliases"] as const;
+type StartupSelectionChange = { collection: typeof startupSelectionCollections[number]; key: string };
+type StartupSelectionProof = { identity: string | null; revision: number; changes: StartupSelectionChange[] };
+
+/** Deltas against an immutable selection, at the returned journal revision.
+    Null means the change journal cannot prove the delta. */
+export function registryStartupSelectionProof(file: RegistryFile): StartupSelectionProof | null | undefined {
   return startupSelectionReaders.get(file)?.();
 }
 
-const startupSelectionCollections = new Set(["entries", "conversations", "receipts", "memberships", "conversationAliases"]);
 function startupSelectionFacts(collection: string, row: unknown): string {
   if (row === undefined) return "absent";
   if (collection === "memberships" || collection === "conversationAliases") return JSON.stringify(row);
@@ -790,12 +1110,28 @@ function startupSelectionFacts(collection: string, row: unknown): string {
     const host = value.structuredHost as { kind?: unknown } | null;
     const legacyHost = value.host as { kind?: unknown } | null;
     const key = value.key as { engine?: unknown; sessionId?: unknown } | null;
-    return JSON.stringify([host?.kind, legacyHost?.kind, key?.engine, key?.sessionId]);
+    return JSON.stringify([host?.kind, legacyHost?.kind, key?.engine, key?.sessionId, value.artifactPath]);
   }
   if (collection === "conversations") return JSON.stringify([value.id, value.engine,
-    (value.generations as Array<{ id: unknown }> | undefined)?.map(generation => generation.id)]);
+    (value.generations as Array<{ id: unknown; path: unknown }> | undefined)?.map(generation => [generation.id, generation.path])]);
   const pending = ["starting", "path-pending", "pane-bound", "host-verified", "prompt-delivered"].includes(String(value.state));
   return JSON.stringify(pending ? [value.conversationId] : []);
+}
+
+/** JSON snapshots are immutable and have no change journal. Compare the
+    inputs shared with the SQLite proof before reusing a startup projection. */
+export function registryStartupSnapshotChanges(previous: RegistryFile, current: RegistryFile): StartupSelectionChange[] {
+  const changes: StartupSelectionChange[] = [];
+  for (const collection of startupSelectionCollections) {
+    const before = previous[collection] as Record<string, unknown>;
+    const after = current[collection] as Record<string, unknown>;
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (before[key] !== after[key] && startupSelectionFacts(collection, before[key]) !== startupSelectionFacts(collection, after[key])) {
+        changes.push({ collection, key });
+      }
+    }
+  }
+  return changes;
 }
 
 /** Whether entry-key lookups on this file read the generation identity index. */
@@ -825,6 +1161,33 @@ const COLD_STABLE_ROW_BYTES = 48 * 1024 * 1024;
 const PREPARED_REPLAY_CHANGES = 256;
 
 type StoredRow = { collection: string; row_key: string; value_json: string; row_order: number };
+export type SpawnMarkerBackup = {
+  name: string;
+  revision: number;
+  row(collection: RowCollection, key: string): string | null;
+};
+
+type SpawnMarkerRepair = { key: string; launchId: string; backup: SpawnMarkerBackup };
+type SpawnMarkerImage = { value_json: string; row_order: number };
+type SpawnMarkerJournal = {
+  backup: string;
+  backupRevision: number;
+  revision: number;
+  rows: { collection: RowCollection; key: string; before: SpawnMarkerImage | null; after: SpawnMarkerImage | null }[];
+  meta: { key: (typeof META_FIELDS)[number]; before: string | null; after: string | null }[];
+};
+export class SpawnMarkerBackupChangedError extends Error {}
+const spawnMarkerJournalKey = (launchId: string) => `spawn_marker_settlement:${launchId}`;
+
+const STARTUP_FALLBACK_WATERMARK = "startup_fallback_watermark";
+export type StartupFallbackSweep = {
+  registry: string | null;
+  journal: string | null;
+  previous: string | null;
+  archiveId: number;
+  keys: string[];
+};
+
 type MetaRow = { key: string; value: string };
 type CachedRow = { valueJson: string; parsed: unknown };
 
@@ -1034,9 +1397,10 @@ function applyRecordedGrantDecision(
 }
 
 interface RegistryChanges {
-  rows: Map<RowCollection, Set<string>>;
+  rows: Map<RowCollection, Map<string, string | null>>;
   meta: Set<(typeof META_FIELDS)[number]>;
   order: Set<RowCollection>;
+  antigravityStates: Map<string, string | null>;
 }
 
 export interface SqliteRegistrySnapshot {
@@ -1324,6 +1688,7 @@ function trackMutableJson<T>(
 
 export class SqliteAgentRegistryStore {
   private readonly db: BunDatabase;
+  private nativeArtifactRead: NativeArtifactRead | null = null;
   /** One prepared snapshot owner, on its own read connection. The writer's
       keyed transactions remain available while it yields. */
   private preparedReader: SqliteAgentRegistryStore | null = null;
@@ -1431,6 +1796,8 @@ export class SqliteAgentRegistryStore {
   private changesReady = false;
   /** Whether this connection's file has the ending change queue; read on first use. */
   private endingQueueReady: boolean | undefined;
+  /** Whether `registry_antigravity_agent_states` exists in this connection's DB. */
+  private antigravityStatesTableReady: boolean | undefined;
   private recordsSource = "registry_rows";
   private readonly localRows = new Map<string, { dataVersion: string; valueJson: string | null }>();
   /** Frozen copies of rows for the shared view. Keyed by what a row was
@@ -1443,6 +1810,7 @@ export class SqliteAgentRegistryStore {
       sixty such rows cost startup half a minute of blocked event loop. */
   private grantDecisions: GrantDecisions | null = null;
   private grantJournalReady = false;
+  private pendingDeliveryOwnerOriginIndexReady = false;
   /* What each hot row's grant decision read: the rows and the identity
      lookups that attested to it, absent ones included. A refresh after another
      writer's commit decides again only the rows a journalled change can reach
@@ -1518,7 +1886,9 @@ export class SqliteAgentRegistryStore {
         this.recordsSource = this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_records'").get() ? "registry_records" : "registry_rows";
         this.changesReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
         this.endingQueueReady = undefined;
+        this.antigravityStatesTableReady = undefined;
         this.grantJournalReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_grant_changes'").get());
+        this.pendingDeliveryOwnerOriginIndexReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'registry_pending_delivery_owner_origin'").get());
         this.generationIdentitiesReady = this.generationIdentitiesInstalled(this.db);
         return;
       } catch (error) { this.db.close(); throw error; }
@@ -1587,6 +1957,7 @@ export class SqliteAgentRegistryStore {
     this.grantJournalReady = true;
     this.changesReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
     this.endingQueueReady = undefined;
+    this.antigravityStatesTableReady = undefined;
     this.recordsSource = this.changesReady ? "registry_records" : "registry_rows";
     const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(registry_rows)").all();
     if (!columns.some((column) => column.name === "row_order")) {
@@ -1603,6 +1974,9 @@ export class SqliteAgentRegistryStore {
       ]);
     }
     registryRowIndexes.install(this.db, path.dirname(filename));
+    this.pendingDeliveryOwnerOriginIndexReady = Boolean(this.db.query(
+      "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'registry_pending_delivery_owner_origin'",
+    ).get());
     // Recovery indexes are prepared separately with a yield between each
     // build; the remaining constructor indexes share the startup fence.
     registryLookupIndexes().install(this.db, path.dirname(filename));
@@ -1783,7 +2157,20 @@ export class SqliteAgentRegistryStore {
     /* The import decides again under its own write lock; an imported
        registry never becomes unimported, so this read spares the lock. */
     if (!this.imported()) this.importFirstBoot(options.initialSnapshot, options.verifyImport);
-    if (options.allowArchiveMigration !== false) this.prepareCallerIndexes();
+    if (options.allowArchiveMigration !== false) this.migrateLegacyAntigravityAccountIds();
+    if (options.allowArchiveMigration !== false) {
+      this.prepareCallerIndexes();
+      if (this.meta("native_caller_artifacts_version") !== NATIVE_CALLER_ARTIFACTS_V1_VERSION
+        || this.meta("native_caller_artifacts_revision") !== NATIVE_CALLER_ARTIFACTS_REVISION) {
+        assertStateStartupMutation(path.dirname(filename), "native MCP caller artifacts");
+        withStartupTransaction(this.db, () => {
+          if (this.meta("native_caller_artifacts_version") !== NATIVE_CALLER_ARTIFACTS_V1_VERSION
+            || this.meta("native_caller_artifacts_revision") !== NATIVE_CALLER_ARTIFACTS_REVISION) {
+            installNativeCallerArtifacts(this.db);
+          }
+        });
+      }
+    }
     if (this.db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_caller_roots'").get()) {
       registryCallerIndexes.install(this.db, path.dirname(filename));
     }
@@ -1829,75 +2216,243 @@ export class SqliteAgentRegistryStore {
     registryCallerIndexes.install(this.db, path.dirname(this.filename));
   }
 
-  /** One capability's generations, plus any independent ancestry evidence.
-      Raw identity fields do not consult grants or materialize their dependencies. */
-  mcpCallerSnapshot(conversationId: string, ancestry: readonly number[], configuredRootId: string | null): {
-    snapshot: Pick<RegistryFile, "conversations" | "entries">; rootConversationId: string | null;
-  } {
-    this.db.exec("BEGIN");
-    try {
-      const read = (collection: "conversations" | "entries", key: string) => {
-        const row = this.db.query<{ value_json: string; row_order: number }, [string, string]>(
-          "SELECT value_json,row_order FROM registry_rows WHERE collection=? AND row_key=?").get(collection, key);
-        this.onRowPayloadRead?.(collection, row ? 1 : 0);
-        return row ? { value: this.parseRow(collection, key, row.value_json, true), order: row.row_order } : null;
-      };
-      const ids = new Set([conversationId]);
-      const ancestryEntries = new Map<string, { path: string; owners: Set<string> }>();
+  /** The capability's role, plus independent ancestry evidence by artifact.
+      Both selectors read the same registry transaction. */
+  mcpCallerSnapshot(conversationId: string | null, ancestry: readonly number[], configuredRootId: string | null) {
+    return this.readMcpCallerSnapshot(configuredRootId, () => {
+      const ids = new Set(conversationId ? [conversationId] : []);
+      const ancestryEntries = new Map<string, string>();
+      const selectedPaths = new Set<string>();
+      let candidatesLeft = MCP_CALLER_CANDIDATE_LIMIT;
       for (const pid of new Set(ancestry)) {
-        const entries = this.db.query<{ row_key: string; path: string }, [number]>(`SELECT row_key,json_extract(value_json,'$.artifactPath') AS path
-          FROM registry_rows WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.process.pid')=? ORDER BY row_order`).all(pid);
+        // Normalization can use exitProcess for a host with a retained scope
+        // or memory unit. Treat its PID as a candidate until normalization
+        // and the process identity probe confirm it.
+        const entries = this.db.query<{ row_key: string; path: string | null }, [number, number, number]>(`
+          SELECT row_key,json_extract(value_json,'$.artifactPath') AS path FROM registry_rows
+            WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.process.pid')=?
+          UNION ALL
+          SELECT row_key,json_extract(value_json,'$.artifactPath') AS path FROM registry_rows
+            WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.exitProcess.pid')=?
+              AND (json_extract(value_json,'$.structuredHost.scope.unit') IS NOT NULL
+                OR json_extract(value_json,'$.structuredHost.memory.unit') IS NOT NULL)
+              AND COALESCE(json_type(value_json,'$.structuredHost.process.pid'),'null') NOT IN ('integer','real')
+          LIMIT ?`).all(pid, pid, candidatesLeft + 1);
+        if (entries.length > candidatesLeft) return null;
+        candidatesLeft -= entries.length;
         for (const { row_key, path } of entries) {
-          const owners = new Set<string>();
-          for (const row of this.db.query<{ conversation_id: string }, [string]>(
-            "SELECT DISTINCT conversation_id FROM registry_generation_identities WHERE path=?").all(path)) {
-            ids.add(row.conversation_id);
-            owners.add(row.conversation_id);
-          }
-          if (owners.size) ancestryEntries.set(row_key, { path, owners });
+          if (typeof path !== "string") continue;
+          ancestryEntries.set(row_key, path);
+          if (selectedPaths.has(path)) continue;
+          selectedPaths.add(path);
+          const owners = this.db.query<{ conversation_id: string }, [string, number]>(
+            "SELECT conversation_id FROM registry_generation_identities WHERE path=? LIMIT ?").all(path, candidatesLeft + 1);
+          if (owners.length > candidatesLeft) return null;
+          candidatesLeft -= owners.length;
+          for (const owner of owners) ids.add(owner.conversation_id);
         }
       }
-      const selected = [...ids].flatMap(id => { const row = read("conversations", id); return row ? [{ id, ...row }] : []; })
-        .sort((a, b) => a.order - b.order);
-      const snapshot: Pick<RegistryFile, "conversations" | "entries"> = { conversations: {}, entries: {} };
-      for (const { id, value } of selected) {
+      const snapshot: McpCallerRegistryRows = { conversations: {}, entries: {} };
+      const generationPaths = new Set<string>();
+      for (const id of ids) {
+        const value = this.readMcpCallerRow("conversations", id);
+        if (!value) continue;
         const conversation = this.normalizePartial({ version: 2, entries: {}, receipts: {}, conversations: { [id]: value } }).conversations[id];
         if (!conversation) continue;
         snapshot.conversations[id] = conversation;
-        for (const generation of conversation.generations) {
-          const key = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
-          if (snapshot.entries[key]) continue;
-          const entry = read("entries", key);
-          if (entry) {
-            const normalized = this.normalizePartial({ version: 2, entries: { [key]: entry.value }, receipts: {} }).entries[key];
-            if (normalized && normalized.artifactPath === generation.path) snapshot.entries[key] = normalized;
-          }
-        }
-        const generationPaths = new Set(conversation.generations.map(generation => generation.path));
-        for (const [entryKey, evidence] of ancestryEntries) {
-          if (!evidence.owners.has(id) || !generationPaths.has(evidence.path) || snapshot.entries[entryKey]) continue;
-          const entry = read("entries", entryKey);
-          if (!entry) continue;
-          const normalized = this.normalizePartial({ version: 2, entries: { [entryKey]: entry.value }, receipts: {} }).entries[entryKey];
-          if (normalized && normalized.artifactPath === evidence.path) snapshot.entries[entryKey] = normalized;
-        }
+        for (const generation of conversation.generations) generationPaths.add(generation.path);
       }
-      const configured = configuredRootId && this.db.query("SELECT 1 FROM registry_rows WHERE collection='conversations' AND row_key=?").get(configuredRootId);
-      const rootConversationId = configured ? configuredRootId : this.db.query<{ conversation_id: string }, []>(
+      for (const [entryKey, artifact] of ancestryEntries) {
+        if (!generationPaths.has(artifact)) continue;
+        const entry = this.readMcpCallerRow("entries", entryKey);
+        if (!entry) continue;
+        const normalized = this.normalizePartial({ version: 2, entries: { [entryKey]: entry }, receipts: {} }).entries[entryKey];
+        if (normalized?.artifactPath === artifact) snapshot.entries[entryKey] = normalized;
+      }
+      return snapshot;
+    });
+  }
+
+  private resetNativeArtifacts(): void {
+    const previous = this.nativeArtifactRead;
+    this.nativeArtifactRead = null;
+    previous?.index.close();
+  }
+
+  // Caller of each slice pins the SQL projection and its journal together.
+  private advanceNativeArtifacts(): boolean {
+    const { db } = this;
+    if (!this.nativeArtifactRead) {
+      const sequence = db.query<{ seq: number }, []>(
+        "SELECT COALESCE(MAX(seq),0) AS seq FROM registry_native_host_path_changes").get()!.seq;
+      this.nativeArtifactRead = { index: new NativeCallerArtifacts(), after: "", sequence };
+    }
+    const state = this.nativeArtifactRead;
+    if (state.after !== null) {
+      const paths = db.query<{ path: string }, [string, number]>(
+        "SELECT path FROM registry_native_host_paths WHERE path>? ORDER BY path LIMIT ?").all(state.after, NATIVE_ARTIFACT_BATCH);
+      for (const { path } of paths) state.index.add(path);
+      state.after = paths.length < NATIVE_ARTIFACT_BATCH ? null : paths.at(-1)!.path;
+    }
+    const first = db.query<{ seq: number }, []>(
+      "SELECT COALESCE(MIN(seq),0) AS seq FROM registry_native_host_path_changes").get()!.seq;
+    if (first > state.sequence + 1) throw new Error("native caller artifact journal no longer covers the lookup");
+    const changes = db.query<{ seq: number; path: string; present: number }, [number, number]>(`
+      SELECT c.seq,c.path,EXISTS(SELECT 1 FROM registry_native_host_paths p WHERE p.path=c.path) AS present
+      FROM registry_native_host_path_changes c WHERE seq>? ORDER BY seq LIMIT ?`).all(state.sequence, NATIVE_ARTIFACT_BATCH);
+    for (const { seq, path, present } of changes) {
+      if (present) state.index.add(path);
+      else state.index.delete(path);
+      state.sequence = seq;
+    }
+    const current = state.index.refresh(NATIVE_ARTIFACT_BATCH) || state.index.refresh(NATIVE_ARTIFACT_BATCH);
+    return state.after === null && changes.length < NATIVE_ARTIFACT_BATCH && current;
+  }
+
+  /** Preparation is shared by native calls and yields between fixed-size
+      batches. The synchronous selector always checks new changes itself. */
+  async prepareNativeCallerArtifacts(signal?: AbortSignal, { waitUntilReady = false } = {}): Promise<void> {
+    if (process.platform !== "linux" || this.closed) return;
+    const deadline = waitUntilReady ? Infinity : performance.now() + 5_000;
+    let restarted = false;
+    // Each slice advances the shared index synchronously. Between slices the
+    // caller keeps its own deadline and can withdraw without ending other work.
+    while (!this.closed && performance.now() < deadline) {
+      signal?.throwIfAborted();
+      try {
+        if (performanceSpans.sync("registry.prepare.slice", () => this.withCallerRead(() => this.advanceNativeArtifacts()))) return;
+      } catch {
+        this.resetNativeArtifacts();
+        if (restarted) {
+          if (waitUntilReady) console.warn("[registry] native caller artifact preparation unavailable");
+          return;
+        }
+        restarted = true;
+      }
+      await yieldToRuntime(signal);
+    }
+    signal?.throwIfAborted();
+  }
+
+  /** A native Claude generation is engine-qualified. Seek the recorded and
+      canonical spellings, including structured reservations without a PID. */
+  mcpNativeCallerSnapshot(sessionId: string, configuredRootId: string | null) {
+    return this.readMcpCallerSnapshot(configuredRootId, () => {
+      const claims = this.db.query<{ conversation_id: string }, [string]>(
+        "SELECT conversation_id FROM registry_generation_identities WHERE entry_key=? LIMIT 2",
+      ).all(sessionKeyId({ engine: "claude", sessionId }));
+      const snapshot: McpCallerRegistryRows = { conversations: {}, entries: {} };
+      if (claims.length > 1) snapshot.nativeGenerationAmbiguous = true;
+      if (claims.length !== 1) return snapshot;
+      const id = claims[0]!.conversation_id;
+      const value = this.readMcpCallerRow("conversations", id);
+      if (!value) return snapshot;
+      snapshot.conversations = this.normalizePartial({ version: 2, entries: {}, receipts: {}, conversations: { [id]: value } }).conversations;
+
+      const artifact = snapshot.conversations[id]?.generations.find(row => row.id === sessionId)?.path;
+      if (!artifact) return snapshot;
+      let canonical: string;
+      try { canonical = fs.realpathSync(artifact); }
+      catch {
+        snapshot.nativeHostsIncomplete = true;
+        return snapshot;
+      }
+      try {
+        if (!this.advanceNativeArtifacts()) {
+          snapshot.nativeHostsIncomplete = true;
+          return snapshot;
+        }
+      } catch {
+        this.resetNativeArtifacts();
+        snapshot.nativeHostsIncomplete = true;
+        return snapshot;
+      }
+      const aliases = this.nativeArtifactRead!.index.aliases(canonical);
+      if (aliases && aliases.size > MCP_CALLER_CANDIDATE_LIMIT) {
+        snapshot.nativeHostsLookupLimitExceeded = true;
+        return snapshot;
+      }
+      const spellings = new Set([artifact, canonical, ...(aliases ?? [])]);
+      const useV2NativeHostIndex = this.meta("native_caller_artifacts_revision") === NATIVE_CALLER_ARTIFACTS_REVISION;
+      const activeIndex = useV2NativeHostIndex ? nativeCallerHostIndex : nativeCallerHostV1Index;
+      const activePredicate = useV2NativeHostIndex ? nativeCallerHost : nativeCallerHostV1;
+      // registry_rows retains the current version of every archived entry.
+      const hosts = this.db.query<{ row_key: string; value_json: string }, [string, number]>(`
+        SELECT row_key,value_json FROM json_each(?) AS alias
+        CROSS JOIN registry_rows INDEXED BY ${activeIndex}
+        WHERE ${activePredicate} AND ${nativeCallerHostPath}=alias.value
+        LIMIT ?`).all(JSON.stringify([...spellings]), MCP_CALLER_CANDIDATE_LIMIT + 1);
+      this.onRowPayloadRead?.("entries", hosts.length);
+      if (hosts.length > MCP_CALLER_CANDIDATE_LIMIT) {
+        snapshot.nativeHostsLookupLimitExceeded = true;
+        return snapshot;
+      }
+      const entries = Object.fromEntries(hosts.map(row => [row.row_key, this.parseRow("entries", row.row_key, row.value_json, true)]));
+      snapshot.entries = this.normalizePartial({ version: 2, receipts: {}, entries }).entries;
+      snapshot.nativeArtifact = canonical;
+      return snapshot;
+    });
+  }
+
+  private readMcpCallerRow(collection: "conversations" | "entries", key: string) {
+    const row = this.db.query<{ value_json: string }, [string, string]>(
+      "SELECT value_json FROM registry_rows WHERE collection=? AND row_key=?").get(collection, key);
+    this.onRowPayloadRead?.(collection, row ? 1 : 0);
+    return row ? this.parseRow(collection, key, row.value_json, true) : null;
+  }
+
+  private readMcpCallerSnapshot(configuredRootId: string | null, select: () => McpCallerRegistryRows | null): {
+    snapshot: McpCallerRegistryRows | null; rootConversationId: string | null;
+  } {
+    return this.withCallerRead(() => {
+      const snapshot = select();
+      const configured = snapshot && configuredRootId
+        && this.db.query("SELECT 1 FROM registry_rows WHERE collection='conversations' AND row_key=?").get(configuredRootId);
+      const rootConversationId = !snapshot ? null : configured ? configuredRootId : this.db.query<{ conversation_id: string }, []>(
         "SELECT conversation_id FROM registry_caller_roots ORDER BY updated_at DESC,row_order DESC LIMIT 1").get()?.conversation_id ?? null;
-      this.db.exec("COMMIT");
       return { snapshot, rootConversationId };
+    });
+  }
+
+  private withCallerRead<T>(read: () => T): T {
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
+    try {
+      const value = read();
+      if (ownsTransaction) this.db.exec("COMMIT");
+      return value;
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* already closed */ }
       throw error;
     }
+  }
+
+  /** Project inputs for busy conversations, in registry order. */
+  busyAccountCarriers(): CarrierSource[] {
+    // A legacy registry has only registry_rows. The archive view excludes cold
+    // mappings even if their retained payload still describes a busy turn.
+    const source = this.recordsSource === "registry_records" ? "registry_hot_rows" : "registry_rows";
+    const rows = this.db.query<{
+      engine: CarrierSource["engine"]; accountId: string; path: string;
+      ownershipProject: string | null; ownershipSource: string | null; project: string | null; cwd: string | null;
+    }, []>(`SELECT ${carrierSelect} FROM ${source} WHERE ${busyCarrierRows}
+        AND ${carrierColumns.engine} IN ('claude','codex') AND ${carrierColumns.accountId} IS NOT NULL
+      ORDER BY row_order`).all();
+    return rows.filter(row => row.accountId).map(row => ({
+      engine: row.engine,
+      busy: true,
+      path: row.path,
+      accountId: row.accountId,
+      ownership: normalizeProjectOwnership({ project: row.ownershipProject, source: row.ownershipSource }),
+      launchProfile: { project: row.project, cwd: row.cwd },
+    }));
   }
 
   /** Indexed keys only, including cold history. Payload reads are bounded by
       the caller's page, and a quiet pass reads no receipt payloads. */
   failedLaunchRepairKeys(limit: number, legacy: boolean): string[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 256) throw new RangeError("invalid failure repair page size");
-    return performanceSpans.sync("registry.keyed", () => this.db.query<{ row_key: string }, [number]>(
+    return measureRegistryRead("registry.keyed", () => this.db.query<{ row_key: string }, [number]>(
       failedLaunchRepairQuery(legacy)).all(limit).map(row => row.row_key));
   }
 
@@ -1928,6 +2483,7 @@ export class SqliteAgentRegistryStore {
       this.preserveIssuedSnapshots();
     } finally {
       this.closed = true;
+      this.resetNativeArtifacts();
       this.writerSnapshotCache = null;
       this.writerSnapshotStarted = false;
       try { this.preparedReader?.close(); }
@@ -1959,6 +2515,7 @@ export class SqliteAgentRegistryStore {
   }
 
   private onDatabaseReopened(db: BunDatabase, previousDb?: BunDatabase): void {
+    this.resetNativeArtifacts();
     if (previousDb) {
       this.snapshotReadDatabase = previousDb;
       try { this.preserveIssuedSnapshots(); }
@@ -1996,8 +2553,12 @@ export class SqliteAgentRegistryStore {
     this.recordsSource = db.query("SELECT 1 FROM sqlite_master WHERE name='registry_records'").get() ? "registry_records" : "registry_rows";
     this.changesReady = Boolean(db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
     this.endingQueueReady = undefined;
+    this.antigravityStatesTableReady = undefined;
     this.grantJournalReady = Boolean(db.query(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_grant_changes'",
+    ).get());
+    this.pendingDeliveryOwnerOriginIndexReady = Boolean(db.query(
+      "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'registry_pending_delivery_owner_origin'",
     ).get());
     this.generationIdentitiesReady = this.generationIdentitiesInstalled(db);
   }
@@ -2055,8 +2616,8 @@ export class SqliteAgentRegistryStore {
   private loadSnapshot(useRowCache: boolean): StampedSnapshot {
     this.onSnapshotLoad?.();
     // A full read before a mutation borrows the admitted writer transaction.
-    const ownsTransaction = !this.writerHeld;
-    if (ownsTransaction) this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       if (this.changesReady) this.refreshColdKeys();
       const hot = useRowCache && this.coldKeys.size > 0;
@@ -2091,15 +2652,15 @@ export class SqliteAgentRegistryStore {
 
   readOnlySnapshot(): SqliteRegistrySnapshot {
     if (this.preparedReader && !this.writerHeld) return this.preparedReader.readOnlySnapshot();
-    return withViewerOperation("registry.read", () => performanceSpans.sync("registry.snapshot", () => this.readOnlySnapshotMeasured()));
+    return measureRegistryRead("registry.snapshot", () => this.readOnlySnapshotMeasured(), true);
   }
 
   /** Filesystem retention needs current owner evidence, never historical
    * delivery bodies or the complete immutable registry graph. Normalize one
    * stored row at a time and keep only the fields its existing guard reads. */
   worktreeProtectionSnapshot(): WorktreeProtection {
-    const admitted = this.writerHeld;
-    if (!admitted) this.db.exec("BEGIN");
+    const admitted = this.db.inTransaction;
+    if (!admitted) beginRegistryTransaction(this.db);
     try {
       const result: WorktreeProtection = { entries: {}, conversations: {}, heldDeliveries: {} };
       for (const collection of ["entries", "conversations", "heldDeliveries"] as const) {
@@ -2153,12 +2714,16 @@ export class SqliteAgentRegistryStore {
 
   private prepareReadOnlySnapshotWork(signal?: AbortSignal): Promise<SqliteRegistrySnapshot> {
     if (signal?.aborted) return Promise.reject(signal.reason);
-    if (this.preparedReader) {
-      const cached = this.preparedReader.readOnlyCache;
+    const reader = this.preparedReader;
+    if (reader?.readOnlyCache) {
+      // The stamp query can reopen the database and clear the cached view.
+      // A replacement can have the same counters, so take the cache afterward.
+      const stamp = reader.storeStamp();
+      const cached = reader.readOnlyCache;
       /* A warm archive/write invalidation must enter the cooperative reader
          preparation below. Calling readOnlySnapshot here drains its header and
          projection generators synchronously on the serving loop. */
-      if (cached && cached.stamp === this.preparedReader.storeStamp()) {
+      if (cached?.stamp === stamp) {
         return Promise.resolve(cached);
       }
       /* A few journalled commits are replayed on the published reader, the
@@ -2168,7 +2733,7 @@ export class SqliteAgentRegistryStore {
          view a caller still held. */
       if (cached) {
         let replayed: StampedSnapshot | null = null;
-        try { replayed = this.preparedReader.replayBoundedJournal(); }
+        try { replayed = reader.replayBoundedJournal(); }
         catch (error) {
           // The cooperative preparation below takes over; the class of the
           // refusal is logged so a replay that always fails is visible.
@@ -2191,15 +2756,16 @@ export class SqliteAgentRegistryStore {
     if (!this.readOnlyCache || !cold || !this.changesReady || this.writerHeld) return null;
     /* One read transaction decides and replays: a commit landing between the
        two would otherwise be replayed without having been judged. */
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const replayed = this.journalIsBounded(cold.coldIds)
-        ? withViewerOperation("registry.read", () => performanceSpans.sync("registry.snapshot", () => finishSteps(this.refreshSnapshotSteps(true))))
+        ? measureRegistryRead("registry.snapshot", () => finishSteps(this.refreshSnapshotSteps(true)), true)
         : null;
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return replayed;
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* Transaction already closed. */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* Transaction already closed. */ }
       throw error;
     }
   }
@@ -2271,7 +2837,7 @@ export class SqliteAgentRegistryStore {
         if (this.closed) throw new Error("registry closed during preparation");
         for (let attempt = 0; attempt < 3; attempt++) {
           const identity = databaseFileIdentity(this.filename);
-          reader.db.exec("BEGIN");
+          beginRegistryTransaction(reader.db);
           const steps = (function* () {
             // Copy immutable projections inside the same bounded, cancellable
             // slices as the loader. Each builder prunes its own map. A peer
@@ -2524,6 +3090,18 @@ export class SqliteAgentRegistryStore {
     finishSteps(this.refreshColdKeySteps());
   }
 
+  /** Cooperative iterators cannot share Bun's cached query statement with a
+      nested reader while suspended. Each owns and finalizes its statement. */
+  private stepStatement<Row, Bindings extends SQLQueryBindings[]>(sql: string): { iterate: (...bindings: Bindings) => IterableIterator<Row> } {
+    const db = this.db;
+    return { *iterate(...bindings) {
+      const statement = db.prepare<Row, SQLQueryBindings[]>(sql);
+      const rows = statement.iterate(...bindings);
+      try { yield* rows; }
+      finally { try { rows.return?.(); } finally { statement.finalize(); } }
+    } };
+  }
+
   private *refreshColdKeySteps(): Generator<void, void> {
     const stamp = this.storeStamp();
     if (stamp === this.coldKeysStamp) return;
@@ -2535,7 +3113,7 @@ export class SqliteAgentRegistryStore {
     const first = this.coldKeysChangeId
       ? this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq : 0;
     if (this.coldKeysChangeId && first > 0 && first <= this.coldKeysChangeId + 1 && changeId >= this.coldKeysChangeId) {
-      const changed = this.db.query<{ collection: string; row_key: string; cold: number }, [number]>(
+      const changed = this.stepStatement<{ collection: string; row_key: string; cold: number }, [number]>(
         `SELECT j.collection,j.row_key,EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection=j.collection AND c.row_key=j.row_key) AS cold
           FROM registry_changes j WHERE j.seq>? ORDER BY j.seq`).iterate(this.coldKeysChangeId);
       try {
@@ -2552,7 +3130,7 @@ export class SqliteAgentRegistryStore {
       } finally { changed.return?.(); }
     } else {
       this.coldKeys = new Set();
-      for (const row of yield* headerRowSteps(this.db.query<{ collection: string; row_key: string }, []>(
+      for (const row of yield* headerRowSteps(this.stepStatement<{ collection: string; row_key: string }, []>(
         "SELECT collection,row_key FROM registry_cold").iterate())) this.coldKeys.add(grantDecisionKey(row.collection,row.row_key));
       for (const [collection,rows] of this.rowCache) {
         for (const key of rows.keys()) {
@@ -2714,7 +3292,7 @@ export class SqliteAgentRegistryStore {
   private *orderedKeysSteps(collection: RowCollection): Generator<void, string[]> {
     let order = this.collectionOrders.get(collection);
     if (!order) {
-      const rows = yield* headerRowSteps(this.db.query<{ row_key: string; row_order: number }, [string]>(
+      const rows = yield* headerRowSteps(this.stepStatement<{ row_key: string; row_order: number }, [string]>(
         "SELECT row_key,row_order FROM registry_rows WHERE collection=? ORDER BY row_order").iterate(collection));
       const keys: string[] = [], orders = new Map<string, number>();
       for (const row of rows) {
@@ -2856,15 +3434,14 @@ export class SqliteAgentRegistryStore {
       }
     } catch (error) {
       try { refresh.return(undefined as never); } catch { /* Preserve the refusal. */ }
-      try { this.db.exec("ROLLBACK"); } catch { /* Transaction already closed. */ }
       throw error;
     }
     if (next.value) return next.value;
 
     // A trimmed journal or replaced view needs a complete, validated reload.
     // Keep that recovery path cooperative too.
-    const ownsTransaction = !this.writerHeld;
-    if (ownsTransaction) this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     const reload = (function* (store: SqliteAgentRegistryStore) {
       yield* store.refreshColdKeySteps();
       const hot = yield* store.loadHotSteps();
@@ -2872,8 +3449,8 @@ export class SqliteAgentRegistryStore {
       store.snapshotChangeId = store.changeId();
       return result;
     })(this);
-    next = reload.next();
     try {
+      next = reload.next();
       while (!next.done) {
         signal?.throwIfAborted();
         const started = performance.now();
@@ -2895,8 +3472,8 @@ export class SqliteAgentRegistryStore {
   private *refreshSnapshotSteps(admitted = false): Generator<void, StampedSnapshot | null> {
     const previous = this.readOnlyCache;
     if (!previous || !this.changesReady) return null;
-    const ownsTransaction = !this.writerHeld && !admitted;
-    if (ownsTransaction) this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction && !admitted;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
       if (first > this.snapshotChangeId + 1 || this.changeId() < this.snapshotChangeId
@@ -2904,7 +3481,7 @@ export class SqliteAgentRegistryStore {
         if (ownsTransaction) this.db.exec("COMMIT");
         return null;
       }
-      const changeRows = this.db.query<{ collection: string; row_key: string }, [number]>(
+      const changeRows = this.stepStatement<{ collection: string; row_key: string }, [number]>(
         "SELECT collection,row_key FROM registry_changes WHERE seq>? ORDER BY seq").iterate(this.snapshotChangeId);
       const changes: Array<{ collection: string; row_key: string }> = [];
       const seenChanges = new Set<string>();
@@ -2986,7 +3563,7 @@ export class SqliteAgentRegistryStore {
         if (kind === "heldDeliveries") {
           const previousDelivery = file.heldDeliveries[key];
           if (previousDelivery) affectedOwners.add(previousDelivery.command.operationId);
-          const owners = this.db.query<{ row_key: string }, [string]>(
+          const owners = this.stepStatement<{ row_key: string }, [string]>(
             "SELECT row_key FROM registry_rows WHERE collection='deliveryOperationOwners' AND json_extract(value_json,'$.deliveryId')=?").iterate(key);
           try {
             for (;;) {
@@ -3155,9 +3732,8 @@ export class SqliteAgentRegistryStore {
       this.snapshotChangeId = this.changeId();
       if (ownsTransaction) this.db.exec("COMMIT");
       return remembered;
-    } catch (error) {
-      if (ownsTransaction) { try { this.db.exec("ROLLBACK"); } catch { /* closed */ } }
-      throw error;
+    } finally {
+      if (ownsTransaction && this.db.inTransaction) this.db.exec("ROLLBACK");
     }
   }
 
@@ -3215,6 +3791,117 @@ export class SqliteAgentRegistryStore {
     return (file[collection] as Record<string, unknown>)[key];
   }
 
+  private spawnMarkerRow(collection: RowCollection, key: string): SpawnMarkerImage | null {
+    return this.db.query<SpawnMarkerImage, [string, string]>(
+      `SELECT value_json,row_order FROM ${this.recordsSource} WHERE collection=? AND row_key=?`,
+    ).get(collection, key);
+  }
+
+  spawnMarkerMatchesBackup({ key, launchId, backup }: SpawnMarkerRepair): boolean {
+    const before = this.spawnMarkerRow("entries", key);
+    const receipt = this.spawnMarkerRow("receipts", launchId);
+    return Boolean(before && receipt && before.value_json === backup.row("entries", key)
+      && receipt.value_json === backup.row("receipts", launchId));
+  }
+
+  private persistSpawnMarkerRepair(
+    file: DecidedRegistryFile, changes: RegistryChanges, revision: number, repair: SpawnMarkerRepair,
+  ): void {
+    if (this.meta(spawnMarkerJournalKey(repair.launchId))) throw new Error("a retained spawn marker settlement already owns this launch");
+    if (changes.order.size) throw new Error("spawn marker settlement cannot reorder registry collections");
+    const journal: SpawnMarkerJournal = {
+      backup: repair.backup.name, backupRevision: repair.backup.revision, revision: revision - 1, rows: [], meta: [],
+    };
+    for (const [collection, rows] of changes.rows) {
+      for (const key of rows.keys()) {
+        const before = this.spawnMarkerRow(collection, key);
+        if ((before?.value_json ?? null) !== repair.backup.row(collection, key)) throw new SpawnMarkerBackupChangedError();
+        journal.rows.push({ collection, key, before, after: null });
+      }
+    }
+    for (const key of changes.meta) journal.meta.push({ key, before: this.meta(key), after: null });
+    this.persistChanges(file, changes, revision);
+    for (const row of journal.rows) row.after = this.spawnMarkerRow(row.collection, row.key);
+    for (const row of journal.meta) row.after = this.meta(row.key);
+    // The registry and its before-images share the SQLite commit and backup.
+    // An interrupted writer cannot leave either half visible by itself.
+    this.setMeta(spawnMarkerJournalKey(repair.launchId), JSON.stringify(journal));
+  }
+
+  restoreSettledSpawnMarkers(launchId: string): "restored" | "missing-journal" | "changed-since-settlement" {
+    if (!this.writerHeld) throw new Error("spawn marker restore needs an admitted writer");
+    const key = spawnMarkerJournalKey(launchId);
+    const raw = this.meta(key);
+    if (!raw) return "missing-journal";
+    const journal = JSON.parse(raw) as SpawnMarkerJournal;
+    if (journal.rows.some(row => !isDeepStrictEqual(this.spawnMarkerRow(row.collection, row.key), row.after))
+      || journal.meta.some(row => this.meta(row.key) !== row.after)) return "changed-since-settlement";
+    for (const row of journal.rows) {
+      if (row.before) this.upsertRow(row.collection, row.key, row.before.value_json, row.before.row_order);
+      else this.deleteRow(row.collection, row.key);
+    }
+    for (const row of journal.meta) {
+      if (row.key === "conversationRevision" && row.before && row.after) {
+        const before = JSON.parse(row.before) as Record<string, number>;
+        const after = JSON.parse(row.after) as Record<string, number>;
+        for (const [engine, revision] of Object.entries(after)) if (revision !== before[engine]) after[engine] = revision + 1;
+        this.setMeta(row.key, JSON.stringify(after));
+      } else if (row.key === "engineRouting" && row.before && row.after) {
+        const before = JSON.parse(row.before) as Record<string, { revision: number }>;
+        const after = JSON.parse(row.after) as Record<string, { revision: number }>;
+        for (const engine of Object.keys(after)) if (after[engine]?.revision !== before[engine]?.revision) after[engine]!.revision += 1;
+        this.setMeta(row.key, JSON.stringify(after));
+      } else if (row.before === null) this.db.query("DELETE FROM registry_meta WHERE key=?").run(row.key);
+      else this.setMeta(row.key, row.before);
+    }
+    this.db.query("DELETE FROM registry_meta WHERE key=?").run(key);
+    const revision = Number(this.meta("revision") ?? 0) + 1;
+    this.setMeta("revision", String(revision));
+    this.drainEndingChanges();
+    this.db.exec("COMMIT");
+    this.writerHeld = false;
+    this.onDatabaseReopened(this.db);
+    this.rememberRevision(revision);
+    this.onCreditGuardChange?.();
+    return "restored";
+  }
+
+  startupFallbackSweep(journal: string | null): StartupFallbackSweep | null {
+    if (!this.changesReady) return null;
+    const registry = databaseFileIdentity(this.filename);
+    return this.db.transaction(() => {
+      const previous = this.meta(STARTUP_FALLBACK_WATERMARK);
+      let after = 0;
+      if (previous && journal) {
+        try {
+          const saved = JSON.parse(previous) as { journal?: string; archiveId?: number } | null;
+          if (saved?.journal === journal && Number.isSafeInteger(saved.archiveId) && saved.archiveId! >= 0) after = saved.archiveId!;
+        } catch { /* An unrecognized checkpoint requires a complete sweep. */ }
+      }
+      const archiveId = this.db.query<{ id: number }, []>("SELECT COALESCE(MAX(id),0) AS id FROM registry_archive").get()!.id;
+      const keys = this.db.query<{ row_key: string }, [number, number]>(`
+        SELECT c.row_key FROM registry_archive a CROSS JOIN registry_cold c
+        WHERE a.id > ? AND a.id <= ? AND a.collection='entries'
+          AND c.collection=a.collection AND c.row_key=a.row_key AND c.archive_id=a.id
+          AND json_extract(a.value_json,'$.structuredHost.kind') IN ('codex-app-server','claude-broker','copilot-acp','antigravity-acp')
+        ORDER BY a.id`,
+      ).all(after, archiveId).map(row => row.row_key);
+      return { registry, journal, previous, archiveId, keys };
+    })();
+  }
+
+  finishStartupFallbackSweep(sweep: StartupFallbackSweep): boolean {
+    if (!this.writerHeld) throw new Error("startup fallback watermark needs an admitted writer");
+    if (!sweep.journal || databaseFileIdentity(this.filename) !== sweep.registry
+      || this.meta(STARTUP_FALLBACK_WATERMARK) !== sweep.previous) return false;
+    const value = JSON.stringify({ journal: sweep.journal, archiveId: sweep.archiveId });
+    if (value === sweep.previous) return true;
+    this.setMeta(STARTUP_FALLBACK_WATERMARK, value);
+    this.db.exec("COMMIT");
+    this.writerHeld = false;
+    return true;
+  }
+
   /* 250 rows per pass keeps the write lock short: a 1,000-row pass held it for
      about 160 ms on an idle machine and 0.8 s on a loaded one, and every
      writer waits that long synchronously (#2761). */
@@ -3228,7 +3915,7 @@ export class SqliteAgentRegistryStore {
     const preselected = held ? undefined : archiveCandidates(this.db,limit);
     if (preselected && !preselected.length) return 0;
     this.writerHeld = false;
-    if (!held) this.db.exec("BEGIN IMMEDIATE");
+    if (!held) beginRegistryTransaction(this.db, true);
     try {
       const moved = archiveInactiveRegistryRows(this.db,limit,preselected);
       if (moved) {
@@ -3345,7 +4032,7 @@ export class SqliteAgentRegistryStore {
       this.coldGrantForgets += 1;
       return changeId;
     }
-    const changes = this.db.query<{ collection: RowCollection; row_key: string }, [number]>(
+    const changes = this.stepStatement<{ collection: RowCollection; row_key: string }, [number]>(
       "SELECT collection,row_key FROM registry_changes WHERE seq>? ORDER BY seq").iterate(previous.changeId);
     const invalidate = function* (store: SqliteAgentRegistryStore, dependency: string): Generator<void> {
       for (const id of store.coldGrantTargets.get(dependency) ?? []) {
@@ -3361,7 +4048,7 @@ export class SqliteAgentRegistryStore {
         const { collection,row_key: key } = next.value;
         yield* invalidate(this,authorityDependency("row",grantDecisionKey(collection,key)));
         if (collection === "conversations") {
-          const identities = this.db.query<{ entry_key: string; artifact_path: string | null }, [string]>(
+          const identities = this.stepStatement<{ entry_key: string; artifact_path: string | null }, [string]>(
             `SELECT json_extract(r.value_json,'$.engine')||':'||json_extract(g.value,'$.id') AS entry_key,
               json_extract(g.value,'$.path') AS artifact_path FROM ${this.recordsSource} r,json_each(r.value_json,'$.generations') g
               WHERE r.collection='conversations' AND r.row_key=?`).iterate(key);
@@ -3720,7 +4407,7 @@ export class SqliteAgentRegistryStore {
          owner keys; with neither named by the journal they stand. */
       if (!delta.ownersChanged && !touched.has("heldDeliveries")) keptOwners = prior.syntheticOwners;
     } else if (!cache && this.changesReady) {
-      const readHeaders = yield* headerRowSteps(this.db.query<ColdHeader, []>(
+      const readHeaders = yield* headerRowSteps(this.stepStatement<ColdHeader, []>(
         "SELECT c.collection,c.row_key,c.archive_id,a.row_order FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id").iterate());
       headers = yield* orderedHeaderSteps(readHeaders, (a, b) => a.row_order - b.row_order);
     }
@@ -3744,7 +4431,7 @@ export class SqliteAgentRegistryStore {
     const archivedDeliveries = keptOwners ? undefined : grouped.get("heldDeliveries");
     if (archivedDeliveries) {
       const storedOwners = new Set<string>();
-      for (const row of yield* headerRowSteps(this.db.query<{ row_key: string }, []>(
+      for (const row of yield* headerRowSteps(this.stepStatement<{ row_key: string }, []>(
         "SELECT row_key FROM registry_rows WHERE collection='deliveryOperationOwners'").iterate())) storedOwners.add(row.row_key);
       for (const header of archivedDeliveries) {
         const operationId = this.coldRowProjections.get(header.archive_id)?.operationId;
@@ -3983,45 +4670,64 @@ export class SqliteAgentRegistryStore {
   private bindReadOnlyReaders(file: RegistryFile, snapshot: StampedSnapshot, coldGrantChangeId: number,
     identity: string | null, coldIds: Map<RowCollection, Map<string, number>>, coldKeys: Map<RowCollection, Set<string>>): StampedSnapshot {
     let startupSelectionChecked = coldGrantChangeId;
-    let startupSelectionRefused = false;
     if (this.changesReady) startupSelectionReaders.set(file, () => {
-      if (startupSelectionRefused) return false;
-      if (databaseFileIdentity(this.filename) !== identity) return false;
+      if (databaseFileIdentity(this.filename) !== identity) return null;
       try {
-        const current = this.db.transaction(() => {
+        return this.db.transaction(() => {
           const last = this.changeId();
           const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
-          if (last < startupSelectionChecked || first > startupSelectionChecked + 1) return false;
-          if (last === startupSelectionChecked) return true;
+          if (last < startupSelectionChecked || first > startupSelectionChecked + 1) return null;
+          if (last === startupSelectionChecked) return { identity, revision: last, changes: [] };
           // Progress can rewrite one host many times while a view prepares.
           // Bound the rows to revalidate after deduplicating their journal events.
-          const changes = this.db.query<{ collection: RowCollection; row_key: string }, [number]>(
-            "SELECT DISTINCT collection,row_key FROM registry_changes WHERE seq>? LIMIT 129").all(startupSelectionChecked);
-          if (changes.length > 128) return false;
+          const changes = this.db.query<{ collection: StartupSelectionChange["collection"]; row_key: string }, [number, ...string[]]>(
+            `SELECT DISTINCT collection,row_key FROM registry_changes WHERE seq>? AND collection IN
+              (${startupSelectionCollections.map(() => "?").join(",")}) LIMIT 129`).all(startupSelectionChecked, ...startupSelectionCollections);
+          if (changes.length > 128) return null;
           const read = this.db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM ${this.recordsSource} WHERE collection=? AND row_key=?`);
+          const hotStructuredEntry = this.db.query(`SELECT 1 FROM registry_hot_rows
+            WHERE collection='entries' AND row_key=? AND json_extract(value_json,'$.structuredHost.kind')
+              IN ('codex-app-server','claude-broker','copilot-acp','antigravity-acp')`);
+          const pinnedColdEntries = coldKeys.get("entries");
+          const changed: StartupSelectionChange[] = [];
           for (const change of changes) {
-            if (!startupSelectionCollections.has(change.collection)) continue;
+            if (change.collection === "entries" && pinnedColdEntries?.has(change.row_key)
+              && hotStructuredEntry.get(change.row_key)) {
+              changed.push({ collection: change.collection, key: change.row_key });
+              continue;
+            }
             const raw = read.get(change.collection,change.row_key);
             this.onRowPayloadRead?.(change.collection,raw ? 1 : 0);
             const current = raw ? parseSqliteJson(raw.value_json,this.db) : undefined;
             const previous = (file[change.collection] as Record<string, unknown>)[change.row_key];
-            if (startupSelectionFacts(change.collection,current) !== startupSelectionFacts(change.collection,previous)) return false;
+            if (startupSelectionFacts(change.collection,current) !== startupSelectionFacts(change.collection,previous)) {
+              changed.push({ collection: change.collection, key: change.row_key });
+            }
           }
-          startupSelectionChecked = last;
-          return true;
+          if (changed.length === 0) startupSelectionChecked = last;
+          return { identity, revision: last, changes: changed };
         })();
-        if (!current) startupSelectionRefused = true;
-        return current;
-      } catch { startupSelectionRefused = true; return false; } // Unreadable evidence never validates a selection.
+      } catch { return null; } // Unreadable evidence never validates a selection.
     });
     const pinnedReceipts = this.changesReady ? this.pinnedRowKeys(file, "receipts", coldGrantChangeId, identity, this.collectionOrders.get("receipts")?.orders) : null;
     const pinnedDeliveries = this.changesReady ? this.pinnedRowKeys(file, "heldDeliveries", coldGrantChangeId, identity) : null;
     const pinnedOwners = this.changesReady ? this.pinnedRowKeys(file, "deliveryOperationOwners", coldGrantChangeId, identity) : null;
-    const pinnedEntries = this.changesReady ? this.pinnedRowKeys(file, "entries", coldGrantChangeId, identity) : null;
+    const pinnedEntries = this.changesReady ? this.pinnedRowKeys(file, "entries", coldGrantChangeId, identity, this.collectionOrders.get("entries")?.orders) : null;
     pageReaders.set(file, (collection, after, limit, filter) => {
       if (this.changeId() !== coldGrantChangeId || databaseFileIdentity(this.filename) !== identity)
         throw new DatabaseReplacedError("registry page needs a fresh snapshot");
       return this.rowKeyPage(collection, after, limit, filter);
+    });
+    latestAgentStateJournalReaders.set(file, (subject) => {
+      if (this.changeId() !== coldGrantChangeId || databaseFileIdentity(this.filename) !== identity)
+        throw new DatabaseReplacedError("registry journal lookup needs a fresh snapshot");
+      const row = this.db.query<{ value_json: string }, [string]>(`
+        SELECT value_json FROM registry_rows
+        WHERE collection='agentStateJournal' AND json_extract(value_json,'$.subject')=?
+        ORDER BY json_extract(value_json,'$.at') DESC, row_order DESC
+        LIMIT 1
+      `).get(subject);
+      return row ? parseSqliteJson(row.value_json, this.db) as AgentStateJournal : undefined;
     });
     boundedReaders.set(file, (collection, filters, limit) => {
       const holds = (row: unknown) => filters.every(filter => {
@@ -4051,13 +4757,15 @@ export class SqliteAgentRegistryStore {
       for (const { row_key: key } of changed) if (rows[key] && holds(rows[key])) keys.push(key);
       return keys.slice(0, limit);
     });
-    keyedReaders.set(file,(collection,field,value) => {
+    keyedReaders.set(file,(collection,field,value,hotOnly) => {
       const values = typeof value === "string" ? [value] : value;
       if (!values.length) return [];
-      const indexed = () => this.matchingRowKeys(collection, field, values);
+      const indexed = () => this.matchingRowKeys(collection, field, values, false, hotOnly);
       if (collection === "entries" && (field === "structuredHost.kind" || field === "artifactPath")) {
         const holds = (entry: AgentRegistryEntry) => values.includes(field === "artifactPath" ? entry.artifactPath : entry.structuredHost?.kind ?? "");
-        return pinnedEntries ? pinnedEntries(indexed, holds) : Object.keys(file.entries).filter(key => holds(file.entries[key]!));
+        const cold = hotOnly ? coldKeys.get("entries") : undefined;
+        return pinnedEntries ? pinnedEntries(indexed, holds, cold)
+          : Object.keys(file.entries).filter(key => !cold?.has(key) && holds(file.entries[key]!));
       }
       if (collection === "receipts") {
         const holds = (receipt: RegistryFile["receipts"][string]) => values.includes(lookupValue(receipt, field) as string);
@@ -4067,7 +4775,7 @@ export class SqliteAgentRegistryStore {
         const holds = (delivery: RegistryFile["heldDeliveries"][string]) => values.includes(lookupValue(delivery, field) as string);
         return pinnedDeliveries ? pinnedDeliveries(indexed, holds) : Object.keys(file.heldDeliveries).filter(key => holds(file.heldDeliveries[key]!));
       }
-      if (collection === "deliveryOperationOwners" && (field === "conversationId" || field === "clientMessageId")) {
+      if (collection === "deliveryOperationOwners" && (field === "conversationId" || field === "clientMessageId" || field === "custodyState")) {
         const holds = (owner: RegistryFile["deliveryOperationOwners"][string]) => values.includes(lookupValue(owner, field) as string);
         return pinnedOwners ? pinnedOwners(indexed, holds) : Object.keys(file.deliveryOperationOwners).filter(key => holds(file.deliveryOperationOwners[key]!));
       }
@@ -4132,6 +4840,56 @@ export class SqliteAgentRegistryStore {
       }
       const receipts = [...receiptKeys].map(key => file.receipts[key]).filter((row): row is RegistryFile["receipts"][string] => !!row);
       return { entries, receipts };
+    });
+    retiredHostReaders.set(file, (limit, cutBoundary) => {
+      // Only rows written during this cut can be its retired-host receipts.
+      // The partial hot/archive indexes keep old payloads out of candidate
+      // discovery before the bound is applied.
+      const cutoff = cutBoundary && Number.isFinite(Date.parse(cutBoundary)) ? cutBoundary : "";
+      const assertCurrent = () => {
+        if (this.changeId() !== coldGrantChangeId)
+          throw new DatabaseReplacedError("registry view changed during retired-host selection; request a fresh snapshot");
+      };
+      const standaloneMerger = (entry: string) => `EXISTS (
+        SELECT 1 FROM registry_generation_identities i
+          JOIN registry_records conversation ON conversation.collection='conversations' AND conversation.row_key=i.conversation_id
+          WHERE i.entry_key=${entry}.row_key AND i.path=json_extract(${entry}.value_json,'$.artifactPath')
+            AND (json_extract(conversation.value_json,'$.agentRole')='merger'
+              OR (json_extract(conversation.value_json,'$.agentRole') IS NULL AND EXISTS (
+                SELECT 1 FROM registry_records receipt
+                  WHERE receipt.collection='receipts'
+                    AND json_extract(receipt.value_json,'$.conversationId')=i.conversation_id
+                    AND json_extract(receipt.value_json,'$.state')='completed'
+                    AND json_extract(receipt.value_json,'$.agentRole')='merger'
+                    AND json_extract(receipt.value_json,'$.key.engine')=json_extract(${entry}.value_json,'$.key.engine')
+                    AND json_extract(receipt.value_json,'$.key.sessionId')=json_extract(${entry}.value_json,'$.key.sessionId')
+                    AND json_extract(receipt.value_json,'$.artifactPath')=i.path
+              )))
+            AND NOT EXISTS (
+              SELECT 1 FROM registry_records membership,json_each(membership.value_json) member
+                WHERE membership.collection='memberships' AND membership.row_key=i.conversation_id
+                  AND json_extract(member.value,'$.kind') IN ('pipeline','flow')
+            )
+      )`;
+      assertCurrent();
+      const rows = this.db.query<{ row_key: string }, [string, string, number]>(
+        `SELECT row_key FROM (
+          SELECT r.row_key,r.row_order FROM registry_rows r INDEXED BY registry_hot_retired_host_cut
+            WHERE r.collection='entries'
+              AND NOT EXISTS (SELECT 1 FROM registry_cold hot WHERE hot.collection='entries' AND hot.row_key=r.row_key)
+              AND json_extract(r.value_json,'$.hostExitProcess.pid') IS NOT NULL
+              AND json_extract(r.value_json,'$.updatedAt')>=?
+              AND ${standaloneMerger("r")}
+          UNION ALL
+          SELECT c.row_key,a.row_order FROM registry_archive a INDEXED BY registry_archive_retired_host_cut
+            JOIN registry_cold c ON a.id=c.archive_id AND a.collection=c.collection AND a.row_key=c.row_key
+            WHERE c.collection='entries' AND a.collection='entries'
+              AND json_extract(a.value_json,'$.hostExitProcess.pid') IS NOT NULL
+              AND json_extract(a.value_json,'$.updatedAt')>=?
+              AND ${standaloneMerger("a")}
+        ) ORDER BY row_order DESC LIMIT ?`).all(cutoff, cutoff, limit + 1);
+      assertCurrent();
+      return { keys: rows.slice(0, limit).map(row => row.row_key), overflow: rows.length > limit, assertCurrent };
     });
     const ids = coldIds;
     const keys = coldKeys;
@@ -4208,7 +4966,7 @@ export class SqliteAgentRegistryStore {
     let seen = changeId;
     let changed: Set<string> | null = new Set();
     let order: ReadonlyMap<string, number> | undefined = originalOrder;
-    return (indexed: () => string[], holds: (row: Row) => boolean): string[] => {
+    return (indexed: () => string[], holds: (row: Row) => boolean, exclude?: ReadonlySet<string>): string[] => {
       /* The index is read before the journal: whatever commits between the
          two reads is in the journal, and is then answered from the view. */
       const current = indexed();
@@ -4221,10 +4979,11 @@ export class SqliteAgentRegistryStore {
         seen = last;
       }
       const rows = file[collection] as Record<string, Row>;
-      if (!changed) return (mergedKeysOf(rows) ?? Object.keys(rows)).filter(key => holds(rows[key]!));
+      if (!changed) return (mergedKeysOf(rows) ?? Object.keys(rows)).filter(key => !exclude?.has(key) && holds(rows[key]!));
       if (!changed.size) return current;
       const owners = current.filter(key => !changed!.has(key));
       for (const key of changed) {
+        if (exclude?.has(key)) continue;
         const row = rows[key];
         if (row && holds(row)) owners.push(key);
       }
@@ -4284,8 +5043,8 @@ export class SqliteAgentRegistryStore {
   }
 
   /** The callback must finish inside the transaction; no lazy object escapes. */
-  private matchingRowKeys(collection: RowCollection, field: LookupField, values: readonly string[]): string[] {
-    if (field === "custodyState" || field === "migration.custodyState") return this.matchingRowKeysBounded(collection, [{ field, value: values }], Number.MAX_SAFE_INTEGER);
+  private matchingRowKeys(collection: RowCollection, field: LookupField, values: readonly string[], exactSpawnAttempt = false, hotOnly = false): string[] {
+    if (field === "custodyState" || field === "migration.custodyState") return this.matchingRowKeysBounded(collection, [{ field, value: values }], Number.MAX_SAFE_INTEGER, true);
     const distinct = [...new Set(values)];
     if (!distinct.length) return [];
     const jsonPath = LOOKUP_PATHS[field];
@@ -4295,28 +5054,81 @@ export class SqliteAgentRegistryStore {
     // With multiple IN bindings plus ORDER BY, SQLite can prefer collection
     // order and inspect every retained payload. Each distinct value gets one
     // field-index seek; merge only its matches in the original collection order.
-    const rows = distinct.flatMap(value => mapped
-      ? this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM registry_hot_rows
-          WHERE collection='${collection}' AND json_extract(value_json,'${jsonPath}') IN (?)
-          UNION ALL SELECT a.row_key,a.row_order FROM registry_archive a CROSS JOIN registry_cold c
-          WHERE a.collection='${collection}' AND json_extract(a.value_json,'${jsonPath}') IN (?)
-            AND c.collection=a.collection AND c.row_key=a.row_key AND c.archive_id=a.id
-          ORDER BY row_order`).all(value, value)
-      : this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM ${this.recordsSource}
-          WHERE collection=? AND json_extract(value_json,'${jsonPath}') IN (?) ORDER BY row_order`)
-        .all(collection, value));
+    const rows = distinct.flatMap(value => {
+      // SQLite 3.39 compares JSON text keys only through their first NUL.
+      // Decode the complete JSON string on the RHS so the expression index
+      // still gets a scalar equality seek; filter its candidates by the
+      // original JavaScript value below.
+      const parameter = exactSpawnAttempt ? "json_extract(?, '$')" : "?";
+      const bindings = [exactSpawnAttempt ? JSON.stringify(value) : value];
+      const match = (column: string) => {
+        const extracted = `json_extract(${column},'${jsonPath}')`;
+        return exactSpawnAttempt ? `${extracted} = ${parameter}` : `${extracted} IN (${parameter})`;
+      };
+      if (hotOnly && this.changesReady) {
+        return this.db.query<{ row_key: string; row_order: number }, string[]>(
+          `SELECT row_key,row_order FROM registry_hot_rows WHERE collection='${collection}' AND ${match("value_json")} ORDER BY row_order`,
+        ).all(...bindings);
+      }
+      return mapped
+        ? this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM registry_hot_rows
+            WHERE collection='${collection}' AND ${match("value_json")}
+            UNION ALL SELECT a.row_key,a.row_order FROM registry_archive a CROSS JOIN registry_cold c
+            WHERE a.collection='${collection}' AND ${match("a.value_json")}
+              AND c.collection=a.collection AND c.row_key=a.row_key AND c.archive_id=a.id
+            ORDER BY row_order`).all(...bindings, ...bindings)
+        : this.db.query<{ row_key: string; row_order: number }, string[]>(`SELECT row_key,row_order FROM ${this.recordsSource}
+            WHERE collection=? AND ${match("value_json")} ORDER BY row_order`).all(collection, ...bindings);
+    });
     return rows.sort((a, b) => a.row_order - b.row_order).map(row => row.row_key);
+  }
+
+  /** Read inside the caller's keyed transaction. The targeted liveness verdict
+      asks whether any delivery still differs from delivered, including legacy
+      rows whose missing state normalizes to held. One actual row witnesses it. */
+  firstUndeliveredKey(conversationIds: readonly string[]): string | undefined {
+    const statement = this.db.query<{ row_key: string }, [string]>(`SELECT row_key FROM ${this.recordsSource}
+      WHERE collection='heldDeliveries' AND json_extract(value_json,'$.conversationId')=?
+        AND json_extract(value_json,'$.state') IS NOT 'delivered' LIMIT 1`);
+    for (const id of conversationIds) {
+      const hit = statement.get(id);
+      if (hit) return hit.row_key;
+    }
+    return undefined;
   }
 
   /** A bounded indexed selection used where even counting retained rows must
    * stop at the caller's refusal threshold. It reads row keys only. */
-  private matchingRowKeysBounded(collection: RowCollection, filters: readonly RegistryKeyFilter[], limit: number): string[] {
+  private matchingRowKeysBounded(collection: RowCollection, filters: readonly RegistryKeyFilter[], limit: number, unbounded = false): string[] {
     if (limit <= 0) return [];
     const clauses = filters.map(({ field, value }) => {
       const values = typeof value === "string" ? [value] : [...new Set(value)];
       return { field, values };
     }).filter(filter => filter.values.length);
     if (filters.length !== clauses.length) return [];
+    // The partial indexes cover pending custody and return keys only.
+    // Express the null predicate directly so SQLite can use the partial index.
+    if (collection === "deliveryOperationOwners"
+      && clauses.some(({ field, values }) => field === "custodyState" && values.length === 1 && values[0] === "pending")) {
+      // Only use the conversationId-leading partial index for unbounded pending scans:
+      // bounded queries need the row_order index for early stop without a temp B-tree sort.
+      if (unbounded && clauses.length === 1 && this.pendingDeliveryOwnerOriginIndexReady) {
+        return this.db.query<{ row_key: string }, [number]>(`SELECT row_key FROM registry_rows INDEXED BY registry_pending_delivery_owner_origin
+          WHERE collection='deliveryOperationOwners' AND json_extract(value_json,'$.terminalState') IS NULL
+          ORDER BY row_order LIMIT ?`).all(limit).map(row => row.row_key);
+      }
+      if (clauses.length === 2) {
+        const identity = clauses.find(({ field }) => field === "conversationId" || field === "runtimeConversationId");
+        if (identity) {
+          const index = identity.field === "conversationId" ? "registry_pending_delivery_owner_origin" : "registry_pending_delivery_owner_runtime";
+          const placeholders = identity.values.map(() => "?").join(",");
+          return this.db.query<{ row_key: string }, (string | number)[]>(`SELECT row_key FROM registry_rows INDEXED BY ${index}
+            WHERE collection='deliveryOperationOwners' AND json_extract(value_json,'$.terminalState') IS NULL
+              AND ${lookupSql(identity.field)} IN (${placeholders})
+            ORDER BY row_order LIMIT ?`).all(...identity.values, limit).map(row => row.row_key);
+        }
+      }
+    }
     const messageAndRecipient = clauses.some(filter => filter.field === "clientMessageId")
       && clauses.some(filter => filter.field === "conversationId");
     const indexedBy = messageAndRecipient
@@ -4358,8 +5170,8 @@ export class SqliteAgentRegistryStore {
   /** Diagnostic attribution needs one client id, including a conserving
       owner fallback, without materializing retained receipt bodies. */
   spawnDiagnosticAttempt(launchId?: string, conversationId?: string): string | undefined {
-    const ownsTransaction = !this.writerHeld;
-    if (ownsTransaction) this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const mapped = this.changesReady && this.db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='registry_records'")
         .get()?.sql.includes("a.collection=c.collection AND a.row_key=c.row_key");
@@ -4486,7 +5298,7 @@ export class SqliteAgentRegistryStore {
     }> }; offset: number; totalGenerations: number; currentEvidence: unknown; nextOffset: number; complete: boolean;
   } {
     const ownsTransaction = !this.db.inTransaction;
-    if (ownsTransaction) this.db.exec("BEGIN");
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const result: ReturnType<SqliteAgentRegistryStore["terminationPage"]>["snapshot"] = { entries: {}, conversations: {} };
       const metadata = this.db.query<{ engine: "codex" | "claude" | "copilot"; total: number; version: string }, [string]>(
@@ -4554,7 +5366,7 @@ export class SqliteAgentRegistryStore {
     // A mutation consumes writer admission before calling its guard. Nested
     // readers borrow the open transaction; only its owner may end it.
     const ownsTransaction = !this.db.inTransaction;
-    if (ownsTransaction) this.db.exec("BEGIN");
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const skipColdKeyInitialization = options.skipColdKeyInitialization === true;
       if (this.changesReady && !skipColdKeyInitialization) this.refreshColdKeys();
@@ -4571,7 +5383,8 @@ export class SqliteAgentRegistryStore {
       component. Keep this projection out of the generic lazy reader: an MCP
       grant on a selected row otherwise triggers its whole-registry fallback. */
   conversationRetentionSnapshot(conversationId: string): Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> {
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       if (this.changesReady) this.refreshColdKeys();
       const result: Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> = {
@@ -4604,7 +5417,7 @@ export class SqliteAgentRegistryStore {
         const next = read("conversationAliases", canonical);
         if (typeof next !== "string") break;
         aliases[canonical] = next;
-        if (seen.has(canonical)) { this.db.exec("COMMIT"); return result; }
+        if (seen.has(canonical)) { if (ownsTransaction) this.db.exec("COMMIT"); return result; }
         seen.add(canonical);
         canonical = next;
       }
@@ -4634,10 +5447,10 @@ export class SqliteAgentRegistryStore {
         const receipt = read("receipts", key);
         if (receipt) receipts[key] = receipt;
       }
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return result;
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* closed */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* closed */ }
       throw error;
     }
   }
@@ -4645,7 +5458,8 @@ export class SqliteAgentRegistryStore {
   /** One transaction and keyed row reads for the at-most-bounded spawn paths in
       a Viewer snapshot. No collection enumeration or whole snapshot occurs. */
   snapshotSpawns(launchIds: readonly string[]): SnapshotSpawnProjection {
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       if (this.changesReady) this.refreshColdKeys();
       const readRow = (collection: RowCollection, key: string): unknown => {
@@ -4707,10 +5521,10 @@ export class SqliteAgentRegistryStore {
             : null,
         };
       }
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return projection;
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
       throw error;
     }
   }
@@ -4741,7 +5555,8 @@ export class SqliteAgentRegistryStore {
   pageSeatChildren(parentId: string, after: SeatChildrenAnchor | null, limit: number, keys?: readonly string[]): SeatChildrenPage {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 60) throw new Error("invalid child page limit");
     if (keys && keys.length > limit) throw new Error("child key budget exceeded");
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       if (this.changesReady) this.refreshColdKeys();
       const file = this.normalize({ version: 2, entries: {}, receipts: {} });
@@ -4803,7 +5618,7 @@ export class SqliteAgentRegistryStore {
           if (key) read("entries", sessionKeyId(key));
         }
       }
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       const last = rows.at(-1);
       return {
         file,
@@ -4814,7 +5629,7 @@ export class SqliteAgentRegistryStore {
         evidenceGap,
       };
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* No open transaction. */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* No open transaction. */ }
       throw error;
     }
   }
@@ -4822,7 +5637,8 @@ export class SqliteAgentRegistryStore {
   /** Advisory worker inventory. This reads indexed live hosts and their own
       lineage only; the general lazy registry reader inventories historical keys. */
   liveWorkerChildren(): { conversationId: string; parentConversationId: string; pipeline: boolean; deputy: boolean }[] {
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const rows = this.db.query<{ artifactPath: string }, []>(`
         SELECT json_extract(value_json, '$.artifactPath') AS artifactPath
@@ -4859,10 +5675,10 @@ export class SqliteAgentRegistryStore {
         this.onRowPayloadRead?.("memberships", stored ? 1 : 0);
         children.set(conversationId, { conversationId, parentConversationId: canonicalParent(edge.parent), pipeline: memberships.some(item => item.kind === "pipeline"), deputy: memberships.some(item => item.kind === "orchestrator") });
       }
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return [...children.values()];
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* already closed */ }
       throw error;
     }
   }
@@ -4888,7 +5704,7 @@ export class SqliteAgentRegistryStore {
     this.db.exec("PRAGMA busy_timeout=0");
     try { return stateLockAttempt("orchestrator.authority", () => {
       const ownsTransaction = !this.db.inTransaction;
-      if (ownsTransaction) this.db.exec("BEGIN");
+      if (ownsTransaction) beginRegistryTransaction(this.db);
       try {
         const canonical = this.workerConversationId(id);
         const row = this.db.query<{ superseded: string | null; generations: number | null; project: string | null }, [string]>(
@@ -4912,7 +5728,8 @@ export class SqliteAgentRegistryStore {
   }
 
   workerSeatContexts(ids: readonly string[]): Map<string, { conversationId: string; directories: string[] }> {
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const result = new Map<string, { conversationId: string; directories: string[] }>();
       for (const id of new Set(ids)) {
@@ -4922,17 +5739,17 @@ export class SqliteAgentRegistryStore {
         const generations = row?.generations ? parseSqliteJson(row.generations, this.db) as { launchProfile?: { cwd?: string } }[] : [];
         result.set(id, { conversationId, directories: generations.toReversed().flatMap(generation => generation.launchProfile?.cwd ? [generation.launchProfile.cwd] : []) });
       }
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return result;
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* already closed */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* already closed */ }
       throw error;
     }
   }
 
   seatTickConversation(id: string): SeatTickConversation | null {
     const ownsTransaction = !this.db.inTransaction;
-    if (ownsTransaction) this.db.exec("BEGIN");
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       if (this.changesReady) this.refreshColdKeys();
       const read = (collection: "conversationAliases" | "conversations" | "entries", key: string) => {
@@ -4987,7 +5804,8 @@ export class SqliteAgentRegistryStore {
     conversation: RegistryFile["conversations"][string] | null;
     entry: RegistryFile["entries"][string] | null;
   } {
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       const read = (collection: "conversations" | "entries", id: string): unknown => {
         const row = this.db.query<{ value_json: string | null }, [string, string]>(
@@ -5003,10 +5821,10 @@ export class SqliteAgentRegistryStore {
       const normalized = this.normalize({ version: 2, receipts: {},
         conversations: rawConversation === null ? {} : { [conversationId]: rawConversation },
         entries: rawEntry === null ? {} : { [key]: rawEntry } });
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return { conversation: normalized.conversations[conversationId] ?? null, entry: normalized.entries[key] ?? null };
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* No open transaction. */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* No open transaction. */ }
       throw error;
     }
   }
@@ -5034,7 +5852,8 @@ export class SqliteAgentRegistryStore {
       most one alias chain and one conversation row per title record; it never
       enumerates a registry collection. */
   snapshotTitleConversations(conversationIds: readonly string[]): SnapshotTitleConversationProjection {
-    this.db.exec("BEGIN");
+    const ownsTransaction = !this.db.inTransaction;
+    if (ownsTransaction) beginRegistryTransaction(this.db);
     try {
       if (this.changesReady) this.refreshColdKeys();
       const readRow = (collection: "conversationAliases" | "conversations", key: string): unknown => {
@@ -5086,10 +5905,10 @@ export class SqliteAgentRegistryStore {
           ...[...conversation.continuityPaths].reverse(),
         ])].slice(0, SNAPSHOT_TITLE_OWNED_PATH_LIMIT),
       }));
-      this.db.exec("COMMIT");
+      if (ownsTransaction) this.db.exec("COMMIT");
       return projection;
     } catch (error) {
-      try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+      try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
       throw error;
     }
   }
@@ -5126,7 +5945,8 @@ export class SqliteAgentRegistryStore {
       current = this.loadLazyInTransaction();
       result = operation(current.file);
       changes = current.changes();
-      const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0;
+      const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0
+        || changes.antigravityStates.size > 0;
       revision = changed ? current.revision + 1 : current.revision;
       if (changed) {
         stamps.before = this.storeStamp();
@@ -5135,13 +5955,14 @@ export class SqliteAgentRegistryStore {
       }
       this.db.exec("RELEASE registry_admitted_mutation");
     } catch (error) {
+      this.antigravityStatesTableReady = undefined;
       this.db.exec("ROLLBACK TO registry_admitted_mutation");
       this.db.exec("RELEASE registry_admitted_mutation");
       throw error;
     }
     if (stamps.after) {
       this.secureFiles();
-      this.updateCachesAfterCommit(current.file, changes, revision, stamps);
+      this.updateCachesAfterCommit(changes, revision, stamps);
       this.rememberRevision(revision);
     }
     const guardChanged = changes.meta.has("quotaObservations") || [...changes.rows.keys(), ...changes.order]
@@ -5154,7 +5975,10 @@ export class SqliteAgentRegistryStore {
     return { result, file: null, revision };
   }
 
-  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { operationName?: string; noWait?: boolean } = {}): SqliteRegistryMutation<T> {
+  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { operationName?: string; noWait?: boolean; spawnMarkerRepair?: SpawnMarkerRepair } = {}): SqliteRegistryMutation<T> {
+    if (options.spawnMarkerRepair && (!this.writerHeld || this.mutationBatch)) {
+      throw new Error("spawn marker settlement needs its own admitted writer");
+    }
     if (this.mutationBatch) return this.mutateBatchMember(operation, includeSnapshot);
     let operationName = options.operationName ?? operation.name;
     /* {@link withWriter} already opened the write transaction for this call. */
@@ -5165,7 +5989,7 @@ export class SqliteAgentRegistryStore {
       const waitStartedAt = performance.now();
       if (writerHeld) { /* the lock is held and the transaction is open */ }
       else if (pessimistic) this.beginMutationWrite(options.noWait);
-      else this.db.exec("BEGIN");
+      else beginRegistryTransaction(this.db);
       let current: LazyRegistrySnapshot;
       let changes: RegistryChanges;
       let result: T;
@@ -5183,7 +6007,8 @@ export class SqliteAgentRegistryStore {
       if (!pessimistic) this.beginMutationWrite(options.noWait);
       let revision: number;
       let stamps = { before: "", after: "" };
-      const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0;
+      const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0
+        || changes.antigravityStates.size > 0;
       try {
         if (!pessimistic) this.noteWriterWait(performance.now() - optimisticWaitStartedAt, operationName, options.noWait);
         if (!pessimistic && Number(this.meta("revision") ?? 0) !== current.revision) {
@@ -5211,11 +6036,13 @@ export class SqliteAgentRegistryStore {
         if (changed) {
           // Inside the write lock, so no other connection commits in between.
           const before = this.storeStamp();
-          this.persistChanges(current.file, changes, revision);
+          if (options.spawnMarkerRepair) this.persistSpawnMarkerRepair(current.file, changes, revision, options.spawnMarkerRepair);
+          else this.persistChanges(current.file, changes, revision);
           stamps = { before, after: this.storeStamp() };
         }
         this.db.exec("COMMIT");
       } catch (error) {
+        this.antigravityStatesTableReady = undefined;
         try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
         throw error;
       }
@@ -5228,7 +6055,7 @@ export class SqliteAgentRegistryStore {
            costs nothing measurable, and an account switch interleaves dozens
            of such commits with such readers on the Viewer's main thread
            (2026-10-07: every request stalled 3 to 6 s as a switch started). */
-        this.updateCachesAfterCommit(current.file, changes, revision, stamps);
+        this.updateCachesAfterCommit(changes, revision, stamps);
         this.rememberRevision(revision);
       }
       const guardChanged = changes.meta.has("quotaObservations") || [...changes.rows.keys(), ...changes.order]
@@ -5338,9 +6165,10 @@ export class SqliteAgentRegistryStore {
 
   /** One request for the write lock that never waits. */
   private tryBeginWrite(): boolean {
+    if (this.db.inTransaction) return false;
     this.db.exec("PRAGMA busy_timeout = 0");
     try {
-      this.db.exec("BEGIN IMMEDIATE");
+      beginRegistryTransaction(this.db, true);
       return true;
     } catch (error) {
       if (error instanceof Error && (error as { code?: string }).code === "SQLITE_BUSY") return false;
@@ -5353,7 +6181,7 @@ export class SqliteAgentRegistryStore {
   private beginMutationWrite(noWait = false): void {
     if (noWait) {
       this.db.exec("PRAGMA busy_timeout = 0");
-      try { this.db.exec("BEGIN IMMEDIATE"); }
+      try { beginRegistryTransaction(this.db, true); }
       finally { this.db.exec("PRAGMA busy_timeout = 5000"); }
       return;
     }
@@ -5365,7 +6193,7 @@ export class SqliteAgentRegistryStore {
     try {
       for (;;) {
         try {
-          this.db.exec("BEGIN IMMEDIATE");
+          beginRegistryTransaction(this.db, true);
           return;
         } catch (error) {
           if (!(error instanceof Error)
@@ -5386,7 +6214,7 @@ export class SqliteAgentRegistryStore {
        failing to compile. */
     const decided = this.decideAssembled(file);
     if (options.noWait) this.beginMutationWrite(true);
-    else this.db.exec("BEGIN IMMEDIATE");
+    else beginRegistryTransaction(this.db, true);
     try {
       const current = this.loadInTransaction();
       if (expectedRevision !== undefined && current.revision !== expectedRevision) {
@@ -5413,7 +6241,7 @@ export class SqliteAgentRegistryStore {
     initialSnapshot: SqliteRegistryStoreOptions["initialSnapshot"],
     verifyImport: SqliteRegistryStoreOptions["verifyImport"],
   ): void {
-    this.db.exec("BEGIN IMMEDIATE");
+    beginRegistryTransaction(this.db, true);
     try {
       const complete = this.meta("migration_complete");
       if (complete !== "1") {
@@ -5589,6 +6417,35 @@ export class SqliteAgentRegistryStore {
       }
       return [...keys].sort().slice(0, limit);
     });
+    latestAgentStateJournalReaders.set(file, (subject) => {
+      const dirty = dirtyRows.get("agentStateJournal");
+      let best: AgentStateJournal | undefined;
+      for (const key of dirty ?? []) {
+        const row = file.agentStateJournal[key];
+        if (row && row.subject === subject && isLaterJournalRowInWriteOrder(row, best)) best = row;
+      }
+      if (reorderedCollections.has("agentStateJournal")) {
+        for (const row of Object.values(file.agentStateJournal)) {
+          if (row.subject === subject && isLaterJournalRowInWriteOrder(row, best)) best = row;
+        }
+        return best;
+      }
+      const rows = this.db.query<{ row_key: string; value_json: string }, [string, number]>(`
+        SELECT row_key, value_json FROM registry_rows
+        WHERE collection='agentStateJournal' AND json_extract(value_json,'$.subject')=?
+        ORDER BY json_extract(value_json,'$.at') DESC, row_order DESC
+        LIMIT ?
+      `).all(subject, 1 + (dirty?.size ?? 0));
+      for (const candidate of rows) {
+        if (dirty?.has(candidate.row_key)) continue;
+        const parsed = parseSqliteJson(candidate.value_json, this.db) as AgentStateJournal;
+        // A dirty row written in the current transaction is newer in write order
+        // than any previously persisted SQLite row with the same `at`.
+        if (!best || parsed.at > best.at) best = parsed;
+        break;
+      }
+      return best;
+    });
     openDeliveryReaders.set(file, (conversationId, states, after, limit) => {
       const dirty = dirtyRows.get("heldDeliveries");
       const keys = new Set([...new Set(states)].flatMap(state => {
@@ -5621,13 +6478,36 @@ export class SqliteAgentRegistryStore {
       }
       return false;
     });
+    structuredProcessReaders.set(file, pids => {
+      // A writer may already have installed another process in this view.
+      // Refuse vacancy while entry changes have yet to reach the index.
+      if (dirtyRows.get("entries")?.size || reorderedCollections.has("entries")) return true;
+      const occupied = this.db.query<{ present: number }, [number, number]>(`
+        SELECT 1 AS present FROM registry_rows
+          WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.process.pid')=?
+        UNION ALL
+        SELECT 1 AS present FROM registry_rows
+          WHERE collection='entries' AND json_extract(value_json,'$.structuredHost.exitProcess.pid')=?
+            AND (json_extract(value_json,'$.structuredHost.scope.unit') IS NOT NULL
+              OR json_extract(value_json,'$.structuredHost.memory.unit') IS NOT NULL)
+        LIMIT 1`);
+      return pids.some(pid => occupied.get(pid, pid) !== null);
+    });
     boundedReaders.set(file, (collection, filters, limit) => this.matchingRowKeysBounded(collection, filters, limit));
     keyedReaders.set(file, (collection, field, value) => {
       const values = typeof value === "string" ? [value] : value;
       if (values.length === 0) return [];
       if (reorderedCollections.has(collection)) return Object.entries(file[collection])
         .filter(([, row]) => values.includes(lookupValue(row, field) as string)).map(([key]) => key);
-      const keys = new Set(this.matchingRowKeys(collection, field, values));
+      const exactSpawnAttempt = trackMutations && collection === "receipts" && field === "clientAttemptId";
+      const keys = new Set(this.matchingRowKeys(collection, field, values, exactSpawnAttempt));
+      if (exactSpawnAttempt) {
+        // The index supplies candidates. The stored receipt carries the full key.
+        for (const key of keys) {
+          const attempt = file.receipts[key]?.clientAttemptId;
+          if (typeof attempt !== "string" || !values.includes(attempt)) keys.delete(key);
+        }
+      }
       for (const key of dirtyRows.get(collection) ?? []) {
         const row = (file[collection] as Record<string, unknown>)[key];
         if (values.includes(lookupValue(row, field) as string)) keys.add(key); else keys.delete(key);
@@ -5932,22 +6812,97 @@ export class SqliteAgentRegistryStore {
         },
       });
     }
+    const antigravityLoaded = new Map<string, AgentProjection | undefined>();
+    const antigravityBaseline = new Map<string, string>();
+    const antigravityDirty = new Map<string, AgentProjection | null>();
+    const antigravityStatesHandle: AntigravityAgentStatesMutable = {
+      get: (subject: string) => {
+        if (antigravityDirty.has(subject)) return antigravityDirty.get(subject) ?? undefined;
+        if (antigravityLoaded.has(subject)) return antigravityLoaded.get(subject);
+        const valueJson = this.readAntigravityAgentStateBySubjectInTransaction(subject);
+        if (valueJson === null) {
+          antigravityLoaded.set(subject, undefined);
+          return undefined;
+        }
+        if (trackMutations) antigravityBaseline.set(subject, valueJson);
+        const parsed = parseSqliteJson(valueJson, this.db) as AgentProjection;
+        antigravityLoaded.set(subject, parsed);
+        return parsed;
+      },
+      page: (after: string, limit: number) => {
+        if (limit <= 0) return [];
+        const combined = new Map<string, AgentProjection>();
+        const storedRows = this.readAntigravityAgentStatesPageInTransaction(after, limit + antigravityDirty.size);
+        for (const [subject, valueJson] of storedRows) {
+          if (antigravityDirty.has(subject)) continue;
+          let parsed = antigravityLoaded.get(subject);
+          if (parsed === undefined && !antigravityLoaded.has(subject)) {
+            if (trackMutations) antigravityBaseline.set(subject, valueJson);
+            parsed = parseSqliteJson(valueJson, this.db) as AgentProjection;
+            antigravityLoaded.set(subject, parsed);
+          }
+          if (parsed) combined.set(subject, parsed);
+        }
+        for (const [subject, value] of antigravityDirty) {
+          if (value !== null && subject > after) combined.set(subject, value);
+        }
+        return [...combined.entries()]
+          .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+          .slice(0, limit);
+      },
+      set: (subject: string, projection: AgentProjection) => {
+        if (trackMutations && !antigravityBaseline.has(subject) && !antigravityLoaded.has(subject)) {
+          const existingJson = this.readAntigravityAgentStateBySubjectInTransaction(subject);
+          if (existingJson !== null) antigravityBaseline.set(subject, existingJson);
+        }
+        antigravityDirty.set(subject, projection);
+      },
+      delete: (subject: string) => {
+        if (trackMutations && !antigravityBaseline.has(subject) && !antigravityLoaded.has(subject)) {
+          const existingJson = this.readAntigravityAgentStateBySubjectInTransaction(subject);
+          if (existingJson !== null) antigravityBaseline.set(subject, existingJson);
+        }
+        antigravityDirty.set(subject, null);
+      },
+    };
+    Object.defineProperty(file, ANTIGRAVITY_AGENT_STATES_ACCESS, {
+      configurable: true,
+      enumerable: false,
+      value: antigravityStatesHandle,
+    });
     return {
       file,
       revision,
       changes: () => {
-        const changes: RegistryChanges = { rows: new Map(), meta: new Set(), order: new Set() };
+        const changes: RegistryChanges = { rows: new Map(), meta: new Set(), order: new Set(), antigravityStates: new Map() };
         for (const [collection, value] of loadedCollections) {
           const baseline = baselineCollections.get(collection)!;
           const current = value as Record<string, unknown>;
           const candidates = reorderedCollections.has(collection)
             ? new Set([...baseline.keys(), ...Object.keys(current)])
             : dirtyRows.get(collection)!;
-          const changed = new Set([...candidates].filter((key) => {
-            if (!Object.hasOwn(current, key)) return baseline.has(key);
+          const changed = new Map<string, string | null>();
+          for (const key of candidates) {
             const previous = baseline.get(key);
-            return previous === undefined || JSON.stringify(current[key]) !== previous;
-          }));
+            if (!Object.hasOwn(current, key)) {
+              if (baseline.has(key)) changed.set(key, null);
+              continue;
+            }
+            const row = current[key];
+            let json = JSON.stringify(collection === "entries" || collection === "conversations"
+              ? rowForStorage(collection, row)
+              : row);
+            if (json === previous) continue;
+            if (collection === "agentStateMetrics") {
+              json = JSON.stringify(agentStateMetricsForStorage(row as AgentStateMetricsRow));
+              // Keep the original payload when only the in-memory counter
+              // or the representation of a zero bucket changed.
+              if (json === previous || previous != null && json === JSON.stringify(agentStateMetricsForStorage(
+                parseSqliteJson(previous, this.db) as AgentStateMetricsRow,
+              ))) continue;
+            }
+            changed.set(key, json);
+          }
           if (changed.size > 0) changes.rows.set(collection, changed);
           if (reorderedCollections.has(collection)) {
             changes.order.add(collection);
@@ -5955,6 +6910,15 @@ export class SqliteAgentRegistryStore {
         }
         for (const [field, value] of loadedMeta) {
           if (!isDeepStrictEqual(baselineMeta.get(field), value)) changes.meta.add(field);
+        }
+        for (const [subject, value] of antigravityDirty) {
+          const previous = antigravityBaseline.get(subject);
+          if (value === null) {
+            if (previous !== undefined) changes.antigravityStates.set(subject, null);
+            continue;
+          }
+          const json = JSON.stringify(value);
+          if (json !== previous) changes.antigravityStates.set(subject, json);
         }
         return changes;
       },
@@ -5985,7 +6949,6 @@ export class SqliteAgentRegistryStore {
   }
 
   private updateCachesAfterCommit(
-    file: RegistryFile,
     changes: RegistryChanges,
     revision: number,
     stamps: { before: string; after: string },
@@ -5993,11 +6956,9 @@ export class SqliteAgentRegistryStore {
     // Both local and external writers use the same durable delta on the next
     // read. Never advance the snapshot cursor past an interleaved writer.
     this.refreshGrantDecisions(revision,stamps.after);
-    for (const [collection,keys] of changes.rows) {
+    for (const [collection, rows] of changes.rows) {
       const cache = this.rowCache.get(collection);
-      const rows = file[collection] as Record<string, unknown>;
-      for (const key of keys) {
-        const valueJson = Object.hasOwn(rows,key) ? JSON.stringify(rows[key]) : null;
+      for (const [key, valueJson] of rows) {
         this.localRows.delete(grantDecisionKey(collection,key));
         this.localRows.set(grantDecisionKey(collection,key),{ dataVersion: stamps.after.split(":")[0]!,valueJson });
         while (this.localRows.size > 128) this.localRows.delete(this.localRows.keys().next().value!);
@@ -6073,7 +7034,7 @@ export class SqliteAgentRegistryStore {
     if (!this.grantJournalReady) { this.grantDecisions = null; return; }
     const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq), 0) AS seq FROM registry_grant_changes").get()!.seq;
     if (first > previous.changeId + 1) { this.grantDecisions = null; return; }
-    const changed = this.db.query<{ seq: number; collection: RowCollection; row_key: string }, [number]>(
+    const changed = this.stepStatement<{ seq: number; collection: RowCollection; row_key: string }, [number]>(
       "SELECT seq, collection, row_key FROM registry_grant_changes WHERE seq > ? ORDER BY seq",
     ).iterate(previous.changeId);
     const rows = previous.rows;
@@ -6146,9 +7107,12 @@ export class SqliteAgentRegistryStore {
     if (this.changesReady) this.db.exec("DELETE FROM registry_cold");
     for (const collection of ROW_COLLECTIONS) {
       for (const [order, [key, value]] of Object.entries(file[collection]).entries()) {
-        this.upsertRow(collection, key, value, order);
+        this.upsertRow(collection, key, JSON.stringify(rowForStorage(collection, value)), order);
       }
     }
+    this.syncAntigravityJsonStatesInTransaction(
+      (file as RegistryFile & { [ANTIGRAVITY_JSON_STATES]?: Record<string, AgentProjection> })[ANTIGRAVITY_JSON_STATES],
+    );
     for (const field of META_FIELDS) this.setMeta(field, JSON.stringify(file[field]));
     this.setMeta("revision", String(revision));
   }
@@ -6165,10 +7129,13 @@ export class SqliteAgentRegistryStore {
           continue;
         }
         if (key in previous && isDeepStrictEqual(previous[key], next[key])) continue;
-        this.upsertRow(collection, key, next[key]);
+        this.upsertRow(collection, key, JSON.stringify(rowForStorage(collection, next[key])));
       }
       this.persistRowOrder(collection, Object.keys(next));
     }
+    this.syncAntigravityJsonStatesInTransaction(
+      (after as RegistryFile & { [ANTIGRAVITY_JSON_STATES]?: Record<string, AgentProjection> })[ANTIGRAVITY_JSON_STATES],
+    );
     for (const field of META_FIELDS) {
       if (isDeepStrictEqual(before[field], after[field])) continue;
       this.setMeta(field, JSON.stringify(after[field]));
@@ -6176,13 +7143,186 @@ export class SqliteAgentRegistryStore {
     this.setMeta("revision", String(revision));
   }
 
+  /** Reads all persisted Antigravity projections for JSON `dual-write` recovery
+   * when an older release rewrote `agent-registry.json` without top-level
+   * `antigravityAgentStates`. Not called on SQLite hot paths. */
+  readAllAntigravityAgentStates(): Record<string, AgentProjection> {
+    try {
+      if (!this.antigravityAgentStatesTableExists()) return {};
+      const rows = this.db.query<{ subject: string; value_json: string }, []>(
+        "SELECT subject, value_json FROM registry_antigravity_agent_states ORDER BY subject",
+      ).all();
+      const out: Record<string, AgentProjection> = {};
+      for (const row of rows) {
+        out[row.subject] = parseSqliteJson(row.value_json, this.db) as AgentProjection;
+      }
+      return out;
+    } catch {
+      this.antigravityStatesTableReady = undefined;
+      return {};
+    }
+  }
+
+  /** Idempotently converts historical Antigravity `entries` and `conversations`
+   * written with a string `accountId` into `{ accountId: null, antigravityAccountId }`
+   * so rollback to prior 3-engine releases (which index `quotaObservations[engine][accountId]`)
+   * never throws HTTP 500 even for conversations created before this change.
+   * Performs zero write locks when no legacy Antigravity rows exist. */
+  private migrateLegacyAntigravityAccountIds(): void {
+    const tables: Array<"registry_rows" | "registry_archive"> = this.changesReady
+      ? ["registry_rows", "registry_archive"]
+      : ["registry_rows"];
+    const findPending = (table: "registry_rows" | "registry_archive"): Array<{ collection: "entries" | "conversations"; row_key: string; nextJson: string }> => {
+      const candidates = this.db.query<{ collection: "entries" | "conversations"; row_key: string; value_json: string }, []>(`
+        SELECT collection, row_key, value_json FROM ${table}
+        WHERE (collection = 'entries' AND row_key LIKE 'antigravity:%')
+           OR (collection = 'conversations' AND value_json LIKE '%"antigravity"%')
+      `).all();
+      const updates: Array<{ collection: "entries" | "conversations"; row_key: string; nextJson: string }> = [];
+      for (const row of candidates) {
+        let parsed: unknown;
+        try { parsed = parseSqliteJson(row.value_json, this.db); } catch { continue; }
+        const converted = rowForStorage(row.collection, parsed);
+        if (converted === parsed) continue;
+        const nextJson = JSON.stringify(converted);
+        if (nextJson !== row.value_json) {
+          updates.push({ collection: row.collection, row_key: row.row_key, nextJson });
+        }
+      }
+      return updates;
+    };
+
+    try {
+      let anyPending = false;
+      for (const table of tables) {
+        if (findPending(table).length > 0) { anyPending = true; break; }
+      }
+      if (!anyPending) return;
+      beginRegistryTransaction(this.db, true);
+      try {
+        let updated = 0;
+        for (const table of tables) {
+          const pending = findPending(table);
+          if (pending.length === 0) continue;
+          const stmt = this.db.query(`UPDATE ${table} SET value_json = ? WHERE collection = ? AND row_key = ?`);
+          for (const item of pending) {
+            stmt.run(item.nextJson, item.collection, item.row_key);
+            this.rowCache.get(item.collection)?.delete(item.row_key);
+            this.localRows.delete(grantDecisionKey(item.collection, item.row_key));
+            updated += 1;
+          }
+        }
+        this.db.exec("COMMIT");
+        if (updated > 0) this.readOnlyCache = null;
+      } catch (error) {
+        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+        throw error;
+      }
+    } catch (error) {
+      const code = (error as { code?: string } | null)?.code;
+      if (code === "SQLITE_READONLY" || code === "SQLITE_READONLY_DBMOVED") return;
+      throw error;
+    }
+  }
+
+  private antigravityAgentStatesTableExists(): boolean {
+    if (this.antigravityStatesTableReady === true) return true;
+    const exists = this.db.query<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'registry_antigravity_agent_states'",
+    ).get();
+    if (!exists) return false;
+    this.antigravityStatesTableReady = true;
+    return true;
+  }
+
+  private ensureAntigravityAgentStatesTable(): void {
+    if (this.antigravityStatesTableReady) return;
+    this.db.exec(`CREATE TABLE IF NOT EXISTS registry_antigravity_agent_states (
+      subject TEXT PRIMARY KEY,
+      value_json TEXT NOT NULL
+    )`);
+    this.antigravityStatesTableReady = true;
+  }
+
+  private syncAntigravityJsonStatesInTransaction(states: Record<string, AgentProjection> | undefined): void {
+    // Only synchronize when the caller explicitly carries a JSON projection map;
+    // `undefined` means a file read without `antigravityAgentStates` (e.g. after
+    // an older release rewrote `agent-registry.json`), which must never wipe the
+    // preserved SQLite projection rows.
+    if (states === undefined) return;
+    const entries = Object.entries(states);
+    if (entries.length === 0) {
+      if (this.antigravityAgentStatesTableExists()) {
+        this.db.exec("DELETE FROM registry_antigravity_agent_states");
+      }
+      return;
+    }
+    this.ensureAntigravityAgentStatesTable();
+    const existing = new Set(
+      this.db.query<{ subject: string }, []>("SELECT subject FROM registry_antigravity_agent_states").all().map((row) => row.subject),
+    );
+    const keep = new Set<string>();
+    for (const [subject, projection] of entries) {
+      keep.add(subject);
+      this.db.query(`
+        INSERT INTO registry_antigravity_agent_states(subject, value_json) VALUES (?, ?)
+        ON CONFLICT(subject) DO UPDATE SET value_json = excluded.value_json
+      `).run(subject, JSON.stringify(projection));
+    }
+    for (const subject of existing) {
+      if (!keep.has(subject)) {
+        this.db.query("DELETE FROM registry_antigravity_agent_states WHERE subject = ?").run(subject);
+      }
+    }
+  }
+
+  private readAntigravityAgentStateBySubjectInTransaction(subject: string): string | null {
+    try {
+      if (!this.antigravityAgentStatesTableExists()) return null;
+      return this.db.query<{ value_json: string }, [string]>(
+        "SELECT value_json FROM registry_antigravity_agent_states WHERE subject = ? LIMIT 1",
+      ).get(subject)?.value_json ?? null;
+    } catch (error) {
+      this.antigravityStatesTableReady = undefined;
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("no such table")) return null;
+      throw error;
+    }
+  }
+
+  private readAntigravityAgentStatesPageInTransaction(after: string, limit: number): Array<[string, string]> {
+    try {
+      if (limit <= 0 || !this.antigravityAgentStatesTableExists()) return [];
+      return this.db.query<{ subject: string; value_json: string }, [string, number]>(
+        "SELECT subject, value_json FROM registry_antigravity_agent_states WHERE subject > ? ORDER BY subject LIMIT ?",
+      ).all(after, limit).map((row) => [row.subject, row.value_json]);
+    } catch (error) {
+      this.antigravityStatesTableReady = undefined;
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("no such table")) return [];
+      throw error;
+    }
+  }
+
   private persistChanges(file: DecidedRegistryFile, changes: RegistryChanges, revision: number): void {
     this.assertDecided(file);
-    for (const [collection, keys] of changes.rows) {
-      const rows = file[collection] as Record<string, unknown>;
-      for (const key of keys) {
-        if (key in rows) this.upsertRow(collection, key, rows[key]);
-        else this.deleteRow(collection,key);
+    for (const [collection, rows] of changes.rows) {
+      for (const [key, valueJson] of rows) {
+        if (valueJson === null) this.deleteRow(collection, key);
+        else this.upsertRow(collection, key, valueJson);
+      }
+    }
+    if (changes.antigravityStates.size > 0) {
+      this.ensureAntigravityAgentStatesTable();
+      for (const [subject, valueJson] of changes.antigravityStates) {
+        if (valueJson === null) {
+          this.db.query("DELETE FROM registry_antigravity_agent_states WHERE subject = ?").run(subject);
+        } else {
+          this.db.query(`
+            INSERT INTO registry_antigravity_agent_states(subject, value_json) VALUES (?, ?)
+            ON CONFLICT(subject) DO UPDATE SET value_json = excluded.value_json
+          `).run(subject, valueJson);
+        }
       }
     }
     for (const collection of changes.order) this.persistRowOrder(collection, Object.keys(file[collection]));
@@ -6208,12 +7348,12 @@ export class SqliteAgentRegistryStore {
     if (collection === "conversations") this.db.query("DELETE FROM registry_conversation_paths WHERE conversation_id=?").run(key);
   }
 
-  private upsertRow(collection: RowCollection, key: string, value: unknown, order?: number): void {
+  private upsertRow(collection: RowCollection, key: string, valueJson: string, order?: number): void {
     if (order !== undefined) {
       this.db.query(`
         INSERT INTO registry_rows(collection, row_key, value_json, row_order) VALUES (?, ?, ?, ?)
         ON CONFLICT(collection, row_key) DO UPDATE SET value_json = excluded.value_json, row_order = excluded.row_order
-      `).run(collection, key, JSON.stringify(value), order);
+      `).run(collection, key, valueJson, order);
       return;
     }
     /* The next position comes from the two order indexes. Aggregating over
@@ -6226,7 +7366,7 @@ export class SqliteAgentRegistryStore {
       SELECT ?1, ?2, ?3, COALESCE((SELECT row_order FROM ${this.recordsSource} WHERE collection=?4 AND row_key=?5),
         MAX(COALESCE((SELECT MAX(row_order) FROM registry_rows WHERE collection=?6),-1), COALESCE(${archived},-1)) + 1) WHERE true
       ON CONFLICT(collection, row_key) DO UPDATE SET value_json = excluded.value_json
-    `).run(collection, key, JSON.stringify(value), collection, key, collection);
+    `).run(collection, key, valueJson, collection, key, collection);
   }
 
   private persistRowOrder(collection: RowCollection, keys: string[]): void {

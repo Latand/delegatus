@@ -5,7 +5,7 @@ import {
   relayRouteError,
 } from "@/lib/externalRelay/routeGuard";
 import { relayCall } from "@/lib/externalRelay/client";
-import { readRelayStore, updateRelayStore } from "@/lib/externalRelay/store";
+import { readRelayStore, updateRelayStoreAsync } from "@/lib/externalRelay/store";
 import { answeredElsewhereResponse } from "@/lib/externalRelay/targetOwnership";
 import { ExternalRelayError } from "@/lib/externalRelay/errors";
 import { targetSchema, type ExternalRelayTarget } from "@/lib/externalRelay/protocol";
@@ -68,7 +68,7 @@ export async function PATCH(req: NextRequest, context: Context) {
       // A competing pairing is a target state, so adoption can continue for its peers.
       remote = { target_id: targetId, name: target.name, answered_by: "service" as const, answered_elsewhere: true, fallback: target.fallback };
     }
-    const updated = updateRelayStore((store) => ({
+    const updated = await updateRelayStoreAsync((store) => ({
       ...store,
       relays: store.relays.map((entry) =>
         entry.id === id
@@ -93,6 +93,9 @@ export async function PATCH(req: NextRequest, context: Context) {
       if (latest) remote = { ...remote, name: latest.name, fallback: latest.fallback };
     }
     refreshExternalRelayPollers(id);
+    // A move the owner confirmed was refused: say so. Unconfirmed writes (adoption, clone setup) keep the 200.
+    if (refusedElsewhere && patch.confirmTakeover === true)
+      return NextResponse.json({ error: "answered_elsewhere" }, { status: 409 });
     return NextResponse.json({ target: remote });
   } catch (error) {
     return relayRouteError(error);

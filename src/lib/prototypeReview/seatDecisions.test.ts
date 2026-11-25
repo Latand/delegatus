@@ -13,7 +13,7 @@ import { seatDecisionNotices } from "./read";
 import { prototypeReviewNotices } from "./model";
 import { publishPrototype, roundDirectory } from "./store";
 import { clearSeatRoundsForTests, insertSeatRound, loadSeatRounds } from "./seatRounds";
-import { prototypeWorld, type PrototypeWorld } from "./world";
+import { prototypeWorld, prototypeProjectReceiptScope, PROTOTYPE_RECEIPT_SCOPE_HEADER, type PrototypeWorld } from "./world";
 import type { OperatorDecisionsRead, PrototypeDecision, PrototypeReviewRead, PrototypeReviewRound, PublishPrototypeInput } from "./types";
 import { questions } from "./questionnaire.fixture";
 import { criticLane } from "./criticGate.fixture";
@@ -87,8 +87,8 @@ test("a Telegram owner reservation answers the asking seat's taskless round", as
 test("only the project's designated seat may ask without a task, and only with questions", async () => {
   const notSeat = { ...seat, orchestrator: () => "conversation_other" };
   const refused = await publishAs(notSeat, { clientRequestId: "worker", title: "Deploy now?", questions: one });
-  expect(refused.status).toBe(400);
-  expect((await refused.json()).error).toContain("only a project's orchestrator may ask without one");
+  expect(refused.status).toBe(403);
+  expect(await refused.json()).toMatchObject({ code: "workspace_forbidden", check: "prototype-seat-authority" });
   const operatorCall = await publishAs(operator, { clientRequestId: "operator", title: "Deploy now?", questions: one });
   expect(operatorCall.status).toBe(400);
   const root = await fs.mkdtemp(path.join(process.env.HOME!, "seat-source-")); roots.push(root);
@@ -160,7 +160,21 @@ test("the seat reads its own questions and the receipt scope names them", async 
   const read = await (await reviewReadPOST(request("/api/prototype-reviews/read", {}), seat)).json() as PrototypeReviewRead;
   expect(read).toMatchObject({ taskId: null, waitingReviewId: seatId });
   expect(read.rounds.map(r => r.id)).toEqual([seatId]);
-  expect(await (await reviewScopePOST(request("/api/prototype-reviews/scope", { mode: "publish" }), seat)).json()).toEqual({ conversationId: "conversation_seat", taskId: null });
+  expect(await (await reviewScopePOST(request("/api/prototype-reviews/scope", { mode: "publish" }), seat)).json()).toEqual({ conversationId: "conversation_seat", taskId: null, project: "project-a" });
+});
+
+test("a taskless publication key cannot replay the same conversation's former project", async () => {
+  const input = { clientRequestId: "seat-project-change", title: "Deploy now?", questions: one };
+  const first = await publishAs(seat, input);
+  expect(first.status).toBe(200);
+  const original = loadSeatRounds();
+  const moved = { ...seat, caller: () => ({ conversationId: "conversation_seat", project: "project-b" }) };
+  const replay = await publishAs(moved, input);
+  expect(replay.status).toBe(409);
+  expect(await replay.json()).toEqual({ error: "publication key already belongs to another project" });
+  expect(loadSeatRounds()).toEqual(original);
+  expect((await publishAs(seat, input)).status).toBe(200);
+  expect(loadSeatRounds()).toEqual(original);
 });
 
 test("an existing seat round's pictures are served without a task and survive another publication's cleanup", async () => {
@@ -414,4 +428,31 @@ test("review id prefixes resolve, keep full values and refuse unknown or ambiguo
   expect(resolvePrototypeReviewId([{ id: a }], "pr_ffffffff")).toBeNull();
   expect(() => resolvePrototypeReviewId([{ id: a }, { id: b }], a.slice(0, 11))).toThrow("ambiguous");
   expect(resolvePrototypeReviewId([{ id: a }, { id: b }], b.slice(0, 15))).toBe(b);
+});
+
+test.each(["caller", "project", "task", "malformed"])("HTTP form receipt scope refuses changed %s proof and admits matching proof", async changed => {
+  const good = encodeURIComponent(prototypeProjectReceiptScope("conversation_seat", null, "project-a"));
+  const bad = changed === "malformed" ? "%" : encodeURIComponent(prototypeProjectReceiptScope(
+    changed === "caller" ? "conversation_foreign" : "conversation_seat",
+    changed === "task" ? "task-prototype" : null,
+    changed === "project" ? "project-b" : "project-a"));
+  const original = loadSeatRounds();
+  for (const mode of ["read", "publish"] as const) {
+    const handler = mode === "read" ? reviewReadPOST : publishPOST;
+    const body = mode === "read" ? {} : { clientRequestId: "scope-bound-form", title: "Choose", questions: one };
+    const refused = request(`/api/prototype-reviews/${mode}`, body);
+    refused.headers.set(PROTOTYPE_RECEIPT_SCOPE_HEADER, bad);
+    const response = await handler(refused, seat);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: "prototype receipt identity changed", code: "workspace_forbidden", check: "prototype-receipt-scope" });
+    expect(loadSeatRounds()).toEqual(original);
+  }
+  for (const mode of ["read", "publish"] as const) {
+    const handler = mode === "read" ? reviewReadPOST : publishPOST;
+    const body = mode === "read" ? {} : { clientRequestId: "scope-bound-form", title: "Choose", questions: one };
+    const admitted = request(`/api/prototype-reviews/${mode}`, body);
+    admitted.headers.set(PROTOTYPE_RECEIPT_SCOPE_HEADER, good);
+    expect((await handler(admitted, seat)).status).toBe(200);
+  }
+  expect(loadSeatRounds()).toHaveLength(1);
 });

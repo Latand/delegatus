@@ -1567,9 +1567,24 @@ A request without the additions is answered exactly as above.
 
 | Field | Written by | Meaning |
 |---|---|---|
-| `requester` | the relay service | Exactly six fields: `key` is the triggering message's `author.key` in the same opaque domain; `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin` and `is_owner` are required booleans derived by the service. `is_owner` is false when the owner posts as an anonymous admin or a channel. |
+| `requester` | the relay service | Exactly six fields: `key` is the triggering message's `author.key` in the same opaque domain; `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin` and `is_owner` are required booleans derived by the service. `is_owner` is false when the owner posts as an anonymous admin or a channel. The install declines `invalid_request`, with the detail "Requester does not match the triggering author or the owner delivery context.", before it builds any tool list or chooses a session, when a requester is present and `respond_to` does not name exactly one non-`self` message whose `author.key` is `key`; when `is_owner` and `is_anonymous_admin` are both true; or when `owner_delivery` arrives with `is_owner` false. Guest delivery requires a matching, non-anonymous requester and forbids `owner_delivery`. A non-owner guest also has `is_admin`, `can_restrict_members` and `can_delete_messages` set to false. |
 | `short_term_memory` | the relay service | The chat's short-term memory, as the service's own agent would see it. At most 16 000 Unicode code points. |
 | `tools` | the relay service | The service's tools that the requester's role may use: a unique `name` of at most 64 characters, a one-line `summary` of at most 200, and a `mode`. At most 100 items. String bounds count Unicode code points. |
+
+For guest delivery, the service supplies the chat's context in
+`input.conversation`, including applicable Business history. `answerPrompt`
+adds that conversation and any supplied `input.short_term_memory` to the
+guest turn for either requester. An absent or null memory field adds no
+memory section. The same guest media policy applies to each requester.
+The install returns `relay_guest_answers` and `requester_context` on every
+claim, including when the service descriptor omits them. Non-owner guest
+execution is ready on the same guest path as owner guest execution, with the
+same context and media handling. It remains inactive until the paired service
+releases its guest-only `relay_isolated_requesters` routing; that flag must no
+longer route non-owner private chats to the owner's agent. The install keeps
+advertising this flag disabled by default in
+`ISOLATED_GUEST_REQUESTERS_ENABLED` until that release. Owner guest requests
+keep the same guest path and behavior.
 
 - `mode: "direct"` names a tool the install could call itself once a later
   feature negotiates reads (`relay_tool_calls`, slice 2); `"handoff"` names
@@ -3431,8 +3446,11 @@ using the pairing credential in `Authorization: Bearer …`,
 `Delegatus-Relay-Version: 1` and JSON content type. It never discovers or guesses
 the trigger id from an opaque message reference or the destination from an
 owner identity. Absent or malformed context keeps the late answer durable with
-status `pending-delivery-context`, logs that status and sends nothing. A member
-claim carrying these fields still has no owner execution or delivery authority.
+status `pending-delivery-context`, logs that status and sends nothing. A claim
+whose requester is not the owner and carries these fields is declined
+`invalid_request` before any tool list or session exists, and so is a positive
+(private) `chat_id` that differs from the paired Telegram owner's user id
+(amended 2026-11-21; earlier, such a member claim ran without owner authority).
 
 The exact `SendMessage` payload and a valid 8–64-character `client_key` are
 persisted before dispatch and reused on every retry, including after restart.

@@ -37,6 +37,9 @@ export function sendFailure(result: Extract<BotCallResult, { ok: false }>, chat:
   if (result.status === 403) {
     return new TelegramBotError("forbidden", `${detail}Telegram refused the post to ${chat.title}: the bot was blocked or removed, lacks the right to post, or the user never wrote to it`);
   }
+  if (result.status === 400 && /CHANNEL_PRIVATE|can't access the chat|cannot access the chat/i.test(result.description ?? "")) {
+    return new TelegramBotError("bot_not_in_chat", `${detail}the bot cannot access this chat`);
+  }
   if (result.status === 400 && /chat not found/i.test(result.description ?? "")) return new TelegramBotError("bot_not_in_chat", `${detail}the bot cannot see this chat`);
   if (result.status === 400 && /not enough rights|have no rights|CHAT_WRITE_FORBIDDEN|CHAT_SEND_.*_FORBIDDEN|TOPIC_CLOSED/i.test(result.description ?? "")) return new TelegramBotError("not_enough_rights", `${detail}the bot may not post here`);
   if (result.status === 400 && /parse entities|can't parse|unsupported start tag|unexpected end tag/i.test(result.description ?? "")) {

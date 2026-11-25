@@ -27,7 +27,7 @@ test.each(["head", "base", "source", "config", "environment", "tool", "operation
   if (kind === "operation") extra.LLV_GATE_PUBLICATION_ID = "operation-two";
   if (kind === "epoch") extra.LLV_GATE_PUBLICATION_EPOCH = "2";
   if (kind === "authority") extra.LLV_GATE_PUBLICATION_FENCE = "custody-two";
-  if (kind === "privacy") extra.LLV_PRIVACY_OCR_LANGUAGES = "eng";
+  if (kind === "privacy") extra.LLV_PRIVACY_KNOWN_VALUES = "fixture-only private label";
   if (kind === "privacy-path") {
     extra.LLV_PRIVACY_KNOWN_VALUES_FILE = path.join(f.dir, ".git", "other-known.json");
     fs.writeFileSync(extra.LLV_PRIVACY_KNOWN_VALUES_FILE, "[]");
@@ -67,6 +67,22 @@ test("receipt component hashes round trip and malformed component records refuse
   const large = Object.fromEntries(Array.from({ length: 80 }, (_, index) => [`component ${String.fromCharCode(97 + Math.floor(index / 26), 97 + index % 26)}`, "b".repeat(64)]));
   expect(() => writePublicationCheckReceipt(refused, binding, "a".repeat(64), large)).toThrow("size limit");
   expect(fs.existsSync(refused)).toBeFalse();
+});
+
+test("publication receipt records check duration and peak RSS and rejects invalid values", () => {
+  const f = fixture();
+  const binding = publicationCheckBinding(f.env);
+  writePublicationCheckReceipt(f.receipt, binding, "a".repeat(64), undefined, 0, 4096);
+  expect(readPublicationCheckReceipt(f.receipt, binding)).toMatchObject({ checksMs: 0, peakRssBytes: 4096 });
+  fs.rmSync(f.receipt);
+  expect(() => writePublicationCheckReceipt(f.receipt, binding, "a".repeat(64), undefined, -1))
+    .toThrow("publication check receipt timing is invalid");
+  expect(() => writePublicationCheckReceipt(f.receipt, binding, "a".repeat(64), undefined, 0, -1))
+    .toThrow("publication check receipt peak RSS is invalid");
+  fs.writeFileSync(f.receipt, JSON.stringify({ version: 1, binding, inputs: "a".repeat(64), completedAt: Date.now(), checksMs: -1 }), { mode: 0o600 });
+  expect(() => readPublicationCheckReceipt(f.receipt, binding)).toThrow("stale or belongs to another operation");
+  fs.writeFileSync(f.receipt, JSON.stringify({ version: 1, binding, inputs: "a".repeat(64), completedAt: Date.now(), checksMs: 0, peakRssBytes: -1 }));
+  expect(() => readPublicationCheckReceipt(f.receipt, binding)).toThrow("publication check receipt peak RSS is invalid");
 });
 
 test("transport input validation retains a named deadline refusal", () => {

@@ -886,11 +886,17 @@ test("(d) concurrent gate requests still run one at a time inside the slot wrapp
 
 test("(e) full browser campaigns are opt-in and are named as skipped by default", async () => {
   const f = fixture();
-  f.seed("kanban.browser.test.tsx", "browser driver");
-  const head = f.addPr(12, "kanban.browser.test.tsx", "browser driver with a new describe block");
+  const file = "kanban.browser.test.tsx";
+  const main = "browser driver";
+  const reviewed = "browser driver with a new describe block";
+  f.seed(file, main);
+  const head = f.addPr(12, file, reviewed);
   const sampled: string[] = [];
-  const runner: CommandRunner = async (_cwd, args) => {
-    if (args[2] === "bun" && args[3] === "test") sampled.push(args[4]!);
+  const runner: CommandRunner = async (cwd, args) => {
+    if (args[2] === "bun" && args[3] === "test") {
+      expect(args[4]).toBe(`./${file}`);
+      sampled.push(readFileSync(join(cwd, file), "utf8"));
+    }
     return successfulCommand(args);
   };
   const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), runner, f.gh);
@@ -903,7 +909,51 @@ test("(e) full browser campaigns are opt-in and are named as skipped by default"
   expect(localGateCommands(lean.work, lean.base, true).find(gate => gate.id === "tests")!.args).toEqual(["bun", "test", "./kanban.browser.test.tsx"]);
   const opted = await batch.gate({ browser: true });
   expect(opted.gated!.notApplicable).toEqual([]);
-  expect(sampled).toContain("./kanban.browser.test.tsx");
+  expect(sampled).toEqual([main, reviewed]);
+});
+
+test("a distinct browser blob from an omitted member keeps the membership reason", async () => {
+  const f = fixture();
+  const file = "kanban.browser.test.tsx";
+  f.seed(file, "// base browser driver");
+  const active = f.addPr(12, file, "// candidate browser driver");
+  const omitted = f.addPr(13, file, "// omitted browser driver");
+  f.views.get(13)!.isDraft = true;
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), f.good, f.gh);
+  await batch.build(`12@${active},13@${omitted}`);
+  const state = await batch.gate();
+  expect(state.gated!.notApplicable).toContainEqual({ source: `#13@${omitted}`, file,
+    reason: "#13 is not in this candidate; its reviewed detector is skipped" });
+});
+
+test("the batch frozen install repairs the compiler before types, lint and privacy", async () => {
+  const f = fixture();
+  f.seed(".gitignore", "node_modules/\n");
+  const head = f.addPr(12, "example.ts", "export const value = 1;\n");
+  const observed: string[] = [];
+  const batch = new MergeBatch(f.repo, join(f.root, "merge-batch.json"), async (cwd, args) => {
+    const command = args[3];
+    if (command === "install" && cwd === built.work) {
+      expect(args.slice(2)).toEqual(["bun", "install", "--frozen-lockfile"]);
+      expect(existsSync(compiler)).toBeFalse();
+      rmSync(compiler);
+      mkdirSync(join(compiler, "bin"), { recursive: true });
+      writeFileSync(join(compiler, "bin", "tsc"), "fixture compiler");
+      observed.push("install");
+    } else if (command === "tsc") {
+      expect(readFileSync(join(compiler, "bin", "tsc"), "utf8")).toBe("fixture compiler");
+      observed.push("tsc");
+    } else if (command?.endsWith("/eslint-changes.ts")) observed.push("lint");
+    else if (command === "scripts/privacy-publication-gate.ts") observed.push("privacy");
+    return successfulCommand(args);
+  }, f.gh);
+  const built = await batch.build(`12@${head}`);
+  const compiler = join(built.work, "node_modules", "typescript");
+  mkdirSync(dirname(compiler));
+  symlinkSync("missing-compiler", compiler);
+  const state = await batch.gate();
+  expect(state.gated?.tip).toBe(built.tip);
+  expect(observed).toEqual(["install", "tsc", "lint", "privacy"]);
 });
 
 function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file" | "behind" | "lost-response" = "green", runOverride?: CommandRunner,

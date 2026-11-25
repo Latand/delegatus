@@ -5,7 +5,6 @@ import { once } from "node:events";
 import { procBackend } from "@/lib/proc";
 import os from "node:os";
 import path from "node:path";
-import { gunzipSync } from "node:zlib";
 
 import { UnixRuntimeHostClient } from "@/lib/runtime/client";
 import { runtimeScope } from "@/lib/runtime/contracts";
@@ -76,10 +75,12 @@ test("each scope answers byte for byte what parsing and re-encoding the host's s
   expect(full.structuredStartup).toEqual(structuredStartupAxis());
 });
 
-test("the gzip body inflates to the same bytes", async () => {
+/* Next drops a route's own `content-encoding` and encodes the answer itself,
+   so a body the route gzipped would be encoded twice behind one label. */
+test("a caller that accepts gzip still gets the unencoded bytes", async () => {
   const response = await GET(request("", { "accept-encoding": "gzip" }));
-  expect(response.headers.get("content-encoding")).toBe("gzip");
-  expect(gunzipSync(Buffer.from(await response.arrayBuffer())).toString("utf8")).toBe(reencoded(journal.snapshotJson()));
+  expect(response.headers.get("content-encoding")).toBeNull();
+  expect(await response.text()).toBe(reencoded(journal.snapshotJson()));
 });
 
 test("the request thread never decodes, parses or re-encodes the snapshot frame", async () => {

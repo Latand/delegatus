@@ -12,12 +12,13 @@ const { loadTasks } = await import("@/lib/tasks/store");
 const { claimMaintenanceRun, patchMaintenanceRun, readMaintenanceRun } = await import("@/lib/boardMaintenance/store");
 const worker = ["conversation", "fixture-maintainer"].join("_");
 const project = "fixture-maintenance";
-const snapshot = new AgentRegistry(path.join(root, "fixture-registry.json")).readOnlySnapshot();
+const snapshot = structuredClone(new AgentRegistry(path.join(root, "fixture-registry.json")).readOnlySnapshot());
 snapshot.conversations[worker as `conversation_${string}`] = { id: worker, agentRole: "maintainer", projectOwnership: { project }, generations: [], continuityPaths: [], abandonedContinuityPaths: [], migration: null } as never;
 let seq = 0; let role = "maintainer";
 const domain = {
   callerAttribution: () => ({ kind: "agent", conversationId: worker, role: "builder" }),
   attentionAuthority: () => ({ kind: "worker", conversationId: worker, role: "builder" }),
+  authorizedSeats: () => [{ conversationId: "conversation_fixture-seat", project, path: null }],
   registrySnapshot: () => { snapshot.conversations[worker as `conversation_${string}`].agentRole = role; return snapshot; },
   listPipelineRecords: () => [], operatorLocale: () => "uk",
 };
@@ -28,7 +29,7 @@ test("durable maintainer role fences writes on the service wire, independent of 
   const denied = await call("send_message", { conversationId: "fixture-target", text: "fixture" }); expect(denied).toMatchObject({ ok: false, code: "maintainer_tool_refused" });
   const result = claimMaintenanceRun({ project, now: Date.now(), intervalHours: 3, seat: { conversationId: "fixture-seat", seatEpoch: 1 }, repoDir: "/fixtures/repository" }); if (!result.claimed) throw new Error("claim expected");
   patchMaintenanceRun(result.run.runId, { conversationId: worker, state: "running" });
-  const created = await call("create_task", withTaskDue({ project, text: "Перевірка дошки", details: "fixture new task", icon: "brush-cleaning", color: "slate" })); expect(created.ok).toBe(true);
+  const created = await call("create_task", withTaskDue({ project, text: "Перевірка дошки", details: "fixture new task", icon: "brush-cleaning", color: "slate" })); expect(created).toMatchObject({ ok: true });
   const task = loadTasks()[0];
   expect(await call("update_task", { taskId: task.id, board: "hidden" })).toMatchObject({ ok: false, code: "maintainer_delete_refused" });
   expect(await call("update_task", { taskId: task.id, removeLine: { index: 0 } })).toMatchObject({ ok: false, code: "maintainer_delete_refused" });
@@ -38,6 +39,24 @@ test("durable maintainer role fences writes on the service wire, independent of 
   expect(await call("update_task", { taskId: task.id, project: "another-project" })).toMatchObject({ ok: false, code: "maintainer_project_refused" });
   const updated = await call("update_task", { taskId: task.id, text: "Оновлена перевірка дошки", appendLine: "Maintenance: fixture evidence" }); expect(updated.ok).toBe(true);
   const log = readMaintenanceRun(result.run.runId)!.log; expect(log.changes).toHaveLength(2); expect(log.changes[1].textBefore).toBe(task.text);
+  const beforeParking = loadTasks();
+  for (const args of [{ status: "blocked" }, { hold: { kind: " Operator ", note: "Supply access" } }]) {
+    expect(await call("update_task", { taskId: task.id, ...args })).toMatchObject({ ok: false, code: "maintainer_park_refused" });
+    expect(await call("create_task", withTaskDue({ project, text: "Перевірка очікування", ...args }))).toMatchObject({ ok: false, code: "maintainer_park_refused" });
+  }
+  expect(loadTasks()).toEqual(beforeParking);
+  expect(readMaintenanceRun(result.run.runId)!.log.changes).toHaveLength(2);
+  const { mutateTasks } = await import("@/lib/tasks/store");
+  const retainedHold = { kind: "resource", by: "agent", since: task.createdAt, note: "Wait for memory" } as const;
+  mutateTasks(tasks => ({ tasks: tasks.map(row => row.id === task.id ? { ...row, hold: retainedHold, status: "blocked" } : row), result: undefined }));
+  expect(await call("update_task", { taskId: task.id, hold: { kind: retainedHold.kind, note: retainedHold.note } })).toMatchObject({ ok: true });
+  expect(loadTasks().find(row => row.id === task.id)).toMatchObject({ status: "inbox", hold: retainedHold });
+  expect(await call("update_task", { taskId: task.id, hold: null })).toMatchObject({ ok: true });
+  expect(loadTasks().find(row => row.id === task.id)?.hold).toBeUndefined();
+  expect(readMaintenanceRun(result.run.runId)!.log.changes.slice(-2)).toEqual([
+    expect.objectContaining({ taskId: task.id, statusFrom: "blocked", statusTo: "inbox" }),
+    expect.objectContaining({ taskId: task.id, fields: expect.arrayContaining(["hold"]) }),
+  ]);
   const count = readMaintenanceRun(result.run.runId)!.counts.writes;
   patchMaintenanceRun(result.run.runId, { state: "succeeded" });
   expect(await call("update_task", { taskId: task.id, text: "Пізня зміна" })).toMatchObject({ ok: false, code: "maintainer_run_ended" });

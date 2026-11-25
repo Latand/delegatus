@@ -116,9 +116,9 @@ test("the MCP curation read enforces the caller deadline across yields", async (
   const original = cooperative.yieldToRuntime;
   const hook = spyOn(cooperative, "yieldToRuntime").mockImplementation(async () => {
     await original();
-    setSystemTime(new Date(NOW + 101));
+    setSystemTime(new Date(NOW + 1001));
   });
-  try { await expect(settingsTool()({ verbose: true }, { deadlineAt: NOW + 100 })).rejects.toThrow("deadline exceeded"); }
+  try { await expect(settingsTool()({ verbose: true }, { deadlineAt: NOW + 1000 })).rejects.toThrow("deadline exceeded"); }
   finally { hook.mockRestore(); }
   checkpoint();
 });
@@ -208,7 +208,8 @@ test("a timed-out curation panel retains the completed run's durable identity", 
     expect(response.status).toBe(200);
     expect((await response.json()).curation).toMatchObject({
       lastRun: { id: pass.id, state: "succeeded", endedAt: AT, conversationId: "conversation_completed_curator" },
-      nextRunAt: null, runsError: "curation status read timed out",
+      nextRunAt: null, runsError: "curation panel read timed out",
+      partial: true, omissions: ["curation.counts", "curation.nextRunAt"],
     });
   } finally { waiting.mockRestore(); clock.mockRestore(); }
   checkpoint();

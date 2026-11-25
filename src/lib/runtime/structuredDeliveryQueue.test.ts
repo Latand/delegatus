@@ -68,14 +68,15 @@ function host(send: (entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, a
   };
 }
 
-test.each(["current", "turn", "writer", "generation", "attention"] as const)(
+test.each(["current", "antigravity", "turn", "writer", "generation", "attention"] as const)(
   "delivery rechecks %s at the journal-to-host boundary",
   async replacement => {
     const writes: string[] = [];
     const statuses: string[] = [];
     let turn = "turn-one";
     let writer = "writer:1";
-    let engine: "codex" | "claude" = "codex";
+    const initialEngine = replacement === "antigravity" ? "antigravity" : "codex";
+    let engine: "codex" | "claude" | "antigravity" = initialEngine;
     let request = {};
     const adapter = host(async (_entry, _dispatch, authorize) => {
       authorize?.();
@@ -89,12 +90,13 @@ test.each(["current", "turn", "writer", "generation", "attention"] as const)(
     adapter.agentAttentionRequest = () => request;
     adapter.answer = async () => { writes.push("answer"); };
     adapter.interrupt = async () => { writes.push("interrupt"); };
-    const answer = replacement === "attention" || replacement === "current";
+    const accepted = replacement === "current" || replacement === "antigravity";
+    const answer = replacement === "attention" || accepted;
     const kind = answer ? "answer" : "interrupt";
     const queue = new StructuredDeliveryQueue({
       effects: async () => [{ id: "effect:control", kind: `runtime.${kind}`, eventSeq: 1,
         payload: { operationId: "control", conversationId: "conversation-one",
-          controlBinding: { engine: "codex", sessionId: "session-one", writerClaim: "writer:1" },
+          controlBinding: { engine: initialEngine, sessionId: "session-one", writerClaim: "writer:1" },
           ...(answer ? { attentionId: "request-one", resolution: { behavior: "allow" } } : { turnId: turn }) } }],
       status: async () => ({ status: "pending", revision: 1 }),
       currentHostClaim: () => writer,
@@ -110,8 +112,8 @@ test.each(["current", "turn", "writer", "generation", "attention"] as const)(
     }, () => adapter);
 
     await queue.drain();
-    expect(writes).toEqual(replacement === "current" ? ["answer"] : []);
-    expect(statuses).toEqual(["delivering", replacement === "current" ? "answered" : "failed"]);
+    expect(writes).toEqual(accepted ? ["answer"] : []);
+    expect(statuses).toEqual(["delivering", accepted ? "answered" : "failed"]);
   },
 );
 

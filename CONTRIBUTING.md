@@ -96,7 +96,7 @@ the Deployer's `mode=release` stage can publish. A moved checkout requires revie
 
 Run `bun scripts/release-verify.ts --preflight --cut <cut-sha> --tag vX.Y.Z --pr <number>`.
 An open PR stops publication. Preflight refreshes `origin/main` and requires the
-merged commit to be an ancestor of main with the reviewed checkout's tree. It
+reviewed checkout to be at the PR's exact integrated commit on main. It
 checks release-only changes against the merge's first parent so inherited main
 changes do not block an older cut. Create the annotated tag on its explicit
 `tagCommit`, then use `git push origin refs/tags/vX.Y.Z`. The native stage guard
@@ -383,7 +383,11 @@ On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits
 a `TMPDIR` under the operator's scratch tree. Browser tests keep their rendered
 capture drivers and are not selected by the hook.
 
-Touched tests run the branch first, up to eight explicit head files at once, each
+Touched tests run the branch first, with up to eight file workers on the head.
+Gate-harness and privacy files share a limit of two workers because they launch
+nested commands. Ordinary files can use the remaining workers in the same
+selection. When Linux portable runners share their parent service, a selection
+containing gate-harness or privacy files uses one worker. Each file runs
 in its own owned process and isolated roots. A green branch skips the baseline
 entirely. For a red branch, only failing files run on the merge base, filtered
 to failing assertions; runner diagnostics need the whole file. Both kinds share
@@ -578,6 +582,19 @@ settings take precedence. The slot locks live in
 `/var/tmp`, the files the installed `/var/tmp/llv-gate` uses, so both gates
 share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. Stage starts and gates share a durable FIFO CPU queue. After ten minutes,
 the head can start under sustained pressure, with two seconds between admissions.
+A prepared push gives its pre-push hook 180 seconds because the remote closes
+an idle SSH push after about 360 seconds.
+
+The Viewer sees the same lock inodes through its read-only `/var/tmp` bind.
+On a new host, provision the claim file and at least one slot and matching
+cap file from the writable host side using the configured `LLV_GATE_SLOTS`
+value. For the default cap of six, those files are
+`llv-heavy-gate.claim.lock`, `llv-heavy-gate.slot1.lock` and
+`llv-heavy-gate.slot1.cap6.lock`. Each additional pair gives the Viewer
+another slot to use. The hook reports an unavailable lock pool if it cannot
+use the claim file or any pair. Container checks use the image's Bun and the
+portable owned runner when a user systemd manager is unavailable.
+
 A test, a driver or any instance on a state directory of its own queues its
 stage starts in `<state>/cpu-gate`, never in the machine queue; a stage ticket
 nobody polls for a minute is passed over, and so is a command ticket whose
@@ -727,9 +744,7 @@ script also publishes its own batch branch and deferred resolutions after
 trusted privacy with hooks skipped, like the engine's base updates; publish
 integration branches through the script. A fetch failure uses
 the last `origin/main`; a missing merge base fails the push. The hook warns
-when main is ahead. Missing tesseract/ffmpeg/ffprobe defers named media paths to
-CI OCR. The two required privacy checks remain strict and unchanged; local
-hooks do not replace trusted CI enforcement. macOS and Windows CI keep scoped
+when main is ahead. The local hook and both required privacy checks inspect media metadata and provenance. macOS and Windows CI keep scoped
 jobs with timeouts, and Bun verification remains available by dispatch.
 Docker PR builds are limited to image inputs, push nothing, end at the
 45-minute job timeout, and are cancelled when superseded or closed. Merge-batch branches skip image verification. App changes verify

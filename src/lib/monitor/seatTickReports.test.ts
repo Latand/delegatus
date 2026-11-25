@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 
-import { DEFAULT_SEAT_TICK_POLICY, SEAT_TICK_WAKE_INTERVAL_MS, seatTickDecision, seatTickWakeCommit, seatTickWakeCommitPlan } from "./seatTick";
+import { DEFAULT_SEAT_TICK_POLICY, SEAT_TICK_WAKE_INTERVAL_MS, seatTickDecision, seatTickReportRequest, seatTickWakeCommit, seatTickWakeCommitPlan } from "./seatTick";
 import { defaultSeatTickSettings, effectiveSeatTickSettings, type SeatTickSettings } from "./seatTickSettings";
 import { seatTickStateForEpoch } from "./seatTickState";
 import { seatTickWakeMessage } from "./report";
@@ -97,7 +97,10 @@ function wakeOf(decision: ReturnType<typeof seatTickDecision>): Wake {
 function landed(check: SeatTickCheckInput): { state: SeatTickProjectState; wake: Wake } {
   const decision = seatTickDecision(check);
   const wake = wakeOf(decision);
-  const plan = seatTickWakeCommitPlan(wake, { fingerprint: check.changeFingerprint, eventsThrough: 0, bridgeReports: check.reports?.bridgeReports === true })!;
+  const plan = seatTickWakeCommitPlan(wake, { fingerprint: check.changeFingerprint, eventsThrough: 0,
+    bridgeReports: check.reports?.bridgeReports === true, reportCoverage: check.reports,
+    reportRequest: seatTickReportRequest(check, check.state, wake.items),
+    priorReportKeys: check.state.reportsOwed?.map(entry => entry.key) })!;
   return { state: seatTickWakeCommit(decision.state, plan, check.now), wake };
 }
 
@@ -132,12 +135,13 @@ test("a full owed-outcome ledger stays within the wake bound and names the key t
     reports: reports(),
   });
   const wake = wakeOf(seatTickDecision(check));
+  const requestKey = seatTickReportRequest(check, check.state, wake.items)!.key;
   const text = seatTickWakeMessage({ project: PROJECT, snapshotAt: iso(T0), reasons: wake.reasons, items: wake.items,
     deferred: wake.deferred, signals: [], reportLines: wake.reportLines,
     monitorPrompt: "Standing note ".padEnd(7_622, "n"), operatorInstructions: "Instructions ".padEnd(500, "i"),
   });
   expect(text.length).toBeLessThanOrEqual(4_000);
-  expect(text).toContain(`key ${reportsOwed[0]!.key} and coversOwed: true`);
+  expect(text).toContain(`key ${requestKey} and coversOwed: true`);
   const autonomous = seatTickWakeMessage({ project: PROJECT, snapshotAt: iso(T0), reasons: wake.reasons, items: wake.items,
     deferred: wake.deferred, signals: [], reportLines: wake.reportLines,
     monitorPrompt: "Standing note ".padEnd(7_622, "n"), operatorInstructions: "Instructions ".padEnd(500, "i"),
@@ -146,32 +150,33 @@ test("a full owed-outcome ledger stays within the wake bound and names the key t
   });
   expect(autonomous.length).toBeLessThanOrEqual(4_000);
   expect(autonomous).toContain("decide all questions");
-  expect(autonomous).toContain(`key ${reportsOwed[0]!.key} and coversOwed: true`);
+  expect(autonomous).toContain(`key ${requestKey} and coversOwed: true`);
 });
 
-test("a wake with a deploy and a lane owes one report naming both, in the operator's language, keyed by the first", () => {
+test("a wake with a deploy and a lane owes one report naming both under its set identity", () => {
   const { state, wake } = landed(input({ settledDeploys: [deployed(SHA_A)], ownLanes: [laneSettled("pipeline_l1")] }));
+  const requestKey = state.reportsOwed![0]!.requestedBy![0]!;
   expect(wake.reportLines).toEqual([
-    "Report owed, in Ukrainian, before this turn ends: deploy aaaaaaaa succeeded, lane pipeline completed. File one report with key deploy:aaaaaaaa:succeeded and coversOwed: true.",
+    `Report owed, in Ukrainian, before this turn ends: deploy aaaaaaaa succeeded, lane pipeline completed. File one report with key ${requestKey} and coversOwed: true.`,
     "Nothing is running now: the report says so.",
   ]);
   expect(state.reportsOwed).toEqual([
-    { key: "deploy:aaaaaaaa:succeeded", label: "deploy aaaaaaaa succeeded", receivedAt: iso(T0) },
-    { key: "lane:pipeline_l1:completed", label: "lane pipeline completed", receivedAt: iso(T0) },
+    { key: "deploy:aaaaaaaa:succeeded", label: "deploy aaaaaaaa succeeded", receivedAt: iso(T0), requestedBy: [requestKey] },
+    { key: "lane:pipeline_l1:completed", label: "lane pipeline completed", receivedAt: iso(T0), requestedBy: [requestKey] },
   ]);
 });
 
-test("a report under the deploy's key clears the deploy only; the next wake still asks for the lane, and a covers entry clears it", () => {
+test("a report under the delivered set key clears every outcome delivered in that wake", () => {
   const first = landed(input({ settledDeploys: [deployed(SHA_A)], ownLanes: [laneSettled("pipeline_l1")] })).state;
+  const requestKey = first.reportsOwed![0]!.requestedBy![0]!;
   const later = T0 + 70 * MINUTE;
   const next = seatTickDecision(input({
     now: later,
     state: first,
     pipelines: [{ id: "pipeline_open", title: "open lane", state: "active" as const, updatedAt: iso(later), stageActivity: null, stageId: "build" }],
-    reports: reports({ lastReportAt: iso(T0 + MINUTE), reportedIds: [idFor("deploy:aaaaaaaa:succeeded")] }),
+    reports: reports({ lastReportAt: iso(T0 + MINUTE), reportedIds: [idFor(requestKey)] }),
   }));
-  expect(next.state.reportsOwed!.map((entry) => entry.key)).toEqual(["lane:pipeline_l1:completed"]);
-  expect(wakeOf(next).reportLines![0]).toBe("Report owed, in Ukrainian, before this turn ends: lane pipeline completed. File one report with key lane:pipeline_l1:completed and coversOwed: true.");
+  expect(next.state.reportsOwed).toEqual([]);
 
   const covered = seatTickDecision(input({
     now: later,
@@ -240,6 +245,117 @@ test("a wake credited late: a coversOwed report filed after it reached the seat 
   expect(still.state.reportsOwed).toHaveLength(2);
   /* With no instant on the record, the commit's own instant stands. */
   expect(seatTickWakeCommit(decision.state, plan, T0 + 5 * MINUTE, null).reportsOwed![0]!.receivedAt).toBe(iso(T0 + 5 * MINUTE));
+});
+
+test("a report under one requested wake key settles the complete delivered set without coversOwed", () => {
+  const first = landed(input({ settledDeploys: [deployed(SHA_A)], ownLanes: [laneSettled("pipeline_l1")] })).state;
+  const firstKey = "deploy:aaaaaaaa:succeeded";
+  const secondKey = "lane:pipeline_l1:completed";
+  const requestKey = first.reportsOwed![0]!.requestedBy![0]!;
+  expect(requestKey).not.toBe(firstKey);
+  const settled = seatTickDecision(input({ now: T0 + MINUTE, state: first,
+    reports: reports({ reportedIds: [idFor(requestKey)] }),
+  }));
+  expect(settled.state.reportsOwed).toEqual([]);
+  expect(settled.state.reportsAcknowledged).toEqual([firstKey, secondKey]);
+});
+
+test("a later wake binds carried and new debt to its requested key across distinct delivery times", () => {
+  const first = landed(input({ ownLanes: [laneSettled("pipeline_l1")] })).state;
+  const second = landed(input({ now: T0 + 70 * MINUTE, state: first,
+    ownLanes: [laneSettled("pipeline_l1"), laneSettled("pipeline_l2", "failed", T0 + 70 * MINUTE)] })).state;
+  const secondRequest = second.reportsOwed!.find(entry => entry.key === "lane:pipeline_l2:failed")!.requestedBy![0]!;
+  expect(second.reportsOwed?.map(entry => [entry.key, entry.receivedAt, entry.requestedBy])).toEqual([
+    ["lane:pipeline_l1:completed", iso(T0), ["lane:pipeline_l1:completed", secondRequest]],
+    ["lane:pipeline_l2:failed", iso(T0 + 70 * MINUTE), [secondRequest]],
+  ]);
+  const settled = seatTickDecision(input({ now: T0 + 71 * MINUTE, state: second,
+    reports: reports({ reportedIds: [idFor("lane:pipeline_l1:completed")] }) }));
+  expect(settled.state.reportsOwed?.map(entry => entry.key)).toEqual(["lane:pipeline_l2:failed"]);
+  expect(seatTickReportRequest(input({ state: settled.state }), settled.state, [])).toMatchObject({ key: "lane:pipeline_l2:failed" });
+});
+
+test("explicit coverage settles only its named outcome and retired keys stay owed", () => {
+  const firstKey = "lane:pipeline_l1:completed";
+  const secondKey = "lane:pipeline_l2:failed";
+  const delivered = landed(input({ ownLanes: [laneSettled("pipeline_l1"), laneSettled("pipeline_l2", "failed")] }));
+  const covered = seatTickDecision(input({ now: T0 + MINUTE, state: delivered.state,
+    reports: reports({ coveredIds: [idFor(secondKey)] }) }));
+  expect(covered.state.reportsOwed?.map(entry => entry.key)).toEqual([firstKey]);
+
+  const reserved = seatTickReportRequest(input({ state: delivered.state,
+    reports: reports({ reservedIds: [idFor(firstKey)] }) }), delivered.state, []);
+  expect(reserved).toMatchObject({ outcomeKeys: [firstKey, secondKey] });
+  expect(reserved!.key).not.toBe(firstKey);
+  expect(reserved!.key).not.toBe(secondKey);
+  const reminder = seatTickDecision(input({ now: T0 + 70 * MINUTE, state: delivered.state,
+    reports: reports({ reservedIds: [idFor(firstKey)] }) }));
+  expect(reminder.state.reportsOwed?.map(entry => entry.key)).toEqual([firstKey, secondKey]);
+  expect(reminder.verdict.kind).toBe("wake");
+  if (reminder.verdict.kind === "wake") expect(reminder.verdict.reportLines?.[0]).toContain(`key ${reserved!.key}`);
+});
+
+test("fallback request settles its delivered singleton while a peer outcome report leaves the anchor owed", () => {
+  const anchor = "lane:pipeline_l1:completed";
+  const peer = "lane:pipeline_l2:failed";
+  const state = landed(input({ ownLanes: [laneSettled("pipeline_l1"), laneSettled("pipeline_l2", "failed")] })).state;
+  const request = state.reportsOwed![0]!.requestedBy![0]!;
+  const peerOnly = seatTickDecision(input({ state, now: T0 + MINUTE, reports: reports({ reportedIds: [idFor(peer)] }) }));
+  expect(peerOnly.state.reportsOwed?.map(entry => entry.key)).toEqual([anchor]);
+  const fallback = seatTickDecision(input({ state, now: T0 + MINUTE, reports: reports({ reportedIds: [idFor(request)] }) }));
+  expect(fallback.state.reportsOwed).toEqual([]);
+});
+
+test("a report predating delivery of a changed set settles only the earlier delivered outcome", () => {
+  const anchor = "lane:pipeline_l1:completed";
+  const peer = "lane:pipeline_l2:failed";
+  const earlier = landed(input({ ownLanes: [laneSettled("pipeline_l1")] })).state;
+  const earlierReport = reports({ reportedIds: [idFor(anchor)] });
+  const laterKey = seatTickReportRequest(input({ reports: earlierReport, state: earlier,
+    ownLanes: [laneSettled("pipeline_l1"), laneSettled("pipeline_l2", "failed", T0 + 2 * MINUTE)] }), earlier,
+  [
+    { kind: "pipeline", id: "pipeline_l1", label: "completed", laneAnnouncement: "pipeline_l1:completed" },
+    { kind: "pipeline", id: "pipeline_l2", label: "failed", laneAnnouncement: "pipeline_l2:failed" },
+  ])!.key;
+  expect(laterKey).not.toBe(anchor);
+  const deliveredLater = seatTickWakeCommit(earlier, {
+    proposal: false, reasons: [], fingerprint: "later", eventsThrough: 0, children: [],
+    reportsOwed: [{ key: peer, label: "lane pipeline_l2 failed" }],
+    reportRequest: { key: laterKey, outcomeKeys: [anchor, peer] },
+  }, T0 + 3 * MINUTE, iso(T0 + 3 * MINUTE));
+  const after = seatTickDecision(input({ state: deliveredLater, now: T0 + 4 * MINUTE, reports: earlierReport }));
+  expect(after.state.reportsOwed?.map(entry => entry.key)).toEqual([peer]);
+  expect(after.state.reportsOwed![0]!.requestedBy).toContain(laterKey);
+});
+
+test("occupied worker report IDs force a fresh report request without settling debt", () => {
+  const key = "lane:pipeline_l1:completed";
+  const state = landed(input({ ownLanes: [laneSettled("pipeline_l1")] })).state;
+  const request = seatTickReportRequest(input({ state, reports: reports({ occupiedIds: [idFor(key)] }) }), state, [])!;
+  expect(request.key).not.toBe(key);
+  const reminder = seatTickDecision(input({ state, now: T0 + 70 * MINUTE, reports: reports({ occupiedIds: [idFor(key)] }) }));
+  expect(reminder.state.reportsOwed?.map(entry => entry.key)).toEqual([key]);
+  expect(reminder.verdict.kind).toBe("wake");
+  if (reminder.verdict.kind === "wake") expect(reminder.verdict.reportLines?.[0]).toContain(`key ${request.key}`);
+});
+
+test("coversOwed acknowledgment survives changed agenda presentation and retired key reservations", () => {
+  const firstKey = "lane:pipeline_l1:completed";
+  const secondKey = "lane:pipeline_l2:completed";
+  const initial = landed(input({ ownLanes: [laneSettled("pipeline_l1"), laneSettled("pipeline_l2")] })).state;
+  const coveredAt = iso(T0 + MINUTE);
+  const covered = seatTickDecision(input({ now: T0 + 2 * MINUTE, state: initial,
+    reports: reports({ reportedIds: [idFor(firstKey)], latestCoversOwedAt: coveredAt }),
+  }));
+  expect(covered.state.reportsOwed).toEqual([]);
+  expect(covered.state.reportsAcknowledged).toEqual([firstKey, secondKey]);
+
+  const later = seatTickDecision(input({ now: T0 + 3 * MINUTE, state: covered.state,
+    ownLanes: [laneSettled("pipeline_l1", "completed", T0 + 2 * MINUTE), laneSettled("pipeline_l2", "completed", T0 + 2 * MINUTE), laneSettled("pipeline_l3", "completed", T0 + 2 * MINUTE)],
+    reports: reports({ reservedIds: [idFor(firstKey)], acknowledgedOutcomeKeys: covered.state.reportsAcknowledged }),
+  }));
+  expect(later.state.reportsOwed?.map(entry => entry.key)).not.toContain(firstKey);
+  expect(later.state.reportsAcknowledged).toContain(secondKey);
 });
 
 test("the owed list is bounded: past 64 the oldest go and the wake says how many", () => {
@@ -426,16 +542,15 @@ test("the replayed day with no report filed: every owed key is asked for in each
   const day = replayDay(false);
   /* Every wake from the first outcome on carries the owed line: the 21
      outcome wakes plus debt reminders; delivered agendas stay deduped. */
-  expect(day.wakes).toBe(47);
+  expect(day.wakes).toBe(49);
   expect(day.owedLines).toHaveLength(day.wakes);
-  const firstKey = day.everOwed[0]!;
   let before = 0;
   for (const line of day.owedLines) {
     const counts = /before this turn ends: (.*?)(?:, and (\d+) more)?\. File one/.exec(line)!;
     const named = counts[1]!.split(", ").length + Number(counts[2] ?? 0);
     expect(named).toBeGreaterThanOrEqual(before);
     before = named;
-    expect(line).toContain(`key ${firstKey} and coversOwed: true`);
+    expect(line).toContain("and coversOwed: true");
   }
   expect(before).toBe(16 + 35);
   expect(day.finalOwed).toHaveLength(16 + 35);

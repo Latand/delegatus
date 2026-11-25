@@ -34,7 +34,10 @@ export class AttemptTrashRecovery {
     db.exec(`CREATE TABLE IF NOT EXISTS trash_recovery (
       directory TEXT PRIMARY KEY, identity TEXT NOT NULL, cursor TEXT NOT NULL DEFAULT '',
       binding TEXT, conflict INTEGER NOT NULL DEFAULT 0, matches TEXT NOT NULL DEFAULT '[]',
-      restored INTEGER NOT NULL DEFAULT 0, checkedAt REAL NOT NULL DEFAULT 0, turn INTEGER NOT NULL DEFAULT 0)`);
+      restored INTEGER NOT NULL DEFAULT 0, checkedAt REAL NOT NULL DEFAULT 0, turn INTEGER NOT NULL DEFAULT 0,
+      ownerBound INTEGER NOT NULL DEFAULT 0)`);
+    if (!db.query<{ name: string }, []>("PRAGMA table_info(trash_recovery)").all().some(column => column.name === "ownerBound"))
+      db.exec("ALTER TABLE trash_recovery ADD COLUMN ownerBound INTEGER NOT NULL DEFAULT 0");
     db.exec("CREATE TABLE IF NOT EXISTS trash_recovery_scan(id INTEGER PRIMARY KEY CHECK(id=1),cursor TEXT NOT NULL,turn INTEGER NOT NULL)");
     db.exec("INSERT OR IGNORE INTO trash_recovery_scan VALUES(1,'',0)");
     db.transaction(() => {
@@ -49,6 +52,13 @@ export class AttemptTrashRecovery {
     })();
   }
   restored(directory: string) { return !!this.db.query("SELECT 1 FROM trash_recovery WHERE directory=?").get(directory); }
+  ownerWasBound(directory: string) {
+    return !!this.db.query("SELECT 1 FROM trash_recovery WHERE directory=? AND ownerBound=1").get(directory);
+  }
+  queueIntent(directory: string, identity: string) {
+    const ownerBound = this.db.query("SELECT 1 FROM roots WHERE directory=?").get(directory) ? 1 : 0;
+    this.db.query("INSERT OR IGNORE INTO trash_recovery(directory,identity,ownerBound) VALUES(?,?,?)").run(directory, identity, ownerBound);
+  }
   refresh(directory: string) {
     this.db.transaction(() => {
       const reset = this.db.query("UPDATE trash_recovery SET restored=0,cursor='',binding=NULL,conflict=0,matches='[]',checkedAt=0 WHERE directory=? AND restored=1").run(directory);
@@ -104,30 +114,45 @@ export class AttemptTrashRecovery {
       this.db.query("DELETE FROM trash_recovery WHERE directory=?").run(directory);
     })();
   }
-  page(now: () => number, deadline: number, budgetNow = now) {
-    const result = { entries: 0, manifestEntries: 0, checks: 0, restored: 0,
+  page(now: () => number, deadline: number, budgetNow = now,
+    discovery: false | { unknown: (scratch: string, name: string) => string | undefined; complete: () => void } | undefined = undefined) {
+    const result = { entries: 0, manifestEntries: 0, checks: 0, restored: 0, adopted: 0, recoveredDirectory: null as string | null,
       outcomes: [] as Array<{ directory: string; disposition: "held" | "deferred"; bytes: number; reason: string }> };
     if (budgetNow() >= deadline) return result;
     const scan = this.db.query<{ cursor: string; turn: number }, []>("SELECT cursor,turn FROM trash_recovery_scan WHERE id=1").get()!;
-    try {
+    if (discovery !== false) try {
       const parent = fs.lstatSync(this.scratch, { throwIfNoEntry: false });
-      if (!parent) return result;
+      if (!parent) { discovery?.complete(); return result; }
       if (!parent.isDirectory() || parent.isSymbolicLink() || fs.realpathSync(this.scratch) !== this.scratch
         || process.getuid && parent.uid !== process.getuid()) throw new Error("owner-unknown: indirect scratch parent");
       const page = discoverAttemptCopies(this.scratch, scan.cursor, budgetNow, deadline, "identity");
       result.entries = page.read;
       for (const name of page.names) {
         if (budgetNow() >= deadline) return result; // Revisit this bounded page after interruption.
-        if (!/^\.delegatus-sweep-[a-f0-9]{64}\.json$/.test(name)) continue;
+        if (!/^\.delegatus-sweep-[a-f0-9]{64}\.json$/.test(name)) {
+          try {
+            const reason = discovery?.unknown(this.scratch, name);
+            if (reason) {
+              result.adopted++;
+              result.outcomes.push({ directory: path.join(this.scratch, name), disposition: "held", bytes: 0, reason });
+            }
+          }
+          catch (error) { result.outcomes.push({ directory: path.join(this.scratch, name), disposition: "held", bytes: 0, reason: `owner-unknown: ${String(error)}` }); }
+          continue;
+        }
         const journal = readAttemptTempTrash(path.join(this.scratch, name), this.scratch);
         if (!journal) { result.outcomes.push({ directory: path.join(this.scratch, name), disposition: "held", bytes: 0, reason: "owner-unknown" }); continue; }
-        if (this.db.query("SELECT 1 FROM roots WHERE directory=?").get(journal.directory)) continue;
+        const existing = this.db.query<{ identity: string }, [string]>("SELECT identity FROM roots WHERE directory=?").get(journal.directory);
+        if (existing && existing.identity !== journal.identity) {
+          result.outcomes.push({ directory: journal.directory, disposition: "held", bytes: 0, reason: "owner-unknown" }); continue;
+        }
         const reset = this.db.query(`INSERT INTO trash_recovery(directory,identity) VALUES(?,?) ON CONFLICT(directory) DO UPDATE SET
           identity=excluded.identity,cursor='',binding=NULL,conflict=0,matches='[]',restored=0,checkedAt=0
           WHERE identity<>excluded.identity`).run(journal.directory, journal.identity);
         if (reset.changes) this.clearObservations(journal.directory);
       }
       this.db.query("UPDATE trash_recovery_scan SET cursor=? WHERE id=1").run(page.done ? "" : page.cursor);
+      if (page.done) discovery?.complete();
     } catch (error) {
       this.db.query("UPDATE trash_recovery_scan SET cursor='' WHERE id=1").run();
       result.outcomes.push({ directory: this.scratch, disposition: "held", bytes: 0, reason: `owner-unknown: ${String(error)}` });
@@ -149,6 +174,14 @@ export class AttemptTrashRecovery {
       return result;
     };
     const journal = readAttemptTempTrash(attemptTempJournalPath(candidate.directory), this.scratch);
+    if (!journal && !fs.existsSync(attemptTempJournalPath(candidate.directory))) {
+      const original = fs.lstatSync(candidate.directory, { throwIfNoEntry: false });
+      if (original?.isDirectory() && !original.isSymbolicLink() && `${original.dev}:${original.ino}` === candidate.identity) {
+        this.db.query("DELETE FROM trash_recovery WHERE directory=? AND identity=?").run(candidate.directory, candidate.identity);
+        this.clearObservations(candidate.directory);
+        return result;
+      }
+    }
     if (!journal || journal.identity !== candidate.identity) return hold();
     let binding: Binding | null = candidate.binding ? JSON.parse(candidate.binding) : null;
     let conflict = !!candidate.conflict, matches: string[] = JSON.parse(candidate.matches);
@@ -223,13 +256,17 @@ export class AttemptTrashRecovery {
       const existing = this.db.query<{ pipelineId: string | null; launchId: string; identity: string }, [string]>(
         "SELECT pipelineId,launchId,identity FROM roots WHERE directory=?").get(journal.directory);
       if (existing && (existing.identity !== journal.identity || existing.pipelineId !== agreed.pipelineId || existing.launchId !== agreed.launchId)) return hold();
+      const previouslyBound = this.db.query<{ ownerBound: number }, [string]>(
+        "SELECT ownerBound FROM trash_recovery WHERE directory=?").get(journal.directory)?.ownerBound;
+      const ownerBound = existing ? (previouslyBound ?? 1) : 0;
       this.db.transaction(() => {
         const inserted = this.db.query(`INSERT OR IGNORE INTO roots(directory,pipelineId,launchId,retainUntilClose,createdAt,identity,checkedAt)
           VALUES(?,?,?,1,?,?,0)`).run(journal.directory, agreed.pipelineId, agreed.launchId, now(), journal.identity);
-        this.db.query("UPDATE trash_recovery SET restored=1,cursor=?,binding=?,matches=? WHERE directory=?")
-          .run(cursor, JSON.stringify(agreed), JSON.stringify(matches), journal.directory);
+        this.db.query("UPDATE trash_recovery SET restored=1,cursor=?,binding=?,matches=?,ownerBound=? WHERE directory=?")
+          .run(cursor, JSON.stringify(agreed), JSON.stringify(matches), ownerBound, journal.directory);
         if (inserted.changes) result.restored++;
       })();
+      result.recoveredDirectory = journal.directory;
       return result;
     } catch { return hold(); }
   }

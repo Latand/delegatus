@@ -1,9 +1,9 @@
 import { answerCapabilities, formatSection, richAnswerInstructions } from "./answerV2";
 import { createHash } from "node:crypto";
 import type { RelayConversation } from "./conversations";
-import { callableTools, mayQuote, PAGE_READ_TOOL } from "./toolLoop";
+import { callableTools, PAGE_READ_TOOL } from "./toolLoop";
 import { readRelaySwitches } from "./switches";
-import { isOwnerTool, offersHandoff, type ExternalRelayRequest } from "./protocol";
+import { isOwnerTool, offersHandoff, visibleRelayTools, type ExternalRelayRequest } from "./protocol";
 import { searchGuidance } from "./searchGuidance";
 export const json = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
 export function answerPrompt(request: ExternalRelayRequest, engine = ""): string {
@@ -18,7 +18,7 @@ export function answerPrompt(request: ExternalRelayRequest, engine = ""): string
     input.short_term_memory
       ? `<short_term_memory>\n${json(input.short_term_memory)}\n</short_term_memory>`
       : null,
-    handoff ? `<tools>\n${json(input.tools ?? [])}\n</tools>` : null,
+    handoff ? `<tools>\n${json(visibleRelayTools(request))}\n</tools>` : null,
   ].filter((section): section is string => section !== null);
   const names = [
     "<documents>",
@@ -31,7 +31,7 @@ export function answerPrompt(request: ExternalRelayRequest, engine = ""): string
     ? ` <requester> describes who wrote the message you answer: key is their author.key in <conversation>. is_admin, can_restrict_members, can_delete_messages, is_anonymous_admin and is_owner describe their role and rights; the service checks every request itself.`
     : "";
   const actions = request.delivery === "guest"
-    ? `"reply" posts one final plain-text answer; "handoff" returns this request to the service assistant, including when <tools> is empty. You cannot call service tools. For "handoff" leave text empty and reply_to null. Always use reply_to null.`
+    ? `"reply" posts one final plain-text answer in one or two short lines; "handoff" returns this request to the service assistant, including when <tools> is empty. You cannot call service tools. Use "handoff" when handling the request needs a listed service capability. For a Delegatus project handoff, direct the owner to the relay's regular owner chat. If you need something from the requester, say what you need in one short question. Describe limits of this turn specifically and avoid claims about access to any server. For "handoff" leave text empty and reply_to null. Always use reply_to null.`
     : handoff
     ? `"reply" posts text; "ignore" posts nothing; "handoff" posts nothing and hands this message back to the service, whose own assistant answers it with the tools in <tools>. You cannot call any of those tools. Choose "handoff" when a good answer needs one of them, for example to act in the chat or to look something up that only a tool can see; otherwise answer yourself. For "handoff" leave text empty and reply_to null.`
     : `"reply" posts text; "ignore" posts nothing.`;
@@ -49,7 +49,7 @@ ${context.map((section) => `${section}\n`).join("")}[Answer with one JSON object
 export function toolRoundPrompt(request: ExternalRelayRequest, round: number, state: {
   results: import("./toolLoop").ToolProjection[]; callsLeft: number; final: boolean; actionSent?: boolean; pageRead?: boolean;
 }, engine = ""): string {
-  const visible = { ...request, input: { ...request.input, tools: [...(request.input.tools ?? []).filter(tool => tool.name !== "read_page" && mayQuote(tool.audience, request.input.requester)),
+  const visible = { ...request, input: { ...request.input, tools: [...visibleRelayTools(request).filter(tool => tool.name !== "read_page"),
     ...(state.pageRead && request.delivery !== "guest" ? [PAGE_READ_TOOL] : [])] } };
   const sections = [
     ...(request.input.tool_guidance != null ? [`<tool_guidance>\n${json(request.input.tool_guidance)}\n</tool_guidance>`] : []),
@@ -85,7 +85,7 @@ export function toolRoundPrompt(request: ExternalRelayRequest, round: number, st
 
 export function conversationTurnPrompt(request: ExternalRelayRequest, record: RelayConversation, round: string) {
   const input = request.input;
-  const sections = `${formatSection(request)}<service_instructions>\n${input.instructions}\n</service_instructions>\n<owner_instructions>\n${input.owner_instructions ?? ""}\n</owner_instructions>\n<documents>\n${json(input.documents)}\n</documents>\n<short_term_memory>\n${json(input.short_term_memory ?? null)}\n</short_term_memory>\n<tools>\n${json(input.tools?.filter((t) => mayQuote(t.audience, input.requester)) ?? [])}\n</tools>\n<tool_guidance>\n${json(input.tool_guidance ?? null)}\n</tool_guidance>\n`;
+  const sections = `${formatSection(request)}<service_instructions>\n${input.instructions}\n</service_instructions>\n<owner_instructions>\n${input.owner_instructions ?? ""}\n</owner_instructions>\n<documents>\n${json(input.documents)}\n</documents>\n<short_term_memory>\n${json(input.short_term_memory ?? null)}\n</short_term_memory>\n<tools>\n${json(visibleRelayTools(request))}\n</tools>\n<tool_guidance>\n${json(input.tool_guidance ?? null)}\n</tool_guidance>\n`;
   const digest = createHash("sha256").update(sections).digest("hex");
   const seen = new Set(record.seen);
   const messages = input.conversation.filter((message) => {

@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
+import type { BigIntStats, StatOptions, Stats } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
@@ -8,7 +9,7 @@ import { lockedFixture } from "./fixtures/lockedDependencies";
 import { buildPipeline } from "./store";
 import { provisionPipelineWorktree, provisionPipelineWorktreeAsync, publishPipelineBranch, publicationFailureCause } from "./git";
 import { findPipelineRecord, savePipelines } from "./store";
-import { dependencyInstallFailure } from "./lockedDependencies";
+import { dependencyInstallFailure, prepareLockedDependencies } from "./lockedDependencies";
 import { realExec, type ExecPort } from "../workflows/provision";
 
 function fixture(writable = false) {
@@ -585,8 +586,698 @@ test("two fresh processes share one completed installation", async () => {
   } finally { f.close(); }
 }, 30_000);
 
+// The timeout covers fixture migration under the gate's I/O limits. Each
+// warm caller independently refuses an in-process walk of the payload.
+test("a real-sized sealed inventory stays out of fresh linked and provisioning callers", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    // Populate read-only payload separately from the cold installer, which
+    // chmods each entry serially. The changed root makes the real writer
+    // validate the complete inventory and refresh the fingerprint.
+    const payload = path.join(modules, "large-payload");
+    // Model a legacy installation before its first payload inventory.
+    fs.unlinkSync(path.join(path.dirname(modules), "payload.sha256"));
+    fs.unlinkSync(path.join(path.dirname(modules), "payload-content.sha256"));
+    fs.unlinkSync(path.join(path.dirname(modules), "validated.sha256"));
+    fs.chmodSync(modules, 0o755);
+    fs.mkdirSync(payload);
+    for (let directory = 0; directory < 407; directory++) {
+      const fixture = path.join(payload, `group-${directory}`);
+      fs.mkdirSync(fixture);
+      for (let entry = 0; entry < 100; entry++) {
+        fs.writeFileSync(path.join(fixture, `file-${entry}.js`), "", { mode: 0o444 });
+      }
+      fs.chmodSync(fixture, 0o555);
+    }
+    fs.chmodSync(payload, 0o555);
+    fs.chmodSync(modules, 0o555);
+    await expect(prepareLockedDependencies(f.worktreeDir)).resolves.toBe(true);
+    const newcomer = await f.addWorktree("large-graph-new-link");
+    const check = `
+      import fs from "node:fs";
+      const lstat = fs.promises.lstat, readdir = fs.promises.readdir;
+      fs.promises.lstat = (file, ...args) => {
+        if (String(file).startsWith(${JSON.stringify(payload)}))
+          throw new Error("warm validation statted a payload entry");
+        return lstat(file, ...args);
+      };
+      fs.promises.readdir = (file, ...args) => {
+        if (String(file).startsWith(${JSON.stringify(modules)})) throw new Error("warm validation walked the sealed graph");
+        return readdir(file, ...args);
+      };
+      await import(${JSON.stringify(path.resolve("scripts/prepare-stage-dependencies.ts"))});`;
+    for (const cwd of [f.worktreeDir, newcomer]) {
+      await f.run([process.execPath, "-e", check], cwd);
+      expect(fs.realpathSync(path.join(cwd, "node_modules"))).toBe(modules);
+    }
+  } finally { f.close(); }
+}, 150_000);
+
+test.each(["missing", "truncated", "directory", "nonempty directory", "stale"] as const)("a %s validation receipt rechecks the fenced inventory", async shape => {
+  const f = await lockedFixture();
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const receipt = path.join(path.dirname(modules), "validated.sha256");
+    const original = fs.readFileSync(receipt, "ascii");
+    if (shape === "missing" || shape.includes("directory")) fs.unlinkSync(receipt);
+    if (shape === "truncated") fs.writeFileSync(receipt, "{");
+    if (shape.includes("directory")) fs.mkdirSync(receipt);
+    if (shape === "nonempty directory") fs.writeFileSync(path.join(receipt, "preserve"), "unowned");
+    if (shape === "stale") fs.chmodSync(modules, 0o755);
+    const release = f.holdWriter();
+    try {
+      const controller = new AbortController();
+      await expect(prepareLockedDependencies(f.worktreeDir, { signal: controller.signal, onWriterWait: () => controller.abort() }))
+        .rejects.toThrow(/\[wait: repository writer fence/);
+    } finally { release(); }
+    const newcomer = await f.addWorktree("receipt-recovery");
+    for (const cwd of [f.worktreeDir, newcomer]) {
+      await f.run([process.execPath, path.resolve("scripts/prepare-stage-dependencies.ts")], cwd);
+      expect(fs.realpathSync(path.join(cwd, "node_modules"))).toBe(modules);
+    }
+    if (shape === "nonempty directory") expect(fs.readFileSync(path.join(receipt, "preserve"), "utf8")).toBe("unowned");
+    else {
+      const refreshed = fs.readFileSync(receipt, "ascii");
+      expect(refreshed).toMatch(/^[a-f0-9]{64}$/);
+      if (shape !== "stale") expect(refreshed).toBe(original);
+    }
+    expect(fs.statSync(modules).mode & 0o222).toBe(0);
+  } finally { f.close(); }
+}, 30_000);
+
+test.each((["linked", "new"] as const).flatMap(link =>
+  (["executable", "writable", "deleted", "replaced"] as const).map(change => [link, change] as const),
+))("a fresh %s admission checks %s nested payload", async (link, change) => {
+  const f = await lockedFixture();
+  try {
+    const hook = path.resolve("scripts/prepare-stage-dependencies.ts");
+    await f.run([process.execPath, hook], f.worktreeDir);
+    const cwd = link === "linked" ? f.worktreeDir : await f.addWorktree("payload-admission");
+    const local = path.join(cwd, "node_modules");
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const parent = path.join(modules, "fixture-tool", "lib");
+    const file = path.join(parent, "index.js");
+    if (change === "executable") fs.chmodSync(file, 0o555);
+    if (change === "writable") fs.chmodSync(file, 0o644);
+    if (change === "deleted" || change === "replaced") {
+      fs.chmodSync(parent, 0o755);
+      if (change === "deleted") fs.unlinkSync(file);
+      else {
+        const replacement = path.join(parent, "replacement");
+        const bytes = fs.readFileSync(file);
+        bytes[0] = bytes[0]! ^ 1;
+        fs.writeFileSync(replacement, bytes, { mode: 0o444 });
+        fs.renameSync(replacement, file);
+      }
+      fs.chmodSync(parent, 0o555);
+    }
+    if (change === "writable") {
+      await f.run([process.execPath, hook], cwd);
+      expect(fs.statSync(file).mode & 0o777).toBe(0o444);
+      expect(fs.realpathSync(local)).toBe(modules);
+    } else {
+      await expect(f.run([process.execPath, hook], cwd)).rejects.toThrow(change === "executable"
+        ? "dependency receipt inventory does not match the installed graph"
+        : "dependency payload changed since the installation was validated");
+      expect(fs.existsSync(local)).toBe(link === "linked");
+      if (change === "executable") expect(fs.statSync(file).mode & 0o777).toBe(0o555);
+    }
+  } finally { f.close(); }
+}, 30_000);
+
+test.each((["linked", "new"] as const).flatMap(link =>
+  (["zero-length", "legacy zero-length", "truncated portable", "restored"] as const).map(shape => [link, shape] as const),
+))("a fresh %s admission recovers a %s payload receipt", async (link, shape) => {
+  const f = await lockedFixture();
+  try {
+    const hook = path.resolve("scripts/prepare-stage-dependencies.ts");
+    await f.run([process.execPath, hook], f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const target = path.dirname(modules), receipt = path.join(target, "payload.sha256");
+    const content = path.join(target, "payload-content.sha256");
+    const before = fs.existsSync(content) ? fs.readFileSync(content, "ascii") : null;
+    const localBefore = fs.readFileSync(receipt, "ascii");
+    if (shape === "restored") {
+      const file = path.join(modules, "fixture-tool", "lib", "index.js");
+      const inode = fs.statSync(file).ino;
+      const backup = path.join(f.root, "backup");
+      fs.renameSync(target, backup);
+      fs.cpSync(backup, target, { recursive: true, verbatimSymlinks: true });
+      expect(fs.statSync(file).ino).not.toBe(inode);
+    } else if (shape === "truncated portable") fs.truncateSync(content, 0);
+    else {
+      fs.truncateSync(receipt, 0);
+      if (shape === "legacy zero-length") fs.rmSync(content, { force: true });
+    }
+    const cwd = link === "linked" ? f.worktreeDir : await f.addWorktree("receipt-admission");
+    await f.run([process.execPath, hook], cwd);
+    expect(fs.realpathSync(path.join(cwd, "node_modules"))).toBe(modules);
+    const restoredContent = fs.readFileSync(content, "ascii");
+    expect(restoredContent).toMatch(/^[a-f0-9]{64}$/);
+    if (before) expect(restoredContent).toBe(before);
+    const recovered = fs.readFileSync(receipt, "ascii");
+    expect(recovered).toMatch(/^[a-f0-9]{64}$/);
+    expect(recovered === localBefore).toBe(shape !== "restored");
+  } finally { f.close(); }
+}, 30_000);
+
+test("a valid local-only receipt is verified before adding a portable digest", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const content = path.join(path.dirname(modules), "payload-content.sha256");
+    const original = fs.readFileSync(content, "ascii");
+    fs.unlinkSync(content);
+    const file = path.join(modules, "fixture-tool", "lib", "index.js");
+    const bytes = fs.readFileSync(file);
+    fs.chmodSync(file, 0o644);
+    fs.writeFileSync(file, "changed");
+    fs.chmodSync(file, 0o444);
+    const hook = path.resolve("scripts/prepare-stage-dependencies.ts");
+    await expect(f.run([process.execPath, hook], f.worktreeDir)).rejects.toThrow("dependency payload changed");
+    expect(fs.existsSync(content)).toBe(false);
+    fs.chmodSync(file, 0o644);
+    fs.writeFileSync(file, bytes);
+    fs.chmodSync(file, 0o444);
+    await f.run([process.execPath, hook], f.worktreeDir);
+    expect(fs.readFileSync(content, "ascii")).toBe(original);
+  } finally { f.close(); }
+}, 30_000);
+
+test("a failed payload receipt fsync preserves the previous record and releases the writer", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const receipt = path.join(path.dirname(modules), "payload.sha256");
+    fs.truncateSync(receipt, 0);
+    const temporary = receipt + ".next";
+    const open = fs.promises.open;
+    const hook = spyOn(fs.promises, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (args[0] === temporary) handle.sync = async () => { throw new Error("fixture fsync failed"); };
+      return handle;
+    });
+    try {
+      await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow("fixture fsync failed");
+      expect(fs.statSync(receipt).size).toBe(0);
+      expect(fs.existsSync(temporary)).toBe(false);
+      f.holdWriter()();
+    } finally { hook.mockRestore(); }
+    await expect(prepareLockedDependencies(f.worktreeDir)).resolves.toBe(true);
+    expect(fs.readFileSync(receipt, "ascii")).toMatch(/^[a-f0-9]{64}$/);
+  } finally { f.close(); }
+}, 30_000);
+
+test.each(["deadline", "revoked"] as const)("a fresh provisioning process handles %s after a permission repair write", async stop => {
+  const f = await lockedFixture();
+  try {
+    const hook = path.resolve("scripts/prepare-stage-dependencies.ts");
+    await f.run([process.execPath, hook], f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const nested = path.join(modules, "fixture-tool/lib/index.js");
+    fs.chmodSync(modules, 0o755);
+    fs.chmodSync(nested, 0o644);
+    const newcomer = await f.addWorktree("permission-retry");
+    const local = path.join(newcomer, "node_modules");
+    const source = `
+      import fs from "node:fs";
+      import { prepareLockedDependencies } from ${JSON.stringify(path.resolve("src/lib/pipelines/lockedDependencies.ts"))};
+      const files = ${JSON.stringify([modules, nested])};
+      const local = ${JSON.stringify(local)};
+      const budget = 500;
+      let now = 1800000000000, interrupted = false;
+      const writes = [];
+      Date.now = () => now;
+      const wrote = file => {
+        if (!files.includes(file)) return;
+        if (fs.existsSync(local)) throw new Error("permission repair published an unvalidated link");
+        writes.push(files.indexOf(file));
+      };
+      const open = fs.promises.open;
+      fs.promises.open = async (file, ...args) => {
+        const handle = await open(file, ...args);
+        const change = handle.chmod.bind(handle);
+        handle.chmod = async mode => { await change(mode); wrote(file); };
+        return handle;
+      };
+      let error = null;
+      try {
+        await prepareLockedDependencies(process.cwd(), { budgetMs: budget, assertCurrent() {
+          if (interrupted) return;
+          const dirty = files.filter(file => fs.statSync(file).mode & 0o200).length;
+          if (dirty === files.length) return;
+          if (dirty === 0 || fs.existsSync(local)) throw new Error("repair did not stop with pending writes");
+          interrupted = true;
+          if (${stop === "revoked"}) throw new Error("fixture repair authority revoked");
+          now += budget + 1;
+        } });
+      } catch (failure) { error = failure.message; }
+      process.stdout.write(JSON.stringify({ writes, error }));`;
+    const result = await realExec(process.execPath, ["-e", source], newcomer, undefined, { timeoutMs: 10_000 });
+    expect(result.code, result.stderr).toBe(0);
+    const { writes, error } = JSON.parse(result.stdout);
+    if (stop === "deadline") {
+      expect(error).toBeNull();
+      expect(result.stderr.match(/deadline exceeded \[commit: permission repair,[^\n]+retrying permission repair in 100 ms/g)).toHaveLength(1);
+      expect(writes).toEqual([0, 1]);
+    } else {
+      expect(error).toContain("fixture repair authority revoked [commit: permission repair");
+      expect(fs.existsSync(local)).toBe(false);
+      expect(writes).toEqual([0]);
+      expect(fs.statSync(nested).mode & 0o777).toBe(0o644);
+      await f.run([process.execPath, hook], newcomer);
+    }
+    expect(fs.realpathSync(local)).toBe(modules);
+    expect(fs.statSync(modules).mode & 0o777).toBe(0o555);
+    expect(fs.statSync(nested).mode & 0o777).toBe(0o444);
+    const release = f.holdWriter();
+    try { await f.run([process.execPath, hook], newcomer); }
+    finally { release(); }
+  } finally { f.close(); }
+}, 30_000);
+
+test("a partly written installation stays unpublished while the writer is active and after validation refuses it", async () => {
+  const f = await lockedFixture();
+  const partial = Promise.withResolvers<void>(), finish = Promise.withResolvers<void>();
+  let writing: Promise<boolean> | undefined;
+  try {
+    const peer = await f.addWorktree("partial-graph-peer");
+    writing = prepareLockedDependencies(f.worktreeDir, { exec: async (...args) => {
+      const result = await realExec(...args);
+      if (args[0] === "bun" && result.code === 0) {
+        fs.unlinkSync(path.join(args[2]!, "node_modules", "fixture-tool", "package.json"));
+        partial.resolve();
+        await finish.promise;
+      }
+      return result;
+    } });
+    void writing.catch(partial.reject);
+    await partial.promise;
+    const controller = new AbortController();
+    await expect(prepareLockedDependencies(peer, {
+      signal: controller.signal, onWriterWait: () => controller.abort(),
+    })).rejects.toThrow(/\[wait: repository writer fence/);
+    expect(fs.existsSync(path.join(peer, "node_modules"))).toBe(false);
+    expect(fs.readdirSync(f.cache).filter(name => /^[a-f0-9]{64}$/.test(name))).toEqual([]);
+    finish.resolve();
+    await expect(writing).rejects.toThrow("required dependency unavailable (ENOENT)");
+    expect(fs.readdirSync(f.cache)).toEqual(["owner.lock"]);
+    expect(fs.existsSync(path.join(f.worktreeDir, "node_modules"))).toBe(false);
+    await expect(prepareLockedDependencies(peer)).resolves.toBe(true);
+  } finally { finish.resolve(); await writing?.catch(() => {}); f.close(); }
+}, 30_000);
+
+test("full validation notices a CLI link removed after the asynchronous stat", async () => {
+  const f = await lockedFixture({ registry: true });
+  let restore: (() => void) | undefined;
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const local = path.join(f.worktreeDir, "node_modules"), modules = fs.realpathSync(local);
+    fs.unlinkSync(path.join(path.dirname(modules), "validated.sha256"));
+    const cli = path.join(modules, ".bin/fixture-tool"), lstat = fs.promises.lstat;
+    let removed = false;
+    function intercept(filename: fs.PathLike, options: StatOptions & { bigint: true }): Promise<BigIntStats>;
+    function intercept(filename: fs.PathLike, options?: StatOptions): Promise<Stats>;
+    function intercept(filename: fs.PathLike, options?: StatOptions): Promise<Stats | BigIntStats> {
+      const value = options?.bigint ? lstat(filename, { bigint: true }) : lstat(filename);
+      return value.then(result => {
+        if (filename === cli && !removed) { fs.unlinkSync(cli); removed = true; }
+        return result;
+      });
+    }
+    const hook = spyOn(fs.promises, "lstat").mockImplementation(intercept);
+    restore = () => hook.mockRestore();
+    await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow(/ENOENT|changed during (validation|preparation)/);
+    expect(removed).toBe(true);
+    expect(fs.realpathSync(local)).toBe(modules);
+    expect(fs.existsSync(cli)).toBe(false);
+  } finally { restore?.(); f.close(); }
+}, 30_000);
+
+test("a stale receipt deadline during the final synchronous stat retries validation in a fresh process", async () => {
+  const f = await lockedFixture();
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const target = path.dirname(fs.realpathSync(path.join(f.worktreeDir, "node_modules")));
+    const receipt = path.join(target, "installed.json");
+    fs.writeFileSync(path.join(target, "validated.sha256"), "0".repeat(64));
+    const source = `
+      import fs from "node:fs";
+      import { prepareLockedDependencies } from ${JSON.stringify(path.resolve("src/lib/pipelines/lockedDependencies.ts"))};
+      let now = 1800000000000, checks = 0;
+      Date.now = () => now;
+      const lstat = fs.lstatSync;
+      fs.lstatSync = (file, ...args) => {
+        const entry = lstat(file, ...args);
+        if (file === ${JSON.stringify(receipt)} && ++checks === 1) now += 180001;
+        return entry;
+      };
+      await prepareLockedDependencies(process.cwd());
+      process.stdout.write(String(checks));`;
+    const result = await realExec(process.execPath, ["-e", source], f.worktreeDir, undefined, { timeoutMs: 10_000 });
+    expect(result.code, result.stderr).toBe(0);
+    expect(Number(result.stdout)).toBeGreaterThan(1);
+    expect(result.stderr.match(/retrying validation in 100 ms/g)).toHaveLength(1);
+    expect(result.stderr).toContain("[validation: existing link and seal");
+  } finally { f.close(); }
+}, 30_000);
+
+test("receipt inventory omissions refuse, and permission drift is repaired under the writer fence", async () => {
+  const f = await lockedFixture({ registry: true });
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const local = path.join(f.worktreeDir, "node_modules"), modules = fs.realpathSync(local);
+    const receipt = path.join(path.dirname(modules), "installed.json");
+    const original = JSON.parse(fs.readFileSync(receipt, "utf8"));
+    fs.writeFileSync(receipt, JSON.stringify({ ...original, cliLinks: [] }));
+    await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow("dependency receipt inventory does not match the installed graph");
+    fs.writeFileSync(receipt, JSON.stringify(original));
+    const payload = path.join(modules, "fixture-tool/index.js"), bin = path.join(modules, ".bin");
+    fs.chmodSync(payload, 0o644);
+    fs.chmodSync(bin, 0o777);
+    expect(await prepareLockedDependencies(f.worktreeDir)).toBe(true);
+    expect(fs.statSync(payload).mode & 0o222).toBe(0);
+    expect(fs.statSync(bin).mode & 0o222).toBe(0o200);
+    await f.run(["node_modules/.bin/fixture-tool"], f.worktreeDir);
+  } finally { f.close(); }
+}, 30_000);
+
+test("a sealed graph with no CLI links admits from its complete empty inventory", async () => {
+  const f = await lockedFixture({ registry: true, cli: false });
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const receipt = JSON.parse(fs.readFileSync(path.join(path.dirname(modules), "installed.json"), "utf8"));
+    expect(receipt.cliLinks).toEqual([]);
+    expect(await prepareLockedDependencies(f.worktreeDir)).toBe(true);
+    expect(fs.realpathSync(path.join(f.worktreeDir, "node_modules"))).toBe(modules);
+  } finally { f.close(); }
+}, 30_000);
+
+test("two linked hooks pass a held writer while a first link waits and performs no warm prune", async () => {
+  const f = await lockedFixture();
+  const hook = path.resolve("scripts/prepare-stage-dependencies.ts");
+  let release: (() => void) | undefined;
+  try {
+    const other = await f.addWorktree("second-linked");
+    const newcomer = await f.addWorktree("first-link");
+    await Promise.all([f.worktreeDir, other].map(cwd => f.run(["bun", hook], cwd)));
+    const modules = fs.realpathSync(path.join(other, "node_modules"));
+    const receipt = path.join(path.dirname(modules), "installed.json");
+    const before = fs.readFileSync(receipt);
+    release = f.holdWriter();
+    await Promise.all([f.worktreeDir, other].map(cwd => f.run(["bun", hook], cwd)));
+
+    const source = `import {prepareLockedDependencies} from ${JSON.stringify(path.resolve("src/lib/pipelines/lockedDependencies.ts"))};
+      let contended=false;
+      try { await prepareLockedDependencies(${JSON.stringify(newcomer)}, {budgetMs:250,onWriterWait(){contended=true;}}); process.stdout.write(JSON.stringify({contended,result:"admitted"})); }
+      catch (error) { process.stdout.write(JSON.stringify({contended,error:String(error)})); }`;
+    const contender = Bun.spawn([process.execPath, "-e", source], { cwd: path.resolve("."), stdout: "pipe", stderr: "pipe" });
+    try {
+      const [code, output] = await Promise.all([contender.exited, new Response(contender.stdout).text()]);
+      expect(code).toBe(0);
+      const result = JSON.parse(output);
+      expect(result.contended).toBe(true);
+      expect(result.error).toMatch(/deadline exceeded \[wait: repository writer fence, wait \d+ ms, validation \d+ ms, commit 0 ms\]/);
+      expect(fs.existsSync(path.join(newcomer, "node_modules"))).toBe(false);
+    } finally { if (contender.exitCode === null) contender.kill("SIGKILL"); }
+
+    release();
+    const commands: string[] = [];
+    await expect(prepareLockedDependencies(newcomer, { exec: (...args) => {
+      commands.push(args[1][0]!);
+      return realExec(...args);
+    } })).resolves.toBe(true);
+    expect(commands).toEqual(["rev-parse", "check-ignore"]);
+    expect(fs.realpathSync(path.join(newcomer, "node_modules"))).toBe(modules);
+    expect(fs.readFileSync(receipt)).toEqual(before);
+  } finally { release?.(); f.close(); }
+}, 30_000);
+
+test("a linked graph admits while a different key installs and seals under the real writer fence", async () => {
+  const f = await lockedFixture();
+  const installed = Promise.withResolvers<void>(), finishInstall = Promise.withResolvers<void>();
+  let cold: Promise<boolean> | undefined;
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const peer = await f.addWorktree("new-key");
+    fs.appendFileSync(path.join(peer, "package.json"), "\n");
+    cold = prepareLockedDependencies(peer, { exec: async (...args) => {
+      const result = await realExec(...args);
+      if (args[0] === "bun") { installed.resolve(); await finishInstall.promise; }
+      return result;
+    } });
+    void cold.catch(installed.reject);
+    await installed.promise;
+    expect(fs.existsSync(path.join(f.cache, "building.json"))).toBe(true);
+    await f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], f.worktreeDir);
+    expect(fs.existsSync(path.join(peer, "node_modules"))).toBe(false);
+    finishInstall.resolve();
+    await expect(cold).resolves.toBe(true);
+    expect(fs.realpathSync(path.join(peer, "node_modules"))).not.toBe(fs.realpathSync(path.join(f.worktreeDir, "node_modules")));
+  } finally { finishInstall.resolve(); await cold?.catch(() => {}); f.close(); }
+}, 30_000);
+
+test("an equal key in a peer namespace cannot admit a foreign link or a copied worktree registration", async () => {
+  const f = await lockedFixture();
+  let release: (() => void) | undefined;
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const repo = path.join(f.root, "foreign-repo"), peer = path.join(f.root, "foreign-lane");
+    await f.run(["git", "clone", f.repoDir, repo]);
+    await f.run(["git", "worktree", "add", "--detach", peer], repo);
+    await prepareLockedDependencies(peer);
+    const local = path.join(f.worktreeDir, "node_modules");
+    const expected = fs.realpathSync(local), foreign = fs.realpathSync(path.join(peer, "node_modules"));
+    expect(path.basename(path.dirname(expected))).toBe(path.basename(path.dirname(foreign)));
+    expect(expected).not.toBe(foreign);
+    fs.unlinkSync(local);
+    fs.symlinkSync(foreign, local, "dir");
+    release = f.holdWriter();
+    const abort = new AbortController();
+    await expect(prepareLockedDependencies(f.worktreeDir, { signal: abort.signal, assertCurrent() { abort.abort(); } }))
+      .rejects.toThrow(/\[wait: repository writer fence/);
+    expect(fs.realpathSync(local)).toBe(foreign);
+    release();
+    await expect(prepareLockedDependencies(f.worktreeDir)).resolves.toBe(true);
+    expect(fs.realpathSync(local)).toBe(expected);
+    const redirect = path.join(f.root, "redirect");
+    fs.symlinkSync(expected, redirect, "dir");
+    fs.unlinkSync(local);
+    fs.symlinkSync(redirect, local, "dir");
+    expect(fs.realpathSync(local)).toBe(expected);
+    await expect(prepareLockedDependencies(f.worktreeDir)).resolves.toBe(true);
+    expect(fs.readlinkSync(local)).not.toContain("redirect");
+    fs.copyFileSync(path.join(peer, ".git"), path.join(f.worktreeDir, ".git"));
+    await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow("dependency worktree is no longer registered");
+    expect(fs.realpathSync(local)).toBe(expected);
+  } finally { release?.(); f.close(); }
+}, 30_000);
+
+test("a Git worktree registration inside a newline path prepares successfully", async () => {
+  const f = await lockedFixture();
+  try {
+    const parent = path.join(f.root, "parent\nwith newline");
+    fs.mkdirSync(parent);
+    const moved = path.join(parent, "checkout");
+    await f.run(["git", "worktree", "move", f.worktreeDir, moved]);
+    f.worktreeDir = moved;
+    f.pipeline.worktreeDir = moved;
+    expect(await prepareLockedDependencies(moved)).toBe(true);
+    expect(fs.lstatSync(path.join(moved, "node_modules")).isSymbolicLink()).toBe(true);
+  } finally { f.close(); }
+}, 30_000);
+
+test.each(["receipt", "installed manifest", "CLI link"] as const)("validation detects a replaced %s behind an asynchronous read", async shape => {
+  const f = await lockedFixture();
+  let restore: (() => void) | undefined;
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const local = path.join(f.worktreeDir, "node_modules");
+    const modules = fs.realpathSync(local), target = path.dirname(modules);
+    const cli = path.join(modules, ".bin", "fixture-tool");
+    const realpath = fs.promises.realpath;
+    let changed = false;
+    const hook = spyOn(fs.promises, "realpath").mockImplementation(async (...args) => {
+      const result = await Reflect.apply(realpath, fs.promises, args);
+      if (args[0] === cli && !changed) {
+        if (shape === "receipt") fs.unlinkSync(path.join(target, "installed.json"));
+        if (shape === "installed manifest") fs.appendFileSync(path.join(target, "package.json"), "\n");
+        if (shape === "CLI link") fs.unlinkSync(cli);
+        changed = true;
+      }
+      return result;
+    });
+    restore = () => hook.mockRestore();
+    await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow(/changed during (validation|preparation)/);
+    expect(changed).toBe(true);
+    expect(fs.realpathSync(local)).toBe(modules);
+  } finally { restore?.(); f.close(); }
+}, 30_000);
+
+test.each(["root", "executable"] as const)("a writable %s needs the writer fence before it can be sealed", async shape => {
+  const f = await lockedFixture();
+  let release: (() => void) | undefined;
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const local = path.join(f.worktreeDir, "node_modules"), modules = fs.realpathSync(local);
+    const stat = fs.lstatSync(local);
+    const filename = shape === "root" ? modules : path.join(modules, "fixture-tool", "cli.js");
+    fs.chmodSync(filename, 0o755);
+    release = f.holdWriter();
+    const abort = new AbortController();
+    await expect(prepareLockedDependencies(f.worktreeDir, { signal: abort.signal, assertCurrent() { abort.abort(); } }))
+      .rejects.toThrow(/\[wait: repository writer fence/);
+    expect(fs.statSync(filename).mode & 0o222).toBe(0o200);
+    release();
+    await expect(prepareLockedDependencies(f.worktreeDir)).resolves.toBe(true);
+    expect(fs.statSync(filename).mode & 0o222).toBe(0);
+    expect(fs.lstatSync(local).ino).toBe(stat.ino);
+    await f.run(["node_modules/.bin/fixture-tool"], f.worktreeDir);
+  } finally { release?.(); f.close(); }
+}, 30_000);
+
+test.skipIf(process.platform === "win32")("a fresh hook reconciles a link when its first process dies after rename", async () => {
+  const f = await lockedFixture();
+  try {
+    const local = path.join(f.worktreeDir, "node_modules"), hook = path.resolve("scripts/prepare-stage-dependencies.ts");
+    const crashed = await realExec(process.execPath, ["-e", `
+      import fs from "node:fs";
+      const rename = fs.renameSync;
+      fs.renameSync = (from, to) => {
+        rename(from, to);
+        if (to === ${JSON.stringify(local)}) process.kill(process.pid, "SIGKILL");
+      };
+      await import(${JSON.stringify(hook)});`], f.worktreeDir);
+    expect(crashed.signal).toBe("SIGKILL");
+    const first = fs.lstatSync(local), destination = fs.readlinkSync(local);
+    const release = f.holdWriter();
+    try { await f.run(["bun", hook], f.worktreeDir); }
+    finally { release(); }
+    expect(fs.readlinkSync(local)).toBe(destination);
+    expect(fs.lstatSync(local).ino).toBe(first.ino);
+    expect(fs.readdirSync(f.cache).filter(name => /^[a-f0-9]{64}$/.test(name))).toHaveLength(1);
+  } finally { f.close(); }
+}, 30_000);
+
+test("a matching replacement symlink cannot acknowledge a lost commit for another inode", async () => {
+  const f = await lockedFixture();
+  let restore: (() => void) | undefined;
+  try {
+    const local = path.join(f.worktreeDir, "node_modules");
+    const rename = fs.renameSync;
+    let replaced: number | undefined;
+    const hook = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      rename(from, to);
+      if (to === local) {
+        const owned = local + ".previous";
+        rename(local, owned);
+        fs.symlinkSync(fs.readlinkSync(owned), local, "dir");
+        replaced = fs.lstatSync(local).ino;
+        throw new Error("link outcome unknown");
+      }
+    });
+    restore = () => hook.mockRestore();
+    await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow(/link outcome unknown \[commit: worktree link/);
+    expect(replaced).toBeDefined();
+    expect(fs.lstatSync(local).ino).toBe(replaced!);
+    expect(fs.lstatSync(local + ".previous").ino).not.toBe(replaced!);
+  } finally { restore?.(); f.close(); }
+}, 30_000);
+
+test.each(["validation", "before commit", "after commit"] as const)("a deadline at %s identifies the failing phase or retains the committed link", async phase => {
+  const f = await lockedFixture();
+  let restore: (() => void) | undefined;
+  let now = 1_800_000_000_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    const local = path.join(f.worktreeDir, "node_modules");
+    if (phase === "validation") {
+      await prepareLockedDependencies(f.worktreeDir);
+      const realpath = fs.promises.realpath;
+      const hook = spyOn(fs.promises, "realpath").mockImplementation(async (...args) => {
+        const result = await Reflect.apply(realpath, fs.promises, args);
+        if (args[0] === local) now += 180_001;
+        return result;
+      });
+      restore = () => hook.mockRestore();
+      await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow(/deadline exceeded \[validation: existing link and seal/);
+      expect(fs.lstatSync(local).isSymbolicLink()).toBe(true);
+    } else if (phase === "before commit") {
+      const symlink = fs.promises.symlink;
+      const hook = spyOn(fs.promises, "symlink").mockImplementation(async (...args) => {
+        await symlink(...args);
+        now += 180_001;
+      });
+      restore = () => hook.mockRestore();
+      await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow(/deadline exceeded \[commit: worktree link/);
+      expect(fs.existsSync(local)).toBe(false);
+    } else {
+      const rename = fs.renameSync;
+      const hook = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+        rename(from, to);
+        if (to === local) now += 180_001;
+      });
+      restore = () => hook.mockRestore();
+      await expect(prepareLockedDependencies(f.worktreeDir)).resolves.toBe(true);
+      const inode = fs.lstatSync(local).ino;
+      await expect(prepareLockedDependencies(f.worktreeDir)).resolves.toBe(true);
+      expect(fs.lstatSync(local).ino).toBe(inode);
+    }
+  } finally { restore?.(); clock.mockRestore(); f.close(); }
+}, 30_000);
+
+test.each([1, 2])("a fenced validation timing out %i time(s) gets one retry in a fresh process", async failures => {
+  const f = await lockedFixture();
+  try {
+    await prepareLockedDependencies(f.worktreeDir);
+    const modules = fs.realpathSync(path.join(f.worktreeDir, "node_modules"));
+    const newcomer = await f.addWorktree("validation-retry");
+    const local = path.join(newcomer, "node_modules");
+    const cli = path.join(modules, ".bin", "fixture-tool");
+    const source = `
+      import fs from "node:fs";
+      import { prepareLockedDependencies } from ${JSON.stringify(path.resolve("src/lib/pipelines/lockedDependencies.ts"))};
+      let now = 1800000000000, attempts = 0;
+      Date.now = () => now;
+      const realpath = fs.promises.realpath;
+      fs.promises.realpath = async (file, ...args) => {
+        const resolved = await realpath(file, ...args);
+        if (file === ${JSON.stringify(cli)}) {
+          if (fs.existsSync(${JSON.stringify(local)})) throw new Error("an unvalidated link was published");
+          if (++attempts <= ${failures}) now += 180001;
+        }
+        return resolved;
+      };
+      let error = null;
+      try { await prepareLockedDependencies(process.cwd()); } catch (failure) { error = failure.message; }
+      process.stdout.write(JSON.stringify({ attempts, error }));`;
+    const result = await realExec(process.execPath, ["-e", source], newcomer, undefined, { timeoutMs: 10_000 });
+    expect(result.code, result.stderr).toBe(0);
+    const { attempts, error } = JSON.parse(result.stdout);
+    expect(attempts).toBe(2);
+    expect(result.stderr.match(/retrying validation in 100 ms/g)).toHaveLength(1);
+    if (failures === 1) {
+      expect(error).toBeNull();
+      expect(fs.realpathSync(local)).toBe(modules);
+    } else {
+      expect(error).toMatch(/deadline exceeded \[validation: fenced graph/);
+      expect(fs.existsSync(local)).toBe(false);
+    }
+    f.holdWriter()();
+  } finally { f.close(); }
+}, 30_000);
+
 test.skipIf(process.platform === "win32").each(["realExec", "worktreeDependencyExec"])("%s keeps the cache fence with an installer after its controller dies", async executor => {
   const f = await lockedFixture();
+  const linked = await f.addWorktree("linked-during-recovery");
+  await prepareLockedDependencies(linked);
+  fs.appendFileSync(path.join(f.worktreeDir, "package.json"), "\n");
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   let ready!: (pid: number) => void;
@@ -628,6 +1319,8 @@ test.skipIf(process.platform === "win32").each(["realExec", "worktreeDependencyE
     for (const target of descriptors) { const lock = tryLockFenceExclusive(target); lock?.release(); expect(lock).toBeNull(); }
     worker.kill("SIGKILL"); await bounded(worker.exited);
     for (const target of descriptors) { const lock = tryLockFenceExclusive(target); lock?.release(); expect(lock).toBeNull(); }
+    await bounded(f.run(["bun", path.resolve("scripts/prepare-stage-dependencies.ts")], linked));
+    expect(fs.existsSync(path.join(f.worktreeDir, "node_modules"))).toBe(false);
     release();
     expect(await bounded(completed)).toBe(0);
     await bounded((async () => {
@@ -847,13 +1540,13 @@ test("dependency command capture preserves multibyte output across pipe chunks",
 }, 30_000);
 
 
-test.each(["final-prune", "reused-link", "final-pointer"])("dependency changes during %s refuse the obsolete shared graph", async phase => {
+test.each(["before-link", "reused-link", "competing-link"] as const)("dependency changes during %s refuse the obsolete shared graph", async phase => {
   const f = await lockedFixture();
   let restore: (() => void) | undefined;
   try {
     const { prepareLockedDependencies } = await import("./lockedDependencies");
     const local = path.join(f.worktreeDir, "node_modules");
-    let changed = false, scans = 0;
+    let changed = false;
     const changeInputs = async () => {
       const filename = path.join(f.worktreeDir, "package.json");
       const manifest = JSON.parse(fs.readFileSync(filename, "utf8"));
@@ -871,24 +1564,25 @@ test.each(["final-prune", "reused-link", "final-pointer"])("dependency changes d
         return resolved;
       });
       restore = () => spy.mockRestore();
-    }
-    await expect(prepareLockedDependencies(f.worktreeDir, { exec: async (command, args, cwd, env, options) => {
-      const result = await realExec(command, args, cwd, env, options);
-      if (phase !== "reused-link" && command === "git" && args[0] === "worktree" && ++scans === 2) {
-        if (phase === "final-pointer") {
+    } else {
+      const original = fs.promises.symlink;
+      const spy = spyOn(fs.promises, "symlink").mockImplementation(async (...args) => {
+        await original(...args);
+        if (phase === "competing-link") {
           await f.makeLagging();
-          fs.unlinkSync(local);
           fs.symlinkSync(path.join(f.repoDir, "node_modules"), local, "dir");
           changed = true;
         } else await changeInputs();
-      }
-      return result;
-    } })).rejects.toThrow("stage environment: dependency preparation failed");
+      });
+      restore = () => spy.mockRestore();
+    }
+    await expect(prepareLockedDependencies(f.worktreeDir)).rejects.toThrow("stage environment: dependency preparation failed");
     restore?.(); restore = undefined;
     expect(changed).toBe(true);
-    expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe(phase === "final-pointer" ? "1.0.0" : "2.0.0");
+    if (phase === "before-link") expect(fs.existsSync(local)).toBe(false);
+    else expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe(phase === "competing-link" ? "1.0.0" : "2.0.0");
     await prepareWorktreeDependencies(f.pipeline);
-    expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe(phase === "final-pointer" ? "2.0.0" : "3.0.0");
+    expect(JSON.parse(fs.readFileSync(path.join(local, "fixture-tool/package.json"), "utf8")).version).toBe(phase === "competing-link" ? "2.0.0" : "3.0.0");
   } finally { restore?.(); f.close(); }
 }, 30_000);
 

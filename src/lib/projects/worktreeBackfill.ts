@@ -297,30 +297,49 @@ export function recoverWorktreeProjects(trigger: "startup" | "rescan", files?: C
       })));
 }
 
-/** Seats retain a read-only diagnostic. The domain apply branch is used by
-    startup; the HTTP/MCP endpoint refuses apply now that recovery is automatic. */
+async function rescanRecoveredWorktrees(): Promise<void> {
+  const { discoverFilesWithProjectCatalog } = await import("@/lib/scanner/discover");
+  const scan = await discoverFilesWithProjectCatalog();
+  if (!scan.complete) throw new Error("Worktree recovery catalog rescan is incomplete; the next full scan retries");
+}
+
+function applyWorktreeBackfill(project?: string) {
+  const report = recoverWorktreeProjects("startup", undefined, project);
+  const sources = new Set(readWorktreeRecoveries().map(row => row.source));
+  const pendingProjection = sources.size > 0
+    && entriesOfCatalog(storedCatalogFiles()).some(([, file]) => sources.has(file.project));
+  return { report, rescanRequired: report.folded.length > 0 || pendingProjection };
+}
+
+/** Seats retain a read-only diagnostic. The HTTP/MCP endpoint refuses apply
+    now that recovery is automatic. */
 export async function backfillWorktreeProjects(options: { dryRun?: boolean; project?: string } = {},
-  rescan: () => Promise<void> = async () => {
-    const { discoverFilesWithProjectCatalog } = await import("@/lib/scanner/discover");
-    const scan = await discoverFilesWithProjectCatalog();
-    if (!scan.complete) throw new Error("Worktree recovery catalog rescan is incomplete; the next full scan retries");
-  },
+  rescan: () => Promise<void> = rescanRecoveredWorktrees,
 ): Promise<WorktreeBackfillReport> {
   if (options.dryRun !== false) return readRecoveryPlan(options.project);
-  const report = recoverWorktreeProjects("startup", undefined, options.project);
-  const sources = new Set(readWorktreeRecoveries().map(row => row.source));
-  let pendingProjection = false;
-  if (sources.size) {
-    pendingProjection = entriesOfCatalog(storedCatalogFiles()).some(([, file]) => sources.has(file.project));
-  }
-  if (report.folded.length || pendingProjection) {
+  const { report, rescanRequired } = applyWorktreeBackfill(options.project);
+  if (rescanRequired) {
     await rescan();
     report.rescanned = true;
   }
   return report;
 }
 
-export async function runWorktreeRecoveryAtStartup(log: (...args: unknown[]) => void = console.error, rescan?: () => Promise<void>): Promise<void> {
-  try { await backfillWorktreeProjects({ dryRun: false }, rescan); }
-  catch { log("[worktree recovery] startup recovery deferred; the next startup or full catalog scan retries"); }
+export async function runWorktreeRecoveryAtStartup(
+  log: (...args: unknown[]) => void = console.error,
+  rescan: () => Promise<void> = rescanRecoveredWorktrees,
+  deferRescan?: (refresh: () => Promise<void>) => void,
+): Promise<{ folded: number; leftAlone: number }> {
+  const warn = () => log("[worktree recovery] startup recovery deferred; the next startup or full catalog scan retries");
+  // This return is the worker's commit receipt. Transaction errors must reach
+  // the caller so the seat tick stays fenced and recovery can retry.
+  const { report, rescanRequired } = applyWorktreeBackfill();
+  if (!rescanRequired) return { folded: report.folded.length, leftAlone: report.leftAlone.length };
+  const refresh = async () => {
+    try { await rescan(); }
+    catch { warn(); }
+  };
+  if (deferRescan) deferRescan(refresh);
+  else await refresh();
+  return { folded: report.folded.length, leftAlone: report.leftAlone.length };
 }

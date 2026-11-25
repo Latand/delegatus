@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { platformLimitDiagnostic } from "./platformLimit";
 
 /*
  * CPU placement for agent hosts and heavy work (docs/design/cpu-placement.md).
@@ -80,7 +81,14 @@ export type CpuRunner = (command: string, args: string[]) => string;
 // eslint-disable-next-line no-restricted-syntax -- Legacy systemd containment probes and scope setup during serving agent launches.
 const run: CpuRunner = (command, args) => execFileSync(command, args, { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "pipe"] });
 const diagnostics = new Set<string>();
-function diagnostic(key: string, message: string) { if (!diagnostics.has(key)) { diagnostics.add(key); console.warn(`[delegatus] ${message}`); } }
+/** Test seam: each line is written once per process, so a test that reads one starts from an empty set. */
+export function resetCpuDiagnosticsForTests(): void { diagnostics.clear(); }
+function diagnostic(key: string, message: string, platform?: NodeJS.Platform) {
+  if (diagnostics.has(key)) return;
+  diagnostics.add(key);
+  if (platform) platformLimitDiagnostic(`[delegatus] ${message}`, platform);
+  else console.warn(`[delegatus] ${message}`);
+}
 
 /** Entry points fold `DELEGATUS_X` into `LLV_X` (bin/envAlias.mjs); read both. */
 export function delegatusSetting(env: Readonly<Record<string, string | undefined>>, name: string): string | undefined {
@@ -186,6 +194,8 @@ export interface CpuPorts {
   /** Test seams; production uses the slices above. */
   agentSlice?: string;
   workSlice?: string;
+  /** Platform whose limits a not-applicable placement reports; defaults to this process's. */
+  platform?: NodeJS.Platform;
 }
 
 let cachedContainment: CpuContainment | null = null;
@@ -212,7 +222,7 @@ export function planAgentCpu(workload: AgentWorkload, env: Readonly<Record<strin
   const containment = ports.probe ? ports.probe() : cachedContainment ?? probeCpuContainment({ platform: process.platform, cgroupRoot: "/sys/fs/cgroup",
     uid: process.getuid?.() ?? -1, runner, container: fs.existsSync("/.dockerenv") || env.LLV_DOCKER_NSENTER_SHIMS === "1", slice: agentSlice });
   if (!ports.probe && containment.kind !== "missing") cachedContainment = containment;
-  if (containment.kind === "not-applicable") { diagnostic("cpu-na", `Agent CPU placement is off: ${containment.reason}.`); return null; }
+  if (containment.kind === "not-applicable") { diagnostic("cpu-na", `Agent CPU placement is off: ${containment.reason}.`, ports.platform ?? process.platform); return null; }
   if (containment.kind === "missing") {
     if (workload !== "operator") throw new CpuContainmentUnavailable(containment.reason);
     diagnostic("cpu-missing", `Operator agents run without CPU placement: ${containment.reason}.`);

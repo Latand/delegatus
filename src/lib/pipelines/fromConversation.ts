@@ -231,7 +231,7 @@ async function sourceCapture(req: NextRequest, input: Pick<ConversationDraftRequ
 }
 
 /** Bounded visible quotations, all read from the descriptor's captured cutoff. */
-export function conversationExcerpt(pinned: PinnedTranscript, engine: "claude" | "codex" | "copilot") {
+export function conversationExcerpt(pinned: PinnedTranscript, engine: "claude" | "codex" | "copilot" | "antigravity") {
   const head = Buffer.alloc(Math.min(pinned.stat.size, 64 * 1024));
   const bytes = fs.readSync(pinned.descriptor, head, 0, head.length, 0);
   let first: string | undefined;

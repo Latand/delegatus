@@ -482,8 +482,7 @@ its speed row is `RuntimePill.tsx:1162-1167`.
    as `entryEffortResult`, with its own `globalCache("serviceTier")`.
 
 `entryFast` stays, derived as `isFastTier(entryServiceTier(entry))` or `null`.
-The call sites `src/lib/scanner/index.ts:350` and
-`src/lib/scanner/observe.ts:94` also set `entry.serviceTier`. `standard` in
+The scanner in `src/lib/scanner/index.ts` also sets `entry.serviceTier`. `standard` in
 argv, written by today's tmux `fast: false`, is treated as `default`.
 
 ## 7. Tests (each file run by path, under fresh `mktemp -d /tmp/…` `LLV_STATE_DIR`, `XDG_CONFIG_HOME`, `TMPDIR` and `CODEX_HOME`)

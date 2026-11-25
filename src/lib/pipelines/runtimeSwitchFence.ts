@@ -50,7 +50,7 @@ export function pipelineSwitchFence(operationId: string): PipelineSwitchFence | 
       const current = find();
       if (!current) throw new Error("target account is no longer allowed: the stage's runtime switch record is gone");
       if (current.retired) throw new Error("runtime switch retry withdrew the old attempt's execution authority");
-      const pool = allowedAccountIdsForProject(current.project, current.to.engine);
+      const pool = current.to.engine === "antigravity" ? null : allowedAccountIdsForProject(current.project, current.to.engine);
       if (accountId !== undefined) {
         if (pool && (!accountId || !pool.includes(accountId))) {
           throw new Error("the conversation's account is no longer allowed on this project; no host starts on it");

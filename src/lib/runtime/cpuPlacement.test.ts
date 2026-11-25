@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  CpuContainmentUnavailable, cpuScopeProperties, cpuSettings, invalidateCpuContainmentProbe, planAgentCpu, probeCpuContainment,
+  CpuContainmentUnavailable, cpuScopeProperties, cpuSettings, invalidateCpuContainmentProbe, planAgentCpu, probeCpuContainment, resetCpuDiagnosticsForTests,
   verifyCpuScope, workAggregateCpuQuota, workloadForMemberships, workSliceProperties, wrapWorkCommand, type CpuContainment,
 } from "./cpuPlacement";
 
@@ -109,6 +109,26 @@ test("a missing mechanism refuses work explicitly and leaves operator hosts runn
     const notApplicable = { probe: (): CpuContainment => ({ kind: "not-applicable", reason: "CPU placement uses Linux cgroups" }), runner: () => "" };
     expect(planAgentCpu("work", {}, notApplicable)).toBeNull();
   } finally { warn.mockRestore(); }
+});
+
+test.each([
+  ["darwin", "info"], ["win32", "info"], ["linux", "warn"], ["freebsd", "warn"],
+] as const)("CPU placement being off on %s is logged as %s", (platform, level) => {
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  const info = spyOn(console, "info").mockImplementation(() => {});
+  const quiet = process.env.LLV_QUIET_DIAGNOSTICS; delete process.env.LLV_QUIET_DIAGNOSTICS;
+  resetCpuDiagnosticsForTests();
+  try {
+    const ports = { platform, probe: (): CpuContainment => ({ kind: "not-applicable", reason: "CPU placement uses Linux cgroups" }), runner: () => "" };
+    // The line is written once per process; the second launch stays silent.
+    for (const workload of ["work", "operator"] as const) expect(planAgentCpu(workload, {}, ports)).toBeNull();
+    const line = "[delegatus] Agent CPU placement is off: CPU placement uses Linux cgroups.";
+    expect(warn.mock.calls.map(call => String(call[0]))).toEqual(level === "warn" ? [line] : []);
+    expect(info.mock.calls.map(call => String(call[0]))).toEqual(level === "info" ? [line] : []);
+  } finally {
+    if (quiet === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS; else process.env.LLV_QUIET_DIAGNOSTICS = quiet;
+    warn.mockRestore(); info.mockRestore();
+  }
 });
 
 test("a first-party heavy command keeps its argv and runs in its own work scope", () => {

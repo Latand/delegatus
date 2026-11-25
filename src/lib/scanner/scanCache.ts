@@ -120,7 +120,9 @@ const FILE_SCAN_PIN_CACHE_MAX = 8;
 // genuine unknown activity from a bounded tail.
 // v12: entries may carry the `copilot-sessions` root and the `copilot`
 // engine/format; a pre-Copilot snapshot has no Copilot rows and is rescanned.
-const FILE_SCAN_CACHE_SCHEMA_VERSION = 12 as const;
+// v13: entries may carry the `antigravity-sessions` root and the `antigravity`
+// engine/format; a pre-Antigravity snapshot has no Antigravity rows and is rescanned.
+const FILE_SCAN_CACHE_SCHEMA_VERSION = 13 as const;
 const FILE_SCAN_SNAPSHOT_VERSION = 1 as const;
 const FILE_SCAN_SNAPSHOT_FILE = "files-scan-snapshot.json";
 const FILE_SCAN_PERSISTENCE_DIAGNOSTIC_MS = 60_000;
@@ -183,13 +185,13 @@ function isFileScanSnapshot(value: unknown): value is FileScanSnapshot {
   const filesValid = value.files.every((candidate) => {
     if (!isRecord(candidate)) return false;
     return typeof candidate.path === "string"
-      && (candidate.root === "codex-sessions" || candidate.root === "claude-projects" || candidate.root === "claude-tasks" || candidate.root === "openclaw-sessions" || candidate.root === "copilot-sessions")
+      && (candidate.root === "codex-sessions" || candidate.root === "claude-projects" || candidate.root === "claude-tasks" || candidate.root === "openclaw-sessions" || candidate.root === "copilot-sessions" || candidate.root === "antigravity-sessions")
       && typeof candidate.name === "string"
       && typeof candidate.project === "string"
       && typeof candidate.title === "string"
-      && (candidate.engine === "codex" || candidate.engine === "claude" || candidate.engine === "shell" || candidate.engine === "openclaw" || candidate.engine === "copilot")
+      && (candidate.engine === "codex" || candidate.engine === "claude" || candidate.engine === "shell" || candidate.engine === "openclaw" || candidate.engine === "copilot" || candidate.engine === "antigravity")
       && typeof candidate.kind === "string"
-      && (candidate.fmt === "codex" || candidate.fmt === "claude" || candidate.fmt === "plain" || candidate.fmt === "openclaw" || candidate.fmt === "copilot")
+      && (candidate.fmt === "codex" || candidate.fmt === "claude" || candidate.fmt === "plain" || candidate.fmt === "openclaw" || candidate.fmt === "copilot" || candidate.fmt === "antigravity")
       && (candidate.parent === null || typeof candidate.parent === "string")
       && typeof candidate.mtime === "number" && Number.isFinite(candidate.mtime)
       && typeof candidate.size === "number" && Number.isFinite(candidate.size)
@@ -216,7 +218,7 @@ function isFileScanSnapshot(value: unknown): value is FileScanSnapshot {
 /* The primed evidence above is only meaningful for an engine whose transcript
    the turn reader parses; background-task output logs carry no turn. */
 function isTranscriptEngine(engine: Engine): engine is TranscriptEngine {
-  return engine === "claude" || engine === "codex" || engine === "openclaw" || engine === "copilot";
+  return engine === "claude" || engine === "codex" || engine === "openclaw" || engine === "copilot" || engine === "antigravity";
 }
 
 function persistedTurnState(entry: FileEntry): TurnState | undefined {
@@ -923,13 +925,6 @@ function probeFileCatalogMembership(slot: FileScanCacheSlot): Promise<string | n
   const clear = () => { if (slot.membershipProbe === probe) slot.membershipProbe = undefined; };
   void probe.then(clear, clear);
   return probe;
-}
-
-/** The catalog's membership key as the scanner roots hold it now, through the
-    same single probe the generations use; null when it cannot be read. Starts
-    no scan. */
-export function probedFileCatalogMembership(): Promise<string | null> {
-  return probeFileCatalogMembership(globalFileScanSlot());
 }
 
 async function membershipFileScanRefresh(slot: FileScanCacheSlot): Promise<FileScanRefresh | undefined> {

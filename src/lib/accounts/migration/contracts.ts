@@ -1,3 +1,6 @@
+/** Maximum automatic claims of one admitted message across recovery and migration. */
+export const DELIVERY_ATTEMPT_LIMIT = 12;
+
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { assertAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
 import type { AgentEngine } from "@/lib/agent/cli";
@@ -80,6 +83,8 @@ export interface LaunchProfile {
   /** Explicit tool/network boundary. Null/absent preserves legacy readOnly
       interpretation for durable generations created before the axis split. */
   sandbox?: "full" | "restricted" | null;
+  /** A verified owner relay may use only its request-bound seat handoff. */
+  ownerRelayHandoffOnly?: boolean;
   allowSubagents: boolean;
   /** No automatic memory reaches this conversation: no learned rules, no
       shared-memory hook, and its engine's own memory off. Set at spawn for a
@@ -105,7 +110,7 @@ export interface LaunchProfile {
   plan: AgentPlan | null;
 }
 
-type DurableLaunchAccess = Partial<Pick<LaunchProfile, "readOnly" | "sandbox">> | null | undefined;
+type DurableLaunchAccess = Partial<Pick<LaunchProfile, "readOnly" | "sandbox" | "ownerRelayHandoffOnly">> | null | undefined;
 
 export function explicitLaunchProfileSandbox(profile: DurableLaunchAccess): "full" | "restricted" | null {
   return profile?.sandbox === "full" || profile?.sandbox === "restricted"
@@ -114,10 +119,11 @@ export function explicitLaunchProfileSandbox(profile: DurableLaunchAccess): "ful
 }
 
 export function launchProfileEngineReadOnly(profile: DurableLaunchAccess): boolean {
-  return explicitLaunchProfileSandbox(profile) === null && profile?.readOnly === true;
+  return profile?.ownerRelayHandoffOnly === true || explicitLaunchProfileSandbox(profile) === null && profile?.readOnly === true;
 }
 
 export function launchProfileCodexSandbox(profile: DurableLaunchAccess): string | null {
+  if (profile?.ownerRelayHandoffOnly === true) return "read-only";
   const sandbox = explicitLaunchProfileSandbox(profile);
   if (sandbox === "full") return "danger-full-access";
   if (sandbox === "restricted") return "workspace-write";
@@ -368,6 +374,10 @@ export interface DurableQuotaObservation {
   /** The provider said the limit is reached whatever the windows show; see
       `QuotaObservation.limitReached`. Absent when the reading did not say. */
   limitReached?: boolean;
+  /** Unix-second watermark of the newest actual quota exhaustion event ever
+      recorded for this account (Antigravity). Preserved across empty polls and
+      expired windows so older transcripts cannot resurrect an already-reset window. */
+  lastQuotaEventAt?: number;
 }
 
 export interface AccountSelectionSnapshot {

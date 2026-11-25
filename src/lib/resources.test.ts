@@ -2,6 +2,8 @@ import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIden
 import { ownFixtureTree, signalFixtureIdentity, stopFixtureTree } from "@/lib/testing/fixtureProcess";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { stopWorktreeSweepWorker } from "@/lib/pipelines/worktreeSweepWorker";
+import { emptyAgentStateMetrics } from "@/lib/agentState/model";
+import { validAgentStateMetricsBeforeAntigravity } from "@/lib/agentState/legacyMetricsFixture";
 
 import { spawn, spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -9,12 +11,12 @@ import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, op
 import os from "node:os";
 import path from "node:path";
 
-import { procBackend } from "@/lib/proc";
+import { procBackend, selectProcBackend } from "@/lib/proc";
 import { shellQuote } from "@/lib/agent/cli";
 import { createResourceDiagnosticTail, RESOURCE_FAILURE_STDERR_MAX_BYTES } from "@/lib/resourceCollector";
 import type { FileEntry, ResourcesPayload } from "@/lib/types";
 
-import { allowedStructuredHostTarget, applyResourceTargets, buildResourceSnapshot, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES, type StructuredHostKillRef, type StructuredHostRecord } from "./resources";
+import { allowedStructuredHostTarget, applyResourceTargets, buildResourceSnapshot, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, serializeResourceObservationForStorage, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES, type StructuredHostKillRef, type StructuredHostRecord } from "./resources";
 import { RESOURCE_WORKER_PID_NAMESPACE_ENTRYPOINT } from "./resources";
 
 afterEach(async () => { await stopWorktreeSweepWorker(); });
@@ -646,6 +648,52 @@ function workerTestReader(options: Parameters<typeof createResourcesReader>[4] =
 }
 
 describe("resource observation", () => {
+  const preAntigravityMetrics = {
+    ...emptyAgentStateMetrics(), at: 1, stuckTurns: 2,
+    stuckByEngine: { codex: 2, claude: 0, copilot: 0 },
+  };
+  const completeMetrics = { ...preAntigravityMetrics, stuckByEngine: { ...preAntigravityMetrics.stuckByEngine, antigravity: 0 } };
+
+  test("durable pre-Antigravity resource metrics are normalized and malformed buckets are rejected", () => {
+    const message = JSON.parse(EMPTY_WORKER_MESSAGE);
+    const serialize = (agentState: unknown) => JSON.stringify({ version: 1, observation: {
+      generation: 1, startedAt: 1, completedAt: 2, collectorId: "worker:fixture",
+      value: { payload: { ...message.payload, agentState }, diagnostic: message.diagnostic, hostCount: 0, treeCount: 0, targets: [] },
+    } });
+    expect(parsePersistedResourceObservation(serialize(preAntigravityMetrics))?.value.payload.agentState).toEqual(completeMetrics);
+    expect(parsePersistedResourceObservation(serialize({ ...preAntigravityMetrics, stuckByEngine: { codex: null } }))).toBeNull();
+  });
+
+  test("resource observation writes retain the rollback-compatible metrics shape", () => {
+    const metrics = { ...emptyAgentStateMetrics(), stuckByEngine: { codex: 1, claude: 0, copilot: 0, antigravity: 4 } };
+    const diagnostic = { fresh: true, status: "complete" as const, durationMs: 0, phases: {
+      systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0,
+    } };
+    const serialized = serializeResourceObservationForStorage({ generation: 1, startedAt: 1, completedAt: 2, collectorId: "legacy-shape-fixture",
+      value: { payload: { system: null, sessions: [], agentState: metrics }, diagnostic, hostCount: 0, treeCount: 0, targets: [] } });
+    const persisted = JSON.parse(serialized).observation.value.payload.agentState;
+    expect(validAgentStateMetricsBeforeAntigravity(persisted)).toBe(true);
+    expect(persisted.stuckByEngine).toEqual({ codex: 1, claude: 0, copilot: 0 });
+    expect(parsePersistedResourceObservation(serialized)?.value.payload.agentState?.stuckByEngine.antigravity).toBe(0);
+  });
+
+  test("worker pre-Antigravity resource metrics are normalized and malformed buckets are rejected", async () => {
+    const message = JSON.parse(EMPTY_FRESH_WORKER_MESSAGE);
+    for (const agentState of [preAntigravityMetrics, { ...preAntigravityMetrics, stuckByEngine: { codex: null } }]) {
+      const frame = JSON.stringify({ ...message, payload: { ...message.payload, agentState } });
+      await withResourceWorkerScript([`printf '%s\\n' ${shellQuote(frame)}`], async () => {
+        const outcome = await workerTestReader().read(true);
+        if (agentState === preAntigravityMetrics) {
+          expect(outcome.diagnostic.status).toBe("complete");
+          expect(outcome.payload.agentState).toEqual(completeMetrics);
+        } else {
+          expect(outcome.payload.agentState).toBeUndefined();
+          expect(outcome.diagnostic.failure?.cause).toBe("worker-output-invalid");
+        }
+      });
+    }
+  });
+
   test("the packaged worker leaves writable and read-only homes and state trees byte-identical", async () => {
     const directory = mkdtempSync(path.join(os.tmpdir(), "llv-resource-package-purity-"));
     const bundleName = "packaged-resource-worker.mjs";
@@ -1254,6 +1302,111 @@ describe("kill-target allowlist", () => {
 });
 
 describe("resource recurring reads", () => {
+  test.each(["darwin", "win32"] as const)("%s default collector keeps a held OS probe off the event loop", async (platform) => {
+    const fixture = mkdtempSync(path.join(os.tmpdir(), "resource-held-probe-"));
+    const release = path.join(fixture, "release");
+    const command = path.join(fixture, platform === "darwin" ? "vm_stat" : "powershell.exe");
+    const previousPath = process.env.PATH;
+    const previousOverride = process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const backend = selectProcBackend(platform);
+    const payload: ResourcesPayload = { system: null, sessions: [] };
+    const diagnostic = { fresh: false, status: "complete" as const, durationMs: 0, phases: {
+      systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0,
+    } };
+    writeFileSync(command, `#!/bin/sh\nwhile [ ! -e ${shellQuote(release)} ]; do sleep 0.01; done\nprintf ''\n`);
+    chmodSync(command, 0o755);
+    let markBuildComplete!: () => void;
+    const buildComplete = new Promise<void>((resolve) => { markBuildComplete = resolve; });
+    let reader: ReturnType<typeof createResourcesReader>;
+    process.env.PATH = `${fixture}${path.delimiter}${previousPath ?? ""}`;
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
+    delete process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
+    try {
+      reader = createResourcesReader(async () => {
+        try {
+          if (platform === "darwin") await backend.resourceSystemMemory?.();
+          await backend.resourcePpidMap?.();
+          await backend.resourceProcessMemory?.([process.pid]);
+          return payload;
+        } finally {
+          markBuildComplete();
+        }
+      }, () => null, Date.now, () => diagnostic);
+    } finally {
+      Object.defineProperty(process, "platform", platformDescriptor);
+      if (previousOverride === undefined) delete process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
+      else process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS = previousOverride;
+    }
+
+    let heartbeat = false;
+    const heartbeatTimer = setTimeout(() => { heartbeat = true; }, 25);
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const pending = await reader.read(false, { waitMs: 50 });
+      expect(pending.diagnostic.status).toBe("pending");
+      expect(pending.diagnostic.collectorId).toStartWith("in-process:");
+      expect(heartbeat).toBe(true);
+
+      writeFileSync(release, "release");
+      await Promise.race([
+        buildComplete,
+        new Promise<never>((_, reject) => {
+          watchdog = setTimeout(() => reject(new Error("held OS probe did not complete after release")), 2_000);
+          watchdog.unref();
+        }),
+      ]);
+      let completed = await reader.read(false, { waitMs: 50 });
+      while (completed.diagnostic.status === "pending") {
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+        completed = await reader.read(false, { waitMs: 50 });
+      }
+      expect(completed.diagnostic.status).toBe("complete");
+      expect(completed.payload).toMatchObject({ system: null, sessions: [], sessionsStale: false });
+    } finally {
+      clearTimeout(heartbeatTimer);
+      if (watchdog) clearTimeout(watchdog);
+      process.env.PATH = previousPath;
+      writeFileSync(release, "release");
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    { platform: "darwin", collector: "in-process", status: "complete" },
+    { platform: "win32", collector: "in-process", status: "complete" },
+    { platform: "linux", collector: "worker", status: "failed" },
+  ])("$platform defaults to the $collector resource collector", async ({ platform, collector, status }) => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const previousOverride = process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
+    const payload: ResourcesPayload = { system: null, sessions: [] };
+    const diagnostic = { fresh: true, status: "complete" as const, durationMs: 0, phases: {
+      systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0,
+    } };
+    let reader: ReturnType<typeof createResourcesReader>;
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
+    delete process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
+    try {
+      reader = createResourcesReader(async () => payload, () => null, () => 1, () => diagnostic, {
+        readFiles: async () => { throw new Error("fixture worker file handoff"); },
+        readHostRecords: async () => [],
+      });
+    } finally {
+      Object.defineProperty(process, "platform", platformDescriptor);
+      if (previousOverride !== undefined) process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS = previousOverride;
+    }
+
+    const read = await reader.read(true);
+    expect(read.diagnostic.collectorId).toStartWith(`${collector}:`);
+    expect(read.diagnostic.status).toBe(status);
+    if (collector === "worker") {
+      expect(read.diagnostic.failure?.causes).toContain("fixture worker file handoff");
+    } else {
+      expect(read.diagnostic.failure).toBeUndefined();
+      expect(read.payload).toEqual(stamped(payload, 1, false));
+    }
+  });
+
   test("the full scaled deadline settles after maximum handoff and TERM-resistant group cleanup", async () => {
     const scale = 0.04;
     const observeTimeoutMs = 30_000 * scale;

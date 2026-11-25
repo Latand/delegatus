@@ -50,7 +50,7 @@ const TYPE_ONLY_IMPORT = /\bimport\s*\(\s*["'`][^"'`$]+["'`]\s*\)\s*\.(?!then\b|
 const WORKFLOW_PATH = /(?:^|[\s"'`=(:,])\.?\/?((?:src|bin|scripts|docs|evidence)\/[\w@.\-/]+\.(?:ts|tsx|mts|cts|js|mjs|cjs|json|py|sh))/gm;
 
 function isFile(file: string): boolean {
-  try { return fs.statSync(file).isFile(); } catch { return false; }
+  try { return fs.statSync(file, { throwIfNoEntry: false })?.isFile() ?? false; } catch { return false; }
 }
 
 /** Every repo path a file may resolve `specifier` to, existing or not: a
@@ -66,17 +66,29 @@ function candidates(root: string, from: string, specifier: string): string[] {
 
 /** Repo-relative paths the given entry files execute, followed transitively
     through static and dynamic imports and through file paths they name. */
-export function executedPaths(root: string, entries: readonly string[]): Set<string> {
+export function executedPaths(root: string, entries: readonly string[], onRead?: (file: string, contents: Buffer | null) => void): Set<string> {
   const reached = new Set<string>();
   const queue = entries.map((entry) => path.resolve(root, entry));
   const visited = new Set<string>();
+  const fileStatus = new Map<string, boolean>();
+  const exists = (file: string) => {
+    let present = fileStatus.get(file);
+    if (present === undefined) {
+      present = isFile(file);
+      fileStatus.set(file, present);
+      if (!present) onRead?.(path.relative(root, file), null);
+    }
+    return present;
+  };
   while (queue.length > 0) {
     const file = queue.pop()!;
     if (visited.has(file)) continue;
     visited.add(file);
     reached.add(path.relative(root, file));
-    if (!isFile(file)) continue;
-    const source = fs.readFileSync(file, "utf8").replace(TYPE_ONLY_STATEMENT, "").replace(TYPE_ONLY_IMPORT, "");
+    if (!exists(file)) continue;
+    const raw = fs.readFileSync(file);
+    onRead?.(path.relative(root, file), raw);
+    const source = raw.toString("utf8").replace(TYPE_ONLY_STATEMENT, "").replace(TYPE_ONLY_IMPORT, "");
     const targets: string[] = [];
     for (const match of source.matchAll(IMPORT_SPECIFIER)) targets.push(...candidates(root, file, match[1]!));
     for (const match of source.matchAll(ANCHORED_PATH)) {
@@ -99,7 +111,7 @@ export function executedPaths(root: string, entries: readonly string[]): Set<str
     }
     for (const target of targets) {
       if (!target.startsWith(root + path.sep)) continue;
-      if (isFile(target)) {
+      if (exists(target)) {
         if (!visited.has(target)) queue.push(target);
       } else {
         reached.add(path.relative(root, target));

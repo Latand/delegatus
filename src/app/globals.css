@@ -394,6 +394,8 @@ body {
 :root[data-composer-focused] [data-attention-pulse][data-attention-pulse],
 :root[data-composer-focused] .mglyph[data-live="1"]::before,
 :root[data-composer-focused] .mglyph[data-live="1"] *,
+:root[data-composer-focused] .emark-neon[data-live="1"]::before,
+:root[data-composer-focused] .emark-neon[data-live="1"] *,
 :root[data-composer-focused] .animate-pulse {
   animation-play-state: paused;
 }
@@ -904,3 +906,5 @@ body {
    chip and the own-message navigator. Both are drawn into it from elsewhere
    (the receipts, the feed), so the row takes no room while it holds neither. */
 [data-composer-status-line]:not(:has([data-receipts-chip], [data-own-steps])) { display: none; }
+
+textarea[data-composer-field] { field-sizing: content; }

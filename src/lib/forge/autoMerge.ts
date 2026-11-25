@@ -30,7 +30,7 @@ import { lanePullRequest, pipelineRepository } from "./resolve";
 import { type PullRequestState } from "./workLinks";
 import { readBatchLanding, readCarriedBranchLanding } from "./batchLanding";
 import { engineForgeWriteEnv, isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
-import { githubReadBackoff, githubReadFailure } from "./githubReadFailure";
+import { githubReadBackoff, githubReadFailure, isTransientMergeReadFailure } from "./githubReadFailure";
 import { issueDeliverySince, sweepIssueDelivery, type IssueDeliveryPorts } from "./issueDelivery";
 import { githubRepositoryOfRemote } from "./workLinks";
 
@@ -1205,9 +1205,8 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     }
     if (decision.kind === "refresh") decision = { kind: "block", reason: refreshRefusal };
   } catch (error) {
-    const transientRead = githubReadFailure(error).transient;
     const gitReady = gitOnlyDeliveryReady(read);
-    if (transientRead && read.delivery?.target.pr !== undefined && gitReady
+    if (isTransientMergeReadFailure(error) && read.delivery?.target.pr !== undefined && gitReady
       && !read.proactiveTaskIds?.length) {
       if (view) {
         if (merge.effectUncertain) {
@@ -2246,13 +2245,14 @@ export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<Auto
           const headerScheme = ["ba", "sic"].join("");
           Object.assign(fetchEnv, {
             GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "2",
+            GIT_ASKPASS: "", GIT_CONFIG_PARAMETERS: undefined,
             GIT_CONFIG_KEY_0: `http.https://github.com/${repository}.git.extraheader`,
             GIT_CONFIG_VALUE_0: `${headerName}: ${headerScheme} ${Buffer.from(`${gitUsername}:${token}`).toString("base64")}`,
             GIT_CONFIG_KEY_1: "credential.helper", GIT_CONFIG_VALUE_1: "",
           });
         }
         return readCarriedBranchLanding(repository, pr, base, {
-          head: lane.merge?.reviewedHead || lane.lastPassedCommit || head,
+          head,
           repoDir: lane.repoDir!,
           ...hint,
         }, issueRead, contentsRead, fetchEnv);

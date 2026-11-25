@@ -698,39 +698,49 @@ test("the member limit shows the default, saves a number on leaving the field, a
 });
 
 
-test("owner tier defaults off, patches in place and has a folded caption in en and uk", async () => {
+test("the settings render server-derived grant status and review destination without a grant switch", async () => {
   accounts({ codex: [signedIn("work")] });
-  let current = relay({ targets: [target({ engine: "codex", model: "gpt-6-astra" })] });
-  answers.relay = { relays: [current], pending: [], status: [] };
-  route((url, init) => {
-    if (url === "/api/external-relay/relays/relay-1" && init?.method === "PATCH") {
-      const body = JSON.parse(String(init.body));
-      current = { ...current, targets: [{ ...current.targets[0], ...body.target }] };
-      answers.relay = { relays: [current], pending: [], status: [] };
-      return jsonResponse({ relay: current });
-    }
-    return undefined;
-  });
+  answers.relay = { relays: [relay({ targets: [
+    target({ grantStatus: "active" }),
+    target({ id: "bot-2", name: "Other bot", grantStatus: "suspended" }),
+    target({ id: "bot-3", grantStatus: "none" }),
+  ] })], pending: [], status: [], reviewDestination: { targetName: "Other bot", installationOwner: false } };
+  route();
   const host = await mount(<ExternalRelaySection />);
-  const row = host.querySelector("[data-external-relay-target]")!;
-  await unfold(row);
-  const control = row.querySelector("[data-external-relay-owner-tier]")!;
-  expect(control.getAttribute("aria-checked")).toBe("false");
-  expect(row.textContent).toContain("Full agent for the owner");
-  await click(control);
-  expect(harness.calls.filter(c => c.method === "PATCH").at(-1)?.body).toEqual({ target: { id: "bot-1", ownerTier: true } });
-  expect(control.getAttribute("aria-checked")).toBe("true");
-  await click(row.querySelector("[data-external-relay-target-fold]"));
-  expect(row.querySelector("[data-external-relay-owner-tier-caption]")?.textContent).toContain("full agent for the owner");
+  expect(host.querySelector("[data-external-relay-review-destination]")?.textContent)
+    .toBe("Prototype reviews go to the pairing owner’s private chat with Other bot.");
+  const rows = Array.from(host.querySelectorAll("[data-external-relay-target]"));
+  const statuses = async () => {
+    const rendered = [];
+    for (const row of rows) {
+      await unfold(row);
+      rendered.push(row.querySelector("[data-external-relay-grant-status]")?.textContent);
+    }
+    return rendered;
+  };
+  expect(rows[0]?.querySelector("[data-external-relay-grant-caption]")?.textContent).toBe("Active grants");
+  expect(await statuses()).toEqual(["Active grants", "Suspended grants", "No grants"]);
+  expect(host.querySelectorAll('[role="switch"]')).toHaveLength(rows.length);
   try {
-    await act(async () => setLocale("uk")); await unfold(row);
-    expect(row.textContent).toContain("Повний агент для власника");
-    expect(row.textContent).toContain("Хто власник, повідомляє сервіс");
-    await click(row.querySelector("[data-external-relay-owner-tier]"));
-    expect(row.querySelector("[data-external-relay-owner-tier]")?.getAttribute("aria-checked")).toBe("false");
+    await act(async () => setLocale("uk"));
+    expect(host.querySelector("[data-external-relay-review-destination]")?.textContent)
+      .toBe("Рев’ю прототипів надходять у приватний чат власника підключення з Other bot.");
+    expect(await statuses()).toEqual(["Дозволи діють", "Дозволи призупинено", "Дозволів немає"]);
   } finally { await act(async () => setLocale("en")); }
 });
 
+test("the selected installation owner's review destination is described in both languages", async () => {
+  answers.relay = { relays: [relay()], pending: [], status: [],
+    reviewDestination: { targetName: "Installation bot", installationOwner: true } };
+  route();
+  const host = await mount(<ExternalRelaySection />);
+  const notice = host.querySelector("[data-external-relay-review-destination]")!;
+  expect(notice.textContent).toBe("Prototype reviews go to the installation owner’s private chat with Installation bot.");
+  try {
+    await act(async () => setLocale("uk"));
+    expect(notice.textContent).toBe("Рев’ю прототипів надходять у приватний чат власника інсталяції з Installation bot.");
+  } finally { await act(async () => setLocale("en")); }
+});
 
 for (const locale of ["en", "uk"] as const) test(`an unresolved owner stop stays visible in relay settings (${locale})`, async () => {
   accounts({ claude: [signedIn("main")] });
@@ -949,6 +959,82 @@ for (const locale of ["en", "uk"] as const) {
       expect(switchOf(host.querySelector('[data-external-relay-target="elsewhere"]')!).getAttribute("aria-checked")).toBe("true");
       expect(clones.slice(1).map(t => t.answered_by)).toEqual(["install", "service"]);
     } finally { window.confirm = original; setLocale("en"); }
+  });
+}
+
+for (const locale of ["en", "uk"] as const) {
+  test(`${locale} a confirmed move the relay refuses says to release the clone on the other install first, then a plain switch-on moves it`, async () => {
+    setLocale(locale);
+    accounts({});
+    const clones = [target({ id: "elsewhere", name: "Shared clone", engine: "codex-cloud", model: "gpt-6.1-sol", answered_elsewhere: true }), target({ id: "service" })];
+    answers.relay = { relays: [relay({ targets: clones })], pending: [], status: [] };
+    route((url, init) => init?.method === "PATCH" && url.endsWith("/targets/elsewhere") ? jsonResponse({ error: "answered_elsewhere" }, 409) : undefined);
+    // The section re-reads the relay list on an interval. Hold every interval the section starts and fire them by hand,
+    // so the refresh that sees the release happens at a chosen step, whatever the period is.
+    const realSetInterval = window.setInterval.bind(window);
+    const originalSetInterval = window.setInterval;
+    const intervals: Array<() => void> = [];
+    window.setInterval = ((handler: () => void) => {
+      intervals.push(handler);
+      return realSetInterval(() => {}, 2 ** 31 - 1);
+    }) as unknown as typeof window.setInterval;
+    try {
+      const host = await mount(<ExternalRelaySection />);
+      const row = () => host.querySelector<HTMLElement>('[data-external-relay-target="elsewhere"]')!;
+      const notice = () => row().querySelector<HTMLElement>("[data-external-relay-move-refused]");
+      const relayReads = () => harness.calls.filter(c => c.url === "/api/external-relay" && c.method === "GET").length;
+      const dialog = () => row().querySelector<HTMLElement>("[data-external-relay-move-confirm]");
+      const control = switchOf(row());
+      await click(control);
+      expect(dialog()).not.toBeNull();
+      await click(dialog()!.querySelector<HTMLElement>("[data-external-relay-move-go]")!);
+      expect(harness.calls.filter(c => c.method === "PATCH").map(c => c.body)).toEqual([{ answered_by: "install", confirmTakeover: true }]);
+      expect(dialog()).toBeNull();
+      expect(control.getAttribute("aria-checked")).toBe("false");
+      expect(notice()?.getAttribute("role")).toBe("alert");
+      expect(notice()?.textContent).toBe(locale === "en"
+        ? "Not moved. Switch off “Answered by this install” on the other install first, then switch it on here."
+        : "Не перенесено. Спочатку вимкніть «Відповідає ця інсталяція» на іншій інсталяції, потім увімкніть тут.");
+      // The notice sits beside the clone it concerns; the card shows no second alert and the row drops its promise to move.
+      expect(host.querySelectorAll("[role=alert]")).toHaveLength(1);
+      expect(host.querySelector("[data-external-relay-release-elsewhere]")).toBeNull();
+      expect(notice()!.closest("[data-external-relay-target-fold]")).toBeNull();
+      if (locale === "uk") return;
+      // The other install lets go. Until the settings read that, the notice stays.
+      Object.assign(clones[0]!, { answered_elsewhere: false });
+      await act(async () => settle());
+      expect(notice()).not.toBeNull();
+      // Their next refresh reads the release: the notice goes and a plain switch-on is one unconfirmed write.
+      expect(intervals.length).toBeGreaterThan(0);
+      const readsBefore = relayReads();
+      await act(async () => { for (const fire of intervals) fire(); });
+      await act(async () => settle());
+      expect(relayReads()).toBeGreaterThan(readsBefore);
+      expect(notice()).toBeNull();
+      route((url, init) => {
+        if (init?.method !== "PATCH" || !url.endsWith("/targets/elsewhere")) return undefined;
+        Object.assign(clones[0]!, { answered_by: "install" });
+        return jsonResponse({ target: clones[0] });
+      });
+      await click(control);
+      expect(dialog()).toBeNull();
+      expect(harness.calls.filter(c => c.method === "PATCH").map(c => c.body)).toEqual([{ answered_by: "install" }]);
+    } finally { window.setInterval = originalSetInterval; setLocale("en"); }
+  });
+}
+
+for (const refusal of [{ status: 502, error: "unreachable" }, { status: 409, error: "not_ready" }] as const) {
+  test(`a confirmed move refused with ${refusal.error} keeps the card alert and no row notice`, async () => {
+    setLocale("en");
+    accounts({});
+    answers.relay = { relays: [relay({ targets: [target({ id: "elsewhere", engine: "codex-cloud", model: "gpt-6.1-sol", answered_elsewhere: true })] })], pending: [], status: [] };
+    route((url, init) => init?.method === "PATCH" ? jsonResponse({ error: refusal.error }, refusal.status) : undefined);
+    const host = await mount(<ExternalRelaySection />);
+    await click(switchOf(host.querySelector('[data-external-relay-target="elsewhere"]')!));
+    await click(host.querySelector<HTMLElement>("[data-external-relay-move-go]")!);
+    expect(host.querySelector("[data-external-relay-move-refused]")).toBeNull();
+    expect(host.querySelectorAll("[role=alert]")).toHaveLength(1);
+    expect(harness.calls.filter(c => c.method === "PATCH")).toHaveLength(1);
   });
 }
 

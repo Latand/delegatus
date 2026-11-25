@@ -34,6 +34,25 @@ test("prepared checks reach native transport when the caller already has Git's e
   expect(fs.existsSync(f.receipt)).toBeFalse();
 }, 60_000);
 
+test("publication preparation certifies a prose-only tree with a dangling dependency root", () => {
+  const f = fixture();
+  f.git("update-ref", "refs/remotes/origin/main", "HEAD");
+  fs.mkdirSync(f.writablePath(".git/info"), { recursive: true });
+  fs.writeFileSync(f.writablePath(".git/info/exclude"), "/node_modules\n");
+  fs.symlinkSync("missing-dependencies", f.writablePath("node_modules"));
+  fs.writeFileSync(f.writablePath("release.md"), "Publication fixture.\n");
+  commitFixtureInputs(f);
+  const prepared = f.run(true);
+  expect(prepared.status, prepared.stderr).toBe(0);
+  expect(fs.existsSync(f.receipt)).toBeTrue();
+  const transported = f.run(false);
+  expect(transported.status, transported.stderr).toBe(0);
+  expect(f.calls().map(call => call.args[0])).toEqual([
+    "scripts/privacy-publication-gate.ts", "scripts/privacy-publication-gate.ts",
+  ]);
+  expect(fs.existsSync(f.receipt)).toBeFalse();
+}, 60_000);
+
 test.each(["during checks", "before transport", "during transport"])("another writer refreshing privacy known values %s retains checked work", when => {
   const f = fixture();
   const known = path.join(f.dir, ".git", "known-values.txt");
@@ -140,6 +159,40 @@ test.each(["unrelated", "newly private", "missing"])("fresh transport privacy ch
   }
   expect(f.calls()).toHaveLength(before);
   expect(fs.existsSync(f.receipt)).toBeFalse();
+}, 60_000);
+
+test("a value added after preparation refuses the native push before it sends objects", () => {
+  const f = fixture();
+  const remote = path.join(f.dir, ".git", "remote.git");
+  f.git("init", "--bare", remote);
+  const known = path.join(f.dir, ".git", "known-values.txt");
+  fs.writeFileSync(known, "initial synthetic fixture value\n");
+  Object.assign(f.env, {
+    LLV_PRIVACY_KNOWN_VALUES_FILE: known,
+    HOOK_PRIVACY: path.join(root, "scripts/privacy-publication-gate.ts"),
+  });
+  fs.appendFileSync(path.join(f.dir, "record.ts"), `\nif (process.argv[2] === "scripts/privacy-publication-gate.ts") {
+    require("node:child_process").execFileSync(process.execPath, [process.env.HOOK_PRIVACY, ...process.argv.slice(3)], { stdio: "inherit" });
+  }\n`);
+  const publishedText = "A synthetic phrase for the publication fixture.";
+  fs.writeFileSync(path.join(f.dir, "release.md"), publishedText + "\n");
+  commitFixtureInputs(f);
+  const prepared = f.run(true);
+  expect(prepared.status, prepared.stderr).toBe(0);
+  expect(f.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toHaveLength(1);
+  fs.appendFileSync(known, publishedText + "\n");
+
+  const transported = spawnSync("git", ["push", remote, `${f.head}:refs/heads/main`], {
+    cwd: f.dir, env: f.env, encoding: "utf8", timeout: 45_000,
+  });
+  expect(transported.status, transported.stderr).toBe(1);
+  expect(transported.stderr).toContain("PRIVACY GATE: FAIL");
+  expect(transported.stderr).toContain("known_value");
+  expect(f.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toHaveLength(2);
+  expect(fs.existsSync(f.receipt)).toBeFalse();
+  expect(f.git("--git-dir", remote, "for-each-ref").toString()).toBe("");
+  const received = spawnSync("git", ["--git-dir", remote, "cat-file", "-e", f.head], { env: f.env });
+  expect(received.status).toBe(1);
 }, 60_000);
 
 nativeTest.each(["leaf", "ancestor"])("fresh transport refuses a known-values %s symlink", kind => {

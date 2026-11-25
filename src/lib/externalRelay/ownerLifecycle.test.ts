@@ -15,7 +15,7 @@ const flush = () => { jest.advanceTimersByTime(1); return fs.promises.stat(proce
 
 function setupRelay(): PairedRelay {
   const relay: PairedRelay = { id: "owner_lifecycle", origin: "http://127.0.0.1:1", api_base: "http://127.0.0.1:1/v1",
-    name: "Fixture", description: "", credential: "fixture", owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
+    name: "Fixture", description: "", credential: "fixture", owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null },
     pairedAt: new Date().toISOString(), paused: false, limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true, engine: "codex", model: "auto", effort: "low", project: null, concurrency: 1, hardCapMinutes: 30, ownerTier: true }] };
   updateRelayStore(store => ({ ...store, relays: [relay] }));
@@ -186,7 +186,7 @@ test("member still loses execution when the service deadline closes", async () =
     if (route.endsWith("/heartbeat") && now >= epoch + 120000) throw new client.ExternalRelayError("lease_lost", 409);
     return { status: 200, body: { status: "ok" } } as never;
   });
-  const pending = runClaimedRequest(relay, { ...contextRequest, request_id: "member_deadline", owner_delivery: delivery, deadline_at: new Date(epoch + 120000).toISOString(),
+  const pending = runClaimedRequest(relay, { ...contextRequest, request_id: "member_deadline", deadline_at: new Date(epoch + 120000).toISOString(),
     input: { ...contextRequest.input, tools: [] } }, undefined, { leaseWorker: false });
   try {
     for (let i = 0; i < 2000 && !launched; i++) await flush();

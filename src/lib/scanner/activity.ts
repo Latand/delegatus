@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 import type { TurnState } from "@/lib/accounts/migration/contracts";
+import { touchCacheEntry } from "@/lib/cacheTelemetry";
 import type { Activity, RootKey, TranscriptEngine } from "../types";
 import { globalCache } from "./caches";
 import { readHead } from "./head";
@@ -22,7 +23,11 @@ globalCache<unknown>("turn-evidence-v1").clear();
 /* v3 replaces the entry's `codex: boolean` discriminator with the engine, so a
    v2 entry surviving a hot reload can no longer be matched by identity. */
 globalCache<unknown>("turn-evidence-v2").clear();
-const turnEvidenceCache = globalCache<CachedTurnEvidence>("turn-evidence-v3");
+const turnEvidenceCache = globalCache<CachedTurnEvidence>(
+  "turn-evidence-v3",
+  (entry, key) => key.length * 2 + 128 + (entry.turn.terminalAt?.length ?? 0) * 2,
+  "estimated-bytes",
+);
 const TURN_EVIDENCE_CACHE_CAP = 4_096;
 
 /** Shared tail read+parse, keyed by path and file identity. Within one
@@ -37,9 +42,14 @@ type CachedTailRecords = {
   mtimeMs: number;
   nbytes: number;
   prefixTruncated: boolean;
+  sourceBytes: number;
   records: Record<string, unknown>[];
 };
-const tailCache = globalCache<CachedTailRecords>("tail-v3");
+const tailCache = globalCache<CachedTailRecords>(
+  "tail-v3",
+  (entry, key) => key.length * 2 + entry.sourceBytes,
+  "source-utf16",
+);
 const TAIL_CACHE_CAP = 64;
 type CachedHeadRecords = {
   size: number;
@@ -49,7 +59,11 @@ type CachedHeadRecords = {
   sourceBytes: number;
   records: Record<string, unknown>[];
 };
-const headCache = globalCache<CachedHeadRecords>("head-records-v2");
+const headCache = globalCache<CachedHeadRecords>(
+  "head-records-v2",
+  (entry, key) => key.length * 2 + entry.sourceBytes * 2,
+  "source-utf16",
+);
 const HEAD_CACHE_CAP = 64;
 const HEAD_CACHE_BYTE_CAP = 16 * 1024 * 1024;
 export const HEAD_RECORD_BYTES = 4 * 1024 * 1024;
@@ -120,6 +134,8 @@ export interface TailRecordsResult {
   records: Record<string, unknown>[];
   complete: boolean;
   prefixTruncated: boolean;
+  /** UTF-16 byte estimate of the decoded tail window used for O(1) cache accounting. */
+  sourceBytes?: number;
   /** Stable unreadable content is local to this transcript; I/O and changing
       identities still leave the scanner's observation incomplete. */
   failure?: "content" | "changed" | "io";
@@ -161,6 +177,7 @@ export function transcriptEngineForRoot(root: RootKey): TranscriptEngine {
   if (root === "codex-sessions") return "codex";
   if (root === "openclaw-sessions") return "openclaw";
   if (root === "copilot-sessions") return "copilot";
+  if (root === "antigravity-sessions") return "antigravity";
   return "claude";
 }
 
@@ -177,7 +194,7 @@ export function transcriptTurnResult(
   const key = `${authoritative ? "authoritative" : "activity"}:${pathname}`;
   const cached = turnEvidenceCache.get(key);
   if (cached && cached.size === size && cached.mtimeMs === mtimeMs && cached.engine === engine) {
-    storeTurnEvidence(pathname, cached);
+    touchCacheEntry(turnEvidenceCache, key);
     return {
       turn: { ...cached.turn },
       complete: true,
@@ -362,7 +379,14 @@ export function tailRecordsResult(pathname: string, size: number, mtimeMs: numbe
     const oldest = tailCache.keys().next().value;
     if (oldest !== undefined) tailCache.delete(oldest);
   }
-  tailCache.set(pathname, { size, mtimeMs, nbytes, prefixTruncated: result.prefixTruncated, records: result.records });
+  tailCache.set(pathname, {
+    size,
+    mtimeMs,
+    nbytes,
+    prefixTruncated: result.prefixTruncated,
+    sourceBytes: result.sourceBytes ?? 0,
+    records: result.records,
+  });
   /* Hand out a fresh copy every call: consumers reverse() the result in place,
      which must never reorder the shared cached array under the next consumer. */
   return { records: result.records.slice(), complete: true, prefixTruncated: result.prefixTruncated };
@@ -429,7 +453,7 @@ function readTail(pathname: string, size: number, nbytes: number): TailRecordsRe
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { records: [], complete: false, prefixTruncated: seek > 0, failure: "content" };
     out.push(parsed as Record<string, unknown>);
   }
-  return { records: out, complete, prefixTruncated: seek > 0 };
+  return { records: out, complete, prefixTruncated: seek > 0, sourceBytes: data.length * 2 };
 }
 
 /** Compatibility projection retained for scanner callers. */

@@ -119,7 +119,7 @@ export type ProjectAccountSelection =
 
 export interface ProjectAccountSelectionInput {
   project: string | null;
-  engine: BindingEngine | "copilot";
+  engine: BindingEngine | "copilot" | "antigravity";
   accounts: readonly { id: string; authPresent: boolean }[];
   observations: readonly DurableQuotaObservation[];
   bindings: readonly AccountProjectBinding[];
@@ -186,7 +186,7 @@ export interface ProjectAccountSelectionInput {
  *   is not a candidate and is not consulted, which is the whole point.
  */
 export function selectProjectAccount(input: ProjectAccountSelectionInput): ProjectAccountSelection {
-  const allowed = input.engine === "copilot" ? null : allowedAccountIdsForProject(input.project, input.engine, input.bindings);
+  const allowed = input.engine === "copilot" || input.engine === "antigravity" ? null : allowedAccountIdsForProject(input.project, input.engine, input.bindings);
   const requestedId = input.requestedId?.trim() || null;
   /* Turbo's paid-credit approval names accounts for this project only. */
   const guarded = (id: string) => {
@@ -216,7 +216,7 @@ export function selectProjectAccount(input: ProjectAccountSelectionInput): Proje
   const preferred = allowed === null || (input.preferredId && allowed.includes(input.preferredId))
     ? input.preferredId ?? null
     : null;
-  const fallbackIds = new Set(input.engine === "copilot" ? []
+  const fallbackIds = new Set(input.engine === "copilot" || input.engine === "antigravity" ? []
     : fallbackAccountIdsForProject(input.project, input.engine, input.bindings));
   const choose = (pool: typeof candidates) => selectHeadlessAccount(
     pool,

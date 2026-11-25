@@ -89,6 +89,15 @@ export class SqliteHandoffQueueStore implements HandoffQueueStore {
     return rows.map((row) => parseSqliteJson(row.value_json, this.db) as HandoffRow);
   }
 
+  hasPendingForConversation(conversationId: string): boolean {
+    const row = this.db.query<{ value_json: string }, [string]>(
+      "SELECT value_json FROM handoff_rows WHERE conversation_id = ? LIMIT 1",
+    ).get(conversationId);
+    if (!row) return false;
+    const value = parseSqliteJson(row.value_json, this.db) as HandoffRow;
+    return value.pendingDeliveries.some(delivery => !value.replayedDeliveryIds.includes(delivery.deliveryId));
+  }
+
   loadHistory(): HandoffRow[] {
     const rows = this.db
       .query<{ value_json: string }, []>("SELECT value_json FROM handoff_history ORDER BY row_order ASC")

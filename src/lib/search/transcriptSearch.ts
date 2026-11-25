@@ -32,7 +32,7 @@ export const TRANSCRIPT_SEARCH_FIELDS = ["message.body"] as const;
 export interface TranscriptIndexSource {
   path: string;
   project: string;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   size: number;
   mtimeMs: number;
 }
@@ -51,7 +51,7 @@ export interface TranscriptSearchItem {
   byteOffset: number;
   lineNumber: number;
   project: string;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   matched?: string[];
   missing?: string[];
   fragments?: Array<Pick<TranscriptSearchItem, "snippet" | "speaker" | "timestamp" | "byteOffset" | "lineNumber">>;
@@ -131,7 +131,7 @@ type HitRow = [
 
 type TranscriptFileRow = {
   project: string;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   mtime_ms: number;
 };
 
@@ -155,14 +155,46 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
   return sqlite.Database;
 }
 
-const TRANSCRIPT_SEARCH_SCHEMA_VERSION = 5;
+const TRANSCRIPT_SEARCH_SCHEMA_VERSION = 6;
 const TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE = 256;
-const scheduledSearchIndexes = new Set<string>();
+const DEFAULT_SEARCH_MIGRATION_RETRY_BASE_MS = 1_500;
+const MAX_SEARCH_MIGRATION_RETRY_MS = 30_000;
+let searchMigrationRetryBaseMs = DEFAULT_SEARCH_MIGRATION_RETRY_BASE_MS;
+
+interface SearchBuildBackoff {
+  delayMs: number;
+  nextAttemptAt: number;
+  lastReason: string;
+}
+
+type SearchIndexBuildResult =
+  | { ok: true }
+  | { ok: false; reason: string; retryAfterMs: number; nextAttemptAt: number; throttled: boolean };
+
+export type SearchSchemaReadyResult =
+  | { ready: true }
+  | { ready: false; reason: string; retryAfterMs: number; nextAttemptAt: number; throttled: boolean };
+
+const scheduledSearchIndexes = new Map<string, { promise: Promise<SearchIndexBuildResult>; ref: () => void }>();
+const searchBuildBackoffs = new Map<string, SearchBuildBackoff>();
+const searchBuildRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearSearchBuildRetryTimer(filename: string): void {
+  const timer = searchBuildRetryTimers.get(filename);
+  if (!timer) return;
+  clearTimeout(timer);
+  searchBuildRetryTimers.delete(filename);
+}
+
+function clearSearchBuildBackoff(filename: string): void {
+  searchBuildBackoffs.delete(filename);
+  clearSearchBuildRetryTimer(filename);
+}
 const readySearchDatabases = new WeakSet<Database>();
 // Readiness is schema metadata. Invalidate on either replacement of the file
 // or a schema change; ordinary appends keep the same readiness. Bound the cache
 // because tests and offline tools can choose many independent state roots.
-const searchSchemas = new Map<string, { identity: string; schema: number; version: number; hit: number; vocabulary: number }>();
+const searchSchemas = new Map<string, { identity: string; schema: number; version: number; hit: number; vocabulary: number; bodyHash: number }>();
 const newestExpressions = new Map<string, string>();
 
 function normalizedBodyHash(body: string): string {
@@ -180,24 +212,41 @@ function hasBodyHashColumn(db: Database): boolean {
 }
 
 function migrateSearchSchema(db: Database): void {
-  const currentVersion = schemaVersion(db);
-  if (currentVersion >= TRANSCRIPT_SEARCH_SCHEMA_VERSION && hasBodyHashColumn(db)) return;
-  if (currentVersion < 4) db.exec("PRAGMA foreign_keys = OFF");
-  db.exec("BEGIN IMMEDIATE");
+  const initialVersion = schemaVersion(db);
+  if (initialVersion >= TRANSCRIPT_SEARCH_SCHEMA_VERSION && hasBodyHashColumn(db)) return;
+  const mayRebuildFiles = initialVersion < 6;
+  if (mayRebuildFiles) {
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.exec("PRAGMA legacy_alter_table = ON");
+  }
+  let inTransaction = false;
   try {
-    if (!hasBodyHashColumn(db)) db.exec("ALTER TABLE transcript_messages ADD COLUMN body_hash TEXT");
-    const pendingMessages = db.query<{ id: number; body: string }, [number, number]>(`
-      SELECT id, body FROM transcript_messages WHERE body_hash IS NULL AND id > ?
-      ORDER BY id
-      LIMIT ?
-    `);
-    const update = db.query("UPDATE transcript_messages SET body_hash = ? WHERE id = ?");
-    let lastId = 0;
-    while (true) {
-      const messages = pendingMessages.all(lastId, TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE);
-      for (const message of messages) update.run(normalizedBodyHash(message.body), message.id);
-      if (messages.length < TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE) break;
-      lastId = messages.at(-1)!.id;
+    db.exec("BEGIN IMMEDIATE");
+    inTransaction = true;
+    // Re-read the schema version inside the write lock so a second migrator
+    // racing a completed upgrade does not rebuild again or drop fresh state.
+    const lockedVersion = schemaVersion(db);
+    const hadBodyHash = hasBodyHashColumn(db);
+    if (lockedVersion >= TRANSCRIPT_SEARCH_SCHEMA_VERSION && hadBodyHash) {
+      db.exec("COMMIT");
+      inTransaction = false;
+      return;
+    }
+    if (!hadBodyHash) db.exec("ALTER TABLE transcript_messages ADD COLUMN body_hash TEXT");
+    if (!hadBodyHash || lockedVersion < 3) {
+      const pendingMessages = db.query<{ id: number; body: string }, [number, number]>(`
+        SELECT id, body FROM transcript_messages WHERE body_hash IS NULL AND id > ?
+        ORDER BY id
+        LIMIT ?
+      `);
+      const update = db.query("UPDATE transcript_messages SET body_hash = ? WHERE id = ?");
+      let lastId = 0;
+      while (true) {
+        const messages = pendingMessages.all(lastId, TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE);
+        for (const message of messages) update.run(normalizedBodyHash(message.body), message.id);
+        if (messages.length < TRANSCRIPT_SEARCH_MIGRATION_BATCH_SIZE) break;
+        lastId = messages.at(-1)!.id;
+      }
     }
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(transcript_messages)").all();
     if (!columns.some((column) => column.name === "sort_timestamp")) {
@@ -205,7 +254,7 @@ function migrateSearchSchema(db: Database): void {
       // belongs to background work; readers use timestamp/file time meanwhile.
       db.exec("ALTER TABLE transcript_messages ADD COLUMN sort_timestamp REAL");
     }
-    if (currentVersion < 4) {
+    if (lockedVersion < 4) {
       // Table replacement invalidates its old descriptor checkpoint as well.
       db.exec("DROP TABLE IF EXISTS transcript_checkpoints");
       db.exec(`
@@ -216,7 +265,7 @@ function migrateSearchSchema(db: Database): void {
           size INTEGER NOT NULL,
           mtime_ms REAL NOT NULL,
           project TEXT NOT NULL,
-          engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot')),
+          engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot', 'antigravity')),
           messages_count INTEGER NOT NULL,
           indexed_at INTEGER NOT NULL
         );
@@ -243,6 +292,28 @@ function migrateSearchSchema(db: Database): void {
             (SELECT mtime_ms / 1000.0 FROM transcript_files WHERE path = transcript_path))
           WHERE sort_timestamp IS NULL;
       `);
+    } else if (lockedVersion < 6) {
+      // Only `transcript_files.engine` widens its CHECK constraint in v6.
+      // With `legacy_alter_table = ON` + `foreign_keys = OFF` (SQLite 3.26+,
+      // including macOS 3.39.4), renaming `transcript_files` leaves both
+      // `transcript_messages` and `transcript_checkpoints` untouched with
+      // their `REFERENCES transcript_files(path) ON DELETE CASCADE` intact,
+      // avoiding multi-GB message copies and preserving valid checkpoints.
+      db.exec(`
+        ALTER TABLE transcript_files RENAME TO transcript_files_previous;
+        CREATE TABLE transcript_files (
+          path TEXT PRIMARY KEY,
+          size INTEGER NOT NULL,
+          mtime_ms REAL NOT NULL,
+          project TEXT NOT NULL,
+          engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot', 'antigravity')),
+          messages_count INTEGER NOT NULL,
+          indexed_at INTEGER NOT NULL
+        );
+        INSERT INTO transcript_files (path, size, mtime_ms, project, engine, messages_count, indexed_at)
+        SELECT path, size, mtime_ms, project, engine, messages_count, indexed_at FROM transcript_files_previous;
+        DROP TABLE transcript_files_previous;
+      `);
     }
     db.exec(`
       CREATE TABLE IF NOT EXISTS transcript_search_sequence (
@@ -250,14 +321,20 @@ function migrateSearchSchema(db: Database): void {
       );
       INSERT OR IGNORE INTO transcript_search_sequence VALUES
         (1, (SELECT COALESCE(MAX(id), 0) FROM transcript_messages));
-      PRAGMA user_version = ${Math.max(currentVersion, TRANSCRIPT_SEARCH_SCHEMA_VERSION)};
+      PRAGMA user_version = ${Math.max(lockedVersion, TRANSCRIPT_SEARCH_SCHEMA_VERSION)};
       COMMIT;
     `);
-    if (currentVersion < 4) db.exec("PRAGMA foreign_keys = ON");
+    inTransaction = false;
   } catch (error) {
-    try { db.exec("ROLLBACK"); } catch { /* transaction did not open */ }
-    if (currentVersion < 4) db.exec("PRAGMA foreign_keys = ON");
+    if (inTransaction) {
+      try { db.exec("ROLLBACK"); } catch { /* transaction did not open */ }
+    }
     throw error;
+  } finally {
+    if (mayRebuildFiles) {
+      try { db.exec("PRAGMA legacy_alter_table = OFF"); } catch { /* ignore */ }
+      try { db.exec("PRAGMA foreign_keys = ON"); } catch { /* ignore */ }
+    }
   }
 }
 
@@ -298,7 +375,7 @@ function openWriterDatabase(): Database {
         size INTEGER NOT NULL,
         mtime_ms REAL NOT NULL,
         project TEXT NOT NULL,
-        engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot')),
+        engine TEXT NOT NULL CHECK(engine IN ('claude', 'codex', 'copilot', 'antigravity')),
         messages_count INTEGER NOT NULL,
         indexed_at INTEGER NOT NULL
       );
@@ -333,7 +410,7 @@ function openWriterDatabase(): Database {
       cursor TEXT NOT NULL
     )`);
     transcriptPathIndex.install(db, path.dirname(filename));
-    if (db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM transcript_messages").get()!.n === 0) {
+    if (db.query<{ found: number }, []>("SELECT 1 AS found FROM transcript_messages LIMIT 1").get() === null) {
       /* Empty fresh indexes are cheap to create before the first indexing pass. */
       db.exec(`
         CREATE VIRTUAL TABLE IF NOT EXISTS transcript_messages_vocab
@@ -387,10 +464,11 @@ function openQueryDatabase(): Database {
     const identity = `${stat.dev}:${stat.ino}`;
     const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
     const cached = searchSchemas.get(filename);
-    const metadata = cached?.identity === identity && cached.schema === schema ? cached : db.query<{ version: number; hit: number; vocabulary: number }, []>(`
+    const metadata = cached?.identity === identity && cached.schema === schema ? cached : db.query<{ version: number; hit: number; vocabulary: number; bodyHash: number }, []>(`
       SELECT user_version AS version,
         EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='transcript_messages_search_hit') AS hit,
-        EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_messages_vocab') AS vocabulary
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_messages_vocab') AS vocabulary,
+        EXISTS(SELECT 1 FROM pragma_table_info('transcript_messages') WHERE name='body_hash') AS bodyHash
       FROM pragma_user_version
     `).get()!;
     if (metadata !== cached) {
@@ -398,15 +476,18 @@ function openQueryDatabase(): Database {
       searchSchemas.set(filename, { ...metadata, identity, schema });
     }
     const currentVersion = metadata.version;
-    // Pre-v4 schemas need table reshaping before they can be read. Close the
-    // reader before that compatibility upgrade; v4 work stays off-thread.
-    if (currentVersion < 4) {
+    // Only pre-v2 schemas (lacking `body_hash`, which read queries select) must
+    // upgrade inline before reading. v2–v5 schemas already carry `body_hash`, so
+    // reads execute immediately against the legacy schema while the leased worker
+    // runs the table rebuild, `sort_timestamp` backfill, and index build off-thread
+    // under the shared backoff schedule.
+    if (currentVersion < 2 || !metadata.bodyHash) {
       db.close();
       openWriterDatabase().close();
       return openQueryDatabase();
     }
-    if (metadata.hit && metadata.vocabulary) readySearchDatabases.add(db);
-    if (currentVersion < TRANSCRIPT_SEARCH_SCHEMA_VERSION || !metadata.hit || !metadata.vocabulary) scheduleSearchIndexBuild(filename);
+    if (currentVersion >= 4 && metadata.hit && metadata.vocabulary) readySearchDatabases.add(db);
+    if (currentVersion < TRANSCRIPT_SEARCH_SCHEMA_VERSION || !metadata.hit || !metadata.vocabulary) void scheduleSearchIndexBuild(filename);
     return db;
   } catch (error) {
     db.close();
@@ -414,9 +495,55 @@ function openQueryDatabase(): Database {
   }
 }
 
-function scheduleSearchIndexBuild(filename: string): void {
-  if (scheduledSearchIndexes.has(filename)) return;
-  scheduledSearchIndexes.add(filename);
+function recordSearchBuildFailure(filename: string, reason: string): {
+  delayMs: number;
+  nextAttemptAt: number;
+} {
+  const prev = searchBuildBackoffs.get(filename);
+  const delayMs = prev && prev.delayMs >= searchMigrationRetryBaseMs
+    ? Math.min(MAX_SEARCH_MIGRATION_RETRY_MS, prev.delayMs * 2)
+    : searchMigrationRetryBaseMs;
+  const nextAttemptAt = Date.now() + delayMs;
+  if (searchBuildBackoffs.size >= 64 && !searchBuildBackoffs.has(filename)) {
+    searchBuildBackoffs.delete(searchBuildBackoffs.keys().next().value!);
+  }
+  searchBuildBackoffs.set(filename, { delayMs, nextAttemptAt, lastReason: reason });
+  return { delayMs, nextAttemptAt };
+}
+
+function scheduleSearchIndexBuild(filename: string, keepAlive = false): Promise<SearchIndexBuildResult> {
+  const existing = scheduledSearchIndexes.get(filename);
+  if (existing) {
+    if (keepAlive) existing.ref();
+    return existing.promise;
+  }
+  const now = Date.now();
+  const activeBackoff = searchBuildBackoffs.get(filename);
+  if (activeBackoff && now < activeBackoff.nextAttemptAt) {
+    const retryAfterMs = Math.max(1, activeBackoff.nextAttemptAt - now);
+    if (!keepAlive && !searchBuildRetryTimers.has(filename)) {
+      const timer = setTimeout(() => {
+        searchBuildRetryTimers.delete(filename);
+        if (!fs.existsSync(filename)) return;
+        void scheduleSearchIndexBuild(filename, false);
+      }, retryAfterMs);
+      timer.unref?.();
+      searchBuildRetryTimers.set(filename, timer);
+    }
+    return Promise.resolve({
+      ok: false,
+      reason: activeBackoff.lastReason,
+      retryAfterMs,
+      nextAttemptAt: activeBackoff.nextAttemptAt,
+      throttled: true,
+    });
+  }
+  clearSearchBuildRetryTimer(filename);
+  let resolveBuild!: (result: SearchIndexBuildResult) => void;
+  const promise = new Promise<SearchIndexBuildResult>((resolve) => { resolveBuild = resolve; });
+  let ref = () => {};
+  const entry = { promise, ref: () => ref() };
+  scheduledSearchIndexes.set(filename, entry);
   try {
     /* Under a lease: it ends with this Viewer instead of holding the service
        cgroup after it (src/lib/helperLease.ts). */
@@ -426,20 +553,146 @@ function scheduleSearchIndexBuild(filename: string): void {
       cwd: process.cwd(),
       env: { ...process.env, LLV_STATE_DIR: path.dirname(filename) },
     }, path.dirname(filename));
+    ref = () => {
+      proc.ref();
+      for (const stream of proc.stdio) (stream as unknown as { ref?: () => void } | null)?.ref?.();
+    };
     let settled = false;
     const settle = (failure: string | null) => {
       if (settled) return;
       settled = true;
-      if (failure) console.error(`[transcript-search] ${failure}; migration will retry on the next search`);
-      scheduledSearchIndexes.delete(filename);
+      if (scheduledSearchIndexes.get(filename) === entry) scheduledSearchIndexes.delete(filename);
+      if (failure) {
+        const { delayMs, nextAttemptAt } = recordSearchBuildFailure(filename, failure);
+        console.error(`[transcript-search] ${failure}; migration will retry with backoff`);
+        resolveBuild({ ok: false, reason: failure, retryAfterMs: delayMs, nextAttemptAt, throttled: false });
+      } else {
+        clearSearchBuildBackoff(filename);
+        resolveBuild({ ok: true });
+      }
     };
     proc.once("error", () => settle("index worker failed"));
     proc.once("exit", (code, signal) => settle(code === 0 ? null : `index worker exited with status ${code ?? signal}`));
-    unrefLeasedHelper(proc);
-  } catch {
-    scheduledSearchIndexes.delete(filename);
-    console.error("[transcript-search] could not start index worker; migration will retry on the next search");
+    if (!keepAlive) unrefLeasedHelper(proc);
+  } catch (error) {
+    if (scheduledSearchIndexes.get(filename) === entry) scheduledSearchIndexes.delete(filename);
+    const detail = error instanceof Error ? error.message : String(error);
+    const reason = `could not start index worker: ${detail}`;
+    const { delayMs, nextAttemptAt } = recordSearchBuildFailure(filename, reason);
+    console.error("[transcript-search] could not start index worker; migration will retry with backoff");
+    resolveBuild({ ok: false, reason, retryAfterMs: delayMs, nextAttemptAt, throttled: false });
   }
+  return promise;
+}
+
+type SearchReadinessProbe =
+  | { exists: false }
+  | { exists: true; version: number; hit: boolean; vocabulary: boolean }
+  | { exists: true; error: string };
+
+function probeTranscriptSearchReadiness(filename: string): SearchReadinessProbe {
+  try {
+    fs.statSync(filename);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { exists: false };
+    return { exists: true, error: error instanceof Error ? error.message : String(error) };
+  }
+  const Database = sqliteDatabase();
+  let probe: Database | null = null;
+  try {
+    probe = observeSqlite(new Database(filename, { readonly: true, strict: true }), "transcript-search");
+    probe.exec("PRAGMA busy_timeout = 50; PRAGMA query_only = ON;");
+    const row = probe.query<{ version: number; hit: number; vocabulary: number }, []>(`
+      SELECT user_version AS version,
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='transcript_messages_search_hit') AS hit,
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='transcript_messages_vocab') AS vocabulary
+      FROM pragma_user_version
+    `).get()!;
+    return { exists: true, version: row.version, hit: Boolean(row.hit), vocabulary: Boolean(row.vocabulary) };
+  } catch (error) {
+    return { exists: true, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    try { probe?.close(); } catch { /* ignore */ }
+  }
+}
+
+/** Ensures an existing legacy transcript-search DB finishes schema upgrade
+    inside the leased background worker before the Viewer opens the writer
+    connection, keeping DDL/copy work and SQLite lock waits off the Viewer's
+    main event loop. Never falls back to inline main-thread DDL on failure,
+    and shares one per-DB retry deadline across feeds and search queries
+    (including when v6 committed before read accelerators finished). */
+export async function ensureTranscriptSearchSchemaReadyOffThread(): Promise<SearchSchemaReadyResult> {
+  const filename = statePath("transcript-search.sqlite");
+  const initial = probeTranscriptSearchReadiness(filename);
+  if (!initial.exists) {
+    clearSearchBuildBackoff(filename);
+    return { ready: true };
+  }
+  if ("error" in initial) {
+    const active = searchBuildBackoffs.get(filename);
+    const now = Date.now();
+    if (active && now < active.nextAttemptAt) {
+      return {
+        ready: false,
+        reason: active.lastReason,
+        retryAfterMs: Math.max(1, active.nextAttemptAt - now),
+        nextAttemptAt: active.nextAttemptAt,
+        throttled: true,
+      };
+    }
+    const reason = `schema probe failed: ${initial.error}`;
+    const { delayMs, nextAttemptAt } = recordSearchBuildFailure(filename, reason);
+    return { ready: false, reason, retryAfterMs: delayMs, nextAttemptAt, throttled: false };
+  }
+  if (initial.version >= TRANSCRIPT_SEARCH_SCHEMA_VERSION) {
+    // Only clear shared backoff once the read accelerators that the same
+    // background worker builds are also present; partial-v6 DBs keep the
+    // existing retry deadline while still letting writers proceed on v6.
+    if (initial.hit && initial.vocabulary) clearSearchBuildBackoff(filename);
+    return { ready: true };
+  }
+  const build = await scheduleSearchIndexBuild(filename, true);
+  if (!build.ok) {
+    return {
+      ready: false,
+      reason: build.reason,
+      retryAfterMs: build.retryAfterMs,
+      nextAttemptAt: build.nextAttemptAt,
+      throttled: build.throttled,
+    };
+  }
+  const after = probeTranscriptSearchReadiness(filename);
+  if (!after.exists) {
+    clearSearchBuildBackoff(filename);
+    return { ready: true };
+  }
+  if ("error" in after) {
+    const reason = `post-migration schema probe failed: ${after.error}`;
+    const { delayMs, nextAttemptAt } = recordSearchBuildFailure(filename, reason);
+    return { ready: false, reason, retryAfterMs: delayMs, nextAttemptAt, throttled: false };
+  }
+  if (after.version < TRANSCRIPT_SEARCH_SCHEMA_VERSION) {
+    const reason = `schema remained at v${after.version}`;
+    const { delayMs, nextAttemptAt } = recordSearchBuildFailure(filename, reason);
+    return { ready: false, reason, retryAfterMs: delayMs, nextAttemptAt, throttled: false };
+  }
+  if (after.hit && after.vocabulary) {
+    clearSearchBuildBackoff(filename);
+  } else {
+    recordSearchBuildFailure(filename, "search read accelerators incomplete after migration");
+  }
+  return { ready: true };
+}
+
+/** Test-only seam to tune or reset per-DB off-thread migration backoff state. */
+export function setTranscriptSearchMigrationRetryBackoffForTests(baseMs: number | null): void {
+  for (const timer of searchBuildRetryTimers.values()) clearTimeout(timer);
+  searchBuildRetryTimers.clear();
+  searchBuildBackoffs.clear();
+  searchMigrationRetryBaseMs = baseMs === null
+    ? DEFAULT_SEARCH_MIGRATION_RETRY_BASE_MS
+    : Math.max(10, Math.floor(baseMs));
 }
 
 /** Background index builds this process started that have not exited yet. */
@@ -495,10 +748,10 @@ function messageFromRecord(
   source: TranscriptIndexSource,
   byteOffset: number,
   lineNumber: number,
-): (ParsedTranscriptMessage & { representation: "claude" | "response" | "event" | "copilot" }) | null {
+): (ParsedTranscriptMessage & { representation: "claude" | "response" | "event" | "copilot" | "antigravity" }) | null {
   let speaker: "user" | "assistant" | null = null;
   let body = "";
-  let representation: "claude" | "response" | "event" | "copilot" = "claude";
+  let representation: "claude" | "response" | "event" | "copilot" | "antigravity" = "claude";
   if (source.engine === "claude" && (parsed.type === "user" || parsed.type === "assistant")) {
     speaker = parsed.type;
     body = textContent(record(parsed.message)?.content);
@@ -522,8 +775,8 @@ function messageFromRecord(
       speaker = "assistant";
       body = typeof payload.message === "string" ? payload.message.trim() : "";
     }
-  } else if (source.engine === "copilot" && (parsed.type === "user.message" || parsed.type === "assistant.message")) {
-    representation = "copilot";
+  } else if ((source.engine === "copilot" || source.engine === "antigravity") && (parsed.type === "user.message" || parsed.type === "assistant.message")) {
+    representation = source.engine;
     speaker = parsed.type === "user.message" ? "user" : "assistant";
     body = textContent(record(parsed.data)?.content);
   }
@@ -641,7 +894,7 @@ async function* readTranscriptMessages(
   }
 }
 
-type RecentMessage = { representation: "response" | "event" | "copilot"; timestamp: number | null; lineNumber: number };
+type RecentMessage = { representation: "response" | "event" | "copilot" | "antigravity"; timestamp: number | null; lineNumber: number };
 type TranscriptCheckpoint = {
   byteOffset: number;
   lineNumber: number;
@@ -668,7 +921,7 @@ function readCheckpoint(row: CheckpointRow | null, current: FileIdentityRow | nu
       || !Array.isArray(cursor.recent) || cursor.recent.length > 8) return null;
     for (const entry of cursor.recent) {
       if (!entry || typeof entry.key !== "string" || !/^[a-f0-9]{64}$/.test(entry.key)
-        || !entry.message || !["response", "event", "copilot"].includes(entry.message.representation)
+        || !entry.message || !["response", "event", "copilot", "antigravity"].includes(entry.message.representation)
         || !(entry.message.timestamp === null || Number.isFinite(entry.message.timestamp))
         || !Number.isSafeInteger(entry.message.lineNumber) || entry.message.lineNumber < 1
         || entry.message.lineNumber >= cursor.lineNumber) return null;
@@ -929,7 +1182,7 @@ function transcriptFiles(db: Database, paths: ReadonlySet<string>): Map<string, 
     return files;
   }
   const rows = db.query("SELECT path, project, engine, mtime_ms FROM transcript_files").values() as Array<
-    [string, string, "claude" | "codex" | "copilot", number]
+    [string, string, "claude" | "codex" | "copilot" | "antigravity", number]
   >;
   for (const [pathname, project, engine, mtime_ms] of rows) {
     if (paths.has(pathname)) files.set(pathname, { project, engine, mtime_ms });
@@ -1039,7 +1292,7 @@ export interface TranscriptActivityRead {
   /** False when no index exists yet: nothing has been scanned. */
   available: boolean;
   rows: TranscriptActivityRow[];
-  files: Map<string, { project: string; engine: "claude" | "codex" | "copilot" }>;
+  files: Map<string, { project: string; engine: "claude" | "codex" | "copilot" | "antigravity" }>;
   /** When the newest transcript was indexed, in milliseconds. */
   indexedAtMs: number | null;
 }
@@ -1071,7 +1324,7 @@ export function readTranscriptActivity(fromSec: number, toSec: number): Transcri
         rows.push({ transcriptPath, speaker, atMs: timestamp * 1_000, seq: id });
         paths.add(transcriptPath);
       }
-      const files = new Map<string, { project: string; engine: "claude" | "codex" | "copilot" }>();
+      const files = new Map<string, { project: string; engine: "claude" | "codex" | "copilot" | "antigravity" }>();
       for (const [pathname, file] of transcriptFiles(db, paths)) files.set(pathname, { project: file.project, engine: file.engine });
       const newest = db.query<{ newest: number | null }, []>("SELECT MAX(indexed_at) AS newest FROM transcript_files").get()?.newest ?? null;
       return { available: true, rows, files, indexedAtMs: newest === null ? null : newest * 1_000 };

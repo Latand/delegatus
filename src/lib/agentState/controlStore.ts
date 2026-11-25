@@ -1,14 +1,23 @@
 import type { AgentRegistry, AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
+import type { AntigravityAgentStatesView } from "@/lib/agent/sqliteRegistryStore";
 import { entryRevision, subjectId } from "./store";
 
 /** Read from the same registry backend as the recipient. The serving
  * reconciler's process-wide cache also serves other registries. */
-export function controlProjectionForEntry(file: Pick<RegistryFile, "agentStates" | "conversations">, entry: AgentRegistryEntry, conversationId: string | null) {
+export function controlProjectionForEntry(
+  file: Pick<RegistryFile, "agentStates" | "conversations">,
+  entry: AgentRegistryEntry,
+  conversationId: string | null,
+  antigravityStates?: AntigravityAgentStatesView,
+) {
   if (conversationId === null) return null;
-  const row = file.agentStates?.[subjectId(entry)];
   const conversation = file.conversations?.[conversationId];
-  if (!row || !conversation || row.entryKey !== sessionKeyId(entry.key) || row.conversationId !== conversationId
+  if (!conversation || conversation.engine !== entry.key.engine
+    || conversation.generations.at(-1)?.id !== entry.key.sessionId) return null;
+  const subject = subjectId(entry);
+  const row = file.agentStates?.[subject] ?? (entry.key.engine === "antigravity" ? antigravityStates?.get(subject) : undefined);
+  if (!row || row.entryKey !== sessionKeyId(entry.key) || row.conversationId !== conversationId
     || row.facts.revision !== entryRevision(entry) || !row.facts.turn.determined) return null;
   /* A reconciler may publish a terminal projection while a conversation-only
      writer advances the turn without changing the host entry. Such a row is
@@ -19,5 +28,5 @@ export function controlProjectionForEntry(file: Pick<RegistryFile, "agentStates"
 }
 
 export function readControlProjection(registry: AgentRegistry, entry: AgentRegistryEntry, conversationId: string | null) {
-  return registry.agentStateRead(file => controlProjectionForEntry(file, entry, conversationId));
+  return registry.agentStateRead((file, antigravityStates) => controlProjectionForEntry(file, entry, conversationId, antigravityStates));
 }

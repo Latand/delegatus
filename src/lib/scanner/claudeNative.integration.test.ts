@@ -85,6 +85,7 @@ test("discovery surfaces the Workflow subagent but never its journal bookkeeping
     "claude-tasks": path.join(SANDBOX, "claude-tasks"),
     "openclaw-sessions": path.join(SANDBOX, "openclaw"),
     "copilot-sessions": path.join(SANDBOX, "copilot-sessions"),
+    "antigravity-sessions": path.join(SANDBOX, "antigravity-sessions"),
   };
   fs.mkdirSync(roots["codex-sessions"], { recursive: true });
   fs.mkdirSync(roots["claude-tasks"], { recursive: true });

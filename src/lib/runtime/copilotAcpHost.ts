@@ -34,6 +34,7 @@ import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/pr
 import type {
   DeliveryReceipt,
   EngineHost,
+  FirstDispatchEvidence,
   HostState,
   QueueEntry,
   RuntimeEvent,
@@ -588,7 +589,7 @@ export class CopilotAcpHost implements EngineHost {
    * is refused as `stale-turn` and writes nothing. Every interrupt is the
    * explicit, recorded one in {@link interrupt}.
    */
-  async send(entry: QueueEntry): Promise<DeliveryReceipt> {
+  async send(entry: QueueEntry, _firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<DeliveryReceipt> {
     const refill = this.dead || this.releasing || this.released ? undefined : this.refillEventWindow();
     if (refill) await refill;
     if (this.unavailable()) return { outcome: "rejected", reason: "dead-host" };
@@ -603,6 +604,7 @@ export class CopilotAcpHost implements EngineHost {
       prompt.push({ type: "image", mimeType: image.mime, data: this.readImage(image).toString("base64") });
     }
     if (prompt.length === 0) prompt.push({ type: "text", text: "" });
+    authorizeDispatch?.();
     this.turnCounter += 1;
     const turnId = `copilot:${this.turnCounter}-${crypto.randomBytes(4).toString("hex")}`;
     const firstPrompt = this.sentEntries.size === 0;

@@ -12,6 +12,11 @@ import configureNext from "./next.config";
 
 const nextConfig = configureNext(PHASE_DEVELOPMENT_SERVER);
 
+test("the browser bundle and the same-origin audio processor use the same program", () => {
+  const source = fs.readFileSync(new URL("./public/audio/dictation-capture.js", import.meta.url), "utf8");
+  expect(configureNext(PHASE_PRODUCTION_BUILD).env?.NEXT_PUBLIC_DICTATION_WORKLET_SOURCE).toBe(source);
+});
+
 test("development reads the config without relying on truncated showConfig stdout", async () => {
   const probe = fs.mkdtempSync(path.join(tmpdir(), "dev-types-"));
   try {
@@ -131,6 +136,7 @@ test("every library worker is bundled and traced into standalone output", async 
     { entry: {} },
     { isServer: true, nextRuntime: "nodejs" } as Parameters<NonNullable<typeof nextConfig.webpack>>[1],
   );
+  expect(configured.plugins).toHaveLength(1);
   if (typeof configured.entry !== "function") throw new Error("webpack entries are not configurable");
   const entries = await configured.entry();
   const tracingIncludes = nextConfig.outputFileTracingIncludes?.["/*"] ?? [];

@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -128,4 +128,23 @@ test("a missing transcript and a foreign path name their own refusal", () => {
   const outside = path.join(SANDBOX, "elsewhere.jsonl");
   fs.writeFileSync(outside, "{}\n", { mode: 0o600 });
   expect(mod.claudeTranscriptOwnership(outside)).toEqual({ kind: "foreign" });
+});
+
+test("transcript discovery and ownership use registered homes without opening authentication documents", () => {
+  const { transcript, shared } = sharedStoreMachine();
+  const accounts = mod.listClaudeAccounts();
+  for (const item of accounts) fs.writeFileSync(path.join(item.home, ".credentials.json"), "{}", { mode: 0o600 });
+  const read = fs.lstatSync;
+  let credentialReads = 0;
+  const spy = spyOn(fs, "lstatSync").mockImplementation(((file: Parameters<typeof read>[0], ...options: unknown[]) => {
+    if (typeof file === "string" && path.basename(file) === ".credentials.json") credentialReads++;
+    return Reflect.apply(read, fs, [file, ...options]);
+  }) as typeof read);
+  try {
+    expect(mod.claudeProjectRoots()).toContain(shared);
+    expect(mod.claudeTranscriptOwnership(transcript, accounts[1]!.id)).toMatchObject({ kind: "owned", accountId: accounts[1]!.id });
+    expect(credentialReads).toBe(0);
+    expect(mod.listClaudeAccounts().map(item => item.id)).toEqual(accounts.map(item => item.id));
+    expect(credentialReads).toBe(accounts.length);
+  } finally { spy.mockRestore(); }
 });
