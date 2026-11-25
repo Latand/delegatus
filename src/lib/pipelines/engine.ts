@@ -343,6 +343,7 @@ export interface PipelinePorts {
   /** Observe the worker's response boundary from an isolated controller harness. */
   provisionToolchainReply?: (id: string, type: string, detail?: string) => Promise<void>;
   observeProvisioningCheckpoint?: (id: string, step: import("./provisioningRecord").ProvisioningStepView | undefined, at: number) => void | Promise<void>;
+  beforeGitDispatch?: (command: string, args: readonly string[], cwd: string) => Promise<void>;
   preflightRepo(repoDir: string): PipelineRepoPreflight | Promise<PipelineRepoPreflight>;
   roleLookup?: PipelineRoleLookup | null;
   spawnAgent(input: {
@@ -14383,7 +14384,11 @@ export async function recoverPipelineProviderTurn(id: string, ports?: PipelinePo
 export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts = defaultPipelinePorts(), publicationPass = 0,
   provisioningDrive?: { deadline: number; selected: Set<string> }): Promise<{ pipelines: Pipeline[]; changed: boolean; retry?: boolean }> {
   assertOperationLease();
-  const provisioningPorts = ports;
+  let provisioningChanged = false;
+  const provisioningPorts: PipelinePorts = { ...ports, observeProvisioningCheckpoint: async (id, step, at) => {
+    provisioningChanged = true;
+    await ports.observeProvisioningCheckpoint?.(id, step, at);
+  } };
   const monotonic = ports.provisionClock?.monotonicMs ?? ports.monotonicNow;
   const drive = provisioningDrive ?? { deadline: monotonic() + 15_000, selected: new Set<string>() };
   ports = leasedOperationPorts(ports);
@@ -14529,7 +14534,6 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     /* Before the lease, never under it (#1799). */
     await settlePendingRemoteActions(ports);
     await settlePendingStageProvenance(ports);
-    let provisioningChanged = false;
     const provisioningNow = ports.provisionClock?.wallMs() ?? unixMs(ports.now());
     if (scoped || (drive.selected.size === 0 && monotonic() < drive.deadline)) {
       const selection = scoped ? await selectControllerPipelines("provisioning", provisioningThrough)

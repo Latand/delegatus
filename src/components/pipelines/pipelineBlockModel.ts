@@ -9,6 +9,15 @@ import { stageAccess, type StageChipState } from "./pipelineModel";
 import { currentProviderWait, latestAttempt, stageAttempts } from "@/lib/pipelines/stageChip";
 import { pipelineMovedAtMs, stageFindings } from "@/lib/pipelines/laneReads";
 
+const provisionWaitCause: Partial<Record<string, Parameters<TFunction>[0]>> = {
+  "provision-step-timeout": "pipelineBlock.provision.cause.stepTimeout",
+  "provision-execution-budget-exhausted": "pipelineBlock.provision.cause.executionBudget",
+  "toolchain-reply-lost": "pipelineBlock.provision.cause.toolchainReplyLost",
+  "waiting-for-provisioning-turn": "pipelineBlock.provision.cause.provisioningTurn",
+  "provisioning-owner-expired": "pipelineBlock.provision.cause.ownerExpired",
+  "checkout-writer-unverified": "pipelineBlock.provision.cause.checkoutWriter",
+};
+
 export { pipelineMovedAtMs, stageFindings };
 
 /*
@@ -339,10 +348,13 @@ export function pipelineReason(t: TFunction, pipeline: Pipeline, nameOf: (stage:
   if (step && nowMs !== undefined && (pipeline.state === "provisioning" || pipeline.state === "needs_decision")) {
     const label = t(`pipelineBlock.provision.${step.step}`);
     const seconds = Math.max(0, Math.floor((nowMs - step.since) / 1_000));
-    const waiting = step.status === "waiting" && step.reason?.includes("timeout");
+    const waiting = step.status === "waiting";
     if (step.retrying) return t("pipelineBlock.provision.retrying", { step: label, seconds });
     const detail = t(waiting ? "pipelineBlock.provision.retry" : "pipelineBlock.provision.age", { step: label, seconds });
-    return step.status === "parked" && pipeline.stateDetail ? `${detail} · ${pipeline.stateDetail}` : detail;
+    const cause = waiting ? ` · ${t(provisionWaitCause[step.reason ?? ""] ?? "pipelineBlock.provision.waitCause",
+      { reason: step.reason ?? "scheduled" })}`
+      + (step.blockerToken ? ` · ${t("pipelineBlock.provision.blocker", { token: step.blockerToken.slice(0, 8) })}` : "") : "";
+    return step.status === "parked" && pipeline.stateDetail ? `${detail}${cause} · ${pipeline.stateDetail}` : `${detail}${cause}`;
   }
   const wait = currentProviderWait(pipeline);
   if (wait?.condition.kind === "transient") {

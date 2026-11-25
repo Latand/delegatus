@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants, promises as fs, type BigIntStats } from "node:fs";
+import { closeSync, constants, fstatSync, mkdirSync, openSync, promises as fs, type BigIntStats } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { containedDependencyExec } from "./lockedDependencies";
@@ -16,6 +16,8 @@ export type PrivateInstallEffect = "private-scratch" | "private-install" | "priv
 
 type PrivateInstallPorts = {
   beforeEffect(effect: PrivateInstallEffect): Promise<void>;
+  afterModulesDirectoryCreated?(): Promise<void>;
+  workerEntry?: string;
   observeLegacy?: typeof observeLegacyInstaller;
   uncertain(observation: Exclude<LegacyInstallerObservation, { kind: "clear" }>): Promise<never>;
   receipt(value: PrivateInstallReceipt): Promise<void>;
@@ -180,6 +182,45 @@ export async function preparePrivateDependencies(repository: string, checkout: s
     const canInstall = selected.files.some(([name]) => name === "bun.lock" || name === "bun.lockb");
     if (!canCopy && !canInstall) return false;
     if (relative && (process.platform !== "linux" || (before && !priorIntent))) return false;
+    if (priorIntent && !before && !relative && process.platform !== "win32") {
+      const priorScratch = path.join(checkout, `.delegatus-dependencies-${priorIntent.claim}`);
+      const priorRoot = await entry(priorScratch);
+      const staged = path.join(priorScratch, "node_modules");
+      const stagedEntry = await entry(staged);
+      if (priorRoot?.isDirectory() && stagedEntry?.isDirectory()
+        && priorIntent.inputs === selected.digest && priorIntent.device === String(stagedEntry.dev)
+        && priorIntent.inode === String(stagedEntry.ino)) {
+        try {
+          const marker = JSON.parse((await fileBytes(path.join(staged, MARKER), 4096)).toString());
+          const intent = JSON.parse((await fileBytes(path.join(staged, INTENT), 4096)).toString());
+          const nonceMatches = typeof intent.nonce === "string"
+            && createHash("sha256").update(intent.nonce).digest("hex") === priorIntent.nonceDigest;
+          const valid = marker.claim === priorIntent.claim && marker.inputs === selected.digest && marker.bun === Bun.version
+            && marker.device === priorIntent.device && marker.inode === priorIntent.inode && marker.mode === "staged"
+            && marker.nonceDigest === priorIntent.nonceDigest && intent.claim === priorIntent.claim && nonceMatches;
+          if (valid && (await inputs(checkout, INSTALL_FILES)).digest === selected.digest
+            && sameDirectory(priorRoot, await entry(priorScratch)) && sameDirectory(stagedEntry, await entry(staged))) {
+            await permit("private-publish");
+            if (!(await entry(target)) && (await inputs(checkout, INSTALL_FILES)).digest === selected.digest
+              && sameDirectory(priorRoot, await entry(priorScratch)) && sameDirectory(stagedEntry, await entry(staged))
+              && publishNoReplace(staged, target)) {
+              await census();
+              if (sameDirectory(stagedEntry, await entry(target)) && (await inputs(checkout, INSTALL_FILES)).digest === selected.digest) {
+                await ports.receipt({ claim: priorIntent.claim, inputs: selected.digest, device: priorIntent.device,
+                  inode: priorIntent.inode, mode: "staged" });
+                await permit("private-cleanup");
+                if (sameDirectory(priorRoot, await entry(priorScratch))) await fs.rm(priorScratch, { recursive: true, force: true });
+                return true;
+              }
+              throw new UnverifiedPrivateInstall();
+            }
+          }
+        } catch (error) {
+          if (!(error instanceof SyntaxError) && !(error instanceof UnverifiedPrivateInstall)
+            && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+    }
     const scratch = path.join(checkout, `.delegatus-dependencies-${claim}`);
     await permit("private-scratch");
     await fs.mkdir(scratch, { mode: 0o700 });
@@ -191,7 +232,7 @@ export async function preparePrivateDependencies(repository: string, checkout: s
       if (relative || !atomicPublish) {
         const checkoutHandle = await fs.open(checkout, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
         try {
-          const probe = await containedDependencyExec(process.execPath, ["--no-env-file", process.argv[1]!, "probe-install-binding"],
+          const probe = await containedDependencyExec(process.execPath, ["--no-env-file", ports.workerEntry ?? process.argv[1]!, "probe-install-binding"],
             checkout, undefined, { timeoutMs: 5_000, inheritFd: checkoutHandle.fd });
           if (probe.code !== 0) return false;
         } finally { await checkoutHandle.close(); }
@@ -268,17 +309,29 @@ async function installInPlace({ checkout, target, scratch, claim, inputs, budget
   verify: () => Promise<boolean>; ports: PrivateInstallPorts;
 }): Promise<boolean> {
   if (original && (!prior || prior.inputs !== inputs || prior.device !== String(original.dev) || prior.inode !== String(original.ino))) return false;
+  let createdIdentity: BigIntStats | undefined;
   if (!original) {
     await permit("create-modules-directory");
     // Exclusive mkdir provides a no-replace binding on filesystems where the
-    // atomic rename extension is unavailable. A foreign target is preserved.
-    await fs.mkdir(target, { mode: 0o700 });
+    // atomic rename extension is unavailable. Keep creation and descriptor
+    // acquisition in one synchronous turn so no awaited callback can replace
+    // the name between those operations; then prove the name still denotes
+    // the opened directory before granting the installer any writes.
+    try {
+      mkdirSync(target, { mode: 0o700 });
+      createdIdentity = await fs.lstat(target, { bigint: true });
+      await ports.afterModulesDirectoryCreated?.();
+    }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return false; throw error; }
   }
   const opens = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
-  const directory = await fs.open(target, opens);
+  let directoryFd: number;
+  try { directoryFd = openSync(target, opens); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ELOOP") return false; throw error; }
   try {
-    const identity = await directory.stat({ bigint: true });
-    const anchored = `/proc/self/fd/${directory.fd}`;
+    const identity = fstatSync(directoryFd, { bigint: true });
+    if ((createdIdentity && !sameDirectory(createdIdentity, identity)) || !sameDirectory(identity, await entry(target))) return false;
+    const anchored = `/proc/self/fd/${directoryFd}`;
     const digest = (nonce: string) => createHash("sha256").update(nonce).digest("hex");
     let intent = prior;
     if (original) {
@@ -297,9 +350,9 @@ async function installInPlace({ checkout, target, scratch, claim, inputs, budget
     try {
       await permit("install-in-place");
       if (!sameDirectory(identity, await entry(target))) return false;
-      const installed = await containedDependencyExec(process.execPath, ["--no-env-file", process.argv[1]!, "install-bound"], checkout,
+      const installed = await containedDependencyExec(process.execPath, ["--no-env-file", ports.workerEntry ?? process.argv[1]!, "install-bound"], checkout,
         { NODE_ENV: "development", BUN_INSTALL_CACHE_DIR: path.join(scratch, "cache"), TMPDIR: scratch },
-        { timeoutMs: budgetMs, inheritFd: directory.fd, additionalInheritedFds: [cache.fd] });
+        { timeoutMs: budgetMs, inheritFd: directoryFd, additionalInheritedFds: [cache.fd] });
       if (installed.code !== 0 || !sameDirectory(identity, await entry(target))) return false;
       const retained = JSON.parse((await fileBytes(path.join(anchored, INTENT), 4096)).toString());
       if (retained.claim !== intent!.claim || typeof retained.nonce !== "string" || digest(retained.nonce) !== intent!.nonceDigest) return false;
@@ -317,5 +370,5 @@ async function installInPlace({ checkout, target, scratch, claim, inputs, budget
       await ports.receipt({ claim: intent!.claim, inputs, device: String(identity.dev), inode: String(identity.ino), mode: "in-place" });
       return true;
     } finally { await cache.close(); }
-  } finally { await directory.close(); }
+  } finally { closeSync(directoryFd); }
 }

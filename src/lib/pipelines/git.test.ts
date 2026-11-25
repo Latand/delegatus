@@ -11,7 +11,7 @@ import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
 import { provisioningStripe, tryProvisioningLock, type ProvisioningGrant } from "./provisionCheckoutCustody";
 import { readWorktreeProvenance } from "./worktreeProvenance";
-import { commitPipelineStage, currentPipelineRemoteBranchHead, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead, type ProvisionCheckoutCustody } from "./git";
+import { commitPipelineStage, currentPipelineRemoteBranchHead, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead, verifyProvisioningCheckoutReceipt, type ProvisionCheckoutCustody } from "./git";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import type { Pipeline } from "./types";
 import { createPipelineWithDelivery, findPipelineRecord, savePipelines, takeoverPipelineDelivery, withPipelineMutation } from "./store";
@@ -1128,6 +1128,40 @@ test("async adoption preserves untracked files and edits made after its safety s
   fs.unlinkSync(path.join(subject.worktreeDir, "tracked.txt"));
   expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(false);
   expect(fs.readFileSync(path.join(subject.worktreeDir, "keep.txt"), "utf8")).toBe("preserve\n");
+});
+
+test("checkout receipt refuses staged changes even when the tracked worktree matches HEAD", async () => {
+  const origin = path.join(publicationState, "staged-index-origin.git");
+  const source = path.join(publicationState, "staged-index-source");
+  await git(publicationState, "init", "--bare", "--initial-branch=main", origin);
+  await git(publicationState, "clone", origin, source);
+  await git(source, "config", "user.name", "Fixture");
+  await git(source, "config", "user.email", "noreply@example.invalid");
+  fs.writeFileSync(path.join(source, "tracked.txt"), "base bytes\n");
+  await git(source, "add", ".");
+  await git(source, "commit", "-m", "base");
+  await git(source, "push", "origin", "main");
+  const head = await git(source, "rev-parse", "HEAD");
+  const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(publicationState, "staged-index-lane"), baseBranch: "main", baseRef: head };
+  subject.delivery!.target.remote = origin;
+  await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+  await git(subject.worktreeDir, "config", "user.name", "Fixture");
+  await git(subject.worktreeDir, "config", "user.email", "noreply@example.invalid");
+  fs.writeFileSync(path.join(subject.worktreeDir, "tracked.txt"), "staged bytes\n");
+  await git(subject.worktreeDir, "add", "tracked.txt");
+  fs.writeFileSync(path.join(subject.worktreeDir, "tracked.txt"), "base bytes\n");
+  const commonDir = await git(source, "rev-parse", "--path-format=absolute", "--git-common-dir");
+  let adds = 0;
+  const exec: import("./git").ProvisionExecPort = async (command, args, cwd, signal, options) => {
+    if (args[0] === "worktree" && args[1] === "add") adds++;
+    return realProvisionExec(command, args, cwd, signal, options);
+  };
+  expect(await verifyProvisioningCheckoutReceipt(subject, {
+    branch: subject.branch, deliveryBranch: subject.branch, start: head, expectedHead: head, reuseBranch: true,
+  }, commonDir, exec, new AbortController().signal)).toBe(false);
+  expect(fs.readFileSync(path.join(subject.worktreeDir, "tracked.txt"), "utf8")).toBe("base bytes\n");
+  expect(await git(subject.worktreeDir, "show", ":tracked.txt")).toBe("staged bytes");
+  expect(adds).toBe(0);
 });
 
 test.skipIf(process.platform === "win32")("an initialization a live Git process still holds is left alone and reported as held (#2176)", async () => {

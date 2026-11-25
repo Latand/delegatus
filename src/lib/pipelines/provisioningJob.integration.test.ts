@@ -6,7 +6,8 @@ import { settlePipelineStopReadLanes } from "./controllerStopRead";
 import type { ProvisionControllerFixture } from "./fixtures/provisionControllerProcess";
 import { BUILD_ONLY, createPipelineFromRequest, expect, fs, path, realWorktreeLane, spyOn, test } from "./engine.fixture";
 import { latch, until, withControllerAuditState } from "./fixtures/ownedStageControl";
-import { findControllerPipeline, withPipelineMutation } from "./store";
+import { findControllerPipeline, savePipelines, withPipelineMutation } from "./store";
+import { settleProvisioningJobsForTests } from "./provisioningJob";
 import { removeProvisioningFixture, seedProvisioningPackage } from "../../../scripts/verify-provisioning-release.mjs";
 
 async function driveProvisioning(ports: Parameters<typeof tickPipelinesController>[1], done: () => Promise<boolean>) {
@@ -17,6 +18,112 @@ async function driveProvisioning(ports: Parameters<typeof tickPipelinesControlle
     await Bun.sleep(20);
   }
 }
+
+test("a repository alias swap at Git dispatch refuses before touching the replacement checkout", () => withControllerAuditState(async () => {
+  const fixture = await realWorktreeLane("provision-alias-dispatch", BUILD_ONLY as never);
+  const { h, repo, origin, root, base, git } = fixture;
+  const alias = path.join(root, "repo-alias"), oldAlias = path.join(root, "repo-alias-old"), replacement = path.join(root, "replacement.git");
+  await settleProvisioningJobsForTests();
+  savePipelines([]);
+  delete h.ports.provisionExec;
+  fs.symlinkSync(repo, alias);
+  await git(root, "clone", "--bare", origin, replacement);
+  const beforeReplacementRefs = await git(replacement, "show-ref");
+  let swapped = false;
+  h.ports.beforeGitDispatch = async (command, args) => {
+    if (swapped || command !== "git" || args[0] !== "worktree" || args[1] !== "add") return;
+    swapped = true;
+    fs.renameSync(alias, oldAlias);
+    fs.symlinkSync(replacement, alias);
+  };
+  const created = await createPipelineFromRequest({ task: "Refuse a changed repository alias before add",
+    repoDir: alias, baseRef: base, publication: "internal", stages: BUILD_ONLY as never }, h.ports);
+  const lane = created.pipeline!;
+  await withPipelineMutation(async (rows, persist) => {
+    const current = rows.find(row => row.id === lane.id)!;
+    current.repoDir = alias;
+    await persist([current]);
+  });
+  try {
+    await driveProvisioning(h.ports, async () => {
+      const state = (await findControllerPipeline(lane.id))?.state;
+      return state === "needs_decision" || state === "running";
+    });
+    const parked = (await findControllerPipeline(lane.id))!;
+    expect(swapped).toBe(true);
+    expect(parked.stateDetail).toContain("repository or checkout identity changed before Git dispatch");
+    expect(fs.existsSync(lane.worktreeDir)).toBe(false);
+    expect(await git(replacement, "show-ref")).toBe(beforeReplacementRefs);
+    expect(await git(repo, "show-ref", "--verify", `refs/heads/${lane.branch}`).catch(() => "missing")).toBe("missing");
+    expect(parked.runs[0]?.attempts).toHaveLength(0);
+  } finally {
+    await settleProvisioningJobsForTests();
+    await settlePipelineControllerJobs();
+    await settlePipelineStopReadLanes();
+    await removeProvisioningFixture(root);
+  }
+}));
+
+test("a withdrawn release fence resumes provisioning only after writer authority returns", () => withControllerAuditState(async () => {
+  const fixture = await realWorktreeLane("provision-fence-withdrawal", BUILD_ONLY as never);
+  const { h, repo, root } = fixture;
+  const jobs = await import("./provisioningJob");
+  try {
+    await settleProvisioningJobsForTests();
+    savePipelines([]);
+    await jobs.stopProvisioningJobsForDemotion();
+    const lane = (await createPipelineFromRequest({ task: "Resume provisioning after a withdrawn fence",
+      repoDir: repo, baseRef: fixture.base, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+    expect(jobs.advanceProvisioningJob(lane, h.ports, { parked() {} })).toBeUndefined();
+    expect(jobs.resumeProvisioningJobsAfterFenceWithdrawal(() => false)).toBe(false);
+    expect(jobs.advanceProvisioningJob(lane, h.ports, { parked() {} })).toBeUndefined();
+    expect(jobs.resumeProvisioningJobsAfterFenceWithdrawal(() => true)).toBe(true);
+    delete h.ports.provisionExec;
+    let adds = 0;
+    h.ports.beforeGitDispatch = async (command, args) => {
+      if (command === "git" && args[0] === "worktree" && args[1] === "add") adds++;
+    };
+    await driveProvisioning(h.ports, async () => {
+      const current = await findControllerPipeline(lane.id);
+      return current?.state === "running" && current.provisioningJob === undefined;
+    });
+    expect(adds).toBe(1);
+    expect((await findControllerPipeline(lane.id))?.lastPassedCommit).toBe(lane.baseRef);
+  } finally {
+    jobs.resumeProvisioningJobsAfterFenceWithdrawal(() => true);
+    await settleProvisioningJobsForTests();
+    await settlePipelineControllerJobs();
+    await settlePipelineStopReadLanes();
+    await removeProvisioningFixture(root);
+  }
+}));
+
+test.skipIf(process.platform !== "linux")("legacy installer census follows checkout identity through a path alias", () => withControllerAuditState(async () => {
+  const { observeLegacyInstaller } = await import("./provisionLegacyInstaller");
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "legacy-cwd-alias-"));
+  const checkout = path.join(root, "checkout"), alias = path.join(root, "checkout-alias");
+  fs.mkdirSync(checkout);
+  fs.symlinkSync(checkout, alias);
+  const child = Bun.spawn([process.execPath, "-e", "process.stdin.resume()", "install"], {
+    cwd: alias, stdin: "pipe", stdout: "ignore", stderr: "ignore",
+  });
+  try {
+    const stop = performance.now() + 2_000;
+    while (performance.now() < stop) {
+      const observation = await observeLegacyInstaller(checkout);
+      if (observation.kind === "possible-writer") {
+        expect(observation.pid).toBe(child.pid);
+        return;
+      }
+      await Bun.sleep(20);
+    }
+    throw new Error("legacy installer census did not identify the aliased checkout writer");
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    await child.exited;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}));
 
 function startFixtureController(input: Omit<ProvisionControllerFixture, "state">, cwd = process.cwd(), env = {}) {
   const child = Bun.spawn([process.execPath, "--no-env-file", "src/lib/pipelines/fixtures/provisionControllerProcess.ts"], {
@@ -104,10 +211,14 @@ test.each(["disk", "repository turn", "executor pool"] as const)("a transient re
       }
       await run();
       expect(adds).toBe(1);
-      wall += 181_000;
+      wall += blocker === "repository turn" ? 400_000 : 181_000;
       await run();
       expect(adds).toBe(1);
       const waiting = (await findControllerPipeline(lane.id))!.provisioningJob!;
+      if (blocker === "repository turn") {
+        expect(waiting.status).toBe("waiting");
+        expect((await findControllerPipeline(lane.id))?.state).toBe("provisioning");
+      }
       turn?.close();
       diskHeld = false;
       release.resolve();

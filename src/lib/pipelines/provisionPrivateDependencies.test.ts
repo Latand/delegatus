@@ -48,6 +48,37 @@ test.each(["enumeration", "process-identity", "expired"] as const)("private prep
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
+test("in-place installation refuses a directory replaced between creation and descriptor binding", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "private-in-place-race-"));
+  try {
+    const source = path.join(root, "source"), checkout = path.join(root, "checkout"), target = path.join(checkout, "node_modules");
+    await fs.mkdir(source);
+    await fs.mkdir(checkout);
+    await fs.writeFile(path.join(checkout, "package.json"), '{"name":"fixture-tools","workspaces":["packages/*"]}\n');
+    await fs.writeFile(path.join(checkout, "bun.lock"), '{"lockfileVersion":1}\n');
+    const effects: PrivateInstallEffect[] = [];
+    const sentinel = "preserve foreign install bytes\n";
+    expect(await preparePrivateDependencies(source, checkout, "directory-race-claim", undefined, undefined, 5_000, {
+      async observeLegacy() { return { kind: "clear", observedAt: 1_000 }; },
+      workerEntry: path.resolve("src/lib/pipelines/provisionToolchain.worker.ts"),
+      async beforeEffect(effect) { effects.push(effect); },
+      async afterModulesDirectoryCreated() {
+        await fs.rename(target, `${target}.created`);
+        await fs.mkdir(target);
+        await fs.writeFile(path.join(target, "sentinel"), sentinel);
+      },
+      async uncertain(observation) { throw new Error(JSON.stringify(observation)); },
+      async receipt() { throw new Error("replaced install directory must not be received"); },
+      async intent() { throw new Error("replaced install directory must not receive an intent"); },
+    })).toBe(false);
+    expect(effects).toContain("create-modules-directory");
+    expect(effects).not.toContain("install-in-place");
+    expect(effects).not.toContain("private-marker");
+    expect(await fs.readFile(path.join(target, "sentinel"), "utf8")).toBe(sentinel);
+    expect(await fs.readdir(target)).toEqual(["sentinel"]);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 test("a staged install marker reconciles after restart without dispatching a second installer", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "private-receipt-recovery-"));
   try {
@@ -78,6 +109,42 @@ test("a staged install marker reconciles after restart without dispatching a sec
     })).toBe(true);
     expect(effects).toEqual([]);
     expect(receipts).toEqual([{ claim, inputs, device: priorIntent.device, inode: priorIntent.inode, mode: "staged" }]);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+test("a completed staged scratch receipt publishes after restart without another install", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "private-scratch-recovery-"));
+  try {
+    const source = path.join(root, "source"), checkout = path.join(root, "checkout"), claim = "scratch-recovery-claim";
+    const scratch = path.join(checkout, `.delegatus-dependencies-${claim}`), staged = path.join(scratch, "node_modules");
+    await fs.mkdir(source);
+    await fs.mkdir(staged, { recursive: true });
+    const manifest = Buffer.from('{"name":"fixture-tools"}\n'), lock = Buffer.from('{"lockfileVersion":1}\n');
+    await fs.writeFile(path.join(checkout, "package.json"), manifest);
+    await fs.writeFile(path.join(checkout, "bun.lock"), lock);
+    await fs.writeFile(path.join(staged, "package.json"), "installed\n");
+    const digest = createHash("sha256");
+    digest.update(JSON.stringify(["package.json", manifest.length])).update(manifest);
+    digest.update(JSON.stringify(["bun.lock", lock.length])).update(lock);
+    const inputs = digest.digest("hex");
+    const info = await fs.stat(staged, { bigint: true });
+    const nonce = "staged-scratch-nonce";
+    const nonceDigest = createHash("sha256").update(nonce).digest("hex");
+    const prior: PrivateInstallIntent = { claim, inputs, device: String(info.dev), inode: String(info.ino), nonceDigest };
+    await fs.writeFile(path.join(staged, ".delegatus-install-intent.json"), JSON.stringify({ claim, nonce }));
+    await fs.writeFile(path.join(staged, ".delegatus-install-receipt.json"), JSON.stringify({ claim, inputs, bun: Bun.version,
+      device: prior.device, inode: prior.inode, mode: "staged", nonceDigest }));
+    const effects: PrivateInstallEffect[] = [], receipts: PrivateInstallReceipt[] = [];
+    expect(await preparePrivateDependencies(source, checkout, "successor-claim", undefined, prior, 5_000, {
+      async observeLegacy() { return { kind: "clear", observedAt: 1_000 }; },
+      async beforeEffect(effect) { effects.push(effect); },
+      async uncertain(observation) { throw new Error(JSON.stringify(observation)); },
+      async receipt(value) { receipts.push(value); },
+      async intent() { throw new Error("scratch recovery must not dispatch a fresh installer"); },
+    })).toBe(true);
+    expect(effects).toEqual(["private-publish", "private-cleanup"]);
+    expect(receipts).toEqual([{ claim, inputs, device: prior.device, inode: prior.inode, mode: "staged" }]);
+    expect(await fs.readFile(path.join(checkout, "node_modules", "package.json"), "utf8")).toBe("installed\n");
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 

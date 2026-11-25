@@ -588,7 +588,10 @@ async function inspectPlannedCheckout(pipeline: Pipeline, plan: PipelineCheckout
     return { ok: false, error: "the pipeline checkout has no matching creation evidence; preserve it and inspect its ownership before retrying" };
   }
   if (registered.includes("locked initializing")) return { ok: true, state: "initializing" };
-  const tracked = await exec("git", ["diff", "--quiet", "HEAD", "--"], pipeline.worktreeDir, signal);
+  const staged = await exec("git", ["diff", "--cached", "--quiet", "HEAD", "--"], pipeline.worktreeDir, signal);
+  if (staged.code === 1) return { ok: false, error: "the pipeline worktree index contains staged tracked changes" };
+  if (staged.code !== 0) return failure("checking pipeline worktree staged tracked files", staged);
+  const tracked = await exec("git", ["diff", "--quiet", "--"], pipeline.worktreeDir, signal);
   if (tracked.code === 1) return { ok: false, error: "the pipeline worktree has incomplete or modified tracked files" };
   if (tracked.code !== 0) return failure("checking pipeline worktree tracked files", tracked);
   return { ok: true, state: "ready", sha };

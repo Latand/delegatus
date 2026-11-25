@@ -1016,7 +1016,8 @@ function expectedTransitionAuthority(intent: ViewerReleaseSwitchIntent, authorit
   const expectedMode = intent.action === "restore"
     ? intent.target.hotStateBackend === HOT_STATE_BACKEND ? "sqlite" : "legacy"
     : intent.target.hotStateBackend === HOT_STATE_BACKEND
-      ? intent.previousAuthority?.mode === "sqlite" ? "sqlite" : "preparing"
+      ? intent.previousAuthority?.mode === "sqlite"
+        || (intent.previousAuthority?.mode === "fencing" && !!intent.previousAuthority.checkpoint) ? "sqlite" : "preparing"
       : "legacy";
   return authority.epoch === (intent.previousAuthority?.epoch ?? 0) + 1
     && authority.mode === expectedMode
@@ -1084,9 +1085,16 @@ function switchTarget(
     throw new Error("release MCP runtime revision does not match the Viewer revision");
   }
   const currentTarget = readCurrentRelease();
-  const sameRelease = currentTarget?.revision === target.revision
-    && currentTarget.endpoint === target.endpoint;
   const previousAuthority = readHotStateAuthority(stateDir);
+  const sameRelease = currentTarget?.revision === target.revision
+    && currentTarget.endpoint === target.endpoint && authorityMatchesRelease(previousAuthority, target);
+  if (!sameRelease && currentTarget?.hotStateBackend === HOT_STATE_BACKEND
+    && currentTarget.revision !== target.revision
+    && previousAuthority?.releaseRevision === currentTarget.revision
+    && (previousAuthority.mode === "sqlite" || previousAuthority.mode === "fencing")
+    && (fence?.mode !== "fencing" || fence.releaseRevision !== currentTarget.revision || !fence.checkpoint)) {
+    throw new Error("the current provisioning controller has no acknowledged release fence; refusing the Viewer switch");
+  }
   let transitionAuthority: HotStateAuthority | null = null;
   const intent: ViewerReleaseSwitchIntent | null = sameRelease
     ? null
@@ -1106,16 +1114,27 @@ function switchTarget(
     if (!sameRelease) {
       phase?.("publishing hot-state authority");
       if (action === "restore") {
+        const restoresFencedRelease = fence?.mode === "fencing"
+          && fence.releaseRevision === target.revision && !!fence.checkpoint;
         transitionAuthority = publishHotStateAuthority(
           stateDir,
           target.hotStateBackend === HOT_STATE_BACKEND ? "sqlite" : "legacy",
           target.revision,
-          fence?.checkpoint ? { checkpoint: fence.checkpoint } : {},
+          fence?.checkpoint ? {
+            checkpoint: fence.checkpoint,
+            ...(restoresFencedRelease && fence.activationReadyAt ? { activationReadyAt: fence.activationReadyAt } : {}),
+            ...(restoresFencedRelease && fence.releaseReadyAt ? { releaseReadyAt: fence.releaseReadyAt } : {}),
+            ...(restoresFencedRelease && fence.activationOwner ? { activationOwner: fence.activationOwner } : {}),
+          } : {},
         );
-      } else if (target.hotStateBackend === HOT_STATE_BACKEND && previousAuthority?.mode !== "sqlite") {
-        transitionAuthority = publishHotStateAuthority(stateDir, "preparing", target.revision);
       } else if (target.hotStateBackend === HOT_STATE_BACKEND) {
-        transitionAuthority = publishHotStateAuthority(stateDir, "sqlite", target.revision);
+        const acknowledgedFence = fence?.mode === "fencing"
+          && fence.releaseRevision === currentTarget?.revision && !!fence.checkpoint;
+        const previousSqliteWriter = previousAuthority?.mode === "sqlite"
+          && previousAuthority.releaseRevision === currentTarget?.revision;
+        transitionAuthority = publishHotStateAuthority(stateDir,
+          acknowledgedFence || previousSqliteWriter ? "sqlite" : "preparing", target.revision,
+          acknowledgedFence ? { checkpoint: fence!.checkpoint } : {});
       } else if (target.hotStateBackend !== HOT_STATE_BACKEND) {
         transitionAuthority = publishHotStateAuthority(
           stateDir,
@@ -1269,7 +1288,11 @@ async function fenceCurrentSqliteRelease(
     throw new Error("active hot-state authority differs from the rollback source release");
   }
   const request = publishHotStateAuthority(stateDir, "fencing", revision,
-    retiringCandidate ? { retirementOwner: captureProcessIdentity(process.pid) } : {});
+    {
+      ...(previous.activationReadyAt ? { activationReadyAt: previous.activationReadyAt } : {}),
+      ...(previous.releaseReadyAt ? { releaseReadyAt: previous.releaseReadyAt } : {}),
+      ...(retiringCandidate ? { retirementOwner: captureProcessIdentity(process.pid) } : {}),
+    });
   try {
     return await checkpointHotStateFence(request, revision, retiringCandidate);
   } catch (error) {
@@ -1571,20 +1594,25 @@ async function main(): Promise<unknown> {
     const previous = release(input.previous);
     reportAdapterPhase(action, "starting the rollback Viewer release");
     await startCandidate(previous);
-    reportAdapterPhase(action, "verifying the rollback Viewer release");
-    const evidence = await verifyViewer(previous, previous.endpoint);
-    if (!evidence.ok) throw new Error(evidence.detail ?? "rollback release health gate failed");
     const previousMcpRuntime = mcpRuntime(input.previousMcpRuntime);
     const candidate = release(input.candidate);
     reportAdapterPhase(action, "fencing the promoted SQLite release");
-    const fence = await fenceCurrentSqliteRelease(candidate.revision, previous, candidate);
-    return switchTarget(
+    const currentAuthority = readHotStateAuthority(stateDir);
+    const restoredFence = currentAuthority?.mode === "fencing"
+      && currentAuthority.releaseRevision === previous.revision && currentAuthority.checkpoint
+      ? currentAuthority : null;
+    const fence = restoredFence ?? await fenceCurrentSqliteRelease(candidate.revision, previous, candidate);
+    const publication = switchTarget(
       previous,
       "restore",
       previousMcpRuntime,
       fence,
       (phase) => reportAdapterPhase(action, phase),
     );
+    reportAdapterPhase(action, "verifying the rollback Viewer release");
+    const evidence = await verifyViewer(previous, previous.endpoint);
+    if (!evidence.ok) throw new Error(evidence.detail ?? "rollback release health gate failed");
+    return publication;
   }
   if (action === "stage-host-successor") {
     const candidate = release(input.candidate);

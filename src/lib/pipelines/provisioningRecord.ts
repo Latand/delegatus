@@ -47,6 +47,8 @@ export type ProvisioningRecord = {
   retryAt?: number;
   /** The transient wait and this cutoff together preserve its spent time. */
   retryPausedAt?: number;
+  /** Token of the checkout or repository owner this FIFO waiter follows. */
+  blockingOwnerToken?: string;
   resource?: string;
   cacheWaitSince?: number;
   cacheWaitIdentity?: string;
@@ -73,6 +75,7 @@ export type ProvisioningStepView = {
   retrying?: boolean;
   reason?: string;
   retryAt?: number;
+  blockerToken?: string;
 };
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -96,6 +99,7 @@ export function validProvisioningRecord(value: unknown): value is ProvisioningRe
     || !["running", "waiting", "awaitingApply", "parked"].includes(String(value.status))
     || (value.retryAt !== undefined && !timestamp(value.retryAt))
     || (value.retryPausedAt !== undefined && !timestamp(value.retryPausedAt))
+    || (value.blockingOwnerToken !== undefined && !text(value.blockingOwnerToken, 64))
     || (value.resource !== undefined && (!text(value.resource, 32) || !/^(?:checkout|repo):[0-9]{1,3}$/.test(value.resource)))
     || (value.cacheWaitSince !== undefined && !timestamp(value.cacheWaitSince))
     || (value.cacheWaitIdentity !== undefined && !validCacheIdentity(value.cacheWaitIdentity))
@@ -138,6 +142,7 @@ export function provisioningStepView(pipeline: Pick<Pipeline, "state" | "provisi
   const reason = (record.waitReason ?? interruption?.reason)?.split(" ", 1)[0];
   return { kind, step, since, deadlineAt, status, ...(retryAt === undefined ? {} : { retryAt }),
     ...(interruption && status !== "waiting" && status !== "parked" ? { retrying: true } : {}),
+    ...(record.blockingOwnerToken ? { blockerToken: record.blockingOwnerToken } : {}),
     ...(reason && /^[a-z][a-z-]{1,63}$/.test(reason) ? { reason } : {}) };
 }
 

@@ -693,7 +693,7 @@ export async function captureProvisioningStepGeometry(browser: Browser, out: str
         deadlineAt: now - 5_000, observedAt: now - 5_000, reason: "provision-step-timeout" } } : {}),
       ...(phase === "timed-out" ? { retryAt: now + 5000, interruption: {
         step: "checkingDependencies", since: now - 8000, deadlineAt: now, observedAt: now, reason: "provision-step-timeout",
-      } } : {}),
+      }, blockingOwnerToken: "4f3a9c21-owner-fixture" } : {}),
     };
     savePipelines([lane]);
   };
@@ -790,7 +790,11 @@ export async function captureProvisioningStepGeometry(browser: Browser, out: str
           await page.screenshot({ path: path.join(out, name + ".png") });
           expect(geometry.whole, JSON.stringify(geometry)).toBe(true);
           expect(geometry.contrast).toBeGreaterThanOrEqual(4.5);
-          expect(geometry.text).toMatch(lang === "en" ? / · \d+ s$/ : / · \d+ с$/);
+          if (phase === "timed-out") {
+            expect(geometry.text).toMatch(lang === "en"
+              ? / · \d+ s · Waiting: the step deadline expired · Owner token 4f3a9c21$/
+              : / · \d+ с · Очікування: сплив строку кроку · Токен власника 4f3a9c21$/);
+          } else expect(geometry.text).toMatch(lang === "en" ? / · \d+ s$/ : / · \d+ с$/);
           frames.push({ name, ...geometry });
           if (index === 0) {
             await page.clock.runFor(31_000);

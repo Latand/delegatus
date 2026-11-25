@@ -303,6 +303,8 @@ export function acknowledgeHotStateFence(
     return writeHotStateAuthority(directory, current, "fencing", current.releaseRevision, {
       epoch: current.epoch,
       checkpoint: { acknowledgedAt: new Date().toISOString(), revisions },
+      ...(current.activationReadyAt ? { activationReadyAt: current.activationReadyAt } : {}),
+      ...(current.releaseReadyAt ? { releaseReadyAt: current.releaseReadyAt } : {}),
     });
   });
 }

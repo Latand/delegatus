@@ -12,6 +12,22 @@ const vanished = (error: NodeJS.ErrnoException) => error.code === "ENOENT" || er
 const exec = promisify(execFile);
 const CENSUS_MS = 5_000;
 
+async function cwdBelongsToCheckout(cwd: string, checkout: string): Promise<boolean | null> {
+  try {
+    const root = await fs.stat(checkout, { bigint: true });
+    if (!root.isDirectory()) return null;
+    let current = path.resolve(cwd);
+    for (;;) {
+      const candidate = await fs.stat(current, { bigint: true });
+      if (!candidate.isDirectory()) return null;
+      if (candidate.dev === root.dev && candidate.ino === root.ino) return true;
+      const parent = path.dirname(current);
+      if (parent === current) return false;
+      current = parent;
+    }
+  } catch { return null; }
+}
+
 async function observeMacInstaller(checkout: string): Promise<LegacyInstallerObservation> {
   const end = performance.now() + CENSUS_MS;
   const command = (executable: string, args: string[]) => exec(executable, args, {
@@ -40,11 +56,9 @@ async function observeMacInstaller(checkout: string): Promise<LegacyInstallerObs
     catch { return { kind: "incomplete", reason: "process-identity" }; }
     if (identity !== start.trim()) return { kind: "incomplete", reason: "process-identity" };
     if (!cwd) return { kind: "incomplete", reason: "working-directory" };
-    let physicalCwd: string;
-    try { physicalCwd = await fs.realpath(cwd); }
-    catch { return { kind: "incomplete", reason: "working-directory" }; }
-    const relative = path.relative(root, physicalCwd);
-    if (relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))) {
+    const belongs = await cwdBelongsToCheckout(cwd, root);
+    if (belongs === null) return { kind: "incomplete", reason: "working-directory" };
+    if (belongs) {
       return { kind: "possible-writer", pid: Number(pid), start: String(new Date(`${start} UTC`).getTime()) };
     }
   }
@@ -96,11 +110,9 @@ async function inspectLegacyInstallers(checkout: string): Promise<LegacyInstalle
         return { kind: "incomplete", reason: "process-identity" };
       }
       if (cwd === root + " (deleted)") return { kind: "incomplete", reason: "working-directory" };
-      let physicalCwd: string;
-      try { physicalCwd = await fs.realpath(cwd); }
-      catch { return { kind: "incomplete", reason: "working-directory" }; }
-      const relative = path.relative(root, physicalCwd);
-      if (relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))) {
+      const belongs = await cwdBelongsToCheckout(cwd, root);
+      if (belongs === null) return { kind: "incomplete", reason: "working-directory" };
+      if (belongs) {
         return { kind: "possible-writer", pid, start: identity[19] };
       }
     } catch {
