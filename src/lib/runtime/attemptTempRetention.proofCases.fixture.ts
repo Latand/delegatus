@@ -84,12 +84,20 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
         bytes: report.bytes, elapsed: clock.elapsed }));
       // Restore proof and restart the actual helper over the same durable
       // cursor. The protected root stays while every ended sibling recovers.
-      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12 }));
       process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = String(heldBytes);
       let removed = report.removed;
+      let recoveryAt = NOW + (clock.elapsed ?? 0);
+      const recover = () => {
+        const retryAt = ledgerRoots(store, scratch).filter(row => row.directory !== held.directory).map(row => row.checkedAt);
+        // The helper restarts on later ticks. Let recorded proof backoff
+        // elapse before asking a new pass to reach the earlier deferrals.
+        recoveryAt = Math.max(recoveryAt + 60_000, ...retryAt);
+        fs.writeFileSync(config, JSON.stringify({ now: recoveryAt, freeBytes: 1e12 }));
+        return realParentPass();
+      };
       const nativeRefused = new Set<string>();
       for (let pass = 0; pass < 3 && store.bytes() > heldBytes; pass++) {
-        const recovered = await realParentPass();
+        const recovered = await recover();
         if (pass === 0) expect(recovered.outcomes[0]!.directory).toBe(next);
         for (const directory of nativeFenceDeferrals(recovered, store)) nativeRefused.add(directory);
         expect(recovered.errors).toBe(0); removed += recovered.removed;
@@ -103,7 +111,7 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
           const stat = fs.statSync(owner.directory); expect(`${stat.dev}:${stat.ino}`).toBe(owner.identity);
           expect(fs.readFileSync(path.join(owner.directory, "data")).length).toBe(4096);
         }
-        const recovered = await realParentPass(); expect(recovered.errors).toBe(0); removed += recovered.removed;
+        const recovered = await recover(); expect(recovered.errors).toBe(0); removed += recovered.removed;
         for (const directory of nativeFenceDeferrals(recovered, store)) nativeRefused.add(directory);
       }
       expect(removed).toBe(count); expect(store.bytes()).toBe(heldBytes);
