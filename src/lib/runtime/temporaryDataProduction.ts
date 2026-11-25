@@ -16,6 +16,8 @@ import { attemptReferencesClear, ledgerLinkedEvidence, type RetainedCheckoutRead
 import { TemporaryDataStore, type TemporaryDataCandidate } from "./temporaryDataStore";
 import { PRESERVATION_NAMES, sweepTemporaryData, TEMPORARY_DATA_RETENTION_MS, type TemporaryDataAuthority } from "./temporaryDataRetention";
 import { retentionUnderTest, RetentionTestSafetyError } from "@/lib/retentionTestSafety";
+import type { TemporaryDataPorts } from "./temporaryDataRetention";
+import { openTaskReferencesEvidence } from "@/lib/cleaner/evidenceReferences";
 
 const HOUR = 3600000;
 // One leased helper owns these version-checked observations. The inventory
@@ -253,7 +255,7 @@ function queueUnattributedCopies(store: TemporaryDataStore, roots: AttemptTempSt
 }
 
 export function discoverTemporaryData(store: TemporaryDataStore, registry: TemporaryRegistry, now: () => number, deadline: number, clock = () => performance.now(),
-  directories = { evidence: statePath("evidence"), journals: statePath("structured-host-events") }) {
+  directories = { evidence: statePath("evidence"), journals: statePath("structured-host-events") }, evidenceOnly = false) {
   const { evidence, journals } = directories;
   for (const [directory, kind] of [[evidence, "evidence"], [path.join(evidence, "agents"), "agents"],
     [path.join(evidence, "recorded-checks"), "recorded"], [path.join(evidence, "attempt-temp"), "copies"], [journals, "journals"]]) store.namespace(directory!, kind!);
@@ -263,7 +265,7 @@ export function discoverTemporaryData(store: TemporaryDataStore, registry: Tempo
     store.setMeta("receipt-cursor", keys.length ? keys.at(-1)! : "");
   }
   let discovered = 0;
-  for (const namespace of store.namespaces(now())) {
+  for (const namespace of store.namespaces(now(), 4, evidenceOnly)) {
     if (clock() >= deadline) break;
     try {
       if (!fs.existsSync(namespace.directory)) { store.checkpoint({ ...namespace, cursor: "", checkedAt: now() + HOUR }); continue; }
@@ -306,7 +308,7 @@ export function discoverTemporaryData(store: TemporaryDataStore, registry: Tempo
             identity: `${stat.dev}:${stat.ino}`, adoptedAt: now(), checkedAt: 0, bytes: 0, reason: "empty-evidence-folder" });
         }
       }
-      store.checkpoint({ ...namespace, cursor: page.done ? "" : page.cursor, checkedAt: now() + (page.done ? HOUR : 1000) });
+      store.checkpoint({ ...namespace, cursor: page.done ? "" : page.cursor, checkedAt: now() + (page.done ? HOUR : evidenceOnly ? 0 : 1000) });
     } catch {
       store.checkpoint({ ...namespace, checkedAt: now() + 60000 });
       store.setMeta("discovery-error", "namespace-unavailable");
@@ -316,17 +318,20 @@ export function discoverTemporaryData(store: TemporaryDataStore, registry: Tempo
 }
 
 export async function runTemporaryDataSweep(ports: { scan: (directories: string[]) => ProcessScan;
-  containerReferences?: (roots: readonly string[]) => Promise<boolean> }, env = process.env, deadline = Date.now() + 30000) {
+  containerReferences?: (roots: readonly string[]) => Promise<boolean>;
+  cleaner?: TemporaryDataPorts["cleaner"]; now?: () => number }, env = process.env, deadline = Date.now() + 30000) {
   const mode = tempSweepMode(env);
   if (!mode || Date.now() >= deadline) return null;
   const store = new TemporaryDataStore(), roots = new AttemptTempStore();
   try {
     const registry = agentRegistry();
+    const now = ports.now ?? Date.now;
     const discoveryDeadline = performance.now() + Math.min(1000, Math.max(0, deadline - Date.now()));
-    const queue = mode === "on" ? queueUnattributedCopies(store, roots, Date.now(), () => discoveryDeadline - performance.now()) : null;
-    const discovered = discoverTemporaryData(store, registry, Date.now, discoveryDeadline);
+    const queue = !ports.cleaner && mode === "on" ? queueUnattributedCopies(store, roots, now(), () => discoveryDeadline - performance.now()) : null;
+    const discovered = discoverTemporaryData(store, registry, now, discoveryDeadline, undefined, undefined, !!ports.cleaner);
     const report = await sweepTemporaryData(store, {
-      mode, checkoutReads, budgetMs: Math.max(0, Math.min(5000, deadline - Date.now())), authority: async row => temporaryDataAuthority(row, registry, roots),
+      mode, now, checkoutReads, cleaner: ports.cleaner, taskReferences: openTaskReferencesEvidence,
+      budgetMs: Math.max(0, Math.min(5000, deadline - Date.now())), authority: async row => temporaryDataAuthority(row, registry, roots, now),
       references: async (row, target, inventory) => {
         if (!ports.containerReferences && retentionUnderTest())
           throw new RetentionTestSafetyError("retention test refused the default Docker reference observer");
@@ -334,17 +339,17 @@ export async function runTemporaryDataSweep(ports: { scan: (directories: string[
       },
       onRemoved: row => { if (isAttemptCopy(row)) roots.forgetCopy(row.directory); },
       claim: async row => {
-        const authority = temporaryDataAuthority(row, registry, roots), releases: (() => void)[] = [];
+        const authority = temporaryDataAuthority(row, registry, roots, now), releases: (() => void)[] = [];
         try { for (const id of [...new Set(authority.pipelineIds)]) releases.push(await claimAttemptRetirement(id, row.directory)); }
         catch (error) { for (const release of releases.reverse()) release(); throw error; }
         return () => { for (const release of releases.reverse()) release(); };
       },
     }, roots.filename + ".sweep");
-    writeJsonDurably(statePath("temporary-data-report.json"), {
+    if (!ports.cleaner) writeJsonDurably(statePath("temporary-data-report.json"), {
       at: new Date().toISOString(), discovered, legacyCopiesQueued: queue?.queued ?? 0,
       legacyCopyQueueError: !!queue?.errors.length, legacyCopyQueueErrors: queue?.errors ?? [], ...report,
     });
-    return report;
+    return { ...report, more: !!ports.cleaner && (store.namespaces(now(), 1, true).length > 0 || store.dueEvidence(now()).length > 0) };
   } finally {
     while (checkoutReads.size > 128) checkoutReads.delete(checkoutReads.keys().next().value!);
     roots.close(); store.close();

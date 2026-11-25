@@ -1,6 +1,7 @@
 "use client";
 
 import { Plus } from "lucide-react";
+import { createPortal } from "react-dom";
 import { createContext, forwardRef, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
@@ -18,11 +19,12 @@ import { consumePendingAccountPanel, onAccountPanelRequest } from "@/lib/account
 import { claudeTierDisplayName } from "@/lib/agent/models";
 import { type TFunction, useLocale } from "@/lib/i18n";
 import { handleOverlayEscape } from "@/lib/overlay";
-import { quotaReadingFromAccountLimits, reconcileQuotaReadings, type ReconciledQuota, type ReconciledQuotaWindow } from "@/lib/rateLimit";
-import { tierWindowKey, type TierWindowKey } from "@/lib/types";
+import { quotaAsEngineLimits, quotaReadingFromAccountLimits, reconcileQuotaReadings, type ReconciledQuota, type ReconciledQuotaWindow } from "@/lib/rateLimit";
+import { tierWindowKey, type EngineLimits, type TierWindowKey } from "@/lib/types";
 import { useIsMobile } from "@/hooks/useIsMobile";
 
 import { AccountRowOpening, revealRow } from "./AccountRowOpening";
+import { BurndownPanel } from "./BurndownPanel";
 import { AccountSpendCredits, paidSpendingActive, showsCreditsBlock } from "./AccountSpendCredits";
 import { AccountRemovalRefusal, liveWorkHref, refusalText } from "./AccountRemovalRefusal";
 import { AccountCleanupFailed, AccountCleanupResult, AccountRemovalSummary, ArchivePath, HiddenAccountOffer } from "./AccountRemovalSummary";
@@ -200,14 +202,40 @@ function factsOf(account: AccountOption, engine: "claude" | "codex", activeId: s
   };
 }
 
+/** The press that opens an account's burndown chart, on the phone, where the
+    accounts screen has no footer to carry it. It covers a fact the row already
+    shows, so no new control or line is drawn: `inset` lays it over the
+    reading, otherwise it is a button around the text it is given. It holds the
+    platform's 44 px target. */
+function ChartPress({ account, engine, chart, inset = true, children }: { account: AccountOption; engine: "claude" | "codex"; chart: RowSurface["chart"]; inset?: boolean; children?: React.ReactNode }) {
+  const { t } = useLocale();
+  if (!chart) return <>{children}</>;
+  return (
+    <button
+      type="button"
+      data-account-chart={account.id}
+      data-account-chart-engine={engine}
+      aria-haspopup="dialog"
+      aria-expanded={chart.openId === account.id}
+      aria-label={t("burndown.openAria", { engine: `${engineDisplay(engine)} · ${account.label}` })}
+      onClick={() => chart.toggle(account.id)}
+      className={inset
+        ? "absolute inset-0 rounded-[6px] hover:bg-canvas/60 active:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        : "-my-1 flex min-h-11 min-w-0 flex-1 items-center rounded-[6px] text-left break-words hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"}
+    >
+      {children}
+    </button>
+  );
+}
+
 /** Every window of the row on one line. A moment an earlier line or the limit note already named is not said again. */
-function WindowLines({ account, facts, now, engine, wide }: { account: AccountOption; facts: RowFacts; now: number; engine: "claude" | "codex"; wide: boolean }) {
+function WindowLines({ account, facts, now, engine, wide, chart }: { account: AccountOption; facts: RowFacts; now: number; engine: "claude" | "codex"; wide: boolean; chart?: RowSurface["chart"] }) {
   const { t } = useLocale();
   const s = useSizes();
   if (facts.windows.length === 0) return null;
   const named = new Set<number | null>([facts.noteUntil]);
-  return (
-    <dl data-account-limits={account.id} aria-label={t("accounts.limitsAria", { label: account.label })} className="flex flex-col gap-0.5">
+  const list = (
+    <dl data-account-limits={account.id} aria-label={t("accounts.limitsAria", { label: account.label })} className={`flex flex-col gap-0.5 ${chart ? "min-h-11 justify-center" : ""}`}>
       {facts.windows.map(({ key, label, window }) => {
         const resetsAt = window.value.resetsAt;
         const said = resetsAt !== null && !named.has(resetsAt);
@@ -225,6 +253,13 @@ function WindowLines({ account, facts, now, engine, wide }: { account: AccountOp
         );
       })}
     </dl>
+  );
+  if (!chart) return list;
+  return (
+    <div className="relative">
+      {list}
+      <ChartPress account={account} engine={engine} chart={chart} />
+    </div>
   );
 }
 
@@ -302,14 +337,19 @@ function NoResetsFact({ account, facts }: { account: AccountOption; facts: RowFa
 }
 
 /** When the numbers were read, and the way to read them again. */
-function RefreshLine({ account, state, facts, receipts }: { account: AccountOption; state: EngineAccountsState; facts: RowFacts; receipts?: ReceiptStore }) {
+function RefreshLine({ account, state, facts, receipts, engine, chart }: { account: AccountOption; state: EngineAccountsState; facts: RowFacts; receipts?: ReceiptStore; engine: "claude" | "codex"; chart?: RowSurface["chart"] }) {
   const { t } = useLocale();
   const s = useSizes();
   const busy = state.limitsBusy?.accountId === account.id;
   const refreshing = busy && state.limitsBusy?.operation === "refreshLimits";
   return (
     <div data-account-line className={`flex items-center gap-2 ${s.line} text-muted ${s.endLine}`}>
-      <span className="min-w-0 flex-1 break-words">{facts.checked ? `${t("accounts.limitsChecked")} · ${facts.checked}` : t("accounts.noDataYet")}</span>
+      {/* A signed-in account with no reading has no window line to press, so this fact is its way into the chart. */}
+      {chart && facts.usable && facts.windows.length === 0 ? (
+        <ChartPress account={account} engine={engine} chart={chart} inset={false}>{facts.checked ? `${t("accounts.limitsChecked")} · ${facts.checked}` : t("accounts.noDataYet")}</ChartPress>
+      ) : (
+        <span className="min-w-0 flex-1 break-words">{facts.checked ? `${t("accounts.limitsChecked")} · ${facts.checked}` : t("accounts.noDataYet")}</span>
+      )}
       <button
         type="button"
         data-account-refresh-limits={account.id}
@@ -591,6 +631,8 @@ type RowSurface = {
   /** Makes the account the default; true when it did. */
   makeDefault: (account: AccountOption) => Promise<boolean>;
   receipts?: ReceiptStore;
+  /** The phone's way into an account's burndown chart; the desktop dialog has the footer's. */
+  chart?: { openId: string | null; toggle: (accountId: string) => void };
 };
 
 type AccountSignIn = {
@@ -709,7 +751,7 @@ function AccountRow({ account, engine, quota, surface }: {
           </button>
         </div>
         <div data-account-below className={`flex flex-col gap-0.5 ${s.indent} ${s.below} empty:hidden`}>
-          <WindowLines account={account} facts={facts} now={now} engine={engine} wide={wide} />
+          <WindowLines account={account} facts={facts} now={now} engine={engine} wide={wide} chart={surface.chart} />
           <RowNotes account={account} facts={facts} now={now} open={open} />
           {engine === "codex" ? <AccountSpendCredits account={account} state={state} quota={quota} phone={phone} column={s.column(wide)} className={`${s.line} ${s.credits}`} /> : null}
           <ResetLine account={account} state={state} facts={facts} now={now} receipts={receipts} />
@@ -739,7 +781,7 @@ function AccountRow({ account, engine, quota, surface }: {
             ) : null}
             {creditsOn ? <p data-account-line className={`break-words ${s.line} text-muted`}>{t("accounts.spendCreditsOnShort")}</p> : null}
             {engine === "codex" ? <NoResetsFact account={account} facts={facts} /> : null}
-            {!account.provider && account.authPresent ? <RefreshLine account={account} state={state} facts={facts} receipts={receipts} /> : null}
+            {!account.provider && account.authPresent ? <RefreshLine account={account} state={state} facts={facts} receipts={receipts} engine={engine} chart={surface.chart} /> : null}
             {removal.armed ? null : <ToolActions account={account} state={state} facts={facts} removal={removal} onProvider={() => setProviderOpen(true)} />}
           </AccountRowOpening>
           {engine === "claude" && account.provider ? <ClaudeProviderEditor state={state} account={account} phone={phone} inRow open={providerFormOpen} onOpenChange={setProviderOpen} /> : null}
@@ -1608,6 +1650,59 @@ function MobileAddAccountRow({ state, engineName, loginBusy }: { state: EngineAc
   );
 }
 
+/** Drops the click that completes the tap now in progress. The sheet that
+    asked for it unmounts as it closes, so the guard lives here, outside it. A
+    gesture that never clicks (a scroll) cannot leave it armed: the next
+    pointer press or a short time lifts it. */
+function consumeNextClick() {
+  const swallow = (click: MouseEvent) => {
+    click.stopPropagation();
+    click.preventDefault();
+    release();
+  };
+  const timer = setTimeout(() => release(), 600);
+  function release() {
+    window.removeEventListener("click", swallow, true);
+    window.removeEventListener("pointerdown", release, true);
+    clearTimeout(timer);
+  }
+  window.addEventListener("click", swallow, true);
+  window.addEventListener("pointerdown", release, true);
+}
+
+/** An account's burndown chart as a bottom sheet over the phone's accounts
+    screen. It sits on the document body, clear of the screen's own scrolling
+    and stacking. A tap outside it closes it and is consumed: the click that
+    follows reaches nothing behind, so one tap never both dismisses the chart
+    and operates a row. Its own press (named by engine and id, since ids repeat
+    across engines) is left to toggle it, so a second press closes rather than
+    reopens. */
+function PhoneBurndown({ engine, account, reading, onClose }: { engine: "claude" | "codex"; account: AccountOption; reading: EngineLimits | null; onClose: () => void }) {
+  const closeRef = useRef(onClose);
+  useEffect(() => { closeRef.current = onClose; });
+  useEffect(() => {
+    const onDown = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (!target || target.closest("[data-burndown-dialog]")) return;
+      const press = target.closest("[data-account-chart]");
+      if (press && press.getAttribute("data-account-chart") === account.id && press.getAttribute("data-account-chart-engine") === engine) return;
+      // Another chart's press only opens a chart, so its click goes through; any other control's is consumed.
+      if (!press) consumeNextClick();
+      closeRef.current();
+    };
+    window.addEventListener("pointerdown", onDown);
+    return () => window.removeEventListener("pointerdown", onDown);
+  }, [account.id, engine]);
+  return createPortal(
+    <>
+      {/* What is behind the sheet is dimmed, and a tap on it closes the chart. */}
+      <div aria-hidden data-burndown-scrim="" className={`fixed inset-0 ${Z.modal} bg-black/40`} />
+      <BurndownPanel key={account.id} sheet engine={engine} label={engineDisplay(engine)} plan={reading?.plan ?? null} accountId={account.id} accountLabel={account.label} reading={reading} onClose={onClose} />
+    </>,
+    document.body,
+  );
+}
+
 function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: EngineAccountsState; now: number; focusAccountId: string | null; receipts: ReceiptStore }) {
   const { t } = useLocale();
   const { engine, accounts, active, notice, status } = state;
@@ -1615,6 +1710,9 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
   const loginBusy = engine === "claude" && accounts.some((account) => account.login != null && NONTERMINAL_CLAUDE_LOGIN_PHASES.has(account.login.phase));
   // One row is open at a time; a press on a row opens it and selects nothing.
   const [openId, setOpenId] = useState<string | null>(null);
+  // The account whose burndown chart is open, if any: one at a time, as the footer has it.
+  const [chartId, setChartId] = useState<string | null>(null);
+  const chartTrigger = useRef<HTMLElement | null>(null);
   // A removal answer lasts until it is closed or the screen is.
   const dismissRemoval = state.dismissRemoval;
   useEffect(() => dismissRemoval, [dismissRemoval]);
@@ -1637,7 +1735,15 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
   const surface: RowSurface = {
     state, now, wide: accounts.some((account) => accountQuota(account, now).tiers.length > 0), phone: true,
     openId, setOpenId, loginBusy, signIn, makeDefault, receipts, focusId: focusAccountId,
+    chart: {
+      openId: chartId,
+      toggle: (accountId) => {
+        chartTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        setChartId((current) => (current === accountId ? null : accountId));
+      },
+    },
   };
+  const chartAccount = chartId === null ? null : accounts.find((account) => account.id === chartId) ?? null;
   /* Accounts an install transfer brought, as on the desktop dialog: re-read
      whenever a sign-in here changes, since a sign-in settles its row. */
   const imported = useImportedAccounts(engine, accounts.map((account) => `${account.id}:${account.authPresent ? 1 : 0}`).join(","));
@@ -1686,6 +1792,17 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
       <MobileAddAccountRow state={state} engineName={engineName} loginBusy={loginBusy} />
       <HiddenAccountOffers state={state} phone className="mx-3 mb-1.5 pl-3" />
       {engine === "claude" ? <ClaudeProviderEditor state={state} phone /> : null}
+      {chartAccount ? (
+        <PhoneBurndown
+          engine={engine}
+          account={chartAccount}
+          reading={quotaAsEngineLimits(accountQuota(chartAccount, now))}
+          onClose={() => {
+            setChartId(null);
+            chartTrigger.current?.focus();
+          }}
+        />
+      ) : null}
     </section>
   );
 }

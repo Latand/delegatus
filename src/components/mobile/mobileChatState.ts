@@ -5,9 +5,10 @@ import type { TFunction } from "@/lib/i18n";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 
-import { attentionId, heldStuckDelivery, stalledAttention } from "../attention";
+import { heldStuckDelivery } from "../attention";
+import { mobileRowState } from "./mobileBoardModel";
 import { latestAttempt, stageChipState, type StageChipState } from "../pipelines/pipelineModel";
-import { clockDuration, turnIsRunning, turnLeftOpen } from "../turnDuration";
+import { clockDuration } from "../turnDuration";
 import { fmtAge } from "../utils";
 import { workingSince } from "../workingSince";
 
@@ -20,7 +21,7 @@ import { workingSince } from "../workingSince";
  * lands — the board's rows. The order is the design's, and it is the order the
  * operator reads it in:
  *
- *   offline > killed > stalled > limit > held > waiting > working > returned > done
+ *   offline > killed > waiting > stalled > limit > held > working > returned > done
  *
  * `offline` is screen-level (the runtime lost the host), so it is passed in
  * rather than read off the entry: every conversation on an offline phone shows
@@ -37,10 +38,10 @@ import { workingSince } from "../workingSince";
 export type ChatStateKey =
   | "offline"
   | "killed"
+  | "waiting"
   | "stalled"
   | "limit"
   | "held"
-  | "waiting"
   | "working"
   | "returned"
   | "done";
@@ -49,10 +50,10 @@ export type ChatStateKey =
 export const CHAT_STATE_PRECEDENCE: readonly ChatStateKey[] = [
   "offline",
   "killed",
+  "waiting",
   "stalled",
   "limit",
   "held",
-  "waiting",
   "working",
   "returned",
   "done",
@@ -99,6 +100,8 @@ export interface ChatStateOptions {
   nowMs?: number;
   /** A decision form of this project is open and the seat's own turn is over: what would read «done» reads «waiting». Working, limit and the rest keep their words. */
   decisionWaiting?: boolean;
+  /** The seat is hosted and idle between turns with no form open: its finished turn reads «waiting», quietly. */
+  seatWaiting?: boolean;
 }
 
 /** How many deliveries the account-switch fence is holding for this card. */
@@ -128,24 +131,14 @@ export function heldMessages(file: FileEntry, nowMs: number = Date.now()): numbe
   return file.stuckDelivery && heldStuckDelivery(file, nowMs / 1000) !== null ? 1 : null;
 }
 
-/** The one state of a conversation. */
-export function chatState(file: FileEntry, { offline = false, nowMs = Date.now(), decisionWaiting = false }: ChatStateOptions = {}): ChatStateKey {
+/**
+ * The one state of a conversation: the board row's own (`mobileRowState`), so
+ * the phone's bar, the switcher and the menu name a conversation the way the
+ * desktop's header, tile and rail do. Only «offline» is the screen's.
+ */
+export function chatState(file: FileEntry, { offline = false, nowMs = Date.now(), decisionWaiting = false, seatWaiting = false }: ChatStateOptions = {}): ChatStateKey {
   if (offline) return "offline";
-  if (file.proc === "killed" && turnLeftOpen(file)) return "killed";
-  /* Stalled keeps the queue's own TTL judgement: a permission prompt from two
-     days ago is dead context, not a conversation holding the line. It no
-     longer raises needs-you, so the header reads the rule itself. */
-  if (stalledAttention(file, nowMs / 1000)) return "stalled";
-  if (file.rateLimit) return "limit";
-  if (heldMessages(file, nowMs) !== null) return "held";
-  if (file.pendingQuestion || file.waitingInput || file.bridgeAsk) return "waiting";
-  /* A dead host runs nothing, whatever freshness the transcript still carries. */
-  if (file.proc !== "killed" && turnIsRunning(file)) return "working";
-  /* A conversation that finished its turn and is waiting on the operator is
-     the queue's business; the attention id is what says so. */
-  if (attentionId(file, nowMs / 1000) !== null) return "waiting";
-  if (file.parent !== null && file.activity === "recent" && file.proc !== "running") return decisionWaiting ? "waiting" : "returned";
-  return decisionWaiting ? "waiting" : "done";
+  return mobileRowState(file, nowMs / 1000, { decisionWaiting, seatWaiting }).key;
 }
 
 export interface ChatStateBits {
@@ -209,6 +202,11 @@ export function chatStateBits(t: TFunction, file: FileEntry, options: ChatStateO
       return { key, tone, phrase: t("mobile2.chat.stateHeldQueued", { count: heldMessages(file, nowMs) ?? 1 }), badge: null };
     case "waiting": {
       const question = Boolean(file.pendingQuestion || file.waitingInput || file.bridgeAsk);
+      /* An idle seat with no form open asks nothing: its word is «waiting»,
+         with no «needs you» chip beside it. */
+      if (mobileRowState(file, nowMs / 1000, { decisionWaiting: options.decisionWaiting, seatWaiting: options.seatWaiting }).badge === null) {
+        return { key, tone: "neutral", phrase: t("mobile2.chat.stateWaiting", { age }), badge: null };
+      }
       return {
         key,
         tone,

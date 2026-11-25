@@ -680,7 +680,11 @@ test("the Stages sheet carries the same chips: a waiting stage's pane names its 
   await tick();
   press(card(host).querySelector("[data-open-stages]"));
   await tick(20);
-  const pane = (stageId: string) => host.querySelector<HTMLElement>(`[data-stages-sheet] .pane[data-stage="${stageId}"]`)!;
+  /* One stage is open under the tabs: a tab press brings the next pane in. */
+  const pane = (stageId: string) => {
+    if (!host.querySelector(`[data-stages-sheet] .pane[data-stage="${stageId}"]`)) click(host.querySelector(`[data-stages-sheet] [role="tab"][data-tab-stage="${stageId}"]`));
+    return host.querySelector<HTMLElement>(`[data-stages-sheet] .pane[data-stage="${stageId}"]`)!;
+  };
   expect(chipText(pane("merge").querySelector('[data-account-trigger="stage:p-search:merge"]'))).toBe("Account C");
   expect(chipText(pane("verify").querySelector(`[data-account-trigger="${verify.conversationId}"]`))).toBe("Account A");
   await openPicker(host, pane("merge").querySelector('[data-account-trigger="stage:p-search:merge"]'));

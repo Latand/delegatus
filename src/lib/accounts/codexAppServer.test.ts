@@ -95,7 +95,7 @@ function clientWith(handler: (child: FakeChild, message: Record<string, unknown>
   child.onWrite = (message) => handler(child, message);
   return {
     child,
-    start: (options = {}) => CodexAppServerClient.start({ launchBinary: "/fixture/codex", readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, ...options, home: "/fake/home", spawn: () => child as never }),
+    start: (options = {}) => CodexAppServerClient.start({ launchBinary: "/fixture/codex", readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, home: "/fake/home", ...options, spawn: () => child as never }),
   };
 }
 
@@ -111,6 +111,53 @@ test("mocked app-server launch uses its fixture binary and never touches an inst
     expect(updaterDirectories).toEqual([]);
   } finally { mkdir.mockRestore(); }
 });
+
+async function checkQuotaHomeAlias(replaceHome: boolean): Promise<void> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "quota-home-alias-"));
+  const home = path.join(root, "home"), alias = path.join(root, "alias");
+  const binary = path.join(root, "codex"), target = path.join(root, "node_modules/@openai/codex/bin/codex.js");
+  fs.mkdirSync(home);
+  fs.symlinkSync(home, alias);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, "fixture");
+  fs.symlinkSync(target, binary);
+  const entered = Promise.withResolvers<void>(), proceed = Promise.withResolvers<void>();
+  let secondEntered = false;
+  const first = clientWith((child, message) => {
+    if (message.method !== "initialize") return;
+    entered.resolve();
+    void proceed.promise.then(() => child.respond(requestId(message), {}));
+  });
+  const second = clientWith((child, message) => {
+    if (message.method !== "initialize") return;
+    secondEntered = true;
+    child.respond(requestId(message), {});
+  });
+  const pending = [first.start({ home, launchBinary: binary, protocolProfile: "quota" })];
+  try {
+    await entered.promise;
+    if (replaceHome) {
+      fs.renameSync(home, path.join(root, "previous"));
+      fs.mkdirSync(home);
+    }
+    pending.push(second.start({ home: alias, launchBinary: binary, protocolProfile: "quota" }));
+    const queue = path.join(root, ".delegatus-codex", "switch.write-locks");
+    const deadline = Date.now() + 3_000;
+    while (!secondEntered && fs.readdirSync(queue).length < 2 && Date.now() < deadline) await Bun.sleep(5);
+    expect(secondEntered).toBe(false);
+    expect(fs.readdirSync(queue)).toHaveLength(2);
+  } finally {
+    proceed.resolve();
+    for (const client of await Promise.all(pending)) client.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  expect(secondEntered).toBe(true);
+}
+
+test.skipIf(process.platform === "win32")("quota launches for two aliases of one account home still serialize",
+  () => checkQuotaHomeAlias(false));
+test.skipIf(process.platform === "win32")("quota launches serialize after an active account home is replaced",
+  () => checkQuotaHomeAlias(true));
 
 test("an unsupported executable is refused before spawning an account app-server", async () => {
   let spawned = false;

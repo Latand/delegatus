@@ -9,7 +9,7 @@ import { getLocale } from "@/lib/i18n";
 
 import { GlyphIcon, Loader2 } from "../../icons";
 import { hhmm } from "../../utils";
-import { ACTION_GUTTER, MESSAGE_ACTION } from "../actionStyles";
+import { MESSAGE_ACTION } from "../actionStyles";
 import { CopyButton } from "../CopyButton";
 import { ContextTokensCaption } from "./ContextTokensCaption";
 import { hasImageBlock, tr, type ToolEvent, type ToolOutputBlock } from "../parse";
@@ -91,20 +91,21 @@ function RowStatusChip({ event }: { event: ToolEvent }) {
    single wrapping line so it never stacks into its own multi-row card. Renders
    nothing when a call carries none of them (a plain non-shell tool).
 
-   On a finger the command's copy target ends this row (#2148), so the command
-   under it keeps the height of its text. The 44 px target overhangs the row by
-   10 px each way, which keeps its icon level with the row's words, and the
-   row's bottom margin grows by as much, so the target ends where the command
-   starts and covers none of it. */
+   The command's copy control ends this row at every pointer (#2148), so the
+   command under it keeps the height of its text and the control never hangs
+   past a one-line command onto the output's own control. On a finger the 44 px
+   target overhangs the row by 10 px each way, which keeps its icon level with
+   the row's words, and the row's bottom margin grows by as much, so the target
+   ends where the command starts and covers none of it. */
 function ToolMeta({ event, coarse }: { event: ToolEvent; coarse: boolean }) {
   const start = hhmm(event.ts);
   const end = event.endTs !== undefined ? hhmm(event.endTs) : "";
   const span = end && start ? tr("tools.ranAt", { start, end }) : "";
   const exit = exitLabel(event);
-  const commandCopy = coarse && event.command ? event.command : "";
+  const commandCopy = event.command ?? "";
   if (!event.cwd && !span && !exit && !commandCopy) return null;
   return (
-    <div className={`${commandCopy ? "mb-2.5" : "mb-1"} flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted`}>
+    <div className={`${commandCopy && coarse ? "mb-2.5" : "mb-1"} flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted`}>
       {exit ? (
         <span className={`inline-flex items-center gap-1 font-semibold ${statusClass(event.status)}`}>
           <StatusIcon status={event.status} className="h-3 w-3" />
@@ -121,7 +122,7 @@ function ToolMeta({ event, coarse }: { event: ToolEvent; coarse: boolean }) {
         </span>
       ) : null}
       {commandCopy ? (
-        <span className="-my-2.5 ml-auto inline-flex shrink-0" data-command-copy="meta">
+        <span className={`${coarse ? "-my-2.5 " : ""}ml-auto mr-[6px] inline-flex shrink-0`} data-command-copy="meta">
           <CopyButton text={commandCopy} label={tr("tools.copyCommand")} className={MESSAGE_ACTION} />
         </span>
       ) : null}
@@ -134,26 +135,16 @@ function ToolMeta({ event, coarse }: { event: ToolEvent; coarse: boolean }) {
    user did not open), wrapped instead of scrolled so a long line stays fully
    visible and never forces document-level horizontal overflow on 390px.
 
-   A 44 px coarse-pointer control pinned 6px down hung 30px out of a one-line
-   command, over the output's own control (#1978), and reserving a 50px band
-   for it left a blank strip under every short command. On a finger the
-   control now ends the meta row above instead (#2148), so the block is the
-   height of its text; the fine pointer's 22px control fits beside one line
-   and stays pinned in the gutter. */
-function CommandBlock({ command, coarse }: { command: string; coarse: boolean }) {
+   The command's copy control is not drawn here: it ends the meta row above
+   (#2148), so the block is the height of its text and no pointer sees two
+   copy controls stacked over each other (#1978). */
+function CommandBlock({ command }: { command: string }) {
   return (
-    <div className="group/cmd relative">
-      <pre className={`max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] py-0.5 font-mono text-ui text-primary ${coarse ? "" : ACTION_GUTTER}`}>
+    <div>
+      <pre className="max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] py-0.5 font-mono text-ui text-primary">
         <span className="select-none text-muted">$ </span>
         {command}
       </pre>
-      {coarse ? null : (
-        <CopyButton
-          text={command}
-          label={tr("tools.copyCommand")}
-          className={`absolute right-[6px] top-[6px] ${MESSAGE_ACTION} group-hover/cmd:opacity-100`}
-        />
-      )}
     </div>
   );
 }
@@ -184,7 +175,7 @@ export function ToolBody({ event }: { event: ToolEvent }) {
     <div className="mb-1 mt-1 rounded-surface bg-sunken px-2.5 py-2">
       <ToolChips chips={event.chips} />
       <ToolMeta event={event} coarse={coarse} />
-      {event.command ? <CommandBlock command={event.command} coarse={coarse} /> : null}
+      {event.command ? <CommandBlock command={event.command} /> : null}
       {event.orchestration ? <OrchestrationCard orchestration={event.orchestration} source={event.command} /> : null}
       {hasDiff && event.body?.type === "diff" ? <DiffCard body={event.body} /> : null}
       {showOutput ? (
@@ -323,8 +314,13 @@ export function ToolBlockRow({ event, index, nested = false }: { event: ToolEven
           {event.summary}
         </span>
         <RowStatusChip event={event} />
-        {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
-        <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
+        {/* Duration and tokens are one unit, so the dot between them keeps its own margin and no row gap. */}
+        {duration || event.contextTokens ? (
+          <span data-tool-meta className="flex shrink-0 items-center whitespace-nowrap">
+            {duration ? <span className="text-caption tabular-nums text-muted">{duration}</span> : null}
+            <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
+          </span>
+        ) : null}
       </div>
       <ToolImages event={event} />
       <ToolBody event={event} />
@@ -413,8 +409,13 @@ export function ToolLine({
             spinner, so the status chip (a second spinner, "executing…") stays
             off it; the duration is the trailing word. */}
         {isMobile && running ? null : <RowStatusChip event={event} />}
-        {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
-        <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
+        {/* Duration and tokens are one unit, so the dot between them keeps its own margin and no row gap. */}
+        {duration || event.contextTokens ? (
+          <span data-tool-meta className="flex shrink-0 items-center whitespace-nowrap">
+            {duration ? <span className="text-caption tabular-nums text-muted">{duration}</span> : null}
+            <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
+          </span>
+        ) : null}
         {showTime && time ? <span className="shrink-0 text-caption tabular-nums text-muted">{time}</span> : null}
       </summary>
       {(collapsed ? manualOpen : isMobile ? phoneOpen : mounted) ? <><ToolBody event={event} />{children}</> : null}
