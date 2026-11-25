@@ -96,6 +96,16 @@ export async function settleProvisioningJobsForTests(): Promise<void> {
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const asDate = (ms: number) => new Date(ms).toISOString();
 const due = (value?: string) => value ? Date.parse(value) : 0;
+// An admitted add uses the ordinary wait as a rollback deferral.
+const transientWait = (row: Pipeline, add?: ProvisioningRecord["admittedAdd"]) =>
+  add ? add.previousWait : row.provisioningWait;
+
+function retryTimeUsed(wait: PipelineBoundedWait, now: number, pausedAt?: number): number {
+  // A pre-v1 controller can still update the ordinary retry record on rollback.
+  // Honor any backoff it recorded while the v1 slot was dormant.
+  const cutoff = pausedAt === undefined ? now : Math.max(pausedAt, Math.min(now, due(wait.retryAfter)));
+  return Math.max(0, cutoff - due(wait.startedAt));
+}
 const clockFor = (ports: ProvisionPorts): ProvisionClock => ports.provisionClock ?? {
   wallMs: () => Date.parse(ports.now()),
   monotonicMs: ports.monotonicNow,
@@ -213,8 +223,10 @@ async function retireProvisioningJob(row: Pipeline, root: string, native: boolea
       const current = tx.get(row.id);
       if (!current || current.createdAt !== row.createdAt || eligible(current) || current.provisioningJob?.token !== slot.token) return false;
       delete current.provisioningJob;
-      if (slot.admittedAdd) {
-        if (slot.admittedAdd.previousWait) current.provisioningWait = slot.admittedAdd.previousWait;
+      // A legacy apply can already have consumed the wait while leaving this slot behind.
+      const add = slot.admittedAdd;
+      if (add && due(current.provisioningWait?.retryAfter) === add.since + ADD_ROLLBACK_DEFERRAL_MS) {
+        if (add.previousWait) current.provisioningWait = add.previousWait;
         else delete current.provisioningWait;
       }
       tx.put(current);
@@ -363,11 +375,13 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     }
   }
   const { signal } = handle.abort;
+  const priorRetry = transientWait(row, previous?.admittedAdd);
   let slot: ProvisioningRecord = {
     ...previous, version: 1, kind: "provision", subject: handle.subject, planSubject: planSubject(row), generation: (previous?.generation ?? 0) + 1,
     token: randomUUID(), owner: { ...captureProcessIdentity(process.pid), instance, release },
     step: "resolvingRepository", status: "running", since: wall, deadlineAt: wall + PROVISION_STEPS.resolvingRepository,
     executionDeadlineAt: wall + EXECUTION_MS, retryAt: undefined,
+    retryPausedAt: priorRetry ? previous?.retryPausedAt ?? (claimed ? wall : Math.min(wall, due(priorRetry.retryAfter))) : undefined,
     cacheOwner: undefined,
   };
   if (claimed && expired && !slot.interruption) {
@@ -384,7 +398,8 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     delete slot.cacheMetadataRemainingMs;
   }
   let changed = false;
-  let stopAt = clock.monotonicMs() + PROVISION_STEPS.resolvingRepository;
+  const claimStart = clock.monotonicMs();
+  let stopAt = claimStart + PROVISION_STEPS.resolvingRepository;
   let executionStop = clock.monotonicMs() + EXECUTION_MS;
   let metadataStop = Infinity;
   let cancelTimer: (() => void) | undefined;
@@ -486,11 +501,12 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     false, true);
     hooks.parked(row!);
   };
+  const pauseRetry = () => slot.retryPausedAt ?? (transientWait(row!, slot.admittedAdd) ? clock.wallMs() : undefined);
   const wait = async (error: Deferred) => {
     const at = Math.min(error.deadline, clock.wallMs() + 5_000, error.cache?.holderDeadline ?? Infinity);
     await write(current => { current.stateDetail = `provisioning wait: ${error.reason}`; },
       { ...slot, step: error.step, since: error.since, deadlineAt: error.deadline, status: "waiting", retryAt: at,
-      resource: error.resource, waitReason: error.reason,
+      resource: error.resource, waitReason: error.reason, retryPausedAt: pauseRetry(),
       ...(error.cache ? { cacheWaitSince: error.since, cacheWaitIdentity: error.cache.identity,
         cacheMetadataRemainingMs: error.cache.metadataRemainingMs } : {}),
       ...(error.step === "waitingForLegacyInstaller" ? { legacyWaitSince: error.since, legacyWriter: error.legacyWriter } : {}) }, false, true);
@@ -542,7 +558,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       fence = await lock("add", checkoutStripe);
       if (!fence) throw deferAdd(clock.wallMs());
       const since = clock.wallMs(), horizon = asDate(since + ADD_ROLLBACK_DEFERRAL_MS);
-      const previousWait = slot.admittedAdd?.previousWait ?? row?.provisioningWait;
+      const previousWait = transientWait(row!, slot.admittedAdd);
       const admittedAdd = { stripe: checkoutStripe, since, argsDigest: hash(args), sequence: (slot.admittedAdd?.sequence ?? 0) + 1,
         ...(previousWait ? { previousWait } : {}) };
       await write(current => {
@@ -599,14 +615,23 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       if (!repository) {
         throw waitTurn(checkout ? repoResource : checkoutResource);
       }
-      const executionStart = clock.monotonicMs();
-      executionStop = executionStart + EXECUTION_MS;
-      await write((_current, tx) => {
+      const admitted = { ...slot, executionDeadlineAt: clock.wallMs() + EXECUTION_MS,
+        resource: undefined, waitReason: undefined, retryPausedAt: undefined };
+      await write((current, tx) => {
         for (const resource of [checkoutResource, repoResource]) {
           const head = tx.provisioningWaitHead(resource);
           if (head && head !== id) throw waitTurn(resource);
         }
-      }, { ...slot, executionDeadlineAt: clock.wallMs() + EXECUTION_MS, resource: undefined, waitReason: undefined });
+        const now = clock.wallMs();
+        executionStop = clock.monotonicMs() + EXECUTION_MS;
+        admitted.executionDeadlineAt = now + EXECUTION_MS;
+        const retry = transientWait(current, slot.admittedAdd);
+        if (retry && slot.retryPausedAt !== undefined) {
+          const resumed = { ...retry, startedAt: asDate(now - retryTimeUsed(retry, now, slot.retryPausedAt)) };
+          if (slot.admittedAdd) admitted.admittedAdd = { ...slot.admittedAdd, previousWait: resumed };
+          else current.provisioningWait = resumed;
+        }
+      }, admitted);
       if (!slot.plan) {
         await step("resolvingBase");
         let { baseBranch, baseRef } = row!;
@@ -751,7 +776,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     if (message.includes(DISK_SPACE_WAIT_PREFIX)) {
       const at = clock.wallMs() + DISK_SPACE_RETRY_MS;
       await write(current => { current.stateDetail = message.slice(message.indexOf(DISK_SPACE_WAIT_PREFIX)); },
-        { ...slot, status: "waiting", retryAt: at }, false, true);
+        { ...slot, status: "waiting", retryAt: at, retryPausedAt: pauseRetry() }, false, true);
       schedule(pool, at, clock, ports);
       return true;
     }
@@ -768,20 +793,25 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       if (clock.monotonicMs() >= executionStop) reason = "provision-execution-budget-exhausted";
       else reason = slot.step === "startingToolchain" && !slot.worker ? "toolchain-start-failed" : "provision-step-timeout";
     } else reason = workerFailure ? error.reason : describeTransientGitFailure(gitReason!, message).cause;
-    const earlier = slot.admittedAdd ? slot.admittedAdd.previousWait : row!.provisioningWait;
+    const earlier = transientWait(row!, slot.admittedAdd);
     const budget = earlier?.budgetMs ?? RETRY_MS;
-    const remaining = budget - Math.max(0, now - due(earlier?.startedAt ?? asDate(now)));
+    // Failed admission reads still spend their own time. Successful probes and
+    // time beyond the scheduled backoff leave the retry window paused.
+    const spent = earlier ? retryTimeUsed(earlier, now, slot.retryPausedAt)
+      + (slot.retryPausedAt === undefined ? 0 : Math.ceil(clock.monotonicMs() - claimStart)) : 0;
+    const remaining = budget - spent;
     if (remaining <= 0) {
       await park(`${reason}; inspect the last provisioning step and retry-stage`);
       return true;
     }
     const rounds = earlier?.rounds ?? 0, retryMaxMs = earlier?.retryMaxMs ?? 60_000;
     const retryAt = now + Math.min(5_000 * 2 ** rounds, retryMaxMs, remaining);
-    const retry: PipelineBoundedWait = { startedAt: earlier?.startedAt ?? asDate(now), rounds: rounds + 1, retryAfter: asDate(retryAt), budgetMs: budget, retryMaxMs };
+    const retry: PipelineBoundedWait = { startedAt: asDate(now - spent), rounds: rounds + 1, retryAfter: asDate(retryAt), budgetMs: budget, retryMaxMs };
     await write(current => {
       if (!slot.admittedAdd) current.provisioningWait = retry;
       current.stateDetail = `provisioning deferred: ${reason}`;
-    }, { ...slot, ...(slot.admittedAdd ? { admittedAdd: { ...slot.admittedAdd, previousWait: retry } } : {}), retryAt, status: "waiting",
+    }, { ...slot, ...(slot.admittedAdd ? { admittedAdd: { ...slot.admittedAdd, previousWait: retry } } : {}),
+      retryAt, retryPausedAt: retryAt, status: "waiting",
       interruption: slot.interruption ?? { step: slot.step, since: slot.since, deadlineAt: slot.deadlineAt, observedAt: now, reason } }, false, true);
     schedule(pool, retryAt, clock, ports);
   } finally {

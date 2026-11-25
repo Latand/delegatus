@@ -45,6 +45,8 @@ export type ProvisioningRecord = {
   executionDeadlineAt: number;
   status: "running" | "waiting" | "awaitingApply" | "parked";
   retryAt?: number;
+  /** The transient wait and this cutoff together preserve its spent time. */
+  retryPausedAt?: number;
   resource?: string;
   cacheWaitSince?: number;
   cacheWaitIdentity?: string;
@@ -92,6 +94,7 @@ export function validProvisioningRecord(value: unknown): value is ProvisioningRe
     || !timestamp(value.since) || !timestamp(value.deadlineAt) || !timestamp(value.executionDeadlineAt)
     || !["running", "waiting", "awaitingApply", "parked"].includes(String(value.status))
     || (value.retryAt !== undefined && !timestamp(value.retryAt))
+    || (value.retryPausedAt !== undefined && !timestamp(value.retryPausedAt))
     || (value.resource !== undefined && (!text(value.resource, 32) || !/^(?:checkout|repo):[0-9]{1,3}$/.test(value.resource)))
     || (value.cacheWaitSince !== undefined && !timestamp(value.cacheWaitSince))
     || (value.cacheWaitIdentity !== undefined && !validCacheIdentity(value.cacheWaitIdentity))

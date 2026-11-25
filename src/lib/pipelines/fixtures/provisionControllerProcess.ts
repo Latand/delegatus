@@ -9,12 +9,21 @@ import { defaultPipelinePorts, patchPipeline } from "../engine";
 import { realProvisionExec } from "../git";
 import { findControllerPipeline } from "../store";
 
-const input = JSON.parse(process.env.LLV_PROVISION_PROCESS_FIXTURE ?? "null") as {
+export type ProvisionControllerFixture = {
   lane: string; state: string; launches: string; end: string;
   applyBarrier?: { entered: string; release: string };
+  loseApplyReply?: true;
+  crashBeforeAdd?: true;
+  transientAdd?: { checkout: string; failures: string };
+  diskHold?: { marker: string };
+  holdStagedInstall?: string;
   pauseAndClose?: true;
   wallFile?: string;
-} | null;
+  monotonicFile?: string;
+  timeoutMs?: number;
+};
+
+const input = JSON.parse(process.env.LLV_PROVISION_PROCESS_FIXTURE ?? "null") as ProvisionControllerFixture | null;
 if (!input || input.state !== process.env.LLV_STATE_DIR || process.env.NODE_ENV !== "test") {
   throw new Error("provisioning subprocess requires isolated fixture state");
 }
@@ -24,6 +33,59 @@ ports.scheduleTick = () => {};
 if (input.wallFile) {
   const file = input.wallFile;
   ports.now = () => fs.readFileSync(file, "utf8");
+}
+if (input.monotonicFile) {
+  const file = input.monotonicFile;
+  const now = () => Number(fs.readFileSync(file, "utf8"));
+  Object.assign(ports, { provisionClock: {
+    wallMs: () => Date.parse(ports.now()),
+    monotonicMs: now,
+    arm(delay: number, run: () => void) {
+      const end = now() + delay;
+      const timer = setInterval(() => {
+        if (now() < end) return;
+        clearInterval(timer);
+        run();
+      }, 10);
+      return () => clearInterval(timer);
+    },
+  } });
+}
+if (input.loseApplyReply) {
+  ports.observeProvisioningCheckpoint = (id, step) => {
+    if (id === input.lane && !step) process.exit(83);
+  };
+}
+if (input.diskHold) {
+  const { marker } = input.diskHold;
+  ports.worktreeDiskWait = () => fs.existsSync(marker) ? "waiting for disk space: fixture hold" : null;
+}
+if (input.transientAdd) {
+  const { checkout, failures } = input.transientAdd;
+  ports.provisionExec = (command, args, cwd, signal, options) => {
+    if (command === "git" && args[0] === "worktree" && args[1] === "add" && args.includes(checkout)) {
+      fs.appendFileSync(failures, "fault\n");
+      throw new Error("connection reset by peer");
+    }
+    return realProvisionExec(command, args, cwd, signal, options);
+  };
+}
+if (input.holdStagedInstall) {
+  const marker = input.holdStagedInstall;
+  ports.provisionToolchainReply = async (id, type, detail) => {
+    if (id !== input.lane || type !== "dispatch" || detail !== "private-install") return;
+    fs.writeFileSync(marker, "");
+    await new Promise(() => {});
+  };
+}
+if (input.crashBeforeAdd) {
+  const log = console.info;
+  const started = JSON.stringify({ pipelineId: input.lane }).slice(0, -1);
+  console.info = (...messages: unknown[]) => {
+    log(...messages);
+    if (messages.some(message => typeof message === "string" && message.includes(started)
+      && message.includes('"phase":"git-started","step":"worktree-add"'))) process.exit(84);
+  };
 }
 if (input.pauseAndClose) {
   const pause = await patchPipeline(input.lane, { action: "pause", reason: "Hold the fixture lane before close" }, ports);
@@ -77,7 +139,7 @@ const controller = new FlowPipelineController({
   clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>), log: () => {},
 }, { phaseDeadlineMs: 15_000, maxPasses: 1 });
 try {
-  const deadline = performance.now() + 28_000;
+  const deadline = performance.now() + (input.timeoutMs ?? 28_000);
   while (!fs.existsSync(input.end) && performance.now() < deadline) {
     await controller.tick();
     const lane = await findControllerPipeline(input.lane);

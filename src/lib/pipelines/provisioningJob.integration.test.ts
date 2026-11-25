@@ -1,7 +1,9 @@
 import { FlowPipelineController } from "./controller";
+import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { settlePipelineControllerJobs, startPipelineControllerJob } from "./controllerJobs";
 import { tickPipelinesController } from "./controllerPass";
 import { settlePipelineStopReadLanes } from "./controllerStopRead";
+import type { ProvisionControllerFixture } from "./fixtures/provisionControllerProcess";
 import { BUILD_ONLY, createPipelineFromRequest, expect, fs, path, realWorktreeLane, spyOn, test } from "./engine.fixture";
 import { latch, until, withControllerAuditState } from "./fixtures/ownedStageControl";
 import { findControllerPipeline, withPipelineMutation } from "./store";
@@ -15,6 +17,182 @@ async function driveProvisioning(ports: Parameters<typeof tickPipelinesControlle
     await Bun.sleep(20);
   }
 }
+
+function startFixtureController(input: Omit<ProvisionControllerFixture, "state">, cwd = process.cwd(), env = {}) {
+  const child = Bun.spawn([process.execPath, "--no-env-file", "src/lib/pipelines/fixtures/provisionControllerProcess.ts"], {
+    cwd, env: { ...process.env, ...env,
+      LLV_PROVISION_PROCESS_FIXTURE: JSON.stringify({ ...input, state: process.env.LLV_STATE_DIR }) },
+    stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: (input.timeoutMs ?? 28_000) + 2_000,
+  });
+  const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]).then(lines => lines.join("\n"));
+  return {
+    child, output,
+    async stop(signal: NodeJS.Signals = "SIGTERM") {
+      if (child.exitCode === null && child.signalCode === null) child.kill(signal);
+      await child.exited;
+      await output;
+    },
+  };
+}
+
+async function waitForFixture(predicate: () => boolean | Promise<boolean>, label: string, timeout = 8_000) {
+  const deadline = performance.now() + timeout;
+  for (;;) {
+    try { if (await predicate()) return; }
+    catch (error) { if (!(error instanceof StateSnapshotChangedError)) throw error; }
+    if (performance.now() >= deadline) throw new Error(`fixture deadline: ${label}`);
+    await Bun.sleep(15);
+  }
+}
+
+function fixtureLaunchCount(launches: string, checkout: string): number {
+  return fs.existsSync(launches) ? fs.readFileSync(launches, "utf8").split("\n").filter(value => value === checkout).length : 0;
+}
+
+function replaceFixtureFile(file: string, value: string) {
+  const next = file + ".next";
+  fs.writeFileSync(next, value);
+  fs.renameSync(next, file);
+}
+
+test.each(["disk", "repository turn", "executor pool"] as const)("a transient retry survives a long %s hold", blocker =>
+  withControllerAuditState(async () => {
+    const { advanceProvisioningJob, settleProvisioningJobsForTests } = await import("./provisioningJob");
+    const { provisioningStripe, tryProvisioningLock } = await import("./provisionCheckoutCustody");
+    const { h, repo, root, git } = await realWorktreeLane("transient-retry-hold", BUILD_ONLY as never);
+    let wall = Date.parse("2026-11-25T08:00:00Z");
+    h.ports.now = () => new Date(wall).toISOString();
+    const lane = (await createPipelineFromRequest({ task: "Retry a transient checkout failure",
+      repoDir: repo, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+    const run = async () => advanceProvisioningJob((await findControllerPipeline(lane.id))!, h.ports, { parked() {} });
+    const exec = h.ports.provisionExec!;
+    let adds = 0, diskHeld = false;
+    h.ports.provisionExec = async (command, args, cwd, signal, options) => {
+      if (command === "git" && args[0] === "worktree" && args[1] === "add" && args.includes(lane.worktreeDir) && ++adds <= 2) {
+        throw new Error("connection reset by peer");
+      }
+      return exec(command, args, cwd, signal, options);
+    };
+    h.ports.worktreeDiskWait = () => diskHeld ? "waiting for disk space: fixture hold" : null;
+    const release = latch(), full = latch();
+    const peers: Promise<boolean>[] = [];
+    let turn: Awaited<ReturnType<typeof tryProvisioningLock>> = null;
+    try {
+      await run();
+      const first = (await findControllerPipeline(lane.id))!.provisioningJob!;
+      expect(first.admittedAdd?.previousWait?.rounds).toBe(1);
+      wall = first.retryAt!;
+      if (blocker === "repository turn") {
+        const common = await git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir");
+        turn = await tryProvisioningLock(process.env.LLV_STATE_DIR!, "repo", provisioningStripe(common), false,
+          new AbortController().signal, () => {});
+        expect(turn).toBeTruthy();
+      } else if (blocker === "disk") diskHeld = true;
+      else {
+        let entered = 0;
+        const peerPorts = { ...h.ports, provisionExec: async () => {
+          if (++entered === 4) full.resolve();
+          await release.promise;
+          return { code: 1, stdout: "", stderr: "fixture finished" };
+        } };
+        for (let index = 0; index < 4; index++) {
+          const peer = (await createPipelineFromRequest({ task: `Occupy provisioning executor ${index}`,
+            repoDir: repo, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+          peers.push(advanceProvisioningJob(peer, peerPorts, { parked() {} })!);
+        }
+        await until(full.promise);
+      }
+      await run();
+      expect(adds).toBe(1);
+      wall += 181_000;
+      await run();
+      expect(adds).toBe(1);
+      const waiting = (await findControllerPipeline(lane.id))!.provisioningJob!;
+      turn?.close();
+      diskHeld = false;
+      release.resolve();
+      await Promise.all(peers);
+      wall = Math.max(wall, waiting.retryAt!);
+      await run();
+      const retried = (await findControllerPipeline(lane.id))!;
+      expect(retried.stateDetail).toBe("provisioning deferred: the network connection failed");
+      expect(retried.provisioningJob!.admittedAdd?.previousWait?.rounds).toBe(2);
+      expect(retried.provisioningJob!.retryAt! - wall).toBe(10_000);
+      wall = retried.provisioningJob!.retryAt!;
+      await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.runs[0]?.attempts[0]?.state === "running");
+      expect(adds).toBe(3);
+      expect((await findControllerPipeline(lane.id))?.runs[0]?.attempts).toHaveLength(1);
+    } finally {
+      turn?.close();
+      release.resolve();
+      await Promise.all(peers);
+      await settleProvisioningJobsForTests();
+      await settlePipelineControllerJobs();
+      await settlePipelineStopReadLanes();
+      await removeProvisioningFixture(root);
+    }
+  }), 20_000);
+
+test("a transient retry keeps its charged backoff across process restart during disk pressure", () => withControllerAuditState(async () => {
+  const { h, repo, root } = await realWorktreeLane("retry-disk-restart", BUILD_ONLY as never);
+  const lane = (await createPipelineFromRequest({ task: "Keep the retry budget through a restart during disk pressure",
+    repoDir: repo, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+  const wallFile = path.join(root, "wall-time");
+  const marker = path.join(root, "disk-hold");
+  const failures = path.join(root, "transient-faults");
+  const launches = path.join(root, "first-children");
+  const end = path.join(root, "controller-end");
+  const input = { lane: lane.id, launches, end, wallFile };
+  const faults = { diskHold: { marker }, transientAdd: { checkout: lane.worktreeDir, failures } };
+  const controllers: ReturnType<typeof startFixtureController>[] = [];
+  const start = (inject: boolean) => {
+    const controller = startFixtureController({ ...input, ...(inject ? faults : {}) });
+    controllers.push(controller);
+    return controller;
+  };
+  const setWall = (ms: number) => replaceFixtureFile(wallFile, new Date(ms).toISOString());
+  const read = () => findControllerPipeline(lane.id);
+  try {
+    setWall(Date.now());
+    const first = start(true);
+    await waitForFixture(async () => (await read())?.provisioningJob?.status === "waiting", "first transient retry");
+    const failure = (await read())!.provisioningJob!;
+    fs.writeFileSync(marker, "");
+    setWall(failure.retryAt!);
+    await waitForFixture(async () => (await read())?.stateDetail?.includes("waiting for disk space") === true, "recorded disk hold");
+    await first.stop("SIGKILL");
+    setWall(failure.retryAt! + 181_000);
+    const second = start(true);
+    await waitForFixture(async () => {
+      const slot = (await read())?.provisioningJob;
+      return slot?.status === "waiting" && slot.retryAt! > failure.retryAt! + 181_000;
+    }, "second controller sees the disk hold");
+    const waiting = (await read())!.provisioningJob!;
+    expect(fs.readFileSync(failures, "utf8")).toBe("fault\n");
+    fs.unlinkSync(marker);
+    setWall(waiting.retryAt!);
+    await waitForFixture(async () => {
+      const current = await read();
+      return current?.state === "needs_decision" || current?.provisioningJob?.admittedAdd?.previousWait?.rounds === 2;
+    }, "second transient result");
+    const retried = (await read())!;
+    expect(retried.stateDetail).toBe("provisioning deferred: the network connection failed");
+    const retry = retried.provisioningJob!.admittedAdd!.previousWait!;
+    expect(Date.parse(retry.startedAt)).toBe(waiting.retryAt! - 5_000);
+    expect(Date.parse(retry.retryAfter)).toBe(waiting.retryAt! + 10_000);
+    await second.stop("SIGKILL");
+    setWall(Date.parse(retry.retryAfter));
+    const third = start(false);
+    expect(await third.child.exited, await third.output).toBe(0);
+    expect(fs.readFileSync(failures, "utf8")).toBe("fault\nfault\n");
+    expect(fixtureLaunchCount(launches, lane.worktreeDir)).toBe(1);
+    expect((await read())?.runs[0]?.attempts).toHaveLength(1);
+  } finally {
+    fs.writeFileSync(end, "");
+    for (const controller of controllers) await controller.stop();
+    await removeProvisioningFixture(root);
+  }
+}), 32_000);
 
 test("a held dependency reply expires and the controller adopts the original checkout", () => withControllerAuditState(async () => {
   const fixture = await realWorktreeLane("held-dependency-reply", BUILD_ONLY as never);
@@ -628,6 +806,17 @@ linuxInstall.each([
         } };
       const lane = (await createPipelineFromRequest({ task: "Install the checkout-relative fixture", repoDir: repo,
         publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+      const read = () => findControllerPipeline(lane.id);
+      const driveInstall = (done: () => Promise<boolean>) => driveProvisioning(h.ports, async () => {
+        const slot = (await read())?.provisioningJob;
+        // A shared-host process can exit during the real census. Let the
+        // frozen clock deliver the ordinary re-probe for an incomplete read.
+        if (interrupted && slot?.step === "waitingForLegacyInstaller" && slot.status === "waiting"
+          && !slot.legacyWriter && slot.retryAt !== undefined && slot.retryAt > wall) {
+          advance(slot.retryAt - wall);
+        }
+        return done();
+      });
       const target = path.join(lane.worktreeDir, "node_modules");
       const launch = h.ports.spawnAgent;
       h.ports.spawnAgent = async (input, reserve) => {
@@ -668,14 +857,14 @@ linuxInstall.each([
       };
       holdPackage = during;
       if (interrupted) {
-        await driveProvisioning(h.ports, async () => installs === 1);
+        await driveInstall(async () => installs === 1);
         await until(firstPermit.promise);
         const slot = (await findControllerPipeline(lane.id))!.provisioningJob!;
         expect(slot.privateIntent?.inode).toBe(String(fs.statSync(target, { bigint: true }).ino));
         expect(fs.existsSync(path.join(target, ".delegatus-install-receipt.json"))).toBe(false);
         advance(slot.deadlineAt - wall);
-        await driveProvisioning(h.ports, async () => (await findControllerPipeline(lane.id))?.provisioningJob?.status === "waiting");
-        const waiting = (await findControllerPipeline(lane.id))!.provisioningJob!;
+        await driveInstall(async () => (await read())?.provisioningJob?.status === "waiting");
+        const waiting = (await read())!.provisioningJob!;
         expect(waiting.interruption?.reason).toBe("provision-step-timeout");
         release.resolve();
         advance(waiting.retryAt! - wall);
@@ -683,12 +872,12 @@ linuxInstall.each([
       if (during) {
         let reachedBun = false;
         void requestedPackage.promise.then(() => { reachedBun = true; });
-        await driveProvisioning(h.ports, async () => reachedBun);
+        await driveInstall(async () => reachedBun);
         replace();
         sendPackage.resolve();
       }
-      await driveProvisioning(h.ports, async () => {
-        const row = await findControllerPipeline(lane.id);
+      await driveInstall(async () => {
+        const row = await read();
         return row?.state === "needs_decision" || (launches === 1 && row?.runs[0]?.attempts[0]?.state === "running");
       });
       const row = (await findControllerPipeline(lane.id))!;
@@ -723,6 +912,240 @@ linuxInstall.each([
   }), 26_000);
 
 const legacyTree = process.env.LLV_PROVISION_LEGACY_TREE;
+
+test.skipIf(process.platform !== "linux" || !legacyTree).each([
+  "crash before launcher", "initializing registration", "launcher timeout without Viewer",
+  "Viewer command timeout", "Viewer step expiry", "Viewer step expiry then forward restart", "launcher output limit",
+  "suspended launcher", "escaped descendant", "wall-clock jump",
+] as const)("add writer rollback cut: %s", cut => withControllerAuditState(async () => {
+  const { h, git, repo, root } = await realWorktreeLane("add-writer-rollback", BUILD_ONLY as never);
+  const { patchPipeline } = await import("./engine");
+  const { settleProvisioningJobsForTests } = await import("./provisioningJob");
+  const writerEntries = path.join(root, "writer-entries");
+  const escapedEntry = path.join(root, "escaped-entry");
+  const release = path.join(root, "release-add");
+  const produceOutput = path.join(root, "produce-output");
+  const launches = path.join(root, "first-children");
+  const end = path.join(root, "controller-end");
+  const wallFile = path.join(root, "wall-time");
+  const monotonicFile = path.join(root, "monotonic-time");
+  const commands = path.join(root, "commands");
+  const setWall = (ms: number) => replaceFixtureFile(wallFile, new Date(ms).toISOString());
+  const setMono = (ms: number) => replaceFixtureFile(monotonicFile, String(ms));
+  const entries = () => fs.existsSync(writerEntries) ? fs.readFileSync(writerEntries, "utf8").trim().split("\n").filter(Boolean) : [];
+  const controllers: ReturnType<typeof startFixtureController>[] = [];
+  const nativeGit = Bun.which("git", { PATH: "/usr/bin:/bin" })!;
+  fs.mkdirSync(commands);
+  fs.writeFileSync(path.join(commands, "git"), `#!/bin/bash
+set -eu
+if [[ " $* " != *" worktree add "* || " $* " != *" $FIXTURE_CHECKOUT "* ]]; then
+  exec "$FIXTURE_GIT" "$@"
+fi
+if [[ -s "$FIXTURE_WRITERS" ]]; then
+  printf '%s %s\\n' "$$" "$PPID" >> "$FIXTURE_WRITERS"
+  [[ -e "$FIXTURE_RELEASE_ADD" ]] || exit 91
+  exec "$FIXTURE_GIT" "$@"
+fi
+if [[ "$FIXTURE_ADD_CUT" == "initializing registration" ]]; then
+  "$FIXTURE_GIT" "$@" --no-checkout
+  "$FIXTURE_GIT" worktree lock --reason initializing "$FIXTURE_CHECKOUT"
+fi
+if [[ "$FIXTURE_ADD_CUT" == "escaped descendant" ]]; then
+  setsid /bin/bash -c '
+    printf "%s\\n" "$$" > "$FIXTURE_ESCAPED"
+    end=$((SECONDS + 75))
+    until [[ -e "$FIXTURE_RELEASE_ADD" ]]; do
+      [[ $SECONDS -lt $end ]] || exit 81
+      sleep 0.05
+    done' </dev/null >/dev/null 2>&1 &
+fi
+printf '%s %s\\n' "$$" "$PPID" >> "$FIXTURE_WRITERS"
+end=$((SECONDS + 75))
+until [[ -e "$FIXTURE_RELEASE_ADD" ]]; do
+  [[ $SECONDS -lt $end ]] || exit 82
+  if [[ -e "$FIXTURE_PRODUCE_OUTPUT" ]]; then head -c 9000000 /dev/zero; exit 83; fi
+  sleep 0.05
+done
+[[ "$FIXTURE_ADD_CUT" != "initializing registration" ]] || exit 81
+exec "$FIXTURE_GIT" "$@"
+`, { mode: 0o700 });
+  const lane = (await createPipelineFromRequest({ task: "Reconcile the admitted worktree writer after a release cut",
+    repoDir: repo, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+  const env = { PATH: commands + path.delimiter + process.env.PATH!, FIXTURE_GIT: nativeGit, FIXTURE_CHECKOUT: lane.worktreeDir,
+    FIXTURE_WRITERS: writerEntries, FIXTURE_RELEASE_ADD: release, FIXTURE_ADD_CUT: cut, FIXTURE_ESCAPED: escapedEntry,
+    FIXTURE_PRODUCE_OUTPUT: produceOutput };
+  const start = (input: Partial<Omit<ProvisionControllerFixture, "state">> = {}, tree?: string) => {
+    const controller = startFixtureController({ lane: lane.id, launches, end, wallFile, ...input }, tree, env);
+    controllers.push(controller);
+    return controller;
+  };
+  const read = () => findControllerPipeline(lane.id);
+  const longTimer = cut === "launcher timeout without Viewer" || cut === "Viewer command timeout";
+  const stepExpiry = cut.startsWith("Viewer step expiry");
+  const parkFirst = cut === "suspended launcher" || cut === "escaped descendant" || cut === "wall-clock jump";
+  let launcher: number | undefined;
+  let launcherStart: string | undefined;
+  let gitPid: number | undefined;
+  let gitStart: string | undefined;
+  let descendant: number | undefined;
+  let descendantStart: string | undefined;
+  let fence = "";
+  const fenceFree = () => Bun.spawnSync(["flock", "-n", fence, "true"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+  try {
+    setWall(Date.now());
+    setMono(0);
+    const first = start({ monotonicFile, timeoutMs: longTimer ? 76_000 : 28_000,
+      ...(cut === "crash before launcher" ? { crashBeforeAdd: true } : {}) });
+    if (cut === "crash before launcher") expect(await first.child.exited, await first.output).toBe(84);
+    else {
+      await waitForFixture(() => entries().length === 1, "native Git entry");
+      [gitPid, launcher] = entries()[0]!.split(" ").map(Number);
+      launcherStart = processStart(launcher!);
+      gitStart = processStart(gitPid!);
+      expect(launcherStart).toBeTruthy();
+      expect(gitStart).toBeTruthy();
+    }
+    const observedWriterAt = performance.now();
+    const admitted = (await read())!;
+    const add = admitted.provisioningJob!.admittedAdd!;
+    const rollbackWait = admitted.provisioningWait!;
+    const horizon = Date.parse(rollbackWait.retryAfter);
+    expect(horizon - add.since).toBe(300_000);
+    expect(admitted.runs[0]?.attempts).toHaveLength(0);
+    fence = path.join(process.env.LLV_STATE_DIR!, "controller-locks", "add", String(add.stripe));
+    expect(fenceFree()).toBe(cut === "crash before launcher");
+    if (cut === "crash before launcher") {
+      expect(entries()).toEqual([]);
+      expect(fs.existsSync(lane.worktreeDir)).toBe(false);
+    }
+    if (cut === "initializing registration") {
+      expect(await git(repo, "worktree", "list", "--porcelain")).toContain("locked initializing");
+      expect(fs.existsSync(path.join(lane.worktreeDir, ".gitignore"))).toBe(false);
+    }
+    if (cut === "escaped descendant") {
+      await waitForFixture(() => fs.existsSync(escapedEntry) && fs.statSync(escapedEntry).size > 0, "escaped writer identity");
+      descendant = Number(fs.readFileSync(escapedEntry, "utf8"));
+      descendantStart = processStart(descendant);
+      expect(descendantStart).toBeTruthy();
+    }
+    if (cut === "suspended launcher" || cut === "Viewer command timeout") process.kill(launcher!, "SIGSTOP");
+    if (stepExpiry || cut === "escaped descendant") setMono(60_000);
+    if (cut === "launcher output limit") fs.writeFileSync(produceOutput, "");
+    if (stepExpiry || cut === "escaped descendant" || cut === "Viewer command timeout" || cut === "launcher output limit") {
+      await waitForFixture(() => processStart(gitPid!) !== gitStart && processStart(launcher!) !== launcherStart,
+        "Viewer reaps its launcher's Git group", longTimer ? 68_000 : 5_000);
+    }
+    if (cut === "Viewer step expiry") {
+      await waitForFixture(async () => (await read())?.provisioningJob?.admittedAdd?.previousWait?.rounds === 1,
+        "expired step records a transient retry alongside the rollback deferral");
+    }
+    await first.stop("SIGKILL");
+    if (cut === "launcher timeout without Viewer") {
+      expect(processStart(gitPid!)).toBe(gitStart);
+      expect(fenceFree()).toBe(false);
+      await waitForFixture(() => fenceFree(), "autonomous add launcher timeout", 68_000);
+      expect(processStart(gitPid!)).not.toBe(gitStart);
+      expect(processStart(launcher!)).not.toBe(launcherStart);
+    }
+    if (stepExpiry || longTimer || cut === "launcher output limit") expect(fenceFree()).toBe(true);
+    if (longTimer) {
+      expect(performance.now() - observedWriterAt).toBeGreaterThan(57_000);
+      expect(performance.now() - observedWriterAt).toBeLessThan(65_000);
+    }
+    if (cut === "escaped descendant") {
+      expect(processStart(descendant!)).toBe(descendantStart);
+      expect(fenceFree()).toBe(false);
+    }
+    if (cut === "wall-clock jump") setWall(add.since + 180_000);
+    const peer = (await createPipelineFromRequest({ task: "Launch another lane during the add deferral",
+      repoDir: repo, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+    const old = start({ lane: peer.id }, legacyTree!);
+    expect(await old.child.exited, await old.output).toBe(0);
+    expect(fixtureLaunchCount(launches, peer.worktreeDir)).toBe(1);
+    expect(fixtureLaunchCount(launches, lane.worktreeDir)).toBe(0);
+    expect(entries()).toHaveLength(cut === "crash before launcher" ? 0 : 1);
+    expect((await read())?.provisioningWait?.retryAfter).toBe(rollbackWait.retryAfter);
+    if (parkFirst) {
+      if (process.env.LLV_PROVISION_UNSAFE_ROLLBACK_CONTROL === "1") {
+        setWall(horizon);
+        const unsafe = start({}, legacyTree!);
+        await waitForFixture(() => entries().length >= 2, "pre-v1 dispatch past the deferral");
+        expect(entries()).toHaveLength(1);
+        await unsafe.stop();
+        return;
+      }
+      if (cut !== "wall-clock jump") setWall(add.since + 64_999);
+      const forward = start();
+      if (cut !== "wall-clock jump") {
+        await waitForFixture(async () => (await read())?.provisioningJob?.status === "waiting", "writer wait just before its cutoff");
+        expect((await read())?.provisioningJob).toMatchObject({
+          step: "waitingForCheckoutWriter", since: add.since, deadlineAt: add.since + 65_000,
+        });
+        setWall(add.since + 65_000);
+      }
+      await waitForFixture(async () => (await read())?.state === "needs_decision", "park while native writer remains");
+      expect((await read())?.stateDetail).toBe("checkout-writer-unverified");
+      expect(fenceFree()).toBe(false);
+      await forward.stop();
+      setWall(horizon);
+      const peerAfterPark = (await createPipelineFromRequest({ task: "Launch a peer during supported rollback",
+        repoDir: repo, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+      const rollback = start({ lane: peerAfterPark.id }, legacyTree!);
+      expect(await rollback.child.exited, await rollback.output).toBe(0);
+      expect(fixtureLaunchCount(launches, peerAfterPark.worktreeDir)).toBe(1);
+      expect(fixtureLaunchCount(launches, lane.worktreeDir)).toBe(0);
+      expect(entries()).toHaveLength(1);
+    }
+    let initializingSuccessor: ReturnType<typeof startFixtureController> | undefined;
+    if (cut === "initializing registration") {
+      initializingSuccessor = start();
+      await waitForFixture(async () => (await read())?.provisioningJob?.step === "waitingForCheckoutWriter",
+        "forward reader preserves the live initializing registration");
+      expect((await read())?.provisioningJob?.since).toBe(add.since);
+      expect(await git(repo, "worktree", "list", "--porcelain")).toContain("locked initializing");
+      expect(entries()).toHaveLength(1);
+    }
+    fs.writeFileSync(release, "");
+    if (cut === "suspended launcher" && processStart(launcher!) === launcherStart) process.kill(launcher!, "SIGCONT");
+    await waitForFixture(() => fenceFree(), "independent add exit proof");
+    if (parkFirst) {
+      const retried = await patchPipeline(lane.id, { action: "retry-stage" }, h.ports);
+      expect(retried.pipeline?.state).toBe("provisioning");
+    }
+    const useLegacy = longTimer || cut === "Viewer step expiry" || cut === "launcher output limit";
+    if (useLegacy) setWall(horizon);
+    if (cut === "Viewer step expiry then forward restart") setWall((await read())?.provisioningJob?.retryAt ?? add.since);
+    if (initializingSuccessor) setWall(add.since + 5_000);
+    const last = initializingSuccessor ?? start({}, useLegacy ? legacyTree : undefined);
+    expect(await last.child.exited, await last.output).toBe(0);
+    if (useLegacy) {
+      expect((await read())?.provisioningWait).toBeUndefined();
+      delete h.ports.provisionExec;
+      await driveProvisioning(h.ports, async () => (await read())?.provisioningJob === undefined);
+    }
+    expect((await read())?.provisioningJob).toBeUndefined();
+    expect((await read())?.provisioningWait).toBeUndefined();
+    expect((await read())?.runs[0]?.attempts).toHaveLength(1);
+    expect(fixtureLaunchCount(launches, lane.worktreeDir)).toBe(1);
+    expect(await git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(admitted.baseRef);
+    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("locked initializing");
+    expect(entries()).toHaveLength(useLegacy || cut === "escaped descendant" || cut === "Viewer step expiry then forward restart" ? 2 : 1);
+  } finally {
+    fs.writeFileSync(release, "");
+    fs.writeFileSync(end, "");
+    if (launcher !== undefined && launcherStart !== undefined && processStart(launcher) === launcherStart) {
+      try { process.kill(launcher, "SIGCONT"); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+    }
+    for (const controller of controllers) await controller.stop();
+    if (fence) await waitForFixture(fenceFree, "fixture add fence cleanup");
+    await settleProvisioningJobsForTests();
+    await settlePipelineControllerJobs();
+    await settlePipelineStopReadLanes();
+    await removeProvisioningFixture(root);
+  }
+}), 105_000);
+
 test.skipIf(!legacyTree).each(["no private tree", "partial private tree"] as const)(
   "pre-v1 reads the committed plan after origin moves with %s",
   privateTree =>
@@ -864,6 +1287,40 @@ test("a fresh controller applies the original checkout after a refused state adm
   }
 }), 32_000);
 
+test("a fresh controller starts one child after the committed apply reply is lost", () => withControllerAuditState(async () => {
+  const { h, git, repo, root } = await realWorktreeLane("apply-reply-lost", BUILD_ONLY as never);
+  const lane = (await createPipelineFromRequest({ task: "Recover a committed apply after the Viewer exits",
+    repoDir: repo, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+  const launches = path.join(root, "first-children");
+  const input = { lane: lane.id, launches, end: path.join(root, "end-controller") };
+  const first = startFixtureController({ ...input, loseApplyReply: true });
+  let successor: ReturnType<typeof startFixtureController> | undefined;
+  try {
+    expect(await first.child.exited, await first.output).toBe(83);
+    const consumed = (await findControllerPipeline(lane.id))!;
+    expect(consumed.state).toBe("running");
+    expect(consumed.provisioningJob).toBeUndefined();
+    expect(consumed.provisioningWait).toBeUndefined();
+    expect(consumed.runs[0]?.attempts).toHaveLength(0);
+    expect(fixtureLaunchCount(launches, lane.worktreeDir)).toBe(0);
+    expect((await first.output).match(/"phase":"git-started","step":"worktree-add"/g)).toHaveLength(1);
+    await git(repo, "commit", "--allow-empty", "-m", "move origin after the successful apply");
+    await git(repo, "push", "origin", "main");
+    successor = startFixtureController(input);
+    expect(await successor.child.exited, await successor.output).toBe(0);
+    expect(await successor.output).not.toContain('"phase":"git-started","step":"worktree-add"');
+    const final = (await findControllerPipeline(lane.id))!;
+    expect(final.lastPassedCommit).toBe(consumed.baseRef);
+    expect(await git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(consumed.baseRef);
+    expect(final.runs[0]?.attempts).toHaveLength(1);
+    expect(fixtureLaunchCount(launches, lane.worktreeDir)).toBe(1);
+  } finally {
+    await first.stop();
+    await successor?.stop();
+    await removeProvisioningFixture(root);
+  }
+}), 40_000);
+
 test.skipIf(process.platform !== "linux")("a slotless checkout waits for the live legacy frozen installer before handoff", () =>
   withControllerAuditState(async () => {
     const { h, git, repo, root } = await realWorktreeLane("live-legacy-installer", BUILD_ONLY as never);
@@ -929,6 +1386,201 @@ test.skipIf(process.platform !== "linux")("a slotless checkout waits for the liv
     }
   }), 24_000);
 
+function processStart(pid: number): string | undefined {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return ["Z", "X", "x"].includes(fields[0]!) ? undefined : fields[19];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+}
+
+test.skipIf(process.platform !== "linux" || !legacyTree).each([
+  "before directory creation", "after directory creation", "partial after exit", "expires with writer alive",
+  "checkout-relative install", "after v1 staged stop and legacy finish", "after v1 staged stop and legacy partial exit",
+] as const)("a complete legacy Viewer shutdown with its installer held %s", cut =>
+  withControllerAuditState(async () => {
+    const { h, git, repo, root } = await realWorktreeLane("legacy-viewer-shutdown", BUILD_ONLY as never);
+    const { settleProvisioningJobsForTests } = await import("./provisioningJob");
+    let supplier: (() => Promise<void>) | undefined;
+    let old: ReturnType<typeof startFixtureController> | undefined;
+    let baseline: ReturnType<typeof startFixtureController> | undefined;
+    let initial: ReturnType<typeof startFixtureController> | undefined;
+    let writer: number | undefined;
+    let writerStart: string | undefined;
+    let wall = Date.now();
+    const writerLive = () => writer !== undefined && writerStart !== undefined && processStart(writer) === writerStart;
+    const release = path.join(root, "release-installer");
+    const pidFile = path.join(root, "legacy-installer");
+    const afterStagedStop = cut.startsWith("after v1 staged stop");
+    const relative = cut === "checkout-relative install";
+    const beforeCreate = cut === "before directory creation" || relative;
+    const partialExit = cut === "partial after exit" || cut === "after v1 staged stop and legacy partial exit";
+    try {
+      supplier = await seedProvisioningPackage(repo, root, process.env, process.execPath, undefined, "fixture-private");
+      if (relative) {
+        const pkg = path.join(repo, "package.json");
+        const manifest = JSON.parse(fs.readFileSync(pkg, "utf8"));
+        manifest.dependencies["fixture-local"] = "file:./packages/local";
+        fs.writeFileSync(pkg, JSON.stringify(manifest));
+        fs.mkdirSync(path.join(repo, "packages/local"), { recursive: true });
+        fs.writeFileSync(path.join(repo, "packages/local/package.json"), '{"name":"fixture-local","version":"1.0.0"}\n');
+        const lock = Bun.spawnSync([process.execPath, "--no-env-file", "install", "--lockfile-only", "--ignore-scripts"],
+          { cwd: repo, stdout: "pipe", stderr: "pipe", timeout: 8_000 });
+        expect(lock.exitCode, lock.stderr.toString()).toBe(0);
+      }
+      await git(repo, "add", ".");
+      await git(repo, "commit", "-m", "legacy fixture package inputs");
+      await git(repo, "push", "origin", "main");
+      delete h.ports.provisionExec;
+      h.ports.now = () => new Date(wall).toISOString();
+      const lane = (await createPipelineFromRequest({ task: "Wait for the exited legacy Viewer's installer",
+        repoDir: repo, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+      const modules = path.join(lane.worktreeDir, "node_modules");
+      const partial = path.join(modules, "partial");
+      const launches = path.join(root, "first-children");
+      const input = { lane: lane.id, launches, end: path.join(root, "end-controller") };
+      const spawnAgent = h.ports.spawnAgent;
+      h.ports.spawnAgent = async (request, reserve) => {
+        const result = await spawnAgent(request, reserve);
+        const observer = Bun.spawn([process.execPath, "-e",
+          'require("node:fs").appendFileSync(process.argv[1], process.cwd() + "\\n")', launches],
+        { cwd: request.cwd, stdout: "ignore", stderr: "ignore", timeout: 5_000 });
+        expect(await observer.exited).toBe(0);
+        return result;
+      };
+      if (afterStagedStop) {
+        const holdStagedInstall = path.join(root, "staged-install-held");
+        initial = startFixtureController({ ...input, holdStagedInstall });
+        await waitForFixture(() => fs.existsSync(holdStagedInstall), "v1 stopped after staged scratch creation");
+        const slot = (await findControllerPipeline(lane.id))!.provisioningJob!;
+        expect(fs.readdirSync(lane.worktreeDir)).toContain(`.delegatus-dependencies-${slot.token}`);
+        expect(fs.existsSync(modules)).toBe(false);
+        expect(slot.privateReceipt).toBeUndefined();
+        await initial.stop("SIGKILL");
+        await waitForFixture(() => processStart(slot.worker!.pid) === undefined, "v1 worker reaped at shutdown");
+      }
+      const commands = path.join(root, "commands");
+      fs.mkdirSync(commands);
+      fs.writeFileSync(path.join(commands, "bun"), `#!/bin/bash
+set -eu
+if [[ $PWD == "$FIXTURE_CHECKOUT" && $# -gt 0 && $1 == install ]]; then
+  if [[ "$FIXTURE_CREATE" == yes ]]; then
+    mkdir node_modules
+    printf 'partial installation' > node_modules/partial
+  fi
+  printf '%s\\n' "$$" > "$FIXTURE_PID"
+  stop=$((SECONDS + 24))
+  until [[ -s "$FIXTURE_RELEASE" ]]; do
+    [[ $SECONDS -lt $stop ]] || exit 82
+    sleep 0.02
+  done
+  [[ $(<"$FIXTURE_RELEASE") == finish ]] || exit 81
+  if [[ "$FIXTURE_CREATE" == yes ]]; then rm node_modules/partial; fi
+fi
+exec "$FIXTURE_BUN" "$@"
+`, { mode: 0o700 });
+      old = startFixtureController(input, legacyTree!, { PATH: commands + path.delimiter + process.env.PATH!,
+        FIXTURE_CHECKOUT: lane.worktreeDir, FIXTURE_CREATE: beforeCreate ? "no" : "yes",
+        FIXTURE_PID: pidFile, FIXTURE_RELEASE: release, FIXTURE_BUN: process.execPath,
+        BUN_INSTALL_CACHE_DIR: path.join(root, "legacy-cache"),
+      });
+      await waitForFixture(() => fs.existsSync(pidFile) && fs.statSync(pidFile).size > 0, "legacy installer launched by pre-v1");
+      writer = Number(fs.readFileSync(pidFile, "utf8"));
+      writerStart = processStart(writer);
+      expect(writer).toBeGreaterThan(1);
+      expect(fs.existsSync(modules)).toBe(!beforeCreate);
+      const before = fs.existsSync(modules) ? fs.statSync(modules, { bigint: true }) : undefined;
+      const scratches = () => fs.readdirSync(lane.worktreeDir).filter(name => name.startsWith(".delegatus-dependencies-")).sort();
+      const priorScratch = scratches();
+      await old.stop("SIGKILL");
+      expect(old.child.signalCode).toBe("SIGKILL");
+      expect(writerLive()).toBe(true);
+      expect(!!(await findControllerPipeline(lane.id))?.provisioningJob).toBe(afterStagedStop);
+      expect(fixtureLaunchCount(launches, lane.worktreeDir)).toBe(0);
+      if (process.env.LLV_PROVISION_LEGACY_CENSUS_CONTROL === "1") {
+        // Compare the same zero-launch assertion with the pre-v1 readiness predicate.
+        baseline = startFixtureController(input, legacyTree!);
+        expect(await baseline.child.exited, await baseline.output).toBe(0);
+        expect(fixtureLaunchCount(launches, lane.worktreeDir)).toBe(0);
+        return;
+      }
+      const effects: string[] = [];
+      h.ports.provisionToolchainReply = async (id, type, detail) => {
+        if (id === lane.id && type === "dispatch" && detail) effects.push(detail);
+      };
+      const read = () => findControllerPipeline(lane.id);
+      await driveProvisioning(h.ports, async () => (await read())?.provisioningJob?.step === "waitingForLegacyInstaller");
+      const waiting = (await read())!;
+      expect(waiting.provisioningJob).toMatchObject({ legacyWriter: { pid: writer, start: writerStart },
+        waitReason: "private-install-writer-live (possible-writer)" });
+      expect(waiting.runs[0]?.attempts).toHaveLength(0);
+      expect(fs.existsSync(modules)).toBe(!!before);
+      if (before) {
+        expect(fs.statSync(modules, { bigint: true }).ino).toBe(before.ino);
+        expect(fs.readdirSync(modules)).toEqual(["partial"]);
+      }
+      expect(effects.filter(effect => effect.startsWith("private-"))).toEqual([]);
+      expect(scratches()).toEqual(priorScratch);
+      if (cut === "expires with writer alive") {
+        wall = waiting.provisioningJob!.deadlineAt;
+        await driveProvisioning(h.ports, async () => (await read())?.state === "needs_decision");
+        expect(writerLive()).toBe(true);
+        expect((await read())?.stateDetail).toBe("private-install-writer-live (possible-writer)");
+        expect(effects.filter(effect => effect.startsWith("private-"))).toEqual([]);
+      } else {
+        fs.writeFileSync(release, partialExit ? "stop" : "finish");
+        await waitForFixture(() => !writerLive(), "legacy installer exit");
+        wall = waiting.provisioningJob!.retryAt!;
+        if (relative) {
+          const inode = fs.statSync(modules, { bigint: true }).ino;
+          await driveProvisioning(h.ports, async () => (await read())?.state === "needs_decision");
+          expect((await read())?.stateDetail).toBe("private-install-unverified");
+          expect(fs.statSync(modules, { bigint: true }).ino).toBe(inode);
+          expect(fs.existsSync(path.join(modules, "fixture-local", "package.json"))).toBe(true);
+          expect((await read())?.runs[0]?.attempts).toHaveLength(0);
+          return;
+        } else if (partialExit) {
+          await driveProvisioning(h.ports, async () => (await read())?.state === "needs_decision");
+          expect((await read())?.stateDetail).toBe("private-install-unverified");
+        } else {
+          const inode = fs.statSync(modules, { bigint: true }).ino;
+          await driveProvisioning(h.ports, async () => (await read())?.runs[0]?.attempts[0]?.state === "running");
+          expect(fs.statSync(modules, { bigint: true }).ino).toBe(inode);
+          expect((await read())?.runs[0]?.attempts).toHaveLength(1);
+          expect(fixtureLaunchCount(launches, lane.worktreeDir)).toBe(1);
+          expect(await git(lane.worktreeDir, "rev-parse", "HEAD")).toBe((await read())!.baseRef);
+          return;
+        }
+      }
+      expect((await read())?.runs[0]?.attempts).toHaveLength(0);
+      expect(fs.readFileSync(partial, "utf8")).toBe("partial installation");
+      expect(fs.statSync(modules, { bigint: true }).ino).toBe(before!.ino);
+      if (afterStagedStop && partialExit) {
+        const { patchPipeline } = await import("./engine");
+        // This is the fixture operator removing the inspected partial tree.
+        fs.rmSync(modules, { recursive: true });
+        expect((await patchPipeline(lane.id, { action: "retry-stage" }, h.ports)).pipeline?.state).toBe("provisioning");
+        await driveProvisioning(h.ports, async () => (await read())?.runs[0]?.attempts[0]?.state === "running");
+        expect(fs.existsSync(path.join(modules, ".delegatus-install-receipt.json"))).toBe(true);
+        expect(fixtureLaunchCount(launches, lane.worktreeDir)).toBe(1);
+      }
+    } finally {
+      fs.writeFileSync(release, "stop");
+      await old?.stop();
+      await baseline?.stop();
+      await initial?.stop();
+      await waitForFixture(() => !writerLive(), "fixture installer cleanup");
+      await settleProvisioningJobsForTests();
+      await supplier?.();
+      await settlePipelineControllerJobs();
+      await settlePipelineStopReadLanes();
+      await removeProvisioningFixture(root);
+    }
+  }), 29_000);
+
 test.skipIf(process.platform !== "linux")("consume refuses a possible legacy writer with an unreadable working directory", () =>
   withControllerAuditState(async () => {
     const { h, git, repo, root } = await realWorktreeLane("legacy-at-consume", BUILD_ONLY as never);
@@ -989,6 +1641,96 @@ test.skipIf(process.platform !== "linux")("consume refuses a possible legacy wri
       await removeProvisioningFixture(root);
     }
   }), 24_000);
+
+test.skipIf(process.platform !== "linux").each(["recovers", "parks at the original cutoff"] as const)(
+  "incomplete enumeration %s across a controller restart", outcome => withControllerAuditState(async () => {
+    const { h, git, repo, base, root } = await realWorktreeLane("legacy-census-incomplete", BUILD_ONLY as never);
+    let supplier: (() => Promise<void>) | undefined;
+    const controllers: ReturnType<typeof startFixtureController>[] = [];
+    const wallFile = path.join(root, "clock");
+    const enumerationFault = path.join(root, "fail-enumeration");
+    const end = path.join(root, "controller-end");
+    const launches = path.join(root, "first-children");
+    const setWall = (ms: number) => replaceFixtureFile(wallFile, new Date(ms).toISOString());
+    const now = Date.now();
+    setWall(now);
+    try {
+      // Use the release worker entry with a fault only at its OS enumeration read.
+      const release = path.join(root, "release");
+      const bundle = path.join(release, ".next", "server", "provision-toolchain-worker.js");
+      fs.mkdirSync(path.dirname(bundle), { recursive: true });
+      for (const item of ["src", "bin", "tsconfig.json", "node_modules"]) {
+        fs.symlinkSync(path.join(process.cwd(), item), path.join(release, item));
+      }
+      const worker = path.join(process.cwd(), "src/lib/pipelines/provisionToolchain.worker.ts");
+      fs.writeFileSync(bundle, `
+        import { existsSync, promises as fs } from "node:fs";
+        const readdir = fs.readdir;
+        fs.readdir = (dir, ...options) => dir === "/proc" && existsSync(${JSON.stringify(enumerationFault)})
+          ? Promise.reject(Object.assign(new Error("fixture enumeration refused"), { code: "EACCES" }))
+          : readdir(dir, ...options);
+        await import(${JSON.stringify(worker)});
+      `);
+      supplier = await seedProvisioningPackage(repo, root, process.env, process.execPath, undefined, "fixture-private");
+      await git(repo, "add", ".");
+      await git(repo, "commit", "-m", "fixture inputs for the failed census");
+      await git(repo, "push", "origin", "main");
+      const lane = (await createPipelineFromRequest({ task: "Withhold installs on incomplete enumeration",
+        repoDir: repo, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+      fs.writeFileSync(enumerationFault, "");
+      const input = { lane: lane.id, launches, end, wallFile };
+      const first = startFixtureController(input, release);
+      controllers.push(first);
+      const read = () => findControllerPipeline(lane.id);
+      await waitForFixture(async () => (await read())?.provisioningJob?.step === "waitingForLegacyInstaller", "incomplete enumeration wait");
+      const waiting = (await read())!.provisioningJob!;
+      expect(waiting).toMatchObject({ status: "waiting", waitReason: "private-install-writer-live (enumeration)" });
+      expect(waiting.deadlineAt - waiting.since).toBe(180_000);
+      const peer = (await createPipelineFromRequest({ task: "Start an independent lane during the incomplete census",
+        repoDir: repo, baseRef: base, publication: "internal", stages: BUILD_ONLY as never }, h.ports)).pipeline!;
+      await waitForFixture(() => fixtureLaunchCount(launches, peer.worktreeDir) === 1, "peer first child");
+      const assertNoInstall = () => {
+        expect(fixtureLaunchCount(launches, lane.worktreeDir)).toBe(0);
+        expect(fs.existsSync(path.join(lane.worktreeDir, "node_modules"))).toBe(false);
+        expect(fs.readdirSync(lane.worktreeDir).some(file => file.startsWith(".delegatus-dependencies-"))).toBe(false);
+      };
+      assertNoInstall();
+      await first.stop("SIGKILL");
+      setWall(waiting.since + 179_999);
+      const second = startFixtureController(input, release);
+      controllers.push(second);
+      await waitForFixture(async () => {
+        const current = (await read())?.provisioningJob;
+        return current?.status === "waiting" && current.token !== waiting.token;
+      }, "re-observation after restart");
+      expect((await read())?.provisioningJob).toMatchObject({ since: waiting.since, deadlineAt: waiting.deadlineAt });
+      assertNoInstall();
+      if (outcome === "recovers") fs.unlinkSync(enumerationFault);
+      setWall(waiting.deadlineAt);
+      if (outcome === "recovers") {
+        expect(await second.child.exited, await second.output).toBe(0);
+        expect(fixtureLaunchCount(launches, lane.worktreeDir)).toBe(1);
+        expect((await read())?.runs[0]?.attempts).toHaveLength(1);
+      } else {
+        await waitForFixture(async () => (await read())?.state === "needs_decision", "incomplete census park");
+        expect((await read())?.stateDetail).toBe("private-install-writer-live (enumeration)");
+        expect((await read())?.provisioningJob?.since).toBe(waiting.since);
+        assertNoInstall();
+      }
+    } catch (error) {
+      fs.writeFileSync(end, "");
+      const diagnostics = await Promise.all(controllers.map(async controller => {
+        await controller.stop();
+        return (await controller.output).split("\n").slice(-20).join("\n");
+      }));
+      throw new Error(`${String(error)}\n${diagnostics.join("\n")}`);
+    } finally {
+      fs.writeFileSync(end, "");
+      for (const controller of controllers) await controller.stop();
+      await supplier?.();
+      await removeProvisioningFixture(root);
+    }
+  }), 30_000);
 
 test.skipIf(process.platform !== "linux")("a successor does not renew a live foreign claim after a wall-clock step", () =>
   withControllerAuditState(async () => {
