@@ -1,3 +1,4 @@
+import type { ViewerOperation } from "./viewerLoopMonitor";
 import { requestWorkload } from "./requestWorkload";
 import { readAttribution } from "./readAttribution";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -36,7 +37,7 @@ export const performanceSites = [
 ] as const;
 export type PerformanceSite = typeof performanceSites[number];
 type Slice = { sequence: number; span: number; parent: number; site: number; kind: "sync" | "await" | "event";
-  start: number; end: number; count: number; totalMs: number; maxMs: number; rows: number; bytes: number; failed: boolean; correlation?: string; requestClass?: string };
+  start: number; end: number; count: number; totalMs: number; maxMs: number; rows: number; bytes: number; failed: boolean; correlation?: string; requestClass?: string; registryOperation?: ViewerOperation };
 const siteIds = new Map(performanceSites.map((site, index) => [site, index]));
 const capacity = 1024;
 const requestCapacity = 256;
@@ -64,7 +65,7 @@ export function createPerformanceSpans(now = monotonicNow) {
     // separately from the enclosing interval, which can include a suspension.
     if (previous && record.kind === "sync" && previous.kind === "sync" && record.maxMs < 1 && previous.maxMs < 1
       && previous.site === record.site && previous.parent === record.parent && previous.correlation === record.correlation && previous.requestClass === record.requestClass
-      && record.start - previous.end < 0.1) {
+      && previous.registryOperation === record.registryOperation && record.start - previous.end < 0.1) {
       previous.end = record.end; previous.count++; previous.totalMs += record.totalMs;
       previous.maxMs = Math.max(previous.maxMs, record.maxMs); previous.rows += record.rows; previous.bytes += record.bytes;
       previous.failed ||= record.failed;
@@ -91,9 +92,12 @@ export function createPerformanceSpans(now = monotonicNow) {
   });
   const finish = (record: Slice) => { record.end = now(); record.totalMs = record.maxMs = record.end - record.start; add(record); };
   const { delegatusPerformanceSync: sync } = {
-    delegatusPerformanceSync<T>(site: PerformanceSite, work: () => T, rows = 0, bytes = 0): T {
+    delegatusPerformanceSync<T>(site: PerformanceSite, work: () => T, rows = 0, bytes = 0, operation?: ViewerOperation): T {
       if (!enabled) return work();
       const record = begin(site, "sync", rows, bytes);
+      if (site === "registry.keyed" && !record.requestClass && operation && operation !== "registry.read") {
+        record.registryOperation = operation;
+      }
       const parentSite = currentSite, parentSpan = currentSpan;
       currentSpan = record.span;
       currentSite = record.site; observeSite?.(currentSite);
