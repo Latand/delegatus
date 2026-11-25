@@ -14,7 +14,7 @@ import { readWorktreeProvenance, worktreeRegistration } from "./worktreeProvenan
 type Lane = Pick<Pipeline, "id" | "repoDir" | "worktreeDir">;
 const sameInode = (a: fs.BigIntStats, b: fs.BigIntStats) => a.dev === b.dev && a.ino === b.ino;
 const unchanged = (a: fs.BigIntStats, b?: fs.BigIntStats) =>
-  b?.isFile() && sameInode(a, b) && b.nlink === 1n && a.ctimeNs === b.ctimeNs && a.mtimeNs === b.mtimeNs && a.size === b.size;
+  b?.isFile() && sameInode(a, b) && b.nlink === BigInt(1) && a.ctimeNs === b.ctimeNs && a.mtimeNs === b.mtimeNs && a.size === b.size;
 const stat = (file: string) => fs.lstatSync(file, { bigint: true, throwIfNoEntry: false });
 const within = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
 const gone = (error: unknown) => ["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "");
@@ -184,7 +184,7 @@ export async function recoverLaneIndexLock(lane: Lane, cwd: string, exec: ExecPo
     if (!hint || !index) return { removed: false };
     if (process.platform !== "linux" || procBackend.name !== "linux") return { error: "index.lock recovery requires Linux open-file evidence" };
     const uid = BigInt(process.geteuid!());
-    if (!index.isFile() || index.nlink !== 1n || index.uid !== uid) return { error: UNBOUND };
+    if (!index.isFile() || index.nlink !== BigInt(1) || index.uid !== uid) return { error: UNBOUND };
     const worktree = canonical(logical), gitDir = canonical(hint);
     const lock = path.join(gitDir, "index.lock");
     const rejected = context?.rejectedPath;
@@ -245,7 +245,7 @@ export async function recoverLaneIndexLock(lane: Lane, cwd: string, exec: ExecPo
               fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK, 0o600);
             try {
               const record = await journal.stat({ bigint: true });
-              if (!record.isFile() || record.uid !== uid || record.nlink !== 1n) return { error: UNBOUND };
+              if (!record.isFile() || record.uid !== uid || record.nlink !== BigInt(1)) return { error: UNBOUND };
               await journal.appendFile(JSON.stringify({ event: "index.lock recovery proof", at: new Date().toISOString(), operation,
                 path: lock, device: String(index.dev), inode: String(index.ino), size: String(index.size), mtimeNs: String(index.mtimeNs), ...counts }) + "\n");
               await journal.sync();
