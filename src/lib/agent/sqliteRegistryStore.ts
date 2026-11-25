@@ -1155,6 +1155,7 @@ const conversationPathSql = (records: string) => `SELECT conversation_id FROM (
     Retained conversations, entries, receipts and deliveries of a long-running
     installation fit; operation owners, the largest payloads, stay per commit. */
 const COLD_STABLE_ROW_BYTES = 48 * 1024 * 1024;
+const PROCESSLESS_ARCHIVE_ENTRY_LIMIT = 2048;
 
 /** Journalled changes a preparation replays on the published reader in one
     synchronous step. A row change is a keyed read and one normalization. */
@@ -1790,6 +1791,7 @@ export class SqliteAgentRegistryStore {
   private readonly coldRowProjectionResults = new Map<string, Map<number, unknown>>();
   private coldGrantCursor: { changeId: number; stamp: string } | null = null;
   private processlessArchiveEntries = new Map<string, number>();
+  private processlessArchiveSchemaVersion: number | null = null;
   private coldKeys = new Set<string>();
   private coldKeysStamp = "";
   /** The change journal position the cold key set was read at; 0 forces a full read. */
@@ -2525,6 +2527,7 @@ export class SqliteAgentRegistryStore {
     this.fileIdentityRead = null;
     this.databaseReopens += 1;
     this.processlessArchiveEntries.clear();
+    this.processlessArchiveSchemaVersion = null;
     // A restored file may have the same revision and counter stamp as the file
     // it replaced. No parsed row or assembled grant from the old inode holds.
     for (const rows of this.rowCache.values()) rows.clear();
@@ -5370,7 +5373,12 @@ export class SqliteAgentRegistryStore {
     const cacheable = this.recordsSource === "registry_records" && !this.db.inTransaction;
     const reopens = this.databaseReopens;
     const next = new Map<string, number>();
+    let schemaVersion: number | null = null;
     const entries = this.read(file => {
+      // A migration can rewrite archive bodies while retaining their IDs. Pin the
+      // schema generation to the same read transaction as the mappings and entries.
+      if (cacheable) schemaVersion = this.db.query<{ schema_version: number }, []>("PRAGMA main.schema_version").get()!.schema_version;
+      const previous = schemaVersion === this.processlessArchiveSchemaVersion ? this.processlessArchiveEntries : null;
       const keys = registryKeysMatching(file, "entries", "structuredHost.kind", kinds);
       const versions = new Map<string, number>();
       if (cacheable) {
@@ -5382,7 +5390,9 @@ export class SqliteAgentRegistryStore {
       const selected: AgentRegistryEntry[] = [];
       for (const key of keys) {
         const id = versions.get(key);
-        if (id !== undefined && (this.processlessArchiveEntries.get(key) === id || this.archivedEntryWithoutProcess(key, id))) {
+        // Keep the first eligible keys in scan order. Overflow takes the ordinary row path.
+        if (id !== undefined && next.size < PROCESSLESS_ARCHIVE_ENTRY_LIMIT
+          && (previous?.get(key) === id || this.archivedEntryWithoutProcess(key, id))) {
           next.set(key, id);
           continue;
         }
@@ -5391,7 +5401,10 @@ export class SqliteAgentRegistryStore {
       }
       return selected.map(copy);
     });
-    if (cacheable && this.databaseReopens === reopens) this.processlessArchiveEntries = next;
+    if (cacheable && this.databaseReopens === reopens) {
+      this.processlessArchiveEntries = next;
+      this.processlessArchiveSchemaVersion = schemaVersion;
+    }
     return entries;
   }
 
