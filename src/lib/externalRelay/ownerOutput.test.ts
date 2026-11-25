@@ -119,17 +119,21 @@ test("owner output withholds URL credentials while keeping an adjacent public li
     [`https://example.test/?id=${value}`, [value], value],
     [`https://example.test/?id=${providerKey}`, [], providerKey],
     [`https://example.test/?password=${value}`, [], value],
-    [`https://example.test/?api%5Fkey=${value}`, [], value],
     [`https://example.test/?x-amz-signature=${value}`, [], value],
     [`https://example.test/#access_token=${value}`, [], value],
     [userInfo.href, [], value],
-    [`https://example.test/?next=${encodeURIComponent(`https://example.test/?password=${value}`)}`, [], value],
     [`https://example.test/?details=${encodeURIComponent(JSON.stringify({ password: value }))}`, [], value],
   ] as const) {
     const output = scrubOwnerOutput(`[Fixture](${url}) · ${publicLink}`, credentials);
     expect(output).not.toContain(secret);
     expect(output).toContain("[redacted");
     expect(output).toEndWith(publicLink);
+  }
+  // Raw and decoded credential passes disagree on these encodings, so the
+  // egress boundary withholds the entire answer.
+  for (const url of [`https://example.test/?api%5Fkey=${value}`,
+    `https://example.test/?next=${encodeURIComponent(`https://example.test/?password=${value}`)}`]) {
+    expect(scrubOwnerOutput(`[Fixture](${url}) · ${publicLink}`)).toBe("[redacted]");
   }
 });
 
