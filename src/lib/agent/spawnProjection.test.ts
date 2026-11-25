@@ -11,7 +11,7 @@ import { activityVerdict } from "@/lib/scanner/activity";
 import { FileRuntimeEventStore } from "@/lib/runtime/eventStore";
 import type { FileEntry } from "@/lib/types";
 
-import { staleWorkingFixture, staleWorkingResponse } from "./spawnProjection.fixture";
+import { recentlyFinishedFiles, staleWorkingFixture, staleWorkingResponse } from "./spawnProjection.fixture";
 import { receiptIsLive, livenessProbe } from "./accountLiveness";
 import { turnIsRunning } from "@/components/turnDuration";
 import { workingSince } from "@/components/workingSince";
@@ -1889,10 +1889,23 @@ test("stale working: a launch whose host died over an open turn reads killed, a 
     expect(row).toMatchObject({ key: "done", dot: "neutral" });
     expect(isSettledLaunchPlaceholder(quiet)).toBe(true);
     expect(isSettledLaunchPlaceholder(dead)).toBe(true);
-    expect(rowStateWord((key) => translate("uk", key), { ...row, settledLaunch: true })).toBe("готово");
-    expect(rowStateWord((key) => translate("en", key), { ...row, settledLaunch: true })).toBe("done");
+    expect(rowStateWord((key) => translate("uk", key), row)).toBe("готово");
+    expect(rowStateWord((key) => translate("en", key), row)).toBe("done");
     expect(workingAgentCount([dead, quiet], now / 1000)).toBe(0);
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("a turn that ended minutes ago is one word, top level or sub-agent, on the board model and the phone bar", () => {
+  const now = Date.now();
+  const { topLevel, subAgent } = recentlyFinishedFiles(now);
+  for (const file of [topLevel, subAgent]) {
+    const row = mobileRowState(file, now / 1000);
+    expect(row).toMatchObject({ key: "returned", dot: "accent" });
+    expect(chatState(file, { nowMs: now })).toBe("returned");
+    expect(rowStateWord((key) => translate("en", key), row)).toBe("finished the turn");
+    expect(rowStateWord((key) => translate("uk", key), row)).toBe("завершив хід");
+    expect(workingAgentCount([file], now / 1000)).toBe(0);
+  }
 });
 
 test("stale working: a launch whose host died after its turn ended stays settled", () => {

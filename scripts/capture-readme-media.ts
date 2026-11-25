@@ -393,8 +393,9 @@ export const SHOTS: ReadmeShot[] = [
     subjects: ['[role="menu"]'],
     target: { kind: "project", project: "harbor-api" },
     viewport: WIDE,
-    requiredText: ["Idempotent refunds", "Inbox", "Done", "Top of the Inbox", "Appearance", "Pipeline actions", "keeps working"],
-    absentText: ["tmux", "Untitled task", "resume ·"],
+    /* The priority hints («Top of the Inbox») belong to an Inbox card; this card is assigned, so its menu shows the three priorities as bare segments. */
+    requiredText: ["Idempotent refunds", "Inbox", "Done", "High", "Normal", "Low", "Appearance", "Pipeline actions", "keeps working"],
+    absentText: ["tmux", "Untitled task", "resume ·", "Top of the Inbox", "Bottom of the Inbox"],
     prepare: async (page) => {
       await foldOrchestrator(page);
       await page.waitForTimeout(500);

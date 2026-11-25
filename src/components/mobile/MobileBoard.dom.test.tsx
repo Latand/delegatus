@@ -52,11 +52,10 @@ const { getMobileNav, resetMobileNavForTests, topScreen } = await import("@/comp
 const { receipts } = await import("@/components/mobile/MobileReceipt");
 const { resetOrchestratorSeatCacheForTests } = await import("@/components/orchestrator/useOrchestratorSeat");
 const { buildMobileBoard, needsDecisionPipelineRows } = await import("@/components/mobile/mobileBoardModel");
-const { launchAge, statePhrase } = await import("@/components/mobile/MobileBoard");
+const { launchAge, startedRepeatsStateAge, statePhrase } = await import("@/components/mobile/MobileBoard");
 const { resetPhoneKanbanPlaces } = await import("@/components/mobile/phoneKanbanPlace");
 const { resetPendingOpensForTest } = await import("@/hooks/useBoardState");
 const { pendingPipelineActs } = await import("@/components/mobile/MobilePipelineScreen");
-const { humanizeDuration } = await import("@/components/turnDuration");
 const { formatResetClock } = await import("@/components/rateLimit");
 type MobileShellHost = NonNullable<React.ComponentProps<typeof ProjectDashboard>["mobileShell"]>;
 
@@ -504,20 +503,40 @@ test("each phrase carries its age, and the held plurals read right at 1 and at n
   const tOf = (locale: Locale): TFunction => ((key: string, vars?: Record<string, unknown>) => translate(locale, key as never, vars as never)) as unknown as TFunction;
   for (const locale of ["en", "uk"] as const) {
     const t = tOf(locale);
-    const age = humanizeDuration(900);
+    const age = translate(locale, "time.agoMin", { n: 15 });
     expect(statePhrase(t, bits("killed"), NOW)).toBe(translate(locale, "mobile2.board.killedAge", { age }));
     expect(statePhrase(t, bits("stalled"), NOW)).toBe(translate(locale, "mobile2.board.stalled", { age }));
-    expect(statePhrase(t, bits("waiting"), NOW)).toBe(translate(locale, "mobile2.board.waiting", { age }));
+    expect(statePhrase(t, bits("waiting"), NOW)).toBe(translate(locale, "mobile2.chat.stateWaiting", { age }));
     expect(statePhrase(t, bits("returned"), NOW)).toBe(translate(locale, "mobile2.board.returned", { age }));
     expect(statePhrase(t, bits("done"), NOW)).toBe(translate(locale, "mobile2.board.done", { age }));
-    for (const key of ["killed", "stalled", "waiting", "returned", "done"] as const) expect(statePhrase(t, bits(key), NOW)).toContain(age);
+    for (const key of ["killed", "stalled", "returned", "done"] as const) expect(statePhrase(t, bits(key), NOW)).toContain(age);
   }
-  expect(statePhrase(tOf("en"), bits("killed"), NOW)).toBe("killed · 15m");
+  expect(statePhrase(tOf("en"), bits("killed"), NOW)).toBe("stopped · 15m ago");
+  /* No ticking seconds: 15m 3s and 15m 40s both read the chat bar's «15m ago». */
+  expect(statePhrase(tOf("en"), bits("done", { seconds: 903 }), NOW)).toBe("done · 15m ago");
+  expect(statePhrase(tOf("en"), bits("done", { seconds: 940 }), NOW)).toBe("done · 16m ago");
+  expect(statePhrase(tOf("uk"), bits("killed", { seconds: 1803 }), NOW)).toBe("зупинено · 30 хв тому");
+  expect(statePhrase(tOf("en"), bits("waiting"), NOW)).toBe("waiting · 15m ago");
   expect(statePhrase(tOf("en"), bits("held", { held: 1 }), NOW)).toBe("held · 1 message queued");
   expect(statePhrase(tOf("en"), bits("held", { held: 5 }), NOW)).toBe("held · 5 messages queued");
   expect(statePhrase(tOf("uk"), bits("held", { held: 1 }), NOW)).toBe("утримано · 1 повідомлення в черзі");
   expect(statePhrase(tOf("uk"), bits("held", { held: 3 }), NOW)).toBe("утримано · 3 повідомлення в черзі");
   expect(statePhrase(tOf("uk"), bits("held", { held: 5 }), NOW)).toBe("утримано · 5 повідомлень у черзі");
+});
+
+test("«started …» is dropped where it only repeats the state's own age", () => {
+  const bits = (key: Parameters<typeof statePhrase>[1]["key"], seconds: number): Parameters<typeof statePhrase>[1] =>
+    ({ key, section: "recent", dot: "neutral", edge: null, badge: null, seconds, held: 0, resetAt: null, account: null });
+  for (const locale of ["en", "uk"] as const) {
+    const t = ((key: string, vars?: Record<string, unknown>) => translate(locale, key as never, vars as never)) as unknown as TFunction;
+    for (const key of ["killed", "stalled", "waiting", "returned", "done"] as const) {
+      expect(startedRepeatsStateAge(t, bits(key, 1803), NOW - 1790, NOW)).toBe(true);
+      expect(startedRepeatsStateAge(t, bits(key, 240), NOW - 1790, NOW)).toBe(false);
+    }
+    /* A running row's state is its turn's clock, not an age: the launch still reads. */
+    expect(startedRepeatsStateAge(t, bits("working", 1803), NOW - 1790, NOW)).toBe(false);
+    expect(startedRepeatsStateAge(t, bits("done", 1803), null, NOW)).toBe(false);
+  }
 });
 
 test("a row at its account's limit says which account and when the window reopens", async () => {

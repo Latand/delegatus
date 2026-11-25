@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { Database } from "bun:sqlite";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import { z } from "zod";
 
@@ -108,9 +109,13 @@ test("symlinked and physical sibling worktrees keep one project after deletion",
   }
 });
 
-afterAll(async () => {
+afterAll(() => {
   resetLegacyDocumentStoresForTests();
   resetStateReadonlyReaderForTests();
+  if (REAL_STATE !== undefined) process.env.LLV_STATE_DIR = REAL_STATE;
+  else delete process.env.LLV_STATE_DIR;
+  if (REAL_HOME !== undefined) process.env.HOME = REAL_HOME;
+  else delete process.env.HOME;
   // Linux permits unlinking open SQLite files; Windows requires them closed.
   if (process.platform === "linux" && fs.existsSync("/proc/self/fd")) {
     const held = fs.readdirSync("/proc/self/fd").flatMap(fd => {
@@ -118,20 +123,14 @@ afterAll(async () => {
     }).filter(filename => filename.startsWith(SANDBOX + path.sep) && filename.includes("state.sqlite"));
     expect(held).toEqual([]);
   }
-  if (REAL_STATE !== undefined) process.env.LLV_STATE_DIR = REAL_STATE;
-  else delete process.env.LLV_STATE_DIR;
-  if (REAL_HOME !== undefined) process.env.HOME = REAL_HOME;
-  else delete process.env.HOME;
-  // The Windows runner's Bun returns EBUSY directly from recursive rm.
-  for (let retries = 0; ; retries++) {
-    try {
-      fs.rmSync(SANDBOX, { recursive: true, force: true });
-      break;
-    } catch (error) {
-      if (!WINDOWS_ONLY || (error as NodeJS.ErrnoException).code !== "EBUSY" || retries >= 10) throw error;
-      await Bun.sleep(200);
-    }
+  // Leaving WAL mode needs an exclusive lock, even where unlinking succeeds.
+  for (const file of new Bun.Glob("**/state.sqlite").scanSync({ cwd: SANDBOX })) {
+    using db = new Database(path.join(SANDBOX, file), { readwrite: true });
+    db.exec("PRAGMA busy_timeout = 0");
+    const mode = db.query<{ journal_mode: string }, []>("PRAGMA journal_mode = DELETE").get();
+    expect(mode?.journal_mode, file).toBe("delete");
   }
+  fs.rmSync(SANDBOX, { recursive: true, force: true });
 });
 
 test("parseWorktreeGitdir resolves an absolute gitdir into repo + worktree name", () => {

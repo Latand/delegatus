@@ -15,7 +15,7 @@ import { CHAT_STATE_PRECEDENCE, chatState, chatStateBits, stagePosition, type Ch
  * asked its own question in its own order. So the order lives in one module and
  * this file pins it end to end:
  *
- *   offline > killed > stalled > limit > held > waiting > working > returned > done
+ *   offline > killed > waiting > stalled > limit > held > working > returned > done
  *
  * The shape of the test is the shape of the claim: for every pair of states,
  * a conversation carrying BOTH signals is called the higher one. That is what
@@ -111,7 +111,7 @@ test("a blocked conversation never reads in the running tone or the running word
 
 test("the queue's own words ride the states that need the operator, and only those", () => {
   const badged = KEYS.filter((key) => chatStateBits(t, SIGNAL[key](base()), { nowMs: NOW_MS }).badge !== null);
-  expect(badged).toEqual(["stalled", "limit", "waiting"]);
+  expect(badged).toEqual(["waiting", "stalled", "limit"]);
 });
 
 test("the limit phrase names the account and its reset, and falls back when the engine reported none", () => {
@@ -190,7 +190,7 @@ test("a host stopped after its turn settled is the finished conversation it is, 
   expect(dead.key).toBe("killed");
   expect(dead.tone).toBe("danger");
   expect(dead.phrase).toMatch(/^mobile2\.chat\.stateKilledAge\(age=/);
-  expect(translate("en", "mobile2.chat.stateKilledAge", { age: "14m ago" })).toBe("killed · 14m ago");
+  expect(translate("en", "mobile2.chat.stateKilledAge", { age: "14m ago" })).toBe("stopped · 14m ago");
   expect(translate("en", "mobile2.chat.stateKilledAge", { age: "14m ago" })).not.toMatch(/queue/);
 });
 
@@ -243,4 +243,41 @@ test("an open decision turns a finished turn into «waiting», and leaves every 
   expect(chatStateBits(t, base(), withDecision).phrase).toMatch(/^waiting · /);
   const uk = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate("uk", key, params);
   expect(chatStateBits(uk, base(), withDecision).phrase).toMatch(/^чекає · /);
+});
+
+/* ── one mapping with the desktop (the same agent reads the same word) ──── */
+
+test("a finished top-level conversation reads like its board row: done when quiet, finished the turn when recent", async () => {
+  const { mobileRowState } = await import("./mobileBoardModel");
+  const quiet = base();
+  const recent = { ...base(), activity: "recent" } as FileEntry;
+  for (const file of [quiet, recent]) {
+    expect(chatState(file, { nowMs: NOW_MS })).toBe(mobileRowState(file, NOW_S).key);
+  }
+  expect(chatState(quiet, { nowMs: NOW_MS })).toBe("done");
+  expect(chatState(recent, { nowMs: NOW_MS })).toBe("returned");
+});
+
+test("a question outranks a stalled turn, as on the board", () => {
+  const file = SIGNAL.waiting(SIGNAL.stalled(base()));
+  expect(chatState(file, { nowMs: NOW_MS })).toBe("waiting");
+});
+
+test("a host that stopped over an open turn is killed on every process word the board counts", () => {
+  for (const proc of ["killed", "done"] as const) {
+    const file = { ...base(), proc, lastTurn: { startedAt: NOW_MS - 60_000, endedAt: null } } as FileEntry;
+    expect(chatState(file, { nowMs: NOW_MS })).toBe("killed");
+  }
+});
+
+test("an idle seat reads «waiting» with no chip; a form or a question keeps its chip", () => {
+  const quiet = chatStateBits(t, base(), { nowMs: NOW_MS, seatWaiting: true });
+  expect(quiet).toMatchObject({ key: "waiting", tone: "neutral", badge: null });
+  expect(quiet.phrase).toContain("stateWaiting");
+  const form = chatStateBits(t, base(), { nowMs: NOW_MS, seatWaiting: true, decisionWaiting: true });
+  expect(form).toMatchObject({ key: "waiting", tone: "warning" });
+  expect(form.badge).not.toBeNull();
+  const asked = chatStateBits(t, SIGNAL.waiting(base()), { nowMs: NOW_MS, seatWaiting: true });
+  expect(asked.badge).not.toBeNull();
+  expect(chatStateBits(t, SIGNAL.working(base()), { nowMs: NOW_MS, seatWaiting: true }).key).toBe("working");
 });

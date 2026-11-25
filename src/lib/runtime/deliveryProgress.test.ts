@@ -1116,6 +1116,20 @@ test("a renewed turn deadline survives a process restart and a stale admission c
   expect(Date.parse(record.deadlineAt!)).toBe(now + 100 * 60_000);
 });
 
+test("a failed-switch deadline remains fixed when a later retry writes a turn deadline", () => {
+  const now = Date.parse("2026-11-02T12:00:00Z");
+  const store = new DeliveryProgressStore(path.join(root, "failed-switch-deadline.sqlite"), () => now, noTimer);
+  try {
+    store.note("switch-bound-message", "conversation_switch_bound", { waitReason: "switch-failed" });
+    const fixed = new Date(now + 10 * 60_000).toISOString();
+    store.deadline("switch-bound-message", fixed, "failed-switch");
+    store.deadline("switch-bound-message", new Date(now + 90 * 60_000).toISOString(), "turn-boundary");
+    expect(store.get("switch-bound-message")).toMatchObject({ deadlineAt: fixed, deadlinePolicy: "failed-switch" });
+  } finally {
+    store.close();
+  }
+});
+
 test("native refusing component survives history eviction, settlement and reopening", () => {
   const filename = path.join(root, "native-refusal.sqlite");
   let clock = Date.parse("2026-11-01T12:00:00Z");
