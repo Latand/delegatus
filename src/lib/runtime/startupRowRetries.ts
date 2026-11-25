@@ -45,24 +45,51 @@ export class StartupRowRetries {
   get(key: string): StartupRowRetry | undefined { return this.rows.get(key); }
   due(key: string, now = Date.now()): boolean { return (this.rows.get(key)?.nextAt ?? 0) <= now; }
 
+  /** Retry filenames are hashes, so discover archived targets from the
+      records themselves. Temporary writes never appear in this selection. */
+  async discover(): Promise<string[]> {
+    let filenames: string[];
+    try { filenames = await fs.readdir(this.directory); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+    const keys: string[] = [];
+    for (const filename of filenames.sort()) {
+      if (!/^[a-f0-9]{64}\.json$/.test(filename)) continue;
+      try {
+        const row = this.parse(await fs.readFile(path.join(this.directory, filename), "utf8"));
+        if (this.file(row.key) !== path.join(this.directory, filename)) throw new Error("invalid structured startup retry key");
+        if (!this.rows.has(row.key)) this.rows.set(row.key, row);
+        keys.push(row.key);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    return keys;
+  }
+
   async load(keys: readonly string[]): Promise<void> {
     try { await fs.access(this.directory); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
     for (const key of keys) {
       if (this.rows.has(key)) continue;
       try {
-        const row = JSON.parse(await fs.readFile(this.file(key), "utf8")) as StartupRowRetry;
-        if (row.key !== key || !Number.isSafeInteger(row.attempts) || row.attempts < 1
-          || !Number.isSafeInteger(row.nextAt) || row.nextAt < 0
-          || !["missing-rollout", "adoption-failed", "incumbent-owned"].includes(row.reason)
-          || (row.resolved !== undefined && typeof row.resolved !== "boolean")
-          || (row.noticePending !== undefined && typeof row.noticePending !== "boolean")
-          || row.quarantined !== (row.attempts >= QUARANTINE_AFTER)) throw new Error("invalid structured startup retry record");
+        const row = this.parse(await fs.readFile(this.file(key), "utf8"));
+        if (row.key !== key) throw new Error("invalid structured startup retry key");
         this.rows.set(key, row);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
+  }
+
+  private parse(text: string): StartupRowRetry {
+    const row = JSON.parse(text) as StartupRowRetry;
+    if (typeof row?.key !== "string" || !Number.isSafeInteger(row.attempts) || row.attempts < 1
+      || !Number.isSafeInteger(row.nextAt) || row.nextAt < 0
+      || !["missing-rollout", "adoption-failed", "incumbent-owned"].includes(row.reason)
+      || (row.resolved !== undefined && typeof row.resolved !== "boolean")
+      || (row.noticePending !== undefined && typeof row.noticePending !== "boolean")
+      || row.quarantined !== (row.attempts >= QUARANTINE_AFTER)) throw new Error("invalid structured startup retry record");
+    return row;
   }
 
   async failed(key: string, reason: StartupRowReason, now = Date.now(), assertActive = () => {}, resolved = false): Promise<StartupRowRetry> {

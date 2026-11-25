@@ -58,7 +58,7 @@ import {
 import { deliverHeldStructuredMessage, enqueueStructuredMessage } from "./structuredMessageDelivery";
 import { didStructuredHostStartupFail, structuredStartupStatus } from "./startupStatus";
 import * as startupStatus from "./startupStatus";
-import { adoptStructuredHostsAtStartup, prepareStructuredStartupRecipient, startupTelegramGrantCheck, structuredStartupDeferral, structuredStartupHosts, type StructuredStartupDependencies } from "./startup";
+import { adoptStructuredHostsAtStartup, pipelineStartupTargetDeferred, prepareStructuredStartupRecipient, startupTelegramGrantCheck, structuredStartupDeferral, structuredStartupHosts, type StructuredStartupDependencies } from "./startup";
 import { interruptionObligationDirectory, interruptionObligationStore, initializeRecipientInterruptionIndex } from "./interruptionObligations";
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
@@ -2671,9 +2671,17 @@ test("startup defers hosts belonging to a preserved future pipeline and still ad
       registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: pipelines[index]!.id,
         role: "builder", slot: "build:1", stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
     }
+    const historical = addStructuredRestartConversation(registry, directory, {
+      sessionId: "cccccccc-3333-0333-0333-cccccccccccc", status: "dead", turn: "terminal",
+    });
+    registry.rememberMembership(historical.conversation.id, { kind: "pipeline", containerId: pipelines[0]!.id,
+      role: "builder", slot: "build:2", stageId: "build", stageOrder: 0, round: 2, parentConversationId: null });
+    expect(registry.archiveInactiveRows()).toBe(1);
     const bytes = JSON.stringify({ schemaVersion: PIPELINES_SCHEMA_VERSION, pipelines });
     fs.writeFileSync(path.join(directory, "pipelines.json"), bytes);
     expect(await startupAdoptionAttempts(registry)).toEqual([`codex:${healthyId}`]);
+    expect(await pipelineStartupTargetDeferred(registry, historical.conversation.id)).toBe(true);
+    expect(await pipelineStartupTargetDeferred(registry, healthy.conversation.id)).toBe(false);
     expect(fs.readFileSync(path.join(directory, "pipelines.json"), "utf8")).toBe(bytes);
   } finally {
     registry.close();

@@ -149,3 +149,121 @@ test("a damaged record answers with the repair it needs, and never with an empty
   /* Neither mutation wrote over the record the operator still has to repair. */
   expect(persistedAccountSource(BINDINGS_SOURCE)).toEqual(damaged);
 });
+
+test("project reads and mutation confirmations fetch only current hot carriers", async () => {
+  const { Database } = await import("bun:sqlite");
+  const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const transcript = await import("@/lib/agent/transcript");
+  const scanner = await import("@/lib/scanner/describe");
+  const previous = agentRegistry();
+  const directory = fs.mkdtempSync(path.join(STATE, "carrier-registry-"));
+  const sqliteFilename = path.join(directory, "registry.sqlite");
+  let payloads = 0;
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteFilename, onSqliteRowPayloadRead: (_collection, count) => { payloads += count; },
+  });
+  const peer = new Database(sqliteFilename);
+  const snapshot = spyOn(registry, "readOnlySnapshot");
+  const adopted = path.join(directory, "adopted.jsonl");
+  const head = spyOn(transcript, "headCwd").mockImplementation(file => file === adopted ? directory : null);
+  const cwd = spyOn(scanner, "projectForCwd").mockImplementation(file => file === directory ? ATLAS : null);
+  try {
+    setAgentRegistryForTests(registry);
+    function seed(account: string | null, changes: {
+      engine?: "claude" | "codex" | "copilot" | "antigravity"; project?: string | null;
+      source?: string; idle?: boolean; adopted?: boolean; previousGeneration?: boolean;
+    } = {}) {
+      const file = changes.adopted ? adopted : path.join(directory, String(account) + ".jsonl");
+      const row = registry.ensureConversation(changes.engine ?? "claude", file, account);
+      const latest = row.generations[0]!;
+      latest.launchProfile.project = changes.project === undefined ? ATLAS : changes.project;
+      if (changes.previousGeneration) row.generations.unshift({ ...latest, accountId: "former-account" });
+      row.turn.state = changes.idle ? "idle" : "busy";
+      const raw = { ...row, projectOwnership: changes.source ? { project: "elsewhere", source: changes.source } : null };
+      peer.query("UPDATE registry_rows SET value_json=? WHERE collection='conversations' AND row_key=?")
+        .run(JSON.stringify(raw), row.id);
+      return row.id;
+    }
+    const live = seed("a-current", { previousGeneration: true });
+    seed("b-legacy", { source: "unknown-legacy-source" });
+    seed("c-adopted", { project: null, adopted: true, engine: "codex" });
+    seed("override", { source: "operator" });
+    seed("quiet", { idle: true });
+    seed("unsupported", { engine: "copilot" });
+    seed("unsupported-ag", { engine: "antigravity" });
+    seed(null);
+    const cold = seed("archived");
+    peer.query("INSERT INTO registry_archive(collection,row_key,value_json,row_order) SELECT collection,row_key,value_json,row_order FROM registry_rows WHERE collection='conversations' AND row_key=?").run(cold);
+    peer.query("INSERT INTO registry_cold(collection,row_key,archive_id) VALUES ('conversations',?,last_insert_rowid())").run(cold);
+
+    const expected = {
+      claude: { carrying: [{ accountId: "a-current" }, { accountId: "b-legacy" }] },
+      codex: { carrying: [{ accountId: "c-adopted" }] },
+    };
+    payloads = 0;
+    expect(await read(ATLAS)).toMatchObject({ engines: expected });
+    expect(head.mock.calls.map(call => call[0])).toEqual([adopted]);
+    expect(await read("elsewhere")).toMatchObject({ engines: { claude: { carrying: [{ accountId: "override" }] } } });
+    peer.query("UPDATE registry_rows SET value_json=json_set(value_json,'$.turn.state','idle') WHERE collection='conversations' AND row_key=?").run(live);
+    const response = await mutate({ action: "add", engine: "claude", accountId: MAIN, project: ATLAS });
+    expect(response.status).toBe(200);
+    expect(response.payload).toMatchObject({ project: { engines: {
+      claude: { restricted: true, carrying: [{ accountId: "b-legacy" }] }, codex: expected.codex,
+    } } });
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(payloads).toBe(0);
+
+    // A restored database can be queried before its owner installs the index.
+    peer.exec("DROP INDEX IF EXISTS registry_busy_carriers");
+    expect(await read(ATLAS)).toMatchObject({ engines: { codex: expected.codex } });
+  } finally {
+    head.mockRestore();
+    cwd.mockRestore();
+    snapshot.mockRestore();
+    setAgentRegistryForTests(previous);
+    peer.close();
+    registry.close();
+  }
+});
+
+test.each(["off", "sqlite"] as const)("the %s view follows routing and quota changes", async sqliteMode => {
+  const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const codex = await import("@/lib/accounts/codex");
+  const transcript = await import("@/lib/agent/transcript");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const previous = agentRegistry();
+  const filename = path.join(fs.mkdtempSync(path.join(STATE, "selection-")), "registry.json");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+  const peer = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
+  const account = codex.listCodexAccounts()[0]!;
+  const catalog = spyOn(codex, "listCodexAccounts").mockReturnValue(["first", "second"]
+    .map(id => ({ ...account, id, label: id, authPresent: true })));
+  const head = spyOn(transcript, "headCwd");
+  try {
+    setAgentRegistryForTests(registry);
+    registry.reconcileConversations([{
+      engine: "claude", path: path.join(path.dirname(filename), "adopted.jsonl"), accountId: MAIN,
+      launchProfile: emptyLaunchProfile(), turn: { state: "busy", source: "assistant", terminalAt: null },
+      observedAt: new Date().toISOString(),
+    }], { snapshot: false });
+    peer.setEngineRouting("codex", "first");
+    // A transcript lookup can take long enough for another process to reroute.
+    head.mockImplementationOnce(() => { peer.setEngineRouting("codex", "second"); return null; });
+    expect(await read(ATLAS)).toMatchObject({ engines: { codex: { nextChosenAccountId: "second" } } });
+    expect(head).toHaveBeenCalledTimes(1);
+    const now = new Date();
+    peer.recordQuotaObservation({
+      engine: "codex", accountId: "second", authenticated: true, observedAt: now.toISOString(),
+      authCheckedAt: now.toISOString(), bootId: "fixture", provenance: { source: "live", reason: null, staleSince: null },
+      limits: { session: { usedPercent: 100, resetsAt: Math.floor(+now / 1000) + 3600 },
+        weekly: null, plan: "max", capturedAt: Math.floor(+now / 1000) },
+    });
+    expect(await read(ATLAS)).toMatchObject({ engines: { codex: { nextChosenAccountId: "first" } } });
+  } finally {
+    head.mockRestore();
+    catalog.mockRestore();
+    setAgentRegistryForTests(previous);
+    peer.close();
+    registry.close();
+  }
+});

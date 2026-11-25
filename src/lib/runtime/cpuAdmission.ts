@@ -25,6 +25,15 @@ export const CPU_QUEUE_ABANDONED_MS = 24 * 60 * 60_000;
 export const CPU_QUEUE_STALE_GRACE_MS = 60_000;
 const BOUNDED_GATE_PREFIX = "command:bounded:";
 export const ACTIVE_GATE_PREFIX = "command:gate-active:";
+/** True when unified cgroup membership names the declared service or a child. */
+export function cgroupScopeContainsUnit(scope: string, unit: string): boolean {
+  if (!/^[A-Za-z0-9_.@:-]+\.(?:service|scope)$/.test(unit)) return false;
+  return scope.split("\n").some(line => {
+    if (!line.startsWith("0::/")) return false;
+    const membership = line.slice(3).replace(/\/$/, "");
+    return membership === `/${unit}` || membership.endsWith(`/${unit}`) || membership.includes(`/${unit}/`);
+  });
+}
 const PUBLICATION_LAUNCHES = "publication_launch_proofs";
 /** More live publications than this never run on one machine. */
 const PUBLICATION_LAUNCH_LIMIT = 64;
@@ -430,9 +439,9 @@ export class CpuAdmissionQueue {
       return read();
     }).immediate();
   }
-  waitingGateOwners(): string[] {
-    return this.db.query<{ owner: string }, []>(`SELECT DISTINCT owner FROM tickets
-      WHERE owner IS NOT NULL AND key GLOB 'command:*' AND key NOT GLOB '${ACTIVE_GATE_PREFIX}*'`).all().map(row => row.owner);
+  waitingGateTickets(): { key: string; owner: string }[] {
+    return this.db.query<{ key: string; owner: string }, []>(`SELECT key, owner FROM tickets
+      WHERE owner IS NOT NULL AND key GLOB 'command:*' AND key NOT GLOB '${ACTIVE_GATE_PREFIX}*'`).all();
   }
   /** The Viewer records each publication preparer it starts by the kernel
    * identity of the process it spawned, the operation it handed that process
