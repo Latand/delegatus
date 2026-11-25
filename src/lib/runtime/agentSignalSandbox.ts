@@ -1,4 +1,5 @@
 import { gateToolingFiles } from "./gateTooling";
+import { platformLimitDiagnostic, platformLimitSeverity } from "./platformLimit";
 import { gateAdmissionInterpreter, gateAdmissionLauncherParent } from "./gateAdmissionLauncher";
 import fs from "node:fs";
 import os from "node:os";
@@ -98,10 +99,22 @@ export function signalBoundaryOff(child: SignalDomainHandle): SignalBoundaryOff 
 }
 
 /** Carries a launch's boundary status to a transport or a reconnected handle. */
-export function recordSignalBoundaryOff(child: SignalDomainHandle, value: SignalBoundaryOff | string, launch?: string): void {
+export function recordSignalBoundaryOff(child: SignalDomainHandle, value: SignalBoundaryOff | string, launch?: string, platform: NodeJS.Platform = process.platform): void {
   const reason = (typeof value === "string" ? value : value.reason).slice(0, BOUNDARY_REASON_MAX_CHARS) || "the boundary could not be established";
   boundaryOff.set(child, { state: "off", reason });
-  if (launch) console.warn(`[signal-sandbox] ${launch} launch runs without the agent signal boundary: ${reason}`);
+  if (launch) reportBoundaryOff(launch, reason, platform);
+}
+
+/** Only the platform's own limit is information; any other cause stays a warning everywhere. */
+function reportBoundaryOff(launch: string, reason: string, platform: NodeJS.Platform): void {
+  const message = `[signal-sandbox] ${launch} launch runs without the agent signal boundary: ${reason}`;
+  if (reason === platformBoundaryReason(platform) && platformLimitSeverity(platform) === "info") platformLimitDiagnostic(message, platform);
+  else console.warn(message);
+}
+
+/** The reason a platform without Linux namespaces gives for running without the boundary. */
+function platformBoundaryReason(platform: NodeJS.Platform): string {
+  return `Linux namespaces are unavailable on ${platform}`;
 }
 
 /** Reject malformed persisted boundary status. */
@@ -122,7 +135,7 @@ function onPath(binary: string, searchPath: string | undefined): boolean {
 /** One capability decision per launch. This side rules out what it can see;
  * the launcher proves the host facts and falls back the same way. */
 function signalLauncher(env: NodeJS.ProcessEnv, bridged: boolean): { launcher: string } | { off: string } {
-  if (process.platform !== "linux") return { off: `Linux namespaces are unavailable on ${process.platform}` };
+  if (process.platform !== "linux") return { off: platformBoundaryReason(process.platform) };
   if (env.LLV_GATE_SLOT_LEASE) return { off: "an inherited gate slot lease cannot cross a user namespace" };
   if (process.getuid?.() === 0) return { off: "managed signal domains require a non-root user" };
   if (!bridged && !onPath("python3", env.PATH)) return { off: "required host dependency is missing: python3" };
@@ -350,7 +363,7 @@ const TERMINAL_ENTRY = 'if command -v python3 >/dev/null 2>&1; then '
 export function terminalSignalSandboxCommand(command: string, env: NodeJS.ProcessEnv = process.env): string {
   const decision = signalLauncher({ ...env, LLV_GATE_SLOT_LEASE: undefined }, env.LLV_DOCKER_NSENTER_SHIMS === "1");
   if ("off" in decision) {
-    console.warn(`[signal-sandbox] terminal launch runs without the agent signal boundary: ${decision.off}`);
+    reportBoundaryOff("terminal", decision.off, process.platform);
     return command;
   }
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -386,12 +399,10 @@ export function resolveSignalTooling(cwd = process.cwd()): { launcher: string; g
 }
 
 /** Route Linux admission calls from older helper copies through the installed
- * detector, even when they carry an explicit LLV_GATE_BUN interpreter. Without
- * one the launcher runs `bun` from the caller's PATH, as gate-slot does: the
- * Viewer's own interpreter can be container-only (`bun-container` in the
- * image) and a bridged agent runs on the host. Check keys and Cloud inputs
- * read the recorded interpreter (gateAdmissionLauncher.ts), never this path. */
-export function installedGateAdmissionEnv(source: Readonly<Partial<NodeJS.ProcessEnv>> = process.env): Record<string, string> {
+ * detector. An explicit LLV_GATE_BUN stays a check input. The launcher's
+ * default is local to its caller: the image selects bun-container, and a
+ * bridged agent uses bun from the host PATH. */
+export function installedGateAdmissionEnv(source: Readonly<Partial<NodeJS.ProcessEnv>> = process.env, localDefault?: string): Record<string, string> {
   if (process.platform !== "linux") return {};
   try {
     const helper = path.join(path.dirname(resolveSignalTooling().gate), "cpu-admission.ts");
@@ -400,6 +411,9 @@ export function installedGateAdmissionEnv(source: Readonly<Partial<NodeJS.Proces
     // while retaining the caller's original interpreter, or its absence.
     const recorded = gateAdmissionInterpreter(source.LLV_GATE_BUN);
     const nativeBun = recorded === undefined ? source.LLV_GATE_BUN || "" : recorded ?? "";
+    // The image's admission default belongs to the launcher. Only a caller's
+    // explicit check input is recorded for reuse and Cloud submission.
+    const launcherBun = nativeBun || localDefault;
     const body = Buffer.from(`#!/bin/bash
 set -eu
 if [[ $# -ge 2 && \${1##*/} == cpu-admission.ts ]]; then
@@ -407,7 +421,7 @@ if [[ $# -ge 2 && \${1##*/} == cpu-admission.ts ]]; then
     --wait|--claim) shift; set -- ${quote(helper)} "$@" ;;
   esac
 fi
-exec ${nativeBun ? quote(nativeBun) : "bun"} "$@"
+exec ${launcherBun ? quote(launcherBun) : "bun"} "$@"
 `);
     const directory = cacheSignalTooling(gateAdmissionLauncherParent(), new Map([["bun", body], ["interpreter", Buffer.from(nativeBun)]]));
     return { LLV_GATE_BUN: path.join(directory, "bun") };

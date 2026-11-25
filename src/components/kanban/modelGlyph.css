@@ -28,6 +28,30 @@
 .mglyph.g-terra .mg-rim { fill: none; stroke: var(--glyph-terra-rim); stroke-width: 0.8; }
 .mglyph.g-luna { --glyph-ink: var(--glyph-luna); --glyph-glow: var(--glyph-luna-glow); --mg-period: 5s; }
 .mglyph.g-luna .mg-earthshine { fill: var(--glyph-luna); opacity: 0.1; }
+/* The periodic-table cells (Neon, Argon, Hydrogen and the two orchestrators,
+   which wear their base element's cell) share one frame drawing and one
+   glow/pulse rule between the model glyph (`.mglyph.g-cell`) and Antigravity
+   engine marks (`.emark-neon`, halo only). Both halo and gas chamber keep one
+   period (`--mg-turn`, GLYPH_TURN_MS). Each element has its own tint. */
+.mglyph.g-cell,
+.emark-neon { --glyph-ink: var(--glyph-neon); --glyph-glow: var(--glyph-neon-glow); --glyph-halo-peak: var(--glyph-halo-peak-strong); --mg-period: var(--mg-turn); }
+.mglyph:is(.g-argon, .g-orch-argon) { --glyph-ink: var(--glyph-argon); --glyph-glow: var(--glyph-argon-glow); }
+.mglyph.g-hydrogen { --glyph-ink: var(--glyph-hydrogen); --glyph-glow: var(--glyph-hydrogen-glow); }
+.mglyph.g-cell { color: var(--glyph-ink); }
+.emark-neon { position: relative; --mg-turn: 4s; }
+.emark-neon > svg { position: relative; overflow: visible; }
+:is(.mglyph.g-cell, .emark-neon) .mg-tile { fill: none; stroke: currentColor; stroke-width: 1.3; }
+:is(.mglyph.g-cell, .emark-neon) .mg-neon-gas { fill: var(--glyph-glow); opacity: 0.12; }
+:is(.mglyph.g-cell, .emark-neon)[data-live="1"] .mg-neon-gas { opacity: 0.34; }
+:is(.mglyph.g-cell, .emark-neon) .mg-neon-num { fill: none; stroke: currentColor; stroke-width: 0.95; stroke-linecap: round; stroke-linejoin: round; }
+:is(.mglyph.g-cell, .emark-neon) .mg-neon-sym { fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+/* An orchestrator's cue: a hub and two satellites in the cell's open corner. */
+.mglyph.g-cell .mg-cue { fill: currentColor; stroke: currentColor; stroke-width: 0.7; stroke-linecap: round; }
+/* Flash is a bolt and a spark; GPT-OSS an open hexagon with a seed. Their inks
+   and halos are their own tokens. */
+.mglyph.g-flash { --glyph-ink: var(--glyph-flash); --glyph-glow: var(--glyph-flash-glow); --mg-period: 2.4s; }
+.mglyph.g-oss { --glyph-ink: var(--glyph-oss); --glyph-glow: var(--glyph-oss-glow); --mg-period: 4s; }
+.mglyph .mg-ring { fill: none; stroke: var(--glyph-ink); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 
 /* Waiting: the model is chosen and has not run. Its colour drains toward
    grey, with no halo and no motion, while the silhouette keeps its full ink:
@@ -40,13 +64,15 @@
    where motion is welcome, so nothing has to be switched off again. Its reach
    and strength are per theme (tokens.css): tight on the light paper, where a
    wide glow is a stain, and strong on the dark, where a faint one is lost. */
-.mglyph::before {
+.mglyph::before,
+.emark-neon::before {
   content: ""; position: absolute; inset: calc(-1 * var(--glyph-halo-reach)); border-radius: 50%; pointer-events: none; opacity: 0;
   /* Faint behind the drawing, so the silhouette keeps its edge against a
      glow of its own colour, and strongest just past the glyph's rim. */
   background: radial-gradient(closest-side, color-mix(in srgb, var(--glyph-glow) calc(var(--glyph-halo-peak) * 0.3), transparent), color-mix(in srgb, var(--glyph-glow) var(--glyph-halo-peak), transparent) 62%, transparent);
 }
-.mglyph[data-live="1"]::before { opacity: 1; }
+.mglyph[data-live="1"]::before,
+.emark-neon[data-live="1"]::before { opacity: 1; }
 .mglyph svg * { transform-box: view-box; transform-origin: 8px 8px; }
 .mglyph .mg-write { transform-origin: 1.6px 14.4px; }
 .mglyph .mg-tilt { transform-origin: 8px 14px; }
@@ -66,12 +92,17 @@
 .mglyph[data-tier="ultra"] { --mg-turn: 0.5s; --mg-pace: 8; }
 @media (prefers-reduced-motion: no-preference) {
   .mglyph[data-live="1"]::before { animation: mg-halo var(--mg-period) ease-in-out infinite; }
-  .mglyph[data-live="1"]:is(.g-sol, .g-astra, .g-opus) > svg { animation: mg-turn var(--mg-turn) linear infinite; }
+  .mglyph.g-cell[data-live="1"]::before,
+  .emark-neon[data-live="1"]::before { animation: mg-halo var(--mg-turn) ease-in-out infinite; }
+  .mglyph[data-live="1"]:is(.g-sol, .g-astra, .g-opus, .g-oss) > svg { animation: mg-turn var(--mg-turn) linear infinite; }
   .mglyph[data-live="1"] .mg-write { animation: mg-write calc(var(--mg-period) / var(--mg-pace)) ease-in-out infinite; }
   .mglyph[data-live="1"] .mg-sway { animation: mg-sway calc(var(--mg-period) / var(--mg-pace)) ease-in-out infinite; }
   .mglyph[data-live="1"] .mg-tilt { animation: mg-tilt calc(var(--mg-period) / var(--mg-pace)) ease-in-out infinite; }
   .mglyph[data-live="1"] .mg-spin { animation: mg-spin calc(var(--mg-period) * 2 / var(--mg-pace)) linear infinite; }
   .mglyph[data-live="1"] .mg-phase { animation: mg-phase calc(var(--mg-period) * 2 / var(--mg-pace)) ease-in-out infinite; }
+  .mglyph[data-live="1"] .mg-flick { animation: mg-flick calc(var(--mg-period) / var(--mg-pace)) ease-in-out infinite; }
+  .mglyph[data-live="1"] .mg-neon-gas,
+  .emark-neon[data-live="1"] .mg-neon-gas { animation: mg-neon var(--mg-turn) ease-in-out infinite; }
 }
 /* The board's holds (globals.css, kanbanBoard.css) pause the moving children
    by name; the turning box is held with them. A focused composer and a panned
@@ -81,6 +112,7 @@
 .kb [data-layout-animating="content"].mglyph > svg,
 .kb [data-column-text-held] .mglyph > svg { animation-play-state: paused !important; }
 @keyframes mg-halo { 50% { opacity: 0.6; transform: scale(0.92); } }
+@keyframes mg-flick { 0%, 100% { opacity: 1; } 45% { opacity: 0.55; } 55% { opacity: 0.9; } 70% { opacity: 0.6; } }
 @keyframes mg-turn { to { transform: rotate(360deg); } }
 @keyframes mg-write { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
 @keyframes mg-sway { 0%, 100% { transform: rotate(-6deg); } 50% { transform: rotate(6deg); } }
@@ -89,6 +121,9 @@
 /* The shadow disc slides between a thin crescent and a fat one, and never
    uncovers a half moon, so every frame is a crescent. */
 @keyframes mg-phase { 0%, 100% { transform: translate(-1.1px, 0.55px); } 50% { transform: translate(0.55px, -0.28px); } }
+/* Neon's gas chamber pulses and shimmers gently over one GLYPH_TURN_MS cycle
+   while the periodic-table frame and Ne strokes stay at full ink. */
+@keyframes mg-neon { 0%, 100% { opacity: 0.16; } 38% { opacity: 0.40; } 44% { opacity: 0.28; } 52% { opacity: 0.44; } 78% { opacity: 0.22; } }
 
 /* A settled state rides the corner as a badge in the stage's tone, cut out of
    the glyph by a ring of the surface under it. It sits out past the corner so
@@ -98,5 +133,8 @@
   display: grid; place-items: center; background: var(--stage-tone);
   box-shadow: 0 0 0 1.5px var(--glyph-cut, var(--surface-card));
 }
+/* A periodic-table tile puts its symbol's last letter in the bottom-right
+   corner while top-right beside the atomic number is open; lift the cells' badge there. */
+.mglyph.g-cell .mg-badge { top: -4px; bottom: auto; }
 .mglyph .mg-badge svg { width: 8px; height: 8px; fill: none; stroke: var(--surface-card); stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
 .mglyph .mg-badge circle { fill: var(--surface-card); stroke: none; }

@@ -5,6 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { FLOW_RETIREMENT } from "@/lib/flows/retirement";
 import { ISSUE_REPORT_RESPONSE_RULE } from "@/lib/issueReports/approvalForm";
 import { cloneFileCallBudgetMs } from "@/lib/externalRelay/cloneToolBudget";
+import { telegramReactionMessageIdSchema, telegramReactionSchema } from "@/lib/telegram/bot/reactions";
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
 import { trackMcpClaim, installMcpLifecycle, logMcpLifecycle, drainMcpClaims } from "../../../bin/mcp-lifecycle.mjs";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
@@ -154,6 +155,8 @@ export const MCP_TOOL_NAMES = [
   "telegram_bot_send",
   "telegram_bot_send_media",
   "telegram_bot_send_document",
+  "telegram_bot_reactions",
+  "telegram_bot_set_reaction",
   "telegram_bot_messages",
   "relay_owner_history",
   "relay_trusted_requesters",
@@ -243,11 +246,11 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      replayed clientRequestId must answer with what the first call recorded
      rather than switch and record a second time. */
   "auto_updates",
-  /* Posts into a Telegram chat. A replayed clientRequestId must answer with
-     the message ids the first call posted, never post a second time. */
+  /* Posts or reacts in a Telegram chat. Replay the first receipt under the same key. */
   "telegram_bot_send",
   "telegram_bot_send_media",
   "telegram_bot_send_document",
+  "telegram_bot_set_reaction",
   /* Records a preview and files one issue (#2518). A replayed clientRequestId
      must answer with the issue the first call filed, never file a second. */
   "issue_report",
@@ -3852,7 +3855,8 @@ export function createMcpToolService(
           /* bridge_report's one refusal (a report with nothing left after the
              privacy scrub) names its code the same way: the same call fails the
              same way, so it is not retryable as sent. */
-          const botRefusal = (typedTool === "telegram_bot_send" || typedTool === "telegram_bot_send_media" || typedTool === "telegram_bot_send_document" || typedTool === "bridge_report") && error instanceof McpToolRefusal
+          const botRefusal = (typedTool === "telegram_bot_send" || typedTool === "telegram_bot_send_media" || typedTool === "telegram_bot_send_document"
+            || typedTool === "telegram_bot_reactions" || typedTool === "telegram_bot_set_reaction" || typedTool === "bridge_report") && error instanceof McpToolRefusal
             && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
             ? { code: error.details.code, retryable: error.details.retryable } : null;
           /* Named issue, workspace, cross-project and orchestrator refusals preserve the
@@ -4135,7 +4139,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   list_pipelines: "Accepts a project key, display name or repository folder in any letter case; omission uses the caller's existing board scope. List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
   conversation_action: "Control or archive Delegatus conversations. speed applies serviceTier in place without cutting a turn; stage conversations use the stage runtime switch. interrupt, kill, resume, compact and permission accept one conversation by id, transcript path, or selected-card reference. A host's tool permission requests are answered with permission and decision allow (once) or deny, optionally naming requestId, and its native question or plan with answer, requestId (the question's reason id) and answers, text, or approve. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
   operator_snapshot: "Read the bounded, secret-redacted Delegatus state currently visible to the operator.",
-  list_tasks: "Accepts a project key, display name or repository folder in any letter case; omission uses the caller's existing board scope. List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it); follow nextCursor with the same filters. Every omitted page/record is counted. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
+  list_tasks: "Accepts a project key, display name or repository folder in any letter case; omission uses the caller's existing board scope. List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it). Follow nextCursor with the same filters, including after an empty page with a continuation. Partial answers name deferred fields in omissions. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
   get_task: "Read one durable board task, including the whole agent-facing `details`.",
   deployment_status: "Read Delegatus deployment or runtime operation status, or list recent deployments, newest first. `compact: true` answers each deployment as {deploymentId, phase, sha, terminal, startedAt, finishedAt, error}; without it, the full record. `kind: host-retirement` with project lets its designated seat and Delegatus-spawned workers read their own project. The server attributes your session; workers resolve their own spawn receipt automatically. Optional callerLaunchId selects an explicit receipt belonging to your session; a designated seat needs no receipt. This reads the latest durable sweep report, capped at 100 records and 100 examined subjects per page, at most 20 pages. Pass cursor unchanged with a fresh clientRequestId while hasMore. A changed report requires restarting pagination. Historical operation/PID identity and current ownership remain explicitly unknown where the authority does not record them; current registry identity is separate. `refusedByFlag` counts, across the whole sweep and every project, the flags behind each no-active-flags refusal, and a refused item names its own `flags`. No sweep or process control is triggered. Earlier individual refusals are not retained, so an absent target never proves completion.",
   resources: "Read system memory, session count/memory totals and Delegatus's own processes. full:true or compact:false includes complete session rows. freshness reports requestedAt, the system block's capturedAt and ageMs, the session table's sessionsCapturedAt, sessionsAgeMs and sessionsStale, the cache source, and refreshSucceeded (fresh:true only). A process with no observation yet answers within a second: freshness.pending is true with reason \"collecting\", the system block is current and the session table is empty until a later call; fresh:true waits for the collection instead. When the session collector failed, the rows come from an earlier capture: sessionsStale is true and every row carries stale:true with its capturedAt, so read them as history of what ran then. viewer lists the web server, runtime host and workers with their memory; it is not actionable, since nothing in it is an agent to kill. Launched agents delegate this read to the Viewer, over either transport. A legacy stdio client without a launch capability measures locally and returns viewer:null with viewerUnavailable \"not-the-viewer\".",
@@ -4145,7 +4149,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   lifecycle_events: "Query the durable lifecycle event journal by lineage and cursor, or poll a bounded relay digest of what changed since the last one.",
   request_attention: [
     'Use waitFor:"accepted" to return after durable acceptance with accepted:true, arrival:"pending" and handoff:null. The default waits for durable browser arrival.',
-    "Move the operator's one active Delegatus view to a typed target immediately and verify the arrival — no confirmation prompt, no pending offer. Execution is gated on server-derived authority: only the operator's root/gateway session or the target project's designated orchestrator seat may direct it; workers and unidentified callers are refused (ATTENTION_NOT_PERMITTED) with nothing recorded. The latest-interaction active view is chosen deterministically (down to the one executing browser tab); success is returned only after that view's camera/focus actually landed, and a missing view, lost target, or timeout is an explicit bounded failure. Durably attributed to the calling session, idempotent by clientRequestId across restarts, and the operator keeps a one-action Return control that restores exactly where they were. On a phone the request shows as a notice; the phone's view never moves. With no desktop to move and a phone open, the call answers at once with delivered: \"notice\" and no handoff.",
+    "Move the operator's one active Delegatus view to a typed target immediately and verify the arrival — no confirmation prompt, no pending offer. Execution is gated on server-derived authority: only the operator's root/gateway session or the target project's designated orchestrator seat may direct it; workers and unidentified callers are refused (ATTENTION_NOT_PERMITTED) with nothing recorded. The latest-interaction active view is chosen deterministically (down to the one executing browser tab); success is returned only after that view's camera/focus actually landed, and a missing view, lost target, or timeout is an explicit bounded failure. Durably attributed to the calling session, idempotent by clientRequestId across restarts, and the operator keeps a one-action Return control that restores exactly where they were. On a phone the request shows as a notice; the phone's view never moves. With no desktop to move and a phone open, the call answers at once with delivered: \"notice\" and no handoff. The same answer comes when the operator's active view is in a different project than the target's: the view stays where it is and they get the notification, whose click opens the target; only a target in the project they are in moves their view.",
     `Targets are typed and discriminated by \`kind\`, one shape per kind: ${FOCUS_TARGET_SHAPES.map((shape) => `${shape.kind} — ${shape.example}`).join("; ")}.`,
     "A conversation target takes either its durable conversationId (resolved server-side to that conversation's current transcript, and the form to prefer because it survives resume and migration) or that transcript's path.",
     "A draft target also needs the top-level project argument; region and point accept intent \"show\" only. A rejected target names the kind it read and the fields that kind expects.",
@@ -4247,8 +4251,8 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   telegram_bot_send_document: [
     "Post one file as a Telegram document (sendDocument) through the operator's Telegram bot into an allowlisted chat — the way to share a report: markdown and long text read badly as messages. The chat must be allowlisted by the operator, as for telegram_bot_send.",
     "`document.path` is absolute on the Viewer host and must resolve, symlinks followed, under a document root the operator set in the Telegram panel (by default `handoff/` in the Viewer host's home), so write reports there first. Paths through a dot-directory are refused pending owner confirmation; the Delegatus state directory is always refused.",
-    "Types: .md .markdown .txt .log .json .csv .pdf .png .jpg .jpeg .html, non-empty, at most 20 MB; text files are scanned, as UTF-8 and UTF-16, for private keys, tokens and credentials (including `password: word` assignments) and refused with document_secret naming the class (`details.secretClass`). Other refusals: document_invalid, document_outside_roots, document_forbidden_path, document_type, document_too_large.",
-    "A secret, dot-directory or outside-roots refusal offers `details.confirmation` with an expiring Delegatus URL. The paired owner signs in and approves there; that action rechecks and sends this exact file to this exact chat and topic once. Show the owner the link and detector reasons. Agents cannot approve, and ordinary retries still run all detectors. The confirmation expires after ten minutes and becomes unavailable after Viewer restart. `document.filename` is the shown name (default the file's own name) and must keep the file's type class (text, PDF or image: a .md may be shown as .txt, never as .pdf); `document.caption` up to 1024 characters, plain or html by `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. Success includes sentBy; per-bot refusals and selection follow telegram_bot_send. The post appears in telegram_bot_messages with kind document and its filename.",
+    "Types are .md .markdown .txt .log .json .csv .pdf .png .jpg .jpeg .html .xlsx .docx .pptx, non-empty, at most 20 MB. Text and Office files are scanned for private keys, tokens and credentials (including `password: word` assignments). A match returns document_secret with the class in details.secretClass. Office inspection includes expanded ZIP members, decoded XML and embedded Office packages up to two levels deep, with a 20 MB total expanded limit and at most 4096 entries across all levels. An Office package that cannot be fully inspected, including one that embeds an OLE object or nests packages deeper, returns document_invalid. Other refusals include document_outside_roots, document_forbidden_path, document_type and document_too_large.",
+    "A secret, dot-directory or outside-roots refusal offers `details.confirmation` with an expiring Delegatus URL. The paired owner signs in and approves there; that action rechecks and sends this exact file to this exact chat and topic once. Show the owner the link and detector reasons. Agents cannot approve, and ordinary retries still run all detectors. The confirmation expires after ten minutes and becomes unavailable after Viewer restart. `document.filename` is the shown name (default the file's own name) and must keep the file's type class (for example, a .md may be shown as .txt). Office filenames keep their extension. `document.caption` accepts up to 1024 characters, as plain text or HTML according to `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. Success includes sentBy; per-bot refusals and selection follow telegram_bot_send. The post appears in telegram_bot_messages with kind document and its filename.",
   ].join(" "),
   relay_answer: relayAnswerDescription,
   relay_service_tools: "Only while you answer a relay message as its owner: the chat service tools for that message. op list searches the compact index; op describe (names) returns parameters and guidance; op call (calls: up to four {tool, arguments, cursor}) runs direct tools under the relay call, output and confirmation limits. in_progress means repeat unchanged. Ready photos and video frames include image content beside metadata; in code mode, forward image blocks with image(block). Reuse unexpired photo refs as seed_media_refs only on generate_image or update_self_profile_photo. Video frames cannot be seeds. relay_answer attachments can select media_ref from this request. Refused in any other conversation and once answered.",
@@ -4257,6 +4261,15 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Read the operator's Telegram groups where Celestia or a clone is present. action groups lists them; action messages reads one page for chat and today or inclusive from/to dates. The existing owner-tools switch defaults OFF. The operator's stored time zone is sent to Celestia. Messages are oldest first; sentAt is when Celestia stored them. A short page may continue: pass nextCursor alone as cursor, retaining the original dates and zone; nextCursor null ends the range. oldestStoredAt marks retained history. editsReported says whether the service reports edits; editedAt marks one. Media includes kind, fileName, mimeType, size, duration, dimensions and fetch availability when the service supplies them. Older services cannot report edits or all media facts. Telegram-side deletions may remain stored. Author ids are excluded. Live relay agents replying in Telegram cannot read this history. No MCP receipt is stored, even with an explicit clientRequestId.",
     "action media takes chat, messageId and optional directory: pass your LLV_EVIDENCE_DIR, an existing directory under the installation's evidence root; the default is evidence/relay-media. It streams one photo, document or video through the paired service, up to 2 GiB, and returns done with path, kind, mimeType, size and SHA-256 only after verification. Repeat the identical call on in_progress to join the same job. not_offered means the paired service must implement relay_owner_media first; too_large names the limit and how to lift it. Files, their contents and original names stay private to this conversation: never copy them into reports, messages to other agents, tasks, commits, pull requests, issues, lessons, Telegram hand-off folders or other chats.",
     "Use history only to answer the operator in this conversation. Never copy message text, names, usernames, chat titles or chat ids into bridge reports, requests or messages to other agents or seats, spawn prompts, task text or details, files, commits, pull requests, issues or lessons. A report may say the answer is in this conversation.",
+  ].join(" "),
+  telegram_bot_reactions: [
+    "Read the reactions available in an allowlisted Telegram chat using a connected Bot API bot. Use the chat alias or ID from telegram_bot_chats.",
+    "The result's catalog is {kind: 'explicit', reactions: [...]} when the chat sets a list, including an empty list when no reactions are allowed. {kind: 'standard'} means Telegram's standard emoji reactions are available. Paid entries in an explicit catalog are visible but cannot be set by bots.",
+  ].join(" "),
+  telegram_bot_set_reaction: [
+    "Set one reaction on a specific message in an allowlisted Telegram chat using a connected Bot API bot. Supply the chat alias or ID and the message ID within that chat.",
+    "Use {type: 'emoji', emoji: '👍'} or an explicitly allowed {type: 'custom_emoji', custom_emoji_id: '…'} from telegram_bot_reactions. The bot's reaction replaces its prior reaction on that message. Paid reactions return reaction_paid_unsupported. Unavailable reactions return reaction_not_allowed. Telegram's per-message limit returns reaction_limit_reached. If delivery is uncertain, reaction_uncertain means Telegram may have applied the change.",
+    "Telegram applies an album reaction to the first surviving message in the album.",
   ].join(" "),
   telegram_bot_messages: [
     "Read recent messages the operator's Telegram bot received in one chat, newest first, from Delegatus's local store — a bot has no history API, so only what arrived while it was connected exists.",
@@ -4438,7 +4451,7 @@ function boundedNumericInput(toolName: McpToolName, fieldPath: string): z.ZodTyp
 
 const taskHoldInputSchema = z.object({
   kind: z.string().describe(`Why work is waiting: ${TASK_HOLD_KINDS.join(", ")}. worker is a wait for a free worker slot: a worker cap, a launch not admitted yet, or capacity another lane will free; use it for every slot wait. resource is a shortage on the machine such as memory or disk; say which one in note, since the card shows it. limit is an account usage limit, with until. Kinds are trimmed and case-insensitive. Unknown kinds normalize to unstated with a warning in notes.`),
-  ref: z.union([utf16Text(500, 0, false, null), z.number().int().positive()]).optional().describe("Task id, PR or issue number, or external URL. String references are preserved exactly, at most 500 UTF-16 code units; stored only for task/pr/issue/external kinds. Never shorten an identifier to fit; use its exact supported reference."),
+  ref: z.union([utf16Text(500, 0, false, null), z.number().int().positive()]).optional().describe("Decision round id or this task's step id for operator holds, task id for task holds, PR or issue reference, or external URL. Only operator, task, pr, issue and external store ref. Use the exact reference, up to 500 UTF-16 code units."),
   note: normalizedUtf16Text(200, value => value.replace(/\s+/g, " ").trim()).optional().describe("One short sentence saying what ends the wait; whitespace is normalized; hard maximum 200 UTF-16 code units, recommended target 150. An overage is refused. Omitted when no reason is known."),
   until: z.string().optional().describe("ISO date for limit or postponed waits."),
 }).describe("Structured reason a task or checklist step is waiting. Provenance and since are assigned by the server.");
@@ -5235,7 +5248,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   account_limits: z.object({
     clientRequestId: clientRequestIdSchema.optional(),
-    engine: z.enum(["claude", "codex", "copilot"]).optional().describe("Only this engine's accounts."),
+    engine: z.enum(["claude", "codex", "copilot", "antigravity"]).optional().describe("Only this engine's accounts."),
     accountId: z.string().trim().min(1).optional().describe("Only this account."),
   }).passthrough(),
   issue_report: z.object({
@@ -5288,6 +5301,16 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     replyToMessageId: z.number().int().positive().optional(),
     topicId: z.number().int().positive().optional().describe("Forum topic (message_thread_id) to post into."),
     silent: z.boolean().optional().describe("Send without a notification sound."),
+  }).passthrough(),
+  telegram_bot_reactions: z.object({
+    clientRequestId: clientRequestIdSchema,
+    chat: z.string().trim().min(1).describe("The allowlisted chat's alias or ID."),
+  }).passthrough(),
+  telegram_bot_set_reaction: z.object({
+    clientRequestId: clientRequestIdSchema,
+    chat: z.string().trim().min(1).describe("The allowlisted chat's alias or ID."),
+    messageId: telegramReactionMessageIdSchema.describe("ID of the message within the specified chat."),
+    reaction: telegramReactionSchema.describe("One reaction. Telegram bots can set standard or explicitly allowed custom emoji."),
   }).passthrough(),
   relay_answer: relayAnswerSchema,
   relay_service_tools: relayServiceToolsSchema,
@@ -5647,7 +5670,7 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
   );
   return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(
     service, productionDomainDependencies,
-    async () => (await prepareAgentRegistry()).prepareNativeCallerArtifacts(),
+    async signal => (await prepareAgentRegistry(signal)).prepareNativeCallerArtifacts(signal),
   ));
 }
 

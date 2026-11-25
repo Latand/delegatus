@@ -103,9 +103,9 @@ const PATTERNS: readonly [PrivateClass, RegExp][] = [
   ["port", /(?<!\p{L})(?:port|порт[уіа]?|порта)(?:\s+|\s*[:=]\s*)\d{1,5}\b/iu],
   /* A path starts a token: `/x/y`, `~/x`, `~user/x`, `$HOME/x`, `C:\x`. A repository-
      relative path (`src/lib/x.ts`) names nothing about this machine. */
-  /* A shell tilde prefix ends at its first slash. NSS user names can contain
-     combining marks and punctuation; Markdown can surround the prefix. */
-  ["path", /(?:^|[\s[(«"'`=:>*_])(?:~[^\s/]*\/|\$HOME\b|\$\{HOME\})/u],
+  /* Consume tilde paths through their final component. NSS user names can
+     contain combining marks and punctuation; Markdown can surround the path. */
+  ["path", /(?:^|[\s[(«"'`=:>*_])(?:~[^\s/]*\/[^\s<>"'`,;!?]*|\$HOME\b|\$\{HOME\})/u],
   /* A complete shell home expression needs no slash. Keep approximate
      numbers and Markdown strike-through readable. */
   ["path", /(?:^|[\s[(«“‹"'`=:>*_])~(?!~)(?:[+-]|[\p{L}\p{M}_][\p{L}\p{M}\p{N}_.+-]*)?(?=$|[\s/)\]»”›"'`,.;:!?*_])/u],

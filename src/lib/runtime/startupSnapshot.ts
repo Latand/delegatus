@@ -5,7 +5,7 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { conversationIdsResolvingTo, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type RegistryFile } from "@/lib/agent/registry";
 import type { SessionKey } from "@/lib/agent/sessionKey";
-import { registryConversationsForPath, registryKeysMatching, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { registryConversationsForPath, registryHotKeysMatching, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 
 const scope = new AsyncLocalStorage<{ registry: AgentRegistry; keys: ReadonlySet<string> } | null>();
 
@@ -55,11 +55,32 @@ export function startupHostSnapshot(registry: AgentRegistry, key: SessionKey, in
   return typeof registry.startupHostSnapshot === "function" ? registry.startupHostSnapshot(key, includeArtifactPath) : startupSnapshot(registry);
 }
 
+const structuredKinds = ["codex-app-server", "claude-broker", "copilot-acp", "antigravity-acp"];
+export type StartupWorkKeys = Set<string>;
+
+const startupWork = new AsyncLocalStorage<StartupWorkKeys>();
+
+export function outsideStartupWork<T>(run: () => T): T { return startupWork.exit(run); }
+
+export function startupWorkKeys(): ReadonlySet<string> | undefined { return startupWork.getStore(); }
+
+export function withStartupWork<T>(keys: StartupWorkKeys, run: () => T): T {
+  return startupWork.run(keys, run);
+}
+
+export function* startupStructuredHostKeys(snapshot: RegistryFile, work: ReadonlySet<string> | undefined = startupWork.getStore()): IterableIterator<string> {
+  const hot = new Set(registryHotKeysMatching(snapshot, "entries", "structuredHost.kind", structuredKinds));
+  yield* hot;
+  for (const key of work ?? []) {
+    if (!hot.has(key) && structuredKinds.includes(snapshot.entries[key]?.structuredHost?.kind ?? "")) yield key;
+  }
+}
+
 /** Materialize indexed host rows inside slices, including cloning and grants. */
 export async function startupStructuredHostEntries(snapshot: RegistryFile, assertActive: () => void = () => {}): Promise<AgentRegistryEntry[]> {
   const rows: AgentRegistryEntry[] = [];
   const selected = (function* () {
-    for (const key of registryKeysMatching(snapshot, "entries", "structuredHost.kind", ["codex-app-server", "claude-broker", "copilot-acp", "antigravity-acp"])) {
+    for (const key of startupStructuredHostKeys(snapshot)) {
       yield performanceSpans.sync("runtime.startup.select", () => {
         const entry = snapshot.entries[key];
         return entry ? JSON.parse(JSON.stringify(entry)) as AgentRegistryEntry : null;

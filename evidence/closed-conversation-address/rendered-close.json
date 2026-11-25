@@ -1,0 +1,391 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "fixture": "issue1695Evidence.fixture.tsx?scenario=loose",
+  "readings": {
+    "1440x900-en-light-close": {
+      "opened": {
+        "visible": true,
+        "text": "AgentReviewer: two presets share a namedone · 12m agoCodexgpt-5.6defaultReviewer",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "AgentReviewer: two presets share a namedone · 12m agoCodexgpt-5.6defaultReviewer",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    },
+    "1440x900-en-dark-close": {
+      "opened": {
+        "visible": false,
+        "text": "",
+        "inViewport": false
+      },
+      "reopened": {
+        "visible": true,
+        "text": "AgentReviewer: two presets share a namedone · 12m agoCodexgpt-5.6defaultReviewer",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    },
+    "1440x900-uk-light-close": {
+      "opened": {
+        "visible": false,
+        "text": "",
+        "inViewport": false
+      },
+      "reopened": {
+        "visible": true,
+        "text": "АгентReviewer: two presets share a nameготово · 12 хв томуCodexgpt-5.6defaultRev",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    },
+    "1440x900-uk-dark-close": {
+      "opened": {
+        "visible": false,
+        "text": "",
+        "inViewport": false
+      },
+      "reopened": {
+        "visible": true,
+        "text": "АгентReviewer: two presets share a nameготово · 12 хв томуCodexgpt-5.6defaultRev",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    },
+    "1000x700-en-light-close": {
+      "opened": {
+        "visible": true,
+        "text": "AgentReviewer: two presets share a namedone · 12m agoCodexgpt-5.6defaultReviewer",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "AgentReviewer: two presets share a namedone · 12m agoCodexgpt-5.6defaultReviewer",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    },
+    "1000x700-en-dark-close": {
+      "opened": {
+        "visible": true,
+        "text": "AgentReviewer: two presets share a namedone · 12m agoCodexgpt-5.6defaultReviewer",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "AgentReviewer: two presets share a namedone · 12m agoCodexgpt-5.6defaultReviewer",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 agentOrchestratorTimelineNeeds you3permission promptWhich of the two anc",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    },
+    "1000x700-uk-light-close": {
+      "opened": {
+        "visible": true,
+        "text": "АгентReviewer: two presets share a nameготово · 12 хв томуCodexgpt-5.6defaultRev",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "АгентReviewer: two presets share a nameготово · 12 хв томуCodexgpt-5.6defaultRev",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    },
+    "1000x700-uk-dark-close": {
+      "opened": {
+        "visible": true,
+        "text": "АгентReviewer: two presets share a nameготово · 12 хв томуCodexgpt-5.6defaultRev",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "АгентReviewer: two presets share a nameготово · 12 хв томуCodexgpt-5.6defaultRev",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      },
+      "board": {
+        "drawn": true,
+        "text": "atlas51 агентОркестраторГрафікПотрібні ви3запит дозволуWhich of the two anchors ",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 2
+      }
+    },
+    "390x844-en-light-back": {
+      "opened": {
+        "visible": true,
+        "text": "Which of the two anchors should win?@ defaulta question · 17m ago·gpt-5.6·stage ",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "Which of the two anchors should win?@ defaulta question · 17m ago·gpt-5.6·stage ",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "Orchestratorworking 6:40Watching the search fixInbox3In progress731Waiting21Done",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 3
+      },
+      "board": {
+        "drawn": true,
+        "text": "Orchestratorworking 6:40Watching the search fixInbox3In progress731Waiting21Done",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 3
+      }
+    },
+    "390x844-en-dark-back": {
+      "opened": {
+        "visible": true,
+        "text": "Which of the two anchors should win?@ defaulta question · 17m ago·gpt-5.6·stage ",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "Which of the two anchors should win?@ defaulta question · 17m ago·gpt-5.6·stage ",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "Orchestratorworking 6:40Watching the search fixInbox3In progress731Waiting21Done",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 3
+      },
+      "board": {
+        "drawn": true,
+        "text": "Orchestratorworking 6:41Watching the search fixInbox3In progress731Waiting21Done",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 3
+      }
+    },
+    "390x844-uk-light-back": {
+      "opened": {
+        "visible": true,
+        "text": "Which of the two anchors should win?@ defaultпитання · 17 хв тому·gpt-5.6·етап 1",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "Which of the two anchors should win?@ defaultпитання · 17 хв тому·gpt-5.6·етап 1",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "Оркестраторпрацює 6:40Watching the search fixВхідні3У роботі731Очікують21Готові4",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 3
+      },
+      "board": {
+        "drawn": true,
+        "text": "Оркестраторпрацює 6:40Watching the search fixВхідні3У роботі731Очікують21Готові4",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 3
+      }
+    },
+    "390x844-uk-dark-back": {
+      "opened": {
+        "visible": true,
+        "text": "Which of the two anchors should win?@ defaultпитання · 17 хв тому·gpt-5.6·етап 1",
+        "inViewport": true
+      },
+      "reopened": {
+        "visible": true,
+        "text": "Which of the two anchors should win?@ defaultпитання · 17 хв тому·gpt-5.6·етап 1",
+        "inViewport": true
+      },
+      "closed": {
+        "drawn": true,
+        "text": "Оркестраторпрацює 6:40Watching the search fixВхідні3У роботі731Очікують21Готові4",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 3
+      },
+      "board": {
+        "drawn": true,
+        "text": "Оркестраторпрацює 6:40Watching the search fixВхідні3У роботі731Очікують21Готові4",
+        "windowOpen": false,
+        "screenOpen": false,
+        "readerOnScreen": false,
+        "notice": false,
+        "hash": "#p=atlas",
+        "entries": 3
+      }
+    }
+  },
+  "failures": []
+}

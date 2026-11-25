@@ -11,7 +11,8 @@ export type RootKey =
   | "claude-projects"
   | "claude-tasks"
   | "openclaw-sessions"
-  | "copilot-sessions";
+  | "copilot-sessions"
+  | "antigravity-sessions";
 
 export type Engine = "codex" | "claude" | "shell" | "openclaw" | "copilot" | "antigravity";
 export type Activity = "live" | "recent" | "stalled" | "idle";
@@ -747,6 +748,8 @@ export interface LimitsPayload {
   codex: EngineLimits | null;
   /** Optional on legacy browser/test payloads; the server now always sends it. */
   copilot?: EngineLimits | null;
+  /** Active Antigravity 5-hour quota exhaustion window, or null when not exhausted. */
+  antigravity?: EngineLimits | null;
   /** The Claude account whose values appear in this payload. */
   claudeAccountId: string | null;
   /** The account whose Codex values appear in this payload. The server always
@@ -755,7 +758,14 @@ export interface LimitsPayload {
   codexAccountId: string | null;
   /** The Copilot account whose latest transcript snapshot appears here. */
   copilotAccountId?: string | null;
-  provenance: { claude: LimitsProvenance; codex: LimitsProvenance; copilot?: LimitsProvenance };
+  /** The Antigravity account whose latest quota observation appears here. */
+  antigravityAccountId?: string | null;
+  provenance: {
+    claude: LimitsProvenance;
+    codex: LimitsProvenance;
+    copilot?: LimitsProvenance;
+    antigravity?: LimitsProvenance;
+  };
   /** ISO timestamp from the first failed refresh behind this fallback payload. */
   staleSince?: string | null;
 }
@@ -784,6 +794,10 @@ export interface BurndownSeries {
       e.g. a Codex plan that reports only a weekly limit. The chart then names
       that reason instead of the generic "no history yet" (issue #606). */
   windowUnreported?: boolean;
+  /** The newest observation of this window, even when it falls before the
+      current window (the quota was read, then the window rolled over). The chart
+      tells "reset since the last reading" from "never observed" by it. */
+  lastReading?: LimitSample | null;
 }
 
 /** Both windows' burndown series for one engine. */

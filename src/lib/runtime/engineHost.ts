@@ -106,9 +106,14 @@ export function normalizeQueueEntry(entry: QueueEntry): NormalizedQueueEntry {
   };
 }
 
+export type DeliveryAcceptanceObservation =
+  | { outcome: "accepted"; turnId: string }
+  | { outcome: "rejected"; reason: string }
+  | { outcome: "uncertain"; reason: string };
+
 export type DeliveryReceipt =
   | { outcome: "steered"; turnId: string }
-  | { outcome: "turn-started"; turnId: string }
+  | { outcome: "turn-started"; turnId: string; observeAcceptance?: () => Promise<DeliveryAcceptanceObservation> }
   | { outcome: "queued-next-turn"; turnId: string }
   | { outcome: "rejected"; reason: "stale-turn" | "dead-host"; refusal?: string };
 
@@ -272,6 +277,8 @@ export interface EngineHost {
   steer?(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<RuntimeSteerOutcome>;
   interrupt(turnRef: string): Promise<void>;
   answer(attentionRef: string, value: unknown): Promise<void>;
+  /** Applies an in-place model/effort change while the host is idle, without restarting the child. */
+  reconfigure?(settings: { model?: string | null; effort?: string | null }): Promise<void>;
   reconcileAgentStateTerminal?(turnRef: string, nativeId: string | null, at: number, outcome?: "completed" | "interrupted" | "error"): boolean;
   agentStateMemory?(): { activeTurnRef: string | null; pendingAttention: string[]; eventCursor: number; nativeTurnId?: string | null; deliveredNativeTurnId?: string | null; promptOrdinal?: number | null; startedAt?: number | null; attentionUnverified?: boolean };
   health(): Promise<HostState>;

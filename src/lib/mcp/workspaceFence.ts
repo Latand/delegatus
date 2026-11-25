@@ -22,6 +22,8 @@ import { currentMcpHttpCaller, runWithMcpCallerResolution } from "./callerContex
 
 export const assertWorkspaceMcpCall = assertWorkspaceExecution;
 
+const NATIVE_PREPARATION_MS = 5_000;
+
 function denied(check: string): never {
   throw new McpToolRefusal(`workspace access denied (${check})`, { code: "workspace_forbidden", retryable: false, check });
 }
@@ -38,7 +40,10 @@ const PROJECT_TOOLS = new Set([
 ]);
 // A project's seat keeps the Telegram grant on its record under member reach
 // (`seatHoldsTelegramGrant`), with the chats the agent route serves any caller.
-const SEAT_TELEGRAM_TOOLS = new Set(["telegram_bot_send", "telegram_bot_send_media", "telegram_bot_send_document", "telegram_bot_chats", "telegram_bot_messages"]);
+const SEAT_TELEGRAM_TOOLS = new Set([
+  "telegram_bot_send", "telegram_bot_send_media", "telegram_bot_send_document",
+  "telegram_bot_chats", "telegram_bot_messages", "telegram_bot_reactions", "telegram_bot_set_reaction",
+]);
 // These reach a Viewer route that applies the workspace fence itself to the
 // caller's forwarded capability, so the route judges their arguments.
 const ROUTE_FENCED_TOOLS = new Set(["publish_prototype_review", "read_prototype_review"]);
@@ -58,7 +63,7 @@ export function workspaceGuardedBindings(bindings: McpToolBindings): McpToolBind
 export function withWorkspaceMcpFence(
   service: McpToolService,
   dependencies: ViewerMcpDomainDependencies,
-  prepareNativeCaller?: () => Promise<void>,
+  prepareNativeCaller?: (signal?: AbortSignal) => Promise<void>,
 ): McpToolService {
   return { async callTool(tool, input, context) {
     // The native proof must be in scope before resolving the caller, just as it
@@ -67,8 +72,16 @@ export function withWorkspaceMcpFence(
       const { nativeCallerProof, ...args } = input;
       const caller = currentMcpHttpCaller();
       if (prepareNativeCaller && (!caller || caller.nativePeer)) {
-        try { await prepareNativeCaller(); }
-        catch { /* The verifier will assess whether caller evidence is available. */ }
+        const remaining = context?.deadlineAt === undefined ? Infinity : context.deadlineAt - Date.now();
+        // Leave time for caller verification and a reply before executor expiry.
+        const budget = Math.min(NATIVE_PREPARATION_MS, Math.floor(remaining / 2));
+        if (budget > 0) {
+          const timeout = AbortSignal.timeout(budget);
+          const signal = context?.signal ? AbortSignal.any([context.signal, timeout]) : timeout;
+          try { await prepareNativeCaller(signal); }
+          catch { /* The verifier will assess whether caller evidence is available. */ }
+        }
+        context?.signal?.throwIfAborted();
       }
       return runWithNativeCallProof(nativeCallerProof, tool, args, () => this.callTool(tool, args, context));
     }

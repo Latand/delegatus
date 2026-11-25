@@ -127,3 +127,29 @@ for (const cache of ["explicit", "default"] as const) test(`direct test preloads
     await stopFixtureProcess(child); fs.rmSync(root, { recursive: true, force: true });
   }
 }, 30_000);
+
+// Review regression: every command signal keeps its own 128+N status through
+// the admission worker, distinct from SIGKILL, and an explicit numeric exit or
+// the budget's own deadline is never rewritten.
+test.skipIf(process.platform !== "linux")("budget and portable runners return 128+N for each command signal and keep numeric exits and the budget deadline", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "owned-runner-signal-status-"));
+  const env = withoutInheritedGate({ ...process.env });
+  for (const key of ["HOME", "XDG_CONFIG_HOME", "TMPDIR", "LLV_STATE_DIR"]) { env[key] = path.join(root, key.toLowerCase()); fs.mkdirSync(env[key]!); }
+  Object.assign(env, { LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_OWNED_RUN_TIMEOUT_MS: "20000", LLV_GATE_RUNNER: "off" });
+  const runner = path.join(import.meta.dir, "owned-runner.ts");
+  const terminate = (signal: number) => ["python3", "-I", "-c", `import os,signal\nsignal.signal(${signal},signal.SIG_DFL)\nos.kill(os.getpid(),${signal})`];
+  const status = (mode: string[], command: string[]) => Bun.spawnSync([process.execPath, runner, ...mode, ...command], { env, stdout: "ignore", stderr: "pipe", timeout: 30_000 }).exitCode;
+  try {
+    const observed: Record<string, number | null> = {};
+    for (const [mode, args] of [["budget", ["--budget", "10000"]], ["portable", ["--portable"]]] as const) {
+      for (const signal of [2, 10, 15, 34]) observed[`${mode} signal ${signal}`] = status([...args], terminate(signal));
+      observed[`${mode} exit 162`] = status([...args], ["python3", "-I", "-c", "raise SystemExit(162)"]);
+    }
+    observed["budget deadline"] = status(["--budget", "500"], ["sleep", "30"]);
+    expect(observed).toEqual({
+      "budget signal 2": 130, "budget signal 10": 138, "budget signal 15": 143, "budget signal 34": 162, "budget exit 162": 162,
+      "portable signal 2": 130, "portable signal 10": 138, "portable signal 15": 143, "portable signal 34": 162, "portable exit 162": 162,
+      "budget deadline": 124,
+    });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 120_000);

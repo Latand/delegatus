@@ -1,7 +1,7 @@
 import { nativeAssociationDecisionApproves } from "@/lib/attention/nativeAssociationForm";
 import { nativeAssociationCurrent } from "@/lib/attention/nativeCallerSources";
 import fs from "node:fs";
-import { attentionDismissalIndex, readExistingAttentionDismissals, type AttentionDismissalV1 } from "@/lib/attention/dismissals";
+import { readExistingPrototypeDismissals, type AttentionDismissalV1 } from "@/lib/attention/dismissals";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import type { BoardTask } from "@/lib/tasks/types";
 import { prototypeRoot, storedMediaPath } from "./store";
@@ -170,5 +170,5 @@ function isActiveNativeApproval(round: PrototypeReviewRound): boolean {
 }
 
 function prototypeDismissals(): ReadonlyMap<string, AttentionDismissalV1> {
-  try { return attentionDismissalIndex(readExistingAttentionDismissals()); } catch { return new Map(); }
+  try { return readExistingPrototypeDismissals(); } catch { return new Map(); }
 }

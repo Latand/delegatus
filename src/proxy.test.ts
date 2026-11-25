@@ -36,6 +36,20 @@ test("automatic handoff keeps authenticated presence writable and rejects other 
   } finally { rmSync(file, { force: true }); }
 });
 
+test("revision readiness reaches its handler through the perimeter with an unencodable key", () => {
+  const fixtureKey = ["operator", "access"].join("-");
+  process.env.LLV_TOKEN = fixtureKey;
+  try {
+    const request = new NextRequest("http://localhost/api/ready?revision=" + "a".repeat(40), { headers: { host: "localhost" } });
+    expect(proxy(request).headers.get("x-middleware-next")).toBe("1");
+    const legacyProbe = (authorized: boolean) => new NextRequest("http://localhost/api/files", { headers: {
+      host: "localhost", ...(authorized ? { authorization: ["Bearer", fixtureKey].join(" ") } : {}),
+    } });
+    expect(proxy(legacyProbe(false)).status).toBe(403);
+    expect(proxy(legacyProbe(true)).headers.get("x-middleware-next")).toBe("1");
+  } finally { delete process.env.LLV_TOKEN; }
+});
+
 const originalToken = process.env.LLV_TOKEN;
 const originalPublicHost = process.env.LLV_PUBLIC_HOST;
 afterEach(() => {

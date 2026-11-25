@@ -11,6 +11,8 @@ interface SetupCustody {
    * fences still run synchronously before granting a native permit. */
   beforeExecOffLoop?(): Promise<void>;
   record(process: ProcessIdentity): void;
+  /** A native proxy that has not received permission to start the engine. */
+  recordWaiterOffLoop?(process: ProcessIdentity): Promise<void>;
   /** An adapter that already awaits readiness retains the same process while
    * a writer is busy; synchronous exec fences still use record(). */
   recordOffLoop?(process: ProcessIdentity): Promise<void>;
@@ -44,5 +46,14 @@ export async function retainStructuredSetupProcessOffLoop(pid: number | undefine
   if (!current || !pid || pid <= 1) return;
   const identity = captureProcessIdentity(pid);
   if (current.recordOffLoop) await current.recordOffLoop(identity);
+  else current.record(identity);
+}
+
+export async function retainStructuredSetupWaiterOffLoop(pid: number | undefined): Promise<void> {
+  const current = activeCustody();
+  if (!current || !pid || pid <= 1) return;
+  const identity = captureProcessIdentity(pid);
+  if (current.recordWaiterOffLoop) await current.recordWaiterOffLoop(identity);
+  else if (current.recordOffLoop) await current.recordOffLoop(identity);
   else current.record(identity);
 }

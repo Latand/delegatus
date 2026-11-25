@@ -1,7 +1,12 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, writeFileSync } from "./local-gate-tests.fixture";
 import { existsSync } from "node:fs";
 import { GATE_TASKS_MAX } from "./gate-tasks";
-import { BudgetExhausted, comparatorEnding, comparisonFileWorkers } from "./local-gate-tests";
+import { BudgetExhausted, comparatorEnding, comparisonFileWorkers, comparisonPhaseBudgetMs, confirmedFileCleanup } from "./local-gate-tests";
+
+test("comparison phase allowance scales from 15 minutes up to 40", () => {
+  expect([1, 30, 31, 51, 102, 130, 1_000].map(comparisonPhaseBudgetMs))
+    .toEqual([15, 15, 16, 21, 33, 40, 40].map(minutes => minutes * 60_000));
+});
 
 test("only an exhausted comparator budget returns no verdict", () => {
   const message = "head: test run exceeded its 15 minute budget; 8 of 12 files completed";
@@ -13,6 +18,16 @@ test("only an exhausted comparator budget returns no verdict", () => {
       line: `touched-tests: ${error instanceof Error ? error.message : error}; gate error (blocking)`, code: 1,
     });
   }
+});
+
+test("Cloud file checkpoints require the owned runner's matching cleanup receipt", () => {
+  const cloud = { platform: "linux", exitCode: 0, output: "portable cleanup", cloudCleanup: true, token: "run-token" };
+  expect(confirmedFileCleanup({ ...cloud, receipt: "run-token" })).toBeTrue();
+  expect(confirmedFileCleanup({ ...cloud, receipt: "other-run" })).toBeFalse();
+  expect(confirmedFileCleanup({ ...cloud, receipt: undefined })).toBeFalse();
+  expect(confirmedFileCleanup({ ...cloud, receipt: "run-token", survivors: "owned child" })).toBeFalse();
+  expect(confirmedFileCleanup({ ...cloud, platform: "darwin", receipt: "run-token" })).toBeFalse();
+  expect(confirmedFileCleanup({ ...cloud, exitCode: 1, receipt: "run-token" })).toBeFalse();
 });
 
 
@@ -358,12 +373,45 @@ test("between-test errors match across private roots without hiding a changed pa
 
 test("gate harness selections limit nested workers while ordinary head and baseline files retain their parallelism", () => {
   const regular = Array.from({ length: 12 }, (_, n) => "src/example" + n + ".test.ts");
+  const nested = ["scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate.binding.test.ts", "scripts/privacy-commit-input.test.ts"];
   expect(comparisonFileWorkers(regular, 8)).toBe(8);
   expect(comparisonFileWorkers(regular, 3)).toBe(3);
-  for (const nested of ["scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate.binding.test.ts", "scripts/privacy-commit-input.test.ts"]) {
-    expect(comparisonFileWorkers([...regular, nested], 8)).toBe(2);
-    expect(comparisonFileWorkers([nested], 8)).toBe(1);
-    expect(comparisonFileWorkers([...regular, nested], 8, true)).toBe(1);
-    expect(comparisonFileWorkers([...regular, nested], 1)).toBe(1);
-  }
+  expect(comparisonFileWorkers(nested, 8)).toBe(2);
+  expect(comparisonFileWorkers([...nested, regular[0]!], 8)).toBe(3);
+  expect(comparisonFileWorkers([...nested, ...regular], 8)).toBe(8);
+  expect(comparisonFileWorkers([...nested, ...regular], 3)).toBe(3);
+  expect(comparisonFileWorkers([...nested, ...regular], 8, true)).toBe(1);
+  expect(comparisonFileWorkers([...nested, ...regular], 1)).toBe(1);
 });
+
+test.skipIf(process.platform === "linux" && Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) > 0)(
+  "ordinary files make progress while the two nested file workers are busy",
+  async () => {
+    const f = fixture(source(true));
+    mkdirSync(path.join(f.dir, "scripts"));
+    const files = ["scripts/privacy-a.test.ts", "scripts/privacy-b.test.ts", "scripts/privacy-c.test.ts", "source.test.ts"];
+    const coordination = `import { existsSync, writeFileSync } from "node:fs";
+import { expect, test } from "bun:test";
+const mark = (name: string) => writeFileSync(${JSON.stringify(f.dir)} + "/" + name, "");
+const marked = (name: string) => existsSync(${JSON.stringify(f.dir)} + "/" + name);
+async function waitFor(marks: string[]) {
+  const deadline = performance.now() + 30_000;
+  while (!marks.every(marked) && performance.now() < deadline) await Bun.sleep(20);
+  expect(marks.filter(marked)).toEqual(marks);
+}`;
+    for (const [index, file] of files.entries()) {
+      const body = index === 3
+        ? 'await waitFor(["a", "b"]); expect(marked("c")).toBe(false); mark("source");'
+        : index === 2
+          ? 'mark("c"); expect(marked("a-done") || marked("b-done")).toBe(true);'
+          : `mark(${JSON.stringify(index === 0 ? "a" : "b")}); await waitFor(["source"]); mark(${JSON.stringify(index === 0 ? "a-done" : "b-done")});`;
+      writeFileSync(path.join(f.dir, file), `${coordination}\ntest("worker coordination", async () => { ${body} });`);
+    }
+    f.git("add", ...files);
+    f.git("commit", "-m", "Mixed worker fixtures");
+    const result = await f.run(files);
+    expect(result.introduced).toEqual([]);
+    expect(f.logs).toContain("touched-tests: head selected 4 files with 3 file workers");
+    expect(f.logs).toContain("touched-tests: green head; no baseline checkout or sample needed");
+  },
+);

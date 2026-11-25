@@ -117,7 +117,11 @@ The command defaults to the committed `scripts/privacy-known-value-fingerprints.
 beside the gate. `LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE` overrides that catalog;
 an empty value disables the default and still requires another known-value source.
 
-Touched tests run the branch first. Gate-harness and privacy suites use at most two file workers because they launch nested commands. Linux portable runners sharing a parent service use one. Other selections run up to eight explicit head files at once, each
+Touched tests run the branch first with up to eight file workers. Gate-harness
+and privacy files share a limit of two workers because they launch nested
+commands. Ordinary files can use the remaining workers in the same selection.
+When Linux portable runners share their parent service, a selection containing
+gate-harness or privacy files uses one worker. Each explicit head file runs
 with fresh state, HOME and TMPDIR under the OS temp root. Only files failing on
 the branch are sampled on the merge base with `origin/main`, filtered to the
 failing assertions; runner errors require the full file. A green branch needs
@@ -127,13 +131,17 @@ always run fresh. Only new failures block;
 output retains pre-existing failures, describe ancestry, test names and
 between-tests errors. An incomplete baseline for a red branch blocks unless
 both sides are broken the same way, which lists as pre-existing.
-Samples report elapsed time. Budgets are five minutes per file and fifteen
-minutes per baseline/head test run. Privacy and isolated checks run concurrently
+Samples report elapsed time. Each file has five minutes. Head and baseline
+phases start at 15 minutes and grow by one minute per four files above 30,
+rounded up, within a shared 40-minute comparison ceiling.
+Privacy and isolated checks run concurrently
 and use the same publication budget as the pipeline's publisher: changes to
 the pipeline engine source/test family, `git.ts` or `parkedPublication.test.ts`
-get 25 minutes for the push, including one minute for the pack; other changes
-retain 15 minutes. An explicit caller deadline remains authoritative. The
-shared rule is `src/lib/pipelines/gateBudget.ts`. Both must pass; a refusal or
+get 25 minutes for the push, including one minute for the pack. Runtime inputs
+get 30 minutes and ordinary changes get 15. The publisher raises the budget to
+45 minutes on retries of a comparator-backed head after a recorded deadline.
+An explicit caller deadline remains authoritative. The shared rule is
+`src/lib/pipelines/gateBudget.ts`. Both must pass; a refusal or
 timeout stops the peer and waits for owned process cleanup. Privacy retains its
 refusal text and exit behaviour. Pre-push takes one admission for independent types/lint,
 test, runtime and native lanes. Pre-commit lint on up to 40 files needs no

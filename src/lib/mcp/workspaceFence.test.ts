@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
 import { emptyLaunchProfile, migrationSuccessorLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { RegistryFile } from "@/lib/agent/registry";
@@ -56,6 +55,14 @@ function person(id: string, role: Member["role"]): Member {
 function conversation(id: string, project: string, bound = true) {
   return { id, engine: "codex", continuityPaths: [], projectOwnership: { project }, generations: [{ path: `${id}.jsonl`, launchProfile: emptyLaunchProfile({ cwd: root, project,
     ...(bound ? { workspace: { memberId: member.id, workspaceId: W1 } } : {}) }) }] };
+}
+function seedDraftRepository() {
+  const env = { ...process.env, GIT_AUTHOR_DATE: AT, GIT_COMMITTER_DATE: AT };
+  for (const args of [["init", "-q", "-b", "main"],
+    ["-c", "user.name=Fixture", "-c", "user.email=noreply", "commit", "-q", "--allow-empty", "-m", "Fixture base"]]) {
+    const result = spawnSync("git", args, { cwd: root, env, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(`Could not seed draft repository: ${result.error ?? result.stderr}`);
+  }
 }
 function rebuild() {
   service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, {
@@ -781,17 +788,17 @@ test("a real resume preserves its durable workspace instead of accepting a repla
 
 test("the production dispatcher enforces the fence for an authenticated capability", async () => {
   const filename = path.join(root, "registry.json"), sqliteFilename = path.join(root, "registry.sqlite");
-  new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename }).close();
   const capability = "a".repeat(43);
-  const db = new Database(sqliteFilename);
-  const insert = db.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES (?, ?, ?, ?)");
-  insert.run("conversations", "conversation_member", JSON.stringify({ ...conversation("conversation_member", own), engine: "codex", createdAt: AT, updatedAt: AT, continuityPaths: [] }), 0);
-  insert.run("receipts", "workspace-launch", JSON.stringify({ launchId: "workspace-launch", conversationId: "conversation_member", spawnCapabilityDigest: createHash("sha256").update(capability).digest("hex") }), 0);
-  db.close();
   const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename });
-  setAgentRegistryForTests(registry);
-  installSpawnCapabilityResolver(digest => registry.conversationIdForSpawnCapabilityDigest(digest));
   try {
+    const launchProfile = emptyLaunchProfile({ cwd: root, project: own, title: "Workspace fixture",
+      workspace: { memberId: member.id, workspaceId: W1 } });
+    const caller = registry.ensureForkedConversation("codex", path.join(root, "caller.jsonl"), null, launchProfile);
+    const reservation = registry.beginSpawnRequest({ engine: "codex", cwd: root, conversationId: caller.id,
+      purpose: "resume-successor", launchProfile, spawnCapabilityDigest: createHash("sha256").update(capability).digest("hex") });
+    expect(reservation.kind).toBe("created");
+    setAgentRegistryForTests(registry);
+    installSpawnCapabilityResolver(digest => registry.conversationIdForSpawnCapabilityDigest(digest));
     const production = await createProductionViewerMcpService(false, false, true);
     const read = (project: string) => runAsMcpHttpCaller({ capability }, () => production.callTool("list_tasks", { project }));
     expect(await read(other)).toMatchObject(REFUSED);
@@ -804,22 +811,23 @@ test("the production dispatcher enforces the fence for an authenticated capabili
     expect((await route(request(other))).status).toBe(403);
     expect((await route(request(own))).status).toBe(200);
     expect(served).toBe(1);
-    expect(spawnSync("git", ["init", "-q", root]).status).toBe(0);
+    seedDraftRepository();
     placeProject(store, owner, projectForCwd(root)!, W1);
     const created = await createPipelineFromRequest({ task: "Bound creator", repoDir: root, stages: [], autoStart: false, src: "owner.jsonl" },
       { ...defaultPipelinePorts(), sourcePathAllowed: () => true, conversationIdForPath: () => "conversation_owner" },
-      { briefer: { kind: "agent", conversationId: "conversation_member" } });
+      { briefer: { kind: "agent", conversationId: caller.id } });
     if (!created.pipeline) throw new Error(JSON.stringify(created));
     expect(created.pipeline?.workspace).toEqual({ memberId: member.id, workspaceId: W1 });
   } finally { installSpawnCapabilityResolver(null); setAgentRegistryForTests(null); registry.close(); }
 });
 
 test("a member-created pipeline retains its scope, refuses revoked stage launches and rechecks a held draft edit", async () => {
-  expect(spawnSync("git", ["init", "-q", root]).status).toBe(0);
+  seedDraftRepository();
   const project = projectForCwd(root)!;
   placeProject(store, owner, project, W1);
   const created = await createPipelineFromRequest({ task: "Workspace draft", repoDir: root, stages: [], autoStart: false }, undefined,
     { allowOperatorDraftWithoutLineage: true, workspaceMemberId: member.id });
+  expect(created.error).toBeUndefined();
   expect(created.pipeline).toBeDefined();
   const pipeline = created.pipeline!;
   const workspace = { memberId: member.id, workspaceId: W1 };
@@ -1034,10 +1042,11 @@ for (const mode of ["member", "owner", "write-refused", "revoked-during-join", "
 
 
 for (const action of ["update-draft", "add-stage", "override-stage"] as const) test(`a member's ${action} binds an installation pipeline in the edit transaction`, async () => {
-  expect(spawnSync("git", ["init", "-q", root]).status).toBe(0);
+  seedDraftRepository();
   placeProject(store, owner, projectForCwd(root)!, W1);
   const created = await createPipelineFromRequest({ task: "Installation draft", repoDir: root, stages: [], autoStart: false }, undefined,
     { allowOperatorDraftWithoutLineage: true });
+  expect(created.error).toBeUndefined();
   const id = created.pipeline!.id;
   expect(findPipelineRecord(id)?.workspace).toBeUndefined();
   const stage = { id: "build", kind: "run" as const, role: { roleId: "builder" as const }, prompt: "Workspace work", next: null };
@@ -1130,6 +1139,8 @@ test("a fenced seat keeps the Telegram tools its record grants; no other fenced 
     call("telegram_bot_chats", { clientRequestId: `telegram-${++requests}` }),
     call("telegram_bot_messages", { chat: "team", clientRequestId: `telegram-${++requests}` }),
     call("telegram_bot_send", { chat: "team", text: "status", clientRequestId: `telegram-${++requests}` }),
+    call("telegram_bot_reactions", { chat: "team", clientRequestId: `telegram-${++requests}` }),
+    call("telegram_bot_set_reaction", { chat: "team", messageId: 5, reaction: { type: "emoji", emoji: "👍" }, clientRequestId: `telegram-${++requests}` }),
   ]);
   const refused = async () => { for (const answer of await tools()) expect(answer).toMatchObject(REFUSED); };
   const served = async () => { for (const answer of await tools()) expect(answer.ok).toBe(true); };
@@ -1196,6 +1207,29 @@ test("an agent author's project label never refuses a permitted transcript, and 
     return answer;
   } } as McpToolService, dependencies);
   expect(await leaking.callTool("conversation_messages", { clientRequestId: "leak", transcriptPath: "conversation_member.jsonl" })).toMatchObject(REFUSED);
+});
+
+test("a native MCP caller can cancel its bounded evidence preparation", async () => {
+  const controller = new AbortController();
+  let dispatched = false;
+  let prepared = false;
+  const fenced = withWorkspaceMcpFence({ callTool: async tool => {
+    dispatched = true;
+    return { ok: true, toolName: tool, clientRequestId: null, replayed: false };
+  } } as McpToolService, { ...dependencies, attentionAuthority: () => ({ kind: "unidentified", conversationId: null }) },
+  async signal => {
+    expect(signal?.aborted).toBe(false);
+    controller.abort(new Error("caller cancelled"));
+    expect(signal?.aborted).toBe(true);
+    prepared = true;
+  });
+  const call = runAsMcpHttpCaller({ nativePeer: {} as never }, () => fenced.callTool(
+    "get_task", { nativeCallerProof: "a".repeat(43) }, { signal: controller.signal },
+  ));
+  const error = await call.then(() => null, reason => reason);
+  expect(error).toBe(controller.signal.reason);
+  expect(prepared).toBe(true);
+  expect(dispatched).toBe(false);
 });
 
 

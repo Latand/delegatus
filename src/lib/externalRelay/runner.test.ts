@@ -6,7 +6,7 @@ import { createHash, randomBytes } from "node:crypto";
 import http from "node:http";
 import dns from "node:dns/promises";
 import { callBody, toolSleep, type ToolLoopRuntime } from "./toolLoop";
-import { requestSchema, handoffAnswerSchema, answerSchema, replyAnswerSchema, type ToolCallResult } from "./protocol";
+import { requestSchema, handoffAnswerSchema, answerSchema, replyAnswerSchema, type ExternalRelayAnswer, type ToolCallResult } from "./protocol";
 import { ownerRequest, pendingRetryAfterSeconds, x1Request, x1Results, x1Errors, x1Dir } from "./toolLoop.fixture";
 import { relayClaimCapabilities, sweepExternalRelayOrphans } from "./poller";
 import { setRelaySwitch } from "./switches";
@@ -4301,6 +4301,57 @@ for (const admission of ["failed_receipt", "lost_response"] as const) test(`owne
   } finally { recover = true; await done; await service.close(); }
 });
 
+test.each(["negotiated", "legacy", "locally refused"] as const)("owner Markdown at completion with a query and a port (%s)", async mode => {
+  const { relayAnswerOp } = await import("./ownerAnswer");
+  const url = "https://example.blog/?p=12345";
+  const index = "https://example.test:8443";
+  const markdown = `**Reading list**\n\n- [Open the post](${url})\n- *Read next* at [the index](${index})`;
+  const plain = `Reading list\n\n- Open the post ${url}\n- Read next at the index ${index}`;
+  const rich = mode !== "legacy";
+  const guide = richRequest().input.format!;
+  const request = { ...contextRequest, request_id: `owner_markdown_${mode.replace(" ", "_")}`,
+    answer: { ...contextRequest.answer, max_chars: rich ? 32_000 : 4000 },
+    ...(rich ? { features: ["relay_rich_messages"] } : {}),
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
+      ...(rich ? { format: { ...guide, max_blocks: mode === "locally refused" ? 1 : guide.max_blocks } } : {}) },
+  };
+  const completions: unknown[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const conversationId = "conversation_owner_markdown_fixture";
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { ownerPorts: {
+      launch: async () => ({ status: 202, body: { conversationId, initialMessage: "delivered" } }),
+      observe: async () => {
+        if (rich) expect(await relayAnswerOp(conversationId, { text: markdown, format: "rich_markdown" }))
+          .toMatchObject({ format: "rich_markdown" });
+        return { state: "ended", finalText: rich ? "Final transcript message" : markdown };
+      },
+      stop: async () => { throw new Error("a settled reply needs no cancellation"); },
+      pollMs: 1,
+    } });
+    const format: ExternalRelayAnswer["format"] = rich ? mode === "negotiated" ? "rich_markdown" : "plain" : undefined;
+    const expected = {
+      action: "reply", reply_to: request.input.respond_to,
+      text: mode === "negotiated" ? markdown : plain,
+      ...(format === undefined ? {} : { format }),
+    };
+    expect(result).toMatchObject({ outcome: "answered", answer: expected });
+    expect(completions).toHaveLength(1);
+    expect(completions[0]).toMatchObject({ outcome: "answered", answer: expected });
+    const record = readAnswerRecord(paired.id, request.target_id, request.request_id);
+    expect(record).toMatchObject({ delivery: "accepted", answer: expected });
+    expect(record?.answer?.format).toBe(format);
+    expect(record?.drops ?? []).toEqual(mode === "locally refused" ? [{ part: "text", reason: "blocks" }] : []);
+    expect(record?.completionRefusals).toBeUndefined();
+  } finally { await service.close(); }
+});
+
 test("owner credentials, host paths and key material never reach completion, answer records or diagnostics", async () => {
   const { rotateOperatorSpawnCapability } = await import("@/lib/agent/operatorCapability");
   const control = rotateOperatorSpawnCapability();
@@ -4310,7 +4361,7 @@ test("owner credentials, host paths and key material never reach completion, ans
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   paired.credential = randomBytes(32).toString("base64url");
   updateRelayStore(s => ({ ...s, relays: [paired] }));
-  const paths = ["/srv/review-fixture/private-note.txt", "~/private-note.txt", "file:///srv/private-note.txt", String.raw`C:\fixture\private.txt`, String.raw`\\fixture-host\share\private.txt`];
+  const paths = ["/srv/review-fixture/private-note.txt", "~/private-note.txt", "~/private-fixture/nested/secret-notes.md", "file:///srv/private-note.txt", String.raw`C:\fixture\private.txt`, String.raw`\\fixture-host\share\private.txt`];
   const material = "fixture-private-material";
   const pgpMaterial = "fixture-pgp-private-material";
   const value = ["fixture", "host", "credential", "value"].join("-");
@@ -4330,6 +4381,8 @@ test("owner credentials, host paths and key material never reach completion, ans
     expect(completions).toHaveLength(1);
     expect(record?.answer?.text).toContain("Done");
     for (const surface of [completions, record, diagnostics]) for (const secret of [value, paired.credential, control, spawn, ...paths, material, pgpMaterial]) expect(JSON.stringify(surface)).not.toContain(JSON.stringify(secret).slice(1, -1));
+    for (const surface of [completions, record, diagnostics]) for (const component of ["private-fixture", "nested", "secret-notes.md"])
+      expect(JSON.stringify(surface)).not.toContain(component);
     const encoded = Array.from(paired.credential, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
     const encodedOutcome = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner_encoded",
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {

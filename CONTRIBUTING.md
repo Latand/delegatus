@@ -383,7 +383,11 @@ On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits
 a `TMPDIR` under the operator's scratch tree. Browser tests keep their rendered
 capture drivers and are not selected by the hook.
 
-Touched tests run the branch first. Selections with gate-harness or privacy suites use at most two file workers, or one when Linux portable runners share their parent service. Other selections use up to eight explicit head files, each
+Touched tests run the branch first, with up to eight file workers on the head.
+Gate-harness and privacy files share a limit of two workers because they launch
+nested commands. Ordinary files can use the remaining workers in the same
+selection. When Linux portable runners share their parent service, a selection
+containing gate-harness or privacy files uses one worker. Each file runs
 in its own owned process and isolated roots. A green branch skips the baseline
 entirely. For a red branch, only failing files run on the merge base, filtered
 to failing assertions; runner diagnostics need the whole file. Both kinds share
@@ -578,6 +582,19 @@ settings take precedence. The slot locks live in
 `/var/tmp`, the files the installed `/var/tmp/llv-gate` uses, so both gates
 share one set of slots; `LLV_GATE_LOCK_DIR` overrides the directory. Stage starts and gates share a durable FIFO CPU queue. After ten minutes,
 the head can start under sustained pressure, with two seconds between admissions.
+A prepared push gives its pre-push hook 180 seconds because the remote closes
+an idle SSH push after about 360 seconds.
+
+The Viewer sees the same lock inodes through its read-only `/var/tmp` bind.
+On a new host, provision the claim file and at least one slot and matching
+cap file from the writable host side using the configured `LLV_GATE_SLOTS`
+value. For the default cap of six, those files are
+`llv-heavy-gate.claim.lock`, `llv-heavy-gate.slot1.lock` and
+`llv-heavy-gate.slot1.cap6.lock`. Each additional pair gives the Viewer
+another slot to use. The hook reports an unavailable lock pool if it cannot
+use the claim file or any pair. Container checks use the image's Bun and the
+portable owned runner when a user systemd manager is unavailable.
+
 A test, a driver or any instance on a state directory of its own queues its
 stage starts in `<state>/cpu-gate`, never in the machine queue; a stage ticket
 nobody polls for a minute is passed over, and so is a command ticket whose

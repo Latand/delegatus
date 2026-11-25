@@ -60,10 +60,10 @@ function ownedQuotaTick(registry: AgentRegistry, quota: QuotaPort): QuotaTickOwn
   if (!owners) quotaOwners.set(registry, owners = new WeakMap());
   const running = owners.get(quota);
   if (running) return running;
-  const owner: QuotaTickOwner = { outcomes: [null, null, null], settled: false, listeners: new Set() };
+  const owner: QuotaTickOwner = { outcomes: [null, null, null, null], settled: false, listeners: new Set() };
   owners.set(quota, owner);
   void withoutOperationLease(() => Promise.allSettled(
-    (["claude", "codex", "copilot"] as const).map((engine, index) =>
+    (["claude", "codex", "copilot", "antigravity"] as const).map((engine, index) =>
       Promise.resolve().then(() => withViewerOperation("controller.account-quota", () => quota.tick(engine)))
         .then(value => { owner.outcomes[index] = { status: "fulfilled", value }; return value; }, error => {
           owner.outcomes[index] = { status: "rejected", reason: error };

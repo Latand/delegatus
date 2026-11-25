@@ -1,13 +1,11 @@
 "use client";
 
-import { Fragment } from "react";
-import { RefreshCw } from "lucide-react";
-
 import { MobileAccountsBody } from "@/components/AccountsPanel";
 import { CopilotAccountList, copilotSignedIn, useCopilotAccounts, type CopilotAccounts } from "@/components/CopilotFooterRow";
 import { EngineMark } from "@/components/EngineMark";
-import { CopyButton } from "@/components/feed/CopyButton";
 import { engineTintOf } from "@/components/utils";
+import { AntigravityCard, type AntigravityAccount, type AntigravityCliPresence } from "@/components/onboarding/AntigravityCard";
+import { InstallCommand, RecheckButton } from "@/components/onboarding/EngineCardParts";
 import type { AccountOption, EngineAccountsState } from "@/hooks/useEngineAccounts";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import { AGENT_INSTALL_COMMANDS } from "@/lib/onboarding/agentInstallCommands";
@@ -21,9 +19,11 @@ import type { RoleEngine } from "@/lib/roles/types";
  * accounts per engine are one row away (#2004) and there is one sign-in
  * implementation. Copilot sits beside them (#2166, newcomer audit F6) with the
  * footer switcher's own rows: it runs single agents, while the orchestrator
- * needs Claude or Codex, and the card says so. A card whose tool is missing
+ * needs Claude or Codex, and the card says so. Antigravity's card is its
+ * sign-in (`AntigravityCard.tsx`): `agy` has no login command, so the card
+ * shows what to run and a check that asks `agy` itself. A card whose tool is missing
  * shows the install command with the copy control under its title and no
- * account rows; one "Check again", on the first such card, looks for all three.
+ * account rows; one "Check again", on the first such card, looks for all four.
  */
 
 export type CliPresence = "found" | "missing" | null;
@@ -65,39 +65,6 @@ function headerLine(state: EngineAccountsState, connected: boolean, t: TFunction
   return state.status === "error" ? t("onboarding.engines.authUnknown") : t("onboarding.engines.signedOut");
 }
 
-/** The command row of a card whose tool is missing: a line that says where to paste it, then the command and its copy control. */
-function InstallCommand({ engine }: { engine: "claude" | "codex" }) {
-  const { t } = useLocale();
-  const { command, segments } = AGENT_INSTALL_COMMANDS[engine];
-  return (
-    <div data-onboarding-install={engine} className="flex min-w-0 flex-col gap-1.5">
-      <p className="text-ui text-secondary">{t("onboarding.engines.pasteCommand")}</p>
-      <div className="flex min-w-0 items-center gap-1">
-        {/* Breaks only after the flags and after the slashes; the copied text is the whole command. */}
-        <code data-onboarding-install-command="" className="min-w-0 rounded-[6px] bg-sunken px-2 py-1 font-mono text-ui text-primary">
-          {segments.map((segment, index) => (
-            <Fragment key={segment}>
-              {index > 0 ? <wbr /> : null}
-              <span className="whitespace-nowrap">{segment}</span>
-            </Fragment>
-          ))}
-        </code>
-        <CopyButton text={command} label={t("tools.copyCommand")} />
-      </div>
-    </div>
-  );
-}
-
-function RecheckButton({ onClick }: { onClick: () => void }) {
-  const { t } = useLocale();
-  return (
-    <button type="button" data-onboarding-recheck="" onClick={onClick} className="inline-flex h-8 shrink-0 items-center gap-1 rounded-[8px] border border-border bg-canvas px-2.5 text-ui font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:h-11">
-      <RefreshCw className="h-3 w-3" aria-hidden />
-      {t("onboarding.engines.recheck")}
-    </button>
-  );
-}
-
 function EngineCard({ state, cli, now, recheck }: { state: EngineAccountsState; cli: CliPresence; now: number; recheck: (() => void) | null }) {
   const { t } = useLocale();
   const engine = state.engine;
@@ -126,7 +93,7 @@ function EngineCard({ state, cli, now, recheck }: { state: EngineAccountsState; 
           {recheck ? <RecheckButton onClick={recheck} /> : null}
         </div>
       )}
-      {missing ? <InstallCommand engine={engine} /> : null}
+      {missing ? <InstallCommand engine={engine} install={AGENT_INSTALL_COMMANDS[engine]} /> : null}
       {engine === "claude" && !missing ? <p data-onboarding-claude-signin="" className="text-ui text-secondary">{t("onboarding.engines.isolatedSignin")}</p> : null}
       {engine === "claude" && !missing ? <p className="text-ui text-secondary">{t("onboarding.engines.providerHelp")}</p> : null}
       {/* Every account the engine store knows, with its own sign-in, and the
@@ -184,24 +151,27 @@ function CopilotCard({ accounts, recheck }: { accounts: CopilotAccounts; recheck
   );
 }
 
-export function EnginesStep({ claude, codex, cli, now, onRecheck }: {
+export function EnginesStep({ claude, codex, antigravity, cli, now, onRecheck }: {
   claude: EngineAccountsState;
   codex: EngineAccountsState;
+  /** Antigravity's recorded sign-in and its check; the dialog owns it because the mapping rows read it too. */
+  antigravity: AntigravityAccount;
   cli: { claude: CliPresence; codex: CliPresence; antigravity?: CliPresence };
   now: number;
   onRecheck: () => void;
 }) {
   const { t } = useLocale();
-  /* Read here rather than in Copilot's card: the one "Check again" looks for all three tools. */
+  /* Read here rather than in Copilot's card: the one "Check again" looks for all four tools. */
   const copilot = useCopilotAccounts({ polling: true });
   const claudeOn = engineReady(claude, cli.claude);
   const codexOn = engineReady(codex, cli.codex);
   const settled = claude.status !== "loading" && codex.status !== "loading";
   const copilotMissing = copilot.body !== null && !copilot.body.cli.present;
   /* The first card whose tool is missing carries the one button. */
-  const missing = [cli.claude === "missing" ? "claude" : null, cli.codex === "missing" ? "codex" : null, copilotMissing ? "copilot" : null].filter((id) => id !== null);
-  const recheckAll = () => { onRecheck(); void copilot.load(); };
-  const buttonFor = (id: "claude" | "codex" | "copilot") => missing[0] === id ? recheckAll : null;
+  const agyCli: AntigravityCliPresence = cli.antigravity ?? antigravity.cli;
+  const missing = [cli.claude === "missing" ? "claude" : null, cli.codex === "missing" ? "codex" : null, agyCli === "missing" ? "antigravity" : null, copilotMissing ? "copilot" : null].filter((id) => id !== null);
+  const recheckAll = () => { onRecheck(); void copilot.load(); void antigravity.reload(); };
+  const buttonFor = (id: "claude" | "codex" | "antigravity" | "copilot") => missing[0] === id ? recheckAll : null;
   return (
     <div className="flex flex-col gap-3">
       {settled && !claudeOn && !codexOn ? (
@@ -210,6 +180,7 @@ export function EnginesStep({ claude, codex, cli, now, onRecheck }: {
       <div className="grid grid-cols-2 items-start gap-4 max-[859px]:grid-cols-1 max-sm:gap-3">
         <EngineCard state={claude} cli={cli.claude} now={now} recheck={buttonFor("claude")} />
         <EngineCard state={codex} cli={cli.codex} now={now} recheck={buttonFor("codex")} />
+        <AntigravityCard agy={antigravity} cli={agyCli} recheck={buttonFor("antigravity")} />
         <CopilotCard accounts={copilot} recheck={buttonFor("copilot")} />
       </div>
     </div>

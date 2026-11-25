@@ -12,7 +12,6 @@ import { controlFetch } from "./controlTransport";
 import { CONTROL_REQUEST_HEADER, CONTROL_RECOVERY_PATH, controlRequestId, type ControlEvidence } from "./controlEvidence";
 import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import { AsyncResource } from "node:async_hooks";
-import { redactMonitorText } from "@/lib/monitor/redact";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
 import { assertWorkspaceMcpCall, workspaceGuardedBindings } from "./workspaceFence";
@@ -23,7 +22,7 @@ import { readSelf } from "@/lib/links/self";
 import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
 import { STAGE_RETIREMENT } from "@/lib/flows/retirement";
 import { performanceSpans } from "@/lib/performanceSpans";
-import { curationAnswerCooperatively } from "@/lib/memory/curation/answer";
+import { readCurationPanel } from "@/lib/memory/curation/answer";
 import { resolvePrototypeReviewId as resolveStoredReviewId } from "@/lib/prototypeReview/store";
 import { resolveIssueReportDigest } from "@/lib/issueReports/store";
 import { shortId, shortenHashesInText } from "@/lib/shortIds";
@@ -85,6 +84,7 @@ import { projectWorkerCounts } from "@/lib/orchestrator/workerCount";
 import { activeClaudeAccountId, claudeAccountsForPrivacy, listClaudeAccounts } from "@/lib/accounts/claude";
 import { activeCodexAccountId, codexAccountsForPrivacy, listCodexAccounts } from "@/lib/accounts/codex";
 import { activeCopilotAccountId, copilotAccountsForPrivacy, listCopilotAccounts } from "@/lib/accounts/copilot";
+import { activeAntigravityAccountId, listAntigravityAccounts } from "@/lib/accounts/antigravity";
 import { projectEngineAccounts } from "@/lib/accounts/projectAccountsView";
 import {
   accountProjectBindings,
@@ -94,7 +94,7 @@ import {
   unbindAccountFromProject,
   type BindingEngine,
 } from "@/lib/accounts/projectBindings";
-import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
+import { agentRegistry, readOnlyConversationLookupFromSnapshot, type ConversationLookup } from "@/lib/agent/registry";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { ENGINE_MODELS, validateLaunchModel } from "@/lib/agent/models";
 import { nativeCallerSources } from "@/lib/attention/nativeCallerSources";
@@ -260,13 +260,14 @@ import {
   type SessionRecord,
   type SessionRecordKind,
 } from "@/lib/session/reader";
+import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import {
   decodeMessagesCursor,
   encodeMessagesCursor,
   InvalidMessagesCursorError,
   messagesCursorScope,
   readMessagesPage,
-  readMessageAuthorContext,
+  readMessageAuthorContextWithStats,
   StaleMessagesCursorError,
 } from "@/lib/session/messagesPage";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
@@ -274,7 +275,7 @@ import { overlaySessionTitles } from "@/lib/session/titleProjection";
 import { linkedContext, withOwnership } from "@/lib/links/linked";
 import { applyAssignmentPatches, createTask, patchTask, taskDuePatch, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
-import { agentBrowserAccess, TeamError, recordAuthors, type AgentBrowserSeat, type RecordAuthor } from "@/lib/team";
+import { agentBrowserAccess, hasConversationMessageAuthors, TeamError, recordAuthors, type AgentBrowserSeat, type RecordAuthor } from "@/lib/team";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
 import { normalizedBoardQuery, pullRequestQuery, titleHasPullRequest } from "./pullRequestQuery";
 import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, pipelineStageRuntimeSetting, setPipelineStageRuntime, validPipelineStageRuntime, type EffectiveReportTelegram } from "@/lib/projects/settings";
@@ -338,6 +339,7 @@ import {
   type AccountLimitsInput,
 } from "./compactAnswers";
 import { changedFieldNames, fieldValues, compactTask, firstLine, fullAnswer, answerHint, listPage, listPageAsync, recordRevision, sinceTime, stringSet, taskAcknowledgement } from "./listAnswers";
+import { deferredTaskPage, indexedTaskPage, taskListLinks, withTaskReferenceBudget } from "./taskListPage";
 
 import { viewerControlOrigin, viewerControlToken } from "./controlEndpoint";
 import {
@@ -581,6 +583,8 @@ async function getViewerControl(
       status: response.status,
       ...(text(result.code) ? { code: text(result.code) } : {}),
       ...(text(result.check) ? { check: text(result.check) } : {}),
+      ...(pathname.startsWith("/api/telegram/bot/agent?op=reactions&") && typeof result.retryAfterSeconds === "number"
+        ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
       ...(requestHealth ? { runtimeHostRequests: requestHealth } : {}),
     });
   }
@@ -3511,7 +3515,7 @@ async function listConversations(
   const conversations = source.items
     .filter(objectRecord) as unknown as FileEntry[];
   const rows = conversations
-    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
+    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot" || entry.engine === "antigravity")
     .slice(0, limit)
     .map((entry) => ({
       conversationId: entry.conversationId ?? null,
@@ -3802,10 +3806,11 @@ async function conversationDeliverability(
 const CONVERSATION_MESSAGE_KINDS = ["message", "reasoning", "tool_call", "tool_result", "trace"] as const;
 const CONVERSATION_MESSAGE_ROLES = ["user", "assistant", "system", "tool"] as const;
 
-function conversationEngineForRoot(rootName: PinnedTranscript["rootName"]): "claude" | "codex" | "copilot" | null {
+function conversationEngineForRoot(rootName: PinnedTranscript["rootName"]): "claude" | "codex" | "copilot" | "antigravity" | null {
   if (rootName === "codex-sessions") return "codex";
   if (rootName === "claude-projects") return "claude";
   if (rootName === "copilot-sessions") return "copilot";
+  if (rootName === "antigravity-sessions") return "antigravity";
   return null;
 }
 
@@ -3933,16 +3938,20 @@ async function conversationMessages(
         code: "conversation_messages_transcript_changed",
       });
     }
+    /* sign-in-and-team §7.1: a human message names its member. */
+    const authored = withRecordAuthors(conversationId, transcriptPath, page.records, {
+      descriptor: pinned.descriptor, size: pinned.stat.size, engine, redactText: context.redactText,
+    });
+    const scanned = authored.scannedBytes > 0
+      ? { ...page.scanned, bytes: page.scanned.bytes + authored.scannedBytes }
+      : page.scanned;
     return redactPayload({
       conversationId,
       ...(args.full === true || args.includeMetadata === true ? { transcriptPath, engine, lastRecordAt: page.lastRecordAt } : {}),
-      /* sign-in-and-team §7.1: a human message names its member. */
-      records: withRecordAuthors(conversationId, transcriptPath, page.records, {
-        descriptor: pinned.descriptor, size: pinned.stat.size, engine, redactText: context.redactText,
-      }),
+      records: authored.records,
       hasMore: page.hasMore,
       cursor: page.cursor ? encodeMessagesCursor(page.cursor, scope) : null,
-      ...(args.full === true || args.includeMetadata === true || page.scanned.capped ? { scanned: page.scanned } : {}),
+      ...(args.full === true || args.includeMetadata === true || scanned.capped ? { scanned } : {}),
       ...selectedContextEcho(selected.target),
     });
   } finally {
@@ -3955,9 +3964,14 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
   transcriptPath: string,
   records: T[],
   source: { descriptor: number; size: number; engine: "claude" | "codex" | "copilot" | "antigravity"; redactText?: (text: string) => string },
-): Array<T & { author?: RecordAuthor | AgentRecordAuthor }> {
-  if (!records.some((record) => record.role === "user")) return records;
-  const context = readMessageAuthorContext(source, records);
+): { records: Array<T & { author?: RecordAuthor | AgentRecordAuthor }>; scannedBytes: number } {
+  if (!records.some((record) => record.role === "user")) return { records, scannedBytes: 0 };
+  const needsOccurrenceContext = hasConversationMessageAuthors(conversationId)
+    || deliveredMessageOccurrences(transcriptPath).length > 0;
+  const authorContext = needsOccurrenceContext
+    ? readMessageAuthorContextWithStats(source, records)
+    : { records: null, scannedBytes: 0 };
+  const context = authorContext.records;
   const authorRecords = context ?? records;
   const claudeOrigins = source.engine === "claude" ? claudeMessageProvenance(transcriptPath) : undefined;
   const agentAuthors = agentRecordAuthors(transcriptPath, source.engine, authorRecords, context, claudeOrigins);
@@ -3965,11 +3979,13 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
     value => hardenedRedact(source.redactText ? source.redactText(value) : value)) : new Map();
   const contextPartAuthors = claudeOrigins ? agentRecordPartAuthors(transcriptPath, authorRecords, claudeOrigins) : new Map();
   const humanBySeq = new Map<number, RecordAuthor>();
-  for (const [index, author] of recordAuthors(conversationId, authorRecords.map((record, index) => ({
-    role: agentAuthors.has(index) || contextPartAuthors.has(index) ? "system" : record.role,
-    ts: record.ts,
-    text: record.sourceText ?? record.text,
-  })))) humanBySeq.set(authorRecords[index]!.seq, author);
+  if (context) {
+    for (const [index, author] of recordAuthors(conversationId, context.map((record, index) => ({
+      role: agentAuthors.has(index) || contextPartAuthors.has(index) ? "system" : record.role,
+      ts: record.ts,
+      text: record.sourceText ?? record.text,
+    })))) humanBySeq.set(context[index]!.seq, author);
+  }
   const agentBySeq = new Map<number, AgentRecordAuthor>();
   for (const [index, author] of agentAuthors) agentBySeq.set(authorRecords[index]!.seq, author);
   const authors = new Map<number, RecordAuthor | AgentRecordAuthor>();
@@ -3979,9 +3995,12 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
     if (human) authors.set(index, human);
     else if (agent) authors.set(index, agent);
   });
-  return records.map((record, index) => partAuthors.has(index)
-    ? { ...record, parts: partAuthors.get(index)! }
-    : authors.has(index) ? { ...record, author: authors.get(index)! } : record);
+  return {
+    records: records.map((record, index) => partAuthors.has(index)
+      ? { ...record, parts: partAuthors.get(index)! }
+      : authors.has(index) ? { ...record, author: authors.get(index)! } : record),
+    scannedBytes: authorContext.scannedBytes,
+  };
 }
 
 type ViewerSeatRefusal = "deputy" | "not-designated" | "no-seat" | "cross-project" | "foreign-project";
@@ -5554,8 +5573,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? 50,
       ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
       ...autoRotationFailureAnswer(project) },
-    ...("status" in curation ? { partial: true, omissions: ["curation"] } : {}),
-    ...(verbose || "status" in curation || settings.curation || curation.lastRun || curation.live || curation.runsError ? { curation } : {}),
+    ...(curation.partial ? { partial: true, omissions: curation.omissions } : {}),
+    ...(verbose || curation.partial || settings.curation || curation.lastRun || curation.live || curation.runsError ? { curation } : {}),
     maintenance: boardMaintenanceAnswer(project, effective, { verbose }),
     ...(typeof args.problemId === "string" ? { problem: readMemoryProblem(project, args.problemId) } : {}),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
@@ -5574,38 +5593,10 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
 async function readSeatCuration(project: string, initial: SeatTickSettings,
   readSettings: (project: string) => SeatTickSettings, context: McpToolCallContext) {
   throwIfCallEnded(context);
-  const timeout = new AbortController();
   const budget = Math.max(0, Math.min(5000, (context.deadlineAt ?? Infinity) - Date.now() - 500));
-  const panelDeadlineAt = Date.now() + budget;
-  const timer = setTimeout(() => timeout.abort(budget < 5000
-    ? new DeadlineExceededError("MCP tool deadline exceeded", 0) : Error("curation panel read timed out")), budget);
-  const signal = context.signal ? AbortSignal.any([context.signal, timeout.signal]) : timeout.signal;
-  let settings = initial;
-  try {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      throwIfCallEnded(context);
-      signal.throwIfAborted();
-      if (Date.now() >= panelDeadlineAt) throw Error("curation panel read timed out");
-      const now = Date.now(), revision = recordRevision(settings);
-      const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
-      const curation = await curationAnswerCooperatively(project, effective, now, signal);
-      throwIfCallEnded(context);
-      signal.throwIfAborted();
-      if (Date.now() >= panelDeadlineAt) throw Error("curation panel read timed out");
-      const fresh = readSettings(project);
-      if (recordRevision(fresh) === revision) return { settings, now, effective, curation };
-      settings = fresh;
-    }
-    throw Error("seat tick settings changed while being read");
-  } catch (error) {
-    throwIfCallEnded(context);
-    const now = Date.now();
-    const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
-    return { settings, now, effective, curation: {
-      status: "unavailable" as const, lastRun: null, live: null,
-      runsError: redactMonitorText(error instanceof Error ? error.message : "curation panel unavailable").slice(0, 300),
-    } };
-  } finally { clearTimeout(timer); }
+  const panel = await readCurationPanel(project, initial, readSettings, { budget, wakeIntervalMs: SEAT_TICK_WAKE_INTERVAL_MS, signal: context.signal });
+  throwIfCallEnded(context);
+  return panel;
 }
 
 /** Turbo for the seat: whether it is on, the credit approval and the switch progress. */
@@ -6001,11 +5992,13 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
       claude: listClaudeAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent })),
       codex: listCodexAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent, spendCredits: account.spendCredits === true })),
       copilot: listCopilotAccounts().map((account) => ({ accountId: account.id })),
+      antigravity: listAntigravityAccounts().map((account) => ({ accountId: account.id })),
     },
     active: {
       claude: snapshot.engineRouting.claude.activeAccountId ?? activeClaudeAccountId(),
       codex: snapshot.engineRouting.codex.activeAccountId ?? activeCodexAccountId(),
       copilot: snapshot.engineRouting.copilot.activeAccountId ?? activeCopilotAccountId(),
+      antigravity: snapshot.engineRouting.antigravity.activeAccountId ?? activeAntigravityAccountId(),
     },
     observations: snapshot.quotaObservations,
     project,
@@ -6022,15 +6015,17 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
  */
 function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   const engine = text(args.engine);
-  if (engine && engine !== "claude" && engine !== "codex" && engine !== "copilot") throw new Error("engine must be claude, codex or copilot");
+  if (engine && engine !== "claude" && engine !== "codex" && engine !== "copilot" && engine !== "antigravity") {
+    throw new Error("engine must be claude, codex, copilot or antigravity");
+  }
   const accountId = text(args.accountId);
   const source = (dependencies.accountLimitsSource ?? productionAccountLimitsSource)();
   const accounts = accountLimitRows({
     ...source,
-    ...(engine ? { engine: engine as "claude" | "codex" | "copilot" } : {}),
+    ...(engine ? { engine: engine as "claude" | "codex" | "copilot" | "antigravity" } : {}),
     ...(accountId ? { accountId } : {}),
   });
-  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude, codex or copilot"} account has the id ${accountId}`);
+  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude, codex, copilot or antigravity"} account has the id ${accountId}`);
   return redactPayload({ count: accounts.length, accounts });
 }
 
@@ -6050,7 +6045,7 @@ async function relayOwnerHistory(args: McpToolArgs, control: ViewerControlDepend
 
 /*
  * The Telegram bot account (docs/design/telegram-bot-account.md, Decision 6).
- * The Viewer is the only process that holds the bot token, so all three tools
+ * The Viewer is the only process that holds the bot token, so the bot tools
  * reach it through the agent route; none of them carries the token or the
  * bot's id either way. The send forwards the calling session's capability,
  * which is how the route attributes the post to this conversation.
@@ -6067,6 +6062,33 @@ async function telegramBotMessages(args: McpToolArgs, control: ViewerControlDepe
     if (typeof value === "number" || (typeof value === "string" && value !== "")) query.set(field, String(value));
   }
   return redactPayload(await readViewerControl(control, `/api/telegram/bot/agent?${query}`));
+}
+
+function telegramReactionRefusal(error: unknown): never {
+  if ((error instanceof McpToolRefusal || error instanceof McpDispatchVerdictError) && typeof error.details.code === "string") {
+    const { code, retryAfterSeconds } = error.details;
+    throw new McpToolRefusal(error.message, {
+      code,
+      retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+      ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
+    });
+  }
+  throw error;
+}
+
+async function telegramBotReactions(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  const query = new URLSearchParams({ op: "reactions", chat: required(args, "chat") });
+  return redactPayload(await readViewerControl(control, `/api/telegram/bot/agent?${query}`).catch(telegramReactionRefusal));
+}
+
+async function telegramBotSetReaction(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  return redactPayload(await dispatchControl(control)("/api/telegram/bot/agent", {
+    op: "set_reaction",
+    clientRequestId: requestId(args),
+    chat: required(args, "chat"),
+    messageId: args.messageId,
+    reaction: args.reaction,
+  }, callerCapabilityHeaders()).catch(telegramReactionRefusal));
 }
 
 async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
@@ -6499,7 +6521,7 @@ async function boardSnapshot(
   }
   const files = (await dependencies.completedFileScan()).snapshot.files;
   const conversations = files
-    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
+    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot" || entry.engine === "antigravity")
     .filter((entry) => !project || entry.project === project)
     .filter((entry) => !activity || entry.activity === activity)
     .filter((entry) => !liveOnly || entry.activity === "live" || entry.activity === "stalled")
@@ -6590,7 +6612,7 @@ function boardAttribution(dependencies: ViewerMcpDomainDependencies): CallerAttr
 function boardReadProject(requested: string, dependencies: ViewerMcpDomainDependencies): string {
   const caller = boardAttribution(dependencies);
   if (caller.kind !== "manager" && caller.kind !== "gateway") return requested;
-  const seat = caller.conversationId && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+  const seat = caller.conversationId && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources(), caller.conversationId))
     .find(candidate => candidate.conversationId === caller.conversationId);
   if (!seat && caller.kind === "gateway") return requested;
   if (!seat || !seat.project) throw new McpToolRefusal("the caller's project designation is unavailable; nothing was read", { code: "project_scope_refused", status: 403, retryable: false });
@@ -6618,25 +6640,29 @@ export function captureBoardCaller(dependencies: ViewerMcpDomainDependencies, co
       throw new McpToolRefusal("board caller identity is unavailable", { code: "caller_unidentified", retryable: false });
     }
     const id = authority && authority.kind !== "unidentified" ? authority.conversationId : caller.via?.deputy ?? caller.conversationId;
-    const registry = dependencies.registrySnapshot?.();
-    const lookup = registry ? readOnlyConversationLookupFromSnapshot(registry) : null;
-    for (const owner of new Set([id, caller.conversationId])) {
-      try {
-        if (revokedSeatPipelineRefusal(owner, value => lookup?.canonicalConversationId(value as `conversation_${string}`) ?? value)) {
-          throw new McpToolRefusal("the caller's orchestrator designation was revoked", { code: "orchestrator_seat_revoked", retryable: false });
+    const inspect = (lookup: Pick<ConversationLookup, "conversation" | "canonicalConversationId"> | null, registry?: RegistrySnapshot) => {
+      for (const owner of new Set([id, caller.conversationId])) {
+        try {
+          if (revokedSeatPipelineRefusal(owner, value => lookup?.canonicalConversationId(value as `conversation_${string}`) ?? value)) {
+            throw new McpToolRefusal("the caller's orchestrator designation was revoked", { code: "orchestrator_seat_revoked", retryable: false });
+          }
+        } catch (error) {
+          if (error instanceof SeatRevocationStoreUnavailableError) throw new McpToolRefusal(error.message, { code: "orchestrator_seat_authority_unavailable", retryable: true });
+          throw error;
         }
-      } catch (error) {
-        if (error instanceof SeatRevocationStoreUnavailableError) throw new McpToolRefusal(error.message, { code: "orchestrator_seat_authority_unavailable", retryable: true });
-        throw error;
       }
-    }
-    const record = id ? lookup?.conversation(id as `conversation_${string}`) : null;
-    const generation = record?.generations.at(-1);
-    if (record?.supersededBy || generation?.archivedAt) refuse();
-    const seat = caller.conversationId ? orchestratorSeatIdentityForConversation(caller.conversationId) : null;
-    const principal = conversationWorkspacePrincipal(dependencies.workspaceConversation ?? registry ?? (() => null), id);
-    return JSON.stringify([caller, authority, principal, record ? [record.id, record.projectOwnership,
-      generation?.id, generation?.path, generation?.launchProfile.project, generation?.launchProfile.cwd, generation?.launchProfile.workspace] : null, seat]);
+      const record = id ? lookup?.conversation(id as `conversation_${string}`) : null;
+      const generation = record?.generations.at(-1);
+      if (record?.supersededBy || generation?.archivedAt) refuse();
+      const seat = caller.conversationId ? orchestratorSeatIdentityForConversation(caller.conversationId) : null;
+      const principal = conversationWorkspacePrincipal(dependencies.workspaceConversation ?? registry ?? (() => null), id);
+      return JSON.stringify([caller, authority, principal, record ? [record.id, record.projectOwnership,
+        generation?.id, generation?.path, generation?.launchProfile.project, generation?.launchProfile.cwd, generation?.launchProfile.workspace] : null, seat]);
+    };
+    if (!id && !caller.conversationId) return inspect(null);
+    if (dependencies.registrySnapshot === productionDomainDependencies.registrySnapshot) return agentRegistry().withBoardCallerLookup(inspect);
+    const registry = dependencies.registrySnapshot?.();
+    return inspect(registry ? readOnlyConversationLookupFromSnapshot(registry) : null, registry);
   });
   const pinned = snapshot();
   const assert = () => { if (snapshot() !== pinned) refuse(); };
@@ -6728,9 +6754,9 @@ function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
   } };
 }
 
-function pipelineReferenceRows(dependencies: ViewerMcpDomainDependencies, project: string): Pipeline[] {
-  const source = dependencies.pipelineSelectionSource?.();
-  return source ? boardSelection(source.filename, "pipelines").referenceRecords(source, project)
+function pipelineReferenceRows(dependencies: ViewerMcpDomainDependencies, project: string, includeArchived = false): Pipeline[] {
+  const source = dependencies.pipelineSelectionSource?.(includeArchived);
+  return source ? boardSelection(source.filename, "pipelines", includeArchived).referenceRecords(source, project)
     : (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines).filter(row => !project || canonicalProject(row.project) === project);
 }
 
@@ -6744,7 +6770,7 @@ function recordMatchesPr(title: string, resolved: ReturnType<typeof pipelineWork
     || (!matching.some(link => link.kind === "issue") && titleHasPullRequest(title, number));
 }
 
-function taskReferenceIds(dependencies: ViewerMcpDomainDependencies, project: string, number: number): string[] {
+function taskReferenceMatch(dependencies: ViewerMcpDomainDependencies, project: string, number: number) {
   const pipelines = pipelineReferenceRows(dependencies, project);
   const carrying = new Map<string, Set<string>>();
   for (const pipeline of pipelines) if (pipelineMatchesPr(pipeline, number)) {
@@ -6752,11 +6778,8 @@ function taskReferenceIds(dependencies: ViewerMcpDomainDependencies, project: st
     for (const id of pipeline.taskIds ?? []) ids.add(id);
     carrying.set(canonicalProject(pipeline.project), ids);
   }
-  const source = dependencies.taskSelectionSource?.();
-  const tasks = source ? boardSelection(source.filename, "tasks").referenceRecords(source, project)
-    : (dependencies.listTaskRecords?.() ?? dependencies.loadTasks()).filter(row => !project || canonicalProject(row.project) === project);
-  return tasks.filter(task => carrying.get(canonicalProject(task.project))?.has(task.id)
-    || recordMatchesPr(task.text, taskWorkLinks(task, []), number)).map(task => task.id).sort();
+  return (task: Pick<import("@/lib/tasks/types").BoardTask, "id" | "project" | "text" | "workLinks">) =>
+    !!carrying.get(canonicalProject(task.project))?.has(task.id) || recordMatchesPr(task.text, taskWorkLinks(task, []), number);
 }
 
 /** Lists reuse the store's immutable generation and materialize one page. */
@@ -6772,6 +6795,7 @@ async function listPipelines(
   const scope = { project: board.project, states, includeClosed: args.includeClosed === true,
     ids: stringSet(args.ids), query: normalizedBoardQuery(text(args.query)), updatedSince: sinceTime(args.updatedSince),
     queryIds: undefined as string[] | undefined };
+  const includeArchived = scope.includeClosed && !scope.ids.length;
   // Resolve explicit ids once so PR matching and paging share the same
   // hot-or-archive records without traversing either collection.
   const requested = scope.ids.length && dependencies.readPipelineRecord
@@ -6781,14 +6805,14 @@ async function listPipelines(
     }))
     : undefined;
   const number = pullRequestQuery(scope.query);
-  if (number !== null) scope.queryIds = (requested ? [...requested.values()] : pipelineReferenceRows(dependencies, scope.project))
+  if (number !== null) scope.queryIds = (requested ? [...requested.values()] : pipelineReferenceRows(dependencies, scope.project, includeArchived))
     .filter(row => (!scope.project || canonicalProject(row.project) === scope.project) && pipelineMatchesPr(row, number)).map(row => row.id).sort();
-  const hotSource = dependencies.pipelineSelectionSource?.();
+  const selection = dependencies.pipelineSelectionSource?.(includeArchived);
   // Explicit ids share get_pipeline's hot-or-archive lookup. Keep ordinary
   // lists on their scalar selection index and materialize only requested rows.
-  const source = hotSource && requested
-    ? { ...hotSource, read: (id: string) => requested.get(id) ?? null }
-    : hotSource;
+  const source = selection && requested
+    ? { ...selection, read: (id: string) => requested.get(id) ?? null }
+    : selection;
   /* #2059: the compact row names its PR in one string, the full forms carry
      every resolved link. */
   const project = (source: Pipeline) => {
@@ -6798,7 +6822,7 @@ async function listPipelines(
     const { stages, ...status } = pipelineCompactRow(pipeline);
     return { ...(args.statusOnly === true ? status : { ...status, stages }), ...pipelineCheckFields(pipeline), ...compactPullRequest(pipeline), ...compactMergeFields(pipeline) };
   };
-  const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
+  const page = source ? boardSelection(source.filename, "pipelines", includeArchived).page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)
     : await listPageAsync(requested
       ? [...requested.values()]
@@ -6857,34 +6881,60 @@ function taskReadModel(dependencies: ViewerMcpDomainDependencies) {
 
 /** Kept for callers explicitly requesting the previous list projection. */
 export const LIST_TASKS_DETAILS_CHARS = 400;
-function listTaskRow(task: TaskPipelineReadModel) {
+function listTaskRow<T extends { details?: string }>(task: T) {
   const details = task.details;
   return typeof details === "string" && details.length > LIST_TASKS_DETAILS_CHARS
     ? { ...task, details: details.slice(0, LIST_TASKS_DETAILS_CHARS), detailsTruncated: true } : task;
 }
 
-function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext = {}): McpToolPayload {
+async function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext = {}): Promise<McpToolPayload> {
+  const deadline = performance.now() + Math.max(0, Math.min(4000, (context.deadlineAt ?? Infinity) - Date.now() - 750));
   const board = context.boardRead ?? captureBoardRead(args, dependencies, context);
   board.assert();
   throwIfCallEnded(context);
   const statuses = stringSet(args.statuses ?? args.status, ["inbox", "assigned", "blocked", "done"]);
   const scope = { project: board.project, statuses, placement: stringSet(args.placement, ["pinned", "unplaced"])[0] ?? "",
     openOnly: args.openOnly === true, updatedSince: sinceTime(args.updatedSince), ids: stringSet(args.ids), query: normalizedBoardQuery(text(args.query)),
-    queryIds: undefined as string[] | undefined,
     priorities: stringSet(args.priority, [...TASK_PRIORITIES]) };
-  const number = pullRequestQuery(scope.query);
-  if (number !== null) scope.queryIds = taskReferenceIds(dependencies, scope.project, number);
+  const productionSource = dependencies.taskSelectionSource === productionDomainDependencies.taskSelectionSource;
   const source = dependencies.taskSelectionSource?.();
-  const project = (source: TaskPipelineReadModel) => {
+  const pipelineSource = !source ? null
+    : dependencies.pipelineSelectionSource === productionDomainDependencies.pipelineSelectionSource
+      ? { filename: statePath("state.sqlite"), read: () => null }
+      : dependencies.pipelineSelectionSource?.() ?? null;
+  const number = pullRequestQuery(scope.query);
+  const project = (source: Omit<TaskPipelineReadModel, "pipelineIds"> & { pipelineIds?: string[] }) => {
     const task = projectReadText(source, context);
     return args.full === true ? withOwnership(task) : args.compact === false ? withOwnership(listTaskRow(task)) : compactTask(task);
   };
-  const selectionPage = (links?: (task: string) => string[]) => boardSelection(source!.filename, "tasks").page(source!, scope, args.cursor,
-    Math.max(1, Math.min(200, integer(args.limit, 100))), task => project(taskWithLinks(task, dependencies, links)));
-  const pipelineSource = source ? dependencies.pipelineSelectionSource?.() : null;
-  const page = source ? pipelineSource ? boardSelection(pipelineSource.filename, "pipelines").withLinks(selectionPage) : selectionPage()
-    : listPage(taskReadModel(dependencies), {
-    scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, 100))),
+  let linksOmitted = false;
+  const links = pipelineSource ? taskListLinks(pipelineSource.filename) : undefined;
+  const reference = number === null ? undefined : pipelineSource
+    ? (task: Pick<import("@/lib/tasks/types").BoardTask, "id" | "project" | "text" | "workLinks">) => {
+      if (recordMatchesPr(task.text, taskWorkLinks(task, []), number)) return true;
+      const ids = links?.(task.id);
+      if (!ids) return undefined;
+      if (!ids.length) return false;
+      const owner = canonicalProject(task.project);
+      const lanes = withTaskReferenceBudget(pipelineSource.filename, ids, database =>
+        boardSelection(pipelineSource.filename, "pipelines").referenceRecords({ ...pipelineSource, database }, owner, ids));
+      return lanes?.some(lane => canonicalProject(lane.project) === owner && pipelineMatchesPr(lane, number));
+    }
+    : !productionSource ? taskReferenceMatch(dependencies, scope.project, number) : undefined;
+  const fallback = !source && !productionSource ? taskReadModel(dependencies) : [];
+  const queryIds = reference && !source
+    ? fallback.filter(task => (!scope.project || canonicalProject(task.project) === scope.project) && reference(task)).map(task => task.id).sort() : undefined;
+  const matchingIds = queryIds ? new Set(queryIds) : undefined;
+  const page = source ? await withViewerOperation("mcp.tasks.indexed-page", () => indexedTaskPage(source, scope, args.cursor,
+      Math.max(1, Math.min(200, integer(args.limit, 100))), task => {
+        if (!pipelineSource && !productionSource) return project(taskWithLinks(task, dependencies));
+        const pipelineIds = links?.(task.id);
+        if (pipelineIds === undefined) linksOmitted = true;
+        return project({ ...taskWithoutPrototypeDetails(task), ...(pipelineIds === undefined ? {} : { pipelineIds }) });
+      }, { checkpoint: () => throwIfCallEnded(context), deadline, matchesReference: reference, signal: context.signal }))
+    : productionSource ? deferredTaskPage()
+    : listPage(fallback, {
+    scope: { ...scope, queryIds }, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, 100))),
     identity: task => ({ id: task.id, time: task.updatedAt ?? "" }),
     matches: task => (!scope.project || canonicalProject(task.project) === scope.project)
       && (!statuses.length || statuses.includes(task.status)) && (!scope.openOnly || task.status !== "done")
@@ -6892,13 +6942,15 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies,
       && (!scope.priorities.length || scope.priorities.includes(taskPriority(task)))
       && (!scope.updatedSince || task.updatedAt >= scope.updatedSince)
       && (!scope.ids.length || scope.ids.includes(task.id))
-      && (scope.queryIds !== undefined ? scope.queryIds.includes(task.id) : !scope.query || task.text.toLowerCase().includes(scope.query)),
+      && (matchingIds ? matchingIds.has(task.id) : !scope.query || task.text.toLowerCase().includes(scope.query)),
     project,
   });
   board.assert();
   throwIfCallEnded(context);
   const { rows: tasks, ...pagination } = page;
+  const omissions = "omissions" in pagination ? pagination.omissions ?? [] : [];
   return redactPayload({ ...pagination, tasks, compact: !fullAnswer(args),
+    ...(linksOmitted ? { partial: true, omissions: [...omissions, "pipelineIds"] } : {}),
     omittedRecordCount: args.full === true ? 0 : tasks.length,
     ...answerHint(args, "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. get_task(taskId) or full:true reads complete records; compact:false returns the previous truncated-details projection. Never write a truncated value back.") });
 }
@@ -8077,7 +8129,14 @@ async function requestAttention(
        the answer: two tabs share a device id, and only the named tab may run
        the move. */
     const view = resolveDirectedAttentionView();
-    if (!view && (dependencies.noticeCapableViewOpen ?? noticeCapableViewOpen)()) {
+    /* The project boundary: the operator is in another project than the
+       target's, so the request reaches them as the notification and moves
+       nothing. Both keys are canonical, so an alias of the same project is the
+       same project. A view with no project open (the overview) has none to
+       protect. */
+    const crossesProject = view !== null && view.project !== null
+      && canonicalOrchestratorProject(view.project) !== project;
+    if ((!view && (dependencies.noticeCapableViewOpen ?? noticeCapableViewOpen)()) || crossesProject) {
       dependencies.adoptRootSession();
       const raised = dependencies.raiseAttentionRequest({
         origin: "root-agent",
@@ -8156,6 +8215,10 @@ async function requestAttention(
     timeoutMs: budget,
     ...(context.signal ? { signal: context.signal } : {}),
   });
+  /* The directed view stood down at the project boundary after this call
+     chose it (the operator changed project while the request was in flight):
+     the request is the notice, the view did not move. */
+  if (outcome.kind === "notice") return noticeAnswer(outcome.request, created);
   const deviceId = request.acknowledgedBy ?? null;
   if (outcome.kind === "failed") {
     const messages: Record<typeof outcome.code, string> = {
@@ -9183,7 +9246,7 @@ export function viewerReadTools(
 ) {
   return {
     get_orchestrator: (args: McpToolArgs) => getOrchestrator(args, domainDependencies),
-    list_tasks: (args: McpToolArgs, context?: McpToolCallContext) => Promise.resolve(listTasks(args, domainDependencies, context)),
+    list_tasks: (args: McpToolArgs, context?: McpToolCallContext) => listTasks(args, domainDependencies, context),
     get_task: (args: McpToolArgs, context?: McpToolCallContext) => getTask(args, domainDependencies, context),
     list_pipelines: (args: McpToolArgs, context?: McpToolCallContext) => listPipelines(args, domainDependencies, context),
     get_pipeline: (args: McpToolArgs, context?: McpToolCallContext) => getPipeline(args, domainDependencies, context),
@@ -9518,6 +9581,8 @@ export function viewerMcpBindings(
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_reactions: (args, context) => telegramBotReactions(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_set_reaction: (args, context) => telegramBotSetReaction(args, viewerControlForCall(controlDependencies, context)),
     relay_answer: async (args) => {
       const caller = attributionOf(domainDependencies);
       try {

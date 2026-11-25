@@ -1,4 +1,5 @@
 import { installTaskTimes, prepareTaskTimes, taskTimePendingCursor, taskTimesReady } from "./taskTimes";
+import { taskListIndex, taskListIndexCurrent, taskListIndexes } from "./taskListIndexes";
 import { observeRegistryWriter } from "@/lib/agent/registryWriter";
 import { assertOperationLease, awaitLeasedOperation } from "@/lib/operationLease";
 import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
@@ -708,6 +709,7 @@ const stateSchema = [
   `CREATE INDEX IF NOT EXISTS state_rows_task_project
     ON state_rows(json_extract(value_json,'$.project'), row_key)
     WHERE collection='tasks' AND json_valid(value_json)`,
+  ...taskListIndexes,
   `CREATE INDEX IF NOT EXISTS state_rows_task_finding
     ON state_rows(json_extract(value_json,'$.project'), json_extract(value_json,'$.findingKey'), row_order, row_key)
     WHERE collection='tasks' AND json_valid(value_json)
@@ -871,12 +873,14 @@ function backfillPipelineRequestReceipts(db: Database): void {
 function openRawDatabase(filename: string): Database {
   const db = connectRawDatabase(filename);
   try {
-    return stateLockAttempt("state.schema", () => {
+    stateLockAttempt("state.schema", () => {
       try {
         // Existing collections are read without acquiring SQLite's writer lock.
         // Missing schema still follows the fenced initialization path below.
         const objects = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type IN ('table','index','trigger')").all();
         const names = new Set(objects.map(row => row.name));
+        const indexDefinition = db.query<{ sql: string }, [string]>("SELECT sql FROM sqlite_master WHERE type='index' AND name=?");
+        const outdatedTaskList = Object.values(taskListIndex).filter(name => !taskListIndexCurrent(name, indexDefinition.get(name)?.sql));
         if (names.has("state_collections") && !names.has("pipeline_request_receipts")
           && db.query("SELECT 1 FROM state_collections WHERE collection IN ('pipelines','pipelines_archive') AND schema_version = 6 LIMIT 1").get()) {
           throw new Error("pipeline format six receipt index is missing; repair required");
@@ -890,10 +894,11 @@ function openRawDatabase(filename: string): Database {
           && (pipelineControllerReferencesCurrent(db) || !mayRunStateStartupMutation(path.dirname(filename)))
           && pipelineEvidenceIndexReady(db)
           && (pipelineTaskMembershipReady(names) || !mayRunStateStartupMutation(path.dirname(filename)))
+          && !outdatedTaskList.length
           && taskDueIndexCurrent(db)
           && db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal"
           && db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all().some(row => row.name === "change_floor")
-          && db.query<{ name: string }, []>("PRAGMA table_info(state_imports)").all().some(row => row.name === "reconciled_sha256")) return db;
+          && db.query<{ name: string }, []>("PRAGMA table_info(state_imports)").all().some(row => row.name === "reconciled_sha256")) return;
         // The readiness check above is read-only. Any path below can mutate
         // the shared database, so an older or partial schema may only be
         // repaired by the release that currently owns SQLite writes.
@@ -906,6 +911,7 @@ function openRawDatabase(filename: string): Database {
         if (names.has("state_rows")) installTaskTimes(db);
         if (!taskDueIndexCurrent(db)) db.exec("DROP INDEX IF EXISTS state_rows_task_due");
         if (!names.has("task_time_pending")) db.exec("DROP INDEX IF EXISTS state_rows_task_legacy_stamp");
+        for (const index of outdatedTaskList) db.exec(`DROP INDEX IF EXISTS ${index}`);
         for (const sql of stateSchema) db.exec(sql);
         installTaskTimes(db);
         if (!names.has("pipeline_request_receipts")) backfillPipelineRequestReceipts(db);
@@ -928,12 +934,17 @@ function openRawDatabase(filename: string): Database {
         assertStateStartupMutation(path.dirname(filename), "state database schema publication");
         db.exec("COMMIT");
         secureDatabaseFiles(filename);
-        return db;
       } catch (error) {
         rollbackQuietly(db);
         throw classifyStateError(error, "state schema");
       }
     });
+    // Leave Bun's bounded query cache available for the caller's statements.
+    // When it fills, query() creates uncached statements that can keep the
+    // native connection open after close(), including during a legacy import.
+    const clearQueryCache = Reflect.get(db, "clearQueryCache");
+    if (typeof clearQueryCache === "function") Reflect.apply(clearQueryCache, db, []);
+    return db;
   } catch (error) {
     db.close();
     throw error;
@@ -2098,7 +2109,7 @@ export function stateRowsContaining(filename: string, collections: readonly stri
   return rows;
 }
 
-function sharedStateReadonlyDatabase(filename: string): Database {
+export function sharedStateReadonlyDatabase(filename: string): Database {
   const current = stateReadonlyReaderOwner.__llvStateReadonlyReader;
   if (current?.filename === filename) return current.db;
   current?.db.close();

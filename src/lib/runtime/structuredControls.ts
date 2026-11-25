@@ -9,6 +9,7 @@ import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { listCopilotAccounts } from "@/lib/accounts/copilot";
 import { copilotModelCatalog } from "@/lib/agent/copilotModels";
+import { antigravityModelCatalog, resolveAntigravityModelAndEffort } from "@/lib/agent/antigravityModels";
 import {
   attributeNamedAccountChoice,
   type AccountChoiceActor,
@@ -427,15 +428,21 @@ export async function dispatchStructuredControl(
   let attributeSwitch: (() => AccountOverrideNotice | undefined) | null = null;
   let assertSwitchCurrent: (() => void) | null = null;
   try {
-    const requestedCopilotModel = typeof request.reconfiguration?.model === "string" ? request.reconfiguration.model.trim() : "";
+    const requestedModel = typeof request.reconfiguration?.model === "string" ? request.reconfiguration.model.trim() : "";
     const copilotAccount = conversation.engine === "copilot"
       ? listCopilotAccounts().find((account) => account.id === generation.accountId)
       : undefined;
-    const copilotModelEfforts = copilotAccount && requestedCopilotModel
-      ? copilotModelCatalog(copilotAccount.id, copilotAccount.sessionStateDir).models.find((model) => model.id === requestedCopilotModel)?.efforts
-      : undefined;
+    const catalogModelEfforts = copilotAccount && requestedModel
+      ? copilotModelCatalog(copilotAccount.id, copilotAccount.sessionStateDir).models.find((model) => model.id === requestedModel)?.efforts
+      : conversation.engine === "antigravity" && requestedModel
+        ? (() => {
+            const resolved = resolveAntigravityModelAndEffort(requestedModel, null);
+            return antigravityModelCatalog(generation.accountId ?? "default").models
+              .find((model) => model.id === (resolved.baseModel ?? requestedModel))?.efforts;
+          })()
+        : undefined;
     const reconfiguration = request.action === "reconfigure"
-      ? reconfigurationFromBody(reconfigurableEngine!, request.reconfiguration ?? {}, copilotModelEfforts)
+      ? reconfigurationFromBody(reconfigurableEngine!, request.reconfiguration ?? {}, catalogModelEfforts)
       : null;
     if (reconfiguration && !reconfiguration.value) {
       return { status: 400, body: { error: reconfiguration.error ?? "invalid configuration" } };
@@ -446,6 +453,9 @@ export async function dispatchStructuredControl(
       const named = reconfiguration.value.accountId;
       if (conversation.engine === "copilot" && named && named !== generation.accountId) {
         return { status: 409, body: { error: "a Copilot session stays in its account's COPILOT_HOME; account changes require a new conversation", code: "unsupported-capability" } };
+      }
+      if (conversation.engine === "antigravity" && named && named !== (generation.accountId ?? "default")) {
+        return { status: 409, body: { error: "an Antigravity session uses the host's signed-in account; account changes are not supported", code: "unsupported-capability" } };
       }
       const unsettled = await waitingSwitch(client, registry, conversation.id);
       const waiting = unsettled?.phase === "waiting" ? unsettled : null;
@@ -510,7 +520,7 @@ export async function dispatchStructuredControl(
     if (reconfiguration?.value?.accountId) {
       const accountExists = dependencies.accountExists ?? ((engine: "claude" | "codex", accountId: string) =>
         (engine === "claude" ? listClaudeAccounts() : listCodexAccounts()).some((account) => account.id === accountId));
-      if (conversation.engine !== "copilot" && !accountExists(reconfigurableEngine as "claude" | "codex", reconfiguration.value.accountId)) {
+      if (conversation.engine !== "copilot" && conversation.engine !== "antigravity" && !accountExists(reconfigurableEngine as "claude" | "codex", reconfiguration.value.accountId)) {
         return { status: 400, body: { error: `account is not available for ${conversation.engine}` } };
       }
       if (conversation.engine === "codex" && reconfiguration.value.accountId !== generation.accountId) {
