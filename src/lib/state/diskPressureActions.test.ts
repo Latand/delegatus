@@ -22,7 +22,7 @@ test("one board card and one bridge report per episode survive real process rest
     expect(observations[4]!.cards[0]!.status).toBe("done");
     expect(observations.at(-1)!.cards).toHaveLength(2);
     expect(observations.at(-1)!.cards.filter(card => card.status === "done")).toHaveLength(1);
-    expect(fs.readFileSync(path.join(env.LLV_STATE_DIR!, "early-passes.ndjson"), "utf8").trim().split("\n")).toHaveLength(3);
+    expect(fs.existsSync(path.join(env.LLV_STATE_DIR!, "early-passes.ndjson"))).toBeFalse();
     // The bridge's own persisted log is the receipt, across all seven writers.
     expect(observations.at(-1)!.reports.reports).toHaveLength(2);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -34,7 +34,7 @@ test("a failed notice effect is retried, and categories are largest first", asyn
   pressure.consumers = [{ kind: "temp", bytes: 1, measuredAt: pressure.at }, { kind: "worktrees", bytes: 100, measuredAt: pressure.at }];
   expect(diskPressureNotice(pressure).indexOf("worktrees")).toBeLessThan(diskPressureNotice(pressure).indexOf("temp:"));
   const ports = productionDiskPressureActions();
-  ports.project = async () => "repo-5678abcd"; ports.early = () => {};
+  ports.project = async () => "repo-5678abcd";
   let cards = 0, reports = 0;
   ports.card = async () => { if (++cards === 1) throw new Error("fixture notice refused"); return true; };
   ports.report = async () => ++reports > 1;

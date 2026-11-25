@@ -874,7 +874,7 @@ function backfillPipelineRequestReceipts(db: Database): void {
 function openRawDatabase(filename: string): Database {
   const db = connectRawDatabase(filename);
   try {
-    return stateLockAttempt("state.schema", () => {
+    stateLockAttempt("state.schema", () => {
       try {
         // Existing collections are read without acquiring SQLite's writer lock.
         // Missing schema still follows the fenced initialization path below.
@@ -901,7 +901,7 @@ function openRawDatabase(filename: string): Database {
           && taskDueIndexCurrent(db)
           && db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal"
           && db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all().some(row => row.name === "change_floor")
-          && db.query<{ name: string }, []>("PRAGMA table_info(state_imports)").all().some(row => row.name === "reconciled_sha256")) return db;
+          && db.query<{ name: string }, []>("PRAGMA table_info(state_imports)").all().some(row => row.name === "reconciled_sha256")) return;
         // The readiness check above is read-only. Any path below can mutate
         // the shared database, so an older or partial schema may only be
         // repaired by the release that currently owns SQLite writes.
@@ -939,12 +939,17 @@ function openRawDatabase(filename: string): Database {
         assertStateStartupMutation(path.dirname(filename), "state database schema publication");
         db.exec("COMMIT");
         secureDatabaseFiles(filename);
-        return db;
       } catch (error) {
         rollbackQuietly(db);
         throw classifyStateError(error, "state schema");
       }
     });
+    // Leave Bun's bounded query cache available for the caller's statements.
+    // When it fills, query() creates uncached statements that can keep the
+    // native connection open after close(), including during a legacy import.
+    const clearQueryCache = Reflect.get(db, "clearQueryCache");
+    if (typeof clearQueryCache === "function") Reflect.apply(clearQueryCache, db, []);
+    return db;
   } catch (error) {
     db.close();
     throw error;

@@ -1,0 +1,193 @@
+{
+  "readings": {
+    "desktop-1440-en-light-inbox": {
+      "ends": [
+        {
+          "id": "priority:high",
+          "text": "Top of the Inbox",
+          "whole": true
+        },
+        {
+          "id": "priority:low",
+          "text": "Bottom of the Inbox",
+          "whole": true
+        }
+      ],
+      "levels": [
+        {
+          "cap": "High",
+          "title": "Top of the Inbox"
+        },
+        {
+          "cap": "Normal",
+          "title": "Normal"
+        },
+        {
+          "cap": "Low",
+          "title": "Bottom of the Inbox"
+        }
+      ],
+      "endsLine": true
+    },
+    "desktop-1440-en-light-in-progress": {
+      "ends": [],
+      "levels": [
+        {
+          "cap": "High",
+          "title": "High"
+        },
+        {
+          "cap": "Normal",
+          "title": "Normal"
+        },
+        {
+          "cap": "Low",
+          "title": "Low"
+        }
+      ],
+      "endsLine": false
+    },
+    "desktop-1440-en-dark-inbox": {
+      "ends": [
+        {
+          "id": "priority:high",
+          "text": "Top of the Inbox",
+          "whole": true
+        },
+        {
+          "id": "priority:low",
+          "text": "Bottom of the Inbox",
+          "whole": true
+        }
+      ],
+      "levels": [
+        {
+          "cap": "High",
+          "title": "Top of the Inbox"
+        },
+        {
+          "cap": "Normal",
+          "title": "Normal"
+        },
+        {
+          "cap": "Low",
+          "title": "Bottom of the Inbox"
+        }
+      ],
+      "endsLine": true
+    },
+    "desktop-1440-en-dark-in-progress": {
+      "ends": [],
+      "levels": [
+        {
+          "cap": "High",
+          "title": "High"
+        },
+        {
+          "cap": "Normal",
+          "title": "Normal"
+        },
+        {
+          "cap": "Low",
+          "title": "Low"
+        }
+      ],
+      "endsLine": false
+    },
+    "desktop-1440-uk-light-inbox": {
+      "ends": [
+        {
+          "id": "priority:high",
+          "text": "Угорі Вхідних",
+          "whole": true
+        },
+        {
+          "id": "priority:low",
+          "text": "Унизу Вхідних",
+          "whole": true
+        }
+      ],
+      "levels": [
+        {
+          "cap": "Високий",
+          "title": "Угорі Вхідних"
+        },
+        {
+          "cap": "Звичайний",
+          "title": "Звичайний"
+        },
+        {
+          "cap": "Низький",
+          "title": "Унизу Вхідних"
+        }
+      ],
+      "endsLine": true
+    },
+    "desktop-1440-uk-light-in-progress": {
+      "ends": [],
+      "levels": [
+        {
+          "cap": "Високий",
+          "title": "Високий"
+        },
+        {
+          "cap": "Звичайний",
+          "title": "Звичайний"
+        },
+        {
+          "cap": "Низький",
+          "title": "Низький"
+        }
+      ],
+      "endsLine": false
+    },
+    "desktop-1440-uk-dark-inbox": {
+      "ends": [
+        {
+          "id": "priority:high",
+          "text": "Угорі Вхідних",
+          "whole": true
+        },
+        {
+          "id": "priority:low",
+          "text": "Унизу Вхідних",
+          "whole": true
+        }
+      ],
+      "levels": [
+        {
+          "cap": "Високий",
+          "title": "Угорі Вхідних"
+        },
+        {
+          "cap": "Звичайний",
+          "title": "Звичайний"
+        },
+        {
+          "cap": "Низький",
+          "title": "Унизу Вхідних"
+        }
+      ],
+      "endsLine": true
+    },
+    "desktop-1440-uk-dark-in-progress": {
+      "ends": [],
+      "levels": [
+        {
+          "cap": "Високий",
+          "title": "Високий"
+        },
+        {
+          "cap": "Звичайний",
+          "title": "Звичайний"
+        },
+        {
+          "cap": "Низький",
+          "title": "Низький"
+        }
+      ],
+      "endsLine": false
+    }
+  },
+  "failures": []
+}

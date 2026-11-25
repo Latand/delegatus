@@ -4,7 +4,8 @@ import * as attemptRemoval from "./attemptTempRemoval";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { buildPipeline, savePipelines, findPipelineRecord, pipelineIdentity } from "@/lib/pipelines/store";
+import { Database } from "bun:sqlite";
+import { buildPipeline, savePipelines, findPipelineRecord, loadPipelines, pipelineIdentity } from "@/lib/pipelines/store";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { materializeOwnedStructuredHostAccess, materializeStructuredHostAccess, tempOwnerForConversation } from "./structuredSpawn";
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -692,6 +693,100 @@ function workScratchFixture(total: number, overdue: number) {
   return { store, directories };
 }
 
+test("absent allocation entries and recurring deferrals leave a path to the tail of the due ledger", async () => {
+  const count = 2050;
+  const { store, directories } = workScratchFixture(count, count);
+  const deep = directories[count - 2]!;
+  const firstPage = new Set(store.due(WORK_TICK, 32, true).map(owner => owner.directory));
+  const absent = Array.from({ length: 4 }, (_, index) => statePath("scratch", `llv-stage-absent${index}`));
+  const live = statePath("scratch", "llv-stage-live");
+  const clock = spyOn(Date, "now");
+  try {
+    for (const [index, directory] of absent.entries()) {
+      fs.mkdirSync(directory);
+      store.register({ directory, pipelineId: "young-lane", launchId: `absent-${index}`,
+        retainUntilClose: false, createdAt: WORK_TICK - 20 * 86400_000 });
+      fs.rmSync(directory, { recursive: true });
+    }
+    const pipeline = finishedLane(path.dirname(live), new Date(WORK_TICK - 3 * 86400_000).toISOString());
+    pipeline.state = "paused";
+    savePipelines([...loadPipelines(), { ...pipeline, ...pipelineIdentity("live-lane", pipeline.task, pipeline.repoDir), id: "live-lane" }]);
+    fs.mkdirSync(live);
+    store.register({ directory: live, pipelineId: "live-lane", launchId: "live-launch", retainUntilClose: true, createdAt: WORK_TICK - 1 });
+    store.retainRoot(live, WORK_TICK - 1);
+    fs.writeFileSync(path.join(live, "payload"), "live data");
+    fs.writeFileSync(path.join(deep, "payload"), Buffer.alloc(8 * 1024 ** 2, 1));
+    store.measure(deep, 0, 0);
+    // Recycled names still have due ledger entries. Their old identities must
+    // be refused cheaply while the scheduler walks past them.
+    const db = new Database(store.filename);
+    try {
+      const replace = db.query("UPDATE roots SET identity='fixture-replaced' WHERE directory=?");
+      db.transaction(() => {
+        for (const directory of directories) if (directory !== deep && !firstPage.has(directory)) replace.run(directory);
+      })();
+    } finally { db.close(); }
+
+    const seen = new Set<string>();
+    const maxTicks = Math.ceil((count + 1) / 32) + 1;
+    for (let i = 0; i < maxTicks && fs.existsSync(deep); i++) {
+      clock.mockReturnValue(WORK_TICK + i * 60_000);
+      const report = i === 1 ? await productionFixtureTick(Date.now()) : (await runAttemptTempSweep({ ...workPorts, references: (original, current, scan) => {
+        if (firstPage.has(original)) throw new AttemptTempBudgetDeferred("attempt protection inventory checkpointed; retry next tick");
+        return references(original, current, scan);
+      } }, workMode))!;
+      expect(report.pressure).toBeFalse();
+      expect(report.errors).toBe(0);
+      for (const row of report.outcomes) seen.add(row.directory);
+      if (i === 0) expect(store.allocationDue(WORK_TICK).map(owner => owner.directory)).toContain(deep);
+      if (i === 1) {
+        expect(report.checked).toBe(32);
+        expect(report.outcomes.some((row: { directory: string }) => firstPage.has(row.directory))).toBeFalse();
+        expect(store.owner(deep)?.bytes).toBeGreaterThanOrEqual(8 * 1024 ** 2);
+      }
+    }
+    expect(seen.size).toBeGreaterThanOrEqual(count);
+    expect(store.has(deep)).toBeFalse();
+    expect(fs.existsSync(deep)).toBeFalse();
+    expect(fs.readFileSync(path.join(live, "payload"), "utf8")).toBe("live data");
+    expect([...firstPage].every(directory => fs.existsSync(directory))).toBeTrue();
+  } finally { clock.mockRestore(); store.close(); }
+}, 180_000);
+
+test("registered live allocation is measured over cap and a pending quarantine keeps its bytes", async () => {
+  const { store } = workScratchFixture(0, 0);
+  const live = statePath("scratch", "llv-stage-allocation"), gone = statePath("scratch", "llv-stage-quarantine");
+  const clock = spyOn(Date, "now").mockReturnValue(WORK_TICK);
+  const payloadBytes = 2 * 1024 ** 2, quarantineBytes = 32 * 1024;
+  try {
+    const lane = finishedLane(path.dirname(live), new Date(WORK_TICK - 3 * 86400_000).toISOString());
+    lane.state = "running";
+    savePipelines([lane]);
+    for (const directory of [live, gone]) {
+      fs.mkdirSync(directory);
+      store.register({ directory, pipelineId: lane.id, launchId: path.basename(directory),
+        retainUntilClose: false, createdAt: WORK_TICK - 1 });
+    }
+    fs.writeFileSync(path.join(live, "payload"), Buffer.alloc(payloadBytes, 1));
+    store.measure(gone, quarantineBytes, 0);
+    const stat = fs.lstatSync(gone), identity = `${stat.dev}:${stat.ino}`;
+    const trash = statePath("scratch", ".delegatus-trash-llv-stage-quarantine-fixture");
+    fs.renameSync(gone, trash);
+    fs.writeFileSync(attemptTempJournalPath(gone), JSON.stringify({ directory: gone, trash, identity, uid: stat.uid, disposable: true }));
+    store.queueTrashIntent(gone, identity);
+    const report = await runAttemptTempSweep(workPorts, { ...workMode, LLV_ATTEMPT_TEMP_CAP_BYTES: String(payloadBytes / 2) });
+    // Production ticks report the allocation; the leased Cleaner pass owns
+    // pressure retirement under the current mainline scheduling contract.
+    expect(report).toMatchObject({ pressure: false, removed: 0 });
+    expect(report!.overCapBytes).toBeGreaterThan(0);
+    expect(report!.bytes).toBeGreaterThanOrEqual(payloadBytes + quarantineBytes);
+    expect(store.owner(live)?.bytes).toBeGreaterThanOrEqual(payloadBytes);
+    expect(store.owner(gone)?.bytes).toBe(quarantineBytes);
+    expect(fs.existsSync(trash)).toBeTrue();
+    expect(fs.statSync(path.join(live, "payload")).size).toBe(payloadBytes);
+  } finally { clock.mockRestore(); store.close(); }
+});
+
 test("work-shaped backlog visits beyond four and drains the 279 overdue registered roots", async () => {
   const { store, directories } = workScratchFixture(812, 279);
   let now = WORK_TICK;
@@ -931,7 +1026,23 @@ test("expensive expired proofs keep their next retry across fresh helpers", asyn
   } finally { store.close(); }
 }, 15_000);
 
-test("a failed full proof under cap pressure waits between minute ticks and retries when due", async () => {
+test.each([
+  ["low space", 1, "100000000000", true],
+  ["configured cap", 412e9, "1", false],
+] as const)("scheduled tick keeps ordinary expiry under %s", async (_label, freeBytes, capBytes, lowSpace) => {
+  const { store, directories: [expired, young] } = workScratchFixture(2, 1);
+  const clock = spyOn(Date, "now").mockReturnValue(WORK_TICK);
+  try {
+    const report = await runAttemptTempSweep({ scan: emptyScan, availableBytes: () => freeBytes, references },
+      { ...workMode, LLV_ATTEMPT_TEMP_CAP_BYTES: capBytes });
+    expect(report).toMatchObject({ lowSpace, pressure: false, pass: null, rootPageLimit: 32, checked: 1, removed: 1 });
+    expect(fs.existsSync(expired!)).toBeFalse();
+    expect(fs.readFileSync(path.join(young!, "payload"), "utf8")).toBe("fixture");
+    expect(store.activePressurePass()).toBeNull();
+  } finally { clock.mockRestore(); store.close(); }
+});
+
+test("a scheduled checkout proof above the cap waits between minute ticks and retries when due", async () => {
   const { store, directories: [directory] } = workScratchFixture(1, 1);
   const previousCap = process.env.LLV_ATTEMPT_TEMP_CAP_BYTES;
   process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "1";
@@ -947,7 +1058,7 @@ test("a failed full proof under cap pressure waits between minute ticks and retr
   try {
     const retryAt = WORK_TICK + 15 * 60_000;
     const failed = await tick(WORK_TICK, true);
-    expect(failed).toMatchObject({ checked: 1, deferred: 1, removed: 0,
+    expect(failed).toMatchObject({ pressure: false, checked: 1, deferred: 1, removed: 0,
       outcomes: [expect.objectContaining({ reasonCode: "checkout_budget", retryAt })] });
     expect(store.owner(directory!)?.checkedAt).toBe(retryAt);
     expect(await tick(WORK_TICK + 60_000, false)).toMatchObject({ checked: 0, removed: 0 });
@@ -961,7 +1072,7 @@ test("a failed full proof under cap pressure waits between minute ticks and retr
   }
 }, 15_000);
 
-test("a full namespace proof failure under cap pressure persists its retry across ticks", async () => {
+test("a scheduled namespace proof above the cap persists its retry across ticks", async () => {
   const { store, directories: [directory] } = workScratchFixture(1, 1);
   const previousCap = process.env.LLV_ATTEMPT_TEMP_CAP_BYTES;
   process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "1";
@@ -978,7 +1089,7 @@ test("a full namespace proof failure under cap pressure persists its retry acros
   try {
     const retryAt = WORK_TICK + 15 * 60_000;
     const failed = await runAttemptTempSweep({ ...workPorts, references }, workMode);
-    expect(failed).toMatchObject({ checked: 1, deferred: 1, removed: 0,
+    expect(failed).toMatchObject({ pressure: false, checked: 1, deferred: 1, removed: 0,
       outcomes: [expect.objectContaining({ reasonCode: "namespace_budget", retryAt })] });
     expect(store.owner(directory!)?.checkedAt).toBe(retryAt);
     now = WORK_TICK + 60_000;
@@ -995,7 +1106,7 @@ test("a full namespace proof failure under cap pressure persists its retry acros
   }
 }, 15_000);
 
-test("a mutation fence deadline under cap pressure backs off across fresh helpers", async () => {
+test("a scheduled mutation fence deadline above the cap backs off across fresh helpers", async () => {
   const { store, directories: [directory] } = workScratchFixture(1, 1);
   const env = { ...process.env, LLV_ATTEMPT_TEMP_CAP_BYTES: "1" };
   const timeout = ["--fixture-mutation-fence=timeout"];
@@ -1006,17 +1117,17 @@ test("a mutation fence deadline under cap pressure backs off across fresh helper
     let extraProofs = 0;
     for (const minutes of [1, 2, 3, 4, 14]) {
       const idle = await productionFixtureTick(WORK_TICK + minutes * 60_000, timeout, env);
-      expect(idle).toMatchObject({ pressure: true, lowSpace: false, removed: 0, reclaimedBytes: 0 });
+      expect(idle).toMatchObject({ pressure: false, lowSpace: false, removed: 0, reclaimedBytes: 0 });
       extraProofs += idle.fixtureMutationFences;
     }
     expect(fs.readFileSync(path.join(directory!, "payload"), "utf8")).toBe("fixture");
     expect(fs.existsSync(attemptTempJournalPath(directory!))).toBeFalse();
     const due = await productionFixtureTick(retryAt, ["--fixture-mutation-fence=observe"], env);
-    expect(due).toMatchObject({ pressure: true, checked: 1, removed: 1, errors: 0 });
+    expect(due).toMatchObject({ pressure: false, checked: 1, removed: 1, errors: 0 });
     expect(due.fixtureMutationFences).toBeGreaterThan(0);
     expect(fs.existsSync(directory!)).toBeFalse();
     expect(extraProofs).toBe(0);
-    expect(failed).toMatchObject({ pressure: true, lowSpace: false, checked: 1, deferred: 1, removed: 0, fixtureMutationFences: 1,
+    expect(failed).toMatchObject({ pressure: false, lowSpace: false, checked: 1, deferred: 1, removed: 0, fixtureMutationFences: 1,
       outcomes: [expect.objectContaining({ reasonCode: "mutation_fence_budget", retryAt })] });
     expect(persisted).toBe(retryAt);
   } finally { store.close(); }
@@ -1039,17 +1150,17 @@ function quarantineWorkRoot(store: AttemptTempStore, directory: string) {
   return trash;
 }
 
-test("mutation fence backoff allows prompt resumption of journaled trash under cap pressure", async () => {
+test("scheduled mutation fence backoff allows prompt resumption of journaled trash above the cap", async () => {
   const { store, directories: [directory] } = workScratchFixture(1, 1);
   const env = { ...process.env, LLV_ATTEMPT_TEMP_CAP_BYTES: "1" };
   try {
     store.defer(directory!, WORK_TICK + 15 * 60_000);
     const trash = quarantineWorkRoot(store, directory!);
     const starting = await productionFixtureTick(WORK_TICK + 60_000, ["--fixture-mutation-fence=observe"], env);
-    expect(starting).toMatchObject({ pressure: true, removed: 0, fixtureMutationFences: 0,
+    expect(starting).toMatchObject({ pressure: false, removed: 0, fixtureMutationFences: 0,
       outcomes: [expect.objectContaining({ reasonCode: "recovery_binding_scan" })] });
     const resumed = await productionFixtureTick(WORK_TICK + 120_000, ["--fixture-mutation-fence=observe"], env);
-    expect(resumed).toMatchObject({ pressure: true, checked: 1, removed: 1, errors: 0 });
+    expect(resumed).toMatchObject({ pressure: false, checked: 1, removed: 1, errors: 0 });
     expect(resumed.fixtureMutationFences).toBeGreaterThan(0);
     expect(fs.existsSync(trash)).toBeFalse();
     expect(fs.existsSync(attemptTempJournalPath(directory!))).toBeFalse();
@@ -1153,7 +1264,7 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_WORK_BENCHMARK !== "1")("work-shaped me
   } finally { clearInterval(timer); clock.mockRestore(); store.close(); }
 }, 60_000);
 
-test.skipIf(process.env.LLV_ATTEMPT_TEMP_WORK_BENCHMARK !== "1")("work-shaped idle CPU under cap pressure with mutation fence timeouts", async () => {
+test.skipIf(process.env.LLV_ATTEMPT_TEMP_WORK_BENCHMARK !== "1")("work-shaped idle CPU above the cap with scheduled mutation fence timeouts", async () => {
   const { store, directories } = workScratchFixture(812, 4);
   let now = WORK_TICK, proofs = 0, cpuSeconds = 0;
   const clock = spyOn(Date, "now").mockImplementation(() => now);
@@ -1176,7 +1287,7 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_WORK_BENCHMARK !== "1")("work-shaped id
       now = WORK_TICK + 60_000 * n;
       const report = (await runAttemptTempSweep({ ...workPorts, references: async original => budgetRoots.has(original) },
         { ...workMode, LLV_ATTEMPT_TEMP_CAP_BYTES: "1" }))!;
-      expect(report).toMatchObject({ pressure: true, lowSpace: false, removed: 0, reclaimedBytes: 0 });
+      expect(report).toMatchObject({ pressure: false, lowSpace: false, removed: 0, reclaimedBytes: 0 });
       cpuSeconds += report.cleanup.sweepCpuSeconds;
     }
     console.log(JSON.stringify({ fixture: "work-cap-pressure-idle", ticks: 60, proofs, cpuSeconds, reclaimedBytes: 0 }));

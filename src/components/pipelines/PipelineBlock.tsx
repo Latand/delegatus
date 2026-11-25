@@ -365,16 +365,18 @@ function FindingList({ findings, shown }: { findings: readonly StageFinding[]; s
 
 /** The report a lane that needs a decision is answered from: the parked
     stage's own report and first finding, or the reason when it filed none. */
-function DecisionReport({ pipeline, stage, names, nameOf }: {
+function DecisionReport({ pipeline, stage, names, nameOf, reason: withReason = true }: {
   pipeline: Pipeline;
   stage: PipelineStage | null;
   names: ReadonlyMap<string, string>;
   nameOf: (stage: PipelineStage) => string;
+  /** Draw the generic reason line: a caller that leads with the stop's own sentence leaves it out. */
+  reason?: boolean;
 }) {
   const { t } = useLocale();
   const report: PipelineStageReportEntry | null = stage ? (pipeline.stageReports ?? []).filter((entry) => entry.stageId === stage.id).at(-1) ?? null : null;
   if (report && currentProviderWait(pipeline)?.condition.kind !== "transient") return <StageReportLine pipeline={pipeline} entry={report} names={names} shown={ANSWER_FINDINGS} />;
-  const reason = pipelineReason(t, pipeline, nameOf);
+  const reason = withReason ? pipelineReason(t, pipeline, nameOf) : null;
   return (
     <>
       {reason ? <p className="stage-report" data-provider-wait={currentProviderWait(pipeline)?.condition.kind === "transient" ? "" : undefined}>{reason}</p> : null}
@@ -403,18 +405,20 @@ function ReviewStopReport({ pipeline, stop, nameOf }: {
 
 /** What the lane stopped on: why it stopped on a review, the review heads of
     a spent review budget, or the parked stage's report. */
-function AnswerReport({ pipeline, answers, names, nameOf }: {
+export function AnswerReport({ pipeline, answers, names, nameOf, reason = true }: {
   pipeline: Pipeline;
   answers: PipelineAnswers;
   names: ReadonlyMap<string, string>;
   nameOf: (stage: PipelineStage) => string;
+  /** Leave out the generic «needs a decision» line when the caller states the stop's own reason first. */
+  reason?: boolean;
 }) {
   const { t } = useLocale();
   if (answers.kind === "merge") return <p className="stage-report" data-merge-stop={pipeline.id}>{t("pipelineBlock.merge.reason", { reason: mergeReasonText(t, pipeline.merge?.reason ?? null) })}</p>;
   if (answers.stop) return <ReviewStopReport pipeline={pipeline} stop={answers.stop} nameOf={nameOf} />;
   return answers.kind === "review"
     ? <p className="review-heads" data-review-heads={pipeline.id}>{pipelineReviewHeads(t, pipeline)}</p>
-    : <DecisionReport pipeline={pipeline} stage={answers.stage} names={names} nameOf={nameOf} />;
+    : <DecisionReport pipeline={pipeline} stage={answers.stage} names={names} nameOf={nameOf} reason={reason} />;
 }
 
 /** A completed lane whose last fix no reviewer saw says so, muted, on a line

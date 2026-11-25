@@ -6755,9 +6755,9 @@ function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
   } };
 }
 
-function pipelineReferenceRows(dependencies: ViewerMcpDomainDependencies, project: string): Pipeline[] {
-  const source = dependencies.pipelineSelectionSource?.();
-  return source ? boardSelection(source.filename, "pipelines").referenceRecords(source, project)
+function pipelineReferenceRows(dependencies: ViewerMcpDomainDependencies, project: string, includeArchived = false): Pipeline[] {
+  const source = dependencies.pipelineSelectionSource?.(includeArchived);
+  return source ? boardSelection(source.filename, "pipelines", includeArchived).referenceRecords(source, project)
     : (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines).filter(row => !project || canonicalProject(row.project) === project);
 }
 
@@ -6796,6 +6796,7 @@ async function listPipelines(
   const scope = { project: board.project, states, includeClosed: args.includeClosed === true,
     ids: stringSet(args.ids), query: normalizedBoardQuery(text(args.query)), updatedSince: sinceTime(args.updatedSince),
     queryIds: undefined as string[] | undefined };
+  const includeArchived = scope.includeClosed && !scope.ids.length;
   // Resolve explicit ids once so PR matching and paging share the same
   // hot-or-archive records without traversing either collection.
   const requested = scope.ids.length && dependencies.readPipelineRecord
@@ -6805,14 +6806,14 @@ async function listPipelines(
     }))
     : undefined;
   const number = pullRequestQuery(scope.query);
-  if (number !== null) scope.queryIds = (requested ? [...requested.values()] : pipelineReferenceRows(dependencies, scope.project))
+  if (number !== null) scope.queryIds = (requested ? [...requested.values()] : pipelineReferenceRows(dependencies, scope.project, includeArchived))
     .filter(row => (!scope.project || canonicalProject(row.project) === scope.project) && pipelineMatchesPr(row, number)).map(row => row.id).sort();
-  const hotSource = dependencies.pipelineSelectionSource?.();
+  const selection = dependencies.pipelineSelectionSource?.(includeArchived);
   // Explicit ids share get_pipeline's hot-or-archive lookup. Keep ordinary
   // lists on their scalar selection index and materialize only requested rows.
-  const source = hotSource && requested
-    ? { ...hotSource, read: (id: string) => requested.get(id) ?? null }
-    : hotSource;
+  const source = selection && requested
+    ? { ...selection, read: (id: string) => requested.get(id) ?? null }
+    : selection;
   /* #2059: the compact row names its PR in one string, the full forms carry
      every resolved link. */
   const project = (source: Pipeline) => {
@@ -6822,7 +6823,7 @@ async function listPipelines(
     const { stages, ...status } = pipelineCompactRow(pipeline);
     return { ...(args.statusOnly === true ? status : { ...status, stages }), ...pipelineCheckFields(pipeline), ...compactPullRequest(pipeline), ...compactMergeFields(pipeline) };
   };
-  const page = source ? boardSelection(source.filename, "pipelines").page(source, scope, args.cursor,
+  const page = source ? boardSelection(source.filename, "pipelines", includeArchived).page(source, scope, args.cursor,
     Math.max(1, Math.min(200, integer(args.limit, PIPELINE_LIST_DEFAULT_LIMIT))), project)
     : await listPageAsync(requested
       ? [...requested.values()]

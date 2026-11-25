@@ -132,6 +132,26 @@ export function cpuInheritedWaitMs(env = process.env): number {
   try { return cpuWaitElapsed(directories.at(-1)!); }
   catch { return 0; } // Unknown accounting cannot extend an owned command's deadline.
 }
+const REPLACE_RETRIES = 100;
+const REPLACE_RETRY_MS = 5;
+/** Atomically replaces a ledger record. Windows refuses to rename over a file
+ * another handle holds open and answers EPERM or EBUSY for as long as the
+ * handle lives; the ledger's own readers open every record while they total
+ * it, so a heartbeat can land on one for a few milliseconds. The previous
+ * record stays whole while the rename is retried, and a handle held past the
+ * bound is a fault that surfaces as before. Other platforms never retry. */
+function replaceRecord(temporary: string, record: string) {
+  for (let attempt = 0; ; attempt++) {
+    try { fs.renameSync(temporary, record); return; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (process.platform !== "win32" || attempt >= REPLACE_RETRIES || (code !== "EPERM" && code !== "EBUSY")) throw error;
+      // eslint-disable-next-line no-restricted-syntax -- Gate and check-broker processes only, on Windows, for the few milliseconds a ledger reader holds the record; the serving loops never write this ledger.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, REPLACE_RETRY_MS);
+    }
+  }
+}
+
 /** Heartbeats end stale intervals even if a waiting process is hard-killed. */
 export function reportCpuWait(env = process.env) {
   const requiredRoots = roots(env);
@@ -140,7 +160,7 @@ export function reportCpuWait(env = process.env) {
   const start = Date.now();
   const write = (end: number, closed = false) => {
     for (const file of files) {
-      try { fs.writeFileSync(`${file}.next`, JSON.stringify({ start, end, closed }), { mode: 0o600 }); fs.renameSync(`${file}.next`, file); }
+      try { fs.writeFileSync(`${file}.next`, JSON.stringify({ start, end, closed }), { mode: 0o600 }); replaceRecord(`${file}.next`, file); }
       catch (error) {
         const optionalAccounting = path.dirname(file) === env.LLV_RECORDED_CHECK_WAIT_ROOT && !requiredRoots.includes(path.dirname(file));
         if (!optionalAccounting && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
