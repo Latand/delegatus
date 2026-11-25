@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { cloudCommand, runCloudChecks, type CloudJob, type CloudResult } from "./cloud-checks";
-import { plan, type PlanEnvironment } from "./local-gate";
+import { plan, type PlanEnvironment } from "./gate-plan";
 
 const job: CloudJob = { head: "a".repeat(40), tree: "b".repeat(40), base: "c".repeat(40), inputs: {}, bundle: "bundle", timeoutMs: 1000 };
 const verdict = (code: number): CloudResult => ({ kind: "verdict", head: job.head, tree: job.tree, base: job.base, inputs: cloudInputDigest(job.inputs), code });
@@ -63,28 +63,17 @@ test("Cloud commands bind the caller deadline and start an isolated candidate wi
   expect(command).not.toContain('bun "$setup_source/scripts/local-gate.ts"');
 });
 
-test("an older setup planner cannot omit candidate transport checks from local or hosted selection", () => {
+test("the candidate planner selects all transport checks with a canonical comparator", () => {
   const checks = ["scripts/local-gate.transport.native.test.ts", "scripts/local-gate.transport.budget.test.ts", "scripts/local-gate.transport.custody.test.ts"];
+  const comparator = "/older/setup/scripts/local-gate-tests.ts";
   const context: PlanEnvironment = { base: "origin/main", existing: new Set(["scripts/gate-cache.ts"]), tests: checks,
-    linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
-  const before = { tools: process.env.LLV_GATE_CANONICAL_TOOLS, comparator: process.env.LLV_GATE_CANONICAL_COMPARATOR };
-  try {
-    process.env.LLV_GATE_CANONICAL_TOOLS = "1";
-    process.env.LLV_GATE_CANONICAL_COMPARATOR = "/older/setup/scripts/local-gate-tests.ts";
-    const selected = plan("pre-push", ["scripts/gate-cache.ts"], context).find(step => step.name === "touched tests")!;
-    expect(selected.command).toEqual(["bun", "/older/setup/scripts/local-gate-tests.ts", "--base", "origin/main", ...checks.map(file => `./${file}`)]);
-    const hosted = cloudCommand(job);
-    expect(hosted).toContain('bun scripts/local-gate.ts pre-push --admitted');
-    expect(hosted).toContain('LLV_GATE_CANONICAL_COMPARATOR="$setup_source/scripts/local-gate-tests.ts"');
-    expect(hosted).not.toContain('bun "$setup_source/scripts/local-gate.ts"');
-  } finally {
-    if (before.tools === undefined) delete process.env.LLV_GATE_CANONICAL_TOOLS; else process.env.LLV_GATE_CANONICAL_TOOLS = before.tools;
-    if (before.comparator === undefined) delete process.env.LLV_GATE_CANONICAL_COMPARATOR; else process.env.LLV_GATE_CANONICAL_COMPARATOR = before.comparator;
-  }
+    linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [], comparator };
+  const selected = plan("pre-push", ["scripts/gate-cache.ts"], context).find(step => step.name === "touched tests");
+  expect(selected?.command).toEqual(["bun", comparator, "--base", "origin/main", ...checks.map(file => `./${file}`)]);
 });
 
 test("a deadline retry in a new hosted workspace starts cold and binds changed trees and bases", () => {
-  const root = mkdtempSync(path.join(tmpdir(), "cloud-checkpoint-retry-"));
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "cloud-checkpoint-retry-")));
   const source = path.join(root, "source"); mkdirSync(source);
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "noreply@example.invalid",
     GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "noreply@example.invalid" };
@@ -101,6 +90,8 @@ test("a deadline retry in a new hosted workspace starts cold and binds changed t
     const bin = path.join(root, "bin"); mkdirSync(bin);
     writeFileSync(path.join(bin, "bun"), `#!/bin/sh
 if [ "$1" = scripts/cloud-check-dependencies.ts ]; then exit 0; fi
+test "$#" = 3 && test "$1" = scripts/local-gate.ts && test "$2" = pre-push && test "$3" = --admitted || exit 13
+test "$LLV_GATE_CANONICAL_TOOLS" = 1 && test "$LLV_GATE_CANONICAL_COMPARATOR" = ${JSON.stringify(path.join(source, "scripts/local-gate-tests.ts"))} || exit 14
 test "$LLV_GATE_PUSH_DEADLINE" = 1900000000000 || exit 12
 cache="$(git rev-parse --git-common-dir)/delegatus-gate/head-files"
 mkdir -p "$cache"
@@ -322,7 +313,7 @@ test("cancellation does not start local checks", async () => {
 });
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { checkEnvironment } from "./gate-cache";
