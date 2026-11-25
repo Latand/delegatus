@@ -23,6 +23,7 @@ import { hostedCloudStageClient, CloudSubmissionNotStartedError } from "./cloudH
 import { claudeCloudStageClient, CLAUDE_SUBMISSION_RECOVERY_MS } from "./cloudClaudeClient";
 import { HostedCloudError } from "./cloudHostedErrors";
 import { prepareCloudPatch, applyCloudPatch } from "./cloudStagePatch";
+import { recoverLaneIndexLock, reportedIndexLockPath, reportsExistingIndexLock, withLaneIndexLockRecovery } from "./indexLock";
 import { FlowRetiredError, STAGE_RETIREMENT, hasRetiredStage } from "@/lib/flows/retirement";
 import { preparePipelineSetup } from "./git";
 import { restoreMissingLaneWorktree } from "./missingWorktree";
@@ -3723,7 +3724,7 @@ async function settleOnRecordedReport(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   ports: PipelinePorts, persist: () => void | Promise<void>, evidence?: StageTurnEvidence | null,
 ): Promise<boolean> {
-  if (!attempt.report || attempt.verdict || attempt.legacyReview) return false;
+  if (!attempt.report || attempt.verdict || attempt.legacyReview || attempt.indexLockRecoveryPending) return false;
   const receipt = attempt.launchId ? ports.spawnReceipt(attempt.launchId) : null;
   const pathname = attempt.agentPath ?? (attempt.conversationId ? ports.pathForConversation(attempt.conversationId) : null)
     ?? receipt?.transcript ?? receipt?.stagedTranscript ?? null;
@@ -6312,6 +6313,7 @@ async function settlePublicationRepair(
   const exec: ExecPort = (command, args, cwd, env, options) => ports.exec(command, args, cwd, env, {
     ...options, additionalInheritedFds: [descriptor, ...options?.additionalInheritedFds ?? []],
   });
+  exec.revalidateIndexLockRecovery = ports.exec.revalidateIndexLockRecovery;
   try { return await settlePublicationRepairWithCustody(pipeline, stage, attempt, { ...ports, exec }, persist); }
   finally { releasePublicationFileLock(descriptor); }
 }
@@ -6372,7 +6374,7 @@ async function settlePublicationRepairWithCustody(
     let custodyHead = repair.commitCustody ? repair.commitStartedHead : undefined;
     let custodyBranch = repair.commitCustody?.branch;
     const custodyMoved = "The dead producer's repair head moved after its creation receipts were proved; preserve the checkout.";
-    const exec: ExecPort = async (command, args, cwd, env, options) => {
+    const guarded: ExecPort = async (command, args, cwd, env, options) => {
       if (deadProducer && command === "git" && ["restore", "add", "commit"].includes(args[0])
         && !producerGone(await readRepairProducerEvidence(pipeline, stage, attempt, ports, true))) {
         return { code: 1, stdout: "", stderr: "The publication repair producer changed while custody was being settled; preserve its work." };
@@ -6393,6 +6395,20 @@ async function settlePublicationRepairWithCustody(
       }
       return ports.exec(command, args, cwd, pipelineLiteralGitEnv(env), options);
     };
+    guarded.revalidateIndexLockRecovery = async () => (await ports.exec.revalidateIndexLockRecovery?.()) !== false
+      && (!deadProducer || producerGone(await readRepairProducerEvidence(pipeline, stage, attempt, ports, true)));
+    const deferIndexLock = async (detail: string) => {
+      if (attempt.error !== detail || pipeline.stateDetail !== detail) {
+        attempt.error = detail;
+        pipeline.stateDetail = detail;
+        await persist();
+      }
+      ports.scheduleTick?.(30_000);
+      return false;
+    };
+    const indexRecovery = await recoverLaneIndexLock(pipeline, pipeline.worktreeDir, guarded, "publication repair");
+    if ("error" in indexRecovery) return deferIndexLock(indexRecovery.error);
+    const exec = withLaneIndexLockRecovery(pipeline, guarded);
     const branch = await exec("git", ["branch", "--show-current"], pipeline.worktreeDir);
     const deliveryBranch = pipeline.delivery!.target.branch.replace(/^refs\/heads\//, "");
     if (branch.code !== 0 || ![pipeline.branch, deliveryBranch].includes(branch.stdout.trim())) {
@@ -6444,8 +6460,11 @@ async function settlePublicationRepairWithCustody(
         await persist();
         if (paths.length) {
           const restored = await exec("git", ["restore", "--worktree", "--", ...paths.map(file => `:(top,literal)${file}`)], pipeline.worktreeDir);
-          if (restored.code !== 0) return fail(restored.stderr.includes(custodyMoved) ? custodyMoved
-            : "The dead producer's unstaged repair could not be discarded; staged work is preserved.");
+          if (restored.code !== 0) {
+            if (restored.stderr.startsWith("index.lock ")) return deferIndexLock(restored.stderr);
+            return fail(restored.stderr.includes(custodyMoved) ? custodyMoved
+              : "The dead producer's unstaged repair could not be discarded; staged work is preserved.");
+          }
           attempt.publicationRepairAbandonment!.reason = attempt.publicationRepairAbandonment!.reason
             .replace("; discarding unstaged repair", "; discarded unstaged repair");
           await persist();
@@ -6455,6 +6474,7 @@ async function settlePublicationRepairWithCustody(
         const tree = await exec("git", ["write-tree"], pipeline.worktreeDir);
         const paths = await exec("git", ["diff", "--cached", "--name-only", "--no-renames", "-z"], pipeline.worktreeDir);
         if (tree.code !== 0 || !/^[0-9a-f]{40}$/.test(tree.stdout.trim()) || paths.code !== 0) {
+          if (tree.stderr.startsWith("index.lock ")) return deferIndexLock(tree.stderr);
           return fail("The dead producer's staged repair custody cannot be pinned; preserve the index and worktree.");
         }
         repair.commitCustody = { branch: custodyBranch!, tree: tree.stdout.trim(), paths: paths.stdout.split("\0").filter(Boolean) };
@@ -6475,22 +6495,26 @@ async function settlePublicationRepairWithCustody(
         const tree = await exec("git", ["write-tree"], pipeline.worktreeDir);
         const unstaged = await exec("git", ["diff", "--quiet", "--no-ext-diff", "--no-textconv"], pipeline.worktreeDir);
         if (tree.code !== 0 || tree.stdout.trim() !== custody.tree || unstaged.code !== 0) {
+          if (tree.stderr.startsWith("index.lock ")) return deferIndexLock(tree.stderr);
           return fail("The repair custody index or worktree changed; preserve its contents before retrying.");
         }
       }
       const key = crypto.createHash("sha256").update(JSON.stringify([stage.id, attempt.n, worker.attempt.launchId, repair.operationId, repair.sha])).digest("hex");
       // The existing output-commit protocol writes a parent/tree/nonce receipt
       // before Git runs and requires that exact receipt to recover a moved head.
-      result = await commitPipelineStage(pipeline, worker.stage.id, false, exec, custody.paths,
+      result = await commitPipelineStage(pipeline, worker.stage.id, false, guarded, custody.paths,
         repair.commitStartedHead!, path.join(pipelineArtifactsDir(pipeline.id), `repair-commit-${key}.json`));
     } else {
       const recovered = replay ? await currentPipelineBranchHead(pipeline, exec) : null;
       if (recovered && !recovered.ok) return fail(`The publication repair commit was already attempted; its outcome cannot be recovered: ${recovered.error}`);
-      result = recovered?.ok && writable ? recovered : await commitPipelineStage(pipeline, worker.stage.id, writable, exec,
+      result = recovered?.ok && writable ? recovered : await commitPipelineStage(pipeline, worker.stage.id, writable, guarded,
         attemptStage(worker.stage, worker.attempt).outputs, writable ? null : repair.sha, ports.stageCommitReceiptFile);
     }
-    if (!result.ok) return fail(deadProducer && writable && result.error === `read-only stage ${worker.stage.id} created a commit`
-      ? custodyMoved : result.error);
+    if (!result.ok) {
+      if (result.error.startsWith("index.lock ") || result.error.includes(": index.lock ")) return deferIndexLock(result.error);
+      return fail(deadProducer && writable && result.error === `read-only stage ${worker.stage.id} created a commit`
+        ? custodyMoved : result.error);
+    }
     const current = await currentPipelineBranchHead(pipeline, ports.exec);
     if (!current.ok || current.sha !== result.sha) return fail(current.ok ? "The publication repair head moved during settlement." : current.error);
     if (deadProducer && (await exec("git", ["merge-base", "--is-ancestor", repair.sha, result.sha], pipeline.worktreeDir)).code !== 0) {
@@ -6987,7 +7011,9 @@ async function settleStageVerdict(
   parsed: NonNullable<ReturnType<typeof parseStageVerdict>>,
   ports: PipelinePorts,
   persist: () => void | Promise<void>,
+  indexLockChecked = false,
 ): Promise<void> {
+  if (attempt.indexLockRecoveryPending) return;
   if (!("failureReason" in parsed) && parsed.verdict.status === "pass" && attempt.launchId
     && recordedReportReceipts(attempt.launchId).some(row => !row.exclusion && (row.pending || !row.complete))) {
     attempt.state = "needs_decision";
@@ -7016,6 +7042,22 @@ async function settleStageVerdict(
     attempt.completedAt = ports.now();
     await park(pipeline, error instanceof Error ? error.message : String(error), attempt);
     return;
+  }
+
+  if (!indexLockChecked && stage.kind === "run" && attempt.executionRuntime !== "cloud" && parsed.verdict.status !== "pass"
+    && [parsed.output, parsed.verdict.blockedReason, ...parsed.verdict.findings ?? []]
+      .some(detail => detail && reportsExistingIndexLock(detail))) {
+    // Only the settled attempt is eligible. Production does the process
+    // inspection in the fenced settlement job, outside the pipeline lease.
+    if (ports.deferStageGit) {
+      attempt.indexLockRecoveryPending = { verdict: parsed.verdict };
+      // Keep the previous attempt state so an older Viewer after a rollback
+      // reads the original report and routes its failure normally.
+      attempt.verdict = null;
+      await persist();
+      return;
+    }
+    if (await settleReportedIndexLock(pipeline, stage, attempt, ports)) return;
   }
 
   /* A fixer repairs discoveries; its next reviewer owns the verdict. Admit
@@ -7113,6 +7155,42 @@ async function settleStageVerdict(
   setCursorState(pipeline, stage.id, "committing");
   await persist();
   await commitPassedStage(pipeline, stage, attempt, ports, persist);
+}
+
+async function settleReportedIndexLock(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts, persistIntent?: () => void | Promise<void>) {
+  const spent = runFor(pipeline, stage.id)?.attempts[attempt.n - 2]?.indexLockContinuationQueued === true;
+  const pending = attempt.indexLockRecoveryPending;
+  const rejectedPath = [attempt.output, attempt.verdict?.blockedReason, ...attempt.verdict?.findings ?? []]
+    .map(detail => detail ? reportedIndexLockPath(detail) : undefined).find(Boolean);
+  const recovery = await recoverLaneIndexLock(pipeline, pipeline.worktreeDir, ports.exec,
+    "stage-reported Git failure", undefined, undefined, {
+      inspectOnly: spent,
+      rejectedPath,
+      recordIntent: persistIntent && pending && !pending.proved ? async () => {
+        pending.proved = true;
+        await persistIntent();
+      } : undefined,
+    });
+  delete attempt.indexLockRecoveryPending;
+  if (!("error" in recovery) && !recovery.removed && !pending?.proved) return false;
+  attempt.state = "failed";
+  attempt.completedAt = ports.now();
+  setCursorState(pipeline, stage.id, "pending");
+  if ("error" in recovery) await park(pipeline, recovery.error, attempt);
+  else {
+    attempt.indexLockContinuationQueued = true;
+    attempt.error = "Recovered the stage's stale index.lock";
+    resetStageForRetry(pipeline, stage);
+    if (pipeline.cursor?.state === "pending") {
+      pipeline.cursor.input = [pipeline.cursor.input,
+        "Continue the prior attempt on this checkout. Reconcile its existing work and retry the Git operation blocked by index.lock once."]
+        .filter(Boolean).join("\n\n");
+    }
+    pipeline.stateDetail = "Recovered the stage's stale index.lock; one continuation queued";
+    ports.scheduleTick?.(0);
+  }
+  return true;
 }
 
 function fixerHasNextReviewer(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): boolean {
@@ -9493,8 +9571,10 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
         await checkpoint();
         assertProactivePipelineExecution(findPipelineRecord(pipeline.id) ?? pipeline);
       };
+      const switchExec: ExecPort = async (...args) => { await dispatchCheckpoint(); return ports.exec(...args); };
+      switchExec.revalidateIndexLockRecovery = async () => { await dispatchCheckpoint(); return true; };
       const outside: PipelinePorts = { ...ports,
-        exec: async (...args) => { await dispatchCheckpoint(); return await ports.exec(...args); },
+        exec: switchExec,
         stopStageAgent: async (...args) => { await dispatchCheckpoint(); return await ports.stopStageAgent(...args); },
         spawnAgent: async (input, onReserved, preparePrompt, admissionPhase) => {
           await dispatchCheckpoint();
@@ -10616,8 +10696,10 @@ async function tickCloudStage(pipeline: Pipeline, stage: PipelineStage, attempt:
         if (account.kind !== "available") throw new Error(`${label} account ${account.kind}`);
       };
       try {
+        const execute: ExecPort = (...args) => { assertCurrent(); return ports.exec(...args); };
+        execute.revalidateIndexLockRecovery = () => { assertCurrent(); return true; };
         await applyCloudPatch(cloudPatchDirectory(pipeline, stage, attempt), cloud.patch, cloud.headSha,
-          pipeline.worktreeDir, ports.exec, assertCurrent, persist, label);
+          pipeline.worktreeDir, withLaneIndexLockRecovery(pipeline, execute), assertCurrent, persist, label);
         assertCurrent();
       }
       catch (error) { return reject(hardenedRedact(error instanceof Error ? error.message : `${label} diff application failed`)); }
@@ -10658,6 +10740,7 @@ async function tickRunStage(
     ? await newAttempt(pipeline, stage, ports.now())
     : prior ?? await newAttempt(pipeline, stage, ports.now());
   if (!attempt || pipeline.state === "needs_decision") return;
+  if (attempt.indexLockRecoveryPending) return;
   if (attempt.activation || unstartedPendingAttempt(attempt) && pipelineHasActivation(pipeline)) {
     if (!attempt.launchId && !attempt.conversationId && !attempt.report && !attempt.verdict) {
       const detail = pendingLaunchDetail(attempt, ports, true);
@@ -13891,6 +13974,7 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "remote action superseded" };
       return await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal, inheritFd: descriptor, timeoutMs: args.includes("fetch") || args[0] === "commit" ? 60_000 : 5_000 });
     };
+    exec.revalidateIndexLockRecovery = () => { revalidate(); return !abort.signal.aborted; };
     let result: import("./git").PipelineGitResult = { ok: false, error: "remote action superseded" };
     try {
       revalidate();
@@ -14000,7 +14084,8 @@ function reviewIngressFence(pipeline: Pipeline): string {
 function requiresReviewIngress(pipeline: Pipeline): boolean {
   const stage = currentStage(pipeline);
   const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
-  const fixer = stage && attempt && attempt.state !== "committing" && fixerHasNextReviewer(pipeline, stage, attempt);
+  const fixer = stage && attempt && !attempt.indexLockRecoveryPending
+    && attempt.state !== "committing" && fixerHasNextReviewer(pipeline, stage, attempt);
   return ["running", "needs_decision"].includes(pipeline.state) && Boolean(fixer);
 }
 
@@ -14056,7 +14141,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
     }
     const flow = stage.kind === "review-loop" && attempt.flowId ? ports.getFlow(attempt.flowId) : null;
     const approved = stage.kind === "review-loop" && flow?.state === "approved";
-    if (preview.cursor?.state !== "committing" && !approved) continue;
+    if (preview.cursor?.state !== "committing" && !approved && !attempt.indexLockRecoveryPending) continue;
     let fingerprint = controllerTickFingerprint(preview);
     const flowFingerprint = JSON.stringify(flow);
     const reader = pipelineRecordReader(preview.id);
@@ -14128,6 +14213,7 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
       if (abort.signal.aborted) return { code: null, stdout: "", stderr: "stage settlement superseded" };
       return await performanceSpans.wait("controller.git-wait", async () => await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal, inheritFd: descriptor, timeoutMs: command === "timeout" ? 5_000 : options?.timeoutMs ?? 60_000 }));
     };
+    exec.revalidateIndexLockRecovery = async () => { await revalidate(); return !abort.signal.aborted; };
     const candidate = cloneControllerPipeline(preview);
     const effects: Array<() => Promise<void>> = [];
     stageSettlementEffects.set(candidate, effects);
@@ -14152,7 +14238,8 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         const current = pipelines.find((pipeline) => pipeline.id === preview.id);
         if (!current || !matches(current)) { abort.abort(); return; }
         const recorded = currentAttempt(current, candidateStage.id)!;
-        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair && !candidateAttempt.stageCommitWait && !candidateAttempt.publicationTextRepair && !candidateAttempt.terminalOutputPublication && !candidateAttempt.pullRequestInspection) return;
+        if (!candidateAttempt.branchAdoption && !candidateAttempt.commitRepair && !candidateAttempt.publicationRepair && !candidateAttempt.stageCommitWait && !candidateAttempt.publicationTextRepair && !candidateAttempt.terminalOutputPublication && !candidateAttempt.pullRequestInspection && !candidateAttempt.indexLockRecoveryPending?.proved) return;
+        if (candidateAttempt.indexLockRecoveryPending?.proved) recorded.indexLockRecoveryPending = structuredClone(candidateAttempt.indexLockRecoveryPending);
         if (candidateAttempt.pullRequestInspection) {
           recorded.pullRequestInspection = structuredClone(candidateAttempt.pullRequestInspection);
           recorded.state = candidateAttempt.state;
@@ -14207,7 +14294,12 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         if (ownershipInvalidated && preview.delivery?.operation?.state === "pending") throw preparationRefusal();
         continue;
       }
-      if (candidateAttempt.activatedBy?.budgetRecheck && ["failed", "needs_decision"].includes(candidateAttempt.state))
+      if (candidateAttempt.indexLockRecoveryPending) {
+        candidateAttempt.verdict = candidateAttempt.indexLockRecoveryPending.verdict;
+        if (!await settleReportedIndexLock(candidate, candidateStage, candidateAttempt, outside, persistIntent))
+          await settleStageVerdict(candidate, candidateStage, candidateAttempt,
+            { verdict: candidateAttempt.verdict!, output: candidateAttempt.output ?? "" }, outside, persistIntent, true);
+      } else if (candidateAttempt.activatedBy?.budgetRecheck && ["failed", "needs_decision"].includes(candidateAttempt.state))
         await publishFailedTerminalRecheck(candidate, candidateStage, candidateAttempt, outside);
       else if (["passed", "skipped"].includes(candidateAttempt.state)) await retryTerminalStagePublication(candidate, candidateStage, candidateAttempt, outside, persistIntent);
       else if (candidateStage.kind !== "review-loop" || await approvedReviewHeadHolds(candidate, candidateAttempt, outside)) {
@@ -14297,7 +14389,8 @@ async function recordStageSettlementPreparationFailure(preview: Pipeline, identi
     if (!current || controllerTickFingerprint(current) !== fingerprint || current.state !== "running"
       || current.delivery?.operation?.state === "running") return;
     const stage = currentStage(current), attempt = stage && currentAttempt(current, stage.id);
-    if (!stage || !attempt || attempt.verdict?.status !== "pass" || current.cursor?.state !== "committing") return;
+    if (!stage || !attempt || (!attempt.indexLockRecoveryPending
+      && (attempt.verdict?.status !== "pass" || current.cursor?.state !== "committing"))) return;
     const prior = attempt.settlementPreparationWait?.identity === identity ? attempt.settlementPreparationWait : undefined;
     const now = ports.now();
     const rounds = Math.min(prior?.rounds ?? 0, Number.MAX_SAFE_INTEGER - 1);
@@ -14311,7 +14404,9 @@ async function recordStageSettlementPreparationFailure(preview: Pipeline, identi
       // No Git result is accepted without fresh ownership. Stop this same
       // intent instead of renewing it forever, retaining the accepted head
       // and publication receipt. The commit retry resumes the same attempt.
-      const detail = `committing the passed stage: branch ownership preparation did not stabilize within 15 minutes: ${reason}; retry-stage to settle the preserved head`;
+      const detail = attempt.indexLockRecoveryPending
+        ? `index.lock recovery: branch ownership preparation did not stabilize within 15 minutes: ${reason}`
+        : `committing the passed stage: branch ownership preparation did not stabilize within 15 minutes: ${reason}; retry-stage to settle the preserved head`;
       stageSettlementEffects.set(current, notes);
       try { await park(current, detail, attempt); }
       finally { stageSettlementEffects.delete(current); }
@@ -14323,7 +14418,8 @@ async function recordStageSettlementPreparationFailure(preview: Pipeline, identi
       });
       return;
     }
-    current.stateDetail = `${STAGE_SETTLEMENT_PREPARATION_DETAIL}: ${reason}; automatic retry at ${attempt.settlementPreparationWait.retryAfter}`;
+    const waitingDetail = attempt.indexLockRecoveryPending ? "index.lock recovery is waiting for fresh branch ownership evidence" : STAGE_SETTLEMENT_PREPARATION_DETAIL;
+    current.stateDetail = `${waitingDetail}: ${reason}; automatic retry at ${attempt.settlementPreparationWait.retryAfter}`;
     if (settledPublicationForHead(current, current.lastPassedCommit)) attempt.error = null;
     await persist([current]);
     ports.scheduleTick?.(delayMs);
@@ -14339,7 +14435,9 @@ async function recordStageSettlementPreparationFailure(preview: Pipeline, identi
 
 async function parkUnadmittedStageSettlement(preview: Pipeline, ports: PipelinePorts, publicationCapacityMissing = false): Promise<boolean> {
   const attempt = preview.cursor && currentAttempt(preview, preview.cursor.stageId);
-  if (preview.state !== "running" || preview.cursor?.state !== "committing" || attempt?.verdict?.status !== "pass"
+  const settling = attempt?.indexLockRecoveryPending ? "index.lock recovery" : "passed-stage settlement";
+  if (preview.state !== "running" || (!attempt?.indexLockRecoveryPending
+    && (preview.cursor?.state !== "committing" || attempt?.verdict?.status !== "pass"))
     || (!publicationCapacityMissing && pipelineControllerJobLanes().includes(preview.id)) || preview.delivery?.operation?.state === "running") return false;
   const windowStartsAt = attempt.settlementAdmissionRetry?.retryAt;
   const remaining = windowStartsAt
@@ -14355,7 +14453,7 @@ async function parkUnadmittedStageSettlement(preview: Pipeline, ports: PipelineP
       // A report can precede the end of the producer's turn by hours. Start
       // this clock only when this stage actually asks for unavailable capacity.
       recorded.settlementAdmissionRetry = { failures: 0, retryAt: ports.now() };
-      current.stateDetail = "passed-stage settlement is waiting for a controller job";
+      current.stateDetail = `${settling} is waiting for a controller job`;
       await persist([current]);
       ports.scheduleTick?.(STAGE_SETTLEMENT_ADMISSION_WAIT_MS);
       return true;
@@ -14364,12 +14462,17 @@ async function parkUnadmittedStageSettlement(preview: Pipeline, ports: PipelineP
     if (failures <= 3) {
       const delay = [60_000, 5 * 60_000, 15 * 60_000][failures - 1]!;
       recorded.settlementAdmissionRetry = { failures, retryAt: new Date(unixMs(ports.now()) + delay).toISOString() };
-      current.stateDetail = `no controller job became available for passed-stage settlement within 15 minutes; automatic retry ${failures}/3 at ${recorded.settlementAdmissionRetry.retryAt}`;
+      current.stateDetail = `no controller job became available for ${settling} within 15 minutes; automatic retry ${failures}/3 at ${recorded.settlementAdmissionRetry.retryAt}`;
       await persist([current]);
       ports.scheduleTick?.(delay);
       return true;
     }
-    const detail = "no controller job became available for passed-stage settlement within 15 minutes after 3 automatic retries; retry-stage to settle the preserved head";
+    const detail = `no controller job became available for ${settling} within 15 minutes after 3 automatic retries; retry-stage to settle the preserved head`;
+    if (recorded.indexLockRecoveryPending) {
+      await park(current, detail, recorded);
+      await persist([current]);
+      return true;
+    }
     // Pending means no executor was admitted. Retire this reservation under
     // the same lane/epoch fence; a stale publisher can no longer consume it.
     const operation = current.delivery?.operation;
@@ -14920,7 +15023,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       for (const lane of await selectControllerPipelines("running")) {
         const stage = currentStage(lane);
         const attempt = stage && currentAttempt(lane, stage.id);
-        if (lane.cursor?.state !== "committing" && !(stage?.kind === "review-loop" && attempt?.flowId && ports.getFlow(attempt.flowId)?.state === "approved")) continue;
+        if (lane.cursor?.state !== "committing" && !attempt?.indexLockRecoveryPending
+          && !(stage?.kind === "review-loop" && attempt?.flowId && ports.getFlow(attempt.flowId)?.state === "approved")) continue;
         settlementOwnedPublications.add(lane.id);
         if (attempt?.settlementAdmissionRetry && unixMs(attempt.settlementAdmissionRetry.retryAt) > unixMs(ports.now())) continue;
         const jobPorts = { ...ports };
@@ -14928,7 +15032,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           const changed = await settlePendingStageGit(jobPorts);
           const current = findPipelineRecord(lane.id);
           const operation = current?.delivery?.operation;
-          if (current?.delivery?.active && operation?.state === "pending") {
+          if (!attempt?.indexLockRecoveryPending && current?.delivery?.active && operation?.state === "pending") {
             const admitted = startPipelineControllerJob(lane.id, async () => {
               await publishPipelineBranch(current, jobPorts.exec, { acceptedSha: operation.sha, now: jobPorts.now });
             }, () => controllerPipelineVersion(lane.id), "publication");

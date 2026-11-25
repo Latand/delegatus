@@ -8,7 +8,7 @@ export function createStageInputExec(
   revalidate: () => void,
   activationError: Error,
 ): ExecPort {
-  return async (command, args, cwd, env, options) => {
+  const activationExec: ExecPort = async (command, args, cwd, env, options) => {
     revalidate();
     if (activationSignal.aborted) throw activationError;
     const signal = options?.signal
@@ -16,4 +16,10 @@ export function createStageInputExec(
       : activationSignal;
     return exec(command, args, cwd, env, { ...options, signal });
   };
+  activationExec.revalidateIndexLockRecovery = async () => {
+    if (await exec.revalidateIndexLockRecovery?.() === false) return false;
+    revalidate();
+    return !activationSignal.aborted;
+  };
+  return activationExec;
 }

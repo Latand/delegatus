@@ -45,7 +45,10 @@ export interface ExecOptions {
   onSpawn?: (pid: number) => void;
 }
 
-export type ExecPort = (command: string, args: string[], cwd: string, env?: Partial<NodeJS.ProcessEnv>, options?: ExecOptions) => ExecResult | Promise<ExecResult>;
+export type ExecPort = ((command: string, args: string[], cwd: string, env?: Partial<NodeJS.ProcessEnv>, options?: ExecOptions) => ExecResult | Promise<ExecResult>) & {
+  /** Revalidate controller ownership after asynchronous index-lock inspection. */
+  revalidateIndexLockRecovery?: () => boolean | Promise<boolean>;
+};
 
 /** Bounded execution shared by Viewer Git and forge calls. Cancellation waits
     for close, including transport children, before ownership can be released. */

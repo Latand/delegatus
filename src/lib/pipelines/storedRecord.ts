@@ -282,6 +282,7 @@ function isSetupResult(value: unknown): boolean {
 function isAttempt(value: unknown, index: number): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const attempt = value as Record<string, unknown>;
+  const indexLockRecovery = attempt.indexLockRecoveryPending as NonNullable<PipelineStageAttempt["indexLockRecoveryPending"]> | undefined;
   return (
     (attempt.accounting === undefined || attemptAccountingSchema.safeParse(attempt.accounting).success
       && (attempt.n === 1 || (attempt.accounting as import("./accounting").AttemptAccounting).repeatReason !== null)) &&
@@ -293,6 +294,10 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.operatorCriticSkip === undefined || attempt.operatorCriticSkip === true) &&
     (attempt.legacyReview === undefined || (attempt.legacyReview === true && attempt.historical === true)) &&
     (attempt.acceptedForReview === undefined || attempt.acceptedForReview === true) &&
+    (indexLockRecovery === undefined || (indexLockRecovery !== null && typeof indexLockRecovery === "object"
+      && isVerdict(indexLockRecovery.verdict) && Boolean(indexLockRecovery.verdict) && indexLockRecovery.verdict.status !== "pass"
+      && (indexLockRecovery.proved === undefined || indexLockRecovery.proved === true))) &&
+    (attempt.indexLockContinuationQueued === undefined || attempt.indexLockContinuationQueued === true) &&
     ["pending", "spawning", "running", "reviewing", "committing", "passed", "failed", "needs_decision", "skipped"].includes(String(attempt.state)) &&
     isEffectiveRole(attempt.effectiveRole) &&
     isNullableString(attempt.launchId) &&

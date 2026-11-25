@@ -32,6 +32,7 @@ import { decisiveRefusal, publicationApp403, publicationDeadlineKind, publicatio
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { recordWorktreeProvenance } from "./worktreeProvenance";
+import { recoverLaneIndexLock, withLaneIndexLockRecovery } from "./indexLock";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
 import { cpuPriorityEnv } from "@/lib/runtime/cpuPriority";
 import { instanceCpuPrioritySource } from "@/lib/runtime/cpuAdmissionScope";
@@ -163,8 +164,9 @@ export function pipelineLiteralGitEnv(env?: Partial<NodeJS.ProcessEnv>): Partial
 }
 
 function withLiteralGitObjects(exec: ExecPort): ExecPort {
-  return (command, args, cwd, env, options) => exec(command, args, cwd,
-    pipelineLiteralGitEnv(env), options);
+  return Object.assign<ExecPort, Pick<ExecPort, "revalidateIndexLockRecovery">>(
+    (command, args, cwd, env, options) => exec(command, args, cwd, pipelineLiteralGitEnv(env), options),
+    { revalidateIndexLockRecovery: exec.revalidateIndexLockRecovery });
 }
 
 /** The cheap half of {@link resolvePipelineBase}: the branch-name shape, with
@@ -468,7 +470,9 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
     && !holdsInitialPin) {
     const remoteContainsLocal = await exec("git", ["merge-base", "--is-ancestor", localSha, remoteSha], pipeline.worktreeDir, signal);
     if (remoteContainsLocal.code === 0) {
-      const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir, signal);
+      const merge = withLaneIndexLockRecovery(pipeline, (command, args, cwd, env, options) =>
+        exec(command, args, cwd, signal, { env, timeoutMs: options?.timeoutMs }));
+      const merged = await merge("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir, undefined, { signal });
       if (merged.code !== 0) return failure("fast-forwarding the delivery branch before production", merged);
       expectedHead = remoteSha;
     }
@@ -652,13 +656,18 @@ async function finishInterruptedCheckout(pipeline: Pipeline, branch: string, sta
   if (stillOwned !== null) return { ok: false, error: `${WORKTREE_INITIALIZATION_HELD} ${stillOwned}` };
   const gitDir = await exec("git", ["rev-parse", "--path-format=absolute", "--git-dir"], pipeline.worktreeDir, signal);
   if (gitDir.code !== 0 || !gitDir.stdout.trim()) return failure("locating the interrupted pipeline checkout", gitDir);
-  fs.rmSync(path.join(gitDir.stdout.trim(), "index.lock"), { force: true });
-  const index = await exec("git", ["read-tree", "HEAD"], pipeline.worktreeDir, signal);
+  const admin = gitDir.stdout.trim();
+  const rebuild = withLaneIndexLockRecovery(pipeline,
+    (command, args, cwd, env, options) => exec(command, args, cwd, signal, { env, timeoutMs: options?.timeoutMs }),
+    () => fs.realpathSync(pipeline.worktreeDir) === registeredPath
+      && fs.readFileSync(path.join(admin, "locked"), "utf8").trim() === "initializing"
+      && fs.readFileSync(path.join(admin, "HEAD"), "utf8").trim() === `ref: refs/heads/${branch}`);
+  const index = await rebuild("git", ["read-tree", "HEAD"], pipeline.worktreeDir, undefined, { signal });
   if (index.code !== 0) return failure("rebuilding the interrupted pipeline checkout index", index);
   // Checkout only files proven missing. If one appears after the scan, Git
   // refuses to overwrite it; every already-present path stays untouched.
   if (missingTrackedPaths.length > 0) {
-    const checkout = await exec("git", ["checkout-index", "--", ...missingTrackedPaths], pipeline.worktreeDir, signal);
+    const checkout = await rebuild("git", ["checkout-index", "--", ...missingTrackedPaths], pipeline.worktreeDir, undefined, { signal });
     if (checkout.code !== 0) return failure("finishing the interrupted pipeline checkout", checkout);
   }
   return { ok: true, sha: start };
@@ -844,9 +853,13 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
   if (branch.code !== 0 || !branch.stdout.trim().startsWith("refs/heads/")) return failure("pinning the stage commit branch", branch);
   const locations = await exec("git", ["rev-parse", "--path-format=absolute", "--git-path", "index"], cwd);
   if (locations.code !== 0 || !path.isAbsolute(locations.stdout.trim())) return failure("locating stage index custody", locations);
-  // An observed foreign claim is never ours to remove or to spend a retry on.
-  if (fs.existsSync(`${locations.stdout.trim()}.lock`)) return { ok: false, deferred: true,
-    error: "stage index custody is held by another Git writer; retrying later" };
+  if (fs.existsSync(`${locations.stdout.trim()}.lock`)) {
+    // Preserve legacy external checkouts without spending the commit intent.
+    if (path.resolve(cwd) !== path.resolve(pipeline.repoDir) && fs.lstatSync(path.join(cwd, ".git")).isDirectory())
+      return { ok: false, deferred: true, error: "stage index custody is held by another Git writer; retrying later" };
+    const recovery = await recoverLaneIndexLock(pipeline, cwd, exec, "commit");
+    if ("error" in recovery) return { ok: false, error: `committing the passed stage: ${recovery.error}` };
+  }
   if (outputPaths) {
     const changedPaths = await exec("git", ["diff", "--name-only", "--no-renames", "-z", parent, tree, "--"], cwd);
     if (changedPaths.code !== 0) return failure("verifying the stage commit output tree", changedPaths);
@@ -900,6 +913,7 @@ export async function commitPipelineStage(
   receiptFile?: string,
   control?: StageCommitControl,
 ): Promise<PipelineGitResult> {
+  exec = withLaneIndexLockRecovery(pipeline, exec);
   // A Viewer exit can leave a source-owned link behind. Reap it before
   // inspecting paths or recovering an already-landed commit.
   try { isolateWorktreeDependencies(pipeline); }
@@ -1020,7 +1034,7 @@ export async function commitPipelineStage(
       ...(receipt ? [`Delegatus-Stage-Commit: ${receipt.id}`] : [])], exec, allowCommit ? undefined : changedOutputPaths,
       () => control?.beforeCommit(sha));
   if (!commit.ok) {
-    if (commit.deferred) return commit;
+    if (commit.deferred || commit.error.startsWith("committing the passed stage: index.lock ")) return commit;
     return { ...commit,
       commitRefusal: await stageCommitRefusal(allowCommit ? null : changedOutputPaths, exec, pipeline.worktreeDir) };
   }
@@ -1575,7 +1589,7 @@ export async function reconcilePipelineStageHead(pipeline: Pipeline, head: strin
 
 export async function resetPipelineStage(pipeline: Pipeline, exec: ExecPort): Promise<PipelineGitResult> {
   if (!pipeline.lastPassedCommit) return { ok: false, error: "the pipeline has no passed-stage commit" };
-  const reset = (await exec("git", ["reset", "--hard", pipeline.lastPassedCommit], pipeline.worktreeDir));
+  const reset = await withLaneIndexLockRecovery(pipeline, exec)("git", ["reset", "--hard", pipeline.lastPassedCommit], pipeline.worktreeDir);
   if (reset.code !== 0) return failure("resetting the pipeline stage", reset);
   const clean = (await exec("git", ["clean", "-fd"], pipeline.worktreeDir));
   if (clean.code !== 0) return failure("cleaning the pipeline stage", clean);
@@ -2232,6 +2246,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       }
       return executed;
     };
+    fencedExec.revalidateIndexLockRecovery = () => { revalidate(); return !abort.signal.aborted && !authorityRevoked; };
     let result: PipelinePublishResult;
     try {
       result = (await executePipelinePublication(reservation.pipeline, fencedExec, { acceptedSha: request.acceptedSha,
@@ -2415,6 +2430,9 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) {
     return { ok: false, error: `the accepted pipeline revision is not an exact commit SHA: ${shortId(acceptedSha || "absent")}` };
   }
+  const recovery = await recoverLaneIndexLock(pipeline, pipeline.worktreeDir, exec, "publication");
+  if ("error" in recovery) return { ok: false, error: `preparing publication: ${recovery.error}` };
+  exec = withLaneIndexLockRecovery(pipeline, exec);
   const local = (await currentPipelineBranchHead(pipeline, exec));
   if (!local.ok) return local;
   /* The worktree must still hold the accepted revision when publication starts.
@@ -2605,7 +2623,7 @@ export async function synchronizePipelineRetryHead(pipeline: Pipeline, exec: Exe
 
   const localIsAncestor = (await exec("git", ["merge-base", "--is-ancestor", local.sha, remoteSha], pipeline.worktreeDir));
   if (localIsAncestor.code === 0) {
-    const merge = (await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir));
+    const merge = await withLaneIndexLockRecovery(pipeline, exec)("git", ["merge", "--ff-only", "--no-overwrite-ignore", remoteSha], pipeline.worktreeDir);
     if (merge.code !== 0) return failure("fast-forwarding the pipeline worktree to its remote repair", merge);
     return { ok: true, sha: remoteSha };
   }

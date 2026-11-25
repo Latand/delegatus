@@ -506,12 +506,15 @@ test.each(["unchanged", "foreign", "legacy-foreign", "changed-index", "reset-ind
       }
       if (shape === "index-lock") {
         const lock = `${await f.git(f.lane(), "rev-parse", "--path-format=absolute", "--git-path", "index")}.lock`;
-        fs.writeFileSync(lock, "held\n");
-        const refused = await repairController(f, null);
-        expect(refused.code, refused.stderr).toBe(0);
-        expect(current().state).toBe("running");
-        expect(current().lastPassedCommit).toBe(accepted);
-        expect(fs.readFileSync(lock, "utf8")).toBe("held\n");
+        const holder = fs.openSync(lock, "wx");
+        try {
+          fs.writeFileSync(holder, "held\n");
+          const refused = await repairController(f, null);
+          expect(refused.code, refused.stderr).toBe(0);
+          expect(current().state).toBe("running");
+          expect(current().lastPassedCommit).toBe(accepted);
+          expect(fs.readFileSync(lock, "utf8")).toBe("held\n");
+        } finally { fs.closeSync(holder); }
         fs.unlinkSync(lock);
         expect(await f.git(f.lane(), "write-tree")).toBe(tree);
         // The unchanged custody intent recovers after the external lock is

@@ -6,6 +6,7 @@ import type { Pipeline, PipelineStageAttempt } from "./types";
 import { currentPipelineBranchHead, pipelineLiteralGitEnv } from "./git";
 import { pipelineArtifactsDir } from "./store";
 import { CONTROLLER_ARTIFACT_PATHSPECS } from "./controllerArtifacts";
+import { recoverLaneIndexLock, withLaneIndexLockRecovery } from "./indexLock";
 
 type Repair = NonNullable<PipelineStageAttempt["publicationRepair"]>;
 
@@ -81,11 +82,22 @@ export async function restoreRejectedPublicationRepair(
   const assertIdle = async () => {
     if (!await idle()) { waiting = true; throw new Error("repair is active"); }
   };
+  const execute: ExecPort = (...args) => exec(...args);
+  execute.revalidateIndexLockRecovery = async () => {
+    if (await exec.revalidateIndexLockRecovery?.() === false) return false;
+    await assertIdle();
+    return true;
+  };
+  const updateCheckout = withLaneIndexLockRecovery(pipeline, execute);
   const git = async (args: string[], index?: string) => {
     await assertIdle();
     const env = pipelineLiteralGitEnv(index ? { GIT_INDEX_FILE: index } : undefined);
     let result;
     if (!index && ["restore", "clean", "update-ref"].includes(args[0]!) && mutationStats) {
+      if (args[0] === "restore") {
+        const recovery = await recoverLaneIndexLock(pipeline, pipeline.worktreeDir, execute, "publication repair restore", env);
+        if ("error" in recovery) throw new Error(recovery.error);
+      }
       const manifest = path.join(scratch, "write.json");
       await fs.promises.writeFile(manifest, JSON.stringify({ args, stamps: [...mutationStats],
         head: expectedHead, branch: baseline!.branch, lock: path.join(directory, "remote-action.lock"),
@@ -100,11 +112,11 @@ export async function restoreRejectedPublicationRepair(
         changed = true;
         throw new Error("repair write lost its fence");
       }
-    } else result = await exec("git", args, pipeline.worktreeDir, env, { timeoutMs: 5_000 });
+    } else result = await updateCheckout("git", args, pipeline.worktreeDir, env, { timeoutMs: 5_000 });
     await assertIdle();
     if (result.code !== 0) {
       gitRefused = true;
-      throw new Error("repair Git operation refused");
+      throw new Error(result.stderr.startsWith("index.lock ") ? result.stderr : "repair Git operation refused");
     }
     return args.includes("-z") ? result.stdout : result.stdout.trim();
   };
@@ -263,8 +275,10 @@ export async function restoreRejectedPublicationRepair(
     return "done";
   } catch (error) {
     // Lease revocation and a refused durable checkpoint belong to the caller.
-    if (!waiting && !changed && !staleStats && !gitRefused) throw error;
-    return waiting ? "waiting" : staleStats
+    if (waiting) return "waiting";
+    if (error instanceof Error && error.message.startsWith("index.lock ")) return { error: error.message };
+    if (!changed && !staleStats && !gitRefused) throw error;
+    return staleStats
       ? { error: "The repair files changed during cleanup; rechecking their pinned snapshot before retrying.", retryable: true }
       : changed ? preserve
       : { error: "The refused publication repair cleanup was interrupted; its pinned output awaits automatic recovery.", retryable: true };

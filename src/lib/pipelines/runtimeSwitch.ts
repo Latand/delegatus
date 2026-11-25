@@ -5,6 +5,7 @@ import { hardenedRedact } from "@/lib/view/compactText";
 import { readMessagesPage } from "@/lib/session/messagesPage";
 import { stagedLaunchRecovery } from "@/lib/runtime/structuredSpawn";
 import { prepareControllerArtifactDirectory } from "./controllerArtifacts";
+import { withLaneIndexLockRecovery } from "./indexLock";
 import { settleAttemptAccounting } from "./attemptAccounting";
 import { switchOperationKey } from "./runtimeSwitchFence";
 import type { PipelinePorts } from "./engine";
@@ -418,7 +419,7 @@ export async function driveRuntimeSwitch(
           tail.push(result.code === 0 ? result.stdout.split("\n").slice(0,40).join("\n") : "Git observation unavailable");
         }
         const content = hardenedRedact(`Continue attempt ${attempt.n} from ${record.from.engine}/${record.from.model} on ${record.to.engine}/${record.to.model}. Keep the same worktree and branch. Do not reset, stash or discard work.\n${tail.join("\n")}`);
-        const directory = await prepareControllerArtifactDirectory(pipeline.worktreeDir, ports.exec);
+        const directory = await prepareControllerArtifactDirectory(pipeline.worktreeDir, withLaneIndexLockRecovery(pipeline, ports.exec));
         const digest = crypto.createHash("sha256").update(content).digest("hex");
         const file = path.join(directory, `runtime-handoff-${digest}.md`);
         writeArtifact(file, content);
