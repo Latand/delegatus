@@ -2580,12 +2580,11 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
       if (checked.code !== 0) return { ...failure("checking the publication before transport", checked), phaseTimings: { ...phaseTimings, preparationMs: Math.max(0, Math.round(performance.now() - checkStarted)) } };
       const elapsed = performance.now() - checkStarted;
       const preparationElapsed = Math.max(0, Math.round(elapsed));
-      // Legacy prepared transports keep their fixed allowance. Checkpoint
-      // publications and the fallback for older, undeclared gates allow a
-      // second scan based on measured preparation, within the push budget.
-      if (checkpoints || preparation === undefined) {
-        const hookMinimumMs = preparation === 3 ? PUBLICATION_TRANSPORT_HOOK_MS : PUBLICATION_TRANSPORT_MS;
-        transportBudgetMs = Math.min(budget.ms, Math.max(hookMinimumMs,
+      // Version 3 checkpoints run a fresh privacy check inside Git's transport,
+      // so keep their deadline within the measured SSH receive-pack window.
+      // Preparation has its own publication budget and cannot enlarge it.
+      if (preparation !== 3 && (checkpoints || preparation === undefined)) {
+        transportBudgetMs = Math.min(budget.ms, Math.max(PUBLICATION_TRANSPORT_MS,
           Math.ceil(2 * elapsed)) + PUBLICATION_PACK_MARGIN_MS);
       }
       // An older or failed gate cannot turn an exit code into a check receipt.

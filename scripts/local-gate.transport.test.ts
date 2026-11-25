@@ -235,7 +235,7 @@ for (const [scenario, capability] of [["slow privacy", 1], ["changed input", 3],
 
 test.each([["short preparation", 70_000], ["long preparation", 600_000]] as const)("an overrun after %s ends with its deadline verdict before Git's pack timeout", async (_label, preparationMs) => {
   const f = fixture();
-  fs.writeFileSync(f.writablePath("scripts/local-gate-capabilities.json"), '{"publicationPrepare":3}\n');
+  fs.writeFileSync(f.writablePath("scripts/local-gate-capabilities.json"), '{"publicationPrepare":3,"publicationCheckpoints":1}\n');
   commitFixtureInputs(f);
   const clock = path.join(f.dir, ".git", "transport-clock");
   const preload = path.join(f.dir, ".git", "transport-clock.ts");
@@ -262,6 +262,7 @@ test.each([["short preparation", 70_000], ["long preparation", 600_000]] as cons
       if (command === "git" && args[0] === "push") pushes++;
       const result = await realExec(command, args, cwd, { ...f.env, ...env }, options);
       if (command === "bun" && args.includes("--publication-prepare") && result.code === 0) {
+        expect(options?.timeoutMs).toBeGreaterThan(240_000);
         elapsedMonotonicMs = preparationMs;
       }
       if (command === "git" && args[0] === "push") {
