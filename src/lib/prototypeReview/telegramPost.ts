@@ -1,5 +1,17 @@
 import { shortenHashesInText } from "@/lib/shortIds";
 import fs from "node:fs/promises";
+import os from "node:os";
+import { claudeAccountsForPrivacy } from "@/lib/accounts/claude";
+import { codexAccountsForPrivacy } from "@/lib/accounts/codex";
+import { copilotAccountsForPrivacy } from "@/lib/accounts/copilot";
+import { EMPTY_DENY_LIST, privateMatches, type PublicDenyList } from "@/lib/bridge/publicSafe";
+import { isOpaqueProjectKey, projectDisplayName } from "@/lib/displayNames";
+import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
+import { projectCurationSnapshot } from "@/lib/projects/curation";
+import { presentationName, projectPresentation } from "@/lib/projects/presentation";
+import { repositoryReportName } from "@/lib/projects/settings";
+import { projectDirectoryFallbacks } from "@/lib/scanner/projectDirectories";
+import { readProjectCatalog } from "@/lib/scanner/projectCatalogStore";
 import crypto from "node:crypto";
 import sharp from "sharp";
 import { taskFeedSource } from "@/lib/tasks/store";
@@ -16,7 +28,8 @@ import { prototypeCopyLine, prototypeReference } from "./telegramAnswer";
 import type { PrototypeFrame, PrototypeReviewRound } from "./types";
 
 const inline = (text: string) => text.replace(/\s+/g, " ").replace(/([\\`*_{}\[\]()#+.!|<>~-])/g, "\\$1");
-const attribute = (text: string) => text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const escapeText = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const attribute = (text: string) => escapeText(text).replace(/"/g, "&quot;");
 export interface PrototypeSlide { id: string; variantNumber: number; caption: string; blob: Blob }
 
 export function prototypeTelegramLink(round: PrototypeReviewRound): string {
@@ -26,26 +39,118 @@ export function prototypeTelegramLink(round: PrototypeReviewRound): string {
   url.searchParams.set("project", round.project);
   return url.href;
 }
-function withReviewLink(message: TelegramRichMessage, round: PrototypeReviewRound, previews: number): TelegramRichMessage {
-  const link = prototypeTelegramLink(round);
-  const count = round.variants.reduce((n, v) => n + v.frames.length, 0);
-  return { ...message,
-    markdown: `${message.markdown}\n\nКадри: ${previews}/${count}. [Повне рев’ю у Delegatus](<${link}>)`,
-    plainText: `${message.plainText}\n\nКадри: ${previews}/${count}. ${link}` };
+// Bound the serialized Markdown as well as Telegram's parsed text.
+const RICH_TEXT_MAX_BYTES = 32_768;
+
+function shorten(value: string, limit: number): string {
+  const points = Array.from(value);
+  return points.length <= limit ? value : points.slice(0, limit - 1).join("") + "…";
 }
 
-/** Only a definitive Telegram limit refusal uses this smaller rich carousel. */
+function shortenDistinctLabels(labels: readonly string[], initialLimit = 32): string[] {
+  const distinctLabels = new Set(labels);
+  const maxLength = Math.max(1, ...labels.map(label => Array.from(label).length));
+  let limit = Math.min(initialLimit, maxLength);
+  while (true) {
+    const shortened = labels.map(label => {
+      const points = Array.from(label);
+      if (points.length <= limit) return label;
+      const retained = limit - 1;
+      const head = Math.ceil(retained / 2);
+      return `${points.slice(0, head).join("")}…${points.slice(points.length - (retained - head)).join("")}`;
+    });
+    if (new Set(shortened).size === distinctLabels.size || limit >= maxLength) return shortened;
+    limit = Math.min(limit + 8, maxLength);
+  }
+}
+
+function reviewTextDenyList(): PublicDenyList {
+  const accounts = [...claudeAccountsForPrivacy(), ...codexAccountsForPrivacy(), ...copilotAccountsForPrivacy()];
+  return { ...EMPTY_DENY_LIST, accounts: accounts.flatMap(account => [account.id, account.label]),
+    local: [os.userInfo().username, path.basename(os.homedir()), os.hostname().split(".")[0]!] };
+}
+
+function reviewText(value: string, deny: PublicDenyList): string {
+  // The owner's private review can include web links and repository names.
+  // Screen machine paths, secrets and identities before escaping or shortening.
+  const normalized = value.replaceAll("\\", "/");
+  const matches = privateMatches(normalized, deny)
+    .filter(match => ["path", "account", "host", "email", "secret"].includes(match.class))
+    .sort((left, right) => left.start - right.start || right.end - left.end);
+  // The shared matcher points at the drive-path prefix. Extend it through the
+  // remaining Windows components so profile and nested folder names disappear.
+  const windowsPath = /(?<![\p{L}\p{N}_])[a-z]:(?:\\|\/)(?!\/)(?:[^\\/\s]+(?:[ \t]+[^\\/\s]+)*(?:\\|\/))*[^\\/\s]+/giu;
+  for (const match of normalized.matchAll(windowsPath)) {
+    matches.push({ class: "path", start: match.index!, end: match.index! + match[0].length });
+  }
+  matches.sort((left, right) => left.start - right.start || right.end - left.end);
+  let cursor = 0;
+  let text = "";
+  for (const match of matches) {
+    if (match.start >= cursor) text += value.slice(cursor, match.start) + "[приховано]";
+    cursor = Math.max(cursor, match.end);
+  }
+  return text + value.slice(cursor);
+}
+
+function reviewProjectName(project: string, deny: PublicDenyList): string {
+  const key = canonicalProject(project);
+  const alias = projectAliasSnapshot().displayNames[key];
+  const manual = !alias && projectCurationSnapshot().manualProjects.find(row => canonicalProject(row.project) === key);
+  const catalogName = [...readProjectCatalog().files.values()].find(file => file.project === key)?.projectName;
+  const name = alias || (manual && manual.displayName) || repositoryReportName(key) || catalogName;
+  const root = !name && isOpaqueProjectKey(key) ? projectDirectoryFallbacks([key])[key] : undefined;
+  const fallback = projectDisplayName(key, name || (root && path.basename(root.replaceAll("\\", "/"))));
+  const label = presentationName(projectPresentation(key), fallback).trim();
+  return isOpaqueProjectKey(label) || reviewText(label, deny) !== label ? "Проєкт без назви" : shorten(label, 120);
+}
+
+function reviewCopy(round: PrototypeReviewRound, slides: readonly PrototypeSlide[], taskTitle: string) {
+  const deny = reviewTextDenyList();
+  const clean = (value: string) => reviewText(value, deny);
+  return {
+    round: { ...round, title: clean(round.title),
+      questions: round.questions?.map(q => ({ ...q, text: clean(q.text),
+        options: q.options.map(o => ({ ...o, label: clean(o.label) })),
+        links: q.links?.map(link => ({ ...link, label: clean(link.label) })) })),
+      variants: round.variants.map(v => ({ ...v, name: clean(v.name), description: clean(v.description) })) },
+    slides: slides.map(s => ({ ...s, caption: clean(s.caption) })),
+    taskTitle: shorten(clean(taskTitle.split("\n")[0]!), 200),
+    projectName: reviewProjectName(round.project, deny),
+  };
+}
+type ReviewCopy = ReturnType<typeof reviewCopy>;
+
+function renderCompact(copy: ReviewCopy, shortenOptions: boolean, sample = false): TelegramRichMessage {
+  const { round, slides } = copy;
+  const variants = round.variants.map(v => ({ ...v, description: shorten(v.description, 80) }));
+  const previews = round.variants.flatMap(v => slides.filter(s => s.variantNumber === v.number).slice(0, 1)
+    .map(s => ({ ...s, caption: shorten(s.caption, 80) })));
+  const condensed = { ...copy, round: { ...round, variants }, slides: previews };
+  if (!shortenOptions) {
+    const withFullOptions = renderReview(condensed, true, sample);
+    if (Buffer.byteLength(withFullOptions.markdown) <= RICH_TEXT_MAX_BYTES) return withFullOptions;
+  }
+  // Retain both ends and grow the retained context until labels stay distinct.
+  const questions = round.questions?.map(q => {
+    const labels = shortenDistinctLabels(q.options.map(option => shortenHashesInText(option.label)));
+    return { ...q, options: q.options.map((option, i) => ({ ...option, label: labels[i]! })) };
+  });
+  const withShortOptions = renderReview({ ...condensed, round: { ...condensed.round, questions } }, true, sample);
+  if (Buffer.byteLength(withShortOptions.markdown) <= RICH_TEXT_MAX_BYTES) return withShortOptions;
+  const distinctOptions = round.questions?.map(question => ({ ...question, options: question.options.map((option, index) => ({
+    ...option, label: `${shorten(shortenHashesInText(option.label), 8)} · ${String.fromCharCode(97 + index)}`,
+  })) }));
+  const final = renderReview({ ...copy, slides: [], round: { ...round, questions: distinctOptions,
+    title: shorten(round.title, 80), variants: variants.map(v => ({ ...v, name: shorten(v.name, 32), description: "" })) } }, true, sample);
+  if (Buffer.byteLength(final.markdown) > RICH_TEXT_MAX_BYTES)
+    throw new Error("Telegram review exceeds the rich message byte budget after compact rendering");
+  return final;
+}
+
+/** A definitive Telegram limit refusal uses this smaller rich carousel. */
 export function renderPrototypeTelegramSummary(round: PrototypeReviewRound, slides: readonly PrototypeSlide[], taskTitle = ""): TelegramRichMessage {
-  const compact = { ...round, title: round.title.slice(0, 120),
-    questions: round.questions?.map(q => ({ ...q, text: q.text.slice(0, 80), options: q.options.map(o => ({ ...o, label: shortenHashesInText(o.label).slice(0, 40) })) })),
-    variants: round.variants.map(v => ({ ...v, description: v.description.slice(0, 160) })) };
-  const previews = round.variants.flatMap(v => slides.filter(s => s.variantNumber === v.number).slice(0, 1).map(s => ({ ...s, caption: s.caption.slice(0, 160) })));
-  const message = renderPrototypeTelegram(compact, previews, taskTitle.slice(0, 200));
-  const count = round.variants.reduce((n, v) => n + v.frames.length, 0);
-  const link = prototypeTelegramLink(round);
-  message.markdown += `\n\nСкорочене рев’ю · ${count} кадрів. [Повне рев’ю у Delegatus](<${link}>)`;
-  message.plainText += `\n\nСкорочене рев’ю · ${count} кадрів. ${link}`;
-  return message;
+  return renderCompact(reviewCopy(round, slides, taskTitle), true);
 }
 
 /** First valid frame of each variant gets priority when the round exceeds 50. */
@@ -90,41 +195,69 @@ async function frameBlob(root: string, reviewId: string, frame: PrototypeFrame):
 }
 
 export function renderPrototypeTelegram(round: PrototypeReviewRound, slides: readonly PrototypeSlide[], taskTitle = "", sample = false): TelegramRichMessage {
-  const lines = [`# 🧪 ${sample ? "Зразок · " : ""}Прототип · ${inline(round.title)}`, `${inline(taskTitle.split("\n")[0]!)} · ${prototypeReference(round)}`, ""];
-  if (sample) lines.push("Це зразок нового повідомлення для перегляду на телефоні.", "");
-  for (const variant of [...round.variants].sort((a, b) => a.number - b.number)) {
-    lines.push(`**${variant.number} · ${inline(variant.name)}**`, "", inline(variant.description), "");
+  return renderBounded(reviewCopy(round, slides, taskTitle), sample);
+}
+
+function renderBounded(copy: ReviewCopy, sample = false): TelegramRichMessage {
+  const full = renderReview(copy, false, sample);
+  if (Buffer.byteLength(full.markdown) <= RICH_TEXT_MAX_BYTES) return full;
+  return renderCompact(copy, false, sample);
+}
+
+function renderReview({ round, slides, taskTitle, projectName }: ReviewCopy, compact: boolean, sample = false): TelegramRichMessage {
+  const title = `${sample ? "Зразок · " : ""}${round.variants.length ? "Прототип" : "Форма рішення"} · ${round.title}`;
+  const reference = prototypeReference(round);
+  const lines = [`# 🧪 ${inline(title)}`, reference, `<p>Проєкт: <b>${escapeText(projectName)}</b></p>`, "",
+    ...(taskTitle ? [`${inline(taskTitle)}`, ""] : [])];
+  const plain = [`🧪 ${title}`, reference, `Проєкт: ${projectName}`, "", ...(taskTitle ? [taskTitle, ""] : []), ""];
+  if (sample) {
+    const notice = "Це зразок нового повідомлення для перегляду на телефоні.";
+    lines.push(notice, "");
+    plain.push(notice, "");
+  }
+  const questions = round.questions ?? [];
+  for (const [i, question] of questions.entries()) {
+    const heading = `Питання ${i + 1}/${questions.length} · ${question.text.replace(/\s+/g, " ")}${question.multiple ? " (можна кілька)" : ""}`;
+    const options = question.options.map((option, j) => `${String.fromCharCode(97 + j)}) ${shortenHashesInText(option.label).replace(/\s+/g, " ")}${option.recommended ? " ✅" : ""}`);
+    if (question.other) options.push("+ Інше — у коментарі");
+    lines.push(`<p><b>${escapeText(heading)}</b><br>${options.map(escapeText).join("<br>")}</p>`, "");
+    plain.push(heading, ...options, "");
+    for (const link of question.links ?? []) {
+      lines.push(`[${inline(link.label)}](<${link.href}>)`, "");
+      plain.push(`${link.label}: ${link.href}`, "");
+    }
+  }
+  const variants = [...round.variants].sort((a, b) => a.number - b.number);
+  for (const variant of variants) {
+    lines.push(`**${variant.number} · ${inline(variant.name)}**`, "");
+    if (variant.description) lines.push(inline(variant.description), "");
     const frames = slides.filter(slide => slide.variantNumber === variant.number);
     if (frames.length) lines.push("<tg-slideshow>", ...frames.map(s => `![](tg://photo?id=${s.id} ${JSON.stringify(s.caption.replace(/[\r\n]/g, " "))})`), "</tg-slideshow>", "");
     else lines.push("Кадри — у Delegatus.", "");
+    plain.push(`${variant.number} · ${variant.name}`);
+    if (variant.description) plain.push(variant.description);
+    plain.push(...frames.map(s => s.caption), "");
   }
-  for (const [i, question] of (round.questions ?? []).entries()) {
-    const heading = `<b>${attribute(`Питання ${i + 1}/${round.questions!.length} · ${question.text.replace(/\s+/g, " ")}${question.multiple ? " (можна кілька)" : ""}`)}</b>`;
-    const options = question.options.map((option, j) => `${String.fromCharCode(97 + j)}) ${attribute(shortenHashesInText(option.label).replace(/\s+/g, " "))}${option.recommended ? " ✅" : ""}`);
-    lines.push(`<p>${[heading, ...options, ...(question.other ? ["+ Інше — у коментарі"] : [])].join("<br>")}</p>`, "");
-    for (const link of question.links ?? []) lines.push(`[${inline(link.label)}](<${link.href}>)`, "");
-  }
-  lines.push("---", `Як відповісти: дайте текстовий reply на цей пост або його опитування: 1b, 2a; 1: b; рекомендовані; або відповідь своїми словами. Рішення записує лише текстовий reply власника. Голоси показують думки учасників. Можна також надіслати клону ${prototypeReference(round)} і відповідь, або скористатися кнопкою. Застереження до рекомендованих відповідей теж збережуться. Повне рев’ю — у Delegatus.`, "");
+  const link = prototypeTelegramLink(round);
+  const count = variants.reduce((n, v) => n + v.frames.length, 0);
+  const frames = count ? `${compact ? "Скорочене рев’ю · " : ""}Кадри: ${slides.length}/${count}. ` : "";
+  lines.push(`${frames}[Повне рев’ю у Delegatus](<${link}>)`, "");
+  plain.push(`${frames}Повне рев’ю у Delegatus: ${link}`, "");
+  const example = questions.map((_, index) => `${index + 1}a`).join(", ");
+  const reply = questions.length
+    ? `Дайте текстову відповідь на це повідомлення. Наприклад, ${example}, «рекомендовані» або відповідь своїми словами. Застереження теж збережуться.`
+    : "Дайте текстову відповідь на це повідомлення з номером варіанта й коментарем.";
+  lines.push(reply, "");
+  plain.push(reply, "");
   const button = (label: string, text: string, recommended = false) => `<tg-button type="copy_text"${recommended ? ' style="success"' : ""} text="${attribute(text)}">${label}</tg-button>`;
-  if (round.questions?.length) lines.push('<tg-button-row align="center">', button("Скопіювати рекомендовані", prototypeCopyLine(round), true), "</tg-button-row>");
-  const variants = [...round.variants].sort((a, b) => a.number - b.number);
+  if (questions.length) {
+    const copied = prototypeCopyLine(round);
+    lines.push('<tg-button-row align="center">', button("Скопіювати рекомендовані", copied, true), "</tg-button-row>");
+    plain.push(`Скопіювати рекомендовані: ${copied}`);
+  }
   for (let i = 0; i < variants.length; i += 8) lines.push('<tg-button-row align="center">', ...variants.slice(i, i + 8).map(v => button(`Варіант ${v.number}`, prototypeCopyLine(round, v.number))), "</tg-button-row>");
-  const plain = [`🧪 ${sample ? "Зразок · " : ""}Прототип · ${round.title}`, `${taskTitle.split("\n")[0]!} · ${prototypeReference(round)}`, ""];
-  for (const variant of variants) {
-    plain.push(`${variant.number} · ${variant.name}`, variant.description,
-      ...slides.filter(s => s.variantNumber === variant.number).map(s => s.caption), "");
-  }
-  for (const [i, question] of (round.questions ?? []).entries()) {
-    plain.push(`Питання ${i + 1}/${round.questions!.length} · ${question.text}${question.multiple ? " (можна кілька)" : ""}`,
-      ...question.options.map((o, j) => `${String.fromCharCode(97 + j)}) ${shortenHashesInText(o.label)}${o.recommended ? " ✅" : ""}`),
-      ...(question.other ? ["+ Інше — у коментарі"] : []), "");
-    for (const link of question.links ?? []) plain.push(`${link.label}: ${link.href}`, "");
-  }
-  plain.push(`Дайте текстовий reply на цей пост або його опитування: 1b, 2a; 1: b; рекомендовані; або відповідь своїми словами. Рішення записує лише текстовий reply власника. Голоси показують думки учасників. Можна також надіслати клону ${prototypeReference(round)} і відповідь, або скопійований рядок. Застереження теж збережуться. Повне рев’ю — у Delegatus.`);
-  if (round.questions?.length) plain.push(`Скопіювати рекомендовані: ${prototypeCopyLine(round)}`);
   for (const variant of variants) plain.push(`Варіант ${variant.number}: ${prototypeCopyLine(round, variant.number)}`);
-  return { markdown: lines.join("\n"), plainText: plain.join("\n"), images: slides.map(({ id, blob }) => ({ id, blob })),
-    review: { id: round.id, taskId: round.taskId, questions: round.questions ?? [] } };
+  return { markdown: lines.join("\n"), plainText: plain.join("\n"), images: slides.map(({ id, blob }) => ({ id, blob })) };
 }
 
 export async function postPrototypeReviewToTelegram(round: PrototypeReviewRound, key = round.id): Promise<PrototypeTelegramPost | undefined> {
@@ -149,11 +282,12 @@ async function postRound(round: PrototypeReviewRound, key: string): Promise<Prot
     try {
       const task = await withPrototypeState(() => round.taskId === null ? undefined : taskFeedSource()?.get(round.taskId));
       const slides = await prototypeSlides(current);
-      const fallback = withReviewLink(renderPrototypeTelegram(current, [], task?.text), current, 0);
+      const copy = reviewCopy(current, slides, task?.text ?? "");
+      const fallback = renderBounded({ ...copy, slides: [] });
       let unavailable: OwnerDestinationFailure | undefined;
       const result = await telegramBotService().sendOwnerReview({ clientRequestId: key,
-        message: withReviewLink(renderPrototypeTelegram(current, slides, task?.text), current, slides.length), fallbackMarkdown: fallback.markdown, fallbackPlainText: fallback.plainText,
-        limitFallback: renderPrototypeTelegramSummary(current, slides, task?.text) }, failure => { unavailable = failure; });
+        message: renderBounded(copy), fallbackMarkdown: fallback.markdown, fallbackPlainText: fallback.plainText,
+        limitFallback: renderCompact(copy, true) }, failure => { unavailable = failure; });
       if (!result) return record("failed", unavailable?.reason ?? "destination_unavailable", unavailable?.detail);
       return record("sent");
     } catch (error) {
