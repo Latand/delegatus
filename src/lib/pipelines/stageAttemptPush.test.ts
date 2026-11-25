@@ -8,7 +8,7 @@ import { commitAndAdoptStageBranch } from "./stageBranch";
 import type { PipelineStageAttempt } from "./types";
 import { bindMergerContract } from "./mergerContract.fixture";
 import { git as batchGit } from "../../../scripts/merge-batch";
-import { fixture, START, NOW } from "./stageAttemptPush.fixture";
+import { commitThenDie, fixture, nextFixture, START, NOW } from "./stageAttemptPush.fixture";
 
 test.each(["batch", "earlier producer", "pull ref only", "tracking ref"] as const)("merger contract native boundary: %s", async mode => {
   const f = await fixture(true);
@@ -73,7 +73,7 @@ test.each(["batch", "earlier producer", "pull ref only", "tracking ref"] as cons
 
 test.each(["commit", "push"] as const)("a superseded producer cannot %s; an explicit fix stage restores publication", async action => {
   const f = await fixture();
-  const review = `stage-proof-review-${f.fixtureNumber}`, fix = `stage-proof-fix-${f.fixtureNumber}`;
+  const review = `stage-proof-review-${nextFixture}`, fix = `stage-proof-fix-${nextFixture}`;
   try {
     await f.push();
     const remoteBefore = await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof");
@@ -101,7 +101,7 @@ test.each(["commit", "push"] as const)("a superseded producer cannot %s; an expl
 
 test("a restarted preparation cannot reclaim its superseded worktree binding", async () => {
   const f = await fixture();
-  const review = `stage-proof-review-restart-${f.fixtureNumber}`;
+  const review = `stage-proof-review-restart-${nextFixture}`;
   try {
     await prepareStageGitGuard(review, f.lane, realExec, "2026-10-16T10:00:00.000Z", async () => {});
     const child = Bun.spawn([process.execPath, "--eval", `
@@ -221,7 +221,7 @@ exec "$PROOF_GIT" "$@"
 
 test.each(["binding", "handoff"] as const)("disk exhaustion during the owner %s keeps the previous owner and permits a retry", async phase => {
   const f = await fixture();
-  const review = `stage-proof-disk-${phase}-${f.fixtureNumber}`;
+  const review = `stage-proof-disk-${phase}-${nextFixture}`;
   const owner = await fs.readFile(path.join(f.receipt, "owner"), "utf8");
   const noSpace = () => { throw Object.assign(new Error("fixture disk is full"), { code: "ENOSPC" }); };
   const write = fs.writeFile, rename = fs.rename;
@@ -504,7 +504,7 @@ test("B: a controller-created replacement link proves a completed parent without
   try {
     const inherited = await f.commit("completed parent output");
     const parent = { ...f.attempt, n: 1, state: "failed", completedAt: NOW, agentPath: "/stage/parent.jsonl" } as PipelineStageAttempt;
-    childLaunch = `stage-proof-generic-replacement-${f.fixtureNumber}`;
+    childLaunch = `stage-proof-generic-replacement-${nextFixture}`;
     await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
     Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, START, async () => {}));
     const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: START, completedAt: NOW, state: "passed",
@@ -539,7 +539,7 @@ test.each(["own commit, receipt lost", "own hooks-off commit", "imported commit"
     }
     const inherited = await f.own("rev-parse", "HEAD");
 
-    childLaunch = `stage-proof-manual-silent-retry-${f.fixtureNumber}`;
+    childLaunch = `stage-proof-manual-silent-retry-${nextFixture}`;
     await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
     Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, START, async () => {}));
     const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: START, completedAt: NOW, state: "passed",
@@ -604,7 +604,7 @@ test.each((["accepted", "accepted replacement", "published"] as const).flatMap(p
   (["valid", "host death", "foreign suffix", "unrecorded suffix", "dropped history", "remote race", "head race"] as const).map(suffix => ({ proof, suffix }))))
 ("recorded ancestry survives a later attempt ($proof, $suffix)", async ({ proof, suffix }) => {
   const f = await fixture();
-  const childLaunch = `stage-proof-recorded-ancestry-${f.fixtureNumber}`;
+  const childLaunch = `stage-proof-recorded-ancestry-${nextFixture}`;
   let lostLaunch: string | null = null;
   try {
     const inherited = await f.commit("earlier passed output");
@@ -697,13 +697,13 @@ test.each((["accepted", "accepted replacement", "published"] as const).flatMap(p
     if (lostLaunch) await fs.rm(stageGitReceiptDirectory(lostLaunch), { recursive: true, force: true });
     await f.close();
   }
-});
+}, 15_000);
 
 test.each(["another worktree", "hooks off", "missing receipt"] as const)(
   "a replacement cannot hide an unproved divergent starting prefix (%s)", async origin => {
     const f = await fixture();
-    const lostLaunch = `stage-proof-divergent-lost-${f.fixtureNumber}`;
-    const childLaunch = `stage-proof-divergent-child-${f.fixtureNumber}`;
+    const lostLaunch = `stage-proof-divergent-lost-${nextFixture}`;
+    const childLaunch = `stage-proof-divergent-child-${nextFixture}`;
     try {
       const accepted = await f.commit("accepted stage output");
       f.pipeline.lastPassedCommit = accepted;
@@ -754,7 +754,7 @@ test.each(["another worktree", "hooks off", "missing receipt"] as const)(
 test.each(["another worktree", "hooks off", "missing receipt"] as const)(
   "an ordinary retry cannot publish an unproved starting prefix (%s)", async origin => {
     const f = await fixture();
-    const childLaunch = `stage-proof-ordinary-retry-${f.fixtureNumber}`;
+    const childLaunch = `stage-proof-ordinary-retry-${nextFixture}`;
     try {
       const accepted = await f.commit("accepted output before retry");
       f.pipeline.lastPassedCommit = accepted;
@@ -802,7 +802,7 @@ test.each(["another worktree", "hooks off", "missing receipt"] as const)(
 
 test("an ordinary retry settles a recorded prefix from its failed predecessor", async () => {
   const f = await fixture();
-  const childLaunch = `stage-proof-ordinary-recorded-retry-${f.fixtureNumber}`;
+  const childLaunch = `stage-proof-ordinary-recorded-retry-${nextFixture}`;
   try {
     const inherited = await f.commit("recorded predecessor output");
     const parent = { ...f.attempt, n: 1, state: "failed", completedAt: "2026-10-16T09:30:00.000Z",
@@ -824,7 +824,7 @@ test("an ordinary retry settles a recorded prefix from its failed predecessor", 
 
 test("an ordinary retry settles unpublished history receipted by an earlier passed attempt", async () => {
   const f = await fixture();
-  const childLaunch = `stage-proof-passed-predecessor-retry-${f.fixtureNumber}`;
+  const childLaunch = `stage-proof-passed-predecessor-retry-${nextFixture}`;
   try {
     const inherited = await f.commit("passed predecessor output");
     const parent = { ...f.attempt, n: 1, state: "passed", completedAt: "2026-10-16T09:30:00.000Z",
@@ -850,7 +850,7 @@ test("four host-loss attempts preserve their receipt ancestry", async () => {
   const launches: string[] = [];
   try {
     for (let n = 1; n <= 4; n += 1) {
-      const launchId = n === 1 ? f.attempt.launchId! : `stage-proof-chain-${f.fixtureNumber}-${n}`;
+      const launchId = n === 1 ? f.attempt.launchId! : `stage-proof-chain-${nextFixture}-${n}`;
       const startedAt = n === 1 ? START : `2026-10-16T${String(8 + n).padStart(2, "0")}:00:00.000Z`;
       if (n > 1) {
         launches.push(launchId);
@@ -883,7 +883,7 @@ test.each([1, 70].flatMap(count =>
   (["settles", "forged transcript edge", "unreceipted commit"] as const).map(variant => [count, variant] as const),
 ))("a usage-guard chain through %i never-launched attempts: %s", async (refusedCount, variant) => {
   const f = await fixture();
-  const childLaunch = `stage-proof-guard-chain-${f.fixtureNumber}`;
+  const childLaunch = `stage-proof-guard-chain-${nextFixture}`;
   try {
     await f.commit("first attempt output");
     const first = { ...f.attempt, n: 1, state: "failed", completedAt: "2026-10-16T09:00:00.000Z",

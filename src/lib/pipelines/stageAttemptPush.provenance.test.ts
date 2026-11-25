@@ -19,7 +19,7 @@ import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
 import { bindStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliveryController";
 import { buildPipeline, loadPipelines, savePipelines } from "./store";
 import type { PipelineStageAttempt } from "./types";
-import { fixture, START, NOW } from "./stageAttemptPush.fixture";
+import { commitThenDie, dieAfterRefUpdate, fixture, nextFixture, repositoryHooks, START, NOW } from "./stageAttemptPush.fixture";
 
 test.each([1, 3])("A: main fast-forward plus %i own commits settles after an in-worktree push", async count => {
   const f = await fixture();
@@ -813,51 +813,12 @@ test.each(["remote", "head", "dirty", "branch", "default race", "default branch"
   } finally { await f.close(); }
 });
 
-// Agents committed with `git -c core.hooksPath=.githooks` to "keep hooks on".
-// A command-line hooks path beats the guard's GIT_CONFIG_COUNT entry, so the
-// guard's receipt hooks never run, while the repository's own hooks still do.
-async function repositoryHooks(f: Awaited<ReturnType<typeof fixture>>, referenceTransaction?: string) {
-  const hooks = path.join(f.root, "repository-hooks");
-  await fs.mkdir(hooks, { recursive: true });
-  if (referenceTransaction) await fs.writeFile(path.join(hooks, "reference-transaction"), referenceTransaction, { mode: 0o700 });
-  await f.own("config", "core.hooksPath", hooks);
-  return async (args: string[], env: Record<string, string> = {}) =>
-    await realExec("git", ["-c", `core.hooksPath=${hooks}`, ...args], f.lane, { ...f.env, ...env });
-}
-
 async function advanceMain(f: Awaited<ReturnType<typeof fixture>>, file: string, content: string) {
   await fs.writeFile(path.join(f.foreign, file), content);
   await f.git(f.foreign, "add", file);
   await f.git(f.foreign, "commit", "-m", "main advances");
   await f.git(f.foreign, "push", "origin", "main");
   await f.own("fetch", "origin", "main");
-}
-
-/** Run one Git command inside its own process group and kill the whole group
- * from the reference-transaction hook once a branch moved, before post-commit
- * or post-merge runs: the same cut an OOM kill of the agent's scope makes. The
- * launch's guard hooks run and forward to the repository's own. */
-async function dieAfterRefUpdate(f: Awaited<ReturnType<typeof fixture>>, args: string[]): Promise<string> {
-  await repositoryHooks(f, "#!/bin/sh\ninput=$(cat)\n[ \"$1\" = committed ] && [ -n \"${STAGE_PROOF_DIE:-}\" ] "
-    + "&& printf '%s\\n' \"$input\" | grep -q ' refs/heads/' && kill -KILL 0\nexit 0\n");
-  const { spawn } = await import("node:child_process");
-  const status = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-    const child = spawn("git", args, { cwd: f.lane, detached: true, stdio: "ignore",
-      env: { ...f.env, STAGE_PROOF_DIE: "1" } as NodeJS.ProcessEnv });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => resolve({ code, signal }));
-  });
-  expect(status.signal).toBe("SIGKILL");
-  await f.own("config", "--unset", "core.hooksPath");
-  // The kill also skipped Git's own cleanup of the merge state.
-  if ((await realExec("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], f.lane, f.env)).code === 0) await f.own("merge", "--quit");
-  return await f.own("rev-parse", "HEAD");
-}
-
-async function commitThenDie(f: Awaited<ReturnType<typeof fixture>>, message: string): Promise<string> {
-  const head = await dieAfterRefUpdate(f, ["commit", "--allow-empty", "-m", message]);
-  expect(await f.own("log", "-1", "--format=%s", head)).toBe(message);
-  return head;
 }
 
 test.each(["clean merge", "clean merge concluded by commit", "conflicted merge"] as const)(
@@ -914,7 +875,7 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
   process.env.LLV_STATE_DIR = path.join(stateRoot, "state");
   let ownedFixture: Awaited<ReturnType<typeof fixture>> | undefined;
   const controller = new AbortController();
-  const successor = `stage-proof-rehost-new-owner-${f.fixtureNumber}`;
+  const successor = `stage-proof-rehost-new-owner-${nextFixture}`;
   let restoreGuardRead = () => {};
   try {
     const f = await fixture(false, false, undefined, { id: "rehost-proof", task: "Stage custody" });
@@ -1048,7 +1009,7 @@ test.each((["claude", "codex"] as const).flatMap(engine =>
 
 test.each(["another launch", "another worktree", "successor owner"])("a rehost refuses to borrow a binding from %s", async mismatch => {
   const f = await fixture();
-  const successor = `stage-proof-rehost-successor-${f.fixtureNumber}`;
+  const successor = `stage-proof-rehost-successor-${nextFixture}`;
   try {
     if (mismatch === "successor owner") await prepareStageGitGuard(successor, f.lane, realExec, START, async () => {});
     if (mismatch === "another launch") {
@@ -1077,7 +1038,7 @@ test.each(["LLV_STAGE_GIT_RECEIPT", "LLV_STAGE_GIT_WORKTREE", "both"])("a lost %
 test.each(["host-lost replacement", "operator retry"] as const)(
   "a commit whose host died before post-commit settles in the %s", async lineage => {
     const f = await fixture();
-    const childLaunch = `stage-proof-host-death-${f.fixtureNumber}`;
+    const childLaunch = `stage-proof-host-death-${nextFixture}`;
     try {
       const lost = await commitThenDie(f, "own work committed just before the kill");
       const parent = { ...f.attempt, n: 1, state: "failed", completedAt: "2026-10-16T09:30:00.000Z",
@@ -1102,7 +1063,7 @@ test.each(["host-lost replacement", "operator retry"] as const)(
 
 test("a same-identity commit made in the lane after the attempt ended is still refused", async () => {
   const f = await fixture();
-  const childLaunch = `stage-proof-after-end-${f.fixtureNumber}`;
+  const childLaunch = `stage-proof-after-end-${nextFixture}`;
   try {
     await f.commit("own receipted work");
     const parent = { ...f.attempt, n: 1, state: "failed", completedAt: "2026-10-16T09:30:00.000Z",

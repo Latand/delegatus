@@ -11,7 +11,7 @@ import { pipelineIdentity } from "./store";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 export const START = "2026-10-16T08:00:00.000Z", NOW = "2026-10-16T12:00:00.000Z";
-let nextFixture = 0;
+export let nextFixture = 0;
 export async function fixture(legacy = false, successor = false, prBase?: { mainBeforeCreation?: boolean }, identity?: { id: string; task: string }) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "stage-proof-"));
   const repository = path.join(root, "lane"), remote = path.join(root, "remote.git"), foreign = path.join(root, "foreign");
@@ -56,8 +56,7 @@ export async function fixture(legacy = false, successor = false, prBase?: { main
     await git(foreign, "commit", "--allow-empty", "-m", "main before lane creation");
     await git(foreign, "push", "origin", "main");
   }
-  const fixtureNumber = ++nextFixture;
-  const launchId = `stage-proof-fixture-${fixtureNumber}`;
+  const launchId = `stage-proof-fixture-${++nextFixture}`;
   const attempt = { launchId, startedAt: START, completedAt: null } as PipelineStageAttempt;
   const pipeline = { id: identity?.id ?? "proof", repoDir: repository, worktreeDir: lane, branch: owned.branch, baseBranch: prBase ? "pipeline/proof" : "main", baseRef: base, lastPassedCommit: base,
     delivery: { active: true, disposition: "owner", ownerId: identity?.id ?? "proof", publish: "enabled",
@@ -70,6 +69,45 @@ export async function fixture(legacy = false, successor = false, prBase?: { main
   const commit = async (label: string) => { await own("commit", "--allow-empty", "-m", label); return own("rev-parse", "HEAD"); };
   const push = async () => own("push", "origin", "HEAD:refs/heads/pipeline/proof");
   const settle = () => settleStageAttemptPush(pipeline, attempt, realExec, NOW);
-  return { fixtureNumber, root, repository, lane, remote, foreign, env, git, own, commit, push, settle, pipeline, attempt, receipt: stageGitReceiptDirectory(launchId),
+  return { root, repository, lane, remote, foreign, env, git, own, commit, push, settle, pipeline, attempt, receipt: stageGitReceiptDirectory(launchId),
     close: async () => { await fs.rm(root, { recursive: true, force: true }); await fs.rm(stageGitReceiptDirectory(launchId), { recursive: true, force: true }); } };
+}
+
+// Agents committed with `git -c core.hooksPath=.githooks` to "keep hooks on".
+// A command-line hooks path beats the guard's GIT_CONFIG_COUNT entry, so the
+// guard's receipt hooks never run, while the repository's own hooks still do.
+export async function repositoryHooks(f: Awaited<ReturnType<typeof fixture>>, referenceTransaction?: string) {
+  const hooks = path.join(f.root, "repository-hooks");
+  await fs.mkdir(hooks, { recursive: true });
+  if (referenceTransaction) await fs.writeFile(path.join(hooks, "reference-transaction"), referenceTransaction, { mode: 0o700 });
+  await f.own("config", "core.hooksPath", hooks);
+  return async (args: string[], env: Record<string, string> = {}) =>
+    await realExec("git", ["-c", `core.hooksPath=${hooks}`, ...args], f.lane, { ...f.env, ...env });
+}
+
+/** Run one Git command inside its own process group and kill the whole group
+ * from the reference-transaction hook once a branch moved, before post-commit
+ * or post-merge runs: the same cut an OOM kill of the agent's scope makes. The
+ * launch's guard hooks run and forward to the repository's own. */
+export async function dieAfterRefUpdate(f: Awaited<ReturnType<typeof fixture>>, args: string[]): Promise<string> {
+  await repositoryHooks(f, "#!/bin/sh\ninput=$(cat)\n[ \"$1\" = committed ] && [ -n \"${STAGE_PROOF_DIE:-}\" ] "
+    + "&& printf '%s\\n' \"$input\" | grep -q ' refs/heads/' && kill -KILL 0\nexit 0\n");
+  const { spawn } = await import("node:child_process");
+  const status = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    const child = spawn("git", args, { cwd: f.lane, detached: true, stdio: "ignore",
+      env: { ...f.env, STAGE_PROOF_DIE: "1" } as NodeJS.ProcessEnv });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  expect(status.signal).toBe("SIGKILL");
+  await f.own("config", "--unset", "core.hooksPath");
+  // The kill also skipped Git's own cleanup of the merge state.
+  if ((await realExec("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], f.lane, f.env)).code === 0) await f.own("merge", "--quit");
+  return await f.own("rev-parse", "HEAD");
+}
+
+export async function commitThenDie(f: Awaited<ReturnType<typeof fixture>>, message: string): Promise<string> {
+  const head = await dieAfterRefUpdate(f, ["commit", "--allow-empty", "-m", message]);
+  expect(await f.own("log", "-1", "--format=%s", head)).toBe(message);
+  return head;
 }
