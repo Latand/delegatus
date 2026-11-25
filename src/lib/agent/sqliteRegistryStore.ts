@@ -796,6 +796,18 @@ type ColdMappingDelta = { removed: Map<RowCollection, Set<string>>; added: ColdH
  * a row at a time. */
 const HEADER_BATCH_ROWS = 1024;
 
+/** Bound each payload read by row count and by accumulated JSON text. */
+function* payloadBatches<Row extends { value_json: string }>(rows: IterableIterator<Row>): Generator<Row[]> {
+  try {
+    for (;;) {
+      let chars = 0;
+      const batch = nextSqliteRows(rows, 16, row => (chars += row.value_json.length) >= 16_384);
+      if (!batch.length) return;
+      yield batch;
+    }
+  } finally { rows.return?.(); }
+}
+
 /** Every row of one open statement, a measured batch for each step. The
  * statement is finished when the read ends, is refused or is abandoned. */
 function* headerRowSteps<Row>(rows: IterableIterator<Row>): Generator<void, Row[]> {
@@ -3204,18 +3216,49 @@ export class SqliteAgentRegistryStore {
     return file;
   }
 
+  /** The read transaction has proved this collection has no archived rows.
+      Keep the header reader's page boundaries and buffer at most sixteen
+      payloads, stopping the batch as soon as one takes it over 16 Ki chars. */
+  private *fullyHotPayloadSteps(collection: RowCollection): Generator<Pick<StoredRow, "row_key" | "row_order" | "value_json">> {
+    const page = this.db.prepare<Pick<StoredRow, "row_key" | "row_order" | "value_json">, [string, number]>(
+      "SELECT row_key,row_order,value_json FROM registry_rows WHERE collection=? AND row_order>? ORDER BY row_order LIMIT 16");
+    let after = -1;
+    try {
+      for (;;) {
+        let count = 0;
+        for (const batch of payloadBatches(page.iterate(collection, after))) {
+          count += batch.length;
+          after = batch[batch.length - 1]!.row_order;
+          yield* batch;
+        }
+        if (count < 16) return;
+      }
+    } finally { page.finalize(); }
+  }
+
   private *loadHotSteps(): Generator<void, SqliteRegistrySnapshot> {
     yield* this.refreshColdKeySteps();
     const input: Record<string, unknown> = { version: 2,entries: {},receipts: {} };
+    const hasCold = this.db.query("SELECT 1 FROM registry_cold WHERE collection=? LIMIT 1");
     for (const collection of ROW_COLLECTIONS) {
       const values: Record<string, unknown> = {};
       let after = -1;
+      if (!this.coldKeys.size || !hasCold.get(collection)) {
+        for (const row of this.fullyHotPayloadSteps(collection)) {
+          this.onRowPayloadRead?.(collection, 1);
+          values[row.row_key] = this.parseRow(collection, row.row_key, row.value_json, true);
+          yield;
+        }
+        input[collection] = values;
+        continue;
+      }
+      const headerPage = this.db.query<Pick<StoredRow,"row_key"|"row_order">, [string, number]>(
+        "SELECT row_key,row_order FROM registry_rows WHERE collection=? AND row_order>? ORDER BY row_order LIMIT 16");
+      const payload = this.db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM registry_rows WHERE collection=? AND row_key=?");
       for (;;) {
         // A limit on hot results can scan thousands of cold compatibility
         // rows before finding sixteen matches. Bound candidate headers first.
-        const headers = this.db.query<Pick<StoredRow,"row_key"|"row_order">, [string, number]>(
-          "SELECT row_key,row_order FROM registry_rows WHERE collection=? AND row_order>? ORDER BY row_order LIMIT 16").all(collection, after);
-        const payload = this.db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM registry_rows WHERE collection=? AND row_key=?");
+        const headers = headerPage.all(collection, after);
         for (const header of headers) {
           after = header.row_order;
           if (!this.coldKeys.has(grantDecisionKey(collection, header.row_key))) {
@@ -4001,8 +4044,16 @@ export class SqliteAgentRegistryStore {
         CASE WHEN json_type(value_json,'$.requestDigest')='text' AND json_extract(value_json,'$.requestDigest')!=''
           THEN json_extract(value_json,'$.command.operationId') END AS operation_id
         FROM registry_archive WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids);
+      // Many rows in one page carry identical projected JSON. Share its
+      // decoding, while evaluating each row and recording its own operation.
+      const decodedClaims = new Map<string, unknown>();
       for (const row of claims) {
-        this.coldRowProjections.set(row.id,{ claimsGrant: rowClaimsBeyondBaselineGrant(parseSqliteJson(row.claims, this.db)),operationId: row.operation_id });
+        let decoded = decodedClaims.get(row.claims);
+        if (decoded === undefined) {
+          decoded = parseSqliteJson(row.claims, this.db);
+          decodedClaims.set(row.claims, decoded);
+        }
+        this.coldRowProjections.set(row.id,{ claimsGrant: rowClaimsBeyondBaselineGrant(decoded),operationId: row.operation_id });
         yield;
       }
     }
@@ -6564,24 +6615,26 @@ export class SqliteAgentRegistryStore {
         const baseline = new Map<string, string | null>();
         if (!trackMutations) {
           const storedValue = {} as typeof value;
-          const storedRows = this.db.query<Pick<StoredRow, "row_key" | "value_json">, [string]>(
-            `SELECT row_key, value_json FROM ${this.recordsSource} WHERE collection = ? ORDER BY row_order`,
-          ).all(collection);
-          this.onRowPayloadRead?.(collection, storedRows.length);
-          for (const row of storedRows) {
-            const parsed = this.parseRow(collection, row.row_key, row.value_json, useRowCache);
-            (storedValue as Record<string, unknown>)[row.row_key] = trackMutations
-              ? structuredClone(parsed)
-              : parsed;
-            if (trackMutations) baseline.set(row.row_key, row.value_json);
-          }
+          // With no cold mappings, the collection-order index can stream the hot table directly.
+          const source = this.changesReady && !this.coldKeys.size ? "registry_rows" : this.recordsSource;
+          const statement = this.db.prepare<Pick<StoredRow, "row_key" | "value_json">, [string]>(
+            `SELECT row_key, value_json FROM ${source} WHERE collection = ? ORDER BY row_order`);
+          const storedKeys = useRowCache ? new Set<string>() : undefined;
+          try {
+            for (const batch of payloadBatches(statement.iterate(collection))) {
+              this.onRowPayloadRead?.(collection, batch.length);
+              for (const row of batch) {
+                (storedValue as Record<string, unknown>)[row.row_key] = this.parseRow(collection, row.row_key, row.value_json, useRowCache);
+                storedKeys?.add(row.row_key);
+              }
+            }
+          } finally { statement.finalize(); }
           /* Every stored row is cached by now, so a larger cache holds rows
              this complete read proved gone. Without this a deleted row's parsed
              JSON stayed in the process for its lifetime. */
           const parsedRows = useRowCache ? this.rowCache.get(collection) : undefined;
-          if (parsedRows && parsedRows.size > storedRows.length) {
-            const stored = new Set(storedRows.map((row) => row.row_key));
-            for (const key of parsedRows.keys()) if (!stored.has(key)) parsedRows.delete(key);
+          if (parsedRows && storedKeys && parsedRows.size > storedKeys.size) {
+            for (const key of parsedRows.keys()) if (!storedKeys.has(key)) parsedRows.delete(key);
           }
           const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };
           input[collection] = storedValue;
