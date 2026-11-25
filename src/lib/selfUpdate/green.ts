@@ -102,18 +102,25 @@ export class GreenReader {
       throw new Error("GitHub returned an invalid branch protection response");
     }
     const protection = branchView.protection;
-    if (protection === undefined || protection === null) {
+    // GitHub omits the member for an unprotected branch; an explicit null is
+    // not a confirmed answer and must not stand in for an empty required set.
+    if (protection === undefined) {
       if (branchView.protected) throw new Error("GitHub returned an invalid branch protection response");
-    } else if (typeof protection !== "object" || Array.isArray(protection)) {
+    } else if (protection === null || typeof protection !== "object" || Array.isArray(protection)) {
       throw new Error("GitHub returned an invalid branch protection response");
     }
     // An absent object is an empty required set. A present one that is not an
     // object is unreadable, and its members must never be defaulted past it.
+    // A present object must also state the set itself (contexts or checks);
+    // one that states neither is unreadable, not an empty requirement.
     const status = (protection as { required_status_checks?: unknown } | undefined | null)?.required_status_checks;
     if (status !== undefined && (!status || typeof status !== "object" || Array.isArray(status))) {
       throw new Error("GitHub returned an invalid required status checks response");
     }
     const { contexts, checks: configured } = (status ?? {}) as { contexts?: unknown; checks?: unknown };
+    if (status !== undefined && contexts === undefined && configured === undefined) {
+      throw new Error("GitHub returned required status checks without a required set");
+    }
     if (contexts !== undefined && (!Array.isArray(contexts) || !contexts.every((name) => typeof name === "string"))) {
       throw new Error("GitHub returned invalid required checks");
     }

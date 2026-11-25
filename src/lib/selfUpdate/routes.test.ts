@@ -741,7 +741,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     await wait(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
   }
 
-  test.each(["optional-red", "empty-required-optional-red", "required-red", "unreadable-protection", "ruleset-required-red", "ruleset-required-green", "malformed-protection", "unreadable-rules"] as const)("manual checkout Update uses required CI on the equal-tree PR head: %s", async scenario => {
+  test.each(["optional-red", "empty-required-optional-red", "required-red", "unreadable-protection", "ruleset-required-red", "ruleset-required-green", "malformed-protection", "set-less-protection", "null-protection", "unreadable-rules"] as const)("manual checkout Update uses required CI on the equal-tree PR head: %s", async scenario => {
     const h = harness({ relaunch: true, remote: "https://github.com/example/project.git" });
     const head = "a".repeat(40), tree = "b".repeat(40);
     const target = { sha: tipSha, short: tipSha.slice(0, 7), version: "1.0.1", date: "" };
@@ -761,6 +761,8 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       if (url.includes("/branches/")) return scenario === "unreadable-protection" ? new Response(null, { status: 403 })
         : scenario === "empty-required-optional-red" ? Response.json({ protected: false })
         : scenario === "malformed-protection" ? Response.json({ protected: true, protection: { required_status_checks: "unreadable" } })
+        : scenario === "set-less-protection" ? Response.json({ protected: true, protection: { required_status_checks: { enforcement_level: "everyone" } } })
+        : scenario === "null-protection" ? Response.json({ protected: false, protection: null })
         : scenario.startsWith("ruleset-required") ? Response.json({ protected: true, protection: { required_status_checks: { contexts: [], checks: [] } } })
         : Response.json({ protected: true, protection: { required_status_checks: { checks: [{ context: "typecheck", app_id: 15368 }] } } });
       if (url.includes("/statuses")) return Response.json([]);
