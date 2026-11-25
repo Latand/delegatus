@@ -7098,7 +7098,10 @@ describe("owner confirmation of one Telegram file send", () => {
      written after the describe, and only when every case's frames are recorded. */
   const output = path.resolve(".artifacts/telegram-file-confirmation");
   const recorded = new Map<string, Record<string, unknown>>();
-  const STATES = ["pending", "details", "status", "sending", "sent", "rejected", "expired", "uncertain", "failed", "unavailable", "owner"] as const;
+  /* `gap-*`: the owner has not met a step this page needs yet, and the page says which and offers it (the server's `missing`). */
+  const GAPS = ["team", "owner", "pairing", "telegram_link", "telegram_account", "telegram_session"] as const;
+  const STATES = ["pending", "details", "status", "sending", "sent", "rejected", "expired", "uncertain", "failed", "unavailable", "owner", ...GAPS.map(gap => `gap-${gap}` as const)] as const;
+  const gapOf = (state: string) => GAPS.find(gap => state === `gap-${gap}`);
   type Frame = { width: 390 | 600 | 820 | 1000 | 1440; lang: "en" | "uk"; theme: "light" | "dark"; state: (typeof STATES)[number]; data?: "media" | "long" };
   const LONG_FILE = `quarterly-${"revenue-".repeat(5)}export-final-v2.json`;
   const LONG_CHAT = "Fixture reports for the regional and international operations office";
@@ -7130,7 +7133,8 @@ describe("owner confirmation of one Telegram file send", () => {
           const pendingHeading = typesetFileConfirmation(data === "media"
             ? (lang === "uk" ? "Обидва зображення поза теками, з яких дозволено надсилати (handoff)" : "Both images are outside the folders files may be sent from (handoff)")
             : (lang === "uk" ? "Схоже, у цьому файлі приватний ключ" : "This file looks like it holds a private key"), lang);
-          const heading = { pending: pendingHeading, details: pendingHeading, status: pendingHeading, sending: pendingHeading, sent: typesetFileConfirmation(words.sentTitle(chat), lang), rejected: typesetFileConfirmation(words.rejectedTitle(chat), lang), expired: words.expiredTitle, uncertain: words.uncertainTitle, failed: words.failedTitle, unavailable: words.unavailableTitle, owner: words.ownerTitle }[state];
+          const heading = { pending: pendingHeading, details: pendingHeading, status: pendingHeading, sending: pendingHeading, sent: typesetFileConfirmation(words.sentTitle(chat), lang), rejected: typesetFileConfirmation(words.rejectedTitle(chat), lang), expired: words.expiredTitle, uncertain: words.uncertainTitle, failed: words.failedTitle, unavailable: words.unavailableTitle, owner: words.ownerTitle,
+            ...Object.fromEntries(GAPS.map(gap => [`gap-${gap}`, typesetFileConfirmation(words.missing[gap].title, lang)])) }[state];
           const asking = ["pending", "details", "status", "sending"].includes(state);
           /* Before any press or scroll: the heading, and while the decision is open both answers and the real file, are whole on the first screen. */
           const firstScreen = await page.evaluate((media) => {
@@ -7231,6 +7235,21 @@ describe("owner confirmation of one Telegram file send", () => {
           if (state === "owner") {
             const href = await page.getByRole("link", { name: words.signIn, exact: true }).getAttribute("href");
             if (href !== `/sign-in?next=${encodeURIComponent(`/?${query}`)}`) failures.push(`${name}: sign-in link ${href}`);
+          }
+          const gap = gapOf(state);
+          if (gap) {
+            /* The body says why, the one action is the step itself, and no link on the page leads to sign-in unless it is the owner's own. */
+            const body = await page.locator("[data-file-confirmation-card]").innerText();
+            const reason = typesetFileConfirmation(words.missing[gap].body, lang);
+            if (!body.includes(reason)) failures.push(`${name}: the reason «${reason}» is missing`);
+            const actions = await page.locator("[data-file-confirmation-card] a, [data-file-confirmation-card] button:not([data-file-confirmation-status])").evaluateAll(nodes => nodes.map(node => ({ tag: node.tagName, text: (node.textContent ?? "").trim(), href: node.getAttribute("href") })));
+            const expected = {
+              team: [{ tag: "A", text: "action", href: "/team" }], owner: [{ tag: "A", text: "action", href: `/sign-in?next=${encodeURIComponent(`/?${query}`)}` }], pairing: [],
+              telegram_link: [{ tag: "BUTTON", text: translate(lang, "team.telegram.link"), href: null }], telegram_account: [{ tag: "BUTTON", text: translate(lang, "team.telegram.link"), href: null }],
+              telegram_session: [{ tag: "BUTTON", text: translate(lang, "team.signIn.telegram"), href: null }],
+            }[gap].map(action => action.text === "action" ? { ...action, text: (words.missing as Record<string, { action?: string }>)[gap]!.action! } : action);
+            if (JSON.stringify(actions) !== JSON.stringify(expected)) failures.push(`${name}: actions ${JSON.stringify(actions)}, expected ${JSON.stringify(expected)}`);
+            if (await page.evaluate(() => location.pathname + location.search) !== `/?${query}`) failures.push(`${name}: the page navigated away`);
           }
           await page.waitForTimeout(150);
           const reading = await page.evaluate(({ coarse, uk, strip }) => {
@@ -7349,7 +7368,7 @@ describe("owner confirmation of one Telegram file send", () => {
           if (latin.length) failures.push(`${name}: Latin words in a Ukrainian frame: ${[...new Set(latin)].join(", ")}`);
           if (state === "status" && !reading.popover) failures.push(`${name}: no popover`);
           if (reading.popover && !reading.popover.inCard) failures.push(`${name}: the popover crosses or touches the card's edge`);
-          if (state !== "owner") {
+          if (state !== "owner" && !gap) {
             if (reading.dotOffChevron === null || Math.abs(reading.dotOffChevron) > 1) failures.push(`${name}: the status dot's centre is ${reading.dotOffChevron} px off the Details chevron's`);
             if (!reading.detailsRow || /\d/.test(reading.detailsRow)) failures.push(`${name}: the Details row reads «${reading.detailsRow}»`);
           }

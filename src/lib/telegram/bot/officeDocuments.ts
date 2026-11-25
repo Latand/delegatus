@@ -339,21 +339,63 @@ function rejectWordImports(members: Array<[string, Buffer, string]>): void {
   }
 }
 
+/** The shared strings a workbook's cells index, from the part its relationships name. */
+function packageSharedStrings(members: Map<string, Buffer>): string[] | undefined {
+  const root = members.get("_rels/.rels");
+  const main = root && relationships(root).find(relationship => /\/officeDocument$/.test(relationship.type));
+  if (!main) return undefined;
+  const workbook = partName("", main.target);
+  const workbookRelationships = members.get(relationshipsName(workbook));
+  const strings = workbookRelationships && relationships(workbookRelationships).find(relationship => /\/sharedStrings$/.test(relationship.type));
+  const part = strings && members.get(partName(workbook, strings.target));
+  return part && sharedStringTable(part);
+}
+
+/** The text of each `si` of a shared-strings part, by index: rich runs joined, phonetic guides left out. */
+function sharedStringTable(bytes: Buffer): string[] {
+  const table: string[] = [];
+  let current: string | null = null;
+  let inText = 0, inPhonetic = 0;
+  parseOfficeXml(bytes, {
+    open(tag) {
+      if (!SHEET.has(tag.uri)) return;
+      if (tag.local === "si") current = "";
+      else if (tag.local === "t") inText++;
+      else if (tag.local === "rPh") inPhonetic++;
+    },
+    text(text) { if (current !== null && inText && !inPhonetic) current += text; },
+    close(tag) {
+      if (!SHEET.has(tag.uri)) return;
+      if (tag.local === "t") inText--;
+      else if (tag.local === "rPh") inPhonetic--;
+      else if (tag.local === "si" && current !== null) { table.push(current); current = null; }
+    },
+  });
+  return table;
+}
+
 /** Inspect a package with {@link inspectOfficeZip} and hand every member, with
  * the text {@link officeXmlText} reads from it, to `visit`. Text is read once
- * the whole package has been checked, so the Word styles of each package
- * (the file itself or an embedded one) apply to all of its parts. */
+ * the whole package has been checked, so the Word styles and the shared
+ * strings of each package (the file itself or an embedded one) apply to all of
+ * its parts. */
 export function inspectOfficePackage(bytes: Buffer, maxBytes: number, visit: (name: string, bytes: Buffer, text: string | null, requiresConsent: boolean) => void): Set<string> {
   const members: Array<[string, Buffer, string]> = [];
   const names = inspectOfficeZip(bytes, maxBytes, (name, content, prefix) => { members.push([name, content, prefix]); });
   rejectWordImports(members);
-  const styles = new Map<string, WordStyles | undefined>();
+  const packages = new Map<string, { styles: WordStyles | undefined; workbook: WorkbookContext }>();
   for (const [name, content, prefix] of members) {
-    if (!styles.has(prefix)) {
-      const own = members.filter(member => member[2] === prefix).map(([member, data]) => [member.slice(prefix.length).toLowerCase(), data] as const);
-      styles.set(prefix, packageWordStyles(new Map(own)));
+    let own = packages.get(prefix);
+    if (!own) {
+      const parts = members.filter(member => member[2] === prefix);
+      const byName = new Map(parts.map(([member, data]) => [member.slice(prefix.length).toLowerCase(), data] as const));
+      own = {
+        styles: packageWordStyles(byName),
+        workbook: { sharedStrings: packageSharedStrings(byName), budget: { left: formulaReadingBudget(parts.reduce((total, [, data]) => total + data.length, 0)) } },
+      };
+      packages.set(prefix, own);
     }
-    const inspection = officeXmlTextInspection(name, content, styles.get(prefix));
+    const inspection = officeXmlTextInspection(name, content, own.styles, own.workbook);
     visit(name, content, inspection.text, inspection.requiresConsent);
   }
   return names;
@@ -541,6 +583,77 @@ function displayedText(styles: WordStyles | undefined) {
   };
 }
 
+/* What the cells of one workbook hold, for reading the text its formulas join. */
+type WorkbookContext = {
+  sharedStrings?: readonly string[];
+  /** Characters of formula readings the whole package may produce. */
+  budget?: { left: number };
+};
+/** The characters of formula readings a package may produce: the displayed-reading allowance. */
+const formulaReadingBudget = (length: number) => 4 * length + (1 << 20);
+const MAX_FORMULA_REFERENCES = 64;
+const CELL_REFERENCE = /^\$?([A-Za-z]{1,3})\$?([0-9]+)$/;
+
+/**
+ * The text a formula puts together, as Excel would show it before any
+ * function runs: each string literal and the stored text of each same-sheet
+ * single-cell reference (`A1`, `$A$1`), in the order written and with nothing
+ * between them. Ranges, references to another sheet or workbook, table
+ * references and names are not read. Null when the formula names more cells
+ * than {@link MAX_FORMULA_REFERENCES}, which cannot be read within the bound.
+ */
+export function formulaReading(formula: string, cellText: (reference: string) => string | undefined): { text: string; references: number } | null {
+  let text = "";
+  let references = 0;
+  /* After a sheet qualifier or a range operator, the next token belongs to another sheet or a range. */
+  let foreign = false;
+  let index = 0;
+  const quoted = (quote: string, from: number) => {
+    let literal = "", end = from;
+    for (; end < formula.length; end++) {
+      if (formula[end] !== quote) { literal += formula[end]; continue; }
+      if (formula[end + 1] !== quote) break;
+      literal += quote;
+      end++;
+    }
+    return { literal, next: end + 1 };
+  };
+  while (index < formula.length) {
+    const char = formula[index]!;
+    if (char === '"') {
+      const { literal, next } = quoted('"', index + 1);
+      text += literal;
+      index = next;
+      foreign = false;
+    } else if (char === "'") {
+      index = quoted("'", index + 1).next;
+      foreign = true;
+    } else if (char === "[") {
+      let depth = 0;
+      for (; index < formula.length; index++) {
+        if (formula[index] === "[") depth++;
+        else if (formula[index] === "]" && --depth === 0) { index++; break; }
+      }
+    } else if (/[A-Za-z0-9_.$\\]/.test(char)) {
+      let end = index + 1;
+      while (end < formula.length && /[A-Za-z0-9_.$\\]/.test(formula[end]!)) end++;
+      const token = formula.slice(index, end);
+      const after = formula[end];
+      index = end;
+      if (after === "!" || after === ":") { foreign = true; index++; continue; }
+      if (foreign || after === "(" || after === "[") { foreign = false; continue; }
+      if (!CELL_REFERENCE.test(token)) continue;
+      if (++references > MAX_FORMULA_REFERENCES) return null;
+      text += cellText(token.replace(/\$/g, "").toUpperCase()) ?? "";
+    } else {
+      index++;
+      if (char === ":" || char === "!") foreign = true;
+      else if (!/\s/.test(char)) foreign = false;
+    }
+  }
+  return { text, references };
+}
+
 /** Join adjacent runs, retaining text inside leaves and real layout boundaries.
  * Readings are returned one line apart: one keeps every leaf's text as
  * written, the second trims XML whitespace from the edges of leaves outside
@@ -555,7 +668,7 @@ function displayedText(styles: WordStyles | undefined) {
  * display cannot split a token it does. Those trim only a leaf that does not
  * itself preserve its spaces. Fatal decoding and parsing apply to XML parts
  * even after a secret is found. */
-function officeXmlTextInspection(name: string, bytes: Buffer, styles?: WordStyles): { text: string | null; requiresConsent: boolean } {
+function officeXmlTextInspection(name: string, bytes: Buffer, styles?: WordStyles, workbook?: WorkbookContext): { text: string | null; requiresConsent: boolean } {
   if (!/\.(?:xml|rels|vml|svg)$/i.test(name) && !startsWithXml(bytes, xmlEncoding(bytes))) return { text: null, requiresConsent: false };
   const pieces: string[] = [];
   const compact: string[] = [];
@@ -565,6 +678,13 @@ function officeXmlTextInspection(name: string, bytes: Buffer, styles?: WordStyle
   let formulaDepth = 0;
   let formulaText = "";
   let requiresConsent = false;
+  /* A cell's stored text, by reference, and each formula as written: what a
+     formula joins is read once the whole sheet is known, so a formula may name a later cell. */
+  type Cell = { reference: string; type: string; value: string; inline: string; formula: string };
+  let cell: Cell | null = null;
+  let inValue = 0, inInline = 0, inText = 0, inPhonetic = 0;
+  const storedText = new Map<string, string>();
+  const formulas: string[] = [];
   const open: SaxesTagNS[] = [];
   const hasChild: boolean[] = [];
   const preserve: boolean[] = [];
@@ -599,9 +719,14 @@ function officeXmlTextInspection(name: string, bytes: Buffer, styles?: WordStyle
       preserve.push(preserved);
       ownPreserve.push(own);
       shown.open(tag, resolve);
-      if (SHEET.has(tag.uri) && tag.local === "calcPr"
-        && /^(?:1|true|on)$/i.test(plainValue(tag, "fullCalcOnLoad") ?? "")) requiresConsent = true;
-      if (SHEET.has(tag.uri) && tag.local === "f") { formulaDepth++; formulaText = ""; }
+      if (SHEET.has(tag.uri)) {
+        if (tag.local === "c") cell = { reference: (plainValue(tag, "r") ?? "").toUpperCase(), type: plainValue(tag, "t") ?? "n", value: "", inline: "", formula: "" };
+        else if (tag.local === "v") inValue++;
+        else if (tag.local === "is") inInline++;
+        else if (tag.local === "t") inText++;
+        else if (tag.local === "rPh") inPhonetic++;
+        else if (tag.local === "f") { formulaDepth++; formulaText = ""; }
+      }
       if (tag.local === "numFmt") {
         const format = Object.values(tag.attributes).find(value => value.uri === "" && value.local === "formatCode")?.value;
         if (format) {
@@ -614,17 +739,33 @@ function officeXmlTextInspection(name: string, bytes: Buffer, styles?: WordStyle
     text(text) {
       pending.push(text);
       if (formulaDepth) formulaText += text;
+      if (cell) {
+        if (inValue) cell.value += text;
+        else if (inInline && inText && !inPhonetic) cell.inline += text;
+      }
     },
     close(tag) {
       flush(!hasChild.pop());
       preserve.pop();
       ownPreserve.pop();
       open.pop();
-      if (SHEET.has(tag.uri) && tag.local === "f" && formulaDepth) {
-        formulaDepth--;
-        const literal = [...formulaText.matchAll(/"((?:[^"]|"")*)"/g)].map(match => match[1]!.replace(/""/g, '"')).join("");
-        if (literal) formulaLiterals.push(literal);
-        formulaText = "";
+      if (SHEET.has(tag.uri)) {
+        if (tag.local === "v") inValue--;
+        else if (tag.local === "is") inInline--;
+        else if (tag.local === "t") inText--;
+        else if (tag.local === "rPh") inPhonetic--;
+        else if (tag.local === "f" && formulaDepth) {
+          formulaDepth--;
+          const literal = [...formulaText.matchAll(/"((?:[^"]|"")*)"/g)].map(match => match[1]!.replace(/""/g, '"')).join("");
+          if (literal) formulaLiterals.push(literal);
+          if (cell && formulaText.trim()) cell.formula = formulaText;
+          formulaText = "";
+        } else if (tag.local === "c" && cell) {
+          const stored = cell.type === "inlineStr" ? cell.inline : cell.type === "s" ? (/^\s*\d+\s*$/.test(cell.value) ? workbook?.sharedStrings?.[Number(cell.value)] : undefined) ?? "" : cell.value;
+          if (cell.reference && stored) storedText.set(cell.reference, stored);
+          if (cell.formula) formulas.push(cell.formula);
+          cell = null;
+        }
       }
       const { text, separated: apart } = officeBoundary(tag, open.at(-1));
       pieces.push(text);
@@ -633,10 +774,20 @@ function officeXmlTextInspection(name: string, bytes: Buffer, styles?: WordStyle
       shown.close(tag);
     },
   });
+  /* What each formula joins from cells, one line each. A budget that runs out, or a
+     formula too wide to read, leaves computed text nobody inspected: that needs consent. */
+  const budget = workbook?.budget ?? { left: formulaReadingBudget(length) };
+  const formulaReadings: string[] = [];
+  for (const formula of formulas) {
+    const reading = formulaReading(formula, reference => storedText.get(reference));
+    if (!reading || reading.text.length > budget.left) { requiresConsent = true; break; }
+    budget.left -= reading.text.length;
+    if (reading.references && reading.text) formulaReadings.push(reading.text);
+  }
   // Attribute values are separate from the displayed text and from each other.
-  return { text: [pieces.join(""), compact.join(""), separated.join(""), ...shown.readings(4 * length + (1 << 20)), ...formulaLiterals, ...attributes].join("\n"), requiresConsent };
+  return { text: [pieces.join(""), compact.join(""), separated.join(""), ...shown.readings(4 * length + (1 << 20)), ...formulaLiterals, ...formulaReadings, ...attributes].join("\n"), requiresConsent };
 }
 
-export function officeXmlText(name: string, bytes: Buffer, styles?: WordStyles): string | null {
-  return officeXmlTextInspection(name, bytes, styles).text;
+export function officeXmlText(name: string, bytes: Buffer, styles?: WordStyles, workbook?: WorkbookContext): string | null {
+  return officeXmlTextInspection(name, bytes, styles, workbook).text;
 }

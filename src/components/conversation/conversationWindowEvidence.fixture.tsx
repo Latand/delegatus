@@ -2530,6 +2530,8 @@ function mountMemberAccounts(root: HTMLElement) {
 function mountFileConfirmation(root: HTMLElement) {
   Date.now = () => Date.parse("2026-10-22T12:00:00Z");
   const state = params.get("state") ?? "pending";
+  /* `gap-<step>`: the browser is refused for that missing step, as the confirmation route says it. */
+  const gap = state.startsWith("gap-") ? state.slice(4) : null;
   /* `data=media` sends two images from outside the roots; `data=long` gives the file and the chat 70-character names. */
   const data = params.get("data");
   const long = data === "long";
@@ -2542,14 +2544,14 @@ function mountFileConfirmation(root: HTMLElement) {
     options: { conversationId: "conversation_fixture", clientRequestId: "fixture", chat: "-1000000000101", topicId: null, replyToMessageId: null, format: "plain", silent: false, images },
     files: images.map((image, index) => ({ path: image.path, resolvedPath: image.path, filename: image.path.split("/").pop()!, sha256: String(index + 1).repeat(64), bytes: 48_213 + index })),
     reasons: images.map(image => ({ code: "document_outside_roots" as const, path: image.path, roots: ["/sandbox/handoff"], reason: `${image.path} is outside the allowed document roots (/sandbox/handoff).` })),
-    createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" ? "pending" : state as FileConfirmationView["state"], ...decided,
+    createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" || gap ? "pending" : state as FileConfirmationView["state"], ...decided,
   } : {
     id: "fixture-confirmation", digest: "a".repeat(64), kind: "document", chatId: "-1000000000101", chatTitle, topicId: 7,
     options: { conversationId: "conversation_fixture", clientRequestId: "fixture", chat: "-1000000000101", topicId: 7, replyToMessageId: 42, format: "html", silent: true,
       document: { path: `/sandbox/handoff/${filename}`, filename, caption: "Requested file / Запитаний файл" } },
     files: [{ path: `/sandbox/handoff/${filename}`, resolvedPath: "/sandbox/.codex/auth.json", filename, sha256: "b".repeat(64), bytes: 2458 }],
     reasons: [{ code: "document_forbidden_path", path: "/sandbox/.codex/auth.json", segment: ".codex", reason: "/sandbox/.codex/auth.json passes through dot-directory .codex." }, { code: "document_outside_roots", path: "/sandbox/.codex/auth.json", roots: ["/sandbox/handoff"], reason: "/sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff)." }, { code: "document_secret", reason: "The file contains what looks like a secret (private_key, line 1).", secretClass: "private_key", line: 1 }],
-    createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" ? "pending" : state as FileConfirmationView["state"], ...decided,
+    createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" || gap ? "pending" : state as FileConfirmationView["state"], ...decided,
   };
   let sends = 0;
   const posts: unknown[] = [];
@@ -2561,6 +2563,7 @@ function mountFileConfirmation(root: HTMLElement) {
     const url = new URL(String(input), location.origin);
     if (url.pathname !== "/api/telegram/bot/confirmation") return Response.json({});
     if (state === "owner") return Response.json({ code: "OPERATOR_REQUIRED" }, { status: 401 });
+    if (gap) return Response.json({ code: "OPERATOR_REQUIRED", missing: gap }, { status: 401 });
     if (init?.method === "POST") {
       const body = JSON.parse(String(init.body));
       posts.push(body);

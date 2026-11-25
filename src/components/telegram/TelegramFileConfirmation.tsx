@@ -4,6 +4,8 @@ import { useEffect, useId, useRef, useState, type ReactNode, type Ref } from "re
 import { Check, CircleX, Clock, Loader2, Send, TriangleAlert, X } from "lucide-react";
 import { translate, useLocale, type Locale } from "@/lib/i18n";
 import { MobileSheetFold } from "@/components/mobile/MobileSheet";
+import { TelegramStep } from "@/components/team/TelegramStep";
+import { isOwnerTelegramGap, type OwnerTelegramGap } from "@/lib/team/contract";
 import { fileConfirmationSummary, fileConfirmationText, typesetFileConfirmation, type FileConfirmationView } from "@/lib/telegram/bot/fileConfirmationContract";
 
 /* The product's button recipe (SelfUpdateView): refusing is the primary, the send carries the warning tone. */
@@ -214,46 +216,77 @@ function Page({ ref, children }: { ref?: Ref<HTMLElement>; children: ReactNode }
   </main>;
 }
 
+/* What a refused request leaves: the old sign-in card (nobody is signed in), or the first step the owner is missing. */
+type Gate = OwnerTelegramGap | "sign-in";
+
+const gateOf = (body: { missing?: unknown } | null): Gate => (isOwnerTelegramGap(body?.missing) ? body.missing : "sign-in");
+
+/* The page names what is missing and does the Telegram steps itself. Nothing here navigates on its own:
+   the only links are buttons that say where they go. */
+function MissingStep({ gate, onDone }: { gate: Gate; onDone(): void }) {
+  const { locale } = useLocale();
+  const words = fileConfirmationText[locale];
+  const [message, setMessage] = useState<string | null>(null);
+  const next = typeof window === "undefined" ? "/telegram-file-confirmation" : window.location.pathname + window.location.search;
+  const signIn = <a className={`${BUTTON} ${TONE.primary}`} href={`/sign-in?next=${encodeURIComponent(next)}`}>{gate === "owner" ? words.missing.owner.action : words.signIn}</a>;
+  let content: ReactNode;
+  if (gate === "sign-in" || gate === "owner") content = signIn;
+  else if (gate === "team") content = <a className={`${BUTTON} ${TONE.primary}`} href="/team">{words.missing.team.action}</a>;
+  else if (gate === "pairing") content = null;
+  else content = <TelegramStep key={gate} purpose={gate === "telegram_session" ? "sign-in" : "link"} buttonClassName={`${BUTTON} ${TONE.primary}`} onMessage={setMessage}
+    onDone={outcome => { if (outcome === "not-linked") setMessage(words.notLinked); else { setMessage(null); onDone(); } }} />;
+  const text = gate === "sign-in" ? { title: words.ownerTitle, body: words.ownerBody } : words.missing[gate];
+  return <Page><Card>
+    <div data-file-confirmation-gap={gate} className="flex flex-col gap-4">
+      <Heading announce>{typesetFileConfirmation(text.title, locale)}</Heading>
+      <p className="text-body text-secondary">{typesetFileConfirmation(text.body, locale)}</p>
+      {content ? <div className="flex flex-col gap-2 pb-3">{content}{message ? <p role="alert" className="text-ui text-danger">{message}</p> : null}</div> : <div className="pb-1" />}
+    </div>
+  </Card></Page>;
+}
+
 export function TelegramFileConfirmation() {
   const { locale } = useLocale();
   const words = fileConfirmationText[locale];
   const [view, setView] = useState<FileConfirmationView | null>(null);
-  const [error, setError] = useState<"owner" | "unavailable" | null>(null);
+  const [gate, setGate] = useState<Gate | null>(null);
+  const [error, setError] = useState<"unavailable" | null>(null);
   const [busy, setBusy] = useState<Pressed | null>(null);
   /* The time of the press, kept here only; the server's own record stays as it is. */
   const [pressedAt, setPressedAt] = useState<string | null>(null);
+  /* Bumped after a Telegram step: the owner's standing changed, so the page asks the server again. */
+  const [asked, setAsked] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     const id = new URLSearchParams(window.location.search).get("id") ?? "";
     void fetch(`/api/telegram/bot/confirmation?id=${encodeURIComponent(id)}`, { cache: "no-store", signal: controller.signal }).then(async response => {
-      if (!response.ok) { if (!controller.signal.aborted) setError(response.status === 401 || response.status === 403 ? "owner" : "unavailable"); return; }
+      if (!response.ok) {
+        const refusal = response.status === 401 || response.status === 403 ? gateOf(await response.json().catch(() => null)) : null;
+        if (controller.signal.aborted) return;
+        if (refusal) setGate(refusal); else setError("unavailable");
+        return;
+      }
       const loaded = await response.json() as FileConfirmationView;
-      if (!controller.signal.aborted) setView(loaded);
+      if (!controller.signal.aborted) { setGate(null); setError(null); setView(loaded); }
     }).catch(() => { if (!controller.signal.aborted) setError("unavailable"); });
     return () => controller.abort();
-  }, []);
+  }, [asked]);
   async function decide(approve: boolean) {
     if (!view || busy) return;
     setBusy(approve ? "send" : "decline");
     const pressed = new Date(Date.now()).toISOString();
     try {
       const response = await fetch("/api/telegram/bot/confirmation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: view.id, digest: view.digest, approve }) });
-      const result = await response.json() as { code?: string };
-      if (!response.ok) {
-        setView({ ...view, state: result.code === "send_uncertain" || result.code === "action_failed" ? "uncertain" : "failed" });
-        setError(response.status === 401 || response.status === 403 ? "owner" : null);
-      } else { setPressedAt(pressed); setView({ ...view, state: approve ? "sent" : "rejected" }); }
+      const result = await response.json().catch(() => ({})) as { code?: string; missing?: unknown };
+      if (response.ok) { setPressedAt(pressed); setView({ ...view, state: approve ? "sent" : "rejected" }); return; }
+      setView({ ...view, state: result.code === "send_uncertain" || result.code === "action_failed" ? "uncertain" : "failed" });
+      if (response.status === 401 || response.status === 403) setGate(gateOf(result));
     } catch { setView({ ...view, state: "uncertain" }); }
     finally { setBusy(null); }
   }
-  if (error === "owner") {
-    const next = typeof window === "undefined" ? "/telegram-file-confirmation" : window.location.pathname + window.location.search;
-    return <Page><Card>
-      <Heading announce>{words.ownerTitle}</Heading>
-      <p className="text-body text-secondary">{words.ownerBody}</p>
-      <div className="pb-3"><a className={`${BUTTON} ${TONE.primary}`} href={`/sign-in?next=${encodeURIComponent(next)}`}>{words.signIn}</a></div>
-    </Card></Page>;
-  }
+  /* After a Telegram step the owner's standing changed: ask again, and the page shows the next missing step or the request. */
+  const askAgain = () => { setGate(null); setView(null); setError(null); setAsked(count => count + 1); };
+  if (gate) return <MissingStep gate={gate} onDone={askAgain} />;
   if (error) return <Page><Card>
     <Heading icon={<CircleX className={`${ICON} text-muted`} aria-hidden />} announce>{words.unavailableTitle}</Heading>
     <p className="pb-3 text-body text-secondary">{words.unavailableBody}</p>

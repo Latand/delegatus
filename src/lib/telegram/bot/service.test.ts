@@ -490,17 +490,24 @@ test("Office imported parts and alternate displayed text stay behind confirmatio
     ["tracked-format.docx", "docx", docx(wordDocument(run(fixtureText.slice(0, 15), '<w:vanish w:val="0"/>') + run(".", '<w:rPrChange><w:rPr><w:vanish/></w:rPr></w:rPrChange>') + run(fixtureText.slice(15), '<w:vanish w:val="0"/>')))],
   ];
   const xlsxEntries = officeParts("xlsx");
-  const xlsx = (sheet: string, extraStyles = "", forceRecalc = false) => officeZip({
+  /* `strings` makes the workbook keep its text in `xl/sharedStrings.xml`, as library writers do. */
+  const xlsx = (sheet: string, extraStyles = "", forceRecalc = false, strings: string[] | null = null) => officeZip({
     ...xlsxEntries,
     "xl/workbook.xml": `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Report" sheetId="1" r:id="rId1"/></sheets>${forceRecalc ? '<calcPr fullCalcOnLoad="1"/>' : ""}</workbook>`,
     "xl/worksheets/sheet1.xml": sheet,
     "xl/styles.xml": extraStyles || '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>',
-    "xl/_rels/workbook.xml.rels": '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>',
+    ...(strings ? { "xl/sharedStrings.xml": `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${strings.length}" uniqueCount="${strings.length}">${strings.map(text => `<si><t>${text}</t></si>`).join("")}</sst>` } : {}),
+    "xl/_rels/workbook.xml.rels": `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>${strings ? '<Relationship Id="rIdT" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>' : ""}</Relationships>`,
   });
+  const sheetOf = (rows: string) => `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rows}</sheetData></worksheet>`;
   fixtures.push(
     ["format-literal.xlsx", "xlsx", xlsx(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row><c r="A1" s="1"><v>1</v></c></row></sheetData></worksheet>`, `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="${fixtureText.split("").join("\\")}"/></numFmts><cellXfs count="2"><xf/><xf numFmtId="164"/></cellXfs></styleSheet>`)],
     ["formula-literal.xlsx", "xlsx", xlsx(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row><c r="A1"><f>\"${fixtureText.slice(0, 15)}\"&amp;\"${fixtureText.slice(15)}\"</f></c></row></sheetData></worksheet>`)],
     ["forced-recalc.xlsx", "xlsx", xlsx(`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row><c r="A1" t="inlineStr"><is><t>${fixtureText.slice(0, 15)}</t></is></c><c r="B1" t="inlineStr"><is><t>${fixtureText.slice(15)}</t></is></c><c r="C1"><f>CONCAT(A1,B1)</f></c></row></sheetData></worksheet>`, "", true)],
+    /* The recalculation flag is no evidence either way: the same split secret over shared strings refuses without it. */
+    ["shared-split.xlsx", "xlsx", xlsx(sheetOf('<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1"><f>CONCAT(A1,B1)</f></c></row>'), "", false, [fixtureText.slice(0, 15), fixtureText.slice(15)])],
+    ["shared-split-reversed.xlsx", "xlsx", xlsx(sheetOf('<row r="1"><c r="A1"><f>$B$1&amp;A2</f></c><c r="B1" t="s"><v>0</v></c><c r="A2" t="s"><v>1</v></c></row>'), "", true, [fixtureText.slice(0, 15), fixtureText.slice(15)])],
+    ["shared-literal.xlsx", "xlsx", xlsx(sheetOf('<row r="1"><c r="A1" t="s"><v>0</v></c></row>'), "", true, [fixtureText])],
   );
   for (const [name, extension, bytes] of fixtures) {
     const file = documentFile(path.join(HANDOFF, name), bytes);
@@ -512,6 +519,29 @@ test("Office imported parts and alternate displayed text stay behind confirmatio
   const neutral = documentFile(path.join(HANDOFF, "neutral.xlsx"), officeZip(officeParts("xlsx")));
   transport.script("sendDocument", ok({ message_id: 199, date: T0 + 100 }));
   expect(await sendDocument({ path: neutral }, { clientRequestId: "neutral-office" })).toMatchObject({ messageIds: [199] });
+  expect(transport.callsOf("sendDocument")).toHaveLength(1);
+});
+
+test("an ordinary spreadsheet with formulas and computed text sends without a secret warning", async () => {
+  await allowedTeam();
+  /* As openpyxl writes a staffing table: the recalculation flag set, text in the shared strings, formulas with no stored result. */
+  const strings = ["Full name", "First", "Last", "Hours", "Anna", "Kovalenko", "Ihor", "Melnyk", "Total", "over", "ok"];
+  const cells = {
+    header: '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c><c r="D1" t="s"><v>3</v></c></row>',
+    anna: '<row r="2"><c r="A2"><f>B2&amp;" "&amp;C2</f><v></v></c><c r="B2" t="s"><v>4</v></c><c r="C2" t="s"><v>5</v></c><c r="D2"><v>160</v></c></row>',
+    ihor: '<row r="3"><c r="A3"><f>B3&amp;" "&amp;C3</f><v></v></c><c r="B3" t="s"><v>6</v></c><c r="C3" t="s"><v>7</v></c><c r="D3"><v>152</v></c></row>',
+    total: '<row r="4"><c r="A4" t="s"><v>8</v></c><c r="D4"><f>SUM(D2:D3)</f><v></v></c><c r="E4"><f>IF(D4&gt;300,"over","ok")</f><v></v></c><c r="F4"><f>Report!B2&amp;LOG10(D2)&amp;\'Q 1\'!A1&amp;SUM(D2:D3)</f><v></v></c></row>',
+  };
+  const ordinary = officeZip({
+    ...officeParts("xlsx"),
+    "xl/workbook.xml": '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Report" sheetId="1" r:id="rId1"/></sheets><calcPr calcId="124519" fullCalcOnLoad="1"/></workbook>',
+    "xl/worksheets/sheet1.xml": `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${Object.values(cells).join("")}</sheetData></worksheet>`,
+    "xl/sharedStrings.xml": `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${strings.length}" uniqueCount="${strings.length}">${strings.map(text => `<si><t>${text}</t></si>`).join("")}</sst>`,
+    "xl/_rels/workbook.xml.rels": '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rIdT" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>',
+  });
+  const file = documentFile(path.join(HANDOFF, "staffing.xlsx"), ordinary);
+  transport.script("sendDocument", ok({ message_id: 201, date: T0 + 100 }));
+  expect(await sendDocument({ path: file }, { clientRequestId: "ordinary-spreadsheet" })).toMatchObject({ messageIds: [201] });
   expect(transport.callsOf("sendDocument")).toHaveLength(1);
 });
 

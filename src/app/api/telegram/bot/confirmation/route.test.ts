@@ -114,6 +114,50 @@ test.each(["document", "media"] as const)("only the paired owner approves %s; a 
   expect((await POST(request("POST", decision))).status).toBe(409);
 });
 
+/* What the owner page is told when the browser cannot confirm yet: the first missing step, and nothing leaves. */
+const DEVICE = { surface: "desktop", browser: "chrome" } as const;
+const ownerMember = () => teamStore().owner()!;
+const mint = (method: "approval" | "claim" | "telegram", memberId = ownerMember().id) => mintSession(teamStore(), memberId, method, DEVICE).value;
+const linkOwner = (userId: string | null) => teamStore().updateMember({ ...ownerMember(), telegram: userId ? { userId, username: "fixture", firstName: "Owner", linkedAt: "2026-10-22T12:00:00.000Z" } : null });
+const pauseRelay = () => updateRelayStore(store => ({ ...store, relays: store.relays.map(relay => ({ ...relay, paused: true })) }));
+const removeRelays = () => updateRelayStore(store => ({ ...store, relays: [] }));
+const addMember = () => { teamStore().insertMember({ ...ownerMember(), id: "m_fixture_member", name: "Member", role: "member", telegram: null, createdBy: ownerMember().id }); return "m_fixture_member"; };
+
+test.each([
+  ["telegram_link", "an approval session of an owner with no linked Telegram", () => { linkOwner(null); return mint("approval"); }],
+  ["telegram_link", "a Telegram session of an owner who unlinked", () => { linkOwner(null); return mint("telegram"); }],
+  ["telegram_account", "an owner linked to another Telegram account", () => { linkOwner("700002"); return mint("telegram"); }],
+  ["telegram_session", "an approval session of the paired owner", () => mint("approval")],
+  ["telegram_session", "the install claim session of the paired owner", () => bootstrap],
+  ["pairing", "owner reviews paused", () => { pauseRelay(); return cookie; }],
+  ["pairing", "owner reviews removed", () => { removeRelays(); return cookie; }],
+  ["pairing", "owner reviews removed while the owner has no linked Telegram", () => { removeRelays(); linkOwner(null); return mint("approval"); }],
+  ["owner", "a member who is not the owner", () => mint("telegram", addMember())],
+  ["owner", "a member who is not the owner while owner reviews are removed", () => { removeRelays(); return mint("approval", addMember()); }],
+] as const)("%s: the page is told what is missing for %s, on read and on decision, and nothing is sent", async (missing, _label, setup) => {
+  const { view } = await pending();
+  const refused = setup();
+  const decision = { id: view.id, digest: view.digest, approve: true };
+  const read = await GET(request("GET", undefined, { cookie: `${MEMBER_COOKIE}=${refused}` }, view.id));
+  expect({ status: read.status, body: await read.json(), cache: read.headers.get("cache-control") }).toEqual({ status: 401, body: { code: "OPERATOR_REQUIRED", missing }, cache: "no-store" });
+  for (const approve of [true, false]) {
+    const response = await POST(request("POST", { ...decision, approve }, { cookie: `${MEMBER_COOKIE}=${refused}` }));
+    expect({ status: response.status, body: await response.json() }).toEqual({ status: 401, body: { code: "OPERATOR_REQUIRED", missing } });
+  }
+  expect(transport.callsOf("sendDocument")).toHaveLength(0);
+  // The request is still waiting for a browser that can confirm it.
+  expect(service.fileConfirmation(view.id)).toMatchObject({ id: view.id, state: "pending" });
+});
+
+test("a browser nobody is signed in on is told to sign in, and learns nothing about the owner", async () => {
+  const { view } = await pending();
+  for (const headers of [{ cookie: "" }, { cookie: `${MEMBER_COOKIE}=${"x".repeat(43)}` }]) {
+    const response = await GET(request("GET", undefined, headers, view.id));
+    expect({ status: response.status, body: await response.json() }).toEqual({ status: 401, body: { code: "MEMBER_REQUIRED" } });
+  }
+  expect(transport.callsOf("sendDocument")).toHaveLength(0);
+});
+
 test("a revoked owner is refused after the body wait", async () => {
   const { view } = await pending();
   let finish!: () => void;

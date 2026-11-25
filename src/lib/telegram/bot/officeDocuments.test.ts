@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { inspectOfficeZip, officeXmlText, wordStyles } from "./officeDocuments";
-import { commentHidingArchive, hiddenSeparators, officeWordRun as wordRun, officeZip } from "./officeDocuments.fixture";
+import { formulaReading, inspectOfficePackage, inspectOfficeZip, officeXmlText, wordStyles } from "./officeDocuments";
+import { commentHidingArchive, hiddenSeparators, officeParts, officeWordRun as wordRun, officeZip } from "./officeDocuments.fixture";
 
 const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
 const S = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
@@ -183,4 +183,63 @@ test("an archive comment cannot hide a second archive from inspection", () => {
   commented.writeUInt16LE(4, clean.length - 2);
   expect(() => inspectOfficeZip(commented, 1 << 20, () => {})).toThrow();
   expect(() => inspectOfficeZip(clean, 1 << 20, () => {})).not.toThrow();
+});
+
+/* ---- computed spreadsheet text -------------------------------------------- */
+
+const CELLS: Record<string, string> = { B2: "Anna", C2: "Kovalenko", D2: "160", A1: "Alpha", B1: "Beta", C3: "Gamma" };
+const reading = (formula: string) => formulaReading(formula, reference => CELLS[reference]);
+
+test.each([
+  ['B2&" "&C2', "Anna Kovalenko", 2],
+  ["SUM(B2:B10)", "", 0],
+  ['IF(D2>0,"yes","no")', "160yesno", 1],
+  ["$A$1&A$1&$B1", "AlphaAlphaBeta", 3],
+  ["a1&b1", "AlphaBeta", 2],
+  ['"say ""hi"" "&A1', 'say "hi" Alpha', 1],
+  ["LOG10(A1)&ATAN2(B1,C3)", "AlphaBetaGamma", 3],
+  ['Sheet2!A1&"-"&B1', "-Beta", 1],
+  ["'Q 1'!A1&C3", "Gamma", 1],
+  ["'It''s'!A1&C3&[1]Other!A1", "Gamma", 1],
+  ["A1:B2&C3", "Gamma", 1],
+  ["Staff[Name]&A1", "Alpha", 1],
+  ["A1.5+1E3", "", 0],
+] as const)("the reading of =%s is %j with %d cell references", (formula, text, references) => {
+  expect(reading(formula)).toEqual({ text, references });
+});
+
+test("a formula that names more cells than the bound cannot be read", () => {
+  expect(reading(Array(64).fill("A1").join("&"))).toEqual({ text: "Alpha".repeat(64), references: 64 });
+  expect(reading(Array(65).fill("A1").join("&"))).toBeNull();
+});
+
+test("a part reads the text its formulas join from shared strings, inline strings and later cells", () => {
+  const sheet = `<worksheet ${S}><sheetData><row><c r="A1"><f>B1&amp;C1&amp;D1</f></c><c r="B1" t="s"><v>0</v></c><c r="C1" t="inlineStr"><is><t>Mid</t><rPh sb="0" eb="1"><t>Hidden</t></rPh></is></c><c r="D1"><f>"-"&amp;E1</f><v>-9</v></c><c r="E1"><v>42</v></c></row></sheetData></worksheet>`;
+  const text = officeXmlText("xl/worksheets/sheet1.xml", Buffer.from(sheet), undefined, { sharedStrings: ["Start"] })!.split("\n");
+  expect(text).toContain("StartMid-9");
+  expect(text).toContain("-42");
+  /* A phonetic guide is not part of what a cell shows, so a formula does not join it. */
+  expect(text).not.toContain("StartMidHidden-9");
+});
+
+test("the recalculation flag alone asks for no consent, and computed text beyond the reading bound does", () => {
+  const workbook = (rows: string, flag = '<calcPr fullCalcOnLoad="1"/>') => officeZip({
+    ...officeParts("xlsx"),
+    "xl/workbook.xml": `<workbook ${S}><sheets/>${flag}</workbook>`,
+    "xl/worksheets/sheet1.xml": `<worksheet ${S}><sheetData>${rows}</sheetData></worksheet>`,
+  });
+  const consent = (bytes: Buffer) => {
+    let asked = false;
+    inspectOfficePackage(bytes, 1 << 22, (_name, _content, _text, requiresConsent) => { asked ||= requiresConsent; });
+    return asked;
+  };
+  const refs = (count: number) => Array(count).fill("A1").join("&amp;");
+  const row = (text: string, formula: string) => `<row><c r="A1" t="inlineStr"><is><t>${text}</t></is></c><c r="B1"><f>${formula}</f></c></row>`;
+  expect(consent(workbook(""))).toBe(false);
+  expect(consent(workbook(row("Alpha", "SUM(A2:A9)&amp;A1")))).toBe(false);
+  expect(consent(workbook(row("Alpha", refs(64))))).toBe(false);
+  expect(consent(workbook(row("Alpha", refs(65))))).toBe(true);
+  /* Sixty-four copies of a 30 000-character cell outgrow what the package's own size allows. */
+  expect(consent(workbook(row("x".repeat(30_000), refs(64))))).toBe(true);
+  expect(consent(workbook(row("x".repeat(30_000), refs(2))))).toBe(false);
 });
