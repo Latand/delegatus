@@ -118,14 +118,27 @@ test.each(["current", "antigravity", "turn", "writer", "generation", "attention"
   },
 );
 
-test.each(["journal write", "host preparation", "new turn"] as const)(
-  "an ordinary queue send rechecks the running turn after %s",
-  async boundary => {
+test.each([
+  ["queue", "journal write"],
+  ["steer-or-queue", "journal write"],
+  ["interrupt-active", "journal write"],
+  ["operator interrupt-active", "journal write"],
+  ["steer-or-queue", "host preparation"],
+  ["queue", "attention resolved"],
+  ["queue", "new turn"],
+] as const)(
+  "a single %s send rechecks the running turn after %s",
+  async (mode, boundary) => {
     let status: StructuredDeliveryTransition = "queued";
-    let attention = false;
+    let attention = boundary === "attention resolved";
     let turnId = "turn-one";
     let writes = 0;
-    const verdicts = [Promise.withResolvers<string>(), Promise.withResolvers<string>()];
+    let interrupts = 0;
+    const operator = mode === "operator interrupt-active";
+    const policy = operator ? "interrupt-active" : mode;
+    const native = mode === "interrupt-active";
+    const verdicts = [Promise.withResolvers<{ status: string; reason?: string | null }>(),
+      Promise.withResolvers<{ status: string; reason?: string | null }>()];
     let verdict = 0;
     const adapter = Object.assign(host(async (_entry, _dispatch, authorize) => {
       if (boundary === "host preparation") {
@@ -135,7 +148,15 @@ test.each(["journal write", "host preparation", "new turn"] as const)(
       authorize?.();
       writes++;
       return { outcome: "queued-next-turn", turnId };
-    }), { supportsQueuedSend: true });
+    }), {
+      supportsSteer: false,
+      supportsQueuedSend: !operator,
+      coalescesQueuedInput: native,
+      usesNativeInputIdentity: native,
+      sendWaitsForRunningTurn: policy === "interrupt-active",
+      acceptsInputDuringTurn: policy === "interrupt-active",
+      interrupt: async () => { interrupts++; },
+    });
     adapter.agentControlState = () => hostControlFactsFromHealth({
       ...idleState(), status: attention ? "attention" : "active", activeTurnRef: turnId,
       pendingAttention: attention ? ["permission-one"] : [],
@@ -143,25 +164,31 @@ test.each(["journal write", "host preparation", "new turn"] as const)(
     const queue = new StructuredDeliveryQueue({
       effects: async () => [{
         id: "effect:follow-up", kind: "runtime.send", eventSeq: 1,
-        payload: { operationId: "follow-up", conversationId: "conversation-one", text: "Follow-up", policy: "queue" },
+        payload: { operationId: "follow-up", conversationId: "conversation-one", text: "Follow-up", policy,
+          origin: operator ? { kind: "operator" } : { kind: "agent", role: "seat-tick" } },
       }],
       status: async () => ({ status }),
-      transition: async (_id, next) => {
+      transition: async (_id, next, details) => {
         status = next;
         if (next === "delivering") {
-          if (boundary === "journal write") attention = true;
+          if (verdict === 0 && boundary === "journal write") attention = true;
+          if (boundary === "attention resolved") attention = false;
           if (boundary === "new turn") { attention = true; turnId = "turn-two"; }
-        } else verdicts[verdict++]!.resolve(next);
+        } else verdicts[verdict++]!.resolve({ status: next, reason: details?.reason });
       },
     }, () => adapter);
     await queue.drain();
-    expect(await verdicts[0]!.promise).toBe(boundary === "new turn" ? "failed" : "queued");
+    expect(await verdicts[0]!.promise).toEqual(boundary === "new turn"
+      ? { status: "failed", reason: "stale-turn" }
+      : { status: "queued", reason: "attention changed before queued delivery" });
     expect(writes).toBe(0);
     if (boundary !== "new turn") {
+      attention = boundary === "host preparation";
       await queue.drain();
-      expect(await verdicts[1]!.promise).toBe("delivered");
+      expect((await verdicts[1]!.promise).status).toBe("delivered");
       expect(writes).toBe(1);
     }
+    expect(interrupts).toBe(0);
   },
 );
 
@@ -4212,25 +4239,54 @@ function inboxHarness(count = 8, overrides: Partial<StructuredDeliveryQueuePort>
   return { queue, port, engine, inputs, rows, sends, bindings, idle: () => { running = false; }, interrupts: () => interrupts };
 }
 
-test("a composed queue send retains its members when the running turn asks for permission", async () => {
+test.each([
+  ["queue", "queue"],
+  ["default steer-or-queue", undefined],
+  ["waiting interrupt-active", "interrupt-active"],
+  ["operator interrupt-active", "interrupt-active"],
+] as const)("a composed %s send retains its members when the running turn asks for permission", async (mode, policy) => {
   let attention = false;
+  let running = true;
+  let binds = 0;
   const h = inboxHarness(2, { bindDeliveryBatch: async () => {
     await Promise.resolve();
-    attention = true;
+    if (++binds === 1) attention = true;
     return true;
   } });
-  for (const input of h.inputs) input.payload.policy = "queue";
+  for (const input of h.inputs) {
+    if (policy) input.payload.policy = policy;
+    if (mode === "waiting interrupt-active") input.payload.origin = { kind: "agent", role: "seat-tick" };
+  }
   Object.assign(h.engine, { supportsQueuedSend: true, usesNativeInputIdentity: true, acceptsInputDuringTurn: true });
   h.engine.agentControlState = () => hostControlFactsFromHealth({
-    ...idleState(), status: attention ? "attention" : "active", activeTurnRef: "incumbent",
+    ...idleState(), ...(running ? { status: attention ? "attention" : "active", activeTurnRef: "incumbent" } : {}),
     pendingAttention: attention ? ["permission-one"] : [],
   });
+  const settled = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+  const transition = h.port.transition;
+  h.port.transition = async (id, status, details, options) => {
+    await transition(id, status, details, options);
+    if ([...h.rows.values()].every(row => row.status === status) && status !== "delivering") {
+      settled[binds - 1]?.resolve();
+    }
+  };
 
   await h.queue.drain();
-
+  await settled[0]!.promise;
   expect(h.sends).toEqual([]);
-  expect(h.rows.get("inbox-0")?.status).toBe("queued");
-  expect(h.rows.get("inbox-1")?.status).toBe("queued");
+  expect([...h.rows.values()].map(row => [row.status, row.reason])).toEqual([
+    ["queued", "attention changed before queued delivery"],
+    ["queued", "attention changed before queued delivery"],
+  ]);
+
+  attention = false;
+  running = false;
+  await h.queue.drain();
+  await settled[1]!.promise;
+  expect(h.sends).toHaveLength(1);
+  expect(h.sends[0]?.parts?.map(part => part.operationId)).toEqual(["inbox-0", "inbox-1"]);
+  expect([...h.rows.values()].map(row => row.status)).toEqual(["delivered", "delivered"]);
+  expect(h.interrupts()).toBe(0);
 });
 
 test.each([undefined, null, "named-turn", "incumbent"])("native seat composition retains caller fence %j", async turnId => {

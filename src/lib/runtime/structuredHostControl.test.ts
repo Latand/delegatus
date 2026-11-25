@@ -9,8 +9,6 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { AgentRegistry, setAgentRegistryForTests, type ProcessIdentity, type RegistryFile } from "@/lib/agent/registry";
-import { entryRevision, subjectId } from "@/lib/agentState/store";
-import type { AgentProjection } from "@/lib/agentState/model";
 import type { SessionKey } from "@/lib/agent/sessionKey";
 import { procBackend } from "@/lib/proc";
 import { systemBootEpoch } from "@/lib/processIdentity";
@@ -961,19 +959,10 @@ test("kill idle refuses a host whose current turn state is unknown", () => {
   expect(refusal).toMatchObject({ status: 409, error: expect.stringContaining("turn state is unknown") });
 });
 
-test("kill idle refuses stale closed projection evidence after conversation-only turn advancement", () => {
-  const hostEntry = entry({});
-  const staleClosed = {
-    version: 1,
-    subject: subjectId(hostEntry as never),
-    entryKey: `claude:${CLAUDE_SESSION}`,
-    conversationId: LANE_CONVERSATION,
-    facts: { revision: entryRevision(hostEntry as never), turn: { determined: true, value: { state: "closed" } } },
-  } as unknown as AgentProjection;
-  const file = snapshot({ entries: { [`claude:${CLAUDE_SESSION}`]: hostEntry },
-    conversations: { [LANE_CONVERSATION]: conversation({ turn: { state: "busy", source: "lifecycle", terminalAt: null, observedAt: new Date(NOW_MS).toISOString() } }) },
-  }) as RegistryFile;
-  file.agentStates = { [staleClosed.subject]: staleClosed };
+test("kill idle checks the current conversation turn without reading projections", () => {
+  const file = gateSnapshot({ turn: "busy" });
+  let projectionReads = 0;
+  Object.defineProperty(file, "agentStates", { get: () => { projectionReads++; return undefined; } });
   const refusal = structuredHostKillRefusal(quiet, { kind: "idle", hours: 2 }, false, {
     snapshot: () => file,
     transcriptMtimeMs: () => NOW_MS - 6 * 3_600_000,
@@ -981,6 +970,7 @@ test("kill idle refuses stale closed projection evidence after conversation-only
   });
 
   expect(refusal).toMatchObject({ status: 409, error: expect.stringContaining("mid-turn") });
+  expect(projectionReads).toBe(0);
 });
 
 test("kill idle refuses a host whose transcript moved since the list was taken", () => {

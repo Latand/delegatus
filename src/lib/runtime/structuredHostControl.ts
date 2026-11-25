@@ -1,4 +1,3 @@
-import { controlProjectionForEntry } from "@/lib/agentState/controlStore";
 import { invalidateAgentState } from "@/lib/agentState/invalidation";
 import { projectAgentStateDisplay } from "@/lib/agentState/model";
 import { cachedAgentObservation } from "@/lib/agentState/projectionCache";
@@ -249,10 +248,7 @@ function currentStructuredHostState(
   if (!entry && !conversation) return null;
   const memberships = conversation ? file.memberships[conversation.id] ?? [] : [];
   const artifactPath = entry?.artifactPath || null;
-  const projection = entry ? controlProjectionForEntry(file, entry, conversation?.id ?? null) : null;
-  const turnBusy = projection
-    ? projection.facts.turn.determined ? projection.facts.turn.value.state === "open" : null
-    : conversation === null || conversation.turn.state === "unknown" ? null : conversation.turn.state === "busy";
+  const turnBusy = conversation === null || conversation.turn.state === "unknown" ? null : conversation.turn.state === "busy";
 
   return {
     seat: conversation === null ? null : memberships.some((membership) => membership.kind === "orchestrator"),

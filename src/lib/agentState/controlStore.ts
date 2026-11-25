@@ -19,9 +19,8 @@ export function controlProjectionForEntry(
   const row = file.agentStates?.[subject] ?? (entry.key.engine === "antigravity" ? antigravityStates?.get(subject) : undefined);
   if (!row || row.entryKey !== sessionKeyId(entry.key) || row.conversationId !== conversationId
     || row.facts.revision !== entryRevision(entry) || !row.facts.turn.determined) return null;
-  /* A reconciler may publish a terminal projection while a conversation-only
-     writer advances the turn without changing the host entry. Such a row is
-     display evidence, not authority for an idle kill. */
+  /* A conversation-only writer can advance the turn without changing
+     the host entry revision. Require agreement with the current turn. */
   const projectedBusy = row.facts.turn.value.state === "open";
   if ((conversation.turn.state === "busy") !== projectedBusy || conversation.turn.state === "unknown") return null;
   return row;

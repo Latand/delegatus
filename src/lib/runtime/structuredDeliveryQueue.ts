@@ -2717,9 +2717,11 @@ export class StructuredDeliveryQueue {
           continue;
         }
       }
+      const deferOnAttentionChange = effect.kind === "send" && !effect.onlyIfIdle
+        && (effect.policy === "queue" || steerOrQueue || waitsForTurn);
       const assertCurrent = () => {
         assertOwner();
-        this.assertHostRoute(host, health, effect.kind === "send" && effect.policy === "queue" && !effect.onlyIfIdle);
+        this.assertHostRoute(host, health, deferOnAttentionChange);
       };
       const authorize = () => {
         recoveryGuard?.();
