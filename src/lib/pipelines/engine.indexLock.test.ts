@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { afterEach, beforeEach, setDefaultTimeout } from "bun:test";
+import { afterEach, beforeEach, setDefaultTimeout, spyOn } from "bun:test";
 import { expect, test, fs, path, spawn, stopFixtureProcess, loadPipelines, realWorktreeLane, finishReported, tickPipelines } from "./engine.fixture";
 import { pipelineArtifactsDir } from "./store";
 import { recoverLaneIndexLock, withLaneIndexLockRecovery } from "./indexLock";
@@ -52,6 +52,9 @@ linuxTest("settlement removes a stale linked-worktree lock, unstages artifacts a
     const stale = new Date("2024-01-01T00:00:00Z");
     fs.utimesSync(lock, stale, stale);
     const original = fs.statSync(lock, { bigint: true });
+    // Exercise the host's real process table, including root-owned processes
+    // whose descriptor directories are unreadable to this test user.
+    readdir.mockRestore();
     await tickPipelines([finishReported(h, "/codex/stage-1.jsonl", "pass", "Finished")], h.ports);
     const settled = loadPipelines().find(row => row.id === id)!;
     expect(settled.state, settled.stateDetail ?? undefined).toBe("completed");
@@ -66,6 +69,7 @@ linuxTest("settlement removes a stale linked-worktree lock, unstages artifacts a
       size: String(original.size), mtimeNs: String(original.mtimeNs) });
     expect(proof.processes).toBeGreaterThan(0);
     expect(proof.descriptors).toBeGreaterThan(0);
+    expect(Number.isInteger(proof.inaccessibleDescriptorTables)).toBe(true);
     expect(await git(worktree, "branch", "--show-current")).toBe(lane.branch);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
@@ -94,6 +98,7 @@ linuxTest("settlement names a live non-Git descriptor holder and preserves the l
 linuxTest("refuses a live Git command whose explicit Git directory is the lane", async () => {
   const box = await realWorktreeLane("git-owner", stages);
   let child: ReturnType<typeof spawn> | undefined;
+  let restoreCwdEvidence: (() => void) | undefined;
   try {
     const lane = loadPipelines().find(row => row.id === box.id)!;
     const admin = await box.git(box.worktree, "rev-parse", "--absolute-git-dir");
@@ -102,11 +107,20 @@ linuxTest("refuses a live Git command whose explicit Git directory is the lane",
     child = spawn("git", ["--git-dir", admin, "hash-object", "--stdin"], { cwd: box.repo, stdio: "pipe" });
     await once(child, "spawn", { signal: AbortSignal.timeout(5_000) });
     fixturePids.add(child.pid!);
+    const readlink = fs.promises.readlink;
+    const hiddenCwd = spyOn(fs.promises, "readlink").mockImplementation(((...args: unknown[]) => {
+      if (args[0] === `/proc/${child!.pid}/cwd`) {
+        return Promise.reject(Object.assign(new Error("fixture cwd unavailable"), { code: "EACCES" }));
+      }
+      return Reflect.apply(readlink, fs.promises, args);
+    }) as typeof fs.promises.readlink);
+    restoreCwdEvidence = () => hiddenCwd.mockRestore();
     const result = await recoverLaneIndexLock(lane, box.worktree, realExec, "merge");
-    expect(result).toMatchObject({ error: expect.stringContaining(`PID ${child.pid} (git) is running Git against this checkout`) });
+    expect(result).toMatchObject({ error: expect.stringContaining(`open-file or Git evidence for PID ${child.pid} (git) is unavailable`) });
     expect(fs.existsSync(lock)).toBe(true);
     expect(fs.existsSync(journalPath(box.id))).toBe(false);
   } finally {
+    restoreCwdEvidence?.();
     if (child) await stopFixtureProcess(child);
     fs.rmSync(box.root, { recursive: true, force: true });
   }
@@ -123,7 +137,7 @@ linuxTest("refuses a child whose descriptor evidence is inaccessible", async () 
     opaquePid = child.pid;
     const result = await recoverLaneIndexLock(lane, box.worktree, realExec, "reset");
     expect(result).toMatchObject({
-      error: expect.stringContaining(`open-file or Git evidence for PID ${child.pid} (${path.basename(process.execPath)}) is unavailable`),
+      error: expect.stringContaining("an exclusive kernel lease on the lock inode is unavailable"),
     });
     expect(fs.readFileSync(lock, "utf8")).toBe("opaque holder\n");
     expect(fs.existsSync(journalPath(box.id))).toBe(false);
@@ -131,6 +145,24 @@ linuxTest("refuses a child whose descriptor evidence is inaccessible", async () 
     if (child) await stopFixtureProcess(child);
     fs.rmSync(box.root, { recursive: true, force: true });
   }
+});
+
+linuxTest("ignores an opaque unrelated descriptor table when the lock lease is exclusive", async () => {
+  const box = await realWorktreeLane("opaque-unrelated-index", stages);
+  try {
+    const lane = loadPipelines().find(row => row.id === box.id)!;
+    const lock = path.join(await box.git(box.worktree, "rev-parse", "--absolute-git-dir"), "index.lock");
+    fs.writeFileSync(lock, "", { flag: "wx" });
+    fixturePids.add(1);
+    opaquePid = 1;
+
+    const result = await recoverLaneIndexLock(lane, box.worktree, realExec, "reset");
+
+    expect(result).toEqual({ removed: true });
+    expect(fs.existsSync(lock)).toBe(false);
+    const proof = JSON.parse(fs.readFileSync(journalPath(box.id), "utf8").trim());
+    expect(proof.inaccessibleDescriptorTables).toBe(1);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
 linuxTest.each(["replacement", "late holder", "lost authority"] as const)("rechecks %s before unlink", async mode => {

@@ -111,19 +111,32 @@ async function indexLockHolder(index: fs.BigIntStats, gitDir: string, worktree: 
     const identity = captureProcessIdentity(pid);
     if (!processIdentityMayRun(identity)) continue;
     counts.processes++;
-    let argv: string[] = [], comm = "";
+    let argv: string[] = [], comm = "", commReadable = true, argvReadable = true;
     const description = () => `PID ${pid} (${path.basename(argv[0] || comm || "command unavailable").replace(/[\x00-\x1f\x7f]/g, "?").slice(0, 80)})`;
-    try {
-      comm = (await fs.promises.readFile(`${processDir}/comm`, "utf8")).trim();
-      argv = (await fs.promises.readFile(`${processDir}/cmdline`, "utf8")).split("\0").filter(Boolean);
-      const git = [comm, path.basename(argv[0] ?? "")].some(name => /^git(?:-|$)/.test(name));
-      if (git) {
+    try { comm = (await fs.promises.readFile(`${processDir}/comm`, "utf8")).trim(); }
+    catch { commReadable = false; }
+    try { argv = (await fs.promises.readFile(`${processDir}/cmdline`, "utf8")).split("\0").filter(Boolean); }
+    catch { argvReadable = false; }
+    const git = [comm, path.basename(argv[0] ?? "")].some(name => /^git(?:-|$)/.test(name));
+    if ((!commReadable && !argvReadable) || (git && (!commReadable || !argvReadable))) {
+      checkDeadline();
+      if (processIdentityMayRun(identity)) possibleHolders.push({ identity,
+        detail: `open-file or Git evidence for ${description()} is unavailable` });
+    }
+    if (git) {
+      try {
         const rawCwd = await fs.promises.readlink(`${processDir}/cwd`);
         const cwd = rawCwd.replace(/ \(deleted\)$/, "");
         if (await gitTargetsCheckout(argv, cwd, processDir, worktree, gitDir) && processIdentityMayRun(identity)) {
           return { holder: `${description()} is running Git against this checkout`, counts };
         }
+      } catch {
+        checkDeadline();
+        if (processIdentityMayRun(identity)) possibleHolders.push({ identity,
+          detail: `open-file or Git evidence for ${description()} is unavailable` });
       }
+    }
+    try {
       for (const fd of await fs.promises.readdir(`${processDir}/fd`)) {
         checkDeadline();
         counts.descriptors++;
@@ -136,13 +149,9 @@ async function indexLockHolder(index: fs.BigIntStats, gitDir: string, worktree: 
       }
     } catch {
       checkDeadline();
-      if (!processIdentityMayRun(identity)) continue;
-      const status = await fs.promises.readFile(`${processDir}/status`, "utf8").catch(() => "");
-      if (!processIdentityMayRun(identity) || /^Kthread:\s+1$/m.test(status)) continue;
-      // A readable command still can hold a descriptor, including one
-      // opened with O_PATH, which does not participate in Linux write leases.
-      // Keep scanning so an observed holder takes precedence in the refusal.
-      possibleHolders.push({ identity, detail: `open-file or Git evidence for ${description()} is unavailable` });
+      // Unreadable descriptor tables are not holder proof: the write lease
+      // below detects open files across UIDs. Keep unreadable Git targeting
+      // evidence as a possible holder because only Git can mutate this index.
       counts.inaccessibleDescriptorTables++;
     }
   }
