@@ -1461,6 +1461,9 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   if (input.signals.some(signal => signal.id === "disk-space" && signal.episode && signal.episode !== input.state.diskPressureShown)) {
     candidates.unshift({ kind: "disk-pressure", detail: "free space on a volume Delegatus writes to is below the warning threshold" });
   }
+  if (input.signals.some(signal => signal.id.startsWith("disk-cleaner:") && signal.actionable !== false)) {
+    candidates.unshift({ kind: "disk-cleaner", detail: "a disk-cleaner completion is waiting for the project seat" });
+  }
 
   const periodicLaneIds = new Set(input.pipelines.filter(lane => isOpenLane(lane) && !lane.pausedBy).map(lane => lane.id));
   const periodicChildIds = new Set(liveChildren.map(child => child.conversationId));
@@ -1498,6 +1501,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       case "maintenance-settled": return item.kind === "maintenance";
       case "worker-ask": return item.kind === "ask";
       case "disk-pressure": return item.kind === "signal" && item.id === "disk-space";
+      case "disk-cleaner": return item.kind === "signal" && item.id.startsWith("disk-cleaner:");
       case "lane-event": return item.mergeEventSeq !== undefined;
       case "own-lane-settled": return !!item.laneAnnouncement;
       case "stalled": return item.reminderKind === "pause" || !!item.stallToken || (item.kind === "pipeline" && persistedStalls.some(entry => entry.pipeline.id === item.id)) || (item.kind === "child" && persistedChildStalls.some(entry => entry.child.conversationId === item.id));
@@ -1505,7 +1509,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       default: return false;
     }
   });
-  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "overdue-task", "own-lane-settled", "stalled", "interval", "permission-request", "worker-ask", "disk-pressure", "release-settled", "release-blocked", "maintenance-settled"]);
+  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "overdue-task", "own-lane-settled", "stalled", "interval", "permission-request", "worker-ask", "disk-pressure", "disk-cleaner", "release-settled", "release-blocked", "maintenance-settled"]);
   const cards: SeatTickCard[] = [];
   const reasons: SeatTickWakeReason[] = [];
   let guardHeld = 0;

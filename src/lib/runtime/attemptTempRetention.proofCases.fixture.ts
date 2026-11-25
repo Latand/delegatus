@@ -39,13 +39,13 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
       if (clearsCap) store.measure(held.directory, 2e9);
       process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = lowSpace || clearsCap ? "1000000000" : "0";
       process.env.LLV_PRESSURE_FIXTURE = config;
-      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+      fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: lowSpace ? 0 : 1e12,
         slowProof: { phase, prefix: count + Number(costlyTail), timeoutPrefix, requiredCost } }));
       const before = store.bytes();
       let report = await realParentPass(), clock = JSON.parse(fs.readFileSync(config, "utf8"));
       for (let tick = 1; !clearsCap && report.removed === 0 && tick < Math.ceil(timeoutPrefix / 7) + 2; tick++) {
         expect(report.errors).toBe(0); expect(clock.elapsed).toBeLessThanOrEqual(40_001);
-        fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: lowSpace ? 0 : 1e12,
+        fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: lowSpace ? 0 : 1e12,
           slowProof: { phase, prefix: count + Number(costlyTail), timeoutPrefix, requiredCost } }));
         report = await realParentPass(); clock = JSON.parse(fs.readFileSync(config, "utf8"));
       }
@@ -84,7 +84,7 @@ for (const lowSpace of [false, true]) for (const clearsCap of lowSpace ? [false]
         bytes: report.bytes, elapsed: clock.elapsed }));
       // Restore proof and restart the actual helper over the same durable
       // cursor. The protected root stays while every ended sibling recovers.
-      fs.writeFileSync(config, JSON.stringify({ now: NOW, freeBytes: 1e12 }));
+      fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW, freeBytes: 1e12 }));
       process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = String(heldBytes);
       let removed = report.removed;
       const nativeRefused = new Set<string>();
