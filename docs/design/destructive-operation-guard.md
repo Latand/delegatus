@@ -726,7 +726,12 @@ max(1, median start ÷ 5 ms), the idle start above. The one-call fast path is
 held to 1.5 × plain plus one wrapper start (30 ms), because a 24 ms baseline
 cannot absorb a fixed start cost as a ratio. The 3 000 separate calls are held
 to the fast path's 2 ms added per call. The slow path is judged on its median.
-The "well under a second" bound for 3 000 targets stays unscaled. The report
+The "well under a second" bound for 3 000 targets stays unscaled. A cost
+regression exceeds its budget in every campaign, while a load spike in the
+shared gate rarely hits two in a row, so the main file runs up to three fresh
+campaigns and passes on the first that meets every budget. When none does,
+the failure lists each campaign's exceeded bounds with their measured values
+and limits. The report
 lines `guard-performance` and `guard-performance-separate` carry the factors
 with the raw runs.
 

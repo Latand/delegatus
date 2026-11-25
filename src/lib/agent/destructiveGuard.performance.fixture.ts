@@ -62,6 +62,24 @@ export function startBaseline(times: number[]) {
 }
 export const startFactor = (times: number[]) => Math.max(1, median(times) / BUN_START_IDLE_MS);
 
+/** Each bound as [name, measured, limit]; returns the ones above their limit. */
+export function overBudget(bounds: [string, number, number][]): string[] {
+  return bounds.filter(([, measured, limit]) => !(measured <= limit)).map(([name, measured, limit]) => `${name}: ${measured.toFixed(2)} > ${limit.toFixed(2)}`);
+}
+
+/** A cost regression exceeds its budget in every campaign; a load spike in the
+ * shared gate rarely hits two in a row. Runs up to `limit` fresh campaigns and
+ * returns every campaign's violations when none met all its budgets. */
+export function firstWithinBudget(limit: number, campaign: (attempt: number) => string[]): string[][] {
+  const failures: string[][] = [];
+  for (let attempt = 0; attempt < limit; attempt++) {
+    const violations = campaign(attempt);
+    if (!violations.length) return [];
+    failures.push(violations);
+  }
+  return failures;
+}
+
 let reportSerial = 0;
 export function report(label: string, value: Record<string, unknown>) {
   console.log(`${label} ${JSON.stringify(value)}`);
