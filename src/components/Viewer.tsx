@@ -18,7 +18,7 @@ import { WorkLinksProvider } from "@/components/workLinks/workLinksContext";
 import { useFiles } from "@/hooks/useFiles";
 import { ServerReachProvider, useDerivedServerReach } from "@/hooks/serverReach";
 import { publishConversationAvailability } from "@/lib/mcp/availability";
-import { useBoardBootAuthority, useBoardBootAuthorityValue } from "@/lib/client/boardBootAuthority";
+import { rememberedNamesAllowed, useBoardBootAuthority, useBoardBootAuthorityValue } from "@/lib/client/boardBootAuthority";
 import { useBoardState } from "@/hooks/useBoardState";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useViewPresence } from "@/hooks/useViewPresence";
@@ -464,8 +464,8 @@ function ViewerApp() {
   /* Every certified answer refreshes the names this browser remembers, so
      the next cold start names the project before its first answer (#2071). */
   useEffect(() => {
-    if (loaded) rememberProjectNames(polledProjectDisplayNames);
-  }, [loaded, polledProjectDisplayNames]);
+    if (loaded && rememberedNamesAllowed(bootAuthority)) rememberProjectNames(polledProjectDisplayNames);
+  }, [loaded, bootAuthority, polledProjectDisplayNames]);
   useEffect(() => {
     publishConversationAvailability(new Set(allFiles.flatMap((file) => file.conversationId ? [file.conversationId] : [])));
   }, [allFiles]);
@@ -1914,7 +1914,7 @@ function ViewerApp() {
       {!isMobile && orchestratorOpen && !kanbanFace && project !== OVERVIEW && !relayIdOfChatsProject(project) ? (
         <OrchestratorDock
           project={project}
-          projectName={projectTitle(project, projectDisplayNames[project], bootAuthority && !bootAuthority.team ? cachedProjectName(project) : undefined) ?? (loaded ? t("dash.projectUnnamed") : "…")}
+          projectName={projectTitle(project, projectDisplayNames[project], rememberedNamesAllowed(bootAuthority) ? cachedProjectName(project) : undefined) ?? (loaded ? t("dash.projectUnnamed") : "…")}
           projectCwd={projectCwds[project]}
           files={files}
           onClose={toggleOrchestrator}

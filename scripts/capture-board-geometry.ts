@@ -9118,6 +9118,10 @@ async function boardStartupMain(): Promise<void> {
   let browserTempHandle: number | undefined;
   const repeats = Number(process.env.BOARD_STARTUP_REPEATS ?? 20);
   const workers = Number(process.env.BOARD_STARTUP_WORKERS ?? 8);
+  /* BOARD_STARTUP_LAYOUT=small keeps the layout under the 65,536-character limit of the browser's
+     own saved layout (llvBoards), the case where the previous revision also drew from disk. The
+     default is the 787 kB layout that never fit. */
+  const smallLayout = process.env.BOARD_STARTUP_LAYOUT === "small";
   let layoutBytes = 0;
   /* Nearest-rank percentiles per profile and scenario, from the rows written beside them. */
   const summary = () => {
@@ -9134,8 +9138,8 @@ async function boardStartupMain(): Promise<void> {
       ...(group.some(row => row.cardsAfter !== undefined) ? { cardsAfter: { min: Math.min(...group.map(row => row.cardsAfter ?? 0)), shells: group.filter(row => row.shellAfter).length } } : {}),
     }]));
   };
-  const save = () => fs.writeFileSync(path.join(OUT_DIR, "board-startup.json"), JSON.stringify({
-    commit: captureCommit(), layoutBytes, repeats, workers, team, profile: process.env.BOARD_STARTUP_PROFILE ?? "both", bytes: "CDP transfer to card, including encoded data from pending requests when reported", summary: summary(), rows,
+  const save = () => fs.writeFileSync(path.join(OUT_DIR, smallLayout ? "board-startup-small.json" : "board-startup.json"), JSON.stringify({
+    commit: captureCommit(), layout: smallLayout ? "small" : "large", layoutBytes, repeats, workers, team, profile: process.env.BOARD_STARTUP_PROFILE ?? "both", bytes: "CDP transfer to card, including encoded data from pending requests when reported", summary: summary(), rows,
   }, null, 2) + "\n");
   try {
     server = startServer(port);
@@ -9151,7 +9155,7 @@ async function boardStartupMain(): Promise<void> {
     try { await seedSeats(project); }
     finally { process.env.TMPDIR = browserTemp; }
     // Closed rows dominate the fixture's wire layout. None of these titles or paths is real.
-    const hidden = Array.from({ length: 6200 }, (_, index) => `/fixture/transcripts/${String(index).padStart(5, "0")}-${"closed-".repeat(13)}.jsonl`);
+    const hidden = Array.from({ length: smallLayout ? 250 : 6200 }, (_, index) => `/fixture/transcripts/${String(index).padStart(5, "0")}-${"closed-".repeat(13)}.jsonl`);
     fs.writeFileSync(path.join(STATE_DIR, "board.json"), JSON.stringify({ schemaVersion: 1, projects: {
       [project]: { schemaVersion: 1, revision: 1, updatedAt: "2100-01-01T00:00:00.000Z",
         prefs: { hidden, manual: [], expanded: [], viewMode: null, taskPanelOpen: false } },
@@ -9164,7 +9168,7 @@ async function boardStartupMain(): Promise<void> {
     await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers, body: JSON.stringify({ noticeDismissed: true }) });
     const board = await fetch(`${baseUrl}/api/board?project=${encodeURIComponent(project)}`);
     layoutBytes = (await board.arrayBuffer()).byteLength;
-    if (!board.ok || layoutBytes < 700_000) throw new Error(`unexpected fixture layout size ${layoutBytes}`);
+    if (!board.ok || (smallLayout ? layoutBytes < 5_000 || layoutBytes > 50_000 : layoutBytes < 700_000)) throw new Error(`unexpected fixture layout size ${layoutBytes}`);
     // Chrome's SingletonSocket has a platform path limit. Keep its files in the
     // capture directory, with a short Linux path through the driver-owned handle.
     browserTempHandle = process.platform === "linux" ? fs.openSync(path.join(BASE, "tmp"), "r") : undefined;

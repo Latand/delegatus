@@ -64,6 +64,8 @@ export interface FilesSnapshotRecord {
   /** Independently retained known IDs. Never part of the ETag's catalog. */
   creations?: CreationLocators;
   accessScope?: string;
+  /** The projects the body was saved under, when the identity's list is bounded. */
+  accessProjects?: string[];
 }
 
 export interface FilesSnapshotStore {

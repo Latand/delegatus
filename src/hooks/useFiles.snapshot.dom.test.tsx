@@ -400,10 +400,21 @@ test("a held snapshot never paints, still makes the first request conditional, a
   expect(held.showHeld()).toBe(false);
 });
 
-for (const identity of ["the saved scope", "another scope"] as const) {
-  test(`a stored catalog waits for the access answer before showing, then ${identity === "the saved scope" ? "shows" : "never shows"} it`, async () => {
-    const saved = "e".repeat(64);
-    const store = memoryFilesSnapshotStore({ ...record(), accessScope: saved });
+/* A project list moves without the person changing, so the saved body also
+   names the list it was saved under: rows of a project the identity no longer
+   reaches are never shown. */
+const SAVED_SCOPE = "e".repeat(64);
+const CATALOG_CASES: ReadonlyArray<{ name: string; saved: string[] | undefined; scope: string; projects: string[] | null; shown: boolean }> = [
+  { name: "the saved scope", saved: undefined, scope: SAVED_SCOPE, projects: null, shown: true },
+  { name: "another scope", saved: undefined, scope: "f".repeat(64), projects: null, shown: false },
+  { name: "the same scope with a widened project list", saved: ["atlas"], scope: SAVED_SCOPE, projects: ["atlas", "mesh"], shown: true },
+  { name: "the same scope with the same project list", saved: ["atlas", "mesh"], scope: SAVED_SCOPE, projects: ["atlas", "mesh"], shown: true },
+  { name: "the same scope with a narrowed project list", saved: ["atlas", "mesh"], scope: SAVED_SCOPE, projects: ["atlas"], shown: false },
+  { name: "the same scope with a project list the body never recorded", saved: undefined, scope: SAVED_SCOPE, projects: ["atlas"], shown: false },
+];
+for (const { name, saved, scope, projects, shown } of CATALOG_CASES) {
+  test(`a stored catalog waits for the access answer before showing, then ${shown ? "shows" : "never shows"} it under ${name}`, async () => {
+    const store = memoryFilesSnapshotStore({ ...record(), accessScope: SAVED_SCOPE, ...(saved ? { accessProjects: saved } : {}) });
     setBoardBootAuthorityForTests(null);
     resetFilesClientCacheForTests(store, true);
     let answer!: (response: Response) => void;
@@ -427,9 +438,9 @@ for (const identity of ["the saved scope", "another scope"] as const) {
     expect(probe().getAttribute("data-cached")).toBe("false");
     expect(calls.length).toBe(1);
     expect(calls[0]!.headers["If-None-Match"]).toBe(ETAG);
-    flushSync(() => setBoardBootAuthorityForTests({ scope: identity === "the saved scope" ? saved : "f".repeat(64), projects: null, team: false }));
+    flushSync(() => setBoardBootAuthorityForTests({ scope, projects, team: projects !== null }));
     await settle();
-    if (identity === "the saved scope") {
+    if (shown) {
       expect(probe().textContent).toBe("/sessions/alpha.jsonl,/sessions/beta.jsonl");
       expect(probe().getAttribute("data-cached")).toBe("true");
       expect(probe().getAttribute("data-loaded")).toBe("false");
@@ -443,7 +454,7 @@ for (const identity of ["the saved scope", "another scope"] as const) {
     await settle();
     expect(probe().getAttribute("data-loaded")).toBe("true");
     expect(probe().getAttribute("data-cached")).toBe("false");
-    expect(probe().textContent).toBe(identity === "the saved scope" ? "/sessions/alpha.jsonl,/sessions/beta.jsonl" : "/sessions/beta.jsonl");
+    expect(probe().textContent).toBe(shown ? "/sessions/alpha.jsonl,/sessions/beta.jsonl" : "/sessions/beta.jsonl");
     flushSync(() => root.unmount());
   });
 }
@@ -468,6 +479,21 @@ test("what a document certified is stored for the next one, and an unchanged ans
   flushSync(() => root.unmount());
 });
 
+test("a catalog saved under a confirmed identity records the project list it was saved under", async () => {
+  const store = memoryFilesSnapshotStore();
+  resetFilesClientCacheForTests(store, true);
+  setBoardBootAuthorityForTests({ scope: SAVED_SCOPE, projects: ["atlas", "mesh"], team: true });
+  globalThis.fetch = mock(async () => new Response(JSON.stringify(BODY), { status: 200, headers: { ETag: ETAG } })) as unknown as typeof fetch;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host as unknown as Element);
+  flushSync(() => root.render(<Probe />));
+  for (let index = 0; index < 10; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  persistFilesSnapshotForTests();
+  expect(store.current()?.accessScope).toBe(SAVED_SCOPE);
+  expect(store.current()?.accessProjects).toEqual(["atlas", "mesh"]);
+  flushSync(() => root.unmount());
+});
 
 test("a visible board heartbeats through files HEAD even with live streaming, and stops on hiding or closing", async () => {
   runtimeEnabled = true;

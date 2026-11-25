@@ -1,7 +1,7 @@
 "use client";
 
 import { useProjectFirstScreen } from "@/hooks/useProjectFirstScreen";
-import { useBoardBootAuthorityValue } from "@/lib/client/boardBootAuthority";
+import { rememberedNamesAllowed, useBoardBootAuthorityValue } from "@/lib/client/boardBootAuthority";
 import { firstScreenTitle } from "@/lib/client/projectFirstScreen";
 
 import { usePipelineCreationCards } from "@/hooks/useFiles";
@@ -440,7 +440,7 @@ function ProjectDashboardView({
   const knownProjectName = projectTitle(
     project,
     providedProjectName ?? projectCatalogEntries.find((entry) => entry.project === project)?.displayName,
-    bootAuthority && !bootAuthority.team ? cachedProjectName(project) : undefined,
+    rememberedNamesAllowed(bootAuthority) ? cachedProjectName(project) : undefined,
   );
   /* The surfaces that take the name as a string (the focus view, sheets, the
      seat) say "Unnamed project" only once the catalog is certified; before

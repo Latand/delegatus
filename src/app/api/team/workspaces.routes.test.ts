@@ -531,3 +531,83 @@ test("board boot authority follows the installation, browser session and current
   expect((await signOut(call("/api/team/session/sign-out", { body: {}, cookie: owner }))).status).toBe(200);
   expect((await teamView(call(endpoint, { cookie: owner }))).status).toBe(401);
 });
+
+describe("the board boot scope", () => {
+  const entry = (project: string, mtime: number): ConversationCatalogEntry => ({
+    path: `/transcripts/${project}-${mtime}.jsonl`, root: "claude" as ConversationCatalogEntry["root"], name: `${project}-${mtime}`, project,
+    title: "t", firstPrompt: "p", engine: "claude", kind: "session", fmt: "claude" as ConversationCatalogEntry["fmt"], mtime, size: 1,
+  });
+  const boot = async (cookie: string) => {
+    const answer = await teamView(call("/api/team?view=board-access", { cookie }));
+    expect(answer.status).toBe(200);
+    return await answer.json() as { scope: string; projects: string[] | null; team: boolean };
+  };
+
+  test("a manager's scope survives a conversation in a project no workspace holds, and the project list widens", async () => {
+    const { owner, member } = await team();
+    expect((await create(owner, { id: W1, name: "Board work", projects: ["repo-a"] })).status).toBe(201);
+    const store = teamStore();
+    store.putWorkspaceMember(W1, verifySessionValue(store, member)!.member.id, "manager", verifySessionValue(store, owner)!.member.id, "2100-01-01T00:00:00.000Z");
+    replaceConversationCatalog([entry("repo-a", 100)]);
+    const before = await boot(member);
+    expect(before.projects).toEqual(["repo-a"]);
+    replaceConversationCatalog([entry("repo-a", 100), entry("dir-new-scratch", 200)]);
+    const after = await boot(member);
+    expect(after.projects).toEqual(["dir-new-scratch", "repo-a"]);
+    expect(after.scope).toBe(before.scope);
+  });
+
+  test("a project placed into another workspace narrows a manager's list and keeps the scope", async () => {
+    const { owner, member } = await team();
+    expect((await create(owner, { id: W1, name: "Board work", projects: ["repo-a"] })).status).toBe(201);
+    expect((await create(owner, { id: W2, name: "Other", projects: [] })).status).toBe(201);
+    const store = teamStore();
+    store.putWorkspaceMember(W1, verifySessionValue(store, member)!.member.id, "manager", verifySessionValue(store, owner)!.member.id, "2100-01-01T00:00:00.000Z");
+    replaceConversationCatalog([entry("repo-a", 100), entry("repo-b", 200)]);
+    const before = await boot(member);
+    expect(before.projects).toEqual(["repo-a", "repo-b"]);
+    expect((await put(owner, { project: "repo-b", workspaceId: W2 })).status).toBe(200);
+    const after = await boot(member);
+    expect(after.projects).toEqual(["repo-a"]);
+    expect(after.scope).toBe(before.scope);
+  });
+
+  test("the owner's scope survives a placement and a new workspace", async () => {
+    const { owner } = await team();
+    expect((await create(owner, { id: W1, name: "Board work", projects: ["repo-a"] })).status).toBe(201);
+    expect((await create(owner, { id: W2, name: "Other", projects: [] })).status).toBe(201);
+    const before = await boot(owner);
+    expect((await put(owner, { project: "repo-b", workspaceId: W2 })).status).toBe(200);
+    const placed = await boot(owner);
+    expect(placed.projects).toBeNull();
+    expect(placed.scope).toBe(before.scope);
+    expect((await create(owner, { id: `w_${"c".repeat(32)}`, name: "Third", projects: [] })).status).toBe(201);
+    expect((await boot(owner)).scope).toBe(before.scope);
+  });
+
+  test("the scope changes with the role, the membership and the person, and never with a project list", async () => {
+    const { owner, member } = await team();
+    expect((await create(owner, { id: W1, name: "Board work", projects: ["repo-a"] })).status).toBe(201);
+    const store = teamStore();
+    const memberId = verifySessionValue(store, member)!.member.id;
+    const ownerId = verifySessionValue(store, owner)!.member.id;
+    const outside = await boot(member);
+    store.putWorkspaceMember(W1, memberId, "member", ownerId, "2100-01-01T00:00:00.000Z");
+    const asMember = await boot(member);
+    expect(asMember.scope).not.toBe(outside.scope);
+    store.putWorkspaceMember(W1, memberId, "manager", ownerId, "2100-01-01T00:00:01.000Z");
+    const asManager = await boot(member);
+    expect(asManager.scope).not.toBe(asMember.scope);
+    /* The project list moves; who the member is and what they hold does not. */
+    expect((await put(owner, { project: "repo-b", workspaceId: W1 })).status).toBe(200);
+    const widened = await boot(member);
+    expect(widened.projects).toEqual(["repo-a", "repo-b"]);
+    expect(widened.scope).toBe(asManager.scope);
+    store.removeWorkspaceMember(W1, memberId);
+    const removed = await boot(member);
+    expect(removed.scope).toBe(outside.scope);
+    expect(removed.projects).toEqual([]);
+    expect(removed.scope).not.toBe(asManager.scope);
+    expect((await boot(owner)).scope).not.toBe(removed.scope);
+  });
+});

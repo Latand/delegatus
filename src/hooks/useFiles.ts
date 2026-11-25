@@ -881,7 +881,7 @@ export function createFilesClientCache(
         if (!creationWritePending && global && materialized.every(id => (global.raw.pipelines as Pipeline[] | undefined)?.some(pipeline => pipeline.id === id))) {
           const store = hooks.creationStore?.();
           const generation = authorityGeneration;
-          const accessScope = readBoardBootAuthority()?.scope ?? undefined;
+          const { accessScope, accessProjects } = accessStamp();
           /* A write begun before the access answer stays valid when it arrives; a
              different confirmed identity cancels it. */
           const current = () => ownsCreation(generation)
@@ -890,7 +890,7 @@ export function createFilesClientCache(
           creationWrites = creationWrites.then(async () => {
             if (!current() || !store?.updateCreations) return;
             await store.updateCreations(authority!.owner, [], materialized, current,
-              { version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: global.etag, text: catalogText(global.raw), accessScope }, authority!.signature);
+              { version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: global.etag, text: catalogText(global.raw), accessScope, accessProjects }, authority!.signature);
             if (!current()) return;
             for (const id of materialized) creations.delete(id);
             publishCreations();
@@ -1522,6 +1522,22 @@ function newFilesClientCache(): FilesClientCache {
   });
 }
 
+/** The projects a saved catalog was written under, with the scope: the project
+    list can change without a new identity, so the body records which list it
+    was saved under. */
+function accessStamp(): { accessScope: string | undefined; accessProjects: string[] | undefined } {
+  const authority = readBoardBootAuthority();
+  return { accessScope: authority?.scope ?? undefined, accessProjects: authority?.projects ? [...authority.projects] : undefined };
+}
+
+/** A body saved under a longer project list than the one now confirmed holds
+    rows of a project this identity no longer reaches: it is not shown. */
+function savedProjectsAllowed(record: FilesSnapshotRecord, authority: NonNullable<ReturnType<typeof readBoardBootAuthority>>): boolean {
+  if (!authority.projects) return true;
+  const allowed = new Set(authority.projects);
+  return Array.isArray(record.accessProjects) && record.accessProjects.every(project => allowed.has(project));
+}
+
 /** A saved catalog from the browser's own store waits for the server's access
     answer: shown when the scope it was saved under is the confirmed one,
     dropped when it is not, and held out of every display until then. */
@@ -1531,7 +1547,7 @@ function settleSavedSnapshot(): void {
   const authority = readBoardBootAuthority();
   if (!authority && !boardBootRetired()) return;
   savedSnapshot = null;
-  if (authority?.scope && saved.record.accessScope === authority.scope) {
+  if (authority?.scope && saved.record.accessScope === authority.scope && savedProjectsAllowed(saved.record, authority)) {
     /* The network may have certified the same rows first: nothing to rewrite. */
     if (saved.cache.showHeld() || saved.cache.certifiedGlobal()?.etag === saved.record.etag) persistedEtag = saved.record.etag;
   } else {
@@ -1632,7 +1648,7 @@ export function useMaterializedCreationIds(): readonly string[] {
 function persistFilesSnapshot(): void {
   const store = snapshotStore;
   const current = filesClientCache.certifiedGlobal();
-  const accessScope = readBoardBootAuthority()?.scope ?? undefined;
+  const { accessScope, accessProjects } = accessStamp();
   const scoped = scopedSnapshotStore(store);
   if ((!accessScope && scoped) || !store || !current || current.etag === persistedEtag) return;
   let text: string;
@@ -1644,7 +1660,7 @@ function persistFilesSnapshot(): void {
   if (text.length > FILES_SNAPSHOT_MAX_BYTES) return;
   persistedEtag = current.etag;
   const owner = browserCreationAuthority()?.signature;
-  void store.write({ version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: current.etag, text, accessScope },
+  void store.write({ version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: current.etag, text, accessScope, accessProjects },
     () => (!scoped || accessScope === readBoardBootAuthority()?.scope) && owner === browserCreationAuthority()?.signature).catch(() => { persistedEtag = null; });
 }
 

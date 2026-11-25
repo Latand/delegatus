@@ -77,6 +77,8 @@ mock.module("@/hooks/runtimeBus", () => ({
 }));
 
 const { Viewer } = await import("./Viewer");
+const { readBoardBootAuthority, resetBoardBootAuthorityForTests } = await import("@/lib/client/boardBootAuthority");
+const { resetProjectNameCacheForTest } = await import("@/lib/client/projectNameCache");
 const { resetFilesClientCacheForTests } = await import("@/hooks/useFiles");
 const { receipts } = await import("./mobile/MobileReceipt");
 const { getMobileNav, resetMobileNavForTests } = await import("./mobile/mobileNav");
@@ -164,7 +166,7 @@ const originalFetch = globalThis.fetch;
 function stubFetch(): void {
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
-    if (url === "/api/team?view=board-access") return Response.json({ scope: null, projects: null, team: false });
+    if (url === "/api/team?view=board-access") return Response.json(access);
     const method = (init?.method ?? "GET").toUpperCase();
     if (url.startsWith("/api/files")) {
       return Response.json({
@@ -204,8 +206,13 @@ function stubFetch(): void {
 }
 
 let mounted: { unmount: () => void } | null = null;
+/* What the access check answers. Most cases leave the browser unconfirmed. */
+let access: { scope: string | null; projects: string[] | null; team: boolean } = { scope: null, projects: null, team: false };
 
 beforeEach(() => {
+  access = { scope: null, projects: null, team: false };
+  resetBoardBootAuthorityForTests();
+  resetProjectNameCacheForTest();
   resetFilesClientCacheForTests();
   resetPhoneKanbanPlaces();
   resetOrchestratorSeatCacheForTests();
@@ -627,4 +634,29 @@ test("a search result on the Overview opens its conversation over it, and ‹ co
   expect(host.querySelector("[data-phone-kanban]")?.getAttribute("data-phone-kanban-active")).toBe("inbox");
   expect(getMobileNav().getState().stack).toEqual([{ kind: "board" }]);
   expect(dom.location.hash).toBe("");
+});
+
+/* A name this browser remembered belongs to the single operator's own browser.
+   A team member's overview on a shared device, and a document the server has
+   not named, never read it for a project nobody named. */
+test("a remembered project name labels the nameless project only for a confirmed solo browser", async () => {
+  const REMEMBERED = "Stored fixture name";
+  const labelAfterAnswer = async (answer: typeof access): Promise<string | null> => {
+    access = answer;
+    resetBoardBootAuthorityForTests();
+    resetProjectNameCacheForTest();
+    dom.localStorage.setItem("llvProjectNames", JSON.stringify({ [NAMELESS]: REMEMBERED }));
+    const host = await mountOverview();
+    if (answer.scope) await until(() => readBoardBootAuthority()?.scope === answer.scope);
+    await act(async () => { await Bun.sleep(15); });
+    const label = cardTitled(host, "Keep the nameless worker going")?.querySelector("[data-phone-card-project]")?.textContent ?? null;
+    act(() => mounted!.unmount());
+    mounted = null;
+    dom.document.body.replaceChildren();
+    return label;
+  };
+
+  expect(await labelAfterAnswer({ scope: null, projects: null, team: false })).toBeNull();
+  expect(await labelAfterAnswer({ scope: "e".repeat(64), projects: [NAMELESS], team: true })).toBeNull();
+  expect(await labelAfterAnswer({ scope: "e".repeat(64), projects: null, team: false })).toBe(REMEMBERED);
 });

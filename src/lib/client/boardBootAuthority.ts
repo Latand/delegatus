@@ -3,6 +3,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { readTeamAuthority, refreshTeamView, subscribeTeamAuthority } from "@/components/team/teamClient";
 import { indexedDbFilesSnapshotStore } from "./filesSnapshotStore";
+import { PROJECT_NAMES_STORAGE_KEY } from "./projectNameCache";
 
 /*
  * What this browser may display from its own disk. The server reads of the
@@ -23,7 +24,12 @@ const RETRY_MS = [1_000, 2_000, 4_000, 8_000] as const;
 const INITIAL_STATE: BoardBootState = { authority: null, ended: false };
 let state = INITIAL_STATE;
 let loading: { cancel: AbortController; done: Promise<void> } | null = null;
-let retryTimer: ReturnType<typeof setTimeout> | null = null;
+/* The retry delay goes through one seam so a test drives the backoff by
+   running the scheduled call, with no real waiting. */
+export type RetryClock = { set(run: () => void, delay: number): unknown; clear(handle: unknown): void };
+const REAL_CLOCK: RetryClock = { set: (run, delay) => setTimeout(run, delay), clear: handle => clearTimeout(handle as ReturnType<typeof setTimeout>) };
+let retryClock = REAL_CLOCK;
+let retryTimer: unknown = null;
 let retryAttempt = 0;
 const listeners = new Set<() => void>();
 
@@ -40,10 +46,19 @@ export function boardBootScopeFor(project: string): string | null {
   return authority && (authority.projects === null || authority.projects.includes(project)) ? authority.scope : null;
 }
 
+/** A remembered project name belongs to the single operator's own browser: it
+    is shown and written only under a confirmed solo scope, never before the
+    server answers and never for a team member on a shared device. */
+export function rememberedNamesAllowed(authority: BoardBootAuthority | null = state.authority): boolean {
+  return Boolean(authority?.scope) && authority?.team === false;
+}
+
 /** True when the identity this read started under has since been replaced or
-    ended. A read that started before the first answer has no identity to lose. */
+    ended. A read that started before the first answer has no identity to lose.
+    A project list that widened or narrowed in place is the same identity: saved
+    data is filtered by the current list when it is read or written. */
 export function boardAccessChanged(started: BoardBootAuthority | null): boolean {
-  return state.ended || (started !== null && started !== state.authority);
+  return state.ended || (started !== null && (!state.authority || !sameIdentity(started, state.authority)));
 }
 
 function publish(next: BoardBootState) {
@@ -53,7 +68,7 @@ function publish(next: BoardBootState) {
 }
 
 function stopRetry(): void {
-  if (retryTimer) clearTimeout(retryTimer);
+  if (retryTimer) retryClock.clear(retryTimer);
   retryTimer = null;
 }
 
@@ -65,7 +80,10 @@ function retire(): void {
 }
 
 async function clearBootData(): Promise<void> {
-  try { localStorage.removeItem("llvBoards"); } catch { /* unavailable storage */ }
+  try {
+    localStorage.removeItem("llvBoards");
+    localStorage.removeItem(PROJECT_NAMES_STORAGE_KEY);
+  } catch { /* unavailable storage */ }
   const write = bootSnapshotStore?.clearBootData();
   if (!write) return;
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -96,8 +114,12 @@ function parseAuthority(value: unknown): BoardBootAuthority | null {
   return { scope, projects, team };
 }
 
-const sameAuthority = (left: BoardBootAuthority, right: BoardBootAuthority) =>
-  left.scope === right.scope && left.team === right.team && JSON.stringify(left.projects) === JSON.stringify(right.projects);
+/** Who is looking and with which rights. The project list is not part of it. */
+const sameIdentity = (left: BoardBootAuthority, right: BoardBootAuthority) =>
+  left.scope === right.scope && left.team === right.team;
+
+const sameProjects = (left: readonly string[] | null, right: readonly string[] | null) =>
+  left === right || (left !== null && right !== null && left.length === right.length && left.every((project, index) => project === right[index]));
 
 /** Until the first answer, a failed check asks again after 1, 2, 4 and then
     every 8 seconds. Once an identity is confirmed the periodic check owns it. */
@@ -105,7 +127,7 @@ function retryLater(): void {
   if (retryTimer || state.ended || state.authority) return;
   const delay = RETRY_MS[Math.min(retryAttempt, RETRY_MS.length - 1)]!;
   retryAttempt += 1;
-  retryTimer = setTimeout(() => {
+  retryTimer = retryClock.set(() => {
     retryTimer = null;
     if (!document.hidden) void recheckBoardBoot();
   }, delay);
@@ -143,7 +165,7 @@ export function recheckBoardBoot(fresh = false): Promise<void> {
       if (cancel.signal.aborted) return;
       if (!next) { retryLater(); return; }
       const previous = state.authority;
-      if (previous && !sameAuthority(previous, next)) {
+      if (previous && !sameIdentity(previous, next)) {
         // The Viewer also has document-scoped files, layout and seat stores.
         // A new document starts all three under the replacement authority.
         retire();
@@ -152,7 +174,10 @@ export function recheckBoardBoot(fresh = false): Promise<void> {
       }
       stopRetry();
       retryAttempt = 0;
-      publish({ authority: previous ?? next, ended: false });
+      // The same identity with another project list updates the list in place:
+      // a project that left it shows no saved data from the next render on,
+      // a project that joined it may show its saved data, and nothing reloads.
+      publish({ authority: previous && sameProjects(previous.projects, next.projects) ? previous : next, ended: false });
     } catch {
       if (!cancel.signal.aborted) retryLater();
     }
@@ -221,9 +246,16 @@ export function setBoardBootAuthorityForTests(authority: BoardBootAuthority | nu
   for (const listener of listeners) listener();
 }
 
+/** Test seam: schedule the retries on a clock the test runs by hand. */
+export function setBoardBootRetryClockForTests(clock: RetryClock): void {
+  stopRetry();
+  retryClock = clock;
+}
+
 /** Test seam: a new document starts with no answer and no retired state. */
 export function resetBoardBootAuthorityForTests(): void {
   stopRetry();
+  retryClock = REAL_CLOCK;
   loading?.cancel.abort();
   loading = null;
   retryAttempt = 0;
