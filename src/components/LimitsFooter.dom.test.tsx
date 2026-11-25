@@ -26,6 +26,7 @@ const NOW = Math.round(Date.now() / 1000);
 
 let limits: LimitsPayload;
 let limitsUnavailable = false;
+const historyUrls: string[] = [];
 let copilotAccountsResponse: Record<string, unknown> = { cli: { present: false, reason: null }, active: "", accounts: [] };
 const copilotActions: Record<string, unknown>[] = [];
 const baseAccount = {
@@ -56,6 +57,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
   if (url === "/api/limits") return limitsUnavailable ? new Response(null, { status: 503 }) : Response.json(limits);
   if (url === "/api/accounts") return Response.json(accounts);
+  if (url.startsWith("/api/limits/history")) {
+    historyUrls.push(url);
+    return new Response(null, { status: 503 });
+  }
   if (url === "/api/accounts/copilot") {
     if (init?.method === "POST") copilotActions.push(JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>);
     return Response.json(copilotAccountsResponse);
@@ -94,6 +99,7 @@ afterEach(async () => {
   limitsUnavailable = false;
   copilotAccountsResponse = { cli: { present: false, reason: null }, active: "", accounts: [] };
   copilotActions.length = 0;
+  historyUrls.length = 0;
   setSystemTime();
 });
 
@@ -611,9 +617,86 @@ test("the active line opens the panel as it did, and its reading still opens the
   await act(async () => { buttons[0]!.click(); });
   expect(host.querySelector('[role="dialog"][aria-label*="Codex"]')).not.toBeNull();
   expect([...host.querySelectorAll("*")].filter((node) => node.classList.contains("ring-accent/50")).length).toBe(0);
-  // Only the active account has a burndown history: its reading is a second control, the others have one.
   expect(buttons[1]!.getAttribute("aria-label")).toBe("Open Codex burndown chart");
-  expect(accountRows(block).slice(1).every((row) => row.querySelectorAll("button").length === 1)).toBe(true);
+  // Every other line has the same two controls: its name, and its reading as a chart button.
+  expect(accountRows(block).slice(1).every((row) => row.querySelectorAll("button").length === 2)).toBe(true);
+});
+
+const chartButton = (row: HTMLElement) => row.querySelector<HTMLButtonElement>("[data-footer-chart]")!;
+
+test("a non-active line opens its own burndown chart from its reading, not the accounts panel", async () => {
+  seedRoster();
+  const host = await render("line");
+  const row = accountRows(engineBlock(host, "codex"))[1]!;
+  const trigger = chartButton(row);
+  expect(trigger.dataset.footerChart).toBe("codex-b");
+  expect(trigger.getAttribute("aria-label")).toBe("Open Codex · Codex B burndown chart");
+  expect(trigger.textContent).toContain("week 60%");
+  await act(async () => { trigger.click(); });
+  await act(async () => { await Promise.resolve(); });
+  const dialog = host.querySelector('[role="dialog"][aria-label="Open Codex · Codex B burndown chart"]');
+  expect(dialog).not.toBeNull();
+  expect(historyUrls).toEqual(["/api/limits/history?engine=codex&account=codex-b"]);
+  // The accounts panel stays closed, and the chart draws from the row's own reading while history is unavailable.
+  expect(host.querySelector('[role="dialog"][aria-label*="accounts" i]')).toBeNull();
+  expect(dialog?.querySelector('svg[role="img"]')).not.toBeNull();
+  expect(dialog?.textContent).toContain("60% left");
+  // A second tap on the same trigger closes it.
+  await act(async () => { trigger.click(); });
+  expect(host.querySelector('[role="dialog"][aria-label*="burndown"]')).toBeNull();
+});
+
+test("the name of a non-active line still opens the accounts panel focused on that account, with no chart", async () => {
+  seedRoster();
+  const host = await render("line");
+  const row = accountRows(engineBlock(host, "codex"))[1]!;
+  await act(async () => { row.querySelector<HTMLButtonElement>("[data-meter-name]")?.closest("button")?.click(); });
+  expect(host.querySelector('[role="dialog"][aria-label*="burndown"]')).toBeNull();
+  const dialog = host.querySelector('[role="dialog"][aria-label*="Codex"]');
+  expect(dialog).not.toBeNull();
+  expect(historyUrls).toEqual([]);
+});
+
+test("a line with no reading still opens a chart, drawn as an estimate", async () => {
+  seedRoster();
+  const host = await render("line");
+  const row = accountRows(engineBlock(host, "codex"))[2]!;
+  expect(rowReading(row).value).toBe("no data yet");
+  await act(async () => { chartButton(row).click(); });
+  await act(async () => { await Promise.resolve(); });
+  const dialog = host.querySelector('[role="dialog"][aria-label="Open Codex · Codex C burndown chart"]');
+  expect(dialog?.querySelector('svg[role="img"]')).not.toBeNull();
+  expect(dialog?.querySelector("[data-burndown-estimated]")).not.toBeNull();
+  expect(dialog?.textContent).not.toContain("No history yet");
+});
+
+test("opening another account's chart replaces the first, and the active line charts its own account", async () => {
+  seedRoster();
+  const host = await render("line");
+  const rows = accountRows(engineBlock(host, "codex"));
+  await act(async () => { chartButton(rows[1]!).click(); });
+  await act(async () => { chartButton(rows[2]!).click(); });
+  await act(async () => { await Promise.resolve(); });
+  expect(host.querySelectorAll('[role="dialog"][aria-label*="burndown"]').length).toBe(1);
+  expect(host.querySelector('[role="dialog"][aria-label*="Codex C"]')).not.toBeNull();
+  await act(async () => { chartButton(rows[0]!).click(); });
+  await act(async () => { await Promise.resolve(); });
+  expect(host.querySelector('[role="dialog"][aria-label*="Codex A"]')).not.toBeNull();
+  expect(historyUrls[historyUrls.length - 1]).toBe("/api/limits/history?engine=codex&account=codex-a");
+});
+
+test("an active account without windows still has a chart button", async () => {
+  seedRoster();
+  accounts.codex.accounts = [roster("codex-a", "Codex A", null), roster("codex-b", "Codex B", 40)] as never;
+  limits = { ...limits, codex: null } as LimitsPayload;
+  const host = await render("line");
+  const active = accountRows(engineBlock(host, "codex"))[0]!;
+  expect(active.querySelector("[data-meter-value]")).toBeNull();
+  const trigger = chartButton(active);
+  expect(trigger.dataset.footerChart).toBe("codex-a");
+  expect(trigger.textContent).toBe("no data yet");
+  await act(async () => { trigger.click(); });
+  expect(host.querySelector('[role="dialog"][aria-label="Open Codex · Codex A burndown chart"]')).not.toBeNull();
 });
 
 test("a single account keeps the one line it always had", async () => {

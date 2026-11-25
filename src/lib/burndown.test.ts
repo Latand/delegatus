@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { burndownForActiveAccount, computePace, idealRemaining, mergeSamples, WINDOW_SECONDS } from "./burndown";
+import { buildSeries, burndownForAccount, burndownSegments, computePace, GAP_S, idealRemaining, mergeSamples, WINDOW_SECONDS } from "./burndown";
 import type { BurndownPayload, BurndownSeries, EngineBurndown } from "./types";
 
 const start = 1_000_000;
@@ -21,22 +21,22 @@ const burndownPayload = (over: Partial<BurndownPayload> = {}): BurndownPayload =
   ...over,
 });
 
-test("burndownForActiveAccount returns the engine series when the account stamp matches", () => {
+test("burndownForAccount returns the engine series when the account stamp matches", () => {
   const payload = burndownPayload();
-  expect(burndownForActiveAccount(payload, "claude", "claude-a")).toBe(payload.claude);
-  expect(burndownForActiveAccount(payload, "codex", "codex-a")).toBe(payload.codex);
+  expect(burndownForAccount(payload, "claude", "claude-a")).toBe(payload.claude);
+  expect(burndownForAccount(payload, "codex", "codex-a")).toBe(payload.codex);
 });
 
-test("burndownForActiveAccount masks a response whose account stamp changed (post-switch race)", () => {
+test("burndownForAccount masks a response whose account stamp changed (post-switch race)", () => {
   const payload = burndownPayload();
-  expect(burndownForActiveAccount(payload, "claude", "claude-b")).toBeNull();
-  expect(burndownForActiveAccount(payload, "codex", "codex-b")).toBeNull();
+  expect(burndownForAccount(payload, "claude", "claude-b")).toBeNull();
+  expect(burndownForAccount(payload, "codex", "codex-b")).toBeNull();
 });
 
-test("burndownForActiveAccount masks on a null payload or empty active id", () => {
-  expect(burndownForActiveAccount(null, "claude", "claude-a")).toBeNull();
-  expect(burndownForActiveAccount(burndownPayload({ claudeAccountId: null }), "claude", "claude-a")).toBeNull();
-  expect(burndownForActiveAccount(burndownPayload(), "claude", "")).toBeNull();
+test("burndownForAccount masks on a null payload or empty account id", () => {
+  expect(burndownForAccount(null, "claude", "claude-a")).toBeNull();
+  expect(burndownForAccount(burndownPayload({ claudeAccountId: null }), "claude", "claude-a")).toBeNull();
+  expect(burndownForAccount(burndownPayload(), "claude", "")).toBeNull();
 });
 
 test("idealRemaining runs a straight 100→0 line across the window", () => {
@@ -146,4 +146,125 @@ test("computePace projects from the observed slope, not an assumed full start", 
   const pace = computePace(series([{ t: start, remaining: 60 }, { t: start + day, remaining: 40 }]), start + day);
   // 40% remaining at 20%/day → 2 more days.
   expect(pace!.zeroCrossing! - (start + day)).toBeCloseTo(2 * day, 0);
+});
+
+/* ---------------------------------------------------- burndownSegments */
+
+const NOW = start + 3 * 86_400;
+const winStart = NOW - 86_400;
+const seriesOf = (samples: { t: number; remaining: number }[], over: Partial<BurndownSeries> = {}): BurndownSeries => ({
+  windowStart: winStart,
+  resetsAt: winStart + week,
+  windowSeconds: week,
+  samples,
+  lastReading: samples[samples.length - 1] ?? null,
+  ...over,
+});
+
+test("burndownSegments joins samples within the gap threshold into one solid run", () => {
+  const out = burndownSegments(seriesOf([0, 300, 600, 900].map((d, i) => ({ t: NOW - 900 + d, remaining: 90 - i }))), NOW);
+  expect(out.known.length).toBe(1);
+  expect(out.known[0].length).toBe(4);
+  expect(out.kind).toBe("partial"); // the first sample is late: the lead from the window's opening is dashed
+});
+
+test("burndownSegments draws a gap longer than the threshold dashed and keeps both runs solid", () => {
+  const a = { t: winStart, remaining: 100 };
+  const b = { t: winStart + 600, remaining: 98 };
+  const c = { t: winStart + 600 + GAP_S + 1, remaining: 90 };
+  const d = { t: NOW, remaining: 70 };
+  const out = burndownSegments(seriesOf([a, b, c, d]), NOW);
+  expect(out.known.map((run) => run.length)).toEqual([2, 1, 1]);
+  expect(out.estimated).toContainEqual([b, c]);
+  expect(out.estimated).toContainEqual([c, d]);
+  expect(out.kind).toBe("partial");
+  expect(out.levelEstimated).toBe(false);
+  expect(out.level).toBe(70);
+});
+
+test("burndownSegments tolerates a gap of exactly the threshold", () => {
+  const a = { t: NOW - GAP_S - 10, remaining: 80 };
+  const b = { t: NOW - 10, remaining: 79 };
+  const out = burndownSegments(seriesOf([a, b], { windowStart: a.t, resetsAt: a.t + week }), NOW);
+  expect(out.known).toEqual([[a, b]]);
+  expect(out.estimated).toEqual([]);
+  expect(out.kind).toBe("fresh");
+});
+
+test("burndownSegments dashes a lead from the window's opening to a late first sample", () => {
+  const first = { t: winStart + 2 * 3600, remaining: 90 };
+  const last = { t: NOW, remaining: 60 };
+  const out = burndownSegments(seriesOf([first, { t: NOW - 300, remaining: 61 }, last]), NOW);
+  expect(out.estimated[0]).toEqual([{ t: winStart, remaining: 100 }, first]);
+  expect(out.kind).toBe("partial");
+});
+
+test("burndownSegments continues a stale last reading flat to now and marks the level estimated", () => {
+  const last = { t: NOW - 6 * 3600, remaining: 55 };
+  const out = burndownSegments(seriesOf([{ t: winStart, remaining: 100 }, { t: winStart + 300, remaining: 99 }, last]), NOW);
+  expect(out.estimated).toContainEqual([last, { t: NOW, remaining: 55 }]);
+  expect(out.level).toBe(55);
+  expect(out.levelEstimated).toBe(true);
+  expect(out.lastObservedAt).toBe(last.t);
+  expect(out.kind).toBe("stale");
+});
+
+test("burndownSegments with a fresh last sample adds nothing after it", () => {
+  const out = burndownSegments(seriesOf([{ t: winStart, remaining: 100 }, { t: winStart + 600, remaining: 97 }, { t: winStart + 1200, remaining: 95 }], { windowStart: winStart }), winStart + 1300);
+  expect(out.estimated).toEqual([]);
+  expect(out.levelEstimated).toBe(false);
+  expect(out.kind).toBe("fresh");
+});
+
+test("burndownSegments reports a reset since the last reading as an assumed-full dashed line", () => {
+  const out = burndownSegments(seriesOf([], { lastReading: { t: winStart - 3600, remaining: 8 } }), NOW);
+  expect(out.kind).toBe("reset");
+  expect(out.estimated).toEqual([[{ t: winStart, remaining: 100 }, { t: NOW, remaining: 100 }]]);
+  expect(out.level).toBe(100);
+  expect(out.levelEstimated).toBe(true);
+  expect(out.known).toEqual([]);
+});
+
+test("burndownSegments draws a never-observed account as a dashed 100% line with an unknown level", () => {
+  const out = burndownSegments(seriesOf([], { lastReading: null }), NOW);
+  expect(out.kind).toBe("none");
+  expect(out.level).toBeNull();
+  expect(out.estimated).toEqual([[{ t: winStart, remaining: 100 }, { t: NOW, remaining: 100 }]]);
+  const unknownWindow = burndownSegments(seriesOf([], { windowStart: null, resetsAt: null, lastReading: null }), NOW);
+  expect(unknownWindow.estimated).toEqual([[{ t: NOW - week, remaining: 100 }, { t: NOW, remaining: 100 }]]);
+});
+
+/* ---------------------------------------------------------- buildSeries */
+
+const liveWindow = (usedPercent: number, extra: Partial<{ resetsAt: number | null; observedAt: number | null }> = {}) => ({ usedPercent, resetsAt: NOW + 5 * 86_400, ...extra });
+
+test("buildSeries stamps the live point at its observation time, not at now", () => {
+  const observedAt = NOW - 4 * 3600;
+  const series = buildSeries([], [], liveWindow(40, { observedAt }), NOW, week, null);
+  expect(series.samples).toEqual([{ t: observedAt, remaining: 60 }]);
+  const viaLiveAt = buildSeries([], [], liveWindow(40), NOW, week, null, NOW - 7200);
+  expect(viaLiveAt.samples).toEqual([{ t: NOW - 7200, remaining: 60 }]);
+  expect(buildSeries([], [], liveWindow(40), NOW, week, null).samples).toEqual([{ t: NOW, remaining: 60 }]);
+});
+
+test("buildSeries never stamps a live point in the future", () => {
+  const series = buildSeries([], [], liveWindow(40, { observedAt: NOW + 500 }), NOW, week, null);
+  expect(series.samples[0].t).toBe(NOW);
+});
+
+test("buildSeries rolls a past reset forward, drops the old window's samples and keeps the last reading", () => {
+  const oldReset = NOW - 3600;
+  const old = { t: oldReset - 86_400, remaining: 12 };
+  const series = buildSeries([old], [], liveWindow(88, { resetsAt: oldReset, observedAt: oldReset - 600 }), NOW, week, null);
+  expect(series.resetsAt).toBe(oldReset + week);
+  expect(series.windowStart).toBe(oldReset);
+  expect(series.samples).toEqual([]);
+  expect(series.lastReading).toEqual({ t: oldReset - 600, remaining: 12 });
+});
+
+test("buildSeries without a live reading charts the stored history and reports its newest sample", () => {
+  const forward = [{ t: NOW - 7200, remaining: 70 }, { t: NOW - 3600, remaining: 65 }];
+  const series = buildSeries(forward, [], null, NOW, week, NOW + 86_400);
+  expect(series.samples).toEqual(forward);
+  expect(series.lastReading).toEqual(forward[1]);
 });
