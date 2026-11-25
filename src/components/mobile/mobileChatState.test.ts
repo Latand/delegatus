@@ -190,7 +190,7 @@ test("a host stopped after its turn settled is the finished conversation it is, 
   expect(dead.key).toBe("killed");
   expect(dead.tone).toBe("danger");
   expect(dead.phrase).toMatch(/^mobile2\.chat\.stateKilledAge\(age=/);
-  expect(translate("en", "mobile2.chat.stateKilledAge", { age: "14m ago" })).toBe("killed · 14m ago");
+  expect(translate("en", "mobile2.chat.stateKilledAge", { age: "14m ago" })).toBe("stopped · 14m ago");
   expect(translate("en", "mobile2.chat.stateKilledAge", { age: "14m ago" })).not.toMatch(/queue/);
 });
 

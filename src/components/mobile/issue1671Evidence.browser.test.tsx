@@ -3082,6 +3082,74 @@ browserTest("#1978: copy controls stay apart and followed content and released p
 }, 300_000);
 
 /*
+ * Two copy icons stacked in one expanded command share a right edge (the
+ * command's control ends its meta row, the output's control hangs at the
+ * body's own inset), at 390 and at 1280, en and uk, light and dark. Readings
+ * go to `evidence/shared-states-and-hints/copy-edge.json`; frames to
+ * `.artifacts/shared-states-and-hints-copy/`.
+ */
+browserTest("one right edge for the command's copy and the output's copy at 390 and 1280, en and uk", async () => {
+  const out = path.resolve(".artifacts/shared-states-and-hints-copy");
+  const evidence = path.resolve("evidence/shared-states-and-hints");
+  fs.mkdirSync(out, { recursive: true });
+  fs.mkdirSync(evidence, { recursive: true });
+  const { base: fixtureBase, stop } = await serveFixture();
+  const browser = await launchChromium();
+  const readings: Record<string, unknown> = {};
+  const failures: string[] = [];
+  try {
+    for (const width of [390, 1280]) for (const lang of ["en", "uk"] as const) for (const scheme of SCHEMES) {
+      const key = `${width}-${lang}-${scheme}`;
+      const phone = width < 640;
+      const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 960 }, hasTouch: phone, isMobile: phone, deviceScaleFactor: 2, colorScheme: scheme });
+      await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+      try {
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const cdp = await context.newCDPSession(page);
+        const command = translate(lang, "tools.copyCommand");
+        const output = translate(lang, "tools.copyOutput");
+        await page.goto(`${fixtureBase}/?toolcard=1#f=${encodeURIComponent(RUNNING_PATH)}`);
+        await page.waitForSelector("[data-log-feed-scroller]", { timeout: 20_000 });
+        await page.getByText("The projection replays every band", { exact: false }).first().waitFor({ timeout: 20_000 });
+        await pause(page, 900);
+        if (phone) {
+          const r = await page.locator("[data-mobile-run-fold]").last().boundingBox();
+          if (!r) throw new Error(`${key}: the run's line is not on screen`);
+          await touch(cdp, [[r.x + r.width / 2, r.y + r.height / 2]]);
+        } else if (!(await page.locator(`[aria-label="${command}"]`).count())) {
+          await page.locator("[data-log-feed-scroller] summary").last().click();
+        }
+        await page.waitForSelector(`[aria-label="${command}"]`, { timeout: 5_000 });
+        await pause(page, 900);
+        const reading = await page.evaluate(({ command: commandLabel, output: outputLabel }) => {
+          const copy = document.querySelector(`[aria-label="${commandLabel}"]`);
+          const body = copy?.closest(".bg-sunken") ?? null;
+          const result = body?.querySelector(`[aria-label="${outputLabel}"]`) ?? null;
+          const right = (element: Element | null) => element ? Math.round(element.getBoundingClientRect().right * 10) / 10 : null;
+          return { command: right(copy ?? null), output: right(result), commandCopies: document.querySelectorAll(`[aria-label="${commandLabel}"]`).length };
+        }, { command, output });
+        readings[key] = reading;
+        if (reading.commandCopies !== 1) failures.push(`${key}: ${reading.commandCopies} command copy controls, not one`);
+        if (reading.command === null || reading.output === null) failures.push(`${key}: a copy control is missing ${JSON.stringify(reading)}`);
+        else if (Math.abs(reading.command - reading.output) > 1) failures.push(`${key}: the command's copy ends at ${reading.command}, the output's at ${reading.output}`);
+        await page.locator(`[aria-label="${command}"]`).locator("xpath=ancestor::*[contains(@class,'bg-sunken')][1]").screenshot({ path: path.join(out, `${key}.png`) });
+        if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
+        await page.close();
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await browser.close();
+    stop();
+  }
+  fs.writeFileSync(path.join(evidence, "copy-edge.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+  if (failures.length) throw new Error(failures.join("\n"));
+}, 300_000);
+
+/*
  * #2072 slice 2, the jump strip: a conversation away from its tail, at the
  * pages Safari leaves on a 390 × 844 and a 430 × 932 phone, in both languages
  * and both schemes (the desktop reader's strip is held by the DOM test in
@@ -7899,11 +7967,17 @@ describe("tool call context tokens", () => {
     const lineHeight = parseFloat(getComputedStyle(document.body).lineHeight) || 16;
     const rows = [...document.querySelectorAll('[data-tool-row], [data-testid="mcp-call-card"] summary')].map((row) => {
       const caption = row.querySelector("[data-context-tokens]");
-      const title = row.querySelector("span.flex-1");
+      const title = row.querySelector("span.flex-1") || row.querySelector("[data-mcp-title]");
       const value = caption && caption.querySelector("span:not([aria-hidden])");
       const cap = caption ? box(caption) : null;
       const r = box(row);
+      /* The dot joins the duration to the counter: the same space on both sides of it. */
+      const dot = caption ? caption.querySelector("[aria-hidden]") : null;
+      const duration = caption ? caption.previousElementSibling : null;
+      const dotBefore = dot && duration && value ? Math.round((box(dot).left - box(duration).right) * 10) / 10 : null;
+      const dotAfter = dot && duration && value ? Math.round((box(value).left - box(dot).right) * 10) / 10 : null;
       return {
+        dotBefore, dotAfter,
         label: (row.textContent || "").trim().slice(0, 70),
         row: r,
         caption: cap,
@@ -7925,7 +7999,7 @@ describe("tool call context tokens", () => {
   type Reading = {
     label: string; row: { height: number }; caption: { height: number } | null; band: number | null; basis: string | null;
     text: string | null; title: string | null; color: string | null; weight: number | null; titleWidth: number | null;
-    oneLine: boolean | null; inside: boolean | null; pushedOut: string[];
+    oneLine: boolean | null; inside: boolean | null; pushedOut: string[]; dotBefore: number | null; dotAfter: number | null;
   };
 
   browserTest("every band, the shared pair and the worst-case row hold their geometry in both themes and languages", async () => {
@@ -7945,11 +8019,12 @@ describe("tool call context tokens", () => {
             try {
               await page.locator("[data-context-tokens-feed]").waitFor();
               const read = await page.evaluate(measureRows) as { rows: Reading[]; scrollWidth: number; clientWidth: number };
-              readings[tag] = read.rows.map((row) => ({ label: row.label, band: row.band, basis: row.basis, text: row.text, height: row.row.height, titleWidth: row.titleWidth }));
+              readings[tag] = read.rows.map((row) => ({ label: row.label, band: row.band, basis: row.basis, text: row.text, height: row.row.height, titleWidth: row.titleWidth, dotBefore: row.dotBefore, dotAfter: row.dotAfter }));
               const captions = read.rows.filter((row) => row.caption);
-              if (!read.rows.some((row) => row.label.includes("Listing pipelines") && row.caption)) failures.push(`${tag}: the MCP row carries no caption`);
+              if (!read.rows.some((row) => (row.label.includes("Listing pipelines") || row.label.includes("Список пайплайнів")) && row.caption)) failures.push(`${tag}: the MCP row carries no caption`);
               const bare = read.rows.find((row) => !row.caption && row.label.includes("ls tmp"));
               if (!bare) failures.push(`${tag}: the uncaptioned baseline row is missing`);
+              if (!captions.some((row) => row.dotBefore !== null)) failures.push(`${tag}: no row carries a duration and a counter to measure the dot between`);
               const bands = new Set(captions.map((row) => row.band));
               for (const band of [0, 1, 2, 3]) if (!bands.has(band)) failures.push(`${tag}: no row in band ${band}`);
               for (const row of captions) {
@@ -7960,6 +8035,7 @@ describe("tool call context tokens", () => {
                 if (bare && Math.abs(row.row.height - bare.row.height) > 1) failures.push(`${at}: row is ${row.row.height}px, baseline ${bare.row.height}px`);
                 if (width === 390 && (row.titleWidth ?? 0) < 96) failures.push(`${at}: the title keeps only ${row.titleWidth}px`);
                 if (!row.title || !/\d/.test(row.title)) failures.push(`${at}: no hover title`);
+                if (row.dotBefore !== null && row.dotAfter !== null && Math.abs(row.dotBefore - row.dotAfter) > 1) failures.push(`${at}: the dot sits ${row.dotBefore}px after the duration and ${row.dotAfter}px before the counter`);
                 if ((row.basis === "measured") === (row.text ?? "").includes("~")) failures.push(`${at}: basis ${row.basis} but caption "${row.text}"`);
               }
               /* Each band reads heavier than the one below: the colours differ and the weight never drops. */
@@ -12800,6 +12876,8 @@ describe("stale working status", () => {
           expect(await dead.getAttribute("data-mobile2-state")).toBe("killed");
           expect(await quiet.locator("[data-mobile2-phrase]").innerText()).toStartWith(prefix("mobile2.board.done"));
           expect(await dead.locator("[data-mobile2-phrase]").innerText()).toStartWith(prefix("mobile2.board.killedAge"));
+          /* One word for a dead agent with the desktop's tile and reader header. */
+          expect((await dead.locator("[data-mobile2-phrase]").innerText()).split(" · ")[0]).toBe(word("kanban.memberState.killed"));
           const reading: Record<string, unknown> = { quiet: await quiet.innerText(), dead: await dead.innerText(), live: await live.innerText() };
           await page.screenshot({ path: path.join(out, "task.png"), fullPage: true });
 
@@ -12811,7 +12889,7 @@ describe("stale working status", () => {
             const header = screen.locator("[data-mobile2-chat-state]").first();
             expect(await header.innerText()).toStartWith(prefix(state));
             /* One word with the desktop's header and tile for the same conversation. */
-            if (name === "quiet") expect((await header.innerText()).split(" · ")[0]).toBe(word("kanban.memberState.done"));
+            expect((await header.innerText()).split(" · ")[0]).toBe(word(name === "quiet" ? "kanban.memberState.done" : "kanban.memberState.killed"));
             expect(await screen.locator('[data-turn-status="running"], [role="timer"]').count()).toBe(0);
             expect(await screen.locator("[data-launch-chips], .animate-spin").count()).toBe(0);
             expect(await screen.innerText()).not.toContain(file.spawn!.launchId.slice(0, 8));
@@ -12948,7 +13026,7 @@ describe("idle seat reads waiting", () => {
             };
           }, selector);
           for (const [scene, query, want] of [
-            ["idle", "1044", waiting.split(" ·")[0]!],
+            ["idle", "1044", waiting],
             ["running", "running", word("mobile2.chat.stateWorking").split("{")[0]!.trim()],
           ] as const) {
             await page.goto(`${base}/?kanban=1&runtime=structured&seathost=${query}#p=atlas`);
@@ -12969,6 +13047,9 @@ describe("idle seat reads waiting", () => {
             for (const [where, reading] of [["card", onCard], ["sheet", onSheet]] as const) {
               if (!reading) { failures.push(`${label}: the ${scene} seat ${where} shows no badge`); continue; }
               if (!reading.text.startsWith(want)) failures.push(`${label}: the ${scene} seat ${where} reads «${reading.text}», not «${want}»`);
+              /* The bar's own phrase, «waiting · 17m ago»: an age to the unit, no ticking seconds. */
+              if (scene === "idle" && /\d+\s?(m|хв)\s\d+\s?(s|с)/.test(reading.text)) failures.push(`${label}: the idle seat ${where} reads a ticking duration «${reading.text}»`);
+              if (scene === "idle" && reading.text.trim() !== bar.text.trim() && reading.text.replace(/\d+/g, "N") !== bar.text.replace(/\d+/g, "N")) failures.push(`${label}: the idle seat ${where} reads «${reading.text}», the bar «${bar.text}»`);
               if (scene === "idle" && reading.tone !== "neutral") failures.push(`${label}: the idle seat ${where} reads in the «${reading.tone}» tone, not the quiet one`);
               if (reading.cut) failures.push(`${label}: the ${scene} seat ${where} badge is cut`);
               if (!reading.inside) failures.push(`${label}: the ${scene} seat ${where} badge leaves the screen`);

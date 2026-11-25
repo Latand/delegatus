@@ -47924,12 +47924,28 @@ describe("one set of hints and one row of controls: priority hints belong to the
                 inPre: pre.contains(command[0] ?? null), overlapsCommand: cmdBox ? overlap(cmdBox, preBox) : null,
                 gap: cmdBox && outBox ? Math.round((outBox.top - cmdBox.bottom) * 10) / 10 : null, commandLine: Math.round(preBox.height * 10) / 10,
                 cmdSize: cmdBox ? [Math.round(cmdBox.width), Math.round(cmdBox.height)] : null,
+                /* Two icons stacked in one block share a right edge. */
+                edgeDelta: cmdBox && outBox ? Math.round(Math.abs(cmdBox.right - outBox.right) * 10) / 10 : null,
+                /* The command's own row: the dot between its duration and its counter sits evenly between them. */
+                dot: (() => {
+                  const row = [...document.querySelectorAll<HTMLElement>('.gsheet [data-tool-row]:not([data-tool-row="group"])')].find((element) => (element.textContent ?? "").includes("rg --files") && element.querySelector("[data-context-tokens] [aria-hidden]"));
+                  const tokens = row?.querySelector<HTMLElement>("[data-context-tokens]");
+                  const dot = tokens?.querySelector<HTMLElement>("[aria-hidden]");
+                  const duration = tokens?.previousElementSibling;
+                  const number = tokens?.lastElementChild;
+                  if (!dot || !duration || !number) return null;
+                  const before = dot.getBoundingClientRect().left - duration.getBoundingClientRect().right;
+                  const after = number.getBoundingClientRect().left - dot.getBoundingClientRect().right;
+                  return { before: Math.round(before * 10) / 10, after: Math.round(after * 10) / 10 };
+                })(),
               };
             }, { command: t("tools.copyCommand"), output: t("tools.copyOutput"), stderr: t("tools.copyStderr") });
             readings[`${label}-copy`] = copy;
             if (copy.commandCopies !== 1 || !copy.endsMetaRow || copy.inPre) failures.push(`${label}: the command's copy is not one control ending its meta row ${JSON.stringify(copy)}`);
             if (copy.overlapsCommand) failures.push(`${label}: the command's copy overlaps the command ${JSON.stringify(copy)}`);
             if (copy.outputCopies >= 1 && (copy.gap === null || copy.gap < copy.commandLine)) failures.push(`${label}: the command's copy and the output's are ${copy.gap}px apart, under the command's line ${copy.commandLine}px`);
+            if (copy.outputCopies >= 1 && (copy.edgeDelta === null || copy.edgeDelta > 1)) failures.push(`${label}: the command's copy and the output's end ${copy.edgeDelta}px apart, not on one right edge`);
+            if (copy.dot && Math.abs(copy.dot.before - copy.dot.after) > 1) failures.push(`${label}: the dot sits ${copy.dot.before}px after the duration and ${copy.dot.after}px before the counter`);
             const body = page.locator('.gsheet [data-command-copy="meta"]').first().locator("xpath=ancestor::div[contains(@class,'rounded-surface')][1]");
             await body.screenshot({ path: path.join(OUT, `${label}-command-copy.png`) });
           }

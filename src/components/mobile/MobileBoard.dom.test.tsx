@@ -507,12 +507,13 @@ test("each phrase carries its age, and the held plurals read right at 1 and at n
     const age = humanizeDuration(900);
     expect(statePhrase(t, bits("killed"), NOW)).toBe(translate(locale, "mobile2.board.killedAge", { age }));
     expect(statePhrase(t, bits("stalled"), NOW)).toBe(translate(locale, "mobile2.board.stalled", { age }));
-    expect(statePhrase(t, bits("waiting"), NOW)).toBe(translate(locale, "mobile2.board.waiting", { age }));
+    expect(statePhrase(t, bits("waiting"), NOW)).toBe(translate(locale, "mobile2.chat.stateWaiting", { age: translate(locale, "time.agoMin", { n: 15 }) }));
     expect(statePhrase(t, bits("returned"), NOW)).toBe(translate(locale, "mobile2.board.returned", { age }));
     expect(statePhrase(t, bits("done"), NOW)).toBe(translate(locale, "mobile2.board.done", { age }));
-    for (const key of ["killed", "stalled", "waiting", "returned", "done"] as const) expect(statePhrase(t, bits(key), NOW)).toContain(age);
+    for (const key of ["killed", "stalled", "returned", "done"] as const) expect(statePhrase(t, bits(key), NOW)).toContain(age);
   }
-  expect(statePhrase(tOf("en"), bits("killed"), NOW)).toBe("killed · 15m");
+  expect(statePhrase(tOf("en"), bits("killed"), NOW)).toBe("stopped · 15m");
+  expect(statePhrase(tOf("en"), bits("waiting"), NOW)).toBe("waiting · 15m ago");
   expect(statePhrase(tOf("en"), bits("held", { held: 1 }), NOW)).toBe("held · 1 message queued");
   expect(statePhrase(tOf("en"), bits("held", { held: 5 }), NOW)).toBe("held · 5 messages queued");
   expect(statePhrase(tOf("uk"), bits("held", { held: 1 }), NOW)).toBe("утримано · 1 повідомлення в черзі");

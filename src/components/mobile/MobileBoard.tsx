@@ -12,7 +12,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { formatResetClock } from "../rateLimit";
 import { clockDuration, humanizeDuration } from "../turnDuration";
-import { fileModelLabel } from "../utils";
+import { fileModelLabel, fmtAgeWith } from "../utils";
 
 import {
   buildMobileBoard,
@@ -127,7 +127,8 @@ export function statePhrase(t: TFunction, state: MobileRowState, now: number): s
     case "held":
       return t("mobile2.board.heldQueued", { count: state.held });
     case "waiting":
-      return t("mobile2.board.waiting", { age: humanizeDuration(seconds) });
+      /* The chat bar's phrase and age, whole: a quiet state's seconds are noise (the bar reads «waiting · 17m ago»). */
+      return t("mobile2.chat.stateWaiting", { age: fmtAgeWith(t, seconds) });
     case "working":
       return state.seconds === null ? t("mobile2.board.workingNow") : t("mobile2.board.workingFor", { elapsed: clockDuration(seconds) });
     case "returned":

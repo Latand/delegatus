@@ -16,12 +16,16 @@ export function fmtAge(mtime: number): string {
 
 /** `fmtAge` for a wait already measured in seconds, against a clock the caller holds. */
 export function fmtAgeSeconds(s: number): string {
+  return fmtAgeWith((key, params) => translate(getLocale(), key, params), s);
+}
+
+/** The same age in the caller's own translator, so a row and the chat bar read one string. */
+export function fmtAgeWith(t: (key: "time.agoSec" | "time.agoMin" | "time.agoHour" | "time.agoDay", params: { n: number }) => string, s: number): string {
   if (!Number.isFinite(s)) return "";
-  const locale = getLocale();
-  if (s < 90) return translate(locale, "time.agoSec", { n: Math.round(s) });
-  if (s < 5400) return translate(locale, "time.agoMin", { n: Math.round(s / 60) });
-  if (s < 129600) return translate(locale, "time.agoHour", { n: Math.round(s / 3600) });
-  return translate(locale, "time.agoDay", { n: Math.round(s / 86400) });
+  if (s < 90) return t("time.agoSec", { n: Math.round(s) });
+  if (s < 5400) return t("time.agoMin", { n: Math.round(s / 60) });
+  if (s < 129600) return t("time.agoHour", { n: Math.round(s / 3600) });
+  return t("time.agoDay", { n: Math.round(s / 86400) });
 }
 
 const TIME_FORMATS: Partial<Record<Locale, Intl.DateTimeFormat>> = {};

@@ -571,7 +571,12 @@
       "cmdSize": [
         22,
         22
-      ]
+      ],
+      "edgeDelta": 0,
+      "dot": {
+        "before": 4,
+        "after": 4
+      }
     },
     "stages-1440-en-dark": {
       "rows": [
@@ -658,7 +663,12 @@
       "cmdSize": [
         22,
         22
-      ]
+      ],
+      "edgeDelta": 0,
+      "dot": {
+        "before": 4,
+        "after": 4
+      }
     },
     "stages-1440-uk-light": {
       "rows": [
@@ -745,7 +755,12 @@
       "cmdSize": [
         22,
         22
-      ]
+      ],
+      "edgeDelta": 0,
+      "dot": {
+        "before": 4,
+        "after": 4
+      }
     },
     "stages-1440-uk-dark": {
       "rows": [
@@ -832,7 +847,12 @@
       "cmdSize": [
         22,
         22
-      ]
+      ],
+      "edgeDelta": 0,
+      "dot": {
+        "before": 4,
+        "after": 4
+      }
     }
   },
   "failures": []

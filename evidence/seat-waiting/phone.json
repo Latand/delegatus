@@ -18,13 +18,13 @@
       "inside": true
     },
     "en-light-idle-card": {
-      "text": "waiting 17m 24s",
+      "text": "waiting · 17m ago",
       "tone": "neutral",
       "cut": false,
       "inside": true
     },
     "en-light-idle-sheet": {
-      "text": "waiting 17m 24s",
+      "text": "waiting · 17m ago",
       "tone": "neutral",
       "cut": false,
       "inside": true
@@ -60,13 +60,13 @@
       "inside": true
     },
     "en-dark-idle-card": {
-      "text": "waiting 17m 24s",
+      "text": "waiting · 17m ago",
       "tone": "neutral",
       "cut": false,
       "inside": true
     },
     "en-dark-idle-sheet": {
-      "text": "waiting 17m 24s",
+      "text": "waiting · 17m ago",
       "tone": "neutral",
       "cut": false,
       "inside": true
@@ -102,13 +102,13 @@
       "inside": true
     },
     "uk-light-idle-card": {
-      "text": "чекає 17 хв 25 с",
+      "text": "чекає · 17 хв тому",
       "tone": "neutral",
       "cut": false,
       "inside": true
     },
     "uk-light-idle-sheet": {
-      "text": "чекає 17 хв 25 с",
+      "text": "чекає · 17 хв тому",
       "tone": "neutral",
       "cut": false,
       "inside": true
@@ -144,13 +144,13 @@
       "inside": true
     },
     "uk-dark-idle-card": {
-      "text": "чекає 17 хв 24 с",
+      "text": "чекає · 17 хв тому",
       "tone": "neutral",
       "cut": false,
       "inside": true
     },
     "uk-dark-idle-sheet": {
-      "text": "чекає 17 хв 24 с",
+      "text": "чекає · 17 хв тому",
       "tone": "neutral",
       "cut": false,
       "inside": true
@@ -167,7 +167,7 @@
       "cut": false,
       "inside": true
     },
-    "uk-dark-running": "працює 6:40"
+    "uk-dark-running": "працює 6:41"
   },
   "failures": []
 }

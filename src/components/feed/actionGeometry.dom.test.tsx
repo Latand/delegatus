@@ -252,6 +252,8 @@ test("the command's one copy control ends its meta row at every pointer, clear o
     /* It ends the row above the command, never inside the command's block... */
     const row = controls[0]!.closest("[data-command-copy]");
     expect(row?.getAttribute("data-command-copy")).toBe("meta");
+    /* It shares the right edge of the output's control: the same inset from the block's edge. */
+    expect(classOf(row!)).toContain(`mr-[${ACTION_INSET_PX}px]`);
     expect(resolveControlPx(controls[0]!)).toBe(coarse ? ACTION_SIZE_COARSE_PX : ACTION_SIZE_FINE_PX);
     expect(block.contains(controls[0]!)).toBe(false);
     expect(classOf(controls[0]!)).not.toContain("absolute");

@@ -742,7 +742,7 @@ test("a hosted seat whose turn is over reads «waiting» with its age in the qui
   const files = [conversation({}), idle];
   const { host, root } = await mount(files);
 
-  expect(badge(host)!.textContent).toBe("waiting 17m 24s");
+  expect(badge(host)!.textContent).toBe("waiting · 17m ago");
   expect(badge(host)!.getAttribute("data-mobile2-seat-badge")).toBe("neutral");
   expect(host.textContent).not.toContain("done ·");
 
@@ -751,7 +751,7 @@ test("a hosted seat whose turn is over reads «waiting» with its age in the qui
 
   const identity = sheet(host)!.querySelector("[data-orchestrator-incumbent]") as HTMLElement;
   const inSheet = identity.querySelector("[data-mobile2-seat-badge]") as HTMLElement;
-  expect(inSheet.textContent).toBe("waiting 17m 24s");
+  expect(inSheet.textContent).toBe("waiting · 17m ago");
   expect(inSheet.getAttribute("data-mobile2-seat-badge")).toBe("neutral");
 });
 

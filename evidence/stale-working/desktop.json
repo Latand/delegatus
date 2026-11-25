@@ -6,7 +6,7 @@
   "uk-light": {
     "quiet": "Completed launch\nготово\n30 хв тому",
     "dead": "Dead mid-turn\nзупинено\n30 хв тому",
-    "live": "Live agent\n26 с тому",
+    "live": "Live agent\n25 с тому",
     "quietWindow": {
       "state": "готово · 30 хв тому",
       "launchChips": 0,
@@ -35,7 +35,7 @@
   "uk-dark": {
     "quiet": "Completed launch\nготово\n30 хв тому",
     "dead": "Dead mid-turn\nзупинено\n30 хв тому",
-    "live": "Live agent\n31 с тому",
+    "live": "Live agent\n29 с тому",
     "quietWindow": {
       "state": "готово · 30 хв тому",
       "launchChips": 0,
@@ -64,7 +64,7 @@
   "en-light": {
     "quiet": "Completed launch\ndone\n30m ago",
     "dead": "Dead mid-turn\nstopped\n30m ago",
-    "live": "Live agent\n36s ago",
+    "live": "Live agent\n32s ago",
     "quietWindow": {
       "state": "done · 30m ago",
       "launchChips": 0,
@@ -93,7 +93,7 @@
   "en-dark": {
     "quiet": "Completed launch\ndone\n30m ago",
     "dead": "Dead mid-turn\nstopped\n30m ago",
-    "live": "Live agent\n41s ago",
+    "live": "Live agent\n36s ago",
     "quietWindow": {
       "state": "done · 30m ago",
       "launchChips": 0,

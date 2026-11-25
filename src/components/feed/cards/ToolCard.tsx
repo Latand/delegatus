@@ -122,7 +122,7 @@ function ToolMeta({ event, coarse }: { event: ToolEvent; coarse: boolean }) {
         </span>
       ) : null}
       {commandCopy ? (
-        <span className={`${coarse ? "-my-2.5 " : ""}ml-auto inline-flex shrink-0`} data-command-copy="meta">
+        <span className={`${coarse ? "-my-2.5 " : ""}ml-auto mr-[6px] inline-flex shrink-0`} data-command-copy="meta">
           <CopyButton text={commandCopy} label={tr("tools.copyCommand")} className={MESSAGE_ACTION} />
         </span>
       ) : null}
@@ -314,8 +314,13 @@ export function ToolBlockRow({ event, index, nested = false }: { event: ToolEven
           {event.summary}
         </span>
         <RowStatusChip event={event} />
-        {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
-        <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
+        {/* Duration and tokens are one unit, so the dot between them keeps its own margin and no row gap. */}
+        {duration || event.contextTokens ? (
+          <span data-tool-meta className="flex shrink-0 items-center whitespace-nowrap">
+            {duration ? <span className="text-caption tabular-nums text-muted">{duration}</span> : null}
+            <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
+          </span>
+        ) : null}
       </div>
       <ToolImages event={event} />
       <ToolBody event={event} />
@@ -404,8 +409,13 @@ export function ToolLine({
             spinner, so the status chip (a second spinner, "executing…") stays
             off it; the duration is the trailing word. */}
         {isMobile && running ? null : <RowStatusChip event={event} />}
-        {duration ? <span className="shrink-0 text-caption tabular-nums text-muted">{duration}</span> : null}
-        <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
+        {/* Duration and tokens are one unit, so the dot between them keeps its own margin and no row gap. */}
+        {duration || event.contextTokens ? (
+          <span data-tool-meta className="flex shrink-0 items-center whitespace-nowrap">
+            {duration ? <span className="text-caption tabular-nums text-muted">{duration}</span> : null}
+            <ContextTokensCaption value={event.contextTokens} lead={Boolean(duration)} />
+          </span>
+        ) : null}
         {showTime && time ? <span className="shrink-0 text-caption tabular-nums text-muted">{time}</span> : null}
       </summary>
       {(collapsed ? manualOpen : isMobile ? phoneOpen : mounted) ? <><ToolBody event={event} />{children}</> : null}
