@@ -14,11 +14,10 @@ described in [CONTRIBUTING](../CONTRIBUTING.md).
 ```sh
 bun install --frozen-lockfile
 bun scripts/merge-batch.ts build '12@abcdef1,13@1234567'
-bun scripts/merge-batch.ts gate            # add --browser to run full browser campaigns
 bun scripts/merge-batch.ts land
 ```
 
-On a native Codex launch, `gate` and `land` print a fresh `runId` before
+On a native Codex launch, `land` and `gate --local` print a fresh `runId` before
 starting work. If the command yields while still running, call the native
 `wait_for_check` once with that ID and the phase as its `reason`. The callback
 returns the exit code and report tail after the phase ends and releases any
@@ -39,17 +38,55 @@ body paragraph (up to 600 characters), and deduplicated machine credit.
 Human `users.noreply` author identities add no trailers; an existing
 non-machine `Co-Authored-By` trailer is refused.
 
-`gate` records the exact candidate it tested: main's full SHA, the built tip,
-and the ordered PR numbers, full reviewed head SHAs and immutable stable
-patch-ids. It installs frozen dependencies,
-runs TypeScript, comparative ESLint, tests and the trusted publication gate.
-Every command runs through `scripts/gate-slot.sh` (a shared machine slot,
-CPU-pressure admission and its own scope in the CPU work slice; see
-`docs/design/cpu-placement.md`), and the script queues them so no two run at
-once: a merger that ran installs, type checks and test files side by side inside
-its own scope was killed by its memory cap twice. Commands use isolated state;
-tests also use isolated home, config and temp roots, a Viewer control URL on a
-closed port, and run one file at a time with JUnit reports.
+## Landing with required GitHub checks
+
+`land` verifies the owned worktree and its linear chain of reviewed patches.
+It scans the candidate commits and generated PR body with the trusted scanner
+from current main. It pushes only the batch branch and opens or updates one PR
+with the original PRs and their closing issue references. The repository's
+tracker audit runs as a required hosted check on the published candidate.
+
+The script reads main's required check contexts from branch protection and
+requires strict updates. It waits for the required checks on the published
+tip to finish green. Optional failures leave the required verdict unchanged.
+When a required check fails on the batch, the script reads the same check on
+each member's reviewed head. A completed red on that head identifies a culprit.
+For privacy checks, a diagnostic that identifies a batch commit or changed
+line or path can also establish attribution. The script records the failing
+tip, context and members, drops the named patches, and rebuilds. An
+unattributable red reports the context and tip and stops the pass.
+
+Main movement triggers reconstruction from the reviewed patches and another
+trusted scan of the candidate and PR body. Updates use a lease on the owned
+branch, and every new tip needs fresh hosted results. Three membership rebuilds
+are allowed. Main-only refreshes preserve that budget. Every land iteration
+spends one of 240 polls, recorded across restarts. Other branches use the
+ordinary publication hook.
+
+Before merging, the script checks each member's `reviewDecision` and all
+pages of reviews. A human request for changes stands until that reviewer
+approves or dismisses it. Comments and pending reviews leave it standing.
+A member with an outstanding human request returns to its lane, and the
+script rebuilds the remainder. An outstanding human request on the batch PR,
+unreadable reviews or unverified App installation authority stop the merge.
+The script checks main and reviewed heads again and uses
+`gh pr merge --rebase --match-head-commit`. It verifies the landed chain's
+patches and closes each unchanged original with its landed SHA and batch URL.
+Original branches and moved PRs remain available for their lanes.
+
+## Optional local validation
+
+Run `bun scripts/merge-batch.ts gate --local` between `build` and `land`
+to investigate the candidate with local checks. Add `--browser` for full
+browser campaigns. Landing uses the reviewed patches and hosted verdict
+independently of any local validation receipt.
+
+The local command records the tested main and tip, ordered PR numbers,
+reviewed head SHAs and stable patch-ids. It installs frozen dependencies and
+runs TypeScript, comparative ESLint, tests and the trusted privacy scanner.
+The commands run one at a time through `scripts/gate-slot.sh` in isolated
+state. Tests also use isolated home, config and temp roots, a Viewer control
+URL on a closed port, and individual files with JUnit reports.
 
 Every validation rebuilds the touched-path union from the current candidate diff
 and every input PR's immutable reviewed patch base and head, including withheld,
@@ -80,7 +117,7 @@ built tree still refuses the gate and publication.
 A reviewed detector of a PR outside the candidate (deferred, moved, culprit) is
 skipped and listed under "Skipped test files": it can import code the candidate
 does not carry, and its native files still run. Full browser campaigns
-(`*.browser.test.*`) are opt-in with `gate --browser`; each UI PR ran its own
+(`*.browser.test.*`) are opt-in with `gate --local --browser`; each UI PR ran its own
 browser checks in review, so by default they are listed as skipped.
 
 The baseline is a fresh sample of the selected native main tests at that
@@ -139,69 +176,16 @@ A case that passes on main and breaks on the candidate, a new file fault
 included, drops only the PR whose removal clears it; the batch is rebuilt and
 the rest is validated again.
 
-The script retains immutable reviewed patch bases and heads, a completed
-validation receipt, bounded receipt history and an append-only attribution log.
-The receipt names the actual tested tuple and built tip, ordered membership
-with patch-ids, current decisions and skipped test files with their reasons.
-A main-only refresh rebuilds the original reviewed patches. It carries that
-receipt only when the ordered membership, reviewed heads and patch-ids remain
-identical, with no new conflict, deferral, culprit or moved-head row. The
-original tested tuple stays unchanged; a separate `carried` history appends
-the new main, built tip and time. It supplies no claim of local tests on that
-new tree. Publication and merge accept only the newest carried tip for that
-same membership, with fresh main and head checks at both boundaries.
+The receipt keeps the tested tuple, current decisions and skipped test files.
+A main-only refresh can carry the receipt as diagnostic history when the
+ordered membership, reviewed heads and stable patch-ids still match. The
+original tested tuple stays fixed, and `carried` records each rebuilt main,
+tip and time. An explicit local validation in progress restarts when the
+membership changes. Earlier receipts and test attributions remain available
+for inspection. Each attribution retains the tuple, detector source, failure
+identity, confirmations and removal observations.
 
-Removing a culprit, head movement or a changed patch voids the receipt.
-All gates, scoped detector discovery and baseline sampling restart; no corpus,
-baseline, pass list or detector selection survives into the new validation.
-Legacy receipts lacking the immutable patch mapping require full validation
-after a main move. Prior receipts and their carried history remain bounded
-evidence in the run record and report.
-
-Each attribution entry records its establishing tuple, detector source, failing
-test identity, confirmations and removal observations. Rebuilds and main refreshes
-never delete or rewrite entries. The report prints historical evidence for every
-withheld culprit while current pre-existing and intermittent results come from
-the completed validation. Clean PRs remain in input order and their complete
-rebuilt candidate must pass before publication. Culprit heads stay unchanged.
-Privacy and other non-test gates retain their existing attribution and stop rules.
-
-`land` requires a fully validated exact candidate and tip, checks original heads
-again, pushes only the owned batch branch, and creates one batch PR. Its body carries the
-original PR references and their closing issue references. It obtains required
-check names from main's protection, requires strict updates and waits for those
-checks to be present, finished and green on the exact newest tip. Optional
-failures do not hold this batch. A hosted red is attributed directly only
-through diagnostic commit/path notices in its failed
-workflow log. Without attributable privacy evidence, a red on a carried tip
-invalidates its receipt and runs one full local attribution gate on that tuple,
-including TypeScript bisect for compiler diagnostics. This spends one membership
-revalidation. A red on a locally validated tip stops without merging, including
-a red the fallback could not reproduce. Unreadable logs still fail closed;
-ordinary checkout log hashes cannot accuse a PR.
-
-Main movement triggers reconstruction from the original reviewed patches,
-trusted candidate and PR-body privacy and a lease-protected update of the owned
-batch branch. All required hosted checks gate every refreshed tip. The script
-owns this light publication path; publish integration branches through it.
-Other pushes retain the ordinary hook. Three membership revalidations are
-allowed; main-only refreshes do not spend that cap. Every `land` iteration,
-including races during gates, publication or merge, spends the existing
-240-poll bound, persisted across command restarts. Carried history is bounded
-by the same limit and survives a later membership revalidation.
-
-Immediately before merging, the script reads each member's `reviewDecision`
-and complete paginated reviews. It uses the engine's latest decisive review
-per reviewer rule: comments and pending reviews leave an outstanding human
-request standing; that reviewer approving or dismissing it clears it. Bot
-requests alone do not veto a merge. A blocking member becomes a review culprit,
-returns to its lane and causes full validation of the remainder. The same human
-rule on the batch PR prevents its merge. Unreadable reviews or unverified App
-authority stop the merge. The merge uses `gh pr merge --rebase
---match-head-commit`, preserving one commit per original PR. It verifies the
-landed chain's patches, then closes each unchanged original with a receipt
-linking its landed SHA and batch PR. Original branches stay in place. A head
-that moves after landing stays open, with that fact in the run record.
+## Deferred resolutions
 
 After the batch lands (or becomes empty), resolve each deferred PR:
 
@@ -220,26 +204,27 @@ including `git show --remerge-diff <sha>`, before listing its newly reviewed
 head in the next batch. A failed resolution gate can be retried after its
 cause is addressed, with the recorded resolution kept for inspection.
 
-Resolution tests use the batch gate's shared native-main comparison and bounded
+Resolution tests use the local gate's shared native-main comparison and bounded
 confirmation. Each selected file runs alone in a fresh isolated home, temp and
 state root on the resolution and on the exact main merged into it. The baseline
 is sampled anew for every resolution attempt; the earlier batch baseline supplies
 no evidence here. Pre-existing assertions and file faults permit publication;
 confirmed new failures withhold the original branch push. Between-test and file
 errors are judged from the file's standalone run, so a bundled-only error is
-rerun alone before any verdict. Incomplete main files use the same named-case
-probes as the batch gate. Dependencies, types, lint and privacy keep their gates.
+rerun alone before any verdict. Incomplete main files use the local gate's named-case
+probes. Dependencies, types, lint and privacy keep their gates.
 The report records each resolution's main and tip, selected files, pre-existing,
 intermittent and uncompared results, and confirmed new failures, including a
 failed attempt kept for inspection.
 
 The report separates pre-existing, intermittent and attributed test failures,
-including confirmation and omission evidence. It has one row per input: `merged <main sha>`, `needs-review <sha>`,
+including confirmation and omission evidence when local checks ran. It also
+records hosted check attribution. It has one row per input: `merged <main sha>`, `needs-review <sha>`,
 `culprit <check: attribution>` or `head-moved`, plus the batch URL. A deferred
 row initially says `needs-review pending resolution`; it is unfinished until
 the merger resolves it or reports why the pass failed. The run succeeds when
 every row is final and the batch merged or became empty. GitHub failures,
-unattributable red checks on locally validated tips, exhausted membership
+unattributable red checks, exhausted membership
 revalidations and an exhausted polling bound fail the pass. Keep the
 private run record and worktrees for inspection; worktree cleanup owns their
 eventual removal. Do not push main or change branch protection.

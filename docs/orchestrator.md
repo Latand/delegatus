@@ -107,9 +107,11 @@ the seat leaves those alone and acts on a merge that stopped. A red check holds
 the merge either way. When two or more ready pull requests are authorized to
 merge, the seat sends one `merger` stage their `N@reviewedHead` pairs and
 excludes every pull request whose live `merge.state` Delegatus holds. The
-merger lands clean patches as one batch; `needs-review` sends a conflict
-resolution to an independent review before a later batch, and `culprit` returns
-to its lane as a finding. See [the merger procedure](merge-batch.md).
+merger builds clean reviewed patches onto current main and lands when the
+required GitHub checks finish green on the batch tip. Local batch checks are
+opt-in. `needs-review` sends a conflict resolution to an independent review
+before a later batch, and `culprit` returns to its lane as a finding.
+See [the merger procedure](merge-batch.md).
 
 **Merge wakes.** A recorded lane merge wakes the project's designated
 orchestrator, including when the lane's completion was already announced or

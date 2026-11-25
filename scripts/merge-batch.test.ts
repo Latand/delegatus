@@ -9,7 +9,7 @@ import { text as streamText } from "node:stream/consumers";
 import { withAgentConfigSandbox } from "../src/lib/runtime/agentConfigSandbox";
 import { applyClaudeSpawnPolicy } from "../src/lib/agent/spawnPolicy";
 import { agentCodexPublicationPolicy } from "../src/lib/git/agentPublicationIdentity";
-import { report, attributeBatchTests, compareBatchTests, fileFault, INCOMPLETE_FILE, GATE_SLOT, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, MAX_TEST_CONFIRMATION_RUNS, commandRunner, type CommandRunner, candidateOf, type Candidate } from "./merge-batch";
+import { report, attributeBatchTests, compareBatchTests, fileFault, INCOMPLETE_FILE, GATE_SLOT, parseReviewedPrs, batchMessage, touchedTests, noticePrs, git, patchId, MergeBatch, localGateCommands, requiredVerdict, nextRefresh, MAX_REQUIRED_CHECK_POLLS, MAX_TEST_CONFIRMATION_RUNS, commandRunner, type CommandRunner, candidateOf } from "./merge-batch";
 import type { TestRun, TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
 import { readWorktreeProvenance } from "../src/lib/pipelines/worktreeProvenance";
@@ -317,7 +317,7 @@ test.each([
     mkdirSync(lock);
     writeFileSync(owner, "existing owner");
   }
-  const result = await commandRunner(root, [process.execPath, join(import.meta.dir, "merge-batch.ts"), phase], {
+  const result = await commandRunner(root, [process.execPath, join(import.meta.dir, "merge-batch.ts"), phase, ...(phase === "gate" ? ["--local"] : [])], {
     ...isolatedEnvironment(join(root, "isolated"), process.env), TMPDIR: state,
     LLV_GATE_CHECK_LAUNCH_ROOT: binding.root, LLV_GATE_CHECK_ROOT: binding.physicalRoot,
     LLV_GATE_CHECK_ROOT_DIRECTORY_IDENTITY: binding.rootDirectoryIdentity,
@@ -414,7 +414,6 @@ test.each([
   const head = f.addPr(12, "unused.txt", "draft fixture");
   f.views.get(12)!.isDraft = true;
   await batch.build(`12@${head}`);
-  if (phase === "land") await batch.gate();
 
   // The production CLI blocks inside an external command with the lock held.
   // A local barrier lets the test attach before supplying the command result.
@@ -458,7 +457,7 @@ esac
     BATCH_FIXTURE_BARRIER: server.url.href, BATCH_FIXTURE_REPO: f.repo, BATCH_FIXTURE_PHASE: phase,
     BATCH_FIXTURE_GIT: realGit, BATCH_FIXTURE_PATH: process.env.PATH, BATCH_FIXTURE_BUN: process.execPath, BATCH_FIXTURE_SCRIPT: barrier,
   };
-  const command = [process.execPath, join(import.meta.dir, "merge-batch.ts"), phase];
+  const command = [process.execPath, join(import.meta.dir, "merge-batch.ts"), phase, ...(phase === "gate" ? ["--local"] : [])];
   const child = ownFixtureTree(spawn(command[0]!, command.slice(1), { cwd: f.repo, env, stdio: ["ignore", "pipe", "pipe"] }));
   const closed = once(child, "close").then(([code]) => code as number | null);
   const stdout = streamText(child.stdout);
@@ -904,7 +903,7 @@ test("(e) full browser campaigns are opt-in and are named as skipped by default"
   const lean = await batch.gate({ browser: false });
   expect(sampled).toEqual([]);
   expect(lean.gated!.notApplicable).toEqual([{ source: "native candidate", file: "kanban.browser.test.tsx",
-    reason: "full browser campaign: opt in with gate --browser" }]);
+    reason: "full browser campaign: opt in with gate --local --browser" }]);
   expect(localGateCommands(lean.work, lean.base).some(gate => gate.id === "tests")).toBeFalse();
   expect(localGateCommands(lean.work, lean.base, true).find(gate => gate.id === "tests")!.args).toEqual(["bun", "test", "./kanban.browser.test.tsx"]);
   const opted = await batch.gate({ browser: true });
@@ -1014,7 +1013,7 @@ function landingFixture(mode: "green" | "attributed" | "unknown" | "privacy-file
         git(f.repo, ["commit", "--allow-empty", "-m", `Main movement ${++refreshes}`]); git(f.repo, ["push", "origin", "main"]);
       }
       const red = (mode === "attributed" || mode === "unknown" || mode === "privacy-file") && reds++ === 0;
-      return JSON.stringify({ state: "OPEN", headRefOid: batch.tip, mergeStateStatus: mode === "behind" ? "BEHIND" : "CLEAN",
+      return JSON.stringify({ state: "OPEN", baseRefName: "main", headRefName: batch.branch, headRefOid: batch.tip, mergeStateStatus: mode === "behind" ? "BEHIND" : "CLEAN",
         statusCheckRollup: [{ name: "privacy", status: "COMPLETED", conclusion: red ? "FAILURE" : "SUCCESS", detailsUrl: "https://github.com/example/fixture/actions/runs/123" },
           { name: "optional", conclusion: "FAILURE", status: "COMPLETED" }] });
     }
@@ -1383,7 +1382,6 @@ for (const mode of ["new", "modified"] as const) {
     expect(state.rows.map(row => row.status)).toEqual(["clean", "clean", "clean"]);
     expect(git(state.work, ["show", `${detector}:adder.test.ts`])).toBe(contents.trimEnd());
     expect(readFileSync(join(state.work, "adder.test.ts"), "utf8")).toBe(contents);
-    await expect(f.batch.land()).rejects.toThrow("Run gate before land");
     expect(f.calls.some(args => args[0] === "pr" && ["create", "merge", "close"].includes(args[1]!))).toBeFalse();
     expect(git(f.repo, ["rev-parse", "main"])).toBe(main);
     for (const [number, head] of [[13, implementation], [14, detector]] as const) {
@@ -1584,15 +1582,17 @@ test("the real main scanner blocks a sensitive generated PR body before push", a
   expect(f.calls.some((args) => args[1] === "create")).toBe(false);
 });
 
-test("one gated batch rebase-merges with exact head, closes originals with landed SHAs and keeps branches", async () => {
+test("one batch rebase-merges without a local receipt with exact head, closes originals with landed SHAs and keeps branches", async () => {
   const f = landingFixture();
   const a = f.addPr(12, "a.txt", "good"), b = f.addPr(13, "b.txt", "good");
   const built = await f.batch.build(`12@${a},13@${b}`);
-  await f.batch.gate();
   const state = await f.batch.land();
   expect(state.rows.map((row) => row.status)).toEqual(["merged", "merged"]);
   expect(state.rows[0]!.commit).not.toBe(built.rows[0]!.commit);
-  expect(f.commands.filter((args) => args.includes("tsc"))).toHaveLength(1);
+  expect(state.gated).toBeNull();
+  expect(f.commands).toHaveLength(2);
+  expect(f.commands[0]).toContain("--check-commits");
+  expect(f.commands[1]).toContain("--paths");
   expect(f.calls.filter((args) => args[1] === "merge")).toHaveLength(1);
   expect(f.calls.filter((args) => args[1] === "close").map((args) => args[args.indexOf("--comment") + 1]))
     .toEqual(state.rows.map((row) => `Landed on main as ${row.commit} through #99. https://github.com/example/fixture/pull/99`));
@@ -1807,7 +1807,7 @@ test("an unattributable red merges nothing", async () => {
   const f = landingFixture("unknown");
   const a = f.addPr(12, "a.txt", "good");
   await f.batch.build(`12@${a}`); await f.batch.gate();
-  await expect(f.batch.land()).rejects.toThrow("names no batch commit or path");
+  await expect(f.batch.land()).rejects.toThrow("Cannot attribute red required checks");
   expect(f.calls.filter((args) => args[1] === "merge")).toHaveLength(0);
 });
 
@@ -1838,7 +1838,7 @@ test("a successful merge with a lost response recovers receipts without rebuildi
 const FIXED_CARRY_TIME = "2030-01-01T00:00:00.000Z";
 const review = (reviewer: string | null, state: string, isBot = false) => JSON.stringify({ reviewer, state, isBot });
 const batchView = (f: ReturnType<typeof landingFixture>, conclusion = "SUCCESS", mergeStateStatus = "CLEAN") => JSON.stringify({
-  state: "OPEN", headRefOid: f.batch.read().tip, mergeStateStatus,
+  state: "OPEN", baseRefName: "main", headRefName: f.batch.read().branch, headRefOid: f.batch.read().tip, mergeStateStatus,
   statusCheckRollup: [{ name: "privacy", status: "COMPLETED", conclusion, detailsUrl: "https://github.com/example/fixture/actions/runs/123" }],
 });
 
@@ -1907,10 +1907,10 @@ test.each([false, true])("T2 main moves during tests; conflict=%s determines whe
   expect((await restartBatch(f).land()).rows[0]!.status).toBe("merged");
 }, 20_000);
 
-test("T3 a member head moving during hosted checks fully gates the remaining membership", async () => {
+test("a member head moving during hosted checks stays open and the rebuilt tip gets its own checks", async () => {
   const f = landingFixture();
   const head = f.addPr(12, "a.txt", "healthy"), other = f.addPr(13, "b.txt", "moving");
-  await f.batch.build(`12@${head},13@${other}`); await f.batch.gate();
+  const built = await f.batch.build(`12@${head},13@${other}`);
   f.commands.length = 0;
   let moved = false;
   const gh = async (args: string[]) => {
@@ -1923,17 +1923,110 @@ test("T3 a member head moving during hosted checks fully gates the remaining mem
   const state = await restartBatch(f, gh).land();
   expect(state.rows.map(row => row.status)).toEqual(["merged", "head-moved"]);
   expect(state.refreshes).toBe(1);
-  expect(f.commands.filter(args => args.includes("tsc"))).toHaveLength(1);
-  expect(state.gated!.carried).toEqual([]);
-  expect(state.validationHistory).toHaveLength(1);
+  expect(f.commands).toHaveLength(4);
+  expect(state.gated).toBeNull();
+  expect(f.calls.find(args => args[1] === "merge")!.at(-1)).toBe(state.tip);
+  expect(state.tip).not.toBe(built.tip);
+  expect(f.calls.filter(args => args[1] === "close").map(args => args[2])).toEqual(["12"]);
 });
 
-test("T4 carried hosted typecheck red runs full local attribution and real TypeScript bisect once", async () => {
+test("a red required check names a member only on its reviewed head, then rebuilds and waits for the remainder", async () => {
+  const f = landingFixture();
+  const healthy = f.addPr(12, "healthy.txt", "healthy");
+  const bad = f.addPr(13, "bad.txt", "bad");
+  const built = await f.batch.build(`12@${healthy},13@${bad}`);
+  let waited = 0;
+  const seen: string[] = [];
+  const gh = async (args: string[]) => {
+    if (args[1]?.endsWith("/protection")) return JSON.stringify({ required_status_checks: { contexts: ["typecheck"], strict: true } });
+    if (args[0] === "pr" && args[1] === "view" && args[3] === "--json" && args[4]?.endsWith("statusCheckRollup")) {
+      const number = Number(args[2]);
+      const conclusion = number === 13 ? "FAILURE" : "SUCCESS";
+      return JSON.stringify({ number, headRefOid: f.views.get(number)!.headRefOid,
+        statusCheckRollup: [{ name: "typecheck", status: "COMPLETED", conclusion }] });
+    }
+    if (args[0] === "pr" && args[1] === "view" && args[2] === "99" && args[4]?.includes("statusCheckRollup")) {
+      const state = f.batch.read();
+      seen.push(state.tip);
+      return batchView(f, state.tip === built.tip ? "FAILURE" : waited ? "SUCCESS" : "").replaceAll('"privacy"', '"typecheck"');
+    }
+    return f.batch.gh(args);
+  };
+  const batch = new MergeBatch(f.repo, f.batch.stateFile, f.batch.run, gh, async () => {
+    waited++;
+    expect(f.calls.some(args => args[1] === "merge")).toBeFalse();
+  });
+  const state = await batch.land();
+  expect(waited).toBe(1);
+  expect(seen).toEqual([built.tip, state.tip, state.tip]);
+  expect(state.rows.map(row => row.status)).toEqual(["merged", "culprit"]);
+  expect(state.rows[1]!.detail).toBe("typecheck: failed on reviewed head");
+  expect(state.hostedAttribution).toEqual([{ candidate: candidateOf(built), tip: built.tip, check: "typecheck", prs: [13], source: "reviewed head" }]);
+  expect(f.calls.find(args => args[1] === "merge")!.at(-1)).toBe(state.tip);
+  expect(state.gated).toBeNull();
+  expect(f.commands).toHaveLength(4);
+  unchangedCulprit(f, 13, bad);
+});
+
+test.each(["wrong head", "different check", "pending rerun"])("hosted attribution refuses %s evidence", async evidence => {
+  const f = landingFixture();
+  const head = f.addPr(12, "healthy.txt", "healthy");
+  const built = await f.batch.build(`12@${head}`);
+  const gh = async (args: string[]) => {
+    if (args[1]?.endsWith("/protection")) return JSON.stringify({ required_status_checks: { contexts: ["typecheck"], strict: true } });
+    if (args[0] === "pr" && args[1] === "view" && args[4]?.endsWith("statusCheckRollup")) {
+      return JSON.stringify({ number: 12, headRefOid: evidence === "wrong head" ? built.base : head,
+        statusCheckRollup: [{ name: evidence === "different check" ? "runtime-gate" : "typecheck",
+          status: evidence === "pending rerun" ? "IN_PROGRESS" : "COMPLETED", conclusion: "FAILURE" }] });
+    }
+    if (args[0] === "pr" && args[1] === "view" && args[2] === "99") return batchView(f, "FAILURE").replaceAll('"privacy"', '"typecheck"');
+    return f.batch.gh(args);
+  };
+  await expect(restartBatch(f, gh).land()).rejects.toThrow(`Cannot attribute red required checks on ${built.tip}: typecheck`);
+  expect(f.batch.read().rows[0]!.status).toBe("clean");
+  expect(f.batch.read().hostedAttribution).toBeUndefined();
+  expect(f.calls.some(args => args[1] === "merge" || args[1] === "close")).toBeFalse();
+  expect(f.commands).toHaveLength(2);
+});
+
+test("a single moved member cannot publish or merge its reviewed patch", async () => {
+  const f = landingFixture();
+  const head = f.addPr(12, "healthy.txt", "healthy");
+  const built = await f.batch.build(`12@${head}`);
+  f.views.get(12)!.headRefOid = built.base;
+  const state = await f.batch.land();
+  expect(state.rows[0]!.status).toBe("head-moved");
+  expect(state.tip).toBe(built.base);
+  expect(f.calls.some(args => ["create", "merge", "close"].includes(args[1]!) && !args.includes("--help"))).toBeFalse();
+  expect(f.commands).toEqual([]);
+});
+
+test("a failed build cannot be reported as an empty landed batch", async () => {
+  const f = landingFixture();
+  const head = f.addPr(12, "healthy.txt", "healthy");
+  const broken = restartBatch(f, async args => {
+    if (args[0] === "api" && args[1] === "graphql") throw new Error("closing references unavailable");
+    return f.batch.gh(args);
+  });
+  await expect(broken.build(`12@${head}`)).rejects.toThrow("closing references unavailable");
+  await expect(restartBatch(f).land()).rejects.toThrow("Batch build did not complete");
+  expect(f.batch.read().landed).toBeFalse();
+  expect(f.commands).toEqual([]);
+});
+
+const shellArgument = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+function compilerShim(root: string, body: string): string {
+  const bin = join(root, "compiler-bin"); mkdirSync(bin);
+  const file = join(bin, "bunx");
+  writeFileSync(file, `#!/bin/sh\n${body}`); chmodSync(file, 0o755);
+  return `${bin}:${process.env.PATH}`;
+}
+
+test("explicit local validation still bisects real TypeScript failures", async () => {
   const compiler = join(import.meta.dir, "../node_modules/typescript/bin/tsc");
-  let fallback = false, types = 0, bisects = 0;
+  let bisects = 0;
   const runner: CommandRunner = async (cwd, args, env) => {
-    if (args.includes("tsc")) {
-      types++;
+    if (args[2] === "bunx" && args[3] === "tsc") {
       return commandRunner(cwd, args.slice(2), { ...(env ?? process.env), PATH: compilerPath });
     }
     if (args[0] === "git" && args[1] === "bisect") {
@@ -1946,41 +2039,16 @@ test("T4 carried hosted typecheck red runs full local attribution and real TypeS
   const f = landingFixture("green", runner);
   const compilerPath = compilerShim(f.root, `exec ${shellArgument(process.execPath)} ${shellArgument(compiler)} --noEmit\n`);
   f.seed("tsconfig.json", JSON.stringify({ compilerOptions: { strict: true, types: [], skipLibCheck: true }, include: ["*.ts"] }));
-  f.seed("contract.ts", "export const requireCount = (value: number) => value;\n");
-  const a = f.addPr(12, "healthy.ts", "export const healthy = true;\n");
-  const b = f.addPr(13, "feature.ts", 'import { requireCount } from "./contract"; requireCount(1);\n');
-  await f.batch.build(`12@${a},13@${b}`); await f.batch.gate();
-  let moved = false;
-  const gh = async (args: string[]) => {
-    if (args[0] === "pr" && args[1] === "view" && args[2] === "99") {
-      if (!moved) {
-        moved = true; f.seed("contract.ts", "export const requireCount = (value: string) => value;\n");
-        return batchView(f, "SUCCESS", "BEHIND");
-      }
-      if (f.batch.read().rows[1]!.status === "clean") return batchView(f, "FAILURE").replaceAll('"privacy"', '"typecheck"');
-    }
-    if (args[0] === "api" && args[1]!.endsWith("branches/main")) return JSON.stringify({ protection: { required_status_checks: { contexts: ["typecheck"] } } });
-    if (args[0] === "api" && args[1]!.endsWith("/protection")) return JSON.stringify({ required_status_checks: { contexts: ["typecheck"], strict: true } });
-    if (args[0] === "run") { fallback = true; return "error TS2345: hosted type mismatch"; }
-    const result = await f.batch.gh(args);
-    return args[0] === "pr" && args[1] === "view" && args[2] === "99" ? result.replaceAll('"privacy"', '"typecheck"') : result;
-  };
-  const state = await restartBatch(f, gh, runner).land();
-  expect(fallback).toBeTrue(); expect(bisects).toBe(1); expect(types).toBe(4);
-  expect(state.rows.map(row => row.status)).toEqual(["merged", "culprit"]);
-  expect(state.rows[1]!.detail).toBe("tsc: first failing batch commit");
-  expect(state.refreshes).toBe(2);
-  expect(state.gated!.carried).toEqual([]);
-  expect(state.validationHistory![0]!.carried).toHaveLength(1);
+  f.seed("contract.ts", "export const requireCount = (value: string) => value;\n");
+  const healthy = f.addPr(12, "healthy.ts", "export const healthy = true;\n");
+  const bad = f.addPr(13, "feature.ts", 'import { requireCount } from "./contract"; requireCount(1);\n');
+  await f.batch.build(`12@${healthy},13@${bad}`);
+  const gated = await f.batch.gate();
+  expect(bisects).toBe(1);
+  expect(gated.rows.map(row => row.status)).toEqual(["clean", "culprit"]);
+  expect(gated.rows[1]!.detail).toBe("tsc: first failing batch commit");
+  expect((await f.batch.land()).rows.map(row => row.status)).toEqual(["merged", "culprit"]);
 }, 30_000);
-
-const shellArgument = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-function compilerShim(root: string, body: string): string {
-  const bin = join(root, "compiler-bin"); mkdirSync(bin);
-  const file = join(bin, "bunx");
-  writeFileSync(file, `#!/bin/sh\n${body}`); chmodSync(file, 0o755);
-  return `${bin}:${process.env.PATH}`;
-}
 
 test.each([
   { code: 1, output: "checker startup unavailable" },
@@ -2011,7 +2079,7 @@ test.each([
   expect(git(batch.read().work, ["symbolic-ref", "--short", "HEAD"])).toBe(batch.read().branch);
 }, 30_000);
 
-test("a carried hosted red that local validation cannot reproduce stops on the next red, including after restart", async () => {
+test("an unattributable hosted red on a refreshed tip stops without local work across restarts", async () => {
   const f = landingFixture();
   const a = f.addPr(12, "a.txt", "healthy");
   await f.batch.build(`12@${a}`); await f.batch.gate();
@@ -2025,13 +2093,13 @@ test("a carried hosted red that local validation cannot reproduce stops on the n
     return f.batch.gh(args);
   };
   f.commands.length = 0;
-  await expect(restartBatch(f, gh).land()).rejects.toThrow("names no batch commit or path");
-  expect(f.commands.filter(args => args.includes("tsc"))).toHaveLength(1);
-  expect(f.batch.read().refreshes).toBe(1);
-  expect(f.batch.read().gated!.carried).toEqual([]);
-  await expect(restartBatch(f, gh).land()).rejects.toThrow("names no batch commit or path");
-  expect(f.commands.filter(args => args.includes("tsc"))).toHaveLength(1);
-  expect(fallbackLogs).toBe(3);
+  await expect(restartBatch(f, gh).land()).rejects.toThrow("Cannot attribute red required checks");
+  expect(f.commands.filter(args => args.includes("tsc"))).toHaveLength(0);
+  expect(f.batch.read().refreshes).toBe(0);
+  expect(f.batch.read().gated!.carried).toHaveLength(1);
+  await expect(restartBatch(f, gh).land()).rejects.toThrow("Cannot attribute red required checks");
+  expect(f.commands.filter(args => args.includes("tsc"))).toHaveLength(0);
+  expect(fallbackLogs).toBe(2);
   expect(f.calls.some(args => args[1] === "merge")).toBeFalse();
 });
 
@@ -2063,7 +2131,7 @@ test.each(["candidate", "body"])("T5 refreshed %s privacy refusal prevents the n
   expect(f.calls.filter(args => args[1] === "edit" || args[1] === "merge")).toEqual([]);
 });
 
-test("T6 a late human request drops its member; a bot request survives the full remainder gate", async () => {
+test("T6 a late human request drops its member; a bot request survives the rebuilt batch", async () => {
   const f = landingFixture();
   const a = f.addPr(12, "a.txt", "healthy"), b = f.addPr(13, "b.txt", "human veto"), c = f.addPr(14, "c.txt", "bot request");
   await f.batch.build(`12@${a},13@${b},14@${c}`); await f.batch.gate();
@@ -2081,7 +2149,7 @@ test("T6 a late human request drops its member; a bot request survives the full 
   expect(state.rows.map(row => row.status)).toEqual(["merged", "culprit", "merged"]);
   expect(state.rows[1]!.detail).toBe("review: human change request outstanding");
   expect(state.refreshes).toBe(1);
-  expect(f.commands.filter(args => args.includes("tsc"))).toHaveLength(1);
+  expect(f.commands.filter(args => args.includes("tsc"))).toHaveLength(0);
   expect(git(f.repo, ["ls-remote", "origin", "refs/heads/topic-13"]).split(/\s/)[0]).toBe(b);
 });
 
@@ -2197,7 +2265,7 @@ test.each([0, 3])("a later review-read failure preserves membership and its cap 
     await expect(restartBatch(f, gh).land()).rejects.toThrow("Membership revalidation required more than three times");
     expect(f.batch.read().revalidationExhausted).toBeTrue();
     expect(f.batch.read().gated).toBeNull();
-    const retry = await commandRunner(f.repo, [process.execPath, join(import.meta.dir, "merge-batch.ts"), "gate"], {
+    const retry = await commandRunner(f.repo, [process.execPath, join(import.meta.dir, "merge-batch.ts"), "gate", "--local"], {
       ...isolatedEnvironment(join(f.root, "exhausted-gate"), process.env), TMPDIR: f.root,
       LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:9",
     });
@@ -2214,13 +2282,13 @@ test("a restarted gate refuses partial persisted membership while its removed pa
   state.rows[0]!.status = "culprit";
   state.rows[0]!.detail = "review: human change request outstanding";
   state.gated = null; state.refreshes = 1; f.batch.save(state);
-  const result = await commandRunner(f.repo, [process.execPath, join(import.meta.dir, "merge-batch.ts"), "gate"], {
+  const result = await commandRunner(f.repo, [process.execPath, join(import.meta.dir, "merge-batch.ts"), "gate", "--local"], {
     ...isolatedEnvironment(join(f.root, "partial-gate"), process.env), TMPDIR: f.root,
     LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:9",
   });
   expect(result.code).toBe(1); expect(result.output).toContain("tip does not match its clean membership");
   expect(f.batch.read().gated).toBeNull();
-  await expect(restartBatch(f).land()).rejects.toThrow("Run gate before land");
+  await expect(restartBatch(f).land()).rejects.toThrow("Batch tip does not match its clean membership");
   expect(f.calls.some(args => args[1] === "merge")).toBeFalse();
 });
 
@@ -2303,8 +2371,8 @@ test("membership revalidation cap remains durable and does not certify an exhaus
   expect(f.batch.read().gated).toBeNull();
   expect(f.batch.read().refreshes).toBe(3);
   expect(f.batch.read().revalidationExhausted).toBeTrue();
-  await expect(restartBatch(f).land()).rejects.toThrow("Run gate before land");
-  const result = await commandRunner(f.repo, [process.execPath, join(import.meta.dir, "merge-batch.ts"), "gate"], {
+  await expect(restartBatch(f).land()).rejects.toThrow("Membership revalidation required more than three times");
+  const result = await commandRunner(f.repo, [process.execPath, join(import.meta.dir, "merge-batch.ts"), "gate", "--local"], {
     ...isolatedEnvironment(join(f.root, "restart-gate"), process.env), TMPDIR: f.root,
     LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:9",
   });
@@ -2314,15 +2382,17 @@ test("membership revalidation cap remains durable and does not certify an exhaus
   expect(f.calls.some(args => args[1] === "create" || args[1] === "merge")).toBeFalse();
 });
 
-test.each(["patch", "order"])("receipt rejects changed immutable membership %s", async change => {
+test.each(["patch", "order", "head"])("landing refuses changed immutable membership %s", async change => {
   const f = landingFixture();
   const a = f.addPr(12, "a.txt", "healthy"), b = f.addPr(13, "b.txt", "other");
   await f.batch.build(`12@${a},13@${b}`); await f.batch.gate();
   const state = f.batch.read();
   if (change === "patch") state.rows[0]!.patch = "bad";
+  else if (change === "head") state.rows[0]!.head = b;
   else state.rows.reverse();
+  state.gated = null;
   f.batch.save(state);
-  await expect(restartBatch(f).land()).rejects.toThrow("Run gate before land");
+  await expect(restartBatch(f).land()).rejects.toThrow(change === "order" ? "tip does not match its clean membership" : "does not match its reviewed head");
   expect(f.calls.some(args => args[1] === "merge")).toBeFalse();
 });
 
@@ -2334,9 +2404,9 @@ test.each([false, true])("a legacy receipt is reusable only on its exact tuple, 
   if (moved) f.seed("advance.txt", "main moved");
   f.commands.length = 0;
   const landed = await restartBatch(f).land();
-  expect(landed.refreshes).toBe(moved ? 1 : 0);
-  expect(landed.gated!.carried ?? []).toEqual([]);
-  expect(f.commands.filter(args => args.includes("tsc"))).toHaveLength(moved ? 1 : 0);
+  expect(landed.refreshes).toBe(0);
+  expect(landed.gated).toEqual(moved ? null : state.gated);
+  expect(f.commands.filter(args => args.includes("tsc"))).toHaveLength(0);
 });
 
 test.each(["candidate privacy", "body privacy", "create", "edit", "reviews", "merge refusal"])("main movement during %s is rebuilt and merged only at the newest hosted-checked tip", async boundary => {
@@ -2886,7 +2956,6 @@ test("a Bun preload retains a literal detector and refuses publication without p
   const retained = await commandRunner(state.work, [process.execPath, "test", "./feature.test.ts"]);
   expect(retained.code).toBe(1);
   expect(retained.output).toContain("(fail) feature invariant");
-  await expect(f.batch.land()).rejects.toThrow("Run gate before land");
   expect(f.calls.some(args => args[0] === "pr" && ["create", "merge", "close"].includes(args[1]!))).toBeFalse();
   expect(git(f.repo, ["ls-remote", "origin", `refs/heads/${state.branch}`])).toBe("");
   expect(git(f.repo, ["rev-parse", "main"])).toBe(main);
@@ -3189,22 +3258,15 @@ test("(b) round 4 main refresh skips a withheld PR's reviewed detector with a no
   const bad = f.addPr(13, "b.js", "const { adjust } = require('./config.js');\nexports.value = adjust(2);\n");
   const healthy = f.addPr(14, "healthy.txt", "healthy");
   let refreshed = false;
-  const gh = async (args: string[]): Promise<string> => {
-    if (args[0] === "pr" && args[1] === "view" && args[2] === "99" && !refreshed) {
+  const run: CommandRunner = async (cwd, args, env) => {
+    if (args[3] === "test" && cwd === f.batch.read().work && !refreshed) {
       refreshed = true;
       f.seed("main.txt", "advanced");
       f.views.get(12)!.headRefOid = f.base;
-      return JSON.stringify({ state: "OPEN", headRefOid: batch.read().tip, mergeStateStatus: "BEHIND" });
     }
-    if (args[0] === "pr" && args[1] === "edit") {
-      const state = batch.read();
-      expect(state.gated!.candidate.prs.map(pr => pr.number)).toEqual([13, 14]);
-      expect(state.gated!.notApplicable).toEqual([{ source: `#12@${detector}`, file: "b.test.ts",
-        reason: "#12 is not in this candidate; its reviewed detector is skipped" }]);
-    }
-    return f.batch.gh(args);
+    return realTests(cwd, args, env);
   };
-  const batch = new MergeBatch(f.repo, f.batch.stateFile, realTests, gh, async () => {});
+  const batch = new MergeBatch(f.repo, f.batch.stateFile, run, f.batch.gh, async () => {});
   await batch.build(`12@${detector},13@${bad},14@${healthy}`);
   await batch.gate();
   const state = await batch.land();
@@ -3224,18 +3286,17 @@ test("reviewed patch scope survives main incorporating and then deleting its det
   const bad = f.addPr(13, "b.js", "const { adjust } = require('./config.js');\nexports.value = adjust(2);\n");
   const healthy = f.addPr(14, "healthy.txt", "healthy");
   let refreshed = false;
-  const gh = async (args: string[]): Promise<string> => {
-    if (args[0] === "pr" && args[1] === "view" && args[2] === "99" && !refreshed) {
+  const run: CommandRunner = async (cwd, args, env) => {
+    if (args[3] === "test" && cwd === f.batch.read().work && !refreshed) {
       refreshed = true;
       git(f.repo, ["merge", "--ff-only", detector]);
       rmSync(join(f.repo, "reviewed.test.ts"));
       f.seed("config.js", "exports.adjust = x => x;\n");
       f.views.get(12)!.isDraft = true;
-      return JSON.stringify({ state: "OPEN", headRefOid: batch.read().tip, mergeStateStatus: "BEHIND" });
     }
-    return f.batch.gh(args);
+    return realTests(cwd, args, env);
   };
-  const batch = new MergeBatch(f.repo, f.batch.stateFile, realTests, gh, async () => {});
+  const batch = new MergeBatch(f.repo, f.batch.stateFile, run, f.batch.gh, async () => {});
   await batch.build(`12@${detector},13@${bad},14@${healthy}`);
   const originalBase = batch.read().rows[0]!.reviewBase;
   await batch.gate();
@@ -3247,8 +3308,8 @@ test("reviewed patch scope survives main incorporating and then deleting its det
   expect(state.gated!.notApplicable.map(entry => [entry.source, entry.file])).toEqual([[`#12@${detector}`, "reviewed.test.ts"]]);
 }, 30_000);
 
-test("random event sequences publish only a validated membership at its latest carried tip", async () => {
-  const totals = { culprit: 0, main: 0, head: 0, publications: 0, validations: 0 };
+test("random event sequences merge only a current reviewed membership with a green tip", async () => {
+  const totals = { culprit: 0, main: 0, head: 0, publications: 0 };
   for (let seed = 1; seed <= 12; seed++) {
     let randomState = seed;
     const random = () => { randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0; return randomState; };
@@ -3257,56 +3318,48 @@ test("random event sequences publish only a validated membership at its latest c
       const other = random() % (index + 1);
       [events[index], events[other]] = [events[other]!, events[index]!];
     }
-    let failureFound = false, mainMoves = 0;
-    let lastFullyValidated: Candidate | undefined;
-    const f = landingFixture("green", async (cwd, args) => {
-      const state = batch.read();
-      if (cwd === state.work || args.includes("--paths")) event();
-      if (args[2] === "bun" && args[3] === "test") {
-        const fails = failureFound && existsSync(join(cwd, "property.js"));
-        return testResult("property.test.ts", fails ? ["regression"] : [], fails ? [] : ["regression"]);
-      }
-      return successfulCommand(args);
-    });
-    f.seed("property.test.ts", "synthetic detector");
+    let failureFound = false, mainMoves = 0, greenTip = "";
+    const f = landingFixture();
     const healthy = f.addPr(12, "healthy.txt", "healthy");
     const moving = f.addPr(13, "moving.txt", "moving");
-    const bad = f.addPr(14, "property.js", "bad");
-    const event = () => {
-      const next = events.shift();
-      if (next === "main") { f.seed(`advance-${++mainMoves}.txt`, "main advanced"); totals.main++; }
-      if (next === "head") { f.views.get(13)!.headRefOid = f.base; totals.head++; }
-      if (next === "culprit") { failureFound = true; totals.culprit++; }
-    };
+    const bad = f.addPr(14, "bad.txt", "bad");
     const gh = async (args: string[]): Promise<string> => {
-      if (args[0] === "pr" && args[1] === "view" && args[2] === "99" && events.length) {
-        event();
-        return JSON.stringify({ state: "OPEN", headRefOid: batch.read().tip, mergeStateStatus: "BEHIND" });
+      if (args[0] === "pr" && args[1] === "view" && args[2] === "99" && args[4]?.includes("statusCheckRollup")) {
+        const state = f.batch.read();
+        const next = events.shift();
+        if (next === "main") {
+          f.seed(`advance-${++mainMoves}.txt`, "main advanced");
+          totals.main++;
+          return batchView(f, "SUCCESS", "BEHIND");
+        }
+        if (next === "head") {
+          f.views.get(13)!.headRefOid = f.base;
+          totals.head++;
+          return batchView(f, "SUCCESS", "BEHIND");
+        }
+        if (next === "culprit") {
+          failureFound = true;
+          f.views.get(14)!.statusCheckRollup = [{ name: "privacy", status: "COMPLETED", conclusion: "FAILURE" }];
+          totals.culprit++;
+        }
+        if (failureFound && state.rows[2]!.status === "clean") return batchView(f, "FAILURE");
+        if (events.length) return batchView(f, "");
+        greenTip = state.tip;
+        return batchView(f);
       }
       if (args[0] === "pr" && ["create", "edit", "merge"].includes(args[1]!) && !args.includes("--help")) {
-        const state = batch.read(), published = candidateOf(state);
-        expect(published.prs).toEqual(lastFullyValidated!.prs);
-        expect(state.gated!.candidate).toEqual(lastFullyValidated!);
-        expect(state.gated!.carried?.at(-1) ?? { main: state.gated!.candidate.main, tip: state.gated!.tip })
-          .toMatchObject({ main: published.main, tip: state.tip });
+        const state = f.batch.read(), published = candidateOf(state);
+        expect(state.gated).toBeNull();
         expect(published.main).toBe(git(f.repo, ["ls-remote", "origin", "refs/heads/main"]).split(/\s/)[0]!);
         for (const pr of published.prs) expect(f.views.get(pr.number)!.headRefOid).toBe(pr.head);
         expect(git(f.repo, ["ls-remote", "origin", `refs/heads/${state.branch}`]).split(/\s/)[0]).toBe(state.tip);
+        if (args[1] === "merge") expect(args.at(-1)).toBe(greenTip);
         totals.publications++;
       }
       return f.batch.gh(args);
     };
-    class ObservedBatch extends MergeBatch {
-      override async gate() {
-        const state = await super.gate();
-        lastFullyValidated = structuredClone(state.gated!.candidate);
-        totals.validations++;
-        return state;
-      }
-    }
-    const batch = new ObservedBatch(f.repo, f.batch.stateFile, f.batch.run, gh, async () => {});
+    const batch = restartBatch(f, gh);
     await batch.build(`12@${healthy},13@${moving},14@${bad}`);
-    await batch.gate();
     const state = await batch.land();
     expect(events).toEqual([]);
     expect(state.rows.map(row => row.status)).toEqual(["merged", "head-moved", "culprit"]);
@@ -3314,7 +3367,6 @@ test("random event sequences publish only a validated membership at its latest c
   }
   expect(totals.culprit).toBe(12); expect(totals.main).toBe(24); expect(totals.head).toBe(12);
   expect(totals.publications).toBeGreaterThanOrEqual(24);
-  expect(totals.validations).toBeGreaterThanOrEqual(12);
 }, 120_000);
 
 test("(b) a withheld reviewed detector with a missing module is skipped with a note", async () => {
@@ -3360,15 +3412,14 @@ for (const fault of ["package", "runtime", "export"] as const) {
   }, 30_000);
 }
 
-test("a receipt for another tuple cannot publish even when the built tip matches", async () => {
+test("a receipt for another tuple has no bearing on landing the healthy built tip", async () => {
   const f = landingFixture("green");
   const healthy = f.addPr(12, "healthy.txt", "healthy");
   await f.batch.build(`12@${healthy}`);
   const state = await f.batch.gate();
   state.gated!.candidate.prs[0]!.head = state.base;
   f.batch.save(state);
-  await expect(f.batch.land()).rejects.toThrow("exact candidate has not completed full validation");
-  expect(f.calls.some(args => args[0] === "pr" && ["create", "merge"].includes(args[1]!))).toBeFalse();
+  expect((await f.batch.land()).rows[0]!.status).toBe("merged");
 }, 30_000);
 
 test("(c) a retained PR deleting a module a native test loads is the only culprit; the rest lands", async () => {
