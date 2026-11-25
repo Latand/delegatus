@@ -64,8 +64,17 @@ function roleLabel(t: TFunction, file: FileEntry): string | null {
  * rather than the decision, and it is what put «❯ 1. Yes» in front of the
  * operator as the name of a wait.
  */
+function destructiveRefusalText(t: TFunction, reason: Pick<ConversationReason, "refusal" | "header">): string {
+  const row = reason.refusal;
+  if (!row) return t("mobile2.board.badgeRefusal");
+  const kind = row.kind.includes("state") ? "state" : row.kind.includes("project") ? "project"
+    : row.kind.includes("home") ? "home" : row.kind.includes("top-level") ? "system" : row.kind.includes("credential") || row.kind.includes("account") ? "credentials" : "protected";
+  return t("attention.destructiveRefusal", { tool: row.tool, entry: row.entry, kind: t(`destructive.kind.${kind}`) });
+}
 function decisionText(t: TFunction, reason: ConversationReason): string {
   switch (reason.kind) {
+    case "refusal":
+      return destructiveRefusalText(t, reason);
     /* An orchestrator's open bridge ask (issue #1168) is the one wait on this
        board that was ESCALATED rather than inferred. */
     case "decision":
@@ -140,8 +149,10 @@ export function needLabel(t: TFunction, need: NeedReason): string {
 }
 
 /** A conversation reason in the card's words: shorter than the toast's line. */
-export function conversationNeedText(t: TFunction, reason: Pick<ConversationReason, "kind" | "header" | "memory">): string {
+export function conversationNeedText(t: TFunction, reason: Pick<ConversationReason, "kind" | "header" | "memory" | "refusal">): string {
   switch (reason.kind) {
+    case "refusal":
+      return destructiveRefusalText(t, reason);
     case "decision":
       return t("mobile2.board.badgeDecision");
     case "plan":

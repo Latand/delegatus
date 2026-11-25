@@ -28,8 +28,11 @@ test.if(linux)("the runner checks out exactly the working tree, and the local in
   fs.writeFileSync(at("untracked-note.txt"), "new file\n");
   git(h.fixture, "rm", "--quiet", "--cached", "LICENSE"); fs.rmSync(at("LICENSE"));
   fs.chmodSync(at("scripts/review-export.ts"), 0o755);
-  const ignoredTracked = git(h.fixture, "ls-files", "-ci", "--exclude-standard").split("\n").filter(Boolean)[0]!;
-  expect(ignoredTracked).toBeTruthy();
+  const ignoredTracked = "ignored-tracked.fixture";
+  fs.appendFileSync(at(".gitignore"), "\n" + ignoredTracked + "\n");
+  fs.writeFileSync(at(ignoredTracked), "owned ignored fixture\n");
+  git(h.fixture, "add", "-f", ignoredTracked);
+  expect(git(h.fixture, "ls-files", "-ci", "--exclude-standard")).toContain(ignoredTracked);
   const file = testFile(h, "tree.test.ts", `
 import fs from "node:fs";
 test("tree", () => {

@@ -13,6 +13,7 @@ import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity"
 import { answerSchema } from "@/lib/externalRelay/protocol";
 import { parseCodexFeatures, setCodexFeatureReaderForTest } from "./codexSpawnPolicy";
 import { claudeKeychainService, readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
+import { claudeManagedEnvironment } from "@/lib/accounts/claude";
 
 // Command/control tests use a fake interpreter and its explicit inventory.
 let restoreFeatureReader: () => void;
@@ -212,7 +213,7 @@ test.each(["claude", "codex"] as const)("%s answer profile pins publication iden
   expect([built.env.GIT_AUTHOR_NAME, built.env.GIT_AUTHOR_EMAIL, built.env.GIT_COMMITTER_NAME, built.env.GIT_COMMITTER_EMAIL]).toEqual(["Build Agent", email, "Build Agent", email]);
   if (engine === "claude") {
     const settings = JSON.parse(built.args[built.args.indexOf("--settings") + 1]!);
-    expect(settings.env).toEqual(agentPublicationIdentityEnv(request.account.env));
+    expect(settings.env).toEqual(agentPublicationIdentityEnv(claudeManagedEnvironment(request.account.home, request.account.env), request.session?.cwd ?? request.runDir));
   } else expect(built.args).toContain(`shell_environment_policy.set.GIT_AUTHOR_EMAIL=${JSON.stringify(email)}`);
 });
 test("Codex finds a new account model when the answer-home cache is stale", () => {
@@ -270,7 +271,7 @@ test("Claude answer profile excludes account settings, connectors, and instructi
   expect(built.args).toContain("--json-schema");
   expect(built.args).toContain("");
   expect(JSON.parse(built.args[built.args.indexOf("--settings") + 1]!)).toEqual({
-    env: agentPublicationIdentityEnv(request.account.env),
+    env: agentPublicationIdentityEnv(claudeManagedEnvironment(request.account.home, request.account.env), request.session?.cwd ?? request.runDir),
   });
   for (const flag of [
     "--mcp-config",

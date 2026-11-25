@@ -5,7 +5,7 @@
 import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
-import { makeHarness, testFile, withoutRunnerLines, type Harness } from "./harness.fixture";
+import { makeHarness, testFile, normalizeRunnerOutput as normalized, type Harness } from "./harness.fixture";
 
 const linux = process.platform === "linux";
 /** Several stub runs, each a full checkout, install and owned test run; slow under load. */
@@ -13,8 +13,6 @@ const E2E_TIMEOUT = 240_000;
 const harnesses: Harness[] = [];
 afterEach(() => { for (const h of harnesses.splice(0)) h.cleanup(); });
 function harness(options?: Parameters<typeof makeHarness>[0]): Harness { const h = makeHarness(options); harnesses.push(h); return h; }
-// Timings and the local CPU queue's waiting lines differ between any two runs.
-const normalized = (text: string) => withoutRunnerLines(text).replace(/\[[\d.]+m?s\]/g, "[t]").replace(/^bun test v.*$/m, "").replace(/^gate-slot: Waiting for the CPU queue.*\n/gm, "");
 const remoteRuns = (h: Harness) => h.calls().filter(call => call.command.includes("serve.ts run"));
 const RUNNING = /^gate-runner: running on the gate runner \(run [0-9a-f]{12}, tree [0-9a-f]{12}\)$/m;
 

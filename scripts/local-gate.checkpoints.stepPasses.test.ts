@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isolatedEnvironment } from "./local-gate";
 import { createHookFixture } from "./local-gate.fixture";
@@ -13,8 +12,10 @@ const serviceTest = test.skipIf(process.platform !== "linux"
 
 serviceTest.each(["declared gate variable", "BASH_ENV bytes"])("native pre-push rejects stale step passes after changing %s", input => {
   const project = path.resolve(import.meta.dir, "..");
-  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-step-")); roots.push(scratch);
-  const f = createHookFixture(project, roots, false, false, path.join(scratch, "repo"));
+  // The fixture confines its writes to the root it allocates; the
+  // repository's siblings (origin, samples, caller state) share that root.
+  const f = createHookFixture(project, roots, false, false, "repo");
+  const scratch = path.dirname(f.dir);
   mkdirSync(path.join(f.dir, "scripts/gate-runner"));
   const origin = path.join(scratch, "origin.git");
   f.git("clone", "--bare", "--shared", ".", origin);
@@ -80,8 +81,10 @@ test("fixture contract", () => {
 
 serviceTest("local check-step invalidates warm and cold retries when BASH_ENV bytes change", () => {
   const project = path.resolve(import.meta.dir, "..");
-  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-bash-env-")); roots.push(scratch);
-  const f = createHookFixture(project, roots, false, false, path.join(scratch, "repo"));
+  // The fixture confines its writes to the root it allocates; the
+  // repository's siblings (origin, samples, caller state) share that root.
+  const f = createHookFixture(project, roots, false, false, "repo");
+  const scratch = path.dirname(f.dir);
   const origin = path.join(scratch, "origin.git");
   f.git("clone", "--bare", "--shared", ".", origin);
   f.git("remote", "add", "origin", origin);

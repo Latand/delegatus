@@ -1,7 +1,37 @@
 import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, writeFileSync } from "./local-gate-tests.fixture";
 import { existsSync } from "node:fs";
 import { GATE_TASKS_MAX } from "./gate-tasks";
-import { BudgetExhausted, comparatorEnding, comparisonFileWorkers } from "./local-gate-tests";
+import { BudgetExhausted, comparatorEnding, comparisonFileWorkers, destructiveTestFile, touchedTests } from "./local-gate-tests";
+
+test("destructive file-system calls stay head-only through direct and renamed imports", () => {
+  const f = fixture(source(true));
+  for (const code of [
+    'import { rm } from "node:fs/promises"; rm(target);',
+    'import { rm as cleanup } from "node:fs/promises"; cleanup(target);',
+    'const { unlink: cleanup } = require("node:fs"); cleanup(target);',
+    'import { renameSync as move } from "node:fs"; move(from, to);',
+  ]) {
+    // Classify text only. Neither version is ever evaluated.
+    writeFileSync(path.join(f.dir, "example.test.ts"), code);
+    expect(destructiveTestFile(f.dir, "example.test.ts")).toBeTrue();
+  }
+});
+
+test("a destructive-code head failure never launches a base sample, including through an imported implementation", async () => {
+  const f = fixture('import { test } from "bun:test"; test("guarded cleanup", () => {});');
+  const marker = path.join(f.dir, "recorded-runs");
+  // Both versions only record. A regression in the selector cannot delete.
+  writeFileSync(path.join(f.dir, "example.test.ts"), `import { test } from "bun:test"; import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(marker)}, "base\\n"); test("guarded cleanup", () => {});`);
+  f.git("add", "example.test.ts"); f.git("commit", "-m", "recording baseline");
+  const base = f.git("rev-parse", "HEAD");
+  writeFileSync(path.join(f.dir, "cleanup.ts"), '// destructive-code: a recording implementation for selector verification\nexport const recorded = true;\n');
+  writeFileSync(path.join(f.dir, "example.test.ts"), `import "./cleanup"; import { test, expect } from "bun:test"; import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(marker)}, "head\\n"); test("guarded cleanup", () => expect(false).toBeTrue());`);
+  const result = await touchedTests(f.dir, base, ["./example.test.ts"], { env: f.env, log: line => f.logs.push(line) });
+  expect(result.introduced).toHaveLength(1); expect(result.preexisting).toHaveLength(0);
+  expect(result.introduced[0], JSON.stringify(result) + f.logs.join("\n")).toMatchObject({ name: "guarded cleanup", kind: "test" });
+  expect(readFileSync(marker, "utf8").trim().split("\n").every(line => line === "head")).toBeTrue();
+  expect(f.logs.some(line => line.startsWith("touched-tests: baseline setup"))).toBeFalse();
+});
 
 test("only an exhausted comparator budget returns no verdict", () => {
   const message = "head: test run exceeded its 15 minute budget; 8 of 12 files completed";
@@ -356,7 +386,7 @@ test("between-test errors match across private roots without hiding a changed pa
   expect(compareTests(old, run("GHIJKL", "different")).introduced).toHaveLength(1);
 });
 
-test("gate harness selections limit nested workers while ordinary head and baseline files retain their parallelism", () => {
+test("mixed selections retain ordinary parallelism and bound nested harness workers", () => {
   const regular = Array.from({ length: 12 }, (_, n) => "src/example" + n + ".test.ts");
   const nested = ["scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate.binding.test.ts", "scripts/privacy-commit-input.test.ts"];
   expect(comparisonFileWorkers(regular, 8)).toBe(8);

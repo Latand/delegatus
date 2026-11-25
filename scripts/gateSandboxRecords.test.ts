@@ -5,11 +5,28 @@ import path from "node:path";
 import { hasActiveGateSandbox } from "./gateSandboxRecords";
 import { createHookFixture } from "./local-gate.fixture";
 import { isolatedEnvironment } from "./local-gate";
+import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
 
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
 afterEach(() => {
   for (const directory of roots.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
+});
+
+test("cleanup without a journal still requires an allocation identity and refuses replaced symlinks", () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "gate-sandbox-identity-")); roots.push(parent);
+  const saved = process.env.LLV_GATE_SANDBOX_RECORD; delete process.env.LLV_GATE_SANDBOX_RECORD;
+  try {
+    const unknown = path.join(parent, "unknown"); fs.mkdirSync(unknown); fs.writeFileSync(unknown + "/keep", "owned");
+    expect(() => releaseGateSandbox(unknown)).toThrow("no local allocation record");
+    expect(fs.readFileSync(unknown + "/keep", "utf8")).toBe("owned");
+    const owned = path.join(parent, "owned"); fs.mkdirSync(owned); recordGateSandbox(owned);
+    releaseGateSandbox(owned); expect(fs.existsSync(owned)).toBeFalse();
+    const replaced = path.join(parent, "replaced"), retained = path.join(parent, "retained");
+    fs.mkdirSync(replaced); recordGateSandbox(replaced); fs.renameSync(replaced, retained); fs.symlinkSync(unknown, replaced);
+    expect(() => releaseGateSandbox(replaced)).toThrow("changed identity");
+    expect(fs.readFileSync(unknown + "/keep", "utf8")).toBe("owned");
+  } finally { if (saved === undefined) delete process.env.LLV_GATE_SANDBOX_RECORD; else process.env.LLV_GATE_SANDBOX_RECORD = saved; }
 });
 
 for (const hook of ["pre-commit", "pre-push"]) test("a completed " + hook + " retires its allocation before a later path recreation", async () => {
@@ -23,19 +40,21 @@ for (const hook of ["pre-commit", "pre-push"]) test("a completed " + hook + " re
   const preload = path.join(fixture.dir, "recreate.ts");
   fs.writeFileSync(preload, [
     'import fs from "node:fs"; import path from "node:path"; import { mock } from "bun:test";',
-    "const allocate = fs.mkdtempSync, remove = fs.rmSync; let directory;",
+    "const allocate = fs.mkdtempSync; let directory; const removals = [];",
     "const patched = { ...fs, mkdtempSync: (prefix, options) => {",
     "  const result = allocate(prefix, options);",
     '  if (path.basename(String(prefix)) === "delegatus-local-gate-") {',
     "    directory = result; fs.writeFileSync(" + JSON.stringify(allocation) + ", JSON.stringify(result));",
     "  } return result;",
-    "}, rmSync: (target, options) => {",
-    "  if (directory && String(target) === directory) fs.renameSync(directory, " + JSON.stringify(saved) + ");",
-    "  else remove(target, options);",
-    "}};",
+    "}, rmSync: (target, options) => { removals.push({ target: String(target), options }); }};",
     'mock.module("node:fs", () => ({ ...patched, default: patched }));',
     'process.once("exit", () => {',
     "  if (!directory) return;",
+    '  if (!removals.some(row => row.target === directory && row.options.recursive && row.options.force)) throw Error("fixture never received its cleanup");',
+    // The double records only. This fixed fixture action simulates recreation
+    // after the hook retired the allocation; it uses the path minted above.
+    "  if (fs.realpathSync(path.dirname(directory)) !== " + JSON.stringify(fs.realpathSync(env.LLV_GATE_TEMP_ROOT ?? env.TMPDIR!)) + ') throw Error("fixture allocation escaped its own temp root");',
+    "  fs.renameSync(directory, " + JSON.stringify(saved) + ");",
     '  fs.mkdirSync(path.join(directory, "tmpdir"), { recursive: true });',
     '  fs.writeFileSync(path.join(directory, "keep"), "new allocation");',
     "});",

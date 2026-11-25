@@ -49,7 +49,7 @@ for (const mode of ["fresh", "resume"] as const) test(`${mode} terminal material
       ...process.env, LLV_TOKEN: undefined, DELEGATUS_MCP_TRANSPORT: "http", LLV_MCP_TRANSPORT: "stdio",
     });
     expect(alias.command).toContain("mcp_servers.viewer.url=");
-    expect(fs.existsSync(path.join(home, "config.toml"))).toBe(false);
+    expect((Bun.TOML.parse(fs.readFileSync(path.join(home, "config.toml"), "utf8")) as Record<string, unknown>).mcp_servers).toBeUndefined();
     expect(() => withSpawnCapability(prepared, "invalid")).toThrow("Viewer spawn capability is invalid");
   } finally {
     if (previous === undefined) delete process.env.LLV_CODEX_BINARY; else process.env.LLV_CODEX_BINARY = previous;
@@ -112,7 +112,7 @@ printf 'credential received\\n'
     expect(files).toHaveLength(1);
     expect(fs.statSync(path.join(directory, files[0])).mode & 0o777).toBe(0o600);
     expect(fs.readFileSync(path.join(directory, files[0]), "utf8").trim() === access).toBe(true);
-    expect(fs.existsSync(path.join(home, "config.toml"))).toBe(false);
+    expect((Bun.TOML.parse(fs.readFileSync(path.join(home, "config.toml"), "utf8")) as Record<string, unknown>).mcp_servers).toBeUndefined();
     fs.unlinkSync(path.join(directory, files[0]));
     const missing = Bun.spawnSync(["sh", "-c", command], {
       cwd: root, env: { ...process.env, LLV_MCP_HTTP_ACCESS: access, EXPECTED_MCP_HTTP_ACCESS: access },

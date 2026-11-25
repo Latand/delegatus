@@ -85,19 +85,20 @@ const held = (lock: string) => spawnSync("flock", ["-n", lock, "true"]).status !
 const hold = (lock: string, ready: string) => `exec 9>${lock} && flock -n 9 && touch ${ready} && exec sleep 600`;
 const waitFor = async (file: string, until: number) => { while (!fs.existsSync(file) && Date.now() < until) await Bun.sleep(20); return fs.existsSync(file); };
 
-// The mock scope registers native PIDs with the user manager. Its cases run
-// on the gate host; an agent PID namespace cannot register those scope PIDs.
+// The comparator uses the legacy remote runner; pre-push explicitly stays
+// local. Both must contain the descendants of the selected test on cancel.
 for (const entry of ["comparator", "wrapped pre-push"] as const)
-for (const signal of ["SIGTERM", "SIGINT"] as const) test.if(linux && (entry === "comparator" || !process.env.LLV_SIGNAL_SANDBOX))(`${entry} contains remote descendants after ${signal}`, async () => {
+for (const signal of ["SIGTERM", "SIGINT"] as const) test.if(linux && (entry === "comparator" || !process.env.LLV_SIGNAL_SANDBOX))(`${entry} contains ${entry === "comparator" ? "remote" : "local"} descendants after ${signal}`, async () => {
   const h = harness();
-  if (entry === "wrapped pre-push") h.settings({ sessionScope: true });
-  const ready = path.join(h.runnerHome, "comparator-ready"), lock = path.join(h.runnerHome, "comparator.lock");
+  const target = entry === "comparator" ? h.runnerHome : path.join(h.fixture, ".git");
+  const ready = path.join(target, "comparator-ready"), lock = path.join(target, "comparator.lock");
   const file = testFile(h, "held.test.ts", `
 import fs from "node:fs";
 import path from "node:path";
 test("held descendant", async () => {
-  let dir = process.cwd();
-  while (!fs.existsSync(path.join(dir, ".gate-runner.env")) && dir !== path.dirname(dir)) dir = path.dirname(dir);
+  const local = ${entry === "wrapped pre-push"};
+  let dir = local ? path.join(process.cwd(), ".git") : process.cwd();
+  while (!local && !fs.existsSync(path.join(dir, ".gate-runner.env")) && dir !== path.dirname(dir)) dir = path.dirname(dir);
   const child = Bun.spawn(["flock", "-x", path.join(dir, "comparator.lock"), "bash", "-c", 'touch "$1"; exec sleep 120', "held", path.join(dir, "comparator-ready")]);
   await child.exited;
 }, 150000);`);
@@ -124,29 +125,21 @@ test("held descendant", async () => {
   try {
     expect(await waitFor(ready, Date.now() + 150_000), stderr).toBeTrue();
     expect(held(lock)).toBeTrue();
-    const id = RUNNING.exec(stderr)![1]!;
-    expect(unitActive(id)).toBeTrue();
-    if (entry === "wrapped pre-push") {
-      const owner = Number(fs.readFileSync(path.join(h.runnerHome, "runs", id, "owner"), "utf8").split(" ")[0]);
-      expect(fs.readFileSync(`/proc/${owner}/cgroup`, "utf8")).toContain("/gate-session-fixture-");
-    }
+    const id = entry === "comparator" ? RUNNING.exec(stderr)![1]! : null;
+    if (id) expect(unitActive(id)).toBeTrue();
     child.kill(signal);
     expect(await exited).toBe(entry === "comparator" && signal === "SIGINT" ? 130 : 143);
     if (entry === "wrapped pre-push") {
       // The client allows up to a minute to confirm remote cleanup. The
       // owning local cgroup may have already ended the client itself.
       const until = Date.now() + 60_000;
-      while ((unitActive(id) || held(lock)) && Date.now() < until) await Bun.sleep(20);
+      while (held(lock) && Date.now() < until) await Bun.sleep(20);
     }
     expect(held(lock)).toBeFalse();
-    expect(unitActive(id)).toBeFalse();
-    if (entry === "comparator") expect(fs.readdirSync(path.join(h.runnerHome, "runs"))).toEqual([]);
-    else if (fs.existsSync(path.join(h.runnerHome, "runs", id))) {
-      // The owning cgroup may end the client before removal is confirmed.
-      // Its retained lease belongs to the existing stale-run sweep.
-      expect(fs.existsSync(path.join(h.runnerHome, "runs", id, "lease"))).toBeTrue();
-    }
-    expect(stderr.match(/^gate-runner: running on the gate runner /gm)).toHaveLength(1);
+    if (id) expect(unitActive(id)).toBeFalse();
+    expect(fs.readdirSync(path.join(h.runnerHome, "runs"))).toEqual([]);
+    expect(stderr.match(/^gate-runner: running on the gate runner /gm) ?? []).toHaveLength(entry === "comparator" ? 1 : 0);
+    if (entry === "wrapped pre-push") expect(h.calls()).toEqual([]);
   } finally {
     if (child.exitCode === null && child.signalCode === null) { child.kill("SIGTERM"); await exited; }
   }
@@ -189,13 +182,11 @@ exec /usr/bin/git "$@"
 
   // 2. The session is lost while install holds: the client's removal stops
   // the setup, and only then runs the command here.
-  const installLock = path.join(h.root, "install.lock"), installing = path.join(h.root, "installing");
-  h.settings({ killWhen: installing, remoteEnv: { LLV_GATE_RUNNER_TEST_AFTER_INSTALL: hold(installLock, installing) } });
+  h.settings({ killWhen: "installing", remoteEnv: { LLV_GATE_RUNNER_TEST_AFTER_INSTALL_ACTION: JSON.stringify({ hold: { lock: "install.lock", mark: "installing" } }) } });
   const lost = h.run(["bun", "test", pass]);
-  expect(fs.existsSync(installing)).toBeTrue();
+  expect(h.calls().some(call => (call as { killedAtMarker?: boolean }).killedAtMarker)).toBeTrue();
   expect(lost.stderr).toMatch(/^gate-runner: running here: the runner session failed before the command started/m);
   expect(lost.stderr).not.toContain("cleanup on the runner was not confirmed");
   expect(lost.code).toBe(0);
-  expect(held(installLock)).toBeFalse();
   expect(fs.readdirSync(runs)).toEqual([]);
 }, E2E_TIMEOUT);

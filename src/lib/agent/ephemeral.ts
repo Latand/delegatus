@@ -87,8 +87,8 @@ export type EphemeralCommand = {
   sessionId: null;
   reviewerPath: null;
 };
-const answerEnvironment = (base: NodeJS.ProcessEnv) =>
-  reviewerEnvironment(base, undefined, ["LLV_SPAWN_CAPABILITY", "LLV_RELAY_CREDENTIAL"]);
+const answerEnvironment = (base: NodeJS.ProcessEnv, cwd: string) =>
+  reviewerEnvironment(base, undefined, ["LLV_SPAWN_CAPABILITY", "LLV_RELAY_CREDENTIAL"], cwd);
 function answerHome(account: AccountContext, sessionHome?: string): string {
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(account.accountId))
     throw new EphemeralProfileError("invalid account id");
@@ -223,7 +223,7 @@ export function buildEphemeralCommand(
       ...(request.webSearch ? ["--allowedTools", "WebSearch"] : []),
       "--strict-mcp-config",
       "--settings",
-      JSON.stringify({ env: agentPublicationIdentityEnv(baseEnv), ...(request.privateContext ? { autoMemoryEnabled: false, disableAllHooks: true } : {}) }),
+      JSON.stringify({ env: agentPublicationIdentityEnv(baseEnv, request.session?.cwd ?? request.runDir), ...(request.privateContext ? { autoMemoryEnabled: false, disableAllHooks: true } : {}) }),
       "--json-schema",
       JSON.stringify(request.schema),
       ...(request.session ? [request.session.mode === "resume" ? "--resume" : "--session-id", request.session.id!, "--autocompact", "auto"] : ["--no-session-persistence"]),
@@ -234,7 +234,7 @@ export function buildEphemeralCommand(
     return {
       command: resolveBinary("claude"),
       args,
-      env: answerEnvironment(baseEnv),
+      env: answerEnvironment(baseEnv, request.session?.cwd ?? request.runDir),
       stdin: request.inputFile ? "" : request.prompt,
       ...(request.inputFile ? { stdinFile: request.inputFile } : {}),
       outputPath: null,
@@ -319,7 +319,7 @@ export function buildEphemeralCommand(
     if (!entry.auto_compact_token_limit && Number.isFinite(entry.context_window))
       args.push("-c", `model_auto_compact_token_limit=${Math.floor(entry.context_window * 0.9)}`);
   }
-  args.push(...agentCodexPublicationArgs({}, request.account.env));
+  args.push(...agentCodexPublicationArgs({}, request.account.env, request.session?.cwd ?? request.runDir));
   const env: NodeJS.ProcessEnv = { ...request.account.env, CODEX_HOME: home };
   if (request.privateContext) {
     // --ephemeral only disables session history. Native diagnostics and SQLite
@@ -332,7 +332,7 @@ export function buildEphemeralCommand(
   return {
     command: binary,
     args,
-    env: answerEnvironment(env),
+    env: answerEnvironment(env, request.session?.cwd ?? request.runDir),
     stdin: request.prompt,
     outputPath: output,
     sessionId: null,

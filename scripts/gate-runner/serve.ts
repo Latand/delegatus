@@ -16,8 +16,8 @@ export const RUN_ID = /^[0-9a-f]{12}$/;
 /** Keys scripts/local-gate.ts isolatedEnvironment replaces; each gets a fresh
  * directory here except XDG_CACHE_HOME, which persists so pinned runtimes and
  * fixtures install once per runner. */
-export const ISOLATED_KEYS = ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"];
-export const PERSISTENT_KEYS = ["XDG_CACHE_HOME", "TMPDIR"];
+export const ISOLATED_KEYS = ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"];
+export const PERSISTENT_KEYS = ["XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "TMPDIR", "LLV_GATE_TEMP_ROOT"];
 const LEASE_STALE_MS = 30 * 60_000;
 /** How long `remove` waits for a signalled session process to stop its units and exit. */
 const OWNER_STOP_MS = 40_000;
@@ -140,6 +140,7 @@ export function commandEnvironment(dir: string, manifest: Manifest, source: Node
     fs.mkdirSync(env[key]!, { recursive: true });
   }
   env.TMPDIR = path.join(dir, "t");
+  env.LLV_GATE_TEMP_ROOT = env.TMPDIR;
   env.CLAUDE_CODE_TMPDIR = env.TMPDIR;
   fs.mkdirSync(env.TMPDIR, { recursive: true });
   env.XDG_CACHE_HOME = path.join(home(), ".cache", "gate-runner");
@@ -370,6 +371,31 @@ function readSetupResult(dir: string): SetupResult | null {
 /** Inside the gate-setup-<id> unit. The unit starts with the user manager's
  * environment, so the session's own comes through a file only its account
  * reads, removed once read. The nonce is never in it. */
+export function afterInstallAction(dir: string, tree: string, value: string | undefined) {
+  if (!value) return;
+  const fail = () => { throw new SetupFailed("manifest", "invalid after-install test action"); };
+  let action: { append?: { file: string; text: string }; hold?: { lock: string; mark: string } };
+  try { action = JSON.parse(value); } catch { return fail(); }
+  if (!action || typeof action !== "object" || Object.keys(action).length !== 1) return fail();
+  const local = (root: string, file: unknown) => {
+    if (typeof file !== "string" || !file || path.isAbsolute(file) || file.split(/[\\/]/).some(part => part === ".." || part === ".")) return fail();
+    const target = path.join(root, file);
+    try {
+      const parent = fs.realpathSync(path.dirname(target)), owned = fs.realpathSync(root);
+      if (parent !== owned && !parent.startsWith(owned + path.sep)) return fail();
+      const stat = fs.lstatSync(target, { throwIfNoEntry: false });
+      if (stat && (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1)) return fail();
+    } catch { return fail(); }
+    return target;
+  };
+  if (action.append && Object.keys(action.append).sort().join(",") === "file,text" && typeof action.append.text === "string") {
+    fs.appendFileSync(local(tree, action.append.file), action.append.text);
+  } else if (action.hold && Object.keys(action.hold).sort().join(",") === "lock,mark") {
+    const lock = local(dir, action.hold.lock), mark = local(dir, action.hold.mark);
+    // Fixed argv, with a fixed program. No received text becomes code.
+    spawnSync("flock", ["-x", lock, process.execPath, "-e", 'require("node:fs").writeFileSync(process.argv[1], "ready");setInterval(() => {}, 1000)', mark], { stdio: "ignore" });
+  } else return fail();
+}
 function setup(dir: string): number {
   const result = path.join(dir, "setup-result.json");
   const answer = (value: SetupResult) => { fs.rmSync(result, { force: true }); fs.writeFileSync(result, JSON.stringify(value), { flag: "wx" }); };
@@ -387,7 +413,7 @@ function setup(dir: string): number {
     if (free.bavail * free.bsize < 2 * 1024 ** 3) throw new SetupFailed("disk", "under 2 GB free on the runner");
     const tree = materialize(dir, manifest, log);
     install(tree.cwd, log);
-    if (process.env.LLV_GATE_RUNNER_TEST_AFTER_INSTALL) spawnSync("/bin/bash", ["-c", process.env.LLV_GATE_RUNNER_TEST_AFTER_INSTALL], { cwd: tree.cwd, stdio: "ignore" });
+    afterInstallAction(dir, tree.cwd, process.env.LLV_GATE_RUNNER_TEST_AFTER_INSTALL_ACTION);
     verify(tree.cwd, tree.env, manifest.tree, log);
     const env = commandEnvironment(dir, manifest, process.env, { remainingMs: handed.remainingMs, receivedAt: handed.receivedAt });
     const cwd = path.resolve(tree.cwd, manifest.cwd);

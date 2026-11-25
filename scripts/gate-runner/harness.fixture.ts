@@ -7,6 +7,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { withoutInheritedGate } from "../../src/lib/testing/inheritedGateEnv";
+import { PROBE } from "./client";
+import { LOAD_PROBE } from "./load";
 
 export const REPOSITORY = path.resolve(import.meta.dir, "..", "..");
 const IDENTITY = { GIT_AUTHOR_NAME: "gate-test", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "gate-test", GIT_COMMITTER_EMAIL: "noreply@example.invalid" };
@@ -56,8 +58,8 @@ export interface Harness {
 }
 
 const STUB = `
-const fs = require("node:fs"), { spawn } = require("node:child_process");
-const [settingsFile, logFile, runnerHome, groupsFile] = __CONFIG__;
+const fs = require("node:fs"), path = require("node:path"), { spawn, spawnSync } = require("node:child_process");
+const [settingsFile, logFile, runnerHome, groupsFile, probe, loadProbe] = __CONFIG__;
 const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
 const args = process.argv.slice(2);
 let index = 0;
@@ -65,11 +67,23 @@ while (index < args.length && args[index].startsWith("-")) index += args[index] 
 const alias = args[index], command = args.slice(index + 1).join(" ");
 const record = { alias, command, stdin: 0, head: "" };
 const flush = () => fs.appendFileSync(logFile, JSON.stringify(record) + "\\n");
+// This double dispatches a closed protocol. Received text is only recorded
+// and matched, and is never passed to an interpreter.
+const run = command.match(/^~\\/\\.bun\\/bin\\/bun ~\\/runs\\/([a-f0-9]{12})\\/serve\\.ts (run|remove|pack-outputs) ~\\/runs\\/\\1$/);
+const upload = command.match(/^mkdir -p ~\\/runs\\/([a-f0-9]{12}) && tar -xf - -C ~\\/runs\\/\\1$/);
+if (command !== probe && command !== loadProbe && !run && !upload) { record.refused = true; flush(); process.exit(255); }
 if (settings.failProbe && command.includes("manager=ok")) { flush(); process.exit(255); }
 if (settings.failOn && command.includes(settings.failOn)) { flush(); process.exit(255); }
 if (settings.hangOn && command.includes(settings.hangOn)) { flush(); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 600000); process.exit(1); }
 // Keep remote execution fixtures independent of host load.
-if (command.includes("cut -d ' ' -f1 /proc/loadavg")) { flush(); process.stdout.write(settings.loadProbe ?? "load=0\\ncpus=16\\n"); process.exit(0); }
+if (command === loadProbe) { flush(); process.stdout.write(settings.loadProbe ?? "load=0\\ncpus=16\\n"); process.exit(0); }
+if (command === probe) {
+  const main = spawnSync("/usr/bin/git", ["--git-dir", path.join(runnerHome, "mirror/delegatus.git"), "rev-parse", "refs/heads/main"], { encoding: "utf8" });
+  const version = spawnSync(path.join(runnerHome, ".bun/bin/bun"), ["--version"], { encoding: "utf8" });
+  const manager = spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore" });
+  const disk = fs.statfsSync(runnerHome);
+  flush(); process.stdout.write("bun=" + version.stdout.trim() + "\\ndisk=" + Math.floor(disk.bavail * disk.bsize / 1024) + "\\n" + (manager.status === 0 ? "manager=ok\\n" : "") + "main=" + main.stdout.trim() + "\\nruns=" + fs.readdirSync(path.join(runnerHome, "runs")).length + "\\n"); process.exit(0);
+}
 if (settings.packFile && command.includes("pack-outputs")) { flush(); process.stdout.write(fs.readFileSync(settings.packFile)); process.exit(0); }
 const env = { HOME: runnerHome, USER: process.env.USER, LANG: "C.UTF-8",
   PATH: [...(settings.remotePath ?? []), "/usr/local/bin", "/usr/bin", "/bin"].join(":"),
@@ -78,9 +92,14 @@ for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
 // setsid alone stays in the caller's cgroup. A local gate stopping that
 // cgroup must close the transport while the remote session handles its EOF.
 const scope = settings.sessionScope && command.includes("serve.ts run");
-const child = spawn(scope ? "systemd-run" : "/bin/bash", scope
-  ? ["--user", "--scope", "--quiet", "--collect", "--unit=gate-session-fixture-" + require("node:crypto").randomUUID(), "--", "/bin/bash", "-c", command]
-  : ["-c", command], { cwd: runnerHome, env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+const id = (run ?? upload)[1], runDir = path.join(runnerHome, "runs", id);
+if (fs.existsSync(runDir) && (fs.lstatSync(runDir).isSymbolicLink() || fs.realpathSync(runDir) !== runDir)) { record.refused = true; flush(); process.exit(255); }
+if (upload) fs.mkdirSync(runDir, { recursive: true });
+const executable = upload ? "/usr/bin/tar" : path.join(runnerHome, ".bun/bin/bun");
+const argv = upload ? ["-xf", "-", "-C", runDir] : [path.join(runDir, "serve.ts"), run[2], runDir];
+const child = spawn(scope ? "systemd-run" : executable, scope
+  ? ["--user", "--scope", "--quiet", "--collect", "--unit=gate-session-fixture-" + require("node:crypto").randomUUID(), "--", executable, ...argv]
+  : argv, { cwd: runnerHome, env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
 // The remote side outlives a killed session, as on a real runner; the
 // harness stops each of these groups when the test ends.
 fs.appendFileSync(groupsFile, child.pid + "\\n");
@@ -90,7 +109,7 @@ const watch = chunk => {
   output += chunk.toString();
   if (output.includes(settings.killOn)) { settings.killOn = undefined; flush(); process.kill(process.pid, "SIGKILL"); }
 };
-if (settings.killWhen && command.includes("serve.ts run")) setInterval(() => { if (fs.existsSync(settings.killWhen)) { flush(); process.kill(process.pid, "SIGKILL"); } }, 50);
+if (settings.killWhen && command.includes("serve.ts run")) setInterval(() => { if (fs.existsSync(path.isAbsolute(settings.killWhen) ? settings.killWhen : path.join(runDir, settings.killWhen))) { record.killedAtMarker = true; flush(); process.kill(process.pid, "SIGKILL"); } }, 50);
 process.stdin.on("data", chunk => { if (record.stdin < 200) record.head += chunk.toString("latin1").slice(0, 200 - record.stdin); record.stdin += chunk.length; child.stdin.write(chunk); });
 process.stdin.on("end", () => child.stdin.end());
 child.stdin.on("error", () => {});
@@ -144,7 +163,7 @@ export function makeHarness(options: { mirrorMain?: "base" | "behind" | "ahead" 
   const stub = path.join(root, "ssh");
   const groups = path.join(root, "stub-groups");
   fs.writeFileSync(groups, "");
-  fs.writeFileSync(stub, `#!${process.execPath}\n${STUB.replace("__CONFIG__", JSON.stringify([settingsFile, log, runnerHome, groups]))}`, { mode: 0o755 });
+  fs.writeFileSync(stub, `#!${process.execPath}\n${STUB.replace("__CONFIG__", JSON.stringify([settingsFile, log, runnerHome, groups, PROBE, LOAD_PROBE]))}`, { mode: 0o755 });
   const nodeModules = fs.realpathSync(path.join(REPOSITORY, "node_modules"));
   const settings = (value: StubSettings) => {
     if (value.sessionScope && process.env.LLV_SIGNAL_SANDBOX) throw new Error("the mock session scope requires the gate host's native PID namespace");
@@ -157,12 +176,12 @@ export function makeHarness(options: { mirrorMain?: "base" | "behind" | "ahead" 
   const home = path.join(root, "home"), tmp = path.join(root, "tmp"), state = path.join(root, "state"), xdg = path.join(root, "xdg");
   for (const dir of [home, tmp, state, xdg]) fs.mkdirSync(dir, { recursive: true });
   const env = (extra: Env = {}): NodeJS.ProcessEnv => withoutInheritedGate({
-    ...cleanGitEnv() as Env, NODE_ENV: undefined, HOME: home, TMPDIR: tmp, XDG_CONFIG_HOME: xdg, LLV_STATE_DIR: state,
+    ...cleanGitEnv() as Env, NODE_ENV: "development", HOME: home, TMPDIR: tmp, LLV_GATE_TEMP_ROOT: tmp, XDG_CONFIG_HOME: xdg, LLV_STATE_DIR: state,
     LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_GATE_RUNNER_CONFIG: config, LLV_GATE_RUNNER_CACHE: cache,
     LLV_GATE_RUNNER_SSH: stub, LLV_GATE_LOCK_DIR: path.join(root, "local-locks"), DELEGATUS_AGENT_CPU: "off",
     // Fixture gates take private slots and never wait on this machine's CPU pressure.
     DELEGATUS_CPU_PRESSURE: "off",
-    LLV_GATE_RUNNER: undefined, LLV_PRIVACY_KNOWN_VALUES_FILE: undefined, ...extra,
+    LLV_GATE_RUNNER: "", LLV_PRIVACY_KNOWN_VALUES_FILE: undefined, ...extra,
   // A local fallback inside an agent's signal domain needs its marker.
   } as unknown as NodeJS.ProcessEnv, { keepSandbox: true });
   return {
@@ -201,3 +220,13 @@ export function testFile(h: Harness, name: string, body: string): string {
 export const privateValue = () => `pv${randomBytes(9).toString("hex")}`;
 
 export const withoutRunnerLines = (text: string) => text.split("\n").filter(line => !line.startsWith("gate-runner: ")).join("\n");
+
+/** Compare command output across admissions with different queue timings. */
+export const normalizeRunnerOutput = (text: string) => withoutRunnerLines(text)
+  .replace(/\[[\d.]+m?s\]/g, "[t]")
+  .replace(/^bun test v.*$/m, "")
+  // Admission progress (CPU queue, heavy slots, a legacy drain, pressure)
+  // depends on what else the host runs at that moment, never on the command.
+  .replace(/^gate-slot: Waiting for .*\r?(?:\n|$)/gm, "")
+  .replace(/^gate-slot: delegatus-gate-.*pids\.peak=.*\n?/gm, "")
+  .replace(/^gate-slot: (?:waiting for CPU admission queue SQLite lock \(deadline \d+ ms\)|CPU admission queue lock acquired after \d+ ms)\r?$\n?/gm, "");

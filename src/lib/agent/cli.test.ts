@@ -123,8 +123,10 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["fresh", 
   const admitted = withSpawnCapability(spec, "a".repeat(43), { ...process.env, LLV_VIEWER_PORT: String(server.port) });
   let hook: { command: string; additionalContextLimit: number };
   if (engine === "codex") {
-    expect(fs.existsSync(path.join(home, "hooks.json"))).toBe(false);
-    expect(fs.existsSync(path.join(home, "config.toml"))).toBe(false);
+    const accountHooks = JSON.parse(fs.readFileSync(path.join(home, "hooks.json"), "utf8")).hooks;
+    expect(accountHooks.PreToolUse).toHaveLength(1);
+    expect(accountHooks.UserPromptSubmit).toBeUndefined();
+    expect(fs.readFileSync(path.join(home, "config.toml"), "utf8")).not.toContain("user_prompt_submit");
     const script = [...new Bun.Glob(".llv/hooks/memory-launch-*.mjs").scanSync({ cwd: home, absolute: true, dot: true })][0];
     expect(script).toBeDefined();
     hook = { command: `bun ${JSON.stringify(script)}`, additionalContextLimit: 40000 };
@@ -600,7 +602,7 @@ test("Claude commands do not gain Codex environment assignments", () => {
   const spec = freshSpecFor("claude", "/repo", { codexHome: path.join(SANDBOX, "unused") });
 
   expect(spec.command).not.toContain("CODEX_HOME=");
-  expect(spec.command).toContain(`'--settings' '${JSON.stringify({ env: agentPublicationIdentityEnv(process.env) }).replaceAll("'", "'\\''")}'`);
+  expect(spec.command).toContain(`'--settings' '${JSON.stringify({ env: agentPublicationIdentityEnv(process.env, "/repo") }).replaceAll("'", "'\\''")}'`);
 });
 
 test("fresh read-only Claude commands accept a non-interactive permission mode", () => {
@@ -863,7 +865,7 @@ test("allowSubagents retains process cleanup on managed Claude fresh and resumed
   for (const profile of [settings, resumedSettings]) {
     expect(profile.hooks.PreToolUse).toEqual([{ matcher: "Bash", hooks: [{
       type: "command", command: expect.stringContaining("LLV_MANAGED_PROCESS_CLEANUP_DENY=1 "),
-    }] }]);
+    }] }, { matcher: "Bash", hooks: [{ type: "command", command: expect.stringContaining("LLV_MANAGED_DESTRUCTIVE_GUARD=1 "), timeout: 10 }] }]);
   }
 });
 

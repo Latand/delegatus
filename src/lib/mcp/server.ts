@@ -1,5 +1,6 @@
 import { relayImages, relayImageGuard, relayImageNote, withRelayImages, MAX_RELAY_IMAGE_CONTENT_BYTES, RELAY_IMAGE_LIMIT_NOTE } from "@/lib/externalRelay/ownerToolContent";
 import { declaredClassSchema, repeatReasonSchema } from "@/lib/pipelines/accounting";
+import { NEEDS_YOU_ROW_KINDS } from "@/lib/attention/needsYouProjection";
 import { taskDeclarationSchema, acceptTaskSchema } from "@/lib/tasks/accounting";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { FLOW_RETIREMENT } from "@/lib/flows/retirement";
@@ -5071,7 +5072,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
       z.object({ kind: z.literal("prototype"), taskId: z.string().min(1).nullable(), reviewId: z.string().min(1) }).passthrough(),
     ]).optional().describe("What to clear; omit to read the project panel."),
     project: z.string().min(1).optional().describe("Read form; defaults to your seat or maintenance project."),
-    kinds: z.array(z.enum(["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask", "lane-decision", "lane-review", "prototype", "update"])).optional(),
+    kinds: z.array(z.enum(NEEDS_YOU_ROW_KINDS)).optional(),
     full: z.boolean().optional(),
     cursor: z.string().optional(),
     reason: z.string().max(200).optional().describe("One line retained beside who cleared the row."),

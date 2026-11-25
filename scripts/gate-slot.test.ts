@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +6,11 @@ import { join } from "node:path";
 import { admitPortableTestRunner } from "../src/lib/testing/portableTestAdmission";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { GATE_TASKS_MAX } from "./gate-tasks";
+
+// Each case starts one or more real gate runners. Under the touched-test
+// gate's CPU quota and host load, two runner starts can outlast Bun's 5 s
+// default, which failed cases that had passed their assertions.
+setDefaultTimeout(30_000);
 
 for (const platform of ["darwin", "win32", "linux"] as const) test(`portable ${platform} admission warns once and permits best-effort execution`, () => {
   const env: NodeJS.ProcessEnv = { NODE_ENV: "test" };

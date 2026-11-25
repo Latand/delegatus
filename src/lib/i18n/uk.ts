@@ -4,6 +4,14 @@ import type { en } from "./en";
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
+  "attention.destructiveRefusal": "Delegatus зупинив видалення: {tool} прибрав би {entry} ({kind}).",
+  "destructive.kind.state": "стан Delegatus",
+  "destructive.kind.credentials": "облікові дані акаунта",
+  "destructive.kind.project": "інший проєкт",
+  "destructive.kind.home": "домашній каталог",
+  "destructive.kind.system": "системний каталог верхнього рівня",
+  "destructive.kind.protected": "захищений каталог",
+  "mobile2.board.badgeRefusal": "Видалення зупинено",
   "claudeCloud.connectGithub": "Підключіть GitHub до цього акаунта Claude на claude.ai.",
   "claudeCloud.createEnvironment": "Створіть хмарне середовище для цього акаунта Claude на claude.ai.",
 

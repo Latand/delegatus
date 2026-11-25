@@ -137,7 +137,7 @@ const OVERRIDES: Record<string, unknown> = {
        the footer seats one first. */
     if (url.startsWith("/api/orchestrator/seat")) {
       seatReads += 1;
-      return jsonResponse({ seat: seatAnswer, pending: null, exists: true });
+      return Response.json({ seat: seatAnswer, pending: null, exists: true });
     }
     if (url.startsWith("/api/limits")) return { ok: false, status: 503, json: async () => ({}), text: async () => "" };
     return jsonResponse({});
@@ -327,7 +327,7 @@ test("with no conversation focused the phone leaf is the board: the seat card ab
   const tabs = q(root, "[data-phone-kanban-tabs]")!;
   expect(seat).not.toBeNull();
   expect(seat.compareDocumentPosition(tabs as unknown as Node) & 4).toBe(4);
-  expect(all(root, "[role=tab]").map((tab) => tab.getAttribute("data-phone-kanban-tab"))).toEqual(["inbox", "assigned", "blocked", "done"]);
+  expect(all(root, "[role=tab]").map((tab) => tab.getAttribute("data-phone-kanban-tab"))).toEqual(["inbox", "assigned", "blocked", "done", "timeline"]);
   /* A first visit opens on Assigned; this project has no task, so it says so
      and points at Inbox, where its work is. */
   expect(board(root)!.getAttribute("data-phone-kanban-active")).toBe("assigned");
@@ -486,7 +486,7 @@ test("the board's footer lands the operator in the orchestrator's conversation, 
   await settle();
   expect(topScreen(getMobileNav().getState())).toEqual({ kind: "chat", id: running.path });
   expect(q(seated, '[data-testid="mobile-focused-pane"]')).not.toBeNull();
-  expect(q(seated, "[data-mobile2-title-text]")?.textContent).toContain(running.title);
+  expect(q(seated, "[data-mobile2-title-text]")?.textContent).toBe(translate("en", "mobile2.board.orchestrator"));
   /* Same open as a row's, and the same reason it is not the resolver's. */
   expect(opened).toEqual([]);
 });

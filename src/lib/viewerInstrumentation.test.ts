@@ -19,13 +19,14 @@ test("legacy worktree catalog refinement cannot delay controller activation or r
     runIdentityMigration: async () => { order.push("identity"); },
     publishHotStateActivation: () => { order.push("hot-state"); },
     runClaudeLoginRecovery: async () => { order.push("login-recovery"); },
-    startStructuredHosts: null,
+    startDestructiveGuard: async () => { order.push("guard"); },
+    startStructuredHosts: () => { order.push("structured-hosts"); },
     startControllers: async () => { order.push("controllers"); },
     publishViewerReleaseReady: () => { order.push("release-ready"); },
     refineBoard: async () => { refinementStarted = true; await refinement; order.push("catalog-and-board-refinement"); },
   });
   expect(order).toEqual([
-    "capability", "identity", "hot-state", "login-recovery", "controllers", "release-ready",
+    "capability", "identity", "hot-state", "login-recovery", "guard", "structured-hosts", "controllers", "release-ready",
   ]);
   expect(refinementStarted).toBeTrue();
   finishRefinement();

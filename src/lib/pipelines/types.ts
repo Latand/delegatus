@@ -875,6 +875,7 @@ export type PipelineStageAttempt = {
   /** Tool permission requests this attempt's agent raised and nobody could
       answer, each denied so the turn went on (#2215). Bounded, oldest first. */
   permissionDenials?: PipelinePermissionDenial[];
+  guardRefusals?: import("@/lib/types").GuardRefusal[];
 };
 
 export type PipelinePriorWriterStop = {

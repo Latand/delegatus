@@ -1,4 +1,5 @@
 import { finishedWorkIndex } from "@/lib/attention/finishedWork";
+import { guardRefusalsForState } from "@/lib/agent/destructiveGuard.refusals";
 import { withFinishedAttention } from "@/lib/attention/finishedAttention";
 import { stateWriteHealth } from "@/lib/state/diskFull";
 import { filesReadSummary } from "@/lib/filesReadSummary";
@@ -487,6 +488,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
       origin: delivery.command.origin,
     });
   }
+  const guardRefusals = guardRefusalsForState(stateDir());
   for (const file of files) {
     if (file.engine !== "claude" && file.engine !== "codex" && file.engine !== "copilot" && file.engine !== "antigravity") continue;
     if (file.spawn) continue;
@@ -496,6 +498,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     const generationIndex = conversation.generations.findIndex((item) => item.path === file.path);
     const latest = conversation.generations.at(-1);
     file.conversationId = conversation.id;
+    if (guardRefusals[conversation.id]) file.guardRefusal = guardRefusals[conversation.id];
     if (generationIndex >= 0) file.generation = generationIndex + 1;
     const lineage = conversationLineageMarkers(registrySnapshot, conversationLookup, conversation, file.path);
     if (lineage.migratedTo) file.migratedTo = lineage.migratedTo;

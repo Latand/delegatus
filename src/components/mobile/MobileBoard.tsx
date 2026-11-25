@@ -149,6 +149,7 @@ export function statePhrase(t: TFunction, state: MobileRowState, now: number): s
 }
 
 export const BADGE_LABEL = {
+  refusal: "mobile2.board.badgeRefusal",
   question: "mobile2.board.badgeQuestion",
   plan: "mobile2.board.badgePlan",
   decision: "mobile2.board.badgeDecision",

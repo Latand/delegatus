@@ -101,7 +101,7 @@ test.each(["bin/guide.md", "src/runtime-host/guide.md"])("runtime prose plans ex
 test("cold runtime builds reject invalid dynamic route/page contracts and tooling errors", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "gate-next-contracts-")); roots.push(dir);
   symlinkSync(path.join(root, "node_modules"), path.join(dir, "node_modules"), "dir");
-  for (const file of ["tsconfig.json", "tsconfig.production.json", "bin/envAlias.mjs"])
+  for (const file of ["tsconfig.json", "tsconfig.production.json", "bin/envAlias.mjs", "public/audio/dictation-capture.js"])
     { mkdirSync(path.dirname(path.join(dir, file)), { recursive: true }); writeFileSync(path.join(dir, file), readFileSync(path.join(root, file))); }
   writeFileSync(path.join(dir, "production.config.ts"), readFileSync(path.join(root, "next.config.ts")));
   // App-specific worker entries need the full repository. Keep production's
@@ -120,7 +120,7 @@ test("cold runtime builds reject invalid dynamic route/page contracts and toolin
     writeFileSync(path.join(dir, "scripts/tool.test.ts"), kind === "tooling" ? 'export const value: number = "invalid";\n' : 'export const value: number = 1;\n');
     const lines: string[] = [];
     const result = await runSteps("pre-push", [{ name: "Viewer build", command: [] }], { root: dir, deadline: soon(120_000), logDir: dir, say: line => lines.push(line),
-      prepare: () => ({ env: { ...process.env, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", LLV_GATE_TYPES_CHECKED: "1", LLV_GATE_FULL_TYPES: realpathSync(dir) }, command: ["node", path.join(root, "node_modules/next/dist/bin/next"), "build", "--webpack"] }),
+      prepare: () => ({ env: { ...process.env, __NEXT_AGENT_UPGRADE: undefined, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", LLV_GATE_TYPES_CHECKED: "1", LLV_GATE_FULL_TYPES: realpathSync(dir) }, command: ["node", path.join(root, "node_modules/next/dist/bin/next"), "build", "--webpack"] }),
     }).then(() => null, (error: unknown) => error);
     expect(result === null, lines.join("\n")).toBe(kind === "valid");
     if (kind === "route" || kind === "page") expect(lines.join("\n")).toContain(".next/types/");

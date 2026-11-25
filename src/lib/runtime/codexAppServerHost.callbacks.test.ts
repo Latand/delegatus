@@ -1,14 +1,19 @@
+// destructive-code: head-only; fixture-owned paths and recording process doubles.
+import { hostExitText, readHostExit, withHostStopOrigin } from "./hostExit";
+import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { procBackend } from "@/lib/proc";
 import { CodexAppServerHost } from "./codexAppServerHost";
+import { encodeCodexStructuredUserText, decodeCodexStructuredUserText as decodeStoredUser } from "./codexStructuredUserText.server";
 import { FileRuntimeEventStore, type RuntimeEventStore } from "./eventStore";
 import { projectEngineHostEvent } from "./engineHostEvents";
+import type { DeliveryTimingMark } from "./engineHost";
 import { codexHostColumns } from "./registry";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
@@ -16,10 +21,350 @@ import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import { questionsResolution } from "@/components/runtime/ConversationAttention";
 import type { RuntimeAttention } from "@/components/runtime/runtimeModel";
-import { installCodexHostFixture, MemoryEventStore, FakeAppServer, fakeSpawn, waitForCondition } from "./codexAppServerHost.fixture";
+import { installCodexHostFixture, deliveryDedup, MemoryEventStore, FakeAppServer, fakeSpawn, waitForCondition, ownedFakeProcess, metadataState } from "./codexAppServerHost.fixture";
 
-let metadataState: string;
-installCodexHostFixture(directory => { metadataState = directory; });
+installCodexHostFixture();
+
+test.each([false, true, undefined, null, "false"])("native question flag %j retains answer IDs and only false permits steer", async (flag) => {
+  const server = new FakeAppServer("async-question-thread");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  await host.send({ id: "active-question-turn", text: "start" });
+  server.request("question-one", "item/tool/requestUserInput", { threadId: "async-question-thread", turnId: "turn-1", isBlocking: flag, questions: [{ id: "q", question: "Continue?" }] });
+  expect((await host.health()).status).toBe(flag === false ? "active" : "attention");
+  expect((await host.health()).pendingAttention).toEqual([expect.stringContaining("item/tool/requestUserInput:question-one:")]);
+  if (flag === false) {
+    expect(await host.send({ id: "matching-steer", text: "keep going", expectedTurnId: "turn-1" })).toMatchObject({ outcome: "steered" });
+    server.request("approval-one", "item/commandExecution/requestApproval", { isBlocking: false, command: "date" });
+    expect((await host.health()).status).toBe("attention");
+    await host.answer((await host.health()).pendingAttention[0]!, { answers: { q: { answers: ["yes"] } } });
+    expect((await host.health()).pendingAttention).toEqual([expect.stringContaining("item/commandExecution/requestApproval:approval-one:")]);
+  }
+  await host.release();
+});
+
+test("Codex operation timing observes preparation and RPC; diagnostic refusal leaves delivery intact", async () => {
+  const server = new FakeAppServer("timing-thread");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  try {
+    const marks: DeliveryTimingMark[] = [];
+    expect(await host.send({ id: "timing-first", text: "start" }, undefined, undefined, mark => marks.push(mark))).toMatchObject({ outcome: "turn-started" });
+    expect(marks).toEqual(["codex-prepare", "codex-confirmed-read", "codex-confirmed", "codex-input-ready", "codex-rpc-start", "codex-rpc-end"]);
+    marks.length = 0;
+    server.steerError = { code: -32000, message: "active turn changed" };
+    expect(await host.send({ id: "timing-refused", text: "steer" }, undefined, undefined, mark => marks.push(mark))).toMatchObject({ outcome: "rejected" });
+    expect(marks).toEqual(["codex-prepare", "codex-confirmed-read", "codex-confirmed", "codex-input-ready", "codex-rpc-start"]);
+    server.steerError = null;
+    expect(await host.send({ id: "timing-second", text: "steer" }, undefined, undefined, () => { throw new Error("observer refused"); })).toMatchObject({ outcome: "steered" });
+  } finally { await host.release(); }
+});
+
+test("Codex stdout preserves Unicode split inside a completed user echo", async () => {
+  const server = new FakeAppServer("unicode-wire");
+  const eventStore = new MemoryEventStore();
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
+  await host.send({ id: "unicode-original", text: "Привіт 🌍" });
+  const encoded = await encodeCodexStructuredUserText("Привіт 🌍", undefined, undefined, undefined, deliveryDedup("unicode-original"));
+  const bytes = Buffer.from(JSON.stringify({ method: "item/completed", params: { threadId: "unicode-wire", turnId: "turn-1", item: { type: "userMessage", id: "unicode-item", clientId: "unicode-original", content: [{ type: "text", text: encoded }] } } }) + "\n");
+  const split = bytes.indexOf(Buffer.from("П")) + 1;
+  const beforeEcho = Date.now();
+  server.stdout.write(bytes.subarray(0, split)); server.stdout.write(bytes.subarray(split));
+  expect(await host.send({ id: "unicode-original", text: "Привіт 🌍" })).toMatchObject({ turnId: "turn-1" });
+  const echo = eventStore.load("unicode-wire").findLast(event => event.kind === "item" && event.phase === "completed") as { deliveryEcho?: { operationId: string; at: string; attachedAt: string } };
+  expect(echo.deliveryEcho?.operationId).toBe("unicode-original");
+  expect(echo.deliveryEcho?.at).toBeString();
+  expect(Date.parse(echo.deliveryEcho!.at)).toBeGreaterThanOrEqual(beforeEcho);
+  expect(Date.parse(echo.deliveryEcho!.at)).toBeLessThanOrEqual(Date.now());
+  expect(Date.parse(echo.deliveryEcho!.attachedAt)).toBeGreaterThanOrEqual(Date.parse(echo.deliveryEcho!.at));
+  await expect(host.send({ id: "unicode-original", text: "wrong payload" })).rejects.toThrow("different payload");
+  await host.release();
+});
+
+test("malformed nonblocking requests stay blocking; auth recovery remains bounded and unverified", async () => {
+  const server = new FakeAppServer("diagnostic-thread");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  await host.send({ id: "diagnostic-turn", text: "start" });
+  server.request("malformed-question", "item/tool/requestUserInput", { threadId: "diagnostic-thread", turnId: "turn-1", isBlocking: false, questions: [{ question: "Missing identity" }] });
+  expect((await host.health()).status).toBe("attention");
+  server.notify("modelProvider/authRecoveryCompleted", {});
+  expect((await host.health()).diagnostics?.authRecovery).toBe("unknown");
+  server.notify("modelProvider/authRecoveryStarted", { threadId: "diagnostic-thread", turnId: "turn-1", provider: "fixture", message: "retrying" });
+  expect((await host.health()).diagnostics?.authRecovery).toBe("started");
+  server.notify("modelProvider/authRecoveryCompleted", { threadId: "diagnostic-thread", turnId: "turn-1", provider: "fixture", message: "complete" });
+  expect((await host.health()).diagnostics).toMatchObject({ executable: "codex", authRecovery: "completed-unverified" });
+  expect((await host.health()).pendingAttention).toEqual([expect.stringContaining("item/tool/requestUserInput:malformed-question:")]);
+  expect(server.requests.filter(request => request.method === "turn/start")).toHaveLength(1);
+  await host.release();
+});
+
+test("a replayed native question retains its pending answer and rejects a duplicate answer", async () => {
+  const server = new FakeAppServer("question-replay-thread");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  server.autoResolveServerRequests = false;
+  const params = { threadId: "question-replay-thread", turnId: "turn-1", isBlocking: false, questions: [{ id: "q", question: "Choose" }] };
+  server.request("question-replay", "item/tool/requestUserInput", params);
+  const attentionId = (await host.health()).pendingAttention[0]!;
+  const answer = host.answer(attentionId, { answers: { q: { answers: ["yes"] } } });
+  server.request("question-replay", "item/tool/requestUserInput", params);
+  await expect(host.answer(attentionId, {})).rejects.toThrow("already awaiting confirmation");
+  server.notify("serverRequest/resolved", { threadId: "question-replay-thread", requestId: "question-replay" });
+  await answer;
+  expect(server.requests.filter(request => request.id === "question-replay")).toHaveLength(1);
+  expect((await host.health()).pendingAttention).toEqual([]);
+  await host.release();
+});
+
+describe("two-phase steering", () => {
+  for (const scenario of ["item", "rollout", "absent", "unreadable"] as const) test(`turn ending with ${scenario} adjudicates accepted input`, async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "steer-host-"));
+    const server = new FakeAppServer();
+    server.threadPath = path.join(directory, "rollout.jsonl");
+    fs.writeFileSync(server.threadPath, "");
+    const host = await CodexAppServerHost.start({ cwd: directory, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    try {
+      const opening = await host.send({ id: "opening", text: "begin" });
+      if (!("turnId" in opening)) throw new Error("opening refused");
+      server.autoCompleteUserMessage = scenario === "item";
+      server.persistUserMessages = scenario === "rollout";
+      const origin = { kind: "agent" as const, conversationId: "conversation_sender", role: "builder" };
+      const accepted = await host.steer({ id: "supplement", text: "agent note", origin });
+      const request = server.requests.findLast(r => r.method === "turn/steer")!;
+      const params = request.params as { clientUserMessageId: string; input: Array<{text: string}> };
+      expect(params.clientUserMessageId).toBe("supplement");
+      expect(decodeStoredUser(params.input[0]!.text)).toMatchObject({ text: "agent note", origin });
+      expect(decodeStoredUser(params.input[0]!.text)).toMatchObject({ deliveryDedup: deliveryDedup("supplement") });
+      if (scenario === "unreadable") { fs.rmSync(server.threadPath); fs.mkdirSync(server.threadPath); }
+      server.notify("turn/completed", { threadId: host.identity.threadId, turn: { id: opening.turnId, status: "completed" } });
+      expect(await accepted.observe()).toBe(scenario === "absent" ? "dropped" : scenario === "unreadable" ? "unknown" : "landed");
+      expect((await host.health()).status).toBe("idle");
+    } finally { await host.release(); fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  for (const end of ["release", "writer-fence"] as const) test(`a running steer outlives the start confirmation timer and ${end} makes it unknown`, async () => {
+    const server = new FakeAppServer();
+    const host = await CodexAppServerHost.start({ cwd: "/repo", deliveryConfirmationTimeoutMs: 10,
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    try {
+      await host.send({ id: "opening", text: "begin" });
+      server.autoCompleteUserMessage = false;
+      const accepted = await host.steer({ id: "pending", text: "waiting for tools" });
+      await new Promise(r => setTimeout(r, 35));
+      expect((await host.health()).status).toBe("active");
+      expect(server.signals).toEqual([]);
+      if (end === "release") await host.release();
+      else {
+        host.setWriterFence(() => false);
+        expect((await host.health()).status).toBe("active");
+        expect(server.signals).toEqual([]);
+      }
+      expect(await accepted.observe()).toBe("unknown");
+    } finally { await host.release(); }
+  });
+
+  for (const code of [-32601, -32600]) test(`steer RPC error ${code} is a definite refusal`, async () => {
+    const server = new FakeAppServer();
+    const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    try {
+      await host.send({ id: "opening", text: "begin" });
+      server.steerError = { code, message: "cannot steer a compact turn", data: { codexErrorInfo: { activeTurnNotSteerable: { turnKind: "compact" } } } };
+      await expect(host.steer({ id: "refused", text: "note" })).rejects.toMatchObject({ code });
+      expect((await host.health()).status).toBe("active");
+    } finally { await host.release(); }
+  });
+
+  test("an unanswered mutating steer is unknown and fails the wedged host", async () => {
+    const server = new FakeAppServer();
+    const host = await CodexAppServerHost.start({ cwd: "/repo", requestTimeoutMs: 30,
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+    try {
+      await host.send({ id: "opening", text: "begin" });
+      server.holdSteer = true;
+      await expect(host.steer({ id: "unknown", text: "note" })).rejects.toThrow();
+      expect((await host.health()).status).toBe("dead");
+    } finally { await host.release(); }
+  });
+});
+
+describe("Codex launch service tier", () => {
+  test("fresh and resumed threads set ultrafast and every send inherits", async () => {
+    for (const threadId of [undefined, "tier-thread"]) {
+      const server = new FakeAppServer("tier-thread");
+      server.modelList = [{ id: "gpt-6-astra", isDefault: true, serviceTiers: [{ id: "priority" }, { id: "ultrafast" }] }];
+      const options = { cwd: "/repo", model: "gpt-6-astra", serviceTier: "ultrafast", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, {}) };
+      const host = await (threadId ? CodexAppServerHost.adopt(threadId, options) : CodexAppServerHost.start(options));
+      try {
+        expect(server.requests.find(request => request.method === (threadId ? "thread/resume" : "thread/start"))?.params).toMatchObject({ serviceTier: "ultrafast" });
+        await host.send({ id: "tier-first", text: "begin" });
+        await host.send({ id: "tier-steer", text: "continue", expectedTurnId: "turn-1" });
+        server.notify("turn/completed", { threadId: host.identity.threadId, turn: { id: "turn-1", status: "completed" } });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        await host.send({ id: "tier-later", text: "next turn" });
+        const sends = server.requests.filter(request => request.method === "turn/start" || request.method === "turn/steer");
+        expect(sends.map(request => request.method)).toEqual(["turn/start", "turn/steer", "turn/start"]);
+        for (const send of sends) { expect(send.params).not.toHaveProperty("serviceTier"); expect(send.params).not.toHaveProperty("serviceTierForTurn"); }
+      } finally { await host.release(); }
+    }
+  });
+  test("catalog without the tier or an unavailable catalog refuses before thread start", async () => {
+    for (const unavailable of [false, true]) {
+      const server = new FakeAppServer("tier-refused");
+      server.modelList = [{ id: "gpt-6-astra", serviceTiers: [{ id: "priority" }] }];
+      if (unavailable) server.modelListFailuresRemaining = 1;
+      await expect(CodexAppServerHost.start({ cwd: "/repo", model: "gpt-6-astra", serviceTier: "ultrafast", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, {}) })).rejects.toThrow(unavailable ? "catalog unavailable" : "priority");
+      expect(server.requests.some(request => request.method === "thread/start")).toBeFalse();
+    }
+  });
+});
+
+test("Codex host records injected OOM SIGKILL on its terminal row", async () => {
+  const memory = fakeAgentMemory();
+  const child = new FakeAppServer("memory-thread");
+  const captured: { args?: string[] } = {};
+  const host = await CodexAppServerHost.start({ cwd: "/repo", mcpServers: [], eventStore: new MemoryEventStore(), ...ownedFakeProcess,
+    memoryCell: memory.cell, spawnProcess: fakeSpawn(child, captured) });
+  try {
+    expect(captured.args).toContain("MemorySwapMax=0");
+    memory.kill();
+    child.emit("exit", null, "SIGKILL");
+    expect((await host.health()).status).toBe("dead");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+    child.emit("close", null, "SIGKILL");
+    expect((await host.health()).status).toBe("dead");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+  } finally { await host.release(); memory.dispose(); }
+});
+
+test("auto scope admission failure is explicit and forced scope keeps the runner diagnostic", async () => {
+  const { AgentMemoryCell, GIB } = await import("./agentMemory");
+  for (const mode of ["auto", "scope"] as const) {
+    const server = new FakeAppServer("scope-failure", "scope-failure", false, [], undefined, null, ["initialize"]);
+    const cell = new AgentMemoryCell({ mechanism: "scope", mode, platform: "linux", limitBytes: GIB, budgetBytes: 2 * GIB, reserveBytes: GIB, totalBytes: 3 * GIB,
+      score: 500, unit: "delegatus-agent-rejected.scope", slice: "delegatus-agents-test.slice", viewerUnit: null, systemdVersion: 255 }, { cgroupForPid: () => null });
+    const start = CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), memoryCell: cell, ...ownedFakeProcess,
+      spawnProcess: (...args) => {
+        const child = fakeSpawn(server)(...args);
+        setTimeout(() => { server.stderr.write("Failed to create bus connection: Connection refused"); server.emit("exit", 1, null); server.emit("close", 1, null); }, 1);
+        return child;
+      } });
+    try {
+      await expect(start).rejects.toThrow(mode === "auto" ? "agent memory scope launch failed before exec; retry shortly" : "Connection refused");
+      expect(server.requests.some(request => request.method === "turn/start")).toBeFalse();
+    } finally { cell.close(); }
+  }
+});
+
+for (const mechanism of ["scope", "watchdog"] as const) for (const platform of ["linux", "darwin"] as const) for (const reused of [false, true]) test(`Codex fatal ${mechanism} exit on ${platform} skips group cleanup after root ${reused ? "reuse" : "disappearance"}`, async () => {
+  const child = new FakeAppServer("watchdog-thread");
+  const memory = fakeHostMemory(child.pid, platform, mechanism);
+  const groupSignals: number[] = [];
+  const host = await CodexAppServerHost.start({ cwd: "/repo", mcpServers: [], eventStore: new MemoryEventStore(),
+    memoryCell: memory.cell, spawnProcess: fakeSpawn(child), processIdentity: memory.processIdentity, pidAlive: memory.pidAlive,
+    shutdownGraceMs: 2, signalProcess: (pid) => { groupSignals.push(pid); } });
+  try {
+    memory.kill();
+    memory.rootExit(reused);
+    Object.assign(child, { signalCode: "SIGKILL" });
+    child.emit("exit", null, "SIGKILL");
+    expect((await host.health()).memory?.lastKill?.fatal).toBe(true);
+    await host.release();
+    await Bun.sleep(5);
+    child.emit("close", null, "SIGKILL");
+    expect(memory.signals).toEqual(mechanism === "watchdog"
+      ? platform === "linux" ? [child.pid + 2, child.pid + 1] : [child.pid + 2, child.pid + 1, child.pid]
+      : []);
+    expect(memory.scopeReaps).toHaveLength(mechanism === "scope" ? 1 : 0);
+    expect(groupSignals).toEqual([]);
+    expect(child.signals).toEqual([]);
+    expect(child.stdout.destroyed).toBe(true);
+    expect(child.stderr.destroyed).toBe(true);
+  } finally { child.emit("close", null, "SIGKILL"); await host.release(); memory.dispose(); }
+});
+
+test("Codex transport confirmation waits for delayed native provenance before restart", async () => {
+  const { durableStageTurnEvidence } = await import("@/lib/pipelines/durableEvidence");
+  const file = path.join(metadataState, "delayed-native-prompt.jsonl");
+  fs.writeFileSync(file, "");
+  const server = new FakeAppServer();
+  server.threadPath = file;
+  const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(server) });
+  let sendSettled = false;
+  let sendOutcome: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
+  try {
+    sendOutcome = host.send({ id: "late-native-write", text: "Continue interrupted work", origin: { kind: "agent", role: "startup-recovery" } })
+      .then(() => ({ ok: true as const }), error => ({ ok: false as const, error }))
+      .then(outcome => { sendSettled = true; return outcome; });
+    await waitForCondition(() => server.requests.some(row => row.method === "turn/start"), "Codex turn/start request was not observed");
+    const request = server.requests.find(row => row.method === "turn/start");
+    if (!request) throw new Error("Codex turn/start request disappeared after readiness");
+    const wire = (request.params as { input: Array<{ text: string }> }).input[0]!.text;
+    const outcome = await sendOutcome;
+    if (!outcome.ok) throw outcome.error;
+    fs.appendFileSync(file, JSON.stringify({ type: "event_msg", timestamp: "2026-10-05T16:01:00Z",
+      payload: { type: "user_message", message: wire } }) + "\n");
+  } finally {
+    if (sendOutcome && !sendSettled) {
+      await host.release();
+      await sendOutcome;
+    } else {
+      await sendOutcome;
+      await host.release();
+    }
+  }
+  expect((await durableStageTurnEvidence("codex", file))?.prompts).toEqual([{ ts: Date.parse("2026-10-05T16:01:00Z"), origin: "pipeline" }]);
+});
+
+for (const transport of ["send", "steer"] as const) {
+  test(`Codex automatic ${transport} into an active turn binds its own native row`, async () => {
+    const { durableStageTurnEvidence } = await import("@/lib/pipelines/durableEvidence");
+    const file = path.join(metadataState, `steered-${transport}.jsonl`);
+    fs.writeFileSync(file, "");
+    const server = new FakeAppServer();
+    server.threadPath = file;
+    server.persistUserMessages = true;
+    const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(server) });
+    try {
+      await host.send({ id: "initial-send", text: "Initial operator input", origin: { kind: "operator" } });
+      const entry = { id: "automatic-steer", text: "Continue this turn", origin: { kind: "agent" as const, role: "pipeline" } };
+      if (transport === "send") expect(await host.send(entry)).toMatchObject({ outcome: "steered", turnId: "turn-1" });
+      else expect(await (await host.steer(entry)).observe()).toBe("landed");
+      expect((await durableStageTurnEvidence("codex", file))?.prompts?.map(row => row.origin)).toEqual(["external", "pipeline"]);
+    } finally { await host.release(); }
+  });
+}
+
+for (const firstDispatch of [false, true]) test(`owner dispatch cutoff survives Codex's internal confirmation await (first dispatch: ${firstDispatch})`, async () => {
+  const server = new FakeAppServer(`owner-native-cutoff-${firstDispatch}`);
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  let allowed = true;
+  const entry = { id: "owner-native-cutoff", text: "Owner instruction" };
+  try {
+    const pending = host.send(entry, firstDispatch ? { operationId: entry.id, writerClaim: "fixture", firstDispatch: true } : undefined,
+      () => { if (!allowed) throw Error("owner first prompt revoked"); });
+    allowed = false;
+    await expect(pending).rejects.toThrow("owner first prompt revoked");
+    expect(server.requests.some(request => request.method === "turn/start" || request.method === "turn/steer")).toBeFalse();
+  } finally { await host.release(); }
+});
+
+test("seat launches disable native questions while workers keep them on fresh and adopted Codex", async () => {
+  for (const seat of [false, true]) for (const resumed of [false, true]) {
+    const server = new FakeAppServer("seat-question-policy");
+    const captured: { args?: string[] } = {};
+    const options = { cwd: "/repo", operatorDecisionForms: seat, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured) };
+    const host = resumed ? await CodexAppServerHost.adopt("seat-question-policy", options) : await CodexAppServerHost.start(options);
+    try {
+      expect(captured.args!.includes("tools.experimental_request_user_input.enabled=false")).toBe(seat);
+      const request = server.requests.find(r => r.method === (resumed ? "thread/resume" : "thread/start"))!;
+      const config = (request.params as { config: Record<string, unknown> }).config;
+      if (seat) {
+        expect(config).toMatchObject({ tools: { experimental_request_user_input: { enabled: false } } });
+        const hooks = (config.hooks as { PreToolUse: Array<{ matcher: string }> }).PreToolUse;
+        expect(hooks.some(group => group.matcher.includes("request_user_input_async"))).toBe(true);
+        expect(hooks.some(group => group.matcher.includes("exec_command"))).toBe(true);
+      }
+      else expect(config).not.toHaveProperty("tools.experimental_request_user_input.enabled");
+    } finally { await host.release(); }
+  }
+});
 
 describe("durable Codex callbacks", () => {
   const method = "item/commandExecution/requestApproval";
@@ -267,7 +612,6 @@ describe("durable Codex callbacks", () => {
   });
 });
 
-
 test("a hard Viewer process restart in the middle of an answer keeps the fsynced dispatch and never redelivers", async () => {
   const fixture = path.join(import.meta.dir, "fixtures/codexCallbackProcess.ts");
   const writeLog = path.join(metadataState, "answers.jsonl");
@@ -397,3 +741,51 @@ for (const { midAnswer = false, graceful = false, reconnectFailure, crashBeforeW
     fs.rmSync(socketRoot, { recursive: true, force: true });
   }
 }, 30_000);
+
+test("Codex records its stop before EOF can end the native host", async () => {
+  const server = new FakeAppServer("host-eof-thread");
+  let nativeAlive = true;
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: () => server as never,
+    processIdentity: () => nativeAlive ? "fixture-codex-eof" : null, pidAlive: () => nativeAlive, signalProcess: () => {} });
+  const process = (await host.health()).exitProcess!;
+  const beforeEof: { value: ReturnType<typeof readHostExit> } = { value: null };
+  let deliveredEof = false;
+  const end = spyOn(server.stdin, "end").mockImplementation(() => {
+    if (!deliveredEof) {
+      deliveredEof = true;
+      beforeEof.value = readHostExit(process);
+      nativeAlive = false;
+      queueMicrotask(() => { server.emit("exit", 0, null); server.emit("close", 0, null); });
+    }
+    return server.stdin;
+  });
+  try {
+    await withHostStopOrigin({ path: "deploy-cut", operationId: "eof-operation" }, () => host.release());
+    expect(end).toHaveBeenCalled();
+    expect(beforeEof.value?.stop).toMatchObject({ path: "deploy-cut", operationId: "eof-operation", signal: "EOF" });
+    expect(readHostExit(process)?.exit).toMatchObject({ code: 0, signal: null });
+  } finally { end.mockRestore(); await host.release(); }
+});
+
+for (const ending of ["release", "external", "code"] as const) test(`Codex host exit observer retains ${ending} status and source after release`, async () => {
+  const server = new FakeAppServer("host-exit-thread");
+  const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server),
+    processIdentity: () => "fixture-codex-host-exit", pidAlive: () => true, shutdownGraceMs: 10,
+    signalProcess: (_pid, signal) => {
+      queueMicrotask(() => server.emit("close", null, signal));
+    } });
+  const process = (await host.health()).exitProcess!;
+  try {
+    expect(process.startIdentity).toBe("fixture-codex-host-exit");
+    if (ending === "release") await withHostStopOrigin({ path: "deploy-cut", operationId: "deploy-fixture-operation" }, () => host.release());
+    else {
+      server.emit("exit", ending === "code" ? 23 : null, ending === "external" ? "SIGKILL" : null);
+      server.emit("close", ending === "code" ? 23 : null, ending === "external" ? "SIGKILL" : null);
+    }
+    const evidence = readHostExit(process)!;
+    expect(evidence.exit).toMatchObject({ code: ending === "code" ? 23 : null, signal: ending === "external" ? "SIGKILL" : ending === "release" ? "SIGTERM" : null });
+    expect(evidence.stop).toEqual(ending === "release" ? expect.objectContaining({ path: "deploy-cut", operationId: "deploy-fixture-operation" }) : null);
+    expect(hostExitText(evidence)).toContain(ending === "release" ? "stopped by deploy-cut" : "no Delegatus stop recorded");
+    expect((await host.health()).exitProcess).toEqual(process);
+  } finally { await host.release(); }
+});

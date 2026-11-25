@@ -16,6 +16,7 @@ import type { AgentEngine } from "./cli";
 import { grantedMcpServers } from "./mcpAllowlist";
 import { operatorTelegramClaudeEntry } from "@/lib/runtime/telegramConnectorEnv";
 import { installProcessCleanupHook, PROCESS_CLEANUP_HOOK_PREFIX } from "./processCleanupPolicy";
+import { DESTRUCTIVE_GUARD_PREFIX, ensureDestructiveGuard } from "./destructiveGuard";
 
 type JsonObject = Record<string, unknown>;
 
@@ -424,7 +425,7 @@ export function prepareManagedClaudeSpawnHome(home: string, cwd: string): void {
 
 function managedCommand(command: unknown): boolean {
   return typeof command === "string" && (command.startsWith(MANAGED_HOOK_PREFIX)
-    || command.startsWith(PROCESS_CLEANUP_HOOK_PREFIX));
+    || command.startsWith(PROCESS_CLEANUP_HOOK_PREFIX) || command.startsWith(DESTRUCTIVE_GUARD_PREFIX));
 }
 
 function withoutManagedHandlers(value: unknown): unknown[] {
@@ -460,7 +461,8 @@ export function applyClaudeSpawnPolicy(
     viewerTransport?: ViewerMcpTransport;
   } = {},
 ): ClaudeSpawnPolicyResult {
-  const publicationIdentity = agentPublicationIdentityEnv(options.publicationEnv ?? process.env);
+  const publicationIdentity = agentPublicationIdentityEnv(options.publicationEnv ?? process.env, options.cwd ?? "/");
+  const guard = ensureDestructiveGuard({ engine: "claude", home, source: options.publicationEnv ?? process.env });
   const sourceSettingsPath = path.join(home, "settings.json");
   const profileId = options.profileId ?? crypto.randomUUID();
   const result = claudeSpawnPolicyPaths(home, profileId);
@@ -491,6 +493,7 @@ export function applyClaudeSpawnPolicy(
 
   const preToolUse = withoutManagedHandlers(hooks.PreToolUse);
   preToolUse.push({ matcher: "Bash", hooks: [{ type: "command", command: installProcessCleanupHook(home) }] });
+  preToolUse.push({ matcher: "Bash", hooks: [guard.handler] });
   let memoryHook: ReturnType<typeof installMemoryHook> = null;
   try { if (!options.cleanMemory) memoryHook = installMemoryHook(home, options.publicationEnv ?? process.env, options.memoryQueuePath ?? null); } catch { /* optional memory must never stop a launch */ }
   const promptHooks = Array.isArray(hooks.UserPromptSubmit) ? hooks.UserPromptSubmit : [];

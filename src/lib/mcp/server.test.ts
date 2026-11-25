@@ -30,6 +30,11 @@ import {
   type McpReceiptStore,
   type McpToolResult,
 } from "./server";
+
+test("the attention read contract accepts refusal filtering and rejects unknown kinds", () => {
+  expect(TOOL_INPUT_SCHEMAS.dismiss_attention.safeParse({ clientRequestId: "guard-read-contract", project: "project-a", kinds: ["refusal"] }).success).toBeTrue();
+  expect(TOOL_INPUT_SCHEMAS.dismiss_attention.safeParse({ clientRequestId: "guard-read-contract", project: "project-a", kinds: ["unknown"] }).success).toBeFalse();
+});
 import { fixturePidAlive, ownFixtureChild, ownedFixturePids, reapFixtureChildren } from "./ownedFixtureChildren";
 
 const scratch: string[] = [];

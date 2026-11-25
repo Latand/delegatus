@@ -54,7 +54,7 @@ export function isAttentionSystemRule(value: unknown): value is AttentionSystemR
 }
 
 /** The reasons a conversation can need the operator for (§4). */
-export type ConversationReasonKind = "decision" | "question" | "plan" | "permission" | "delivery" | "launch" | "memory" | "ask";
+export type ConversationReasonKind = "decision" | "question" | "plan" | "permission" | "delivery" | "launch" | "memory" | "ask" | "refusal";
 
 /** The reasons a lane can need the operator for: a decision, a spent review
     budget, and a completed lane's merge that stopped (#2187 §4.6). */

@@ -78,7 +78,7 @@ test.each([
       .toEqual([name, email, name, email]);
     if (engine === "claude") {
       const settings = JSON.parse(fs.readFileSync(built.args[built.args.indexOf("--settings") + 1]!, "utf8"));
-      expect(settings.env).toEqual({ ...agentPublicationIdentityEnv(process.env), CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" });
+      expect(settings.env).toEqual({ ...agentPublicationIdentityEnv(process.env, process.env.LLV_STATE_DIR!), CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" });
     } else {
       expect(built.args).toContain(`shell_environment_policy.set.GIT_AUTHOR_EMAIL=${JSON.stringify(email)}`);
     }

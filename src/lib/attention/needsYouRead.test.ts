@@ -72,6 +72,19 @@ test("read selects update sources before board preparation and memory omits upda
   } finally { setSystemTime(); }
 });
 
+test("a refusal-only read loads conversations and retains its dismissible localized row", async () => {
+  setSystemTime(new Date(now * 1000));
+  try {
+    const body = { files: [file("guard", { guardRefusal: { id: "guard-refusal", at, tool: "rm", entry: "~/.ssh", kind: "an account's credentials", command: "rm -rf ~/.ssh" } })], pipelines: [], tasks: [] };
+    const input = sources({ board: async () => body, tasks: async () => [], pipelines: async () => [] });
+    const answer = await readNeedsYou("project-a", { kinds: ["refusal"], locale: "en" }, "panel", input.readers);
+    expect(answer.rows).toHaveLength(1);
+    expect(answer.rows[0]).toMatchObject({ kind: "refusal", target: { kind: "conversation", conversationId: "conversation_guard", reasonId: "destructive-guard:guard-refusal" } });
+    expect(answer.rows[0]!.line).toContain("Delegatus stopped a delete");
+    expect(input.calls).toContain("liveness");
+  } finally { setSystemTime(); }
+});
+
 test("expiry during a native read stops later sources without waiting for a timer", async () => {
   setSystemTime(new Date(now * 1000));
   const input = sources({ board: async () => { setSystemTime(new Date(now * 1000 + 3500)); return fixture(); } });

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 type SandboxIdentity = { directory: string; dev: number; ino: number; generation?: string };
-const allocations = new Map<string, { identity: SandboxIdentity; journal: string }>();
+const allocations = new Map<string, { identity: SandboxIdentity; journal?: string }>();
 const identityKey = (row: SandboxIdentity) => JSON.stringify([row.directory, row.dev, row.ino, row.generation]);
 
 /** A child can recognize a still-owned allocation in its supervisor's journal.
@@ -38,13 +38,11 @@ export function hasActiveGateSandbox(directory: string, journal: string | undefi
  * outer owned runner consumes this journal only after its children stop. */
 export function recordGateSandbox(directory: string): string {
   const record = process.env.LLV_GATE_SANDBOX_RECORD;
-  if (record) {
-    const stat = fs.lstatSync(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("invalid gate sandbox allocation");
-    const identity = { directory: fs.realpathSync(directory), dev: stat.dev, ino: stat.ino, generation: randomUUID() };
-    fs.appendFileSync(record, JSON.stringify(identity) + "\n");
-    allocations.set(path.resolve(directory), { identity, journal: record });
-  }
+  const stat = fs.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("invalid gate sandbox allocation");
+  const identity = { directory: fs.realpathSync(directory), dev: stat.dev, ino: stat.ino, generation: randomUUID() };
+  if (record) fs.appendFileSync(record, JSON.stringify(identity) + "\n");
+  allocations.set(path.resolve(directory), { identity, journal: record });
   return directory;
 }
 
@@ -53,17 +51,13 @@ export function recordGateSandbox(directory: string): string {
 export function releaseGateSandbox(directory: string) {
   const key = path.resolve(directory);
   const allocation = allocations.get(key);
-  if (!allocation) {
-    if (process.env.LLV_GATE_SANDBOX_RECORD) throw new Error("gate sandbox has no local allocation record");
-    fs.rmSync(directory, { recursive: true, force: true });
-    return;
-  }
+  if (!allocation) throw new Error("gate sandbox has no local allocation record");
   const { identity, journal } = allocation;
   const stat = fs.lstatSync(identity.directory, { throwIfNoEntry: false });
   if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== identity.dev || stat.ino !== identity.ino
     || fs.realpathSync(identity.directory) !== identity.directory)) throw new Error("recorded gate sandbox changed identity");
   if (stat) fs.rmSync(identity.directory, { recursive: true, force: true });
-  fs.appendFileSync(journal, JSON.stringify({ ...identity, released: true }) + "\n");
+  if (journal) fs.appendFileSync(journal, JSON.stringify({ ...identity, released: true }) + "\n");
   allocations.delete(key);
 }
 
@@ -78,7 +72,7 @@ export function retainGateSandbox(directory: string) {
   const stat = fs.lstatSync(identity.directory, { throwIfNoEntry: false });
   if (!stat || !stat.isDirectory() || stat.isSymbolicLink() || stat.dev !== identity.dev || stat.ino !== identity.ino
     || fs.realpathSync(identity.directory) !== identity.directory) throw new Error("recorded gate sandbox changed identity");
-  fs.appendFileSync(journal, JSON.stringify({ ...identity, retained: true }) + "\n");
+  if (journal) fs.appendFileSync(journal, JSON.stringify({ ...identity, retained: true }) + "\n");
   allocations.delete(key);
 }
 

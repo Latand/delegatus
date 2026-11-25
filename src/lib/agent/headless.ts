@@ -69,7 +69,7 @@ export interface LiveRun {
 
 export const headlessRuns = new Map<string, LiveRun>();
 
-export function reviewerEnvironment(base: NodeJS.ProcessEnv, spawnCapability?: string, omitKeys: readonly string[] = []): NodeJS.ProcessEnv {
+export function reviewerEnvironment(base: NodeJS.ProcessEnv, spawnCapability?: string, omitKeys: readonly string[] = [], cwd?: string): NodeJS.ProcessEnv {
   const env = withoutUnsupportedApiCredentials(withoutOperatorCredentials(base));
   /* A headless reviewer is no owner of the operator's state. The Viewer's own
      claim (the image sets it for the whole container) used to ride along, so a
@@ -79,7 +79,7 @@ export function reviewerEnvironment(base: NodeJS.ProcessEnv, spawnCapability?: s
   delete env[STATE_OWNER_ENV];
   for (const key of omitKeys) delete env[key];
   if (spawnCapability) env.LLV_SPAWN_CAPABILITY = spawnCapability;
-  Object.assign(env, agentPublicationIdentityEnv(base));
+  Object.assign(env, agentPublicationIdentityEnv({ ...base, ...(spawnCapability ? { LLV_SPAWN_CAPABILITY: spawnCapability } : {}) }, cwd));
   return env;
 }
 
@@ -321,7 +321,7 @@ export interface BuiltHeadlessCommand {
 
 export async function prepareHeadlessPublication(built: BuiltHeadlessCommand, cwd: string): Promise<BuiltHeadlessCommand> {
   const source = await repositoryPublicationSource(cwd, built.env);
-  const identity = agentPublicationIdentityEnv(source);
+  const identity = agentPublicationIdentityEnv(source, cwd);
   built = { ...built, env: { ...source, ...identity } };
   if (!built.codexPublication) {
     const args = [...built.args];
@@ -336,7 +336,7 @@ export async function prepareHeadlessPublication(built: BuiltHeadlessCommand, cw
     return { ...built, args };
   }
   const policy = await readCodexShellPolicy(built.command, cwd, built.env, [], { ignoreUserConfig: true });
-  return { ...built, args: [...built.args, ...agentCodexPublicationArgs(policy, built.env)] };
+  return { ...built, args: [...built.args, ...agentCodexPublicationArgs(policy, built.env, cwd)] };
 }
 
 /* Every headless run is a flow's reviewer or a one-shot summarizer, and a
@@ -380,13 +380,14 @@ export function reviewerCommand(
       baseSettingsPath: claudeAccount?.managed ? claudeSettingsPath() : null,
       profileId: `headless-${sessionId}`,
       cleanMemory: HEADLESS_CLEAN_MEMORY,
+      cwd,
     }).settingsPath;
     args.push("--settings", settings);
     const baseEnv = claudeAccount?.managed ? claudeManagedEnvironment(claudeAccount.home) : process.env;
     return { ...claudeProviderCommand(claudeAccount?.home ?? "", provider, args),
       agentMemoryRole: "reviewer",
       agentMemoryMaxBytes: role.agentMemoryMaxBytes,
-      env: { ...reviewerEnvironment(baseEnv, spawnCapability), ...(HEADLESS_CLEAN_MEMORY ? CLAUDE_CLEAN_MEMORY_ENV : {}) }, stdin: null, outputPath: null, sessionId,
+      env: { ...reviewerEnvironment(baseEnv, spawnCapability, [], cwd), ...(HEADLESS_CLEAN_MEMORY ? CLAUDE_CLEAN_MEMORY_ENV : {}) }, stdin: null, outputPath: null, sessionId,
       reviewerPath: claudeTranscriptPath(cwd, sessionId, claudeAccount?.projectsDir) };
   }
   /* --json turns stdout into a JSONL event stream whose first events carry
@@ -400,7 +401,7 @@ export function reviewerCommand(
   const baseEnv = codexAccount?.home
     ? { ...withoutUnsupportedApiCredentials(process.env), CODEX_HOME: codexAccount.home } : process.env;
   args.push(...codexProcessCleanupArgs(codexAccount?.home));
-  args.push(...agentCodexPublicationArgs({}, baseEnv));
+  args.push(...agentCodexPublicationArgs({}, baseEnv, cwd));
   if (codexAccount?.managed) args.push("-c", "cli_auth_credentials_store=file");
   if (role.model) args.push("-m", role.model);
   if (role.effort) args.push("-c", `model_reasoning_effort=${role.effort}`);
@@ -411,7 +412,7 @@ export function reviewerCommand(
     agentMemoryMaxBytes: role.agentMemoryMaxBytes,
     codexPublication: true,
     args,
-    env: reviewerEnvironment(baseEnv, spawnCapability),
+    env: reviewerEnvironment(baseEnv, spawnCapability, [], cwd),
     stdin: fenceViewerSpawnPrompt("codex", reviewRequest),
     outputPath,
     sessionId: null,

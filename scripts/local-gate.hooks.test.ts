@@ -79,6 +79,13 @@ test("the gate temp root cannot inherit a pipeline's operator scratch TMPDIR", (
     if (original === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = original;
   }
 });
+
+test("an explicitly bound private gate root survives a router's production environment", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "gate-private-root-")); roots.push(directory);
+  expect(gateTemporaryRoot("linux", { NODE_ENV: "production", LLV_GATE_TEMP_ROOT: directory })).toBe(directory);
+  expect(() => gateTemporaryRoot("linux", { LLV_GATE_TEMP_ROOT: "relative" })).toThrow("absolute");
+  expect(() => gateTemporaryRoot("linux", { LLV_GATE_TEMP_ROOT: directory + "/missing" })).toThrow();
+});
 test("a push that changes nothing checks every pushed commit for privacy and runs no types or tests", () => {
   // Lane branch N commits behind main, stage changed nothing: the diff against
   // the merge base is empty whatever main has become since.
@@ -281,6 +288,7 @@ for (const slow of ["privacy", "checks"] as const) test(`a ${slow} deadline pres
 
 for (const code of ["EROFS", "EACCES", "ENOENT"]) {
   test(`controller gate creation falls back from an unavailable /var/tmp (${code}) without using inherited scratch`, () => {
+    const allocation = mkdtempSync(path.join(tmpdir(), "gate-fallback-allocation-")); roots.push(allocation);
     const original = process.env.TMPDIR;
     const sandboxRecord = process.env.LLV_GATE_SANDBOX_RECORD;
     delete process.env.LLV_GATE_SANDBOX_RECORD;
@@ -290,10 +298,10 @@ for (const code of ["EROFS", "EACCES", "ENOENT"]) {
       const created = createGateSandbox("linux", prefix => {
         calls.push(prefix);
         if (calls.length === 1) throw Object.assign(new Error("unavailable preferred root"), { code });
-        return `${prefix}fixture`;
+        return allocation;
       }, { NODE_ENV: "production" });
       expect(calls).toEqual([path.join("/var/tmp", "delegatus-local-gate-"), path.join("/tmp", "delegatus-local-gate-")]);
-      expect(created).toBe(`${calls[1]}fixture`);
+      expect(created).toBe(allocation);
     } finally {
       if (original === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = original;
       if (sandboxRecord !== undefined) process.env.LLV_GATE_SANDBOX_RECORD = sandboxRecord;

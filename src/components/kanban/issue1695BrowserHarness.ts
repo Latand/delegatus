@@ -664,6 +664,53 @@ export function ownedBrowserSocketEnvironment() {
     close: () => fs.rmSync(directory, { recursive: true, force: true }) };
 }
 
+/** Destructive refusals use the same Needs-you projection on both surfaces. */
+export async function captureDestructiveRefusal(browser: Browser, out: string, phone: boolean) {
+  fs.mkdirSync(out, { recursive: true });
+  const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+  const readings: unknown[] = [];
+  try {
+    for (const width of phone ? [390, 410, 430] : [900, 1170, 1440]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+      const tag = `${width}-${lang}-${theme}`;
+      const { context, page, pageErrors } = await openFixture(browser, `${server.base}?destructive-refusal=1&open=1&lang=${lang}`, { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
+      try {
+        if (phone) { await page.locator('[data-mobile2-open="attention"]').waitFor(); await page.locator('[data-mobile2-open="attention"]').click(); }
+        const row = page.locator('[data-attention-row="destructive-guard:rendered-refusal"]');
+        await row.waitFor();
+        const expected = translate(lang, "attention.destructiveRefusal", { tool: "rm", entry: "~/.ssh", kind: translate(lang, "destructive.kind.credentials") });
+        expect(await row.innerText()).toContain(expected);
+        const geometry = await row.evaluate(element => {
+          const box = element.getBoundingClientRect(), cuts: string[] = [];
+          const walker = document.createTreeWalker(element.querySelector('[data-needs-you-sentence]')!, NodeFilter.SHOW_TEXT);
+          let node: Node | null;
+          while ((node = walker.nextNode())) {
+            if (!node.textContent?.trim() || !node.parentElement?.checkVisibility()) continue;
+            const range = document.createRange(); range.selectNodeContents(node);
+            for (const rect of range.getClientRects()) {
+              let left = 0, right = innerWidth, top = 0, bottom = innerHeight;
+              for (let parent: HTMLElement | null = node.parentElement; parent; parent = parent.parentElement) {
+                const style = getComputedStyle(parent), bounds = parent.getBoundingClientRect();
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, bounds.left); right = Math.min(right, bounds.right); }
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, bounds.top); bottom = Math.min(bottom, bounds.bottom); }
+              }
+              if (rect.left < left - .5 || rect.right > right + .5 || rect.top < top - .5 || rect.bottom > bottom + .5) cuts.push(node.textContent.trim());
+            }
+          }
+          return { cuts, onFirstScreen: box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth, overflow: document.documentElement.scrollWidth > innerWidth };
+        });
+        await page.screenshot({ path: path.join(out, tag + ".png") });
+        expect(geometry.cuts, tag).toEqual([]); expect(geometry.onFirstScreen, tag).toBeTrue(); expect(geometry.overflow, tag).toBeFalse();
+        await page.locator('[data-needs-you-dismiss="destructive-guard:rendered-refusal"]').click();
+        await row.waitFor({ state: "hidden" });
+        expect(pageErrors, tag).toEqual([]);
+        readings.push({ width, lang, theme, expected, geometry });
+      } finally { await context.close(); }
+    }
+    fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: phone ? "src/components/mobile/issue1671Evidence.browser.test.tsx" : "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    return readings.length;
+  } finally { server.stop(); }
+}
+
 export async function serveEvidenceFixture(
   outDir: string,
   entryFixture = "src/components/kanban/issue1695Evidence.fixture.tsx",

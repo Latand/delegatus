@@ -4,6 +4,8 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { Workflow } from "@/lib/workflows/types";
 import type { TurnState } from "@/lib/accounts/migration/contracts";
 import type { PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
+
+export interface GuardRefusal { id: string; at: string; tool: string; entry: string; kind: string; command: string }
 import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
 
 export type RootKey =
@@ -298,6 +300,7 @@ export interface FileEntry {
   /** Current host allocation, refreshed after adoption; the launch keeps its receipt. */
   memoryCap?: import("@/lib/runtime/agentMemoryConfig").AgentMemoryCap;
   pendingPermission?: PendingPermissionRequest | null;
+  guardRefusal?: GuardRefusal;
   /** Live pane wall or fresh structured account exhaustion. */
   rateLimit?: RateLimitState | null;
   /** claude-tasks only: recovered originating Bash command ("" if not found). */

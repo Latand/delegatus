@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,32 +7,18 @@ import { PassThrough } from "node:stream";
 import { type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { afterEach, beforeEach, spyOn } from "bun:test";
 import * as pinnedProtocol from "@/lib/accounts/codexPinnedProtocol";
-import type { RuntimeEventStore } from "./eventStore";
+import type { SelectedContextRef } from "@/lib/selection/selectedContext";
+import { type RuntimeEventStore } from "./eventStore";
 import type { RuntimeEvent } from "./engineHost";
 import { parseCodexFeatures, setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
 import type { NativeQueuedSubmission } from "./nativeCodexQueue";
 
-export function installCodexHostFixture(setState: (directory: string) => void) {
-  let metadataState: string;
-  let previousMetadataState: string | undefined;
-  let restoreFeatures: () => void;
-  let restoreVersion: () => void;
-  beforeEach(() => {
-    const versionSpy = spyOn(pinnedProtocol, "installedCodexVersion").mockReturnValue("0.162.1");
-    restoreVersion = () => versionSpy.mockRestore();
-    restoreFeatures = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable false\nfuture_worker stable true"));
-    previousMetadataState = process.env.LLV_STATE_DIR;
-    metadataState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-metadata-"));
-    process.env.LLV_STATE_DIR = metadataState;
-    setState(metadataState);
-  });
-  afterEach(() => {
-    restoreVersion();
-    restoreFeatures();
-    if (previousMetadataState === undefined) delete process.env.LLV_STATE_DIR;
-    else process.env.LLV_STATE_DIR = previousMetadataState;
-    fs.rmSync(metadataState, { recursive: true, force: true });
-  });
+export const COMPACT_SELECTED: SelectedContextRef = { version: 1, state: "selected", conversationId: "conversation_marker_fixture", capturedAt: "2026-09-22T00:00:00.000Z" };
+
+export const DENIED_FEATURE_ARGS = ["-c", "agents.enabled=false", "-c", 'approvals_reviewer="user"', "-c", "features.multi_agent=false", "-c", "features.multi_agent_v2=false", "-c", "features.future_worker=false", "-c", "features.collab=false", "-c", "features.plugins=false"];
+
+export function deliveryDedup(operationId: string): string {
+  return createHash("sha256").update(operationId).digest("hex");
 }
 
 export class MemoryEventStore implements RuntimeEventStore {
@@ -45,6 +32,29 @@ export class MemoryEventStore implements RuntimeEventStore {
     const events = this.events.get(threadId) ?? [];
     events.push(structuredClone(event));
     this.events.set(threadId, events);
+  }
+}
+
+export function modelNegotiationServer(threadId: string, defaultModel = "text-model") {
+  const server = new FakeAppServer(threadId);
+  server.modelList = ["text-model", "image-model"].map(id => ({ id, model: id, isDefault: id === defaultModel, inputModalities: id === "image-model" ? ["text", "image"] : ["text"] }));
+  return server;
+}
+
+export const MODEL_NEGOTIATION_IMAGE = { sha256: "a".repeat(64), mime: "image/png" as const, bytes: 67 };
+
+export class FailingEventStore implements RuntimeEventStore {
+  readonly stored: RuntimeEvent[] = [];
+  appendAttempts = 0;
+
+  load(): RuntimeEvent[] {
+    return structuredClone(this.stored);
+  }
+
+  append(_threadId: string, event: RuntimeEvent): void {
+    this.appendAttempts += 1;
+    if (this.appendAttempts >= 2) throw new Error("ENOSPC oauth_token=must-stay-private");
+    this.stored.push(structuredClone(event));
   }
 }
 
@@ -461,4 +471,78 @@ export async function waitForCondition(predicate: () => boolean | Promise<boolea
     await Bun.sleep(10);
   }
   throw new Error(message);
+}
+
+/** Control host deadlines while metadata I/O and the request barrier keep
+ * using the real event loop. Install only after the host has booted. */
+export function controlHostTimeouts() {
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  let now = 0;
+  const pending = new Map<ReturnType<typeof setTimeout>, { at: number; run: () => void }>();
+  const timers = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay = 0) => {
+    const handle = realSetTimeout(run, 120_000);
+    pending.set(handle, { at: now + delay, run });
+    return handle;
+  }) as typeof setTimeout);
+  const cancellations = spyOn(globalThis, "clearTimeout").mockImplementation((handle) => {
+    pending.delete(handle as ReturnType<typeof setTimeout>);
+    realClearTimeout(handle as ReturnType<typeof setTimeout>);
+  });
+  return {
+    pendingCount: () => pending.size,
+    advance(ms: number) {
+      const target = now + ms;
+      for (;;) {
+        const due = [...pending].filter(([, timer]) => timer.at <= target)
+          .sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        const [handle, timer] = due;
+        pending.delete(handle);
+        realClearTimeout(handle);
+        now = timer.at;
+        timer.run();
+      }
+      now = target;
+    },
+    restore() {
+      timers.mockRestore();
+      cancellations.mockRestore();
+      for (const handle of pending.keys()) realClearTimeout(handle);
+      pending.clear();
+    },
+  };
+}
+
+export const ownedFakeProcess = {
+  pidAlive: () => true,
+  processIdentity: () => "4242:owned",
+};
+
+export async function nextEvent(iterable: AsyncIterable<unknown>): Promise<unknown> {
+  return (await iterable[Symbol.asyncIterator]().next()).value;
+}
+
+export let metadataState: string;
+
+export function installCodexHostFixture(setState?: (directory: string) => void) {
+  let previousMetadataState: string | undefined;
+  let restoreFeatures: () => void;
+  let restoreVersion: () => void;
+  beforeEach(() => {
+    const versionSpy = spyOn(pinnedProtocol, "installedCodexVersion").mockReturnValue("0.162.1");
+    restoreVersion = () => versionSpy.mockRestore();
+    restoreFeatures = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable false\nfuture_worker stable true"));
+    previousMetadataState = process.env.LLV_STATE_DIR;
+    metadataState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-host-metadata-"));
+    process.env.LLV_STATE_DIR = metadataState;
+    setState?.(metadataState);
+  });
+  afterEach(() => {
+    restoreVersion();
+    restoreFeatures();
+    if (previousMetadataState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousMetadataState;
+    fs.rmSync(metadataState, { recursive: true, force: true });
+  });
 }

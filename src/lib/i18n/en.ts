@@ -4,6 +4,15 @@ import type { Dictionary } from "./core";
    Plural entries use Intl.LDMLPluralRule forms; {name} placeholders are
    filled from t()'s params. uk.ts must mirror this key set. */
 export const en = {
+  "attention.destructiveRefusal": "Delegatus stopped a delete: {tool} would remove {entry} ({kind}).",
+  "destructive.kind.state": "Delegatus state",
+  "destructive.kind.credentials": "account credentials",
+  "destructive.kind.project": "another project",
+  "destructive.kind.home": "home directory",
+  "destructive.kind.system": "top-level system directory",
+  "destructive.kind.protected": "protected directory",
+  "mobile2.board.badgeRefusal": "Delete stopped",
+
   "claudeCloud.connectGithub": "Connect GitHub to this Claude account on claude.ai.",
   "claudeCloud.createEnvironment": "Create a cloud environment for this Claude account on claude.ai.",
 

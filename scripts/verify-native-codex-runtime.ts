@@ -20,6 +20,7 @@ export const engineFiles = [
   "src/lib/runtime/codexSocketTransport.native.test.ts",
   "src/lib/agent/processCleanupPolicy.native.test.ts",
   "src/lib/agent/operatorQuestionPolicy.native.test.ts",
+  "src/lib/agent/destructiveGuard.native.test.ts",
   "src/lib/runtime/nativeCodexQueue.test.ts",
   "src/lib/runtime/codexHistoryReader.test.ts",
   "src/lib/runtime/nativeQueueCompaction.integration.test.ts",
@@ -34,11 +35,27 @@ export const engineInjectionFiles = [
   "src/lib/runtime/codexAppServerHost.injectCli.test.ts",
 ];
 
+// Bound each shared host contract file independently within the existing
+// five-minute file deadline, including when publication runs sibling lanes.
+export const codexHostContractFiles = [
+  "src/lib/runtime/codexAppServerHost.test.ts",
+  "src/lib/runtime/codexAppServerHost.realtime.test.ts",
+  "src/lib/runtime/codexAppServerHost.replay.test.ts",
+  "src/lib/runtime/codexAppServerHost.nativeProof.test.ts",
+  "src/lib/runtime/codexAppServerHost.recovery.test.ts",
+  "src/lib/runtime/codexAppServerHost.cleanup.test.ts",
+  "src/lib/runtime/codexAppServerHost.adoption.test.ts",
+  "src/lib/runtime/codexAppServerHost.callbacks.test.ts",
+  "src/lib/runtime/codexAppServerHost.mcpRecovery.test.ts",
+  "src/lib/runtime/codexAppServerHost.eventWindow.test.ts",
+];
+
 export const files = [
   "scripts/gate-completion.native.test.ts",
   "src/lib/runtime/codexSocketTransport.native.test.ts",
   "src/lib/agent/processCleanupPolicy.native.test.ts",
   "src/lib/agent/operatorQuestionPolicy.native.test.ts",
+  "src/lib/agent/destructiveGuard.native.test.ts",
   "src/lib/runtime/nativeCodexQueue.test.ts",
   "src/lib/runtime/codexHistoryReader.test.ts",
   "src/lib/runtime/nativeQueueRuntime.test.ts",
@@ -51,11 +68,7 @@ export const files = [
   "src/lib/runtime/codexSteerDelivery.integration.test.ts",
   "src/lib/runtime/deliveryLongTurn.native.test.ts",
   "src/lib/runtime/codexTurnProfile.test.ts",
-  // Restart scenarios launch real fixture processes. Give each group its
-  // own file budget in the shared comparator.
-  "src/lib/runtime/codexAppServerHost.test.ts",
-  "src/lib/runtime/codexAppServerHost.callbacks.test.ts",
-  "src/lib/runtime/codexAppServerHost.mcpRecovery.test.ts",
+  ...codexHostContractFiles,
   "src/lib/runtime/claudeStreamBrokerHost.test.ts",
   "src/lib/runtime/structuredDeliveryQueue.test.ts",
   "src/lib/runtime/structuredDeliveryController.test.ts",
@@ -150,7 +163,7 @@ export function nativeBatches(selection?: Selection): string[][] {
   return [files, ...singles.map(file => [file])];
 }
 
-if (import.meta.main) {
+export async function runNativeVerifier(run: typeof spawnSync = spawnSync) {
   const sharedOnly = process.argv[2] === "--shared-only" && process.argv[3] === undefined;
   const binary = sharedOnly ? undefined : process.argv[2];
   const selection = sharedOnly ? "--shared-only" : process.argv[3];
@@ -178,6 +191,7 @@ if (import.meta.main) {
   for (const key of ISOLATED_ROOT_KEYS) {
     env[key] = join(roots, key === "TMPDIR" ? "t" : key.toLowerCase()); mkdirSync(env[key]!);
   }
+  env.LLV_GATE_TEMP_ROOT = env.TMPDIR;
   const batches = nativeBatches(selection as Selection | undefined);
   for (const file of batches.flat()) if (!existsSync(file)) throw new Error(`Missing named native runtime check: ${file}`);
   if (sharedOnly && process.env.LLV_GATE_COMPARE_BASE) {
@@ -194,9 +208,11 @@ if (import.meta.main) {
     for (const key of ISOLATED_ROOT_KEYS) {
       fileEnv[key] = join(fileRoot, key === "TMPDIR" ? "t" : key.toLowerCase()); mkdirSync(fileEnv[key]!);
     }
-    const result = spawnSync(process.execPath, ["test", "--timeout=60000", file], { env: fileEnv, stdio: "inherit", timeout: 300_000, killSignal: "SIGKILL" });
+    fileEnv.LLV_GATE_TEMP_ROOT = fileEnv.TMPDIR;
+    const result = run(process.execPath, ["test", "--timeout=60000", file], { env: fileEnv, stdio: "inherit", timeout: 300_000, killSignal: "SIGKILL" });
     if (result.error) throw result.error;
     if (result.status !== 0) process.exit(result.status ?? 1);
   }
   process.exit(0);
 }
+if (import.meta.main) await runNativeVerifier();

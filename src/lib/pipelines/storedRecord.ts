@@ -279,6 +279,10 @@ function isSetupResult(value: unknown): boolean {
     && typeof setup.stderr === "string" && setup.stderr.length <= 16_000;
 }
 
+function isGuardRefusals(value: unknown): boolean {
+  return value === undefined || Array.isArray(value) && value.length <= 20 && value.every(row => row && typeof row === "object"
+    && ["id", "at", "tool", "entry", "kind", "command"].every(key => typeof row[key] === "string") && Number.isFinite(Date.parse(row.at)));
+}
 function isAttempt(value: unknown, index: number): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const attempt = value as Record<string, unknown>;
@@ -394,7 +398,7 @@ function isAttempt(value: unknown, index: number): boolean {
     (attempt.priorWriterStops === undefined || Array.isArray(attempt.priorWriterStops)
       && attempt.priorWriterStops.every(stop => stop !== undefined && isPriorWriterStop(stop))
       && new Set(attempt.priorWriterStops.map(stop => stop.conversationId)).size === attempt.priorWriterStops.length) &&
-    isPermissionDenials(attempt.permissionDenials)
+    isPermissionDenials(attempt.permissionDenials) && isGuardRefusals(attempt.guardRefusals)
   );
 }
 

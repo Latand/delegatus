@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
+import { copyDestructiveGuardAssets } from "./destructive-guard-assets";
 
 // Lifecycle fixtures can build the production bundle inside their own sandbox.
 const result = await Bun.build({
@@ -37,6 +38,7 @@ if (!result.success) {
   const source = await Bun.file(output.path).text();
   const nodeEsmSource = source.replaceAll('"next/server"', '"next/server.js"');
   await Bun.write(output.path, nodeEsmSource);
+  copyDestructiveGuardAssets(process.cwd(), path.dirname(output.path));
   // Managed MCP releases copy dist in full. Retain the exact pinned data next
   // to the bundle so admission also works without a source checkout.
   const protocols = path.join(process.cwd(), "src/lib/accounts/protocol");

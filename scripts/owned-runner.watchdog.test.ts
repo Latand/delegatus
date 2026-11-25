@@ -15,7 +15,7 @@ async function watchdogUntil(check: () => boolean, failure: () => string, timeou
   }
 }
 
-type WatchdogMode = "slow" | "transient" | "renew" | "refused" | "missing" | "hung" | "command-exit" | "TERM" | "INT" | "deadline";
+type WatchdogMode = "slow" | "transient" | "renew" | "refused" | "missing" | "hung" | "command-exit" | "command-124" | "TERM" | "INT" | "deadline" | "guard-deadline" | "guard-deadline-test";
 async function probeWatchdog(mode: WatchdogMode) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "runner-watchdog-"));
   const env = withoutInheritedGate({ ...process.env });
@@ -26,6 +26,7 @@ async function probeWatchdog(mode: WatchdogMode) {
   env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
   const bin = path.join(root, "bin"); fs.mkdirSync(bin);
   const attempts = path.join(root, "attempts.jsonl"), delivered = path.join(root, "delivered"), ready = path.join(root, "ready.json");
+  const survivor = path.join(root, "child.json");
   const notifier = Bun.which("systemd-notify")!;
   // The real service and manager remain in use. Only this fixture's notifier
   // transport delays or refuses a delivery; successful attempts reach systemd.
@@ -36,7 +37,7 @@ const file = ${JSON.stringify(attempts)};
 const count = fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\\n").length : 0;
 fs.appendFileSync(file, JSON.stringify({ ...captureProcessIdentity(process.pid), service: captureProcessIdentity(process.ppid) }) + "\\n");
 if (${JSON.stringify(mode)} === "refused" || (${JSON.stringify(mode)} === "transient" && count === 0)) process.exit(17);
-if (["hung", "command-exit", "TERM", "INT", "deadline"].includes(${JSON.stringify(mode)})) await new Promise(() => setInterval(() => {}, 1000));
+if (["hung", "command-exit", "command-124", "TERM", "INT", "deadline", "guard-deadline", "guard-deadline-test"].includes(${JSON.stringify(mode)})) await new Promise(() => setInterval(() => {}, 1000));
 if (${JSON.stringify(mode)} === "slow" && count === 0) await Bun.sleep(3000);
 const child = Bun.spawn([${JSON.stringify(notifier)}, ...process.argv.slice(2)], { stdout: "ignore", stderr: "ignore" });
 const code = await child.exited;
@@ -48,19 +49,36 @@ process.exit(code);
     for (const name of ["systemctl", "systemd-run"]) fs.symlinkSync(Bun.which(name)!, path.join(bin, name));
     env.PATH = bin;
   } else env.PATH = `${bin}:${env.PATH}`;
+  const admittedTest = mode === "guard-deadline-test";
   const command = `import fs from "node:fs";
 import { captureProcessIdentity } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/lib/processIdentity.ts"))};
+if (process.env.LLV_OWNED_RUN_DEADLINE_FILE) throw new Error("owned deadline control reached the command");
+${admittedTest ? `import { test } from "bun:test";
+test("a running test with an owned child", async () => {
+  if (!process.env.LLV_CHECK_ENTRY_SUPERVISOR) throw new Error("test did not enter its admission supervisor");
+  const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+  fs.writeFileSync(${JSON.stringify(survivor)}, JSON.stringify(captureProcessIdentity(child.pid)));` : ""}
 fs.writeFileSync(${JSON.stringify(ready)}, JSON.stringify(captureProcessIdentity(process.pid)));
-while (!fs.existsSync(${JSON.stringify(mode === "command-exit" ? attempts : delivered)})
+while (!fs.existsSync(${JSON.stringify(mode === "command-exit" || mode === "command-124" ? attempts : delivered)})
   || (${mode === "renew"} && Number(fs.readFileSync(${JSON.stringify(delivered)}, "utf8")) < 4)) await Bun.sleep(20);
+${mode === "command-124" ? `const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+fs.writeFileSync(${JSON.stringify(survivor)}, JSON.stringify(captureProcessIdentity(child.pid)));
+process.exit(124);` : ""}
+${admittedTest ? "}, 60_000);" : ""}
 `;
-  const runner = spawn(process.execPath, [path.join(import.meta.dir, "owned-runner.ts"), process.execPath, "-e", command], { env, stdio: ["ignore", "ignore", "pipe"] });
+  const guardDeadline = mode === "guard-deadline" || admittedTest;
+  const budgetArgs = guardDeadline ? ["--owned-budget", "6000"] : [];
+  const testFile = path.join(root, "deadline.test.ts");
+  if (admittedTest) fs.writeFileSync(testFile, command);
+  const commandArgs = admittedTest ? ["test", testFile] : ["-e", command];
+  const runner = spawn(process.execPath, [path.join(import.meta.dir, "owned-runner.ts"), ...budgetArgs, process.execPath, ...commandArgs], { env, stdio: ["ignore", "ignore", "pipe"] });
   let output = "";
   runner.stderr!.on("data", chunk => { output += String(chunk); });
   const exited = new Promise<number | null>((resolve, reject) => { runner.once("exit", resolve); runner.once("error", reject); });
   const identities = (): ProcessIdentity[] => [
     ...(fs.existsSync(ready) ? [JSON.parse(fs.readFileSync(ready, "utf8")) as ProcessIdentity] : []),
     ...(fs.existsSync(attempts) ? fs.readFileSync(attempts, "utf8").trim().split("\n").map(line => JSON.parse(line) as ProcessIdentity) : []),
+    ...(fs.existsSync(survivor) ? [JSON.parse(fs.readFileSync(survivor, "utf8")) as ProcessIdentity] : []),
   ];
   try {
     await watchdogUntil(() => fs.existsSync(ready) && (mode === "missing" || fs.existsSync(attempts)) || runner.exitCode !== null, () => output);
@@ -78,7 +96,15 @@ while (!fs.existsSync(${JSON.stringify(mode === "command-exit" ? attempts : deli
         expect(fs.existsSync(delivered), output).toBe(true);
         expect(fs.readFileSync(attempts, "utf8").trim().split("\n").length).toBeGreaterThanOrEqual(mode === "renew" ? 4 : 2);
       }
-    } else if (["TERM", "INT", "deadline"].includes(mode)) expect(code, output).toBe(mode === "INT" ? 130 : mode === "deadline" ? 124 : 143);
+    } else if (mode === "deadline" || guardDeadline || mode === "command-124") {
+      expect(code, output).toBe(124);
+      if (guardDeadline) {
+        expect(output).toContain("owned runner: execution guard expired");
+        expect(output).not.toContain("admission broker closed");
+        expect(output).not.toContain("budget cleanup failed");
+      }
+      expect(output.includes("owned runner: surviving owned processes:")).toBe(mode === "command-124");
+    } else if (["TERM", "INT"].includes(mode)) expect(code, output).toBe(mode === "INT" ? 130 : 143);
     else {
       expect(code, output).toBe(1);
       expect(output).toContain("watchdog notification failed");
@@ -92,7 +118,7 @@ while (!fs.existsSync(${JSON.stringify(mode === "command-exit" ? attempts : deli
   }
 }
 
-for (const mode of ["slow", "transient", "renew", "refused", "missing", "hung", "command-exit", "TERM", "INT", "deadline"] as const) {
+for (const mode of ["slow", "transient", "renew", "refused", "missing", "hung", "command-exit", "command-124", "TERM", "INT", "deadline", "guard-deadline", "guard-deadline-test"] as const) {
   test.skipIf(process.platform !== "linux" || !process.env.LLV_OWNED_TEST_RUN_CGROUP)(`service watchdog ${mode} retains its delivery and cleanup bounds`, async () => {
     await probeWatchdog(mode);
     // A new service must own a fresh failure window, even after a refusal.

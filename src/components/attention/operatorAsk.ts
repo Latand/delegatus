@@ -46,6 +46,8 @@ const plain = (sentence: string): OperatorAsk => ({ question: null, options: [],
     title already, so it is not repeated here. */
 export function conversationOperatorAsk(t: TFunction, reason: ConversationReason, file?: Pick<FileEntry, "pendingQuestion">): OperatorAsk {
   switch (reason.kind) {
+    case "refusal":
+      return plain(conversationNeedText(t, reason));
     case "decision":
       return plain(t("needs.ask.decision"));
     case "question": {

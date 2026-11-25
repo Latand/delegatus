@@ -76,6 +76,7 @@ const PROJECTION_STATE_FILES = [
   "storage-incidents.json",
   /* The switch that shows or hides asks moves no scan and no other store. */
   "asks-you-settings.json",
+  "destructive-guard/refusals.cursor.json",
 ] as const;
 const projectionCacheStore = globalThis as typeof globalThis & {
   __llvFilesProjectionCache?: Map<string, CachedProjection>;

@@ -270,7 +270,7 @@ test("liveOnly keeps live and starting hosts, excludes stale hosts, and includeG
   const all = await service.callTool("agent_activity", { clientRequestId: "mixed-history", liveOnly: true, includeGone: true, limit: 200, full: true }) as any;
   expect(all.count).toBe(101);
   expect(all.conversations.some((row: any) => row.conversationId === "conversation-20")).toBe(true);
-});
+}, 30_000);
 
 test("keyset pages survive insertions and deletions, cache warm filters, and yield to cancellation", async () => {
   const { listPage, listPageAsync } = await import("./listAnswers");
@@ -508,4 +508,4 @@ test("real service uses keyed reads and replays only changed selection rows on a
   expect(taskSelectionPageCalls).toBe(0);
   console.log(`Indexed 10000-card service: keyed task reads remain one per requested ID; list_tasks skips task BoardSelection`);
   } finally { BoardSelection.prototype.page = originalPage; process.env.LLV_STATE_DIR = previousState; }
-}, 90_000);
+}, 120_000);

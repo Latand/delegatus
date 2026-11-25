@@ -135,12 +135,14 @@ test("the native Codex matrices resolve the latest three reviewed pins at the pr
   expect(step.if).toBeUndefined();
   expect(step["continue-on-error"]).toBeUndefined();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-matrix-"));
+  // The resolver and its failure control each start a shell under the shared gate's CPU quota.
+  const resolverTimeoutMs = 30_000;
   try {
     const output = path.join(root, "output");
     const run = Bun.spawnSync(["bash", "-c", step.run!], {
-      cwd: repositoryRoot, env: { ...process.env, GITHUB_OUTPUT: output }, timeout: 5000,
+      cwd: repositoryRoot, env: { ...process.env, GITHUB_OUTPUT: output }, timeout: resolverTimeoutMs,
     });
-    expect(run.exitCode).toBe(0);
+    expect(run.exitCode, `matrix resolver: signal=${run.signalCode}, stderr=${run.stderr.toString()}`).toBe(0);
     const values = Object.fromEntries(fs.readFileSync(output, "utf8").trim().split("\n").map(line => {
       const split = line.indexOf("=");
       return [line.slice(0, split), line.slice(split + 1)];
@@ -155,12 +157,12 @@ test("the native Codex matrices resolve the latest three reviewed pins at the pr
     fs.writeFileSync(path.join(bin, "bun"), "#!/bin/sh\nexit 23\n", { mode: 0o755 });
     fs.rmSync(output);
     const failed = Bun.spawnSync([Bun.which("bash")!, "-c", step.run!], {
-      cwd: repositoryRoot, env: { ...process.env, PATH: bin, GITHUB_OUTPUT: output }, timeout: 5000,
+      cwd: repositoryRoot, env: { ...process.env, PATH: bin, GITHUB_OUTPUT: output }, timeout: resolverTimeoutMs,
     });
-    expect(failed.exitCode).toBe(23);
+    expect(failed.exitCode, `matrix failure control: signal=${failed.signalCode}, stderr=${failed.stderr.toString()}`).toBe(23);
     expect(fs.readFileSync(output, "utf8")).toBe("");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
+}, 75_000);
 
 test("supported Codex CLIs run the full native contracts at the proposed commit", () => {
   const job = workflow.jobs["native-codex-runtime"];

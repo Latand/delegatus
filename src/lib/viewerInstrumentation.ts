@@ -136,6 +136,7 @@ interface ViewerRuntimeActivationSteps {
   initializeOperatorCapability: () => Promise<void>;
   runIdentityMigration?: () => Promise<void> | void;
   runClaudeLoginRecovery?: () => Promise<void>;
+  startDestructiveGuard?: () => Promise<void>;
   startStructuredHosts: (() => void) | null;
   startControllers: () => Promise<void>;
   publishHotStateActivation: () => void;
@@ -954,6 +955,7 @@ export async function completeViewerRuntimeActivation(
   await steps.runClaudeLoginRecovery?.();
   const { retireLegacyCodexMemoryHooksAtStartup } = await import("@/lib/memory/hookMigration");
   await retireLegacyCodexMemoryHooksAtStartup();
+  await steps.startDestructiveGuard?.();
   steps.startStructuredHosts?.();
   await steps.startControllers();
   steps.publishViewerReleaseReady();
@@ -1125,7 +1127,13 @@ export async function registerViewerRuntime(): Promise<void> {
   const startupBarrier = createViewerStartupBarrier(startupAbort);
   const quiesceStartup = async () => {
     const reason = new Error("structured startup retired by release handover");
-    await Promise.all([startupBarrier.quiesce(reason), worktreeRecovery.quiesce(reason)]);
+    const quiesced = Promise.all([startupBarrier.quiesce(reason), worktreeRecovery.quiesce(reason)]);
+    try {
+      const { stopDestructiveRefusalIngest } = await import("@/lib/agent/destructiveGuard.refusals");
+      stopDestructiveRefusalIngest();
+    } finally {
+      await quiesced;
+    }
   };
   const assertStartupActive = () => {
     // Observe durable retirement at every phase/batch boundary, including
@@ -1195,6 +1203,16 @@ export async function registerViewerRuntime(): Promise<void> {
     assertStartupActive();
     await completeViewerRuntimeActivation({
       initializeOperatorCapability: initializeOperatorSpawnCapabilityAtStartup,
+      startDestructiveGuard: () => startupBarrier.run(async () => {
+        assertStartupActive();
+        const { installDestructiveGuardForAccounts } = await import("@/lib/agent/destructiveGuard");
+        assertStartupActive();
+        installDestructiveGuardForAccounts();
+        const { startDestructiveRefusalIngest } = await import("@/lib/agent/destructiveGuard.refusals");
+        assertStartupActive();
+        await startDestructiveRefusalIngest(() => isCurrent() && !startupAbort.signal.aborted
+          && readHotStateAuthority(hotStateDirectory)?.mode !== "fencing");
+      }),
       runClaudeLoginRecovery: async () => {
         const { recoverClaudeLoginsAtStartup } = await import("@/lib/accounts/claudeLogin");
         await recoverClaudeLoginsAtStartup();

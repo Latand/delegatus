@@ -1485,6 +1485,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private readonly tierAccountHome?: string;
   private engineStatus: "active" | "idle" | "unhosted" | "dead" = "idle";
   private activeFlags: string[] = [];
+  private guardFlags: string[] = [];
   /** Image capability learned from `model/list`. An RPC fault leaves the
       value unknown, keeps admission fail-closed, and schedules discovery on
       the next image send. */
@@ -1681,7 +1682,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       options.assertCurrent?.();
       telegram = await resolveTelegramLaunchGrant(
         subscriptionEnv(
-          options.env ?? process.env,
+          { ...(options.env ?? process.env), LLV_AGENT_CWD: options.cwd },
           options.codexHome,
           granted.length > 0,
           options.forwardGitHubConfig === true,
@@ -1722,6 +1723,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       throw error;
     }
     const provisional = new CodexAppServerHost(child, { threadId: threadId ?? "pending", path: null }, options);
+    provisional.guardFlags = [`destructive-guard:nested:${childEnv.LLV_DESTRUCTIVE_GUARD_NESTED ?? "off"}`];
     provisional.gateCheckRoot = child instanceof CodexSocketTransport
       ? socketGateCheckRoot({ endpoint: child.endpoint, process: { pid: child.pid,
         startIdentity: child.startIdentity, bootEpoch: child.bootEpoch } }, options.socketOwner ? undefined : gateCheckLaunchBinding)
@@ -1790,7 +1792,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
         : null;
       // A reconnected listener keeps its verified launch root across Viewer restarts.
       config.shell_environment_policy = agentCodexPublicationPolicy(configRead.config?.shell_environment_policy,
-        options.env ?? process.env, provisional.gateCheckRoot);
+        options.env ?? process.env, provisional.gateCheckRoot, options.cwd);
       const cleanup = questionPolicy?.config ?? codexProcessCleanupConfig(options.codexHome);
       if (questionPolicy) config.tools = questionPolicy.tools;
       Object.assign(config.features as Record<string, unknown>, cleanup.features);
@@ -3708,7 +3710,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       pendingAttention: [...this.attentions].filter(([, attention]) => attention.params.tool !== gateCheckTool.name).map(([id]) => id),
       nativeQueueRevision: this.nativeQueueRevision,
       ...memoryField(this.memoryCell),
-      activeFlags: [...this.activeFlags, ...(this.nativeQueue ? [NATIVE_QUEUE_CAPABILITY] : []), ...(this.injectCapability === "supported" ? [NATIVE_INJECT_CAPABILITY] : []), ...(this.protocol.hasRequestField("turn/start", "model") && this.protocol.hasRequestField("turn/start", "effort") && Array.isArray(record(this.modelCatalog)?.data) ? [NATIVE_TURN_PROFILE_CAPABILITY] : [])],
+      activeFlags: [...this.activeFlags, ...this.guardFlags, ...(this.nativeQueue ? [NATIVE_QUEUE_CAPABILITY] : []), ...(this.injectCapability === "supported" ? [NATIVE_INJECT_CAPABILITY] : []), ...(this.protocol.hasRequestField("turn/start", "model") && this.protocol.hasRequestField("turn/start", "effort") && Array.isArray(record(this.modelCatalog)?.data) ? [NATIVE_TURN_PROFILE_CAPABILITY] : [])],
       account: this.account,
       diagnostics: { executable: this.selectedExecutable, version: this.protocolVersion === null ? null : this.protocol.cliVersion, nativeQueue: !!this.nativeQueue, queueCapability: this.queueCapability, injectCapability: this.injectCapability, authRecovery: this.authRecovery,
         protocol: normalizeCodexProtocolReceipt({ schemaVersion: this.protocol.version, schemaDigest: this.protocol.schemaDigest, experimentalApi: this.experimentalApi, unpinnedCli: this.protocol.unpinned,

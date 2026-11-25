@@ -19,6 +19,7 @@ import { compactSensitiveText, staticSensitiveClasses } from "@/lib/privacy/stat
 import { mailboxPattern } from "@/lib/privacy/mailbox";
 import publicationFingerprints from "../../../scripts/privacy-known-value-fingerprints.json";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
+import { agentDestructiveGuardEnv } from "@/lib/agent/destructiveGuard";
 import { publicationCheckBinding, publicationPreparationVersion, readPublicationCheckReceipt } from "@/lib/git/publicationCheckReceipt";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
@@ -2528,6 +2529,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     LLV_GATE_LANE_ID: pipeline.id, LLV_GATE_PUSH_HEAD: acceptedSha, LLV_GATE_STATE_DIR: stateDir(),
     ...(pipeline.cursor?.stageId ? { LLV_GATE_STAGE_ID: pipeline.cursor.stageId } : {}),
     LLV_GATE_PUSH_DEADLINE: String(publicationHookDeadline(budget.ms, Date.now())) };
+  Object.assign(pushEnv, agentDestructiveGuardEnv({ ...process.env, ...pushEnv }, { cwd: pipeline.worktreeDir }));
   const transportBudgetMs = Math.min(budget.ms, PUBLICATION_TRANSPORT_HOOK_MS + PUBLICATION_PACK_MARGIN_MS);
   const receiptFile = preparation ? path.join(pipelineArtifactsDir(pipeline.id), `publication-checks-${pipeline.delivery!.operation!.id}.json`) : undefined;
   let phaseTimings: NonNullable<PipelinePublishResult["phaseTimings"]> = { preparationMs: 0, checksMs: 0, transportMs: 0 };

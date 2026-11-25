@@ -252,7 +252,7 @@ run_claimed() {
   trap 'signal=TERM; if [[ -n $runner ]]; then kill -TERM "$runner" 2>/dev/null || true; fi' TERM
   trap 'signal=INT; if [[ -n $runner ]]; then kill -INT "$runner" 2>/dev/null || true; fi' INT
   end_cpu_wait
-  run "$@" <&0 &
+  LLV_OWNED_RUN_GATE_PARENT_PID="$$" run "$@" <&0 &
   runner=$!
   if [[ -n $signal ]]; then kill -s "$signal" "$runner" 2>/dev/null || true; fi
   while :; do

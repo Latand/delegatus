@@ -109,11 +109,25 @@ test("a file that cannot finish on either side in the same way is PRE-EXISTING f
   const f = fixture("process.exit(0);");
   writeFileSync(path.join(f.dir, "example.test.ts"), "// harmless edit\nprocess.exit(0);");
   const accepted = cliAt(f, f.base);
-  expect(accepted.status).toBe(0);
+  expect(accepted.status, accepted.stdout + accepted.stderr).toBe(0);
   expect(accepted.stdout).toMatch(/PRE-EXISTING example\.test\.ts: <runner error> .+ \(the base run of this file is broken the same way\)/);
   expect(accepted.stdout).toContain("0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
   expect((await f.run()).preexisting).toHaveLength(1);
   expect(f.logs.join("\n")).toContain("baseline run");
+});
+
+test.each(["missing", "different"])("private sandbox paths preserve between-tests error identity: %s", missing => {
+  const code = (name: string) => `import { test, describe } from "bun:test";
+import { readFileSync } from "node:fs";
+test("complete report", () => {});
+describe("missing input", () => { readFileSync(process.env.HOME + "/${name}"); });`;
+  const f = fixture(code("missing"));
+  writeFileSync(path.join(f.dir, "example.test.ts"), code(missing));
+  const outcome = cliAt(f, f.base);
+  expect(outcome.status, outcome.stdout + outcome.stderr).toBe(missing === "missing" ? 0 : 1);
+  expect(outcome.stdout).toContain(`${missing === "missing" ? "PRE-EXISTING" : "NEW"} example.test.ts: <between-tests error> error: ENOENT:`);
+  expect(outcome.stdout).toContain(`<sandbox>/home/${missing}`);
+  expect(outcome.stderr).not.toContain("gate error");
 });
 
 test("a between-tests error only on the head, or a different one, is NEW from the CLI and blocks", async () => {

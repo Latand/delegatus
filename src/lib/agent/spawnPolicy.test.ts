@@ -1,4 +1,5 @@
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { ensureDestructiveGuard } from "./destructiveGuard";
 import { afterEach, expect, test } from "bun:test";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -190,6 +191,8 @@ test("Claude spawn policy preserves user settings and re-injects one managed hoo
     },
   });
   fs.writeFileSync(settingsPath, userSettings);
+  expect(ensureDestructiveGuard({ engine: "claude", home: accountHome }).hook).toBe("account");
+  const guardedAccount = fs.readFileSync(settingsPath, "utf8");
 
   const installed = applyClaudeSpawnPolicy(accountHome, { profileId: "worker" });
   applyClaudeSpawnPolicy(accountHome, { profileId: "worker" });
@@ -197,7 +200,7 @@ test("Claude spawn policy preserves user settings and re-injects one managed hoo
     hooks: { PreToolUse: Array<{ matcher: string }> };
   };
 
-  expect(fs.readFileSync(settingsPath, "utf8")).toBe(userSettings);
+  expect(fs.readFileSync(settingsPath, "utf8")).toBe(guardedAccount);
   expect(profile.hooks.PreToolUse.filter((group) => group.matcher === "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage")).toHaveLength(1);
 });
 
@@ -214,8 +217,8 @@ test("Claude spawn policy seeds a fresh account from the shared user settings sn
   };
 
   expect(settings.model).toBe("shared-model");
-  expect(settings.env).toEqual({ SHARED: "kept", ...agentPublicationIdentityEnv(process.env) });
-  expect(settings.hooks.PreToolUse).toHaveLength(2);
+  expect(settings.env).toEqual({ SHARED: "kept", ...agentPublicationIdentityEnv(process.env, "/") });
+  expect(settings.hooks.PreToolUse).toHaveLength(3);
 });
 
 test("Claude native MCP config keeps only granted servers out of the operator's registrations", () => {
@@ -471,7 +474,7 @@ test("allowSubagents uses an isolated profile while the denied profile stays enf
 
   expect(denied.hooks.PreToolUse.some((group) => group.matcher === "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage")).toBe(true);
   expect(allowed.hooks.PreToolUse).toContainEqual({ matcher: "Read", hooks: [{ type: "command", command: "user-read-hook" }] });
-  expect(allowed.hooks.PreToolUse.filter(group => group.matcher === "Bash")).toHaveLength(1);
+  expect(allowed.hooks.PreToolUse.filter(group => group.matcher === "Bash")).toHaveLength(2);
   expect(allowed.hooks.PreToolUse.some(group => group.matcher === NATIVE_MULTI_AGENT_HOOK_MATCHER)).toBe(false);
 });
 
@@ -740,4 +743,33 @@ test("registered Claude Viewer endpoints do not inherit credentials from the par
       else process.env[name] = value;
     }
   }
+});
+
+test("an operator terminal launch without a working tree owns the project its session works in", () => {
+  const accountHome = home(), root = fs.realpathSync(home());
+  const fakeHome = path.join(root, "home"), project = path.join(fakeHome, "Projects/p"), other = path.join(fakeHome, "Projects/q"), worktree = path.join(root, "worktree");
+  for (const directory of [project + "/.git", other, worktree, fakeHome + "/.ssh"]) fs.mkdirSync(directory, { recursive: true });
+  const terminal = JSON.parse(fs.readFileSync(applyClaudeSpawnPolicy(accountHome, { profileId: "terminal-guard" }).settingsPath, "utf8")).env as Record<string, string>;
+  const launched = JSON.parse(fs.readFileSync(applyClaudeSpawnPolicy(accountHome, { profileId: "launch-guard", cwd: worktree }).settingsPath, "utf8")).env as Record<string, string>;
+  if (process.platform === "win32") return;
+  expect(terminal.LLV_DESTRUCTIVE_GUARD_SESSION_ROOT).toBe("1");
+  expect(terminal.LLV_DESTRUCTIVE_GUARD_OWN.split(":")).not.toContain("/");
+  expect(launched.LLV_DESTRUCTIVE_GUARD_SESSION_ROOT).toBeUndefined();
+  expect(launched.LLV_DESTRUCTIVE_GUARD_OWN.split(":")).toContain(worktree);
+  // Evaluate against a test-owned policy that seals both projects and a secrets directory.
+  const policyFile = path.join(root, "policy.json");
+  fs.writeFileSync(policyFile, JSON.stringify({ v: 1, digest: "a".repeat(64), home: [fakeHome], sealed: [
+    { path: project, kind: "another project" }, { path: other, kind: "another project" }, { path: fakeHome + "/.ssh", kind: "an account or secrets directory" }] }));
+  const decide = (env: Record<string, string>, command: string) => {
+    const input = { session_id: "terminal", cwd: project, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } };
+    const result = Bun.spawnSync([process.execPath, path.join(env.LLV_DESTRUCTIVE_GUARD_DIR!, "destructive-guard.mjs"), "hook"], { cwd: root, stdout: "pipe", stderr: "pipe", stdin: Buffer.from(JSON.stringify(input)),
+      env: { ...env, HOME: fakeHome, LLV_DESTRUCTIVE_GUARD_POLICY: policyFile, LLV_DESTRUCTIVE_GUARD_JOURNAL: path.join(root, "journal.ndjson") } });
+    expect(result.exitCode).toBe(0);
+    return result.stdout.toString() ? "deny" : "allow";
+  };
+  for (const command of ["rm -rf dist", "mv a.txt b.txt", "rm notes.txt", "echo hi > out.txt", "cp a b"]) {
+    expect(decide(terminal, command), command).toBe("allow");
+    expect(decide(launched, command), command).toBe("deny");
+  }
+  for (const command of [`rm -rf '${other}'`, "rm -rf ~/.ssh"]) expect(decide(terminal, command), command).toBe("deny");
 });

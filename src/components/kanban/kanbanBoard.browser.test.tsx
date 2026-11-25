@@ -72,6 +72,16 @@ const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(proc
 /** Where a memory-profile block keeps its frames: under MEMORY_PROFILE_OUT when set, otherwise under .artifacts. */
 const memoryOut = (name: string) => process.env.MEMORY_PROFILE_OUT ? path.resolve(process.env.MEMORY_PROFILE_OUT, name) : path.resolve(".artifacts", name);
 
+describe("destructive operation refusal", () => {
+  browserTest("protected delete attention is readable and dismissible on desktop", async () => {
+    const { captureDestructiveRefusal, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    try { expect(await captureDestructiveRefusal(browser, path.join(process.env.LLV_EVIDENCE_DIR!, "destructive-refusal-desktop"), false)).toBe(12); }
+    finally { await browser.close(); sockets.close(); }
+  }, 240_000);
+});
+
 describe("accepted queued creation continuity", () => {
   browserTest("real create, missing catalogs, reload and terminal readback at desktop widths", async () => {
     const { captureAcceptedCreation, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");

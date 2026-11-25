@@ -9,7 +9,7 @@ import { codexMemoryHookConfig } from "./hook";
 interface Span { start: number; end: number; properties?: Map<string, Span>; items?: Span[] }
 
 /** Parse spans only after JSON.parse has validated the complete document. */
-function jsonSpans(source: string): Span {
+export function jsonSpans(source: string): Span {
   JSON.parse(source);
   const tokens = [...source.matchAll(/"(?:\\.|[^"\\])*"|[{}\[\],:]|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/g)];
   let cursor = 0;
@@ -65,7 +65,7 @@ function archivedCodexHome(home: string): { root: string; formerHome: string; sh
   };
 }
 
-function removeArrayItems(items: Span[], selected: Set<number>): Edit[] {
+export function removeArrayItems(items: Span[], selected: Set<number>): Edit[] {
   const edits: Edit[] = [];
   for (let i = 0; i < items.length; i++) {
     if (!selected.has(i)) continue;
@@ -77,14 +77,14 @@ function removeArrayItems(items: Span[], selected: Set<number>): Edit[] {
   return edits;
 }
 
-function edit(source: string, edits: Edit[]): string {
+export function edit(source: string, edits: Edit[]): string {
   for (const range of edits.sort((a, b) => b.start - a.start)) source = source.slice(0, range.start) + (range.text ?? "") + source.slice(range.end);
   return source;
 }
 
 /** Find complete top-level statements in validated TOML. Comments, multiline
  * strings and nested values can contain convincing table/assignment text. */
-function tomlStatements(source: string) {
+export function tomlStatements(source: string) {
   const headers: Array<{ start: number; end: number; table: Record<string, unknown> }> = [];
   const assignments: Array<{ start: number; end: number; key: string }> = [];
   let multiline: string | null = null, depth = 0;

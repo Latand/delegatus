@@ -621,6 +621,8 @@ test("the trusted local entry vouches only for a Host that names loopback: a DNS
   }
 });
 
+// Each of the four sequential requests keeps its five-second curl deadline.
+// The outer deadline also covers starting and closing both listeners.
 test("a trusted local entry never vouches for a proxied loopback Host", async () => {
   const entry = await gateway();
   try {
@@ -633,7 +635,7 @@ test("a trusted local entry never vouches for a proxied loopback Host", async ()
     expect(local.status).toBe(200);
     expect(entry.viewer.seen.at(-1)?.vouched).toBe(true);
   } finally { await entry.close(); }
-});
+}, 30_000);
 
 test("the remote entry rejects an unauthenticated request whatever local identity its headers forge", async () => {
   const entry = await gateway();

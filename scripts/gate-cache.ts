@@ -115,7 +115,7 @@ export function gateToolFiles(root: string): string[] {
 
 /** Isolation replaces these before a check reads them, or they only record
  * how this process was started. */
-const ROOTS = new Set(["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "TMPDIR", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR",
+const ROOTS = new Set(["HOME", "BASH_ENV", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "TMPDIR", "LLV_GATE_TEMP_ROOT", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR",
   "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "NODE_ENV", "LLV_VIEWER_CONTROL_URL"]);
 const BOOKKEEPING = new Set(["PWD", "OLDPWD", "SHLVL", "_", "INVOCATION_ID", "JOURNAL_STREAM", "SYSTEMD_EXEC_PID", "MANAGERPID",
   // The native entry proves each worker's supervisor. The recorder collects
@@ -130,7 +130,7 @@ const KEYED = /^(?:PATH|LANG|LANGUAGE|LC_[A-Z]+|TZ|USER|LOGNAME|SHELL|NODE_OPTIO
 const IDENTITY = /^GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)$/;
 /** Admission, placement and the signal boundary decide where and when a check
  * runs, never what it checks. The boundary's host epoch is keyed instead. */
-const TRANSPORT = /^(?:LLV_SIGNAL_SANDBOX|LLV_CHECK_(?:BROKER|ADMISSION_FILE)|LLV_(?:GATE|CPU|OWNED)_[A-Z0-9_]+|DELEGATUS_(?:GATE_CPU_HEADROOM|CHECK_(?:ADMISSION_OWNER|BROKER))|(?:LLV|DELEGATUS)_(?:AGENT_CPU|CPU_PRESSURE[A-Z0-9_]*|WORK_(?:SCOPE_)?CPU_QUOTA)|LLV_DOCKER_NSENTER_SHIMS|DBUS_SESSION_BUS_ADDRESS|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
+const TRANSPORT = /^(?:LLV_DESTRUCTIVE_GUARD_[A-Z_]+|LLV_SIGNAL_SANDBOX|LLV_CHECK_(?:BROKER|ADMISSION_FILE)|LLV_(?:GATE|CPU|OWNED)_[A-Z0-9_]+|DELEGATUS_(?:GATE_CPU_HEADROOM|CHECK_(?:ADMISSION_OWNER|BROKER))|(?:LLV|DELEGATUS)_(?:AGENT_CPU|CPU_PRESSURE[A-Z0-9_]*|WORK_(?:SCOPE_)?CPU_QUOTA)|LLV_DOCKER_NSENTER_SHIMS|DBUS_SESSION_BUS_ADDRESS|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
 const declaredInputs = (env: Partial<NodeJS.ProcessEnv>) => new Set((env.LLV_GATE_CHECK_ENV ?? "").split(",").map(name => name.trim()).filter(Boolean));
 
 /** One environment for every reusable check, whoever starts the hook: a stage

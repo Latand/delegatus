@@ -1106,8 +1106,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       && (nativeSetting === undefined || nativeSetting === "1");
     this.account = { type: auth.authMethod, planType: auth.subscriptionType };
     this.launchFlags = options.allowSubagents
-      ? [STRUCTURED_IMAGE_CAPABILITY]
-      : [STRUCTURED_IMAGE_CAPABILITY, NATIVE_MULTI_AGENT_DENY_FLAG];
+      ? [STRUCTURED_IMAGE_CAPABILITY, `destructive-guard:nested:${options.env?.LLV_DESTRUCTIVE_GUARD_NESTED ?? "off"}`]
+      : [STRUCTURED_IMAGE_CAPABILITY, NATIVE_MULTI_AGENT_DENY_FLAG, `destructive-guard:nested:${options.env?.LLV_DESTRUCTIVE_GUARD_NESTED ?? "off"}`];
     this.reapedPromise = new Promise((resolve) => { this.resolveReaped = resolve; });
     child.stdout.on("data", (chunk: Buffer | string) => {
       this.acceptStdout(typeof chunk === "string" ? chunk : this.stdoutDecoder.write(chunk));
@@ -1217,7 +1217,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     try {
       options = { ...options, env: await repositoryPublicationSource(options.cwd, options.env ?? process.env) };
       env = subscriptionEnv(
-        options.env ?? process.env,
+        { ...(options.env ?? process.env), LLV_AGENT_CWD: options.cwd },
         options.claudeConfigDir,
         options.forwardGitHubConfig === true,
         options.providerAccount === true,
@@ -1301,7 +1301,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       );
     } else args.push("--settings", JSON.stringify({
       ...(engineMemoryOff(options) ? { autoMemoryEnabled: false } : {}),
-      env: { ...agentPublicationIdentityEnv(options.env ?? process.env), ...(engineMemoryOff(options) ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}) },
+      env: { ...agentPublicationIdentityEnv(options.env ?? process.env, options.cwd), ...(engineMemoryOff(options) ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}) },
     }), "--strict-mcp-config");
     if (options.providerAccount) args.push("--setting-sources", "");
     if (resume) args.push("--resume", sessionId);
@@ -1332,7 +1332,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     }
     child.once("close", () => relay?.close());
     const host = new ClaudeStreamBrokerHost(child, { sessionId }, auth, {
-      ...options, releaseCleanup: () => { relay?.close(); options.releaseCleanup?.(); },
+      ...options, env: { ...(options.env ?? process.env), LLV_DESTRUCTIVE_GUARD_NESTED: env.LLV_DESTRUCTIVE_GUARD_NESTED },
+      releaseCleanup: () => { relay?.close(); options.releaseCleanup?.(); },
     });
     try {
       if (options.claudeConfigDir) await host.verifyViewerMcp();

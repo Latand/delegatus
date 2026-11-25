@@ -192,14 +192,14 @@ export async function prepareAgentPublicationSpec(spec: ResumeSpec): Promise<Res
   spec = { ...spec, publicationIdentity: source[REPOSITORY_IDENTITY] ?? null };
   if (spec.publicationSettings) {
     const settings = { ...spec.publicationSettings,
-      env: { ...spec.publicationSettings.env as Record<string, string>, ...agentPublicationIdentityEnv(source) } };
+      env: { ...spec.publicationSettings.env as Record<string, string>, ...agentPublicationIdentityEnv(source, spec.cwd) } };
     spec.command = spec.command.replace(shellQuote(JSON.stringify(spec.publicationSettings)), () => shellQuote(JSON.stringify(settings)));
   }
   const input = spec.codexPublication;
   if (!input) return spec;
   source.CODEX_HOME = input.home;
   const policy = await readCodexShellPolicy(resolveCodexBinary(), spec.cwd, source);
-  const args = agentCodexPublicationArgs(policy, source).map(shellQuote).join(" ");
+  const args = agentCodexPublicationArgs(policy, source, spec.cwd).map(shellQuote).join(" ");
   return { ...spec, command: telegramScopedCommand(`${codexEnvPrefix(input.home, input.mcpServers)} ${input.command} ${args}${input.subcommand ?? ""}`, input.mcpServers) };
 }
 
@@ -210,7 +210,7 @@ export function withSpawnCapability(spec: ResumeSpec, capability: string, source
     if (spec.publicationIdentity === null) delete source[REPOSITORY_IDENTITY];
     else source[REPOSITORY_IDENTITY] = spec.publicationIdentity;
   }
-  const identity = Object.entries(agentPublicationIdentityEnv(source))
+  const identity = Object.entries(agentPublicationIdentityEnv({ ...source, LLV_SPAWN_CAPABILITY: capability }, spec.cwd))
     .map(([key, value]) => `${key}=${shellQuote(value!)}; export ${key};`).join(" ");
   const publicationEnv = { ...source, LLV_SPAWN_CAPABILITY: capability };
   let command = spec.command;
@@ -493,7 +493,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
       : null;
     const publicationSettings = installedPolicy ? undefined : {
       ...(engineMemoryOff(options) ? { autoMemoryEnabled: false } : {}),
-      env: { ...agentPublicationIdentityEnv(process.env), ...(engineMemoryOff(options) ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}) },
+      env: { ...agentPublicationIdentityEnv(process.env, cwd), ...(engineMemoryOff(options) ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}) },
     };
     if (installedPolicy) pushClaudePolicyArgs(args, installedPolicy);
     else args.push("--settings", JSON.stringify(publicationSettings), "--strict-mcp-config");
@@ -604,7 +604,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
   if (options.omitSkillsInstructions) args.push("-c", "skills.include_instructions=false");
   if (engineMemoryOff(options)) args.push("-c", "features.memories=false");
   const home = options.codexHome ?? accountForSpawn().home;
-  args.push(...agentCodexPublicationArgs({}, process.env));
+  args.push(...agentCodexPublicationArgs({}, process.env, cwd));
   if (isManagedCodexHome(home)) args.push("-c", "cli_auth_credentials_store=file");
   const mcp = codexMcpRuntimeOverrides(home, cwd, mcpServers);
   for (const override of mcp.overrides) args.push("-c", override);
@@ -767,7 +767,7 @@ export function resumeSpecForSession(
   let command = shellQuote(codexBinary);
   if (options.omitSkillsInstructions) command += " -c skills.include_instructions=false";
   if (engineMemoryOff(options)) command += " -c features.memories=false";
-  const publicationArgs = agentCodexPublicationArgs({}, process.env);
+  const publicationArgs = agentCodexPublicationArgs({}, process.env, cwd);
   command += ` ${publicationArgs.map(shellQuote).join(" ")}`;
   if (isManagedCodexHome(home)) command += " -c cli_auth_credentials_store=file";
   const mcp = codexMcpRuntimeOverrides(home, cwd, mcpServers);

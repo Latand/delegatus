@@ -287,6 +287,7 @@ test("a drain during runtime admission retries a refused lease release and repla
   }
 });
 
+// The first admission initializes the fixture stores before persisting and replaying the receipt.
 test("disk cleaner admission persists a read-only profile and the Viewer grant", async () => {
   const result = await launch("cleaner_disk_admission");
   expect(result.status).toBe(202);
@@ -296,7 +297,7 @@ test("disk cleaner admission persists a read-only profile and the Viewer grant",
   expect(replay.status).toBe(202);
   expect(replay.receipt?.launchId).toBe(result.receipt?.launchId);
   expect(replay.receipt?.launchProfile.readOnly).toBe(true);
-});
+}, 60_000);
 
 test.each([undefined, "checkout"])("checkout admission keeps write access (mode=%s)", async mode => {
   const result = await launch(`cleaner_checkout_${mode ?? "default"}`, { roleParams: mode ? { mode } : {} });

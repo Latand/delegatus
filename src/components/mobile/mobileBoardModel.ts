@@ -68,7 +68,7 @@ export type MobileRowStateKey =
 export type MobileBoardSection = "needs" | "working" | "recent";
 
 /** The trailing badge of a row that needs the operator: its reason. */
-export type MobileRowBadge = "question" | "plan" | "decision" | "permission" | "delivery" | "launch" | "memory" | "ask";
+export type MobileRowBadge = "question" | "plan" | "decision" | "permission" | "delivery" | "launch" | "memory" | "ask" | "refusal";
 
 export type MobileRowDot = "success" | "warning" | "danger" | "accent" | "neutral";
 
@@ -116,6 +116,7 @@ function isoSeconds(iso: string | null | undefined): number | null {
     as its sort key. */
 function waitingBadge(reason: ConversationReason): MobileRowBadge {
   switch (reason.kind) {
+    case "refusal": return "refusal";
     case "decision": return "decision";
     case "plan": return "plan";
     case "question": return "question";

@@ -13,6 +13,7 @@ const real = { ...fs }, realChild = { ...childProcess };
 const missing = (target: unknown) => typeof target === "string" && (target === "/proc" || target.startsWith("/proc/"));
 const absent = (target: string) => Object.assign(new Error(`ENOENT: no such file or directory, open '${target}'`), { code: "ENOENT" });
 let psBroken = false;
+let psAttempts: { timeout?: number; error?: string }[] | undefined;
 // Lifetime authority reads the real machine, outside the missing-/proc fault
 // injected into the gate. Capture synchronously while the reported child lives.
 let lifetimeProbe = false;
@@ -23,9 +24,16 @@ mock.module("node:fs", () => ({
 }));
 mock.module("node:child_process", () => ({
   ...realChild,
-  spawnSync: (command: string, ...rest: unknown[]) => !lifetimeProbe && psBroken && command === "ps"
-    ? { status: null, stdout: "", stderr: "", error: absent(command) }
-    : (realChild.spawnSync as (...args: unknown[]) => unknown)(command, ...rest),
+  spawnSync: (command: string, ...rest: unknown[]) => {
+    const gatePs = !lifetimeProbe && command === "ps";
+    if (gatePs && psBroken) return { status: null, stdout: "", stderr: "", error: absent(command) };
+    const result = (realChild.spawnSync as (...args: unknown[]) => ReturnType<typeof childProcess.spawnSync>)(command, ...rest);
+    if (gatePs) psAttempts?.push({
+      timeout: (rest[1] as childProcess.SpawnSyncOptions | undefined)?.timeout,
+      error: (result.error as NodeJS.ErrnoException | undefined)?.code,
+    });
+    return result;
+  },
 }));
 const { ContainmentFailed, NoVerdict, runSteps } = await import("./local-gate");
 
@@ -68,28 +76,37 @@ async function gone(pid: number): Promise<boolean> {
   for (let wait = 0; wait < 40 && running(pid); wait++) await Bun.sleep(50);
   return !running(pid);
 }
-async function stoppedStep(dir: string, budgetMs = 1_000) {
+async function stoppedStep(dir: string, cancel?: AbortController) {
   const at = performance.now();
+  const startedAt = Date.now();
+  const deadline = cancel ? null : { at: startedAt + 1_000, startedAt };
   // The root and a helper it started, which must go with it.
-  const script = `echo $$ > '${dir}/root.pid'; sleep 60 & echo $! > '${dir}/helper.pid'; wait`;
-  const pending = runSteps("pre-push", [{ name: "touched tests", command: [] }], { root: dir, deadline: { at: Date.now() + budgetMs, startedAt: Date.now() }, logDir: dir, say: () => {},
-    prepare: () => ({ command: ["bash", "-c", script], env: process.env }) }).then(() => null, (caught: unknown) => caught);
-  const until = Date.now() + budgetMs;
-  const pids: number[] = [];
+  const file = path.join(dir, "processes");
+  const script = "sleep 60 & printf '%s %s\\n' \"$$\" \"$!\" > \"$1\"; wait";
+  const pending = runSteps("pre-push", [{ name: "touched tests", command: [] }], { root: dir, deadline, cancel: cancel?.signal, logDir: dir, say: () => {},
+    prepare: () => ({ command: ["bash", "-c", script, "gate-noproc-fixture", file], env: process.env }) }).then(() => null, (caught: unknown) => caught);
+  const until = deadline?.at ?? startedAt + 20_000;
+  let pids: number[] = [];
   try {
-    for (const name of ["root", "helper"]) {
-      const file = path.join(dir, `${name}.pid`);
-      while (!real.existsSync(file) && Date.now() < until) await Bun.sleep(10);
-      const pid = Number(real.readFileSync(file, "utf8"));
-      lifetimeProbe = true;
-      try {
+    let ready: RegExpExecArray | null = null;
+    while (!ready && Date.now() < until) {
+      if (real.existsSync(file)) ready = /^([1-9]\d*) ([1-9]\d*)\n$/.exec(real.readFileSync(file, "utf8"));
+      if (!ready) await Bun.sleep(10);
+    }
+    if (!ready) throw new Error("fixture did not report both process identities");
+    pids = [Number(ready[1]), Number(ready[2])];
+    lifetimeProbe = true;
+    try {
+      for (const pid of pids) {
         const identity = captureProcessIdentity(pid);
         started.push(identity);
         expect(processIdentityStatus(identity), "fixture reported with live PID/start/boot identity").toBe("alive");
-      } finally { lifetimeProbe = false; }
-      pids.push(pid);
-    }
-  } finally { await pending; }
+      }
+    } finally { lifetimeProbe = false; }
+  } finally {
+    cancel?.abort();
+    await pending;
+  }
   const error = await pending;
   return { error, elapsed: performance.now() - at, pids };
 }
@@ -146,11 +163,21 @@ test("a ps that answers slowly is cut off by the cleanup allowance, and the stop
   real.writeFileSync(path.join(slow, "ps"), `#!/bin/sh\nexec ${Bun.which("sleep")} 60\n`, { mode: 0o755 });
   const searched = process.env.PATH;
   process.env.PATH = `${slow}${path.delimiter}${searched}`;
+  const attempts: NonNullable<typeof psAttempts> = [];
+  psAttempts = attempts;
   try {
-    const { error, elapsed } = await stoppedStep(dir, 500);
-    // The deadline and the three-second cleanup allowance, whatever ps does.
-    expect(elapsed).toBeLessThan(500 + 3_000 + 1_000);
+    // Start cleanup after the owned children are ready. Verify the actual ps
+    // timeout separately from how long the scheduler took to start the step.
+    const { error } = await stoppedStep(dir, new AbortController());
+    expect(attempts.some(attempt => attempt.error === "ETIMEDOUT")).toBeTrue();
+    for (const { timeout } of attempts) {
+      expect(timeout).toBeGreaterThan(0);
+      expect(timeout).toBeLessThanOrEqual(3_000);
+    }
     expect(error).toBeInstanceOf(ContainmentFailed);
     expect((error as Error).message).toContain("the processes it started could not be listed (no /proc, and ps did not answer within 3 s), so they could not be proven stopped; stop them before pushing again");
-  } finally { process.env.PATH = searched; }
+  } finally {
+    psAttempts = undefined;
+    process.env.PATH = searched;
+  }
 }, 30_000);

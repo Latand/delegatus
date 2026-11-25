@@ -5,6 +5,7 @@ import { splitAttemptTime } from "@/lib/pipelines/accounting";
 import { readHostExit, withHostStopOrigin } from "./hostExit";
 import { SOURCE_STATES, chooseSource, sourceTurnsEnginesOff } from "@/lib/memory/fixtures/source";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { ensureDestructiveGuard } from "@/lib/agent/destructiveGuard";
 import { fakeAgentMemory, fakeHostMemory } from "./fixtures/agentMemory";
 import { EventEmitter } from "node:events";
 import crypto from "node:crypto";
@@ -168,10 +169,10 @@ test("Claude clean inline settings preserve legacy bytes outside the clean-memor
   const state = path.join(root, "state");
   process.env.LLV_STATE_DIR = state;
   const env = { ...process.env, HOME: root };
-  const legacyBody = JSON.stringify({ env: agentPublicationIdentityEnv(env) });
+  const legacyBody = JSON.stringify({ env: agentPublicationIdentityEnv(env, root) });
   const cleanBody = JSON.stringify({
     autoMemoryEnabled: false,
-    env: { ...agentPublicationIdentityEnv(env), CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" },
+    env: { ...agentPublicationIdentityEnv(env, root), CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" },
   });
   try {
     for (const source of ["unchosen", "importing"] as const) {
@@ -1055,7 +1056,7 @@ describe("ClaudeStreamBrokerHost", () => {
       });
       const settingsArg = captured.args![captured.args!.indexOf("--settings") + 1]!;
       const settings = JSON.parse(accountSettings ? fs.readFileSync(settingsArg, "utf8") : settingsArg);
-      expect(settings.env).toEqual(agentPublicationIdentityEnv({ LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email }));
+      expect(settings.env).toEqual(agentPublicationIdentityEnv({ LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email }, "/repo"));
     } finally { await host.release(); fs.rmSync(configDir, { recursive: true, force: true }); }
   });
 
@@ -1411,8 +1412,8 @@ describe("ClaudeStreamBrokerHost", () => {
     const adoptedMcpPath = adoptedCapture.args![adoptedCapture.args!.indexOf("--mcp-config") + 1]!;
     const adoptedMcp = JSON.parse(fs.readFileSync(adoptedMcpPath, "utf8"));
     expect(freshSettings.theme).toBe("shared-dark");
-    expect(freshSettings.env).toEqual({ SHARED_SETTING: "kept", ...agentPublicationIdentityEnv({}) });
-    expect(freshSettings.hooks.PreToolUse.map((group) => group.matcher)).toEqual(["Read", "Bash", "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage"]);
+    expect(freshSettings.env).toEqual({ SHARED_SETTING: "kept", ...agentPublicationIdentityEnv(stdioEnv, managedHome) });
+    expect(freshSettings.hooks.PreToolUse.map((group) => group.matcher)).toEqual(["Read", "Bash", "Bash", "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage"]);
     // Each hosted generation has its own FIFO hook receipt queue. Native
     // settings and policy remain identical across fresh/adopted launches.
     const omitMemoryHook = (settings: typeof adoptedSettings) => ({ ...settings,
@@ -1436,6 +1437,8 @@ describe("ClaudeStreamBrokerHost", () => {
     const legacySettingsPath = path.join(legacyHome, "settings.json");
     const legacySettings = JSON.stringify({ theme: "legacy-light", custom: { owner: "legacy" } });
     fs.writeFileSync(legacySettingsPath, legacySettings);
+    expect(ensureDestructiveGuard({ engine: "claude", home: legacyHome }).hook).toBe("account");
+    const guardedLegacySettings = fs.readFileSync(legacySettingsPath, "utf8");
     const legacyChild = new FakeClaude(new RecordingDeliveryLedger());
     const legacyCapture: { args?: string[] } = {};
     const legacy = await ClaudeStreamBrokerHost.start({
@@ -1454,7 +1457,7 @@ describe("ClaudeStreamBrokerHost", () => {
     };
     expect(legacyProfile.hooks.PreToolUse.some((group) => group.matcher === "Task|Agent|Workflow|TeamCreate|TeamDelete|SendMessage")).toBe(true);
     expect(legacyProfile.hooks.PreToolUse.some((group) => group.matcher === "Bash")).toBe(true);
-    expect(fs.readFileSync(legacySettingsPath, "utf8")).toBe(legacySettings);
+    expect(fs.readFileSync(legacySettingsPath, "utf8")).toBe(guardedLegacySettings);
     await legacy.release();
   });
 

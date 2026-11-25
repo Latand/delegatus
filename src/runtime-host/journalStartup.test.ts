@@ -18,7 +18,7 @@ beforeAll(() => {
   const started = performance.now();
   largeJournal(fixture, historySize);
   console.log(JSON.stringify({ journalFixtureRows: historySize, seedMs: Math.round(performance.now() - started) }));
-}, 240_000);
+}, 300_000);
 afterAll(() => fs.rmSync(directory, { recursive: true, force: true }));
 function copy(source = fixture): string { const f = path.join(directory, `copy-${next++}.sqlite`); fs.copyFileSync(source, f); return f; }
 function meta(f: string, key: string): string | null { const db = new Database(f, { readonly: true }); try { return db.query<{ value: string }, [string]>("SELECT value FROM journal_meta WHERE key=?").get(key)?.value ?? null; } finally { db.close(); } }

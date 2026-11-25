@@ -1,7 +1,8 @@
+// destructive-code: head-only; fixture-owned paths and recording process doubles.
 import * as mcpTickFixture from "../monitor/seatTickController.fixture";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { expect, spyOn, test } from "bun:test";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { CodexAppServerHost } from "./codexAppServerHost";
@@ -10,10 +11,23 @@ import { bindCodexHostPersistence, codexHostColumns } from "./registry";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import type { RuntimeHostClient } from "./client";
 import { structuredDeliveryMcpObservation, bindStructuredDeliveryQueue } from "./structuredDeliveryController";
-import { installCodexHostFixture, MemoryEventStore, FakeAppServer, fakeSpawn } from "./codexAppServerHost.fixture";
+import { materializeStructuredHostAccess } from "./structuredSpawn";
+import { installCodexHostFixture, MemoryEventStore, FakeAppServer, fakeSpawn, metadataState } from "./codexAppServerHost.fixture";
 
-let metadataState: string;
-installCodexHostFixture(directory => { metadataState = directory; });
+installCodexHostFixture();
+
+test.each([false, true])("Codex child environments preserve the production evidence folder (resume=%s)", async resumed => {
+  const access = materializeStructuredHostAccess(false, { ...process.env }, null);
+  const server = new FakeAppServer("evidence-thread");
+  const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+  const options = { cwd: metadataState, env: access.env, ...access.codex, ...access.host,
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured) };
+  const host = resumed ? await CodexAppServerHost.adopt("evidence-thread", options) : await CodexAppServerHost.start(options);
+  try {
+    expect(captured.options?.env?.LLV_EVIDENCE_DIR).toBe(access.env.LLV_EVIDENCE_DIR);
+    expect(captured.options?.env?.TMPDIR).toBe(access.env.TMPDIR);
+  } finally { await host.release(); access.cleanup(); }
+});
 
 for (const restored of [false, true]) test.each(["off", "sqlite"] as const)(`Viewer MCP denial reaches claimed persistence, keyed health and tick (%s, restored=${restored})`, async sqliteMode => {
   const { seatMcpHealth } = await import("../monitor/seatMcpHealth");
@@ -204,12 +218,13 @@ test("MCP service controls preserve denial layers and same-key effects", async (
   } finally { await host.release(); }
 });
 
-
 const mcpRestartCases = [1, 33, "pending-denial", "starts-32", "starts-33", "healthy-32", "healthy-33"] as const;
+
 const mcpRestartDeliveries = [
   ...mcpRestartCases.map(scenario => ({ scenario, delivery: undefined as string | undefined, label: String(scenario) })),
   ...["buffered", "live"].flatMap(delivery => [1, "starts-33"].map(scenario => ({ scenario, delivery, label: `${scenario}, ${delivery}` }))),
 ];
+
 test.each(mcpRestartDeliveries)("a fresh process retains MCP correlation ($label)", async ({ scenario, delivery }) => {
   const fixture = path.join(import.meta.dir, "fixtures/codexCallbackProcess.ts");
   const directory = path.join(metadataState, "mcp-process-events");
@@ -254,7 +269,6 @@ test.each(mcpRestartDeliveries)("a fresh process retains MCP correlation ($label
     await closed;
   }
 }, 30_000);
-
 
 for (const scenario of ["tool-128", "tool-129", "denials-33", "starts-33", "large-result"] as const)
   test(`Viewer MCP observation stays bounded for ${scenario}`, async () => {
@@ -337,7 +351,6 @@ test("Viewer MCP recovery stays unverified when restoration has lost event histo
     expect(host.readViewerMcpObservation()).toMatchObject({ denied: [{ tool: "get_task", seq: expect.any(Number) }], unverified: true });
   } finally { await host.release(); }
 });
-
 
 for (const scenario of ["pending-denial", "replayed-start", "restored-replayed-start",
   "healthy-32", "healthy-33", "healthy-34", "restored-healthy-32", "restored-healthy-33"] as const)

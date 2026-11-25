@@ -5,12 +5,37 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { decodeXML } from "entities";
-import { gateInputSnapshot, gateTemporaryRoot, ISOLATED_DIRECTORY_KEYS, isolatedEnvironment, SUPERVISOR_MARGIN_MS } from "./local-gate";
+import { gateInputSnapshot, gateTemporaryRoot, ISOLATED_DIRECTORY_KEYS, isolatedEnvironment, privacyGeneratorTest, SUPERVISOR_MARGIN_MS } from "./local-gate";
+import { PRIVACY_GENERATOR_BUN_VERSION } from "./privacy-generator-runtime";
 import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
 export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number }
 export interface TestRun { failures: TestSite[]; passed: TestSite[]; elapsedMs: number; completed: string[] }
+
+/** Conservative head-only classification follows local imports, including the
+ * implementation a test exercises. Unknown or overlarge graphs get no base run. */
+export function destructiveTestFile(root: string, file: string): boolean {
+  const pending = [path.resolve(root, file)], seen = new Set<string>();
+  while (pending.length) {
+    const target = pending.pop()!;
+    if (seen.has(target)) continue;
+    if (seen.size >= 256 || !target.startsWith(path.resolve(root) + path.sep)) return true;
+    seen.add(target);
+    let source: string;
+    try { source = readFileSync(target, "utf8"); } catch { return true; }
+    if (/destructive-code|\b(?:rm|rmdir|unlink|truncate|rename)(?:Sync)?\s*\(|\b(?:rm|rmdir|unlink|truncate|rename)(?:Sync)?\s+(?:as\s+\w+)|\b(?:rm|rmdir|unlink|truncate|rename)(?:Sync)?\s*:\s*\w+|\brm\s+-[^\n]*[rRf]|find[^\n]*-delete|rsync[^\n]*--delete/.test(source)) return true;
+    for (const match of source.matchAll(/(?:\bfrom\s*|\bimport\s*(?:\(\s*)?|\brequire\s*\(\s*)["']([.@][^"']+)["']/g)) {
+      const name = match[1];
+      if (!name.startsWith(".") && !name.startsWith("@/")) continue;
+      const base = name.startsWith("@/") ? path.join(root, "src", name.slice(2)) : path.resolve(path.dirname(target), name);
+      const resolved = [base, ...[".ts", ".tsx", ".mjs", ".js", "/index.ts", "/index.tsx"].map(ext => base + ext)].find(value => { try { return statSync(value).isFile(); } catch { return false; } });
+      if (!resolved) return true;
+      pending.push(resolved);
+    }
+  }
+  return false;
+}
 const escapedTemporaryRoot = path.join(gateTemporaryRoot(), "delegatus-test-comparison-").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const privateTestRoot = new RegExp(`${escapedTemporaryRoot}[a-zA-Z0-9]{6}[/\\\\]test-[a-zA-Z0-9]{6}`, "g");
 const diagnosticName = (site: TestSite) => site.kind === "error" ? site.name.replace(privateTestRoot, "<sandbox>") : site.name;
@@ -350,6 +375,10 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     env.PATH = fileRunnerPath(env);
     env.NO_COLOR = "1"; env.FORCE_COLOR = "0";
     const report = path.join(privateRoot, "junit.xml"), log = path.join(privateRoot, "output.log");
+    // A fixture can put this sandbox below the head checkout. Normalize its
+    // exact allocation before checkout replacement would hide that prefix on
+    // only one side; preserve the path within it and the actual error cause.
+    const sandboxDiagnostic = (value: string) => value.split(privateRoot).join("<sandbox>");
     const fd = openSync(log, "w");
     let result: Bun.Subprocess;
     let exitCode: number;
@@ -361,7 +390,8 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       // The outer clock starts before systemd starts the inner service. Give
       // that service time to enforce its own deadline and drain its cgroup.
       // Both clocks still exclude independently observed CPU queue waits.
-      result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(fileMs + SUPERVISOR_MARGIN_MS), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--timeout=60000", "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
+      result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--owned-budget", String(fileMs + SUPERVISOR_MARGIN_MS),
+        process.execPath, "test", `./${file}`, "--timeout=60000", "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
         cwd: root, env: { ...env, LLV_OWNED_RUN_TIMEOUT_MS: String(fileMs) }, stdio: ["ignore", fd, fd],
       });
       exitCode = await result.exited;
@@ -369,11 +399,16 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     // The owned runner ends the service cgroup. A group number after the root
     // exits is neither a bound handle nor proof against PID reuse.
     try {
-      const output = readFileSync(log, "utf8");
-      survivors = output.split("\n").find(line => line.startsWith("owned runner: surviving owned processes:"));
+      const output = sandboxDiagnostic(readFileSync(log, "utf8"));
+      const lines = output.split("\n");
+      survivors = lines.find(line => line.startsWith("owned runner: surviving owned processes:"));
       const task = gateTaskDiagnostics(output);
       taskPeak = task.peak;
-      if (exitCode !== 0 && task.failure) throw new Error(task.failure);
+      const cleanupFailure = lines.find(line => line.startsWith("owned runner: budget cleanup failed:"));
+      const entryFailure = lines.includes("worker entry refused: worker entry owned children survived cleanup")
+        ? "owned runner: budget cleanup failed: worker entry owned children survived cleanup" : null;
+      const refusal = task.failure ?? cleanupFailure ?? entryFailure;
+      if (exitCode !== 0 && refusal) throw new Error(refusal);
       if (result.signalCode || ![0, 1].includes(exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? exitCode})`);
       const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, filtered);
       // A complete report still needs the service's ownership verdict.
@@ -401,9 +436,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
         }
         throw new Error(detail);
       }
-      // A caller's TMPDIR may sit inside its checkout. Normalize the report
-      // sandbox before replacing that checkout prefix on only the head side.
-      failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.replace(privateTestRoot, "<sandbox>").split(root).join("<checkout>")}`, kind: "error" });
+      failures.push({ file, suite: "", name: `${RUNNER_ERROR}${sandboxDiagnostic(message).split(root).join("<checkout>")}`, kind: "error" });
     } finally { rmSync(privateRoot, { recursive: true, force: true }); }
     const elapsedMs = performance.now() - fileStarted;
     const hint = label === "head" && elapsedMs > budgets.fileMs / 2
@@ -649,7 +682,11 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     }
     const baseFiles = new Set(git("ls-tree", "-r", "--name-only", "-z", base, "--", ...files).split("\0"));
     const failingFiles = files.filter(file => head.failures.some(site => site.file === file));
-    const oldFiles = failingFiles.filter(file => baseFiles.has(file));
+    // Destructive paths never run against an older implementation. A red head
+    // remains blocking and gets no inherited-failure allowance.
+    const headOnly = new Set(failingFiles.filter(file => destructiveTestFile(root, file)));
+    for (const file of headOnly) log(`touched-tests: ${file}: destructive code, judged on head only; no base execution`);
+    const oldFiles = failingFiles.filter(file => baseFiles.has(file) && !headOnly.has(file));
     const graph = dependencyGraph(root);
     const remote = oldFiles.length ? git("config", "--get", "remote.origin.url").trim() : "";
     const baselineStarted = performance.now();
@@ -695,7 +732,14 @@ export async function touchedTests(root: string, baseRef: string, selected: read
         installed = installedFingerprint(root);
       }
     } catch { log("touched-tests: baseline reuse disabled: tool inputs could not be fingerprinted"); }
-    const environment = environmentFingerprint(inherited);
+    const baselineEnvironment = () => {
+      const environment = environmentFingerprint(inherited);
+      if (!oldFiles.includes(privacyGeneratorTest)) return environment;
+      const configured = inherited.LLV_PRIVACY_GENERATOR_BUN?.trim();
+      const binary = Bun.which(configured || `bun-${PRIVACY_GENERATOR_BUN_VERSION}`, { PATH: fileRunnerPath(inherited), cwd: root });
+      return fingerprint([environment, configured, binary ? fileFingerprint(binary) : null]);
+    };
+    const environment = baselineEnvironment();
     const context = [3, base, remote, Bun.version, process.platform, process.arch, fileFingerprint(process.execPath), graph.fingerprint, installed, tools, environment, budgets];
     const cacheKey = (file: string) => fingerprint([context, file,
       head.failures.some(site => site.file === file && site.kind === "error") ? "whole file"
@@ -714,7 +758,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const fresh = freshFiles.length ? await runFiles(prepareBaseline(), freshFiles, sandbox, inherited, "baseline", { ...runOptions, sites: head.failures }) : empty;
     let unchangedTools = false;
     try {
-      unchangedTools = !!installed && installedFingerprint(root) === installed && environmentFingerprint(inherited) === environment
+      unchangedTools = !!installed && installedFingerprint(root) === installed && baselineEnvironment() === environment
         && fingerprint(gateToolFiles(toolRoot).map(file => [file, fileFingerprint(path.join(toolRoot, file))])) === fingerprint(tools);
     } catch { /* A changed or unreadable input cannot certify a new record. */ }
     if (graph.shareable && unchangedTools) for (const file of freshFiles) {
@@ -740,7 +784,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const comparison = await confirmFailures(baseline, head, async (side, sites) => {
       if (sites.some(site => site.kind === "error")) diagnosticReruns++;
       else reruns++;
-      const retryFiles = [...new Set(sites.map(site => site.file))].filter(file => side === "head" || baseFiles.has(file));
+      const retryFiles = [...new Set(sites.map(site => site.file))].filter(file => side === "head" || baseFiles.has(file) && !headOnly.has(file));
       if (!retryFiles.length) return { failures: [], passed: [], completed: [], elapsedMs: 0 };
       return await runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { ...runOptions, ...(sites.some(site => site.kind === "error") ? {} : { sites }), deadline });
     });

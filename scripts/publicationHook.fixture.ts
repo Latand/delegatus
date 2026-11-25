@@ -34,12 +34,22 @@ function fixture() {
   const env: NodeJS.ProcessEnv = { ...f.env, LLV_GATE_PUBLICATION_RECEIPT: receipt, LLV_GATE_PUBLICATION_ID: "operation-one",
     LLV_GATE_PUBLICATION_EPOCH: "1", LLV_GATE_PUBLICATION_FENCE: "custody-one", LLV_GATE_PUSH_HEAD: head,
     LLV_GATE_PUBLICATION_REF: "refs/heads/main", LLV_GATE_PUBLICATION_REMOTE_HEAD: "0".repeat(40) };
+  const executionEnv = (overrides: Partial<NodeJS.ProcessEnv> = {}) => {
+    const result = { ...env, ...overrides };
+    // The real publisher supplies the guard. This adapter supplies the fake
+    // command recorders, behind that guard, as the fixture's launch PATH.
+    if (overrides.LLV_DESTRUCTIVE_GUARD_DIR) {
+      result.PATH = overrides.LLV_DESTRUCTIVE_GUARD_DIR + path.delimiter + env.PATH;
+      result.LLV_DESTRUCTIVE_GUARD_BOUND_PATH = result.PATH;
+    }
+    return result;
+  };
   const run = (prepare: boolean, extra: Partial<NodeJS.ProcessEnv> = {}) => spawnSync(prepare ? "bun" : "bash", prepare
     ? ["scripts/local-gate.ts", "pre-push", "--publication-prepare"] : [".githooks/pre-push"], {
     cwd: f.dir, env: { ...env, ...(!prepare ? { PATH: `${f.git("--exec-path").toString().trim()}${path.delimiter}${env.PATH}` } : {}), ...extra }, encoding: "utf8", timeout: 45_000,
     input: prepare ? undefined : `HEAD ${env.LLV_GATE_PUSH_HEAD} refs/heads/main ${"0".repeat(40)}\n`,
   });
-  return { ...f, head, receipt, env, run };
+  return { ...f, head, receipt, env, run, executionEnv };
 }
 
 function nativeFixture(coldBun = false) {

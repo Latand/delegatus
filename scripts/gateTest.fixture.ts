@@ -11,8 +11,16 @@ async function recordFixtureIdentities(files: string[], timeoutMs = 2_000): Prom
   const until = Date.now() + timeoutMs;
   const identities: ProcessIdentity[] = [];
   for (const file of files) {
-    while (!existsSync(file) && Date.now() < until) await Bun.sleep(10);
-    const identity = captureProcessIdentity(Number(readFileSync(file, "utf8")));
+    // Creation precedes the shell's PID write. A visible empty file is not
+    // the readiness receipt and must never register PID zero for cleanup.
+    let pid = 0;
+    while (Date.now() < until) {
+      if (existsSync(file)) pid = Number(readFileSync(file, "utf8").trim());
+      if (Number.isSafeInteger(pid) && pid > 1) break;
+      await Bun.sleep(10);
+    }
+    expect(pid, "fixture published its complete PID receipt").toBeGreaterThan(1);
+    const identity = captureProcessIdentity(pid);
     owned.push(identity);
     identities.push(identity);
     expect(processIdentityStatus(identity), "fixture reported with live PID/start/boot identity").toBe("alive");

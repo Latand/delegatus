@@ -105,6 +105,10 @@ export function withAgentConfigSandbox(
      handed this path and resolves no app dir of its own, so the spelling is
      the one every release before the Delegatus rename used. */
   env.LLV_STATE_DIR = path.join(configHome, LEGACY_APP_DIR, "state");
+  if (env.LLV_DESTRUCTIVE_GUARD_OWN && !root.includes(":")) {
+    env.LLV_DESTRUCTIVE_GUARD_OWN += ":" + root;
+    env.LLV_DESTRUCTIVE_GUARD_FAST += ":" + root;
+  }
   /* The new prefix never reaches an agent: an inherited DELEGATUS_STATE_DIR
      would win over the sandbox value above at the agent's own entry point
      (rename-delegatus.md §5). Entry points fold and delete it at the root;

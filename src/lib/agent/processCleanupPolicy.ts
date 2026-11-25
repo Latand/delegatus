@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ensureDestructiveGuard, guardTrust } from "./destructiveGuard";
 
 export const PROCESS_CLEANUP_HOOK_PREFIX = "LLV_MANAGED_PROCESS_CLEANUP_DENY=1 ";
 export const PROCESS_CLEANUP_DENY_MESSAGE = "PID-only process cleanup: stop only processes you started, using the PID recorded at start. Never stop by name, pattern or port. Bind probe servers to port 0 and read back their assigned port.";
@@ -227,26 +228,33 @@ try {
   return `${PROCESS_CLEANUP_HOOK_PREFIX}bun '${file.replaceAll("'", "'\\''")}'`;
 }
 
-/** Session flags carry both the declaration and its trust; account config and
- * hooks.json are untouched. Hash/key format follows Codex's hook discovery in
+/** Session flags carry the cleanup declaration and trust. The destructive
+ * guard verifies its account install and uses session flags on fallback.
+ * Hash/key format follows Codex's hook discovery in
  * rust-v0.154.0 and rust-v0.159.0 and is exercised with the native interpreter. */
-export function codexProcessCleanupConfig(home: string = path.join(os.homedir(), ".codex")) {
+export function codexProcessCleanupConfig(home: string = path.join(os.homedir(), ".codex"), source: NodeJS.ProcessEnv = process.env) {
   const command = installProcessCleanupHook(home);
   const handler = { async: false, command, timeout: 10, type: "command" };
   const group = { hooks: [handler], matcher: "Bash|shell|shell_command|exec_command" };
   const hash = "sha256:" + crypto.createHash("sha256").update(JSON.stringify({ event_name: "pre_tool_use", ...group })).digest("hex");
   const key = "/<session-flags>/config.toml:pre_tool_use:0:0";
-  return { features: { hooks: true, codex_hooks: true }, hooks: {
+  const config = { features: { hooks: true, codex_hooks: true }, hooks: {
     PreToolUse: [{ matcher: group.matcher, hooks: [{ type: "command", command, timeout: 10 }] }],
     state: { [key]: { enabled: true, trusted_hash: hash } },
   } };
+  const guard = ensureDestructiveGuard({ engine: "codex", home, source });
+  if (guard.hook !== "account") {
+    const group = { matcher: "Bash", hooks: [guard.handler] };
+    config.hooks.PreToolUse.push(group);
+    Object.assign(config.hooks.state, { "/<session-flags>/config.toml:pre_tool_use:1:0": { enabled: true, trusted_hash: guardTrust(group) } });
+  }
+  return config;
 }
 
-export function codexProcessCleanupArgs(home: string = path.join(os.homedir(), ".codex")): string[] {
-  const config = codexProcessCleanupConfig(home);
+export function codexProcessCleanupArgs(home: string = path.join(os.homedir(), ".codex"), source: NodeJS.ProcessEnv = process.env): string[] {
+  const config = codexProcessCleanupConfig(home, source);
   // TOML inline tables omit nulls; discovery restores those optional fields.
-  const group = config.hooks.PreToolUse[0];
-  const command = group.hooks[0].command;
-  return ["-c", "features.hooks=true", "-c", "features.codex_hooks=true", "-c", `hooks.PreToolUse=[{matcher=${JSON.stringify(group.matcher)},hooks=[{type="command",command=${JSON.stringify(command)},timeout=10}]}]`,
+  const groups = config.hooks.PreToolUse.map(group => `{matcher=${JSON.stringify(group.matcher)},hooks=[${group.hooks.map(handler => `{type="command",command=${JSON.stringify(handler.command)},timeout=10}`).join(",")}]}`).join(",");
+  return ["-c", "features.hooks=true", "-c", "features.codex_hooks=true", "-c", `hooks.PreToolUse=[${groups}]`,
     "-c", `hooks.state={${Object.entries(config.hooks.state).map(([key, state]) => `${JSON.stringify(key)}={enabled=true,trusted_hash=${JSON.stringify(state.trusted_hash)}}`).join(",")}}`];
 }

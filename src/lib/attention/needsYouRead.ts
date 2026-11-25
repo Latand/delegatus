@@ -74,7 +74,7 @@ export async function readNeedsYou(project: string, options: NeedsYouReadOptions
   };
   try {
     const wants = (kinds: readonly NeedsYouRowKind[]) => !options.kinds || options.kinds.some(kind => kinds.includes(kind));
-    const conversations = wants(["decision", "question", "plan", "permission", "delivery", "launch", "memory", "ask"]);
+    const conversations = wants(["decision", "question", "plan", "permission", "refusal", "delivery", "launch", "memory", "ask"]);
     const boardNeeded = conversations || wants(["lane-decision", "lane-review", "prototype"]);
     const body = boardNeeded ? await source("board", () => sources.board(signal), { files: [], pipelines: [], tasks: [] }) : { files: [], pipelines: [], tasks: [] };
     const tasks = boardNeeded ? await source("tasks", sources.tasks, []) : [];
