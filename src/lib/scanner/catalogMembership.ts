@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { RootKey } from "@/lib/types";
+import { isAntigravityTranscriptPath } from "./antigravityNative";
 import { isClaudeWorkflowBookkeeping } from "./claudeNative";
 import { isCopilotTranscriptPath } from "./copilotNative";
 import { isOpenclawTranscript } from "./openclawNative";
@@ -20,6 +21,7 @@ function eligible(rootName: RootKey, root: string, pathname: string): boolean {
   if (rootName === "claude-projects") return !isClaudeWorkflowBookkeeping(path.relative(root, pathname));
   if (rootName === "openclaw-sessions") return isOpenclawTranscript(name);
   if (rootName === "copilot-sessions") return isCopilotTranscriptPath(root, pathname);
+  if (rootName === "antigravity-sessions") return isAntigravityTranscriptPath(root, pathname);
   if (rootName === "claude-tasks") {
     const parts = path.relative(root, pathname).split(path.sep);
     return parts.length === 4 && parts[2] === "tasks" && name.endsWith(".output");

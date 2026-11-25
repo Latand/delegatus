@@ -110,6 +110,7 @@ export type GlyphName =
   | "cmd-group"
   | "codex"
   | "claude"
+  | "antigravity"
   | "image"
   | "blob"
   | "note"
@@ -133,6 +134,7 @@ const GLYPHS: Record<GlyphName, LucideIcon> = {
   "cmd-group": Terminal,
   codex: Command,
   claude: Sparkle,
+  antigravity: Sparkle,
   image: ImageIcon,
   blob: Binary,
   note: PencilLine,
@@ -150,9 +152,9 @@ const GLYPHS: Record<GlyphName, LucideIcon> = {
 };
 
 export function GlyphIcon({ name, className }: { name: GlyphName; className?: string }) {
-  /* The two engine names go through the Viewer's one engine mark (#1743), so a
-     feed row and a stage node never draw Claude two different ways. */
-  if (name === "claude" || name === "codex") return <EngineMark engine={name} size={14} className={className} />;
+  /* Engine names go through the Viewer's one engine mark (#1743), so a
+     feed row and a stage node never draw an engine two different ways. */
+  if (name === "claude" || name === "codex" || name === "antigravity") return <EngineMark engine={name} size={14} className={className} />;
   const Icon = GLYPHS[name];
   return <Icon className={className ?? "h-3.5 w-3.5"} aria-hidden />;
 }

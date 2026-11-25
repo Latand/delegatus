@@ -4893,7 +4893,7 @@ export const en = {
   "mobile2.board.pipelineStage": "stage {stage}/{total} · {name}",
   "mobile2.board.pipelineStageFailed": "stage {stage}/{total} · {name} · failed",
   "mobile2.board.pipelineFindings": { one: "{count} finding", other: "{count} findings" },
-  "mobile2.board.killed": "killed · messages queue",
+  "mobile2.board.killed": "stopped · messages queue",
   "mobile2.board.stalled": "stalled · {age}",
   "mobile2.board.limit": "at the account limit",
   "mobile2.board.limitResets": "resets {time}",
@@ -4933,7 +4933,7 @@ export const en = {
      precedence — offline > killed > stalled > limit > held > waiting >
      working > returned > done — and no surface writes its own. */
   "mobile2.chat.stateOffline": "offline · reconnecting",
-  "mobile2.chat.stateKilled": "killed · messages queue",
+  "mobile2.chat.stateKilled": "stopped · messages queue",
   "mobile2.chat.stateStalled": "stalled · {age}",
   "mobile2.chat.stateLimit": "limit",
   "mobile2.chat.stateLimitAt": "limit · resets {time}",
@@ -5028,7 +5028,7 @@ export const en = {
   "mobile2.composer.queueAria": "Queue — delivers when the runtime reconnects",
   "mobile2.composer.respawn": "Respawn",
   "mobile2.composer.respawnAria": "Respawn the agent",
-  "mobile2.composer.placeholderKilled": "killed · text queues until a respawn",
+  "mobile2.composer.placeholderKilled": "stopped · text queues until a respawn",
   "mobile2.composer.placeholderHeld": "held · text you send queues",
   "mobile2.composer.placeholderOffline": "offline · text you send is delivered on reconnect",
   /* Mobile v2 accounts & limits screen (#1439, lane 9): per engine, the
@@ -5119,10 +5119,10 @@ export const en = {
      claimed a message queue nobody measured and carried no age, and the held
      plurals were swapped; the dictionary is append-only per lane, so the
      corrected phrases are new keys and the old ones are no longer read. */
-  "mobile2.board.killedAge": "killed · {age}",
+  "mobile2.board.killedAge": "stopped · {age}",
   "mobile2.board.heldQueued": { one: "held · {count} message queued", other: "held · {count} messages queued" },
   "mobile2.board.started": "started {age} ago",
-  "mobile2.chat.stateKilledAge": "killed · {age}",
+  "mobile2.chat.stateKilledAge": "stopped · {age}",
   "mobile2.chat.stateHeldQueued": { one: "held · {count} message queued", other: "held · {count} messages queued" },
   "mobile2.composer.placeholderStopped": "the host stopped · text queues until a respawn",
   /* Mobile v2 lane 10: the pipeline screen takes over what the retired dock
@@ -5420,9 +5420,8 @@ export const en = {
   "kanban.memberState.held": "held",
   "kanban.memberState.waiting": "needs you",
   "kanban.memberState.working": "working",
-  "kanban.memberState.returned": "turn finished",
-  "kanban.memberState.done": "idle",
-  "kanban.memberState.launchDone": "done",
+  "kanban.memberState.returned": "finished the turn",
+  "kanban.memberState.done": "done",
   "kanban.pipeline": "Pipeline",
   "kanban.pipelineAria": "{title}: {progress}",
   "kanban.actor.agent": "an agent",
@@ -6215,6 +6214,7 @@ export const en = {
   "seatTick.reason.permissionRequest": "a permission request waits",
   "seatTick.reason.workerAsk": "a worker's question waits on the orchestrator",
   "seatTick.reason.diskPressure": "disk space is low",
+  "seatTick.reason.diskCleaner": "disk cleanup finished",
   "seatTick.outcome.landed": "landed",
   "seatTick.outcome.deferred": "deferred, an attempt outstanding",
   "seatTick.outcome.queued": "queued",

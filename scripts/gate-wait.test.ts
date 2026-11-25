@@ -484,6 +484,27 @@ test.skipIf(process.platform !== "linux")("recorder death ends its original supe
 }, 45_000);
 
 
+// Review regression: Bun's node:child_process reports neither a code nor a
+// signal for an unnamed real-time signal. The portable supervisor keeps the
+// kernel status, and the receipt tells the signal apart from an explicit 162.
+for (const [shape, body, commandExit, commandSignal] of [
+  ["real-time signal 34", "process.kill(process.pid, 34);", null, "SIG34"],
+  ["explicit exit 162", "process.exit(162);", 162, null],
+] as const) test.skipIf(process.platform !== "linux")(`a recorded portable command's ${shape} closes with status 162 and a confirmed receipt`, async () => {
+  const f = fixture(), env = portableEnvironment(f);
+  const script = path.join(f.root, "command.ts"), declaration = path.join(f.root, "manifest.json");
+  fs.writeFileSync(script, `import fs from "node:fs";fs.appendFileSync(import.meta.dir+"/executions","run\\n");${body}`);
+  writeEnvelope(declaration, await buildManifest({ executionEnvironment: {}, cwd: f.root, deadline: Date.now() + 30_000,
+    executionMs: 30_000, selection: ["signalled-command"], configurationDigest: digest({ fixture: shape }),
+    roots: [{ directory: f.root, purpose: "evidence" }], inputs: [{ root: f.root, file: "command.ts" }],
+    outputs: [{ root: f.root, file: "late.patch" }], completion: { root: f.root, file: "complete.json" } }));
+  const recording = background(["--record", f.log, "--manifest", declaration, "--", process.execPath, script], env, f.root);
+  expect(await recording.closed, JSON.stringify(recording.output())).toBe(162);
+  const terminal = terminalSchema.parse(readEnvelope(path.join(f.dir, "result.json")));
+  expect(terminal.report).toMatchObject({ kind: "portable", phase: "close", commandExit, commandSignal, cleanup: "confirmed" });
+  expect(fs.readFileSync(path.join(f.root, "executions"), "utf8")).toBe("run\n");
+}, 45_000);
+
 test("closed queue observations round-trip independently of execution budgets", () => {
   const f = fixture();
   const env = { NODE_ENV: "test" as const, LLV_CPU_WAIT_ROOTS: "[]", LLV_RECORDED_CHECK_WAIT_ROOT: f.root };

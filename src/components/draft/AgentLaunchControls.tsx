@@ -253,7 +253,7 @@ export function useAgentLaunchDraft(options: {
 
   const [engine, setEngineState] = useState<LaunchEngine>(() => {
     const stored = read("engine");
-    if (stored === "codex" || stored === "claude" || stored === "copilot") return stored;
+    if (stored === "codex" || stored === "claude" || stored === "copilot" || stored === "antigravity") return stored;
     return options.initialEngine ?? "claude";
   });
   const [model, setModelState] = useState(() => read("model") || options.initialModel || defaultModelFor(engine));

@@ -5,6 +5,7 @@ import { loadTasks, mutateTasks, saveTasks } from "./store";
 import { taskRevision } from "./revision";
 import { expect, test } from "bun:test";
 import { createTask, patchTask } from "./commands";
+import { holdEditorDraft, holdEditorPatch } from "./hold";
 import { TASK_HOLD_KINDS, type BoardTask, type TaskHold } from "./types";
 
 const NOW = "2026-10-02T10:00:00.000Z";
@@ -227,25 +228,27 @@ test("operator undo restores hold age and provenance, requires its revision, and
   expect(patchTask([moved], moved.id, { ...request, expectedRevision: "stale" }, LATER, { actor: "operator" }).ok).toBe(false);
   expect(patchTask([moved], moved.id, request, LATER, { actor: "agent" }).ok).toBe(false);
 
-  const operatorHeld = ok(patchTask([task()], "hold-task", { hold: { kind: "operator", note: "Choose a setting" } }, NOW, { actor: "operator" })).task;
+  const operatorHeld = ok(patchTask([task()], "hold-task", { hold: { kind: "operator", note: "Choose a setting", ref: "fixture-round" } }, NOW, { actor: "operator" })).task;
   const operatorMoved = ok(patchTask([operatorHeld], operatorHeld.id, { status: "assigned" }, LATER)).task;
   const operatorRestored = ok(patchTask([operatorMoved], operatorMoved.id, {
     status: "blocked", restoreHold: operatorHeld.hold, expectedProject: operatorMoved.project,
     expectedRevision: taskRevision(operatorMoved),
   }, LATER, { actor: "operator" }));
-  expect(operatorRestored.task).toMatchObject({ status: "blocked", hold: { kind: "operator" } });
+  expect(operatorRestored.task).toMatchObject({ status: "blocked", hold: { kind: "operator", ref: "fixture-round" } });
 });
 
-for (const [kind, expected] of [["PR", "pr"], [" Issue ", "issue"], ["banana", "unstated"], ["unstated", "unstated"]] as const) {
+for (const [kind, expected] of [["PR", "pr"], [" Issue ", "issue"], [" Operator ", "operator"], ["banana", "unstated"], ["unstated", "unstated"]] as const) {
   test(`hold kind ${JSON.stringify(kind)} normalizes across create, update and steps`, () => {
-    const hold = { kind, ref: 123, note: "After the dependency finishes" };
+    const hold = { kind, ref: expected === "operator" ? "fixture-round" : 123, note: "After the dependency finishes" };
     const steps = [{ id: "dependency", text: "Finish dependency", state: "open", hold }];
     const created = ok(createTask([], { project: "fixture", placement: "unplaced", text: "Wait for dependency", hold, steps }, [], { now: () => NOW, id: () => "normalized-hold" }));
     const updated = ok(patchTask(created.tasks, created.task.id, { hold, steps }, LATER));
     for (const result of [created, updated]) {
       expect(result.task.hold?.kind).toBe(expected);
       expect(result.task.steps?.[0]?.hold?.kind).toBe(expected);
-      expect(result.task.hold?.ref).toBe(expected === "pr" || expected === "issue" ? "123" : undefined);
+      const ref = expected === "unstated" ? undefined : String(hold.ref);
+      expect(result.task.hold?.ref).toBe(ref);
+      expect(result.task.steps?.[0]?.hold?.ref).toBe(ref);
       if (kind === "banana") {
         expect(result.notes).toEqual([
           'Unknown hold kind "banana" normalized to unstated.',
@@ -264,3 +267,23 @@ for (const [kind, expected] of [["PR", "pr"], [" Issue ", "issue"], ["banana", "
     expect(updated.task.hold?.since).toBe(NOW);
   });
 }
+
+test("the hold editor submits no stale ref after a kind change and keeps an operator hold's exact ref", () => {
+  const prHold = ok(patchTask([task()], "hold-task", { hold: { kind: "pr", note: "Wait for the change", ref: "41" } }, NOW, { actor: "operator" })).task;
+  // Switching a PR hold to an operator hold clears the number the input no longer shows.
+  const draft = holdEditorDraft(prHold.hold, "operator");
+  expect(draft).toEqual({ ref: "", until: "" });
+  const switched = ok(patchTask([prHold], prHold.id, { hold: holdEditorPatch({ kind: "operator", note: "Choose a setting", ...draft }) }, LATER, { actor: "operator" })).task;
+  expect(switched.hold).toMatchObject({ kind: "operator", note: "Choose a setting" });
+  expect(switched.hold).not.toHaveProperty("ref");
+  // Editing the note of an existing operator hold leaves its exact ref in place.
+  const operatorHold = ok(patchTask([task()], "hold-task", { hold: { kind: "operator", note: "Choose a setting", ref: "fixture-round" } }, NOW, { actor: "operator" })).task;
+  const same = holdEditorDraft(operatorHold.hold, "operator");
+  expect(same.ref).toBe("fixture-round");
+  const renamed = ok(patchTask([operatorHold], operatorHold.id, { hold: holdEditorPatch({ kind: "operator", note: "Choose another setting", ...same }) }, LATER, { actor: "operator" })).task;
+  expect(renamed.hold).toMatchObject({ kind: "operator", note: "Choose another setting", ref: "fixture-round" });
+  // A date or ref belongs only to the kinds that store one.
+  expect(holdEditorPatch({ kind: "task", note: "n", ref: "aabbccdd", until: "2026-10-03T10:00:00.000Z" })).toEqual({ kind: "task", note: "n", ref: "aabbccdd" });
+  expect(holdEditorPatch({ kind: "postponed", note: "n", ref: "41", until: "2026-10-03T10:00:00.000Z" })).toEqual({ kind: "postponed", note: "n", until: "2026-10-03T10:00:00.000Z" });
+  expect(holdEditorDraft(prHold.hold, "pr").ref).toBe("41");
+});

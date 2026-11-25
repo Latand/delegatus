@@ -2,6 +2,7 @@ import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import { readCpuPriority, type CpuPrioritySource } from "./cpuPriority";
 import type { TaskPriority } from "../tasks/types";
@@ -24,6 +25,31 @@ export const CPU_QUEUE_ABANDONED_MS = 24 * 60 * 60_000;
 export const CPU_QUEUE_STALE_GRACE_MS = 60_000;
 const BOUNDED_GATE_PREFIX = "command:bounded:";
 export const ACTIVE_GATE_PREFIX = "command:gate-active:";
+/** True when unified cgroup membership names the declared service or a child. */
+export function cgroupScopeContainsUnit(scope: string, unit: string): boolean {
+  if (!/^[A-Za-z0-9_.@:-]+\.(?:service|scope)$/.test(unit)) return false;
+  return scope.split("\n").some(line => {
+    if (!line.startsWith("0::/")) return false;
+    const membership = line.slice(3).replace(/\/$/, "");
+    return membership === `/${unit}` || membership.endsWith(`/${unit}`) || membership.includes(`/${unit}/`);
+  });
+}
+const PUBLICATION_LAUNCHES = "publication_launch_proofs";
+/** More live publications than this never run on one machine. */
+const PUBLICATION_LAUNCH_LIMIT = 64;
+/** The per-launch secret the Viewer puts into the exec environment of a
+ * publication preparer it spawns. Its queue row stores only the digest. */
+export const PUBLICATION_LAUNCH_PROOF_ENV = "LLV_GATE_PUBLICATION_LAUNCH_PROOF";
+export function publicationLaunchDigest(proof: string): string {
+  return createHash("sha256").update(proof).digest("hex");
+}
+function readPublicationLaunch(stored: string): ProcessIdentity | null {
+  try {
+    const identity = JSON.parse(stored) as ProcessIdentity | null;
+    return identity && Number.isSafeInteger(identity.pid) && identity.pid > 0 && typeof identity.startIdentity === "string"
+      && typeof identity.bootEpoch === "string" && identity.bootEpoch ? identity : null;
+  } catch { return null; }
+}
 /** `stalledMs` is set only while the head is past its bound and nothing is admitted. */
 export type CpuQueueWait = { since: number; position: number; waitedMs: number; heldBy: "queue" | "pressure"; priority?: TaskPriority; stalledMs?: number };
 /** Recent kernel capacity evidence from before admission. Any intervening
@@ -413,9 +439,52 @@ export class CpuAdmissionQueue {
       return read();
     }).immediate();
   }
-  waitingGateOwners(): string[] {
-    return this.db.query<{ owner: string }, []>(`SELECT DISTINCT owner FROM tickets
-      WHERE owner IS NOT NULL AND key GLOB 'command:*' AND key NOT GLOB '${ACTIVE_GATE_PREFIX}*'`).all().map(row => row.owner);
+  waitingGateTickets(): { key: string; owner: string }[] {
+    return this.db.query<{ key: string; owner: string }, []>(`SELECT key, owner FROM tickets
+      WHERE owner IS NOT NULL AND key GLOB 'command:*' AND key NOT GLOB '${ACTIVE_GATE_PREFIX}*'`).all();
+  }
+  /** The Viewer records each publication preparer it starts by the kernel
+   * identity of the process it spawned, the operation it handed that process
+   * and the digest of a secret it put only into that process's exec
+   * environment. Gate helpers read the rows to tell the preparer's cleanup
+   * runner from a legacy holder, whatever bytes the lane's checkout carries.
+   * A row proves nothing alone: a reader must match it to a live process that
+   * still carries the same operation and the secret behind the digest, which
+   * a row written for a process the Viewer did not launch cannot name.
+   * Older releases never read this table. */
+  recordPublicationLaunch(identity: ProcessIdentity, operation: string, proofDigest: string): void {
+    // Probe the processes before taking the writer, as check() does.
+    const ended = this.publicationLaunchRows().filter(row => {
+      const launch = readPublicationLaunch(row.identity);
+      return !launch || this.observer.status(launch) === "dead";
+    }).map(row => row.identity);
+    this.db.transaction(() => {
+      this.db.exec(`CREATE TABLE IF NOT EXISTS ${PUBLICATION_LAUNCHES} (identity TEXT PRIMARY KEY, operation TEXT NOT NULL, proof TEXT NOT NULL, recorded INTEGER NOT NULL)`);
+      const remove = this.db.query(`DELETE FROM ${PUBLICATION_LAUNCHES} WHERE identity = ?`);
+      for (const row of ended) remove.run(row);
+      this.db.query(`INSERT OR REPLACE INTO ${PUBLICATION_LAUNCHES} VALUES (?, ?, ?, ?)`).run(JSON.stringify(identity), operation, proofDigest, this.now());
+      // A Viewer that dies before forgetting leaves its row until the process
+      // is seen dead. The newest rows are the live publications.
+      this.db.query(`DELETE FROM ${PUBLICATION_LAUNCHES} WHERE identity NOT IN
+        (SELECT identity FROM ${PUBLICATION_LAUNCHES} ORDER BY recorded DESC, rowid DESC LIMIT ?)`).run(PUBLICATION_LAUNCH_LIMIT);
+    }).immediate();
+  }
+  forgetPublicationLaunch(identity: ProcessIdentity): void {
+    if (!this.hasPublicationLaunches()) return;
+    this.db.query(`DELETE FROM ${PUBLICATION_LAUNCHES} WHERE identity = ?`).run(JSON.stringify(identity));
+  }
+  publicationLaunches(): { identity: ProcessIdentity; operation: string; proof: string }[] {
+    return this.publicationLaunchRows().flatMap(row => {
+      const identity = readPublicationLaunch(row.identity);
+      return identity && /^[0-9a-f]{64}$/.test(row.proof) ? [{ identity, operation: row.operation, proof: row.proof }] : [];
+    });
+  }
+  private hasPublicationLaunches(): boolean {
+    return this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(PUBLICATION_LAUNCHES) !== null;
+  }
+  private publicationLaunchRows(): { identity: string; operation: string; proof: string }[] {
+    if (!this.hasPublicationLaunches()) return [];
+    return this.db.query<{ identity: string; operation: string; proof: string }, []>(`SELECT identity, operation, proof FROM ${PUBLICATION_LAUNCHES}`).all();
   }
   activeGateSlots(): ActiveGateSlot[] {
     if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gate_slots'").get()) return [];

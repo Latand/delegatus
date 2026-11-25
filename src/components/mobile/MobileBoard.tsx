@@ -12,7 +12,7 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { formatResetClock } from "../rateLimit";
 import { clockDuration, humanizeDuration } from "../turnDuration";
-import { fileModelLabel } from "../utils";
+import { fileModelLabel, fmtAgeWith } from "../utils";
 
 import {
   buildMobileBoard,
@@ -102,6 +102,16 @@ export function launchAge(seconds: number): string {
   return humanizeDuration(Math.floor(total / unit) * unit);
 }
 
+/** The states whose phrase ends in «{age}»: the chat bar's «state · 30m ago». */
+const AGED_STATES: ReadonlySet<MobileRowState["key"]> = new Set(["killed", "stalled", "waiting", "returned", "done"]);
+
+/** Whether «started …» would only say the age the state's phrase already
+    says, which reads as a repeat and takes the row's width for nothing. */
+export function startedRepeatsStateAge(t: TFunction, state: MobileRowState, launchedAt: number | null, now: number): boolean {
+  if (launchedAt === null || !AGED_STATES.has(state.key)) return false;
+  return fmtAgeWith(t, Math.max(0, now - launchedAt)) === fmtAgeWith(t, state.seconds ?? 0);
+}
+
 /** The state phrase of a row, in the operator's words. It never truncates.
     `now` dates the limit's reset — today's shows the hour, a later one the day
     with it — so the row reads «Main resets 16:40» (README §4.2). */
@@ -111,9 +121,9 @@ export function statePhrase(t: TFunction, state: MobileRowState, now: number): s
     case "killed":
       /* The age the model computes, like every neighbour; and nothing about a
          queue — a killed row never measured one (#1487). */
-      return t("mobile2.board.killedAge", { age: humanizeDuration(seconds) });
+      return t("mobile2.board.killedAge", { age: fmtAgeWith(t, seconds) });
     case "stalled":
-      return t("mobile2.board.stalled", { age: humanizeDuration(seconds) });
+      return t("mobile2.board.stalled", { age: fmtAgeWith(t, seconds) });
     case "limit": {
       /* The wall the operator is actually waiting on is WHEN it lifts, and on
          which account. A read that names neither still says the row is at a
@@ -127,13 +137,14 @@ export function statePhrase(t: TFunction, state: MobileRowState, now: number): s
     case "held":
       return t("mobile2.board.heldQueued", { count: state.held });
     case "waiting":
-      return t("mobile2.board.waiting", { age: humanizeDuration(seconds) });
+      /* The chat bar's phrase and age, whole: a quiet state's seconds are noise (the bar reads «waiting · 17m ago»). */
+      return t("mobile2.chat.stateWaiting", { age: fmtAgeWith(t, seconds) });
     case "working":
       return state.seconds === null ? t("mobile2.board.workingNow") : t("mobile2.board.workingFor", { elapsed: clockDuration(seconds) });
     case "returned":
-      return t("mobile2.board.returned", { age: humanizeDuration(seconds) });
+      return t("mobile2.board.returned", { age: fmtAgeWith(t, seconds) });
     case "done":
-      return t("mobile2.board.done", { age: humanizeDuration(seconds) });
+      return t("mobile2.board.done", { age: fmtAgeWith(t, seconds) });
   }
 }
 
@@ -201,12 +212,12 @@ export function ConversationRow({ row, quiet, now, onOpen, catalogPath }: {
             <>
               <span aria-hidden className="shrink-0 opacity-60">·</span>
               <span data-mobile2-engine={row.file.engine} className="inline-flex shrink-0">
-                <EngineMark engine={row.file.engine} size={16} />
+                <EngineMark engine={row.file.engine} size={16} working={state.key === "working"} />
               </span>
               <span data-mobile2-model className="shrink-0">{fileModelLabel(row.file)}</span>
             </>
           ) : null}
-          {row.launchedAt === null ? null : (
+          {row.launchedAt === null || startedRepeatsStateAge(t, state, row.launchedAt, now) ? null : (
             <>
               <span aria-hidden className="shrink-0 opacity-60">·</span>
               <span data-mobile2-started className="shrink-0">{t("mobile2.board.started", { age: launchAge(now - row.launchedAt) })}</span>

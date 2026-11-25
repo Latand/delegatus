@@ -10,13 +10,14 @@ import type { ReleaseSetting } from "./settings";
 export interface ReleasePorts {
   now: () => number;
   settings: (project: string) => ReleaseSetting | null | undefined;
-  observe: (project: string, frozenCut?: string) => Promise<{ policy: ReleaseInput; repoDir: string; src: string; recovery?: { commit: string; pr: number; cut: string | null } | null } | null>;
+  observe: (project: string, frozenCut?: string) => Promise<{ policy: ReleaseInput; repoDir: string; src: string;
+    recovery?: { commit: string; pr: number; cut: string | null } | null; recoveryForPipeline?: string } | null>;
   taskDone: (project: string, taskId: string) => boolean;
   supersedingTag: (project: string, run: ReleaseRun) => Promise<string | null>;
   task: (project: string, run: ReleaseRun, adopted?: string) => string;
   create: (request: CreatePipelineRequest, key: string) => Promise<string>;
   lookup?: (key: string) => string | null;
-  pipeline: (id: string) => { state: string; merged: boolean; declined: boolean; mergeActive?: boolean; mergeCancelled?: boolean; mergeStopReason?: string | null; mergeCommit?: string | null; pr?: number | null } | null;
+  pipeline: (id: string) => { state: string; merged: boolean; declined: boolean; mergeBy?: "auto-merge" | "outside" | null; mergeActive?: boolean; mergeCancelled?: boolean; mergeStopReason?: string | null; mergeCommit?: string | null; pr?: number | null } | null;
 }
 export interface ReleaseController {
   reconcile: (project: string) => Promise<string | null>;
@@ -165,17 +166,36 @@ async function reconcileRun(project: string, ports: ReleasePorts): Promise<strin
     const reason = lane.mergeCancelled ? "release-merge-cancelled" : `release-merge-stopped: ${lane.mergeStopReason}`;
     return settle(project, ports, run, "failed", reason) ? `release: ${reason}` : null;
   }
-  if (lane?.state === "completed" && lane.merged && run.phase !== "publish") {
-    if (!lane.mergeCommit || !/^[a-f0-9]{40}$/.test(lane.mergeCommit) || !lane.pr || !run.request) return "release: merge receipt incomplete";
+  // A watcher receipt only says GitHub merged something. It needs the
+  // observer's PR-content proof before publication can be admitted.
+  let landing = lane?.state === "completed" && lane.merged && lane.mergeBy !== "outside"
+    ? { commit: lane.mergeCommit, pr: lane.pr } : null;
+  if (!landing && lane?.state === "completed" && !lane.mergeActive && run.phase !== "publish"
+    && run.request && ports.settings(project)?.enabled) {
+    const observed = await ports.observe(project, run.cut);
+    const proof = observed?.recovery;
+    if (observed?.recoveryForPipeline === run.pipelineId && proof?.cut === run.cut) {
+      const current = ports.pipeline(run.pipelineId!);
+      if (current?.state === "completed" && !current.mergeActive && !current.mergeCancelled && !current.mergeStopReason) {
+        landing = proof;
+      }
+    }
+  }
+  if (landing && run.phase !== "publish") {
+    const { commit, pr } = landing;
+    if (!commit || !/^[a-f0-9]{40}$/.test(commit) || !pr || !run.request) return "release: merge receipt incomplete";
     const setting = ports.settings(project);
     if (!setting?.enabled) return null;
-    const request: CreatePipelineRequest = { ...run.request, task: `${run.request.task}: публікація`, baseRef: lane.mergeCommit, finishesTask: true,
-      stages: releasePublishStages({ cut: run.cut, lastTag: run.lastTag, changes: [], commit: lane.mergeCommit, pr: lane.pr,
+    const request: CreatePipelineRequest = { ...run.request, task: `${run.request.task}: публікація`, baseRef: commit, finishesTask: true,
+      stages: releasePublishStages({ cut: run.cut, lastTag: run.lastTag, changes: [], commit, pr,
         askBeforePublish: setting.askBeforePublish,
         approval: !setting.askBeforePublish ? JSON.stringify(setting.publishApproval ?? { at: setting.updatedAt, by: setting.setBy, why: setting.why }) : undefined }) };
     const claim = run;
-    mutateReleaseProject(project, current => current.live?.key === claim.key && current.live.pipelineId === claim.pipelineId && current.live.phase !== "publish"
-      ? { ...current, live: { ...current.live, key: `${claim.key}:publish`, phase: "publish", releasePipelineId: claim.pipelineId!, pipelineId: null, request } } : current);
+    const transitioned = mutateReleaseProject(project, current => current.live?.key === claim.key && current.live.cut === claim.cut
+      && current.live.taskId === claim.taskId && current.live.pipelineId === claim.pipelineId && current.live.phase !== "publish"
+      ? { ...current, live: { ...current.live, key: `${claim.key}:publish`, phase: "publish", releasePipelineId: claim.pipelineId!, pipelineId: null, request,
+          trigger: lane?.merged && lane.mergeBy !== "outside" ? claim.trigger : "recovery" } } : current);
+    if (transitioned.live?.key !== `${claim.key}:publish`) return null;
     return admit(project, ports);
   }
   const outcome = lane?.state === "completed" && run.phase === "publish" ? "published"

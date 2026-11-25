@@ -2,7 +2,6 @@
 
 import { CardStatusBadge } from "@/components/CardStatusBadge";
 import { rowStateWord } from "@/components/mobile/mobileBoardModel";
-import { isSettledLaunchPlaceholder } from "@/components/launchHistoryModel";
 
 import { Bot, Flag } from "lucide-react";
 import { memo, useRef, useState } from "react";
@@ -157,9 +156,9 @@ const MemberTile = memo(function MemberTile({ member, workspace, open, onOpen }:
      name's truncation, and names the role preset only in its tooltip (#1865). */
   const place = member.stage ? stageAttemptPlace(member.stage.pipeline, member.stage.stage.id, member.file) : null;
   const parts = member.stage && place ? stageCardLabelParts(t, member.stage.stage, place) : null;
-  const engine = member.file.engine === "claude" || member.file.engine === "codex" ? engineWord(member.file.engine) : null;
+  const engine = member.file.engine === "claude" || member.file.engine === "codex" || member.file.engine === "antigravity" ? engineWord(member.file.engine) : null;
   const hint = member.stage && place ? stageLabelTitle(t, member.stage.stage, place, engine) : undefined;
-  const state = rowStateWord(t, { key: member.state, activity: member.activity, settledLaunch: isSettledLaunchPlaceholder(member.file) });
+  const state = rowStateWord(t, { key: member.state, activity: member.activity });
   const stateClass = member.needsYou ? "needs" : member.working ? "working" : member.state;
   return (
     <button
@@ -173,7 +172,7 @@ const MemberTile = memo(function MemberTile({ member, workspace, open, onOpen }:
       onClick={() => onOpen(member.file)}
     >
       <span className="row">
-        <EngineMark engine={member.file.engine} size={12} className="engine" label={member.file.engine} />
+        <EngineMark engine={member.file.engine} size={12} className="engine" label={member.file.engine} working={member.working} />
         <span className="role" title={hint}>{parts ? parts.name : role}</span>
         {parts && parts.attempt !== null ? <span className="attempt"> · {parts.attempt}</span> : null}
         {member.file.agentActivity && member.file.proc === "running" ? <CardStatusBadge file={member.file} /> : <span className={`state ${stateClass}`}>{state}</span>}

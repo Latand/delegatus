@@ -109,6 +109,10 @@ function tailMessages(entry: FileEntry): { messages: CompactMessage[]; scannedBy
         const role = message.role === "user" ? "user" : message.role === "assistant" ? "assistant" : null;
         const value = contentText(message.content);
         if (role && value.trim()) messages.push({ role, at, text: value });
+      } else if (entry.engine === "antigravity" || entry.engine === "copilot") {
+        const role = row.type === "user.message" ? "user" : row.type === "assistant.message" ? "assistant" : null;
+        const value = contentText(object(row.data).content);
+        if (role && value.trim()) messages.push({ role, at, text: value });
       } else {
         const payload = object(row.payload); const type = text(payload.type);
         const role = type === "user_message" ? "user" : type === "agent_message" ? "assistant" : null;

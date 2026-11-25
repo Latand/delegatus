@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "a5d8ad21d2d313e49f59270a3111663ad21dab4ed8c0cf4af7b04386f3c754e6",
+  "generatorSha256": "ce08b1e67ab24096c300d61f880516db4c3f21da47a158e1f3788a41b70d7e02",
   "seed": "scripts/readme-demo-state.ts",
   "seedSha256": "a87949b4f1615a6a66fa13611b07548a7fd2fb33a331f422fc29538981151710",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
@@ -115,12 +115,12 @@
       "colorScheme": "dark",
       "rasterTiles": 21,
       "renderBack": {
-        "worstTileMean": 12.115,
-        "changedTileShare": 0.001,
-        "meanDifference": 0.387,
+        "worstTileMean": 4.934,
+        "changedTileShare": 0,
+        "meanDifference": 0.299,
         "ringsClipped": 0
       },
-      "sha256": "e646e7bdfcfb6f97994250a3f835c619357993ea8c25774023cd67fba7efbc1f"
+      "sha256": "6e732a34b460599431b137c8bf8e3d692e5331f6af1d299648419739ba581ae7"
     },
     {
       "path": "accounts.svg",

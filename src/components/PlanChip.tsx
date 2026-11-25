@@ -91,7 +91,7 @@ export function CtxChip({ ctx }: { ctx: CtxUsage }) {
     ariaLabel = t("plan.ctxAriaUnknown", { used });
   }
   return (
-    <Badge tone={ctxTone(ctx.pct)} title={title} aria-label={ariaLabel}>
+    <Badge tone={ctxTone(ctx.pct)} title={title} aria-label={ariaLabel} data-ctx-chip="">
       {/* The percentage leads the chip face whenever it is known (issue #177
           item 1), giving the phone header the exact context % at a glance. When
           the model's window is unknown the percentage is undefined, so the chip

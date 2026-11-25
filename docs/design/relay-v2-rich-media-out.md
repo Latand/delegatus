@@ -791,10 +791,12 @@ selects literal text. Each call replaces the prior parts, including `text`,
 and an omitted format returns to the rich default. Without negotiation the
 final assistant message is the chat reply, as before.
 
-`ownerAnswer` scrubs the reply text before validating it. Rich text uses the
-negotiated rich limit. Text that fails rich validation falls back to the
-existing plain path and its `plainMax` truncation. Buttons and captions pass
-through `scrubOwnerOutput` too. Owner answers keep
+`ownerAnswer` scrubs the reply text before validating it. The scrub keeps
+public URLs and their Markdown delimiters intact, including ordinary query
+parameters. It still removes credential-bearing URLs and scrubs buttons and
+captions. Rich text uses the negotiated rich limit. Text that fails rich
+validation is rendered as readable plain text and bounded by `plainMax`.
+Owner answers keep
 `reply_to: owner.messageId`.
 
 The owner wrapper addresses the agent as the chat assistant. Task handoffs
@@ -823,8 +825,9 @@ web search; set `LLV_RELAY_REPLY_CONFIG` to a private signed-in Claude config
 copy, and use private HOME, state and temp roots, retaining only
 synthetic output. Neither check posts a message.
 
-Without negotiation owner answers retain the existing plain wire format and
-length limit.
+Without negotiation owner answers use the legacy plain wire format and length
+limit. Markdown emphasis becomes plain text, lists retain readable markers,
+and a Web link becomes its label followed by its URL.
 
 ### 10.2 The `relay_answer` tool
 
