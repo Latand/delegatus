@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { AGENT_STATE_POLICY, centralIdleEligible, evaluateAgentState, fact, unknown, type AgentFacts } from "./model";
+import { AGENT_STATE_POLICY, centralIdleEligible, evaluateAgentState, fact, unknown, validAgentFacts, type AgentFacts } from "./model";
 
 const now = 1_000_000;
 function facts(): AgentFacts {
@@ -38,4 +38,17 @@ test("missing, expired or independently held evidence cannot authorize idle reti
   expect(centralIdleEligible(f, now + AGENT_STATE_POLICY.idleMs)).toBe(true);
   f.obligations = fact([], { ...f.obligations.evidence, validUntil: now - 1 });
   expect(centralIdleEligible(f, now + AGENT_STATE_POLICY.idleMs)).toBe(false);
+});
+
+test("persisted transcript facts accept legacy and versioned summaries while refusing malformed versions", () => {
+  const f = facts();
+  f.subject = "a".repeat(48);
+  if (!f.transcript.determined) throw new Error("fixture transcript missing");
+  f.transcript.value.artifact = "b".repeat(24);
+  expect(validAgentFacts(JSON.parse(JSON.stringify(f)))).toBe(true);
+  for (const boundaryVersion of [1, 2, 0, -1, 1.5, "1", null]) {
+    const row = JSON.parse(JSON.stringify(f));
+    row.transcript.value.boundaryVersion = boundaryVersion;
+    expect(validAgentFacts(row)).toBe(boundaryVersion === 1 || boundaryVersion === 2);
+  }
 });

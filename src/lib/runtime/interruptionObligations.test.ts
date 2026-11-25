@@ -12,6 +12,7 @@ import {
   initializeRecipientInterruptionIndex,
   recipientInterruptionEvidence,
   recipientInterruptionObligationStore,
+  RecipientInterruptionEvidenceError,
   restartCutProposal,
   type InterruptionObligationInput,
 } from "./interruptionObligations";
@@ -262,7 +263,8 @@ test("canonical replacement and deletion update incoming and absent recipients a
   const cut = store.record(releaseCut).obligation;
   await initializeRecipientInterruptionIndex(obligations);
   const moved = { ...cut, conversationId: "conversation_replaced" as const };
-  sourceSql(obligations, (db, collection) => db.query("INSERT OR REPLACE INTO state_rows SELECT collection,row_key,?,row_order,row_revision,controller_active FROM state_rows WHERE collection=? AND row_key=?")
+  sourceSql(obligations, (db, collection) => db.query(`INSERT OR REPLACE INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active)
+    SELECT collection,row_key,?,row_order,row_revision,controller_active FROM state_rows WHERE collection=? AND row_key=?`)
     .run(JSON.stringify(moved), collection, cut.id));
   expect(recipientInterruptionEvidence(obligations, [moved.conversationId]).records).toEqual([moved]);
   expect(recipientInterruptionEvidence(obligations, [cut.conversationId]).records).toEqual([]);
@@ -335,6 +337,49 @@ test("recipient cut writers never scan unrelated cuts or fallback journals", asy
     expect(unrelatedReads).toBe(0);
     expect(journalScans).toBe(0);
   } finally { reader.mockRestore(); scanner.mockRestore(); }
+});
+
+test("recipient mutations redact lock queue replacement and leave the cut unwritten", async () => {
+  const obligations = path.join(directory, "recipient-mutation-lock-failure");
+  await initializeRecipientInterruptionIndex(obligations);
+  const writer = recipientInterruptionObligationStore(obligations, [releaseCut.conversationId]);
+  const pending = `${obligations}.pending.jsonl`;
+  const queue = `${pending}.write-locks`;
+  fs.rmSync(queue, { recursive: true, force: true });
+  fs.writeFileSync(queue, "replacement");
+  let failure: unknown;
+  try { writer.record(releaseCut); } catch (error) { failure = error; }
+  expect(failure).toBeInstanceOf(RecipientInterruptionEvidenceError);
+  expect(failure).toMatchObject({ category: "journal lock setup failed" });
+  expect((failure as Error).message).toBe("recipient interruption evidence is unavailable or incomplete (journal lock setup failed)");
+  expect((failure as Error).message).not.toContain(queue);
+  expect((failure as Error).cause).toMatchObject({ code: "EEXIST" });
+  fs.rmSync(queue);
+  fs.mkdirSync(queue);
+  expect(recipientInterruptionEvidence(obligations, [releaseCut.conversationId]).records).toEqual([]);
+});
+
+test("recipient lock admission classifies EDQUOT as redacted lock setup failure", async () => {
+  const obligations = path.join(directory, "recipient-lock-quota");
+  await initializeRecipientInterruptionIndex(obligations);
+  const pending = `${obligations}.pending.jsonl`;
+  const write = fs.writeFileSync;
+  const ticket = spyOn(fs, "writeFileSync").mockImplementation(((filename: unknown, ...args: unknown[]) => {
+    if (String(filename).startsWith(`${pending}.write-locks${path.sep}`)) {
+      throw Object.assign(new Error(`quota exceeded at ${String(filename)}`), { code: "EDQUOT" });
+    }
+    return Reflect.apply(write, fs, [filename, ...args]);
+  }) as typeof write);
+  try {
+    let failure: unknown;
+    try { recipientInterruptionEvidence(obligations, [releaseCut.conversationId]); }
+    catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(RecipientInterruptionEvidenceError);
+    expect(failure).toMatchObject({ category: "journal lock setup failed" });
+    expect((failure as Error).message).toBe("recipient interruption evidence is unavailable or incomplete (journal lock setup failed)");
+    expect((failure as Error).message).not.toContain(obligations);
+    expect((failure as Error).cause).toMatchObject({ code: "EDQUOT" });
+  } finally { ticket.mockRestore(); }
 });
 
 test("a failed canonical update rolls back its recipient index with its original record", async () => {

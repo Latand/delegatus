@@ -1,21 +1,72 @@
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
-import { signalFixtureIdentity } from "@/lib/testing/fixtureProcess";
-import { describe, expect, spyOn, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { ownFixtureTree, signalFixtureIdentity, stopFixtureTree } from "@/lib/testing/fixtureProcess";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { stopWorktreeSweepWorker } from "@/lib/pipelines/worktreeSweepWorker";
+import { emptyAgentStateMetrics } from "@/lib/agentState/model";
+import { validAgentStateMetricsBeforeAntigravity } from "@/lib/agentState/legacyMetricsFixture";
+
+import { spawn, spawnSync } from "node:child_process";
+import { createInterface } from "node:readline";
 import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { procBackend } from "@/lib/proc";
+import { procBackend, selectProcBackend } from "@/lib/proc";
 import { shellQuote } from "@/lib/agent/cli";
 import { createResourceDiagnosticTail, RESOURCE_FAILURE_STDERR_MAX_BYTES } from "@/lib/resourceCollector";
 import type { FileEntry, ResourcesPayload } from "@/lib/types";
 
-import { allowedStructuredHostTarget, applyResourceTargets, buildResourceSnapshot, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES, type StructuredHostKillRef, type StructuredHostRecord } from "./resources";
+import { allowedStructuredHostTarget, applyResourceTargets, buildResourceSnapshot, consumeKillTarget, createResourcesReader, lastResourceBuildDiagnostic, lastResourceTargetRefs, noteSessionTargets, parsePersistedResourceObservation, parseResourcesFixture, resetResourcesForTests, resolveResourceWorkerLaunch, resourceDiagnosticHeader, resourceWorkerFileSnapshot, serializeResourceObservationForStorage, RESOURCE_OBSERVATION_MAX_BYTES, RESOURCE_WORKER_OUTPUT_MAX_BYTES, type StructuredHostKillRef, type StructuredHostRecord } from "./resources";
+import { RESOURCE_WORKER_PID_NAMESPACE_ENTRYPOINT } from "./resources";
+
+afterEach(async () => { await stopWorktreeSweepWorker(); });
 
 const NODE_BIN = process.env.LLV_TEST_NODE_BIN || Bun.which("node");
 if (!NODE_BIN) throw new Error("resource tests require Node on PATH");
 const NODE_SHELL = shellQuote(NODE_BIN);
+
+test.skipIf(process.platform !== "linux").each([
+  { label: "matching", acknowledge: true }, { label: "wrong", acknowledge: false },
+  { label: "closed-input", acknowledge: null },
+])("a namespace worker requires a matching ownership acknowledgment ($label)", async ({ acknowledge }) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "resource-namespace-ack-"));
+  const marker = path.join(directory, "started");
+  const token = "fixture-containment";
+  const request = JSON.stringify({ input: "fixture" });
+  const namespace = ["/usr/bin/unshare", "/bin/unshare"].find(existsSync);
+  if (!namespace) throw new Error("resource namespace tests require unshare");
+  const child = ownFixtureTree(spawn(namespace, ["--user", "--map-root-user", "--pid", "--fork",
+    "/bin/sh", "-c", RESOURCE_WORKER_PID_NAMESPACE_ENTRYPOINT, "fixture", token,
+    "/bin/sh", "-c", String.raw`printf started > "$1"; IFS= read -r payload; printf '%s\n' "$payload"`, "fixture-worker", marker,
+  ], { stdio: ["pipe", "pipe", "pipe"] }));
+  let diagnostics = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => { diagnostics = (diagnostics + chunk).slice(-4096); });
+  const output = createInterface({ input: child.stdout });
+  const lines = output[Symbol.asyncIterator]();
+  try {
+    const first = await lines.next();
+    expect(first.done, diagnostics).toBe(false);
+    const [observedToken, rawPid, namespaceId] = first.value!.split(" ");
+    expect(observedToken).toBe(token);
+    const root = captureProcessIdentity(Number(rawPid));
+    expect(processIdentityStatus(root)).toBe("alive");
+    expect(readlinkSync(`/proc/${root.pid}/ns/pid`)).toBe(namespaceId!);
+    expect(readFileSync(`/proc/${root.pid}/status`, "utf8").match(/^NSpid:\s+.*\b1$/m)).not.toBeNull();
+    if (acknowledge === null) child.stdin.end();
+    else child.stdin.end(`${acknowledge ? token : "wrong-acknowledgment"}\n${request}\n`);
+    const received: string[] = [];
+    for (let line = await lines.next(); !line.done; line = await lines.next()) received.push(line.value);
+    const code = child.exitCode ?? await new Promise<number | null>(resolve => child.once("exit", resolve));
+    expect(code, diagnostics).toBe(acknowledge ? 0 : 125);
+    expect(existsSync(marker)).toBe(acknowledge === true);
+    expect(received).toEqual(acknowledge ? [request] : []);
+  } finally {
+    output.close();
+    await stopFixtureTree(child);
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 const SESSION_ID = ["019f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
 const SECOND_SESSION_ID = ["029f4906", "3f67", "7b72", "9fbc", "9ec3b5ad1326"].join("-");
@@ -371,6 +422,84 @@ async function settleWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<
   }
 }
 
+/** Run the collector in an owned child so its event loop cannot delay the
+    test parent's settlement timer. The worker acknowledges startup while held
+    before output; the parent starts the original budget when it releases it. */
+async function readMalformedWithin(directory: string, bootstrapMs: number) {
+  const entrypoint = path.join(directory, "collector.ts");
+  writeFileSync(entrypoint, `
+    import { existsSync, writeFileSync } from "node:fs";
+    import { createResourcesReader } from ${JSON.stringify(path.join(import.meta.dir, "resources.ts"))};
+    const payload = { system: null, sessions: [] };
+    const diagnostic = { fresh: true, status: "complete", durationMs: 0, phases: {
+      systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0,
+    } };
+    const reader = createResourcesReader(async () => payload, () => null, Date.now, () => diagnostic, {
+      readFiles: async () => [],
+      initial: {
+        generation: 1, startedAt: 1, completedAt: 2, collectorId: "durable",
+        value: { payload, diagnostic, hostCount: 0, treeCount: 0, targets: [] },
+      },
+    });
+    const read = reader.read(true);
+    while (!existsSync(${JSON.stringify(path.join(directory, "ready"))})) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    // Acknowledge from the collector's event loop as well as the producer.
+    // The parent cannot release output while the collector is still in setup.
+    await new Promise((resolve) => setImmediate(resolve));
+    writeFileSync(${JSON.stringify(path.join(directory, "collector-ready"))}, "ready");
+    process.stdout.write(JSON.stringify(await read) + "\\n");
+  `);
+  const began = performance.now();
+  const collector = ownFixtureTree(spawn(process.execPath, [entrypoint], { stdio: ["ignore", "pipe", "pipe"] }));
+  let stdout = "";
+  let stderr = "";
+  collector.stdout.setEncoding("utf8");
+  collector.stderr.setEncoding("utf8");
+  collector.stdout.on("data", (chunk: string) => { stdout += chunk; });
+  collector.stderr.on("data", (chunk: string) => { stderr += chunk; });
+  const response = deferred<void>();
+  const lines = createInterface({ input: collector.stdout });
+  lines.once("line", () => response.resolve());
+  const exited = new Promise<number | null>((resolve) => {
+    collector.once("error", () => resolve(null));
+    collector.once("close", resolve);
+  });
+  try {
+    await awaitWorkerReady(directory, "collector-ready");
+    console.info("resource malformed-output startup", { bootstrapMs, startupMs: performance.now() - began });
+    const released = performance.now();
+    const settlement = settleWithin(response.promise, 250);
+    writeFileSync(path.join(directory, "release"), "release");
+    const settled = await settlement;
+    const elapsedMs = performance.now() - released;
+    console.info("resource independent settlement", {
+      withinBudget: settled !== CLEANUP_DEADLINE, budgetMs: 250, elapsedMs,
+    });
+    expect(settled === CLEANUP_DEADLINE, "collector did not settle within 250ms after release").toBeFalse();
+    expect(elapsedMs, "settlement observed after the independent deadline").toBeLessThanOrEqual(250);
+    // Runtime exit follows the response; it has its own bounded cleanup check.
+    const exitBegan = performance.now();
+    const exit = await settleWithin(exited, SETTLEMENT_STALL_MS);
+    console.info("resource collector exit", { exitMs: performance.now() - exitBegan });
+    expect(exit, stderr).toBe(0);
+    return JSON.parse(stdout) as Awaited<ReturnType<ReturnType<typeof workerTestReader>["read"]>>;
+  } finally {
+    lines.close();
+    await stopFixtureTree(collector);
+  }
+}
+
+async function awaitWorkerReady(directory: string, marker = "ready"): Promise<void> {
+  const ready = path.join(directory, marker);
+  // The independent collector adds a cold module load (about 500ms locally)
+  // before worker bootstrap. This startup guard is outside both phase budgets.
+  const deadline = performance.now() + 5_000;
+  while (!existsSync(ready) && performance.now() < deadline) await Bun.sleep(5);
+  expect(existsSync(ready), "worker never acknowledged the pre-effect barrier").toBeTrue();
+}
+
 function errno(code: string): NodeJS.ErrnoException {
   const error = new Error(code) as NodeJS.ErrnoException;
   error.code = code;
@@ -519,6 +648,52 @@ function workerTestReader(options: Parameters<typeof createResourcesReader>[4] =
 }
 
 describe("resource observation", () => {
+  const preAntigravityMetrics = {
+    ...emptyAgentStateMetrics(), at: 1, stuckTurns: 2,
+    stuckByEngine: { codex: 2, claude: 0, copilot: 0 },
+  };
+  const completeMetrics = { ...preAntigravityMetrics, stuckByEngine: { ...preAntigravityMetrics.stuckByEngine, antigravity: 0 } };
+
+  test("durable pre-Antigravity resource metrics are normalized and malformed buckets are rejected", () => {
+    const message = JSON.parse(EMPTY_WORKER_MESSAGE);
+    const serialize = (agentState: unknown) => JSON.stringify({ version: 1, observation: {
+      generation: 1, startedAt: 1, completedAt: 2, collectorId: "worker:fixture",
+      value: { payload: { ...message.payload, agentState }, diagnostic: message.diagnostic, hostCount: 0, treeCount: 0, targets: [] },
+    } });
+    expect(parsePersistedResourceObservation(serialize(preAntigravityMetrics))?.value.payload.agentState).toEqual(completeMetrics);
+    expect(parsePersistedResourceObservation(serialize({ ...preAntigravityMetrics, stuckByEngine: { codex: null } }))).toBeNull();
+  });
+
+  test("resource observation writes retain the rollback-compatible metrics shape", () => {
+    const metrics = { ...emptyAgentStateMetrics(), stuckByEngine: { codex: 1, claude: 0, copilot: 0, antigravity: 4 } };
+    const diagnostic = { fresh: true, status: "complete" as const, durationMs: 0, phases: {
+      systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0,
+    } };
+    const serialized = serializeResourceObservationForStorage({ generation: 1, startedAt: 1, completedAt: 2, collectorId: "legacy-shape-fixture",
+      value: { payload: { system: null, sessions: [], agentState: metrics }, diagnostic, hostCount: 0, treeCount: 0, targets: [] } });
+    const persisted = JSON.parse(serialized).observation.value.payload.agentState;
+    expect(validAgentStateMetricsBeforeAntigravity(persisted)).toBe(true);
+    expect(persisted.stuckByEngine).toEqual({ codex: 1, claude: 0, copilot: 0 });
+    expect(parsePersistedResourceObservation(serialized)?.value.payload.agentState?.stuckByEngine.antigravity).toBe(0);
+  });
+
+  test("worker pre-Antigravity resource metrics are normalized and malformed buckets are rejected", async () => {
+    const message = JSON.parse(EMPTY_FRESH_WORKER_MESSAGE);
+    for (const agentState of [preAntigravityMetrics, { ...preAntigravityMetrics, stuckByEngine: { codex: null } }]) {
+      const frame = JSON.stringify({ ...message, payload: { ...message.payload, agentState } });
+      await withResourceWorkerScript([`printf '%s\\n' ${shellQuote(frame)}`], async () => {
+        const outcome = await workerTestReader().read(true);
+        if (agentState === preAntigravityMetrics) {
+          expect(outcome.diagnostic.status).toBe("complete");
+          expect(outcome.payload.agentState).toEqual(completeMetrics);
+        } else {
+          expect(outcome.payload.agentState).toBeUndefined();
+          expect(outcome.diagnostic.failure?.cause).toBe("worker-output-invalid");
+        }
+      });
+    }
+  });
+
   test("the packaged worker leaves writable and read-only homes and state trees byte-identical", async () => {
     const directory = mkdtempSync(path.join(os.tmpdir(), "llv-resource-package-purity-"));
     const bundleName = "packaged-resource-worker.mjs";
@@ -1127,6 +1302,111 @@ describe("kill-target allowlist", () => {
 });
 
 describe("resource recurring reads", () => {
+  test.each(["darwin", "win32"] as const)("%s default collector keeps a held OS probe off the event loop", async (platform) => {
+    const fixture = mkdtempSync(path.join(os.tmpdir(), "resource-held-probe-"));
+    const release = path.join(fixture, "release");
+    const command = path.join(fixture, platform === "darwin" ? "vm_stat" : "powershell.exe");
+    const previousPath = process.env.PATH;
+    const previousOverride = process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const backend = selectProcBackend(platform);
+    const payload: ResourcesPayload = { system: null, sessions: [] };
+    const diagnostic = { fresh: false, status: "complete" as const, durationMs: 0, phases: {
+      systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0,
+    } };
+    writeFileSync(command, `#!/bin/sh\nwhile [ ! -e ${shellQuote(release)} ]; do sleep 0.01; done\nprintf ''\n`);
+    chmodSync(command, 0o755);
+    let markBuildComplete!: () => void;
+    const buildComplete = new Promise<void>((resolve) => { markBuildComplete = resolve; });
+    let reader: ReturnType<typeof createResourcesReader>;
+    process.env.PATH = `${fixture}${path.delimiter}${previousPath ?? ""}`;
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
+    delete process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
+    try {
+      reader = createResourcesReader(async () => {
+        try {
+          if (platform === "darwin") await backend.resourceSystemMemory?.();
+          await backend.resourcePpidMap?.();
+          await backend.resourceProcessMemory?.([process.pid]);
+          return payload;
+        } finally {
+          markBuildComplete();
+        }
+      }, () => null, Date.now, () => diagnostic);
+    } finally {
+      Object.defineProperty(process, "platform", platformDescriptor);
+      if (previousOverride === undefined) delete process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
+      else process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS = previousOverride;
+    }
+
+    let heartbeat = false;
+    const heartbeatTimer = setTimeout(() => { heartbeat = true; }, 25);
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const pending = await reader.read(false, { waitMs: 50 });
+      expect(pending.diagnostic.status).toBe("pending");
+      expect(pending.diagnostic.collectorId).toStartWith("in-process:");
+      expect(heartbeat).toBe(true);
+
+      writeFileSync(release, "release");
+      await Promise.race([
+        buildComplete,
+        new Promise<never>((_, reject) => {
+          watchdog = setTimeout(() => reject(new Error("held OS probe did not complete after release")), 2_000);
+          watchdog.unref();
+        }),
+      ]);
+      let completed = await reader.read(false, { waitMs: 50 });
+      while (completed.diagnostic.status === "pending") {
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+        completed = await reader.read(false, { waitMs: 50 });
+      }
+      expect(completed.diagnostic.status).toBe("complete");
+      expect(completed.payload).toMatchObject({ system: null, sessions: [], sessionsStale: false });
+    } finally {
+      clearTimeout(heartbeatTimer);
+      if (watchdog) clearTimeout(watchdog);
+      process.env.PATH = previousPath;
+      writeFileSync(release, "release");
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    { platform: "darwin", collector: "in-process", status: "complete" },
+    { platform: "win32", collector: "in-process", status: "complete" },
+    { platform: "linux", collector: "worker", status: "failed" },
+  ])("$platform defaults to the $collector resource collector", async ({ platform, collector, status }) => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const previousOverride = process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
+    const payload: ResourcesPayload = { system: null, sessions: [] };
+    const diagnostic = { fresh: true, status: "complete" as const, durationMs: 0, phases: {
+      systemMemory: 0, readFiles: 0, readHosts: 0, ppidMap: 0, processMemory: 0, attach: 0, serialization: 0,
+    } };
+    let reader: ReturnType<typeof createResourcesReader>;
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
+    delete process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS;
+    try {
+      reader = createResourcesReader(async () => payload, () => null, () => 1, () => diagnostic, {
+        readFiles: async () => { throw new Error("fixture worker file handoff"); },
+        readHostRecords: async () => [],
+      });
+    } finally {
+      Object.defineProperty(process, "platform", platformDescriptor);
+      if (previousOverride !== undefined) process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS = previousOverride;
+    }
+
+    const read = await reader.read(true);
+    expect(read.diagnostic.collectorId).toStartWith(`${collector}:`);
+    expect(read.diagnostic.status).toBe(status);
+    if (collector === "worker") {
+      expect(read.diagnostic.failure?.causes).toContain("fixture worker file handoff");
+    } else {
+      expect(read.diagnostic.failure).toBeUndefined();
+      expect(read.payload).toEqual(stamped(payload, 1, false));
+    }
+  });
+
   test("the full scaled deadline settles after maximum handoff and TERM-resistant group cleanup", async () => {
     const scale = 0.04;
     const observeTimeoutMs = 30_000 * scale;
@@ -1134,6 +1414,9 @@ describe("resource recurring reads", () => {
     const timeoutMs = 29_500 * scale;
     const closeTimeoutMs = 1_000 * scale;
     const headroomMs = 500 * scale;
+    // Native cleanup measured 76ms; the derived 70ms reserve cannot contain
+    // it. Reserve cleanup inside the same 1,200ms overall observation bound.
+    const cleanupTimeoutMs = 250;
 
     await withResourceWorkerScript((directory) => {
       const descendantPid = path.join(directory, "deadline-descendant-pid");
@@ -1146,13 +1429,18 @@ describe("resource recurring reads", () => {
         "while :; do sleep 0.01; done",
       ];
     }, async (directory) => {
+      const began = performance.now();
       const outcome = await workerTestReader({
+        // This fixture has no hosts; keep unrelated cold registry imports
+        // outside the scaled worker/cleanup budget.
+        readHostRecords: async () => [],
         readFiles: async () => {
           await new Promise((resolve) => setTimeout(resolve, inputTimeoutMs));
           return [];
         },
-        workerLimits: { observeTimeoutMs, inputTimeoutMs, timeoutMs, closeTimeoutMs, headroomMs },
+        workerLimits: { observeTimeoutMs, inputTimeoutMs, timeoutMs, closeTimeoutMs, cleanupTimeoutMs, headroomMs },
       }).read(true);
+      console.info("resource scaled deadline", { elapsedMs: performance.now() - began, observeTimeoutMs, cleanupTimeoutMs });
       const workerPid = Number(readFileSync(path.join(directory, "pid"), "utf8"));
       const descendantPid = Number(readFileSync(path.join(directory, "deadline-descendant-pid"), "utf8"));
 
@@ -1541,9 +1829,12 @@ describe("resource recurring reads", () => {
   test("ESRCH cleanup settles without a secondary failure or referenced handles", async () => {
     await withResourceWorkerScript((directory) => [
       `read host_pid _ < /proc/self/stat; printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
+      "read -r _",
+      `printf ready > ${shellQuote(path.join(directory, "ready"))}`,
+      `while [ ! -e ${shellQuote(path.join(directory, "release"))} ]; do sleep 0.005; done`,
       `printf '%s\\n' '${EMPTY_FRESH_WORKER_MESSAGE}'`,
       "exit 0",
-    ], async () => {
+    ], async (directory) => {
       const realKill = process.kill.bind(process);
       const kill = spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
         if (pid < 0) throw errno("ESRCH");
@@ -1552,7 +1843,13 @@ describe("resource recurring reads", () => {
       const baseline = referencedHandles();
       let outcome: Awaited<ReturnType<ReturnType<typeof workerTestReader>["read"]>> | typeof CLEANUP_DEADLINE;
       try {
-        outcome = await settleWithin(workerTestReader({ initial: null }).read(true), 200);
+        const read = workerTestReader({ initial: null }).read(true);
+        await awaitWorkerReady(directory);
+        const began = performance.now();
+        const settlement = settleWithin(read, 200);
+        writeFileSync(path.join(directory, "release"), "release");
+        outcome = await settlement;
+        console.info("resource ESRCH cleanup", { elapsedMs: performance.now() - began });
       } finally {
         kill.mockRestore();
       }
@@ -2300,37 +2597,58 @@ describe("resource recurring reads", () => {
     for (const identity of ["recycled", "null"] as const) {
       await withResourceWorkerScript((directory) => [
         `read host_pid _ < /proc/self/stat; printf '%s' "$host_pid" > "${path.join(directory, "pid")}"`,
+        "read -r _",
+        `printf ready > ${shellQuote(path.join(directory, "ready"))}`,
+        `while [ ! -e ${shellQuote(path.join(directory, "release"))} ]; do sleep 0.005; done`,
         "exit 0",
-      ], async () => {
+      ], async (directory) => {
         const realKill = process.kill.bind(process);
-        let identityReads = 0;
-        const processIdentity = spyOn(procBackend, "processIdentity").mockImplementation((pid) => {
-          if (identity === "null") return null;
-          identityReads += 1;
-          return identityReads === 1 ? `${pid}:owned` : `${pid}:recycled`;
-        });
+        let cleanupPhase = false;
+        let cleanupIdentityReads = 0;
         const signals: Array<string | number | undefined> = [];
-        const kill = spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
-          if (pid < 0 && signal !== 0 && signal !== undefined) {
-            signals.push(signal);
-            return true;
-          }
-          if (pid < 0) throw errno("ESRCH");
-          return realKill(pid, signal as NodeJS.Signals | number | undefined);
-        }) as typeof process.kill);
-        let outcome: Awaited<ReturnType<ReturnType<typeof workerTestReader>["read"]>> | typeof CLEANUP_DEADLINE;
-        try {
-          outcome = await settleWithin(workerTestReader({
-            initial: null,
-            workerLimits: { observeTimeoutMs: 300, inputTimeoutMs: 10, timeoutMs: 80, closeTimeoutMs: 10, headroomMs: 40 },
-          }).read(true), 150);
-        } finally {
-          kill.mockRestore();
-          processIdentity.mockRestore();
-        }
+        const individualSignals: NodeJS.Signals[] = [];
+        const read = workerTestReader({
+          initial: null,
+          // The old 300ms observation budget raced cold startup and cleanup.
+          // Allow startup separately from the cleanup/supervisor reserves;
+          // the released cleanup phase retains the original 150ms check.
+          workerLimits: { observeTimeoutMs: 10_000, inputTimeoutMs: 10, timeoutMs: 5_000, closeTimeoutMs: 10, headroomMs: 40 },
+          workerProcessRuntime: {
+            pidAlive: (pid) => procBackend.pidAlive(pid),
+            processIdentity: (pid) => {
+              if (!cleanupPhase) return `${pid}:owned`;
+              cleanupIdentityReads += 1;
+              return identity === "null" ? null : `${pid}:recycled`;
+            },
+            descendants: (pid) => [pid],
+            processGroupId: (pid) => pid,
+            processGroupMembers: () => [],
+            signal: (pid, signal) => {
+              // A present group requires an ownership check before signalling.
+              // No real group signal is sent even when that check is broken.
+              if (pid < 0) {
+                if (signal !== 0 && signal !== undefined) signals.push(signal);
+                return;
+              }
+              if (signal !== 0) individualSignals.push(signal as NodeJS.Signals);
+              realKill(pid, signal);
+            },
+          },
+        }).read(true);
+        await awaitWorkerReady(directory);
+        cleanupPhase = true;
+        const began = performance.now();
+        const settlement = settleWithin(read, 150);
+        writeFileSync(path.join(directory, "release"), "release");
+        const outcome = await settlement;
+        const cleanupMs = performance.now() - began;
+        console.info("resource leader-first cleanup", { identity, cleanupMs });
 
         expect(outcome === CLEANUP_DEADLINE, identity).toBeFalse();
+        expect(cleanupMs, identity).toBeLessThanOrEqual(150);
+        expect(cleanupIdentityReads, identity).toBeGreaterThan(0);
         expect(signals, identity).toEqual([]);
+        expect(individualSignals, identity).toEqual([]);
       });
     }
   });
@@ -2623,40 +2941,26 @@ describe("resource recurring reads", () => {
     });
   });
 
-  test("an incomplete observation message settles promptly with a degraded response", async () => {
-    await withResourceWorkerScript([
+  test.each([
+    { title: "an incomplete observation message settles promptly with a degraded response", bootstrapMs: 300,
+      message: { type: "observation" } },
+    { title: "an observation with invalid nested types settles promptly with a degraded response", bootstrapMs: 0,
+      message: { type: "observation", payload: { system: null, sessions: "invalid" }, diagnostic: {}, targets: [] } },
+  ])("$title", async ({ message, bootstrapMs }) => {
+    await withResourceWorkerScript((directory) => [
       "trap 'exit 0' TERM INT",
-      "printf '{\"type\":\"observation\"}\\n'",
+      "read -r _",
+      `sleep ${bootstrapMs / 1000}`,
+      `printf ready > ${shellQuote(path.join(directory, "ready"))}`,
+      `while [ ! -e ${shellQuote(path.join(directory, "release"))} ]; do sleep 0.005; done`,
+      `printf '%s\\n' ${shellQuote(JSON.stringify(message))}`,
       "while :; do sleep 0.01; done",
-    ], async () => {
-      const reader = workerTestReader();
-      const outcome = await Promise.race([
-        reader.read(true),
-        new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 250)),
-      ]);
-
-      expect(outcome === "hung").toBeFalse();
+    ], async (directory) => {
+      const outcome = await readMalformedWithin(directory, bootstrapMs);
       expect(outcome).toMatchObject({
         payload: { system: null, sessions: [] },
-        diagnostic: { degradedReason: "collector-crash" },
+        diagnostic: { degradedReason: "collector-crash", failure: { cause: "worker-output-invalid" } },
       });
-    });
-  });
-
-  test("an observation with invalid nested types settles promptly with a degraded response", async () => {
-    await withResourceWorkerScript([
-      "trap 'exit 0' TERM INT",
-      "printf '{\"type\":\"observation\",\"payload\":{\"system\":null,\"sessions\":\"invalid\"},\"diagnostic\":{},\"targets\":[]}\\n'",
-      "while :; do sleep 0.01; done",
-    ], async () => {
-      const reader = workerTestReader();
-      const outcome = await Promise.race([
-        reader.read(true),
-        new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), 250)),
-      ]);
-
-      expect(outcome === "hung").toBeFalse();
-      expect(outcome).toMatchObject({ diagnostic: { degradedReason: "collector-crash" } });
     });
   });
 

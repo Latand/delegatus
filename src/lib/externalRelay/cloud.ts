@@ -1,9 +1,12 @@
+import { CODEX_CLOUD_MODEL_IDS } from "@/lib/agent/models";
+import { collectProviderOpen, providerOpen, type ProviderOpen } from "./providerOpens";
 import WebSocket from "ws";
 import type { EphemeralAgentRun, EphemeralAgentResult } from "@/lib/agent/ephemeral";
 import { resolveHostedCloudEnvironment } from "@/lib/pipelines/cloudHostedClient";
 
 export const CLOUD_MODEL = "gpt-6.1-sol";
 export type CloudRequest = {
+  model?: string | null;
   ["prompt"]: string;
   environmentId: string;
   fullAccess: boolean;
@@ -11,13 +14,18 @@ export type CloudRequest = {
   schema?: object;
   effort?: string | null;
   timeoutMs: number;
+  leaseDeadlineAt?: number;
   signal: AbortSignal;
   authorize?(): void;
+  onProviderOpen?: (open: ProviderOpen) => void;
   onProgress?: (observation: { queued?: boolean; writingAnswer?: boolean }) => void;
 };
 /** A rejected call is safe to retry locally only when no Cloud turn remains running. */
 export class CloudFailure extends Error {
   constructor(public readonly confirmed: boolean) { super("Codex Cloud unavailable"); }
+}
+export class CloudLeaseUnsupported extends CloudFailure {
+  constructor() { super(true); }
 }
 /** Decoder exceptions may include private model output. Never retain their cause. */
 export class CloudAnswerError extends Error {
@@ -35,6 +43,12 @@ export function createCloudTransport(connect: (endpoint: string, headers: Record
   resolveEnvironment: (request: CloudRequest) => Promise<string> = request => resolveHostedCloudEnvironment(request.environmentId,
     { token: process.env.LLV_CODEX_CLOUD_TOKEN ?? "" }, { signal: request.signal, assertCurrent: () => request.signal.throwIfAborted() })): CloudTransport {
   return async request => {
+    // The provider accepts an interrupt request without promising to end
+    // execution by a deadline. A lease-bound turn needs a provider guarantee
+    // before any remote execution can be admitted.
+    if (request.leaseDeadlineAt !== undefined) throw new CloudLeaseUnsupported();
+    const model = request.model ?? CLOUD_MODEL;
+    if (!CODEX_CLOUD_MODEL_IDS.includes(model)) throw new CloudFailure(true);
     const endpoint = process.env.LLV_CODEX_CLOUD_URL;
     if (!request.environmentId || !endpoint || !/^wss:\/\//.test(endpoint)) throw new CloudFailure(true);
     return new Promise<string>((resolve, reject) => {
@@ -81,6 +95,10 @@ export function createCloudTransport(connect: (endpoint: string, headers: Record
             return;
           }
           if (message.params?.threadId !== threadId) return;
+          if (!request.fullAccess && ["item/started", "item/completed"].includes(message.method) && message.params.item?.type === "webSearch") {
+            const open = providerOpen(message.params.item, message.method === "item/started" ? "start" : "done");
+            if (open) request.onProviderOpen?.(open);
+          }
           if (message.method === "item/agentMessage/delta") output += message.params.delta ?? "";
           if (message.method === "item/completed" && message.params.item?.type === "agentMessage") output = message.params.item.text ?? output;
           if (message.method === "turn/started") { turnId = message.params.turn?.id; request.onProgress?.({}); }
@@ -102,7 +120,7 @@ export function createCloudTransport(connect: (endpoint: string, headers: Record
           if (!cwd.startsWith("/") || cwd.includes("\0")) throw new CloudFailure(true);
           const response = await rpc("thread/start", {
             ...(request.privateContext ? { ephemeral: true } : {}),
-            model: CLOUD_MODEL, approvalPolicy: "never", serviceTier: "ultrafast",
+            model, approvalPolicy: "never", serviceTier: "ultrafast",
             environments: [{ environmentConfigId: request.environmentId, cwd }], deferredEnvironment: true,
             sandbox: request.fullAccess ? "danger-full-access" : "read-only",
             config: { ...(request.effort ? { model_reasoning_effort: request.effort } : {}), ...(request.fullAccess ? {} : {
@@ -110,7 +128,7 @@ export function createCloudTransport(connect: (endpoint: string, headers: Record
               project_doc_max_bytes: 0, "skills.include_instructions": false,
               include_environment_context: false, include_apps_instructions: false,
               include_collaboration_mode_instructions: false, include_permissions_instructions: false,
-              "tools.experimental_request_user_input.enabled": false, web_search: "live", mcp_servers: {},
+              "tools.experimental_request_user_input.enabled": false, web_search: "cached", mcp_servers: {},
             }) },
           });
           const thread = response.thread as { id?: string; ephemeral?: boolean; environments?: { environmentConfigId?: string; environmentId?: string; cwd?: string }[] } | undefined;
@@ -145,6 +163,7 @@ export function runCloudRelay(input: Omit<CloudRequest, "signal"> & {
   const abort = new AbortController();
   const started = Date.now();
   let local: EphemeralAgentRun | undefined;
+  const providerOpens: ProviderOpen[] = [];
   const authorizationTimer = input.authorize ? setInterval(() => {
     try { input.authorize!(); } catch { abort.abort(); local?.cancel(); }
   }, 100) : undefined;
@@ -152,14 +171,16 @@ export function runCloudRelay(input: Omit<CloudRequest, "signal"> & {
   const done = (async (): Promise<EphemeralAgentResult> => {
     try {
       input.authorize?.();
-      const text = await (input.transport ?? cloudTransport)({ ...input, signal: abort.signal });
+      const text = await (input.transport ?? cloudTransport)({ ...input, signal: abort.signal, onProviderOpen: open => { if (!input.fullAccess) collectProviderOpen(providerOpens, open); input.onProviderOpen?.(open); } });
       let answer: unknown;
       try { answer = input.decode ? input.decode(text) : JSON.parse(text); }
       catch { throw new CloudAnswerError(); }
-      return { status: "done", answer, durationMs: Date.now() - started, code: null, signal: null };
+      return { status: "done", answer, providerOpens, durationMs: Date.now() - started, code: null, signal: null };
     } catch (error) {
+      if (error instanceof CloudLeaseUnsupported) throw error;
       if (abort.signal.aborted) return { status: "cancelled", answer: null, durationMs: Date.now() - started, code: null, signal: null };
       if (!(error instanceof CloudFailure) || !error.confirmed) throw error;
+      if (providerOpens.length) return { status: "violation", answer: null, providerOpens, durationMs: Date.now() - started, code: null, signal: null };
       if (Date.now() >= started + input.timeoutMs) return { status: "timeout", answer: null, durationMs: Date.now() - started, code: null, signal: null };
       input.authorize?.();
       input.onFallback?.();

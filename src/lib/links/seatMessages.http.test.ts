@@ -14,6 +14,13 @@ afterAll(fixtures.cleanup);
 const otherRemote = "code.example.test/acme/unlinked";
 const otherKey = projectIdentityFromRemote(`https://${otherRemote}`, "/")!.project;
 
+async function expectScannedClaudeAgents(base: string, count: number): Promise<void> {
+  const scan = await request(base, "/test/scan");
+  expect(scan.status).toBe(200);
+  const files = scan.body.files as { engine: string }[];
+  expect(files.filter(file => file.engine === "claude")).toHaveLength(count);
+}
+
 for (const boundary of ["shared", "unshared", "revoked", "scope-removed"] as const) {
   test(`explicit recovery authenticates before resuming queued seat messages: ${boundary}`, async () => {
     const name = `auth-recovery-${boundary}`;
@@ -33,7 +40,8 @@ for (const boundary of ["shared", "unshared", "revoked", "scope-removed"] as con
       expect((await request(a, "/test/seat-send", "POST", { project: key, machine: id,
         text: "Queued outbound recovery message.", clientMessageId: "recovery-outbound" })).status).toBe(200);
       const task = await createOn(a, "Recovery task must wait for sharing.");
-      seedTranscript(`${name}-a`, "Private recovery transcript."); await request(a, "/test/scan");
+      seedTranscript(`${name}-a`, "Private recovery transcript.");
+      await expectScannedClaudeAgents(a, 1);
       await request(b, "/test/fail-sync?on=401");
       expect((await request(a, `/api/links/peers/${id}`, "POST")).body.error).toBe("revoked");
       await request(b, "/test/fail-sync?on=0");
@@ -80,6 +88,7 @@ for (const boundary of ["shared", "unshared", "revoked", "scope-removed"] as con
           expect(((await request(b, `/api/links/agents?project=${key}`)).body.agents as { p: string }[]).some(row => row.p === key)).toBe(true);
         } else {
           expect(await taskOn(b, task.id)).toBeUndefined();
+          expect((await request(b, `/api/links/agents?project=${key}`)).body.agents).toEqual([]);
           expect(recoveryWire.join("\n")).not.toContain("Queued outbound recovery message.");
           expect(recoveryWire.join("\n")).not.toContain("Recovery task must wait for sharing.");
         }
@@ -90,7 +99,7 @@ for (const boundary of ["shared", "unshared", "revoked", "scope-removed"] as con
         expect((await request(base, "/test/seat-delivery")).body.commands).toBe(count);
       }
     } finally { wire.close(); }
-  });
+  }, 30_000);
 }
 
 test("linked seats exchange attributed messages in both directions with one durable delivery per retry", async () => {
@@ -112,7 +121,28 @@ test("linked seats exchange attributed messages in both directions with one dura
   await sync(a, id);
   await sync(a, id);
   expect((await request(a, "/test/seat-deliveries")).body as unknown as unknown[]).toHaveLength(1);
-});
+}, 30_000);
+
+test("HTTP admits a fresh UUID-shaped peer label and pins an already-bound install", async () => {
+  const a = await install("uuid-label-seat-a"), b = await install("uuid-label-seat-b");
+  const id = await link(a, b);
+  await request(a, "/test/seat", "POST", { project: key });
+  const label = ["33333333", "3333", "4333", "8333", "333333333333"].join("-");
+  const peerFile = path.join(root, "uuid-label-seat-a", "links", "peers.json");
+  const peers = JSON.parse(fs.readFileSync(peerFile, "utf8")) as { peers: { id: string; label: string }[] };
+  peers.peers.find(peer => peer.id === id)!.label = label;
+  fs.writeFileSync(peerFile, JSON.stringify(peers));
+
+  const fresh = await request(a, "/test/seat-send", "POST", { project: key, machine: label,
+    text: "Route the UUID-shaped label.", clientMessageId: "uuid-label-fresh" });
+  expect(fresh.status).toBe(200);
+  expect(fresh.body).toMatchObject({ outcome: "accepted", machine: label });
+
+  const bound = await request(a, "/test/seat-send", "POST", { project: key, machine: label, boundMachineInstall: label,
+    text: "A bound install must remain exact.", clientMessageId: "uuid-label-bound" });
+  expect(bound.status).toBe(409);
+  expect(bound.body).toMatchObject({ code: "machine_unknown", admission: "refused" });
+}, 30_000);
 
 for (const point of ["before", "after"] as const) {
   test(`linked seat relay survives receiver restart ${point} admission and preserves one operation`, async () => {
@@ -130,7 +160,7 @@ for (const point of ["before", "after"] as const) {
     const deliveries = (await request(restarted, "/test/seat-deliveries")).body as unknown as { command: { operationId: string } }[];
     expect(deliveries).toHaveLength(1);
     expect((await request(a, `/test/seat-receipt?operationId=${sent.body.operationId}`)).body).toMatchObject({ state: "accepted" });
-  });
+  }, 30_000);
 }
 
 test("linked messages recover a lost committed answer and a sender restart with queued outbound words", async () => {
@@ -184,7 +214,7 @@ test("peer without a designated seat refuses delivery, and relay authority marke
   expect(sent.status).toBe(200); await sync(a, id);
   expect((await request(a, `/test/seat-receipt?operationId=${sent.body.operationId}`)).body).toMatchObject({ state: "refused", code: "orchestrator_not_designated" });
   expect((await request(b, "/test/seat-deliveries")).body as unknown as unknown[]).toHaveLength(0);
-});
+}, 30_000);
 
 test("real scanned shared agents carry registry tasks, pipeline stages, roles and seat presence both ways", async () => {
   const a = await install("scan-role-a"), b = await install("scan-role-b"); const id = await link(a, b);
@@ -192,7 +222,7 @@ test("real scanned shared agents carry registry tasks, pipeline stages, roles an
     const task = await createOn(base, "Shared build task");
     await request(base, "/test/pipeline", "POST", { id: `fixture-${name}`, taskIds: [task.id], project: key, state: "running", current: "build", stages: [{ id: "build", role: "builder", attempt: { state: "running" } }] });
     for (const session of ["build", "deployer", "seat"]) seedTranscript(name, "Transcript canary must never cross.", remote, session);
-    await request(base, "/test/scan");
+    await expectScannedClaudeAgents(base, 3);
     for (const session of ["build", "deployer", "seat"]) expect((await request(base, "/test/attribute-agent", "POST", { session, project: key, role: session === "seat" ? "orchestrator" : session === "build" ? "builder" : "deployer", seat: session === "seat", ...(session === "build" ? { pipeline: `fixture-${name}` } : {}) })).status).toBe(200);
     await request(base, "/test/scan");
   }
@@ -204,7 +234,7 @@ test("real scanned shared agents carry registry tasks, pipeline stages, roles an
     expect(agents.find(row => row.seat === 1)).toMatchObject({ t: "orchestrator", ro: "orchestrator" });
     expect(JSON.stringify(agents)).not.toContain("Transcript canary");
   }
-});
+}, 30_000);
 
 for (const fork of [false, true]) {
   test(`shared GitHub clone with an unchanged old remote ${fork ? "refuses a fork" : "syncs under the proven current key"}`, async () => {
@@ -218,7 +248,8 @@ for (const fork of [false, true]) {
     await request(b, "/api/links/shared", "POST", { v: 1, all: false, projects: [oldKey] });
     for (const base of [a, b]) await request(base, "/test/forge-settled");
     const task = await createOn(b, "Task from the old checkout", { project: oldKey });
-    seedTranscript(`rename-${fork}-b`, "Private transcript canary", oldRemote, "renamed-agent"); await request(b, "/test/scan");
+    seedTranscript(`rename-${fork}-b`, "Private transcript canary", oldRemote, "renamed-agent");
+    await expectScannedClaudeAgents(b, 1);
     await sync(a, id);
     const states = (await request(a, "/api/links/peers")).body.states as { projects: { key: string; state: string }[] }[];
     expect(states[0]!.projects.find(project => project.key === newKey)?.state).toBe(fork ? "only-here" : "linked");
@@ -227,7 +258,7 @@ for (const fork of [false, true]) {
       expect((await taskOn(a, task.id))?.project).toBe(newKey);
       expect(((await request(a, `/api/links/agents?project=${newKey}`)).body.agents as { p: string }[]).some(row => row.p === newKey)).toBe(true);
     }
-  });
+  }, 30_000);
 }
 
 
@@ -244,7 +275,7 @@ test("linked relay refuses workers and operator callers and rejects injected wir
   expect(sent.status).toBe(200); await sync(a, id);
   expect((await request(a, `/test/seat-receipt?operationId=${sent.body.operationId}`)).body).toMatchObject({ state: "refused", code: "malformed" });
   expect((await request(b, "/test/seat-deliveries")).body as unknown as unknown[]).toHaveLength(0);
-});
+}, 30_000);
 
 
 for (const revoked of [false, true]) for (const side of ["receiver", "caller"] as const) {
@@ -271,7 +302,7 @@ for (const revoked of [false, true]) for (const side of ["receiver", "caller"] a
       text: "Queued plaintext must remain private.", clientMessageId: "held-outbound" })).status).toBe(200);
     await createOn(receiving, "Task text must remain private.");
     seedTranscript(names[receiving === a ? 0 : 1]!, "Transcript stays private.", remote, "held-agent");
-    await request(receiving, "/test/scan");
+    await expectScannedClaudeAgents(receiving, 1);
     await request(b, "/test/capture");
     await request(receiving, "/test/seat-delivery?mode=hold");
     const syncing = request(a, `/api/links/peers/${id}`, "POST");

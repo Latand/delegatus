@@ -10,6 +10,7 @@ import { cpuSlotForOwner, inheritedCpuSlot } from "./cpuAdmission";
 import { cpuOwnerIdentity, signalSandboxContext } from "./signalSandboxContext";
 import { cpuWaitBudget, cpuInheritedWaitMs, cpuBudgetTimer } from "./cpuAdmissionBudget";
 import { parseMemorySize } from "./agentMemory";
+import { commandStatus, spawnOwnedCommand } from "./ownedCommandProcess";
 
 type Gate = { root: string; inode: string; owner: ProcessIdentity; parent: ProcessIdentity; timeoutMs: number; startedAt: number; directory: string; waitRoot: string; recorded?: RecordedSupervisorObligation | null };
 const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -104,6 +105,10 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
   const root = `${context.cgroupRoot}${parent}/gate-${randomUUID()}`;
   fs.mkdirSync(root);
   const budget = cpuWaitBudget(process.env);
+  const completionReceipt = process.env.LLV_OWNED_RUN_COMPLETION_RECEIPT;
+  const completionToken = process.env.LLV_OWNED_RUN_COMPLETION_TOKEN;
+  delete budget.env.LLV_OWNED_RUN_COMPLETION_RECEIPT;
+  delete budget.env.LLV_OWNED_RUN_COMPLETION_TOKEN;
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-namespace-gate-"));
   let child: ReturnType<typeof spawn> | undefined;
   let guardian: ReturnType<typeof spawn> | undefined;
@@ -156,15 +161,13 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
       fifo.once("exit", code => code === 0 ? resolve() : reject(new Error("owned runner could not create its exec barrier")));
     });
     const argv = timedCommand([barrier, ...command], 'barrier=$1; shift; read -r < "$barrier" || exit 69; export LLV_OWNED_TEST_RUNNER_PID=$$; ');
-    child = spawn(argv[0]!, argv.slice(1), {
-      stdio: ["inherit", "inherit", "inherit", "pipe"], env: { ...budget.env, LLV_OWNED_TEST_RUN_CGROUP: cgroup },
-    });
+    child = spawnOwnedCommand(argv, { marker: true, env: { ...budget.env, LLV_OWNED_TEST_RUN_CGROUP: cgroup } });
     const execution = observeCommandExecution(child);
     const commandIdentity = producerCommandIdentity(child.pid);
     producerReport("namespace", commandIdentity);
     let commandExit: number | null = null, commandSignal: string | null = null;
     const finished = new Promise<number>(resolve => {
-      child!.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; resolve(code ?? (signal === "SIGTERM" ? 143 : 137)); });
+      child!.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; resolve(commandStatus(code, signal)); });
       child!.once("error", () => resolve(1));
     });
     let interrupted = 0;
@@ -200,6 +203,8 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
     removeRoot(gate);
     fs.rmSync(directory, { recursive: true, force: true });
     producerReport("namespace", commandIdentity, { ...await execution(), phase: "close", commandExit, commandSignal, cleanup: guardCode === 0 ? "confirmed" : "unknown" });
+    if (completionReceipt && completionToken && (commandExit !== null || commandSignal !== null) && guardCode === 0)
+      fs.writeFileSync(completionReceipt, completionToken, { flag: "wx", mode: 0o600 });
     return process.exit(interrupted || (guardCode === 124 ? 124 : code || guardCode || (survivors ? 1 : 0)));
   } catch (error) {
     try { await empty(gate); }

@@ -1,7 +1,7 @@
 import type { ProcessIdentity } from "@/lib/processIdentity";
 import type { Determinable } from "@/lib/runtime/determinable";
 
-export const AGENT_STATE_POLICY = Object.freeze({ version: 1, reconcileMs: 2 * 60_000, observationMs: 5000, stuckMs: 10 * 60_000, startupGraceMs: 5 * 60_000, idleMs: 3_600_000 });
+export const AGENT_STATE_POLICY = Object.freeze({ version: 1, reconcileMs: 2 * 60_000, observationMs: 5000, stuckMs: 10 * 60_000, startupGraceMs: 5 * 60_000, idleMs: 3_600_000, abandonedTurnMs: 6 * 3_600_000 });
 export type AgentState = "working" | "waiting-operator" | "idle" | "stuck" | "unowned" | "dead";
 export interface Evidence {
   source: "proc" | "host-memory" | "native-transcript" | "registry-cache" | "operation-ledger";
@@ -48,10 +48,12 @@ export interface TranscriptVersion {
   mtimeMs: number;
   coveredFrom: number;
   bytesRead: number;
+  /** Missing on persisted summaries produced before versioned boundaries. */
+  boundaryVersion?: number;
 }
 export interface AgentFacts {
   subject: string;
-  engine: "codex" | "claude" | "copilot";
+  engine: "codex" | "claude" | "copilot" | "antigravity";
   revision: string;
   process: Fact<{ status: "alive" | "dead"; identity: ProcessIdentity }>;
   owner: Fact<"held" | "other" | "absent">;
@@ -93,6 +95,7 @@ export function evaluateAgentState(facts: AgentFacts, now: number, policy = AGEN
           else if (available("transcript")) {
             state = stuck ? "stuck" : "working";
             reason = stuck ? "open turn with silent transcript" : facts.turn.value.opening === "accepted" ? "accepted work awaiting a native prompt" : "verified open turn";
+            if (facts.turn.evidence.ref === "native-open-after-idle-conflict-grace") reason += "; idle-memory conflict exceeded native write grace";
             if (stuck && facts.activity?.determined && facts.activity.value.flags.length) reason += `; ${facts.activity.value.flags.join(", ")}`;
           }
         }
@@ -123,6 +126,8 @@ export interface AgentProjection {
   verdict: AgentVerdict;
   revision: number;
   pendingPublication: boolean;
+  /** Cleared with the publication acknowledgement. Older pending rows owe a refresh. */
+  pendingFilesRevision?: boolean;
   publishable?: boolean;
   divergence: string | null;
   divergenceKey?: string | null;
@@ -159,7 +164,7 @@ export interface AgentStateMetrics {
   unownedRssMeasured: number;
   unownedRssUnknown: number;
   stuckTurns: number;
-  stuckByEngine: { codex: number; claude: number; copilot: number };
+  stuckByEngine: { codex: number; claude: number; copilot: number; antigravity: number };
   stuckByReason: { silent: number; checking: number; providerWait: number };
   subjectsObserved: number;
   subjectsUnverified: number;
@@ -174,9 +179,41 @@ export interface AgentStateMetrics {
 }
 export function emptyAgentStateMetrics(): AgentStateMetrics {
   return { version: 1, revision: 0, at: 0, registryTranscriptDivergencesTotal: 0, registryTranscriptDivergencesCurrent: 0,
-    unownedHosts: 0, unownedRssBytes: null, unownedRssMeasured: 0, unownedRssUnknown: 0, stuckTurns: 0, stuckByEngine: { codex: 0, claude: 0, copilot: 0 }, stuckByReason: { silent: 0, checking: 0, providerWait: 0 },
+    unownedHosts: 0, unownedRssBytes: null, unownedRssMeasured: 0, unownedRssUnknown: 0, stuckTurns: 0, stuckByEngine: { codex: 0, claude: 0, copilot: 0, antigravity: 0 }, stuckByReason: { silent: 0, checking: 0, providerWait: 0 },
     subjectsObserved: 0, subjectsUnverified: 0, subjectsDeferred: 0, pendingProjectionPublications: 0,
     lastCompleteReconciliationAt: null, afterKey: null, journalRows: 0, terminalSubjects: 0, physicalAliasesUnverified: 0 };
+}
+
+export type StoredAgentStateMetrics = Omit<AgentStateMetrics, "stuckByEngine"> & {
+  stuckByEngine: { codex: number; claude: number; copilot: number };
+};
+
+export type AgentStateMetricsRow = Omit<AgentStateMetrics, "stuckByEngine"> & {
+  stuckByEngine: Partial<AgentStateMetrics["stuckByEngine"]>;
+};
+
+const legacyAgentStateMetricKeys = new Set([
+  "version", "revision", "at", "registryTranscriptDivergencesTotal", "registryTranscriptDivergencesCurrent",
+  "unownedHosts", "unownedRssBytes", "unownedRssMeasured", "unownedRssUnknown", "stuckTurns", "stuckByEngine",
+  "stuckByReason", "subjectsObserved", "subjectsUnverified", "subjectsDeferred", "physicalAliasesUnverified",
+  "pendingProjectionPublications", "journalRows", "terminalSubjects", "lastCompleteReconciliationAt", "afterKey",
+  "physicalSubjects",
+]);
+
+/** Keep persisted metrics readable by releases before Antigravity was added. */
+export function agentStateMetricsForStorage(metrics: AgentStateMetricsRow): StoredAgentStateMetrics {
+  const stored: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(metrics)) {
+    if (!legacyAgentStateMetricKeys.has(key)) continue;
+    stored[key] = key === "stuckByEngine"
+      ? {
+        codex: metrics.stuckByEngine.codex ?? 0,
+        claude: metrics.stuckByEngine.claude ?? 0,
+        copilot: metrics.stuckByEngine.copilot ?? 0,
+      }
+      : value;
+  }
+  return stored as StoredAgentStateMetrics;
 }
 
 export interface AgentStateDisplay {
@@ -209,7 +246,7 @@ export function validAgentFacts(value: unknown): value is AgentFacts {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
   if (typeof row.subject !== "string" || !/^[a-f0-9]{48}$/.test(row.subject)
-    || !["codex", "claude", "copilot"].includes(row.engine as string) || typeof row.revision !== "string" || row.revision.length > 128) return false;
+    || !["codex", "claude", "copilot", "antigravity"].includes(row.engine as string) || typeof row.revision !== "string" || row.revision.length > 128) return false;
   for (const key of ["process", "owner", "turn", "attention", "transcript", "obligations", "activity"]) {
     const field = row[key] as { determined?: unknown; evidence?: Evidence; value?: unknown; why?: unknown } | undefined;
     if (!field || typeof field.determined !== "boolean" || !field.evidence || !validAgentEvidence(field.evidence)) return false;
@@ -237,6 +274,7 @@ export function validAgentFacts(value: unknown): value is AgentFacts {
         || !["nativeId", "localRef", "opening", "closing"].every(k => v[k] === null || typeof v[k] === "string" && v[k].length <= 256)
         || !(v.at === null || number("at")))) return false;
       if (key === "transcript" && (!number("size") || !number("mtimeMs") || !number("coveredFrom") || !number("bytesRead")
+        || v.boundaryVersion !== undefined && (!Number.isSafeInteger(v.boundaryVersion) || (v.boundaryVersion as number) < 1)
         || typeof v.signature !== "string" || v.signature.length > 256 || typeof v.artifact !== "string" || !/^[a-f0-9]{24}$/.test(v.artifact))) return false;
       if (key === "activity" && (!number("tools") || !strings(v.flags, 16, 64) || typeof v.providerRetry !== "boolean")) return false;
     }

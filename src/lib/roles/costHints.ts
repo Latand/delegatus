@@ -15,11 +15,16 @@ const MODEL_SIZE: readonly (readonly [RegExp, 1 | 2 | 3])[] = [
   [/^(?:claude-)?haiku\b/, 1],
   [/^gpt-5\.6-luna\b/, 1],
   [/^gpt-6-luna\b/, 1],
+  [/^gemini-3\.8-flash\b/, 1],
   [/^(?:claude-)?sonnet\b/, 2],
   [/^gpt-5\.6-terra\b/, 2],
+  [/^gemini-4-argon\b/, 2],
+  [/^gpt-oss-120b\b/, 2],
   [/^(?:claude-)?(opus|fable)\b/, 3],
   [/^gpt-5\.6-sol\b/, 3],
-  [/^gpt-6(?:\.1)?-(astra|sol)\b/, 3],
+  [/^gpt-6(?:\.[12])?-(astra|sol)\b/, 3],
+  [/^gemini-4-(neon|hydrogen)\b/, 3],
+  [/^gemini-pro-orchestrator-/, 3],
 ];
 
 /** Size class of a catalogued model; an uncatalogued one counts as large. */

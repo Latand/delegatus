@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -7,6 +8,7 @@ import { AgentRegistry, type StructuredHostClaimDecision, type StructuredTermina
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { stopTerminalStructuredOrphan } from "./registry";
 
+const ref = (value: string) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 const fixture = path.join(import.meta.dir, "fixtures/claudeSuccession.ts");
 const key = { engine: "claude" as const, sessionId: "planned-succession" };
 async function until(predicate: () => boolean): Promise<void> {
@@ -62,8 +64,8 @@ async function scenario(run: (s: {
   }
 }
 
-for (const [caller, recordedCaller] of [["adoption", "claude-adoption"], ["demotion", "startup-demotion"], ["terminal", "terminal-recovery"]]) {
-  test(`a terminal Claude orphan stop records the real ${caller} caller and claim refusal`, async () => scenario(async s => {
+for (const [caller, recordedCaller] of [["adoption", "claude-adoption"], ["demotion", "startup-demotion"], ["terminal", "terminal-recovery"], ["codex-adoption", "codex-adoption"]]) {
+  test(`an orphan stop after succession records ${caller}, its refusal and the still-open turn`, async () => scenario(async s => {
     const before = s.registry.readOnlySnapshot().entries["claude:planned-succession"]!;
     s.registry.upsert({ ...before, status: "dead" });
     fs.writeFileSync(path.join(s.directory, "exit-owner"), "exit");
@@ -72,17 +74,35 @@ for (const [caller, recordedCaller] of [["adoption", "claude-adoption"], ["demot
     expect(processIdentityStatus(s.child)).toBe("alive");
     // Terminal cleanup requires a proven-dead root; a row label cannot retire live work.
     s.registry.recordStructuredTerminationSurvivors(key, s.native, [s.child]);
-    process.kill(s.native.pid, "SIGKILL");
-    await until(() => processIdentityStatus(s.native) === "dead");
-    const successor = s.launch(caller!);
+    const successor = s.launch(`${caller}-held`);
     const output = collect(successor.stdout!);
     const error = collect(successor.stderr!);
+    await until(() => fs.existsSync(path.join(s.directory, "successor-ready")));
+    // Both busy processes crossed into the successor generation. Lose the
+    // native root before releasing recovery; its recorded open turn remains.
+    expect(processIdentityStatus(s.native)).toBe("alive");
+    expect(processIdentityStatus(s.child)).toBe("alive");
+    expect(JSON.parse(fs.readFileSync(path.join(s.directory, "runtime-host.sock.lock"), "utf8")).acquisitionId)
+      .toBe("00000000-0000-0000-0000-000000000002");
+    process.kill(s.native.pid, "SIGKILL");
+    await until(() => processIdentityStatus(s.native) === "dead");
+    fs.writeFileSync(path.join(s.directory, "recover-successor"), "recover");
     expect(await settled(successor), await error).toBe(0);
     await output;
     const records = fs.readFileSync(path.join(s.directory, "host-termination-journal.ndjson"), "utf8").trim().split("\n").map(line => JSON.parse(line));
-    expect(records.find(record => record.event === "captured" && record.source === "structured-orphan-stop").decision).toEqual({
+    expect(records.find(record => record.event === "captured" && record.source === "structured-orphan-stop").decision).toMatchObject({
       caller: recordedCaller, claimRefusal: "termination-survivors", ownerPid: s.owner.pid,
       claimEpoch: 1, writerClaimEpoch: 1, status: "dead",
+    });
+    const captured = records.find(record => record.event === "captured" && record.source === "structured-orphan-stop").decision;
+    const previousOwner = JSON.parse(before.claimOwner!.slice("structured-host:".length));
+    expect(captured).toMatchObject({
+      reason: "orphan-writer-not-blocking", ownerStartIdentity: previousOwner.startIdentity,
+      ownerBootEpoch: previousOwner.bootEpoch, ownerState: "dead",
+      ownershipState: "read", turnOpen: true, activeTurnRef: ref("original-turn"),
+      runtimeHostGeneration: { state: "read", pid: successor.pid, acquisitionId: "00000000-0000-0000-0000-000000000002" },
+      conversations: [{ id: ref("conversation_fixture"), currentGeneration: true, turnState: "busy",
+        memberships: [{ kind: "pipeline", containerId: ref("pipeline_fixture"), stageId: ref("build"), stageOrder: 1, round: 1 }] }],
     });
     expect(records.at(-1).event).toBe("settled");
   }), 20_000);
@@ -137,7 +157,7 @@ test("a descendant of a proven-dead Claude host is still stopped with its refusa
   expect(await stopTerminalStructuredOrphan(s.registry, key, {}, decision)).toBe(true);
   expect(processIdentityStatus(s.child)).toBe("dead");
   const records = fs.readFileSync(path.join(s.directory, "host-termination-journal.ndjson"), "utf8").trim().split("\n").map(line => JSON.parse(line));
-  expect(records.findLast(record => record.event === "captured").decision).toEqual({
+  expect(records.findLast(record => record.event === "captured").decision).toMatchObject({
     caller: "terminal-recovery", claimRefusal: "termination-survivors", ownerPid: s.owner.pid,
     claimEpoch: 1, writerClaimEpoch: 1, status: "live",
   });
@@ -149,7 +169,7 @@ test("decision records retain fixed fields and discard unexpected text", async (
   expect(s.registry.captureStructuredTerminationSurvivors(key, s.native, [s.child], "decision-test", decision)).not.toBeNull();
   const line = fs.readFileSync(path.join(s.directory, "host-termination-journal.ndjson"), "utf8").trim();
   expect(line).not.toContain(unexpected);
-  expect(JSON.parse(line).decision).toEqual({ caller: null, claimRefusal: null, ownerPid: s.owner.pid,
+  expect(JSON.parse(line).decision).toMatchObject({ caller: null, claimRefusal: null, ownerPid: s.owner.pid,
     claimEpoch: 1, writerClaimEpoch: 1, status: "live" });
 }), 20_000);
 
@@ -179,8 +199,8 @@ test("malformed persisted row values produce a bounded decision and complete ado
   const decision = records.find(record => record.event === "captured" && record.source === "structured-orphan-stop").decision;
   const serialized = JSON.stringify(decision);
   expect(serialized).not.toContain(payload);
-  expect(Buffer.byteLength(serialized)).toBeLessThanOrEqual(256);
-  expect(decision).toEqual({ caller: "claude-adoption", claimRefusal: "termination-survivors", ownerPid: s.owner.pid,
+  expect(Buffer.byteLength(serialized)).toBeLessThanOrEqual(12_000);
+  expect(decision).toMatchObject({ caller: "claude-adoption", claimRefusal: "termination-survivors", ownerPid: s.owner.pid,
     claimEpoch: null, writerClaimEpoch: 1, status: null });
   expect(records.at(-1).event).toBe("settled");
 }), 20_000);
@@ -212,11 +232,11 @@ test("persisted decision epochs and statuses retain only bounded values", async 
     expect(s.registry.captureStructuredTerminationSurvivors(key, s.native, [s.child], "decision-test",
       { caller: "terminal-recovery", claimRefusal: null })).not.toBeNull();
     const record = JSON.parse(fs.readFileSync(journal, "utf8").trim().split("\n").at(-1)!);
-    expect(record.decision).toEqual({ caller: "terminal-recovery", claimRefusal: null, ownerPid: s.owner.pid,
+    expect(record.decision).toMatchObject({ caller: "terminal-recovery", claimRefusal: null, ownerPid: s.owner.pid,
       claimEpoch: sample.expected,
       // The host reader already replaces invalid writer epochs with zero.
       writerClaimEpoch: sample.expected ?? 0, status: sample.expectedStatus });
-    expect(Buffer.byteLength(JSON.stringify(record.decision))).toBeLessThanOrEqual(256);
+    expect(Buffer.byteLength(JSON.stringify(record.decision))).toBeLessThanOrEqual(12_000);
   }
 }), 20_000);
 

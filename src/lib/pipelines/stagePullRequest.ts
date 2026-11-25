@@ -1,3 +1,4 @@
+import { publicationLanguageHints, publicationSummary, publicationTitle } from "@/lib/forge/publicationLanguage";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -69,7 +70,7 @@ function refused(part: PullRequestTextRefusal["part"], check: string, kind: stri
   return { ok: false, privacy: { part, check, kind, ...(line ? { line } : {}) },
     error: `pull request publication privacy gate refused ${part} [redacted]: ${check} (${kind})`
       + (line ? `; decoded line ${line}` : "")
-      + (part.includes("title") ? "; the title comes from the pipeline task; the seat must correct that task line" : "") };
+      + (part.includes("title") ? "; the seat must correct the pipeline publication title" : "") };
 }
 
 /** No detector output or matched value is copied into a refusal. */
@@ -383,22 +384,30 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
     if (number !== null && attempt.pullRequestInspection) attempt.error = attempt.pullRequestInspection.detail;
     if (number === null || refresh) {
       const producer = stagePullRequestProducer(pipeline, attempt);
-      const result = publicResult(producer);
-      const summary = producer.activatedBy?.edge === "fail" ? result : producer.report?.summary?.trim() || producer.output?.trim() || "";
+      const rawSummary = producer.report?.summary?.trim() || producer.output?.trim() || "";
+      const rawResult = publicResult(producer);
+      const summary = refresh || producer.activatedBy?.edge === "fail" ? rawResult : rawSummary;
+      const result = publicationSummary(rawResult);
       const update = `${RESULT_START}\n## Latest pipeline result\n\nHead: \`${acceptedHead}\`\n\n`
         + (recheck ? result : `**Last fix was not re-reviewed: review budget spent.**\n\nFix result: ${result}`)
         + `\n${RESULT_END}\n\n`;
       // Preserve the producer's description and attribution footer byte for
-      // byte. The exact prefix also recovers a lost edit acknowledgement.
+      // byte. Comparing the whole body also recovers a lost edit acknowledgement.
       const legacyReports = pipeline.runs.flatMap(run => run.attempts).filter(isFinalBudgetFix)
         .map(a => a.report?.summary?.trim() || a.output?.trim() || "");
       if (pendingRefresh) legacyReports.push(pendingRefresh.summary);
-      const updatedBody = replaceLatestResult(found.body ?? "", update, legacyReports);
+      // Older publication code could normalize the report before writing it.
+      const updatedBody = replaceLatestResult(found.body ?? "", update,
+        legacyReports.flatMap(report => [report, publicationSummary(report)]));
       const alreadyUpdated = refresh && number !== null && found.body === updatedBody;
       const incomplete = refresh && number !== null && (typeof found.body !== "string" || typeof found.title !== "string");
       if (pendingRefresh && incomplete) return { ok: false, error: "the deferred pull request body refresh needs a complete PR body and title read" };
-      const body = alreadyUpdated ? found.body! : refresh ? updatedBody : summary;
-      const title = found.title ?? pipeline.task.split("\n").map(line => line.trim()).find(Boolean)?.slice(0, 120) ?? "";
+      const body = alreadyUpdated ? found.body! : refresh ? updatedBody : publicationSummary(summary);
+      const title = found.title ?? publicationTitle(pipeline.task, summary, pipeline.prTitle);
+      const hints = [...publicationLanguageHints("title", title), ...publicationLanguageHints("body", body),
+        ...publicationLanguageHints("body", rawSummary), ...publicationLanguageHints("body", summary)];
+      if (hints.length) attempt.publicationLanguageHints = { at: attempt.publicationLanguageHints?.at ?? new Date().toISOString(),
+        hints: [...new Map(hints.map(hint => [`${hint.part}:${hint.line}`, hint])).values()] };
       for (const [part, value] of [["title", title], ["body", body]] as const) {
         const inspected = await inspectPullRequestText(part, value);
         if (!inspected.ok) return inspected;

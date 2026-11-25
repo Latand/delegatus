@@ -26,11 +26,12 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
   | "memory.curation-authority"
-  | "recorded-check.observe" | "pipelines.retirement-evidence" | "pipelines.retirement-check" | "pipelines.prior-writer-stop" | "pipelines.evidence" | "pipelines.get" | "pipelines.laneChanges" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-credit-guard" | "account-credit-guard.store"
+  | "memory.curation-panel.metadata" | "mcp.tasks.indexed-page"
+  | "recorded-check.observe" | "pipelines.retirement-evidence" | "pipelines.retirement-check" | "pipelines.prior-writer-stop" | "pipelines.evidence" | "pipelines.get" | "pipelines.laneChanges" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-quota" | "controller.account-credit-guard" | "account-credit-guard.store"
   | "runtime-journal.maintenance"
   | "orchestrator.deploy-attribution" | "orchestrator.deploy-attribution.write"
   | "runtime.rpc" | "runtime.delivery-list" | "runtime.delivery-wake"
-  | "claude.headless-json" | "agent.stdin-file" | "relay.media-input" | "relay.attachments" | "relay.attachments.read" | "relay.attachments.upload"
+  | "claude.headless-json" | "agent.stdin-file" | "relay.page-read" | "relay.media-input" | "relay.attachments" | "relay.attachments.read" | "relay.attachments.upload"
   | "external-relay.owner-history" | "external-relay.owner-media" | "external-relay.clone-send" | "external-relay.clone-directory" | "mcp.project-prefix" | "issue-report.resolve" | "self-update.revision-prefix"
   | "relay.owner-continuation.send" | "relay.owner-turn.observe" | "external-relay.chains" | "relay.service-tools" | "relay.tool-index"
   | "prototype.publish" | "prototype.copy" | "prototype.state" | "prototype.delivery" | "prototype.telegram"
@@ -45,7 +46,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "codex.protocol-admission" | "codex.cli-update" | "mcp.page-cursors"
   | "worktrees.discovery" | "worktrees.candidate" | "worktrees.accounting"
   | "pipelines.controller-job" | "pipelines.provisioning" | "pipelines.controller-lane" | "pipelines.controller-schedule" | "pipelines.publication-recovery"
-  | "pipelines.controller-artifacts"
+  | "pipelines.controller-artifacts" | "pipelines.operator-stop-evidence"
   | "telegram.membership-check" | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel"
   | "seat-tick.pause-conditions" | "structured-user.publish" | "structured-user.provenance" | "structured-user.retention"
   | "turbo.sweep" | "turbo.sweep.read" | "turbo.sweep.apply" | "turbo.sweep.settle";
@@ -100,7 +101,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
   watchdogFactory: () => ReturnType<typeof startLoopWatchdog> = () => startLoopWatchdog()) {
   const sink = createLoopLogSink();
   let writeLog = log ?? sink.enqueue;
-  const context = new AsyncLocalStorage<ViewerOperation>();
+  const context = new AsyncLocalStorage<Operation>();
   const active = new Set<Operation>();
   let completed: Operation[] = [];
   let last = now();
@@ -261,7 +262,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       lastSummary = at;
     }
     readAttribution.clear();
-    spans.clear();
+    spans.clearSpans();
     activeDropped = completedDropped = 0;
     last = at;
   };
@@ -286,7 +287,11 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
           memoryUsage: { ...sample.memoryUsage, ...(sample.memoryUsage.bun ? { bun: { ...sample.memoryUsage.bun } } : {}) },
           caches: sample.caches.map(row => ({ ...row })), gaps: { ...sample.gaps, operations: [...sample.gaps.operations], sites: [...sample.gaps.sites] } })) };
     },
-    current: () => context.getStore(),
+    current(lifetime?: "active") {
+      const op = context.getStore();
+      // A detached callback still inherits the name after the operation has settled.
+      return lifetime === "active" && op?.end !== undefined ? undefined : op?.name;
+    },
     setProfiler(next: ReturnType<typeof createLoopProfiler>) { profiler?.stop(); profiler = next; },
     setLogSink(sink: (line: string) => void) {
       const previous = writeLog;
@@ -299,6 +304,8 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       const finish = () => {
         active.delete(op);
         op.end = now();
+        // Detached callbacks can retain this context after the pass finishes.
+        op.lease = undefined;
         completed.push(op);
         if (completed.length <= 128) return;
         let shortest = 0;
@@ -308,7 +315,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         completed.splice(shortest, 1);
         completedDropped++;
       };
-      return readAttribution.run(name, () => context.run(name, () => {
+      return readAttribution.run(name, () => context.run(op, () => {
         try {
           const result = work();
           if (result && typeof (result as unknown as Promise<unknown>).then === "function") {

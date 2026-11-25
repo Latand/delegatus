@@ -29,7 +29,7 @@ export interface IdentityWaveSharedPathCandidate {
 export interface IdentityWaveMigrationInput {
   dryRun?: boolean;
   now: string;
-  transcriptTitle(pathname: string, engine: "claude" | "codex" | "copilot"): string | null;
+  transcriptTitle(pathname: string, engine: "claude" | "codex" | "copilot" | "antigravity"): string | null;
   sharedPathForLegacy(pathname: string): IdentityWaveSharedPathCandidate | null;
   orchestratorSeats: readonly IdentityWaveSeat[];
   commitExternalPathRekeys?(rekeys: readonly IdentityWavePathRekey[]): void;
@@ -148,7 +148,7 @@ function safeSharedPath(
 function safeTranscriptTitle(
   input: IdentityWaveMigrationInput,
   pathname: string,
-  engine: "claude" | "codex" | "copilot",
+  engine: "claude" | "codex" | "copilot" | "antigravity",
 ): EvidenceResolution<string> {
   try {
     const title = semanticEvidence(input.transcriptTitle(pathname, engine));
@@ -328,7 +328,7 @@ export function stampOrchestratorLineage(
   file: RegistryFile,
   seat: IdentityWaveSeat,
   createdAt: string,
-): { changed: boolean; engine: "claude" | "codex" | "copilot" | null } {
+): { changed: boolean; engine: "claude" | "codex" | "copilot" | "antigravity" | null } {
   const conversationId = seat.conversationId
     ? canonicalConversationId(file, seat.conversationId)
     : null;
@@ -404,7 +404,7 @@ export function stampOrchestratorLineage(
 function stampPendingOrchestratorLineage(
   file: RegistryFile,
   seat: IdentityWaveSeat,
-): { changed: boolean; engine: "claude" | "codex" | "copilot" | null } {
+): { changed: boolean; engine: "claude" | "codex" | "copilot" | "antigravity" | null } {
   const conversationId = seat.conversationId
     ? canonicalConversationId(file, seat.conversationId)
     : null;
@@ -467,7 +467,7 @@ export function applyIdentityWaveMigration(
   if (!dryRun && ownership.rekeys.length > 0) {
     input.commitExternalPathRekeys?.(ownership.rekeys);
   }
-  const changedEngines = new Set<"claude" | "codex" | "copilot">();
+  const changedEngines = new Set<"claude" | "codex" | "copilot" | "antigravity">();
   let retitled = 0;
   let rekeyed = 0;
   let edgesStamped = 0;

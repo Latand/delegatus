@@ -8,7 +8,7 @@ import { once } from "node:events";
 import type { AgentRegistryEntry } from "@/lib/agent/registry";
 import type { AgentProjection, AgentStateMetrics } from "./model";
 import type { StructuredHostRetirementReport } from "@/lib/runtime/structuredHostRetirement";
-import { FIXTURE_CONVERSATION, type FixtureEngine } from "./testFixture";
+import { FIXTURE_CONVERSATION, currentClaudeRecords, type FixtureEngine } from "./testFixture";
 import { processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 
 interface FixtureAnswer { port: number; ready: boolean; native?: ProcessIdentity; entry: AgentRegistryEntry; projection: AgentProjection; metrics: AgentStateMetrics; report: StructuredHostRetirementReport }
@@ -70,6 +70,58 @@ test("Claude tool output converges after the real broker owner exits and native 
   expect(replayed.entry.structuredHost!.activeTurnRef).toBeNull();
   expect(replayed.metrics.registryTranscriptDivergencesTotal).toBe(1);
 }, 30000);
+test("Claude idle/native conflict deadline survives a real observer process restart", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "central-conflict-restart-")); roots.push(root);
+  for (const dir of ["state", "home", "config"]) fs.mkdirSync(path.join(root, dir));
+  const native = start("native", root, "claude"), socket = await native.next();
+  const owner = start("owner", root, "claude", String(native.child.pid), String(socket.port));
+  expect((await owner.next()).ready).toBe(true);
+  const exited = once(owner.child, "exit"); owner.child.kill("SIGTERM"); await exited;
+  const observer = start("idle-observer", root, "claude");
+  expect((await observer.next()).projection.facts.turn.determined).toBe(false);
+  observer.send("grace-before");
+  expect((await observer.next()).projection.facts.turn.determined).toBe(false);
+  const stopped = once(observer.child, "exit"); observer.child.kill("SIGTERM"); await stopped;
+  const restarted = start("idle-observer", root, "claude");
+  expect((await restarted.next()).projection.facts.turn.determined).toBe(false);
+  restarted.send("grace-after");
+  expect((await restarted.next()).projection.facts.turn).toMatchObject({ determined: true, value: { state: "open" },
+    evidence: { ref: "native-open-after-idle-conflict-grace" } });
+  expect(native.child.exitCode).toBeNull();
+}, 30000);
+
+test("pending Claude background evidence survives observer restart until an appended completion notice", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "central-background-restart-")); roots.push(root);
+  for (const dir of ["state", "home", "config"]) fs.mkdirSync(path.join(root, dir));
+  const native = start("native", root, "claude"), socket = await native.next();
+  const owner = start("owner", root, "claude", String(native.child.pid), String(socket.port));
+  expect((await owner.next()).ready).toBe(true);
+  const ownerStopped = once(owner.child, "exit"); owner.child.kill("SIGTERM"); await ownerStopped;
+
+  const records = currentClaudeRecords();
+  const result = records.open.find(row => row.type === "user" && Array.isArray((row.message as { content?: { type?: string }[] }).content)
+    && (row.message as { content: { type?: string }[] }).content.some(part => part.type === "tool_result"));
+  if (!result) throw new Error("Claude tool result fixture missing");
+  result.toolUseResult = { backgroundTaskId: "fixture-background" };
+  const transcript = path.join(root, "native.jsonl");
+  fs.writeFileSync(transcript, [...records.open, ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n");
+
+  const observer = start("idle-observer", root, "claude");
+  expect((await observer.next()).projection.facts.obligations).toMatchObject({ determined: true, value: ["background:background task fixture-background"] });
+  const observerStopped = once(observer.child, "exit"); observer.child.kill("SIGTERM"); await observerStopped;
+
+  const restarted = start("idle-observer", root, "claude");
+  expect((await restarted.next()).projection.facts.obligations).toMatchObject({ determined: true, value: ["background:background task fixture-background"] });
+  const restartedStopped = once(restarted.child, "exit"); restarted.child.kill("SIGTERM"); await restartedStopped;
+
+  fs.appendFileSync(transcript, `${JSON.stringify({ type: "user", timestamp: "2026-10-10T12:00:02.000Z",
+    message: { role: "user", content: "<task-notification><task-id>fixture-background</task-id><status>completed</status></task-notification>" } })}\n`);
+  const completed = start("idle-observer", root, "claude");
+  expect((await completed.next()).projection.facts.obligations).toMatchObject({ determined: true, value: [] });
+  expect(completed.child.exitCode).toBeNull();
+  expect(native.child.exitCode).toBeNull();
+}, 30000);
+
 for (const engine of ["codex", "claude", "copilot"] as FixtureEngine[]) {
   test(`${engine}: successor scheduler repairs an ownerless native completion, survives restart, and retires only after the idle bound`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "central-restart-")); roots.push(root);

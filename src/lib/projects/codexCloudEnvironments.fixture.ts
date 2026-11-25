@@ -24,7 +24,7 @@ export function cloudEnvironmentTestContext() {
         LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect(code, stderr).toBe(0);
-    return JSON.parse(stdout);
+    return stdout ? JSON.parse(stdout) : null;
   }
 
   function cleanup() {

@@ -31,7 +31,7 @@ const command = path.join(root, "answer-stub");
 fs.writeFileSync(command, `#!/usr/bin/env bun\nconst a=process.argv;await Bun.stdin.text();console.log(JSON.stringify({type:'thread.started',thread_id:crypto.randomUUID()}));await Bun.write(a[a.indexOf('--output-last-message')+1], JSON.stringify({action:'reply',text:'Done',reply_to:'m1'}));`); fs.chmodSync(command, 0o700);
 function paired(api_base: string): PairedRelay {
   return { id: "hold-relay", origin: api_base.replace(/\/v1$/, ""), api_base, name: "Test", description: "Test", credential: "x".repeat(43),
-    features: ["progress_steps"], owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(),
+    features: ["progress_steps"], owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: new Date().toISOString(),
     paused: false, limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
     targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "none", enabled: true, engine: "codex", model: "gpt-6-sol", effort: "low", project: null, concurrency: 1, hardCapMinutes: 1, memberLimitPerHour: 0 }] };
 }
@@ -219,7 +219,12 @@ for (const outcome of ["no_capacity", "member_limit"] as const) test(`${outcome}
     releaseDrain(drainFile(), "early-outcome"); accountManager.resolveHeadlessSpawn = previous;
     reserveRun(blocker(relay, "recheck-blocker"));
     const held = claim(`${outcome}-recheck`, 20000);
-    if (outcome === "member_limit") held.input.requester.key = "another-member";
+    if (outcome === "member_limit") {
+      // Another member's request: that member is both the requester and the trigger's author.
+      held.input.requester.key = "another-member";
+      Object.assign(held.input, { conversation: held.input.conversation.map(message => message.id === held.input.respond_to
+        ? { ...message, author: { ...message.author, key: "another-member" } } : message) });
+    }
     const pending = runClaimedRequest(relay, held, undefined, { command });
     await Bun.sleep(200);
     if (outcome === "no_capacity") accountManager.resolveHeadlessSpawn = (() => ({ kind: "unavailable" })) as typeof previous;

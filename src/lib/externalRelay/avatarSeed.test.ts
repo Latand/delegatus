@@ -31,7 +31,7 @@ test("seed admission accepts ten inbound, returned or mixed images and refuses e
   for (const inboundCount of [0, 4, 10]) {
     const input = request();
     input.input.conversation[0]!.media = Array.from({ length: inboundCount }, (_, index) => photo(index + 1));
-    const returned = new Set(Array.from({ length: 10 - inboundCount }, (_, index) => ref(index + inboundCount + 1)));
+    const returned = new Set(Array.from({ length: 10 }, (_, index) => ref(index + 1)));
     for (let count = 1; count <= 10; count++) {
       expect(admittedSeedMedia(input, { seed_media_refs: Array.from({ length: count }, (_, index) => ref(index + 1)) }, returned)).toBe(true);
     }
@@ -99,7 +99,7 @@ for (const [name, example] of Object.entries(fixture.examples)) test(`service av
     const actions = posts.filter(call => call.tool !== "get_profile_photo");
     expect(actions).toHaveLength(local ? 0 : 1);
     expect(target.results.at(-1)).toMatchObject(local
-      ? { status: "denied", code: "invalid_arguments", output: "" }
+      ? { status: "denied", code: "invalid_arguments", output: expect.stringContaining("media_ref_unavailable_or_expired") }
       : { status: example.result.status, output: example.result.output,
         ...("code" in example.result ? { code: example.result.code } : {}) });
     if (!local) expect(actions[0]).toMatchObject({ tool: example.call.tool, arguments: example.call.arguments });

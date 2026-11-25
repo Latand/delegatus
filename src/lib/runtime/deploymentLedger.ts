@@ -5,7 +5,8 @@ import type { Database } from "bun:sqlite";
 
 import { statePath } from "@/lib/configDir";
 
-import type { ViewerDeploymentStatus } from "./contracts";
+import type { RuntimeOperationReceipt, RuntimeStartupOperationCursor, ViewerDeploymentStatus } from "./contracts";
+import { startupPendingOperationPage } from "./startupOperationLedger";
 
 export type DeploymentLedgerRead<T> =
   | { state: "ok"; value: T }
@@ -31,7 +32,7 @@ const UNREADABLE_LEDGER = "deployment ledger is unreadable";
  * lock, and never create the table if it is absent.
  */
 
-function ledgerPath(env: NodeJS.ProcessEnv = process.env): string {
+export function runtimeJournalPath(env: NodeJS.ProcessEnv = process.env): string {
   return env.LLV_RUNTIME_JOURNAL?.trim() || statePath("runtime-events.sqlite");
 }
 
@@ -44,12 +45,53 @@ function openLedger(env: NodeJS.ProcessEnv = process.env): Database | null {
   const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
   if (!sqlite) return null;
   try {
-    return observeSqlite(new sqlite.Database(ledgerPath(env), { readonly: true, create: false }), "deployment-ledger");
+    return observeSqlite(new sqlite.Database(runtimeJournalPath(env), { readonly: true, create: false }), "deployment-ledger");
   } catch {
     /* No journal on this host, or it is not readable from here. The caller
        reports that as unreadable rather than as an empty ledger. */
     return null;
   }
+}
+
+/** A successor Viewer can read active operations while the preceding host
+    still serves the session-evidence protocol without operation paging. */
+export function readStartupPendingOperations(after: RuntimeStartupOperationCursor, env = process.env) {
+  const db = openLedger(env);
+  if (!db) throw new Error("runtime journal is unavailable for startup operation evidence");
+  try { return startupPendingOperationPage(db, after); }
+  finally { db.close(); }
+}
+
+/** Every active operation of a preceding host's journal, read in one SQLite
+    read transaction so the pages describe one moment. The preceding host's
+    effect revision does not move with operation receipts, so a caller proves
+    the answer current by reading it again and comparing the two answers:
+    unrelated session writes leave it alone. */
+export function readStartupPendingOperationSet(env = process.env): RuntimeOperationReceipt[] {
+  const db = openLedger(env);
+  if (!db) throw new Error("runtime journal is unavailable for startup operation evidence");
+  try {
+    db.exec("BEGIN");
+    try {
+      const operations: RuntimeOperationReceipt[] = [];
+      let after: RuntimeStartupOperationCursor = { eventSeq: 0, rowId: 0 };
+      for (;;) {
+        const page = startupPendingOperationPage(db, after);
+        operations.push(...page.pendingOperations);
+        const next = page.pendingOperationsNext;
+        if (!next) return operations;
+        if (next.eventSeq < after.eventSeq || next.eventSeq === after.eventSeq && next.rowId <= after.rowId) {
+          throw new Error("structured startup operation cursor did not advance");
+        }
+        after = next;
+      }
+    } finally { db.exec("COMMIT"); }
+  } finally { db.close(); }
+}
+
+/** The facts startup reads from an active operation receipt. */
+export function startupPendingOperationSetDigest(operations: readonly RuntimeOperationReceipt[]): string {
+  return JSON.stringify(operations.map(receipt => [receipt.operationId, receipt.conversationId, receipt.kind, receipt.status]).sort());
 }
 
 function unreadable<T>(): DeploymentLedgerRead<T> {
@@ -88,6 +130,7 @@ export function ledgerDeployments(
   const db = openLedger(env);
   if (!db) return checkout.length ? { state: "ok", value: checkout.slice().reverse().slice(0, limit) } : unreadable();
   try {
+    prepareDeploymentTimes(db);
     const rows = db.query<{ id: string; state_json: string }, [string, number]>(
       `SELECT id, state_json FROM entities WHERE kind = ?${NEWEST_DEPLOYMENT_FIRST} LIMIT ?`,
     ).all("deployment", Math.max(1, limit));
@@ -105,29 +148,28 @@ export function ledgerDeployments(
   }
 }
 
-/**
- * Recency, expressed to the store rather than guessed at in memory.
- *
- * A deployment's start instant lives in the JSON value, not in a column, so the
- * ordering has to reach into it — which the ledger's own queries already do
- * (`json_extract` over `state_json` is how the runtime snapshot separates live
- * sessions from dead ones). `julianday` turns the ISO-8601 text `createdAt`
- * carries into a number, and answers NULL for anything it cannot read as a
- * time; SQLite sorts NULL last under DESC, which is where a record that cannot
- * say when it started belongs. `updatedAt` stands in only for a record with no
- * readable start at all, and the row's write clock and then the id break a tie
- * between two deployments admitted in the same instant.
- *
- * Ordering on an expression means no index can serve it, so the store sorts the
- * deployment rows to answer. That is the whole cost, it is bounded by how many
- * deployments this host has ever run, and it buys an answer that does not
- * depend on the newest record happening to fall inside a window.
+/** Rebuild a connection-local projection from authoritative time text. The
+ * journal stays read-only, including journals written by older hosts. As with
+ * the former expression sort, preparation visits deployment metadata only;
+ * selected payloads alone are decoded and validated. SQLite never parses time.
  */
+function prepareDeploymentTimes(db: Database): void {
+  db.exec("BEGIN");
+  db.exec("CREATE TEMP TABLE deployment_times(id TEXT PRIMARY KEY, started_ms INTEGER)");
+  const insert = db.query("INSERT INTO deployment_times VALUES (?,?)");
+  const instant = (value: unknown) => {
+    const ms = typeof value === "string" ? Date.parse(value) : NaN;
+    return Number.isFinite(ms) ? ms : null;
+  };
+  for (const row of db.query<{ id: string; created: string | null; updated: string | null }, []>(`
+    SELECT id,json_extract(state_json,'$.createdAt') AS created,json_extract(state_json,'$.updatedAt') AS updated
+    FROM entities WHERE kind='deployment'`).iterate()) {
+    insert.run(row.id, instant(row.created) ?? instant(row.updated));
+  }
+}
+
 const NEWEST_DEPLOYMENT_FIRST = `
-  ORDER BY COALESCE(
-      julianday(json_extract(state_json, '$.createdAt')),
-      julianday(json_extract(state_json, '$.updatedAt'))
-    ) DESC,
+  ORDER BY (SELECT started_ms FROM deployment_times WHERE deployment_times.id=entities.id) DESC,
     COALESCE(updated_at, 0) DESC,
     id DESC
 `;
@@ -155,6 +197,7 @@ export function latestLedgerDeployment(
   const db = openLedger(env);
   if (!db) return checkout ? { state: "ok", value: checkout } : unreadable();
   try {
+    prepareDeploymentTimes(db);
     const row = db.query<{ id: string; state_json: string }, [string]>(
       `SELECT id, state_json FROM entities WHERE kind = ?${NEWEST_DEPLOYMENT_FIRST} LIMIT 1`,
     ).get("deployment");

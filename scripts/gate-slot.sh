@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Heavy commands wait for low CPU pressure and a free shared machine slot in
-# the same pass, then run in their own scope in the CPU work slice
+# Heavy commands wait for CPU queue readiness and a free shared machine slot,
+# then run in their own scope in the CPU work slice
 # (docs/design/cpu-placement.md). The slot lock files are the ones the installed
 # /var/tmp/llv-gate uses, so both gates count against one set of slots.
 set -euo pipefail
+gate_bun=${LLV_GATE_BUN:-bun}
+if [[ -z ${LLV_GATE_BUN:-} && -f /.dockerenv && -x /usr/local/bin/bun-container && $(command -v bun) == /usr/local/bin/bun ]]; then
+  gate_bun=/usr/local/bin/bun-container
+fi
 # Recording/waiting is outside admission: a waiter must never take a slot.
 if [[ ${1:-} == --record || ${1:-} == --wait ]]; then
-  exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/gate-wait.ts" "$@"
+  exec "$gate_bun" "$(dirname "${BASH_SOURCE[0]}")/gate-wait.ts" "$@"
 fi
 slots=${LLV_GATE_SLOTS:-6}
 if [[ ! "$slots" =~ ^[1-9][0-9]*$ ]]; then
@@ -49,13 +53,21 @@ own_cgroup() {
 }
 # The user manager accepts CPU properties even where an ancestor keeps the cpu
 # controller off (DisableControllers=cpu, an undelegated slice), and the scope
-# then runs with no controls; only the kernel files prove the quotas hold. This
-# process's scope and the work slice above it must both carry a quota.
+# then runs with no controls; only the kernel files prove the quotas hold.
+# A worker leaf inherits its service's ceiling. Require a finite gate ancestor
+# below the work slice and a finite work-slice ceiling.
 cpu_quota_effective() {
-  local root=${LLV_GATE_CGROUP_ROOT:-/sys/fs/cgroup} group own="" above=""
+  local root=${LLV_GATE_CGROUP_ROOT:-/sys/fs/cgroup} group own="" above="" control_group work_group candidate_quota
   group=$(own_cgroup) && [[ $group == */"$slice"/* ]] || { echo "the gate's cgroup ${group:-(unreadable)} is outside $slice"; return 1; }
-  { read -r own _ < "$root$group/cpu.max"; } 2>/dev/null
-  { read -r above _ < "$root${group%%/"$slice"/*}/$slice/cpu.max"; } 2>/dev/null
+  work_group=${group%%/"$slice"/*}/$slice
+  control_group=$group
+  while [[ -n $control_group && $control_group != "$work_group" ]]; do
+    candidate_quota=""
+    { read -r candidate_quota _ < "$root$control_group/cpu.max"; } 2>/dev/null || true
+    if [[ $candidate_quota =~ ^[0-9]+$ ]]; then own=$candidate_quota; break; fi
+    control_group=${control_group%/*}
+  done
+  { read -r above _ < "$root$work_group/cpu.max"; } 2>/dev/null
   [[ $own =~ ^[0-9]+$ && $above =~ ^[0-9]+$ ]] && return 0
   echo "the kernel applied no CPU quota to $group (cpu.max ${own:-absent}, $slice cpu.max ${above:-absent}); the cpu controller is off on an ancestor"
   return 1
@@ -76,7 +88,7 @@ if [[ ${1:-} == --in-cpu-scope ]]; then shift; verified_exec "$@"; fi
 # privacy and the remote client; heavy checks take their slot on the runner.
 pre_push_parent() {
   local script expected root directory
-  if [[ $# -eq 3 && ${1##*/} == bun && ${2##*/} == local-gate.ts && $3 == pre-push ]]; then
+  if [[ $# -eq 3 && ( ${1##*/} == bun || ${1##*/} == bun-container || ${1##*/} == bun.exe ) && ${2##*/} == local-gate.ts && $3 == pre-push ]]; then
     script=$2; expected=scripts/local-gate.ts
   elif [[ $# -ge 2 && ( ${1##*/} == bash || ${1##*/} == sh ) && ${2##*/} == pre-push ]]; then
     script=$2; expected=.githooks/pre-push
@@ -108,21 +120,30 @@ run() {
   fi
   if [[ -n ${LLV_SIGNAL_SANDBOX:-} ]] && ! user_manager; then
     echo "gate-slot: no reachable systemd user manager, so no gate service with MemoryMax=${LLV_GATE_MEM:-14G}; running in a bounded leaf of this agent's own scope instead, under the agent's memory cap" >&2
-    exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --namespace "$@"
+    exec "$gate_bun" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --namespace "$@"
   fi
   if cpu_applies; then
     user_manager || refuse "no reachable systemd user manager"
     systemctl --user set-property --runtime "$slice" CPUWeight=100 "CPUQuota=${aggregate}%" CPUQuotaPeriodSec=20ms >/dev/null 2>&1 \
       || refuse "the user manager refused the quota for $slice"
     export LLV_OWNED_RUN_CPU_SLICE="$slice" LLV_OWNED_RUN_CPU_QUOTA="$scope_quota"
-    exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" /bin/bash "${BASH_SOURCE[0]}" --in-cpu-scope "$@"
+    exec "$gate_bun" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" /bin/bash "${BASH_SOURCE[0]}" --in-cpu-scope "$@"
   fi
   if user_manager; then
-    exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" "$@"
+    exec "$gate_bun" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" "$@"
   fi
-  exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --portable "$@"
+  exec "$gate_bun" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --portable "$@"
 }
-if pre_push_parent "$@"; then run "$@"; fi
+# Bind the bypass to the wrapper that took this branch. The marker can
+# cross exec and service handoff, but it cannot identify a descendant.
+unset LLV_GATE_HOOK_WRAPPER_IDENTITY
+if pre_push_parent "$@"; then
+  if [[ -r /proc/$BASHPID/stat ]] && IFS= read -r wrapper_stat < "/proc/$BASHPID/stat"; then
+    read -ra wrapper_fields <<< "${wrapper_stat##*) }"
+    export LLV_GATE_HOOK_WRAPPER_IDENTITY="$BASHPID:${wrapper_fields[19]}"
+  fi
+  run "$@"
+fi
 
 # Keep the ticket until a slot is locked and its admission is committed.
 # CPU waits precede the owned runner's execution deadline.
@@ -132,7 +153,7 @@ admission="$(dirname "${BASH_SOURCE[0]}")/cpu-admission.ts"
 # A nested command continues an already admitted job. The helper validates
 # the parent start identity and its kernel-held slot before reusing it.
 reuse_code=0
-"${LLV_GATE_BUN:-bun}" "$admission" --reuse-slot || reuse_code=$?
+"$gate_bun" "$admission" --reuse-slot || reuse_code=$?
 if [[ $reuse_code == 0 ]]; then run "$@"; fi
 if [[ $reuse_code != 75 ]]; then exit "$reuse_code"; fi
 # A top-level heavy command may run on the gate runner instead
@@ -147,7 +168,7 @@ if [[ ${LLV_GATE_RUNNER:-} != off && ${NODE_ENV:-} != test && -f $runner_client 
   runner_decision=$(mktemp "${TMPDIR:-/tmp}/gate-runner-decision.XXXXXXXX")
   # The client runs as a job so a TERM or INT sent to this shell reaches it:
   # it stops the remote run and confirms the stop before it exits.
-  LLV_GATE_RUNNER_DECISION=$runner_decision "${LLV_GATE_BUN:-bun}" "$runner_client" "$@" <&0 &
+  LLV_GATE_RUNNER_DECISION=$runner_decision "$gate_bun" "$runner_client" "$@" <&0 &
   runner_pid=$!
   trap 'kill -TERM "$runner_pid" 2>/dev/null || true' TERM
   trap 'kill -INT "$runner_pid" 2>/dev/null || true' INT
@@ -183,7 +204,7 @@ end_cpu_wait() {
 }
 if [[ -n ${LLV_CPU_WAIT_ROOTS:-} && ${LLV_CPU_WAIT_ROOTS:-} != '[]' ]]; then
   wait_dir=$(mktemp -d "${TMPDIR:-/tmp}/delegatus-cpu-wait.XXXXXXXX")
-  "${LLV_GATE_BUN:-bun}" "$admission" --watch-wait "$wait_dir" "$owner_pid" &
+  "$gate_bun" "$admission" --watch-wait "$wait_dir" "$owner_pid" &
   wait_pid=$!
   trap end_cpu_wait EXIT
   trap 'end_cpu_wait; exit 130' INT TERM
@@ -195,24 +216,94 @@ fi
 # Propagate helper failures; only a lost slot race retries.
 claim() {
   local code=0
-  "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid" || code=$?
+  "$gate_bun" "$admission" --claim "$queue_key" "$owner_pid" "$@" || code=$?
   if [[ $code != 0 && $code != 75 ]]; then exit "$code"; fi
   return "$code"
 }
-queue_key="command:$$:$RANDOM:$RANDOM"
-queued_at=$(date +%s)
+try_lock() {
+  local code=0
+  if command -v flock >/dev/null; then flock -n "$1" || code=$?
+  else "$gate_bun" "$admission" --lock-fd "$1" || code=$?; fi
+  if [[ $code != 0 && $code != 1 ]]; then exit "$code"; fi
+  return "$code"
+}
+# Linux flock can hold an exclusive lock on a read-only descriptor. Open the
+# same inode from the host and the Viewer's read-only bind. Only a writable
+# caller can provision a missing file, and a concurrent creator wins.
+shared_lock_file() {
+  [[ -f $1 ]] ||
+    { [[ ! -e $1 && ! -L $1 ]] && (set -o noclobber; : >"$1"); } ||
+    [[ -f $1 ]]
+}
+# Keep the claim across the owned runner's execution and cleanup, even where
+# exec cannot preserve the shell's native PID. The runner inherits the Unix
+# lock descriptors for its own lifetime and for nested-slot proof.
+run_claimed() {
+  local runner="" signal="" result
+  trap 'signal=TERM; if [[ -n $runner ]]; then kill -TERM "$runner" 2>/dev/null || true; fi' TERM
+  trap 'signal=INT; if [[ -n $runner ]]; then kill -INT "$runner" 2>/dev/null || true; fi' INT
+  end_cpu_wait
+  run "$@" <&0 &
+  runner=$!
+  if [[ -n $signal ]]; then kill -s "$signal" "$runner" 2>/dev/null || true; fi
+  while :; do
+    result=0; wait "$runner" || result=$?
+    kill -0 "$runner" 2>/dev/null || break
+  done
+  runner=""
+  "$gate_bun" "$admission" --release-slot "$queue_key" "$owner_pid" || {
+    echo "gate-slot: could not release the completed command's slot" >&2
+    if [[ $result == 0 ]]; then result=1; fi
+  }
+  exit "$result"
+}
+queue_key="command:bounded:drained:$$:$RANDOM:$RANDOM"
+slot_search=$slots
+# Prepared types reserve the first shared slot across the headroom check
+# and the whole plan. Two cold container publishers cannot both spend the
+# same memory sample while their compilers are still starting.
+if [[ -n ${LLV_GATE_PUBLICATION_MEMORY_BYTES:-} ]]; then slot_search=1; fi
 while :; do
-  "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid" "$queued_at"
-  if ! command -v flock >/dev/null; then
-    if claim; then end_cpu_wait; run "$@"; fi
+  "$gate_bun" "$admission" --wait "$queue_key" "$owner_pid"
+  if [[ $OSTYPE == msys || $OSTYPE == cygwin ]]; then
+    # Native Windows uses the shared queue's atomic claim and the native
+    # wrapper PID as its slot proof.
+    if claim portable; then run_claimed "$@"; fi
   else
-    for ((i=1; i<=slots; i++)); do
-      exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
-      if flock -n 9; then
-        if claim; then end_cpu_wait; run "$@"; fi
+    # Serialize current final claims. The cap lock identifies this particular
+    # slot's protocol and stays held alongside fd 9 for the runner's lifetime.
+    claim_file="$lock_dir/llv-heavy-gate.claim.lock"
+    if ! { shared_lock_file "$claim_file" && exec 8<"$claim_file"; } 2>/dev/null; then
+      echo "gate-slot: cannot open the shared claim lock; provision it in the writable host lock directory" >&2
+      exit 69
+    fi
+    if try_lock 8; then
+      usable=false
+      for ((i=1; i<=slot_search; i++)); do
+        slot_file="$lock_dir/llv-heavy-gate.slot$i.lock"
+        cap_file="$lock_dir/llv-heavy-gate.slot$i.cap$slots.lock"
+        if ! { shared_lock_file "$slot_file" && exec 9<"$slot_file"; } 2>/dev/null; then continue; fi
+        if ! { shared_lock_file "$cap_file" && exec 7<"$cap_file"; } 2>/dev/null; then
+          exec 9<&-
+          continue
+        fi
+        usable=true
+        if try_lock 9; then
+          if try_lock 7 && claim "$i"; then
+            exec 8<&-
+            run_claimed "$@"
+          fi
+          break
+        fi
+        exec 9<&- 7<&-
+      done
+      exec 9<&- 7<&-
+      if [[ $usable == false ]]; then
+        echo "gate-slot: cannot open a shared slot and cap lock pair for LLV_GATE_SLOTS=$slots; provision the pair in the writable host lock directory" >&2
+        exit 69
       fi
-      exec 9>&-
-    done
+    fi
+    exec 8<&-
   fi
   sleep "$poll"
 done

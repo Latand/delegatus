@@ -129,6 +129,22 @@ function keptReading(key: string): SeatTickSettingsAnswer | null {
   return Date.parse(summary.at) >= Date.parse(kept.at) ? null : kept;
 }
 
+/**
+ * The closed switch's reading as the seat answer carried it, so the card's first
+ * frame shows the stored schedule instead of waiting for its own request.
+ *
+ * It fills a key that holds no reading yet and nothing else: a reading this tab
+ * already has came from the settings route itself or from a write, and the
+ * hook's own read stays the one that refreshes it. A body that is not a summary
+ * answer is ignored, and the control then shows its placeholder as before.
+ */
+export function seedSeatTickSettings(project: string, answer: unknown): void {
+  const key = `${project}:summary`;
+  if (readings.has(key) || !isAnswer(answer) || answer.view !== "summary") return;
+  readings.set(key, answer);
+  while (readings.size > 64) readings.delete(readings.keys().next().value!);
+}
+
 const SETTINGS_URL = "/api/monitor/seat-tick/settings";
 
 async function readError(response: Response): Promise<string | null> {

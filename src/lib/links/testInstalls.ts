@@ -22,10 +22,27 @@ export function createLinkTestInstalls() {
     fs.writeFileSync(path.join(state, "project-remotes.json"), JSON.stringify({ schemaVersion: 1, remotes: { [key]: remote, ...extraRemotes } }));
     // Each install scans only its own homes, never the operator's transcripts.
     const home = path.join(state, "home");
+    const claudeHome = path.join(home, ".claude");
+    const codexHome = path.join(home, ".codex");
     fs.mkdirSync(path.join(state, "tmp"), { recursive: true });
     const preferredPort = installPorts.get(name);
-    const child = spawn(process.execPath, ["src/lib/links/testServer.ts", state, ...(preferredPort ? [`--port=${preferredPort}`] : [])], { cwd: source, env: { ...process.env, LLV_STATE_DIR: state, XDG_CONFIG_HOME: path.join(state, "config"),
-      HOME: home, TMPDIR: path.join(state, "tmp"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_CLAUDE_HOME: path.join(home, ".claude"), LLV_CODEX_HOME: path.join(home, ".codex") } });
+    const child = spawn(process.execPath, ["src/lib/links/testServer.ts", state, ...(preferredPort ? [`--port=${preferredPort}`] : [])], {
+      cwd: source,
+      env: {
+        ...process.env,
+        HOME: home,
+        XDG_CONFIG_HOME: path.join(state, "config"),
+        TMPDIR: path.join(state, "tmp"),
+        LLV_STATE_DIR: state,
+        LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
+        // The test preload sets the public aliases, and they take precedence
+        // when the child imports the environment normalizer.
+        DELEGATUS_CLAUDE_HOME: claudeHome,
+        DELEGATUS_CODEX_HOME: codexHome,
+        LLV_CLAUDE_HOME: claudeHome,
+        LLV_CODEX_HOME: codexHome,
+      },
+    });
     children.add(child);
     child.once("exit", () => children.delete(child));
     const port = await new Promise<number>((resolve, reject) => {

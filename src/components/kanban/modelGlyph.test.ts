@@ -7,6 +7,8 @@ import { GLYPH_STATE, GLYPH_TURN_MS, glyphTier, modelGlyphKind, modelGlyphName }
 test("every catalogued Claude and Codex model has its glyph, by family", () => {
   expect(ENGINE_MODELS.claude.map((option) => modelGlyphKind("claude", option.id))).toEqual(["opus", "fable", "fable", "fable", "sonnet", "sonnet", "haiku", "haiku", "haiku"]);
   expect(ENGINE_MODELS.codex.map((option) => [option.id, modelGlyphKind("codex", option.id)])).toEqual([
+    ["gpt-6.2-sol", "sol"],
+    ["gpt-6.2-astra", "astra"],
     ["gpt-6-astra", "astra"],
     ["gpt-6.1-sol", "sol"],
     ["gpt-6.1-terra", "terra"],
@@ -72,4 +74,29 @@ test("only an applied priority or ultrafast tier speeds a Codex glyph up; anythi
   /* Claude has no tier: a stray value on its entry changes nothing. */
   expect(glyphTier("claude", "ultrafast")).toBe("ordinary");
   expect(glyphTier("copilot", "priority")).toBe("ordinary");
+});
+
+test("GPT-6.2 models retain their family glyph and catalogue label", () => {
+  expect(modelGlyphKind("codex", "gpt-6.2-sol")).toBe("sol");
+  expect(modelGlyphKind("codex", "gpt-6.2-astra")).toBe("astra");
+  expect(modelGlyphName("codex", "gpt-6.2-sol")).toBe("GPT-6.2-Sol");
+  expect(modelGlyphName("codex", "gpt-6.2-astra")).toBe("GPT-6.2-Astra");
+});
+
+test("Antigravity Gemini Neon models draw the neon glyph; other Antigravity models keep the fallback dot", () => {
+  expect(modelGlyphKind("antigravity", "gemini-4-neon")).toBe("neon");
+  expect(modelGlyphKind("antigravity", "gemini-4-neon-xhigh")).toBe("neon");
+  expect(modelGlyphKind("antigravity", "gemini-pro-orchestrator-neon")).toBe("neon");
+  expect(modelGlyphKind("antigravity", "Gemini-4.5-Neon")).toBe("neon");
+
+  for (const id of ["gemini-4-argon", "gemini-4-hydrogen", "gemini-3.8-flash", "claude-opus-5-5", "gpt-oss-120b-medium", "gemini-pro-orchestrator-g1-pro", "gemini-4-neonic", ""]) {
+    expect(modelGlyphKind("antigravity", id)).toBeNull();
+  }
+  expect(modelGlyphKind("codex", "gemini-4-neon")).toBeNull();
+  expect(modelGlyphKind("claude", "gemini-4-neon")).toBeNull();
+  expect(modelGlyphKind("copilot", "gemini-4-neon")).toBeNull();
+
+  expect(modelGlyphName("antigravity", "gemini-4-neon")).toBe("Gemini 4 Neon");
+  expect(modelGlyphName("antigravity", "gemini-pro-orchestrator-neon")).toBe("Orchestrator (Neon)");
+  expect(glyphTier("antigravity", "ultrafast")).toBe("ordinary");
 });

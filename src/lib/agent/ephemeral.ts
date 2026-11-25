@@ -1,3 +1,4 @@
+import { collectProviderOpen, type ProviderOpen } from "@/lib/externalRelay/providerOpens";
 import fs from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -46,6 +47,7 @@ export type EphemeralAgentRequest = {
   hardCapMs: number;
   /** The engine's own native web search, the one tool a relay answer may use (relay.md §B.6). */
   webSearch?: boolean;
+  authorizeLaunch?(): void;
   inputImages?: readonly string[];
   inputFile?: string;
   imageGeneration?: { readableRoot: string; readableMediaRoot?: string };
@@ -54,6 +56,7 @@ export type EphemeralAgentRequest = {
   runtime?: HeadlessReviewRuntime & { timeoutMs?: number };
 };
 export type EphemeralAgentResult = {
+  providerOpens?: ProviderOpen[];
   diagnostic?: OwnerTurnDiagnostic;
   threadId?: string | null;
   imageHome?: string;
@@ -288,7 +291,7 @@ export function buildEphemeralCommand(
     "-c",
     "cli_auth_credentials_store=file",
     "-c",
-    `web_search=${request.webSearch ? "live" : "disabled"}`,
+    `web_search=${request.webSearch ? "cached" : "disabled"}`,
     "-c",
     "project_doc_max_bytes=0",
     "-c",
@@ -356,6 +359,8 @@ export async function runEphemeralAgent(
   let cancelled = false;
   let violation = false;
   let sawClaudeInit = false;
+  const providerOpens: ProviderOpen[] = [];
+  let providerOpened = false;
   let sessionId: string | null = null;
   let compacted = false;
   let promptTokens: number | null = null;
@@ -407,7 +412,8 @@ export async function runEphemeralAgent(
         /* mapper ignores malformed lines */
       }
       for (const event of mapAgentLine(request.engine, line, { webSearch: request.webSearch === true, session: !!request.session, imageGeneration: request.imageGeneration !== undefined })) {
-        request.onEvent?.(event);
+        if (event.type === "provider_open") { collectProviderOpen(providerOpens, event.open); if (!event.open.search) providerOpened = true; }
+        if (event.type !== "note" || !providerOpened) request.onEvent?.(event);
         if (event.type === "violation") {
           violation = true;
           cancel();
@@ -466,6 +472,7 @@ export async function runEphemeralAgent(
                 ? "done"
                 : "failed";
       finish({
+        providerOpens,
         ...(request.imageGeneration && request.engine === "codex" ? { threadId: sessionId, imageHome: built.env.CODEX_HOME } : {}),
         ...(request.session ? { sessionId, promptTokens, compacted } : {}),
         status,
@@ -476,11 +483,15 @@ export async function runEphemeralAgent(
       });
     },
   });
+  const launchAuthorized = () => {
+    request.authorizeLaunch?.();
+    return launch();
+  };
   let launched: ReturnType<typeof launchDetached>;
   try {
     if (request.engine === "codex") {
       const { waitForCodexProcess, withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
-      launched = await withCodexCliLaunch(request.runtime?.command ?? built.command, async () => launch(), async result => {
+      launched = await withCodexCliLaunch(request.runtime?.command ?? built.command, async () => launchAuthorized(), async result => {
         if (!result?.pid) return;
         try { await waitForCodexProcess(result.handle); }
         catch (error) {
@@ -489,7 +500,7 @@ export async function runEphemeralAgent(
           throw error;
         }
       });
-    } else launched = launch();
+    } else launched = launchAuthorized();
   } catch (error) {
     clearInterval(ticker);
     finish({ status: "failed", answer: null, durationMs: 0, code: null, signal: null });

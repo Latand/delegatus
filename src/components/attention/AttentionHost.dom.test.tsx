@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 
 import { viewBus, type ViewSlice } from "@/hooks/viewPresenceBus";
+import * as audioApp from "@/lib/audio/app";
+import type { CueRequest } from "@/lib/audio/cues";
 import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { answerAttentionRequest, attentionForDevice, attentionRecordsForSurface, raiseAttentionRequest } from "@/lib/attention/service";
 import { mutateAttention, readAttentionFile } from "@/lib/attention/store";
@@ -36,6 +38,12 @@ import type { FocusObservation } from "./navigate";
  * acceptance that moved nothing. A test that mocked the record would have passed
  * against the broken build.
  */
+
+/* The notification an agent's request rings, seen as the cue it asks for. */
+const rung: CueRequest[] = [];
+const realAudio = { ...audioApp };
+mock.module("@/lib/audio/app", () => ({ ...realAudio, playCue: (request: CueRequest) => { rung.push(request); return "played"; } }));
+afterAll(() => { mock.module("@/lib/audio/app", () => realAudio); });
 
 const dom = new Window({ url: "http://localhost/" });
 const G = globalThis as Record<string, unknown>;
@@ -77,6 +85,7 @@ beforeEach(() => {
   roots = [];
   visibility = "visible";
   unreachable = new Set<string>();
+  rung.length = 0;
   /* The return-project memory lives here and is keyed by request id, which the
      tests reuse; a leak between them would hide the case where it is empty. */
   dom.localStorage.clear();
@@ -1368,4 +1377,244 @@ test("the phone board draws a lane the server just admitted, and still answers n
   await poll();
   expect(seen.at(-1)).toEqual([]);
   resetFilesClientCacheForTests();
+});
+
+/* ── The project boundary: an agent's request moves the operator only inside
+   the project they are in ─────────────────────────────────────────────────── */
+
+const inProject = (project: string | null) => viewBus.reportContext({ project, board: { renderedRevision: null, durableRevision: null, sync: "unavailable" } });
+
+/** A request no view could move when it was raised, found later by a poll. */
+function raiseNotice(id = "attention_1") {
+  return raiseAttentionRequest({
+    origin: "root-agent",
+    target: { kind: "conversation", path: ANCHOR },
+    frameAtCreation: { project: "demo", rect: RAISED_RECT, boardRevision: 4 },
+    intent: "show",
+    reason: "The reviewer finished with request-changes.",
+    offeredTo: [],
+    delivery: "notice",
+  }, { now, id }).request;
+}
+
+/** What the operator is in the middle of: a draft with the caret inside it. */
+function typing() {
+  const draft = dom.document.createElement("textarea");
+  dom.document.body.appendChild(draft);
+  draft.value = "half a sentence being dictated";
+  draft.focus();
+  draft.setSelectionRange(5, 5);
+  return draft;
+}
+
+const ringsFor = (id: string) => rung.filter((request) => request.eventId === `attention:${id}`);
+
+test("a directed request for a project the operator has since left moves nothing: draft, caret and view stay, and the notification names the card", async () => {
+  inProject("other-project");
+  raiseDirected();
+  const draft = typing();
+  const { bus, log, opened, placed } = board({ [ANCHOR]: LIVE_RECT });
+  mount(bus);
+  await settle();
+
+  expect(log.moved).toEqual([]);
+  expect(opened).toEqual([]);
+  expect(placed).toEqual([]);
+  expect(draft.value).toBe("half a sentence being dictated");
+  expect(dom.document.activeElement).toBe(draft);
+  expect(draft.selectionStart).toBe(5);
+  expect(viewBus.getSlice().focusedPath).toBe("/tmp/what-i-was-reading.jsonl");
+  expect(one("[data-testid='focus-return-chip']")).toBeNull();
+
+  /* The record is the notice a cross-project request is: no device directed. */
+  expect(record()).toMatchObject({ state: "pending", delivery: "notice", offeredTo: [], returnPoints: [] });
+  expect(record().acknowledgedBy).toBeUndefined();
+  expect(readHandoffClaim(tabClaims, "attention_1")).toBeNull();
+
+  /* The existing notification, once, and a click on it goes to the card. */
+  const rings = ringsFor("attention_1");
+  expect(rings.length).toBeGreaterThan(0);
+  expect(new Set(rings.map((request) => request.cue))).toEqual(new Set(["your-move"]));
+  expect(rings[0]!.caption).toMatchObject({ what: "attention", target: { kind: "conversation", path: ANCHOR } });
+
+  /* However many heartbeats follow, nothing ever moves it. */
+  for (let i = 0; i < 5; i += 1) await poll();
+  expect(log.moved).toEqual([]);
+  expect(record().state).toBe("pending");
+});
+
+test("a request for the project the operator is in still moves them, and rings no notification", async () => {
+  inProject("demo");
+  raiseDirected();
+  const { bus, log } = board({ [ANCHOR]: LIVE_RECT });
+  mount(bus);
+  await settle();
+
+  expect(log.moved).toEqual([LIVE_RECT]);
+  expect(record().state).toBe("following");
+  expect(rung.every((request) => (request.caption as { target: unknown } | undefined)?.target === null)).toBe(true);
+});
+
+test("a key that moved is the same project: an alias on the view's side or the request's side still moves", async () => {
+  inProject("demo-old");
+  raiseDirected();
+  const first = board({ [ANCHOR]: LIVE_RECT });
+  mount(first.bus, { projectAliases: { "demo-old": "demo" } });
+  await settle();
+  expect(first.log.moved).toEqual([LIVE_RECT]);
+  expect(record().state).toBe("following");
+});
+
+test("an alias that points both keys at one project moves the view", async () => {
+  inProject("demo-new");
+  raiseDirected();
+  const { bus, log } = board({ [ANCHOR]: LIVE_RECT });
+  mount(bus, { projectAliases: { demo: "demo-new" } });
+  await settle();
+  expect(log.moved).toEqual([LIVE_RECT]);
+  expect(record().state).toBe("following");
+});
+
+test("a notice found by a poll while the operator is in another project is rung and never offered, accepted or moved", async () => {
+  inProject("other-project");
+  raiseNotice();
+  const draft = typing();
+  const { bus, log } = board({ [ANCHOR]: LIVE_RECT });
+  mount(bus);
+  await settle();
+  for (let i = 0; i < 4; i += 1) await poll();
+
+  expect(log.moved).toEqual([]);
+  expect(record()).toMatchObject({ state: "pending", offeredTo: [] });
+  expect(draft.value).toBe("half a sentence being dictated");
+  expect(dom.document.activeElement).toBe(draft);
+  const rings = ringsFor("attention_1");
+  expect(rings.length).toBeGreaterThan(0);
+  expect(rings.every((request) => (request.caption as { target: { kind: string } }).target.kind === "conversation")).toBe(true);
+});
+
+test("a notice found by a poll while the operator is in its project is followed, as today", async () => {
+  inProject("demo");
+  raiseNotice();
+  const { bus, log } = board({ [ANCHOR]: LIVE_RECT });
+  mount(bus);
+  await settle();
+  await poll();
+  await poll();
+
+  expect(log.moved).toEqual([LIVE_RECT]);
+  expect(record().state).toBe("following");
+});
+
+test("a view with no project open is never taken by a notice nobody directed at it", async () => {
+  inProject(null);
+  raiseNotice();
+  const { bus, log } = board({ [ANCHOR]: LIVE_RECT });
+  mount(bus);
+  await settle();
+  await poll();
+
+  expect(log.moved).toEqual([]);
+  expect(record().state).toBe("pending");
+});
+
+test("a request offered while the operator was in its project, found after they left it, is not accepted", async () => {
+  raiseNotice();
+  answerAttentionRequest("attention_1", { kind: "offer", deviceId: DEVICE }, { now });
+  inProject("other-project");
+  const { bus, log } = board({ [ANCHOR]: LIVE_RECT });
+  mount(bus);
+  await settle();
+
+  expect(log.moved).toEqual([]);
+  expect(record().state).toBe("offered");
+  expect(ringsFor("attention_1").length).toBeGreaterThan(0);
+});
+
+test("the operator's own command moves them wherever they are", async () => {
+  inProject("other-project");
+  raiseAttentionRequest({
+    origin: "operator",
+    target: { kind: "conversation", path: ANCHOR },
+    frameAtCreation: { project: "demo", rect: RAISED_RECT, boardRevision: 4 },
+    intent: "show",
+    reason: "Show me the reviewer.",
+    offeredTo: [DEVICE],
+  }, { now, id: "attention_1" });
+  const { bus, log } = board({ [ANCHOR]: LIVE_RECT });
+  mount(bus);
+  await settle();
+
+  expect(log.moved).toEqual([LIVE_RECT]);
+  expect(record().state).toBe("following");
+});
+
+/** The transport, with a hook that runs when an event of one kind is POSTed. */
+function transportOn(kind: string, before: (attempt: number) => "fail" | void) {
+  const inner = transport();
+  let attempt = 0;
+  return (async (url: string, init?: { body?: string }) => {
+    if (init?.body && (JSON.parse(init.body) as { kind: string }).kind === kind) {
+      attempt += 1;
+      if (before(attempt) === "fail") throw new TypeError("network down");
+    }
+    return inner(url as never, init as never);
+  }) as unknown as typeof fetch;
+}
+
+test("the operator switches project while the accept is in flight: the view does not move, and the record goes back to a notice", async () => {
+  inProject("demo");
+  raiseNotice();
+  answerAttentionRequest("attention_1", { kind: "offer", deviceId: DEVICE }, { now });
+  const draft = typing();
+  const { bus, log } = board({ [ANCHOR]: LIVE_RECT });
+  mount(bus, { fetchFn: transportOn("accept", () => { inProject("other-project"); }) });
+  await settle();
+  for (let i = 0; i < 3; i += 1) await poll();
+
+  expect(log.moved).toEqual([]);
+  expect(record()).toMatchObject({ state: "pending", delivery: "notice", returnPoints: [] });
+  expect(readHandoffClaim(tabClaims, "attention_1")).toBeNull();
+  expect(draft.value).toBe("half a sentence being dictated");
+  expect(dom.document.activeElement).toBe(draft);
+  expect(one("[data-testid='focus-return-chip']")).toBeNull();
+  expect(ringsFor("attention_1").length).toBeGreaterThan(0);
+});
+
+test("a stand-down the network swallowed is retried on the next poll, and the call is not left to expire as lost", async () => {
+  inProject("other-project");
+  raiseDirected();
+  const { bus, log } = board({ [ANCHOR]: LIVE_RECT });
+  mount(bus, { fetchFn: transportOn("stand-down", (attempt) => (attempt === 1 ? "fail" : undefined)) });
+  await settle();
+
+  /* The first stand-down never reached the record. */
+  expect(record()).toMatchObject({ state: "accepted", acknowledgedBy: DEVICE });
+
+  await poll();
+  expect(log.moved).toEqual([]);
+  expect(record()).toMatchObject({ state: "pending", delivery: "notice", offeredTo: [], returnPoints: [] });
+  expect(record().acknowledgedBy).toBeUndefined();
+});
+
+test("a stand-down the server refused is not retried", async () => {
+  inProject("other-project");
+  raiseDirected();
+  let attempts = 0;
+  const inner = transport();
+  const refusing = (async (url: string, init?: { body?: string }) => {
+    if (init?.body && (JSON.parse(init.body) as { kind: string }).kind === "stand-down") {
+      attempts += 1;
+      return { ok: false, status: 409, json: async () => ({ error: "ILLEGAL_TRANSITION", state: "accepted" }) };
+    }
+    return inner(url as never, init as never);
+  }) as unknown as typeof fetch;
+  const { bus, log } = board({ [ANCHOR]: LIVE_RECT });
+  mount(bus, { fetchFn: refusing });
+  await settle();
+  await poll();
+  await poll();
+
+  expect(attempts).toBe(1);
+  expect(log.moved).toEqual([]);
 });

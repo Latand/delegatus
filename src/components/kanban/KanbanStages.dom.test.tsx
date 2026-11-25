@@ -1240,6 +1240,43 @@ test.each(["running", "passed", "failed", "needs_decision"] as const)("desktop s
   expect(reader!.closest('[data-stages-sheet]')).toBeNull();
 });
 
+test("a cloud stage's pane opens its stored cloud task through the conversation control's place, a local stage keeps its button", async () => {
+  const taskUrl = "https://example.com/cloud/tasks/task_abc123";
+  const cloudOf = (cloud: Record<string, unknown>) => {
+    const p = searchPipeline();
+    const run = p.runs.find((entry) => entry.stageId === "verify")!;
+    run.attempts = [{ ...run.attempts.at(-1)!, n: 1, conversationId: null, agentPath: null, definition: { runtime: "codex-cloud" }, cloud } as unknown as typeof run.attempts[number]];
+    return p;
+  };
+  const cleanup = () => {
+    for (const root of roots.splice(0)) flushSync(() => root.unmount());
+    document.body.replaceChildren();
+    localStorage.clear();
+  };
+  const openPane = async (p: Pipeline) => {
+    const { host } = mount(p);
+    await tick();
+    click(card(host).querySelector("[data-open-stages]"));
+    await tick();
+    return pane(host, "verify")!;
+  };
+  const withUrl = await openPane(cloudOf({ phase: "completed", taskId: "task_abc123", taskUrl }));
+  const link = withUrl.querySelector<HTMLAnchorElement>('[data-open-cloud="verify"]');
+  expect(link?.getAttribute("href")).toBe(taskUrl);
+  expect(link?.getAttribute("target")).toBe("_blank");
+  expect(link?.getAttribute("rel")).toBe("noopener noreferrer");
+  expect(link?.textContent).toBe("Open cloud task");
+  expect(withUrl.querySelector('[data-open-conversation="verify"]')).toBeNull();
+  cleanup();
+  const without = await openPane(cloudOf({ phase: "submitting", taskId: null, taskUrl: null, submissionUnresolved: true }));
+  expect(without.querySelector("[data-open-cloud]")).toBeNull();
+  expect(without.querySelector("[data-open-conversation]")).toBeNull();
+  cleanup();
+  const local = await openPane(searchPipeline());
+  expect(local.querySelector('[data-open-conversation="verify"]')?.textContent).toBe("Open agent");
+  expect(local.querySelector("[data-open-cloud]")).toBeNull();
+});
+
 test("stage memory follows the displayed attempt and stays absent for legacy attempts", async () => {
   const pipeline = searchPipeline();
   const attempts = pipeline.runs.find(run => run.stageId === "verify")!.attempts;

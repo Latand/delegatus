@@ -100,7 +100,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     .filter(row => accountCreditGuardBlock("codex", row.accountId, row.limits)).map(row => row.accountId));
   const stops = await Promise.allSettled([...hosts.map(async item => {
     if (item.key.engine !== "codex" || blockedAccounts.size === 0) return;
-    const entry = registry.readOnlySnapshot().entries[sessionKeyId(item.key)];
+    const entry = registry.hostEntry(item.key);
     if (!entry?.artifactPath) return;
     const conversation = registry.conversationForPath(entry.artifactPath);
     const generation = conversation?.generations.at(-1);
@@ -186,7 +186,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     }
     // The stop may have failed after writing its cut. Never create a successor
     // while the source still has a registered or recorded resident host.
-    const entry = registry.readOnlySnapshot().entries[obligation.hostKey];
+    const entry = registry.hostEntry(obligation.hostKey);
     if (entry && entry.status !== "dead" && entry.status !== "unhosted") continue;
     const project = owner?.pipeline.project ?? conversationProjectKey(conversation.projectOwnership, generation.launchProfile);
     const resolve = accountManager.resolveProjectSpawn.bind(accountManager);

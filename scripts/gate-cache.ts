@@ -3,10 +3,23 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { systemBootEpoch } from "../src/lib/processIdentity";
+import { withoutGateAdmissionLauncher } from "../src/lib/runtime/gateAdmissionLauncher";
+import { gateToolingFiles } from "./gate-tooling";
 
 export const fingerprint = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export function fileFingerprint(file: string): string {
   return existsSync(file) && statSync(file).isFile() ? createHash("sha256").update(readFileSync(file)).digest("hex") : "missing";
+}
+
+/** The Bash wrappers read this file before launching the gate or comparator.
+ * Bind the file behind startup effects such as umask and resource limits. */
+export function shellStartupFingerprint(root: string, startup: string | undefined): string | null {
+  if (!startup) return null;
+  const file = realpathSync(path.resolve(root, startup));
+  const stat = statSync(file);
+  const bytes = fileFingerprint(file);
+  if (!stat.isFile() || bytes === "missing") throw new Error("BASH_ENV is not a readable file");
+  return fingerprint([startup, file, stat.dev, stat.ino, bytes]);
 }
 /** Include installed bytes: a lockfile alone cannot detect an edited compiler
  * or plugin. Bounded traversal follows package links, including an external
@@ -64,7 +77,8 @@ export function cacheDirectory(root: string, family: string): string {
  */
 export function gateToolFiles(root: string): string[] {
   const ts = new Bun.Transpiler({ loader: "ts" }), tsx = new Bun.Transpiler({ loader: "tsx" });
-  const pending = ["scripts/local-gate.ts", "scripts/local-gate-tests.ts", "scripts/owned-runner.ts", "scripts/cpu-admission.ts", "scripts/test-child-guardian.ts", "scripts/test-child-ownership.preload.ts", "test-preload.ts"];
+  const pending = ["scripts/local-gate.ts", "scripts/local-gate-tests.ts", "scripts/test-child-ownership.preload.ts", "test-preload.ts",
+    ...gateToolingFiles.map(name => `scripts/${name}`)];
   const seen = new Set<string>();
   while (pending.length) {
     const relative = pending.pop()!;
@@ -82,12 +96,12 @@ export function gateToolFiles(root: string): string[] {
       if (resolved) pending.push(path.relative(root, resolved));
     }
   }
-  return [...seen, "scripts/gate-slot.sh", "bunfig.toml", "tsconfig.json"].sort();
+  return [...seen, "bunfig.toml", "tsconfig.json"].sort();
 }
 
 /** Isolation replaces these before a check reads them, or they only record
  * how this process was started. */
-const ROOTS = new Set(["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "TMPDIR", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR",
+const ROOTS = new Set(["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "TMPDIR", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR",
   "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "NODE_ENV", "LLV_VIEWER_CONTROL_URL"]);
 const BOOKKEEPING = new Set(["PWD", "OLDPWD", "SHLVL", "_", "INVOCATION_ID", "JOURNAL_STREAM", "SYSTEMD_EXEC_PID", "MANAGERPID",
   "TERM", "COLORTERM", "PAGER", "GIT_PAGER", "GH_PAGER", "NO_COLOR", "FORCE_COLOR"]);
@@ -99,7 +113,7 @@ const KEYED = /^(?:PATH|LANG|LANGUAGE|LC_[A-Z]+|TZ|USER|LOGNAME|SHELL|NODE_OPTIO
 const IDENTITY = /^GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)$/;
 /** Admission, placement and the signal boundary decide where and when a check
  * runs, never what it checks. The boundary's host epoch is keyed instead. */
-const TRANSPORT = /^(?:LLV_SIGNAL_SANDBOX|LLV_(?:GATE|CPU|OWNED)_[A-Z0-9_]+|(?:LLV|DELEGATUS)_(?:AGENT_CPU|CPU_PRESSURE[A-Z0-9_]*|WORK_(?:SCOPE_)?CPU_QUOTA)|LLV_DOCKER_NSENTER_SHIMS|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
+const TRANSPORT = /^(?:LLV_SIGNAL_SANDBOX|LLV_CHECK_(?:BROKER|ADMISSION_FILE)|LLV_(?:GATE|CPU|OWNED)_[A-Z0-9_]+|DELEGATUS_(?:GATE_CPU_HEADROOM|CHECK_(?:ADMISSION_OWNER|BROKER))|(?:LLV|DELEGATUS)_(?:AGENT_CPU|CPU_PRESSURE[A-Z0-9_]*|WORK_(?:SCOPE_)?CPU_QUOTA)|LLV_DOCKER_NSENTER_SHIMS|DBUS_SESSION_BUS_ADDRESS|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
 const declaredInputs = (env: Partial<NodeJS.ProcessEnv>) => new Set((env.LLV_GATE_CHECK_ENV ?? "").split(",").map(name => name.trim()).filter(Boolean));
 
 /** One environment for every reusable check, whoever starts the hook: a stage
@@ -124,7 +138,9 @@ export function checkEnvironment(env: Partial<NodeJS.ProcessEnv>): NodeJS.Proces
 
 /** Portable check inputs, including declared absences. Placement and private
  * roots are supplied by each executor; PATH selects that executor's tools. */
-export function checkInputEnvironment(env: Partial<NodeJS.ProcessEnv>): Record<string, string | null> {
+export function checkInputEnvironment(source: Partial<NodeJS.ProcessEnv>): Record<string, string | null> {
+  // The installed admission launcher stands for the interpreter it recorded.
+  const env = withoutGateAdmissionLauncher(source);
   const declared = declaredInputs(env);
   const names = new Set([...Object.keys(env).filter(name => KEYED.test(name) && name !== "PATH"), ...declared]);
   return Object.fromEntries([...names].sort().map(name => [name, Object.hasOwn(env, name) ? env[name] ?? null : null]));
@@ -146,12 +162,19 @@ export function hostEpoch(env: Partial<NodeJS.ProcessEnv>): string {
 /** Key everything that reaches a check from `env`, which is either a
  * checkEnvironment result or a test comparison's own inherited environment:
  * values for inputs, presence for a commit identity, the host epoch for the
- * signal boundary and the bytes of explicit Git configuration files.
+ * signal boundary and the bytes of explicit Git configuration files. An
+ * explicit declaration also binds inputs that normally serve as transport.
  */
-export function environmentFingerprint(env: Partial<NodeJS.ProcessEnv>): string {
-  const inputs = Object.entries(env).filter(([name, value]) => value !== undefined && !ROOTS.has(name) && !BOOKKEEPING.has(name)
-    && !IDENTITY.test(name) && (KEYED.test(name) || !TRANSPORT.test(name))
-    && !/^(?:GIT_CONFIG(?:_COUNT|_PARAMETERS)?|GIT_CONFIG_(?:KEY|VALUE)_\d+|LLV_PRIVACY_[A-Z0-9_]+)$/.test(name))
+export function environmentFingerprint(source: Partial<NodeJS.ProcessEnv>): string {
+  // A routed LLV_GATE_BUN names a per-release launcher. Key what it runs.
+  const env = withoutGateAdmissionLauncher(source);
+  const declared = declaredInputs(env);
+  const inputs = Object.entries(env).filter(([name, value]) => {
+    if (value === undefined || ROOTS.has(name) || name === "LLV_SIGNAL_SANDBOX" || name.startsWith("LLV_GATE_PUBLICATION_")
+      || /^(?:GIT_CONFIG(?:_COUNT|_PARAMETERS)?|GIT_CONFIG_(?:KEY|VALUE)_\d+)$/.test(name)) return false;
+    return declared.has(name) || (!BOOKKEEPING.has(name) && !IDENTITY.test(name) && !/^LLV_PRIVACY_[A-Z0-9_]+$/.test(name)
+      && (KEYED.test(name) || !TRANSPORT.test(name)));
+  })
     .map(([name, value]) => [name, name === "PATH" ? checkEnvironment({ PATH: value, LLV_AGENT_FORGE_DIR: env.LLV_AGENT_FORGE_DIR }).PATH : value])
     .filter(([name]) => name !== "LLV_AGENT_FORGE_DIR")
     .sort(([a], [b]) => a!.localeCompare(b!));

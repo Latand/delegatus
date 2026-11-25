@@ -280,6 +280,10 @@ function harness(options: {
         if (options.registry) {
           const registry = options.registry;
           return {
+            incomingDeliveryHealth: registry.incomingDeliveryHealth.bind(registry),
+            deliverySnapshotForMessageKey: registry.deliverySnapshotForMessageKey.bind(registry),
+            deliverySnapshotForOperation: registry.deliverySnapshotForOperation.bind(registry),
+            hostEntry: registry.hostEntry.bind(registry),
             pageSeatChildren: registry.pageSeatChildren.bind(registry),
             seatTickConversation: registry.seatTickConversation.bind(registry),
             seatMcpReceipt: registry.seatMcpReceipt.bind(registry),
@@ -1281,7 +1285,7 @@ const settledLane = { id: "pipeline_l", state: "completed", createdAt: new Date(
 
 function reportPort(log: () => import("@/lib/bridge/types").BridgeReportV1[]) {
   return {
-    log,
+    log: () => ({ reports: log(), reservedIds: [] }),
     enabled: () => true,
     operatorLocale: () => "uk" as const,
   };

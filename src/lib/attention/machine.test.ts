@@ -242,6 +242,48 @@ test("only the device that agreed may abandon, and only from accepted", () => {
   expect(early.reason).toBe("invalid-transition");
 });
 
+function directed(overrides: Partial<AttentionRequestV1> = {}): AttentionRequestV1 {
+  return request({
+    state: "accepted",
+    offeredTo: ["device-a"],
+    acknowledgedBy: "device-a",
+    acceptedVia: "auto-follow",
+    directedSessionId: "tab-1",
+    ...overrides,
+  });
+}
+
+test("a directed device that finds the operator in another project stands down: nothing moved, the request is a pending notice no device is directed at", () => {
+  const stood = applyAttentionEvent(directed(), { kind: "stand-down", deviceId: "device-a" }, { now: T0 });
+  expect(stood.ok).toBe(true);
+  if (!stood.ok) return;
+  expect(stood.request.state).toBe("pending");
+  expect(stood.request.delivery).toBe("notice");
+  expect(stood.request.offeredTo).toEqual([]);
+  expect(stood.request.acknowledgedBy).toBeUndefined();
+  expect(stood.request.acceptedVia).toBeUndefined();
+  expect(stood.request.directedSessionId).toBeUndefined();
+  expect(stood.request.returnPoints).toEqual([]);
+  /* Not a device's to answer, so no device is offered it and none can follow. */
+  expect(offerStatusForDevice(stood.request, "device-a")).toBe("none");
+  /* And it ends the way every unanswered request does. */
+  expect(expiryCauseByClock(stood.request, later(OFFER_TTL_MS))).toBe("ttl");
+});
+
+test("only the acknowledging device stands down, only from accepted, and never a move that already landed or an operator's own", () => {
+  const other = applyAttentionEvent(directed(), { kind: "stand-down", deviceId: "device-b" }, { now: T0 });
+  expect(other.ok).toBe(false);
+  if (!other.ok) expect(other.reason).toBe("not-acknowledger");
+
+  for (const state of ["pending", "offered", "following", "expired"] as const) {
+    const early = applyAttentionEvent(directed({ state }), { kind: "stand-down", deviceId: "device-a" }, { now: T0 });
+    expect(early.ok).toBe(false);
+  }
+
+  const operators = applyAttentionEvent(directed({ origin: "operator" }), { kind: "stand-down", deviceId: "device-a" }, { now: T0 });
+  expect(operators.ok).toBe(false);
+});
+
 test("an agreed request that never lands is ended by the clock as lost, never as unseen", () => {
   const accepted = drive([{ kind: "offer", deviceId: "device-a" }, { kind: "accept", deviceId: "device-a" }]);
 

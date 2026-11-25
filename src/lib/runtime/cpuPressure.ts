@@ -3,6 +3,7 @@ import { cpuPriorityFromEnv, type CpuPrioritySource } from "./cpuPriority";
 import { randomUUID } from "node:crypto";
 import { cpuCommandOwner, type CpuQueueWait } from "./cpuAdmission";
 import { instanceCpuAdmissionQueue } from "./cpuAdmissionScope";
+import { urgentStageCapacitySampler, type UrgentStagePoll } from "./urgentStageCapacity";
 import { CPU_QUEUE_DETAIL_PREFIX, cpuQueueDetail } from "./cpuQueueText";
 
 import { delegatusSetting } from "./cpuPlacement";
@@ -10,22 +11,20 @@ import { delegatusSetting } from "./cpuPlacement";
 /*
  * CPU-pressure admission for heavy work (docs/design/cpu-placement.md).
  *
- * A pipeline stage start, a workflow setup or stage-agent start, a
- * publication's dependency install and a release install or build wait while
- * the machine's CPU pressure is high: each is held once `some avg10` reaches
- * the hold threshold and released only after the value has stayed below the
- * release threshold for the release window. A persistent priority queue admits
- * the head after ten minutes even when pressure stays high, with short spacing
- * between admissions. Operator sends, receipt reconciliation and recovery never ask.
- * A failed sample admits: the work scopes' CPU quotas still bound the work.
- * `scripts/gate-slot.sh` applies the same policy to gates.
+ * Stages, workflows, installs, builds and local heavy checks wait when
+ * `some avg10` reaches the hold threshold. The pressure hold lifts after a
+ * full release window below the release threshold, or when the ticket reaches
+ * the persistent queue's ten-minute wait bound. Order and spacing still apply,
+ * and heavy checks also need a free slot. Operator sends, receipt reconciliation
+ * and recovery never ask. A failed sample permits a start in this gate.
+ * `scripts/gate-slot.sh` samples separately and falls back to load per CPU.
  */
 
 export interface CpuPressurePolicy { holdAt: number; releaseBelow: number; releaseAfterMs: number; deferAfterMs: number }
 export const DEFAULT_CPU_PRESSURE_POLICY: CpuPressurePolicy = { holdAt: 30, releaseBelow: 20, releaseAfterMs: 10_000, deferAfterMs: 120_000 };
 
-export type CpuPressureHold = { since: number; avg10: number; deferred: boolean; policy: CpuPressurePolicy; queue?: CpuQueueWait };
-export type CpuStartGate = { check(key?: string, priority?: CpuPrioritySource): CpuPressureHold | null; cancel?(key: string): void };
+export type CpuPressureHold = { since: number; avg10: number; deferred: boolean; policy: CpuPressurePolicy; queue?: CpuQueueWait; observeUrgentCapacity?(): void };
+export type CpuStartGate = { check(key?: string, priority?: CpuPrioritySource, urgentStage?: UrgentStagePoll): CpuPressureHold | null; cancel?(key: string): void };
 
 /** `some avg10` from /proc/pressure/cpu, or null when the text has none. */
 export function parseCpuPressure(text: string): number | null {
@@ -121,12 +120,23 @@ export function machineCpuPressureGate(): CpuStartGate | null {
     sample: () => { try { return parseCpuPressure(fs.readFileSync("/proc/pressure/cpu", "utf8")); } catch { return null; } },
     now: Date.now,
   }) : null;
+  const capacity = pressure ? urgentStageCapacitySampler() : null;
   return globalGate.__llvCpuPressureGate = {
-    check: (key = `command:${process.pid}`, priority = cpuPriorityFromEnv()) => {
+    check: (key = `command:${process.pid}`, priority = cpuPriorityFromEnv(), urgentStage) => {
       const held = pressure?.check();
-      const durable = key.startsWith("stage:") || key.startsWith("workflow:");
-      const queue = instanceCpuAdmissionQueue().check(key, !held, durable ? undefined : cpuCommandOwner(), true, priority);
-      return queue ? { since: queue.since, avg10: held?.avg10 ?? 0, deferred: false, policy: policy ?? DEFAULT_CPU_PRESSURE_POLICY, queue } : null;
+      const stage = key.startsWith("stage:");
+      const durable = stage || key.startsWith("workflow:");
+      const queue = instanceCpuAdmissionQueue();
+      const evidence = held && stage && urgentStage ? capacity?.latest(queue, key) : undefined;
+      const wait = queue.check(key, !held, durable ? undefined : cpuCommandOwner(), true, priority, false, undefined,
+        evidence && urgentStage ? { evidence, currentRevision: urgentStage.currentRevision } : undefined);
+      if (!wait) return null;
+      const observeUrgentCapacity = held && stage && urgentStage && capacity && wait.priority === "high" && wait.heldBy === "pressure"
+        ? () => { void Promise.resolve().then(() => capacity.refresh(queue, key, urgentStage))
+          .catch(error => console.error("[pipelines] urgent CPU repoll failed", error)); }
+        : undefined;
+      return { since: wait.since, avg10: held?.avg10 ?? 0, deferred: false, policy: policy ?? DEFAULT_CPU_PRESSURE_POLICY,
+        queue: wait, observeUrgentCapacity };
     },
     cancel: (key) => instanceCpuAdmissionQueue().cancel(key),
   };

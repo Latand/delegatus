@@ -287,6 +287,8 @@ async function successorBoot(
   } = {},
 ): Promise<{ adopted: string[]; error: unknown }> {
   const registry = options.registry ?? new AgentRegistry(registryFile);
+  // A fresh simulated Viewer has no delivery publication from its predecessor.
+  if (!options.registry) await bindStructuredDeliveryQueue([], { registry, client: null });
   let adoptionStarted = false;
   const adopted: string[] = [];
   const successor = options.viewer ?? { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };

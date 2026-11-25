@@ -11,7 +11,7 @@ export const AUTO_BALANCE_SAMPLE_GAP_MS = 60 * 1000;
 export const AUTO_BALANCE_FRESH_MS = 5 * 60 * 1000;
 
 /** Engines with durable quota observations. Migration remains two-engine. */
-export type QuotaEngine = "claude" | "codex" | "copilot";
+export type QuotaEngine = "claude" | "codex" | "copilot" | "antigravity";
 
 /** Usage-limit reset credits an account holds (issue #1373), as the Codex
     app-server reports them beside the rate limits. `expiresAt` is the soonest
@@ -37,6 +37,9 @@ export interface QuotaObservation {
       limit, spent credits). The windows keep the percentages it read. Absent
       when the reading did not say either way. */
   limitReached?: boolean;
+  /** Unix-second watermark of the newest actual quota exhaustion event ever
+      recorded for this account (Antigravity). */
+  lastQuotaEventAt?: number;
 }
 
 export interface EffectiveRemaining {

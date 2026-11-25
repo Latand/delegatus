@@ -1567,9 +1567,24 @@ A request without the additions is answered exactly as above.
 
 | Field | Written by | Meaning |
 |---|---|---|
-| `requester` | the relay service | Exactly six fields: `key` is the triggering message's `author.key` in the same opaque domain; `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin` and `is_owner` are required booleans derived by the service. `is_owner` is false when the owner posts as an anonymous admin or a channel. |
+| `requester` | the relay service | Exactly six fields: `key` is the triggering message's `author.key` in the same opaque domain; `is_admin`, `can_restrict_members`, `can_delete_messages`, `is_anonymous_admin` and `is_owner` are required booleans derived by the service. `is_owner` is false when the owner posts as an anonymous admin or a channel. The install declines `invalid_request`, with the detail "Requester does not match the triggering author or the owner delivery context.", before it builds any tool list or chooses a session, when a requester is present and `respond_to` does not name exactly one non-`self` message whose `author.key` is `key`; when `is_owner` and `is_anonymous_admin` are both true; or when `owner_delivery` arrives with `is_owner` false. Guest delivery requires a matching, non-anonymous requester and forbids `owner_delivery`. A non-owner guest also has `is_admin`, `can_restrict_members` and `can_delete_messages` set to false. |
 | `short_term_memory` | the relay service | The chat's short-term memory, as the service's own agent would see it. At most 16 000 Unicode code points. |
 | `tools` | the relay service | The service's tools that the requester's role may use: a unique `name` of at most 64 characters, a one-line `summary` of at most 200, and a `mode`. At most 100 items. String bounds count Unicode code points. |
+
+For guest delivery, the service supplies the chat's context in
+`input.conversation`, including applicable Business history. `answerPrompt`
+adds that conversation and any supplied `input.short_term_memory` to the
+guest turn for either requester. An absent or null memory field adds no
+memory section. The same guest media policy applies to each requester.
+The install returns `relay_guest_answers` and `requester_context` on every
+claim, including when the service descriptor omits them. Non-owner guest
+execution is ready on the same guest path as owner guest execution, with the
+same context and media handling. It remains inactive until the paired service
+releases its guest-only `relay_isolated_requesters` routing; that flag must no
+longer route non-owner private chats to the owner's agent. The install keeps
+advertising this flag disabled by default in
+`ISOLATED_GUEST_REQUESTERS_ENABLED` until that release. Owner guest requests
+keep the same guest path and behavior.
 
 - `mode: "direct"` names a tool the install could call itself once a later
   feature negotiates reads (`relay_tool_calls`, slice 2); `"handoff"` names
@@ -2265,7 +2280,7 @@ environment scrub, and keep separate flag sets.
 |---|---|---|---|
 | No command execution | `--disable shell_tool --disable unified_exec` | `--tools` naming no command tool | [phase 0]; E3 |
 | No apps, plugins or connectors | `--disable apps --disable plugins` | `--strict-mcp-config` with no `--mcp-config` | [phase 0]: without them both engines expose the signed-in account's hosted apps or connectors |
-| **[rc]** The native web search, and no other web tool | `-c web_search=live` | `--tools WebSearch --allowedTools WebSearch` (no `WebFetch`) | E9 |
+| The native web search, and no other web tool | `-c web_search=cached`; page reads use `read_page` | `--tools WebSearch --allowedTools WebSearch` (no `WebFetch`) | E9; page-reader checks |
 | No sub-agent tools | per-run catalog without `multi_agent_version`; `--disable multi_agent` alone does not remove them | **[rc]** `--tools WebSearch --allowedTools WebSearch` (no agent tool); init tripwire | E2; E6; E8 |
 | No other acting tools; [negotiated image exception](relay-v2-rich-media-out.md#9-codex-native-image-generation) | `--disable view_image`, catalog without `apply_patch_tool_type`, `--disable image_generation --disable goals --disable memories --disable browser_use --disable computer_use --disable sleep_tool` | **[rc]** `--tools WebSearch --allowedTools WebSearch`, `--restricted` | E3; E6; E8 |
 | No personal instruction files | a dedicated answer `CODEX_HOME` with no `AGENTS.md`; `-c project_doc_max_bytes=0` blocks project files from the cwd and its ancestors | `--restricted --safe-mode`; cwd outside `$HOME` | E1; E6; test 7 |
@@ -2321,7 +2336,7 @@ codex exec -
   --disable shell_tool --disable unified_exec --disable apps --disable plugins
   --disable multi_agent --disable goals --disable image_generation --disable memories
   --disable browser_use --disable computer_use --disable sleep_tool --disable view_image
-  -c web_search=live            [rc]; disabled for a profile without web search
+  -c web_search=cached          [rc]; disabled for a profile without web search
   -c project_doc_max_bytes=0
   -c skills.include_instructions=false
   -c include_environment_context=false
@@ -2431,6 +2446,21 @@ catch drift in the field. Each kills the group and completes the lease as
 requester. The restricted profile above remains unchanged. A target's
 optional, default-off `ownerTier` switch selects a full ordinary agent for
 the service-identified owner; see [relay-owner-tier.md](relay-owner-tier.md).
+
+The Viewer also offers `read_page` in the restricted relay's local round loop,
+for Claude, Codex and Codex Cloud. It never adds an engine-native tool or MCP
+server. The reader checks URL schemes, credentials, installation names,
+address classes, default ports and every DNS answer before dialling the checked
+IP directly. Redirects repeat the policy. Guest and owner answers receive no
+reader. See [the page reader design](relay-page-read-url-policy.md) for bounds,
+refusal codes and the test matrix.
+
+Restricted Codex search uses cached results, so provider-side live page opens
+are disabled. Any reported provider open remains checked at round end before
+accepting an answer or calls. Notes stop after the first open. A refused fresh
+round passes only the reason into the next fresh round; a chain, guest or final
+round fails with `profile_violation` and any chain is broken. All page reads go
+through `read_page` and its guarded local transport.
 
 ### B.6.6 [delta] The profile in a long-lived conversation
 
@@ -2793,7 +2823,7 @@ Bun pin are untouched, so `scripts/verify-runtime-host.ts` is not needed.
 | 22 | **[rc]** `src/lib/externalRelay/runner.test.ts` with the stub CLI of test 4 | With tools, the schema offers `handoff` and the completion is exactly `declined` / `handoff` with the fixed `HANDOFF_DETAIL` and null `retry_after_s`; without tools the schema keeps two actions. Records: input as received, engine, model, outcome, delivery `accepted` / `refused`, a declined request, a lost lease, no record for ids that cannot name a file, and neither the lease id nor the credential in any record. |
 | 23 | **[rc]** `src/lib/externalRelay/answers.test.ts`, `src/lib/externalRelay/poller.test.ts`, `src/app/api/external-relay/route.test.ts` | One 30-day constant: a record ended 29.99 days ago is read and kept, one ended 30.01 days ago is hidden and pruned, a running one is never pruned. The list is newest first and bounded. The orphan sweep finishes a dead owner's record as `failed:install_restarted` and leaves a live one running. The claim sends `features: ["requester_context", "relay_tool_calls"]`. Both routes keep every guard and refuse an agent caller. |
 | 24 | `ExternalRelaySection.dom.test.tsx`, `RelayChats.dom.test.tsx`, `src/app/api/external-relay/conversations/route.test.ts`, and the phone driver's "external relay" cases | The card fetches and shows nothing a chat said. The chats' conversations: the route lists them for the operator and refuses an agent; the feed serves a recorded transcript to the operator alone and only that file, and refuses its deletion; the sidebar entry, the leaf's rows in English and Ukrainian with no delete, and the agent window's reader with no composer and no agent controls, at 1440 and 390, light and dark. The single answers: the route lists them across targets without a chat conversation; a relay with only an answer is a sidebar entry, its row opens the exchange read only with no field to type into, an expired one says so; the driver's `?relay=answers` scene draws them; readings in `evidence/external-relay/card.json` and `chats.json`, beside the slice 2b `settings.json`, whose bytes stay pinned. (The `relay-answers` capture case left with the card's Recent answers; its readings stay in `evidence/external-relay/recent-answers.json`.) |
-| 25 | **[rc]** `src/lib/agent/ephemeral.test.ts`, `src/lib/externalRelay/progress.test.ts`, `src/lib/externalRelay/runner.test.ts`, `src/app/api/external-relay/route.test.ts`, `ExternalRelaySection.dom.test.tsx`, and test 7 with `LLV_ANSWER_PROFILE_PROBE=1` | Web search: the argument lists add only `web_search=live` and `--tools WebSearch --allowedTools WebSearch`, every other hardening stays; the tripwire admits the search events only with web search on, and still trips on `WebFetch`, `Bash`, MCP, command and file items; every relay run is launched with it and its record says so. Member limit: a member's third request at a limit of 2 is declined `member_limit` with its line and a `retry_after_s` under an hour; another chat, another member, an admin, the owner, a limit of 0 or null, and a request without a requester all pass; the route takes 0 to 1000 or null and refuses the rest; the field shows the default and saves a number or no limit. |
+| 25 | **[rc]** `src/lib/agent/ephemeral.test.ts`, `src/lib/externalRelay/progress.test.ts`, `src/lib/externalRelay/runner.test.ts`, `src/app/api/external-relay/route.test.ts`, `ExternalRelaySection.dom.test.tsx`, and test 7 with `LLV_ANSWER_PROFILE_PROBE=1` | Web search: restricted Codex uses `web_search=cached`; Claude offers only `WebSearch`, every other hardening stays; tripwires admit search events only when enabled and still stop `WebFetch`, `Bash`, MCP, command and file items; every relay run records its profile. Member limit: a member's third request at a limit of 2 is declined `member_limit` with its line and a `retry_after_s` under an hour; another chat, another member, an admin, the owner, a limit of 0 or null, and a request without a requester all pass; the route takes 0 to 1000 or null and refuses the rest; the field shows the default and saves a number or no limit. |
 
 ## B.12 [delta] Branding: the service's name and look
 
@@ -3416,8 +3446,11 @@ using the pairing credential in `Authorization: Bearer …`,
 `Delegatus-Relay-Version: 1` and JSON content type. It never discovers or guesses
 the trigger id from an opaque message reference or the destination from an
 owner identity. Absent or malformed context keeps the late answer durable with
-status `pending-delivery-context`, logs that status and sends nothing. A member
-claim carrying these fields still has no owner execution or delivery authority.
+status `pending-delivery-context`, logs that status and sends nothing. A claim
+whose requester is not the owner and carries these fields is declined
+`invalid_request` before any tool list or session exists, and so is a positive
+(private) `chat_id` that differs from the paired Telegram owner's user id
+(amended 2026-11-21; earlier, such a member claim ran without owner authority).
 
 The exact `SendMessage` payload and a valid 8–64-character `client_key` are
 persisted before dispatch and reused on every retry, including after restart.

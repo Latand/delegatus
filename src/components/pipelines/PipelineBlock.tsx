@@ -2,7 +2,7 @@
 
 import { AgentMemoryCapNote } from "@/components/AgentMemoryCapNote";
 import { Flag, Link2, Settings } from "lucide-react";
-import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { useLocale, type TFunction } from "@/lib/i18n";
 import { parseCpuQueueDetail } from "@/lib/runtime/cpuQueueText";
@@ -36,6 +36,7 @@ import {
   type StageNavTarget,
   attemptStateLabel,
   stageAgentRowModel,
+  stageCloudTaskUrl,
 } from "./pipelineModel";
 import {
   blockAgeSeconds, cardChain, chainSteps, cardChainLevels, laneMergeWord, mergeNeedsYou, mergeReasonText, parkedStage, pipelineAnswers, pipelineEnded, pipelineMovedAtMs, pipelineNeedsYou, pipelineReason, reviewStopFindings, reviewStopReason, sameTitle, screenCurrentStageId, STAGE_MARK, stageFindings,
@@ -285,16 +286,35 @@ function CardLine({ summary, nameOf, suffixes, age, tail, opens, onOpenStage }: 
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+  const { width, level, alone, wrap } = current;
+  const levelCount = levels.length;
+  const measureOverflow = useCallback(() => {
+    const element = pills.current;
+    if (!element || !width || wrap) return;
+    const available = element.clientWidth;
+    if (!available || element.scrollWidth <= available + 0.5) return;
+    setFit((previous) => {
+      // Several resize notifications may describe the same rendered fold.
+      if (previous.width !== width || (previous.key === key
+        && (previous.level !== level || previous.alone !== alone || previous.wrap !== wrap))) return previous;
+      if (level < (alone ? levelCount - 1 : lastBeside)) return { key, width, level: level + 1, alone, wrap };
+      if (!alone) return { key, width, level: 0, alone: true, wrap: false };
+      return { key, width, level, alone, wrap: true };
+    });
+  }, [key, width, level, alone, wrap, levelCount, lastBeside]);
   useLayoutEffect(() => {
     const element = pills.current;
-    if (!element || !current.width || element.clientWidth === 0) return;
-    if (element.scrollWidth <= element.clientWidth + 0.5) return;
-    setFit((previous) => {
-      const base = previous.key === key ? previous : { ...current };
-      if (base.level < (base.alone ? levels.length - 1 : lastBeside)) return { ...base, level: base.level + 1 };
-      if (!base.alone) return { ...base, level: 0, alone: true };
-      return base.wrap ? base : { ...base, wrap: true };
-    });
+    if (!element || typeof ResizeObserver !== "function") return;
+    measureOverflow();
+    const observer = new ResizeObserver(measureOverflow);
+    // The strip responds to space left by the age and PR. Its steps respond
+    // to new labels, counts or fonts even when the strip stays clipped.
+    observer.observe(element);
+    for (const step of element.children) observer.observe(step);
+    return () => observer.disconnect();
+  }, [measureOverflow]);
+  useLayoutEffect(() => {
+    if (typeof ResizeObserver !== "function") measureOverflow();
   });
   const items = levels[Math.min(current.level, levels.length - 1)]!;
   const item = (entry: ChainItem, index: number) => (
@@ -491,7 +511,7 @@ function MergeWord({ pipeline, nowMs }: { pipeline: Pipeline; nowMs: number }) {
     waiting hint, who merged it, or a stopped merge someone already answered
     with "Leave the PR open", in muted ink. A stop still asking is the answer
     panel's. */
-function MergeNote({ pipeline }: { pipeline: Pipeline }) {
+function MergeStatusNote({ pipeline }: { pipeline: Pipeline }) {
   const { t } = useLocale();
   const word = laneMergeWord(pipeline);
   if (!word || mergeNeedsYou(pipeline)) return null;
@@ -499,6 +519,15 @@ function MergeNote({ pipeline }: { pipeline: Pipeline }) {
   if (word === "merged" && pipeline.merge?.by === "auto-merge") return <p className="pb-merge-note" data-merge-note="merged">{t("pipelineBlock.merge.byDelegatus")}</p>;
   if (word === "stopped") return <p className="pb-merge-note" data-merge-note="stopped">{t("pipelineBlock.merge.reason", { reason: mergeReasonText(t, pipeline.merge?.reason ?? null) })}</p>;
   return null;
+}
+
+function MergeNote({ pipeline }: { pipeline: Pipeline }) {
+  const { t } = useLocale();
+  const names = pipeline.merge?.optionalFailedChecks ?? [];
+  return <>
+    <MergeStatusNote pipeline={pipeline} />
+    {names.length > 0 && <p className="pb-merge-note" data-merge-note="optional-failures">{t("pipelineBlock.merge.optionalFailures", { names: names.join(", ") })}</p>}
+  </>;
 }
 
 /** What the lane stopped on: what the stage said, its findings, the merge's
@@ -944,6 +973,7 @@ function ScreenBlock(props: PipelineBlockProps & {
     const { stage } = chip;
     const isCurrent = stage.id === currentId;
     const agent = stageAgentRowModel(pipeline, stage.id);
+    const cloudUrl = stageCloudTaskUrl(pipeline, stage.id);
     const conversation = conversationOf(stage);
     const openable = Boolean(props.onOpenStage) && conversation.openable;
     const configurable = !conversation.openable && Boolean(props.onConfigureStage) && stageConfigurable(pipeline, stage.id);
@@ -1025,7 +1055,7 @@ function ScreenBlock(props: PipelineBlockProps & {
       >
         {control}
         <AgentMemoryCapNote cap={latestAttempt(pipeline, stage.id)?.memoryCap} />
-        {isCurrent || agent.target || agent.earlier.length ? (
+        {isCurrent || agent.target || cloudUrl || agent.earlier.length ? (
           <div className="pb-stage-body">
             {agent.question ? <p className="pb-latest whitespace-pre-wrap" data-stage-question={stage.id}>{agent.question}</p> : null}
             {isCurrent && answers ? (
@@ -1046,6 +1076,12 @@ function ScreenBlock(props: PipelineBlockProps & {
                 <span>{t("pipelineStage.openAgent")}</span>
                 <ChevronRight />
               </button>
+            ) : null}
+            {cloudUrl ? (
+              <a className="pb-open-conv" data-open-cloud={stage.id} href={cloudUrl} target="_blank" rel="noopener noreferrer" aria-label={t("pipelineStage.openCloudTaskAria", { stage: name })}>
+                <span>{t("pipelineStage.openCloudTask")}</span>
+                <ChevronRight />
+              </a>
             ) : null}
             {agent.earlier.length && props.onOpenAttempt ? (
               <details data-stage-attempts={stage.id}>

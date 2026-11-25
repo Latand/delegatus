@@ -9,8 +9,9 @@ import { reboundAssembledMcpGrants } from "./mcpAllowlist";
 import { normalizeRegistry, readOnlyConversationLookupFromSnapshot, type RegistryFile } from "./registry";
 import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "./registryPerformanceDataset";
 import { OWNER_ENDINGS_CURSOR } from "./registryEndings";
+import { emptyAgentStateMetrics } from "@/lib/agentState/model";
 import {
-  registryRowsMatching, archivedOwnersEndedSince, hotRegistryRows, registryConversationsForEntryKey, registryConversationsForPath, registryRowProjection,
+  registryRowsMatching, archivedOwnersEndedSince, hotRegistryRows, registryConversationsForEntryKey, registryConversationsForPath, registryRowProjection, registryRetiredHostRows,
   SqliteAgentRegistryStore, type RegistryRowProjector,
 } from "./sqliteRegistryStore";
 
@@ -45,6 +46,30 @@ function history() {
   };
   return { dataset, open };
 }
+
+test("hot registry startup accepts pre-Antigravity agent-state metrics and rejects malformed buckets", () => {
+  const { open } = history();
+  const store = open();
+  const normalizeHotRowsSteps = (agentStateMetrics: Record<string, unknown>) => {
+    const reader = store as unknown as {
+      normalizeHotRowsSteps(input: Record<string, unknown>): Generator<void, RegistryFile>;
+    };
+    const steps = reader.normalizeHotRowsSteps({ version: 2, entries: {}, receipts: {}, agentStateMetrics });
+    let result = steps.next();
+    while (!result.done) result = steps.next();
+    return result.value;
+  };
+  const legacy = emptyAgentStateMetrics();
+  delete (legacy.stuckByEngine as Partial<typeof legacy.stuckByEngine>).antigravity;
+
+  const loaded = normalizeHotRowsSteps({ current: legacy });
+  expect(Object.keys(loaded.agentStateMetrics.current?.stuckByEngine ?? {}).sort()).toEqual(["claude", "codex", "copilot"]);
+
+  expect(() => normalizeHotRowsSteps({ current: {
+    ...legacy,
+    stuckByEngine: { ...legacy.stuckByEngine, codex: null },
+  } })).toThrow("invalid agent-state row");
+});
 
 test("mixed foreign writes release superseded history views while keeping lazy archive reads", async () => {
   const { dataset, open } = history();
@@ -162,6 +187,23 @@ test("a grant-bearing write is decided once and serialized without assembling th
   expect(stored.updatedAt).toBe("2026-10-11T21:00:00.000Z");
   expect(stored.launchProfile?.cwd).toBe("/repo/rewritten");
   expect([stored.launchProfile?.mcpServers]).toEqual(expected!);
+});
+
+test("retired-host selection refuses a peer revision newer than its held census snapshot", () => {
+  const { open } = history();
+  const reader = open();
+  const writer = open();
+  const key = Object.keys(reader.snapshot().file.entries)[0]!;
+  const exited = { pid: 7654, startIdentity: "7654:1", stop: {
+    path: "deploy-cut", at: "2026-11-10T12:00:00.000Z",
+  } };
+  writer.mutate(file => {
+    file.entries[key]!.hostExitProcess = exited;
+  }, false);
+  const held = reader.readOnlySnapshot().file;
+  writer.mutate(file => { delete file.entries[key]!.hostExitProcess; }, false);
+  expect(() => registryRetiredHostRows(held, 200, "2026-11-10T11:59:00.000Z"))
+    .toThrow("registry view changed during retired-host selection");
 });
 
 test("a decision inside a mutation reads the attestors that mutation rewrote", () => {

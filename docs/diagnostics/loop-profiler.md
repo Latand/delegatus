@@ -73,6 +73,22 @@ post-trigger window has no further gap. Overlapping gaps also retain their
 existing correlated journal records, bounded to four long and eight short
 gaps per capture.
 
+The summary and admission settlement commit in the same transaction. A failed
+write retains one bounded summary in the serving process, and later polls retry
+it before admitting another capture, even after collection is disabled. Multiple
+gap records referencing that window still count as one stored profile. Retrying
+an already committed settlement cannot append it again. If the process exits
+before storage recovers, the in-memory summary is lost; the durable pending
+admission still enforces conservative recovery cooldown.
+
+Persistence failures report `persistence-failed phase=persist code=…`;
+`capture-failed` identifies a collection or conversion failure and includes
+`phase=collect` or `phase=trim`. Codes come from a fixed vocabulary, including
+`BUSY` for lock-admission timeout, allowlisted filesystem error codes,
+`PROFILE_INVALID` for invalid stored data and `UNKNOWN` for other causes.
+Settlement failures without a summary report `admission-unavailable` with
+`phase=settle`. Exception messages and paths are omitted.
+
 Only repository-relative source/chunk paths, source-verified identifier names,
 numeric sample weights and allowlisted native categories survive conversion.
 Board rows, raw stacks, dynamic function names and external paths are omitted.
@@ -95,6 +111,7 @@ private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR and
 
 ```sh
 bash "$GATE" bun test --timeout=60000 ./src/lib/loopProfilerSupervisor.test.ts
+bash "$GATE" bun test --timeout=60000 ./src/lib/loopProfilerServing.recovery.test.ts
 bash "$GATE" bun test --timeout=60000 ./src/lib/loopProfiler.test.ts
 bash "$GATE" bun src/lib/loopProfiler.fixture.ts idle-arm-cost
 ```

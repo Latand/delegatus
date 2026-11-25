@@ -9,12 +9,13 @@
  * copilot: `--reasoning-effort <level>`, verbatim from `copilot --help` (1.0.87).
  * There is no per-model scale; the CLI decides what a model supports.
  */
-export type AgentEngineName = "claude" | "codex" | "copilot";
+export type AgentEngineName = "claude" | "codex" | "copilot" | "antigravity";
 
 export const ENGINE_EFFORTS: Record<AgentEngineName, readonly string[]> = {
   claude: ["low", "medium", "high", "xhigh", "max"],
   codex: ["low", "medium", "high", "xhigh"],
   copilot: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+  antigravity: ["low", "medium", "high", "xhigh", "max"],
 };
 
 export function isEngineEffort(engine: AgentEngineName, value: string): boolean {
@@ -33,7 +34,7 @@ export function isKnownEffortTier(value: string): boolean {
 }
 
 /* Codex reasoning scales vary per model (`supported_reasoning_levels` in
-   ~/.codex/models_cache.json): gpt-6 and gpt-6.1 astra/sol and gpt-5.6 sol/terra add
+   ~/.codex/models_cache.json): gpt-6, gpt-6.1 and gpt-6.2 astra/sol and gpt-5.6 sol/terra add
    max+ultra above xhigh, gpt-6-luna and the rest of the 5.6 family add max,
    and everything older (or unknown) runs the classic low…xhigh. First matching prefix wins, and a model
    the table has never been told about falls through to the classic scale — so
@@ -41,7 +42,7 @@ export function isKnownEffortTier(value: string): boolean {
    selector without any error to notice. */
 const CODEX_MODEL_SCALES: readonly (readonly [RegExp, readonly string[]])[] = [
   [/^gpt-6\.1-terra\b/, ["low", "medium", "high", "xhigh", "max", "ultra"]],
-  [/^gpt-6(?:\.1)?-(astra|sol)\b/, ["low", "medium", "high", "xhigh", "max", "ultra"]],
+  [/^gpt-6(?:\.[12])?-(astra|sol)\b/, ["low", "medium", "high", "xhigh", "max", "ultra"]],
   [/^gpt-6-luna\b/, ["low", "medium", "high", "xhigh", "max"]],
   [/^gpt-5\.6-(sol|terra)\b/, ["low", "medium", "high", "xhigh", "max", "ultra"]],
   [/^gpt-5\.6\b/, ["low", "medium", "high", "xhigh", "max"]],
@@ -59,6 +60,44 @@ const COPILOT_CATALOG_SCALES = new Map<string, readonly string[]>();
     are globally stable, so one account's observed ladder applies to the same id. */
 export function registerCopilotEffortScales(models: readonly { id: string; efforts: readonly string[] | null }[]): void {
   for (const model of models) if (model.efforts?.length) COPILOT_CATALOG_SCALES.set(model.id, [...model.efforts]);
+}
+
+/* Measured `agy 1.5.13` per-model `thought_level` ladders (docs/design/antigravity-engine.md §2.4).
+   Dynamic ACP / `agy models` refreshes can register additional or updated ladders at runtime. */
+const ANTIGRAVITY_MODEL_SCALES: Readonly<Record<string, readonly string[]>> = {
+  "gemini-4-neon": ["low", "medium", "high", "xhigh"],
+  "gemini-4-hydrogen": ["low", "medium", "high", "xhigh"],
+  "gemini-4-argon": ["low", "medium", "high"],
+  "gemini-3.8-flash": ["low", "medium", "high"],
+  "claude-opus-5-5": ["low", "medium", "high"],
+  "claude-sonnet-5-5": ["low", "medium", "high"],
+  "gpt-oss-120b-medium": ["medium"],
+};
+const ANTIGRAVITY_CATALOG_SCALES = new Map<string, readonly string[]>();
+let antigravityCatalogScope: string | null = null;
+const ANTIGRAVITY_EFFORT_SUFFIX = /-(low|medium|high|xhigh|max)$/;
+
+function currentAntigravityCatalogScope(): string {
+  if (typeof process === "undefined" || !process.env) return "";
+  return `${process.env.LLV_STATE_DIR ?? ""}\0${process.env.XDG_CONFIG_HOME ?? ""}\0${process.env.HOME ?? ""}`;
+}
+
+/** Seed per-model ladders discovered from Antigravity ACP `configOptions` or `agy models`.
+    Scoped to the active state/config environment so isolated state roots never inherit
+    another directory's cached model catalog. */
+export function registerAntigravityEffortScales(models: readonly { id: string; efforts: readonly string[] | null }[]): void {
+  const scope = currentAntigravityCatalogScope();
+  if (antigravityCatalogScope !== scope) {
+    ANTIGRAVITY_CATALOG_SCALES.clear();
+    antigravityCatalogScope = scope;
+  }
+  for (const model of models) if (model.efforts?.length) ANTIGRAVITY_CATALOG_SCALES.set(model.id, [...model.efforts]);
+}
+
+function antigravityBaseModelKey(model: string): string {
+  const id = model.trim().toLowerCase();
+  if (!id || id === "gpt-oss-120b-medium" || id.startsWith("gemini-pro-orchestrator-")) return id;
+  return id.replace(ANTIGRAVITY_EFFORT_SUFFIX, "");
 }
 
 /* OpenClaw's `--thinking` ladder, kept out of ENGINE_EFFORTS because it is a
@@ -79,6 +118,13 @@ export function effortScale(engine: string, model: string | null | undefined, co
   if (engine === "copilot") {
     const id = (model ?? "").trim().toLowerCase();
     return copilotModelEfforts ?? COPILOT_CATALOG_SCALES.get(id) ?? COPILOT_MODEL_SCALES[id] ?? ENGINE_EFFORTS.copilot;
+  }
+  if (engine === "antigravity") {
+    const id = antigravityBaseModelKey(model ?? "");
+    const dynamic = antigravityCatalogScope === currentAntigravityCatalogScope()
+      ? ANTIGRAVITY_CATALOG_SCALES.get(id)
+      : undefined;
+    return dynamic ?? ANTIGRAVITY_MODEL_SCALES[id] ?? ENGINE_EFFORTS.antigravity;
   }
   if (engine !== "codex") return null;
   const id = (model ?? "").trim().toLowerCase();

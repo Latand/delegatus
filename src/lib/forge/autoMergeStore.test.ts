@@ -413,6 +413,53 @@ describe("global merge admission", () => {
     } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
   });
 
+  test.each([
+    ["DNS lookup", "error connecting to api.github.com: lookup api.github.com: no such host", "DNS lookup failed"],
+    ["TLS hostname mismatch", "connection failed: tls: failed to verify certificate: x509: certificate is valid for example.invalid, not api.github.com", "certificate verification failed"],
+    ["missing pull request", "gh: pull request not found\nwarning: connection closed", "not found"],
+    ["unreachable network", "dial tcp: ENETUNREACH", "temporarily unavailable"],
+  ])("%s keeps the linked PR's ref and task open", async (_case, stderr, reason) => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-linked-read-refused");
+    const previousPath = process.env.PATH;
+    try {
+      const taskId = markedTask(fixture.lane);
+      fixture.lane.delivery!.target.pr = 17;
+      savePipelines([fixture.lane]);
+      const bin = fs.mkdtempSync(path.join(fixture.directory, "gh-"));
+      const calls = path.join(bin, "calls");
+      fs.writeFileSync(path.join(bin, "gh"), `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2, 4).join(" ") + "\\n");
+process.stderr.write(${JSON.stringify(stderr)});
+process.exit(1);
+`, { mode: 0o700 });
+      process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
+      const { githubRunner } = await import("../monitor/githubEvidence");
+      let clock = T0;
+      const ports = productionAutoMergePorts({ now: () => clock, loadPipelines,
+        pullRequestOf: () => ({ repository: REPO, number: 17 }), cachedState: () => null,
+        setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: githubRunner(fixture.work, 30_000, { declared: () => false }) });
+      for (let poll = 0; poll < 3; poll++) {
+        await sweepAutoMerge(ports);
+        await sweepTaskFinishes(ports);
+        clock += MERGE_POLL_MS;
+      }
+      expect({
+        ref: fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main"),
+        task: loadTasks().find(task => task.id === taskId)?.status,
+        calls: fs.readFileSync(calls, "utf8").trim().split("\n"),
+      }).toEqual({ ref: fixture.base, task: "inbox", calls: ["pr view", "pr view", "pr view"] });
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", reason: expect.stringContaining(reason) });
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      fs.rmSync(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
   test.each(["red", "pending", "head", "draft", "closed", "review", "protection"] as const)(
     "F3: a %s PR observation survives a later endpoint outage and an unavailable retry", async condition => {
       resetAutoMergeForTests();
@@ -851,7 +898,7 @@ test("retry-merge clears the persisted read failure and its counter", async () =
     write: async () => { throw new Error("forbidden write"); },
   });
   for (let n = 0; n < 3; n++, clock += MERGE_POLL_MS) await sweepAutoMerge(ports);
-  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", readFailures: 3, reason: "GitHub read authentication failed: HTTP 401: Bad credentials" });
+  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", readFailures: 3, reason: "GitHub read authentication failed: details withheld for privacy" });
   const retried = await patchPipeline(id, { action: "retry-merge" }, { now: () => iso(clock) } as never);
   expect(retried.error).toBeUndefined();
   expect(loadPipelines()[0]!.merge).toMatchObject({ state: "queued", readFailures: 0, reason: null, nextReadAt: null });
@@ -1004,7 +1051,7 @@ test.each([[12, 1], [21, 2]])("%s due failures yield to a healthy follower with 
   }
 });
 
-test("a stopped merge is stored, raises lane-merge with its two answers, and retry-merge requeues it; a merge is journaled", async () => {
+test.each(["conflict", "legacy optional failure"])("a stopped %s is stored and retry-merge requeues and merges it", async mode => {
   resetAutoMergeForTests();
   savePipelines([completedLane("pipe-merge")]);
   let clock = T0;
@@ -1023,13 +1070,14 @@ test("a stopped merge is stored, raises lane-merge with its two answers, and ret
         return JSON.stringify({
           state: merged ? "MERGED" : "OPEN", isDraft: false, headRefOid: HEAD, baseRefName: "main",
           mergeable: mergeState === "DIRTY" ? "CONFLICTING" : "MERGEABLE", mergeStateStatus: merged ? "UNKNOWN" : mergeState,
-          statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: iso(T0) }],
+          statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: iso(T0) },
+            ...(mode === "legacy optional failure" ? [{ __typename: "CheckRun", name: "optional-audit", status: "COMPLETED", conclusion: "FAILURE" }] : [])],
           mergeCommit: merged ? { oid: "f".repeat(40) } : null, mergedAt: merged ? iso(clock) : null,
         });
       }
       if (args[0] === "api" && args[1] === `repos/${REPO}/pulls/7/reviews?per_page=100`) return "";
       if (args[0] === "api" && args[1] === `repos/${REPO}/rules/branches/main`) return "[]";
-      if (args[0] === "api" && args[1] === `repos/${REPO}/branches/main`) return "[]";
+      if (args[0] === "api" && args[1] === `repos/${REPO}/branches/main`) return JSON.stringify(["ci"]);
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
       if (args[0] === "pr" && args[1] === "merge") { mergeState = "MERGED"; return ""; }
       throw new Error(`unexpected gh ${args.join(" ")}`);
@@ -1039,8 +1087,15 @@ test("a stopped merge is stored, raises lane-merge with its two answers, and ret
   ports.write = (args) => ports.run(args);
 
   await sweepAutoMerge(ports);
+  const reason = mode === "legacy optional failure" ? 'check "optional-audit" failed' : MERGE_REASONS.conflict;
+  if (mode === "legacy optional failure") {
+    // Replay a record written by the earlier runner, through the real reader.
+    const lanes = loadPipelines();
+    lanes.find(lane => lane.id === "pipe-merge")!.merge!.reason = reason;
+    savePipelines(lanes);
+  }
   const blocked = loadPipelines().find((pipeline) => pipeline.id === "pipe-merge")!;
-  expect(blocked.merge).toMatchObject({ state: "blocked", reason: MERGE_REASONS.conflict, repository: REPO, prNumber: 7, chain: [HEAD] });
+  expect(blocked.merge).toMatchObject({ state: "blocked", reason, repository: REPO, prNumber: 7, chain: [HEAD] });
 
   const need = laneNeed(blocked);
   expect(need?.cleared).toBeNull();
@@ -1070,6 +1125,7 @@ test("a stopped merge is stored, raises lane-merge with its two answers, and ret
   expect(merged.merge).toMatchObject({ state: "merged", by: "auto-merge", mergedHead: HEAD, mergeCommit: "f".repeat(40), method: "squash" });
   expect(calls.filter((args) => args[1] === "merge")).toEqual([["pr", "merge", "7", "--repo", REPO, "--squash", "--match-head-commit", HEAD]]);
 
+  if (mode === "legacy optional failure") expect(merged.merge?.optionalFailedChecks).toEqual(["optional-audit"]);
   refreshLifecycleJournal({ pipelines: [merged] }, { force: true });
   const events = queryLifecycleEvents({ pipelineId: "pipe-merge", limit: 50 }).events;
   expect(events.filter((event) => event.type === "pipeline_merged").map((event) => event.summary)).toEqual([`pull request #7 merged by Delegatus, head ${HEAD} — ship the merge runner`]);

@@ -2,7 +2,7 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { runtimeDataCorruptionCode } from "@/lib/runtime/dataCorruption";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { canonicalNativeQueueProof, type NativeQueueCompactedProof, type NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
-import { isStructuredHostKind, parseRuntimeScope, RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, DeploymentAdmissionClosedError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
+import { isStructuredHostKind, parseRuntimeScope, RUNTIME_RECEIPT_STATUSES, STARTUP_SESSION_VERSION_BATCH, RuntimeIdempotencyConflictError, DeploymentAdmissionClosedError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeStartupOperationCursor, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { consumeRuntimeEvent, RuntimeConsumerDeferredError, type RuntimeConsumerPorts } from "@/lib/runtime/consumers";
 
@@ -157,6 +157,24 @@ export class RuntimeHost {
         conversationId: request.params?.conversationId as string | undefined,
         artifactPath: request.params?.artifactPath as string | undefined,
       });
+      else if (request.method === "startup-session-evidence") {
+        if (!this.structuredHosts) throw new Error("structured hosts are disabled");
+        const ids = request.params?.conversationIds;
+        if (!Array.isArray(ids) || ids.length > STARTUP_SESSION_VERSION_BATCH
+          || ids.some(id => typeof id !== "string" || !id.trim() || id.length > 512)) {
+          throw new Error("runtime startup session identities are invalid");
+        }
+        const includeEvidence = request.params?.includeEvidence;
+        if (includeEvidence !== undefined && (typeof includeEvidence !== "boolean" || (includeEvidence && ids.length !== 1))) {
+          throw new Error("runtime startup session evidence requires one identity");
+        }
+        const after = request.params?.pendingOperationsAfter as RuntimeStartupOperationCursor | undefined;
+        if (after !== undefined && (!after || ids.length !== 0 || !Number.isSafeInteger(after.eventSeq)
+          || after.eventSeq < 0 || !Number.isSafeInteger(after.rowId) || after.rowId < 0)) {
+          throw new Error("runtime startup operation cursor is invalid");
+        }
+        result = this.journal.startupSessionEvidence(ids, includeEvidence === true, after);
+      }
       else if (request.method === "events") result = this.journal.replay(Number(request.params?.after ?? 0));
       else if (request.method === "wait") result = await this.journal.waitForEvents(
         Number(request.params?.after ?? 0),
@@ -165,10 +183,22 @@ export class RuntimeHost {
       );
       else if (request.method === "append" || request.method === "append-session-fenced" || request.method === "operation") {
         const event = request.params?.event as RuntimeEventInput;
-        if (request.method === "append-session-fenced" && (!event?.scope || parseRuntimeScope(event.scope).type !== "session"
-          || event.kind !== "session-status" || !Number.isSafeInteger(event.expectedSessionRevision)
-          || event.expectedSessionRevision! < 0)) {
-          throw new Error("a fenced session append requires a session-status event and its observed revision");
+        const producerKey = event?.producer?.eventKey ?? event?.producerKey;
+        const ownedWithdrawal = event?.producer?.kind === "viewer-command"
+          && typeof producerKey === "string" && producerKey.startsWith("pipeline-withdrawal:");
+        if (ownedWithdrawal && request.method !== "append-session-fenced") {
+          throw new Error("an owned provider withdrawal requires a fenced session append");
+        }
+        if (request.method === "append-session-fenced") {
+          const scope = event?.scope && parseRuntimeScope(event.scope);
+          const withdrawal = ownedWithdrawal && event.kind === "pipeline.provider-continuation-cancelled"
+            && scope?.type === "session" && event.payload?.conversationId === scope.id
+            && /^pipeline-withdrawal:[a-f0-9]{64}:1$/.test(producerKey)
+            && event.effect === undefined && event.operationId === undefined;
+          if (scope?.type !== "session" || ((event.kind !== "session-status" || ownedWithdrawal) && !withdrawal)
+            || !Number.isSafeInteger(event.expectedSessionRevision) || event.expectedSessionRevision! < 0) {
+            throw new Error("a fenced session append requires an authorized session event and its observed revision");
+          }
         }
         const publishedBefore = this.journal.publishedSeq();
         const appended = performanceSpans.sync("runtime.commit", () => this.journal.append(event));

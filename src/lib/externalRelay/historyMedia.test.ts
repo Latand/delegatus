@@ -48,7 +48,7 @@ function request(role: Role, size = 77): ExternalRelayRequest {
 }
 function paired(origin: string, engine = "claude", ownerTier = true): PairedRelay {
   return { id: "history_fixture", origin, api_base: `${origin}/api/relay/v1`, name: "Fixture", description: "", credential: "x".repeat(43),
-    owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-10-06T12:00:00Z", paused: false,
+    owner: { namespace: "telegram", id: "101", display_name: "Owner", handle: null }, pairedAt: "2026-10-06T12:00:00Z", paused: false,
     features: ["relay_media_in", "relay_history_media"], limits: { max_wait_s: 25, max_response_bytes: 1048576, max_answer_chars: 4000 },
     targets: [{ ...newTargetSettings({ target_id: "target", name: "Fixture", answered_by: "install", fallback: "service" }),
       engine, model: "fixture", ownerTier, memberLimitPerHour: null }] } as PairedRelay;
@@ -62,7 +62,7 @@ for (const role of ["owner", "group", "guest"] as const) {
     expect(validateMediaInput(parsed).map(media => media.ref)).toEqual(["photo_3", "photo_0", "photo_2", "photo_1"]);
     expect(requestSchema.parse(parsed)).toEqual(parsed);
     expect(admittedSeedMedia(parsed, { seed_media_refs: ["photo_1"] })).toBe(true);
-    expect(ownerTierFor({ ownerTier: true }, parsed) !== null).toBe(role !== "group");
+    expect(ownerTierFor({ ownerTier: true }, parsed) !== null).toBe(role === "owner");
     expect(callableTools(parsed)).toEqual([]);
     const hostile = structuredClone(parsed); hostile.input.conversation[3]!.author.key = "other";
     expect(ownerTierFor({ ownerTier: true }, hostile)).toBeNull();
@@ -99,7 +99,10 @@ for (const role of ["owner", "group", "guest"] as const) {
         expect(log.mock.calls).toEqual([["External relay history media dropped", JSON.stringify({ request: raw.request_id, entryIndex: 1, count: 1 })]]);
         expect(requestSchema.parse(parsed)).toEqual(parsed);
         const anchor = request(role); Object.assign(anchor.input.conversation[3]!, { media: [invalid] });
-        if (!(invalid && typeof invalid === "object" && "kind" in invalid && invalid.kind === "document" || invalid && typeof invalid === "object" && "ref" in invalid && invalid.ref === "photo_3"))
+        if (invalid && typeof invalid === "object" && ("mime_type" in invalid && invalid.mime_type === "image/svg+xml" || "byte_size" in invalid && invalid.byte_size === 20971521)) {
+          const refused = requestSchema.parse(anchor).input.conversation[3]!.media![0]!;
+          expect(refused.availability).toBe("mime_type" in invalid && invalid.mime_type === "image/svg+xml" ? "unsupported_type" : "too_large");
+        } else if (!(invalid && typeof invalid === "object" && "kind" in invalid && invalid.kind === "document" || invalid && typeof invalid === "object" && "ref" in invalid && invalid.ref === "photo_3"))
           expect(requestSchema.safeParse(anchor).success).toBe(false);
       }
     } finally { log.mockRestore(); }
@@ -109,7 +112,7 @@ for (const role of ["owner", "group", "guest"] as const) {
 async function runnerCase(role: Role, engine: "claude" | "codex" | "codex-cloud", mode: "valid" | "overflow" | "unnegotiated" | "no_history_feature" | "lease_lost" | "bad_bytes" = "valid", chain = false) {
   const bytes = await (await import("sharp")).default({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toBuffer();
   const raw = request(role, bytes.length);
-  const downloads: string[] = [], completions: unknown[] = [], prompts: string[] = [];
+  const downloads: string[] = [], completions: unknown[] = [], prompts: string[] = [], contexts: (string | undefined)[] = [];
   const paths: string[] = [];
   const server = await startTestRelay((req, body) => {
     if (req.url?.includes("/media/")) {
@@ -142,6 +145,8 @@ else {const sid=a[a.indexOf(a.includes('--resume')?'--resume':'--session-id')+1]
 `); fs.chmodSync(command, 0o700);
   const inspect = (prompt: string, live = true) => {
     prompts.push(prompt);
+    const contextFile = prompt.match(/<relay_context_file>\n("(?:\\.|[^"\\])*")\n<\/relay_context_file>/)?.[1];
+    contexts.push(contextFile ? fs.readFileSync(JSON.parse(contextFile) as string, "utf8") : undefined);
     if (!prompt.includes("<inbound_media>")) return;
     const media = JSON.parse(prompt.split("<inbound_media>")[1]!.split("</inbound_media>")[0]!) as { ref: string; local_path?: string }[];
     for (const item of media) if (item.local_path) { paths.push(item.local_path); if (live) expect(fs.readFileSync(item.local_path)).toEqual(bytes); }
@@ -154,15 +159,15 @@ else {const sid=a[a.indexOf(a.includes('--resume')?'--resume':'--session-id')+1]
   let cloudCalls = 0;
   const run = async (input: ExternalRelayRequest) => {
     const result = await runClaimedRequest(relay, input, undefined, { leaseWorker: false, command, ownerPorts: ports,
-      cloudTransport: async () => { cloudCalls++; return JSON.stringify({ action: "reply", text: "Done.", reply_to: null }); } });
+      cloudTransport: async input => { cloudCalls++; inspect(input.prompt); return JSON.stringify({ action: "reply", text: "Done.", reply_to: null }); } });
     if (fs.existsSync(capture)) {
       const frame = JSON.parse(fs.readFileSync(capture, "utf8")); fs.rmSync(capture);
       inspect(frame.prompt, false);
-      expect(engine === "claude" ? frame.blocks : frame.images.length).toBe(frame.media.length);
+      expect(engine === "claude" ? frame.blocks : frame.images.length).toBe(frame.media.filter((item: { local_path?: string }) => item.local_path).length);
     }
     return result;
   };
-  return { raw, downloads, completions, prompts, paths, run, cloudCalls: () => cloudCalls, close: server.close };
+  return { raw, downloads, completions, prompts, contexts, paths, run, cloudCalls: () => cloudCalls, close: server.close };
 }
 
 for (const role of ["owner", "group", "guest"] as const) for (const engine of ["claude", "codex", "codex-cloud"] as const)
@@ -193,16 +198,21 @@ for (const role of ["owner", "group", "guest"] as const) for (const mode of ["ov
     try {
       const result = await f.run(f.raw);
       if (mode === "overflow" || mode === "unnegotiated" && role === "guest") expect(result).toMatchObject({ outcome: "declined", reason: "invalid_request" });
-      else if (mode === "unnegotiated" || mode === "no_history_feature") expect(result).toMatchObject({ outcome: "answered", answer: { text: "Done." } });
+      else if (mode === "unnegotiated" || mode === "no_history_feature" || mode === "bad_bytes") expect(result).toMatchObject({ outcome: "answered", answer: { text: "Done." } });
       else if (role === "owner") {
         // Only persistent owner turns deliver owner-tier failure notices.
         expect(result).toMatchObject({ outcome: "answered", answer: { text: "Your request could not be completed. Please try again." } });
       } else if (mode === "lease_lost") expect(result).toBeNull();
       else expect(result).toMatchObject({ outcome: "failed" });
-      expect(f.downloads.length).toBe(mode === "no_history_feature" ? role === "guest" ? 4 : 2 : mode === "lease_lost" || mode === "bad_bytes" ? 1 : 0);
+      expect(f.downloads.length).toBe(mode === "no_history_feature" ? role === "guest" ? 4 : 2 : mode === "bad_bytes" ? 4 : mode === "lease_lost" ? 1 : 0);
       if (mode === "no_history_feature") {
         expect(f.downloads).toEqual(role === "guest" ? ["photo_3", "photo_0", "photo_2", "photo_1"] : ["photo_3", "photo_0"]);
         expect(f.prompts.join().includes('"ref":"photo_1"')).toBe(role === "guest");
+      } else if (mode === "bad_bytes") {
+        expect(f.paths).toEqual([]);
+        const media = JSON.parse(f.prompts[0]!.split("<inbound_media>")[1]!.split("</inbound_media>")[0]!);
+        expect(media).toHaveLength(4);
+        expect(media.every((item: { readable: boolean; reason: string }) => item.readable === false && item.reason === "unsupported_media_type")).toBe(true);
       } else if (mode !== "unnegotiated" || role === "guest") expect(f.prompts).toEqual([]);
       else { expect(f.prompts.join()).toContain("[Media attached; description unavailable]"); expect(f.paths).toEqual([]); }
     } finally { await f.close(); }
@@ -220,8 +230,9 @@ for (const role of ["owner", "group"] as const) for (const engine of ["claude", 
       next.input.respond_to = "message_5";
       expect((await f.run(next))?.outcome).toBe("answered");
       expect(f.downloads).toEqual(["photo_3", "photo_0", "photo_2", "photo_1", "photo_5", "photo_4"]);
-      expect(f.prompts[1]).not.toContain('"id":"message_1"');
-      expect(f.prompts[1]).not.toContain('"ref":"photo_1"');
+      expect(f.prompts[1]!.includes('"id":"message_1"')).toBe(role === "owner");
+      const inbound = f.prompts[1]!.split("<inbound_media>")[1]!.split("</inbound_media>")[0]!;
+      expect(inbound).not.toContain('"ref":"photo_1"');
       const record = readConversations()[0]!; expect(record.seen).toContain("message_5"); resetConversation(record);
       next.request_id = "history_after_reset";
       expect((await f.run(next))?.outcome).toBe("answered");
@@ -240,12 +251,17 @@ for (const engine of ["claude", "codex"] as const) for (const contextFile of [fa
     if (contextFile) {
       f.raw.input.instructions = "C".repeat(16000);
       f.raw.input.owner_instructions = "D".repeat(16000);
+    } else {
+      const older = f.raw.input.conversation[2]!;
+      f.raw.input.conversation.splice(3, 0, ...Array.from({ length: 10 }, (_, i) => ({
+        ...older, id: `recent_${i}`, sent_at: `2026-10-06T12:00:02.${i + 1}Z`, text: "Recent context", media: undefined,
+      })));
     }
     const rows = (prompt: string) => JSON.parse(prompt.split("<conversation>\n")[1]!.split("\n</conversation>")[0]!) as ExternalRelayRequest["input"]["conversation"];
-    const assertLinks = (prompt: string) => {
+    const assertLinks = (prompt: string, context?: string) => {
       expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(MAX_STRUCTURED_TEXT_BYTES);
       expect(prompt.includes("<relay_context_file>")).toBe(contextFile);
-      const sent = rows(prompt);
+      const sent = rows(contextFile ? context! : prompt);
       for (const message of f.raw.input.conversation) {
         const row = sent.find(row => row.id === message.id)!;
         expect(row).toBeDefined();
@@ -254,7 +270,9 @@ for (const engine of ["claude", "codex"] as const) for (const contextFile of [fa
         expect(row.sent_at).toBe(message.sent_at);
         expect(row.reply_to).toBe(message.reply_to);
       }
-      expect(sent.find(row => row.id === "message_1")!.text).toBe("[Earlier text omitted; attachments retained]");
+      expect(sent.find(row => row.id === "message_1")!.text).toBe(contextFile
+        ? f.raw.input.conversation.find(message => message.id === "message_1")!.text
+        : "[Earlier text omitted; attachments retained]");
     };
     try {
       requestSchema.parse(f.raw);
@@ -263,13 +281,13 @@ for (const engine of ["claude", "codex"] as const) for (const contextFile of [fa
       expect(first).toEqual(["photo_3", "photo_0", "photo_2", "photo_1"]);
       const firstSeen = readConversations()[0]!.seen;
       const next = structuredClone(f.raw); next.request_id = "history_trim_next";
-      next.input.conversation.push({ ...next.input.conversation[3]!, id: "message_4", reply_to: "message_3", media: undefined, text: "Continue." });
+      next.input.conversation.push({ ...next.input.conversation.at(-1)!, id: "message_4", reply_to: "message_3", media: undefined, text: "Continue." });
       next.input.respond_to = "message_4";
       expect((await f.run(next))?.outcome).toBe("answered");
       expect(f.downloads.slice(first.length).filter(ref => first.includes(ref))).toEqual([]);
       expect(f.downloads).toEqual(first);
-      assertLinks(f.prompts[0]!);
-      expect(firstSeen).toEqual(expect.arrayContaining(f.raw.input.conversation.map(message => message.id)));
+      assertLinks(f.prompts[0]!, f.contexts[0]);
+      expect(firstSeen).toEqual(expect.arrayContaining(f.raw.input.conversation.filter(message => !contextFile || message.media?.length).map(message => message.id)));
       next.request_id = "history_trim_third";
       expect((await f.run(next))?.outcome).toBe("answered");
       expect(f.downloads).toEqual(first);
@@ -278,7 +296,7 @@ for (const engine of ["claude", "codex"] as const) for (const contextFile of [fa
       expect((await f.run(next))?.outcome).toBe("answered");
       expect(f.downloads.slice(first.length)).toHaveLength(4);
       expect(new Set(f.downloads.slice(first.length))).toEqual(new Set(first));
-      assertLinks(f.prompts[3]!);
+      assertLinks(f.prompts[3]!, f.contexts[3]);
       next.request_id = "history_trim_reset_again";
       expect((await f.run(next))?.outcome).toBe("answered");
       expect(f.downloads).toHaveLength(8);
@@ -287,3 +305,24 @@ for (const engine of ["claude", "codex"] as const) for (const contextFile of [fa
       expect(f.downloads).toHaveLength(8);
     } finally { await f.close(); }
   }, 30_000);
+
+for (const role of ["owner", "group", "guest"] as const) for (const mediaOnly of [false, true])
+  test(`${role}/codex-cloud: refused media ${mediaOnly ? "gets a reason" : "preserves the text answer"}`, async () => {
+    const f = await runnerCase(role, "codex-cloud");
+    for (const message of f.raw.input.conversation) {
+      message.media = message.media?.map(media => ({ ...media, availability: "unsupported_type", mime_type: "image/gif" }));
+      if (message.id === f.raw.input.respond_to) message.text = mediaOnly ? "" : "Answer this text";
+    }
+    f.raw.input.request_text = null;
+    try {
+      const result = await f.run(f.raw);
+      expect(result).toMatchObject({ outcome: "answered", answer: { text: mediaOnly
+        ? "Media could not be read: unsupported media type. Send a JPEG/PNG image or a text request." : "Done." } });
+      expect(f.downloads).toEqual([]); expect(f.paths).toEqual([]);
+      expect(f.cloudCalls()).toBe(mediaOnly ? 0 : 1);
+      if (!mediaOnly) {
+        const media = JSON.parse(f.prompts[0]!.split("<inbound_media>")[1]!.split("</inbound_media>")[0]!);
+        expect(media.every((item: { readable: boolean }) => item.readable === false)).toBe(true);
+      }
+    } finally { await f.close(); }
+  });

@@ -10,8 +10,8 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-upgrade-"));
 const environment = {
   LLV_STATE_DIR: path.join(sandbox, "state"),
   LLV_CODEX_HOME: path.join(sandbox, "codex"),
-  LLV_CLAUDE_HOME: path.join(sandbox, "claude"),
   DELEGATUS_CODEX_HOME: path.join(sandbox, "codex"),
+  LLV_CLAUDE_HOME: path.join(sandbox, "claude"),
   DELEGATUS_CLAUDE_HOME: path.join(sandbox, "claude"),
   OPENCLAW_STATE_DIR: path.join(sandbox, "openclaw"),
   TMPDIR: path.join(sandbox, "tmp"),
@@ -155,7 +155,7 @@ for (const scenario of [
     if (scenario.oldScan) expect(first.headers.get("x-llv-files-cache")).toBe("miss");
     expect(first.headers.get("x-llv-files-projection-cache")).toBe("miss");
     await drainCaches();
-    expect(JSON.parse(fs.readFileSync(scanPath, "utf8")).schemaVersion).toBe(12);
+    expect(JSON.parse(fs.readFileSync(scanPath, "utf8")).schemaVersion).toBe(13);
 
     // Both consumers and their subsequent cache hits retain the same values.
     for (const view of ["full", "summary"] as const) {

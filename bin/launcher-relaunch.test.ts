@@ -10,11 +10,13 @@ import { isAlive } from "../src/lib/selfUpdate/pid";
 import { ApplyController } from "../src/lib/selfUpdate/apply";
 import type { LauncherRecord } from "../src/lib/selfUpdate/launcher";
 import { readStartIdentity } from "./self-update-supervisor.mjs";
+import { STUB_READY } from "./__fixtures__/cli-self-update";
 import { terminalClosed, terminalExited } from "./__fixtures__/terminal-lifecycle";
 
 const roots: string[] = [];
 const children = new Set<ReturnType<typeof spawn>>();
 const owners = new Map<number, string>();
+const observeOwners = new Set<() => unknown>();
 function ownerExited(pid: number, identity: string) {
   if (!isAlive(pid)) return true;
   const current = readStartIdentity(pid);
@@ -40,8 +42,11 @@ async function stopRecorded(record: LauncherRecord) {
     await until(() => !isAlive(entry.pid!) ? true : null);
   }
 }
-afterEach(async () => {
+async function cleanup() {
   for (const child of children) await stop(child);
+  // A failed wait can precede the test's next read of the replacement record.
+  // Collect that detached launcher and its children even on the failure path.
+  for (const observe of observeOwners) observe();
   // Detached supervisors are owned by the bootstrap. Capture their genuine
   // records while observing them and signal only those recorded identities.
   for (const [pid, identity] of owners) {
@@ -51,6 +56,9 @@ afterEach(async () => {
     while (isAlive(pid) && Date.now() < deadline) await Bun.sleep(25);
     if (isAlive(pid) && readStartIdentity(pid) === identity) { try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ } }
     await until(() => ownerExited(pid, identity) ? true : null);
+    // A launcher may publish a child between the first observation and its
+    // retirement. Map iteration also visits owners added by this final read.
+    for (const observe of observeOwners) observe();
   }
   for (const [pid, identity] of owners) {
     if (!ownerExited(pid, identity)) throw new Error("Fixture owner is still running before removal");
@@ -60,11 +68,13 @@ afterEach(async () => {
   for (const child of children) await terminalClosed(child);
   children.clear();
   owners.clear();
+  observeOwners.clear();
   // Exited Windows processes can leave NTFS handles pending release. Retry
   // removal only for our recorded temp roots, after all owners have exited.
   for (const root of roots) await rm(root, { recursive: true, force: true, maxRetries: process.platform === "win32" ? 8 : 0, retryDelay: 250 });
   roots.length = 0;
-}, 90000);
+}
+afterEach(cleanup, 90000);
 
 async function until<T>(read: () => T | null | false, budget = 90000): Promise<T> {
   const deadline = Date.now() + budget;
@@ -91,7 +101,9 @@ async function fixture(equalsPort = false) {
     writeFileSync(path.join(directory, "dist", "standalone", "server.js"), `
       const server = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.PORT), fetch(request) {
         if (request.headers.get("authorization") !== "Bearer synthetic-terminal-key") return new Response("Unauthorized", { status: 401 });
-        return new Response(new URL(request.url).pathname === "/chunk.js" ? "void 0" : '<script src="/chunk.js"></script>' + process.cwd());
+        const pathname = new URL(request.url).pathname;
+        ${STUB_READY}
+        return new Response(pathname === "/chunk.js" ? "void 0" : '<script src="/chunk.js"></script>' + process.cwd());
       } });
       process.on("SIGTERM", () => { server.stop(true); process.exit(0); });
     `);
@@ -139,6 +151,7 @@ async function fixture(equalsPort = false) {
     for (const entry of [record.launcher, record.web, record.runtimeHost]) if (entry.pid && entry.startIdentity) owners.set(entry.pid, entry.startIdentity);
     return record;
   };
+  observeOwners.add(readRecord);
   const old = start(path.join(base, "bin", "cli.mjs"));
   let output = "";
   old.stdout!.on("data", data => { output = (output + data).slice(-4096); });
@@ -184,8 +197,9 @@ async function fixture(equalsPort = false) {
         const files = ["stdout", "stderr"].map(stream => openSync(path.join(directory, name + "." + stream), "a"));
         const trace = value => appendFileSync(path.join(directory, name + ".jsonl"), JSON.stringify(value) + "\\n");
         try {
+          const started = performance.now();
           const child = original(command, args, { ...options, stdio: ["ignore", ...files] });
-          trace({ method, pid: child.pid, entry: args.findLast(arg => /\\.(mjs|js)$/.test(arg)), argv: args.map(arg => arg.length > 256 ? "<long-argument>" : arg), status: child.status, signal: child.signal, error: child.error?.message });
+          trace({ method, pid: child.pid, elapsedMs: performance.now() - started, entry: args.findLast(arg => /\\.(mjs|js)$/.test(arg)), argv: args.map(arg => arg.length > 256 ? "<long-argument>" : arg), status: child.status, signal: child.signal, error: child.error?.message, errorCode: child.error?.code });
           if (method === "spawn") {
             child.once("exit", (code, signal) => trace({ code, signal }));
             child.once("error", error => trace({ error: error.message }));
@@ -248,7 +262,7 @@ async function fixture(equalsPort = false) {
       print("page-health", { status: page.status, body: (await page.text()).slice(0, 2048) });
     } catch (error) { print("page-health", String(error)); }
   };
-  return { old, before, candidate, prior, pointer, rollbackPointer, apply, readRecord, bootstrap, plan, port, env, diagnose, diagnosticsDir };
+  return { old, before, candidate, prior, pointer, rollbackPointer, apply, readRecord, recordFile, bootstrap, plan, port, env, diagnose, diagnosticsDir };
 }
 
 test("terminal load preflight refuses a candidate that ignores TERM within its child timeout", async () => {
@@ -266,13 +280,67 @@ test("terminal load preflight refuses a candidate that ignores TERM within its c
   await until(() => existsSync(entered));
   const preflightPid = Number(readFileSync(entered, "utf8")), identity = readStartIdentity(preflightPid);
   if (identity) owners.set(preflightPid, identity);
-  await terminalExited(run.child, 5000);
+  // Bound the load check itself. The bootstrap then starts and health-checks
+  // the prior release, which has the same budget as every other rollback.
+  const preflight = await until(() => {
+    for (const name of readdirSync(f.diagnosticsDir).filter(name => name.endsWith(".jsonl"))) {
+      for (const line of readFileSync(path.join(f.diagnosticsDir, name), "utf8").trim().split("\n")) {
+        try {
+          const event = JSON.parse(line);
+          if (event.method === "spawnSync" && event.argv?.includes("--version")) return event;
+        } catch { /* A trace line may still be being written. */ }
+      }
+    }
+    return null;
+  }, 5000);
+  expect(preflight.errorCode).toBe("ETIMEDOUT");
+  expect(preflight.elapsedMs).toBeLessThan(5000);
+  expect(isAlive(preflightPid)).toBe(false);
+  const rollbackStarted = performance.now();
+  await terminalExited(run.child)
+    .catch(async error => { await f.diagnose("rollback health after bounded load preflight", run); throw error; });
+  console.error("[terminal-timing] " + JSON.stringify({ preflightMs: preflight.elapsedMs, rollbackMs: performance.now() - rollbackStarted }));
   expect(run.child.exitCode).toBe(1);
   const record = f.readRecord()!;
   expect(record.web.state).toBe("healthy"); expect(record.runtimeHost.state).toBe("healthy");
   expect(record.web.revision).toBe("a".repeat(7));
   expect(readFileSync(f.pointer, "utf8")).toBe(f.rollbackPointer);
-}, 15_000);
+}, 240000);
+
+test("terminal teardown collects replacement owners after an interrupted health wait", async () => {
+  const f = await fixture();
+  await stop(f.old); await stopRecorded(f.before);
+  // The prior Viewer is alive with an inherited cwd, but cannot report health
+  // yet. This reproduces the early wait failure without runner-speed timing.
+  const server = path.join(f.prior, "dist", "standalone", "server.js");
+  const entered = path.join(f.diagnosticsDir, "rollback-entered");
+  writeFileSync(server, `
+    (await import("node:fs")).writeFileSync(${JSON.stringify(entered)}, String(process.pid));
+    while (true) await Bun.sleep(1000);
+  `);
+  writeFileSync(path.join(f.candidate, "bin", "cli.mjs"), 'throw new Error("candidate load refused");\n');
+  const run = f.bootstrap();
+  await until(() => existsSync(entered));
+  const webPid = Number(readFileSync(entered, "utf8"));
+  // The process can enter before its launcher finishes publishing custody.
+  // Observe that publication without registering owners in the test harness.
+  const replacement = await until(() => {
+    try {
+      const record = JSON.parse(readFileSync(f.recordFile, "utf8")) as LauncherRecord;
+      return record.launcher.pid !== f.before.launcher.pid && record.web.pid === webPid
+        && [record.launcher, record.web, record.runtimeHost].every(entry => entry.pid && entry.startIdentity) ? record : null;
+    } catch { return null; }
+  });
+  expect(isAlive(webPid)).toBe(true);
+  await expect(terminalExited(run.child, 1)).rejects.toThrow("Terminal process did not exit after its health budget");
+  // Deliberately do not call readRecord: teardown must discover the new owner.
+  await cleanup();
+  for (const entry of [replacement.launcher, replacement.web, replacement.runtimeHost]) {
+    expect(ownerExited(entry.pid!, entry.startIdentity!)).toBe(true);
+  }
+  expect(run.child.exitCode !== null || run.child.signalCode !== null).toBe(true);
+  expect(existsSync(path.dirname(f.prior))).toBe(false);
+}, 240000);
 
 test("terminal rollback deadline refuses and reaps its own hung legacy launcher", async () => {
   const f = await fixture();

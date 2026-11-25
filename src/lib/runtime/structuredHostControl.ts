@@ -1,7 +1,7 @@
 import { invalidateAgentState } from "@/lib/agentState/invalidation";
 import { projectAgentStateDisplay } from "@/lib/agentState/model";
 import { cachedAgentObservation } from "@/lib/agentState/projectionCache";
-import { entryRevision, subjectId } from "@/lib/agentState/store";
+import { entryRevision, readAgentProjection, subjectId } from "@/lib/agentState/store";
 import { differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, stopAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { recordHostStop, withHostStopOrigin, type HostStopOrigin } from "./hostExit";
 import fs from "node:fs";
@@ -50,7 +50,7 @@ export function readStructuredHostRecords(dependencies: {
   // conversation payloads, including when the inventory is empty.
   const entries = hotRegistryRows(file, "entries").map(([, entry]) => entry)
     .filter((entry) => Boolean(entry.structuredHost?.process)
-      && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot"))
+      && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot" || entry.key.engine === "antigravity"))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, RESOURCE_STRUCTURED_HOST_LIMIT);
   if (!entries.length) return [];
@@ -62,7 +62,7 @@ export function readStructuredHostRecords(dependencies: {
     for (const id of sessionIds) {
       // Keep the inventory's existing raw-session matching and last-owner
       // precedence across engines; the index itself uses qualified keys.
-      for (const engine of ["claude", "codex", "copilot"] as const) {
+      for (const engine of ["claude", "codex", "copilot", "antigravity"] as const) {
         for (const conversation of registryConversationsForEntryKey(file, `${engine}:${id}`)) {
           selected.set(conversation.id, conversation);
         }
@@ -86,7 +86,9 @@ export function readStructuredHostRecords(dependencies: {
     const generation = conversation?.generations.find((candidate) => candidate.id === entry.key.sessionId) ?? null;
     const memberships = conversation ? file.memberships[conversation.id] ?? [] : [];
     const pipeline = memberships.find((membership) => membership.kind === "pipeline") ?? null;
-    const candidate = cachedAgentObservation(subjectId(entry)) ?? file.agentStates?.[subjectId(entry)];
+    const candidate = cachedAgentObservation(subjectId(entry))
+      ?? file.agentStates?.[subjectId(entry)]
+      ?? (entry.key.engine === "antigravity" && !dependencies.snapshot ? readAgentProjection(agentRegistry(), subjectId(entry)) : undefined);
     const central = candidate?.facts.revision === entryRevision(entry) ? candidate : null;
     const display = central ? projectAgentStateDisplay(central, (dependencies.now ?? Date.now)()) : null;
     if (!dependencies.snapshot && (!display || display.quality === "unverified")) invalidateAgentState(agentRegistry().filename, entry.key);
@@ -186,7 +188,7 @@ export function structuredHostKillRefFromRegistry(
   if (!entry) return { ok: false, error: "the registry has no row for this session", owner };
   const process = recordedScopeProcess(entry.structuredHost);
   if (!process) return { ok: false, error: "the registry row names no host process", owner };
-  if (key.engine !== "claude" && key.engine !== "codex") {
+  if (key.engine !== "claude" && key.engine !== "codex" && key.engine !== "copilot" && key.engine !== "antigravity") {
     return { ok: false, error: `a ${key.engine} session has no structured host to end`, owner };
   }
   if (typeof process.startIdentity !== "string" || process.startIdentity.length === 0) {
@@ -362,6 +364,10 @@ export type StructuredHostTerminationOutcome =
 
 export interface StructuredHostTerminationDependencies {
   stopOrigin?: HostStopOrigin;
+  /** The registry whose row this termination ends. Once the tree is proven
+      gone, the row's orphan alarm, if one is recorded, is closed there: the
+      host it warned about no longer runs. */
+  orphanAlarmRegistry?: import("@/lib/agent/registry").AgentRegistry;
   processIdentity?(pid: number): string | null;
   bootEpoch?(): string | null;
   pidAlive?(pid: number): boolean;
@@ -444,7 +450,17 @@ export async function terminateStructuredHostTree(
   ref: StructuredHostKillRef,
   dependencies: StructuredHostTerminationDependencies = {},
 ): Promise<StructuredHostTerminationOutcome> {
-  return withRecordedHostFence(ref, () => terminateStructuredHostTreeFenced(ref, dependencies));
+  const outcome = await withRecordedHostFence(ref, () => terminateStructuredHostTreeFenced(ref, dependencies));
+  if (outcome.ok && ref.sessionId && dependencies.orphanAlarmRegistry) {
+    const key: SessionKey = { engine: ref.engine, sessionId: ref.sessionId };
+    try {
+      const { closeOrphanedHostAlarm } = await import("./orphanedHostAlarm");
+      await closeOrphanedHostAlarm(dependencies.orphanAlarmRegistry, key);
+    } catch (error) {
+      console.error("[structured hosts] orphaned host alarm closure after a stop deferred", { key: sessionKeyId(key), error: String(error) });
+    }
+  }
+  return outcome;
 }
 
 async function terminateStructuredHostTreeFenced(
@@ -646,7 +662,7 @@ async function terminateStructuredHostTreeFenced(
     return {
       ok: false,
       status: 409,
-      error: "structured termination evidence could not be persisted",
+      error: dependencies.authorize?.()?.error ?? "structured termination evidence could not be persisted",
       remaining: tree.filter(candidate => alive(candidate)),
       survivors: capturedIdentities.filter(identity => {
         try { return processIdentityStatus(identity, identityProbe) !== "dead"; }
@@ -789,7 +805,7 @@ async function terminateStructuredHostTreeFenced(
             added = true;
           }
           if (added && dependencies.persistCapturedTree && !await dependencies.persistCapturedTree([...identities.values()])) {
-            return { ok: false, status: 409, error: "structured termination evidence could not be persisted", remaining: survivors(), ...partialEvidence() };
+            return { ok: false, status: 409, error: dependencies.authorize?.()?.error ?? "structured termination evidence could not be persisted", remaining: survivors(), ...partialEvidence() };
           }
           const refused = await readAuthority() ?? authorityRefusal();
           if (refused) return refused;

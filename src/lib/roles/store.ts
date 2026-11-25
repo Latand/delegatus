@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { effortScale } from "@/lib/agent/efforts";
 import { validAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
-import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
+import { normalizeClaudeLaunchModel, validateLaunchModel } from "@/lib/agent/models";
 
 import { ROLE_DEFAULTS } from "./defaults";
 import { ROLE_VARIANT_DEFAULTS, shippedVariantConfig } from "./paramConfig";
@@ -24,9 +24,8 @@ const READABLE_SCHEMA_VERSIONS: readonly unknown[] = [1, 2, 3, 4, 5, 6];
 /** Shipped runtime of each builder variant; a saved variant mapping merges over it. */
 export const BUILDER_VARIANT_DEFAULTS = ROLE_VARIANT_DEFAULTS.builder;
 
-/** Hard cap for any persisted prompt scaffold, shared with the pipeline store
-    so a value that saves is always a value that loads. */
-export const MAX_SCAFFOLD_LENGTH = 12_000;
+export { MAX_SCAFFOLD_LENGTH } from "./limits";
+import { MAX_SCAFFOLD_LENGTH } from "./limits";
 
 export class RoleStoreError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -47,7 +46,7 @@ function isPartialConfig(value: unknown): value is Partial<RoleConfig> {
   if (Object.keys(value).some((key) => key !== "engine" && key !== "model" && key !== "effort" && key !== "serviceTier" && key !== "agentMemoryMaxBytes")) return false;
   if (!validAgentMemoryMax((value as Partial<RoleConfig>).agentMemoryMaxBytes)) return false;
   const { engine, model, effort, serviceTier } = value as Partial<RoleConfig>;
-  if (engine !== undefined && engine !== "claude" && engine !== "codex") return false;
+  if (engine !== undefined && engine !== "claude" && engine !== "codex" && engine !== "antigravity") return false;
   if (model !== undefined && (typeof model !== "string" || model.length > 128)) return false;
   if (effort !== undefined && (typeof effort !== "string" || effort.length > 32)) return false;
   if (serviceTier !== undefined && (typeof serviceTier !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(serviceTier))) return false;
@@ -85,6 +84,7 @@ function isCompatibleConfig(id: string, config: RoleConfig): boolean {
   if (config.model.length > 128 || /[\u0000-\u001f\u007f]/.test(config.model)) return false;
   if (config.engine === "claude" && !normalizeClaudeLaunchModel(config.model)) return false;
   if (config.engine === "codex" && !config.model.startsWith("gpt-")) return false;
+  if (config.engine === "antigravity" && "error" in validateLaunchModel("antigravity", config.model)) return false;
   if (config.serviceTier && config.engine !== "codex") return false;
   const scale = effortScale(config.engine, config.model)!;
   if (!scale.includes(config.effort)) {

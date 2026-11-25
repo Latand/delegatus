@@ -1,26 +1,35 @@
+import { pageReader, type PageReader, type PageReadResult } from "./pageReader";
 import { admittedSeedMedia } from "./mediaInputValidation";
 import { createHash } from "node:crypto";
 import { ExternalRelayError, isUnknownFeatureRefusal, relayCall } from "./client";
-import { isOwnerTool, ownerRateLimitSchema, RELAY_OWNER_TOOLS, toolCallResultSchema, type ExternalRelayRequest, type ExternalRelayRequester, type RoundCall, type ToolCallResult } from "./protocol";
+import { isOwnerTool, ownerRateLimitSchema, relayToolAudience, RELAY_OWNER_TOOLS, toolCallResultSchema, visibleRelayTools, type ExternalRelayRequest, type RoundCall, type ToolCallResult } from "./protocol";
 import { readRelaySwitches } from "./switches";
 import type { PairedRelay } from "./store";
 import type { RelayToolCallRecord } from "./answers";
+import { redactRequesterCodeText } from "./requesterEnrolmentContract";
 import { ACTION_VERIFICATION_MS, ACTION_VERIFICATION_READS, actionOutcomeReads, establishActionOutcome, verificationFailed, type ActionOutcome, type ActionResolution } from "./actionOutcome";
 
 export const RELAY_TOOL_ROUNDS = 8;
+// Receipt reads do not admit actions. This bound is also saved by the runner.
+export const UNKNOWN_OUTCOME_READS = 3;
 
-export function mayQuote(audience: string | undefined, requester: ExternalRelayRequester | null | undefined): boolean {
-  return audience === undefined || (audience === "admin" && requester?.is_admin === true) ||
-    (audience === "owner" && requester?.is_owner === true);
-}
 export const callableReads = (request: ExternalRelayRequest) =>
-  (request.input.tools ?? []).filter((tool) => tool.mode === "direct" && tool.effect === "read" &&
-    tool.parameters && mayQuote(tool.audience, request.input.requester));
+  request.delivery === "guest" ? [] : visibleRelayTools(request).filter(tool =>
+    tool.mode === "direct" && tool.effect === "read" && tool.parameters);
 
 export const callableTools = (request: ExternalRelayRequest) =>
-  (request.input.tools ?? []).filter((tool) => tool.mode === "direct" && tool.parameters &&
-    (tool.effect === "read" || tool.effect === "action" && !!request.input.requester) &&
-    mayQuote(tool.audience, request.input.requester));
+  request.delivery === "guest" ? [] : visibleRelayTools(request).filter(tool =>
+    tool.name !== "read_page" && tool.mode === "direct" && tool.parameters &&
+    (tool.effect === "read" || tool.effect === "action" && !!request.input.requester));
+
+export const PAGE_READ_TOOL: import("./protocol").ExternalRelayTool = {
+  name: "read_page", summary: "Read one public internet page through the relay URL policy.",
+  mode: "direct", effect: "read", parameters: { type: "object", required: ["url"], additionalProperties: false,
+    properties: { url: { type: "string" } } },
+};
+export const roundTools = (request: ExternalRelayRequest, pageRead = false) =>
+  [...callableTools(request), ...(pageRead && request.delivery !== "guest" ? [PAGE_READ_TOOL] : [])];
+type LoopResolution = ActionResolution & { page?: PageReadResult };
 
 /** Sort at every depth without interpreting JSON keys as object prototypes. */
 export function canonical(value: unknown): string {
@@ -38,14 +47,16 @@ export function callBody(request: ExternalRelayRequest, logical: { tool: string;
 }
 export type ToolProjection = {
   media_notes?: string[];
+  media_images?: { ref: string; image_index: number }[];
+  refusal?: import("./pageUrlPolicy").PageRefusal;
   round: number; tool: string; arguments?: Record<string, unknown>; page_of?: string;
   effect?: "action"; delivered?: true; execution_unknown?: true; summary?: string; expires_in_s?: number;
   outcome?: ActionOutcome;
   status: string; output: string; truncated: boolean; next_cursor?: string; audience?: string; code?: string;
 };
-export type ToolLoopRuntime = { sleep?: (ms: number, signal: AbortSignal) => Promise<void>; now?: () => number; monotonicNow?: () => number; onUnknownFeature?: () => Promise<unknown>;
+export type ToolLoopRuntime = { pageRead?: boolean; pageReader?: PageReader; sleep?: (ms: number, signal: AbortSignal) => Promise<void>; now?: () => number; monotonicNow?: () => number; onUnknownFeature?: () => Promise<unknown>;
   /** Successful read-image downloads owned by this request's media collector. */
-  seedMediaRefs?: ReadonlySet<string> };
+  seedMediaRefs?: ReadonlySet<string>; seedRefusal?: (ref: string) => string };
 export async function toolSleep(ms: number, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
@@ -61,10 +72,11 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
 }, runtime: ToolLoopRuntime = {}, onProgress?: (tool: string, done: boolean, failed: boolean) => void, onToolState?: (pending: boolean) => void) {
   // I8/C8 admission and the authoritative index belong to the service. The
   // feature gates only the amended owner semantics; legacy 2a owner reads stay.
-  const tools = callableTools(request);
+  const tools = roundTools(request, runtime.pageRead);
+  const mayQuote = relayToolAudience(request);
   const ownerToolsEnabled = readRelaySwitches().owner_tools && relay.features?.includes(RELAY_OWNER_TOOLS);
-  const effectOf = (name: string) => request.input.tools?.find((tool) => tool.name === name)?.effect;
-  const cache = new Map<string, Promise<ActionResolution>>();
+  const effectOf = (name: string) => name === "read_page" ? "read" : request.input.tools?.find((tool) => tool.name === name)?.effect;
+  const cache = new Map<string, Promise<LoopResolution>>();
   const cursors = new Map<string, string>();
   const accounted = new Set<string>();
   const projected = new Set<string>();
@@ -89,8 +101,14 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
   };
   const callsLeft = () => terminal ? 0 : Math.max(0, Math.min(remaining, 16 - sent));
   async function send(body: ReturnType<typeof callBody>, tool: string): Promise<ActionResolution> {
+    const checkSeeds = () => {
+      if ("arguments" in body && !admittedSeedMedia(request, body.arguments ?? {}, runtime.seedMediaRefs, now()))
+        throw new ExternalRelayError("media_ref_expired", 400);
+    };
+    const beforeSend = async () => { checkSeeds(); await lease.beforeSend?.(); checkSeeds(); };
     if (!await lease.ack()) { lease.lose(); lease.signal.throwIfAborted(); }
     lease.signal.throwIfAborted();
+    try { checkSeeds(); } catch { return { result: null, code: "media_ref_expired", output: "The image ref expired before the call was sent." }; }
     const action = effectOf(tool) === "action";
     const verifyingRead = action && Object.hasOwn(actionOutcomeReads, tool) ? actionOutcomeReads[tool] : undefined;
     const owner = ownerToolsEnabled && isOwnerTool(tools.find((item) => item.name === tool)!);
@@ -138,7 +156,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
           if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool || parsed.data.effect !== "action")
             throw new ExternalRelayError("malformed");
           if (!parsed.data.replayed) remaining = Math.min(remaining, parsed.data.calls_remaining);
-          if (parsed.data.calls_remaining === 0 || parsed.data.delivered || parsed.data.status !== "ok" && parsed.data.status !== "error") terminal = true;
+          if (!parsed.data.replayed && parsed.data.calls_remaining === 0 || parsed.data.delivered || parsed.data.status !== "ok" && parsed.data.status !== "error") terminal = true;
           return parsed.data;
         } catch (error) {
           if (isUnknownFeatureRefusal(error)) await runtime.onUnknownFeature?.();
@@ -153,20 +171,41 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       if (rejectionCode) { terminal = true; rejected.abort(); }
       return resolution;
     }
-    const unknown = async (initial?: ToolCallResult): Promise<ActionResolution> => {
+    let lastUnknown: ToolCallResult | undefined;
+    let recoveringReceipt = false;
+    const unknown = async (initial: ToolCallResult | undefined = lastUnknown): Promise<ActionResolution> => {
       terminal = true;
       sawUnknown = true;
-      return { result: initial ?? null, unknown: true, output: verificationFailed(tool, "no verifying read declared").output };
+      return { result: initial ?? null, unknown: true, output: `The outcome of ${tool} remains unknown.`,
+        ...(recoveringReceipt && !initial ? { outcome: "verification_failed" as const } : {}) };
     };
-    let ambiguous = false;
-    const refused = (code?: string) => {
-      if (action && ambiguous) return unknown();
+    let receiptDeadline = Math.min(now() + 360_000, (lease.deadlineAt ?? Infinity) - 1000);
+    // The ledger stores wall-clock deadlines; the injected loop clock also
+    // drives pending waits and relative confirmation expiry in rehearsals.
+    let savedReceiptDeadline = Date.now() + Math.max(0, receiptDeadline - now());
+    if (action && lease.verificationBudget) {
+      try {
+        const saved = await lease.verificationBudget(body.call_id, savedReceiptDeadline, "send");
+        savedReceiptDeadline = Math.min(savedReceiptDeadline, saved.deadlineAt);
+        receiptDeadline = Math.min(receiptDeadline, now() + Math.max(0, savedReceiptDeadline - Date.now()));
+        recoveringReceipt = saved.recovering === true;
+        if (!saved.allowed || recoveringReceipt && saved.reads >= UNKNOWN_OUTCOME_READS) return unknown();
+      } catch (error) {
+        lease.signal.throwIfAborted();
+        return { ...await unknown(), code: error instanceof ExternalRelayError ? error.code : "verification_bound_unavailable" };
+      }
+    }
+    let ambiguous = recoveringReceipt;
+    let reconciling = recoveringReceipt;
+    let receiptReads = 0;
+    const refused = async (code?: string): Promise<ActionResolution> => {
+      if (action && ambiguous) return { ...await unknown(lastUnknown ? { ...lastUnknown, output: "", truncated: false, code: undefined } : undefined), code };
       // A wire refusal proves this owner call was not admitted. Other calls'
       // markers and any earlier uncertainty in this call still block handoff.
       if (owner) possibleOwnerActions.delete(body.call_id);
       return { result: null, code, output: "The call could not be completed." };
     };
-    const unfinished = () => action ? unknown() : { result: null, output: "The read did not finish." };
+    const unfinished = () => action ? unknown(lastUnknown) : { result: null, output: "The read did not finish." };
     const started = now();
     let failures = 0;
     let unavailable = 0;
@@ -176,12 +215,25 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       if (rejectionCode) return refused(rejectionCode);
       if (pending && now() - started >= 330_000) return unfinished();
       try {
+        if (reconciling) {
+          if (receiptReads >= UNKNOWN_OUTCOME_READS || now() >= receiptDeadline) return unknown(lastUnknown);
+          receiptReads++;
+          if (!await lease.ack()) { lease.lose(); lease.signal.throwIfAborted(); }
+          if (lease.verificationBudget && !(await lease.verificationBudget(body.call_id, savedReceiptDeadline, true)).allowed)
+            return unknown(lastUnknown);
+          if (now() >= receiptDeadline) return unknown(lastUnknown);
+        }
         if (action) {
           if (owner) possibleOwnerActions.add(body.call_id);
           else actionSent = true;
         }
         const response = await relayCall(relay.api_base, `/requests/${encodeURIComponent(request.request_id)}/tool-calls`, "POST", body,
-          relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal: callSignal, beforeSend: lease.beforeSend });
+          relay.credential, { timeoutMs: 30_000, maxBytes: 65_536, signal: callSignal, beforeSend: async () => {
+            if (reconciling && now() >= receiptDeadline) throw new ExternalRelayError("verification_deadline", 409);
+            await beforeSend();
+            if (reconciling && now() >= receiptDeadline) throw new ExternalRelayError("verification_deadline", 409);
+          }, prepareBody: () => { checkSeeds(); return body; } });
+        if (reconciling && now() >= receiptDeadline) return unknown(lastUnknown);
         if (rejectionCode) return refused(rejectionCode);
         const parsed = toolCallResultSchema.safeParse(response.body);
         if (!parsed.success || parsed.data.call_id !== body.call_id || parsed.data.tool !== tool) throw new ExternalRelayError("malformed");
@@ -189,13 +241,27 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         onlyRateLimited = false;
         // Concurrent responses and historical replays must never replenish the budget.
         if (!result.replayed) remaining = Math.min(remaining, result.calls_remaining);
-        // R6 zero ends new actions even on replay; an admitted pending call still polls below.
-        if (action && result.calls_remaining === 0 || result.code === "too_many_calls" || result.delivered || ["confirmation_pending", "outcome_unknown"].includes(result.status)) terminal = true;
-        // Reauthorization can deny a saved success after execution. Keep the
-        // denial; unavailable permits only retries of this same wire identity.
-        if (action && result.status === "denied" && result.code !== "unavailable") terminal = true;
-        if (action && result.status === "outcome_unknown") return unknown(result);
-        if (!action && !mayQuote(result.audience, request.input.requester)) return { result };
+        // Only a fresh admission snapshot can close the new-call budget; admitted receipts still poll.
+        if (action && !result.replayed && result.calls_remaining === 0 || result.code === "too_many_calls" || result.delivered || ["confirmation_pending", "outcome_unknown"].includes(result.status)) terminal = true;
+        // A refused receipt read cannot disclose the earlier result's text.
+        if (action && result.status === "denied" && lastUnknown)
+          lastUnknown = { ...lastUnknown, output: "", truncated: false, code: undefined };
+        // Reauthorization closes new actions. A refused receipt read keeps
+        // the unknown outcome and its denial code.
+        if (action && result.status === "denied" && result.code !== "unavailable") {
+          terminal = true;
+          if (reconciling) return { ...await unknown(), code: result.code };
+        }
+        if (action && result.status === "outcome_unknown") {
+          ambiguous = true;
+          lastUnknown = result;
+          if (!mayQuote(result.audience) || receiptReads >= UNKNOWN_OUTCOME_READS)
+            return unknown(result);
+          reconciling = true;
+          await wait(1000);
+          continue;
+        }
+        if (!action && !mayQuote(result.audience)) return { result };
         if (result.status === "pending") {
           pending = true;
           if (action) ambiguous = true;
@@ -210,7 +276,7 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
             continue;
           }
           if (action) {
-            return unknown(result);
+            return { ...await unknown(lastUnknown ?? result), code: result.code };
           }
         }
         return { result };
@@ -272,7 +338,20 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
         let args: unknown;
         try { args = JSON.parse(call.arguments); } catch { return local("invalid_arguments"); }
         if (!args || typeof args !== "object" || Array.isArray(args)) return local("invalid_arguments");
-        if (!admittedSeedMedia(request, args as Record<string, unknown>, runtime.seedMediaRefs)) return local("invalid_arguments");
+        if (call.tool === "read_page" && (Object.keys(args).length !== 1 || typeof (args as { url?: unknown }).url !== "string")) return local("invalid_arguments");
+        if (Object.hasOwn(args, "seed_media_refs")) {
+          if (!["generate_image", "update_self_profile_photo"].includes(call.tool)) return local("invalid_arguments", "seed_tool_unsupported");
+          const properties = tools.find(tool => tool.name === call.tool)?.parameters?.properties;
+          const seedSchema = properties && typeof properties === "object" && !Array.isArray(properties)
+            ? (properties as Record<string, unknown>).seed_media_refs : undefined;
+          if (!seedSchema || typeof seedSchema !== "object" || Array.isArray(seedSchema) || (seedSchema as Record<string, unknown>).type !== "array")
+            return local("invalid_arguments", "seed_refs_not_advertised");
+          if (!admittedSeedMedia(request, args as Record<string, unknown>, runtime.seedMediaRefs, now())) {
+            const refs = (args as Record<string, unknown>).seed_media_refs;
+            const refused = Array.isArray(refs) && refs.find(ref => typeof ref === "string" && !runtime.seedMediaRefs?.has(ref));
+            return local("invalid_arguments", typeof refused === "string" ? runtime.seedRefusal?.(refused) ?? "media_ref_unavailable_or_expired" : "seed_refs_invalid");
+          }
+        }
         logical = { tool: call.tool, arguments: args as Record<string, unknown> };
       }
       const body = callBody(request, logical);
@@ -294,15 +373,21 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
           }
           onToolState?.(true);
           if (!tool.audience) onProgress?.(call.tool, false, false);
-          const response = send(body, call.tool);
+          const response: Promise<LoopResolution> = call.tool === "read_page" && "arguments" in body
+            ? (async () => {
+              if (!await lease.ack()) { lease.lose(); lease.signal.throwIfAborted(); }
+              lease.signal.throwIfAborted();
+              return { result: null, page: await (runtime.pageReader ?? pageReader).readPublicPage(body.arguments!.url as string,
+                { signal: callSignal, deadlineAt: lease.deadlineAt }) };
+            })() : send(body, call.tool);
           return onToolState ? response.finally(() => onToolState(false)) : response;
         })().then((value) => {
-          if (!tool.audience && (!value.result || !value.result.audience)) onProgress?.(call.tool, true, value.result?.status !== "ok");
+          if (!tool.audience && (!value.result || !value.result.audience)) onProgress?.(call.tool, true, (value.page?.status ?? value.result?.status) !== "ok");
           return value;
         });
         cache.set(body.call_id, task);
       }
-      return { call, local: false, body, task };
+      return { call, local: call.tool === "read_page", body, task };
     });
     const projections = new Map<number, ToolProjection>();
     const rows = new Map<number, RelayToolCallRecord>();
@@ -310,12 +395,15 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       const { call, local, body } = scheduled[index]!;
       const action = effectOf(call.tool) === "action";
       const raw = value.result;
-      const withheld = !!raw && !mayQuote(raw.audience, request.input.requester);
-      let output = withheld ? "" : value.outcome === "verification_failed" ? value.output ?? "" : raw?.output ?? value.output ?? "";
-      let code = withheld && !action ? "not_permitted" : raw?.code ?? value.code;
-      let status = withheld && !action ? "denied" : raw?.status ?? ("unknown" in value && value.unknown ? "outcome_unknown" : local ? "denied" : "error");
+      const page = "page" in value ? value.page as PageReadResult | undefined : undefined;
+      const withheld = !!raw && !mayQuote(raw.audience);
+      // Service text can quote chat history, so pending enrolment codes never
+      // reach an agent, its transcript or its report through a tool result.
+      let output = redactRequesterCodeText(withheld ? "" : value.outcome === "verification_failed" ? value.output ?? "" : raw?.output ?? page?.output ?? value.output ?? "");
+      let code = withheld && !action ? "not_permitted" : raw?.code ?? page?.code ?? value.code;
+      let status = withheld && !action ? "denied" : raw?.status ?? page?.status ?? ("unknown" in value && value.unknown ? "outcome_unknown" : local ? "denied" : "error");
       if (withheld && action) terminal = true;
-      let truncated = !withheld && (raw?.truncated ?? false);
+      let truncated = !withheld && (raw?.truncated ?? page?.truncated ?? false);
       if (body && !accounted.has(body.call_id)) {
         accounted.add(body.call_id);
         const bytes = Buffer.byteLength(output);
@@ -331,25 +419,26 @@ export function createToolLoop(relay: PairedRelay, request: ExternalRelayRequest
       const projection: ToolProjection = { round, tool: call.tool,
         ...(body && "arguments" in body ? { arguments: body.arguments } : call.cursor ? { page_of: call.cursor } : {}),
         status, output, truncated,
+        ...(page?.refusal ? { refusal: page.refusal } : {}),
         ...(action ? { effect: "action" as const } : {}),
         ...(value.outcome ? { outcome: value.outcome } : {}),
         ...(action && raw && "unknown" in value && value.unknown ? { execution_unknown: true as const } : {}),
         ...(action && raw?.delivered ? { delivered: true as const } : {}),
         ...(action && !withheld && raw?.status === "confirmation_pending" ? {
-          ...(raw.summary !== undefined ? { summary: raw.summary } : {}),
+          ...(raw.summary !== undefined ? { summary: redactRequesterCodeText(raw.summary) } : {}),
           ...(raw.expires_at ? { expires_in_s: Math.max(0, Math.ceil((Date.parse(raw.expires_at) - now()) / 1000)) } : {}),
         } : {}),
-        ...(!withheld && raw?.cursor ? { next_cursor: raw.cursor } : {}),
+        ...(!action && !withheld && raw?.cursor ? { next_cursor: raw.cursor } : {}),
         ...(!withheld && raw?.audience ? { audience: raw.audience } : {}), ...(code ? { code } : {}),
       };
       if (!duplicate) {
         projections.set(index, projection);
         if (body) projected.add(body.call_id);
       }
-      if (!withheld && raw?.cursor) cursors.set(raw.cursor, call.tool);
+      if (!action && !withheld && raw?.cursor) cursors.set(raw.cursor, call.tool);
       rows.set(index, { round, tool: call.tool, page: call.cursor !== null, status: raw?.status ?? status,
-        code: raw?.code ?? code ?? null, audience: raw?.audience ?? null,
-        truncated: raw?.truncated ?? false, replayed: raw?.replayed ?? false, withheld, local: local || !raw,
+        code: page?.refusal?.class ?? raw?.code ?? code ?? null, audience: raw?.audience ?? null,
+        truncated: raw?.truncated ?? page?.truncated ?? false, replayed: raw?.replayed ?? false, withheld, local: local || !raw,
         ...(value.outcome ? { outcome: value.outcome } : {}),
         ...(action ? { effect: "action" as const } : {}) });
     }

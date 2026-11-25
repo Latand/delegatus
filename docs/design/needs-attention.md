@@ -69,7 +69,7 @@ desktop board since #1695) and the phone kanban card (#2072).
 | 2 | Pending question (`AskUserQuestion`) | `attention.ts:130` | Desktop: bare "needs you". Phone: "Question" badge. Toast: the question's header (`decision.ts:80`). |
 | 3 | Pending plan (`ExitPlanMode`) | `attention.ts:130` (`pendingQuestion.kind === "plan"`) | Desktop: bare "needs you". Phone: "Plan" badge. Toast: "Plan to approve" (`decision.ts:77`). |
 | 4 | Rate-limit wall, scraped from a tmux pane | `attention.ts:131`, set only by `src/lib/scanner/waitingInput.ts:70` | Desktop: bare "needs you". Phone: "Limit" badge with the reset time (`mobileBoardModel.ts:145-155`). |
-| 5 | Waiting input: a permission or choice prompt scraped from a tmux pane | `attention.ts:134`, set only by `src/lib/scanner/index.ts:336` and `observe.ts:98` | Desktop: bare "needs you". Phone: "Question" badge. Toast: "Permission prompt" (`decision.ts:83`). |
+| 5 | Waiting input: a permission or choice prompt scraped from a tmux pane | `attention.ts:134` | Desktop: bare "needs you". Phone: "Question" badge. Toast: "Permission prompt" (`decision.ts:83`). |
 | 6 | Owed message delivery older than 5 minutes (`DELIVERY_WAIT_ATTENTION_MS`) | `attention.ts:60,138`; projected from the registry's held deliveries at `src/app/api/files/response.ts:398-409,555-557` | Desktop: bare "needs you". Phone: "Needs attention" badge. Toast: "Message not delivered" (`decision.ts:84`). |
 | 7 | Stalled: turn open, no transcript write for 180 s, process running, under 2 h old | `attention.ts:68,140`; the 180 s rule is `src/lib/scanner/activity.ts:443-445` | Desktop: red card edge (`KanbanCard.tsx:271-272`) and bare "needs you". Phone: red "Stalled" badge (`mobileBoardModel.ts:143`). |
 | 8 | Lane parked in `needs_decision` | `park()` at `src/lib/pipelines/engine.ts:1457`, 47 call sites (stage verdict `needs_decision`, fail-edge budget spent, spawn failures, rate-limit park, missing verdict, review flow paused, …) | Desktop: amber lane block with the state word and `stateDetail`; the foot's "needs you" is suppressed while a lane says it (`KanbanCard.tsx:270,278`). Phone: pipeline state chip (`MobileKanban.tsx:219-220`). |
@@ -399,6 +399,32 @@ shows the Back chip. The phone gets a notice and never a move:
   notices it shows as seen, and the dot goes out.
 
 The phone never posts to the request, so a desktop can still follow it.
+
+### A request never carries the operator out of their project
+
+`request_attention` moves the operator's view only inside the project the
+operator is in. An orchestrator's request for a card in another project would
+otherwise take the screen from someone typing or dictating there.
+
+- **Server.** `resolveDirectedAttentionView` also returns the project the chosen
+  tab has open. When it is set and its canonical key differs from the target's,
+  `request_attention` records the same `delivery: "notice"` request the phone
+  gets, directs it at no view and answers `delivered: "notice"` at once. A view
+  with no project open (the overview) keeps the move. No view at all stays
+  `NO_ACTIVE_VIEW`, or the phone notice when one is open.
+- **Browser, where the move takes effect.** `AttentionHost` asks
+  `requestCrossesProject` (`src/lib/attention/projectBoundary.ts`) with the
+  project open on the view bus at that moment and the alias table the board
+  polls. An agent's request for another project is neither accepted nor
+  followed; a notice no view was directed at is also held when no project is
+  open, so a view that opens later is never taken. A directed move the operator
+  has left behind in flight posts `stand-down`: the record returns to a pending
+  notice, the blocked call answers as the notice, and nothing moved. The
+  operator's own commands are never held.
+- **The notification** is the existing «An agent asks you to look» sound caption.
+  Its click opens the card the request named (a conversation, or a lane for a
+  pipeline or stage) and the project for any other target kind. It rings once per
+  request id, wherever it is raised from.
 
 ## 7. The slice
 

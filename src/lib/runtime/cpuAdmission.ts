@@ -2,28 +2,107 @@ import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import { readCpuPriority, type CpuPrioritySource } from "./cpuPriority";
 import type { TaskPriority } from "../tasks/types";
 
-import { processIdentityStatus, type ProcessIdentity, type ProcessIdentityStatus } from "../processIdentity";
+import { processIdentityStatus, systemBootEpoch, type ProcessIdentity, type ProcessIdentityStatus } from "../processIdentity";
 import { procBackend } from "../proc";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext } from "./signalSandboxContext";
 
 export const CPU_QUEUE_MAX_WAIT_MS = 10 * 60_000;
 export const CPU_QUEUE_SPACING_MS = 2_000;
-/** A waiting stage polls every five seconds. An ownerless ticket nobody has
- * polled for this long stops counting ahead of others, for every release
- * sharing the file; it keeps its row. */
+export const CPU_STAGE_POLL_MS = 5_000;
+/** A waiting stage polls every five seconds. Ownerless tickets, bounded Linux
+ * gate waiters and unverifiable owners that stop polling keep their rows but
+ * stop counting ahead of others, for every release sharing the file. */
 export const CPU_QUEUE_UNPOLLED_MS = 60_000;
 /** An ownerless ticket unpolled for this long, and held by no fence, is
  * removed; so is a ticket whose owner no kernel check here can prove alive. */
 export const CPU_QUEUE_ABANDONED_MS = 24 * 60 * 60_000;
 /** How long a head may stay past its bound, with nothing admitted, before the wait reads as stalled. */
 export const CPU_QUEUE_STALE_GRACE_MS = 60_000;
+const BOUNDED_GATE_PREFIX = "command:bounded:";
+export const ACTIVE_GATE_PREFIX = "command:gate-active:";
+const PUBLICATION_LAUNCHES = "publication_launch_proofs";
+/** More live publications than this never run on one machine. */
+const PUBLICATION_LAUNCH_LIMIT = 64;
+/** The per-launch secret the Viewer puts into the exec environment of a
+ * publication preparer it spawns. Its queue row stores only the digest. */
+export const PUBLICATION_LAUNCH_PROOF_ENV = "LLV_GATE_PUBLICATION_LAUNCH_PROOF";
+export function publicationLaunchDigest(proof: string): string {
+  return createHash("sha256").update(proof).digest("hex");
+}
+function readPublicationLaunch(stored: string): ProcessIdentity | null {
+  try {
+    const identity = JSON.parse(stored) as ProcessIdentity | null;
+    return identity && Number.isSafeInteger(identity.pid) && identity.pid > 0 && typeof identity.startIdentity === "string"
+      && typeof identity.bootEpoch === "string" && identity.bootEpoch ? identity : null;
+  } catch { return null; }
+}
 /** `stalledMs` is set only while the head is past its bound and nothing is admitted. */
 export type CpuQueueWait = { since: number; position: number; waitedMs: number; heldBy: "queue" | "pressure"; priority?: TaskPriority; stalledMs?: number };
-type Ticket = { seq: number; fifo_seq: number; key: string; since: number; owner: string | null; priority: number; source: string | null; polled: number | null; low_pressure: number };
+/** Recent kernel capacity evidence from before admission. Any intervening
+ * admission invalidates the observation, including on a different process. */
+export type UrgentStageCapacity = {
+  key: string; revision: string; sampledAt: number; lastBeforeProbe: number | null; hasCapacity: boolean;
+};
+type UrgentStageDecision = { evidence: UrgentStageCapacity; currentRevision(): string | null };
+
+function matchesUrgentStage(decision: UrgentStageDecision): boolean {
+  try { return decision.currentRevision() === decision.evidence.revision; }
+  catch { return false; } // A state reader with no current evidence cannot authorize an early start.
+}
+type Ticket = { seq: number; fifo_seq: number; key: string; since: number; owner: string | null; priority: number; source: string | null; polled: number | null; low_pressure: number; linux_poll: string | null };
+const boundedLinuxGateWaiter = (row: Ticket) =>
+  process.platform === "linux" && row.low_pressure === 1 && row.key.startsWith(BOUNDED_GATE_PREFIX);
+type LinuxGatePoll = { domain: string; ms: number };
+/** A time namespace shows CLOCK_BOOTTIME plus its own offset. Null when this
+ * process is in a time namespace whose offset cannot be read. */
+function linuxBootOffsetMs(): number | null {
+  try {
+    const offset = /^boottime\s+(-?\d+)\s+(\d+)\s*$/m.exec(fs.readFileSync("/proc/self/timens_offsets", "utf8"));
+    return offset ? Number(offset[1]) * 1000 + Number(offset[2]) / 1_000_000 : null;
+  } catch {
+    // A kernel without time namespaces has neither file and no offset.
+    return fs.existsSync("/proc/self/ns/time") ? null : 0;
+  }
+}
+function openLinuxGateClock(): (() => LinuxGatePoll | null) | null {
+  try {
+    const epoch = systemBootEpoch()?.split(":")[1];
+    const ffi = process.getBuiltinModule?.("bun:ffi") as typeof import("bun:ffi") | undefined;
+    const offset = linuxBootOffsetMs();
+    if (!epoch || !ffi || offset === null) return null;
+    // Samples are kept on the host's boot clock, so helpers in different time
+    // namespaces of one boot age a ticket on the same clock.
+    const domain = `${epoch}:host-boottime`;
+    const library = ffi.dlopen("libc.so.6", { clock_gettime: { args: ["i32", "ptr"], returns: "i32" } });
+    const time = new BigInt64Array(2);
+    return () => {
+      // CLOCK_BOOTTIME is shared by the independent helpers and is immune to
+      // wall-clock steps. Bun's hrtime starts over in each helper.
+      if (library.symbols.clock_gettime(7, ffi.ptr(time)) !== 0) return null;
+      return { domain, ms: Number(time[0]) * 1000 + Number(time[1]) / 1_000_000 - offset };
+    };
+  } catch { return null; }
+}
+let readLinuxGateClock: ReturnType<typeof openLinuxGateClock> | undefined;
+function linuxGateClock(): LinuxGatePoll | null {
+  if (readLinuxGateClock === undefined) readLinuxGateClock = openLinuxGateClock();
+  return readLinuxGateClock?.() ?? null;
+}
+const linuxPollStamp = (poll: LinuxGatePoll) => `${poll.domain}:${poll.ms}`;
+function linuxPollAge(row: Ticket, clock: LinuxGatePoll | null): number | null {
+  if (!clock || !row.linux_poll) return null;
+  const split = row.linux_poll.lastIndexOf(":");
+  if (split <= 0 || row.linux_poll.slice(0, split) !== clock.domain || split === row.linux_poll.length - 1) return null;
+  const ms = Number(row.linux_poll.slice(split + 1));
+  return Number.isFinite(ms) && ms >= 0 && ms <= clock.ms ? clock.ms - ms : null;
+}
+type GateSlot = { slot: number | null; cap: number };
+type ActiveGateSlot = GateSlot & { key: string; owner: string };
 /** The queue judges owners with these; `log` receives one line for each ticket
  * it removes or passes over because of its owner. */
 export type CpuOwnerObserver = { status(identity: ProcessIdentity): ProcessIdentityStatus; exited(identity: ProcessIdentity): boolean; log?(line: string): void };
@@ -149,7 +228,7 @@ export class CpuAdmissionQueue {
   constructor(file: string, private readonly now = Date.now, private readonly spacingMs = CPU_QUEUE_SPACING_MS, private readonly maxWaitMs = CPU_QUEUE_MAX_WAIT_MS, private readonly unpolledMs = CPU_QUEUE_UNPOLLED_MS,
     private readonly observer: CpuOwnerObserver = {
       status: processIdentityStatus, exited: identity => procBackend.processExited(identity.pid),
-    }, busyTimeoutMs = 5_000) {
+    }, busyTimeoutMs = 5_000, private readonly linuxClock = linuxGateClock) {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite?.Database) throw new Error("CPU admission requires the supported Bun runtime");
@@ -164,8 +243,9 @@ export class CpuAdmissionQueue {
       const schemaReady = () => {
         const triggers = new Map(this.db.query<{ name: string; sql: string }, []>("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'").all().map(row => [row.name, row.sql]));
         const columns = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all().map(row => row.name));
-        return triggers.get("tickets_fifo") === TICKETS_FIFO && triggers.get("tickets_poll") === TICKETS_POLL
-          && ["priority", "source", "low_pressure", "aging", "fifo_seq"].every(name => columns.has(name));
+        const cutoverColumns = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(legacy_gate_cutover)").all().map(row => row.name));
+        return triggers.has("legacy_gate_retired") && triggers.has("tickets_linux_poll_reset") && triggers.get("tickets_fifo") === TICKETS_FIFO && triggers.get("tickets_poll") === TICKETS_POLL
+          && ["priority", "source", "low_pressure", "aging", "fifo_seq", "linux_poll"].every(name => columns.has(name)) && cutoverColumns.has("admission");
       };
       if (!schemaReady()) {
         const opened = this.now();
@@ -202,6 +282,12 @@ export class CpuAdmissionQueue {
           // Set by a ticket's own check: it starts only while measured pressure is
           // low. Helpers that predate the column leave it 0, the old behaviour.
           if (!columns.some(column => column.name === "low_pressure")) this.db.exec("ALTER TABLE tickets ADD COLUMN low_pressure INTEGER NOT NULL DEFAULT 0");
+          // Legacy checkers still publish wall-clock polls through tickets_poll.
+          // Their writes invalidate the boot-clock sample, even for a repeated
+          // wall timestamp. This release writes its sample after that update.
+          if (!columns.some(column => column.name === "linux_poll")) this.db.exec("ALTER TABLE tickets ADD COLUMN linux_poll TEXT");
+          this.db.exec(`CREATE TRIGGER IF NOT EXISTS tickets_linux_poll_reset AFTER UPDATE OF polled ON tickets
+            WHEN NEW.linux_poll IS NOT NULL BEGIN UPDATE tickets SET linux_poll = NULL WHERE key = NEW.key; END`);
           // Only a ticket checked by an aging-aware owner may gain effective rank.
           // Legacy owners keep comparing task rank/seq and cannot act on its age.
           if (!columns.some(column => column.name === "aging")) this.db.exec("ALTER TABLE tickets ADD COLUMN aging INTEGER NOT NULL DEFAULT 0");
@@ -216,6 +302,23 @@ export class CpuAdmissionQueue {
           }
           this.db.exec("DROP TRIGGER IF EXISTS tickets_fifo");
           this.db.exec(TICKETS_FIFO);
+          if (!this.db.query("SELECT 1 FROM sqlite_master WHERE name = 'legacy_gate_retired'").get()) {
+            // Historical shells delete their own command ticket when claiming.
+            // A cancellation is also a possible claim until that identity exits.
+            this.db.exec(`CREATE TABLE legacy_gate_retirements (seq INTEGER PRIMARY KEY, owner TEXT);
+              CREATE TABLE legacy_gate_cutover (id INTEGER PRIMARY KEY, boot TEXT, clock TEXT, uptime REAL, admission INTEGER, overflow INTEGER NOT NULL);
+              INSERT INTO legacy_gate_cutover VALUES (1, NULL, NULL, NULL, NULL, 0);
+              CREATE TRIGGER legacy_gate_retired AFTER DELETE ON tickets WHEN OLD.key GLOB 'command:[0-9]*' BEGIN
+                INSERT INTO legacy_gate_retirements (owner) VALUES (OLD.owner);
+                UPDATE legacy_gate_cutover SET overflow = 1 WHERE overflow = 0 AND last_insert_rowid() > 128;
+                DELETE FROM legacy_gate_retirements WHERE seq <= last_insert_rowid() - 128;
+              END`);
+            if (this.lastAdmission() !== null) this.restartLegacyObservation();
+          }
+          if (!this.db.query<{ name: string }, []>("PRAGMA table_info(legacy_gate_cutover)").all().some(column => column.name === "admission")) {
+            this.db.exec("ALTER TABLE legacy_gate_cutover ADD COLUMN admission INTEGER");
+            this.restartLegacyObservation();
+          }
           this.db.exec("CREATE INDEX IF NOT EXISTS tickets_priority_seq ON tickets(priority, seq)");
           // The poll trigger above stamped only ownerless tickets at first.
           if (this.db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'tickets_poll'").get()?.sql !== TICKETS_POLL) {
@@ -265,6 +368,144 @@ export class CpuAdmissionQueue {
     rows.forEach((row, index) => assign.run(index + 1, row.seq + offset));
     this.db.query("UPDATE sqlite_sequence SET seq = ? WHERE name = 'tickets'").run(rows.length);
   }
+  private stalledDuration(now: number, headSince: number, last: number | null): number | undefined {
+    const elapsed = now - Math.max(headSince + this.maxWaitMs, last ?? 0);
+    return elapsed > CPU_QUEUE_STALE_GRACE_MS ? elapsed : undefined;
+  }
+  /** A ready command stays at the head while its outer slot is unavailable. */
+  slotWait(key: string): { waitedMs: number; stalledMs?: number } {
+    const row = this.db.query<{ since: number; last: number | null }, [string]>(
+      "SELECT since, last FROM tickets CROSS JOIN admission WHERE key = ? AND admission.id = 1",
+    ).get(key)!;
+    const now = this.now();
+    return { waitedMs: Math.max(0, now - row.since), stalledMs: this.stalledDuration(now, row.since, row.last) };
+  }
+  lastAdmission(): number | null {
+    return this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
+  }
+  // Called with the SQLite writer held. A process already running at this
+  // boundary can own an unobserved grant. A later birth has complete history.
+  private restartLegacyObservation(): void {
+    const context = process.platform === "linux" ? signalSandboxContext() : null;
+    let uptime: number | null = null, clock: string | null = null;
+    if (process.platform === "linux") {
+      const proc = context?.hostProc ?? "/proc";
+      try {
+        clock = fs.readlinkSync(path.join(proc, "self/ns/time"));
+        uptime = Number(fs.readFileSync(path.join(proc, "uptime"), "utf8").split(" ")[0]);
+      }
+      catch { /* An unavailable clock keeps the pre-existing grant uncertain. */ }
+    }
+    this.db.query("UPDATE legacy_gate_cutover SET boot = ?, clock = ?, uptime = ?, admission = ?, overflow = 0").run(
+      context?.hostEpoch ?? (process.platform === "linux" ? systemBootEpoch() : null) ?? "unknown", clock, uptime, this.lastAdmission());
+    this.db.exec("DELETE FROM legacy_gate_retirements");
+  }
+  legacyGateHistory(epoch: string) {
+    const snapshot = () => this.db.transaction(() => ({
+      cutover: this.db.query<{ boot: string | null; clock: string | null; uptime: number | null; admission: number | null; overflow: number }, []>(
+        "SELECT boot, clock, uptime, admission, overflow FROM legacy_gate_cutover WHERE id = 1").get()!,
+      rows: this.db.query<{ owner: string | null }, []>("SELECT owner FROM legacy_gate_retirements").all(),
+    }))();
+    const read = () => {
+      const { cutover, rows } = snapshot();
+      const retirements = new Set<string>();
+      let complete = !cutover.overflow;
+      for (const row of rows) {
+        let owner: ProcessIdentity | null = null;
+        try { if (row.owner) owner = JSON.parse(row.owner) as ProcessIdentity; }
+        catch { /* A malformed historical identity requires a new observation. */ }
+        if (owner && owner.bootEpoch === epoch && Number.isSafeInteger(owner.pid) && owner.pid > 0 &&
+          typeof owner.startIdentity === "string" && /^\d+:\d+$/.test(owner.startIdentity) && owner.startIdentity.startsWith(`${owner.pid}:`)) {
+          retirements.add(owner.startIdentity);
+        } else complete = false;
+      }
+      return { cutover, retirements, complete };
+    };
+    const history = read();
+    if (history.complete) return history;
+    // A missed or untranslatable retirement invalidates absence as evidence
+    // for existing processes. Later births get a fresh, complete observation.
+    return this.db.transaction(() => {
+      if (!read().complete) this.restartLegacyObservation();
+      return read();
+    }).immediate();
+  }
+  waitingGateOwners(): string[] {
+    return this.db.query<{ owner: string }, []>(`SELECT DISTINCT owner FROM tickets
+      WHERE owner IS NOT NULL AND key GLOB 'command:*' AND key NOT GLOB '${ACTIVE_GATE_PREFIX}*'`).all().map(row => row.owner);
+  }
+  /** The Viewer records each publication preparer it starts by the kernel
+   * identity of the process it spawned, the operation it handed that process
+   * and the digest of a secret it put only into that process's exec
+   * environment. Gate helpers read the rows to tell the preparer's cleanup
+   * runner from a legacy holder, whatever bytes the lane's checkout carries.
+   * A row proves nothing alone: a reader must match it to a live process that
+   * still carries the same operation and the secret behind the digest, which
+   * a row written for a process the Viewer did not launch cannot name.
+   * Older releases never read this table. */
+  recordPublicationLaunch(identity: ProcessIdentity, operation: string, proofDigest: string): void {
+    // Probe the processes before taking the writer, as check() does.
+    const ended = this.publicationLaunchRows().filter(row => {
+      const launch = readPublicationLaunch(row.identity);
+      return !launch || this.observer.status(launch) === "dead";
+    }).map(row => row.identity);
+    this.db.transaction(() => {
+      this.db.exec(`CREATE TABLE IF NOT EXISTS ${PUBLICATION_LAUNCHES} (identity TEXT PRIMARY KEY, operation TEXT NOT NULL, proof TEXT NOT NULL, recorded INTEGER NOT NULL)`);
+      const remove = this.db.query(`DELETE FROM ${PUBLICATION_LAUNCHES} WHERE identity = ?`);
+      for (const row of ended) remove.run(row);
+      this.db.query(`INSERT OR REPLACE INTO ${PUBLICATION_LAUNCHES} VALUES (?, ?, ?, ?)`).run(JSON.stringify(identity), operation, proofDigest, this.now());
+      // A Viewer that dies before forgetting leaves its row until the process
+      // is seen dead. The newest rows are the live publications.
+      this.db.query(`DELETE FROM ${PUBLICATION_LAUNCHES} WHERE identity NOT IN
+        (SELECT identity FROM ${PUBLICATION_LAUNCHES} ORDER BY recorded DESC, rowid DESC LIMIT ?)`).run(PUBLICATION_LAUNCH_LIMIT);
+    }).immediate();
+  }
+  forgetPublicationLaunch(identity: ProcessIdentity): void {
+    if (!this.hasPublicationLaunches()) return;
+    this.db.query(`DELETE FROM ${PUBLICATION_LAUNCHES} WHERE identity = ?`).run(JSON.stringify(identity));
+  }
+  publicationLaunches(): { identity: ProcessIdentity; operation: string; proof: string }[] {
+    return this.publicationLaunchRows().flatMap(row => {
+      const identity = readPublicationLaunch(row.identity);
+      return identity && /^[0-9a-f]{64}$/.test(row.proof) ? [{ identity, operation: row.operation, proof: row.proof }] : [];
+    });
+  }
+  private hasPublicationLaunches(): boolean {
+    return this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(PUBLICATION_LAUNCHES) !== null;
+  }
+  private publicationLaunchRows(): { identity: string; operation: string; proof: string }[] {
+    if (!this.hasPublicationLaunches()) return [];
+    return this.db.query<{ identity: string; operation: string; proof: string }, []>(`SELECT identity, operation, proof FROM ${PUBLICATION_LAUNCHES}`).all();
+  }
+  activeGateSlots(): ActiveGateSlot[] {
+    if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gate_slots'").get()) return [];
+    return this.db.query<ActiveGateSlot, []>("SELECT tickets.key, owner, slot, cap FROM gate_slots JOIN tickets USING (key)").all();
+  }
+  // Retire precisely the observed claim. The caller has either reaped its
+  // owned runner or proved that its lifetime lock is free.
+  releaseGateSlot(key: string, owner: string): void {
+    this.db.transaction(() => {
+      if (this.db.query("DELETE FROM gate_slots WHERE key = ? AND EXISTS (SELECT 1 FROM tickets WHERE key = ? AND owner = ?)").run(key, key, owner).changes) {
+        this.cancel(key);
+      }
+    }).immediate();
+  }
+  private recordGateSlot(key: string, gate: GateSlot): void {
+    if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gate_slots'").get()) {
+      // Older releases still write these tables directly. Slot recovery
+      // belongs to the wrapper that can verify the lifetime proof.
+      this.db.exec(`
+        CREATE TABLE gate_slots (key TEXT PRIMARY KEY, slot INTEGER, cap INTEGER NOT NULL);
+        CREATE TRIGGER gate_slot_keep BEFORE DELETE ON tickets
+          WHEN OLD.key IN (SELECT key FROM gate_slots) BEGIN SELECT RAISE(IGNORE); END;
+        CREATE TRIGGER gate_slot_count BEFORE INSERT ON suspended
+          WHEN NEW.key IN (SELECT key FROM gate_slots) BEGIN SELECT RAISE(IGNORE); END;
+        CREATE TRIGGER gate_slot_polled BEFORE INSERT ON unpolled
+          WHEN NEW.key IN (SELECT key FROM gate_slots) BEGIN SELECT RAISE(IGNORE); END;
+      `);
+    }
+    this.db.query("INSERT INTO gate_slots VALUES (?, ?, ?)").run(key, gate.slot, gate.cap);
+  }
   /** Only the release owning this pipeline namespace reconciles stage tickets. */
   reconcile(prefix: string, active: ReadonlySet<string>, eligible = active): void {
     this.db.transaction(() => {
@@ -286,7 +527,8 @@ export class CpuAdmissionQueue {
       }
     }).immediate();
   }
-  check(key: string, pressureAllows: boolean, owner?: ProcessIdentity, consume = true, source?: CpuPrioritySource, requireLowPressure = false): CpuQueueWait | null {
+  check(key: string, pressureAllows: boolean, owner?: ProcessIdentity, consume = true, source?: CpuPrioritySource, requireLowPressure = false,
+    gateSlot?: GateSlot & { lastBeforeProbe: number | null }, urgentStage?: UrgentStageDecision): CpuQueueWait | null {
     // Process probes and reads of the task database must not hold this
     // queue's writer. Re-read the rows under the lock and match observations
     // by their exact owner/binding and observed rank. Peers may poll or reorder
@@ -304,15 +546,21 @@ export class CpuAdmissionQueue {
       }
     };
     const sampledAt = this.now();
+    let sampledClock: LinuxGatePoll | null | undefined;
+    const preflightClock = () => sampledClock === undefined ? sampledClock = this.linuxClock() : sampledClock;
     const sampledTickets = new Map(this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE (source IS NOT NULL AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)) OR key = ?").all(key).map(row => [row.key, row]));
     for (const row of sampledTickets.values()) {
       const observed = owners.get(row.owner!);
       if (observed?.dead) continue;
       // The calling ticket returns from a hold and refreshes its binding below.
       if (row.key === key) { if (!source && row.source) rank(row.source); continue; }
-      const quiet = sampledAt - (row.polled ?? (row.owner === null ? sampledAt : row.since));
-      if ((quiet > this.unpolledMs || quiet > CPU_QUEUE_ABANDONED_MS)
-        && (row.owner === null || observed?.status === "unverified")) continue;
+      const wallQuiet = sampledAt - (row.polled ?? (row.owner === null ? sampledAt : row.since));
+      // Without a boot clock here, the poll's wall-clock age applies.
+      const quiet = boundedLinuxGateWaiter(row) && row.owner !== null && preflightClock()
+        ? linuxPollAge(row, preflightClock()) ?? 0 : wallQuiet;
+      const unverifiable = row.owner === null || observed?.status === "unverified";
+      if (quiet > this.unpolledMs && (unverifiable || boundedLinuxGateWaiter(row))
+        || quiet > CPU_QUEUE_ABANDONED_MS && unverifiable) continue;
       if (row.source) rank(row.source);
     }
     if (source) rank(JSON.stringify(source));
@@ -320,30 +568,44 @@ export class CpuAdmissionQueue {
     const decisions: string[] = [];
     const wait = this.db.transaction(() => {
       const now = this.now();
+      let committedClock: LinuxGatePoll | null | undefined;
+      const clock = () => committedClock === undefined ? committedClock = this.linuxClock() : committedClock;
+      const activeSlots = this.activeGateSlots();
+      const gateHolders = new Set(activeSlots.map(gate => gate.key));
       // A release that predates polls released these from a hold since the last check.
       this.db.query("UPDATE tickets SET polled = ? WHERE owner IS NULL AND polled IS NULL").run(now);
       for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NOT NULL").all()) {
+        if (gateHolders.has(row.key)) continue;
         const observed = owners.get(row.owner!);
         if (!observed) continue;
         const { identity, status, dead } = observed;
         if (dead) {
           this.cancel(row.key);
-          decisions.push(`removed ${row.key}: its owner process ${identity.pid} has exited`);
+          if (!row.key.startsWith(ACTIVE_GATE_PREFIX)) decisions.push(`removed ${row.key}: its owner process ${identity.pid} has exited`);
           continue;
         }
         // An owner recorded in another PID namespace, or one the kernel will
         // not describe, is never proven alive or dead here, so its polls stand
-        // for it as for an ownerless ticket. One the kernel shows alive keeps
-        // its place however long it waits.
-        if (status !== "unverified" || row.key === key) continue;
-        const quiet = now - (row.polled ?? row.since);
-        if (quiet > CPU_QUEUE_ABANDONED_MS) {
+        // for it as for an ownerless ticket. A stopped Linux gate wrapper can
+        // also be alive without making progress on its bounded wait.
+        if (row.key === key || status !== "unverified" && !boundedLinuxGateWaiter(row)) continue;
+        let quiet = now - (row.polled ?? row.since);
+        const sample = boundedLinuxGateWaiter(row) ? clock() : null;
+        if (sample) {
+          const age = linuxPollAge(row, sample);
+          // An older writer or a reboot gets one full interval from
+          // observation. Initialize it under the writer lock.
+          if (age === null) this.db.query("UPDATE tickets SET linux_poll = ? WHERE key = ?").run(linuxPollStamp(sample), row.key);
+          quiet = age ?? 0;
+        }
+        if (status === "unverified" && quiet > CPU_QUEUE_ABANDONED_MS) {
           this.cancel(row.key);
           decisions.push(`removed ${row.key}: its owner process ${identity.pid} cannot be verified from here and has not checked in for ${Math.round(quiet / 3_600_000)} h`);
         } else if (quiet > this.unpolledMs && !this.db.query("SELECT 1 FROM suspended WHERE key = ?").get(row.key)) {
           this.db.query("INSERT INTO suspended VALUES (?)").run(row.key);
           this.db.query("INSERT INTO unpolled VALUES (?)").run(row.key);
-          decisions.push(`passed over ${row.key}: its owner process ${identity.pid} cannot be verified from here and has not checked in for ${Math.round(quiet / 1_000)} s; its next check returns it to its place`);
+          const reason = status === "unverified" ? " cannot be verified from here and" : "";
+          decisions.push(`passed over ${row.key}: its owner process ${identity.pid}${reason} has not checked in for ${Math.round(quiet / 1_000)} s; its next check returns it to its place`);
         }
       }
       // The insert is the poll: tickets_poll stamps an existing row with `now`.
@@ -351,6 +613,10 @@ export class CpuAdmissionQueue {
       this.db.query("DELETE FROM suspended WHERE key = ?").run(key);
       this.db.query("DELETE FROM stage_admissions WHERE key = ?").run(key);
       this.touch(key);
+      if (owner && requireLowPressure && process.platform === "linux" && key.startsWith(BOUNDED_GATE_PREFIX)) {
+        const sample = clock();
+        if (sample) this.db.query("UPDATE tickets SET linux_poll = ? WHERE key = ?").run(linuxPollStamp(sample), key);
+      }
       this.db.query("UPDATE tickets SET aging = 1 WHERE key = ? AND aging = 0").run(key);
       this.db.query("UPDATE tickets SET low_pressure = ? WHERE key = ? AND low_pressure IS NOT ?").run(requireLowPressure ? 1 : 0, key, requireLowPressure ? 1 : 0);
       if (source) {
@@ -402,35 +668,61 @@ export class CpuAdmissionQueue {
       const age = Math.floor(waitedMs / this.maxWaitMs);
       const effectiveClass = Math.max(0, ticket.priority - age);
       const agedClass = "MAX(0, priority - aging * CAST(MAX(0, ? - since) / ? AS INTEGER))";
-      // A bounded caller still passes low-pressure-only tickets at its bound.
+      // At its bound, an install can pass checks that may be waiting for a slot.
+      // Gate tickets count each other even after they become eligible under pressure.
       const passesLowPressure = !requireLowPressure && budget === 0 ? 1 : 0;
-      const counted = `${lane} AND (${agedClass} < ? OR (${agedClass} = ? AND fifo_seq <= ?)) AND (? = 0 OR low_pressure = 0 OR key = ?) AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)`;
+      // The active gate's fence is visible to older command checkers. It is
+      // outside this release's FIFO. At its bound a current shell also passes
+      // older pressure-only shells, which cannot act on an expired hold.
+      const passLegacyGates = key.startsWith(BOUNDED_GATE_PREFIX) && budget === 0;
+      const gateFilter = passLegacyGates ? `AND (low_pressure = 0 OR key GLOB '${BOUNDED_GATE_PREFIX}*')` : "";
+      const counted = `${lane} AND key NOT GLOB '${ACTIVE_GATE_PREFIX}*' ${gateFilter} AND (${agedClass} < ? OR (${agedClass} = ? AND fifo_seq <= ?)) AND (? = 0 OR low_pressure = 0 OR key = ?) AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)`;
       const args: [number, number, number, number, number, number, number, number, string] = [now, this.maxWaitMs, effectiveClass, now, this.maxWaitMs, effectiveClass, ticket.fifo_seq, passesLowPressure, key];
       const ahead = this.db.query<{ n: number }, typeof args>(`SELECT COUNT(*) AS n FROM tickets WHERE ${counted}`).get(...args)!;
       const head = this.db.query<{ since: number }, [...typeof args, number, number]>(`SELECT since FROM tickets WHERE ${counted} ORDER BY ${agedClass}, fifo_seq LIMIT 1`).get(...args, now, this.maxWaitMs)!;
       const position = ahead.n;
-      const last = this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
+      const last = this.lastAdmission();
       const spacing = last === null ? 0 : Math.max(0, last + this.spacingMs - now);
-      // Heavy gates must keep waiting under load even after the queue's stage
-      // fairness bound. Readiness and the final slot claim use the same guard.
-      if (!observationChanged && position === 1 && spacing === 0 && (pressureAllows || !requireLowPressure && budget === 0)) {
+      // The durable wait bound lifts the pressure hold in both lanes.
+      // Readiness and claim still require the same queue position and spacing.
+      const slotObservationChanged = gateSlot !== undefined && gateSlot.lastBeforeProbe !== last;
+      const portableSlots = gateSlot?.slot === null ? activeSlots.filter(gate => gate.slot === null) : [];
+      const portableFull = gateSlot?.slot === null && portableSlots.length >= Math.min(gateSlot.cap, ...portableSlots.map(gate => gate.cap));
+      const ready = !observationChanged && !slotObservationChanged && !portableFull && position === 1 && spacing === 0;
+      const evidence = urgentStage?.evidence;
+      const canStartUrgently = ready && !pressureAllows && budget > 0 && consume && evidence?.hasCapacity === true
+        && ticket.owner === null && ticket.priority === 0 && !requireLowPressure && ticket.low_pressure === 0
+        && key.startsWith("stage:") && evidence.key === key && evidence.lastBeforeProbe === last
+        && evidence.sampledAt <= now && now - evidence.sampledAt <= CPU_STAGE_POLL_MS
+        && matchesUrgentStage(urgentStage!);
+      if (ready && (pressureAllows || budget === 0 || canStartUrgently)) {
         if (consume) {
           // Commands settle at their kernel slot claim. Stages retain a
           // recoverable admission until their own start checkpoint is read.
           if (!owner && (key.startsWith("stage:") || key.startsWith("workflow:"))) {
             this.db.query("INSERT OR IGNORE INTO stage_admissions VALUES (?)").run(key);
           } else this.cancel(key);
+          if (gateSlot && owner) {
+            // Earlier legacy claims are covered by the probe and last check.
+            // A later legacy claim sees this head until the owner exits. Its
+            // negative FIFO sequence keeps it ahead even when peers age to 0.
+            this.db.query(`INSERT INTO tickets (key, since, owner, priority, low_pressure, fifo_seq)
+              VALUES (?, ?, ?, -1, 1, -(SELECT next FROM ticket_order WHERE id = 1))`)
+              .run(`${ACTIVE_GATE_PREFIX}${key}`, now, JSON.stringify(owner));
+            this.recordGateSlot(`${ACTIVE_GATE_PREFIX}${key}`, gateSlot);
+            this.db.exec("UPDATE ticket_order SET next = next + 1 WHERE id = 1");
+          }
           this.db.query("UPDATE admission SET last = ? WHERE id = 1").run(now);
         }
         return null;
       }
       // A lane head past its pressure bound, with no recent machine
       // admission, is stalled. This reading never estimates a remaining wait.
-      const stalledMs = now - Math.max(head.since + this.maxWaitMs, last ?? 0);
+      const stalledMs = this.stalledDuration(now, head.since, last);
       return {
-        since: ticket.since, position, waitedMs, heldBy: observationChanged || position > 1 || spacing > 0 ? "queue" as const : "pressure" as const,
+        since: ticket.since, position, waitedMs, heldBy: observationChanged || position > 1 || spacing > 0 || slotObservationChanged || portableFull ? "queue" as const : "pressure" as const,
         ...(ticket.priority === 1 ? {} : { priority: ticket.priority === 0 ? "high" as const : "low" as const }),
-        ...(stalledMs > CPU_QUEUE_STALE_GRACE_MS ? { stalledMs } : {}),
+        ...(stalledMs !== undefined ? { stalledMs } : {}),
       };
     }).immediate();
     for (const line of decisions) (this.observer.log ?? logOwnerDecision)(line);

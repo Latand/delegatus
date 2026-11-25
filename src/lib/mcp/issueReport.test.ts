@@ -900,3 +900,13 @@ test("a draft is prepared without consent and a plain decline ends the report", 
   expect(readIssueReportPreview(digest, sandbox)).toMatchObject({ state: "preview", title: REPORT.title, body: REPORT.body });
   expect(fs.readdirSync(sandbox).filter(name => /^[a-f0-9]{64}\.json$/.test(name))).toEqual([`${digest}.json`]);
 });
+
+test("public issue language hints stay separate from the localized operator preview", async () => {
+  const h = harness({ locale: "uk" });
+  const answer = await h.call(REPORTER, { action: "preview", ...REPORT, title: "Виправити публікацію" });
+  expect(answer).toMatchObject({ ok: true, previewLanguage: "uk", title: "Виправити публікацію" });
+  expect(answer.hintWarnings).toContain("Publication language hint: title line 1 uses another script; write public GitHub prose in English.");
+  const shown = await h.call(SEAT_CALLER, { action: "show", digest: answer.digest });
+  expect(shown.hintWarnings).toEqual(answer.hintWarnings);
+  expect(shown.previewText).not.toContain((answer.hintWarnings as string[])[0]!);
+});

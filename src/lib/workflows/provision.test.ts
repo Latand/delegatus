@@ -168,6 +168,20 @@ test("provisionWorktree surfaces the add error when nothing usable exists", asyn
   if (!res.ok) expect(res.error).toContain("disk exploded");
 });
 
+test("workflow publication derives English text while its task stays local", async () => {
+  const wf = makeWorkflow(SANDBOX, { task: "Виправити публікацію" });
+  const calls: string[][] = [];
+  const exec: ExecPort = async (_command, args) => {
+    calls.push(args);
+    return { code: 0, stdout: "https://github.com/example/widgets/pull/1", stderr: "" };
+  };
+  expect((await finishPr(wf, "Виправлено публікацію", exec)).ok).toBe(true);
+  const create = calls.find(args => args[0] === "pr" && args[1] === "create")!;
+  expect(create[create.indexOf("--title") + 1]).toBe("Implement project changes");
+  expect(create[create.indexOf("--body") + 1]).not.toContain("Виправлено");
+  expect(wf.task).toBe("Виправити публікацію");
+});
+
 test("finishPr pushes the branch then opens the PR against the base branch", async () => {
   const wf = makeWorkflow("/repo", { baseBranch: "main" });
   const { exec, calls } = fakeExec((call) =>

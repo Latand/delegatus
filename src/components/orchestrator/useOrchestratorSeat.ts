@@ -6,6 +6,7 @@ import { documentHidden } from "@/lib/client/hiddenTraffic";
 import type { SeatRefs } from "@/lib/tasks/groupHide";
 
 import { publishSeatDeputies, publishSeatProject } from "./seatDeputies";
+import { seedSeatTickSettings } from "./useSeatTickSettings";
 import { parseSeatStatus, seatConversationsOf, type OrchestratorSeatStatus } from "./seatState";
 
 /** How often the panel re-reads the project's seat. The seat only moves when
@@ -46,6 +47,7 @@ interface ScopedRead {
  * still be READ, never restored from disk.
  */
 const answers = new Map<string, ScopedRead>();
+const revisions = new WeakMap<OrchestratorSeatStatus, string>();
 const readKey = (project: string, cwd: string | undefined): string => `${project}\0${cwd ?? ""}`;
 
 /** The last cross-project answer this tab was given (#1841), shared by every
@@ -104,7 +106,12 @@ function publishSeat(key: string, next: ScopedRead): void {
   const previous = answers.get(key);
   // Polls parse fresh objects even when the seat has not moved. Keep the
   // complete answer stable so its phone/board readers do no work for a tick.
-  if (previous && JSON.stringify(previous) === JSON.stringify(next)) return;
+  if (previous && previous.failed === next.failed && previous.status === next.status) return;
+  if (previous && JSON.stringify(previous) === JSON.stringify(next)) {
+    const revision = next.status && revisions.get(next.status);
+    if (revision && previous.status) revisions.set(previous.status, revision);
+    return;
+  }
   answers.set(key, next);
   for (const listener of polls.get(key)?.listeners ?? []) listener(next);
 }
@@ -199,9 +206,23 @@ export function resetOrchestratorSeatCacheForTests(): void {
 export async function fetchOrchestratorSeat(project: string, cwd?: string, signal?: AbortSignal): Promise<OrchestratorSeatStatus> {
   const query = new URLSearchParams({ project });
   if (cwd) query.set("cwd", cwd);
-  const response = await fetch("/api/orchestrator/seat?" + query, signal ? { signal } : undefined);
+  const prior = answers.get(readKey(project, cwd))?.status;
+  const base = prior && revisions.get(prior);
+  const response = await fetch("/api/orchestrator/seat?" + query, {
+    signal, headers: { "x-delegatus-seat-base": base ?? "initial" },
+  });
   if (!response.ok) throw new Error(`orchestrator seat read failed: ${response.status}`);
-  return parseSeatStatus(await response.json());
+  const body = await response.json() as { tick?: unknown; unchanged?: boolean } | null;
+  /* The tick's summary rides this answer so the toggle paints its state with the card. */
+  seedSeatTickSettings(project, body?.tick);
+  const revision = response.headers.get("x-delegatus-seat-revision");
+  if (body?.unchanged) {
+    if (!prior || !base || revision !== base) throw new Error("unexpected seat revision");
+    return prior;
+  }
+  const status = parseSeatStatus(body);
+  if (revision) revisions.set(status, revision);
+  return status;
 }
 
 const cachedSeat = (project: string | null, cwd: string | undefined): ScopedRead | null => (

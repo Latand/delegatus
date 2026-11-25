@@ -13,11 +13,12 @@
 import { createHash } from "node:crypto";
 import { liveFreshObservation } from "@/lib/accounts/accountProjection";
 import { selectProjectAccount } from "@/lib/accounts/projectSelection";
+import { isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
 import type { AccountProjectBinding } from "@/lib/accounts/projectBindings";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import type { AgentLivenessRecord, AgentLivenessSnapshot } from "@/lib/lifecycle/liveness";
 import { latestOperationalStageAttempt } from "@/lib/pipelines/attemptSelection";
-import { boundedStageExecution, clampChars, clampLine } from "@/lib/pipelines/listProjection";
+import { boundedStageExecution, clampChars, clampLine, cloudAttemptRead } from "@/lib/pipelines/listProjection";
 import { graphDigest, stageDigests } from "@/lib/pipelines/stageDigest";
 import { attemptAccountPin, currentRuntimeSeat } from "@/lib/pipelines/runtimeSwitch";
 import type { Pipeline, PipelineStage, PipelineStageAttempt, PipelineStageReport } from "@/lib/pipelines/types";
@@ -207,7 +208,9 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
     && !!runtimeSwitch.launch?.launchId && runtimeSwitch.launch.launchId === selected?.launchId;
   const hasRuntimeEvidence = selected && (selected.launchId || selected.conversationId || selected.agentPath
     // Legacy launched records can predate both binding and launch identities.
-    || (!selected.definition && selected.startedAt && selected.state !== "pending" && selected.state !== "spawning"));
+    || (!selected.definition && (!selected.cloud || selected.executionRuntime === "cloud-then-local" || selected.cloud.fallback)
+      && selected.startedAt && selected.state !== "pending" && selected.state !== "spawning"));
+  const cloud = selected ? cloudAttemptRead(stage, selected, SUMMARY_CHARS) : null;
   const result = selected?.report && "result" in selected.report && typeof selected.report.result === "string"
     ? selected.report.result : null;
   return {
@@ -242,10 +245,10 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
       /* Role copying, definition binding and start booking precede dispatch.
          A launch or conversation identity witnesses the persisted runtime,
          including switches; a requested switch target does not. */
-      runtime: selected.effectiveRole && hasRuntimeEvidence && !reservedHandoff ? {
+      runtime: cloud?.runtime ?? (selected.effectiveRole && hasRuntimeEvidence && !reservedHandoff ? {
         ...currentRuntimeSeat(selected),
         serviceTierSource: selected.effectiveRole.serviceTierSource ?? null,
-      } : null,
+      } : null),
       accountPin: attemptAccountPin(stage, selected),
       roleParams: selected.definition?.role?.params ?? null,
       access: selected.effectiveRole?.access ?? null,
@@ -254,8 +257,8 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
       state: selected.state,
       verdict: verdict?.status ?? null,
       findings: verdict?.findings ?? [],
-      summary: clampChars(selected.report?.summary ?? null, SUMMARY_CHARS),
-      result: result !== null && result.length > 160 ? clampChars(result, 159) : result,
+      summary: cloud ? cloud.summary : clampChars(selected.report?.summary ?? null, SUMMARY_CHARS),
+      result: cloud ? cloud.result : result !== null && result.length > 160 ? clampChars(result, 159) : result,
       decisionRequested: selected.decisionRequested === true,
       /* Findings handed to the fix stage after the budget was spent and never
          re-reviewed (#1868). */
@@ -267,6 +270,14 @@ export function pipelineStageRead(pipeline: Pipeline, stageId: string, attempt?:
       startedAt: selected.startedAt ?? null,
       completedAt: selected.completedAt ?? null,
       error: clampChars(selected.error, ERROR_CHARS),
+      providerWait: selected.providerWait ? {
+        tries: selected.providerWait.tries,
+        resumeAt: selected.providerWait.resumeAt,
+        lastError: clampChars(selected.providerWait.text, ERROR_CHARS),
+      } : undefined,
+      providerRecoveries: selected.providerRecoveries?.map(({ at, action, condition, summary }) => ({
+        at, action, condition: condition.label, summary: clampChars(summary, ERROR_CHARS + 100),
+      })),
     } : null,
   };
 }
@@ -340,14 +351,18 @@ export function compactLiveness(snapshot: AgentLivenessSnapshot) {
   };
 }
 
-export type AccountLimitEngine = "claude" | "codex" | "copilot";
+export type AccountLimitEngine = "claude" | "codex" | "copilot" | "antigravity";
+
+type RequiredLimitEngine = "claude" | "codex" | "copilot";
 
 export type AccountLimitsInput = {
   engine?: AccountLimitEngine;
   accountId?: string;
-  accounts: Record<AccountLimitEngine, ReadonlyArray<{ accountId: string; authPresent?: boolean; spendCredits?: boolean }>>;
-  active: Record<AccountLimitEngine, string | null>;
-  observations: Record<AccountLimitEngine, Readonly<Record<string, DurableQuotaObservation>>>;
+  accounts: Record<RequiredLimitEngine, ReadonlyArray<{ accountId: string; authPresent?: boolean; spendCredits?: boolean }>>
+    & { antigravity?: ReadonlyArray<{ accountId: string; authPresent?: boolean; spendCredits?: boolean }> };
+  active: Record<RequiredLimitEngine, string | null> & { antigravity?: string | null };
+  observations: Record<RequiredLimitEngine, Readonly<Record<string, DurableQuotaObservation>>>
+    & { antigravity?: Readonly<Record<string, DurableQuotaObservation>> };
   /** Server-resolved project and bindings used by the actual automatic selector. */
   project?: string | null;
   bindings?: readonly AccountProjectBinding[];
@@ -371,17 +386,18 @@ function windowRow(window: LimitWindow | null | undefined) {
  * reaches a provider.
  */
 export function accountLimitRows(input: AccountLimitsInput) {
-  const engines: AccountLimitEngine[] = input.engine ? [input.engine] : ["claude", "codex", "copilot"];
+  const engines: AccountLimitEngine[] = input.engine ? [input.engine] : ["claude", "codex", "copilot", "antigravity"];
+  const nowSec = Math.floor(input.now / 1000);
   return engines.flatMap((engine) => {
-    const engineAccounts = input.accounts[engine];
-    const observationMap = input.observations[engine];
-    const nextChosen = engine === "copilot" ? null : selectProjectAccount({
+    const engineAccounts = input.accounts[engine] ?? [];
+    const observationMap = input.observations[engine] ?? {};
+    const nextChosen = engine === "copilot" || engine === "antigravity" ? null : selectProjectAccount({
       project: input.project ?? null,
       engine,
       accounts: engineAccounts.map((account) => ({ id: account.accountId, authPresent: account.authPresent ?? true })),
       observations: Object.values(observationMap),
       bindings: [...(input.bindings ?? [])],
-      preferredId: input.active[engine],
+      preferredId: input.active[engine] ?? null,
       model: input.model,
       now: input.now,
     });
@@ -390,14 +406,18 @@ export function accountLimitRows(input: AccountLimitsInput) {
       .filter((account) => !input.accountId || account.accountId === input.accountId)
       .map((account) => {
         const observation = observationMap[account.accountId];
-        const limits = observation?.limits ?? null;
+        const rawLimits = observation?.limits ?? null;
+        const antigravityExpired = engine === "antigravity"
+          && rawLimits?.session != null
+          && !isAntigravitySessionWindowActive(rawLimits.session, nowSec);
+        const limits = antigravityExpired ? null : rawLimits;
         return {
           engine,
           /* No label: it is free text the operator typed and may name a person;
              the account id is the one identity this answer carries. */
           accountId: account.accountId,
           ...(engine === "codex" ? { spendCredits: account.spendCredits === true, credits: limits?.credits ?? null } : {}),
-          active: input.active[engine] === account.accountId,
+          active: (input.active[engine] ?? null) === account.accountId,
           ...(nextChosenId ? { nextChosen: nextChosenId === account.accountId } : {}),
           /* Whether the observation is recent enough for the automatic switch to
              act on — the same test the accounts panel draws "stale" from. */

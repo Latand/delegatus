@@ -178,6 +178,12 @@ export function projectPipelineEvents(pipelines: Pipeline[]): LifecycleEventInpu
             at: recovery.at, summary: recovery.summary,
           });
         }
+        const language = attempt.publicationLanguageHints;
+        if (language?.hints.length) events.push({ ...lineage,
+          key: attemptKey(pipeline, run.stageId, attempt, "publication-language-hint"),
+          type: "publication_language_hint", at: language.at,
+          summary: `Publication language hint: GitHub prose should be English; review ${language.hints.map(hint => `${hint.part} line ${hint.line}`).join(", ")}. Advisory only; publication continues.`,
+        });
         const rewrite = attempt.publicationTextRepair;
         if (rewrite) {
           // Seat wakes omit routine progress. Retain the refusal after a fast

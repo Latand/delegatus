@@ -355,6 +355,22 @@ describe("workspace authority", () => {
     expect((await seatGET(request("/api/orchestrator/seat?project=repo-alpha&scope=all", outsider))).status).toBe(403);
   });
 
+  test("the seat read carries the tick schedule for the owner and never for a workspace member", async () => {
+    const seatPath = path.join(root, "alpha-seat.jsonl");
+    beginOrchestratorSeatIntent({ project: "repo-alpha", mandate: "fixture", clientRequestId: "seat-alpha-tick", mode: "existing", conversationId: "conversation_alpha_tick", now: new Date(now).toISOString() });
+    completeOrchestratorSeatIntent({ project: "repo-alpha", clientRequestId: "seat-alpha-tick", conversationId: "conversation_alpha_tick", path: seatPath, now: new Date(now).toISOString(), preparedAuthCredentialBaseline: null });
+    const owned = await (await seatGET(request("/api/orchestrator/seat?project=repo-alpha", owner))).json();
+    expect(owned.seat).toMatchObject({ conversationId: "conversation_alpha_tick" });
+    expect(owned.tick).toMatchObject({ view: "summary", project: "repo-alpha" });
+    for (const actor of [member, manager]) {
+      const response = await seatGET(request("/api/orchestrator/seat?project=repo-alpha", actor));
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.seat).toMatchObject({ conversationId: "conversation_alpha_tick" });
+      expect("tick" in body).toBe(false);
+    }
+  });
+
   test("membership reads and invite choices follow live workspace roles", async () => {
     for (const actor of [owner, manager, member, outsider]) {
       const answer = await (await workspacesGET(request("/api/team/workspaces", actor))).json();

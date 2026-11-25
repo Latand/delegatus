@@ -6,6 +6,10 @@ import path from "node:path";
 import type { Pipeline, PipelineStage, PipelineStageAttempt } from "./types";
 
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-legacy-review-store-"));
+const { importLegacyTasks } = await import("@/lib/tasks/store");
+// Serving activation imports task links before archive predicates read them
+// inside the pipeline transaction. Seed that collection in this fixture too.
+importLegacyTasks(path.join(process.env.LLV_STATE_DIR, "tasks.json"));
 const { archiveSettledPipelines, findPipelineRecord, loadArchivedPipelines, loadPipelines, loadPipelinesForStartup, pipelineIdentity, savePipelines } = await import("./store");
 const { applyLegacyReviewConversion, previewLegacyReviewConversion } = await import("./legacyReviewDefinition");
 

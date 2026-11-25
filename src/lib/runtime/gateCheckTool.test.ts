@@ -6,6 +6,7 @@ import { bindGateCheckRoot, runGateCheckTool } from "./gateCheckTool";
 import * as gateWait from "./gateWait";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
+import { GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV, publishGateRun, recorderGatePaths } from "./gateCheckRecord";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -24,6 +25,143 @@ function finish(dir: string, exit: number) {
   fs.writeFileSync(path.join(dir, "exit.tmp"), `${exit}\n`);
   fs.renameSync(path.join(dir, "exit.tmp"), path.join(dir, "exit"));
 }
+
+function registeredFixture() {
+  const f = fixture(), runId = "a".repeat(64);
+  const ticket = JSON.parse(fs.readFileSync(path.join(f.dir, "completion.json"), "utf8"));
+  const record = { ...ticket, runId, log: f.log, rootDirectoryIdentity: physical(f.root) };
+  fs.writeFileSync(path.join(f.dir, "completion.json"), JSON.stringify(record));
+  publishGateRun(f.root, record);
+  return { ...f, runId, record, index: path.join(f.root, ".gate-runs", `${runId}.json`) };
+}
+
+test.each(["correct", "wrong", "omitted", "foreign", "relative"])("run id returns the verdict with a %s log hint", async hint => {
+  const f = registeredFixture(), other = fixture();
+  const log = hint === "correct" ? f.log : hint === "wrong" ? path.join(f.root, "absent/check.log")
+    : hint === "foreign" ? other.log : hint === "relative" ? "incorrect.log" : undefined;
+  const abort = new AbortController();
+  try {
+    const held = runGateCheckTool({ runId: f.runId, log, reason: "registered check" }, f.binding, abort.signal);
+    finish(f.dir, 37);
+    const answer = await held;
+    expect(answer.success).toBe(true);
+    expect(JSON.parse(answer.contentItems[0].text)).toMatchObject({ terminal: true, code: 37, runId: f.runId });
+  } finally { abort.abort(); }
+});
+
+test.each(["foreign", "copied", "outside", "indirect", "ticket", "owner", "directory", "index-link", "traversal"])("run id refuses %s evidence without adopting a result", async fault => {
+  const f = registeredFixture(), other = fixture(); finish(f.dir, 0); finish(other.dir, 0);
+  let binding = f.binding, runId = f.runId;
+  if (fault === "foreign") binding = other.binding;
+  if (fault === "copied") {
+    fs.mkdirSync(path.join(other.root, ".gate-runs"));
+    fs.copyFileSync(f.index, path.join(other.root, ".gate-runs", `${runId}.json`));
+    binding = other.binding;
+  }
+  if (fault === "outside") fs.writeFileSync(f.index, JSON.stringify({ ...f.record, log: other.log }));
+  if (fault === "indirect") {
+    fs.symlinkSync(other.root, path.join(f.root, "indirect"), "dir");
+    fs.writeFileSync(f.index, JSON.stringify({ ...f.record, log: path.join(f.root, "indirect/check.log") }));
+  }
+  if (fault === "ticket") fs.writeFileSync(path.join(f.dir, "completion.json"), "{}");
+  if (fault === "owner") fs.writeFileSync(path.join(f.dir, "owner.json"), "{}");
+  if (fault === "directory") {
+    fs.renameSync(f.dir, `${f.dir}.retained`); fs.mkdirSync(f.dir);
+    for (const file of ["owner.json", "completion.json", "exit"]) fs.copyFileSync(path.join(`${f.dir}.retained`, file), path.join(f.dir, file));
+  }
+  if (fault === "index-link") { fs.unlinkSync(f.index); fs.symlinkSync(path.join(f.dir, "completion.json"), f.index); }
+  if (fault === "traversal") runId = "../check.log.gate/completion";
+  const answer = await runGateCheckTool({ runId, log: f.log, reason: "unverified check" }, binding, new AbortController().signal);
+  expect(answer.success).toBe(false);
+});
+
+test("a run index changed across the wait refuses its result", async () => {
+  const f = registeredFixture(), abort = new AbortController();
+  try {
+    const held = runGateCheckTool({ runId: f.runId, reason: "changed index" }, f.binding, abort.signal);
+    fs.writeFileSync(f.index, "{}"); finish(f.dir, 0);
+    expect((await held).success).toBe(false);
+  } finally { abort.abort(); }
+});
+
+test("an interrupted indexed wait reports the published ID and preserves the callback identity guard", async () => {
+  const f = registeredFixture(), abort = new AbortController();
+  const args = { runId: f.runId, reason: "registered check" };
+  const completionId = gateWait.gateCompletionIdentity(f.log).runId;
+  const held = runGateCheckTool(args, f.binding, abort.signal, completionId);
+  abort.abort();
+  const answer = await held;
+  expect(answer.success).toBe(false);
+  expect(answer.contentItems[0].text).toContain(`(runId=${f.runId}): gate completion wait cancelled`);
+  finish(f.dir, 0);
+  const wrongIdentity = await runGateCheckTool(args, f.binding, new AbortController().signal, f.runId);
+  expect(wrongIdentity.success).toBe(false);
+  expect(wrongIdentity.contentItems[0].text).toContain(`(runId=${f.runId}): gate completion run identity changed`);
+  const late = await runGateCheckTool(args, f.binding, new AbortController().signal, completionId);
+  expect(late.success).toBe(true);
+  expect(JSON.parse(late.contentItems[0].text)).toMatchObject({ terminal: true, code: 0, runId: f.runId });
+});
+
+test("recorder pins the launch root across a nested TMPDIR and refuses altered proof", () => {
+  const f = fixture(), nested = path.join(f.root, "nested"); fs.mkdirSync(nested);
+  const env = { [GATE_CHECK_LAUNCH_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };
+  expect(recorderGatePaths(path.join(nested, "check.log"), nested, env).root).toBe(f.root);
+  expect(() => recorderGatePaths(path.join(nested, "check.log"), nested, {
+    ...env, [GATE_CHECK_ROOT_IDENTITY_ENV]: "0:0",
+  })).toThrow("gate launch root identity changed");
+  const outside = fixture().log;
+  expect(() => recorderGatePaths(outside, nested, env)).toThrow("outside the recorder's temporary root");
+  expect(() => recorderGatePaths(path.join(nested, "check.log"), nested, {
+    [GATE_CHECK_ROOT_ENV]: f.root,
+  })).toThrow("gate launch root proof is incomplete");
+});
+
+test("recorder refuses an existing log symlink outside its root before creating a ticket", () => {
+  const f = fixture(), outside = fixture(), nested = path.join(f.root, "nested");
+  fs.mkdirSync(nested);
+  const log = path.join(nested, "check.log");
+  fs.symlinkSync(outside.log, log);
+  const env = { [GATE_CHECK_LAUNCH_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };
+  expect(() => recorderGatePaths(log, nested, env)).toThrow(`resolvedRoot=${JSON.stringify(f.root)}`);
+  expect(fs.existsSync(`${log}.gate`)).toBe(false);
+  expect(fs.existsSync(path.join(f.root, ".gate-runs"))).toBe(false);
+});
+
+test("recorder refuses a moved launch root even when its original path aliases the same directory", () => {
+  const f = fixture(), retained = `${f.root}.retained`;
+  const env = { [GATE_CHECK_LAUNCH_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };
+  fs.renameSync(f.root, retained);
+  fs.symlinkSync(retained, f.root, "dir");
+  try {
+    expect(() => recorderGatePaths(path.join(f.root, "check.log"), f.root, env))
+      .toThrow("gate launch root identity changed");
+  } finally {
+    fs.unlinkSync(f.root);
+    fs.renameSync(retained, f.root);
+  }
+});
+
+test.each([GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV, GATE_CHECK_ROOT_IDENTITY_ENV])("recorder refuses missing or empty %s without falling back to TMPDIR", field => {
+  const f = fixture();
+  const proof = { [GATE_CHECK_LAUNCH_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };
+  for (const value of [undefined, ""]) {
+    expect(() => recorderGatePaths(f.log, f.root, { ...proof, [field]: value }))
+      .toThrow("gate launch root proof is incomplete");
+  }
+});
+
+test.each([GATE_CHECK_LAUNCH_ROOT_ENV, GATE_CHECK_ROOT_ENV])("recorder refuses relative %s", field => {
+  const f = fixture();
+  const proof = { [GATE_CHECK_LAUNCH_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_ENV]: f.root, [GATE_CHECK_ROOT_IDENTITY_ENV]: physical(f.root) };
+  expect(() => recorderGatePaths(f.log, f.root, { ...proof, [field]: "relative-root" }))
+    .toThrow("gate launch root proof is incomplete");
+});
+
+test("recorder retains its no-launch-proof fallback for standalone checks", () => {
+  const f = fixture();
+  expect(recorderGatePaths(f.log, f.root, {}).root).toBe(f.root);
+  expect(() => recorderGatePaths(f.log, fixture().root, {})).toThrow("outside the recorder's temporary root");
+});
 
 // Drop only completion notifications, while driving the wait's clock explicitly.
 function missedNotifications(directory: string) {

@@ -12,10 +12,11 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * The agents' surface for the Telegram bot account, called by the five
- * Viewer MCP tools (`docs/design/telegram-bot-account.md`, Decision 6).
+ * The agents' surface for the Telegram bot account, called by the Viewer
+ * MCP tools (`docs/design/telegram-bot-account.md`, Decision 6).
  *
- * GET `?op=chats[&includeInactive=1]` and `?op=messages&chat=…` read; POST
+ * GET `?op=chats[&includeInactive=1]`, `?op=messages&chat=…` and
+ * `?op=reactions&chat=…` read. POST `{op:"set_reaction", …}` sets one reaction. POST
  * `{op:"send", …}`, `{op:"send_media", …}` or `{op:"send_document", …}`
  * posts. The sender is resolved here from the forwarded
  * conversation capability, never from an argument, so the attribution a post
@@ -42,6 +43,8 @@ export async function GET(req: NextRequest) {
           since: params.get("since") ?? undefined,
           maxChars: params.get("maxChars") ?? undefined,
         }));
+      case "reactions":
+        return NextResponse.json(await service.readReactions(params.get("chat")));
       default:
         return NextResponse.json({ error: "Unknown Telegram bot read", code: "invalid_action" }, { status: 400 });
     }
@@ -55,7 +58,9 @@ export async function POST(req: NextRequest) {
   if (rejected) return rejected;
   let body: Record<string, unknown>;
   try { body = await req.json() as Record<string, unknown>; } catch { return NextResponse.json({ error: "Invalid JSON", code: "invalid_json" }, { status: 400 }); }
-  if (body.op !== "send" && body.op !== "send_media" && body.op !== "send_document") return NextResponse.json({ error: "Unknown Telegram bot action", code: "invalid_action" }, { status: 400 });
+  if (!body || (body.op !== "send" && body.op !== "send_media" && body.op !== "send_document" && body.op !== "set_reaction")) {
+    return NextResponse.json({ error: "Unknown Telegram bot action", code: "invalid_action" }, { status: 400 });
+  }
   try {
     if (body.op === "send" && Object.hasOwn(body, "reportId")) {
       try {
@@ -71,6 +76,9 @@ export async function POST(req: NextRequest) {
       }
     }
     const service = telegramBotService();
+    if (body.op === "set_reaction") {
+      return NextResponse.json(await service.setReaction({ chat: body.chat, messageId: body.messageId, reaction: body.reaction }));
+    }
     const parsed = parseTelegramChatReference(body.chat);
     const known = parsed && service.listChats().chats.find((chat) => chat.postAllowed && (
       chat.chatId === parsed.chat || chat.chat === parsed.chat || chat.alias === parsed.chat

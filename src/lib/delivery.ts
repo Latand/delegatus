@@ -1,3 +1,4 @@
+import { RegistryTransactionError } from "@/lib/agent/registryTransaction";
 import { orchestratorRecipientRefusal, orchestratorRecipientRefusalAsync } from "@/lib/orchestrator/seats";
 import { DeliveryAdmissionRefusedError, type DeliveryAdmissionGuard } from "@/lib/deliveryAdmission";
 import type { AgentEngine } from "@/lib/agent/cli";
@@ -9,6 +10,7 @@ import { listFiles } from "@/lib/scanner";
 import { pathAllowed } from "@/lib/scanner/roots";
 import { transcriptLiveOwnership, type TranscriptLiveOwnership } from "@/lib/scanner/transcripts";
 import { recoverDeadStructuredConversation, StructuredResumeUnpublishedError } from "@/lib/runtime/structuredRecovery";
+import { StageAttemptSettledError } from "@/lib/runtime/stageGitEnvironment";
 import type { MessageOrigin } from "@/lib/runtime/messageOrigin";
 import type { ActuationLease } from "@/lib/deliveryActuation";
 import { ownedDeliveryProgressStore } from "@/lib/runtime/deliveryProgress";
@@ -95,6 +97,9 @@ export interface DeliverySuccess {
   structured?: true;
   operationId?: string;
   receipt?: RuntimeOperationReceipt;
+  waitReason?: string;
+  detail?: string;
+  deadlineAt?: string;
   /** Set when an account switch named an account outside the project's pool:
       the switch was carried out and attributed, and the answer says so. */
   accountOverride?: AccountOverrideNotice;
@@ -108,8 +113,10 @@ export function migrationDeliveryOutcome(outcome: DeliveryOutcome): "delivered" 
 }
 
 function failure(error: unknown, status = 500, actuation?: "started"): DeliveryFailure {
+  if (error instanceof RegistryTransactionError) return { ok: false, outcome: "failed", error: error.message, code: error.code, status: 503 };
   if (error instanceof DeliveryAdmissionRefusedError) return { ok: false, outcome: "failed", error: error.message, code: error.code, status: 409, admission: "refused" };
   if (error instanceof StructuredResumeUnpublishedError) return { ok: false, outcome: "failed", error: error.message, code: "structured_revival_impossible", status: 503 };
+  if (error instanceof StageAttemptSettledError) return { ok: false, outcome: "failed", error: error.refusal, code: error.code, status: 409 };
   return {
     ok: false,
     outcome: "failed",
@@ -260,7 +267,7 @@ type AgentTranscript = FileEntry & { engine: AgentEngine };
 
 /** A transcript of an engine the registry keeps conversations for. */
 function agentTranscript(entry: FileEntry): entry is AgentTranscript {
-  return entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot";
+  return entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot" || entry.engine === "antigravity";
 }
 
 /**
@@ -365,6 +372,7 @@ export async function deliverConversationMessage(message: ConversationMessage, o
             ok: true,
             target: recovered.spawned ? null : structured.target,
             outcome: "held",
+            ...(structured.waitReason ? { waitReason: structured.waitReason, detail: structured.detail, deadlineAt: structured.deadlineAt } : {}),
             spawned: recovered.spawned,
             structured: true,
             operationId: structured.operationId,

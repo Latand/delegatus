@@ -49,6 +49,58 @@ and network policy can supply the project template. Otherwise networking uses
 the restricted package-manager preset. Secrets, VPN connections and other
 account-specific requirements are excluded.
 
+## Repository setup
+
+Preparation reads the bound ref through the existing GitHub contents reader.
+It resolves the commit once, lists its root tree and reads only the immutable
+blobs for `Dockerfile`, `package.json`, `.bun-version`, `.node-version`, `.nvmrc`
+and `.tool-versions`. Lockfiles need only a presence check. Reads have one
+20-second deadline; truncated trees, oversized manifests and symbolic links
+refuse preparation with a saved readiness reason. Repository text is never
+executed on the preparing machine.
+
+Exact Bun and Node versions come from those declarations, including Docker
+image tags, a literal global Bun install, package engines, packageManager and
+Volta pins. Ranges supply requirements but cannot select a version. Missing or
+conflicting pins refuse readiness instead of installing a floating release.
+The generated Linux setup installs into `/usr/local`, verifies exact versions
+under `env -i` with the system PATH, then runs the lockfile's frozen install.
+Bun uses `--frozen-lockfile`, npm uses `ci`, and pinned pnpm and Yarn use their
+respective frozen or immutable mode. No lockfile means no dependency install.
+Conflicting lockfile families and unpinned pnpm or Yarn also refuse readiness.
+
+Matching ready environments are checked for the same generated setup before
+they can be reused. Empty setup and intact generated setup are repaired in
+place: create a draft, read its base version and revision, PATCH only its
+install script, and use the existing approval operation. A lost PATCH reply
+is recovered by reading the draft before another write. Expected revisions
+protect concurrent edits; start skills, networking and other configuration
+fields remain with the provider. The script checksum distinguishes intact
+generated setup from operator edits. A hand-written script or an edited
+generated script is preserved, and readiness names the required setup steps.
+Explicit environment selections remain authoritative and require their owner
+to supply missing setup. Approval failures retain their existing typed reason
+and never establish readiness.
+
+### Preparation callers
+
+`prepareCloudEnvironment` in `src/lib/projects/codexCloudEnvironments.ts` is the
+only production caller of backend `create`, `draft`, `configureDraft`, `begin`
+and `complete`. The last two implement `approve/begin` and `approve/complete`.
+Production preparation enters through `CloudEnvironmentController.visit`
+using its `prepare` port, or `createHostedCloudStageClient.prepareEnvironment`.
+The controller also opens the backend for read-only repository discovery.
+Publication checks consume prepared bindings and never prepare environments.
+
+Direct test callers are `codexCloudEnvironments.fixture.ts`,
+`cloudEnvironmentRestart.fixture.ts`, `cloudEnvironmentController.test.ts`,
+`codexCloudEnvironments.test.ts`, `codexCloudEnvironments.recovery.test.ts` and
+`codexCloudEnvironments.status.test.ts`. The lifecycle and setup tests use
+the shared fixtures. Their repository snapshots and provider transports are
+injected; they make no live GitHub or Cloud requests.
+
+## Approval recovery
+
 Creation persists intent before its POST, then checkpoints the configuration,
 draft, draft revision and approval-operation identifiers. Approval initiation
 reuses the saved idempotency key. Completion follows a successful operation and

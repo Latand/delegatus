@@ -1,16 +1,19 @@
+import { noteRelayHttpRefusal, type RelayHttpRefusal } from "./httpDiagnostics";
+import type { CompletionRefusal } from "./completionRefusal";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { endLeasedHelper, leasedHelperInput, spawnLeasedHelper } from "@/lib/helperLease";
 import type { ExternalRelayCompletion, ExternalRelayProgress } from "./protocol";
 import type { PairedRelay } from "./store";
-import type { RelayAnswerDelivery } from "./answers";
 import { ExternalRelayError, relayCall } from "./client";
 import { completeRelayRequest } from "./relayCompletion";
 import { ownerRelayAuthorized, ownerRelayFailureReplyAuthorized, ownerRelayStatusReplyAuthorized } from "./ownerAuthority";
+import { endRequesterLease, requesterLeaseWriter, type RequesterLease } from "./requesterLease";
 
-export type TransportResult = { body: ExternalRelayCompletion; delivery: RelayAnswerDelivery; refusalCode?: string };
-type Frame = { type: "ready" } | { type: "heartbeat"; seq: number; phase: "attempt" | "acknowledged" | "failed" | "completion_pending" | "post_completion"; status: number; code?: string }
+export type TransportResult = Awaited<ReturnType<typeof completeRelayRequest>>;
+type Frame = { type: "http_refusal"; record: RelayHttpRefusal } | { type: "ready" } | { type: "heartbeat"; seq: number; phase: "attempt" | "acknowledged" | "failed" | "completion_pending" | "post_completion"; status: number; code?: string }
+  | { type: "refusal"; refusal: CompletionRefusal } | { type: "downgrade"; refusal: CompletionRefusal }
   | { type: "completion"; result?: TransportResult; error?: true } | { type: "refresh_features" } | { type: "drained" };
 // A validated 128 KB answer may expand to 768 KB when JSON escapes control
 // characters. Keep an explicit per-frame cap with room for the envelope.
@@ -39,7 +42,9 @@ export class RelayLeaseTransport {
 
   constructor(private readonly relay: PairedRelay, private readonly requestId: string, private readonly targetId: string, private readonly leaseId: string,
     private readonly intervalMs: number, private readonly onHeartbeat: (frame: Extract<Frame, { type: "heartbeat" }>) => void,
-    initialProgress: ExternalRelayProgress | null = null, private readonly onRefreshFeatures?: () => void, launch = relayLeaseTransportLaunch()) {
+    initialProgress: ExternalRelayProgress | null = null, private readonly onRefreshFeatures?: () => void, launch = relayLeaseTransportLaunch(),
+    private readonly onRefusal?: (refusal: CompletionRefusal) => void, private readonly onDowngrade?: (refusal: CompletionRefusal) => void,
+    private readonly requesterLease?: RequesterLease) {
     this.child = spawnLeasedHelper("relay-lease", { command: launch.executable, args: [launch.workerPath], cwd: process.cwd(), env: process.env }, undefined,
       { input: true, stdout: "pipe", stderr: "ignore" });
     this.closed = new Promise(resolve => this.child.once("close", () => resolve()));
@@ -48,7 +53,7 @@ export class RelayLeaseTransport {
     leasedHelperInput(this.child).on("error", fail);
     this.child.stdout!.setEncoding("utf8");
     this.child.stdout!.on("data", (chunk: string) => this.read(chunk));
-    this.send({ type: "start", relay, requestId, targetId, leaseId, intervalMs, progress: initialProgress });
+    this.send({ type: "start", relay, requestId, targetId, leaseId, intervalMs, progress: initialProgress, requesterLease });
   }
 
   private send(value: unknown) {
@@ -59,6 +64,7 @@ export class RelayLeaseTransport {
   private fail(error: Error) {
     if (this.failed) return;
     this.failed = error;
+    if (this.requesterLease) endRequesterLease(this.requesterLease);
     this.readyReject(error);
     this.completeReject?.(error);
     this.drainedResolve();
@@ -72,9 +78,12 @@ export class RelayLeaseTransport {
       if (Buffer.byteLength(line) > MAX_FRAME_BYTES) { this.fail(new Error("relay lease helper exceeded its frame bound")); endLeasedHelper(this.child); return; }
       try {
         const frame = JSON.parse(line) as Frame;
+        if (frame.type === "http_refusal") { noteRelayHttpRefusal(frame.record); continue; }
         if (frame.type === "ready") { this.readyResolve(); continue; }
         if (frame.type === "heartbeat") { this.onHeartbeat(frame); continue; }
         if (frame.type === "refresh_features") { this.onRefreshFeatures?.(); continue; }
+        if (frame.type === "refusal") { console.error("External relay completion refused", { request: this.requestId.slice(0, 8), ...frame.refusal }); this.onRefusal?.(frame.refusal); continue; }
+        if (frame.type === "downgrade") { this.onDowngrade?.(frame.refusal); continue; }
         if (frame.type === "drained") { this.drainedResolve(); continue; }
         if (frame.type === "completion") {
           if (frame.result) this.completeResolve?.(frame.result);
@@ -122,13 +131,17 @@ export class InlineRelayLeaseTransport {
   private regularPending = false;
   private progressPending = false;
   private pendingLeaseLoss?: { status: number; code: string };
+  private readonly requesterLease?: ReturnType<typeof requesterLeaseWriter>;
   readonly ready: Promise<void>;
 
   constructor(private readonly relay: PairedRelay, private readonly requestId: string, private readonly targetId: string,
     private readonly leaseId: string, private readonly intervalMs: number,
     private readonly onHeartbeat: (frame: Extract<Frame, { type: "heartbeat" }>) => void,
-    progress: ExternalRelayProgress | null, private readonly onRefreshFeatures?: () => void) {
+    progress: ExternalRelayProgress | null, private readonly onRefreshFeatures?: () => void,
+    private readonly onRefusal?: (refusal: CompletionRefusal) => void, private readonly onDowngrade?: (refusal: CompletionRefusal) => void,
+    requesterLease?: RequesterLease) {
     this.progressValue = progress;
+    if (requesterLease) this.requesterLease = requesterLeaseWriter(requesterLease);
     this.nextDue = Date.now() + intervalMs;
     this.ready = this.beat(false);
   }
@@ -149,6 +162,7 @@ export class InlineRelayLeaseTransport {
     const seq = ++this.seq;
     const sent = this.progressValue;
     const progress = sent;
+    const sentAt = Date.now();
     const frame = (phase: Extract<Frame, {type:"heartbeat"}>["phase"], status: number, code?: string) =>
       this.onHeartbeat({ type: "heartbeat", seq, phase, status, ...(code ? {code} : {}) });
     this.beatPromise = (async () => {
@@ -157,12 +171,14 @@ export class InlineRelayLeaseTransport {
         const response = await relayCall(this.relay.api_base, `/requests/${encodeURIComponent(this.requestId)}/heartbeat`, "POST",
           { lease_id: this.leaseId, seq, progress }, this.relay.credential,
           { timeoutMs: 5000, maxBytes: this.relay.limits.max_response_bytes });
+        this.requesterLease?.acknowledge(sentAt);
         frame("acknowledged", response.status);
         if (this.progressValue === sent) this.progressValue = null;
       } catch (error) {
         const status = error instanceof ExternalRelayError ? error.status : 0;
         const code = error instanceof ExternalRelayError ? error.code : "transport_error";
         const leaseLost = status === 404 || status === 409 && code === "lease_lost";
+        if (leaseLost) this.requesterLease?.end();
         const phase = this.accepted && leaseLost ? "post_completion" : this.completing && leaseLost ? "completion_pending" : "failed";
         frame(phase, status, code);
         if (phase === "completion_pending") this.pendingLeaseLoss = {status,code};
@@ -202,14 +218,14 @@ export class InlineRelayLeaseTransport {
       ownerAuthorization ? () => ownerAuthorization === "status"
         ? ownerRelayStatusReplyAuthorized(this.relay.id, this.targetId, this.requestId, body, plainMax)
         : (ownerAuthorization === "failure" ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(this.relay.id, this.targetId, this.requestId) : undefined,
-      async () => { this.onRefreshFeatures?.(); }, plainMax);
+      async () => { this.onRefreshFeatures?.(); }, plainMax, this.onRefusal, undefined, this.onDowngrade);
     this.completing = false;
     this.accepted = result.delivery === "accepted";
     if (this.pendingLeaseLoss) {
       const lost = this.pendingLeaseLoss; this.pendingLeaseLoss = undefined;
       this.onHeartbeat({ type:"heartbeat", seq:this.seq, phase:this.accepted ? "post_completion" : "failed", ...lost });
     }
-    if (this.accepted) { this.stopped = true; clearTimeout(this.timer); }
+    if (this.accepted) { this.stopped = true; clearTimeout(this.timer); this.requesterLease?.end(); }
     return result;
   }
 
@@ -217,6 +233,7 @@ export class InlineRelayLeaseTransport {
     if (this.closed) return;
     this.closed = true;
     this.stopped = true;
+    this.requesterLease?.end();
     clearTimeout(this.timer);
     clearTimeout(this.progressTimer);
     await this.beatPromise;

@@ -890,7 +890,7 @@ test.each(["child", "deploy", "maintenance", "stall"] as const)("legacy retained
     label: "Settlement ".padEnd(500, "s"),
     ...(kind === "child" ? { outcomeId: id, stateTokens: [`${id}@one`] } : {}),
     ...(kind === "deploy" ? { deploy: { deploymentId: id, phase: "succeeded", sha: "a".repeat(40), error: null } } : {}),
-    ...(kind === "maintenance" ? { maintenance: { runId: id } } : {}),
+    ...(kind === "maintenance" ? { maintenance: { runId: id, page: 0, pages: 1 } } : {}),
     ...(kind === "stall" ? { stallToken: `${id}@one` } : {}),
   }));
   const verdict: Extract<import("./types").SeatTickVerdict, { kind: "wake" }> = {
@@ -907,6 +907,7 @@ test.each(["child", "deploy", "maintenance", "stall"] as const)("legacy retained
   delete commit.acknowledgmentLines;
   delete commit.itemLines;
   delete commit.itemsShown;
+  if (kind === "maintenance") commit.announcedMaintenance = ids;
   const outstandingWake = {
     clientMessageId: `legacy-${kind}-wake`, conversationId: CONVERSATION, seatEpoch: 7, operationId: null,
     preparedAt: new Date(NOW - MINUTE).toISOString(), text, commit,
@@ -966,10 +967,11 @@ test.each([30, 200])("full report ledgers deliver a complete maintenance settlem
     rig.deps.sources!.now = () => NOW + round * 70 * MINUTE;
     await runSeatTickCheck(PROJECT, rig.deps);
     expect(rig.sent.at(-1)!.text.length).toBeLessThanOrEqual(wakeLimit);
-    expect(rig.written.at(-1)!.reportsOwed).toEqual(reportsOwed);
-    expect(rig.sent.at(-1)!.text).toContain(`key ${reportsOwed[0]!.key} and coversOwed: true`);
+    const requestKey = rig.written.at(-1)!.reportsOwed![0]!.requestedBy![0]!;
+    expect(rig.written.at(-1)!.reportsOwed).toEqual(reportsOwed.map(entry => ({ ...entry, requestedBy: [requestKey] })));
+    expect(rig.sent.at(-1)!.text).toContain(`key ${requestKey} and coversOwed: true`);
   }
-  const bullet = `- [maintenance] ${run.taskId} — ${maintenanceItemLabel(run)}`;
+  const bullet = `- [maintenance] ${run.taskId}:1 — ${maintenanceItemLabel(run)}`;
   expect(bullet.length).toBeGreaterThan(1_200);
   /* Both ledgers leave room for the whole item within the two wakes; the
      short labels fit it into the first. */
@@ -1001,6 +1003,117 @@ test("the controller keeps unpaid report reminders after the delivered agenda dr
   expect((await runSeatTickCheck(PROJECT, rig.deps))!.reasons).toEqual(["interval"]);
   expect(rig.sent.at(-1)!.text).not.toContain(`key ${key}`);
   expect(rig.written.at(-1)!.reportsOwed).toEqual([]);
+});
+
+test("a recorded wake report settles its delivered set and its key is skipped on later wakes", async () => {
+  const { setSystemTime } = await import("bun:test");
+  const { readBridgeReportLog, scopedReportId } = await import("@/lib/bridge/store");
+  const { createMcpToolService, SqliteMcpReceiptStore } = await import("@/lib/mcp/server");
+  const { productionDomainDependencies, viewerMcpBindings } = await import("@/lib/mcp/bindings");
+  const { shutdownTaskPageWorker } = await import("@/lib/links/taskPageWorker");
+  const { setReportTelegram } = await import("@/lib/projects/settings");
+  const { seatTickReportRows } = await import("./seatTickReports");
+  const previousState = process.env.LLV_STATE_DIR;
+  const directory = fs.mkdtempSync(path.join(SANDBOX, "wake-report-"));
+  process.env.LLV_STATE_DIR = path.join(directory, "state");
+  const stateFile = path.join(directory, "seat-tick.json");
+  const receipts = new SqliteMcpReceiptStore(path.join(directory, "receipts.sqlite"));
+  try {
+    setReportTelegram(PROJECT, { chat: "report-room", name: "Project" }, "operator");
+    const sends: string[] = [];
+    const service = () => createMcpToolService(viewerMcpBindings(undefined, {
+      get: async () => { throw new Error("unexpected control read"); },
+      post: async () => { throw new Error("unexpected control write"); },
+    }, {
+      ...productionDomainDependencies,
+      callerProject: () => PROJECT,
+      callerAttribution: () => ({ kind: "manager", conversationId: CONVERSATION, role: "orchestrator" }),
+      authorizedSeats: () => [{ conversationId: CONVERSATION, path: null, project: PROJECT }],
+      operatorLocale: () => "en",
+      operatorTimeZone: () => "UTC",
+      publicDenyList: () => ({ accounts: [], people: [], local: [], projects: [] }),
+      sendReportTelegram: async ({ clientRequestId }) => {
+        sends.push(clientRequestId);
+        return { ok: true, messageIds: [70 + sends.length] };
+      },
+    }), receipts, { permit: () => ({ allowed: true }) });
+    const fileReport = async (key: string, clientRequestId: string, now: number, coversOwed = true) => {
+      setSystemTime(new Date(now));
+      try {
+        return await service().callTool("bridge_report", {
+          key, clientRequestId, class: "status", summary: "Reviewed the delivered lane outcomes.", coversOwed,
+        });
+      } finally {
+        setSystemTime();
+      }
+    };
+    const at = (now: number) => new Date(now).toISOString();
+    const parked = { ...settledLane, id: "park-first", state: "needs_decision" };
+    const second = { ...settledLane, id: "park-second", state: "needs_decision", movedAt: at(NOW - 4 * MINUTE) };
+    const firstKey = "lane:park-first:parked";
+    const secondKey = "lane:park-second:parked";
+    const laterKey = "lane:park-later:parked";
+    const state = () => readSeatTickState(PROJECT, stateFile);
+    const tick = async (now: number, pipelines: Parameters<typeof harness>[0]["pipelines"]) => {
+      const rig = harness({ pipelines, now, stateFile });
+      rig.deps.sources!.reports = { ...reportPort(() => []), log: seatTickReportRows };
+      const record = await runSeatTickCheck(PROJECT, rig.deps);
+      return { record, sent: rig.sent };
+    };
+    writeSeatTickState(PROJECT, { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: at(NOW - 70 * MINUTE), lastProposalAt: at(NOW) }, stateFile);
+    const first = await tick(NOW, [parked, second]);
+    expect(first.record?.delivery).toMatchObject({ outcome: "delivered", clientMessageId: first.sent[0]!.clientMessageId });
+    const firstRequestKey = first.sent[0]!.text.match(/File one report with key ([^ ]+) and coversOwed: true/)?.[1] ?? "";
+    expect(firstRequestKey).not.toBe("");
+    expect(firstRequestKey).not.toBe(firstKey);
+    expect(first.sent[0]!.text).toContain(`lane park-fir parked, lane park-sec parked. File one report with key ${firstRequestKey}`);
+    expect(state().reportsOwed?.map(entry => entry.key)).toEqual([firstKey, secondKey]);
+    expect(state().announcedLanes).toEqual(["park-first:needs_decision", "park-second:needs_decision"]);
+
+    const filed = await fileReport(firstRequestKey, "first-wake-report", NOW + MINUTE, false);
+    expect(filed).toMatchObject({ recorded: true, replayed: false, seq: 1,
+      destinations: { telegram: { state: "sent", messageIds: [71] } } });
+    expect(readBridgeReportLog().reports[0]).toMatchObject({
+      id: scopedReportId(PROJECT, firstRequestKey), at: at(NOW + MINUTE),
+    });
+    expect(readBridgeReportLog().reports[0]).not.toHaveProperty("coversOwedAt");
+    const unchanged = await tick(NOW + 2 * MINUTE, [parked, second]);
+    expect(unchanged.sent).toEqual([]);
+    expect(state().reportsOwed).toEqual([]);
+
+    const later = await tick(NOW + 71 * MINUTE, [
+      { ...parked, state: "needs_review", movedAt: at(NOW + 70 * MINUTE) },
+      { ...second, id: "park-later", movedAt: at(NOW + 69 * MINUTE) },
+    ]);
+    expect(later.record?.delivery).toMatchObject({ outcome: "delivered", clientMessageId: later.sent[0]!.clientMessageId });
+    expect(later.sent[0]!.clientMessageId).not.toBe(first.sent[0]!.clientMessageId);
+    expect(later.sent[0]!.text).toContain(`File one report with key ${laterKey}`);
+    expect(state().reportsOwed?.map(entry => entry.key)).toEqual([laterKey]);
+    expect(state().announcedLanes).toContain("park-first:needs_review");
+
+    expect(await fileReport(firstRequestKey, "first-wake-report", NOW + 72 * MINUTE, false)).toEqual({ ...filed, replayed: true });
+    expect(await fileReport(firstRequestKey, "duplicate-wake-report", NOW + 72 * MINUTE)).toMatchObject({
+      recorded: false, alreadyRecorded: true, seq: 1, reportId: filed.ok ? filed.reportId : undefined,
+    });
+    const stillOwed = await tick(NOW + 73 * MINUTE, []);
+    expect(stillOwed.sent).toEqual([]);
+    expect(state().reportsOwed?.map(entry => entry.key)).toEqual([laterKey]);
+    expect(sends).toHaveLength(1);
+    expect(readBridgeReportLog().reports.map(row => row.coversOwedAt)).toEqual([undefined]);
+
+    expect(await fileReport(laterKey, "later-wake-report", NOW + 74 * MINUTE)).toMatchObject({ recorded: true, seq: 2,
+      destinations: { telegram: { state: "sent", messageIds: [72] } } });
+    const settled = await tick(NOW + 145 * MINUTE, []);
+    expect(settled.sent).toEqual([]);
+    expect(state().reportsOwed).toEqual([]);
+    expect(readBridgeReportLog().reports.map(row => row.seq)).toEqual([1, 2]);
+    expect(sends).toHaveLength(2);
+  } finally {
+    receipts.close();
+    await shutdownTaskPageWorker();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+  }
 });
 
 test("deploy snapshots are taken in the pass before the decision and the send, whether or not a wake goes out", async () => {
@@ -1265,6 +1378,9 @@ describe("seat authentication recovery through production seams", () => {
     const { TelegramBotService, productionTelegramBotDependencies } = await import("@/lib/telegram/bot/service");
     const { FakeBotTransport, fakeBotToken, ok } = await import("@/lib/telegram/bot/fakeTransport");
     const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+    const { updateRelayStore } = await import("@/lib/externalRelay/store");
+    const { destinationRelay } = await import("@/lib/externalRelay/ownerDestination.fixture");
+    updateRelayStore(store => ({ ...store, relays: [destinationRelay()] }));
     const create = engine === "claude" ? createManagedClaudeAccount : createManagedCodexAccount;
     const a = create("Account A");
     const b = create("Account B");
@@ -1340,7 +1456,8 @@ describe("seat authentication recovery through production seams", () => {
     const transport = new FakeBotTransport();
     transport.script("getMe", ok({ id: 4242424, is_bot: true, first_name: "Fixture Bot", username: "fixture_bot", can_join_groups: true }));
     let messageId = 1;
-    transport.handlers.sendMessage = () => ok({ message_id: messageId++, date: 1, chat: { id: -1000000000101, type: "supergroup", title: "Fixture" }, text: "sent" });
+    transport.handlers.getChat = () => ok({ id: 41, type: "private", first_name: "Owner" });
+    transport.handlers.sendRichMessage = () => ok({ message_id: messageId++, date: 1, chat: { id: 41, type: "private", first_name: "Owner" }, text: "sent" });
     const telegram = new TelegramBotService({ ...productionTelegramBotDependencies(), transportFor: () => transport,
       now: () => new Date(AUTH_AT), sleep: async () => {}, conversationTitle: () => null });
     await telegram.connect(fakeBotToken()); await telegram.stopPoller();
@@ -1361,7 +1478,7 @@ describe("seat authentication recovery through production seams", () => {
     rig.deps.reconcileSeat = () => null;
     delete rig.deps.ensureCard;
     const sendRequests: string[] = [];
-    rig.deps.seatAuth = { rotate: (body, _dependencies, actor, admission) => executeOrchestratorRotation(body, command, actor, admission), telegram: async (input) => { sendRequests.push(String(input.clientRequestId)); return telegram.send(input); } };
+    rig.deps.seatAuth = { rotate: (body, _dependencies, actor, admission) => executeOrchestratorRotation(body, command, actor, admission), telegram: async (input) => { sendRequests.push(String(input.clientRequestId)); return telegram.sendOwnerReview(input); } };
     function migrateAccount(accountId: string, targetPath: string, at: string) {
       const id = original.conversationId! as Parameters<typeof registry.requestConversationReseat>[0];
       const requested = registry.requestConversationReseat(id, accountId);
@@ -1449,6 +1566,23 @@ describe("seat authentication recovery through production seams", () => {
   }
 
   for (const engine of ["claude", "codex"] as const) {
+    test(`${engine}: authentication notices never reach the project report chat (#4128)`, async () => {
+      await authFixture(false, async (f) => {
+        await f.check();
+        expect(f.cards()).toHaveLength(1);
+        expect(f.cards()[0]!.text).toContain("Account A");
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+        expect(f.transport.callsOf("sendRichMessage").map(call => call.params.chat_id)).toEqual([41]);
+        expect(f.reports().every(report => report.telegram === undefined)).toBe(true);
+        expect(f.reports()[0]!.body).not.toContain("Account A");
+        expect(f.reports()[0]!.body).not.toContain(ERROR_TEXT);
+        await f.restartAuthentication();
+        await f.check();
+        expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+        expect(f.transport.callsOf("sendRichMessage").map(call => call.params.chat_id)).toEqual([41]);
+      }, engine);
+    });
+
     test(`${engine}: touching unchanged credentials before first detection still reports and parks`, async () => {
       await authFixture(false, async (f) => {
         const file = path.join(f.a.home, engine === "claude" ? ".credentials.json" : "auth.json");
@@ -1536,7 +1670,7 @@ describe("seat authentication recovery through production seams", () => {
       expect(f.row().authIncident).toBeUndefined();
       expect(f.reports()).toHaveLength(1);
       expect(f.sendRequests.every(key => key === id)).toBe(true);
-      expect(f.transport.calls.filter(call => call.method === "sendMessage")).toHaveLength(1);
+      expect(f.transport.calls.filter(call => call.method === "sendRichMessage")).toHaveLength(1);
       expect(f.rig.sent.length).toBeGreaterThan(0);
     });
   });
@@ -1612,7 +1746,7 @@ describe("seat authentication recovery through production seams", () => {
         await f.check(); await f.check();
         expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
         expect(f.rig.sent).toHaveLength(0); expect(f.cards()[0]?.status).toBe("inbox");
-        expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+        expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
         expect((await f.restartAuthentication(`
           const { spyOn } = await import("bun:test");
           const credentials = await import("./src/lib/accounts/claudeCredentials");
@@ -1687,7 +1821,7 @@ describe("seat authentication recovery through production seams", () => {
       await f.check();
       expect(f.row().authIncident).toBeUndefined(); expect(f.cards()[0]?.status).toBe("done");
       expect(f.rig.sent).toHaveLength(1); expect(f.spawns).toHaveLength(0);
-      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
       expect((await f.restartAuthentication()).authIncident).toBeUndefined();
     });
   });
@@ -1733,26 +1867,74 @@ describe("seat authentication recovery through production seams", () => {
     }, engine);
   });
 
+  test("legacy report-chat debt is discarded across restart without another send (#4128)", async () => {
+    await authFixture(false, async f => {
+      await f.check();
+      const id = f.row().authIncident!.id;
+      writeSeatTickState(PROJECT, { ...f.row(), authTelegramOwed: [
+        { id, chat: "auth-fixture", topicId: 7, html: "Legacy private diagnostic" } as never,
+      ] });
+      expect((await f.restartAuthentication()).authTelegramOwed ?? []).toEqual([]);
+      await f.check();
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+      expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
+      expect(f.cards()).toHaveLength(1);
+    });
+  });
+
+  test.each(["absent", "paused", "group", "changed"] as const)("operator destination %s never falls back to the report chat (#4128)", async failure => {
+    await authFixture(false, async f => {
+      const { updateRelayStore } = await import("@/lib/externalRelay/store");
+      const { destinationRelay } = await import("@/lib/externalRelay/ownerDestination.fixture");
+      if (failure === "absent") updateRelayStore(store => ({ ...store, relays: [] }));
+      if (failure === "paused") updateRelayStore(store => ({ ...store, relays: [{ ...destinationRelay(), paused: true }] }));
+      if (failure === "group") f.transport.handlers.getChat = () => ({ ok: true, result: { id: 41, type: "group", title: "Fixture group" } });
+      if (failure === "changed") f.transport.handlers.getChat = () => {
+        updateRelayStore(store => ({ ...store, relays: [] }));
+        return { ok: true, result: { id: 41, type: "private", first_name: "Owner" } };
+      };
+      await f.check();
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+      expect(f.transport.callsOf("sendRichMessage")).toHaveLength(0);
+      expect(f.cards()).toHaveLength(1);
+      const owed = f.row().authTelegramOwed!;
+      expect(owed).toHaveLength(1);
+      expect(owed[0]).toMatchObject({ audience: "operator" });
+      expect((await f.restartAuthentication()).authTelegramOwed).toEqual(owed);
+      f.transport.handlers.getChat = () => ({ ok: true, result: { id: 41, type: "private", first_name: "Owner" } });
+      updateRelayStore(store => ({ ...store, relays: [destinationRelay()] }));
+      await f.check(); await f.check();
+      expect(f.transport.callsOf("sendRichMessage").map(call => call.params.chat_id)).toEqual([41]);
+      expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+      expect(f.row().authTelegramOwed ?? []).toEqual([]);
+    });
+  });
+
   test.each([[false, true], [true, true], [false, false]])("a known Telegram refusal retries independently with allowed=%s and bridge=%s", async (allowed, bridgeEnabled) => {
     await authFixture(allowed, async (f) => {
       if (!bridgeEnabled) (await import("@/lib/projects/settings")).setBridgeReports(PROJECT, false, "fixture");
-      f.telegram.setChat("-1000000000101", "auth-fixture", false);
+      const send = f.rig.deps.seatAuth!.telegram!;
+      let connected = false;
+      f.rig.deps.seatAuth!.telegram = async input => {
+        if (!connected) throw Object.assign(new Error("fixture disconnected"), { code: "bot_not_connected" });
+        return send(input);
+      };
       await f.check();
       expect(f.row().authIncident?.notice?.telegram).toBe("failed");
-      expect(f.transport.callsOf("sendMessage")).toHaveLength(0); expect(f.reports()).toHaveLength(bridgeEnabled ? 1 : 0);
+      expect(f.transport.callsOf("sendRichMessage")).toHaveLength(0); expect(f.reports()).toHaveLength(bridgeEnabled ? 1 : 0);
       await f.check();
       expect((await f.restartAuthentication()).authTelegramOwed).toHaveLength(1);
       if (allowed) expect(f.rig.sent.length).toBeGreaterThan(0);
       const { drainFile, writeDrain, releaseDrain } = await import("@/lib/selfUpdate/drain");
       writeDrain(drainFile(), { id: "auth-telegram-retry-drain", target: "fixture", since: AUTH_AT, until: 0, persistent: true });
       try {
-        f.telegram.setChat("-1000000000101", "auth-fixture", true);
+        connected = true;
         await f.check();
-        expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+        expect(f.transport.callsOf("sendRichMessage")).toHaveLength(0);
         expect(f.row().authTelegramOwed).toHaveLength(1);
       } finally { releaseDrain(drainFile(), "auth-telegram-retry-drain"); }
       await f.check(); await f.check();
-      expect(f.transport.callsOf("sendMessage")).toHaveLength(1); expect(f.reports()).toHaveLength(bridgeEnabled ? 1 : 0);
+      expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1); expect(f.reports()).toHaveLength(bridgeEnabled ? 1 : 0);
       expect(f.row().authTelegramOwed ?? []).toHaveLength(0);
       if (!allowed) expect(f.row().authIncident?.notice?.telegram).toBe("sent");
       expect(new Set(f.sendRequests).size).toBe(1);
@@ -1762,9 +1944,9 @@ describe("seat authentication recovery through production seams", () => {
   test("an uncertain Telegram send keeps its original receipt and is never posted twice", async () => {
     await authFixture(false, async (f) => {
       const { unreachable } = await import("@/lib/telegram/bot/fakeTransport");
-      f.transport.handlers.sendMessage = () => unreachable("timed_out");
+      f.transport.handlers.sendRichMessage = () => unreachable("timed_out");
       await f.check(); await f.check();
-      expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
       expect(f.row().authTelegramOwed ?? []).toHaveLength(0);
       expect(f.reports()).toHaveLength(1); expect(f.cards()).toHaveLength(1);
     });
@@ -1785,8 +1967,8 @@ describe("seat authentication recovery through production seams", () => {
       await f.check(); await f.check();
       expect(f.row().authIncident?.accountId).toBe(f.b.id);
       expect(f.row().authIncident?.id).not.toBe(first);
-      expect(f.reports()).toHaveLength(2); expect(f.reports()[1]?.body).toContain("Account B");
-      expect(f.transport.callsOf("sendMessage")).toHaveLength(2); expect(f.rig.sent).toHaveLength(0);
+      expect(f.reports()).toHaveLength(2); expect(f.cards().some(card => card.text.includes("Account B"))).toBe(true);
+      expect(f.transport.callsOf("sendRichMessage")).toHaveLength(2); expect(f.rig.sent).toHaveLength(0);
       expect(f.cards().filter((card) => card.status === "inbox")).toHaveLength(1);
       expect((await f.restartAuthentication()).authIncident?.accountId).toBe(f.b.id);
       await f.check(); expect(f.reports()).toHaveLength(2);
@@ -1804,11 +1986,11 @@ describe("seat authentication recovery through production seams", () => {
       f.unchangedNote(); f.unchangedBinding();
       expect(f.reports()).toHaveLength(1); expect(f.reports()[0]!.class).toBe("status");
       expect(f.reports()[0]!.origin).toMatchObject({ kind: "agent", role: "seat-tick", conversationId: null });
-      expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
       expect(f.cards()).toHaveLength(1); expect(f.cards()[0]!.status).toBe("done");
       f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
       for (let n = 0; n < 3; n++) await f.check();
-      expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
     });
   });
 
@@ -1816,11 +1998,11 @@ describe("seat authentication recovery through production seams", () => {
     await authFixture(false, async (f) => {
       expect((await f.check())?.delivery?.outcome).toBe("seat-auth-failed");
       expect(f.spawns).toHaveLength(0); expect(f.reports()).toHaveLength(1); expect(f.reports()[0]!.class).toBe("blocked");
-      expect(f.reports()[0]!.body).toContain("Account B"); expect(f.reports()[0]!.body).toContain("увійдіть");
+      expect(f.cards()[0]!.text).toContain("Account B"); expect(f.cards()[0]!.text).toContain("увійдіть");
       expect(f.cards()[0]!.status).toBe("inbox"); f.unchangedBinding();
       f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
       for (let n = 0; n < 3; n++) expect((await f.check())?.delivery?.outcome).toBe("seat-auth-failed");
-      expect(f.rig.sent).toHaveLength(0); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.rig.sent).toHaveLength(0); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
       fs.writeFileSync(path.join(f.a.home, ".credentials.json"), "{\"refreshed\":true}", { mode: 0o600 });
       const login = new Date("2026-10-08T00:10:00Z");
       fs.utimesSync(path.join(f.a.home, ".credentials.json"), login, login);
@@ -1847,7 +2029,7 @@ describe("seat authentication recovery through production seams", () => {
       expect(persisted.authIncident).toBeUndefined();
       expect(persisted.authRecoveredThrough).toBe(f.row().authRecoveredThrough);
       await f.check();
-      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
       f.appendTurn("authentication_failed", "2026-10-08T00:30:00Z");
       await f.check();
       expect(f.row().authIncident?.lastFailedTs).toBe(Date.parse("2026-10-08T00:30:00Z"));
@@ -1864,7 +2046,7 @@ describe("seat authentication recovery through production seams", () => {
       f.appendTurn("authentication_failed", "2026-10-08T00:08:00Z");
       await f.check();
       expect(f.row().authIncident?.firstFailedAt).toBe("2026-10-08T00:08:00.000Z");
-      expect(f.reports()).toHaveLength(2); expect(f.transport.callsOf("sendMessage")).toHaveLength(2);
+      expect(f.reports()).toHaveLength(2); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(2);
       expect(f.rig.sent).toHaveLength(0);
       await f.check(); expect(f.reports()).toHaveLength(2);
     });
@@ -1878,15 +2060,15 @@ describe("seat authentication recovery through production seams", () => {
       const before = JSON.stringify(persistedAccountSource(BINDINGS_SOURCE));
       await f.check();
       expect(f.reports()).toHaveLength(1); expect(f.cards()).toHaveLength(1);
-      expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
-      expect(f.reports()[0]!.body).toContain("не зміг автентифікуватися");
-      expect(f.reports()[0]!.body).toContain("account-project-bindings.json");
-      expect(f.reports()[0]!.body).not.toContain("Account B");
+      expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
+      expect(f.cards()[0]!.text).toContain("не зміг автентифікуватися");
+      expect(f.cards()[0]!.text).toContain("account-project-bindings.json");
+      expect(f.cards()[0]!.text).not.toContain("Account B");
       expect(f.row().authIncident?.rotation.state).toBe("refused");
       expect((await f.restartAuthentication()).authIncident?.notice?.card).toBe(true);
       for (let n = 0; n < 3; n++) await f.check();
       expect(f.spawns).toHaveLength(0); expect(f.rig.sent).toHaveLength(0);
-      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
       expect(JSON.stringify(persistedAccountSource(BINDINGS_SOURCE))).toBe(before);
     });
   });
@@ -1911,7 +2093,7 @@ describe("seat authentication recovery through production seams", () => {
       expect(f.row().authIncident?.rotation.state).toBe("refused");
       expect(f.seat().conversationId).toBe(f.original.conversationId);
       expect(f.rig.sent).toHaveLength(0);
-      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
     }, "codex", true);
   });
 
@@ -1933,12 +2115,12 @@ describe("seat authentication recovery through production seams", () => {
         await f.check(); await f.check();
         expect(helpers).toBe(0); expect(f.spawns).toHaveLength(0);
         expect(f.row().authIncident?.rotation.state).toBe("held");
-        expect(f.reports()).toHaveLength(0); expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+        expect(f.reports()).toHaveLength(0); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(0);
         expect(f.rig.sent).toHaveLength(0);
       } finally { releaseDrain(drainFile(), lease.id); }
       await f.check(); await f.check();
       expect(helpers).toBe(1); expect(f.spawns).toHaveLength(1);
-      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
     }, "codex", true);
   });
 
@@ -1956,13 +2138,13 @@ describe("seat authentication recovery through production seams", () => {
       try {
         await f.check(); await f.check();
         expect(f.row().authIncident?.rotation.state).toBe("held");
-        expect(f.reports()).toHaveLength(0); expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+        expect(f.reports()).toHaveLength(0); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(0);
         expect(f.spawns).toHaveLength(0); expect(f.rig.sent).toHaveLength(0);
       } finally { releaseDrain(drainFile(), lease.id); }
       f.command.spawn = spawn;
       await f.check(); await f.check();
       expect(f.spawns).toHaveLength(1); expect(f.spawns[0]!.clientAttemptId).toBe(attempt);
-      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
     });
   });
 
@@ -1988,7 +2170,7 @@ describe("seat authentication recovery through production seams", () => {
       expect(f.row().eventsThrough).toBe(refused.eventsThrough);
       expect(f.row().outstandingWake?.clientMessageId).toBe(refused.outstandingWake?.clientMessageId);
       expect(f.row().authIncident?.rotation.state).toBe("none-allowed");
-      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
       fs.writeFileSync(path.join(f.a.home, ".credentials.json"), "{\"refreshed\":true}", { mode: 0o600 });
       await f.check(); await f.check();
       expect(f.rig.sent).toHaveLength(1);
@@ -2001,9 +2183,9 @@ describe("seat authentication recovery through production seams", () => {
     await authFixture(false, async (f) => {
       fs.writeFileSync(f.transcript, ""); f.appendTurn("authentication_failed", AUTH_AT, ERROR_TEXT + " detail".repeat(1000));
       await f.check();
-      expect(f.reports()[0]!.body).toContain("увійдіть"); expect(f.reports()[0]!.body).toContain("Account B");
-      expect(f.cards()[0]!.text).toContain("увійдіть");
-      expect(String(f.transport.callsOf("sendMessage")[0]!.params.text)).toContain("увійдіть");
+      expect(f.cards()[0]!.text).toContain("увійдіть"); expect(f.cards()[0]!.text).toContain("Account B");
+      expect(f.reports()[0]!.body).not.toContain("увійдіть");
+      expect(JSON.stringify(f.transport.callsOf("sendRichMessage")[0]!.params.rich_message)).toContain("увійдіть");
     });
   });
 
@@ -2045,7 +2227,7 @@ describe("seat authentication recovery through production seams", () => {
         releaseDrain(drainFile(), lease.id);
         await f.check(); await f.check();
         expect(f.reports()).toHaveLength(1);
-        expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+        expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
         expect(f.cards()).toHaveLength(1); expect(f.cards()[0]?.status).toBe("done");
         expect(f.row().authIncident).toBeUndefined(); expect(f.spawns).toHaveLength(0);
         expect(f.rig.sent.length).toBeGreaterThan(0);
@@ -2069,9 +2251,9 @@ describe("seat authentication recovery through production seams", () => {
         await f.check(); await f.check();
         expect(f.reports()).toHaveLength(1);
         expect(f.sendRequests).toEqual([id]);
-        expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+        expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
         expect(f.cards()).toHaveLength(1); expect(f.cards()[0]?.status).toBe("done");
-        expect(f.reports()[0]?.body).toContain("Account A");
+        expect(f.cards()[0]?.text).toContain("Account A");
         expect(f.row().authIncident).toBeUndefined(); expect(f.spawns).toHaveLength(0);
         expect(f.rig.sent.length).toBeGreaterThan(0);
         await f.restartAuthentication(); await f.check();
@@ -2108,10 +2290,10 @@ describe("seat authentication recovery through production seams", () => {
         await f.check(); await f.check();
         expect(f.reports()).toHaveLength(2);
         expect(f.sendRequests).toEqual([predecessorId, successorId]);
-        expect(f.transport.callsOf("sendMessage")).toHaveLength(2);
+        expect(f.transport.callsOf("sendRichMessage")).toHaveLength(2);
         expect(f.cards()).toHaveLength(2);
         expect(f.cards().map(card => card.status).sort()).toEqual(["done", "inbox"]);
-        expect(f.reports()[0]?.body).toContain("Account A"); expect(f.reports()[1]?.body).toContain("Account B");
+        expect(f.cards()[0]?.text).toContain("Account A"); expect(f.cards().some(card => card.text.includes("Account B"))).toBe(true);
         expect(f.row().authIncident?.id).toBe(successorId);
         expect(f.row().authIncident?.rotation.state).toBe("refused");
         expect(f.rig.sent).toHaveLength(0); expect(decisions).toBe(1);
@@ -2126,7 +2308,7 @@ describe("seat authentication recovery through production seams", () => {
     await authFixture(false, async (f) => {
       f.rig.deps.ensureCard = () => { throw Object.assign(new Error("fixture board write refused"), { code: "EACCES" }); };
       await f.check();
-      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
       fs.writeFileSync(path.join(f.a.home, ".credentials.json"), '{"repaired":true}', { mode: 0o600 });
       await f.check(); await f.check();
       expect(f.row().authIncident).toBeUndefined(); expect(f.rig.sent.length).toBeGreaterThan(0);
@@ -2136,7 +2318,7 @@ describe("seat authentication recovery through production seams", () => {
       await f.check(); await f.check();
       expect(f.row().authCardsOwed).toEqual([]);
       expect(f.cards()).toHaveLength(1); expect(f.cards()[0]?.status).toBe("done");
-      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
     });
   });
 
@@ -2162,7 +2344,7 @@ describe("seat authentication recovery through production seams", () => {
       expect(f.cards()).toHaveLength(2);
       expect(f.cards().filter(card => card.status === "inbox")).toHaveLength(1);
       expect(f.reports()).toHaveLength(2);
-      expect(f.transport.callsOf("sendMessage")).toHaveLength(2);
+      expect(f.transport.callsOf("sendRichMessage")).toHaveLength(2);
     });
   });
 
@@ -2172,7 +2354,7 @@ describe("seat authentication recovery through production seams", () => {
       writeDrain(drainFile(), lease);
       try { await f.check(); expect(f.row().authIncident?.rotation.state).toBe("held"); expect(f.spawns).toHaveLength(0); expect(f.reports()).toHaveLength(0); expect(f.rig.sent).toHaveLength(0); }
       finally { releaseDrain(drainFile(), lease.id); }
-      await f.check(); expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      await f.check(); expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
     });
   });
 
@@ -2191,12 +2373,12 @@ describe("seat authentication recovery through production seams", () => {
         expect(f.spawns).toHaveLength(0);
         expect(f.rig.sent).toHaveLength(0);
         expect(f.reports()).toHaveLength(0);
-        expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+        expect(f.transport.callsOf("sendRichMessage")).toHaveLength(0);
         expect(f.cards()).toHaveLength(0);
         releaseDrain(drainFile(), "auth-notice-drain");
         await f.check(); await f.check();
         expect(f.reports()).toHaveLength(1);
-        expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+        expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
         expect(f.cards()).toHaveLength(1);
       } finally { releaseDrain(drainFile(), "auth-notice-drain"); }
     });
@@ -2227,7 +2409,7 @@ describe("seat authentication recovery through production seams", () => {
       expect(f.cards()).toHaveLength(1);
       expect(f.cards()[0]?.status).toBe("done");
       expect(f.reports()).toHaveLength(1);
-      expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
       expect(f.spawns).toHaveLength(1);
     });
   });
@@ -2267,7 +2449,7 @@ describe("seat authentication recovery through production seams", () => {
           { id: predecessorId, state: "resolved" }, { id: successorId, state: "open" },
         ]);
         expect(f.reports()).toHaveLength(2);
-        expect(f.transport.callsOf("sendMessage")).toHaveLength(2);
+        expect(f.transport.callsOf("sendRichMessage")).toHaveLength(2);
         expect(f.rig.sent).toHaveLength(0);
         expect(successorRotations).toBe(1);
         delete f.rig.deps.ensureCard;
@@ -2277,7 +2459,7 @@ describe("seat authentication recovery through production seams", () => {
         expect(f.cards().map(card => card.status).sort()).toEqual(["done", "inbox"]);
         expect(f.row().authIncident?.id).toBe(successorId);
         expect(f.reports()).toHaveLength(2);
-        expect(f.transport.callsOf("sendMessage")).toHaveLength(2);
+        expect(f.transport.callsOf("sendRichMessage")).toHaveLength(2);
         expect(successorRotations).toBe(1);
       } finally { releaseDrain(drainFile(), "auth-board-debt-drain"); }
     });
@@ -2412,7 +2594,7 @@ describe("seat authentication recovery through production seams", () => {
         writeSeatTickState(project, row);
       };
       await f.check(); await f.check();
-      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1); expect(f.cards()).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1); expect(f.cards()).toHaveLength(1);
       expect(f.row().authIncident?.notice?.card).toBe(true);
       expect(f.sendRequests).toHaveLength(2); expect(new Set(f.sendRequests).size).toBe(1);
     });
@@ -2429,7 +2611,7 @@ describe("seat authentication recovery through production seams", () => {
       };
       await f.check(); await f.check(); await f.check();
       expect(f.spawns).toHaveLength(1); expect(f.reports()).toHaveLength(1);
-      expect(f.transport.callsOf("sendMessage")).toHaveLength(1); expect(f.cards()).toHaveLength(1);
+      expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1); expect(f.cards()).toHaveLength(1);
       expect(f.cards()[0]!.status).toBe("done");
     });
   });
@@ -2440,8 +2622,8 @@ describe("seat authentication recovery through production seams", () => {
       await f.check(); await f.check();
       expect(f.row().authIncident?.rotation.state).toBe("refused");
       expect(f.rig.sent).toHaveLength(0); expect(f.reports()).toHaveLength(1);
-      expect(f.reports()[0]!.body).toContain("fixture launch refused");
-      expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.cards()[0]!.text).toContain("fixture launch refused");
+      expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
     });
   });
 
@@ -2453,7 +2635,7 @@ describe("seat authentication recovery through production seams", () => {
       expect(f.row().authIncident?.rotation.state).toBe("refused");
       expect(f.reports()).toHaveLength(1);
       expect(f.reports()[0]?.class).toBe("blocked");
-      expect(f.reports()[0]?.body).toContain("fixture terminal launch failure");
+      expect(f.cards()[0]?.text).toContain("fixture terminal launch failure");
       expect(f.cards()[0]?.status).toBe("inbox");
       expect(f.rig.sent).toHaveLength(0);
     });
@@ -2509,7 +2691,7 @@ describe("seat authentication recovery through production seams", () => {
       expect(f.row().authIncident?.seatEpoch).toBe(f.seat().seatEpoch);
       expect(f.cards()[0]?.status).toBe("inbox");
       expect(f.cards()[0]?.text).toContain("fixture asynchronous launch failure");
-      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
       expect((await f.restartAuthentication()).authIncident?.rotation.state).toBe("refused");
       if (repair === "login") {
         fs.writeFileSync(path.join(f.a.home, ".credentials.json"), "{\"repaired\":true}");
@@ -2546,7 +2728,7 @@ describe("seat authentication recovery through production seams", () => {
       expect(f.rig.sent).toHaveLength(0); expect(f.row().authIncident?.rotation.state).toBe("refused");
       expect(f.row().authIncident?.seatEpoch).toBe(f.seat().seatEpoch);
       expect(f.reports()).toHaveLength(1); expect(f.reports()[0]?.class).toBe("blocked");
-      expect(f.cards()[0]?.status).toBe("inbox"); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.cards()[0]?.status).toBe("inbox"); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
       expect((await f.restartAuthentication()).authIncident?.rotation.state).toBe("refused");
     });
   });
@@ -2563,7 +2745,7 @@ describe("seat authentication recovery through production seams", () => {
       reconcileActiveOrchestratorSeat(PROJECT, f.command);
       await f.check();
       expect(f.row().authIncident).toBeUndefined(); expect(f.cards()[0]?.status).toBe("done");
-      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendMessage")).toHaveLength(1);
+      expect(f.reports()).toHaveLength(1); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(1);
     });
   });
 
@@ -2577,7 +2759,7 @@ describe("seat authentication recovery through production seams", () => {
         const result = await executeOrchestratorRotation(body, f.command, null);
         expect(result.status).toBe(409); expect(result.body.code).toBe("incumbent_changed"); return result;
       };
-      await f.check(); expect(f.spawns).toHaveLength(0); expect(f.row().authIncident).toBeUndefined(); expect(f.reports()).toHaveLength(0); expect(f.transport.callsOf("sendMessage")).toHaveLength(0);
+      await f.check(); expect(f.spawns).toHaveLength(0); expect(f.row().authIncident).toBeUndefined(); expect(f.reports()).toHaveLength(0); expect(f.transport.callsOf("sendRichMessage")).toHaveLength(0);
     });
   });
 });

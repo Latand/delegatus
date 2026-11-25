@@ -137,7 +137,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
     if (args[0] === "api" && /\/pulls\/\d+\/reviews/.test(args[1] ?? "")) return "";
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/rules/branches/`)) return "[]";
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/compare/`)) return mergeBase ?? baseTip;
-    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return args.at(-1) === ".commit.sha" ? baseTip : JSON.stringify(options.required ?? []);
+    if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/branches/`)) return args.at(-1) === ".commit.sha" ? baseTip : JSON.stringify(options.required ?? ["ci"]);
     if (args[0] === "repo" && args[1] === "view") return JSON.stringify({ squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true });
     if (args[0] === "api" && args[1] === "-X" && args[2] === "PUT") throw new Error("GitHub update-branch is forbidden");
     if (args[0] === "api" && args[1]?.startsWith(`repos/${REPO}/commits/`)) {
@@ -278,32 +278,19 @@ function finished() {
 const conflicting = () => openPr(11, { mergeStateStatus: "DIRTY", mergeable: "CONFLICTING" });
 beforeEach(() => resetAutoMergeForTests());
 
-test("a red non-required check behind main refreshes once without blocking", async () => {
+test("optional failures neither refresh nor block a reviewed PR", async () => {
   const h = harness({ required: ["ci"], mergeBase: MAIN_1, lanes: [finished()],
-    prs: [openPr(11, { checks: [green("ci"), red("optional-audit")] })] });
+    prs: [openPr(11, { checks: [green("ci"), red("optional-audit")], mergeStateStatus: "UNSTABLE" })] });
   h.setBase(MAIN_2);
-  await h.sweep();
-  expect(h.merge("finished")).toMatchObject({ state: "refreshing", reason: null,
-    refresh: { base: MAIN_2, head: HEAD_A, pipelineId: "refresh-1" } });
-  expect(h.creates).toHaveLength(1);
-  expect(h.calls).toContainEqual(["api", `repos/${REPO}/compare/${MAIN_2}...${HEAD_A}`, "--jq", ".merge_base_commit.sha"]);
-  expect(h.writes).toEqual([]);
-
-  const head = "b".repeat(40);
-  Object.assign(h.pipeline("refresh-1"), { state: "completed", lastPassedCommit: head });
-  h.pipeline("refresh-1").delivery!.active = false;
-  Object.assign(h.prs.get(11)!, { head, checks: [] });
-  await h.sweep();
-  expect(h.merge("refresh-1")).toMatchObject({ state: "waiting-checks", head, headSeenAt: iso(h.now()) });
-  expect(h.merges()).toEqual([]);
-  h.prs.get(11)!.checks = [green("ci"), green("optional-audit")];
   await h.run(5 * MERGE_POLL_MS);
-  expect(h.merges().map(args => args.at(-1))).toEqual([head]);
-  expect(h.creates).toHaveLength(1);
+  expect(h.merge("finished")).toMatchObject({ state: "merged", optionalFailedChecks: ["optional-audit"] });
+  expect(h.creates).toEqual([]);
+  expect(h.merges()).toHaveLength(1);
+  expect(h.calls.some(args => args[1]?.includes("/compare/"))).toBe(false);
 });
 
 test("a red check on a head containing current main keeps its failure reason", async () => {
-  const h = harness({ lanes: [finished()], prs: [openPr(11, { checks: [red("optional-audit")] })] });
+  const h = harness({ required: ["optional-audit"], lanes: [finished()], prs: [openPr(11, { checks: [red("optional-audit")] })] });
   await h.sweep();
   expect(h.merge("finished")).toMatchObject({ state: "blocked", reason: 'check "optional-audit" failed' });
   expect(h.creates).toEqual([]);
@@ -380,7 +367,7 @@ test.each(["retry", "archive"] as const)("the durable refresh bound survives %s 
     } as Pipeline["runs"][number]["attempts"][number]];
     return value;
   };
-  const h = harness({ lanes: [finished()], mergeBase: MAIN_1,
+  const h = harness({ required: ["ci", "optional-audit"], lanes: [finished()], mergeBase: MAIN_1,
     prs: [openPr(11, { checks: [green("ci"), red("optional-audit")] })] });
   h.setBase(MAIN_2);
   let starts = 0;
@@ -812,16 +799,19 @@ test("refused creation and a closed successor leave a plain stopped reason", asy
   expect(closed.writes).toHaveLength(0);
 });
 
-test("the successor uses the existing green-check runner and settles its parent", async () => {
+test.each([false, true])("the successor settles its parent with optional failures=%s", async optional => {
   const h = harness({ lanes: [finished()], prs: [conflicting()] });
   await h.sweep();
   h.pipeline("refresh-1").state = "completed";
   h.pipeline("refresh-1").delivery!.active = false;
   h.prs.get(11)!.mergeStateStatus = "CLEAN";
   h.prs.get(11)!.mergeable = "MERGEABLE";
+  if (optional) h.prs.get(11)!.checks = [green("ci"), red("optional-audit")];
   await h.run(6 * 60_000);
   expect(h.merge("refresh-1")).toMatchObject({ state: "merged", by: "auto-merge" });
   expect(h.merge("finished")).toMatchObject({ state: "merged", by: "auto-merge" });
+  expect(h.merge("refresh-1")?.optionalFailedChecks).toEqual(optional ? ["optional-audit"] : []);
+  expect(h.merge("finished")?.optionalFailedChecks).toEqual(optional ? ["optional-audit"] : []);
   expect(h.merges()).toHaveLength(1);
 });
 
@@ -1500,12 +1490,18 @@ test.each(["conflict", "red", "requested change", "moved head"])("unknown queue:
   }
 });
 
-// Keep this causal probe identical on the pinned base and the fixed runner.
+// Required failures and BEHIND still need an update; optional red alone does not.
 for (const status of ["BEHIND", "UNSTABLE"]) for (const check of ["ci", "optional-audit"]) {
-  test(`outdated red probe: ${status} with ${check} uses one mechanical update and fresh exact-head checks`, async () => {
+  test(`outdated red probe: ${status} with ${check} respects required checks and base status`, async () => {
     const { h, git, plans, pushes } = behindQueue(1, { mergeBase: "0".repeat(40),
       pr: { mergeStateStatus: status, checks: check === "ci" ? [red(check)] : [green("ci"), red(check)] } });
     git.landed = pr => { pr.checks = []; };
+    if (status === "UNSTABLE" && check === "optional-audit") {
+      await h.run(5 * MERGE_POLL_MS);
+      expect(h.merge("queued-0")).toMatchObject({ state: "merged", optionalFailedChecks: [check] });
+      expect([plans.length, pushes.length, h.creates.length, h.merges().length]).toEqual([0, 0, 0, 1]);
+      return;
+    }
     await h.sweep();
     const counts = { plans: plans.length, pushes: pushes.length, refreshes: h.creates.length, merges: h.merges().length };
     console.log("outdated-red-probe", status, check, JSON.stringify(counts));
@@ -1545,22 +1541,24 @@ test("outdated red probe: three reviewed PRs need no agent refresh lanes", async
   expect(pushes.map(push => push.mergesBefore)).toEqual([0, 1, 2]);
 });
 
-test.each(["ci", "optional-audit"])("current-base red %s stays blocked with mechanical ports available", async check => {
-  const { h, plans, pushes } = behindQueue(1, { pr: { mergeStateStatus: "UNSTABLE", checks: [red(check)] } });
-  await h.run(3 * MERGE_POLL_MS);
-  expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: checkFailedReason(check) });
-  expect([plans.length, pushes.length, h.creates.length, h.merges().length]).toEqual([0, 0, 0, 0]);
+test.each(["ci", "optional-audit"])("current-base red %s blocks only when required with mechanical ports available", async check => {
+  const { h, plans, pushes } = behindQueue(1, { pr: { mergeStateStatus: "UNSTABLE", checks: check === "ci" ? [red("optional-first"), red(check)] : [green("ci"), red(check)] } });
+  await h.run(5 * MERGE_POLL_MS);
+  expect(h.merge("queued-0")).toMatchObject(check === "ci" ? { state: "blocked", reason: checkFailedReason(check) }
+    : { state: "merged", reason: null, optionalFailedChecks: [check] });
+  expect([plans.length, pushes.length, h.creates.length, h.merges().length]).toEqual([0, 0, 0, check === "ci" ? 0 : 1]);
 });
 
-test.each(["ci", "optional-audit"])("red %s remains visible during update and blocks a failing new head", async check => {
+test.each(["ci", "optional-audit"])("red %s during update and on the new head blocks only when required", async check => {
   const { h, git, plans, pushes } = behindQueue(1, { mergeBase: "0".repeat(40), pr: { checks: [red(check)] } });
-  git.landed = pr => { pr.checks = [red(check)]; h.setMergeBase(MAIN_1); };
+  git.landed = pr => { pr.checks = check === "ci" ? [red(check)] : [green("ci"), red(check)]; h.setMergeBase(MAIN_1); };
   await h.sweep();
-  expect(h.merge("queued-0")).toMatchObject({ state: "updating", reason: checkFailedReason(check) });
-  expect(h.logs).toContain(`[auto merge] queued-0: ${checkFailedReason(check)} on ${HEAD_A}; recorded base update ${pushes[0]!.commit} from ${MAIN_1}`);
+  expect(h.merge("queued-0")).toMatchObject({ state: "updating", reason: check === "ci" ? checkFailedReason(check) : null });
+  if (check === "ci") expect(h.logs).toContain(`[auto merge] queued-0: ${checkFailedReason(check)} on ${HEAD_A}; recorded base update ${pushes[0]!.commit} from ${MAIN_1}`);
   await h.run(10 * MERGE_POLL_MS);
-  expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: checkFailedReason(check), head: pushes[0]!.commit });
-  expect([plans.length, pushes.length, h.creates.length, h.merges().length]).toEqual([1, 1, 0, 0]);
+  expect(h.merge("queued-0")).toMatchObject({ state: check === "ci" ? "blocked" : "merged",
+    reason: check === "ci" ? checkFailedReason(check) : null, head: pushes[0]!.commit });
+  expect([plans.length, pushes.length, h.creates.length, h.merges().length]).toEqual([1, 1, 0, check === "ci" ? 0 : 1]);
 });
 
 test("a stale forge comparison cannot refresh a red head Git proves current", async () => {
@@ -1961,7 +1959,7 @@ test("a recorded update whose push failed is pushed again as the same commit", a
   await h.sweep();
   const recorded = structuredClone(h.merge("queued-0")!);
   expect(recorded).toMatchObject({ state: "updating", readFailures: 1 });
-  expect(recorded.reason).toStartWith("Base update temporarily unavailable: fatal: unable to access the remote");
+  expect(recorded.reason).toBe("Base update temporarily unavailable: details withheld for privacy");
   expect(recorded.updates).toEqual([{ requestedAt: iso(T0), head: null, commit: pushes[0]!.commit, base: MAIN_1 }]);
   expect(h.prs.get(11)!.head).toBe(HEAD_A);
   h.advance(MERGE_POLL_MS);
@@ -2018,7 +2016,7 @@ test("base update failures stop at the durable bound after restart and release t
     h.advance(MERGE_POLL_MS);
     await h.run(10 * MERGE_POLL_MS, () => h.merges().length === 1);
     expect(h.merge("queued-0")).toMatchObject({ state: "blocked", readFailures: 3 });
-    expect(h.merge("queued-0")!.reason).toContain("connection refused");
+    expect(h.merge("queued-0")!.reason).toBe("Base update temporarily unavailable: details withheld for privacy");
     expect(pushes.filter(push => push.branch === "refs/heads/topic-0")).toHaveLength(2);
     expect(h.merges().map(args => args[2])).toEqual(["12"]);
     expect(h.creates).toEqual([]);
@@ -2963,7 +2961,7 @@ test.each([false, true])("an out-of-window refresh permits an expired failed rea
   expect(read).toBe(true);
   expect(h.merge("queued-1")).toMatchObject(retry
     ? { state: "queued", attempts: 1, headSeenAt: null, readFailures: 0 }
-    : { state: "queued", reason: "GitHub read failed: fixture forge unavailable", nextReadAt: iso(T0 + MERGE_POLL_MS), readFailures: 1 });
+    : { state: "queued", reason: "GitHub read failed: details withheld for privacy", nextReadAt: iso(T0 + MERGE_POLL_MS), readFailures: 1 });
   expect(h.creates).toHaveLength(1);
   expect(h.writes).toEqual([]);
   expect(h.merges()).toEqual([]);
@@ -3233,4 +3231,15 @@ test("refresh stages defer tier and account selection to live launch capacity", 
     expect(stage.serviceTier).toBeUndefined();
   }
   expect(request.stages.map(stage => stage.role?.roleId)).toEqual(["merger", "reviewer", "merger"]);
+});
+
+test("automatic refresh carries the publication title separately from its local task", async () => {
+  const { refreshRequest } = await import("./autoRefresh");
+  const p = lane("publication-refresh");
+  p.task = "Виправити публікацію"; p.prTitle = "Fix publication text";
+  p.merge = { prNumber: 7, refresh: { base: MAIN_1, head: HEAD_A, baseBranch: "main" } } as PipelineMerge;
+  p.delivery = { target: { branch: "refs/heads/pipeline/publication-refresh" } } as Pipeline["delivery"];
+  const request = refreshRequest(p);
+  expect(request.prTitle).toBe("Fix publication text");
+  expect(request.task).toContain("Виправити публікацію");
 });

@@ -30,7 +30,7 @@ import { lanePullRequest, pipelineRepository } from "./resolve";
 import { type PullRequestState } from "./workLinks";
 import { readBatchLanding, readCarriedBranchLanding } from "./batchLanding";
 import { engineForgeWriteEnv, isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
-import { githubReadBackoff, githubReadFailure } from "./githubReadFailure";
+import { githubReadBackoff, githubReadFailure, isTransientMergeReadFailure } from "./githubReadFailure";
 import { issueDeliverySince, sweepIssueDelivery, type IssueDeliveryPorts } from "./issueDelivery";
 import { githubRepositoryOfRemote } from "./workLinks";
 
@@ -40,7 +40,7 @@ import { githubRepositoryOfRemote } from "./workLinks";
  * A completed lane of a project that turned the setting on, whose reviews
  * passed (§4.2), is queued here and merged through GitHub with `gh`, one lane
  * at a time per repository, once its PR's required checks have arrived, settled
- * and are green, with no reported failure (§4.3). Scheduled beside the forge
+ * and are green. Optional failures are retained as notes. Scheduled beside the forge
  * sweep from the controller cycle and, like it, run outside every pipeline
  * lease: the `gh` calls happen with no lock held, and each result is written
  * under the pipeline lock against the record read again inside it.
@@ -507,12 +507,20 @@ type Step =
   | { kind: "refresh" }
   | { kind: "merge" };
 
+function blockingCheck(view: PullRequestView, required: readonly string[] | null) {
+  return view.checks.find(check => check.verdict === "red" && (required === null || required.includes(check.name)));
+}
+
+function failedCheckReason(name: string, required: readonly string[] | null): string {
+  return required === null ? `${checkFailedReason(name)}; ${MERGE_REASONS.requiredUnknown}` : checkFailedReason(name);
+}
+
 /**
  * What one read of the PR means for the merge (§4.3, §4.4), decided from the
  * record and the read alone. It updates the record's check bookkeeping in
  * place (the head clock, the names seen) and answers the next move.
  */
-export function decideMerge(merge: PipelineMerge, view: PullRequestView, required: readonly string[], now: number): Step {
+export function decideMerge(merge: PipelineMerge, view: PullRequestView, required: readonly string[] | null, now: number): Step {
   if (view.state === "MERGED") return { kind: "merged", by: merge.state === "merging" || merge.effectUncertain ? "auto-merge" : "outside" };
   if (view.state === "CLOSED") return { kind: "block", reason: MERGE_REASONS.closed };
   if (changesRequested(view)) return { kind: "block", reason: MERGE_REASONS.changesRequested };
@@ -534,20 +542,24 @@ export function decideMerge(merge: PipelineMerge, view: PullRequestView, require
   const previous = merge.lastChecks;
   merge.lastChecks = names;
   merge.seenChecks = [...new Set([...merge.seenChecks, ...names])].sort();
+  merge.optionalFailedChecks = required === null ? [] : [...new Set(view.checks
+    .filter(check => check.verdict === "red" && !required.includes(check.name))
+    .map(check => check.name))].sort();
   if (view.mergeStateStatus === "DIRTY" || view.mergeable === "CONFLICTING") return { kind: "block", reason: MERGE_REASONS.conflict };
-  const red = view.checks.find((check) => check.verdict === "red");
+  const red = blockingCheck(view, required);
   const age = now - Date.parse(merge.headSeenAt ?? iso(now));
   if (outstanding) {
     /* The update was accepted and its commit has not reached the PR yet. */
-    return age >= MERGE_WAIT_LIMIT_MS ? { kind: "block", reason: MERGE_REASONS.checksTimeout } : { kind: "wait", state: "updating", reason: red ? checkFailedReason(red.name) : null };
+    return age >= MERGE_WAIT_LIMIT_MS ? { kind: "block", reason: MERGE_REASONS.checksTimeout } : { kind: "wait", state: "updating", reason: red ? failedCheckReason(red.name, required) : null };
   }
-  if (red) return { kind: "block", reason: checkFailedReason(red.name) };
+  if (red) return { kind: "block", reason: failedCheckReason(red.name, required) };
+  if (required === null) return { kind: "block", reason: MERGE_REASONS.requiredUnknown };
   if (view.mergeStateStatus === "BEHIND") return { kind: "refresh" };
   const present = new Set(names);
   const requiredNames = new Set(required);
   // Only required contexts hold the merge while checks register or run.
   const missing = [...new Set([...required, ...merge.seenChecks])].filter((name) => requiredNames.has(name) && !present.has(name));
-  const grew = previous !== null && names.some((name) => !previous.includes(name));
+  const grew = previous !== null && names.some((name) => requiredNames.has(name) && !previous.includes(name));
   const pending = view.checks.some((check) => requiredNames.has(check.name) && check.verdict !== "green");
   const settled = names.length > 0 && missing.length === 0 && age >= MERGE_SETTLE_MS && previous !== null && !grew && !pending;
   if (!settled) {
@@ -558,7 +570,7 @@ export function decideMerge(merge: PipelineMerge, view: PullRequestView, require
       .map(check => check.name)])];
     return { kind: "wait", state: "waiting-checks", reason: waiting.length ? `waiting for ${waiting.join(", ")}` : "waiting for checks to settle" };
   }
-  // UNSTABLE is mergeable once required contexts pass and reported failures are ruled out above.
+  // UNSTABLE is mergeable once required contexts pass, including with optional failures.
   if ((view.mergeStateStatus === "CLEAN" || view.mergeStateStatus === "HAS_HOOKS" || view.mergeStateStatus === "UNSTABLE") && view.mergeable === "MERGEABLE") return { kind: "merge" };
   if (view.mergeStateStatus === "BLOCKED") {
     const review = view.reviewDecision === "REVIEW_REQUIRED";
@@ -1031,6 +1043,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     live.headSeenAt = merge.headSeenAt;
     live.lastChecks = merge.lastChecks;
     live.seenChecks = merge.seenChecks;
+    live.optionalFailedChecks = merge.optionalFailedChecks;
     live.readAt = iso(now);
     live.readFailures = 0;
   };
@@ -1051,7 +1064,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     return;
   }
   let view: PullRequestView | null = null;
-  let required: string[] = [];
+  let required: string[] | null = null;
   let decision: Step;
   try {
     view = parsePullRequestView(await ports.run(["pr", "view", String(merge.prNumber), "--repo", merge.repository, "--json", PR_FIELDS]));
@@ -1083,7 +1096,13 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     if (unlanded && view.headRefOid === merge.chain.at(-1) && !await replayBaseUpdate(read, merge, unlanded, view, ports, now)) return;
     if (view.state === "OPEN") {
       view.reviews = parseReviews(await ports.run(["api", `repos/${merge.repository}/pulls/${merge.prNumber}/reviews?per_page=100`, "--paginate", "--jq", ".[] | {reviewer: .user.login, isBot: (.user.type == \"Bot\"), state} | @json"]));
-      required = await requiredContexts(merge.repository, view.baseRefName || "main", ports);
+      try {
+        required = await requiredContexts(merge.repository, view.baseRefName || "main", ports);
+      } catch (error) {
+        // Unknown protection retains the conservative red-check stop. With
+        // no red check, preserve the existing read-failure recovery path.
+        if (!blockingCheck(view, null)) throw error;
+      }
     }
     decision = decideMerge(merge, view, required, now);
     // GitHub can leave a diverged PR UNKNOWN indefinitely. Prove that the
@@ -1108,8 +1127,8 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       return;
     }
     if (decision.kind === "refresh" && await updateBehindBase(read, merge, view, ports, now, bookkeeping, mayMerge, queueReason)) return;
-    const red = view.checks.find(check => check.verdict === "red");
-    const failedCheck = decision.kind === "block" && red && decision.reason === checkFailedReason(red.name);
+    const red = blockingCheck(view, required);
+    const failedCheck = decision.kind === "block" && red && decision.reason === failedCheckReason(red.name, required);
     const machineParent = decision.kind === "block" && decision.reason === MERGE_REASONS.headChanged
       && ports.startRefresh && refreshAdmission(read, ports.loadPipelines(), ports.setting(read.project))
       ? await machineRefreshParent(merge, view.headRefOid, ports) : null;
@@ -1186,9 +1205,8 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     }
     if (decision.kind === "refresh") decision = { kind: "block", reason: refreshRefusal };
   } catch (error) {
-    const transientRead = githubReadFailure(error).transient;
     const gitReady = gitOnlyDeliveryReady(read);
-    if (transientRead && read.delivery?.target.pr !== undefined && gitReady
+    if (isTransientMergeReadFailure(error) && read.delivery?.target.pr !== undefined && gitReady
       && !read.proactiveTaskIds?.length) {
       if (view) {
         if (merge.effectUncertain) {
@@ -1689,6 +1707,7 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
           live.mergedAt = refreshed?.merge?.mergedAt ?? iso(now);
           live.mergedHead = refreshed?.merge?.mergedHead ?? null;
           live.mergeCommit = refreshed?.merge?.mergeCommit ?? null;
+          if (refreshed?.merge) live.optionalFailedChecks = refreshed.merge.optionalFailedChecks;
           live.reason = null;
         });
       } else if (cached === "closed") {
@@ -1725,7 +1744,8 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
         // The successor owns the refreshed head and its check clock. Reflect its
         // progress on the original lane without putting both in the merge queue.
         const progress = refreshed.merge;
-        if (merge.state !== progress.state || merge.reason !== progress.reason || merge.readAt !== progress.readAt) {
+        if (merge.state !== progress.state || merge.reason !== progress.reason || merge.readAt !== progress.readAt
+          || JSON.stringify(merge.optionalFailedChecks) !== JSON.stringify(progress.optionalFailedChecks)) {
           await commit(ports, pipeline, (live) => {
             const current = ports.loadPipelines().find(lane => lane.id === refreshed.id);
             if (current?.state !== "completed" || current.lastPassedCommit !== refreshed.lastPassedCommit
@@ -1734,6 +1754,7 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
               || !ports.setting(pipeline.project).enabled) return;
             live.state = progress.state;
             live.reason = progress.reason;
+            live.optionalFailedChecks = progress.optionalFailedChecks;
             live.blockedAt = progress.blockedAt;
             live.readAt = progress.readAt;
             live.nextReadAt = progress.nextReadAt;
@@ -2239,13 +2260,14 @@ export function scheduleAutoMerge(overrides: Partial<AutoMergePorts> & Pick<Auto
           const headerScheme = ["ba", "sic"].join("");
           Object.assign(fetchEnv, {
             GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_COUNT: "2",
+            GIT_ASKPASS: "", GIT_CONFIG_PARAMETERS: undefined,
             GIT_CONFIG_KEY_0: `http.https://github.com/${repository}.git.extraheader`,
             GIT_CONFIG_VALUE_0: `${headerName}: ${headerScheme} ${Buffer.from(`${gitUsername}:${token}`).toString("base64")}`,
             GIT_CONFIG_KEY_1: "credential.helper", GIT_CONFIG_VALUE_1: "",
           });
         }
         return readCarriedBranchLanding(repository, pr, base, {
-          head: lane.merge?.reviewedHead || lane.lastPassedCommit || head,
+          head,
           repoDir: lane.repoDir!,
           ...hint,
         }, issueRead, contentsRead, fetchEnv);

@@ -9,6 +9,7 @@ import { buildFilesResponse } from "@/app/api/files/response";
 import { writeSummaryBootstrap } from "@/lib/scanner/summaryBootstrap";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { stateDir, statePath } from "@/lib/configDir";
+import { projectAliasSnapshot, withProjectAliasSnapshot } from "@/lib/projects/aliases";
 import { diffFilesBodies } from "@/lib/filesDelta";
 import { BoardEncoder } from "@/lib/boardEncoding";
 import type { FilesResponseWorkerRequest, SeatSourceWorkerRequest } from "@/lib/scanner/filesResponseWorker";
@@ -42,7 +43,9 @@ function workerRequest(value: unknown): FilesResponseWorkerRequest | SeatSourceW
     && (value.query.conversationId === undefined || typeof value.query.conversationId === "string")) return value as unknown as SeatSourceWorkerRequest;
   if (record(value) && typeof value.project === "string") {
     if (value.type === "seat-reports") return value as unknown as SeatSourceWorkerRequest;
-    if (value.type === "seat-agenda" && typeof value.bodyFile === "string" && typeof value.now === "number" && Number.isFinite(value.now)) return value as unknown as SeatSourceWorkerRequest;
+    if (value.type === "seat-agenda" && typeof value.bodyFile === "string" && typeof value.now === "number" && Number.isFinite(value.now)
+      && (value.pauses === undefined || record(value.pauses) && [value.pauses.quotaReadyLaneIds, value.pauses.deployLaneIds].every(
+        ids => ids === undefined || Array.isArray(ids) && ids.every(id => typeof id === "string")))) return value as unknown as SeatSourceWorkerRequest;
     if (value.type === "seat-rule-reports" && typeof value.at === "string" && Number.isFinite(Date.parse(value.at))
       && (value.deadlineAt === undefined || typeof value.deadlineAt === "number" && Number.isFinite(value.deadlineAt))) return value as unknown as SeatSourceWorkerRequest;
   }
@@ -157,12 +160,40 @@ async function seatSource(request: SeatSourceWorkerRequest): Promise<Record<stri
   } else if (request.type === "seat-agenda") {
     if (path.dirname(path.resolve(request.bodyFile)) !== path.resolve(statePath("files-response-results"))) throw new Error("seat agenda body path is outside the worker result directory");
     const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
-    const body = { tasks: [], ...JSON.parse(await fs.promises.readFile(request.bodyFile, "utf8")) };
+    const body = { tasks: [], ...JSON.parse(await fs.promises.readFile(request.bodyFile, "utf8")) } as
+      import("@/lib/attention/needsYouRead").NeedsYouBody & { tasks: import("@/lib/tasks/types").BoardTask[] };
     const { needsYouAnswer } = await import("@/lib/attention/needsYouProjection");
-    const forms = needsYouAnswer({ ...body, files: [] }, null, request.now, request.project, {
-      tasks: body.tasks ?? [], pipelines: body.pipelines ?? [], dismissals: [], reports: null, admissions: [], unavailable: [], workLinks: body.workLinks, seatConversationId: request.seatConversationId,
-    }, { kinds: ["prototype", "lane-decision", "lane-review"], full: true }, "stale-first", { rows: Number.MAX_SAFE_INTEGER, bytes: Infinity });
-    value = { asks: seatAgendaAsks(body, request.now, request.project), forms: { rows: forms.rows, count: forms.count, routedToSeat: forms.routedToSeat } };
+    const { canonicalOrchestratorProject } = await import("@/lib/orchestrator/seats");
+    const { loadPipelinesForSeatAgenda } = await import("@/lib/pipelines/store");
+    const { overlayAttentionRoutes } = await import("@/lib/attention/routeOverlay");
+    const { waitingRoundIds } = await import("@/lib/attention/routing");
+    // Imports and file IO finish before this synchronous projection. The scope
+    // ends before result persistence or another request can observe it.
+    value = withProjectAliasSnapshot(projectAliasSnapshot(), (): import("@/lib/monitor/types").SeatTickAgendaInput => {
+      const project = canonicalOrchestratorProject(request.project);
+      const tasks = body.tasks.filter(task => canonicalOrchestratorProject(task.project) === project);
+      const held = tasks.filter(task => task.status !== "done" && (task.status === "blocked" || task.hold));
+      const prerequisites = held.flatMap(task => {
+        const hold = task.hold;
+        return (hold?.kind === "task" || hold?.kind === "external") && hold.ref && hold.ref !== task.id ? [hold.ref] : [];
+      });
+      const knownTasks = new Set(body.tasks.map(task => task.id));
+      const taskIds = new Set([...held.map(task => task.id), ...prerequisites.filter(id => knownTasks.has(id))]);
+      const laneIds = new Set(prerequisites.filter(id => !knownTasks.has(id)));
+      const projected = new Set(body.pipelines.map(lane => lane.id));
+      const retained = loadPipelinesForSeatAgenda([...taskIds], [...laneIds])
+        .filter(lane => !projected.has(lane.id) && canonicalOrchestratorProject(lane.project) === project);
+      if (retained.some(lane => !lane.hiddenAt)) {
+        overlayAttentionRoutes([], retained, waitingRoundIds(tasks, body.seatDecisions), request.now);
+      }
+      const forms = needsYouAnswer({ ...body, files: [] }, null, request.now, request.project, {
+        tasks: body.tasks ?? [], pipelines: body.pipelines ?? [], dismissals: [], reports: null, admissions: [], unavailable: [], workLinks: body.workLinks, seatConversationId: request.seatConversationId,
+      }, { kinds: ["prototype", "lane-decision", "lane-review"], full: true }, "stale-first", { rows: Number.MAX_SAFE_INTEGER, bytes: Infinity });
+      const pauses = new Map<string, string[]>();
+      const asks = seatAgendaAsks({ ...body, pipelines: [...body.pipelines, ...retained] }, request.now, project, pauses, request.pauses);
+      return { asks, ...(pauses.size ? { pauseWaitingTasks: Object.fromEntries([...pauses].map(([id, tasks]) => [id, tasks.sort()])) } : {}),
+        forms: { rows: forms.rows, count: forms.count, routedToSeat: forms.routedToSeat } };
+    });
   } else if (request.type === "seat-reports") {
     const { seatTickReportRows } = await import("@/lib/monitor/seatTickReports");
     value = seatTickReportRows(request.project);

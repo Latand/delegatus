@@ -9,7 +9,10 @@
 
 import { clampEffortToScale } from "@/lib/agent/efforts";
 import {
+  ANTIGRAVITY_DEFAULT_MODEL,
   CODEX_ASTRA_MODEL,
+  CODEX_GPT62_SOL_MODEL,
+  CODEX_GPT62_ASTRA_MODEL,
   CODEX_GPT61_SOL_MODEL,
   CODEX_GPT6_LUNA_MODEL,
   CODEX_GPT6_SOL_MODEL,
@@ -27,6 +30,8 @@ export type EquivalentRow = { roleId: RoleId; variant?: RoleVariantId };
 // GPT-6 Luna misses details a fix or a cleanup needs, so it lands one tier up.
 const CODEX_TO_CLAUDE: Record<string, string> = {
   [CODEX_ASTRA_MODEL]: "opus",
+  [CODEX_GPT62_SOL_MODEL]: "opus",
+  [CODEX_GPT62_ASTRA_MODEL]: "opus",
   [CODEX_GPT61_SOL_MODEL]: "opus",
   [CODEX_GPT6_SOL_MODEL]: "opus",
   [CODEX_GPT6_LUNA_MODEL]: "sonnet",
@@ -88,6 +93,24 @@ const ROW_TARGETS: Record<RoleEngine, Readonly<Record<string, RoleConfig>>> = {
     "builder:docs-fixes": { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
     "reviewer:trivial": { engine: "codex", model: CODEX_GPT6_LUNA_MODEL, effort: "high" },
   },
+  antigravity: {
+    orchestrator: { engine: "antigravity", model: ANTIGRAVITY_DEFAULT_MODEL, effort: "high" },
+    reviewer: { engine: "antigravity", model: ANTIGRAVITY_DEFAULT_MODEL, effort: "high" },
+    verifier: { engine: "antigravity", model: "gemini-4-argon", effort: "medium" },
+    builder: { engine: "antigravity", model: ANTIGRAVITY_DEFAULT_MODEL, effort: "high" },
+    "builder:frontend": { engine: "antigravity", model: ANTIGRAVITY_DEFAULT_MODEL, effort: "high" },
+    "builder:apply-fixes": { engine: "antigravity", model: ANTIGRAVITY_DEFAULT_MODEL, effort: "high" },
+    "builder:trivial": { engine: "antigravity", model: "gemini-3.8-flash", effort: "high" },
+    "builder:docs": { engine: "antigravity", model: "gemini-4-argon", effort: "medium" },
+    "builder:frontend-fixes": { engine: "antigravity", model: ANTIGRAVITY_DEFAULT_MODEL, effort: "high" },
+    "builder:docs-fixes": { engine: "antigravity", model: "gemini-4-argon", effort: "medium" },
+    "reviewer:trivial": { engine: "antigravity", model: "gemini-3.8-flash", effort: "high" },
+    architect: { engine: "antigravity", model: ANTIGRAVITY_DEFAULT_MODEL, effort: "xhigh" },
+    cleaner: { engine: "antigravity", model: "gemini-4-argon", effort: "high" },
+    maintainer: { engine: "antigravity", model: ANTIGRAVITY_DEFAULT_MODEL, effort: "medium" },
+    "prod-auditor": { engine: "antigravity", model: ANTIGRAVITY_DEFAULT_MODEL, effort: "high" },
+    deployer: { engine: "antigravity", model: ANTIGRAVITY_DEFAULT_MODEL, effort: "high" },
+  },
 };
 
 function rowKey(row: EquivalentRow): string {
@@ -97,6 +120,12 @@ function rowKey(row: EquivalentRow): string {
 /** The equivalent model on `engine`; an unknown source model maps to the target's largest. */
 export function equivalentModel(model: string, engine: RoleEngine): string {
   if (engine === "claude") return CODEX_TO_CLAUDE[model] ?? "opus";
+  if (engine === "antigravity") {
+    const id = model.trim().toLowerCase();
+    if (id.includes("haiku") || id.includes("luna") || id.includes("flash")) return "gemini-3.8-flash";
+    if (id.includes("sonnet") || id.includes("terra") || id.includes("argon")) return "gemini-4-argon";
+    return ANTIGRAVITY_DEFAULT_MODEL;
+  }
   return CLAUDE_TO_CODEX[model] ?? CODEX_GPT61_SOL_MODEL;
 }
 

@@ -100,6 +100,8 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
         const value = state[name];
         if (value !== null && (typeof value !== "string" || !Number.isFinite(Date.parse(value)))) return null;
       }
+      if (state.lastTaskWakeAt !== undefined
+        && (!string(state.lastTaskWakeAt) || !Number.isFinite(Date.parse(state.lastTaskWakeAt)))) return null;
       if (state.wakeDecidedSince !== undefined && state.wakeDecidedSince !== null
         && (typeof state.wakeDecidedSince !== "string" || !Number.isFinite(Date.parse(state.wakeDecidedSince)))) return null;
       if (state.checkErrorAlarmPending !== undefined && typeof state.checkErrorAlarmPending !== "boolean") return null;
@@ -133,6 +135,7 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
       /* Absent on every row written before reported stalls; absent keeps every
          stall ahead of the unstarted tasks. */
       if (state.reportedStalls !== undefined && (!Array.isArray(state.reportedStalls) || !state.reportedStalls.every(string))) return null;
+      if (state.reportsAcknowledged !== undefined && (!Array.isArray(state.reportsAcknowledged) || state.reportsAcknowledged.length > 64 || !state.reportsAcknowledged.every(string))) return null;
       const validWake = (wake: SeatTickOutstandingWake | null | undefined): boolean => {
         if (!wake || !string(wake.clientMessageId) || !string(wake.conversationId)
           || !integer(wake.seatEpoch) || !nullableString(wake.operationId) || !wake.commit

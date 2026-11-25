@@ -8,11 +8,14 @@ import type { OwnerBridgeContext } from "./ownerBridgeContext";
 import type { OwnerTurnDiagnostic } from "./diagnostic";
 import { ACTION_VERIFICATION_READS } from "./actionOutcome";
 import { ExternalRelayError } from "./errors";
+import { canonicalRelayProject, requesterEntries, type RelayRunEntry, type TrustedRequesterEntry, type TrustedRequesterSettings } from "./trustedRequesters";
+import type { RelayGrantStatus } from "./settingsView";
 
 export type RelayTargetSettings = {
   id: string;
   name: string;
   answered_by: "install" | "service";
+  answered_elsewhere?: boolean;
   fallback: "service" | "none";
   enabled: boolean;
   engine: "claude" | "codex" | "codex-cloud" | null;
@@ -26,6 +29,7 @@ export type RelayTargetSettings = {
   memberLimitPerHour?: number | null;
   /** Absent is off; only the operator can enable full owner agent runs. */
   ownerTier?: boolean;
+  requesters?: TrustedRequesterSettings;
 };
 /** The open «Створити клона» request (cloneCreate.ts), until it ends. */
 export type RelayCloneRequest = {
@@ -107,6 +111,10 @@ export type RunRecord = {
   conversationId?: string;
   /** Durable custody survives a lost lease, cutoff, or Viewer restart. */
   ownerTurn?: { rawRequest?: unknown; context?: import("./profile").OwnerInstruction; restartRetries?: 1; restartPending?: true;
+    seatHandoff?: true;
+    handoffOutcome?: { status: "accepted" | "refused" | "uncertain"; project: string | null; code: string | null };
+    entry?: RelayRunEntry;
+    leaseDeadlineAt?: number;
     delivery?: import("./protocol").OwnerDelivery;
     /** Persisted before /complete; an absent ACK never authorizes /send. */
     completionAttempt?: { body: ExternalRelayCompletion; files: import("./attachments").StagedAttachment[] };
@@ -115,7 +123,10 @@ export type RunRecord = {
       parts?: { payload: import("./cloneSend").CloneSendInput; firstAttemptAt?: number;
         receipt?: Extract<import("./cloneSend").CloneSendResult, { kind: "sent" }> }[];
       status?: "retry" | "pending-delivery-context" | "uncertain" | "retry-expired" | "refused" };
-    diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
+    diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string; retryOfOperationId?: string; deadlineAt?: string; failureReason?: string; primaryFailure?: OwnerTurnDiagnostic["primaryFailure"] }; clientAttemptId: string; prototype?: true;
+    /** A carried switch still has to be present when a prototype decision is written. */
+    prototypeGrant?: Pick<TrustedRequesterEntry, "id" | "project">;
+    request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
     /** When the cutoff was first written; older rows are stamped on recovery. */
     cancelledAt?: string;
     /** Terminal local recovery; executor termination is still unproven. The
@@ -197,9 +208,16 @@ function withoutExpired(store: RelayStore): RelayStore {
 }
 export function readRelayStore(): RelayStore {
   const store = readStoredRelays();
-  return store.pending.some((item) => expired(item, Date.now()))
-    ? updateRelayStore((current) => current)
-    : store;
+  const current = withoutExpired(store);
+  if (current === store) return store;
+  try {
+    return updateRelayStore(value => value, 0);
+  } catch (error) {
+    // A concurrent writer prunes expired pairings before it writes. Hide
+    // them from readers immediately without waiting on that writer.
+    if (error instanceof RelayStoreBusy) return current;
+    throw error;
+  }
 }
 /** Authority reads never create settings or prune pending pairings. */
 export function pairedTelegramOwner(userId: string): boolean {
@@ -230,13 +248,27 @@ function readStoredRelays(): RelayStore {
 }
 export function updateRelayStore(
   change: (store: RelayStore) => RelayStore,
+  waitMs?: number,
 ): RelayStore {
   const file = externalRelayFile("relays");
   return withFileLock(file, () => {
     const next = withoutExpired(change(withoutExpired(readStoredRelays())));
     writeRelayFile(file, next);
     return next;
+  }, waitMs);
+}
+export async function updateRelayStoreAsync(change: (store: RelayStore) => RelayStore | Promise<RelayStore>): Promise<RelayStore> {
+  return withRelayStoreLock(async (store, replace) => {
+    const next = withoutExpired(await change(store));
+    replace(next);
+    return next;
   });
+}
+
+export async function withRelayStoreLock<T>(action: (store: RelayStore, replace: (next: RelayStore) => void) => T | Promise<T>,
+  until = Date.now() + 5_000): Promise<T> {
+  const file = externalRelayFile("relays");
+  return withFileLockAsync(file, () => action(withoutExpired(readStoredRelays()), next => writeRelayFile(file, next)), until);
 }
 export function readRunLedger(): RunLedger {
   const ledger = read(externalRelayFile("runs"), () => ({
@@ -287,7 +319,7 @@ export function withFileLock<T>(file: string, action: () => T, waitMs = 5_000): 
           fs.rmSync(lock, { force: true });
         }
       }
-      if (Date.now() >= deadline) throw new Error("relay store is busy");
+      if (Date.now() >= deadline) throw new RelayStoreBusy();
       // eslint-disable-next-line no-restricted-syntax -- Legacy relay-store write lock during serving relay mutations.
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }
@@ -562,6 +594,7 @@ export function newTargetSettings(
     id: target.target_id,
     name: target.name,
     answered_by: target.answered_by,
+    answered_elsewhere: target.answered_elsewhere,
     fallback: target.fallback,
     enabled: true,
     engine: "codex-cloud",
@@ -590,16 +623,24 @@ export function mergeRelayTargets(
           ...kept,
           name: target.name,
           answered_by: target.answered_by,
+          answered_elsewhere: target.answered_elsewhere,
           fallback: target.fallback,
         }
       : newTargetSettings(target);
   });
 }
-export function publicRelay(
-  relay: PairedRelay,
-): Omit<PairedRelay, "credential"> {
+export function publicRelay(relay: PairedRelay) {
   const { credential: _credential, ...publicRecord } = relay;
-  return publicRecord;
+  const targets = relay.targets.map(target => {
+    const entries = requesterEntries(relay, target);
+    const project = canonicalRelayProject(target.project);
+    const active = relay.paused === false && target.enabled === true && target.answered_by === "install"
+      && entries.some(entry => canonicalRelayProject(entry.project) === project);
+    const grantStatus: RelayGrantStatus = active ? "active" : entries.length ? "suspended" : "none";
+    const { ownerTier: _ownerTier, requesters: _requesters, ...settings } = target;
+    return { ...settings, grantStatus };
+  });
+  return { ...publicRecord, targets };
 }
 export function publicPending(
   pending: PendingRelay,

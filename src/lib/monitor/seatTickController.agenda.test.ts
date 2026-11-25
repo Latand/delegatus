@@ -1405,6 +1405,8 @@ test("a child whose host was released after a settled turn is finished, and harv
 test("a launch that failed before it ran is a terminal child with a failed outcome, harvested once (#1465)", async () => {
   const fixture = childFixture("failed-child");
   const child = fixture.spawn({ title: "build the exporter", unobserved: true });
+  const receipt = fixture.registry.spawnReceipt(child.launchId)!;
+  expect(fixture.registry.releaseStructuredSpawnAdmissionOwner(child.launchId, receipt.admissionOwner!).released).toBe(true);
   fixture.registry.failSpawn(child.launchId, "the host could not be started");
   fixture.seed();
   const rig = childRig(fixture);
@@ -1674,13 +1676,19 @@ test("a wake nobody can account for is kept under its key past the deadline and 
   fixture.seed({ outstandingWake: wake });
   const first = childRig(fixture, { realWakeState: true });
   expect(await runSeatTickCheck(fixture.project, first.deps)).toMatchObject({ verdict: "wake", delivery: { outcome: "deferred-outstanding" } });
-  expect(fixture.row().outstandingWake).toEqual({ ...wake, preparedAt: new Date(fixture.now).toISOString() });
+  expect(fixture.row().outstandingWake).toEqual({ ...wake, preparedAt: new Date(fixture.now).toISOString(), preparationTimeUnknown: true });
   expect(first.cards).toEqual([]);
   expect(first.sent).toEqual([]);
-  const within = childRig(fixture, { realWakeState: true, now: fixture.now + 29 * MINUTE });
+  const within = childRig(fixture, { realWakeState: true, now: fixture.now + 15 * MINUTE - 1 });
   await runSeatTickCheck(fixture.project, within.deps);
   expect(within.cards).toEqual([]);
   expect(within.sent).toEqual([]);
+  const alarm = childRig(fixture, { realWakeState: true, now: fixture.now + 15 * MINUTE });
+  await runSeatTickCheck(fixture.project, alarm.deps);
+  expect(alarm.cards.map((entry) => entry.card)).toMatchObject([{ ref: SEAT_TICK_WAKE_UNRESOLVED_REF, instance: wake.clientMessageId }]);
+  expect(alarm.cards[0]!.card.detail).toContain("15 minutes");
+  expect(alarm.sent).toEqual([]);
+  expect(fixture.row().outstandingWake?.clientMessageId).toBe(wake.clientMessageId);
 
   const aged = childRig(fixture, { realWakeState: true, now: fixture.now + 61 * MINUTE });
   const record = await runSeatTickCheck(fixture.project, aged.deps);
@@ -1958,7 +1966,11 @@ test("cross-project, pipeline-owned, engine-native and unrelated conversations a
 
 test("a child the registry cannot place is unknown: not open work, not harvested, and said so (#1465)", async () => {
   const fixture = childFixture("unknown-child");
-  fixture.spawn({ title: "a reservation nothing settled", unobserved: true });
+  const child = fixture.spawn({ title: "a completed launch with no observed turn", unobserved: true, completedReceipt: true });
+  const receipt = fixture.registry.spawnReceipt(child.launchId)!;
+  // The producer finished, but no turn observation or host can place this child.
+  if (receipt.admissionOwner) expect(fixture.registry.releaseStructuredSpawnAdmissionOwner(child.launchId, receipt.admissionOwner).released).toBe(true);
+  expect(fixture.registry.spawnReceipt(child.launchId)?.admissionOwner ?? null).toBeNull();
   fixture.seed();
   const rig = childRig(fixture);
   const record = await runSeatTickCheck(fixture.project, rig.deps);
@@ -2034,7 +2046,7 @@ test("a busy child whose host is gone is a stall the registry can see, reported 
   expect(record).toMatchObject({ verdict: "wake", reasons: ["interval"] });
   expect(first.liveness).toEqual([{ conversationId: fixture.seat.conversationId }]);
   expect(fixture.row().stalledSeen).toEqual([`child:${child.id}`]);
-  const second = childRig(fixture, { now: fixture.now + 61 * MINUTE });
+  const second = childRig(fixture, { now: fixture.now + MINUTE });
   const stalled = await runSeatTickCheck(fixture.project, second.deps);
   expect(stalled).toMatchObject({ verdict: "wake", reasons: ["stalled"] });
   expect(stalled!.detail).toContain("host_gone_turn_open");

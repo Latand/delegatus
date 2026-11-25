@@ -9,6 +9,7 @@ import { performanceSpans } from "@/lib/performanceSpans";
 import { withoutOperationLease } from "@/lib/operationLease";
 import { CODEX_MISSING_ROLLOUT_REASON, isMissingCodexRolloutError } from "./hostEndCause";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
+import { forgetOrphanedHostGrace, orphanedHostFirstObservedAt, structuredHostOrphaned } from "./orphanedHost";
 import { recordedHostHeld } from "@/lib/recordedChecks/store";
 import type {
   AgentHostStatus,
@@ -35,6 +36,7 @@ import {
 import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
 import { ClaudeStreamBrokerHost, type ClaudeStreamBrokerHostOptions } from "./claudeStreamBrokerHost";
 import type { CopilotAcpHost } from "./copilotAcpHost";
+import type { AntigravityAcpHost } from "./antigravityAcpHost";
 import { StructuredHostAdoptionCleanupError, type HostState } from "./engineHost";
 import { structuredHostsEnabled } from "./flags";
 import { conversationTurnLiveness, type TurnLivenessDependencies } from "./liveness";
@@ -46,6 +48,7 @@ import { registryConversationsForEntryKey, registryKeysMatchingBounded, registry
 import { entryRevision, readAgentProjection, subjectId as agentStateSubjectId } from "@/lib/agentState/store";
 import { cachedAgentObservationForRevision } from "@/lib/agentState/projectionCache";
 import { fileSignature } from "@/lib/agentState/transcript";
+import { hostTurnRecordIdentity } from "./eventStore";
 import type { StructuredHostTerminationDependencies } from "./structuredHostControl";
 import { assertMemberLaunchAllowed } from "@/lib/team/memberLaunchAuthority";
 import { recoverMemberAdoption } from "./memberAdoptionRecovery";
@@ -209,6 +212,31 @@ export function copilotHostColumns(state: HostState, writerClaimEpoch: number): 
   };
 }
 
+export function antigravityHostColumns(state: HostState, writerClaimEpoch: number): StructuredHostColumns {
+  return {
+    ...(state.exitProcess ? { exitProcess: state.exitProcess } : {}),
+    kind: "antigravity-acp",
+    endpoint: state.endpoint,
+    process: registryProcess(state),
+    eventCursor: state.eventCursor,
+    protocolVersion: state.protocolVersion,
+    writerClaimEpoch,
+    activeTurnRef: state.activeTurnRef,
+    attentionVerified: true,
+    ...(state.agentStateAttention ? { agentStateAttention: state.agentStateAttention } : {}),
+    agentStateTurnStartedAt: state.agentStateTurnStartedAt ?? null,
+    agentStateNativeTurnId: state.agentStateNativeTurnId ?? null,
+    agentStateNativePromptOrdinal: state.agentStateNativePromptOrdinal ?? null,
+    agentStateNativePromptAnchor: state.agentStateNativePromptAnchor ?? null,
+    pendingAttention: state.pendingAttention,
+    ...(state.memory ? { memory: state.memory } : {}),
+    ...(state.scope ? { scope: state.scope } : {}),
+    ...(state.signalDomain ? { signalDomain: state.signalDomain } : {}),
+    ...(state.signalBoundary ? { signalBoundary: state.signalBoundary } : {}),
+    activeFlags: state.activeFlags,
+  };
+}
+
 export async function persistCodexHost(
   registry: AgentRegistry,
   key: SessionKey,
@@ -280,7 +308,10 @@ function sameMaterialHostState(left: HostState, right: HostState): boolean {
     && sameStrings(left.activeFlags, right.activeFlags);
 }
 
-export type StructuredHostPersistenceStop = (() => Promise<void>) & { flush(): Promise<void> };
+export type StructuredHostPersistenceStop = (() => Promise<void>) & {
+  flush(): Promise<void>;
+  custody: AdoptedHostCustody;
+};
 
 const persistenceGlobal = globalThis as typeof globalThis & {
   __delegatusHostPersistence?: WeakMap<object, StructuredHostPersistenceStop>;
@@ -638,8 +669,10 @@ async function bindStructuredHostPersistence(
     throw error;
   }
   if (stopped) unsubscribe();
+  const { endpoint, process } = columnsFromState(initialState, writerClaimEpoch);
   const binding = Object.assign(stop, {
     flush: () => withoutOperationLease(() => enqueue(() => withoutOperationLease(persistPending))),
+    custody: { claimOwner, claimEpoch: writerClaimEpoch, writerEpoch: writerClaimEpoch, endpoint, process },
   });
   hostPersistence.set(host, binding);
   host.setPersistenceFlush?.(binding.flush);
@@ -733,14 +766,63 @@ export async function bindCopilotHostPersistence(
   );
 }
 
+export async function bindAntigravityHostPersistence(
+  registry: AgentRegistry,
+  key: SessionKey,
+  host: AntigravityAcpHost,
+  claimOwner: string,
+  writerClaimEpoch: number,
+  releasedStatus: "unhosted" | "dead" = "unhosted",
+  options: StructuredHostPersistenceOptions = {},
+): Promise<StructuredHostPersistenceStop> {
+  return bindStructuredHostPersistence(
+    registry,
+    key,
+    host,
+    claimOwner,
+    writerClaimEpoch,
+    releasedStatus,
+    antigravityHostColumns,
+    options,
+  );
+}
+
+export interface AdoptedHostCustody {
+  claimOwner: AgentRegistryEntry["claimOwner"];
+  claimEpoch: number;
+  writerEpoch: StructuredHostColumns["writerClaimEpoch"];
+  endpoint: string;
+  process: ProcessIdentity | null;
+}
+
+export function structuredHostCustody(entry: AgentRegistryEntry | null | undefined): AdoptedHostCustody | null {
+  if (!entry?.structuredHost) return null;
+  const { endpoint, process, writerClaimEpoch } = entry.structuredHost;
+  return { claimOwner: entry.claimOwner, claimEpoch: entry.claimEpoch, writerEpoch: writerClaimEpoch, endpoint, process };
+}
+
+export function matchesStructuredHostCustody(
+  custody: AdoptedHostCustody | null | undefined,
+  entry: AgentRegistryEntry | null | undefined,
+): boolean {
+  const host = entry?.structuredHost;
+  return Boolean(custody && entry && host && entry.claimOwner === custody.claimOwner && entry.claimEpoch === custody.claimEpoch
+    && host.writerClaimEpoch === custody.writerEpoch && host.endpoint === custody.endpoint
+    && (custody.process && host.process
+      ? sameRecordedProcessIdentity(host.process, custody.process) && host.process.bootEpoch === custody.process.bootEpoch
+      : host.process === custody.process));
+}
+
 export interface AdoptedCodexHost {
   key: SessionKey;
   host: CodexAppServerHost;
+  custody?: AdoptedHostCustody;
 }
 
 export interface AdoptedClaudeHost {
   key: SessionKey;
   host: ClaudeStreamBrokerHost;
+  custody?: AdoptedHostCustody;
 }
 
 export type StructuredHostAdoptionFilter = (entry: AgentRegistryEntry) => boolean;
@@ -900,6 +982,7 @@ function settledOrphanWithPendingDelivery(registry: AgentRegistry, entry: AgentR
   if (!fresh || !proc.determined || proc.value.status !== "alive" || !sameRecordedProcessIdentity(proc.value.identity, process)
     || !owner.determined || owner.value !== "absent" || !turn.determined || turn.value.state === "open"
     || !attention.determined || attention.value.length !== 0 || !transcript.determined || !obligations.determined) return false;
+  if (turn.evidence.source === "operation-ledger" && hostTurnRecordIdentity(entry.key.sessionId) !== turn.evidence.ref) return false;
   const expectedProcessSignature = (() => {
     try { return fileSignature(fs.statSync(entry.artifactPath!, { bigint: true })); } catch { return null; }
   })();
@@ -994,7 +1077,7 @@ async function endRecordedStructuredTree(
   const { startIdentity, bootEpoch } = processIdentity;
   if (!startIdentity || !bootEpoch) return false;
   const engine = key.engine;
-  if (engine !== "claude" && engine !== "codex" && engine !== "copilot") return false;
+  if (engine !== "claude" && engine !== "codex" && engine !== "copilot" && engine !== "antigravity") return false;
   const root: ProcessIdentity = { pid: processIdentity.pid, startIdentity, bootEpoch };
   const targetScope = recordedAgentScope(startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost);
   const recordedDomain = startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost?.signalDomain;
@@ -1018,6 +1101,7 @@ async function endRecordedStructuredTree(
     seat: null, turnBusy: null, owned: false, lastActiveAt: null,
   }, {
     stopOrigin: { path: source, operationId: sessionKeyId(key) },
+    orphanAlarmRegistry: registry,
     scope: targetScope,
     retainedSurvivors: [...startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredTerminationSurvivors ?? [], ...domainProcesses],
     authorize,
@@ -1070,6 +1154,115 @@ export async function stopTerminalStructuredOrphan(
     && !processIdentityProvenDead(orphan))) return false;
   return terminateVerifiedStructuredOrphan(registry, key, orphan, entry.claimOwner ?? null, dependencies, undefined,
     { caller: "terminal-recovery", claimRefusal: claimDecision?.refusal ?? null });
+}
+
+export type OrphanedStructuredHostStop =
+  | { state: "stopped" }
+  /** The row is no orphan any more (claimed again, ended, or retired) by the
+      time the stop looked; the caller reads it again. */
+  | { state: "not-orphaned" }
+  | { state: "grace"; detail: string; until: number }
+  /** The stop cannot proceed now. `until` bounds how long a send stays held
+      behind it; `firstObserved` is true for the call that recorded the first
+      refusal of this orphan, which raises the alarm. */
+  | { state: "refused"; detail: string; until: number; firstObserved: boolean };
+
+/** Work an orphan may still finish on its own: an open turn, pending
+    attention, or Claude background shells. Unreadable background evidence
+    counts as work. Null when none is in flight. */
+async function orphanedHostInFlightWork(entry: AgentRegistryEntry, now: number): Promise<string | null> {
+  const host = entry.structuredHost;
+  if (host?.activeTurnRef) return "an open turn";
+  if (host?.pendingAttention.length) return "pending attention";
+  if (entry.key.engine !== "claude") return null;
+  if (!entry.artifactPath) return "background work that cannot be read";
+  const background = await verifiedBackgroundWork(entry.artifactPath, now);
+  if (background.state !== "read") return `background work that cannot be read (${background.reason})`;
+  return background.names.length ? `background work (${background.names.join(", ")})` : null;
+}
+
+/**
+ * Stops an orphaned structured host so its conversation can be resumed: the
+ * engine still runs while the process recorded as its
+ * claim owner is gone, so its stdio reaches nobody and no resume can
+ * reconnect it. It goes through the same identity-fenced ladder as every
+ * other orphan stop.
+ *
+ * An orphan with work in flight gets a bounded grace first: it is left alone
+ * until `graceMs` after the later of `admittedAt`, the durable admission of
+ * the send that needs it, and the first durable observation of this orphan
+ * with work in flight. A send that waited behind a handover longer than the
+ * grace still leaves the orphan its whole grace, and a restart neither resets
+ * nor extends the bound. A host whose owner may still run is never touched,
+ * and the fence is asked again before every signal.
+ *
+ * A stop that cannot proceed (a pending action owns the row, the engine's
+ * identity cannot be verified, or processes survived the ladder) is refused
+ * with its reason and a deadline `refusedHoldMs` after the later of
+ * `admittedAt` and the first durable observation of the refusal, anchored the
+ * same way as the grace.
+ */
+export async function stopOrphanedStructuredHost(
+  registry: AgentRegistry,
+  key: SessionKey,
+  options: { admittedAt: string | null; now: () => number; graceMs: number; refusedHoldMs: number; recheck?: () => void },
+  dependencies: StructuredOrphanStopDependencies = {},
+): Promise<OrphanedStructuredHostStop> {
+  const entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
+  const engine = entry?.structuredHost?.process ?? null;
+  if (!entry || !engine || !structuredHostOrphaned(entry) || claimOwnerBlocksOrphanReap(entry.claimOwner)) {
+    return { state: "not-orphaned" };
+  }
+  const rowKey = sessionKeyId(key);
+  const admitted = Date.parse(options.admittedAt ?? "");
+  const refused = async (detail: string): Promise<OrphanedStructuredHostStop> => {
+    const now = options.now();
+    const observed = await orphanedHostFirstObservedAt(registry.filename, rowKey, engine, now, "stop-refused");
+    const until = Math.max(observed, Number.isFinite(admitted) ? admitted : observed) + options.refusedHoldMs;
+    console.error("[structured hosts] orphaned host whose owner process is gone could not be stopped", {
+      key: rowKey, pid: engine.pid, detail, firstRefusedAt: new Date(observed).toISOString(), holdUntil: new Date(until).toISOString(),
+    });
+    return { state: "refused", detail, until, firstObserved: observed === now };
+  };
+  if (entry.pendingAction !== null) return refused(`a pending ${entry.pendingAction} owns the row`);
+  if (!engine.startIdentity || !engine.bootEpoch) {
+    return refused("the engine process's start identity cannot be verified, so no signal can be fenced to it");
+  }
+  const custody = structuredCustodyIdentity(entry);
+  const now = options.now();
+  const inFlight = await orphanedHostInFlightWork(entry, now);
+  if (inFlight) {
+    const observed = await orphanedHostFirstObservedAt(registry.filename, rowKey, engine, now);
+    const until = Math.max(observed, Number.isFinite(admitted) ? admitted : observed) + options.graceMs;
+    if (now < until) {
+      const detail = `the orphaned host still has in-flight work (${inFlight}); `
+        + `it is stopped at ${new Date(until).toISOString()} unless it settles first`;
+      // Recorded once, when its grace starts; the held send names it on every retry.
+      if (observed === now) console.error("[structured hosts] orphaned host whose owner process is gone held for its grace", {
+        key: rowKey, pid: engine.pid, inFlight, firstObservedAt: new Date(observed).toISOString(), until: new Date(until).toISOString(),
+      });
+      return { state: "grace", detail, until };
+    }
+  }
+  options.recheck?.();
+  const stopped = await endRecordedStructuredTree(registry, key, engine, "structured-orphan-owner-gone",
+    /* Asked before every signal and again at retirement, when the engine is
+       already gone: it pins custody and the gone owner, not the engine. */
+    current => structuredCustodyIdentity(current) === custody && current?.pendingAction === null
+      && !claimOwnerBlocksOrphanReap(current.claimOwner ?? null), dependencies);
+  console.error(`[structured hosts] orphaned host whose owner process is gone ${stopped ? "stopped" : "survived its stop"}`, {
+    key: rowKey, pid: engine.pid, inFlight, graceEnded: inFlight !== null,
+  });
+  if (stopped) {
+    await forgetOrphanedHostGrace(registry.filename, rowKey);
+    return { state: "stopped" };
+  }
+  const after = startupHostSnapshot(registry, key).entries[rowKey];
+  if (!after || !structuredHostOrphaned(after)) return { state: "not-orphaned" };
+  const survivors = after.structuredTerminationSurvivors?.length ?? 0;
+  return refused(survivors > 0
+    ? `${survivors} process${survivors === 1 ? "" : "es"} of the orphaned host survived its stop`
+    : "the orphaned host's stop did not prove every process gone");
 }
 
 /**
@@ -1379,10 +1572,11 @@ export async function adoptCodexRegistryHosts(
             ? dependencies.adoptHost(entry.key.sessionId, options)
             : CodexAppServerHost.adopt(entry.key.sessionId, options));
           memberCurrent?.();
-          await bindCodexHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
+          const binding = await bindCodexHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
             "unhosted", { onCheckpoint: custody?.checkpoint });
-          adopted.push({ key: entry.key, host });
-          dependencies.onAdopted?.({ key: entry.key, host });
+          const item = { key: entry.key, host, custody: binding.custody };
+          adopted.push(item);
+          dependencies.onAdopted?.(item);
         } catch (error) {
           try { await custody?.cleanup(); } catch { /* live setup remains durably owned for reconciliation */ }
           if (error instanceof StructuredHostAdoptionCleanupError
@@ -1548,10 +1742,11 @@ export async function adoptClaudeRegistryHosts(
             ? dependencies.adoptHost(entry.key.sessionId, options)
             : ClaudeStreamBrokerHost.adopt(entry.key.sessionId, options));
           memberCurrent?.();
-          await bindClaudeHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
+          const binding = await bindClaudeHostPersistence(registry, entry.key, host, claimed.claimOwner!, claimed.claimEpoch,
             "unhosted", { onCheckpoint: custody?.checkpoint });
-          adopted.push({ key: entry.key, host });
-          dependencies.onAdopted?.({ key: entry.key, host });
+          const item = { key: entry.key, host, custody: binding.custody };
+          adopted.push(item);
+          dependencies.onAdopted?.(item);
         } catch (error) {
           try { await custody?.cleanup(); } catch { /* live setup remains durably owned for reconciliation */ }
           if (error instanceof StructuredHostAdoptionCleanupError

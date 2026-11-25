@@ -493,12 +493,12 @@ test("a projection from the snapshot file reports the scan generation that file 
   const snapshotFile = path.join(stateDir, "files-scan-snapshot.json");
   const snapshot = { files: [], projectCatalog: [], complete: true };
   try {
-    fs.writeFileSync(snapshotFile, JSON.stringify({ version: 1, schemaVersion: 12, epoch: "e1", generation: 15, snapshot }));
+    fs.writeFileSync(snapshotFile, JSON.stringify({ version: 1, schemaVersion: 13, epoch: "e1", generation: 15, snapshot }));
     const fromFile = await buildFilesResponseInWorker({ ...request, snapshot: undefined, snapshotFile }, runtimeFor(stateDir));
     expect(fromFile.snapshotRead).toEqual({ epoch: "e1", generation: 15 });
 
     /* A file written before the scan named its generation dates nothing. */
-    fs.writeFileSync(snapshotFile, JSON.stringify({ version: 1, schemaVersion: 12, snapshot }));
+    fs.writeFileSync(snapshotFile, JSON.stringify({ version: 1, schemaVersion: 13, snapshot }));
     const undated = await buildFilesResponseInWorker({ ...request, snapshot: undefined, snapshotFile }, runtimeFor(stateDir));
     expect(undated.snapshotRead).toBeUndefined();
 
@@ -708,15 +708,57 @@ test("seat report worker persists outcomes once, filters foreign projects, and r
     await expect(runSeatSourceInWorker({ type: "seat-rule-reports", project: "fixture", at: "invalid" }, runtime)).rejects.toThrow("invalid request");
     await produce();
     const first = await read("fixture");
-    expect(first).toHaveLength(2);
-    expect(first.map((row: { origin: { conversationId: string } }) => row.origin.conversationId)).toEqual(["conversation_fixture", "conversation_fixture"]);
-    expect(await read("elsewhere")).toEqual([]);
+    expect(first.reports).toHaveLength(2);
+    expect(first.reports.map((row: { origin: { conversationId: string } }) => row.origin.conversationId)).toEqual(["conversation_fixture", "conversation_fixture"]);
+    expect(first.reservedIds).toEqual([]);
+    expect(await read("elsewhere")).toEqual({ reports: [], reservedIds: [], occupiedIds: [] });
     await produce();
     expect(await read("fixture")).toEqual(first);
     await drainFilesResponseWorker("restart report reader");
     expect(await read("fixture")).toEqual(first);
   } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
 }, 15_000);
+
+test("seat agenda worker is byte-identical to the unscoped projection across alias moves and requests", async () => {
+  const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
+  const { needsYouAnswer } = await import("@/lib/attention/needsYouProjection");
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { seatReadBoard, SEAT_READ_NOW } = await import("@/lib/monitor/seatReads.fixture");
+  const { runSeatSourceInWorker } = await import("./filesResponseWorker");
+  const state = scratchState(), runtime = runtimeFor(state);
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  try {
+    persistProjectAliases([{ source: "old", target: "current", displayName: "Fixture" }]);
+    const body = seatReadBoard();
+    const directory = path.join(state, "files-response-results");
+    fs.mkdirSync(directory, { recursive: true });
+    const bodyFile = path.join(directory, "fixture-agenda.json");
+    fs.writeFileSync(bodyFile, JSON.stringify(body));
+    for (const project of ["current", "moved", "foreign"]) {
+      if (project === "moved") persistProjectAliases([{ source: "current", target: "moved", displayName: "Fixture" }]);
+      // The reference reproduces the original full worker projection without
+      // a scoped snapshot; the resident worker must see each later alias move.
+      const forms = needsYouAnswer({ ...body, files: [] }, null, SEAT_READ_NOW, project, {
+        tasks: body.tasks, pipelines: body.pipelines, dismissals: [], reports: null, admissions: [], unavailable: [], seatConversationId: "conversation_seat",
+      }, { kinds: ["prototype", "lane-decision", "lane-review"], full: true }, "stale-first", { rows: Number.MAX_SAFE_INTEGER, bytes: Infinity });
+      const expected = { asks: seatAgendaAsks(body, SEAT_READ_NOW, project), forms: { rows: forms.rows, count: forms.count, routedToSeat: forms.routedToSeat } };
+      expect(expected.asks.length).toBeGreaterThan(0);
+      expect(expected.forms.count).toBeGreaterThan(0);
+      const actual = await runSeatSourceInWorker({ type: "seat-agenda", bodyFile, project, now: SEAT_READ_NOW, seatConversationId: "conversation_seat" }, runtime);
+      expect(actual.body).toBe(JSON.stringify(expected));
+    }
+    await expect(runSeatSourceInWorker({ type: "seat-agenda", bodyFile: path.join(state, "outside.json"), project: "current", now: SEAT_READ_NOW }, runtime))
+      .rejects.toThrow("outside the worker result directory");
+    await drainFilesResponseWorker("restart agenda reader");
+    const restarted = await runSeatSourceInWorker({ type: "seat-agenda", bodyFile, project: "moved", now: SEAT_READ_NOW, seatConversationId: "conversation_seat" }, runtime);
+    expect(JSON.parse(restarted.body).asks.length).toBeGreaterThan(0);
+  } finally {
+    await stopTestWorker();
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+}, 30_000);
 
 test.each(["STATE_ADMISSION_BUSY", "DEADLINE_EXCEEDED"] as const)("seat report worker preserves retryable source failure %s", async errorCode => {
   const { runSeatSourceInWorker } = await import("./filesResponseWorker");
@@ -914,6 +956,84 @@ test("task form currency survives the real board summary and notice builders", a
       const next = await seatAgendaInWorker(JSON.stringify(withdrawn), "project-a", Date.parse("2026-11-12T13:00:00Z") / 1000, runtimeFor(state));
       expect(next.forms.rows).toEqual([]);
     } finally { await dismissAttention(target, { kind: "operator", surface: "desktop" }, { undo: true }); saveTasks(previous); }
+  } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
+});
+
+test("the seat agenda worker returns a task ask and the task carried by a due pause", async () => {
+  const { seatAgendaInWorker } = await import("./filesResponseWorker");
+  const state = scratchState();
+  const now = Date.parse("2026-11-20T06:47:00Z");
+  const since = new Date(now - 86_400_000).toISOString();
+  const project = "project-a";
+  const tasks = ["resumable", "paused"].map(id => ({
+    id, project, text: `Check ${id}`, status: "blocked", placement: "unplaced", assignments: [],
+    createdAt: since, updatedAt: since, hold: { kind: "resource", by: "agent", note: "Wait for memory", since },
+  }));
+  tasks.push({ ...tasks[0]!, id: "operator-access", hold: { kind: "operator", by: "operator", note: "Grant release access", since } });
+  tasks.push({ ...tasks[1]!, id: "quota-paused" });
+  const pipelines = [{ id: "due-pause", task: "Resume after the wait", project, taskIds: ["paused", "operator-access"],
+    state: "paused", stages: [], runs: [], pausedAt: since, createdAt: since }];
+  try {
+    const quota = { ...pipelines[0]!, id: "ready-quota", taskIds: ["quota-paused", "operator-access"],
+      pause: { reason: "Wait for quota", resumeCondition: { kind: "account-usage", engine: "codex", accountId: "fixture-account", window: "weekly", belowPercent: 70 } } };
+    const result = await seatAgendaInWorker(JSON.stringify({ files: [], tasks, pipelines: [...pipelines, quota] }), project, now / 1000,
+      runtimeFor(state), undefined, { quotaReadyLaneIds: [quota.id] });
+    expect(result.asks).toEqual([expect.objectContaining({
+      id: "resumable", waitingTaskIds: ["resumable"], label: expect.stringContaining("Verify the wait now"),
+    })]);
+    expect(result.pauseWaitingTasks).toEqual({ "due-pause": ["paused"], "ready-quota": ["quota-paused"] });
+  } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
+});
+
+test("retained lanes share the seat agenda's prerequisite rows and live assignments", async () => {
+  const { seatAgendaInWorker } = await import("./filesResponseWorker");
+  const { buildPipeline } = await import("@/lib/pipelines/store");
+  const { initializeStateCollections } = await import("@/lib/state/sqliteStateStore");
+  const { isPipeline } = await import("@/lib/pipelines/storedRecord");
+  const { laneRouteKey } = await import("@/lib/attention/routeTypes");
+  const { seatReadBoard, SEAT_READ_AT, SEAT_READ_NOW } = await import("@/lib/monitor/seatReads.fixture");
+  const state = scratchState(), runtime = runtimeFor(state);
+  const project = "retained-fixture";
+  const worker = { ...seatReadBoard(0).files[0]!, project, activity: "live" as const, proc: "running" as const,
+    operatorAsk: undefined, attentionRoute: undefined };
+  const assignment = { path: worker.path, conversationId: worker.conversationId, state: "linked" as const, panePid: null, error: null, at: SEAT_READ_AT };
+  const task = (id: string, other: Partial<import("@/lib/tasks/types").BoardTask> = {}): import("@/lib/tasks/types").BoardTask => ({
+    id, project, text: `Check ${id}`, status: "assigned", placement: "unplaced",
+    assignments: [], updatedAt: SEAT_READ_AT, createdAt: SEAT_READ_AT, ...other,
+  });
+  const prerequisite = task("aabb0011", { assignments: [assignment] });
+  const dependent = task("aabb0022", { status: "blocked", hold: { kind: "task", ref: prerequisite.id, note: "Until the prerequisite settles", since: SEAT_READ_AT, by: "agent" } });
+  const working = task("aabb0033", { status: "blocked", assignments: [assignment], hold: { kind: "resource", note: "Wait for memory", since: SEAT_READ_AT, by: "agent" } });
+  const acceptance = task("aabb0044", { status: "blocked", hold: { kind: "external", note: "Check the running build", since: SEAT_READ_AT, by: "agent" } });
+  const delegated = task("aabb0055", { status: "blocked", hold: { kind: "external", note: "Follow the recorded decision", since: SEAT_READ_AT, by: "agent" } });
+  const retained = (id: string, taskIds: string[]) => ({ ...buildPipeline({ id, task: "Earlier work", taskIds, project, repoDir: "/fixture/repo",
+    stages: [{ kind: "run", id: "build", next: null, prompt: "Build the fixture",
+      effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+    srcPath: null, srcConversationId: null, now: SEAT_READ_AT }), cursor: null, state: "closed" as const, closedAt: SEAT_READ_AT, hiddenAt: SEAT_READ_AT });
+  const historical = retained("retained-lane", [dependent.id, working.id, delegated.id]);
+  const merged = { ...retained("retained-merged", [acceptance.id]), state: "completed" as const,
+    merge: { gitOnly: true as const, state: "merged" as const, by: "outside" as const, repository: "fixture/repo",
+      prNumber: null, policyChangedAt: SEAT_READ_AT, reviewedHead: "", chain: [], updates: [], seenChecks: [], head: null,
+      headSeenAt: null, lastChecks: null, readAt: null, nextReadAt: null, requestedAt: SEAT_READ_AT, mergedHead: null, mergeCommit: null,
+      method: null, mergedAt: SEAT_READ_AT, attempts: 0, reason: null, blockedAt: null, updatedAt: SEAT_READ_AT } };
+  expect(isPipeline(historical)).toBe(true);
+  expect(isPipeline(merged)).toBe(true);
+  const parked: import("@/lib/pipelines/types").Pipeline = { ...retained("routed-lane", [delegated.id]), hiddenAt: null, closedAt: null, state: "needs_decision" };
+  parked.attentionRoute = { key: laneRouteKey(parked, "lane-decision"), owner: "form", form: { taskId: delegated.id, reviewId: "open-round" } };
+  try {
+    initializeStateCollections(path.join(state, "state.sqlite"), ["pipelines", "pipelines_archive"].map(collection => ({
+      collection, schemaVersion: 5, migrationId: "fixture", key: (lane: { id: string }) => lane.id,
+      loadRecords: () => collection === "pipelines_archive" ? [historical, merged] : [],
+    })));
+    const body = { files: [worker], tasks: [prerequisite, dependent, working, acceptance, delegated], pipelines: [parked] };
+    const read = (snapshot: typeof body) => seatAgendaInWorker(JSON.stringify(snapshot), project, SEAT_READ_NOW, runtime);
+    expect((await read(body)).asks).toEqual([expect.objectContaining({ id: acceptance.id, label: expect.stringContaining("deployment_status") })]);
+    const resumed = await read({ ...body, tasks: [{ ...prerequisite, status: "done" }, dependent, working, acceptance, delegated], files: [] });
+    expect(resumed.asks).toEqual([
+      expect.objectContaining({ id: dependent.id, label: expect.stringContaining("recorded prerequisite cleared") }),
+      expect.objectContaining({ id: working.id, label: expect.stringContaining("Verify the wait now") }),
+      expect.objectContaining({ id: acceptance.id, label: expect.stringContaining("deployment_status") }),
+    ]);
   } finally { await stopTestWorker(); fs.rmSync(state, { recursive: true, force: true }); }
 });
 

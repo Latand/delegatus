@@ -371,10 +371,9 @@ export async function readBackgroundTaskLedger(transcriptPath: string, options: 
     const stat = await handle.stat({ bigint: true });
     if (!stat.isFile()) return null;
     const size = Number(stat.size);
-    let cached = cache.get(transcriptPath);
-    if (!cached || cached.dev !== stat.dev || cached.ino !== stat.ino || cached.offset > size) {
-      cached = { dev: stat.dev, ino: stat.ino, offset: 0, ledger: emptyBackgroundTaskLedger() };
-    }
+    const existing = cache.get(transcriptPath);
+    const reused = existing !== undefined && existing.dev === stat.dev && existing.ino === stat.ino && existing.offset <= size;
+    const cached = reused ? existing : { dev: stat.dev, ino: stat.ino, offset: 0, ledger: emptyBackgroundTaskLedger() };
     // Bounded observers can use the existing incremental ledger, but never
     // start an unbounded cold history read to classify one current turn.
     let { offset, ledger } = cached;
@@ -406,9 +405,14 @@ export async function readBackgroundTaskLedger(transcriptPath: string, options: 
     }
     /* The unterminated tail is read again once its line is complete. */
     const consumed = offset - carry.length;
-    cache.delete(transcriptPath);
-    cache.set(transcriptPath, { dev: stat.dev, ino: stat.ino, offset: consumed, ledger });
-    while (cache.size > MAX_CACHED_TRANSCRIPTS) cache.delete(cache.keys().next().value!);
+    if (reused && ledger === cached.ledger) {
+      cached.offset = consumed;
+      cache.touch(transcriptPath);
+    } else {
+      cache.delete(transcriptPath);
+      cache.set(transcriptPath, { dev: stat.dev, ino: stat.ino, offset: consumed, ledger });
+      while (cache.size > MAX_CACHED_TRANSCRIPTS) cache.delete(cache.keys().next().value!);
+    }
     return options.maxBytes === undefined || consumed === size ? ledger : null;
   } catch {
     return null;
@@ -433,9 +437,11 @@ interface VerifiedBackgroundRow {
   offset: number;
   ledger: BackgroundTaskLedger;
   edge: Buffer;
+  lastAccessMs: number;
   refusal?: string;
 }
 const verifiedVersion = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+const INCOMPLETE_ROW_IDLE_TTL_MS = 5 * 60_000;
 export class VerifiedBackgroundWorkCache {
   private readonly rows = new Map<string, VerifiedBackgroundRow>();
   private readonly pending = new Map<string, Promise<void>>();
@@ -458,6 +464,33 @@ export class VerifiedBackgroundWorkCache {
       if (!before.isFile()) return refused("the transcript is no regular file");
       const size = Number(before.size);
       let cached = this.rows.get(transcriptPath);
+      if (!cached && this.rows.size >= this.capacity) {
+        // Recovery rows carry the only in-memory ledger/cursor for their
+        // transcript version. Never evict one before it reaches EOF: doing so
+        // lets a lexically early set of large files starve every later file.
+        // A completed row is a safe LRU victim. A missing artifact has no
+        // reader left to resume it, and an unvisited cursor expires after a
+        // bounded idle window; active readers refresh lastAccessMs below.
+        // This keeps abandoned recovery from permanently owning a slot.
+        const completed = [...this.rows].find(([key, row]) => !this.pending.has(key)
+          && (Boolean(row.refusal) || row.offset >= Number(row.version.size)));
+        if (completed) this.rows.delete(completed[0]);
+        else {
+          let abandoned: string | undefined;
+          for (const [key, row] of this.rows) {
+            if (this.pending.has(key)) continue;
+            let missing = false;
+            try { await fs.promises.stat(key); }
+            catch (error) { missing = (error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR"; }
+            // Recheck identity after stat: another request may have replaced
+            // this cursor while the filesystem call was pending.
+            if (this.pending.has(key) || this.rows.get(key) !== row) continue;
+            if (missing || nowMs - row.lastAccessMs >= INCOMPLETE_ROW_IDLE_TTL_MS) { abandoned = key; break; }
+          }
+          if (!abandoned) return refused("background transcript recovery is pending cache capacity");
+          this.rows.delete(abandoned);
+        }
+      }
       const same = cached && verifiedVersion(cached.version) === verifiedVersion(before);
       const stable = async () => {
         const [after, named] = await Promise.all([handle!.stat({ bigint: true }), fs.promises.stat(transcriptPath, { bigint: true })]);
@@ -465,6 +498,7 @@ export class VerifiedBackgroundWorkCache {
       };
       if (same && (cached!.refusal || cached!.offset === size)) {
         if (!await stable()) return refused("the transcript changed under the read");
+        cached!.lastAccessMs = nowMs;
         this.rows.delete(transcriptPath); this.rows.set(transcriptPath, cached!);
         return cached!.refusal ? refused(cached!.refusal)
           : { state: "read", names: pendingBackgroundTasks(cached!.ledger, nowMs).map(backgroundTaskName) };
@@ -517,8 +551,7 @@ export class VerifiedBackgroundWorkCache {
       }
       if (!await stable()) return refused("the transcript changed under the read");
       this.rows.delete(transcriptPath);
-      this.rows.set(transcriptPath, { version: before, offset, ledger, edge, ...(refusal ? { refusal } : {}) });
-      while (this.rows.size > this.capacity) this.rows.delete(this.rows.keys().next().value!);
+      this.rows.set(transcriptPath, { version: before, offset, ledger, edge, lastAccessMs: nowMs, ...(refusal ? { refusal } : {}) });
       return refusal ? refused(refusal) : offset < size ? refused("background transcript recovery is pending")
         : { state: "read", names: pendingBackgroundTasks(ledger, nowMs).map(backgroundTaskName) };
     } catch (error) {
