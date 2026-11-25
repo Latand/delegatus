@@ -94,6 +94,8 @@ test("independent registration waits for the outer retirement after the child cl
     child.emit("error", new Error("callback connection closed"));
     child.emit("close", 0, null);
     await reaped.promise;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(flushes).toBe(1);
     expect(registered).toBe(false);
     expect((await host.health()).pid).toBeNull();
   } finally {
@@ -102,4 +104,26 @@ test("independent registration waits for the outer retirement after the child cl
     await waitForCondition(() => flushes === 3, "detached cleanup settled");
   }
   expect(registered).toBe(true);
+});
+
+test("cleanup already inside retirement can finish its checkpoints before the fence exits", async () => {
+  const child = new FakeAppServer("custody-reentrant");
+  const owner = hostExitProcess(child.pid, "owned")!;
+  const signalled = Promise.withResolvers<void>();
+  const host = await CodexAppServerHost.start({
+    cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child),
+    pidAlive: () => true, processIdentity: () => "owned", shutdownGraceMs: 5_000,
+    signalProcess: () => signalled.resolve(),
+  });
+  let flushes = 0;
+  host.setPersistenceFlush(async () => { flushes++; });
+  await fence.withRecordedHostFence(owner, async () => {
+    const release = host.release();
+    await signalled.promise;
+    child.emit("error", new Error("callback connection closed"));
+    child.emit("close", 0, null);
+    await release;
+    await waitForCondition(() => flushes === 3, "reentrant checkpoints settled", 1_000);
+  });
+  expect((await host.health()).pid).toBeNull();
 });

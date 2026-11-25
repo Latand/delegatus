@@ -4,9 +4,21 @@ import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { digest } from "./wire";
 
 type Owner = { pid: number; startIdentity?: string | null; bootEpoch?: string | null };
-type Admission = { file: string; active: boolean };
+type Admission = { file: string; active: boolean; exited?: boolean; observers?: PromiseWithResolvers<void> };
 const shared = process as typeof process & { __delegatusRecordedHostFence?: AsyncLocalStorage<Admission> };
 const context = shared.__delegatusRecordedHostFence ??= new AsyncLocalStorage<Admission>();
+
+/** Capture the outer reservation while an effect is admitted. A detached
+ * observer can await its exit without requesting permission for another
+ * effect. A caller already inside that reservation remains reentrant. */
+export function currentRecordedHostFenceExit(): (() => Promise<void> | undefined) | undefined {
+  const held = context.getStore();
+  if (!held?.active || held.exited === undefined) return undefined;
+  return () => {
+    if (held.exited || (held.active && context.getStore() === held)) return undefined;
+    return (held.observers ??= Promise.withResolvers<void>()).promise;
+  };
+}
 /** Shared by registration and the complete signal ladder. A nested native
  * release retains the outer reservation until its last possible signal. */
 export async function withRecordedHostFence<T>(owner: Owner, operation: () => Promise<T>, options: { waitMs?: number } = {}): Promise<T> {
@@ -16,9 +28,15 @@ export async function withRecordedHostFence<T>(owner: Owner, operation: () => Pr
   const file = statePath("recorded-check-host-fences", String(slot));
   const held = context.getStore();
   if (held?.active && held.file === file) return operation();
-  return withFileTransactionAsync(file, "recorded check host custody", async () => {
-    const admission: Admission = { file, active: true };
-    try { return await context.run(admission, operation); }
-    finally { admission.active = false; }
-  }, options);
+  const admission: Admission = { file, active: false, exited: false };
+  try {
+    return await withFileTransactionAsync(file, "recorded check host custody", async () => {
+      admission.active = true;
+      try { return await context.run(admission, operation); }
+      finally { admission.active = false; }
+    }, options);
+  } finally {
+    admission.exited = true;
+    admission.observers?.resolve();
+  }
 }
