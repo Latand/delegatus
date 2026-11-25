@@ -1,4 +1,6 @@
 "use client";
+
+import { firstScreenColumn, type FirstScreenProjection } from "@/lib/client/projectFirstScreen";
 import { useMaterializedCreationIds } from "@/hooks/useFiles";
 
 import { History, ListPlus, Maximize2, MessageSquarePlus, Minimize2, Pin, Workflow } from "lucide-react";
@@ -157,6 +159,8 @@ export interface KanbanBoardProps {
   /** The files drawn are a restored answer being confirmed (#2071): the bar
       says «updating…» beside the count. */
   updating?: boolean;
+  initialTab?: TaskStatus;
+  onFirstScreen?: (layout: FirstScreenProjection) => void;
   catalogFailures: number;
   selection: ReadonlySet<string>;
   /** The bar's first group (the project's name and accounts) (#1801). */
@@ -428,7 +432,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
   const barRef = useRef<HTMLElement>(null);
   /* The recent agents' list under its icon; a card's link to more conversations opens it too. */
   const [recentOpen, setRecentOpen] = useState(false);
-  const [tab, setTab] = useState<TaskStatus>("assigned");
+  const [tab, setTab] = useState<TaskStatus>(props.initialTab ?? "assigned");
   const [query, setQuery] = useState("");
   const [reasonFilter, setReasonFilter] = useState<TaskReasonFilter | undefined>();
   const [linkQuery, setLinkQuery] = useState("");
@@ -565,6 +569,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
     previousModel.current = shared;
     return shared;
   }, [buildKanbanModel, bands, effectiveTasks, pipelines, projection, files, props.flows, statuses, props.overview?.keep, reasonFilter, seatRefs, query, unfoldedReaders, modelNow, held]);
+  const onFirstScreen = props.onFirstScreen;
+  useEffect(() => {
+    if (!onFirstScreen || held || statuses.size || edits.size || query || reasonFilter) return;
+    const inbox = model.unlinkedShown.filter(card => card.members.length > 0 && !card.drafts.length);
+    const columns = KANBAN_STATUSES.map(status => {
+      const column = model.columns[status];
+      const parked = new Set(column.parked);
+      const ordered = [...column.shown.filter(card => !parked.has(card.id)), ...column.shown.filter(card => parked.has(card.id))];
+      return firstScreenColumn(status, [...ordered, ...(status === "inbox" ? inbox : [])].map(card => card.title));
+    });
+    onFirstScreen({ columns, active: tab });
+  }, [onFirstScreen, model, tab, held, statuses, edits, query, reasonFilter]);
   const cardsById = useMemo(() => {
     const map = new Map<string, KanbanCardModel>();
     for (const status of KANBAN_STATUSES) for (const card of model.columns[status].cards) map.set(card.id, card);

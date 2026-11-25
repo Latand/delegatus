@@ -1,5 +1,7 @@
 "use client";
 
+import type { FirstScreenLayout } from "@/lib/client/projectFirstScreen";
+
 import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
 import { useLocale, type MessageKey } from "@/lib/i18n";
@@ -33,9 +35,11 @@ function Bar({ width, height, className = "" }: { width: string; height: number;
   return <span aria-hidden className={`block shrink-0 ${SKELETON_BAR} ${className}`} style={{ width, height }} />;
 }
 
-function Status({ label, className, style, children, testId }: { label: string; className: string; style?: CSSProperties; children: React.ReactNode; testId: string }) {
+function Status({ label, className, style, children, testId, busy = true }: {
+  label: string; className: string; style?: CSSProperties; children: React.ReactNode; testId: string; busy?: boolean;
+}) {
   return (
-    <div role="status" aria-busy="true" aria-live="polite" data-skeleton={testId} className={className} style={style}>
+    <div role={busy ? "status" : undefined} aria-busy={busy} aria-live={busy ? "polite" : undefined} data-skeleton={testId} className={className} style={style}>
       <span className="sr-only">{label}</span>
       {children}
     </div>
@@ -69,14 +73,16 @@ function SkeletonSection({ label, id }: { label: string; id: string }) {
 }
 
 /** The seat card's placeholder: the 56 px card with its round mark. */
-function SkeletonSeat() {
+function SkeletonSeat({ name }: { name?: string | null } = {}) {
   return (
-    <div className="px-3" aria-hidden>
+    <div className="px-3" aria-hidden={name ? undefined : true}>
       <div data-skeleton-seat="" className="flex min-h-14 items-center gap-3 rounded-[12px] bg-card px-3 py-2 shadow-1">
         <span className="h-8 w-8 shrink-0 rounded-full bg-sunken" />
         <span className="flex min-w-0 flex-1 flex-col gap-1.5">
-          <Bar width="42%" height={12} />
-          <Bar width="58%" height={10} />
+          {name ? <span className="truncate text-ui font-semibold text-primary" data-board-first-seat="">{name}</span> : <>
+            <Bar width="42%" height={12} />
+            <Bar width="58%" height={10} />
+          </>}
         </span>
       </div>
     </div>
@@ -157,25 +163,37 @@ function PhoneCardSkeleton({ index }: { index: number }) {
  * with its real labels, Assigned selected as the board opens, and dimmed
  * count placeholders, then cards in the card's own anatomy.
  */
-export function PhoneKanbanSkeleton({ seat = true, active = "assigned", className = "" }: { seat?: boolean; active?: (typeof KANBAN_COLUMNS)[number]; className?: string }) {
+export function PhoneKanbanSkeleton({ seat = true, active = "assigned", className = "", layout, seatName }: {
+  seat?: boolean; active?: (typeof KANBAN_COLUMNS)[number]; className?: string; layout?: FirstScreenLayout; seatName?: string | null;
+}) {
   const { t } = useLocale();
+  const selected = layout?.active ?? active;
+  const column = layout?.columns.find(column => column.status === selected);
   return (
-    <Status testId="phone-kanban" label={t("dash.loadingBoard")} className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${className}`}>
-      {seat ? <div className="shrink-0 pb-1 pt-1.5"><SkeletonSeat /></div> : null}
+    <Status testId="phone-kanban" busy={!column && !seatName} label={t(column || seatName ? "dash.updating" : "dash.loadingBoard")} className={`flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${className}`}>
+      {seat ? <div className="shrink-0 pb-1 pt-1.5"><SkeletonSeat name={seatName} /></div> : null}
       <div aria-hidden data-skeleton-tabs="" className="grid shrink-0 grid-cols-4 gap-1 border-b border-border px-1.5 pt-1">
         {KANBAN_COLUMNS.map((status) => (
-          <span key={status} className={`relative flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 rounded-t-[10px] px-1 pb-2 pt-1.5 ${status === active ? "bg-card" : ""}`}>
-            <span className={`whitespace-nowrap text-ui font-semibold leading-none ${status === active ? "text-primary" : "text-secondary"}`}>{t(COLUMN_LABEL[status])}</span>
+          <span key={status} className={`relative flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 rounded-t-[10px] px-1 pb-2 pt-1.5 ${status === selected ? "bg-card" : ""}`}>
+            <span className={`whitespace-nowrap text-ui font-semibold leading-none ${status === selected ? "text-primary" : "text-secondary"}`}>{t(COLUMN_LABEL[status])}</span>
             <Bar width="22px" height={8} className="rounded-full" />
-            {status === active ? <span className="absolute inset-x-[20%] bottom-0 h-0.5 rounded-full bg-accent" /> : null}
+            {status === selected ? <span className="absolute inset-x-[20%] bottom-0 h-0.5 rounded-full bg-accent" /> : null}
           </span>
         ))}
       </div>
       <div className="flex flex-col gap-2 px-3 pb-3 pt-2">
-        {Array.from({ length: 6 }, (_, index) => <PhoneCardSkeleton key={index} index={index} />)}
+        {column ? <div data-board-first-screen="" className="flex flex-col gap-2">
+          {column.titles.map((title, index) => <FirstScreenCard key={index} title={title} />)}
+        </div> : Array.from({ length: 6 }, (_, index) => <PhoneCardSkeleton key={index} index={index} />)}
       </div>
     </Status>
   );
+}
+
+function FirstScreenCard({ title }: { title: string }) {
+  return <article className="rounded-xl border border-border bg-card px-3 py-2.5 shadow-1">
+    <h3 className="line-clamp-2 text-body font-semibold text-primary" data-board-first-card="">{title}</h3>
+  </article>;
 }
 
 function KanbanCardSkeleton({ index }: { index: number }) {
@@ -192,13 +210,16 @@ function KanbanCardSkeleton({ index }: { index: number }) {
  * strip the scroll and tab modes draw, then the four wells with their real
  * heads. The kanban's own loading branch and `KanbanSkeleton` both draw this.
  */
-export function KanbanColumnsSkeleton({ mode, style, status = true }: { mode: KanbanLayoutMode; style?: CSSProperties; status?: boolean }) {
+export function KanbanColumnsSkeleton({ mode, style, status = true, layout }: {
+  mode: KanbanLayoutMode; style?: CSSProperties; status?: boolean; layout?: FirstScreenLayout;
+}) {
   const { t } = useLocale();
   return (
     <div
       className="scroll-wrap"
       data-board-wrap={mode}
       data-kanban-columns-skeleton=""
+      data-board-first-screen={layout ? "" : undefined}
       {...(status ? { role: "status", "aria-busy": true, "aria-live": "polite" as const } : {})}
     >
       {status ? <span className="sr-only">{t("kanban.loading")}</span> : null}
@@ -206,16 +227,18 @@ export function KanbanColumnsSkeleton({ mode, style, status = true }: { mode: Ka
         <div className={`tabs-nav${mode === "scroll" ? " jump" : ""}`} aria-hidden>
           {KANBAN_COLUMNS.map((status) => (
             /* The strip's own buttons, inert: `.tabs-nav button` sizes them. */
-            <button key={status} type="button" tabIndex={-1} aria-selected={mode === "tabs" ? status === "assigned" : undefined}>{t(COLUMN_LABEL[status])}</button>
+            <button key={status} type="button" disabled={Boolean(layout)} tabIndex={-1} aria-selected={mode === "tabs" ? status === (layout?.active ?? "assigned") : undefined}>{t(COLUMN_LABEL[status])}</button>
           ))}
         </div>
       ) : null}
       <div className={`board${mode === "tabs" ? " tabs" : mode === "scroll" ? " scroll" : mode === "narrow" ? " narrow" : ""}`} data-mode={mode} style={style}>
         {KANBAN_COLUMNS.map((status, column) => (
           /* The tab face opens on Assigned, as the board does. */
-          <section key={status} className={`column${mode === "tabs" && status === "assigned" ? " active" : ""}`} data-status={status}>
+          <section key={status} className={`column${mode === "tabs" && status === (layout?.active ?? "assigned") ? " active" : ""}`} data-status={status}>
             <div className="col-head"><h2>{t(COLUMN_LABEL[status])}</h2></div>
-            {Array.from({ length: COLUMN_CARDS[status] }, (_, index) => <KanbanCardSkeleton key={index} index={column * 2 + index} />)}
+            {layout ? <div className="flex flex-col gap-2 px-3 pb-2">
+              {layout.columns[column]?.titles.map((title, index) => <FirstScreenCard key={index} title={title} />)}
+            </div> : Array.from({ length: COLUMN_CARDS[status] }, (_, index) => <KanbanCardSkeleton key={index} index={column * 2 + index} />)}
           </section>
         ))}
       </div>
@@ -232,7 +255,9 @@ export function KanbanColumnsSkeleton({ mode, style, status = true }: { mode: Ka
  *
  * `overview` leaves the seat out, as the cross-project board does.
  */
-export function KanbanSkeleton({ project = null, overview = false }: { project?: string | null; overview?: boolean }) {
+export function KanbanSkeleton({ project = null, overview = false, layout, seatName }: {
+  project?: string | null; overview?: boolean; layout?: FirstScreenLayout; seatName?: string | null;
+}) {
   const { t } = useLocale();
   const seat = useKanbanSeat(project ?? "");
   const withSeat = !overview && project !== null;
@@ -256,22 +281,24 @@ export function KanbanSkeleton({ project = null, overview = false }: { project?:
     ? (seat.collapsed ? undefined : ({ "--seat-w": `${seat.width}px` } as CSSProperties))
     : seat.height !== null && !seat.collapsed ? ({ "--seat-h": `${seat.height}px` } as CSSProperties) : undefined;
   const seatView = withSeat ? (
-    <section aria-hidden data-skeleton-seat="" className={`seat${side ? " side" : ""}${seat.collapsed ? " folded" : ""}`} style={seatStyle}>
+    <section aria-hidden={seatName ? undefined : true} data-skeleton-seat="" className={`seat${side ? " side" : ""}${seat.collapsed ? " folded" : ""}`} style={seatStyle}>
       <div className="seat-head">
         <span className="h-6 w-6 shrink-0 rounded-full bg-sunken" />
         <span className="text-[13px] font-semibold text-primary">{t("orchPanel.title")}</span>
-        <Bar width="96px" height={10} />
+        {seatName
+          ? <span className="truncate text-ui text-secondary" data-board-first-seat="">{seatName}</span>
+          : <Bar width="96px" height={10} />}
       </div>
     </section>
   ) : null;
   return (
     <div ref={rootRef} className="kb" data-kanban-skeleton="" data-mode={mode}>
-      <Status testId="kanban" label={t("dash.loadingBoard")} className={`kb-body${side ? " seat-side" : ""}`}>
+      <Status testId="kanban" busy={!layout && !seatName} label={t(layout || seatName ? "dash.updating" : "dash.loadingBoard")} className={`kb-body${side ? " seat-side" : ""}`}>
         {side ? seatView : null}
         <div className="kb-page">
           {side ? null : seatView}
           <div className="board-frame">
-            <KanbanColumnsSkeleton mode={mode} style={tracks ? (tracks as CSSProperties) : undefined} status={false} />
+            <KanbanColumnsSkeleton mode={mode} layout={layout} style={tracks ? (tracks as CSSProperties) : undefined} status={false} />
           </div>
         </div>
       </Status>

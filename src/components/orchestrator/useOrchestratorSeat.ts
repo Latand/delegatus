@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { boardAccessChanged, readBoardBootAuthority, recheckBoardBoot } from "@/lib/client/boardBootAuthority";
 import { documentHidden } from "@/lib/client/hiddenTraffic";
 import type { SeatRefs } from "@/lib/tasks/groupHide";
 
@@ -208,11 +209,18 @@ export async function fetchOrchestratorSeat(project: string, cwd?: string, signa
   if (cwd) query.set("cwd", cwd);
   const prior = answers.get(readKey(project, cwd))?.status;
   const base = prior && revisions.get(prior);
+  const authority = readBoardBootAuthority();
   const response = await fetch("/api/orchestrator/seat?" + query, {
     signal, headers: { "x-delegatus-seat-base": base ?? "initial" },
   });
-  if (!response.ok) throw new Error(`orchestrator seat read failed: ${response.status}`);
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) void recheckBoardBoot();
+    throw new Error(`orchestrator seat read failed: ${response.status}`);
+  }
+  /* A read that began before the first access answer has no identity to lose. */
+  if (boardAccessChanged(authority) || signal?.aborted) throw new DOMException("seat access changed", "AbortError");
   const body = await response.json() as { tick?: unknown; unchanged?: boolean } | null;
+  if (boardAccessChanged(authority) || signal?.aborted) throw new DOMException("seat access changed", "AbortError");
   /* The tick's summary rides this answer so the toggle paints its state with the card. */
   seedSeatTickSettings(project, body?.tick);
   const revision = response.headers.get("x-delegatus-seat-revision");

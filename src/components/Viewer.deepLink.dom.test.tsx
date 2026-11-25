@@ -222,6 +222,7 @@ function stubFetch(
 ) {
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
+    if (url === "/api/team?view=board-access") return Response.json({ scope: null, projects: null, team: false });
     requestLog.push(url);
     if (url.startsWith("/api/files")) {
       const pin = new URL(url, "http://localhost").searchParams.get("path") ?? "";

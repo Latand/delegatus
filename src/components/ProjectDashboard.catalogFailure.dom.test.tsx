@@ -137,7 +137,9 @@ test("every catalog surface is fed the failure count", async () => {
      counts — not either against a literal — means a correctly guarded third
      site keeps passing and an unguarded one fails. */
   const skeletons = dashboard.match(/<(?:BoardRowsSkeleton|KanbanSkeleton)\b/g) ?? [];
-  const guarded = dashboard.match(/catalogFailures > 0 \? <CatalogFailureNotice[^\n]*?\/> : [^\n]*?<(?:BoardRowsSkeleton|KanbanSkeleton)\b/g) ?? [];
+  /* The notice yields only while no saved screen is there to show, so the guard
+     may carry that condition and the branches may sit on their own lines. */
+  const guarded = dashboard.match(/catalogFailures > 0(?: && [^?\n]*)?\s*\?\s*<CatalogFailureNotice[^\n]*?\/>\s*:\s*[^\n]*?<(?:BoardRowsSkeleton|KanbanSkeleton)\b/g) ?? [];
   expect(skeletons.length, "the dashboard renders no skeleton at all").toBeGreaterThan(0);
   expect(guarded.length, "a skeleton site does not yield to the catalog failure notice").toBe(skeletons.length);
 

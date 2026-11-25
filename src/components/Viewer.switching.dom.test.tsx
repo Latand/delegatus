@@ -209,6 +209,7 @@ const delayed = <T,>(value: T): Promise<T> => new Promise((resolve) => setTimeou
 
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = String(input);
+  if (url === "/api/team?view=board-access") return delayed(Response.json({ scope: null, projects: null, team: false }));
   const method = (init?.method ?? "GET").toUpperCase();
   if (url.startsWith("/api/files") && method === "HEAD") {
     presenceRequests.push(url);

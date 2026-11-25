@@ -3,7 +3,6 @@ import { ChevronDown, Ellipsis, Search } from "lucide-react";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 import { PRODUCT_NAME } from "@/lib/brand";
 import { translate, type Locale, type MessageKey } from "@/lib/i18n";
-import { PROJECT_NAMES_STORAGE_KEY } from "@/lib/client/projectNameCache";
 
 import { DelegatusMark } from "./brand/BrandMark";
 import { kanbanColumnTracks, type KanbanLayoutMode } from "./kanban/kanbanLayout";
@@ -16,15 +15,15 @@ import { SKELETON_BAR, SkeletonRow, TITLE_SKELETON_BAR } from "./skeletons";
  * The first frame of the app (#2071, docs/design/skeletons-and-transitions.md
  * D1).
  *
- * The real tree reads the viewport, the stored project and its name from the
+ * The real tree reads the viewport, the stored project from the
  * browser, none of which exists in a server render. It used to render the
  * desktop Overview there instead, so a phone painted a desktop layout that
  * said «No projects yet» until the bundle ran. This shell is what the server
  * and the hydration render draw instead: both form factors, one shown by the
  * same media query `useIsMobile` answers, in the shape of the board that is
- * coming. The inline script right after it names the project, picks the
+ * coming. The inline script right after it picks the
  * language and sizes the seat and columns from this browser's storage before
- * the first paint, so the shell never shows a raw key or the wrong language.
+ * the first paint, while the project title stays neutral until access is confirmed.
  *
  * Deterministic on purpose: no hooks, no browser reads while rendering, so
  * the server and hydration renders agree. The Viewer replaces it with the real
@@ -55,19 +54,17 @@ const COLUMNS = ["inbox", "assigned", "blocked", "done"] as const;
 const COLUMN_CARDS: Record<(typeof COLUMNS)[number], number> = { inbox: 2, assigned: 1, blocked: 0, done: 0 };
 
 /**
- * Names the project, sets the language and sizes the desktop board, before
+ * Sets the language and sizes the desktop board before
  * the first paint. Mirrors, in a few lines of ES5:
  * - `initialProjectFromState` (the `#p=` hash, then `llvProject`);
- * - `projectTitle` (the remembered name, then the readable key; an opaque
- *   `repo-`/`dir-` key stays a placeholder bar);
  * - the i18n detection (`llv_lang`, then the browser language);
  * - `kanbanLayoutMode` and `seatCollapsed` for the columns and the seat.
  *
  * It writes ONLY to `<html lang>` and to the shell root, which carries
  * `suppressHydrationWarning`: attributes and custom properties. Everything
  * below the root is React's to hydrate, so the stylesheet draws the rest from
- * those: the name as `::before` content from `--boot-name`, the seat height
- * and the column tracks as inherited custom properties, and the one board
+ * those: the seat height and the column tracks as inherited custom
+ * properties, and the one board
  * mode shown out of the four the server rendered. A text node or a class
  * written into the subtree made hydration fail and regenerate the tree.
  * The source carries no `<`, so the script's own text compares equal to what
@@ -84,11 +81,6 @@ var ov=!p||p===${JSON.stringify(OVERVIEW)};
 var l=g("llv_lang");if(l!=="en"&&l!=="uk")l=String(navigator.language||"").toLowerCase().indexOf("uk")===0?"uk":"en";
 d.documentElement.lang=l;r.setAttribute("data-boot-locale",l);
 r.setAttribute("data-boot-view",ov?"overview":"project");
-var t=null;
-if(!ov){var n={};try{n=JSON.parse(g(${JSON.stringify(PROJECT_NAMES_STORAGE_KEY)})||"{}")||{}}catch(e){}
-t=typeof n[p]==="string"&&n[p].trim()?n[p].trim():null;
-if(!t&&!/^(?:repo|dir)-[0-9a-f]{16,}$/.test(p)){t=p==="project_unresolved"?"Unresolved project":p.indexOf("-agents-tools-")===0&&p.length>14?p.slice(14):(p.replace(/^-+/,"")||p)}}
-if(t){r.style.setProperty("--boot-name",JSON.stringify(t.replace(/[\\n\\r]+/g," ")));r.setAttribute("data-boot-named","")}
 var hidden=g(${JSON.stringify(RAIL_HIDDEN_STORAGE_KEY)})==="hidden";if(hidden)r.setAttribute("data-boot-rail","hidden");
 var w=window.innerWidth-(hidden?34:248),md=w>=1400?"wide":w>=1200?"narrow":w>=768?"scroll":"tabs";
 r.setAttribute("data-boot-mode",md);
@@ -99,7 +91,7 @@ if(c)r.setAttribute("data-boot-seat-folded","");else if(rc.heightV===${SEAT_HEIG
 }catch(e){}})();`;
 
 /* Which shell shows, which language shows, what the project view adds over
-   the overview, the name, the seat's fold and the board mode: all keyed on
+   the overview, the seat's fold and the board mode: all keyed on
    the root's attributes the script sets. The query is `useIsMobile`'s own, so
    the shell the server picks is the layout the app mounts. Without the script
    (no JavaScript) the wide board shows. */
@@ -108,9 +100,6 @@ const BOOT_SHELL_STYLE = `
 @media ${MOBILE_LAYOUT_QUERY}{[data-boot-shell] [data-boot-phone]{display:flex}[data-boot-shell] [data-boot-desk]{display:none}}
 [data-boot-shell][data-boot-locale="uk"] [data-boot-lang="en"],[data-boot-shell]:not([data-boot-locale="uk"]) [data-boot-lang="uk"]{display:none}
 [data-boot-shell]:not([data-boot-view="project"]) [data-boot-project-only],[data-boot-shell][data-boot-view="project"] [data-boot-overview-only]{display:none}
-[data-boot-shell] [data-boot-title]::before{content:var(--boot-name,"")}
-[data-boot-shell] [data-boot-title-bar]{display:none}
-[data-boot-shell]:not([data-boot-named]) [data-boot-title-bar]{display:inline-block}
 [data-boot-shell][data-boot-rail="hidden"] [data-boot-rail-aside]{display:none}
 [data-boot-shell][data-boot-seat-folded] .kb [data-boot-seat]{height:auto}
 [data-boot-shell] .kb [data-boot-board-mode]{display:none}

@@ -191,6 +191,7 @@ export function OrchestratorPanel({
   onSeatSignal,
   seatTasks,
   seatRead,
+  bootSeatName,
 }: {
   project: string;
   projectName: string;
@@ -219,6 +220,7 @@ export function OrchestratorPanel({
   /** A read of this project's seat its host already keeps (the kanban board,
       for the same project and cwd): the panel uses it and polls nothing. */
   seatRead?: OrchestratorSeatRead;
+  bootSeatName?: string | null;
 }) {
   const { t } = useLocale();
   const ownRead = useOrchestratorSeat(seatRead ? null : project, projectCwd);
@@ -581,7 +583,9 @@ export function OrchestratorPanel({
           <span className="seat-title">
             <strong>{t("orchPanel.title")}</strong>
             {collapsed ? null : <span className="proj" title={projectName}>{projectName}</span>}
-            <StateBadge state={state} file={file} word />
+            {!status && bootSeatName
+              ? <span className="proj" data-board-first-seat="">{bootSeatName}</span>
+              : <StateBadge state={state} file={file} word />}
             {liveDeputy && !collapsed ? <SeatDeputyChip deputy={liveDeputy} /> : null}
           </span>
           {state.kind === "loading" || failed ? null : (

@@ -48,7 +48,7 @@ function seatRoom(section: HTMLElement | null): number {
  * so both edges move and the one under the pointer follows it. The width is
  * the project's, and a double-click puts the default back.
  */
-export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boardId, seatRead }: {
+export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boardId, seatRead, bootSeatName }: {
   project: string;
   projectName: string;
   projectCwd?: string;
@@ -59,6 +59,7 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
   boardId: string;
   /** The board's read of this project's seat, shared so the page polls it once. */
   seatRead?: OrchestratorSeatRead | null;
+  bootSeatName?: string | null;
 }) {
   const { t } = useLocale();
   const seat = useKanbanSeat(project);
@@ -384,6 +385,7 @@ export function KanbanSeat({ project, projectName, projectCwd, files, tasks, boa
           projectCwd={projectCwd}
           files={files}
           seatTasks={tasks}
+          bootSeatName={bootSeatName}
           {...(seatRead ? { seatRead } : {})}
         />
         {seat.collapsed ? null : side ? (

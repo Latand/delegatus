@@ -1,5 +1,7 @@
 "use client";
 
+import { announceBoardSignIn } from "@/lib/client/boardBootAuthority";
+
 import { ChevronLeft, KeyRound, Send, Smartphone } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -155,6 +157,7 @@ export function SignInCard({ next }: { next: string }) {
   }, []);
 
   const finish = useCallback((name: string) => {
+    announceBoardSignIn();
     setScreen({ kind: "done", name });
     window.setTimeout(() => goNext(next), 700);
   }, [next]);

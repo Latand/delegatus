@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 
+import { readBoardBootAuthority, rememberedNamesAllowed } from "@/lib/client/boardBootAuthority";
 import { cachedProjectName } from "@/lib/client/projectNameCache";
 import { projectTitle } from "@/lib/displayNames";
 import type { TFunction } from "@/lib/i18n";
@@ -80,10 +81,13 @@ export function workNamesWanted(work: ResumeWork | null | undefined): WantedName
   };
 }
 
+/** The name this browser remembered, for a confirmed single operator only. */
+const savedProjectName = (project: string) => rememberedNamesAllowed(readBoardBootAuthority()) ? cachedProjectName(project) : undefined;
+
 const ENGINES: Record<string, string> = { claude: "Claude", codex: "Codex", copilot: "Copilot" };
 
 function turnLabel(turn: BlockingTurn, names: BlockerNames, t: TFunction): string {
-  const project = turn.project ? projectTitle(turn.project, names.projects[turn.project], cachedProjectName(turn.project)) : null;
+  const project = turn.project ? projectTitle(turn.project, names.projects[turn.project], savedProjectName(turn.project)) : null;
   if (turn.seat) return project ? t("selfUpdate.auto.block.seat", { project }) : t("selfUpdate.auto.block.seatUnnamed");
   const engine = ENGINES[turn.engine];
   const work = names.conversations[turn.conversationId]?.trim()
@@ -126,7 +130,7 @@ export interface WorkRow {
 }
 
 function projectName(key: string | null | undefined, names: BlockerNames): string | null {
-  return key ? projectTitle(key, names.projects[key], cachedProjectName(key)) : null;
+  return key ? projectTitle(key, names.projects[key], savedProjectName(key)) : null;
 }
 
 /* The role in words: the role's name, a review flow's own words, or a stage

@@ -36,6 +36,7 @@ mock.module("@/hooks/useConversationCatalog", () => ({
   useConversationCatalog: () => ({ items: [], nextCursor: null, total: 0, loading: false, error: false, loadMore: () => {}, retry: () => {} }),
 }));
 const { PERSISTED_BOARDS_KEY, resetPendingOpensForTest } = await import("@/hooks/useBoardState");
+const { setBoardBootAuthorityForTests } = await import("@/lib/client/boardBootAuthority");
 const { ServerReachProvider } = await import("@/hooks/serverReach");
 const { viewBus } = await import("@/hooks/viewPresenceBus");
 const { resetProjectNameCacheForTest, PROJECT_NAMES_STORAGE_KEY } = await import("@/lib/client/projectNameCache");
@@ -62,6 +63,9 @@ const matchMediaFor = (query: string) => ({
    Every request is recorded, so a write made on a snapshot would show. */
 const pending = new Promise<Response>(() => {});
 let requests: Array<{ url: string; method: string }> = [];
+/* The layout read answers only when a test says so. */
+let boardAnswer: unknown = null;
+const SCOPE = "a".repeat(64);
 const OVERRIDES: Record<string, unknown> = {
   window: dom,
   document: dom.document,
@@ -82,6 +86,7 @@ const OVERRIDES: Record<string, unknown> = {
   IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } },
   fetch: ((input: string | URL | Request, init?: RequestInit) => {
     requests.push({ url: String(input), method: (init?.method ?? "GET").toUpperCase() });
+    if (boardAnswer && String(input).startsWith("/api/board")) return Promise.resolve(Response.json({ ok: true, board: boardAnswer }));
     return pending;
   }) as unknown as typeof fetch,
 };
@@ -111,13 +116,16 @@ let roots: Root[] = [];
 beforeEach(() => {
   roots = [];
   requests = [];
+  boardAnswer = null;
   mobile = false;
+  setBoardBootAuthorityForTests({ scope: SCOPE, projects: null, team: false });
   dom.localStorage.clear();
   resetProjectNameCacheForTest();
   resetPendingOpensForTest();
   setLocale("en");
 });
 afterEach(() => {
+  setBoardBootAuthorityForTests(null);
   for (const root of roots) flushSync(() => root.unmount());
   dom.document.body.replaceChildren();
 });
@@ -218,36 +226,44 @@ function conversation(path: string, title: string): FileEntry {
   };
 }
 const ALPHA = conversation("/sessions/alpha.jsonl", "Run the atlas board.");
-/** The board this browser confirmed in an earlier document. */
+const CONFIRMED_BOARD = {
+  schemaVersion: 1, revision: 2, updatedAt: new Date(0).toISOString(), pathAliases: {}, explicitManual: [ALPHA.path],
+  prefs: { manual: [ALPHA.path], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode: null, taskPanelOpen: false },
+};
+/** What this browser confirmed in an earlier document, under its scope. */
 function persistBoard(): void {
-  dom.localStorage.setItem(PERSISTED_BOARDS_KEY, JSON.stringify([[KEY, {
-    schemaVersion: 1, revision: 2, updatedAt: new Date(0).toISOString(), pathAliases: {}, explicitManual: [ALPHA.path],
-    prefs: { manual: [ALPHA.path], hidden: [], expanded: [], favorites: [], foldedEngineChildIds: [], expandedEngineTrayParentIds: [], viewMode: null, taskPanelOpen: false },
-  }]]));
+  dom.localStorage.setItem(PERSISTED_BOARDS_KEY, JSON.stringify({ scope: SCOPE, boards: [[KEY, CONFIRMED_BOARD]] }));
   dom.localStorage.setItem(PROJECT_NAMES_STORAGE_KEY, JSON.stringify({ [KEY]: "atlas" }));
 }
+const settle = async () => {
+  for (let i = 0; i < 24; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+};
 
 for (const phone of [true, false]) {
   const surface = phone ? "phone" : "desktop";
-  test(`${surface}: a restored answer paints the board at once, says it is updating, and acts on nothing until certified`, () => {
+  test(`${surface}: a restored answer holds the board's skeleton, says it is updating, and acts on nothing until certified`, async () => {
     mobile = phone;
     persistBoard();
+    boardAnswer = CONFIRMED_BOARD;
     const reports = spyOn(viewBus, "reportCards");
     try {
       const { host, rerender } = mount({ loaded: false, cached: true, files: [ALPHA] });
-      /* The board's content, not its skeleton. (The seat's own panel may
-         still be reading its seat, which is its own placeholder.) */
-      expect(host.querySelector('[data-kanban-skeleton], [data-skeleton="phone-kanban"], [data-skeleton="rows-board"]') === null).toBe(true);
-      if (phone) expect(host.querySelector(`[data-phone-kanban] [data-phone-card-agent="${ALPHA.path}"]`)).not.toBeNull();
-      else expect(host.querySelector("[data-kanban-board]")).not.toBeNull();
+      await settle();
+      /* The layout read has finished, yet the saved answer is display only:
+         the skeleton stays, named and marked as updating. */
+      expect(host.querySelector('[data-kanban-skeleton], [data-skeleton="phone-kanban"], [data-skeleton="rows-board"]')).not.toBeNull();
+      expect(host.querySelector("[data-kanban-board], [data-phone-kanban]")).toBeNull();
       expect(host.textContent).toContain(en["dash.updating"]);
       expect(title(host).textContent).toContain("atlas");
       /* Nothing that acts on data ran on the snapshot. */
       expect(reports).not.toHaveBeenCalled();
       expect(requests.filter((request) => request.method !== "GET")).toEqual([]);
       rerender({ loaded: true, cached: false });
+      await settle();
       expect(reports).toHaveBeenCalled();
       expect(host.textContent).not.toContain(en["dash.updating"]);
+      if (phone) expect(host.querySelector(`[data-phone-kanban] [data-phone-card-agent="${ALPHA.path}"]`)).not.toBeNull();
+      else expect(host.querySelector("[data-kanban-board]")).not.toBeNull();
     } finally {
       reports.mockRestore();
     }
@@ -256,9 +272,11 @@ for (const phone of [true, false]) {
 
 /* ── Reconnecting ───────────────────────────────────────────────────────── */
 
-test("desktop: a reconnect in progress is a quiet note in the bar, never an alert", () => {
+test("desktop: a reconnect in progress is a quiet note in the bar, never an alert", async () => {
   persistBoard();
+  boardAnswer = CONFIRMED_BOARD;
   const { host } = mount({ loaded: true, files: [ALPHA], catalogFailures: 2, reach: { kind: "reconnecting", lastGoodAt: Date.UTC(2100, 0, 2, 14, 2) } });
+  await settle();
   const note = host.querySelector('[data-bar-reach="reconnecting"]');
   expect(note).not.toBeNull();
   expect(note!.textContent).toMatch(/^reconnecting · showing \d\d:\d\d$/);
@@ -266,9 +284,11 @@ test("desktop: a reconnect in progress is a quiet note in the bar, never an aler
   expect(host.textContent).not.toContain(en["kanban.filesFailed"]);
 });
 
-test("desktop: a minute of failures is the red alert again", () => {
+test("desktop: a minute of failures is the red alert again", async () => {
   persistBoard();
+  boardAnswer = CONFIRMED_BOARD;
   const { host } = mount({ loaded: true, files: [ALPHA], catalogFailures: 7, reach: { kind: "offline", lastGoodAt: null } });
+  await settle();
   const alert = host.querySelector('.bar [role="alert"]');
   expect(alert).not.toBeNull();
   expect(alert!.textContent).toBe(en["kanban.filesFailed"]);

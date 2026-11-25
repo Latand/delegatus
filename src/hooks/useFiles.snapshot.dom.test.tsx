@@ -26,6 +26,7 @@ mock.module("./runtimeBus", () => ({
 
 const { createFilesClientCache, filesApiUrl, resetFilesClientCacheForTests, persistFilesSnapshotForTests, useFiles } = await import("./useFiles");
 const { FILES_SNAPSHOT_MAX_AGE_MS, FILES_SNAPSHOT_VERSION, memoryFilesSnapshotStore, usableSnapshot } = await import("@/lib/client/filesSnapshotStore");
+const { setBoardBootAuthorityForTests } = await import("@/lib/client/boardBootAuthority");
 
 const dom = new Window();
 Object.assign(globalThis, {
@@ -40,6 +41,7 @@ Object.assign(globalThis, {
 const originalFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  setBoardBootAuthorityForTests(null);
   document.body.replaceChildren();
 });
 beforeEach(() => {
@@ -202,6 +204,7 @@ test("a snapshot is never painted over an answer this document already has", asy
 test("a stored record is used only while current, fresh, bounded and revalidatable", () => {
   const now = Date.now();
   expect(usableSnapshot(record(), now)).toBe(true);
+  expect(usableSnapshot(record({ version: FILES_SNAPSHOT_VERSION - 1 }), now)).toBe(false);
   expect(usableSnapshot(record({ version: FILES_SNAPSHOT_VERSION + 1 }), now)).toBe(false);
   expect(usableSnapshot(record({ savedAt: now - FILES_SNAPSHOT_MAX_AGE_MS - 1 }), now)).toBe(false);
   expect(usableSnapshot(record({ etag: "" }), now)).toBe(false);
@@ -369,6 +372,93 @@ test("the board's rows paint from the stored answer before the request answers, 
   flushSync(() => root.unmount());
 });
 
+test("a held snapshot never paints, still makes the first request conditional, and shows or vanishes when the identity is known", async () => {
+  const { calls, fetcher } = recordingFetcher(notModified);
+  const shown = createFilesClientCache(fetcher);
+  expect(shown.hydrate(record(), "hold")).toBe(true);
+  expect(shown.readScope().cached).toBeFalsy();
+  expect(shown.readScope().files).toEqual([]);
+  expect(shown.showHeld()).toBe(true);
+  expect(shown.readScope().cached).toBe(true);
+  expect(shown.readScope().files.map((file) => file.path)).toEqual(BODY.files.map((file) => file.path));
+
+  const dropped = createFilesClientCache(fetcher);
+  dropped.hydrate(record(), "hold");
+  dropped.dropHeld();
+  expect(dropped.showHeld()).toBe(false);
+  await dropped.revalidate().catch(() => undefined);
+  expect(calls.at(-1)!.headers["If-None-Match"]).toBeUndefined();
+
+  const held = createFilesClientCache(fetcher);
+  held.hydrate(record(), "hold");
+  const certified = await held.revalidate();
+  expect(calls.at(-1)!.headers["If-None-Match"]).toBe(ETAG);
+  /* The server's own 304 certifies the rows for this requester. */
+  expect(certified.loaded).toBe(true);
+  expect(certified.cached).toBe(false);
+  expect(certified.files.map((file) => file.path)).toEqual(BODY.files.map((file) => file.path));
+  expect(held.showHeld()).toBe(false);
+});
+
+/* A project list moves without the person changing, so the saved body also
+   names the list it was saved under: rows of a project the identity no longer
+   reaches are never shown. */
+const SAVED_SCOPE = "e".repeat(64);
+const CATALOG_CASES: ReadonlyArray<{ name: string; saved: string[] | undefined; scope: string; projects: string[] | null; shown: boolean }> = [
+  { name: "the saved scope", saved: undefined, scope: SAVED_SCOPE, projects: null, shown: true },
+  { name: "another scope", saved: undefined, scope: "f".repeat(64), projects: null, shown: false },
+  { name: "the same scope with a widened project list", saved: ["atlas"], scope: SAVED_SCOPE, projects: ["atlas", "mesh"], shown: true },
+  { name: "the same scope with the same project list", saved: ["atlas", "mesh"], scope: SAVED_SCOPE, projects: ["atlas", "mesh"], shown: true },
+  { name: "the same scope with a narrowed project list", saved: ["atlas", "mesh"], scope: SAVED_SCOPE, projects: ["atlas"], shown: false },
+  { name: "the same scope with a project list the body never recorded", saved: undefined, scope: SAVED_SCOPE, projects: ["atlas"], shown: false },
+];
+for (const { name, saved, scope, projects, shown } of CATALOG_CASES) {
+  test(`a stored catalog waits for the access answer before showing, then ${shown ? "shows" : "never shows"} it under ${name}`, async () => {
+    const store = memoryFilesSnapshotStore({ ...record(), accessScope: SAVED_SCOPE, ...(saved ? { accessProjects: saved } : {}) });
+    setBoardBootAuthorityForTests(null);
+    resetFilesClientCacheForTests(store, true);
+    let answer!: (response: Response) => void;
+    const calls: Call[] = [];
+    globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), headers: { ...(init?.headers as Record<string, string> | undefined) } });
+      return new Promise<Response>((resolve) => { answer = resolve; });
+    }) as unknown as typeof fetch;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host as unknown as Element);
+    flushSync(() => root.render(<Probe />));
+    const probe = () => host.firstElementChild as unknown as HTMLElement;
+    const settle = async () => {
+      for (let index = 0; index < 10; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+      flushSync(() => undefined);
+    };
+    await settle();
+    /* No identity yet: nothing saved is on screen, and the request is out and conditional. */
+    expect(probe().textContent).toBe("empty");
+    expect(probe().getAttribute("data-cached")).toBe("false");
+    expect(calls.length).toBe(1);
+    expect(calls[0]!.headers["If-None-Match"]).toBe(ETAG);
+    flushSync(() => setBoardBootAuthorityForTests({ scope, projects, team: projects !== null }));
+    await settle();
+    if (shown) {
+      expect(probe().textContent).toBe("/sessions/alpha.jsonl,/sessions/beta.jsonl");
+      expect(probe().getAttribute("data-cached")).toBe("true");
+      expect(probe().getAttribute("data-loaded")).toBe("false");
+      answer(notModified());
+    } else {
+      expect(probe().textContent).toBe("empty");
+      expect(probe().getAttribute("data-cached")).toBe("false");
+      const other = { ...BODY, files: [BODY.files[1]] };
+      answer(new Response(JSON.stringify(other), { status: 200, headers: { ETag: '"files-v1-other"' } }));
+    }
+    await settle();
+    expect(probe().getAttribute("data-loaded")).toBe("true");
+    expect(probe().getAttribute("data-cached")).toBe("false");
+    expect(probe().textContent).toBe(shown ? "/sessions/alpha.jsonl,/sessions/beta.jsonl" : "/sessions/beta.jsonl");
+    flushSync(() => root.unmount());
+  });
+}
+
 test("what a document certified is stored for the next one, and an unchanged answer is not rewritten", async () => {
   const store = memoryFilesSnapshotStore();
   resetFilesClientCacheForTests(store);
@@ -389,6 +479,21 @@ test("what a document certified is stored for the next one, and an unchanged ans
   flushSync(() => root.unmount());
 });
 
+test("a catalog saved under a confirmed identity records the project list it was saved under", async () => {
+  const store = memoryFilesSnapshotStore();
+  resetFilesClientCacheForTests(store, true);
+  setBoardBootAuthorityForTests({ scope: SAVED_SCOPE, projects: ["atlas", "mesh"], team: true });
+  globalThis.fetch = mock(async () => new Response(JSON.stringify(BODY), { status: 200, headers: { ETag: ETAG } })) as unknown as typeof fetch;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host as unknown as Element);
+  flushSync(() => root.render(<Probe />));
+  for (let index = 0; index < 10; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  persistFilesSnapshotForTests();
+  expect(store.current()?.accessScope).toBe(SAVED_SCOPE);
+  expect(store.current()?.accessProjects).toEqual(["atlas", "mesh"]);
+  flushSync(() => root.unmount());
+});
 
 test("a visible board heartbeats through files HEAD even with live streaming, and stops on hiding or closing", async () => {
   runtimeEnabled = true;

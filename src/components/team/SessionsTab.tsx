@@ -1,5 +1,7 @@
 "use client";
 
+import { clearBoardBootOnSignOut } from "@/lib/client/boardBootAuthority";
+
 import { Monitor, Smartphone, Tablet } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -61,7 +63,7 @@ export function SessionsTab({ view }: { view: TeamView }) {
     setEnding(null);
   };
   const signOut = (session: SessionRow) => session.current
-    ? end("current", () => teamRequest("/api/team/session/sign-out", { body: {} }), () => { window.location.replace("/sign-in"); })
+    ? end("current", () => teamRequest("/api/team/session/sign-out", { body: {} }), async () => { await clearBoardBootOnSignOut(); window.location.replace("/sign-in"); })
     : end(session.id, () => teamRequest("/api/team/sessions", { method: "DELETE", body: { id: session.id } }), () => {});
   const signOutElsewhere = () => end("others", () => teamRequest("/api/team/sessions", { method: "DELETE", body: { all: true } }), () => {});
 

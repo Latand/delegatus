@@ -1,5 +1,7 @@
 "use client";
 
+import { clearBoardBootOnSignOut } from "@/lib/client/boardBootAuthority";
+
 import { ArrowLeft, LogOut } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -40,6 +42,7 @@ export function TeamPage({ initialTab, initialCreate = false }: { initialTab: Te
 
   const signOut = useCallback(async () => {
     await teamRequest("/api/team/session/sign-out", { body: {} });
+    await clearBoardBootOnSignOut();
     window.location.replace("/sign-in");
   }, []);
 

@@ -4,6 +4,7 @@ import { useCallback, useMemo, type ReactNode } from "react";
 
 import { useNowSeconds, BOARD_CLOCK_MS } from "@/hooks/useNowSeconds";
 import { isOpaqueProjectKey, projectTitle } from "@/lib/displayNames";
+import { rememberedNamesAllowed, useBoardBootAuthorityValue } from "@/lib/client/boardBootAuthority";
 import { cachedProjectName } from "@/lib/client/projectNameCache";
 import { useLocale } from "@/lib/i18n";
 import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
@@ -136,11 +137,12 @@ export function OverviewKanban({ projects, displayNames, files, tasks, flows, pi
      map, else the one this browser last saw, else a readable key. The map
      falls back to the key itself for a project nobody named, and an opaque
      key is not a name. */
+  const bootAuthority = useBoardBootAuthorityValue();
   const projectLabel = useCallback((project: string) => {
     const named = displayNames[project]?.trim();
     const live = named && named !== project && !isOpaqueProjectKey(named) ? named : undefined;
-    return projectTitle(project, live, cachedProjectName(project));
-  }, [displayNames]);
+    return projectTitle(project, live, rememberedNamesAllowed(bootAuthority) ? cachedProjectName(project) : undefined);
+  }, [displayNames, bootAuthority]);
   /* An empty column says what the Overview's narrowing left out of it; the
      whole board empty says nothing works anywhere. */
   const emptyCopy = useCallback((status: TaskStatus, elsewhere: boolean) => ({

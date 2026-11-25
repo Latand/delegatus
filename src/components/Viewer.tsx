@@ -18,6 +18,7 @@ import { WorkLinksProvider } from "@/components/workLinks/workLinksContext";
 import { useFiles } from "@/hooks/useFiles";
 import { ServerReachProvider, useDerivedServerReach } from "@/hooks/serverReach";
 import { publishConversationAvailability } from "@/lib/mcp/availability";
+import { rememberedNamesAllowed, useBoardBootAuthority, useBoardBootAuthorityValue } from "@/lib/client/boardBootAuthority";
 import { useBoardState } from "@/hooks/useBoardState";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useViewPresence } from "@/hooks/useViewPresence";
@@ -253,11 +254,18 @@ function writePanelPref(key: string, value: string): void {
 }
 
 export function Viewer() {
-  return useMounted() ? <ViewerApp /> : <BootShell />;
+  /* The app's own reads authorize themselves and start at once. The access
+     check only decides which saved data this document may show, and ends the
+     document when the server refuses or changes the identity. */
+  const { ended } = useBoardBootAuthority();
+  const mounted = useMounted();
+  return mounted && !ended ? <ViewerApp /> : <BootShell />;
 }
 
 function ViewerApp() {
   const { t, locale } = useLocale();
+  /* Saved project names are shown only after the server names this identity. */
+  const bootAuthority = useBoardBootAuthorityValue();
   /* There is no operator credential to claim: same-origin IS the operator (see
      `operatorAuthority`), and no key, secret, cookie or paste exists anywhere in
      this app. This only erases what earlier rounds left on disk — a stored bearer,
@@ -457,8 +465,8 @@ function ViewerApp() {
   /* Every certified answer refreshes the names this browser remembers, so
      the next cold start names the project before its first answer (#2071). */
   useEffect(() => {
-    if (loaded) rememberProjectNames(polledProjectDisplayNames);
-  }, [loaded, polledProjectDisplayNames]);
+    if (loaded && rememberedNamesAllowed(bootAuthority)) rememberProjectNames(polledProjectDisplayNames);
+  }, [loaded, bootAuthority, polledProjectDisplayNames]);
   useEffect(() => {
     publishConversationAvailability(new Set(allFiles.flatMap((file) => file.conversationId ? [file.conversationId] : [])));
   }, [allFiles]);
@@ -1888,7 +1896,7 @@ function ViewerApp() {
       {!isMobile && orchestratorOpen && !kanbanFace && project !== OVERVIEW && !relayIdOfChatsProject(project) ? (
         <OrchestratorDock
           project={project}
-          projectName={projectTitle(project, projectDisplayNames[project], cachedProjectName(project)) ?? (loaded ? t("dash.projectUnnamed") : "…")}
+          projectName={projectTitle(project, projectDisplayNames[project], rememberedNamesAllowed(bootAuthority) ? cachedProjectName(project) : undefined) ?? (loaded ? t("dash.projectUnnamed") : "…")}
           projectCwd={projectCwds[project]}
           files={files}
           onClose={toggleOrchestrator}
@@ -2004,6 +2012,7 @@ function ViewerApp() {
             project={dashboardProject}
             loaded={loaded}
             cached={cached}
+            catalogConfirmed={loaded && scopeCertified && !cached}
             catalogFailures={catalogFailures}
             openNonce={openNonce}
             focusRequest={focusRequest?.catalog && catalogPin?.path !== focusRequest.path ? null : focusRequest}
