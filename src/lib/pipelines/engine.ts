@@ -512,7 +512,7 @@ export interface PipelinePorts {
   publicationRepairProducerState?(conversationId: string): Promise<"active" | "idle" | "gone" | "blocked" | "unknown">;
   /** Whether a delivery for this conversation is still waiting to land. A
       continuation is never added on top of one (#1747). */
-  conversationDeliveryOutstanding?(conversationId: string): boolean;
+  conversationDeliveryOutstanding?(conversationId: string, exceptClientMessageId?: string): boolean;
   /** Settles the repair's own send by its durable key, never by conversation activity. */
   stageRepairDelivery?(conversationId: string, clientMessageId: string, deadline: number): Promise<import("./types").PipelineRepairDelivery>;
   /** Whether the transcript artifact a launch receipt named exists. A delivery
@@ -2785,8 +2785,8 @@ export function defaultPipelinePorts(
         return null;
       }
     },
-    conversationDeliveryOutstanding: (conversationId) =>
-      outstandingDeliverySince(currentSnapshot(), conversationId) !== null,
+    conversationDeliveryOutstanding: (conversationId, exceptClientMessageId) =>
+      outstandingDeliverySince(currentSnapshot(), conversationId, exceptClientMessageId) !== null,
     stageRepairDelivery: async (conversationId, clientMessageId, deadline) => {
       try { return await stageRepairDelivery(registry, conversationId, clientMessageId, deadline, { client: runtimeHostClient() }); }
       finally { invalidateRegistryProjection(); }
@@ -7884,12 +7884,26 @@ async function continueRestoredClaudeStage(
       || Boolean(priorBackgroundWait && host?.state !== "gone" && interrupted !== "dead");
     if (holdsBackground && await holdForBackgroundTasks(pipeline, attempt, durable, ports, persist, now) !== "none") return true;
   }
+  const reportedBackgroundOwed = durable?.backgroundReportedAt !== null && durable?.backgroundReportedAt !== undefined
+    && (durable.lastAgentEventAt ?? 0) <= durable.backgroundReportedAt
+    && (Boolean(priorBackgroundWait) || durable.backgroundReportedAt > unixMs(recovery.deadline));
+  if (reportedBackgroundOwed) {
+    // Verified completion gives the same continuation key a bounded handoff
+    // window measured from the task notification.
+    const handoffDeadline = durable!.backgroundReportedAt! + RESTORE_CONTINUATION_WAIT_MS;
+    if (handoffDeadline > unixMs(recovery.deadline)) {
+      recovery.deadline = new Date(handoffDeadline).toISOString();
+      await persist();
+      if (!current()) return true;
+    }
+  }
   if (priorBackgroundWait) {
     // Give the same delivery key time to reach the engine once the wait ends,
     // whether the send is still owed or was already admitted.
     delete attempt.backgroundWait;
     if (pipeline.stateDetail?.startsWith(BACKGROUND_TASK_WAIT_DETAIL_PREFIX)) pipeline.stateDetail = null;
-    recovery.deadline = new Date(Math.max(unixMs(recovery.deadline), unixMs(ports.now()) + RESTORE_CONTINUATION_WAIT_MS)).toISOString();
+    const handoffBase = reportedBackgroundOwed ? durable!.backgroundReportedAt! : unixMs(ports.now());
+    recovery.deadline = new Date(Math.max(unixMs(recovery.deadline), handoffBase + RESTORE_CONTINUATION_WAIT_MS)).toISOString();
     await persist();
     if (!current()) return true;
   }
@@ -7930,7 +7944,7 @@ async function continueRestoredClaudeStage(
     if (!current() || await operatorStopped()) return false;
     return current() && !restartCutHoldsStageRecovery(attempt, ports)
       && !deployCutHoldsAttempt(deployCutOf(attempt, ports), ports)
-      && !ports.conversationDeliveryOutstanding?.(conversationId)
+      && !ports.conversationDeliveryOutstanding?.(conversationId, recovery.clientMessageId)
       && (latestActive !== true || !!latestInterrupted)
       && (latest.turn !== "busy" || (latest.lastAgentOutputAt ?? 0) <= unixMs(recovery.cutAt) || idleTurnSilent(latest, ports))
       && (!latest.snapshot || stageTurnEvidenceCurrent(latest) === true)
@@ -8229,18 +8243,27 @@ async function holdForBackgroundTasks(
   /* A read that could not see the work cannot say it ended: a wait already
      under way holds, to its own bound, until a read can. */
   if (!durable?.backgroundTasks) {
-    return attempt.backgroundWait && unixMs(now) < unixMs(attempt.backgroundWait.until) ? "waiting" : "none";
+    const wait = attempt.backgroundWait;
+    if (!wait) return "none";
+    // An unreadable sample cannot reset or release an established wait. At
+    // its original bound, park with that evidence still attached; only a
+    // verified completion or confirmed host death can hand it off.
+    if (unixMs(now) >= unixMs(wait.until)) {
+      await park(pipeline, "background work could not be verified at its persisted park-at time" + BACKGROUND_REPORT_AFTER_PARK, attempt);
+      await persist();
+      return "parked";
+    }
+    return "waiting";
   }
   const live = liveBackgroundTasks(durable.backgroundTasks ?? [], unixMs(now));
   if (live.length === 0) {
     if (durable.backgroundReportedAt && (durable.lastAgentEventAt ?? 0) <= durable.backgroundReportedAt) {
-      const detail = "waiting: background work has ended; waiting for the agent's next turn and stage_report";
-      if (attempt.backgroundWait || pipeline.stateDetail !== detail) {
+      if (attempt.backgroundWait || pipeline.stateDetail?.startsWith(BACKGROUND_TASK_WAIT_DETAIL_PREFIX)) {
         delete attempt.backgroundWait;
-        pipeline.stateDetail = detail;
+        pipeline.stateDetail = null;
         await persist();
       }
-      return "waiting";
+      return "none";
     }
     if (attempt.backgroundWait) {
       delete attempt.backgroundWait;

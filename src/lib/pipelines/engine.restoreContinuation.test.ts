@@ -279,7 +279,7 @@ test.each(["text", "tool_use", "thinking", "prompt", "pipeline prompt"] as const
   } finally { await r.f.end(); }
 });
 
-test.each(["deliver", "operator input", "unknown input", "queued operator input", "queued unknown input", "queued agent input", "task attachment", "operator stop", "report", "control", "identity", "lost ACK"] as const)
+test.each(["deliver", "background reservation", "operator input", "unknown input", "queued operator input", "queued unknown input", "queued agent input", "task attachment", "operator stop", "report", "control", "identity", "lost ACK"] as const)
 ("restore continuation uses durable structured admission: %s", async scenario => {
   const r = await restoredStage();
   const { RuntimeJournal } = await import("@/runtime-host/journal");
@@ -295,6 +295,15 @@ test.each(["deliver", "operator input", "unknown input", "queued operator input"
     writerClaim: "fixture:1", capabilities: { steer: false, structuredAttention: true },
   } });
   publish();
+  if (scenario === "background reservation") {
+    declareBackgroundCommand(r);
+    r.ports.conversationHostProcess = async () => ({ state: "alive", pid: r.f.hostPid });
+    r.ports.conversationDeliveryOutstanding = (conversationId, exceptClientMessageId) =>
+      r.f.registry.pendingDeliveries(conversationId as `conversation_${string}`).some(delivery =>
+        delivery.state === "held" || delivery.state === "assigned" || delivery.state === "delivery-uncertain"
+          ? delivery.clientMessageId !== exceptClientMessageId
+          : false);
+  }
   const client = {
     readSession: async () => {
       if (!changed) {
@@ -358,8 +367,14 @@ test.each(["deliver", "operator input", "unknown input", "queued operator input"
   };
   try {
     await tickPipelines([], r.ports);
+    if (scenario === "background reservation") {
+      expect(commands).toBe(0);
+      r.advance(WAIT + 1000);
+      finishBackgroundCommand(r);
+      await tickPipelines([], r.ports);
+    }
     if (scenario === "lost ACK") await tickPipelines([], r.ports);
-    const allowed = ["deliver", "lost ACK", "queued agent input", "task attachment"].includes(scenario);
+    const allowed = ["deliver", "background reservation", "lost ACK", "queued agent input", "task attachment"].includes(scenario);
     expect(changed).toBe(true);
     expect({ commands, deliveries }).toEqual({ commands: scenario === "lost ACK" ? 2 : allowed ? 1 : 0, deliveries: allowed ? 1 : 0 });
     if (scenario === "lost ACK") expect(commandInputs[1]).toEqual(commandInputs[0]);
@@ -502,6 +517,55 @@ test("a live background wait still parks at its persisted silence bound", async 
     expect(result).toMatchObject({ state: "needs_decision", keys: [],
       backgroundWait: { until: r.ports.now() }, recovery: { count: 1 } });
     expect(loadPipelines()[0]!.stateDetail).toContain("background task background-command exceeded 60 min");
+  } finally { await r.f.end(); }
+});
+
+test("a first live observation with the completion notification keeps the queued attempt reportable", async () => {
+  const r = await restoredStage();
+  try {
+    // The first usable read is after the completion notification: no earlier
+    // tick persisted backgroundWait while host liveness was unknown.
+    r.ports.conversationHostProcess = async () => ({ state: "unknown", pid: null });
+    r.setOutstanding(true);
+    r.setCompleted(false);
+    await tickPipelines([], r.ports);
+    r.advance(WAIT + 1000);
+    finishBackgroundCommand(r);
+    r.ports.conversationHostProcess = async () => ({ state: "alive", pid: r.f.hostPid });
+    await tickPipelines([], r.ports);
+    expect(loadPipelines()[0]!.state).toBe("running");
+    expect(r.sends).toHaveLength(0);
+    r.setOutstanding(false);
+    r.setCompleted(true);
+    const report = await engineModule.reportStageCompletion({ verdict: "pass", summary: "Completed after notification" },
+      { kind: "agent", role: "builder", conversationId: r.f.attempt.conversationId! }, r.ports);
+    expect(report).not.toHaveProperty("error");
+    r.advance(1000);
+    r.records.push({ type: "assistant", timestamp: r.ports.now(), message: { role: "assistant", model: "claude-test",
+      stop_reason: "end_turn", content: [{ type: "text", text: "Completed after notification." }] } });
+    r.write();
+    await tickPipelines([], r.ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+  } finally { await r.f.end(); }
+});
+
+test("an unreadable transcript at the wait bound preserves the original expiry", async () => {
+  const r = await restoredStage();
+  try {
+    r.ports.conversationHostProcess = async () => ({ state: "alive", pid: r.f.hostPid });
+    declareBackgroundCommand(r);
+    await tickPipelines([], r.ports);
+    const original = loadPipelines()[0]!.runs[0]!.attempts[0]!.backgroundWait!;
+    r.advance(BACKGROUND_TASK_WAIT_CEILING_MS);
+    r.ports.durableTurnEvidence = async () => null;
+    await tickPipelines([], r.ports);
+    expect(loadPipelines()[0]!.state).toBe("needs_decision");
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.backgroundWait).toEqual(original);
+    r.advance(1000);
+    r.ports.durableTurnEvidence = durableStageTurnEvidence;
+    await tickPipelines([], r.ports);
+    expect(loadPipelines()[0]!.state).toBe("needs_decision");
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.backgroundWait?.until).toBe(original.until);
   } finally { await r.f.end(); }
 });
 
