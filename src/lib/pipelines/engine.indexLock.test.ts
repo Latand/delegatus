@@ -95,33 +95,47 @@ linuxTest("settlement names a live non-Git descriptor holder and preserves the l
   }
 });
 
-linuxTest("refuses a live Git command whose explicit Git directory is the lane", async () => {
+linuxTest.each(["--git-dir", "worktree cwd"] as const)("refuses a live Git command targeting the lane (%s)", async target => {
   const box = await realWorktreeLane("git-owner", stages);
   let child: ReturnType<typeof spawn> | undefined;
-  let restoreCwdEvidence: (() => void) | undefined;
   try {
     const lane = loadPipelines().find(row => row.id === box.id)!;
     const admin = await box.git(box.worktree, "rev-parse", "--absolute-git-dir");
     const lock = path.join(admin, "index.lock");
     fs.writeFileSync(lock, "", { flag: "wx" });
-    child = spawn("git", ["--git-dir", admin, "hash-object", "--stdin"], { cwd: box.repo, stdio: "pipe" });
+    child = target === "--git-dir"
+      ? spawn("git", ["--git-dir", admin, "hash-object", "--stdin"], { cwd: box.repo, stdio: "pipe" })
+      : spawn("git", ["hash-object", "--stdin"], { cwd: box.worktree, stdio: "pipe" });
     await once(child, "spawn", { signal: AbortSignal.timeout(5_000) });
     fixturePids.add(child.pid!);
-    const readlink = fs.promises.readlink;
-    const hiddenCwd = spyOn(fs.promises, "readlink").mockImplementation(((...args: unknown[]) => {
-      if (args[0] === `/proc/${child!.pid}/cwd`) {
-        return Promise.reject(Object.assign(new Error("fixture cwd unavailable"), { code: "EACCES" }));
-      }
-      return Reflect.apply(readlink, fs.promises, args);
-    }) as typeof fs.promises.readlink);
-    restoreCwdEvidence = () => hiddenCwd.mockRestore();
     const result = await recoverLaneIndexLock(lane, box.worktree, realExec, "merge");
-    expect(result).toMatchObject({ error: expect.stringContaining(`open-file or Git evidence for PID ${child.pid} (git) is unavailable`) });
+    expect(result).toMatchObject({ error: expect.stringContaining(`PID ${child.pid} (git) is running Git against this checkout`) });
     expect(fs.existsSync(lock)).toBe(true);
     expect(fs.existsSync(journalPath(box.id))).toBe(false);
   } finally {
-    restoreCwdEvidence?.();
     if (child) await stopFixtureProcess(child);
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+});
+
+linuxTest("reports the bounded cause when procfs inspection fails", async () => {
+  const box = await realWorktreeLane("procfs-cause", stages);
+  let restore: (() => void) | undefined;
+  try {
+    const lane = loadPipelines().find(row => row.id === box.id)!;
+    const lock = path.join(await box.git(box.worktree, "rev-parse", "--absolute-git-dir"), "index.lock");
+    fs.writeFileSync(lock, "", { flag: "wx" });
+    const readFile = fs.promises.readFile;
+    const mocked = spyOn(fs.promises, "readFile").mockImplementation(((...args: unknown[]) => {
+      if (args[0] === "/proc/self/mountinfo") return Promise.reject(new Error("procfs evidence unavailable"));
+      return Reflect.apply(readFile, fs.promises, args);
+    }) as typeof fs.promises.readFile);
+    restore = () => mocked.mockRestore();
+    const result = await recoverLaneIndexLock(lane, box.worktree, realExec, "reset");
+    expect(result).toEqual({ error: "index.lock recovery could not verify or record the lock state: procfs evidence unavailable" });
+    expect(fs.existsSync(lock)).toBe(true);
+  } finally {
+    restore?.();
     fs.rmSync(box.root, { recursive: true, force: true });
   }
 });

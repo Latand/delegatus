@@ -6397,17 +6397,44 @@ async function settlePublicationRepairWithCustody(
     };
     guarded.revalidateIndexLockRecovery = async () => (await ports.exec.revalidateIndexLockRecovery?.()) !== false
       && (!deadProducer || producerGone(await readRepairProducerEvidence(pipeline, stage, attempt, ports, true)));
+    const priorIndexLockWait = attempt.publicationRepairIndexLockWait;
+    if (priorIndexLockWait && unixMs(priorIndexLockWait.retryAt) > unixMs(ports.now())) {
+      ports.scheduleTick?.(Math.min(30_000, unixMs(priorIndexLockWait.retryAt) - unixMs(ports.now())));
+      return false;
+    }
     const deferIndexLock = async (detail: string) => {
-      if (attempt.error !== detail || pipeline.stateDetail !== detail) {
-        attempt.error = detail;
-        pipeline.stateDetail = detail;
+      const wait = attempt.publicationRepairIndexLockWait;
+      const failures = (wait?.failures ?? 0) + 1;
+      const delay = [60_000, 5 * 60_000, 15 * 60_000][failures - 1];
+      if (delay === undefined) {
+        const parked = `Publication repair stopped after ${wait?.failures ?? failures - 1} index.lock recovery retries: ${detail}`;
+        attempt.publicationRepairIndexLockWait = { retryAt: ports.now(), failures, detail };
+        attempt.error = parked;
+        pipeline.stateDetail = parked;
         await persist();
+        await park(pipeline, parked, attempt);
+        return false;
       }
-      ports.scheduleTick?.(30_000);
+      const retryAt = new Date(unixMs(ports.now()) + delay).toISOString();
+      attempt.publicationRepairIndexLockWait = { retryAt, failures, detail };
+      if (attempt.error !== detail || pipeline.stateDetail !== detail) {
+        attempt.error = `${detail}; publication repair retry ${failures}/3 at ${retryAt}`;
+      }
+      pipeline.stateDetail = attempt.error;
+      await persist();
+      ports.scheduleTick?.(Math.min(30_000, delay));
       return false;
     };
     const indexRecovery = await recoverLaneIndexLock(pipeline, pipeline.worktreeDir, guarded, "publication repair");
     if ("error" in indexRecovery) return deferIndexLock(indexRecovery.error);
+    if (attempt.publicationRepairIndexLockWait) {
+      delete attempt.publicationRepairIndexLockWait;
+      if (attempt.error?.includes("publication repair retry ")) {
+        if (pipeline.stateDetail === attempt.error) pipeline.stateDetail = null;
+        attempt.error = null;
+      }
+      await persist();
+    }
     const exec = withLaneIndexLockRecovery(pipeline, guarded);
     const branch = await exec("git", ["branch", "--show-current"], pipeline.worktreeDir);
     const deliveryBranch = pipeline.delivery!.target.branch.replace(/^refs\/heads\//, "");

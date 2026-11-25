@@ -276,8 +276,12 @@ export async function recoverLaneIndexLock(lane: Lane, cwd: string, exec: ExecPo
     } finally { fs.closeSync(dirFd); }
     const late = await performanceSpans.wait("proc.scan", () => indexLockHolder(index, gitDir, worktree, signal));
     return { error: `index.lock recovery blocked: ${late.holder ?? "an exclusive kernel lease on the lock inode is unavailable"}` };
-  } catch {
-    return { error: "index.lock recovery could not verify or record the lock state" };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const safeReason = reason.replace(/[\x00-\x1f\x7f]/g, " ").replace(/\s+/g, " ")
+      .replace(/(?:\/[A-Za-z0-9._-]+){2,}/g, "<path>").replace(/\\(?:[^\\\s:]+\\)+[^\\\s:]*/g, "<path>")
+      .trim().slice(0, 240);
+    return { error: `index.lock recovery could not verify or record the lock state${safeReason ? `: ${safeReason}` : ""}` };
   }
 }
 

@@ -697,6 +697,8 @@ export type PipelineStageAttempt = {
   backgroundWait?: BackgroundWait;
   /** A controller commit interruption keeps the passed attempt retrying itself. */
   stageCommitWait?: { retryAt: string; detail: string; failures: number };
+  /** Publication repair index-lock refusals retry on a bounded durable schedule. */
+  publicationRepairIndexLockWait?: { retryAt: string; failures: number; detail: string };
   /** A settled stage reported index.lock EEXIST. The proof survives unlink and restart. */
   indexLockRecoveryPending?: { verdict: StageVerdict; proved?: true };
   /** This attempt used the one automatic continuation after index lock recovery. */

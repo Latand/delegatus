@@ -1,3 +1,4 @@
+import { setDefaultTimeout } from "bun:test";
 import { expect, test, fs, os, path, tickPipelines, savePipelines, rawPatchPipeline } from "./engine.fixture";
 import { current, fixture, isolatePublicationGit } from "./publicationRecovery.fixture";
 import { realExec } from "@/lib/workflows/provision";
@@ -9,6 +10,7 @@ import { once } from "node:events";
 import { defaultPipelinePorts, settlePendingStageGit } from "./engine";
 
 isolatePublicationGit();
+setDefaultTimeout(20_000);
 
 test.each(["clean", "staged", "staged-unstaged", "saved-intent"] as const)(
   "a dead repair retains accepted history after rollback (%s)", async shape => {
@@ -461,11 +463,11 @@ test.each(["staged", "staged-unstaged"] as const)("dead repair custody refuses a
 });
 
 
-test.each(["unchanged", "foreign", "legacy-foreign", "changed-index", "reset-index", "raced-index", "raced-worktree", "index-lock", "after-commit", "after-commit-foreign"] as const)(
+test.each(["unchanged", "foreign", "legacy-foreign", "changed-index", "reset-index", "raced-index", "raced-worktree", "index-lock", "index-lock-persistent", "after-commit", "after-commit-foreign"] as const)(
   "repair custody replay preserves exact ownership (%s)", async shape => {
     const f = await fixture();
     try {
-      const clock = f.h.ports.now(); f.h.ports.now = () => clock;
+      let clock = f.h.ports.now(); f.h.ports.now = () => clock;
       f.h.ports.resumeSeveredTurn = async () => true;
       const accepted = await f.commit("implementation"); f.refuse(); await f.finish();
       const original = structuredClone(current().runs[0]!.attempts[0]!);
@@ -504,22 +506,38 @@ test.each(["unchanged", "foreign", "legacy-foreign", "changed-index", "reset-ind
         fs.writeFileSync(path.join(f.lane(), "file.txt"), "later staged work\n");
         await f.agentGit(f.lane(), "add", "file.txt");
       }
-      if (shape === "index-lock") {
+      if (shape.startsWith("index-lock")) {
         const lock = `${await f.git(f.lane(), "rev-parse", "--path-format=absolute", "--git-path", "index")}.lock`;
         const holder = fs.openSync(lock, "wx");
         try {
           fs.writeFileSync(holder, "held\n");
-          const refused = await repairController(f, null);
-          expect(refused.code, refused.stderr).toBe(0);
-          expect(current().state).toBe("running");
-          expect(current().lastPassedCommit).toBe(accepted);
-          expect(fs.readFileSync(lock, "utf8")).toBe("held\n");
+          const attempts = shape === "index-lock-persistent" ? 4 : 1;
+          for (let index = 0; index < attempts; index++) {
+            const refused = await repairController(f, null);
+            expect(refused.code, refused.stderr).toBe(0);
+            const currentAttempt = current().runs[0]!.attempts[0]!;
+            if (index < 3) {
+              expect(current().state).toBe("running");
+              expect(currentAttempt.publicationRepairIndexLockWait?.failures).toBe(index + 1);
+              clock = currentAttempt.publicationRepairIndexLockWait!.retryAt;
+              f.h.advanceWallClock(Date.parse(clock) - Date.parse(f.h.ports.now()));
+            } else {
+              expect(current().state).toBe("needs_decision");
+              expect(current().stateDetail).toContain(`PID ${process.pid}`);
+            }
+            expect(current().lastPassedCommit).toBe(accepted);
+            expect(fs.readFileSync(lock, "utf8")).toBe("held\n");
+          }
         } finally { fs.closeSync(holder); }
-        fs.unlinkSync(lock);
-        expect(await f.git(f.lane(), "write-tree")).toBe(tree);
-        // The unchanged custody intent recovers after the external lock is
-        // released, without a manual retry or a replacement producer turn.
+        if (shape === "index-lock") {
+          fs.unlinkSync(lock);
+          clock = current().runs[0]!.attempts[0]!.publicationRepairIndexLockWait!.retryAt;
+          f.h.advanceWallClock(Date.parse(clock) - Date.parse(f.h.ports.now()));
+          expect(await f.git(f.lane(), "write-tree")).toBe(tree);
+          // The unchanged custody intent recovers after the external lock is released.
+        }
       }
+      if (shape === "index-lock-persistent") return;
       const resumed = await repairController(f, null, shape === "raced-index" ? "index" : shape === "raced-worktree" ? "worktree" : undefined);
       expect(resumed.code, resumed.stderr).toBe(0);
       const result = current();
