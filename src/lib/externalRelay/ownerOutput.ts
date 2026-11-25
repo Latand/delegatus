@@ -1,15 +1,18 @@
 import { hardenedRedact } from "@/lib/view/compactText";
-import { redactArchive } from "@/lib/reviewHistory/redaction";
+import { redactStructuredText } from "@/lib/reviewHistory/redaction";
+import { redactMonitorText } from "@/lib/monitor/redact";
 import { decodeSensitiveText } from "@/lib/privacy/canonicalText";
 import { knownProviderSecretOffset } from "@/lib/accounts/providerSecretRedaction";
 import { currentOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
 import { existingInternalServiceHeaders, INTERNAL_SERVICES } from "@/lib/agent/callerClaims";
 import { readRelayStore } from "./store";
+import { relayPlainText } from "./answerText";
+import { redactOwnerUrls } from "./ownerUrl";
 import { viewerBootGateKey } from "../../../bin/viewerGateKey.mjs";
 
 /** Structured replies cross the same egress boundary as transcript answers.
  * Tool arguments are inputs to the existing service-tool admission boundary. */
-export function scrubOwnerReply(value: unknown, credentials: readonly string[] = []): unknown {
+export function scrubOwnerReply(value: unknown, credentials: readonly string[] = [], plain = false): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const raw = value as Record<string, unknown>;
   if (raw.action === "call") return value;
@@ -17,6 +20,9 @@ export function scrubOwnerReply(value: unknown, credentials: readonly string[] =
     : Array.isArray(part) ? part.map(scrub)
       : part && typeof part === "object" ? Object.fromEntries(Object.entries(part).map(([key, item]) => [key, scrub(item)])) : part;
   const clean = scrub(raw) as Record<string, unknown>;
+  if (plain && raw.action === "reply" && typeof clean.text === "string") {
+    clean.text = relayPlainText(clean.text, text => scrubOwnerOutput(text, credentials));
+  }
   // Offsets refer to the original text. Never retarget a mention after a scrub.
   if (clean.text !== raw.text) clean.mentions = [];
   return clean;
@@ -59,14 +65,15 @@ export function scrubOwnerOutput(text: string, credentials: readonly string[] = 
     // End in a lowercase letter, like each root, to retain camelCase boundaries.
     return `${marker}${prefixes.push(prefix) - 1}${marker}x`;
   });
-  clean = redactArchive(clean) as string;
+  clean = redactStructuredText(clean, prose => redactMonitorText(redactOwnerUrls(prose)));
   clean = clean.replace(new RegExp(`${marker}(\\d+)${marker}x`, "g"), (_match, index: string) => prefixes[Number(index)]!);
   clean = scrubOwnerText(clean);
   // Inspect the shared decoded view without rewriting the answer's formatting.
   // Apply every egress rule, including retained provider fingerprints, to that
   // view. A recoverable secret or undecidable encoding withholds the output.
   const decodedOutput = decodeSensitiveText(clean, false, undefined, true);
-  if (decodedOutput.error || scrubOwnerText(decodedOutput.text) !== decodedOutput.text) return "[redacted]";
+  if (decodedOutput.error || scrubOwnerText(decodedOutput.text) !== decodedOutput.text
+    || redactOwnerUrls(decodedOutput.text) !== decodedOutput.text) return "[redacted]";
   return clean;
 }
 
