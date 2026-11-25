@@ -9,6 +9,7 @@ import { RoleMemoryChanged, withCurrentRoleMemory, withoutStoredLessonsAsync } f
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import { prepareControllerArtifactDirectory, protectExistingControllerArtifacts } from "./controllerArtifacts";
+import { withLaneIndexLockRecovery } from "./indexLock";
 import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
 import { isStagePromptContext, renderStagePrompt, type StagePromptContext } from "./prompts";
 import { loadTasksByIds } from "@/lib/tasks/store";
@@ -90,6 +91,7 @@ async function composeCurrentStageInput(
     if (storedLessonRevision() !== revision) throw new RoleMemoryChanged();
   };
   const limit = MAX_STRUCTURED_TEXT_BYTES - reserveBytes;
+  const prepareIndex = withLaneIndexLockRecovery(pipeline, exec);
   const workerLimit = effectiveWorkerLimit(pipeline.project).value;
   const testGuidance = resolveStageTestGuidance();
   await validateStageContext(context, worktreeDir || pipeline.repoDir);
@@ -99,12 +101,12 @@ async function composeCurrentStageInput(
   let inline: string | undefined;
   if (fits(scrubStageText(full))) inline = await filter(full);
   if (inline !== undefined && fits(inline)) {
-    await protectExistingControllerArtifacts(worktreeDir, exec);
+    await protectExistingControllerArtifacts(worktreeDir, prepareIndex);
     assertPrivacy();
     return inline;
   }
 
-  const directory = await prepareControllerArtifactDirectory(worktreeDir, exec);
+  const directory = await prepareControllerArtifactDirectory(worktreeDir, prepareIndex);
 
   const artifacts: Array<{ label: string; file: string; text: string }> = [];
   const retainArtifact = (label: string, source: string, text: string) => {

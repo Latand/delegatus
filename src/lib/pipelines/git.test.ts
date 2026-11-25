@@ -10,6 +10,7 @@ import { Database } from "bun:sqlite";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
 import { withProvisioningTurn } from "./provisioningTurn";
+import { fixtureIndexLockCensus } from "./indexLock.fixture";
 import { readWorktreeProvenance } from "./worktreeProvenance";
 import { commitPipelineStage, currentPipelineRemoteBranchHead, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
@@ -993,7 +994,8 @@ for (const interruption of ["timeout", "cancellation"] as const) {
       // No Git process is left on the checkout: the retry does what the killed add had left to do.
       (await git(source, "config", "filter.slow.smudge", "cat"));
       (await git(source, "config", "filter.slow.clean", "cat"));
-      const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+      const census = fixtureIndexLockCensus();
+      const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec).finally(() => census.mockRestore());
       expect(retry).toEqual({ ok: true, sha: subject.baseRef, baseBranch: "main" });
       expect(fs.readFileSync(path.join(subject.worktreeDir, "tracked.txt"), "utf8")).toBe("complete file\n");
       expect(fs.readFileSync(path.join(subject.worktreeDir, "keep.txt"), "utf8")).toBe("preserve partial checkout\n");
@@ -1037,7 +1039,8 @@ test("interrupted checkout recovery preserves whitespace paths and symlinks acro
     (await git(source, "config", "filter.slow.smudge", "cat"));
     (await git(source, "config", "filter.slow.clean", "cat"));
 
-    const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+    const census = fixtureIndexLockCensus();
+    const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec).finally(() => census.mockRestore());
 
     expect(retry).toEqual({ ok: true, sha: subject.baseRef, baseBranch: "main" });
     expect(fs.readFileSync(path.join(subject.worktreeDir, "my file.txt"), "utf8")).toBe("space path content\n");

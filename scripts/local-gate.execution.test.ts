@@ -103,7 +103,14 @@ test.skipIf(process.platform !== "linux" || !process.env.LLV_OWNED_TEST_RUN_CGRO
         writeFileSync(${JSON.stringify(record)}, JSON.stringify(captureProcessIdentity(process.pid)));
         expect(1).toBe(${kind === "assertion" ? 2 : 1});
       });
-      test("pending native result", async () => { await new Promise(() => {}); }, 60000);
+      test("pending native result", async () => {
+        ${kind === "pure" ? `
+          const child = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+          child.unref();
+          writeFileSync(${JSON.stringify(record + ".child")}, JSON.stringify(captureProcessIdentity(child.pid)));
+        ` : ""}
+        await new Promise(() => {});
+      }, 60000);
     `}`);
   const error = await runSteps("pre-push", [{ name: "types", command: [] }], {
     root: dir, deadline: soon(20_000), logDir: dir, say: line => lines.push(line),
@@ -116,6 +123,12 @@ test.skipIf(process.platform !== "linux" || !process.env.LLV_OWNED_TEST_RUN_CGRO
   // The real systemd --wait client must finish containment before the hook
   // accepts a retry, including a detached child left by a successful command.
   expect(processIdentityStatus(identity), output).toBe("dead");
+  if (kind === "pure") {
+    expect(existsSync(record + ".child"), output).toBeTrue();
+    const child: ProcessIdentity = JSON.parse(readFileSync(record + ".child", "utf8")); owned.push(child);
+    expect(processIdentityStatus(child), output).toBe("dead");
+    expect(output).not.toContain("surviving owned processes");
+  }
   const ending = endingOf("pre-push", error);
   expect(ending.code, output).toBe(kind === "pure" ? 75 : 1);
   if (kind === "pure") expect(error).toBeInstanceOf(NoVerdict);

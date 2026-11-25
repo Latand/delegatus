@@ -49,6 +49,7 @@ export async function applyCloudPatch(directory: string, patch: Patch, head: str
     assertCurrent();
     const result = await exec("git", args, cwd, undefined, { timeoutMs: 30_000 });
     assertCurrent();
+    if (result.code !== 0 && result.stderr.startsWith("index.lock ")) throw new Error(result.stderr);
     return result;
   };
   const current = await git(["rev-parse", "HEAD"]);

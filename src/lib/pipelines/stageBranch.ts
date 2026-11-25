@@ -5,6 +5,7 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import { settleStageAttemptPush } from "./stageAttemptPush";
 import { performanceSpans } from "@/lib/performanceSpans";
 import type { ExecPort } from "@/lib/workflows/provision";
+import { withLaneIndexLockRecovery } from "./indexLock";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import path from "node:path";
 
@@ -139,6 +140,9 @@ export async function commitAndAdoptStageBranch(
     }
     return execute(command, args, cwd, env, options);
   };
+  exec.revalidateIndexLockRecovery = async () => (await execute.revalidateIndexLockRecovery?.()) !== false
+    && stageBranchOwnershipFence(pipelines(), pipeline.id) === ownership;
+  const updateCheckout = withLaneIndexLockRecovery(pipeline, exec);
   const cwd = pipeline.worktreeDir;
   const branch = (await exec("git", ["branch", "--show-current"], cwd));
   if (branch.code !== 0) return { ok: false, error: `checking the stage branch: ${branch.stderr.trim()}` };
@@ -272,15 +276,15 @@ export async function commitAndAdoptStageBranch(
   for (const ancestor of new Set([pipeline.lastPassedCommit, targetSha])) {
     if ((await exec("git", ["merge-base", "--is-ancestor", ancestor, committed.sha], cwd)).code !== 0) return refused("the adoption would drop an accepted or destination tip");
   }
-  const switched = (await exec("git", ["switch", "--no-overwrite-ignore", destination], cwd));
+  const switched = await updateCheckout("git", ["switch", "--no-overwrite-ignore", destination], cwd);
   if (switched.code !== 0) return refused(`returning to the pipeline branch: ${switched.stderr.trim()}`);
   // Git checks the current destination tip again. A concurrent advance cannot
   // be overwritten, and a branch checked out elsewhere cannot be switched to.
-  const advanced = (await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", committed.sha], cwd));
+  const advanced = await updateCheckout("git", ["merge", "--ff-only", "--no-overwrite-ignore", committed.sha], cwd);
   if (advanced.code !== 0) {
     // Keep retry on the stage's branch. Otherwise the next committing tick
     // could mistake the unchanged destination tip for the stage's work.
-    const restored = (await exec("git", ["switch", "--no-overwrite-ignore", source], cwd));
+    const restored = await updateCheckout("git", ["switch", "--no-overwrite-ignore", source], cwd);
     return refused(`fast-forwarding the pipeline branch: ${advanced.stderr.trim()}${restored.code === 0 ? "" : `; restoring the stage branch: ${restored.stderr.trim()}`}`);
   }
   const finalHead = (await exec("git", ["rev-parse", "HEAD"], cwd));

@@ -7,6 +7,7 @@ import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { rollupChecksWithIdentity } from "@/lib/forge/checkRollup";
 import type { ExecPort } from "@/lib/workflows/provision";
+import { withLaneIndexLockRecovery } from "./indexLock";
 import { DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, verifyPassedHeadIntegration, type PipelineGitResult } from "./git";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
@@ -179,6 +180,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
   const directory = attempt.launchId ? stageGitReceiptDirectory(attempt.launchId) : null;
   const refuse = (detail: string): PipelineGitResult => ({ ok: false, error: `settling the stage push: ${detail}; both tips are preserved` });
   const exec: ExecPort = (command, args, cwd, env, options) => execute(command, args, cwd, pipelineLiteralGitEnv(env), options);
+  exec.revalidateIndexLockRecovery = execute.revalidateIndexLockRecovery;
   try {
     const refusal = await stageAttemptPushRefusal(attempt.launchId);
     if (refusal !== null) return refuse(refusal);
@@ -520,8 +522,8 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     const current = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
     if (current.code !== 0 || current.stdout.trim() !== head) return refuse("the lane head raced the attempt proof");
     if (head !== tip) {
-      const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", tip], pipeline.worktreeDir);
-      if (merged.code !== 0) return refuse("the proved push could not fast-forward the lane");
+      const merged = await withLaneIndexLockRecovery(pipeline, exec)("git", ["merge", "--ff-only", "--no-overwrite-ignore", tip], pipeline.worktreeDir);
+      if (merged.code !== 0) return refuse(`the proved push could not fast-forward the lane${merged.stderr.startsWith("index.lock ") ? `: ${merged.stderr}` : ""}`);
     }
     if (await remoteHead() !== tip
       || (integrationBase && !await integrationOrigin(pipeline, integrationBase, deliveryUrl, exec))) return refuse("the adopted remote moved before acceptance");
