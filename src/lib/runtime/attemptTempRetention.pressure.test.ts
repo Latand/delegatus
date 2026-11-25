@@ -226,7 +226,7 @@ test.each([
       store.measure(directory, 12288);
       const stat = fs.statSync(directory); identities.push(`${stat.dev}:${stat.ino}`);
     }
-    const baseConfig = { now: NOW, freeBytes: 100 * ATTEMPT_TEMP_LOW_SPACE_BYTES };
+    const baseConfig = { pressureInventory: true, now: NOW, freeBytes: 100 * ATTEMPT_TEMP_LOW_SPACE_BYTES };
     fs.writeFileSync(config, JSON.stringify({ ...baseConfig, slowProof: { phase, prefix } }));
     process.env.LLV_TEMP_SWEEP = "on"; process.env.LLV_ATTEMPT_TEMP_CAP_BYTES = "0"; process.env.LLV_PRESSURE_FIXTURE = config;
     let checked = 0, removed = 0, removedBytes = 0, deferred = 0, ticks = 0;
