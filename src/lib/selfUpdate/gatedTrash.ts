@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { performanceSpans } from "@/lib/performanceSpans";
+import { isCleanerAuditBinding, type CleanerAuditBinding } from "@/lib/cleaner/diskJournal";
 
 /** A durable quarantine intent. The tree moves to `trash`, inside `gate`; the
  * pass closes the gate (mode 000) before its final holder scan and owner read,
@@ -24,7 +25,7 @@ export type GatedTrashRow = {
   /** The release's revision and its age when it left its path. */
   context?: { sha: string; age?: number };
   /** Cleaner ownership is durable before the release leaves its path. */
-  cleaner?: { passId: string; proof: string; bytes?: number };
+  cleaner?: CleanerAuditBinding;
 };
 export type GatedTrashOutcome = { removed: true } | { removed: false; reason: string };
 export type GatedTrashOptions = {
@@ -32,6 +33,10 @@ export type GatedTrashOptions = {
   beforeGate?: (trash: string) => Promise<string | null>;
   /** Last owner check after inventory, immediately before deletion starts. */
   beforeRemove?: () => string | null | Promise<string | null>;
+  /** Synchronous recheck immediately before each recursive removal. */
+  dispatchHold?: () => string | null;
+  /** Keep the native intent until its Cleaner audit is durable. */
+  retainJournal?: boolean;
   /** Runs with the gate closed. Throwing restores the tree, then rethrows. */
   observe: (trash: string, gate: string) => Promise<string | null>;
   /** Runs with the gate closed and cwd at the trash: pass "." paths. */
@@ -52,8 +57,7 @@ export const isGatedTrashRow = (row: unknown): row is GatedTrashRow => {
     && typeof value.identity === "string" && Number.isSafeInteger(value.uid)
     && sibling(value.gate, value.directory) && value.trash === path.join(value.gate, path.basename(value.directory))
     && (value.legacyTrash === undefined || typeof value.legacyTrash === "string" && sibling(value.legacyTrash, value.directory))
-    && (value.cleaner === undefined || typeof value.cleaner.passId === "string" && /^[a-f0-9-]{36}$/.test(value.cleaner.passId)
-      && typeof value.cleaner.proof === "string" && (value.cleaner.bytes === undefined || Number.isSafeInteger(value.cleaner.bytes) && value.cleaner.bytes >= 0));
+    && (value.cleaner === undefined || isCleanerAuditBinding(value.cleaner));
 };
 
 /** Journal, then rename the tree out of its path. Null when it is not a plain directory. */
@@ -96,18 +100,18 @@ export function reopenGate(row: GatedTrashRow) {
 /** Conservatively restore a Cleaner quarantine after restart when deletion has
  * not begun. A partial deletion remains quarantined for an explicitly guarded
  * recovery pass instead of being mistaken for a complete release. */
-export function restoreGatedTrash(journal: string, row: GatedTrashRow): boolean {
-  if (row.deleting || fs.lstatSync(row.directory, { throwIfNoEntry: false })) return false;
+export function restoreGatedTrash(journal: string, row: GatedTrashRow, retainJournal = false): boolean {
+  if (row.deleting) return false;
   const gate = fs.lstatSync(row.gate, { throwIfNoEntry: false });
-  const tree = fs.lstatSync(row.trash, { throwIfNoEntry: false });
-  if (!gate || !gate.isDirectory() || gate.isSymbolicLink() || !tree || !tree.isDirectory() || tree.isSymbolicLink()
-    || identityOf(tree) !== row.identity || tree.uid !== row.uid
-    || (process.getuid && (gate.uid !== process.getuid() || tree.uid !== process.getuid()))) return false;
+  if (gate && (!gate.isDirectory() || gate.isSymbolicLink() || process.getuid && gate.uid !== process.getuid())) return false;
+  const tree = fs.lstatSync(row.trash, { throwIfNoEntry: false }), original = fs.lstatSync(row.directory, { throwIfNoEntry: false });
+  const owned = (stat: fs.Stats | undefined) => stat?.isDirectory() && !stat.isSymbolicLink()
+    && identityOf(stat) === row.identity && stat.uid === row.uid && (!process.getuid || stat.uid === process.getuid());
+  if (owned(original) && !tree) { finish(row, journal, retainJournal); return true; }
+  if (!gate || original || !owned(tree)) return false;
   fs.chmodSync(row.gate, 0o700);
   fs.renameSync(row.trash, row.directory);
-  fs.rmdirSync(row.gate);
-  dropInventory(journal);
-  fs.unlinkSync(journal);
+  finish(row, journal, retainJournal);
   return true;
 }
 
@@ -185,13 +189,13 @@ function dropInventory(journal: string) {
   try { fs.unlinkSync(inventoryFile(journal)); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 }
 
-function finish(row: GatedTrashRow, journal: string) {
+function finish(row: GatedTrashRow, journal: string, retainJournal = false) {
   try { fs.rmdirSync(row.gate); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   dropInventory(journal);
-  fs.unlinkSync(journal);
+  if (!retainJournal) fs.unlinkSync(journal);
 }
 
-function restore(row: GatedTrashRow, journal: string) {
+function restore(row: GatedTrashRow, journal: string, retainJournal?: boolean) {
   if (row.legacyTrash && row.legacyRow) {
     fs.renameSync(row.trash, row.legacyTrash);
     fs.rmdirSync(row.gate);
@@ -202,7 +206,7 @@ function restore(row: GatedTrashRow, journal: string) {
   try { fs.lstatSync(row.directory); throw new Error("original path was acquired while trash is held; preserved both paths"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   fs.renameSync(row.trash, row.directory);
-  finish(row, journal);
+  finish(row, journal, retainJournal);
 }
 
 /** Settle a quarantine: restore the tree when anything holds it, else remove
@@ -214,7 +218,11 @@ export async function settleGatedTrash(journal: string, row: GatedTrashRow, opti
   if (!fs.existsSync(row.gate)) {
     // Journaled before the gate was made, or the gate went after a removal or restore.
     if (legacy) fs.mkdirSync(row.gate, { mode: 0o700 });
-    else { fs.unlinkSync(journal); return row.deleting ? { removed: true } : { removed: false, reason: "changed" }; }
+    else {
+      dropInventory(journal);
+      if (!options.retainJournal) fs.unlinkSync(journal);
+      return row.deleting ? { removed: true } : { removed: false, reason: "changed" };
+    }
   }
   const gateStat = fs.lstatSync(row.gate);
   if (!gateStat.isDirectory() || gateStat.isSymbolicLink() || (process.getuid && gateStat.uid !== process.getuid()))
@@ -224,13 +232,13 @@ export async function settleGatedTrash(journal: string, row: GatedTrashRow, opti
   if (!moved && legacy) { fs.renameSync(row.legacyTrash!, row.trash); moved = fs.lstatSync(row.trash); }
   if (!moved) {
     // Interrupted before the rename, or after the last unlink.
-    finish(row, journal);
+    finish(row, journal, options.retainJournal);
     return row.deleting ? { removed: true } : { removed: false, reason: "changed" };
   }
   if (!moved.isDirectory() || moved.isSymbolicLink() || identityOf(moved) !== row.identity || moved.uid !== row.uid)
     return { removed: false, reason: "changed" };
   const keep = (reason: string): GatedTrashOutcome => {
-    if (!row.deleting) restore(row, journal);
+    if (!row.deleting) restore(row, journal, options.retainJournal);
     return { removed: false, reason };
   };
   if (!row.deleting && options.beforeGate) {
@@ -260,6 +268,7 @@ export async function settleGatedTrash(journal: string, row: GatedTrashRow, opti
           else writeJsonDurably(inventoryFile(journal), [...entries], { space: 0 });
         }
         if (!reason && options.beforeRemove) reason = await options.beforeRemove();
+        if (!reason) reason = options.dispatchHold?.() ?? null;
       }
     } catch (error) { failure = error; }
     if (!reason && failure === undefined) {
@@ -267,9 +276,16 @@ export async function settleGatedTrash(journal: string, row: GatedTrashRow, opti
       if (!row.deleting) { row.deleting = true; writeJsonDurably(journal, row); }
       const remove = options.remove ?? removeEntry;
       for (const entry of options.first ?? []) {
-        if (fs.lstatSync(path.dirname(entry), { throwIfNoEntry: false })?.isDirectory() && fs.existsSync(entry)) await remove(entry);
+        if (!fs.lstatSync(path.dirname(entry), { throwIfNoEntry: false })?.isDirectory() || !fs.existsSync(entry)) continue;
+        reason = options.dispatchHold?.() ?? null;
+        if (reason) break;
+        await remove(entry);
       }
-      for (const entry of fs.readdirSync(".").sort()) await remove(entry);
+      if (!reason) for (const entry of fs.readdirSync(".").sort()) {
+        reason = options.dispatchHold?.() ?? null;
+        if (reason) break;
+        await remove(entry);
+      }
     }
   } finally {
     process.chdir(previous);
@@ -280,6 +296,6 @@ export async function settleGatedTrash(journal: string, row: GatedTrashRow, opti
   if (reason) return keep(reason);
   if (!removing) return keep("changed");
   fs.rmdirSync(row.trash);
-  finish(row, journal);
+  finish(row, journal, options.retainJournal);
   return { removed: true };
 }

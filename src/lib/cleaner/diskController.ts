@@ -139,7 +139,7 @@ export async function reconcileAutomaticDiskCleaner(pressure: DiskPressure, port
       };
       if (pass && !pass.finished) pass = await finish(pass, [], 0, true);
       if (pass?.finished && !pass.card && active()) {
-        await recordDiskCleanerReport(pass);
+        pass = await recordDiskCleanerReport(pass);
         if (await ports.card(pass)) {
           pass = { ...pass, card: true };
           writeJsonDurably(file, pass);

@@ -26,7 +26,7 @@ export type DiskCleanerPass = {
 export function readDiskCleanerPass(): DiskCleanerPass | null {
   try {
     const pass = JSON.parse(fs.readFileSync(diskCleanerStateFile(), "utf8")) as DiskCleanerPass;
-    if (/^[a-f0-9-]{36}$/.test(pass.id) && typeof pass.project === "string" && Number.isFinite(pass.startedAt)
+    if (/^[a-f0-9-]{36}$/.test(pass.id) && typeof pass.project === "string" && (pass.mode === "on" || pass.mode === "dry-run") && Number.isFinite(pass.startedAt)
       && Array.isArray(pass.before) && (!pass.finished || Number.isFinite(pass.finished.at))) return pass;
     throw new Error("invalid disk cleaner state");
   } catch (error) {
@@ -35,7 +35,8 @@ export function readDiskCleanerPass(): DiskCleanerPass | null {
   }
 }
 
-export function diskCleanerAllowed(id: string) {
+export function diskCleanerAllowed(id: string, expected?: Pick<DiskCleanerPass, "project" | "mode">) {
   const pass = readDiskCleanerPass();
-  return viewerReleaseOwnsTraffic() && process.env.LLV_CLEANER !== "off" && pass?.id === id && !pass.finished;
+  return viewerReleaseOwnsTraffic() && process.env.LLV_CLEANER !== "off" && pass?.id === id && !pass.finished
+    && (!expected || pass.project === expected.project && pass.mode === expected.mode);
 }

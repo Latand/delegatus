@@ -11,7 +11,9 @@ import { RetentionWorker } from "./retentionWorker";
 import { retentionProcessScan, retentionScanWithObserver, withSelfObservation } from "./retentionInspection";
 import { observePrivilegedReleases, RELEASE_OBSERVER } from "./releaseObserver.worker";
 import { quarantineTree, sealProcessLinks, settleGatedTrash } from "./gatedTrash";
-import { cleanerJournal, createCleanerJournal, cleanerJournalFile } from "@/lib/cleaner/diskJournal";
+import { cleanerJournal, createCleanerJournal, cleanerJournalFile, diskCleanerReportsFile } from "@/lib/cleaner/diskJournal";
+import { diskCleanerSignals, recordDiskCleanerReport } from "@/lib/cleaner/diskReport";
+import { seatTickSignalVersion } from "@/lib/monitor/seatTick";
 import { installStateOwnershipGraph, MODULE_CONSUMER_SOURCE } from "./stateOwnershipGraph.fixture";
 import { buildPipeline, loadPipelinesForList, savePipelines } from "@/lib/pipelines/store";
 
@@ -760,7 +762,7 @@ test("Cleaner leaves an unbound legacy release quarantine to ordinary retention 
   expect(report.removed.some(item => item.dir === h.dirs[1])).toBeFalse();
 }, 30_000);
 
-test("Cleaner resumes its original audit after a crash following the first release unlink", async () => {
+test.each(["clear", "reopened", "dispatch"] as const)("Cleaner checks mounts on partial release replay (%s)", async mount => {
   const h = fixture(20), pass = fixtureCleanerId("88888888", "8888", "4888", "8888", "888888888888");
   const state = path.dirname(h.ports.reportFile!);
   const previousState = process.env.LLV_STATE_DIR;
@@ -786,8 +788,24 @@ test("Cleaner resumes its original audit after a crash following the first relea
     expect(fs.existsSync(journal)).toBeTrue();
     expect(fs.readFileSync(cleanerJournalFile(pass), "utf8").trim().split("\n").map(line => JSON.parse(line).phase)).toEqual(["intent"]);
     h.ports.cleaner = { id: fixtureCleanerId("aaaaaaaa", "aaaa", "4aaa", "8aaa", "aaaaaaaaaaaa"), allowed: () => true, dryRun: false, journal: () => {} };
+    let mountReads = 0, removals = 0;
+    h.ports.mountPoints = directory => directory === row!.trash && ++mountReads >= (mount === "dispatch" ? 2 : 1) && mount !== "clear"
+      ? [path.join(row!.trash, "nested", "mount")] : [];
+    h.ports.removeTree = async entry => {
+      if (process.cwd() === row!.trash) removals++;
+      await fs.promises.rm(entry, { recursive: true, force: true });
+    };
     const report = await h.run();
     expect(report.errors).toEqual([]);
+    if (mount !== "clear") {
+      expect(removals).toBe(0);
+      expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.dirs[1], reason: "mount-boundary" }));
+      expect(fs.existsSync(row!.trash)).toBeTrue();
+      expect(fs.existsSync(journal)).toBeTrue();
+      expect(fs.readFileSync(cleanerJournalFile(pass), "utf8").trim().split("\n")).toHaveLength(1);
+      return;
+    }
+    expect(removals).toBeGreaterThan(0);
     expect(fs.existsSync(journal)).toBeFalse();
     expect(fs.existsSync(h.dirs[1]!)).toBeFalse();
     const outcomes = fs.readFileSync(cleanerJournalFile(pass), "utf8").trim().split("\n").map(line => JSON.parse(line));
@@ -795,6 +813,54 @@ test("Cleaner resumes its original audit after a crash following the first relea
     expect(outcomes[1]).toMatchObject({ bytes: 4096 });
   } finally {
     if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  }
+}, 30_000);
+
+test.each([false, true])("terminal release recovery settles the audit and seat report once (audit already written=%s)", async recorded => {
+  const h = fixture(20), pass = fixtureCleanerId("bbbbbbbb", "bbbb", "4bbb", "8bbb", "bbbbbbbbbbbb");
+  const state = path.dirname(h.ports.reportFile!), prior = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  try {
+    const target = h.dirs[1]!, proof = "release audit fixture", project = "release-fixture", bytes = 8192;
+    const journal = path.join(state, "release-trash-terminal-cleaner.json");
+    fs.mkdirSync(state, { recursive: true });
+    createCleanerJournal(pass);
+    const audit = cleanerJournal(pass, "release");
+    audit("intent", target, bytes, proof);
+    await recordDiskCleanerReport({ id: pass, project, episode: null, mode: "on", startedAt: 1, before: [],
+      finished: { at: 2, after: [], removed: { "attempt-temp": 0, release: 0, evidence: 0 }, kept: [], uncertain: 1, errors: 0, incomplete: true } });
+    const seat = { conversationId: "release-seat", seatEpoch: 1 };
+    const original = (await diskCleanerSignals(project))[0]!;
+    await diskCleanerSignals(project, [seatTickSignalVersion(original, seat)], seat);
+    const row = quarantineTree(target, journal, { sha: h.shas[1]! }, { passId: pass, bytes, proof })!;
+    const unlink = fs.unlinkSync;
+    const interrupted = spyOn(fs, "unlinkSync").mockImplementation(file => {
+      if (file === journal) throw new Error("interrupted before native journal settlement");
+      return unlink(file);
+    });
+    try {
+      await expect(settleGatedTrash(journal, row, { observe: async () => null })).rejects.toThrow("interrupted before native journal settlement");
+    } finally { interrupted.mockRestore(); }
+    expect(fs.existsSync(row.trash)).toBeFalse();
+    if (recorded) audit("removed", target, bytes, proof);
+    h.ports.cleaner = { id: pass, allowed: () => true, dryRun: false, journal: () => {} };
+    const recovered = await h.run();
+    expect(recovered.errors).toEqual([]);
+    expect(recovered.removed.filter(entry => entry.dir === target)).toHaveLength(1);
+    expect(fs.existsSync(journal)).toBeFalse();
+    const journalBytes = fs.readFileSync(cleanerJournalFile(pass), "utf8");
+    const reports = fs.readFileSync(diskCleanerReportsFile(), "utf8");
+    expect(journalBytes.trim().split("\n").map(entry => JSON.parse(entry).phase)).toEqual(["intent", "removed"]);
+    expect(JSON.parse(reports)[0].finished).toMatchObject({ uncertain: 0, errors: 0, removed: { release: bytes } });
+    const corrected = await diskCleanerSignals(project);
+    expect(corrected).toHaveLength(1);
+    await diskCleanerSignals(project, [seatTickSignalVersion(corrected[0]!, seat)], seat);
+    expect((await h.run()).removed.some(entry => entry.dir === target)).toBeFalse();
+    expect(await diskCleanerSignals(project)).toEqual([]);
+    expect(fs.readFileSync(cleanerJournalFile(pass), "utf8")).toBe(journalBytes);
+    expect(fs.readFileSync(diskCleanerReportsFile(), "utf8")).toBe(reports);
+  } finally {
+    if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior;
   }
 }, 30_000);
 

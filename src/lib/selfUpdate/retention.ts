@@ -3,7 +3,7 @@ import { withSelfObservation, type RetentionScan } from "./retentionInspection";
 import { RetentionWorker, RetentionInspectionError, type RetentionInspection } from "./retentionWorker";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
-import { cleanerJournal, type CleanerJournal } from "@/lib/cleaner/diskJournal";
+import { cleanerAuditPending, settleCleanerAudit, type CleanerJournal } from "@/lib/cleaner/diskJournal";
 import { reconcileDiskCleanerReport } from "@/lib/cleaner/diskReport";
 import { assertRetentionTestPath } from "@/lib/retentionTestSafety";
 import path from "node:path";
@@ -519,6 +519,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           if (cleaner && !row) cleaner.journal("refused", candidate.dir, bytes, proof);
           if (!row) { report.kept.push({ dir: candidate.dir, reason: "changed", bytes }); continue; }
           const outcome = await settleGatedTrash(journal, row, { remove: ports.removeTree, first: [".next/DELEGATUS_RELEASE_READY"],
+            retainJournal: !!cleaner,
             beforeGate: async trash => cleaner && (preserve(trash) || !releaseBuilt(trash, candidate.sha))
               ? "keep marker, Git, or filesystem boundary" : releaseContentHold(trash, candidate.sha),
             observe: (trash, gate) => gatedReleaseHold(candidate, trash, gate),
@@ -526,14 +527,19 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
             beforeRemove: cleaner && (async () => {
               if (!cleaner.allowed()) return "cleaner lost traffic ownership";
               return gatedReleaseHold(candidate, row.trash, row.gate);
-            }) });
+            }),
+            dispatchHold: cleaner && (() => !cleaner.allowed() ? "cleaner ownership changed" : mounts(row.gate).length ? "mount-boundary" : null) });
           if (!outcome.removed) {
-            cleaner?.journal("refused", candidate.dir, bytes, proof);
+            if (cleaner && !row.deleting && restoreGatedTrash(journal, row, true)) {
+              cleaner.journal("refused", candidate.dir, bytes, proof);
+              fs.unlinkSync(journal);
+            }
             report.kept.push({ dir: candidate.dir, reason: outcome.reason, bytes }); continue;
           }
           cleaner?.journal("removed", candidate.dir, bytes, proof);
           report.removed.push({ dir: candidate.dir, sha: candidate.sha, bytes });
           await dropWorktreeMetadata(candidate.dir);
+          if (cleaner) fs.unlinkSync(journal);
           continue;
         } else {
           const packageTree = inspectTree(candidate.dir, { git: true, mounts: mounts(candidate.dir) });
@@ -573,46 +579,55 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
         if (row.cleaner) {
           if (!cleaner || !releaseTrash || !gated || !cleaner.allowed()
             || path.dirname(row.directory) !== root || !/^[a-f0-9]{12}$/.test(path.basename(row.directory))) continue;
-          const audit = cleanerJournal(row.cleaner.passId, "release");
+          if (mounts(row.gate).length) {
+            report.kept.push({ dir: row.directory, reason: "mount-boundary", bytes: row.cleaner.bytes ?? 0 });
+            continue;
+          }
           // A killed worker may leave mode 000 before the first unlink. Open
           // the validated gate before reading the bound inode's contents.
           reopenGate(row);
+          const mountHold = () => mounts(row.gate).length || mounts(row.trash).length ? "mount-boundary" : null;
+          if (mountHold()) {
+            report.kept.push({ dir: row.directory, reason: "mount-boundary", bytes: row.cleaner.bytes ?? 0 });
+            continue;
+          }
           const trash = fs.lstatSync(row.trash, { throwIfNoEntry: false });
           const bytes = trash ? await bytesOf(row.trash) : 0;
-          const auditBytes = row.cleaner.bytes ?? bytes;
-          if (row.deleting && trash) {
-            if (cleaner.dryRun) {
+          if (row.deleting) {
+            if (cleaner.dryRun && trash) {
               report.kept.push({ dir: row.directory, reason: "dry-run", bytes: row.cleaner.bytes ?? 0 });
+              continue;
+            }
+            if (trash && !await cleanerAuditPending(row.cleaner, "release", row.directory)) {
+              report.kept.push({ dir: row.directory, reason: "Cleaner audit is already terminal", bytes });
               continue;
             }
             const candidate: Candidate = { dir: row.directory, sha: row.context?.sha ?? "", age: row.context?.age ?? 0,
               locked: false, identity: row.identity };
             const outcome = await settleGatedTrash(journal, row, { remove: ports.removeTree,
+              retainJournal: true,
               observe: async (tree, gate) => {
                 const { current, processes, unfenced } = await gatedObservation(tree, candidate.dir);
                 return protect(candidate, current, processes, true)
                   ?? (heldByProcess(gate, processes) ? "process" : unfenced ? "owner-unfenced" : null);
               },
-              beforeRemove: () => cleaner.allowed() ? null : "cleaner ownership changed" });
+              dispatchHold: () => cleaner.allowed() ? mountHold() : "cleaner ownership changed" });
             if (outcome.removed) {
-              audit("removed", row.directory, auditBytes, row.cleaner.proof);
-              report.removed.push({ dir: row.directory, sha: candidate.sha, bytes });
+              await settleCleanerAudit(row.cleaner, "release", row.directory, "removed");
               await reconcileDiskCleanerReport(row.cleaner.passId);
-              await dropWorktreeMetadata(row.directory);
+              if (!fs.lstatSync(row.directory, { throwIfNoEntry: false })) await dropWorktreeMetadata(row.directory);
+              fs.unlinkSync(journal);
+              report.removed.push({ dir: row.directory, sha: candidate.sha, bytes });
             } else report.kept.push({ dir: row.directory, reason: outcome.reason, bytes });
             continue;
           }
-          const restored = restoreGatedTrash(journal, row);
+          const restored = restoreGatedTrash(journal, row, true);
           if (restored) {
-            audit("refused", row.directory, auditBytes, row.cleaner.proof);
-            report.kept.push({ dir: row.directory, reason: "restored after Cleaner restart", bytes });
-          } else if (row.deleting && !trash) {
-            audit("removed", row.directory, auditBytes, row.cleaner.proof);
-            report.removed.push({ dir: row.directory, sha: row.context?.sha ?? "", bytes });
+            await settleCleanerAudit(row.cleaner, "release", row.directory, "refused");
             await reconcileDiskCleanerReport(row.cleaner.passId);
-            await dropWorktreeMetadata(row.directory);
+            fs.unlinkSync(journal);
+            report.kept.push({ dir: row.directory, reason: "restored after Cleaner restart", bytes });
           } else {
-            audit("refused", row.directory, auditBytes, row.cleaner.proof);
             report.kept.push({ dir: row.directory, reason: "Cleaner quarantine requires guarded recovery", bytes });
           }
           continue;

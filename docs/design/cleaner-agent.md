@@ -21,6 +21,8 @@ three classes:
 - Registered attempt and stage scratch uses the attempt ledger, lane
   retirement claim, identity checks and existing native remover. A lane's
   completion or a standalone host's proved termination establishes ownership.
+  The owner's canonical project must match the pass at selection and at
+  dispatch. The minute worker continues its ordinary scratch expiry schedule.
   The tree must have been idle for three hours. Open and parked lanes,
   checkout links, live process and container references, keep markers,
   preservation records and unknown identities keep their data.
@@ -28,11 +30,14 @@ three classes:
   release beyond the newest 15. Serving, rollback, in-flight, locked or
   dirty releases and revisions without a surviving Git ref are kept.
   The existing release gate closes access to the quarantined tree before
-  the final process and owner checks.
+  the final process and owner checks. Interrupted release removal checks mount
+  boundaries after reopening the gate and at recursive removal dispatch.
 - Evidence retention removes ledger-bound captures after their seven-day
   retention and file-age checks pass. Open tasks protect captures through
   lane and launch membership or a stored path reference. This uses the
-  evidence owner's quarantine, identity and live-reference checks.
+  evidence owner's quarantine, identity and live-reference checks. A
+  quarantine retains its authorizing pass and proof through recovery so the
+  original audit and seat report can settle.
 
 The cleaner runs removal inside the leased retention workers and leaves
 unverifiable trees in place. A durable journal under `state/disk-cleaner`

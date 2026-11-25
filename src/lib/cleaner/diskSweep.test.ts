@@ -14,8 +14,10 @@ import { createCleanerJournal, cleanerJournalFile, diskCleanerStateFile } from "
 import { runCleanerSweep } from "./diskSweep";
 import { createTask } from "@/lib/tasks/commands";
 import { saveTasks } from "@/lib/tasks/store";
+import { persistProjectAliases } from "@/lib/projects/aliases";
+import { projectAliasStore } from "@/lib/projects/persistence";
 
-test.skipIf(process.platform !== "linux")("guarded scratch sweep removes only the finished, quiet and unreferenced root", async () => {
+test.skipIf(process.platform !== "linux")("guarded scratch sweep removes only quiet, unreferenced roots owned by the pass project", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "disk-cleaner-scratch-"));
   const saved = { state: process.env.LLV_STATE_DIR, port: process.env.PORT, cleaner: process.env.LLV_CLEANER };
   process.env.LLV_STATE_DIR = path.join(root, "state");
@@ -36,9 +38,19 @@ test.skipIf(process.platform !== "linux")("guarded scratch sweep removes only th
     }] }];
     const parked = { ...closedLane, ...pipelineIdentity("parked-fixture", closedLane.task, repo),
       id: "parked-fixture", state: "paused", pausedState: "running", closedAt: null } as const;
-    savePipelines([closedLane, parked]);
+    const foreign = { ...closedLane, ...pipelineIdentity("foreign-fixture", closedLane.task, repo),
+      id: "foreign-fixture", project: "foreign-project" };
+    const alias = { ...closedLane, ...pipelineIdentity("alias-fixture", closedLane.task, repo),
+      id: "alias-fixture", project: "old-fixture-project" };
+    const rebound = { ...closedLane, ...pipelineIdentity("rebound-fixture", closedLane.task, repo),
+      id: "rebound-fixture", project: "moving-fixture-project" };
+    expect(persistProjectAliases([alias, rebound].map(lane => ({
+      source: lane.project, target: closedLane.project, displayName: "Fixture",
+    })))).toBeTrue();
+    savePipelines([closedLane, parked, foreign, alias, rebound]);
     const store = new AttemptTempStore();
-    const cases = ["clear", "live", "recent", "open-fd", "git", "keep"] as const;
+    const cases = ["clear", "alias", "live", "recent", "open-fd", "git", "keep", "foreign", "unknown", "rebound"] as const;
+    const lanes: Partial<Record<typeof cases[number], typeof closedLane>> = { live: parked, foreign, alias, rebound };
     const dirs = new Map<typeof cases[number], string>();
     try {
       for (const [index, name] of cases.entries()) {
@@ -54,22 +66,42 @@ test.skipIf(process.platform !== "linux")("guarded scratch sweep removes only th
           scan.processes.push({ pid: process.pid, namespace: "fixture", stamped: false,
             paths: [repo, fs.readlinkSync(`/proc/self/fd/${openFd}`)] });
         }
-        store.register({ directory, pipelineId: name === "live" ? parked.id : closedLane.id,
-          launchId: "fixture-launch", retainUntilClose: false, createdAt: now - 86400_000 });
+        const lane = lanes[name] ?? closedLane;
+        store.register({ directory, pipelineId: lane.id,
+          launchId: name === "unknown" ? "unbound-launch" : "fixture-launch", retainUntilClose: false, createdAt: now - 86400_000 });
         dirs.set(name, directory);
       }
     } finally { store.close(); }
     createCleanerJournal(id);
     writeJsonDurably(diskCleanerStateFile(), { id, startedAt: now, project: "fixture", mode: "on", episode: null, before: [] });
-    const result = await runCleanerSweep({ id, class: "attempt-temp", after: "" }, { scan: () => scan, containerReferences: async () => true, now: () => now });
+    const movingRoot = dirs.get("rebound")!, inode = fs.lstatSync(movingRoot).ino;
+    let reboundWhileQuarantined = false;
+    const result = await runCleanerSweep({ id, class: "attempt-temp", after: "" }, {
+      scan: () => scan, now: () => now, containerReferences: async roots => {
+        if (!reboundWhileQuarantined && roots.includes(movingRoot) && !fs.existsSync(movingRoot)) {
+          projectAliasStore.mutate(statePath("project-aliases.json"), current => ({
+            next: { ...current, aliases: { ...current.aliases, [rebound.project]: foreign.project } }, result: undefined,
+          }));
+          reboundWhileQuarantined = true;
+        }
+        return true;
+      },
+    });
     expect(result.errors, JSON.stringify(result.kept)).toBe(0);
+    expect(reboundWhileQuarantined).toBeTrue();
+    expect(fs.lstatSync(movingRoot).ino).toBe(inode);
     expect(fs.existsSync(dirs.get("clear")!), JSON.stringify(result.kept)).toBe(false);
-    for (const name of cases.slice(1)) expect(fs.existsSync(dirs.get(name)!)).toBe(true);
+    expect(fs.existsSync(dirs.get("alias")!), JSON.stringify(result.kept)).toBe(false);
+    for (const name of cases.slice(2)) expect(fs.existsSync(dirs.get(name)!)).toBe(true);
+    for (const name of ["foreign", "unknown"] as const) expect(result.kept).toContainEqual(expect.objectContaining({
+      path: dirs.get(name), reason: "scratch owner project unproven or outside Cleaner pass",
+    }));
     expect(result.kept.map(row => row.reason).join("\n")).toContain("touched within three hours");
     const rows = fs.readFileSync(cleanerJournalFile(id), "utf8").trim().split("\n").map(line => JSON.parse(line));
-    expect(rows).toEqual(["intent", "removed"].map(phase => expect.objectContaining({
-      phase, class: "attempt-temp", path: dirs.get("clear"), bytes: expect.any(Number), proof: expect.stringContaining("settled lane"),
-    })));
+    expect(rows.slice(0, 4)).toEqual((["clear", "alias"] as const).flatMap(name => ["intent", "removed"].map(phase => expect.objectContaining({
+      phase, class: "attempt-temp", path: dirs.get(name), bytes: expect.any(Number), proof: expect.stringContaining("settled lane"),
+    }))));
+    expect(rows.slice(4)).toEqual(["intent", "refused"].map(phase => expect.objectContaining({ phase, path: movingRoot })));
   } finally {
     if (openFd !== undefined) fs.closeSync(openFd);
     closeAgentRegistryForTests();

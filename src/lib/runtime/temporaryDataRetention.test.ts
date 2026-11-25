@@ -1,19 +1,27 @@
 import { plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { attemptTempJournalPath } from "@/lib/tempSweep";
 import { statePath } from "@/lib/configDir";
+import { cleanerJournal, cleanerJournalFile, createCleanerJournal, diskCleanerReportsFile } from "@/lib/cleaner/diskJournal";
+import { diskCleanerSignals, recordDiskCleanerReport } from "@/lib/cleaner/diskReport";
+import { openTaskReferencesEvidence } from "@/lib/cleaner/evidenceReferences";
+import { seatTickSignalVersion } from "@/lib/monitor/seatTick";
+import { createTask } from "@/lib/tasks/commands";
+import { saveTasks } from "@/lib/tasks/store";
 import { TemporaryDataStore, type TemporaryDataCandidate } from "./temporaryDataStore";
 import { sweepTemporaryData, temporaryDataProtection, TEMPORARY_DATA_RETENTION_MS as WEEK, type TemporaryDataPorts } from "./temporaryDataRetention";
 
 const roots: string[] = [], stores: TemporaryDataStore[] = [];
 const NOW = Date.UTC(2035, 0, 15);
+const fixturePass = (label: string) => createHash("sha256").update(label).digest("hex").slice(0, 36);
 afterEach(() => { removeKeepMarkers(); for (const store of stores.splice(0)) store.close(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
-function fixture(directory = true) {
+function fixture(directory = true, cleaner = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "temporary-retention-")); roots.push(root);
-  const scope = path.join(root, "evidence"), candidate = path.join(scope, "lane", directory ? "captures" : "capture.png");
+  const scope = path.join(root, cleaner ? "state" : "", "evidence"), candidate = path.join(scope, "lane", directory ? "captures" : "capture.png");
   fs.mkdirSync(path.dirname(candidate), { recursive: true });
   if (directory) { fs.mkdirSync(candidate); fs.writeFileSync(path.join(candidate, "screen.png"), "capture"); }
   else fs.writeFileSync(candidate, "capture");
@@ -40,7 +48,8 @@ test("Cleaner applies the seven-day tree-age guard to ownerless copies before an
       const row = { ...f.row, directory, scope, kind: "ownerless-copy" as const, identity: `${stat.dev}:${stat.ino}` };
       f.store.register(row);
       const journal: string[] = [];
-      f.ports.cleaner = { allowed: () => true, journal: phase => journal.push(phase), processClear: () => true };
+      f.ports.cleaner = { id: fixturePass("ownerless-copy"), allowed: () => true,
+        journal: phase => journal.push(phase), processClear: () => true };
       f.ports.mode = "on";
       const report = await sweepTemporaryData(f.store, f.ports);
       if (age < WEEK) {
@@ -55,12 +64,104 @@ test("Cleaner applies the seven-day tree-age guard to ownerless copies before an
   }
 });
 
-async function runRecovery(f: ReturnType<typeof fixture>, mode: string, time: number) {
-  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "temporaryDataRetention.fixture.ts"), f.store.filename, mode, String(time)], { stdout: "pipe", stderr: "pipe" });
+async function runRecovery(f: ReturnType<typeof fixture>, mode: string, time: number, pass?: string) {
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "temporaryDataRetention.fixture.ts"), f.store.filename, mode, String(time),
+    ...(pass ? [pass] : [])], { stdout: "pipe", stderr: "pipe" });
   const [output, error] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect(await child.exited, error).toBe(0);
   return output;
 }
+
+test.each(["initial-path", "quarantined-url", "dispatch-url"] as const)("symlink followed by parent traversal protects open-task evidence at %s", async edge => {
+  const f = fixture(true, true), prior = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "state");
+  try {
+    const alias = path.join(f.root, "shortcut"), child = path.join(f.row.directory, "nested");
+    fs.mkdirSync(child);
+    const inode = fs.statSync(f.row.directory).ino, previousTarget = path.join(f.root, "unrelated");
+    fs.mkdirSync(previousTarget);
+    fs.symlinkSync(edge === "initial-path" ? child : previousTarget, alias);
+    let linkReady = edge === "initial-path", linkHeld = false;
+    const retarget = (target: string) => {
+      fs.unlinkSync(alias); fs.symlinkSync(path.join(target, "nested"), alias);
+      expect(fs.readFileSync(`${alias}/../screen.png`, "utf8")).toBe("capture");
+      linkReady = true;
+    };
+    const details = edge === "initial-path" ? `See ${alias}/../screen.png` : `See [capture](file://${alias}/../screen.png)`;
+    const task = createTask([], { project: "fixture", text: "Review the capture", placement: "unplaced", details }, [],
+      { id: () => "alias-traversal-task", now: () => new Date(NOW).toISOString() });
+    if (!task.ok) throw new Error(task.error);
+    saveTasks(task.tasks, statePath("tasks.json"));
+    let sawQuarantine = false, finalReads = 0;
+    const pass = fixturePass("evidence-traversal");
+    createCleanerJournal(pass);
+    const report = await sweepTemporaryData(f.store, { ...f.ports, taskReferences: (row, authority, current) => {
+      const held = openTaskReferencesEvidence(row, authority, current);
+      if (linkReady && (edge === "initial-path" || current !== row.directory)) linkHeld ||= held;
+      return held;
+    },
+      cleaner: { id: pass, allowed: () => true, journal: cleanerJournal(pass, "evidence"), processClear: (original, current) => {
+        if (edge === "dispatch-url" && current !== original && ++finalReads === 3) retarget(current);
+        return true;
+      } },
+      references: async (row, current) => {
+        if (current !== row.directory) {
+          sawQuarantine = true;
+          if (edge === "quarantined-url") retarget(current);
+        }
+        return true;
+      },
+    });
+    expect(report).toMatchObject({ removed: 0, errors: 0 });
+    expect(sawQuarantine).toBe(edge !== "initial-path");
+    if (edge === "dispatch-url") expect(finalReads).toBe(3);
+    expect(linkHeld).toBeTrue();
+    expect(fs.statSync(f.row.directory).ino).toBe(inode);
+    expect(fs.readFileSync(path.join(f.row.directory, "screen.png"), "utf8")).toBe("capture");
+    expect(fs.existsSync(attemptTempJournalPath(f.row.directory))).toBeFalse();
+  } finally {
+    if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior;
+  }
+});
+
+test.each([true, false])("evidence replay settles the authorizing pass across two process exits (directory=%s)", async directory => {
+  const f = fixture(directory, true), prior = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(f.root, "state");
+  try {
+    const owner = fixturePass("evidence-replay-owner"), successor = fixturePass("evidence-replay-successor");
+    const project = "fixture-evidence", seat = { conversationId: "evidence-seat", seatEpoch: 1 };
+    createCleanerJournal(owner); createCleanerJournal(successor);
+    expect(await runRecovery(f, "cleaner-crash", NOW, owner)).toBe("quarantined\n");
+    const journal = attemptTempJournalPath(f.row.directory);
+    const intent = JSON.parse(fs.readFileSync(cleanerJournalFile(owner), "utf8").trim());
+    expect(JSON.parse(fs.readFileSync(journal, "utf8")).cleaner).toEqual({ passId: owner, proof: intent.proof, bytes: intent.bytes });
+    await recordDiskCleanerReport({ id: owner, project, episode: null, mode: "on", startedAt: 1, before: [],
+      finished: { at: 2, after: [], removed: { "attempt-temp": 0, release: 0, evidence: 0 }, kept: [], uncertain: 1, errors: 0, incomplete: true } });
+    const original = (await diskCleanerSignals(project))[0]!;
+    await diskCleanerSignals(project, [seatTickSignalVersion(original, seat)], seat);
+
+    expect(await runRecovery(f, "cleaner-recover-after-audit", NOW + 60001, successor)).toBe("removed\n");
+    expect(fs.existsSync(journal)).toBeTrue();
+    expect(fs.existsSync(trashOf(f))).toBeFalse();
+    expect(fs.readFileSync(cleanerJournalFile(successor), "utf8")).toBe("");
+    const audit = fs.readFileSync(cleanerJournalFile(owner), "utf8");
+    const reports = fs.readFileSync(diskCleanerReportsFile(), "utf8");
+    expect(audit.trim().split("\n").map(line => JSON.parse(line))).toEqual([intent, { ...intent, phase: "removed", at: expect.any(String) }]);
+    expect(JSON.parse(reports)[0].finished).toMatchObject({ uncertain: 0, errors: 0, removed: { evidence: intent.bytes } });
+    const corrected = await diskCleanerSignals(project);
+    expect(corrected).toHaveLength(1);
+    await diskCleanerSignals(project, [seatTickSignalVersion(corrected[0]!, seat)], seat);
+
+    expect(JSON.parse(await runRecovery(f, "recover", NOW + 120002))).toMatchObject({ checked: 1, errors: 0 });
+    expect(fs.existsSync(journal)).toBeFalse();
+    expect(f.store.get(f.row.directory)).toBeNull();
+    expect(await diskCleanerSignals(project)).toEqual([]);
+    expect(fs.readFileSync(cleanerJournalFile(owner), "utf8")).toBe(audit);
+    expect(fs.readFileSync(diskCleanerReportsFile(), "utf8")).toBe(reports);
+  } finally {
+    if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior;
+  }
+});
 
 function trashOf(f: ReturnType<typeof fixture>) {
   return (JSON.parse(fs.readFileSync(attemptTempJournalPath(f.row.directory), "utf8")) as { trash: string }).trash;

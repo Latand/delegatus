@@ -682,7 +682,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   // working reserve on small filesystems. A fixed cap alone reacts too late.
   const capBytes = freeBytes === null ? configuredCapBytes : Math.min(configuredCapBytes,
     Math.max(0, Math.floor(Math.min((store.bytes() + freeBytes) / 2, store.bytes() + freeBytes - ATTEMPT_TEMP_LOW_SPACE_BYTES))));
-  const pressure = !!options.selection || lowSpace || store.bytes() > capBytes;
+  // The minute worker retires only the ordinary expiry page. Disk pressure
+  // is handled by the Cleaner lease and cannot expand that worker's budget.
+  const pressure = !!options.selection || !options.scheduledOnly && (lowSpace || store.bytes() > capBytes);
   // An ordinary page; under pressure an explicit maxRoots limits the tick.
   const budget = Math.max(1, Math.min(32, options.maxRoots ?? (options.scheduledOnly ? 32 : 4)));
   type Outcome = { directory: string; disposition: "deferred" | "live" | "evidence" | "held" | "operator" | "failed" | "removed"; bytes: number;
@@ -815,7 +817,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // quarantine retains its allocation projection until replay resolves.
       const pendingJournal = fs.existsSync(attemptTempJournalPath(owner.directory));
       if (cleaner && (!stat || pendingJournal)) {
-        outcome(owner.directory, "held", bytes, "missing path or native retirement journal belongs to the ordinary sweep"); return;
+        outcome(owner.directory, "held", bytes, "missing path or native retirement journal belongs to the ordinary sweep",
+          "ordinary_sweep_recovery");
+        return;
       }
       const pendingTrash = !stat && pendingJournal;
       if (recoveredTrash) {

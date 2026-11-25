@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +6,7 @@ import { isolatedEnvironment } from "../../../scripts/local-gate";
 import { seatTickSignalVersion } from "@/lib/monitor/seatTick";
 import { recordDiskCleanerReport, diskCleanerSignals, reconcileDiskCleanerReport } from "./diskReport";
 import type { DiskCleanerPass } from "./diskState";
+import { diskCleanerReportsFile } from "./diskJournal";
 
 const roots: string[] = [];
 const saved = { state: process.env.LLV_STATE_DIR, home: process.env.HOME, xdg: process.env.XDG_CONFIG_HOME, tmp: process.env.TMPDIR };
@@ -59,7 +60,7 @@ test("seat lookup reads only outstanding reports as acknowledged history grows",
   expect(await diskCleanerSignals(project)).toEqual([]);
 });
 
-test("late release recovery updates and redelivers the original pass exactly once", async () => {
+test.each([false, true])("late release recovery redelivers the original pass once (archive write interrupted=%s)", async interrupted => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "disk-cleaner-late-report-")); roots.push(root);
   const env = isolatedEnvironment(root, process.env);
   process.env.HOME = env.HOME!; process.env.XDG_CONFIG_HOME = env.XDG_CONFIG_HOME!; process.env.TMPDIR = env.TMPDIR!;
@@ -76,11 +77,20 @@ test("late release recovery updates and redelivers the original pass exactly onc
   const seat = { conversationId: "seat-late", seatEpoch: 1 };
   const signal = (await diskCleanerSignals(project))[0]!;
   await diskCleanerSignals(project, [seatTickSignalVersion(signal, seat)], seat);
-  await reconcileDiskCleanerReport(id);
+  if (interrupted) {
+    const rename = fs.renameSync, archive = diskCleanerReportsFile();
+    const failure = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (to === archive) throw new Error("interrupted archive write");
+      rename(from, to);
+    });
+    try { await expect(reconcileDiskCleanerReport(id)).rejects.toThrow("interrupted archive write"); }
+    finally { failure.mockRestore(); }
+  } else await reconcileDiskCleanerReport(id);
   const corrected = await diskCleanerSignals(project);
   expect(corrected).toHaveLength(1);
   expect(corrected[0]!.label).toContain("релізи 5.00 GiB");
   expect(corrected[0]!.label).not.toContain("Неповний прохід");
+  await diskCleanerSignals(project, [seatTickSignalVersion(corrected[0]!, seat)], seat);
   await reconcileDiskCleanerReport(id);
-  expect(await diskCleanerSignals(project)).toHaveLength(1);
+  expect(await diskCleanerSignals(project)).toEqual([]);
 });

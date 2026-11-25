@@ -256,7 +256,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
         + (last ? `Last pass ${last.ended === "complete" ? "completed" : "ended when pressure cleared"} in ${minutes(last.durationMs)} over ${last.ticks} ticks, `
           + `${last.visited} visits, ${last.removed} roots removed (${gb(last.removedBytes)}). ` : "")
         + (full && last?.ended !== "complete" ? `Last full pass completed in ${minutes(full.durationMs)} over ${full.ticks} ticks. ` : "");
-      const summary = passText + `${report.lowSpace ? "Low free space: prioritize expired attempt scratch regardless of cap. " : ""}`
+      const summary = passText + `${report.lowSpace ? "Scratch free space is below the working reserve. " : ""}`
         + `${report.spaceError ? `Scratch free-space observation failed: ${report.spaceError}. ` : ""}`
         + `Recorded allocation ${gb(report.bytes)}; cap ${gb(report.capBytes)}; ${mode === "dry-run" ? "would reclaim" : "reclaimed"} ${gb(report.removedBytes)} attributed; `
         + `budget deferred ${gb(report.deferredBytes)}; held live ${gb(report.liveHeldBytes)}; held by evidence ${gb(report.evidenceHeldBytes)}; `

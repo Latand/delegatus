@@ -2,11 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { agentRegistry } from "@/lib/agent/registry";
 import { statePath } from "@/lib/configDir";
-import { loadPipelinesForList } from "@/lib/pipelines/store";
+import { loadPipelinesForList, pipelineRecordReader } from "@/lib/pipelines/store";
 import { pipelineActivitySettled } from "@/lib/pipelines/types";
+import { projectAliasResolver } from "@/lib/projects/aliases";
 import { liveOrWaitingConversationCwds } from "@/lib/pipelines/worktreeSweep";
 import { assertRetentionTestPath, retentionUnderTest } from "@/lib/retentionTestSafety";
-import { AttemptTempStore, sweepAttemptTemps, type AttemptTempSweepOptions } from "@/lib/runtime/attemptTempRetention";
+import { AttemptTempStore, sweepAttemptTemps, type AttemptTempOwner, type AttemptTempSweepOptions } from "@/lib/runtime/attemptTempRetention";
 import { attemptTempAuthority } from "@/lib/runtime/attemptTempProduction";
 import { attemptProcessReferencesClear, attemptReferencesClear } from "@/lib/runtime/attemptTempFilesystem";
 import { attemptTempConfigParent } from "@/lib/runtime/attemptTempPaths";
@@ -53,6 +54,24 @@ function openLaneUses(directory: string): boolean {
     || liveOrWaitingConversationCwds(agentRegistry().worktreeProtectionSnapshot()).some(overlaps);
 }
 
+function scratchOwnerMatches(owner: AttemptTempOwner, project: string): boolean {
+  try {
+    const canonical = projectAliasResolver();
+    if (owner.pipelineId) {
+      const lane = pipelineRecordReader(owner.pipelineId).read();
+      const attempts = lane?.runs.flatMap(run => run.attempts).filter(attempt => attempt.launchId === owner.launchId
+        || attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId));
+      return !!lane?.project?.trim() && attempts?.length === 1 && canonical(lane.project.trim()) === canonical(project);
+    }
+    const registry = agentRegistry(), facts = registry.temporaryDataFacts({ launchId: owner.launchId });
+    if (!facts.receipt || facts.pipelines.length) return false;
+    const conversation = registry.conversationAuthorityFacts(facts.receipt.conversationId);
+    if (conversation?.superseded) return false;
+    const projects = [conversation?.project?.trim(), facts.receipt.explicitProject?.trim()].filter(Boolean);
+    return projects.length > 0 && projects.every(key => canonical(key!) === canonical(project));
+  } catch { return false; }
+}
+
 /** Runs in the leased sweep helper. The ledger and its owner perform the
  * removal. The cleaner supplies a bounded selection and tighter guards. */
 export async function runCleanerSweep(request: CleanerSweepRequest, ports: {
@@ -61,14 +80,15 @@ export async function runCleanerSweep(request: CleanerSweepRequest, ports: {
   now?: () => number;
 } = {}): Promise<CleanerSweepResult> {
   const empty = { kept: [], errors: 0, next: null, more: false };
-  const mode = readDiskCleanerPass()?.mode;
-  const allowed = () => diskCleanerAllowed(request.id);
-  if (!mode || !allowed()) return empty;
+  const pass = readDiskCleanerPass();
+  const allowed = () => diskCleanerAllowed(request.id, pass ?? undefined);
+  if (!pass?.project.trim() || !allowed()) return empty;
+  const { mode } = pass;
   const scan = ports.scan ?? productionScan;
   const journal = cleanerJournal(request.id, request.class);
   if (request.class === "evidence") {
     const report = await runTemporaryDataSweep({ scan, now: ports.now, containerReferences: ports.containerReferences,
-      cleaner: { allowed, journal, processClear: (original, target) => attemptProcessReferencesClear(original, target, scan([original, target])) } },
+      cleaner: { id: request.id, allowed, journal, processClear: (original, target) => attemptProcessReferencesClear(original, target, scan([original, target])) } },
       { ...process.env, LLV_TEMP_SWEEP: mode }, Date.now() + attemptTempRemaining(8000));
     return report ? { ...empty, kept: report.keptRows, errors: report.errors, more: report.more } : empty;
   }
@@ -77,6 +97,10 @@ export async function runCleanerSweep(request: CleanerSweepRequest, ports: {
     const page = store.cleanerRoots(request.after);
     const kept: CleanerHold[] = [];
     const selected = new Map(page.filter(row => {
+      if (!scratchOwnerMatches(row, pass.project.trim())) {
+        kept.push({ path: row.directory, bytes: row.bytes, reason: "scratch owner project unproven or outside Cleaner pass" });
+        return false;
+      }
       try { if (scratchRoot(row.directory)) return true; } catch { /* Preserve unreadable ancestry. */ }
       kept.push({ path: row.directory, bytes: row.bytes, reason: "scratch ancestry or keep marker" });
       return false;
@@ -95,7 +119,8 @@ export async function runCleanerSweep(request: CleanerSweepRequest, ports: {
           return !!row && row.identity === owner.identity && row.pipelineId === owner.pipelineId
             && row.launchId === owner.launchId && row.createdAt === owner.createdAt
             && row.released === owner.released && row.retainUntilClose === owner.retainUntilClose
-            && scratchRoot(owner.directory) && !openLaneUses(owner.directory);
+            && scratchRoot(owner.directory) && !openLaneUses(owner.directory)
+            && scratchOwnerMatches(owner, pass.project.trim());
         },
         watches: [diskCleanerStateFile(), statePath("viewer-release.json"), statePath("scratch"), attemptTempConfigParent()]
           .filter(file => fs.existsSync(file)),

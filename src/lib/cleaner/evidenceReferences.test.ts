@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -49,10 +50,11 @@ test("the evidence sweep keeps a task's aliased file URL and reclaims adjacent e
     fs.utimesSync(path.join(directory, "screen.png"), timestamp, timestamp);
   }
   const journal: string[] = [];
+  const passId = createHash("sha256").update("evidence alias test pass").digest("hex").slice(0, 36);
   const result = await sweepTemporaryData(store, { now: Date.now, mounts: () => [], mode: "on",
     claim: async () => () => {}, authority: async () => authority, references: async () => true,
     taskReferences: openTaskReferencesEvidence,
-    cleaner: { allowed: () => true, journal: phase => journal.push(phase), processClear: () => true } });
+    cleaner: { id: passId, allowed: () => true, journal: phase => journal.push(phase), processClear: () => true } });
   store.close();
   expect(result.removed).toBe(1);
   expect(fs.readFileSync(path.join(alias, "screen.png"), "utf8")).toBe(linked);
