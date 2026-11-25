@@ -37,19 +37,31 @@ import {
    the dialog owns the feed and the actions, and the DOM tests render this
    with fixture snapshots. */
 
+/** What one action ended in: why the server refused it (worded in the
+    operator's language), or which optional CI checks failed for an update it
+    admitted anyway. */
+export interface ActionOutcome {
+  error: ActionError | null;
+  optionalCheckFailures?: readonly string[];
+}
+
 export interface ViewState {
   now: number;
   armed: boolean;
   openLogs: ReadonlySet<string>;
   pending: ReadonlySet<string>;
-  /** Why the last action was refused, worded here in the operator's language. */
+  /** The outcome of the last action started outside the Update card (Check
+      now, the restarts, the auto switch). The header shows it. */
   error: ActionError | null;
-  /** Optional CI checks that failed for an update the server admitted anyway. */
-  optionalCheckFailures?: string[];
-  /** The last action was one of the Update card's own (Update, Retry). Its
-      outcome shows in that card on the phone, where the confirmation
-      scrolls past the header. */
-  outcomeInUpdateCard?: boolean;
+  optionalCheckFailures?: readonly string[];
+  /** The outcome of the Update card's own actions (Update, Retry), kept apart
+      from the other actions' so a late answer lands where its button is. */
+  updateOutcome?: ActionOutcome;
+  /** The dialog is in its phone layout (the viewport query that also makes it
+      a full screen, wide or tall). The confirmation scrolls that layout to the
+      Update card, which sits below the header, so the card shows its own
+      outcome there; every other layout shows it in the header. */
+  phone?: boolean;
   /** A web restart was asked for and nothing answers yet. */
   waitingForWeb: boolean;
   /** The web process answering now is not the one that served this page. */
@@ -231,29 +243,34 @@ function Header({ s, state, actions, t, locale }: { s: Snapshot; state: ViewStat
         </span>
       </div>
       {s.check.state === "failed" && checkError ? <p data-error="check" className={ERROR_LINE}>{checkError}</p> : null}
-      <ActionOutcome state={state} t={t} place="header" />
+      <OutcomeLines outcome={{ error: state.error, optionalCheckFailures: state.optionalCheckFailures }} t={t} />
+      {state.phone ? null : <OutcomeLines outcome={state.updateOutcome} t={t} />}
     </section>
   );
 }
 
 const ERROR_LINE = "m-0 rounded-[8px] bg-danger-soft px-2 py-1.5 font-mono text-label text-danger [overflow-wrap:anywhere]";
 
-/** What the last action ended in: why it was refused, or which optional CI
-    checks failed for an update the server admitted. The header shows it. On
-    the phone the confirmation scrolls to the Update card instead, so an
-    Update-card action shows it there (beside the button just pressed) and
-    the header copy hides: one copy is visible at every width. */
-function ActionOutcome({ state, t, place }: { state: ViewState; t: TFunction; place: "header" | "update" }) {
-  const inUpdate = Boolean(state.outcomeInUpdateCard);
-  if (place === "update" && !inUpdate) return null;
-  const phone = inUpdate ? (place === "update" ? " sm:hidden" : " max-sm:hidden") : "";
-  const where = place === "update" ? { "data-outcome-place": "update" } : {};
+/** An action's outcome as lines: why it was refused, then the optional CI
+    checks that failed for an update the server admitted. The header draws it,
+    except the Update card's own on the phone layout, which that card draws
+    (`UpdateOutcome`), because the confirmation leaves the scroller at the
+    card and the header sits above it. The choice is made here from the
+    dialog's own phone decision and not by the stylesheet, so each layout draws
+    one copy at every size. */
+function OutcomeLines({ outcome, t }: { outcome: ActionOutcome | undefined; t: TFunction }) {
+  if (!outcome) return null;
   return <>
-    {state.error ? <p data-error="action" {...where} className={`${ERROR_LINE}${phone}`}>{refusalText(state.error, t)}</p> : null}
-    {state.optionalCheckFailures?.length ? <p role="status" data-warning="optional-checks" {...where} className={`m-0 rounded-[8px] bg-warning-soft px-2 py-1.5 text-label text-warning [overflow-wrap:anywhere]${phone}`}>
-      {t("selfUpdate.warning.optionalChecks", { checks: state.optionalCheckFailures.join(", ") })}
+    {outcome.error ? <p data-error="action" className={ERROR_LINE}>{refusalText(outcome.error, t)}</p> : null}
+    {outcome.optionalCheckFailures?.length ? <p role="status" data-warning="optional-checks" className="m-0 rounded-[8px] bg-warning-soft px-2 py-1.5 text-label text-warning [overflow-wrap:anywhere]">
+      {t("selfUpdate.warning.optionalChecks", { checks: outcome.optionalCheckFailures.join(", ") })}
     </p> : null}
   </>;
+}
+
+/** The Update card's own outcome, drawn in the card on the phone layout. */
+function UpdateOutcome({ state, t }: { state: ViewState; t: TFunction }) {
+  return state.phone ? <OutcomeLines outcome={state.updateOutcome} t={t} /> : null;
 }
 
 function StepRow({ step, short, state, actions, t, managed }: { step: Step; short: string; state: ViewState; actions: ViewActions; t: TFunction; managed: boolean }) {
@@ -334,7 +351,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
       return (
         <section data-section="update" data-update="idle" className={CARD}>
           {heading(t("selfUpdate.update.heading"))}
-          <ActionOutcome state={state} t={t} place="update" />
+          <UpdateOutcome state={state} t={t} />
           <p className="m-0 text-ui text-secondary">{copy}</p>
           {rebuildCheckout ? <Button action="update" tone="primary" label={t("selfUpdate.update.rebuildCheckout")} onClick={actions.update} disabled={s.busy !== null || state.pending.has("update")} /> : null}
         </section>
@@ -347,7 +364,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
       return (
         <section data-section="update" data-update="package-manual" className={CARD}>
           {heading(t("selfUpdate.update.to", { target: target.version }))}
-          <ActionOutcome state={state} t={t} place="update" />
+          <UpdateOutcome state={state} t={t} />
           <p className="m-0 text-ui text-secondary">{t("selfUpdate.update.packageManual")}</p>
         </section>
       );
@@ -360,7 +377,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
             <Button action="update" tone="primary" label={t("selfUpdate.update.button")} onClick={actions.update} disabled={s.busy !== null || state.pending.has("update")} />
           </div>
         </div>
-        <ActionOutcome state={state} t={t} place="update" />
+        <UpdateOutcome state={state} t={t} />
         <p className="m-0 text-ui text-secondary">{t(managed ? "selfUpdate.update.noteManaged" : s.action ? "selfUpdate.update.note" : "selfUpdate.update.noteApply")}</p>
         {s.mode === "package" ? <p data-note="package-manual" className="m-0 text-ui text-secondary">{t("selfUpdate.update.packageManual")}</p> : null}
         <WorkLine s={s} t={t} />
@@ -383,7 +400,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
             {t("selfUpdate.update.progress", { n: runningStepNumber(update.steps), total: update.steps.length })}
           </span>
         </div>
-        <ActionOutcome state={state} t={t} place="update" />
+        <UpdateOutcome state={state} t={t} />
         {update.trigger === "auto" ? <p className="m-0 text-ui text-secondary">{t("selfUpdate.auto.started")}</p> : null}
         {steps(short, update.steps)}
       </section>
@@ -393,7 +410,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
     return (
       <section data-section="update" data-update="done" className={`${CARD} ${EDGE.success}`}>
         {heading(t("selfUpdate.update.updatedTo", { target }))}
-        <ActionOutcome state={state} t={t} place="update" />
+        <UpdateOutcome state={state} t={t} />
         {update.trigger === "auto" ? <p className="m-0 text-ui text-secondary">{t("selfUpdate.auto.started")}</p> : null}
         <p data-outcome="done" className="m-0 rounded-[8px] bg-success-soft px-2.5 py-2 text-ui text-success">
           {t(managed ? "selfUpdate.update.deployed" : "selfUpdate.update.built", { sha: short, duration: duration(elapsed, t) })} {appliedCopy(s, short, t)}
@@ -429,7 +446,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
           /> : null}
         </div>
       </div>
-      <ActionOutcome state={state} t={t} place="update" />
+      <UpdateOutcome state={state} t={t} />
       <div data-outcome="failed" className="flex flex-col gap-1 rounded-[8px] bg-danger-soft px-2.5 py-2 text-ui text-danger">
         <p className="m-0">{copy}</p>
         {cause ? <p data-cause="" className="m-0 font-mono text-label [overflow-wrap:anywhere]">{cause}</p> : null}

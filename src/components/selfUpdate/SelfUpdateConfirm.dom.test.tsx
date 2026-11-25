@@ -50,6 +50,7 @@ const { groupWorkRows, publishBlockerNames, workRows } = await import("./blocker
 const { SelfUpdateConfirm } = await import("./SelfUpdateConfirm");
 const { SelfUpdateDialog } = await import("./SelfUpdateDialog");
 const { setLocale, translate } = await import("@/lib/i18n");
+const { MOBILE_LAYOUT_QUERY, mobileLayoutViewport } = await import("@/lib/attention/eligibility");
 
 /* Opaque keys of the scanner's shape, built here so no literal looks like one. */
 const DELEGATUS = `repo-${"ab".repeat(10)}`;
@@ -322,4 +323,72 @@ describe("the automatic-updates switch", () => {
     expect(toggle().textContent).toBe("Turn on");
     expect(dom.document.querySelector("[data-error='action']")).not.toBeNull();
   });
+});
+
+/* An answer is drawn where its own action's button is, however many actions
+   the person started before it came back: the Update card's refusal belongs in
+   that card on the phone layout (portrait or landscape) and in the header on
+   the desktop, and Check now's answer always belongs in the header. */
+describe("an action's answer lands with the action that asked", () => {
+  const REFUSED = "The selected revision is not green (typecheck).";
+  const CHECK_FAILED = "The request failed (HTTP 500).";
+  const VIEWPORTS = [
+    ["a portrait phone", 390, 844, true],
+    ["a landscape phone", 844, 390, true],
+    ["a desktop", 1440, 900, false],
+  ] as const;
+
+  const held = () => {
+    let release: (response: Response) => void = () => {};
+    const promise = new Promise<Response>((resolve) => { release = resolve; });
+    return { promise, release };
+  };
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const refusal = () => json(409, { code: "deployment-refused", detail: "red", snapshot: snapshot("ready"),
+    green: { state: "red", detail: "typecheck", checks: ["typecheck"] } });
+  const lines = (scope: { querySelectorAll(selector: string): Iterable<{ textContent: string | null }> } | null) =>
+    [...(scope?.querySelectorAll("[data-error='action']") ?? [])].map((line) => line.textContent);
+  const where = (name: string) => dom.document.querySelector(`[data-section='${name}']`);
+  const wait = (ms: number) => act(async () => { await new Promise((resolve) => setTimeout(resolve, ms)); });
+
+  /* happy-dom reads the query list's comma as AND, so the phone query is
+     answered here by the project's own predicate for the viewport under test. */
+  let viewport = { width: 1024, height: 768 };
+  beforeAll(() => {
+    (dom as unknown as { matchMedia: unknown }).matchMedia = (query: string) => ({
+      matches: query === MOBILE_LAYOUT_QUERY ? mobileLayoutViewport(viewport) : false,
+      media: query, addEventListener() {}, removeEventListener() {},
+    });
+  });
+  afterAll(() => { delete (dom as unknown as { matchMedia?: unknown }).matchMedia; });
+  afterEach(() => { viewport = { width: 1024, height: 768 }; });
+
+  for (const [name, width, height, phone] of VIEWPORTS) for (const order of ["update first", "check first"] as const) {
+    test(`${name}: Update's refusal and Check now's failure keep their own places (${order})`, async () => {
+      viewport = { width, height };
+      const update = held();
+      const check = held();
+      globals.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        if (init?.method === "POST") return path.endsWith("/update") ? update.promise : check.promise;
+        return json(200, snapshot("ready"));
+      }) as typeof fetch;
+      await mount(<SelfUpdateDialog onClose={() => {}} />);
+      for (let tries = 0; tries < 40 && !dom.document.querySelector("[data-action='update']"); tries++) await wait(25);
+
+      await act(async () => { button(dom.document, "[data-action='update']").click(); });
+      await act(async () => { button(confirmDialog(), "[data-action='confirm-apply']").click(); });
+      /* Update's answer is still out when Check now is pressed. */
+      await act(async () => { button(dom.document, "[data-action='check']").click(); });
+
+      const answers = order === "update first"
+        ? [() => update.release(refusal()), () => check.release(json(500, {}))]
+        : [() => check.release(json(500, {})), () => update.release(refusal())];
+      for (const answer of answers) { await act(async () => { answer(); await new Promise((resolve) => setTimeout(resolve, 10)); }); }
+
+      expect(lines(where("update"))).toEqual(phone ? [REFUSED] : []);
+      expect(lines(where("header"))).toEqual(phone ? [CHECK_FAILED] : [CHECK_FAILED, REFUSED]);
+      expect(lines(dom.document.body)).toHaveLength(2);
+    });
+  }
 });

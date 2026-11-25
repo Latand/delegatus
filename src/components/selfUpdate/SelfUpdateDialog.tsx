@@ -10,8 +10,8 @@ import type { Snapshot } from "@/lib/selfUpdate/types";
 
 import { OPEN_SELF_UPDATE_EVENT } from "./openSelfUpdate";
 import { SelfUpdateConfirm } from "./SelfUpdateConfirm";
-import { actionError, targetText, type ActionError, type ActionResponse } from "./selfUpdateCopy";
-import { SelfUpdateView, type ViewActions, type ViewState } from "./SelfUpdateView";
+import { actionError, targetText, type ActionResponse } from "./selfUpdateCopy";
+import { SelfUpdateView, type ActionOutcome, type ViewActions, type ViewState } from "./SelfUpdateView";
 import { selfUpdateTicket, useSelfUpdateFeed } from "./useSelfUpdateFeed";
 
 /**
@@ -51,11 +51,11 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const [confirming, setConfirming] = useState<"update" | "retry" | "install-action" | null>(null);
   const [openLogs, setOpenLogs] = useState<Set<string>>(() => new Set());
   const [pending, setPending] = useState<Set<string>>(() => new Set());
-  const [error, setError] = useState<ActionError | null>(null);
-  const [optionalCheckFailures, setOptionalCheckFailures] = useState<string[]>([]);
-  /* The Update card's own actions (Update and Retry) show their outcome in
-     that card on the phone; every other action keeps it in the header. */
-  const [outcomeInUpdateCard, setOutcomeInUpdateCard] = useState(false);
+  /* What each action ended in, kept with the action that produced it: the
+     Update card's own (Update and Retry, key "update") apart from every other
+     action's. An answer is written when it arrives, possibly after the person
+     started another action, so it cannot go by whichever action began last. */
+  const [outcomes, setOutcomes] = useState<Partial<Record<"update" | "header", ActionOutcome>>>({});
   const [webRestart, setWebRestart] = useState<{ pid: number | null } | null>(null);
   const [firstWebPid, setFirstWebPid] = useState<number | null | undefined>(undefined);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -74,10 +74,10 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
 
 
   const act = useCallback(async (key: string, path: string, body?: unknown) => {
+    const place = key === "update" ? "update" : "header";
+    const record = (outcome: ActionOutcome) => setOutcomes((value) => ({ ...value, [place]: outcome }));
     setPending((value) => new Set(value).add(key));
-    setError(null);
-    setOptionalCheckFailures([]);
-    setOutcomeInUpdateCard(key === "update");
+    setOutcomes({});
     /* The snapshot this action answers with is ordered from now: a stream
        state that arrives while it runs is newer and stays. Its outcome (the
        error, the restart it began) is the action's own and always shown. */
@@ -89,13 +89,13 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
         body: body === undefined ? undefined : JSON.stringify(body),
       });
       const payload = await response.json().catch(() => null) as ActionResponse | null;
-      if (!response.ok) setError(actionError(response.status, payload));
-      else if (payload?.optionalCheckFailures?.length) setOptionalCheckFailures(payload.optionalCheckFailures);
+      if (!response.ok) record({ error: actionError(response.status, payload) });
+      else if (payload?.optionalCheckFailures?.length) record({ error: null, optionalCheckFailures: payload.optionalCheckFailures });
       const next = response.ok ? payload as Snapshot | null : payload?.snapshot;
       if (next && next.meta) feed.accept(next, ticket);
       return response.ok;
     } catch {
-      setError({ code: "offline" });
+      record({ error: { code: "offline" } });
       return false;
     } finally {
       setPending((value) => {
@@ -184,9 +184,10 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     armed,
     openLogs,
     pending,
-    error,
-    optionalCheckFailures,
-    outcomeInUpdateCard,
+    error: outcomes.header?.error ?? null,
+    optionalCheckFailures: outcomes.header?.optionalCheckFailures,
+    updateOutcome: outcomes.update,
+    phone: isMobile,
     waitingForWeb: webRestart !== null && (feed.offline || !web || web.pid === webRestart.pid),
     reloadTo: replaced ? (s?.serving.web?.short || s?.installed.short || null) : null,
   };
