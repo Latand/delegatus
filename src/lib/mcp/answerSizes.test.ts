@@ -4,8 +4,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-// The gate supplies isolated process state. Keep this directory for fixture-only files.
+// Set roots before importing the service: even a refused call must be isolated.
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-sizes-"));
+for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "TMPDIR"]) {
+  process.env[key] = path.join(sandbox, key);
+  fs.mkdirSync(process.env[key]!, { recursive: true });
+}
+process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
+process.env.LLV_RUNTIME_HOST_SOCKET = path.join(sandbox, "absent.sock");
+process.env.LLV_RUNTIME_HOST_CONTROL_SOCKET = path.join(sandbox, "absent-control.sock");
 afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 const bindingModule = process.env.MCP_SIZE_BINDINGS ?? "./bindings";
@@ -497,7 +504,6 @@ test("real service uses keyed reads and replays only changed selection rows on a
   const nextLinkPage = await call("list_tasks", { ids: [tasks[20]!.id, tasks[50]!.id], limit: 50 });
   expect(nextLinkPage.tasks.find((task: { id: string }) => task.id === tasks[20]!.id).pipelineIds).toEqual([]);
   expect(nextLinkPage.tasks.find((task: { id: string }) => task.id === tasks[50]!.id).pipelineIds).toEqual([pipelines[50]!.id]);
-  console.log(`Indexed 10000-card service: changed-ID reads=1, single task update metadata=1, single pipeline update metadata=1`);
   expect(pipelineIndex.work.metadataRows - beforePipelines).toBe(1);
   expect(taskSelectionPageCalls).toBe(0);
   console.log(`Indexed 10000-card service: keyed task reads remain one per requested ID; list_tasks skips task BoardSelection`);
