@@ -1,5 +1,44 @@
-import { expect, test, tickPipelines, loadPipelines, savePipelines, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, stampPipelinePrompt, providerRecoveryHarness, cutChainKit, CHAIN_RESET, otherKindCut, largeToolResult } from "./engine.fixture";
+import { expect, test, tickPipelines, loadPipelines, savePipelines, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, stampPipelinePrompt, providerRecoveryHarness, cutChainKit, CHAIN_RESET, otherKindCut, largeToolResult, engineModule } from "./engine.fixture";
+import { pipelineStageRead } from "@/lib/mcp/compactAnswers";
 
+test.each([
+  ["prose", "other", "This content was flagged for possible cybersecurity risk."],
+  ["native code without a message", "cyber_policy", ""],
+] as const)("a Codex cybersecurity refusal from %s parks and appears in the stage attempt read", async (_source, errorClass, message) => {
+  const f = await providerRecoveryHarness("codex", errorClass, message);
+  const original = loadPipelines()[0]!;
+  const stageId = original.cursor!.stageId;
+  const source = original.runs[0]!.attempts[0]!;
+  f.advance(1_000);
+  const startedAt = f.h.ports.now();
+  f.advance(1_000);
+  const file = stageTranscript("codex-cybersecurity-refusal", [
+    { type: "event_msg", timestamp: startedAt, payload: { type: "task_started" } },
+    { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_complete", error: {
+      ...(message ? { message } : {}), codex_error_info: errorClass,
+    } } },
+  ]);
+  readFixtures(f.h, { [source.agentPath!]: file });
+
+  await engineModule.recoverPipelineProviderTurn(original.id, f.h.ports);
+  f.advance(10 * 60_000);
+  await tickPipelines([], f.h.ports);
+
+  const parked = loadPipelines()[0]!;
+  const detail = `stage cut by Codex cybersecurity refusal after 0 tries; last: ${message || errorClass}`;
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: detail, worktreeDir: original.worktreeDir, branch: original.branch });
+  expect(pipelineStageRead(parked, stageId, source.n).attempt).toMatchObject({
+    state: "needs_decision",
+    conversationId: source.conversationId,
+    error: detail,
+    providerRecoveries: [
+      { action: "wait", condition: "Codex cybersecurity refusal" },
+      { action: "park", condition: "Codex cybersecurity refusal", summary: detail },
+    ],
+  });
+  expect(f.h.spawnInputs).toHaveLength(1);
+  expect(f.sends).toEqual([]);
+});
 
 // A parked retry's confirmation wait goes with its chain when the next chain,
 // read with no tick between, runs past the read bound.

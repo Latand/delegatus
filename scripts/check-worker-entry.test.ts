@@ -35,7 +35,7 @@ for (const call of ["open", "openat"]) for (const [flags, admitted] of [
   ["os.O_PATH | os.O_WRONLY", true],
   ["os.O_PATH | os.O_TRUNC", true],
 ] as const) test.skipIf(process.platform !== "linux" || call === "open" && process.arch !== "x64")(`${call} preserves compiler admission for ${flags}`, () => {
-  const source = String.raw`import ctypes,os,platform,subprocess,sys,tempfile
+  const source = String.raw`import ctypes,os,platform,signal,subprocess,sys,tempfile
 with tempfile.TemporaryDirectory() as root:
  filename=os.path.join(root,"compiler")
  with open(filename,"w") as file: file.write("Micro"+"soft Corporation\nfunction cre"+"ateProgram(")
@@ -53,7 +53,7 @@ os.close(fd)
  result=subprocess.run(["python3","-I",sys.argv[1],"python3","-I","-c",command,filename,sys.argv[2],sys.argv[3],platform.machine()],env=env,capture_output=True,text=True,timeout=5)
  assert result.stdout == "opening\n",result
  if sys.argv[4] == "true":
-  assert result.returncode == 137,result
+  assert result.returncode == -signal.SIGKILL,result
  else:
   assert result.returncode == 0,result.stderr
 `;
@@ -109,6 +109,27 @@ assert int(os.environ["LLV_CHECK_ENTRY_PID"]) == 0
 `;
   const command = ["python3", "-I", "-c", source];
   const result = spawnSync("python3", ["-I", entry, ...(nested ? ["python3", "-I", entry] : []), ...command], { encoding: "utf8", timeout: 10_000 });
+  expect(result.status, result.stderr).toBe(0);
+});
+
+test.skipIf(process.platform !== "linux")("worker entry preserves a real signal and an explicit shell-style exit as distinct results", () => {
+  const source = String.raw`import signal,subprocess,sys
+entry = [sys.executable, "-I", sys.argv[1]]
+command = [sys.executable, "-I", "-c"]
+terminate = """import os,signal,sys
+sig = int(sys.argv[1])
+if sig != signal.SIGKILL:
+ signal.signal(sig, signal.SIG_DFL)
+os.kill(os.getpid(), sig)
+"""
+for argv in (entry, entry + entry):
+ for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGKILL):
+  result = subprocess.run([*argv, *command, terminate, str(sig)], timeout=4)
+  assert result.returncode == -sig, result
+ result = subprocess.run([*argv, *command, "raise SystemExit(128 + 15)"], timeout=4)
+ assert result.returncode == 143, result
+`;
+  const result = spawnSync("python3", ["-I", "-c", source, entry], { encoding: "utf8", timeout: 10_000 });
   expect(result.status, result.stderr).toBe(0);
 });
 
@@ -250,7 +271,7 @@ try:
    assert time.monotonic()<deadline,"fixture command did not stop"
    time.sleep(0.005)
  runner.terminate()
- assert runner.wait(timeout=2) in (137,143)
+ assert runner.wait(timeout=2) in (-signal.SIGKILL,-signal.SIGTERM)
  for fd in descriptors:
   poll=select.poll();poll.register(fd,select.POLLIN)
   assert poll.poll(0),"cancelled descendant still alive at supervisor exit"

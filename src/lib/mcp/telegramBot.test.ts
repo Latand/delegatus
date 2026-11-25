@@ -3,15 +3,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 
 import { TelegramBotError } from "@/lib/telegram/bot/service";
 import { telegramBotFailure } from "@/lib/telegram/bot/http";
 
 import { productionViewerControlDependencies, viewerMcpBindings, type ViewerControlDependencies } from "./bindings";
-import { createMcpToolService, McpDispatchVerdictError, McpToolRefusal, MemoryMcpReceiptStore, SqliteMcpReceiptStore } from "./server";
+import { createMcpToolService, createViewerMcpServer, McpDispatchVerdictError, McpToolRefusal, MemoryMcpReceiptStore, SqliteMcpReceiptStore } from "./server";
 
-/* The three Telegram bot tools reach the Viewer's agent route and nothing
+/* The Telegram bot tools reach the Viewer's agent route and nothing
    else (docs/design/telegram-bot-account.md, Decision 6). */
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-telegram-bot-"));
@@ -78,6 +81,78 @@ test("telegram_bot_send forwards links for the agent route to decide whether a t
   await bindings().telegram_bot_send({ clientRequestId: "link-3", chat: "t.me/plain_group/42", text: "Report" });
   expect(dispatched[2]!.body.chat).toBe("t.me/plain_group/42");
   expect(dispatched[2]!.body).not.toHaveProperty("topicId");
+});
+
+test("reaction tools forward the chat and targeted message, preserving the custom emoji ID", async () => {
+  const reaction = { type: "custom_emoji", custom_emoji_id: "9007199254740993" };
+  const chat = "team-reports";
+  const answer = { chat, chatId: "-1000000000101", messageId: 517, reaction, setBy: { name: "Report Bot", username: null } };
+  dispatchAnswer = async () => answer;
+  expect(await bindings().telegram_bot_set_reaction({ clientRequestId: "reaction-set", chat, messageId: 517, reaction })).toEqual(answer);
+  expect(dispatched).toEqual([{
+    pathname: "/api/telegram/bot/agent",
+    body: { op: "set_reaction", clientRequestId: "reaction-set", chat, messageId: 517, reaction },
+    headers: expect.objectContaining({ [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY }),
+  }]);
+  await bindings().telegram_bot_reactions({ clientRequestId: "reaction-read", chat });
+  expect(reads).toEqual(["/api/telegram/bot/agent?op=reactions&chat=team-reports"]);
+});
+
+test("reaction tool envelopes preserve named refusals and replay an uncertain write without redispatch", async () => {
+  let writes = 0;
+  const viewer = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (req) => {
+    if (req.method === "GET") return telegramBotFailure(new TelegramBotError("rate_limited", "Telegram rate limit", { retryAfterSeconds: 4 }));
+    writes++;
+    return telegramBotFailure(writes === 1
+      ? new TelegramBotError("reaction_paid_unsupported", "Telegram bots cannot set paid reactions")
+      : new TelegramBotError("reaction_uncertain", "Telegram did not confirm whether the reaction was set"));
+  } });
+  const previousControl = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
+  try {
+    const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), new MemoryMcpReceiptStore());
+    const chat = "team-reports";
+    const read = await service.callTool("telegram_bot_reactions", { clientRequestId: "reaction-rate-limit", chat });
+    expect(read).toMatchObject({ ok: false, code: "rate_limited", retryable: true, details: { retryAfterSeconds: 4 } });
+    const paid = await service.callTool("telegram_bot_set_reaction", { clientRequestId: "reaction-paid", chat, messageId: 5, reaction: { type: "paid" } });
+    expect(paid).toMatchObject({ ok: false, code: "reaction_paid_unsupported", retryable: false });
+    const args = { clientRequestId: "reaction-uncertain", chat, messageId: 5, reaction: { type: "emoji", emoji: "👍" } };
+    expect(await service.callTool("telegram_bot_set_reaction", args)).toMatchObject({ ok: false, code: "reaction_uncertain", retryable: false, replayed: false });
+    expect(await service.callTool("telegram_bot_set_reaction", args)).toMatchObject({ ok: false, code: "reaction_uncertain", retryable: false, replayed: true });
+    expect(writes).toBe(2);
+  } finally {
+    if (previousControl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+    else process.env.LLV_VIEWER_CONTROL_URL = previousControl;
+    viewer.stop(true);
+  }
+});
+
+test("the MCP protocol accepts one reaction and rejects arrays and out-of-range message IDs before dispatch", async () => {
+  const tool = "telegram_bot_set_reaction";
+  const service = createMcpToolService(bindings(), new MemoryMcpReceiptStore());
+  const server = createViewerMcpServer(service, [tool]);
+  const client = new Client({ name: "reaction-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const reaction = { type: "custom_emoji", custom_emoji_id: "9007199254740993" };
+    const args = { chat: "team-reports", messageId: 5, reaction };
+    for (const [clientRequestId, overrides] of [
+      ["array", { reaction: [reaction, reaction] }],
+      ["zero", { messageId: 0 }],
+      ["overflow", { messageId: 2147483648 }],
+    ] as const) {
+      expect((await client.callTool({ name: tool, arguments: { ...args, ...overrides, clientRequestId } })).isError).toBe(true);
+    }
+    expect(dispatched).toEqual([]);
+    const result = await client.callTool({ name: tool, arguments: { ...args, clientRequestId: "single" } });
+    expect(result.isError).not.toBe(true);
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]!.body).toEqual({ ...args, op: "set_reaction", clientRequestId: "single" });
+  } finally {
+    await client.close();
+    await server.close();
+  }
 });
 
 test("telegram_bot_send_media forwards album paths and captions with the caller capability", async () => {
