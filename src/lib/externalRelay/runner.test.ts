@@ -4301,6 +4301,55 @@ for (const admission of ["failed_receipt", "lost_response"] as const) test(`owne
   } finally { recover = true; await done; await service.close(); }
 });
 
+test.each(["negotiated", "legacy", "locally refused"] as const)("owner Markdown at completion (%s)", async mode => {
+  const { relayAnswerOp } = await import("./ownerAnswer");
+  const url = "https://example.blog/?p=12345";
+  const markdown = `**Reading list**\n\n- [Open the post](${url})\n- *Read next*`;
+  const plain = `Reading list\n\n- Open the post ${url}\n- Read next`;
+  const rich = mode !== "legacy";
+  const guide = richRequest().input.format!;
+  const request = { ...contextRequest, request_id: `owner_markdown_${mode.replace(" ", "_")}`,
+    answer: { ...contextRequest.answer, max_chars: rich ? 32_000 : 4000 },
+    ...(rich ? { features: ["relay_rich_messages"] } : {}),
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true },
+      ...(rich ? { format: { ...guide, max_blocks: mode === "locally refused" ? 1 : guide.max_blocks } } : {}) },
+  };
+  const completions: unknown[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`);
+  paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const conversationId = "conversation_owner_markdown_fixture";
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { ownerPorts: {
+      launch: async () => ({ status: 202, body: { conversationId, initialMessage: "delivered" } }),
+      observe: async () => {
+        if (rich) expect(await relayAnswerOp(conversationId, { text: markdown, format: "rich_markdown" }))
+          .toMatchObject({ format: "rich_markdown" });
+        return { state: "ended", finalText: rich ? "Final transcript message" : markdown };
+      },
+      stop: async () => { throw new Error("a settled reply needs no cancellation"); },
+      pollMs: 1,
+    } });
+    const expected = {
+      action: "reply", reply_to: request.input.respond_to,
+      text: mode === "negotiated" ? markdown : plain,
+      ...(rich ? { format: mode === "negotiated" ? "rich_markdown" : "plain" } : {}),
+    };
+    expect(result).toMatchObject({ outcome: "answered", answer: expected });
+    expect(completions).toHaveLength(1);
+    expect(completions[0]).toMatchObject({ outcome: "answered", answer: expected });
+    const record = readAnswerRecord(paired.id, request.target_id, request.request_id);
+    expect(record).toMatchObject({ delivery: "accepted", answer: expected });
+    expect(record?.answer?.format).toBe(rich ? expected.format : undefined);
+    expect(record?.drops ?? []).toEqual(mode === "locally refused" ? [{ part: "text", reason: "blocks" }] : []);
+    expect(record?.completionRefusals).toBeUndefined();
+  } finally { await service.close(); }
+});
+
 test("owner credentials, host paths and key material never reach completion, answer records or diagnostics", async () => {
   const { rotateOperatorSpawnCapability } = await import("@/lib/agent/operatorCapability");
   const control = rotateOperatorSpawnCapability();
