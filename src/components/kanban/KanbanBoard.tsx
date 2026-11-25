@@ -15,7 +15,7 @@ import { suggestTaskIcon } from "@/lib/tasks/taskIconSuggest";
 import { TASK_PRIORITIES, type BoardTask, type TaskColor, type TaskPriority, type TaskStatus, type TaskHold } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import { MAX_VISIBLE_PATHS } from "@/lib/view/types";
-import { latestAttempt, pipelineStateLabel, stagePromptExtra } from "@/components/pipelines/pipelineModel";
+import { latestAttempt, pipelineStateLabel, stageAsksOperator, stagePromptExtra } from "@/components/pipelines/pipelineModel";
 import { conversationSourceFile, ConversationDrafts } from "@/components/pipelines/conversationDraftClient";
 import { conversationRefusalText, useConversationPreview } from "@/components/pipelines/useConversationDraft";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
@@ -254,11 +254,11 @@ interface OpenStageDraft {
   stageId: string;
 }
 
-/** The Stages sheet: which card's pipeline, the stage it opened on, and what to hand focus back to. */
+/** The Stages sheet: which card's pipeline, the stage whose tab is selected, and what to hand focus back to. */
 interface SheetTarget {
   cardId: string;
   pipelineId: string;
-  focus: string | null;
+  selected: string | null;
   opener: HTMLElement | null;
   /** Opened from a lane's «Graph»: the sheet starts with its graph shown. */
   graph: boolean;
@@ -476,7 +476,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The lane review sheet (docs/design/lane-diff-comments.md); one of the two sheets is open at a time. */
   const [review, setReview] = useState<{ pipelineId: string; title: string; opener: HTMLElement | null } | null>(null);
   /* Pane folds and attempt choices outlive one opening of the sheet, as the prototype's do. */
-  const [paneFolds, setPaneFolds] = useState<ReadonlySet<string>>(EMPTY_SET);
   const [paneAttempts, setPaneAttempts] = useState<ReadonlyMap<string, number>>(() => new Map());
   /* The board draws the edits it has sent ahead of the poll: a new title or
      colour at once, and a hidden group gone at once with a hide stamped now. */
@@ -669,12 +668,12 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const { pipeline } = sheetSummary.summary;
     return pipeline.stages.map((stage) => {
       const key = stageDraftKey(pipeline.id, stage.id);
-      const folded = paneFolds.has(key);
       const shown = shownAttempt(pipeline, stage.id, paneAttempts.get(key) ?? null);
       const file = shown ? (shown.agentPath ? filesByPath.get(shown.agentPath) : undefined) ?? (shown.conversationId ? filesByConversation.get(shown.conversationId) : undefined) ?? null : null;
-      return { stage, folded, attempts: operationalAttempts(pipeline, stage.id), shown, file, readerKey: file && !folded ? conversationIdentity(file) : null };
+      /* One stage is selected at a time, and only its pane mounts a conversation. */
+      return { stage, attempts: operationalAttempts(pipeline, stage.id), shown, file, readerKey: file && stage.id === sheet?.selected ? conversationIdentity(file) : null };
     });
-  }, [sheetSummary, paneFolds, paneAttempts, filesByPath, filesByConversation]);
+  }, [sheet?.selected, sheetSummary, paneAttempts, filesByPath, filesByConversation]);
   /* A conversation a pane shows is mounted in that pane, unless the agent window shows it or is bringing it in. */
   const sheetSlots = useMemo(() => new Set(sheetPanes.flatMap((pane) => (pane.readerKey && pane.readerKey !== shownState && pane.readerKey !== requestedAgent ? [pane.readerKey] : []))), [sheetPanes, shownState, requestedAgent]);
 
@@ -700,6 +699,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         inSheet: sheetSlots.has(reader.key),
         owner: owner && card ? stableOwner(reader.key, { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: owner.stage }) : null,
         ...(isCurrentSeatConversation(seatRefs, file) ? { seat: true, seatWaiting: seatIdle, ...(seatPlaceholder?.key === reader.key ? { composerPlaceholder: seatPlaceholder.text } : {}) } : {}),
+        ...(owner?.stage && stageAsksOperator(owner.stage.pipeline, owner.stage.stage.id) ? { composerPlaceholder: t("kanban.stages.answerPlaceholder") } : {}),
         /* The window is the operator's conversation window: the agent in its
            reader takes the one composer from any other place of the same
            conversation, the seat's included. */
@@ -717,6 +717,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
           file: pane.file,
           inSheet: shownState !== pane.readerKey,
           owner: stableOwner(pane.readerKey, { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: { pipeline: summary.pipeline, stage: pane.stage } }),
+          ...(stageAsksOperator(summary.pipeline, pane.stage.id) ? { composerPlaceholder: t("kanban.stages.answerPlaceholder") } : {}),
         });
       }
     }
@@ -2352,10 +2353,10 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* ── The Stages sheet ─────────────────────────────────────────────────── */
   const openSheet = useCallback((cardId: string, pipeline: Pipeline, stageId?: string, options: { graph?: boolean } = {}) => {
     const summary = cardsByIdRef.current.get(cardId)?.pipelines.find((entry) => entry.pipeline.id === pipeline.id);
-    const focus = stageId ?? (summary ? currentStageId(summary.pipeline, summary.views) : null);
+    const selected = stageId ?? (summary ? currentStageId(summary.pipeline, summary.views) : null);
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setReview(null);
-    setSheet({ cardId, pipelineId: pipeline.id, focus, opener, graph: options.graph === true });
+    setSheet({ cardId, pipelineId: pipeline.id, selected, opener, graph: options.graph === true });
   }, []);
   const openReview = useCallback((pipeline: Pipeline, title: string) => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -2402,15 +2403,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
   useEffect(() => {
     if (sheet && !sheetSummary) closeSheet();
   }, [sheet, sheetSummary, closeSheet]);
-  const foldPanes = useCallback((pipelineId: string, stageIds: readonly string[], folded: boolean) => {
-    setPaneFolds((current) => {
-      const next = new Set(current);
-      for (const stageId of stageIds) {
-        if (folded) next.add(stageDraftKey(pipelineId, stageId));
-        else next.delete(stageDraftKey(pipelineId, stageId));
-      }
-      return next;
-    });
+  const selectStage = useCallback((stageId: string) => {
+    setSheet((current) => (current && current.selected !== stageId ? { ...current, selected: stageId } : current));
   }, []);
 
   /* ── Pipeline actions over the pipeline route (`usePipelineActions`) ──── */
@@ -2431,7 +2425,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
     menu.setOpen({ anchor, value: { kind: "pipeline", cardId, pipelineId: pipeline.id } });
   }, [menu]);
   /* Skip or Retry pressed as a link on the stop's entry: the menu row's request, with Skip held for its receipt. */
-  const answerLane = useCallback((cardId: string, pipeline: Pipeline, answer: LaneAnswerItem) => {
+  const answerLane = useCallback((cardId: string, pipeline: Pipeline, answer: Pick<LaneAnswerItem, "action" | "stageId" | "stageName" | "expectedAttempt">) => {
     /* Read through the ref: a handler that follows the card list would re-render every card on each catalog answer. */
     const card = cardsByIdRef.current.get(cardId);
     startPipelineAction(
@@ -3096,24 +3090,20 @@ export function KanbanBoard(props: KanbanBoardProps) {
       summary={sheetSummary.summary}
       panes={sheetPanes}
       flowsById={flowsById}
-      initialFocus={sheet.focus}
+      selected={sheet.selected}
+      onSelect={selectStage}
+      nowMs={props.now * 1000}
       initialGraph={sheet.graph}
       windowReader={shown}
       windowDraft={shownDraftStage(shown, sheet.pipelineId)}
       placement={placement}
       drafts={stageDrafts}
       ports={pipelinePorts}
-      onFold={(stageId, folded) => foldPanes(sheet.pipelineId, [stageId], folded)}
-      onFoldMany={(stageIds, folded) => foldPanes(sheet.pipelineId, stageIds, folded)}
       onChooseAttempt={(stageId, n) => setPaneAttempts((current) => withEntry(current, stageDraftKey(sheet.pipelineId, stageId), n))}
       onStageMenu={(stage, anchor) => menu.setOpen({ anchor, value: { kind: "stage", cardId: sheetSummary.card.id, pipelineId: sheet.pipelineId, stageId: stage.id, from: "sheet" } })}
+      onAnswer={(pipeline, answer) => answerLane(sheetSummary.card.id, pipeline, answer)}
+      acting={acting.has(sheet.pipelineId)}
       onOpenRecorded={openRecorded}
-      onOpenStage={(stage) => {
-        /* The window opens over the sheet; closing it hands the keyboard back to the node or chip. */
-        const from = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-        openStage(sheetSummary.summary.pipeline, stage, sheetSummary.card.id);
-        openedFrom.current = from;
-      }}
       onLeaveWindow={leaveWindow}
       onClose={closeSheet}
     />

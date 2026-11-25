@@ -4,7 +4,7 @@ import type { Flow } from "@/lib/flows/types";
 import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import { translate } from "@/lib/i18n";
 
-import { attemptArrivals, attemptOrdinal, edgeFired, graphOrder, graphTopology, layoutGraph, loopShapes, operationalAttempts, pastAttempts, routeEdge, stageViews, unitMembers, wireFired } from "./pipelineGraph";
+import { attemptArrivals, attemptOrdinal, edgeFired, fixRoundMarks, graphOrder, graphTopology, layoutGraph, loopShapes, operationalAttempts, passChain, pastAttempts, routeEdge, stageViews, unitMembers, wireFired } from "./pipelineGraph";
 import { pastAttemptLabel } from "./PipelineSection";
 
 /* The kanban stage graph's pure half (#1695 K5a) over invented pipeline
@@ -391,4 +391,90 @@ test("a lineage-adopted helper attempt is evidence: it spends no retry, is not t
   const past = pastAttempts([record], new Map());
   expect(past.filter((row) => row.stageId === "implement").map((row) => [row.kind, row.n])).toEqual([["helper", 1], ["attempt", 1]]);
   expect(past.find((row) => row.kind === "helper")!.conversation).toEqual({ path: "/fixture/helper.jsonl", conversationId: "conversation_helper" });
+});
+
+/* A fix two reviewers share has no pass wire into it, so graph order puts it first; one column must read the lane in order. */
+const sharedStages = [
+  stage("brief", "architect", "build"),
+  stage("fix", "builder", "review"),
+  stage("build", "builder", "review"),
+  stage("review", "reviewer", "visual", { onFail: { to: "fix", maxRounds: 2 } }),
+  stage("visual", "visual-critic", null, { onFail: { to: "fix", maxRounds: 1 } }),
+];
+
+test("one column lists the stages the lane runs in order, then the stage only a failure reaches", () => {
+  const record = pipeline(sharedStages, [], null);
+  const column = layoutGraph(record, 340, "TB");
+  const top = (id: string) => column.nodes.get(id)!.y;
+  expect(["brief", "build", "review", "visual", "fix"].map(top)).toEqual(["brief", "build", "review", "visual", "fix"].map(top).sort((a, b) => a - b));
+  expect(top("fix")).toBeGreaterThan(top("visual"));
+});
+
+test("a graph too wide for the sheet turns into one column that fits, never a cut left-to-right row", () => {
+  const eight = pipeline(["a", "b", "c", "d", "e", "f", "g", "h"].map((id, at, all) => stage(id, "builder", all[at + 1] ?? null)), [], null);
+  expect(layoutGraph(eight, 2000).dir).toBe("LR");
+  const narrow = layoutGraph(eight, 780);
+  expect(narrow.dir).toBe("TB");
+  expect(narrow.width).toBeLessThanOrEqual(780);
+});
+
+test("a fix only a failure reaches stands on the layer before the stage it re-enters, so its wire is short and ends there; a return to an earlier step stays a return", () => {
+  const record = pipeline(sharedStages, [], null);
+  const layout = layoutGraph(record, 2000);
+  const { topology } = layout;
+  expect(["brief", "build", "review", "visual", "fix"].map((id) => topology.layer.get(id))).toEqual([0, 1, 2, 3, 1]);
+  expect(topology.row.get("fix")).toBe(1);
+  /* Both fail edges name a fix the lane goes on to: forward, not «back». */
+  expect(topology.loops.get("review")?.forward).toBe(true);
+  expect(topology.loops.get("visual")?.forward).toBe(true);
+  /* The fix's own pass wire leaves its right edge, goes up between the two layers and ends on Review's left edge: no node stands in its way. */
+  const wire = layout.topology.wires.find((edge) => edge.id === "fix:pass:review")!;
+  const fix = layout.nodes.get("fix")!;
+  const review = layout.nodes.get("review")!;
+  const route = routeEdge(layout, wire)!;
+  expect(route.d.startsWith(`M${fix.x + fix.w},${fix.y + fix.h / 2}`)).toBe(true);
+  expect(route.d.endsWith(`${review.x - 2},${review.y + review.h / 2}`)).toBe(true);
+  const build = layout.nodes.get("build")!;
+  const gap = fix.x + fix.w + (review.x - fix.x - fix.w) / 2;
+  expect(gap).toBeGreaterThan(build.x + build.w);
+  expect(gap).toBeLessThan(review.x);
+  /* A retry back to Build is a return to an earlier step. */
+  expect(graphTopology(pipeline(retryStages, [], null)).loops.get("verify")?.forward).toBe(false);
+});
+
+test("a chain of fixes behind a fail edge keeps the pass chain's layers: each stands before the one it leads to", () => {
+  const record = pipeline([
+    stage("build", "builder", "review"),
+    stage("review", "reviewer", "visual", { onFail: { to: "fix-api", maxRounds: 2 } }),
+    stage("fix-api", "builder", "fix-web"),
+    stage("fix-web", "builder", "review"),
+    stage("visual", "visual-critic", null, { onFail: { to: "fix-web", maxRounds: 1 } }),
+  ], [], null);
+  const { layer, row } = graphTopology(record);
+  expect(["build", "review", "visual"].map((id) => layer.get(id))).toEqual([1, 2, 3]);
+  expect([layer.get("fix-api"), layer.get("fix-web")]).toEqual([0, 1]);
+  expect([row.get("fix-api"), row.get("fix-web")]).toEqual([1, 1]);
+  /* A stage the fail edge leads to with nothing to re-enter stands after its source. */
+  const open = graphTopology(pipeline([
+    stage("build", "builder", "review", { onFail: { to: "diagnose", maxRounds: 1 } }),
+    stage("review", "reviewer", null),
+    stage("diagnose", "architect", "report"),
+    stage("report", "cleaner", null),
+  ], [], null));
+  expect(["build", "review", "diagnose", "report"].map((id) => open.layer.get(id))).toEqual([0, 1, 1, 2]);
+});
+
+test("a fail edge's rounds are one mark per round of its budget, read from the fix's own attempts: a pass, a failure, a fix at work, a round left", () => {
+  const stages = [stage("build", "builder", "review"), stage("review", "reviewer", null, { onFail: { to: "fix", maxRounds: 3 } }), stage("fix", "builder", "review")];
+  const edge = { from: "review", to: "fix" };
+  const none = pipeline(stages, [], null);
+  expect(fixRoundMarks(none, edge, 3)).toEqual(["left", "left", "left"]);
+  const at1 = pipeline(stages, [{ stageId: "fix", attempts: [attempt(1, "running", at(1), failVia("review", 1))] }], null);
+  expect(fixRoundMarks(at1, edge, 3)).toEqual(["next", "left", "left"]);
+  const taken = pipeline(stages, [{ stageId: "fix", attempts: [attempt(1, "passed", at(1), failVia("review", 1)), attempt(2, "failed", at(5), failVia("review", 2)), attempt(3, "running", at(9), failVia("review", 3))] }], null);
+  expect(fixRoundMarks(taken, edge, 3)).toEqual(["ok", "bad", "next"]);
+  /* The same source attempt sent twice is one round, and an attempt another stage's failure started is not this edge's. */
+  const other = pipeline(stages, [{ stageId: "fix", attempts: [attempt(1, "passed", at(1), failVia("review", 1)), attempt(2, "passed", at(2), failVia("review", 1)), attempt(3, "passed", at(3), failVia("visual", 1))] }], null);
+  expect(fixRoundMarks(other, edge, 3)).toEqual(["ok", "left", "left"]);
+  expect(passChain(pipeline(stages, [], null))).toEqual(["build", "review"]);
 });

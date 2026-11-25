@@ -213,8 +213,8 @@
   :root:not([data-theme="light"]) .kb .reader.conv:focus-visible { box-shadow: inset 0 0 0 2px var(--color-accent); }
   /* The role-memory lesson button draws its outline at 40 % accent (2:1); solid it reads 5.3:1 or more. */
   :root:not([data-theme="light"]) .pblock .stage-lesson:focus-visible { outline-color: var(--color-accent); }
-  /* The pane halo is 26 % accent (1.5:1). */
-  :root:not([data-theme="light"]) .kb .pane:focus-visible { box-shadow: 0 0 0 2px var(--color-accent); }
+  /* A stage pane takes the keyboard when the Stages window opens and draws no ring of its own: its tone's rule is its one frame, and the selected tab shows where the keyboard is. */
+  :root:not([data-theme="light"]) .kb .pane:focus-visible { box-shadow: var(--shadow-1); }
   /* A control with no focus style of its own (the seat and reader icon buttons,
      the feed's summaries, report links) shows the browser ring, near-white
      here; it takes the accent. Colour only and no specificity, so every
@@ -444,8 +444,8 @@
 :root[data-theme="dark"] .kb .reader.conv:focus-visible { box-shadow: inset 0 0 0 2px var(--color-accent); }
 /* The role-memory lesson button draws its outline at 40 % accent (2:1); solid it reads 5.3:1 or more. */
 :root[data-theme="dark"] .pblock .stage-lesson:focus-visible { outline-color: var(--color-accent); }
-/* The pane halo is 26 % accent (1.5:1). */
-:root[data-theme="dark"] .kb .pane:focus-visible { box-shadow: 0 0 0 2px var(--color-accent); }
+/* A stage pane takes the keyboard when the Stages window opens and draws no ring of its own (see above). */
+:root[data-theme="dark"] .kb .pane:focus-visible { box-shadow: var(--shadow-1); }
 /* A control with no focus style of its own (the seat and reader icon buttons,
    the feed's summaries, report links) shows the browser ring, near-white
    here; it takes the accent. Colour only and no specificity, so every

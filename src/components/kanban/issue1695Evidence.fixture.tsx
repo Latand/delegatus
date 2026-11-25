@@ -50,6 +50,7 @@ import { VoiceConversationPanel } from "@/components/VoiceConversation";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleCallHistory, sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
 import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
+import { buildStageShapes } from "./stageShapes.fixture";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { attachVoiceOutput, openVoiceMicrophone, type VoiceMicrophone } from "@/lib/audio/voiceDevices";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
@@ -1858,7 +1859,25 @@ const stagePlacePipelines: Pipeline[] = STAGE_PLACE ? [pipeline("lane-stage-plac
     { stageId: "review", attempts: [attempt(1, "running", null, { definition: { runtime: "claude-cloud" }, cloud: { phase: "failed", fallback: { at: iso(5 * MIN), reason: "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)" } } })] },
   ],
   { stageId: "review", state: "running", input: null, activatedBy: null })] : [];
+/* `?scenario=stageshapes` (redesign S2): one lane per graph shape the Stages window must draw, each on a task of
+   its own, with invented stage ids and text (`stageShapes.fixture.ts`, which the phone's fixture reads too). */
+const STAGE_SHAPES = SCENARIO === "stageshapes";
+const stageShapeLanes = STAGE_SHAPES ? buildStageShapes({
+  project: PROJECT, iso, L,
+  file: (id, title, state) => {
+    const made = add(conversation(`shape-${id}`, title, state === "working" ? working({ plan: { current: "Reading the findings" } }) : state === "asking" ? {
+      mtime: now - 9 * MIN, lastTurn: { startedAt: (now - 14 * MIN) * 1_000, endedAt: (now - 10 * MIN) * 1_000 },
+      pendingQuestion: { kind: "question", toolUseId: `tool-shape-${id}`, transcriptPath: `/repo/shape-${id}.jsonl`, pid: 1, askedAt: iso(9 * MIN), questions: [{ question: L("Should the report keep the header row when it is exported as CSV?", "Чи лишати рядок заголовків у звіті, коли його експортують у CSV?"), header: "Export", multiSelect: false, options: [] }] },
+    } : { mtime: now - 300 * MIN }));
+    return { path: made.path, conversationId: made.conversationId! };
+  },
+}) : [];
+const shapePipelines: Pipeline[] = stageShapeLanes.map((entry) => entry.pipeline);
+const shapeTasks = (): BoardTask[] => stageShapeLanes.map((entry, index) => task(`t-shape-${entry.slug}`, "assigned", entry.pipeline.task, "", (index + 1) * MIN));
+
+
 const pipelines: Pipeline[] = [
+  ...shapePipelines,
   ...stagePlacePipelines,
   ...cloudChecksPipelines,
   ...wallPipelines,
@@ -2142,6 +2161,7 @@ const tasks: BoardTask[] = [
     task("t-rem-old", "assigned", L("A task from a peer that predates lane rows", "Задача від вузла, що ще не знає про рядки етапів"), "", 31 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
     task("t-rem-done", "done", L("Publish the linked boards guide", "Опублікувати посібник зі зв’язаних дошок"), "", 3 * 60 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
   ] : []),
+  ...(STAGE_SHAPES ? shapeTasks() : []),
   ...(SOUND_CAPTIONS ? [task("t-captions", "assigned", L("Sound captions: say what each sound means", "Підписи до звуків: що означає кожен"), "", 3 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),

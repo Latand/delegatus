@@ -11,22 +11,20 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 /*
- * One pipeline on the phone, the Stages view (#2072 slice 6,
- * docs/design/phone-kanban.md §3.13; mobile v2 lane 7 before it). What this
+ * One pipeline on the phone, the Stages window (redesign S2, variant 3;
+ * #2072 slice 6, docs/design/phone-kanban.md §3.13 before it). What this
  * guards is the shape behind the rendered frames:
  *
- *   - the BAR says where the lane stands (state · stage k of N · age) and the
- *     body owns the title, once;
- *   - the passed stages before the current one fold into one row that opens
- *     in place;
- *   - the current stage is expanded: who runs it, its attempt, what it last
- *     did, the agent's latest line, and "Open conversation"; the answer to a
- *     decision or a spent review budget sits inside it;
- *   - a waiting stage is one compact row whose ⚙ opens its configuration in a
- *     sheet, the desktop's own editor (lane 10);
- *   - the linked tasks, then "Past attempts · n", which lists the finished
- *     attempts, review rounds and a round's other reviewer transcripts;
- *   - the bar's ⋯ carries the lane's own actions and leads on to the board's.
+ *   - the BAR names the lane whole, and the body opens on the line that says
+ *     whom the lane waits on, the stages as a grid of tabs, the fail edges the
+ *     tabs do not carry as rule lines, and one pane under them;
+ *   - the pane holds the selected stage's conversation, the answer to a stop
+ *     and «Open agent»; a stage that has not started holds its first message,
+ *     and the pane's ⋯ opens the stage's sheet (its configuration, Retry,
+ *     Skip);
+ *   - the bar's ⋯ carries the lane's own actions, Show on board, Attach, the
+ *     linked tasks and «Past attempts · n» (each its own face), and leads on
+ *     to the board's menu.
  */
 
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
@@ -55,6 +53,7 @@ const { receipts } = await import("./MobileReceipt");
 const { setLocale } = await import("@/lib/i18n");
 
 const dom = new Window({ url: "http://localhost/", width: 390, height: 844 });
+(dom as unknown as { matchMedia: (query: string) => unknown }).matchMedia = (query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} });
 const G = globalThis as Record<string, unknown>;
 const OVERRIDES: Record<string, unknown> = {
   window: dom, document: dom.document, navigator: dom.navigator, Node: dom.Node, HTMLElement: dom.HTMLElement,
@@ -62,6 +61,15 @@ const OVERRIDES: Record<string, unknown> = {
   sessionStorage: dom.sessionStorage, localStorage: dom.localStorage,
   requestAnimationFrame: (cb: (t: number) => void) => setTimeout(() => cb(0), 0) as unknown as number,
   cancelAnimationFrame: (id: number) => clearTimeout(id),
+  ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
+  fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+    let body: unknown = {};
+    if (String(input).startsWith("/api/logs")) {
+      const { reqs } = JSON.parse(String(init?.body ?? "{}")) as { reqs: Array<{ id: string }> };
+      body = { chunks: Object.fromEntries(reqs.map((req) => [req.id, { data: "", start: 0, offset: 0, size: 0 }])) };
+    }
+    return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  },
 };
 const HAS: Record<string, boolean> = {};
 const SAVED: Record<string, unknown> = {};
@@ -92,7 +100,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const q = (host: HTMLElement, selector: string) => host.querySelector(selector) as unknown as HTMLElement | null;
 const qa = (host: HTMLElement, selector: string) => Array.from(host.querySelectorAll(selector)) as unknown as HTMLElement[];
-const click = (el: Element | null) => {
+const click = (el: { dispatchEvent(event: never): unknown } | null) => {
   if (!el) throw new Error("nothing to click");
   flushSync(() => el.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true }) as never));
 };
@@ -149,12 +157,6 @@ function parkedPipeline(over: Partial<Pipeline> = {}): Pipeline {
   } as unknown as Pipeline;
 }
 
-const stageRow = (host: HTMLElement, id: string) => q(host, `.pb-stage[data-stage="${id}"]`);
-const position = (k: number, n: number) => {
-  const text = translate("en", "kanban.stages.position", { k, n });
-  return text.charAt(0).toLowerCase() + text.slice(1);
-};
-
 /* The same lane, running its Implement stage: Design passed, and the agent's
    plan names what it is doing now. */
 const BUILDING = { ...IMPLEMENT, plan: { steps: [], done: 0, total: 0, current: "Checking the fallback path next", updatedAt: null } } as unknown as FileEntry;
@@ -169,149 +171,242 @@ function runningPipeline(): Pipeline {
   } as unknown as Partial<Pipeline>);
 }
 
-test("the bar says where the lane stands, and the body owns the title once", () => {
+const tab = (host: HTMLElement, stageId: string) => q(host, `[role="tab"][data-tab-stage="${stageId}"]`);
+const tabIds = (host: HTMLElement) => qa(host, '[role="tab"]').map((el) => el.getAttribute("data-tab-stage"));
+const selectedTab = (host: HTMLElement) => q(host, '[role="tab"][aria-selected="true"]')?.getAttribute("data-tab-stage") ?? null;
+const paneOf = (host: HTMLElement, stageId: string) => q(host, `.pane[data-stage="${stageId}"]`);
+const opened = async (host: HTMLElement) => { click(q(host, '[data-mobile2-open="menu"]')); await settle(); };
+
+test("the bar names the lane whole; the body opens on whom the lane waits on, the tab grid and one pane", () => {
   const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
   expect(q(host, '[data-mobile2-screen="pipeline"]')).not.toBeNull();
   expect(q(host, '[data-mobile2-pipeline="p2"]')).not.toBeNull();
   expect(q(host, "[data-mobile2-back]")).not.toBeNull();
-
-  const meta = q(host, "[data-mobile2-meta]")!;
-  expect(q(meta, ".pstate-word")!.textContent).toBe(translate("en", "pipelineState.needs_decision"));
-  expect(q(meta, ".pstate-word")!.getAttribute("data-pstate")).toBe("needs_decision");
-  /* "stage 3 of 5", the desktop's position words in a meta line, then the age
-     with a unit since the lane last moved (the review attempt ended an hour ago). */
-  /* The stage it stands on, in the one attempt caption, then where it sits (#1892). */
-  expect(meta.textContent).toBe(`${translate("en", "pipelineState.needs_decision")}·Review·${position(3, 5)}·1h`);
-  /* The heading is in view, so the bar does not carry the title as well. */
-  expect(q(host, "[data-mobile2-title-text]")).toBeNull();
-
+  /* The title is the bar's, once, and the body carries no second heading. */
+  expect(q(host, "[data-mobile2-title-text]")!.textContent).toBe("Fast conversation switching");
   const body = q(host, "[data-mobile2-pipeline-body]")!;
-  const heading = q(body, "[data-pipeline-heading]")!;
-  expect(heading.tagName).toBe("H2");
-  expect(heading.textContent).toBe("Fast conversation switching");
-  expect(body.textContent!.split("Fast conversation switching").length).toBe(2);
+  expect(body.textContent!.split("Fast conversation switching").length).toBe(1);
+  expect(q(body, "[data-pipeline-heading], [data-stages-count]")).toBeNull();
   /* No template or worktree line under the bar (README §4.7, critique P3-3). */
   expect(body.textContent).not.toContain("lane/p2");
   expect(body.textContent).not.toContain("/repo-w");
-  expect(q(body, "[data-stages-count]")!.textContent).toBe(`${translate("en", "mobile2.pipeline.stages")}5`);
+  /* The first line says the stop, as the card's state line does, with the dot in the owner's tone. */
+  const waits = q(body, ".gs-waits")!;
+  expect(waits.getAttribute("data-waits-on")).toBe("you");
+  expect(q(waits, ".gs-waits-words")!.textContent).toBe(translate("en", "cardState.you.lane", { why: translate("en", "cardState.why.other", { stage: "Review" }) }));
+  /* Five stages, in the order the lane runs them, the stopped one selected; one panel, one pane. */
+  expect(tabIds(host)).toEqual(["design", "implement", "review", "fix", "merge"]);
+  expect(selectedTab(host)).toBe("review");
+  expect(qa(host, '[role="tabpanel"]')).toHaveLength(1);
+  expect(qa(host, ".pane")).toHaveLength(1);
+  expect(paneOf(host, "review")).not.toBeNull();
+  /* The fail edge is one rule line under the tabs. */
+  expect(qa(host, ".gs-rule").map((rule) => rule.textContent)).toEqual([`↺ ${translate("en", "kanban.stages.ruleRest", { from: "Review", to: "Implement", fired: 0, max: 3 })}`]);
 });
 
-test("Attach is a list row after the stages, a link at its leading edge, and it opens the links sheet (#2148)", () => {
-  const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
-  const body = q(host, "[data-mobile2-pipeline-body]")!;
-  const attach = q(body, '[data-work-links-open="p2"]')!;
-  expect(attach.textContent).toBe(translate("en", "workLinks.attach"));
-  /* A row of its own, after the stage list and its loop words, never beside
-     the heading as bare text. */
-  expect(attach.className).toBe("pb-attach");
-  expect(attach.firstElementChild?.getAttribute("class")).toContain("pb-attach-icon");
-  const block = attach.parentElement!;
-  const order = Array.from(block.children).map((child) => child.tagName === "OL" ? "stages" : child === attach ? "attach" : child.className);
-  expect(order.indexOf("stages")).toBeLessThan(order.indexOf("attach"));
-  expect(order.at(-1)).toBe("attach");
-  /* With no link the heading has no empty row under it. */
-  expect(q(body, ".pb-links-row")).toBeNull();
-  click(attach);
-  expect(q(host, '[data-mobile2-links-sheet="p2"]')).not.toBeNull();
+test("a tab selects its stage's pane in place; a stage that ran shows its conversation and a stage that has not started holds its first message", () => {
+  const opened: string[] = [];
+  const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={(entry) => opened.push(entry.path)} />);
+  click(tab(host, "implement"));
+  expect(selectedTab(host)).toBe("implement");
+  expect(paneOf(host, "review")).toBeNull();
+  expect(q(paneOf(host, "implement")!, ".pname")!.textContent).toBe("2. Implement");
+  click(q(paneOf(host, "implement")!, "[data-open-conversation]"));
+  expect(opened).toEqual([IMPLEMENT.path]);
+  /* A stage with no transcript left in the scan is a statement, not a dead button. */
+  click(tab(host, "design"));
+  expect(q(paneOf(host, "design")!, "[data-open-conversation]")).toBeNull();
+  /* A stage that has not started holds its first message. */
+  click(tab(host, "fix"));
+  expect(q(paneOf(host, "fix")!, "[data-draft-message]")).not.toBeNull();
+  expect(q(paneOf(host, "fix")!, ".pstate")!.textContent).toBe(translate("en", "kanban.graphState.pending"));
 });
 
-test("the passed stages before the current one fold into one row, which opens and closes in place", () => {
-  const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
-  const rows = () => qa(host, ".pb-stage[data-stage]").map((el) => el.getAttribute("data-stage"));
-  expect(rows()).toEqual(["review", "fix", "merge"]);
-  const fold = q(host, "[data-passed-fold]")!;
-  expect(fold.tagName).toBe("BUTTON");
-  expect(fold.getAttribute("data-passed-fold")).toBe("2");
-  expect(fold.getAttribute("aria-expanded")).toBe("false");
-  expect(q(fold, ".pb-num")!.textContent).toBe("1–2");
-  expect(q(fold, ".pb-name")!.textContent).toBe(translate("en", "pipelineBlock.passedRow", { count: 2 }));
-  expect(q(fold, ".pb-ident-words")!.textContent).toBe("Design · Implement");
-  expect(q(fold, '.pmark[data-mark="check"]')).not.toBeNull();
-
-  click(fold);
-  expect(fold.getAttribute("aria-expanded")).toBe("true");
-  expect(rows()).toEqual(["design", "implement", "review", "fix", "merge"]);
-  /* The numbers are the stages' places in the chain, folded or not. */
-  expect(qa(host, ".pb-stage[data-stage] .pb-num").map((el) => el.textContent)).toEqual(["1", "2", "3", "4", "5"]);
-  click(fold);
-  expect(rows()).toEqual(["review", "fix", "merge"]);
-
-  /* A lane with one passed stage before the current one has nothing to fold. */
-  const one = mount(<MobilePipelineScreen pipeline={runningPipeline()} files={[BUILDING]} now={NOW} onOpenConversation={() => {}} />);
-  expect(q(one, "[data-passed-fold]")).toBeNull();
-  expect(qa(one, ".pb-stage[data-stage]").map((el) => el.getAttribute("data-stage"))).toEqual(["design", "implement", "review", "fix", "merge"]);
-});
-
-test("the decision says what it stopped on inside the stage it parked on; Skip and Retry are rows of the ⋯ sheet", async () => {
+test("the stage the lane stopped on says what it stopped on inside its pane; Skip and Retry are rows of the ⋯ sheet", async () => {
   const answered: string[] = [];
   const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={(entry) => answered.push(entry.path)} />);
-  const current = q(host, ".pb-stage[data-stage-current]")!;
-  expect(current.getAttribute("data-stage")).toBe("review");
-  /* The report lives in the stage; no answer is on the screen's face
-     (docs/design/calm-task-cards-build.md §4.2). */
+  const stop = q(paneOf(host, "review")!, "[data-pane-stop]")!;
+  /* The report lives in the stage; no answer is on the screen's face (docs/design/calm-task-cards-build.md §4.2). */
   expect(qa(host, "[data-answer-action]")).toEqual([]);
-  click(q(host, '[data-mobile2-open="menu"]'));
-  await settle();
+  expect(qa(stop, ".stage-findings li")[0]!.textContent).toContain("the feed cache is dropped");
+  expect(qa(stop, ".stage-findings li")[1]!.textContent).toBe(translate("en", "kanban.stageReport.moreFindings", { count: 1 }));
+  expect(q(stop, ".stage-report")!.textContent).toBe(translate("en", "pipelineBlock.reason.failed", { stage: "Review" }) + ` · ${translate("en", "pipelineVerdict.findings", { count: 2 })}`);
+  await opened(host);
   expect(Array.from(dom.document.querySelectorAll("[data-mobile2-pipeline-menu] [data-phone-lane-answer]")).map((el) => [el.getAttribute("data-phone-lane-answer"), el.textContent])).toEqual([
     ["skip-stage", translate("en", "kanban.pipelineAct.label.skip-stage", { stage: "Review" })],
     ["retry-stage", translate("en", "kanban.pipelineAct.label.retry-stage", { stage: "Review" })],
   ]);
   /* Each is a 44 px sheet row. */
   expect(Array.from(dom.document.querySelectorAll("[data-phone-lane-answer]")).every((el) => (el as unknown as HTMLElement).className.includes("min-h-11"))).toBe(true);
-  /* The first finding with its rank, then how many more (§3.13). */
-  const finding = qa(current, ".stage-findings li");
-  expect(finding[0]!.textContent).toContain("the feed cache is dropped");
-  expect(finding[1]!.textContent).toBe(translate("en", "kanban.stageReport.moreFindings", { count: 1 }));
-  expect(q(current, ".pb-answer .stage-report")!.textContent).toBe(translate("en", "pipelineBlock.reason.failed", { stage: "Review" }) + ` · ${translate("en", "pipelineVerdict.findings", { count: 2 })}`);
-  /* Who runs the stage, and its attempt, on the stage's own line. The attempt
-     is counted the way every stage label counts it (#1865): the stage's own
-     attempts, whatever the record numbered its single one. */
-  /* Its model glyph names the engine, so the line under it draws no second mark. */
-  expect(q(current, ".pb-stage-title [data-glyph-engine]")).not.toBeNull();
-  expect(q(current, ".pb-stage-ident [data-engine-mark]")).toBeNull();
-  expect(q(current, ".pb-stage-ident .imodel")).not.toBeNull();
-  /* A stage that ran once is its name alone (#1892). */
-  expect(q(current, ".pb-ident-words")!.textContent).toBe(`· ${translate("en", "roleCopy.reviewer.name")} · ${translate("en", "mobile2.pipeline.review")}`);
-  expect(q(current, ".pb-attempt")).toBeNull();
-  /* The fail edge's budget rides the failing stage's row, and the loop words under the list. */
-  expect(q(current, ".pret")!.textContent).toBe("↺0/3");
-  expect(qa(host, ".pb-loops li").map((el) => el.textContent)).toEqual([`↺ ${translate("en", "kanban.loopRest", { from: "Review", to: "Implement", count: 3 })}`]);
-  /* Its conversation is one row under the answer. */
-  click(q(current, "[data-open-conversation]"));
+  /* Its conversation is one control under the report. */
+  click(q(paneOf(host, "review")!, "[data-open-conversation]"));
   expect(answered).toEqual([REVIEW.path]);
 });
 
-test("a running stage is expanded with who runs it, what it is doing and its conversation; the waiting stages stay compact", () => {
-  const opened: string[] = [];
-  const host = mount(<MobilePipelineScreen pipeline={runningPipeline()} files={[BUILDING]} now={NOW} onOpenConversation={(entry) => opened.push(entry.path)} />);
-  const current = q(host, ".pb-stage[data-stage-current]")!;
-  expect(current.getAttribute("data-stage")).toBe("implement");
-  expect(current.getAttribute("data-stage-state")).toBe("running");
-  expect(q(current, '.mglyph[data-glyph-state="running"][data-live="1"]')).not.toBeNull();
-  expect(q(current, ".pb-stage-state")!.textContent).toBe(translate("en", "kanban.graphState.running"));
-  expect(q(current, "[data-stage-now]")!.textContent).toBe(translate("en", "kanban.stageReport.line", { who: translate("en", "roleCopy.builder.name"), outcome: translate("en", "kanban.graphState.running"), age: "6m" }));
-  expect(q(current, "[data-stage-latest]")!.textContent).toBe("“Checking the fallback path next”");
-  expect(q(current, ".pb-ident-words")!.textContent).toBe(`· ${translate("en", "roleCopy.builder.name")}`);
-  /* The current stage's head is no control of its own: its conversation is the row under it. */
-  expect(q(current, ".pb-stage-row")!.tagName).toBe("DIV");
-  click(q(current, "[data-open-conversation]"));
-  expect(opened).toEqual([BUILDING.path]);
-  expect(q(host, "[data-answer-action]")).toBeNull();
+test("the ⋯ holds the rows the screen's body used to list: Attach, the linked tasks and «Past attempts · n», each face with a way back", async () => {
+  const PRIOR = file("/repo/implement-1.jsonl", "Implement, first try");
+  const REVIEW_BOUND = { ...REVIEW, conversationId: "conversation-review-b" } as FileEntry;
+  const membership = (slot: string) => ({
+    kind: "flow" as const, containerId: "flow-9", role: "reviewer", slot, stageId: null, stageOrder: null, round: 3, parentConversationId: "conversation-builder",
+  });
+  const PRIOR_REVIEWER = {
+    ...file("/repo/review-a.jsonl", "Review round 3, binding a"),
+    conversationId: "conversation-review-a",
+    durableLineage: { kind: "review", role: "reviewer", parentConversationId: "conversation-builder", reviewsConversationId: "conversation-builder", memberships: [membership("reviewer:3:binding-a")] },
+  } as unknown as FileEntry;
+  const flow = {
+    id: "flow-9", implementerPath: IMPLEMENT.path, state: "reviewing",
+    rounds: [{ n: 3, reviewerPath: REVIEW_BOUND.path, reviewerConversationId: REVIEW_BOUND.conversationId, verdict: "REQUEST_CHANGES", startedAt: at(3_700) }],
+  } as unknown as Flow;
+  const pipeline = parkedPipeline({
+    runs: [
+      { stageId: "design", attempts: [attempt({})] },
+      { stageId: "implement", attempts: [attempt({ n: 1, state: "failed", agentPath: PRIOR.path, verdict: { status: "fail", findings: ["the export endpoint returned 500"] } }), attempt({ n: 2, agentPath: IMPLEMENT.path })] },
+      { stageId: "review", attempts: [attempt({ n: 3, state: "failed", agentPath: REVIEW_BOUND.path, flowId: "flow-9", verdict: { status: "fail", findings: ["one", "two"] } })] },
+    ] as unknown as Pipeline["runs"],
+    taskIds: ["t1"],
+  } as unknown as Partial<Pipeline>);
+  const task = { id: "t1", project: "atlas", text: "Approve the phone prototype\nmore", status: "assigned", assignments: [], updatedAt: new Date(NOW * 1_000).toISOString() } as unknown as BoardTask;
+  const openedFiles: string[] = [];
+  const openedTasks: string[] = [];
+  const store = nav();
+  const host = mount(
+    <MobilePipelineScreen
+      pipeline={pipeline}
+      files={[IMPLEMENT, REVIEW_BOUND, PRIOR, PRIOR_REVIEWER]}
+      flows={[flow]}
+      tasks={[task]}
+      now={NOW}
+      onOpenConversation={(entry) => openedFiles.push(entry.path)}
+      onOpenTask={(picked) => openedTasks.push(picked.id)}
+    />, store,
+  );
+  /* Nothing of them is on the body any more. */
+  expect(q(host, "[data-mobile2-section], [data-mobile2-past], [data-mobile2-past-toggle]")).toBeNull();
+  await opened(host);
+  const menu = () => dom.document.querySelector("[data-mobile2-pipeline-menu]") as unknown as HTMLElement;
+  expect(Array.from(menu().querySelectorAll("[data-mobile2-menu-row]")).map((row) => row.getAttribute("data-mobile2-menu-row"))).toEqual(["changes", "checks", "board", "links", "tasks", "past"]);
+  const rowOf = (name: string) => menu().querySelector(`[data-mobile2-menu-row="${name}"]`) as unknown as HTMLElement;
+  expect(rowOf("tasks").textContent).toContain(translate("en", "mobile2.pipeline.linkedTasks"));
+  expect(rowOf("tasks").textContent).toContain("1");
+  /* Design, the two Implement attempts, the Review attempt and its round, and the other binding. */
+  expect(rowOf("past").textContent).toContain(translate("en", "kanban.past.head", { count: 6 }));
+  expect(menu().querySelector("[data-mobile2-stage-caption]")!.textContent).toBe(translate("en", "mobile2.pipeline.stageCaption"));
 
-  /* Waiting stages: one row each, no body, their ⚙ the way to their settings. */
-  for (const id of ["review", "fix", "merge"]) {
-    const row = stageRow(host, id)!;
-    expect(row.querySelector(".pb-stage-body")).toBeNull();
-    expect(row.querySelector("[data-stage-configure]")!.tagName).toBe("BUTTON");
-    expect(row.querySelector(".pb-gear")).not.toBeNull();
-    expect(q(row, ".pb-stage-state")!.textContent).toBe(translate("en", "kanban.graphState.pending"));
-  }
-  /* A passed stage with no transcript left in the scan is a statement. */
-  expect(q(stageRow(host, "design")!, ".pb-stage-row")!.tagName).toBe("DIV");
+  /* Attach opens the links sheet. */
+  click(rowOf("links"));
+  await settle();
+  expect(dom.document.querySelector('[data-mobile2-links-sheet="p2"]')).not.toBeNull();
+  flushSync(() => store.closeSheet());
+  await settle();
+
+  /* The linked tasks, a face of the same sheet with a way back. */
+  await opened(host);
+  click(rowOf("tasks"));
+  await settle();
+  const tasks = dom.document.querySelector("[data-mobile2-pipeline-tasks]") as unknown as HTMLElement;
+  expect(tasks).not.toBeNull();
+  expect(Array.from(tasks.querySelectorAll("[data-mobile2-linked-task]")).map((row) => row.getAttribute("data-mobile2-linked-task"))).toEqual(["t1"]);
+  click(tasks.querySelector('[data-mobile2-menu-row="back"]'));
+  await settle();
+  expect(dom.document.querySelector("[data-mobile2-pipeline-menu]")).not.toBeNull();
+  click(rowOf("tasks"));
+  await settle();
+  click(dom.document.querySelector('[data-mobile2-linked-task="t1"]'));
+  await settle();
+  expect(openedTasks).toEqual(["t1"]);
+
+  /* Past attempts, each row opening its transcript. */
+  await opened(host);
+  click(rowOf("past"));
+  await settle();
+  const priorRow = dom.document.querySelector('[data-mobile2-past-row="p2:implement:attempt:1"]') as unknown as HTMLElement;
+  expect(priorRow.tagName).toBe("BUTTON");
+  expect(priorRow.className).toContain("min-h-11");
+  expect(priorRow.textContent).toContain(translate("en", "kanban.stageAttempt", { stage: "Implement", n: 1 }));
+  const roundRow = dom.document.querySelector('[data-mobile2-past-row="p2:review:attempt:3:round:3"]') as unknown as HTMLElement;
+  expect(roundRow.textContent).toContain(translate("en", "kanban.past.verdict.REQUEST_CHANGES"));
+  const binding = dom.document.querySelector(`[data-mobile2-past-row="p2:review:transcript:${PRIOR_REVIEWER.path}"]`) as unknown as HTMLElement;
+  expect(binding.textContent).toContain(translate("en", "mobile2.pipeline.reviewTranscript", { n: 3 }));
+  /* An attempt whose transcript left the scan is a statement, not a dead button. */
+  const design = dom.document.querySelector('[data-mobile2-past-row="p2:design:attempt:1"]') as unknown as HTMLElement;
+  expect(design.tagName).toBe("DIV");
+  expect(design.textContent).toContain(translate("en", "kanban.past.none"));
+  click(priorRow);
+  await settle();
+  expect(openedFiles).toEqual([PRIOR.path]);
 });
 
-test("a paused lane holds its stage: a hollow mark and no live tone, still expanded, with Resume in the ⋯; resumed, it is live again (§3.13)", async () => {
-  const paused = { ...runningPipeline(), state: "paused", pausedState: "running" } as Pipeline;
+test("a lane with no linked task and no past attempt offers neither row", async () => {
+  const host = mount(<MobilePipelineScreen pipeline={runningPipeline()} files={[BUILDING]} now={NOW} onOpenConversation={() => {}} />);
+  await opened(host);
+  const rows = Array.from(dom.document.querySelectorAll("[data-mobile2-pipeline-menu] [data-mobile2-menu-row]")).map((row) => row.getAttribute("data-mobile2-menu-row"));
+  expect(rows).toContain("links");
+  expect(rows).not.toContain("tasks");
+});
+
+test.each([false, true])("retained phone rounds open their exact archive with a transcript present: %s", async (present) => {
+  const flow = { id: "retained-phone-review", state: "closed", rounds: [1, 2].map(n => ({
+    n, reviewerPath: present ? REVIEW.path : null, verdict: n === 1 ? "REQUEST_CHANGES" : "APPROVE", startedAt: at(3700 - n),
+  })) } as unknown as Flow;
+  const pipeline = parkedPipeline({ runs: [{ stageId: "review", attempts: [attempt({ n: 3, state: "passed", flowId: flow.id })] }] } as unknown as Partial<Pipeline>);
+  const targets: unknown[] = [];
+  const openedFiles: string[] = [];
+  const record = (event: Event) => targets.push((event as CustomEvent).detail);
+  window.addEventListener("llv:review-history", record);
+  try {
+    const host = mount(<MobilePipelineScreen pipeline={pipeline} flows={[flow]} files={present ? [REVIEW] : []} now={NOW} onOpenConversation={file => openedFiles.push(file.path)} />);
+    await opened(host);
+    click(dom.document.querySelector('[data-mobile2-menu-row="past"]'));
+    await settle();
+    for (const n of [1, 2]) {
+      const entry = dom.document.querySelector(`[data-mobile2-review-history="${flow.id}"][data-review-round="${n}"]`) as unknown as HTMLElement;
+      expect(entry.tagName).toBe("BUTTON");
+      click(entry);
+    }
+    expect(targets).toEqual([{ id: flow.id, round: 1 }, { id: flow.id, round: 2 }]);
+    expect(openedFiles).toEqual([]);
+  } finally { window.removeEventListener("llv:review-history", record); }
+});
+
+test("retained phone attempt offers its archive when the list row is absent", async () => {
+  const id = "retained-without-list-row";
+  const pipeline = parkedPipeline({ runs: [{ stageId: "review", attempts: [attempt({ state: "passed", flowId: id })] }] } as unknown as Partial<Pipeline>);
+  const targets: unknown[] = [];
+  const record = (event: Event) => targets.push((event as CustomEvent).detail);
+  window.addEventListener("llv:review-history", record);
+  try {
+    const host = mount(<MobilePipelineScreen pipeline={pipeline} flows={[]} files={[]} now={NOW} onOpenConversation={() => {}} />);
+    await opened(host);
+    click(dom.document.querySelector('[data-mobile2-menu-row="past"]'));
+    await settle();
+    const entry = dom.document.querySelector(`[data-mobile2-review-history="${id}"]`) as unknown as HTMLElement;
+    expect(entry.tagName).toBe("BUTTON");
+    click(entry);
+    expect(targets).toEqual([{ id, round: undefined }]);
+  } finally { window.removeEventListener("llv:review-history", record); }
+});
+
+test("a running stage is selected with its conversation and the waits-on line names who works; the waiting stages are tabs the lane has not reached", () => {
+  const openedFiles: string[] = [];
+  const host = mount(<MobilePipelineScreen pipeline={runningPipeline()} files={[BUILDING]} now={NOW} onOpenConversation={(entry) => openedFiles.push(entry.path)} />);
+  expect(selectedTab(host)).toBe("implement");
+  expect(q(host, ".gs-waits")!.getAttribute("data-waits-on")).toBe("working");
+  expect(q(host, ".gs-waits-words")!.textContent).toBe(`${translate("en", "kanban.stages.position", { k: 2, n: 5 })} · ${translate("en", "kanban.stages.waits.on", { who: translate("en", "kanban.stages.waits.role.builder"), stage: "Implement" })}`);
+  const running = paneOf(host, "implement")!;
+  expect(running.className).toContain("tone-active");
+  expect(q(running, ".pstate")!.textContent).toBe(translate("en", "kanban.graphState.running"));
+  click(q(running, "[data-open-conversation]"));
+  expect(openedFiles).toEqual([BUILDING.path]);
+  expect(q(host, "[data-answer-action]")).toBeNull();
+  /* The stages after it wait. */
+  for (const id of ["review", "fix", "merge"]) expect(tab(host, id)!.getAttribute("data-tab-state")).toBe("pending");
+  /* A passed stage's tab says so. */
+  expect(tab(host, "design")!.getAttribute("data-tab-state")).toBe("passed");
+});
+
+test("a paused lane says so in its waits-on line and keeps its stage selected, with Resume in the ⋯; resumed, it is live again (§3.13)", async () => {
+  const paused = { ...runningPipeline(), state: "paused", pausedState: "running", pause: { reason: "waiting for a deploy window" } } as unknown as Pipeline;
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
@@ -324,75 +419,29 @@ test("a paused lane holds its stage: a hollow mark and no live tone, still expan
   ));
   const view = host as unknown as HTMLElement;
   render(paused);
-
-  const held = q(view, ".pb-stage[data-stage-current]")!;
-  expect(held.getAttribute("data-stage")).toBe("implement");
-  const mark = q(held, ".pb-stage-title .mglyph")!;
-  expect(mark.getAttribute("data-glyph-state")).toBe("waiting");
-  expect(mark.hasAttribute("data-live")).toBe(false);
-  expect(mark.className).toContain("tone-idle");
-  expect(held.className).toContain("tone-idle");
-  expect(held.className).not.toContain("tone-active");
-  /* The stage's own state stays in the record; the drawing is the hold's. */
-  expect(held.getAttribute("data-stage-state")).toBe("running");
-  expect(held.getAttribute("data-stage-held")).toBe("1");
-  expect(q(view, '.mglyph[data-live="1"], .pmark[data-live="1"]')).toBeNull();
-  expect(q(held, ".pb-stage-state")!.textContent).toBe(translate("en", "pipelineState.paused"));
-  /* Still the expanded stage: what it last did, in the lane's word, and its conversation. */
-  expect(q(held, "[data-stage-now]")!.textContent).toBe(translate("en", "kanban.stageReport.line", { who: translate("en", "roleCopy.builder.name"), outcome: translate("en", "pipelineState.paused"), age: "6m" }));
-  expect(q(held, "[data-open-conversation]")).not.toBeNull();
-  expect(q(view, "[data-mobile2-meta] .pstate-word")!.getAttribute("data-pstate")).toBe("paused");
+  expect(selectedTab(view)).toBe("implement");
+  expect(q(view, ".gs-waits")!.getAttribute("data-waits-on")).toBe("waiting");
+  expect(q(view, ".gs-waits-words")!.textContent).toBe(`${translate("en", "kanban.stages.position", { k: 2, n: 5 })} · ${translate("en", "kanban.stages.waits.pausedWhy", { reason: "waiting for a deploy window" })}`);
   /* Resume is the ⋯'s first row. */
   click(q(view, '[data-mobile2-open="menu"]'));
   await settle();
   expect(Array.from(dom.document.querySelectorAll("[data-mobile2-pipeline-menu] [data-mobile2-pipeline-action]")).map((el) => el.getAttribute("data-mobile2-pipeline-action"))).toEqual(["resume", "archive"]);
   flushSync(() => store.closeSheet());
   await settle();
-
-  /* Resumed: the same stage is live again, in its tone, with the pulse. */
+  /* Resumed: the same stage is live again, whose agent the line names. */
   render(runningPipeline());
-  const live = q(view, ".pb-stage[data-stage-current]")!;
-  expect(live.hasAttribute("data-stage-held")).toBe(false);
-  expect(live.className).toContain("tone-active");
-  const pulse = q(live, ".pb-stage-title .mglyph")!;
-  expect(pulse.getAttribute("data-glyph-state")).toBe("running");
-  expect(pulse.getAttribute("data-live")).toBe("1");
-  expect(q(live, ".pb-stage-state")!.textContent).toBe(translate("en", "kanban.graphState.running"));
+  expect(q(view, ".gs-waits")!.getAttribute("data-waits-on")).toBe("working");
+  expect(q(view, ".gs-waits-words")!.textContent).toContain(translate("en", "kanban.stages.waits.role.builder"));
 });
 
-test("every stage that ran opens its own conversation from its row; one missing from the scan uses the reader link", () => {
-  const opened: string[] = [];
-  const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={(entry) => opened.push(entry.path)} />);
-  click(q(host, "[data-passed-fold]"));
-  const implement = q(stageRow(host, "implement")!, "[data-stage-open]")!;
-  expect(implement.tagName).toBe("BUTTON");
-  expect(implement.getAttribute("aria-label")).toStartWith(translate("en", "mobile2.pipeline.openStage", { stage: "Implement" }));
-  click(implement);
-  expect(opened).toEqual([IMPLEMENT.path]);
-  expect(q(stageRow(host, "design")!, "[data-stage-open], [data-stage-configure]")).toBeNull();
-
-  const gone = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[]} now={NOW} onOpenConversation={() => {}} />);
-  click(q(gone, "[data-passed-fold]"));
-  expect(q(stageRow(gone, "implement")!, ".pb-stage-row")!.tagName).toBe("BUTTON");
-  expect(q(gone, "[data-open-conversation]")).toBeTruthy();
-});
-
-test("a never-run stage's ⚙ opens its configuration in a sheet — the desktop's own editor — Tab stays inside it, and Escape closes only the sheet (lane 10, PR #431, #507 F2)", async () => {
+test("a never-run stage's pane ⋯ opens its configuration in a sheet — the desktop's own editor — Tab stays inside it, and Escape closes only the sheet (lane 10, PR #431, #507 F2)", async () => {
   const store = nav();
   const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />, store);
-  const fix = q(host, '[data-stage-configure="fix"]')!;
-  /* The row names what it opens, and then who would run the stage — the marks
-     beside it are never the only carrier of that (#1743). */
-  expect(fix.getAttribute("aria-label")).toStartWith(translate("en", "mobile2.pipeline.configure", { stage: "Fix" }));
-  expect(fix.getAttribute("aria-label")).toContain("Claude");
-  expect(fix.getAttribute("aria-haspopup")).toBe("dialog");
-  expect(fix.querySelector("[data-engine-mark], [data-glyph-engine]")).not.toBeNull();
-  /* A stage that ran configures nothing: the engine snapshots its config at
-     the first attempt. */
-  expect(q(host, '[data-stage-configure="review"]')).toBeNull();
-
-  fix.focus();
-  click(fix);
+  click(tab(host, "fix"));
+  const gear = q(paneOf(host, "fix")!, "[data-pane-menu]")!;
+  expect(gear.getAttribute("aria-haspopup")).toBe("menu");
+  gear.focus();
+  click(gear);
   await settle();
   /* The nav store owns «a sheet is open» (§3.3); the screen says which stage. */
   expect(store.getState().sheet).toBe("stage");
@@ -400,6 +449,8 @@ test("a never-run stage's ⚙ opens its configuration in a sheet — the desktop
   expect(sheet).not.toBeNull();
   expect(sheet!.textContent).toContain(translate("en", "mobile2.pipeline.configureTitle", { stage: "Fix" }));
   expect(sheet!.querySelector('[data-mobile2-stage-config="fix"] [data-pipeline-stage-card="p2::fix"]')).not.toBeNull();
+  /* Retry and Skip act on the stage the lane waits on, and this one is not. */
+  expect(Array.from(sheet!.querySelectorAll("[data-mobile2-stage-act]")).map((row) => [row.getAttribute("data-mobile2-stage-act"), row.hasAttribute("data-refused")])).toEqual([["retry-stage", true], ["skip-stage", true]]);
   /* A real modal dialog (PR #431): it takes focus on open. */
   expect(sheet!.getAttribute("aria-modal")).toBe("true");
   expect(sheet!.contains(dom.document.activeElement as never)).toBe(true);
@@ -428,29 +479,36 @@ test("a never-run stage's ⚙ opens its configuration in a sheet — the desktop
   press({ key: "Tab", shiftKey: true });
   expect(dom.document.activeElement).toBe(last as never);
 
-  /* Escape closes the sheet and nothing else; focus returns to the row. */
+  /* Escape closes the sheet and nothing else. */
   flushSync(() => dom.document.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as never));
   await settle();
   expect(dom.document.querySelector('[data-mobile2-sheet="stage"]')).toBeNull();
   expect(store.getState().sheet).toBeNull();
   expect(q(host, '[data-mobile2-screen="pipeline"]')).not.toBeNull();
-  expect(dom.document.activeElement).toBe(fix as never);
-
-  /* A finished pipeline configures nothing: its never-run stages are statements. */
-  const done = mount(<MobilePipelineScreen pipeline={parkedPipeline({ state: "completed", cursor: null })} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
-  expect(q(done, "[data-stage-configure]")).toBeNull();
-  expect(q(stageRow(done, "fix")!, ".pb-stage-row")!.tagName).toBe("DIV");
 });
 
-test("a tap on a stage that has not started opens this screen on that stage's sheet, once; a stage that ran, another lane or a finished lane opens none (docs/design/task-card-no-inline-conversations.md §6)", async () => {
+test("the pane's ⋯ on the stage the lane waits on offers Retry and Skip, which go through the board's guarded answers", async () => {
+  const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
+  click(q(paneOf(host, "review")!, "[data-pane-menu]"));
+  await settle();
+  const sheet = dom.document.querySelector('[data-mobile2-sheet="stage"]') as unknown as HTMLElement;
+  expect(sheet.textContent).toContain(translate("en", "mobile2.pipeline.stageMenu", { stage: "Review" }));
+  expect(Array.from(sheet.querySelectorAll("[data-mobile2-stage-act]")).map((row) => [row.getAttribute("data-mobile2-stage-act"), row.hasAttribute("data-refused"), row.textContent])).toEqual([
+    ["retry-stage", false, translate("en", "kanban.stages.retryThis")],
+    ["skip-stage", false, translate("en", "kanban.stages.skipThis")],
+  ]);
+});
+
+test("a tap on a stage that has not started opens this screen on that stage's tab and sheet, once; a stage that ran, another lane or a finished lane opens none (docs/design/task-card-no-inline-conversations.md §6)", async () => {
   const { requestPipelineStage } = await import("./pipelineStageRequest");
   const sheetOf = () => dom.document.querySelector('[data-mobile2-sheet="stage"]') as unknown as HTMLElement | null;
 
   const store = nav();
   requestPipelineStage("p2", "fix");
-  mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />, store);
+  const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />, store);
   await settle();
   expect(store.getState().sheet).toBe("stage");
+  expect(selectedTab(host)).toBe("fix");
   expect(sheetOf()!.textContent).toContain(translate("en", "mobile2.pipeline.configureTitle", { stage: "Fix" }));
   expect(sheetOf()!.querySelector('[data-mobile2-stage-config="fix"] [data-pipeline-stage-card="p2::fix"]')).not.toBeNull();
   flushSync(() => store.closeSheet());
@@ -477,7 +535,7 @@ test("a tap on a stage that has not started opens this screen on that stage's sh
   }
 });
 
-test("a spent review budget is answered inside the review stage: its heads, Close lane and One more round", () => {
+test("a spent review budget is answered from the ⋯: its stop is in the review stage's pane, and Accept as is is a row (One more round is refused by the fixed budget)", async () => {
   const review = parkedPipeline({
     state: "needs_review",
     cursor: null,
@@ -489,30 +547,19 @@ test("a spent review budget is answered inside the review stage: its heads, Clos
     reviewPending: { stageId: "review", attempt: 3, fixStageId: "implement", fixAttempt: 1, reviewedHead: "4f1c2a9d11", currentHead: "9b2e7d4c22", verdict: "fail", findings: 2 },
   } as unknown as Partial<Pipeline>);
   const host = mount(<MobilePipelineScreen pipeline={review} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
-  const answers = qa(host, "[data-answer-action]");
-  expect(answers.map((el) => [el.getAttribute("data-answer-action"), el.textContent])).toEqual([
-    ["accept-head", translate("en", "pipelineBlock.answer.acceptAsIs")],
-    ["continue-review", translate("en", "pipelineBlock.answer.reviewAgain")],
-  ]);
-  const stage = answers[0]!.closest(".pb-stage") as unknown as HTMLElement;
-  expect(stage.getAttribute("data-stage")).toBe("review");
-  expect(stage.getAttribute("data-stage-current")).toBe("1");
+  expect(selectedTab(host)).toBe("review");
   /* One line on why it stopped (#2187 §3.4); the two heads ride its tooltip. */
-  const reason = q(stage, "[data-review-stop]")!;
+  const reason = q(paneOf(host, "review")!, "[data-review-stop]")!;
   expect(reason.getAttribute("data-review-stop")).toBe("stop-after-fix");
   expect(reason.textContent).toBe(translate("en", "pipelineBlock.stop.afterFix"));
   expect(reason.getAttribute("title")).toContain("9b2e7d4c");
-  /* The lane has no cursor; the bar counts the stage the screen expands, the
-     number its row carries. */
-  expect(q(host, "[data-mobile2-meta] .pstate-word")!.textContent).toBe(translate("en", "pipelineState.needs_review"));
-  expect(q(host, "[data-mobile2-meta]")!.textContent).toContain(position(3, 5));
-  expect(q(stage, ".pb-num")!.textContent).toBe("3");
-  /* The stage the lane waits on is amber and says the lane's state. */
-  expect(stage.className).toContain("tone-needs");
-  expect(q(stage, ".pb-stage-state")!.textContent).toBe(translate("en", "pipelineState.needs_review"));
+  expect(qa(host, "[data-answer-action]")).toEqual([]);
+  expect(q(host, ".gs-waits")!.getAttribute("data-waits-on")).toBe("you");
+  await opened(host);
+  expect(Array.from(dom.document.querySelectorAll("[data-phone-lane-answer]")).map((el) => el.getAttribute("data-phone-lane-answer"))).toEqual(["accept-head"]);
 });
 
-test("a completed lane lists every stage with nothing expanded, and says what closed it", () => {
+test("a completed lane has every stage as a tab with the last one that started selected, and says it is done", () => {
   const done = parkedPipeline({
     state: "completed",
     cursor: null,
@@ -523,128 +570,26 @@ test("a completed lane lists every stage with nothing expanded, and says what cl
       { stageId: "implement", attempts: [attempt({ n: 1, state: "failed", verdict: { status: "fail" } }), attempt({ n: 2, agentPath: IMPLEMENT.path })] },
       { stageId: "review", attempts: [attempt({ n: 1, agentPath: REVIEW.path, completedAt: at(1_200) })] },
     ],
-    stageReports: [{ seq: 1, stageId: "review", attempt: 1, at: at(1_200), status: "pass", actor: { kind: "agent", role: "reviewer" }, summary: "approved" }],
   } as unknown as Partial<Pipeline>);
   const host = mount(<MobilePipelineScreen pipeline={done} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
-  expect(q(host, "[data-mobile2-meta]")!.textContent).toBe(`${translate("en", "pipelineState.completed")}·20m`);
-  expect(q(host, "[data-passed-fold]")).toBeNull();
-  expect(q(host, ".pb-stage[data-stage-current]")).toBeNull();
-  expect(qa(host, ".pb-stage[data-stage]").map((el) => el.getAttribute("data-stage-state"))).toEqual(["passed", "passed", "passed"]);
-  expect(q(host, ".pb-note [data-stage-report]")!.getAttribute("data-stage-report-status")).toBe("pass");
-  /* The retried stage says which attempt passed. */
-  /* From the second attempt, the number rides the name: «Implement · 2». */
-  expect(q(stageRow(host, "implement")!, ".pb-attempt")!.textContent).toBe(" · 2");
+  expect(q(host, ".gs-waits")!.getAttribute("data-waits-on")).toBe("done");
+  expect(q(host, ".gs-waits-words")!.textContent).toBe(translate("en", "cardState.done.plain"));
+  expect(qa(host, '[role="tab"]').map((el) => el.getAttribute("data-tab-state"))).toEqual(["passed", "passed", "passed"]);
+  expect(selectedTab(host)).toBe("review");
   expect(q(host, "[data-answer-action]")).toBeNull();
+  /* The retried stage says which attempt passed. */
+  click(tab(host, "implement"));
+  expect(qa(paneOf(host, "implement")!, ".attempts button").map((button) => button.textContent)).toEqual([`${translate("en", "kanban.attemptWord", { n: 1 })} · ${translate("en", "kanban.graphState.failed")}`, `${translate("en", "kanban.attemptWord", { n: 2 })} · ${translate("en", "kanban.graphState.passed")}`]);
 });
 
-test("«Past attempts · n» comes last: every finished attempt and round, each opening its transcript, and a round's other reviewer binding (lane 10, #353)", () => {
-  const PRIOR = file("/repo/implement-1.jsonl", "Implement, first try");
-  const REVIEW_BOUND = { ...REVIEW, conversationId: "conversation-review-b" } as FileEntry;
-  const membership = (slot: string) => ({
-    kind: "flow" as const, containerId: "flow-9", role: "reviewer", slot, stageId: null, stageOrder: null, round: 3, parentConversationId: "conversation-builder",
-  });
-  const PRIOR_REVIEWER = {
-    ...file("/repo/review-a.jsonl", "Review round 3, binding a"),
-    conversationId: "conversation-review-a",
-    durableLineage: { kind: "review", role: "reviewer", parentConversationId: "conversation-builder", reviewsConversationId: "conversation-builder", memberships: [membership("reviewer:3:binding-a")] },
-  } as unknown as FileEntry;
-  const flow = {
-    id: "flow-9", implementerPath: IMPLEMENT.path, state: "reviewing",
-    rounds: [{ n: 3, reviewerPath: REVIEW_BOUND.path, reviewerConversationId: REVIEW_BOUND.conversationId, verdict: "REQUEST_CHANGES", startedAt: at(3_700) }],
-  } as unknown as Flow;
-  const pipeline = parkedPipeline({
-    runs: [
-      { stageId: "design", attempts: [attempt({})] },
-      { stageId: "implement", attempts: [attempt({ n: 1, state: "failed", agentPath: PRIOR.path, verdict: { status: "fail", findings: ["the export endpoint returned 500"] } }), attempt({ n: 2, agentPath: IMPLEMENT.path })] },
-      { stageId: "review", attempts: [attempt({ n: 3, state: "failed", agentPath: REVIEW_BOUND.path, flowId: "flow-9", verdict: { status: "fail", findings: ["one", "two"] } })] },
-    ] as unknown as Pipeline["runs"],
-    taskIds: ["t1"],
-  } as unknown as Partial<Pipeline>);
-  const task = { id: "t1", project: "atlas", text: "Approve the phone prototype\nmore", status: "assigned", assignments: [], updatedAt: new Date(NOW * 1_000).toISOString() } as unknown as BoardTask;
-  const opened: string[] = [];
-  const openedTasks: string[] = [];
-  const host = mount(
-    <MobilePipelineScreen
-      pipeline={pipeline}
-      files={[IMPLEMENT, REVIEW_BOUND, PRIOR, PRIOR_REVIEWER]}
-      flows={[flow]}
-      tasks={[task]}
-      now={NOW}
-      onOpenConversation={(entry) => opened.push(entry.path)}
-      onOpenTask={(picked) => openedTasks.push(picked.id)}
-    />,
-  );
-  const body = q(host, "[data-mobile2-pipeline-body]")!;
-  /* The block, the linked tasks, then Past attempts, last. */
-  expect(Array.from(body.children).map((el) => (el.matches(".pblock") ? "block" : el.getAttribute("data-mobile2-section") ?? (el.hasAttribute("data-mobile2-past") ? "past" : el.tagName))))
-    .toEqual(["block", "tasks", "past"]);
-  click(q(host, '[data-mobile2-linked-task="t1"]'));
-  expect(openedTasks).toEqual(["t1"]);
-
-  const toggle = q(host, "[data-mobile2-past-toggle]")!;
-  /* Design, the two Implement attempts, the Review attempt and its round, and the other binding. */
-  expect(toggle.textContent).toBe(translate("en", "kanban.past.head", { count: 6 }));
-  expect(toggle.className).toContain("min-h-11");
-  expect(q(host, "[data-mobile2-past-row]")).toBeNull();
-  click(toggle);
-  expect(toggle.getAttribute("aria-expanded")).toBe("true");
-
-  const prior = q(host, '[data-mobile2-past-row="p2:implement:attempt:1"]')!;
-  expect(prior.tagName).toBe("BUTTON");
-  expect(prior.className).toContain("min-h-11");
-  expect(prior.textContent).toContain(translate("en", "kanban.stageAttempt", { stage: "Implement", n: 1 }));
-  click(prior);
-  expect(opened).toEqual([PRIOR.path]);
-
-  const round = q(host, '[data-mobile2-past-row="p2:review:attempt:3:round:3"]')!;
-  expect(round.textContent).toContain(translate("en", "kanban.past.verdict.REQUEST_CHANGES"));
-  const binding = q(host, `[data-mobile2-past-row="p2:review:transcript:${PRIOR_REVIEWER.path}"]`)!;
-  expect(binding.textContent).toContain(translate("en", "mobile2.pipeline.reviewTranscript", { n: 3 }));
-  click(binding);
-  expect(opened).toEqual([PRIOR.path, PRIOR_REVIEWER.path]);
-
-  /* An attempt whose transcript left the scan is a statement, not a dead button. */
-  const design = q(host, '[data-mobile2-past-row="p2:design:attempt:1"]')!;
-  expect(design.tagName).toBe("DIV");
-  expect(design.textContent).toContain(translate("en", "kanban.past.none"));
-});
-
-test.each([false, true])("retained phone rounds open their exact archive with a transcript present: %s", present => {
-  const flow = { id: "retained-phone-review", state: "closed", rounds: [1, 2].map(n => ({
-    n, reviewerPath: present ? REVIEW.path : null, verdict: n === 1 ? "REQUEST_CHANGES" : "APPROVE", startedAt: at(3700 - n),
-  })) } as unknown as Flow;
-  const pipeline = parkedPipeline({ runs: [{ stageId: "review", attempts: [attempt({ n: 3, state: "passed", flowId: flow.id })] }] } as unknown as Partial<Pipeline>);
-  const targets: unknown[] = [];
-  const opened: string[] = [];
-  const record = (event: Event) => targets.push((event as CustomEvent).detail);
-  window.addEventListener("llv:review-history", record);
-  try {
-    const host = mount(<MobilePipelineScreen pipeline={pipeline} flows={[flow]} files={present ? [REVIEW] : []} now={NOW} onOpenConversation={file => opened.push(file.path)} />);
-    click(q(host, "[data-mobile2-past-toggle]"));
-    for (const n of [1, 2]) {
-      const entry = q(host, `[data-mobile2-review-history="${flow.id}"][data-review-round="${n}"]`)!;
-      expect(entry.tagName).toBe("BUTTON");
-      click(entry);
-    }
-    expect(targets).toEqual([{ id: flow.id, round: 1 }, { id: flow.id, round: 2 }]);
-    expect(opened).toEqual([]);
-  } finally { window.removeEventListener("llv:review-history", record); }
-});
-
-test("retained phone attempt offers its archive when the list row is absent", () => {
-  const id = "retained-without-list-row";
-  const pipeline = parkedPipeline({ runs: [{ stageId: "review", attempts: [attempt({ state: "passed", flowId: id })] }] } as unknown as Partial<Pipeline>);
-  const targets: unknown[] = [];
-  const record = (event: Event) => targets.push((event as CustomEvent).detail);
-  window.addEventListener("llv:review-history", record);
-  try {
-    const host = mount(<MobilePipelineScreen pipeline={pipeline} flows={[]} files={[]} now={NOW} onOpenConversation={() => {}} />);
-    click(q(host, "[data-mobile2-past-toggle]"));
-    const entry = q(host, `[data-mobile2-review-history="${id}"]`)!;
-    expect(entry.tagName).toBe("BUTTON");
-    click(entry);
-    expect(targets).toEqual([{ id, round: undefined }]);
-  } finally { window.removeEventListener("llv:review-history", record); }
+test("a hidden lane offers Show on board as a row of the ⋯", async () => {
+  const hidden = parkedPipeline({ dismissedAt: at(30) } as Partial<Pipeline>);
+  const host = mount(<MobilePipelineScreen pipeline={hidden} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
+  expect(q(host, "[data-mobile2-pipeline-body] [data-mobile2-pipeline-action]")).toBeNull();
+  await opened(host);
+  const row = dom.document.querySelector('[data-mobile2-pipeline-menu] [data-mobile2-pipeline-action="showOnBoard"]') as unknown as HTMLElement;
+  expect(row.textContent).toBe(translate("en", "mobile2.pipeline.showOnBoard"));
+  expect(row.getAttribute("data-mobile2-pipeline-patch")).toBe("undismiss");
 });
 
 test("the bar's ⋯ holds the lane's own actions and leads on to the board's menu", async () => {
@@ -687,14 +632,14 @@ test("the ⋯ actions for a lane are the board menu's pause or resume, and Close
 test("in Ukrainian the stage names stay the pipeline's and every word is the desktop's Ukrainian word", () => {
   setLocale("uk");
   const host = mount(<MobilePipelineScreen pipeline={parkedPipeline()} files={[IMPLEMENT, REVIEW]} now={NOW} onOpenConversation={() => {}} />);
-  click(q(host, "[data-passed-fold]"));
-  expect(qa(host, ".pb-stage[data-stage] .pb-name").map((el) => el.textContent)).toEqual(["Design", "Implement", "Review", "Fix", "Merge"]);
-  expect(q(host, "[data-mobile2-meta] .pstate-word")!.textContent).toBe(translate("uk", "pipelineState.needs_decision"));
+  expect(qa(host, '[role="tab"] .slbl').map((el) => el.textContent)).toEqual(["Design", "Implement", "Review", "Fix", "Merge"]);
+  expect(q(host, ".gs-waits-words")!.textContent).toBe(translate("uk", "cardState.you.lane", { why: translate("uk", "cardState.why.other", { stage: "Review" }) }));
+  expect(qa(host, ".gs-rule").map((rule) => rule.textContent)).toEqual([`↺ ${translate("uk", "kanban.stages.ruleRest", { from: "Review", to: "Implement", fired: 0, max: 3 })}`]);
   expect(qa(host, "[data-answer-action]")).toEqual([]);
   expect(q(host, "[data-open-conversation]")!.textContent).toBe(translate("uk", "pipelineStage.openAgent"));
 });
 
-test.each(["running", "passed", "failed", "needs_decision"] as const)("stage agent row opens %s conversations and earlier attempts", (state) => {
+test.each(["running", "passed", "failed", "needs_decision"] as const)("a single stage lane has no tabs; its pane opens %s conversations and the question comes before the answer", (state) => {
   const old = { ...IMPLEMENT, path: "/fixture/old-design.jsonl", conversationId: "conversation_old" } as FileEntry;
   const current = { ...REVIEW, conversationId: "conversation_design" } as FileEntry;
   const p = parkedPipeline({
@@ -705,20 +650,20 @@ test.each(["running", "passed", "failed", "needs_decision"] as const)("stage age
       attempt({ n: 2, state, agentPath: current.path, conversationId: current.conversationId, report: { verdict: { status: "needs_decision", findings: [] }, summary: "Choose a layout.\nCompact or expanded?" } }),
     ] }],
   } as unknown as Partial<Pipeline>);
-  const opened: string[] = [];
-  const host = mount(<MobilePipelineScreen pipeline={p} files={[old, current]} now={NOW} onOpenConversation={(file) => opened.push(file.path)} />);
-  const stage = q(host, '[data-stage="design"]')!;
-  expect(q(stage, '[data-open-conversation]')?.textContent).toContain("Open agent");
-  click(q(stage, '[data-open-conversation]'));
-  expect(opened).toEqual([current.path]);
-  expect(q(stage, '[data-stage-question]')?.textContent ?? null).toBe(state === "needs_decision" ? "Choose a layout.\nCompact or expanded?" : null);
-  if (state === "needs_decision") expect(stage.innerHTML.indexOf("data-stage-question")).toBeLessThan(stage.innerHTML.indexOf("data-answer="));
-  click(q(stage, 'details summary'));
-  click(q(stage, '[data-open-attempt="1"]'));
-  expect(opened).toEqual([current.path, old.path]);
+  const openedFiles: string[] = [];
+  const host = mount(<MobilePipelineScreen pipeline={p} files={[old, current]} now={NOW} onOpenConversation={(file) => openedFiles.push(file.path)} />);
+  expect(qa(host, '[role="tab"]')).toEqual([]);
+  const stage = paneOf(host, "design")!;
+  expect(q(stage, "[data-open-conversation]")?.textContent).toContain("Open agent");
+  click(q(stage, "[data-open-conversation]"));
+  expect(openedFiles).toEqual([current.path]);
+  expect(q(stage, "[data-stage-question]")?.textContent ?? null).toBe(state === "needs_decision" ? "Choose a layout.\nCompact or expanded?" : null);
+  /* Its earlier attempt is one press away on the attempts row. */
+  click(q(stage, '[data-attempt="1"]'));
+  expect(q(stage, '[data-attempt="1"]')!.getAttribute("aria-pressed")).toBe("true");
 });
 
-test("a stage that ran in the cloud opens its stored cloud task from the same row, in both languages", () => {
+test("a stage that ran in the cloud opens its stored cloud task from its pane, in both languages", () => {
   const taskUrl = "https://example.com/cloud/tasks/task_abc123";
   const cloudPipeline = (cloud: Record<string, unknown>) => parkedPipeline({
     stages: [STAGES[0]!], state: "completed", cursor: null,
@@ -727,7 +672,7 @@ test("a stage that ran in the cloud opens its stored cloud task from the same ro
   for (const lang of ["en", "uk"] as const) {
     setLocale(lang);
     const host = mount(<MobilePipelineScreen pipeline={cloudPipeline({ phase: "completed", taskId: "task_abc123", taskUrl })} files={[]} now={NOW} onOpenConversation={() => { throw new Error("cloud stages have no transcript"); }} />);
-    const link = q(host, '.pb-stage[data-stage="design"] a.pb-open-conv[data-open-cloud="design"]') as HTMLAnchorElement;
+    const link = q(host, '.pane[data-stage="design"] a[data-open-cloud="design"]') as HTMLAnchorElement;
     expect(link.getAttribute("href")).toBe(taskUrl);
     expect(link.textContent).toBe(translate(lang, "pipelineStage.openCloudTask"));
     expect(q(host, "[data-open-conversation]")).toBeNull();

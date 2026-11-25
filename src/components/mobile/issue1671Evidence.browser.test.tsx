@@ -15312,6 +15312,453 @@ describe("account row on the phone", () => {
   }, 7_200_000);
 });
 
+describe("redesign S2 the Stages window on the phone", () => {
+  /*
+   * The phone pipeline screen draws the board's Stages window (`StagesSheet` at
+   * `presentation="screen"`): the same lanes of every graph shape as the
+   * desktop driver (`stageShapes.fixture.ts`), at 390 × 844, in both languages
+   * and schemes:
+   *
+   *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=google-chrome-stable \
+   *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "redesign S2"
+   *
+   * Gated, from text ranges: every tab name whole in the four-column grid, one
+   * skip mark on a skipped tab; the step buttons and the graph toggle on the
+   * waits-on line's own row; the selected stage's conversation read in its pane
+   * (never the empty-file note); a parked stage's reason, question and where to
+   * answer; a skipped stage's pane without an empty box; the graph's steps in
+   * order down its column, with no fail-only stage between them; the
+   * title in the bar whole (it wraps, never ends in an ellipsis); the waits-on
+   * line whole on the first screen; every rule line whole; one panel; the
+   * selected pane's composer, when it has a conversation, whole above the
+   * screen's bottom edge; the graph's nodes naming what a press does; the
+   * pane's ⋯ stage sheet, the ⋯ sheet and its linked-tasks face whole, each
+   * modal: Tab never leaves it and a tap on the screen behind it changes
+   * nothing there. Every state in both languages and both schemes.
+   * Frames and the manifest go to $LLV_EVIDENCE_DIR/redesign-s2-phone.
+   */
+  const S2_OUT = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "redesign-s2-phone");
+  const SLUGS = ["fix-skipped", "fix-taken", "return-loop", "visual-gate", "shared-fix", "returning-fix", "prototype", "recheck", "skipped", "parked-publication", "parked-question", "single", "eight", "chain"] as const;
+  /** A comma list of lanes narrows a local run while the driver is worked on; the evidence run leaves it unset. */
+  const ONLY = process.env.LLV_S2_PHONE_SLUGS ? process.env.LLV_S2_PHONE_SLUGS.split(",") : null;
+  const readScreen = (page: Page) => page.evaluate(() => {
+    const screen = document.querySelector<HTMLElement>('[data-mobile2-screen="pipeline"]');
+    if (!screen) return null;
+    const box = screen.getBoundingClientRect();
+    const ranges = (root: Element) => {
+      const found: DOMRect[] = [];
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.textContent?.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) if (rect.width > 0 && rect.height > 0) found.push(rect);
+      }
+      return found;
+    };
+    const outside = (element: Element | null, within: DOMRect) => !element || ranges(element).some((rect) => rect.left < within.left - 0.5 || rect.right > within.right + 0.5);
+    const strip = screen.querySelector<HTMLElement>('[role="tablist"]');
+    const tabs = [...screen.querySelectorAll<HTMLElement>('[role="tab"]')];
+    const title = screen.querySelector<HTMLElement>("[data-mobile2-title-text]");
+    const waits = screen.querySelector<HTMLElement>(".gs-waits");
+    const composer = screen.querySelector<HTMLElement>("[data-kanban-reader] textarea, [data-kanban-reader] [contenteditable='true']");
+    const tools = screen.querySelector<HTMLElement>(".gs-tools");
+    const pane = screen.querySelector<HTMLElement>(".pane");
+    const away = pane?.querySelector<HTMLElement>(".pane-conv.away");
+    const composerBox = composer?.getBoundingClientRect();
+    return {
+      tabs: tabs.map((tab) => {
+        const name = tab.querySelector<HTMLElement>(".slbl")!;
+        const stripBox = strip?.getBoundingClientRect();
+        return {
+          stage: tab.dataset.tabStage ?? "", kind: tab.dataset.tabKind ?? "", state: tab.dataset.tabState ?? "", word: tab.dataset.tabWord ?? null, selected: tab.getAttribute("aria-selected") === "true",
+          dots: tab.querySelector<HTMLElement>(".sdots")?.dataset.dots ?? null,
+          count: tab.querySelector("[data-dots-count]")?.textContent ?? null,
+          returned: tab.querySelector(".pret")?.textContent ?? null,
+          cut: name.scrollWidth > name.clientWidth + 1 || ranges(name).some((rect) => stripBox ? rect.right > stripBox.right + 0.5 || rect.left < stripBox.left - 0.5 : false),
+          height: Math.round(tab.getBoundingClientRect().height),
+          top: Math.round(tab.getBoundingClientRect().top * 10) / 10,
+          unitTop: Math.round((tab.closest(".gs-unit")?.getBoundingClientRect().top ?? 0) * 10) / 10,
+          skipMarks: ((tab as HTMLElement).innerText.match(/↷/g) ?? []).length,
+        };
+      }),
+      lead: waits && tools ? { waitsTop: Math.round(waits.getBoundingClientRect().top), waitsBottom: Math.round(waits.getBoundingClientRect().bottom), toolsTop: Math.round(tools.getBoundingClientRect().top), toolsBottom: Math.round(tools.getBoundingClientRect().bottom) } : null,
+      pane: {
+        stage: pane?.dataset.stage ?? "",
+        text: pane?.innerText ?? "",
+        sub: pane?.querySelector(".pane-sub")?.textContent ?? "",
+        reader: Boolean(pane?.querySelector("[data-kanban-reader]")),
+        messages: pane?.querySelectorAll("[data-kanban-reader] .msg").length ?? 0,
+        stop: pane?.querySelector("[data-lane-stop]")?.textContent ?? null,
+        hint: pane?.querySelector("[data-answer-hint]")?.textContent ?? null,
+        hintKind: pane?.querySelector<HTMLElement>("[data-answer-hint]")?.dataset.answerKind ?? null,
+        prole: pane?.querySelector(".prole")?.textContent ?? "",
+        height: Math.round(pane?.getBoundingClientRect().height ?? 0),
+        placeholder: pane?.querySelector("textarea")?.getAttribute("placeholder") ?? null,
+        /* A parked pane's one primary control, enabled and on the first screen without scrolling. */
+        answers: [...(pane?.querySelectorAll<HTMLButtonElement>("[data-pane-answer]") ?? [])].map((button) => {
+          const rect = button.getBoundingClientRect();
+          return { action: button.dataset.paneAnswer ?? "", text: button.textContent ?? "", disabled: button.disabled, whole: rect.width > 0 && rect.left >= box.left && rect.right <= box.right && rect.top >= box.top && rect.bottom <= box.bottom };
+        }),
+        innerRing: Boolean(pane && [...pane.querySelectorAll<HTMLElement>(".pane-attention-ring")].some((ring) => getComputedStyle(ring).display !== "none")),
+        question: pane?.querySelector("[data-stage-question]")?.textContent ?? null,
+        boxedEmpty: Boolean(away && getComputedStyle(away).borderTopStyle === "dashed"),
+      },
+      columns: strip ? getComputedStyle(strip).gridTemplateColumns.split(" ").length : 0,
+      title: { text: title?.textContent ?? "", cut: !title || title.scrollWidth > title.clientWidth + 1 || outside(title, box) || getComputedStyle(title).textOverflow === "ellipsis" && title.scrollWidth > title.clientWidth },
+      waits: waits ? { text: waits.textContent ?? "", cut: outside(waits, box) } : null,
+      rules: [...screen.querySelectorAll<HTMLElement>(".gs-rule")].map((rule) => ({ text: rule.textContent ?? "", cut: outside(rule, box) })),
+      panels: screen.querySelectorAll('[role="tabpanel"]').length,
+      readers: screen.querySelectorAll("[data-kanban-reader]").length,
+      composer: composerBox ? { bottom: Math.round(composerBox.bottom), top: Math.round(composerBox.top), screenBottom: Math.round(box.bottom), whole: composerBox.bottom <= box.bottom + 0.5 && composerBox.top >= box.top } : null,
+      overflowX: Math.round(Math.max(0, document.documentElement.scrollWidth - window.innerWidth)),
+    };
+  });
+
+  browserTest("390 px: every graph shape's pipeline screen, its popover, the ⋯ sheet and its faces, in both languages and schemes", async () => {
+    fs.mkdirSync(S2_OUT, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await launchChromium();
+    const frames: Array<{ file: string; lane: string; lang: string; scheme: string; state: string }> = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of SCHEMES) {
+          const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2, colorScheme: scheme });
+          await context.addInitScript((language) => { localStorage.setItem("llv_lang", language); }, lang);
+          try {
+            for (const slug of SLUGS.filter((entry) => !ONLY || ONLY.includes(entry))) {
+              const key = `${slug}-${lang}-${scheme}`;
+              const fail = (message: string) => failures.push(`${key}: ${message}`);
+              const page = await context.newPage();
+              const pageErrors: string[] = [];
+              page.on("pageerror", (error) => pageErrors.push(error.message));
+              try {
+                await page.goto(`${base}/?kanban=1&stageshapes=1#pipeline=lane-shape-${slug}`);
+                await page.waitForSelector('[data-mobile2-screen="pipeline"] .gsheet.screen', { timeout: 20_000 });
+                await pause(page, 700);
+                const read = await readScreen(page);
+                if (!read) { fail("the pipeline screen did not open"); continue; }
+                const strip = slug === "parked-publication" || slug === "single" ? false : true;
+                if (strip && read.columns !== 4) fail(`the tab grid has ${read.columns} columns`);
+                if (!strip && read.tabs.length) fail(`a single stage drew ${read.tabs.length} tab(s)`);
+                for (const tab of read.tabs) if (tab.cut) fail(`tab ${tab.stage} is cut`);
+                /* A detached stage is the first line of its own cell: on the line of the step tabs in its row, so it is not a third line of the cell above. */
+                const stepTabs = read.tabs.filter((tab) => tab.kind === "step");
+                for (const tab of read.tabs.filter((candidate) => candidate.kind === "detached")) {
+                  if (Math.abs(tab.top - tab.unitTop) > 1) fail(`detached tab ${tab.stage} sits ${tab.top - tab.unitTop}px below its cell's top`);
+                  for (const step of stepTabs.filter((candidate) => Math.abs(candidate.unitTop - tab.unitTop) <= 1)) if (Math.abs(step.top - tab.top) > 1) fail(`detached tab ${tab.stage} top ${tab.top} is off the step tabs' line ${step.top}`);
+                  if (stepTabs.length && tab.height < Math.min(...stepTabs.map((step) => step.height)) - 1) fail(`detached tab ${tab.stage} is ${tab.height}px high, shorter than the step tabs`);
+                }
+                if (read.title.cut) fail(`the bar's title is cut: ${JSON.stringify(read.title)}`);
+                if (!read.waits || read.waits.cut) fail(`the waits-on line is cut or missing: ${JSON.stringify(read.waits)}`);
+                if (read.rules.some((rule) => rule.cut)) fail("a rule line is cut");
+                if (read.panels !== (strip ? 1 : 0)) fail(`${read.panels} tab panels`);
+                if (read.readers > 1) fail(`${read.readers} readers mounted`);
+                if (read.composer) {
+                  /* The conversation's composer is reached by scrolling the screen to its end, and is whole there; the pane's feed scrolls inside its own bounded height. */
+                  const reached = await page.evaluate(() => {
+                    const body = document.querySelector<HTMLElement>("[data-mobile2-pipeline-body]");
+                    const screen = document.querySelector<HTMLElement>('[data-mobile2-screen="pipeline"]');
+                    const field = document.querySelector<HTMLElement>("[data-kanban-reader] textarea, [data-kanban-reader] [contenteditable='true']");
+                    if (!body || !screen || !field) return null;
+                    body.scrollTop = body.scrollHeight;
+                    const box = field.getBoundingClientRect();
+                    const within = screen.getBoundingClientRect();
+                    const result = { top: Math.round(box.top), bottom: Math.round(box.bottom), screenBottom: Math.round(within.bottom), whole: box.bottom <= within.bottom + 0.5 && box.top >= within.top };
+                    body.scrollTop = 0;
+                    return result;
+                  });
+                  if (reached && !reached.whole) fail(`the composer is cut at the end of the screen: ${JSON.stringify(reached)}`);
+                }
+                /* The step buttons and the graph toggle ride the waits-on line's row, not a row of their own under it. */
+                if (read.lead && read.lead.toolsTop >= read.lead.waitsBottom - 1) fail(`the step buttons take a row under the waits-on line: ${JSON.stringify(read.lead)}`);
+                for (const tab of read.tabs) if (tab.skipMarks > 1) fail(`tab ${tab.stage} draws its skip mark ${tab.skipMarks} times`);
+                /* The selected stage's conversation is read in its pane as on the desktop; a truly empty one never says «file». */
+                if (/файл поки|порожній|file is empty/i.test(read.pane.text)) fail(`the pane uses file wording: ${read.pane.text.slice(0, 120)}`);
+                if (read.pane.reader && read.pane.messages === 0 && /Ще без виводу|No output yet/.test(read.pane.text)) fail("the pane's conversation shows no message");
+                if (slug === "parked-publication" || slug === "parked-question" || slug === "returning-fix") {
+                  if (!read.pane.stop && slug !== "returning-fix") fail("the parked stage's pane gives no stop reason");
+                  if (!read.pane.hint) fail("the parked stage's pane does not say where to answer");
+                  if (/(працює…|working…)/.test(read.pane.text)) fail("the parked stage's pane shows a working footer");
+                  if (read.pane.innerRing) fail("the parked pane's conversation draws a second ring inside the pane's frame");
+                  if (slug === "parked-question") {
+                    if (read.pane.answers.length) fail("a question's pane offers a retry button beside its composer");
+                    if (read.pane.hintKind !== "question") fail(`a question's pane does not point to the composer: ${read.pane.hint}`);
+                    if (!read.pane.placeholder || /agent will start|агент запуститься/.test(read.pane.placeholder) || !(lang === "en" ? /answer/i : /відповід/i).test(read.pane.placeholder)) fail(`the composer's placeholder is not an answer's: ${read.pane.placeholder}`);
+                  } else {
+                    const [answer, ...extra] = read.pane.answers;
+                    if (!answer || extra.length) fail(`the parked pane offers ${read.pane.answers.length} primary buttons, not one`);
+                    else if (answer.disabled || !answer.whole || !(lang === "en" ? /Retry|Review again/ : /Повторити|Ще одне ревʼю/).test(answer.text)) fail(`the parked pane's primary button is not a whole, enabled Retry on the first screen: ${JSON.stringify(answer)}`);
+                  }
+                }
+                if (/(review loop|цикл рев.ю)/.test(read.pane.prole) && !/·/.test(read.pane.prole)) fail(`the role and the loop name run together: ${read.pane.prole}`);
+                for (const rule of read.rules) if (/, тоді|, then /.test(rule.text) || !/→/.test(rule.text)) fail(`a rule line leaves the one grammar: ${rule.text}`);
+                /* A tab that carries its fix's rounds draws one mark per round of the budget, and no ✕ sits on a stage at work. */
+                for (const tab of read.tabs) {
+                  if (!tab.dots || /^\d+\/\d+$/.test(tab.dots)) continue;
+                  const marks = tab.dots.split(" ");
+                  const used = marks.filter((kind) => kind !== "left").length;
+                  if (tab.count !== `${used}/${marks.length}`) fail(`tab ${tab.stage} carries rounds "${tab.dots}" and says "${tab.count}"`);
+                  if (["running", "reviewing", "committing"].includes(tab.state) && marks[0] === "bad") fail(`tab ${tab.stage} is at work and starts with a ✕: ${tab.dots}`);
+                }
+                if (slug === "returning-fix") {
+                  const visual = read.tabs.find((tab) => tab.stage === "visual");
+                  if (visual?.returned?.replace("↺", "") !== "2/2") fail(`Visual's tab says "${visual?.returned}" while its rounds are spent`);
+                  if (!read.rules.some((rule) => /Visual/.test(rule.text) && /(2 of 2|2 з 2)/.test(rule.text))) fail("Visual's rule line does not say 2 of 2");
+                }
+                if (slug === "parked-question" && !read.pane.question) fail("the parked stage's pane does not show its question");
+                if (read.overflowX > 0) fail(`the page scrolls sideways by ${read.overflowX}px`);
+                const sheetFile = `${key}-screen.png`;
+                await page.screenshot({ path: path.join(S2_OUT, sheetFile) });
+                frames.push({ file: sheetFile, lane: slug, lang, scheme, state: "screen" });
+                {
+                  const detached = read.tabs.find((tab) => tab.kind === "detached");
+                  const initial = read.tabs.find((tab) => tab.selected)?.stage;
+                  if (detached && initial) {
+                    /* A selected detached stage: its pane says it is off the chain and keeps its ⋯. */
+                    await page.tap(`[role="tab"][data-tab-stage="${detached.stage}"]`);
+                    await pause(page, 300);
+                    const pane = await page.evaluate(() => ({ state: document.querySelector(".pane .pstate")?.textContent ?? "", menu: Boolean(document.querySelector(".pane [data-pane-menu]")), stage: document.querySelector<HTMLElement>(".pane")?.dataset.stage ?? "" }));
+                    if (pane.stage !== detached.stage) fail(`the detached tab's pane is ${pane.stage}`);
+                    if (!pane.menu) fail("the detached tab's pane has no ⋯");
+                    const detachedText = await page.evaluate(() => document.querySelector<HTMLElement>(".pane")?.innerText ?? "");
+                    if (/Starts first|Стартує першим|first stage|перший етап|last stage|останній етап/.test(detachedText)) fail(`the detached tab's pane says it starts first or ends last: ${detachedText.slice(0, 160)}`);
+                    if (detached.word && !pane.state.includes(lang === "en" ? (detached.word === "notRun" ? "never ran" : "off the chain") : (detached.word === "notRun" ? "не запускався" : "поза ланцюжком"))) fail(`the detached tab's pane says «${pane.state}»`);
+                    const file = `${key}-detached-tab.png`;
+                    await page.screenshot({ path: path.join(S2_OUT, file) });
+                    frames.push({ file, lane: slug, lang, scheme, state: "detached-tab" });
+                    await page.tap(`[role="tab"][data-tab-stage="${initial}"]`);
+                    await pause(page, 300);
+                  }
+                  if (slug === "skipped" && initial) {
+                    /* The skipped stage's pane says so and draws no empty box in place of a conversation. */
+                    await page.tap('[role="tab"][data-tab-stage="deliver"]');
+                    await pause(page, 300);
+                    const skipped = await readScreen(page);
+                    const word = lang === "en" ? "skipped" : "пропущено";
+                    if (!skipped || skipped.pane.stage !== "deliver") fail("the skipped tab did not select");
+                    else {
+                      const said = skipped.pane.text.toLowerCase().split(word).length - 1;
+                      if (said !== 1) fail(`the skipped pane says «${word}» ${said} times: ${skipped.pane.text.slice(0, 160)}`);
+                      if (!skipped.pane.sub) fail("the skipped pane's sub-line is empty");
+                      if (skipped.pane.height > 320) fail(`the skipped pane is ${skipped.pane.height}px high, an empty box`);
+                      if (/started by|запустив/.test(skipped.pane.text)) fail("the skipped pane names a starter");
+                      if (skipped.pane.boxedEmpty) fail("the skipped pane draws an empty dashed box");
+                      if (/No conversation recorded|Розмову не записано/.test(skipped.pane.text)) fail("the skipped pane says no conversation was recorded");
+                    }
+                    const file = `${key}-skipped-stage.png`;
+                    await page.screenshot({ path: path.join(S2_OUT, file) });
+                    frames.push({ file, lane: slug, lang, scheme, state: "skipped-stage" });
+                    await page.tap(`[role="tab"][data-tab-stage="${initial}"]`);
+                    await pause(page, 300);
+                  }
+                  const shot = async (state: string) => {
+                    const file = `${key}-${state}.png`;
+                    await page.screenshot({ path: path.join(S2_OUT, file) });
+                    frames.push({ file, lane: slug, lang, scheme, state });
+                  };
+                  /* A sheet is modal: Tab stays inside it, and a tap on the screen behind it reaches nothing there. */
+                  const behindState = () => page.evaluate(() => {
+                    const body = document.querySelector('[data-mobile2-pipeline-body]');
+                    return JSON.stringify({
+                      selected: body?.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute("data-tab-stage") ?? null,
+                      waits: body?.querySelector(".gs-waits")?.getAttribute("aria-expanded") ?? null,
+                      graph: body?.querySelector("[data-sheet-graph]")?.getAttribute("aria-pressed") ?? null,
+                    });
+                  });
+                  const gateModal = async (sheetName: string, rowCount: number) => {
+                    for (let index = 0; index < rowCount + 3; index += 1) {
+                      await page.keyboard.press("Tab");
+                      const inside = await page.evaluate(() => Boolean(document.querySelector("[data-mobile2-sheet]")?.contains(document.activeElement)));
+                      if (!inside) { fail(`${sheetName}: Tab ${index + 1} left the sheet for the screen behind it`); break; }
+                    }
+                    const behind = await page.evaluate(() => {
+                      const body = document.querySelector('[data-mobile2-pipeline-body]');
+                      const sheet = document.querySelector("[data-mobile2-sheet]");
+                      const candidates = [...(body?.querySelectorAll<HTMLElement>('[role="tab"][aria-selected="false"], .gs-waits') ?? [])];
+                      for (const element of candidates) {
+                        const box = element.getBoundingClientRect();
+                        const x = box.left + box.width / 2;
+                        const y = box.top + box.height / 2;
+                        if (box.width === 0 || y < 0 || y > window.innerHeight) continue;
+                        const hit = document.elementFromPoint(x, y);
+                        return { x, y, reached: Boolean(hit && body?.contains(hit) && !sheet?.contains(hit)), target: element.getAttribute("data-tab-stage") ?? "waits" };
+                      }
+                      return null;
+                    });
+                    if (!behind) return;
+                    if (behind.reached) fail(`${sheetName}: the ${behind.target} control behind the sheet is reachable at ${Math.round(behind.x)},${Math.round(behind.y)}`);
+                    const before = await behindState();
+                    await page.touchscreen.tap(behind.x, behind.y);
+                    await pause(page, 250);
+                    const after = await behindState();
+                    if (before !== after) fail(`${sheetName}: a tap behind the sheet changed the screen: ${before} -> ${after}`);
+                    /* The tap on the scrim closes the sheet; reopen is the caller's. */
+                  };
+                  const openMenu = async () => {
+                    await page.tap('[data-mobile2-open="menu"]');
+                    await page.waitForSelector("[data-mobile2-pipeline-menu]");
+                    await pause(page, 300);
+                  };
+                  const closeSheet = async () => {
+                    if (await page.locator("[data-mobile2-sheet]").count()) {
+                      await page.tap("[data-mobile2-close]");
+                      await page.waitForSelector("[data-mobile2-sheet]", { state: "detached", timeout: 5_000 });
+                    }
+                  };
+
+                  await page.tap(".gs-waits");
+                  await page.waitForSelector(".gs-waits-pop");
+                  await shot("popover");
+                  await page.tap(".gs-waits");
+
+                  /* The graph: every node says it shows its pane, never that it opens a conversation. */
+                  await page.tap("[data-sheet-graph]");
+                  await page.waitForSelector(".gs-graph .pnode", { timeout: 10_000 });
+                  await pause(page, 300);
+                  const graph = await page.evaluate(() => ({
+                    nodes: [...document.querySelectorAll<HTMLElement>(".gs-graph .pnode")].map((node) => node.getAttribute("aria-label") ?? ""),
+                    stages: document.querySelectorAll('[role="tab"]').length,
+                    selectedNodes: document.querySelectorAll(".gs-graph .pnode.selected").length,
+                    selectedTab: document.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute("data-tab-stage") ?? null,
+                    selectedKind: document.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute("data-tab-kind") ?? null,
+                    nodeStages: [...document.querySelectorAll<HTMLElement>(".gs-graph .pnode")].map((node) => `${node.dataset.stage}${node.classList.contains("selected") ? "*" : ""}`),
+                    overflowX: Math.round(Math.max(0, document.documentElement.scrollWidth - window.innerWidth)),
+                  }));
+                  if (!graph.nodes.length) fail("the graph drew no node");
+                  if (graph.nodes.some((label) => /Open its|Відкрити його/.test(label))) fail(`a graph node names an action a press does not take: ${graph.nodes.find((label) => /Open its|Відкрити його/.test(label))}`);
+                  /* A conditional fix on a fail edge is drawn as a strip on its source node, which has no node of its own to select. */
+                  if (graph.selectedKind === "conditional" ? graph.selectedNodes > 1 : graph.selectedNodes !== 1) fail(`${graph.selectedNodes} graph nodes are selected (tab ${graph.selectedTab}; nodes ${graph.nodeStages.join(" ")})`);
+                  if (graph.overflowX > 0) fail(`the graph scrolls the page sideways by ${graph.overflowX}px`);
+                  /* The steps read in order down the column, and a stage only a failure reaches does not stand between them. */
+                  const column = await page.evaluate(() => ({
+                    cut: (() => {
+                      const canvas = document.querySelector<HTMLElement>(".gs-graph");
+                      if (!canvas) return true;
+                      const within = canvas.getBoundingClientRect();
+                      const walker = document.createTreeWalker(canvas, NodeFilter.SHOW_TEXT);
+                      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                        if (!node.textContent?.trim()) continue;
+                        const range = document.createRange();
+                        range.selectNodeContents(node);
+                        for (const rect of range.getClientRects()) if (rect.width > 0 && (rect.right > within.right + 0.5 || rect.left < within.left - 0.5)) return true;
+                      }
+                      return canvas.scrollWidth > canvas.clientWidth + 1;
+                    })(),
+                    nodes: [...document.querySelectorAll<HTMLElement>(".gs-graph .pnode[data-stage]")].map((node) => ({ stage: node.dataset.stage ?? "", top: Math.round(node.getBoundingClientRect().top) })),
+                  }));
+                  if (column.cut) fail("the graph is cut at the canvas's side");
+                  /* No node or row text of the graph is cut with an ellipsis, and a fix the lane goes on to is never «back». */
+                  const graphText = await page.evaluate(() => ({
+                    truncated: [...document.querySelectorAll<HTMLElement>(".gs-graph .pnode *, .gs-graph .pstrip *")].filter((element) => element.children.length === 0 && (element.textContent ?? "").trim() && element.scrollWidth > element.clientWidth + 1).map((element) => element.textContent ?? ""),
+                    strips: [...document.querySelectorAll<HTMLElement>(".gs-graph .pstrip[data-strip]")].map((strip) => ({ id: strip.dataset.strip ?? "", text: strip.textContent ?? "" })),
+                  }));
+                  for (const text of graphText.truncated) fail(`a graph text is cut: ${text}`);
+                  for (const strip of graphText.strips) {
+                    const target = read.tabs.find((tab) => tab.stage === strip.id.split(":")[2]);
+                    if (target && target.kind !== "step" && /back to|назад до/.test(strip.text)) fail(`the row for ${target.stage} reads «back»: ${strip.text}`);
+                  }
+                  const stepNodes = read.tabs.filter((tab) => tab.kind === "step").map((tab) => column.nodes.find((node) => node.stage === tab.stage)).filter(Boolean) as Array<{ stage: string; top: number }>;
+                  for (let index = 1; index < stepNodes.length; index += 1) if (stepNodes[index]!.top < stepNodes[index - 1]!.top) fail(`step ${stepNodes[index]!.stage} stands before ${stepNodes[index - 1]!.stage} in the graph`);
+                  const lastStepTop = Math.max(0, ...stepNodes.map((node) => node.top));
+                  for (const node of column.nodes.filter((entry) => !stepNodes.some((step) => step.stage === entry.stage))) if (node.top < lastStepTop) fail(`${node.stage}, which only a failure reaches, stands between the steps of the lane`);
+                  await shot("graph");
+                  await page.tap("[data-sheet-graph]");
+                  await pause(page, 200);
+
+                  /* The stage sheet: the pane's ⋯. */
+                  await page.tap("[data-pane-menu]");
+                  await page.waitForSelector("[data-mobile2-stage-config], [data-mobile2-stage-acts]");
+                  await pause(page, 300);
+                  const stageSheet = await page.evaluate(() => {
+                    const sheet = document.querySelector<HTMLElement>('[data-mobile2-sheet="stage"]');
+                    if (!sheet) return null;
+                    const box = sheet.getBoundingClientRect();
+                    const walker = document.createTreeWalker(sheet, NodeFilter.SHOW_TEXT);
+                    let cut = false;
+                    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                      if (!node.textContent?.trim()) continue;
+                      const range = document.createRange();
+                      range.selectNodeContents(node);
+                      for (const rect of range.getClientRects()) if (rect.width > 0 && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5)) cut = true;
+                    }
+                    return { title: sheet.querySelector("[data-mobile2-sheet-header]")?.textContent ?? "", cut, rows: sheet.querySelectorAll("[data-mobile2-stage-act], button").length };
+                  });
+                  if (!stageSheet) fail("the pane's ⋯ opened no stage sheet");
+                  else {
+                    if (stageSheet.cut) fail("the stage sheet's text is cut at the sheet's edge");
+                    if (!stageSheet.title.trim()) fail("the stage sheet has no title");
+                  }
+                  await shot("stage-sheet");
+                  await gateModal("the stage sheet", stageSheet?.rows ?? 4);
+                  await closeSheet();
+
+                  /* The ⋯ sheet: its rows, its caption, its background inert, then its faces. */
+                  await openMenu();
+                  const menu = await page.evaluate(() => ({
+                    rows: [...document.querySelectorAll<HTMLElement>("[data-mobile2-pipeline-menu] [data-mobile2-menu-row], [data-mobile2-pipeline-menu] [data-mobile2-pipeline-action], [data-mobile2-pipeline-menu] [data-phone-lane-answer]")].map((row) => row.dataset.mobile2MenuRow ?? row.dataset.mobile2PipelineAction ?? row.dataset.phoneLaneAnswer ?? ""),
+                    caption: document.querySelector("[data-mobile2-stage-caption]")?.textContent ?? "",
+                  }));
+                  for (const required of ["changes", "checks", "board", "links", "tasks"]) if (!menu.rows.includes(required)) fail(`the ⋯ sheet lacks the ${required} row: ${JSON.stringify(menu.rows)}`);
+                  if (!menu.caption) fail("the ⋯ sheet has no stage-settings caption");
+                  await shot("menu");
+                  await gateModal("the ⋯ sheet", menu.rows.length);
+                  if (!(await page.locator("[data-mobile2-sheet]").count())) await openMenu();
+
+                  /* The linked-tasks face: one row per task, its status beside it, whole. */
+                  if (menu.rows.includes("tasks")) {
+                    await page.tap('[data-mobile2-menu-row="tasks"]');
+                    await page.waitForSelector("[data-mobile2-pipeline-tasks]");
+                    await pause(page, 300);
+                    const tasks = await page.evaluate(() => {
+                      const face = document.querySelector<HTMLElement>("[data-mobile2-pipeline-tasks]")!;
+                      const sheet = document.querySelector<HTMLElement>('[data-mobile2-sheet="menu"]')!;
+                      const box = sheet.getBoundingClientRect();
+                      const rows = [...face.querySelectorAll<HTMLElement>("[data-mobile2-linked-task]")];
+                      const cut = rows.some((row) => {
+                        const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+                        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                          if (!node.textContent?.trim()) continue;
+                          const range = document.createRange();
+                          range.selectNodeContents(node);
+                          for (const rect of range.getClientRects()) if (rect.width > 0 && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5)) return true;
+                        }
+                        return false;
+                      });
+                      return { rows: rows.map((row) => row.textContent ?? ""), cut, back: Boolean(face.querySelector('[data-mobile2-menu-row="back"]')) };
+                    });
+                    if (!tasks.rows.length) fail("the linked-tasks face lists no task");
+                    if (tasks.cut) fail("a linked task's row is cut at the sheet's edge");
+                    if (!tasks.back) fail("the linked-tasks face has no way back");
+                    await shot("tasks");
+                    await gateModal("the linked-tasks face", tasks.rows.length + 1);
+                    if (!(await page.locator("[data-mobile2-sheet]").count())) await openMenu();
+                    if (await page.locator("[data-mobile2-pipeline-tasks]").count()) {
+                      await page.tap('[data-mobile2-pipeline-tasks] [data-mobile2-menu-row="back"]');
+                      await page.waitForSelector("[data-mobile2-pipeline-menu]");
+                    }
+                  }
+                  if (menu.rows.includes("past")) {
+                    await page.tap('[data-mobile2-menu-row="past"]');
+                    await page.waitForSelector("[data-mobile2-past]");
+                    await shot("past");
+                  }
+                }
+                if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+              } catch (error) {
+                fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+              } finally { await page.close(); }
+            }
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(S2_OUT, "manifest.json"), `${JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", describe: "redesign S2 the Stages window on the phone", scenario: "kanban=1&stageshapes=1", viewport: "390x844", frames, failures }, null, 2)}\n`);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); stop(); }
+  }, 3_600_000);
+});
+
 describe("account burndown chart on the phone", () => {
   /* Any account's reading on the phone's accounts screen opens that account's chart as a bottom sheet: a non-active
      account with partial history (solid readings, dashed gaps), and a signed-in account with no reading at all (axes,

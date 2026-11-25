@@ -9,7 +9,7 @@ import fs from "node:fs";
 import { dirname } from "node:path";
 import crypto from "node:crypto";
 import { agentRegistry, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type RegistryFile } from "@/lib/agent/registry";
-import { registryCollectionPage, registryConversationsForEntryKey, registryRowsMatching, registryKeysMatchingBounded } from "@/lib/agent/sqliteRegistryStore";
+import { registryCollectionPage, registryConversationsForEntryKey, registryKeysMatchingBounded } from "@/lib/agent/sqliteRegistryStore";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
@@ -152,8 +152,7 @@ export class AgentStateService {
     const { registry, now } = this.ports;
     const started = performance.now();
     const cursor = readAgentStateMetrics(registry).afterKey;
-    const entries = registry.agentStateRead(file => registryRowsMatching(file, "entries", "structuredHost.kind",
-      ["codex-app-server", "claude-broker", "copilot-acp", "antigravity-acp"]).filter(row => row.structuredHost?.process).map(row => copyAgentStateRow(row)))
+    const entries = registry.agentStateProcessEntries()
       .sort((a, b) => sessionKeyId(a.key).localeCompare(sessionKeyId(b.key)));
     const after = cursor === null ? 0 : entries.findIndex(row => sessionKeyId(row.key) > cursor);
     const start = after < 0 ? 0 : after;
