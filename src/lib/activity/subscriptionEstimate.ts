@@ -1,18 +1,31 @@
 import estimates from "./usageEstimates.json";
-import { modelKey, priceTier, tokenCost as apiCost } from "./tokenPrices";
+import { modelKey, priceTier, tokenCost as apiCost, tokenRate } from "./tokenPrices";
 import type { TokenCounts } from "./tokenUsage";
 import type { SpendBasis, SpendBudget, SpendEngine } from "./taskLimitSpendTypes";
 
 export { apiCost };
-export const ESTIMATE_VERSION = estimates.version;
+// Price edits invalidate persisted task equivalents even when the editorial
+// snapshot label was accidentally left unchanged.
+import { createHash } from "node:crypto";
+
+export function estimateVersionAt(date: string): string {
+  const applicable = estimates.prices.filter(row => (row.effectiveFrom ?? row.date) <= date && (!row.until || date <= row.until));
+  return `${estimates.version}:${createHash("sha256").update(JSON.stringify(applicable)).digest("hex").slice(0,16)}`;
+}
+export const ESTIMATE_VERSION = estimateVersionAt(new Date().toISOString().slice(0,10));
 
 const METERS = new Map(estimates.meter.map(row => [`${row.engine}:${row.model}:${row.tier}`, row.times]));
 
 export function meterCost(model: string, tier: string, engine: string, counts: TokenCounts, priced?: number | null): number | null {
   const multiplier = METERS.get(`${engine}:${modelKey(model)}:${priceTier(tier)}`);
-  if (multiplier === undefined) return priced === undefined ? apiCost(model, tier, counts) : priced;
-  const standard = apiCost(model, "standard", counts);
-  return standard === null ? null : standard * multiplier;
+  if (engine !== "codex") return priced === undefined ? apiCost(model, tier, counts) : priced;
+  const standard = tokenRate(model, "standard"), service = tokenRate(model,tier);
+  if (!standard) return priced === undefined ? apiCost(model,tier,counts) : priced;
+  // Subscription calibration predates the provider's separate cache-write
+  // tariff. Preserve that meter unit: cache writes use ordinary input weight.
+  const rate = multiplier === undefined ? service ?? standard : standard;
+  return (counts.input * rate.input + counts.cacheRead * rate.cacheRead
+    + counts.cacheWrite * rate.input + counts.output * rate.output) / 1e6 * (multiplier ?? 1);
 }
 
 export function reportedPlan(value: string | null | undefined): string | null {
@@ -34,8 +47,8 @@ export function planBudget(engine: SpendEngine, plan: string | null, tier: strin
   return BUDGETS.get(budgetKey(engine, plan, window, tier)) ?? BUDGETS.get(budgetKey(engine, plan, window, null)) ?? null;
 }
 
-export function planWithoutFixedLimit(plan: string | null): boolean {
-  return plan !== null && ["enterprise", "edu"].includes(planKey(plan));
+export function planWithoutFixedLimit(plan: string | null, finiteWindowObserved = false): boolean {
+  return plan !== null && ["enterprise", "edu"].includes(planKey(plan)) && !finiteWindowObserved;
 }
 
 export function shareBasis(measured: number, planned: number): SpendBasis | null {

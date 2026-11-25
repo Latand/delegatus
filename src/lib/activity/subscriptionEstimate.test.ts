@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import estimates from "./usageEstimates.json";
-import { apiCost, estimateShare, meterCost, planBudget, planWithoutFixedLimit } from "./subscriptionEstimate";
+import { apiCost, estimateShare, estimateVersionAt, meterCost, planBudget, planWithoutFixedLimit } from "./subscriptionEstimate";
 import { emptyTokens } from "./tokenUsage";
 
 test("mixed Claude models use the rates for cache reads, both cache write durations, and output", () => {
@@ -17,7 +17,7 @@ test("Codex metering uses published speed multipliers while API prices use the r
   expect(meterCost("gpt-6.1-sol", "priority", "codex", counts)).toBeCloseTo(2.4825);
   expect(apiCost("gpt-6.1-sol", "ultrafast", counts)).toBeCloseTo(5.958);
   expect(meterCost("gpt-6.1-sol", "ultrafast", "codex", counts)).toBeCloseTo(7.944);
-  expect(apiCost("gpt-6.2-sol", "ultrafast", counts)).toBeCloseTo(2.979);
+  expect(apiCost("gpt-6.2-sol", "ultrafast", counts)).toBeCloseTo(3.279);
   expect(meterCost("gpt-6.2-sol", "ultrafast", "codex", counts)).toBeCloseTo(5.958);
   const mixed = meterCost("gpt-6.2-sol", "default", "codex", counts)! + meterCost("gpt-6-luna", "default", "codex", counts)!;
   expect(mixed).toBeCloseTo(1.0673);
@@ -41,15 +41,16 @@ test("weekly share combines measured rates and budget fallback with the full est
   expect(estimateShare(160, 0, null, null)).toMatchObject({ weeklyPp: null, basis: null, range: null, missingBudget: true });
   expect(estimateShare(160, 80, 3, null)).toMatchObject({ weeklyPp: 3, basis: "measured", missingBudget: true });
   expect(planWithoutFixedLimit("enterprise")).toBe(true);
+  expect(planWithoutFixedLimit("enterprise", true)).toBe(false);
   expect(planWithoutFixedLimit("fixture-plan")).toBe(false);
   expect(planBudget("claude", "enterprise", null)).toBeNull();
 });
 
 test("the versioned data has distinct, sourced, dated rows and current promotions", () => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = "2026-11-24";
   expect(estimates.version).toMatch(/^\d{4}-\d{2}-\d{2}\.\d+$/);
   const groups = [
-    { rows: estimates.prices, keys: estimates.prices.map(row => [row.model, row.tier]) },
+    { rows: estimates.prices, keys: estimates.prices.map(row => [row.model, row.tier, row.effectiveFrom ?? row.date]) },
     { rows: estimates.meter, keys: estimates.meter.map(row => [row.engine, row.model, row.tier]) },
     { rows: estimates.budgets, keys: estimates.budgets.map(row => [row.engine, row.plan, row.window, row.planTier]) },
   ];
@@ -61,11 +62,14 @@ test("the versioned data has distinct, sourced, dated rows and current promotion
       expect(row.date <= estimates.version.slice(0, 10)).toBe(true);
     }
   }
-  for (const { until } of estimates.prices) {
-    if (until) expect(today <= until).toBe(true);
-  }
+  expect(estimates.prices.filter(({ until }) => until).every(({ until }) => today <= until!)).toBe(true);
   for (const budget of estimates.budgets) {
     expect(budget.low > 0 && budget.low <= budget.mid && budget.mid <= budget.high).toBe(true);
     expect(["measured", "measured-thin", "inferred", "published"]).toContain(budget.grade);
   }
+});
+
+test("scheduled price transitions change the bounded repricing key only when the active rate changes", () => {
+  expect(estimateVersionAt("2027-02-27")).toBe(estimateVersionAt("2027-02-28"));
+  expect(estimateVersionAt("2027-03-01")).not.toBe(estimateVersionAt("2027-02-28"));
 });

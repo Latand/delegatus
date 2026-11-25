@@ -33,7 +33,7 @@ const TASKS: Record<string, TaskSpendSummary> = {
     provider("codex", [account("codex:a", "A", "pro", 1.2, 24e6, 47), account("codex:b", "B", "pro", 0.4, 9e6, 22)]),
   ] },
   large: { providers: [
-    provider("claude", [account("claude:a", "A", "max", 12.4, 610e6, 66)], "floor", "before-counting"),
+    provider("claude", [account("claude:a", "A", "max", 12.4, 610e6, 66, 12)], "floor", "before-counting"),
     provider("codex", [account("codex:a", "A", "pro", 21.3, 402e6, 74), account("codex:d", "D", "pro", 12.9, 250e6, 40)]),
   ] },
   norate: { providers: [
@@ -156,9 +156,9 @@ test("the board's cards ask once for every task, and each provider draws its mar
   /* Still being counted: nothing at all. */
   expect(host.querySelector("[data-spend='counting']")).toBeNull();
   for (const id of ["two", "large"]) expect(/\d/.test(host.querySelector(`[data-spend='${id}']`)!.textContent!)).toBe(false);
-  expect(host.querySelector("[data-spend='large'] .scale-floor")!.textContent).toBe("≥");
+  expect(host.querySelector("[data-spend='large'] .scale-floor")).toBeNull();
   expect(host.querySelector("[data-spend='norate'] .spend-n")!.textContent).toBe("41m");
-  expect(host.querySelector("[data-spend='large']")!.getAttribute("aria-label")).toBe("Task usage: Claude at least 12% of the week, Codex about 34% of the week");
+  expect(host.querySelector("[data-spend='large']")!.getAttribute("aria-label")).toBe("Task usage: Claude about 12% (estimate) of the week, Codex about 34% of the week");
   expect(host.querySelector("[data-spend='two']")!.getAttribute("role")).toBe("button");
 });
 
@@ -187,18 +187,16 @@ test("a lower bound's scale fills by its printed, floored figure", async () => {
   const host = await mount(<><TaskSpendMarks taskId="floor46" interactive /><TaskSpendMarks taskId="floor146" interactive /></>);
   expect(marks(host, "floor46")).toEqual([["claude", "floor", 1]]);
   expect(marks(host, "floor146")).toEqual([["claude", "floor", 2]]);
-  expect((await open("floor46")).textContent).toContain("Claude ≥4%");
-  expect((await open("floor146")).textContent).toContain("Claude ≥14%");
+  expect((await open("floor46")).textContent).toContain("Claude ≈4%");
+  expect((await open("floor146")).textContent).toContain("Claude ≈14%");
 });
 
-test("an account's label is printed whole, with no title standing in for a cut", async () => {
+test("the compact card popover omits repeated account detail and keeps each provider estimate", async () => {
   await mount(<><TaskSpendMarks taskId="long" interactive /><PhoneTaskSpend taskId="long" headingClass="h" /></>);
-  const name = "Research workstation in the second office, shared by the whole data team on site · Max";
   const pop = await open("long");
-  for (const label of [pop.querySelector(".meter-label")!, document.querySelector("[data-phone-task-spend='long'] .meter-label")!]) {
-    expect(label.textContent).toBe(name);
-    expect(label.hasAttribute("title")).toBe(false);
-  }
+  expect(pop.textContent).toContain("Claude ≈2%");
+  expect(pop.querySelectorAll(".pop-row")).toHaveLength(1);
+  expect(pop.textContent).not.toContain("Research workstation");
 });
 
 test("a screen reader reaches the popover's lines: the open marks are described by the bubble", async () => {
@@ -209,7 +207,7 @@ test("a screen reader reaches the popover's lines: the open marks are described 
   const described = document.getElementById(trigger.getAttribute("aria-describedby")!)!;
   expect(described.getAttribute("role")).toBe("tooltip");
   const text = described.textContent!;
-  for (const line of ["A · Max", "B · Max", "A · Pro", "B · Pro", "account week 53%", "Now 12% of A's 5-hour window", "±30%"]) expect(text).toContain(line);
+  for (const line of ["Claude ≈3%", "Codex ≈2%", "±30%"] ) expect(text).toContain(line);
   await act(async () => trigger.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
   expect(trigger.hasAttribute("aria-describedby")).toBe(false);
 });
@@ -233,17 +231,16 @@ test("a tap opens the popover and the next tap closes it: a touch pointer neithe
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
 });
 
-test("the popover reads as an estimate: ≈ per provider, each account beside its week, the 5-hour share, ±30 %", async () => {
+test("the compact popover marks estimates and shows one total token line", async () => {
   await mount(<TaskSpendMarks taskId="two" interactive />);
   const pop = await open("two");
   expect(pop).not.toBeNull();
   const text = pop.textContent!;
   expect(text).toContain("Claude ≈3%");
   expect(text).toContain("Codex ≈2%");
-  expect([...pop.querySelectorAll(".meter-label")].map((el) => el.textContent)).toEqual(["A · Max", "B · Max", "A · Pro", "B · Pro"]);
-  expect([...pop.querySelectorAll(".meter-num")].map((el) => el.textContent)).toEqual(["2%", "1%", "1%", "0.4%"]);
-  expect(pop.querySelector("[data-spend-session='claude:a']")!.textContent).toBe("Now 12% of A's 5-hour window");
-  expect(pop.querySelector(".pop-note")!.textContent).toBe("226m tokens · ≈ $23 at API prices");
+  expect(pop.querySelectorAll(".pop-row")).toHaveLength(2);
+  expect(pop.querySelector(".pop-note")!.textContent).toBe("226m tokens");
+  expect(pop.textContent).not.toContain("Now 12%");
   const trigger = document.querySelector<HTMLElement>("[data-spend='two']")!;
   await act(async () => trigger.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
   expect(document.querySelector("[data-spend-pop='two']")).toBeNull();
@@ -251,29 +248,32 @@ test("the popover reads as an estimate: ≈ per provider, each account beside it
 
 test("a lower bound and an unreported plan have distinct explanations in Ukrainian", async () => {
   setLocale("uk");
-  await mount(<><TaskSpendMarks taskId="large" interactive /><TaskSpendMarks taskId="norate" interactive /></>);
+  await mount(<><TaskSpendMarks taskId="large" interactive /><PhoneTaskSpend taskId="large" headingClass="h" />
+    <TaskSpendMarks taskId="norate" interactive /><PhoneTaskSpend taskId="norate" headingClass="h" /></>);
   const large = await open("large");
-  expect(large.textContent).toContain("Claude ≥12%");
-  expect(large.querySelector("[data-spend-provider='claude'] .meter-sign")!.textContent).toBe("≥");
-  expect(large.querySelector(".pop-warn")!.textContent).toBe("Нижня межа: роботу до початку обліку не пораховано");
+  expect(large.textContent).toContain("Claude ≈12%");
+  expect(large.querySelector("[data-spend-provider='claude'] .meter-sign")).toBeNull();
+  expect(large.querySelector(".pop-warn")!.textContent).toContain("Нижня межа: роботу до початку обліку не пораховано");
+  const phone = document.querySelector("[data-phone-task-spend='large']")!.textContent!;
+  expect(phone).toContain("оцінка задачі ≈12% за тиждень");
+  expect(phone).toContain("оцінка за 5 годин ≈12%");
   const norate = await open("norate");
   const claude = norate.querySelector("[data-spend-provider='claude']")!;
   expect(claude.textContent!.replace(/\s/g, " ")).toContain("Claude 41 млн токенів");
   expect(claude.textContent).toContain("Для оцінки частки потрібен план акаунта");
-  expect(claude.textContent).toContain("Акаунт не визначено");
   expect(claude.textContent).not.toMatch(/невідом|unknown/);
   expect(/%/.test(claude.textContent!)).toBe(false);
-  expect(norate.querySelector(".pop-note")!.textContent).toContain("за цінами API");
+  expect(claude.querySelector(".pop-row")!.textContent).toContain("за цінами API");
 });
 
 test("a member who is not the owner sees each provider's figure and no account", async () => {
   guest = true;
   await mount(<TaskSpendMarks taskId="two" interactive />);
   const pop = await open("two");
-  expect(pop.querySelectorAll(".meter").length).toBe(0);
+  expect(pop.querySelectorAll(".pop-row").length).toBe(2);
   expect(pop.textContent).toContain("Claude ≈3%");
   expect(pop.textContent).toContain("Codex ≈2%");
-  expect(pop.querySelector(".pop-note")!.textContent).toBe("226m tokens · ≈ $23 at API prices");
+  expect(pop.querySelector(".pop-note")!.textContent).toBe("226m tokens");
 });
 
 test("the phone's face is passive, and its task screen lists the numbers; a refused read draws nothing", async () => {
@@ -282,7 +282,7 @@ test("the phone's face is passive, and its task screen lists the numbers; a refu
   expect(face.getAttribute("role")).toBeNull();
   expect(face.getAttribute("aria-hidden")).toBe("true");
   expect(host.querySelector("[data-phone-task-spend='two'] h2")!.textContent).toBe("Task usage");
-  expect(host.querySelectorAll("[data-phone-task-spend='two'] .meter").length).toBe(4);
+  expect(host.querySelectorAll("[data-phone-task-spend='two'] .pop-row").length).toBe(2);
 
   for (const root of roots.splice(0)) act(() => root.unmount());
   resetTaskSpend();

@@ -20,12 +20,12 @@ export interface TokenRate { input: number; cacheRead: number; cacheWrite: numbe
 export type PriceTier = "standard" | "fast" | "flex" | "ultrafast";
 
 const RATES = new Map(usageEstimates.prices.map(row => {
-  const { input, cachedInput, cacheWrite5m, cacheWrite1h, output } = row;
+  const { input, cachedInput, cacheWrite5m, cacheWrite1h, cacheWrite30m, cacheWrite12h, output } = row;
   const claude = row.model.startsWith("claude-");
-  return [`${row.model}:${row.tier}`, {
+  return [`${row.model}:${row.tier}:${row.effectiveFrom ?? row.date}`, {
     input, cacheRead: cachedInput, output,
-    cacheWrite: cacheWrite5m ?? (claude ? input * 1.25 : input),
-    cacheWrite1h: cacheWrite1h ?? (claude ? input * 2 : input),
+    cacheWrite: cacheWrite5m ?? cacheWrite30m ?? (claude ? input * 1.25 : input),
+    cacheWrite1h: cacheWrite1h ?? cacheWrite12h ?? (claude ? input * 2 : input),
   }];
 }));
 
@@ -45,14 +45,18 @@ export function priceTier(tier: string | null | undefined): PriceTier | null {
 /** A dated snapshot id (`claude-haiku-4-5-20251001`) prices as its model. */
 export const modelKey = (model: string) => model.trim().toLowerCase().replace(/-\d{8}$/, "");
 
-export function tokenRate(model: string, tier: string | null | undefined): TokenRate | null {
+export function tokenRate(model: string, tier: string | null | undefined, pricingDate = new Date().toISOString().slice(0, 10)): TokenRate | null {
   const priced = priceTier(tier);
-  return priced ? RATES.get(`${modelKey(model)}:${priced}`) ?? null : null;
+  if (!priced) return null;
+  const row = usageEstimates.prices.filter(item => modelKey(item.model) === modelKey(model) && item.tier === priced
+    && (item.effectiveFrom ?? item.date) <= pricingDate && (!item.until || pricingDate <= item.until))
+    .sort((a,b) => (b.effectiveFrom ?? b.date).localeCompare(a.effectiveFrom ?? a.date))[0];
+  return row ? RATES.get(`${row.model}:${row.tier}:${row.effectiveFrom ?? row.date}`) ?? null : null;
 }
 
 /** Dollars for one model and tier, or null when it has no published price. */
-export function tokenCost(model: string, tier: string | null | undefined, counts: TokenCounts): number | null {
-  const rate = tokenRate(model, tier);
+export function tokenCost(model: string, tier: string | null | undefined, counts: TokenCounts, pricingDate?: string): number | null {
+  const rate = tokenRate(model, tier, pricingDate);
   if (!rate) return null;
   const write5m = Math.max(0, counts.cacheWrite - counts.cacheWrite1h);
   return (counts.input * rate.input + counts.cacheRead * rate.cacheRead + write5m * rate.cacheWrite

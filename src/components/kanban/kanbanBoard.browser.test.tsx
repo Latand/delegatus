@@ -19683,12 +19683,12 @@ describe("the orchestrator's parallel self in the seat's feed", () => {
 
 describe("task limit spend: a scale on the card's state line, the numbers in its popover", () => {
   const CASES = {
-    "t-upload": { state: "one provider", marks: [["codex", "num", 1]], pop: [/Codex ≈1%/, /650.*1.200/, /(published sources|відкритих джерел)/] },
-    "t-search": { state: "two providers", marks: [["claude", "num", 1], ["codex", "num", 1]], pop: [/Claude ≈3%/, /Codex ≈2%/, /0[.,]4%/, /5-(hour|годин)/, /Max 20×/, /(account usage and the plan budget|темпом акаунта й бюджетом плану)/, /900.*2.300/, /226/] },
-    "t-export": { state: "several accounts", marks: [["claude", "tiny", 0], ["codex", "num", 2]], pop: [/Claude <1%/, /Codex ≈7%/, /A · Pro/, /B · Plus/, /D · Pro/] },
-    "t-links": { state: "tiny", marks: [["claude", "tiny", 0]], pop: [/Claude <1%/, /0[.,]3%/] },
-    "t-interrupt": { state: "large, lower bound", marks: [["claude", "floor", 2], ["codex", "num", 4]], pop: [/Claude ≥12%/, /Codex ≈34%/, /(task|задача) ≥ ?12%/] },
-    "t-disk": { state: "plan unreported", marks: [["claude", "tokens", null], ["codex", "num", 1]], pop: [/Claude 41/, /(reported account plan is needed|потрібен план акаунта)/, /(Unattributed account|Акаунт не визначено)/, /Codex ≈1%/] },
+    "t-upload": { state: "one provider", marks: [["codex", "num", 1]], pop: [/Codex ≈1%/, /650.*1.200/, /(published sources|відкритими джерелами)/] },
+    "t-search": { state: "two providers", marks: [["claude", "num", 1], ["codex", "num", 1]], pop: [/Claude ≈3%/, /Codex ≈2%/, /(account usage and the plan budget|темпом акаунта й бюджетом плану)/, /900.*2.300/, /226/] },
+    "t-export": { state: "several accounts", marks: [["claude", "tiny", 0], ["codex", "num", 2]], pop: [/Claude <1%/, /Codex ≈7%/] },
+    "t-links": { state: "tiny", marks: [["claude", "tiny", 0]], pop: [/Claude <1%/] },
+    "t-interrupt": { state: "large, estimate with incomplete history", marks: [["claude", "floor", 2], ["codex", "num", 4]], pop: [/Claude ≈12%/, /Codex ≈34%/] },
+    "t-disk": { state: "plan unreported", marks: [["claude", "tokens", null], ["codex", "num", 1]], pop: [/Claude 41/, /(reported account plan is needed|потрібен план акаунта)/, /Codex ≈1%/] },
   } as const;
   const COUNTING = "t-merge-a";
   const WIDTHS = [1440, 1280, 820, 390, 320, 360, 440] as const;
@@ -19728,17 +19728,19 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
     const popReading = (page: Page, id: string) => page.evaluate((id) => {
       const pop = document.querySelector<HTMLElement>(`[data-spend-pop="${id}"]`)!.closest<HTMLElement>("[role=tooltip]")!;
       const r = pop.getBoundingClientRect();
-      const lines = [...pop.querySelectorAll<HTMLElement>(".pop-title, .pop-main, .meter, .meter-note, .pop-note")].map((el) => el.innerText.replace(/\s+/g, " ").trim());
-      /* No line is cut: an account label, whatever its length, is printed whole. */
-      const clipped = [...pop.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main, .meter-note, .pop-note")].filter((el) => el.scrollWidth > el.clientWidth + 1).length;
-      const labels = [...pop.querySelectorAll<HTMLElement>(".meter-label")].map((el) => ({ text: el.textContent ?? "", lines: new Set([...el.getClientRects()].map((b) => Math.round(b.top))).size, height: el.getBoundingClientRect().height }));
-      /* Every account line, its label's text, its value and its bar stay inside the bubble. */
-      const textRects = [...pop.querySelectorAll<HTMLElement>(".meter-label")].flatMap((el) => { const range = document.createRange(); range.selectNodeContents(el); return [...range.getClientRects()]; });
-      const outside = [...[...pop.querySelectorAll<HTMLElement>(".meter, .meter-figure, .meter-value, .meter-bar")].map((el) => el.getBoundingClientRect()), ...textRects].filter((b) =>
+      const lines = [...pop.querySelectorAll<HTMLElement>(".pop-title, .pop-main, .meter-note, .pop-note")].map((el) => el.innerText.replace(/\s+/g, " ").trim());
+      const clipped = [...pop.querySelectorAll<HTMLElement>(".pop-main, .meter-note, .pop-note")].filter((el) => el.scrollWidth > el.clientWidth + 1).length;
+      const labels = [...pop.querySelectorAll<HTMLElement>("[data-spend-account]")].map((el) => ({ text: el.textContent ?? "", lines: new Set([...el.getClientRects()].map((b) => Math.round(b.top))).size, height: el.getBoundingClientRect().height }));
+      const textRects = [...pop.querySelectorAll<HTMLElement>(".pop-main, .meter-note, .pop-note")].flatMap((el) => { const range = document.createRange(); range.selectNodeContents(el); return [...range.getClientRects()]; });
+      const outside = [...[...pop.querySelectorAll<HTMLElement>(".pop-main, .meter-note, .pop-note")].map((el) => el.getBoundingClientRect()), ...textRects].filter((b) =>
         b.left < r.left - 0.5 || b.right > r.right + 0.5 || b.top < r.top - 0.5 || b.bottom > r.bottom + 0.5).length;
-      /* The task figure's digits start at one x on every account line. */
-      const numX = [...pop.querySelectorAll<HTMLElement>(".meter-num")].map((el) => Math.round(el.getBoundingClientRect().left));
-      return { box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, viewport: { width: innerWidth, height: innerHeight }, lines, clipped, labels, outside, numX, bg: getComputedStyle(pop).backgroundColor };
+      const host = document.querySelector<HTMLElement>(`[data-kanban-card="task:${id}"]`);
+      const timelineRects = [...(host?.querySelectorAll<HTMLElement>("[data-chronology-entry]") ?? [])].flatMap((row) => {
+        const range = document.createRange(); range.selectNodeContents(row); return [...range.getClientRects()];
+      });
+      const overlapsTimeline = timelineRects.some((b) => b.left < r.right - 0.5 && r.left < b.right - 0.5 && b.top < r.bottom - 0.5 && r.top < b.bottom - 0.5);
+      const numX: number[] = [];
+      return { box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, viewport: { width: innerWidth, height: innerHeight }, lines, clipped, labels, outside, overlapsTimeline, numX, bg: getComputedStyle(pop).backgroundColor };
     }, id);
     try {
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of WIDTHS) {
@@ -19784,11 +19786,12 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               readings.push({ label, id, popover: pop });
               const text = pop.lines.join("\n");
               for (const want of expected.pop) if (!want.test(text)) failures.push(`${label} ${id}: the popover lacks ${want}:\n${text}`);
-              if (!/(±30%|published sources|відкритих джерел)/.test(text) || !/API/.test(text)) failures.push(`${label} ${id}: missing estimate basis or API total`);
+              if (!/(±30%|published sources|відкритими джерелами)/.test(text) || !/API/.test(text)) failures.push(`${label} ${id}: missing estimate basis or API total`);
               if (pop.clipped) failures.push(`${label} ${id}: ${pop.clipped} popover lines are cut`);
               if (pop.outside) failures.push(`${label} ${id}: ${pop.outside} account lines or bars leave the bubble`);
+              if (pop.overlapsTimeline) failures.push(`${label} ${id}: the popover covers task timeline text`);
               /* The fixture's 80-character label cannot share a line with its figure: it is printed whole, on lines of its own. */
-              if (id === "t-interrupt" && !pop.labels.some((l) => l.text.length > 80 && text.includes(l.text.replace(/\s+/g, " ")))) failures.push(`${label} ${id}: the 80-character account label is not printed whole: ${JSON.stringify(pop.labels)}`);
+              if (pop.lines.length > 6) failures.push(`${label} ${id}: the compact popover renders ${pop.lines.length} rows`);
               if (new Set(pop.numX).size > 1) failures.push(`${label} ${id}: account figures start at ${pop.numX.join(", ")}`);
               if (pop.box.left < 0 || pop.box.top < 0 || pop.box.right > pop.viewport.width || pop.box.bottom > pop.viewport.height) failures.push(`${label} ${id}: the popover leaves the window ${JSON.stringify(pop.box)}`);
               const cardBox = (await host.boundingBox())!;
@@ -19835,21 +19838,23 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               const box = (await section.boundingBox())!;
               if (box.x < 0 || box.x + box.width > width || box.y < 0 || box.y + box.height > height) failures.push(`${label} ${id}: the Limits section is not whole on screen ${JSON.stringify(box)}`);
               const text = (await section.innerText()).replace(/[ \t]+/g, " ");
-              /* As in the popover: every account label whole, inside the section, and the digits at one x. */
+              /* The phone task screen gives each account a complete estimate line. */
               const fit = await section.evaluate((el) => {
                 const r = el.getBoundingClientRect();
-                const cut = [...el.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main, .meter-note, .pop-note")].filter((node) => node.scrollWidth > node.clientWidth + 1).length;
-                const rects = [...el.querySelectorAll<HTMLElement>(".meter-label")].flatMap((node) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()]; });
-                const outside = [...[...el.querySelectorAll<HTMLElement>(".meter, .meter-figure, .meter-value, .meter-bar")].map((node) => node.getBoundingClientRect()), ...rects].filter((b) => b.left < r.left - 0.5 || b.right > r.right + 0.5).length;
-                const numX = [...el.querySelectorAll<HTMLElement>(".meter-num")].map((node) => Math.round(node.getBoundingClientRect().left));
-                return { cut, outside, numX, labels: [...el.querySelectorAll<HTMLElement>(".meter-label")].map((node) => node.textContent ?? "") };
+                const cut = [...el.querySelectorAll<HTMLElement>(".pop-main, .meter-note, .pop-note")].filter((node) => node.scrollWidth > node.clientWidth + 1).length;
+                const rects = [...el.querySelectorAll<HTMLElement>("[data-spend-account]")].flatMap((node) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()]; });
+                const outside = [...[...el.querySelectorAll<HTMLElement>(".pop-main, .meter-note, .pop-note, [data-spend-account]")].map((node) => node.getBoundingClientRect()), ...rects].filter((b) => b.left < r.left - 0.5 || b.right > r.right + 0.5).length;
+                const numX: number[] = [];
+                return { cut, outside, numX, labels: [...el.querySelectorAll<HTMLElement>("[data-spend-account]")].map((node) => node.textContent ?? "") };
               });
               readings.push({ label, id, section: text, fit });
               if (fit.cut) failures.push(`${label} ${id}: ${fit.cut} Limits lines are cut`);
               if (fit.outside) failures.push(`${label} ${id}: ${fit.outside} account lines leave the Limits section`);
               if (new Set(fit.numX).size > 1) failures.push(`${label} ${id}: Limits figures start at ${fit.numX.join(", ")}`);
-              if (id === "t-interrupt" && !fit.labels.some((l) => l.length > 80)) failures.push(`${label} ${id}: the 80-character account label is not whole in the Limits section: ${JSON.stringify(fit.labels)}`);
+              if (id === "t-interrupt" && !fit.labels.some((l) => l.includes("Research workstation in the second office"))) failures.push(`${label} ${id}: the full account detail is not present in the Limits section: ${JSON.stringify(fit.labels)}`);
               for (const want of CASES[id].pop) if (!want.test(text)) failures.push(`${label} ${id}: the Limits section lacks ${want}`);
+              if (id === "t-interrupt" && !/Research workstation in the second office/.test(text)) failures.push(`${label} ${id}: the phone Limits section omits account detail`);
+              if (id === "t-links" && !/≈0[.,]3%/.test(text)) failures.push(`${label} ${id}: the phone Limits section omits the account estimate`);
               await page.screenshot({ path: path.join(out, `${label}-task-${id}.png`) });
               await page.goBack();
               await page.locator(`[data-phone-kanban-tab="${tab}"]`).waitFor({ timeout: 10_000 });

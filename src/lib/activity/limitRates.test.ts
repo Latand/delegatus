@@ -117,6 +117,12 @@ test("a provisional measured rate and its plan tier survive the loss of its samp
     series = { "claude|a|weekly": [reading(first + DAY, 100), reading(now, 80), reading(now + 3 * DAY, 70)] };
     expect(await run(now + 3 * DAY, null)).not.toContainEqual({ account, day: date });
     expect(row()).toEqual(saved);
+    const latestDay = new Date(now + 3 * DAY).toISOString().slice(0,10);
+    const carried = store.db.query("SELECT plan,plan_tier FROM usage_limit_rates WHERE account=? AND day=? AND window='weekly'").get(account, latestDay);
+    expect(carried).toEqual({ plan: "max", plan_tier: "default_claude_max_20x" });
+    await run(now + 3 * DAY, { ...plan, plan: "pro", planTier: null });
+    expect(store.db.query("SELECT plan,plan_tier FROM usage_limit_rates WHERE account=? AND day=? AND window='weekly'").get(account, latestDay))
+      .toEqual({ plan: "pro", plan_tier: null });
   } finally {
     store.close();
     fs.rmSync(root, { recursive: true, force: true });

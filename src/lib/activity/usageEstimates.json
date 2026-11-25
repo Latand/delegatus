@@ -37,9 +37,10 @@
     {"model": "claude-haiku-5-5", "tier": "standard", "input": 0.1, "cachedInput": 0.01, "output": 0.5, "cacheWrite5m": 0.125, "cacheWrite1h": 0.2, "source": "anthropic-api", "date": "2026-11-24"},
     {"model": "claude-haiku-4-5", "tier": "standard", "input": 1, "cachedInput": 0.1, "output": 5, "cacheWrite5m": 1.25, "cacheWrite1h": 2, "source": "anthropic-api", "date": "2026-11-24"},
     {"model": "claude-3-5-haiku", "tier": "standard", "input": 0.8, "cachedInput": 0.08, "output": 4, "cacheWrite5m": 1.0, "cacheWrite1h": 1.6, "source": "anthropic-api", "date": "2026-11-24"},
-    {"model": "gpt-6.2-sol", "tier": "standard", "input": 2, "cachedInput": 0.1, "output": 10, "source": "openai-api", "date": "2026-11-24"},
-    {"model": "gpt-6.2-sol", "tier": "fast", "input": 4, "cachedInput": 0.2, "output": 20, "source": "openai-api", "date": "2026-11-24"},
-    {"model": "gpt-6.2-sol", "tier": "ultrafast", "input": 6, "cachedInput": 0.3, "output": 30, "until": "2027-02-28", "source": "openai-api", "date": "2026-11-24"},
+    {"model": "gpt-6.2-sol", "tier": "standard", "input": 2, "cachedInput": 0.1, "output": 10, "cacheWrite30m": 2.5, "cacheWrite12h": 5, "source": "openai-api", "date": "2026-11-24"},
+    {"model": "gpt-6.2-sol", "tier": "fast", "input": 4, "cachedInput": 0.2, "output": 20, "cacheWrite30m": 5, "cacheWrite12h": 10, "source": "openai-api", "date": "2026-11-24"},
+    {"model": "gpt-6.2-sol", "tier": "ultrafast", "input": 6, "cachedInput": 0.3, "output": 30, "cacheWrite30m": 7.5, "cacheWrite12h": 15, "until": "2027-02-28", "source": "openai-api", "date": "2026-11-24"},
+    {"model": "gpt-6.2-sol", "tier": "ultrafast", "input": 12, "cachedInput": 0.6, "output": 60, "cacheWrite30m": 15, "cacheWrite12h": 30, "effectiveFrom": "2027-03-01", "source": "openai-api", "date": "2026-11-24"},
     {"model": "gpt-6.2-astra", "tier": "standard", "input": 8, "cachedInput": 0.4, "output": 40, "source": "openai-api", "date": "2026-11-24"},
     {"model": "gpt-6.2-astra", "tier": "fast", "input": 16, "cachedInput": 0.8, "output": 80, "source": "openai-api", "date": "2026-11-24"},
     {"model": "gpt-6.2-astra", "tier": "ultrafast", "input": 24, "cachedInput": 1.2, "output": 120, "until": "2027-02-28", "source": "openai-api", "date": "2026-11-24"},
@@ -93,7 +94,8 @@
     {"model": "gpt-5.6-luna", "tier": "standard", "input": 0.2, "cachedInput": 0.02, "output": 1.2, "source": "openai-api", "date": "2026-11-24"},
     {"model": "gpt-5.6-luna", "tier": "flex", "input": 0.1, "cachedInput": 0.01, "output": 0.6, "source": "openai-api", "date": "2026-11-24"},
     {"model": "gpt-5.6-luna", "tier": "fast", "input": 0.4, "cachedInput": 0.04, "output": 2.4, "source": "openai-api", "date": "2026-11-24"},
-    {"model": "gpt-6.1-terra", "tier": "standard", "input": 1, "cachedInput": 0.05, "output": 5, "source": "openai-api", "date": "2026-11-24"}
+    {"model": "gpt-6.1-terra", "tier": "standard", "input": 1, "cachedInput": 0.05, "output": 5, "source": "openai-api", "date": "2026-11-24"},
+    {"model": "gpt-6.1-terra", "tier": "flex", "input": 0.5, "cachedInput": 0.025, "output": 2.5, "cacheWrite30m": 0.625, "cacheWrite12h": 1.25, "source": "openai-api", "date": "2026-11-24"}
   ],
   "meter": [
     {"engine": "codex", "model": "gpt-6.2-astra", "tier": "fast", "times": 2, "source": "codex-pricing", "date": "2026-11-24"},

@@ -2238,7 +2238,6 @@
 
 /* The popover: the state dot's bubble, with a provider block per engine. */
 .spend-pop { width: max-content; max-width: min(320px, calc(100vw - 24px)); text-align: left; }
-:is(.spend-pop, .phone-spend) .spend-unit { white-space: nowrap; }
 :is(.spend-pop, .phone-spend) .pop-sub { overflow-wrap: anywhere; }
 .spend-pop .pop-title { display: block; font-weight: 600; margin-bottom: 4px; }
 .spend-pop .pop-row { display: flex; align-items: flex-start; gap: 5px; }

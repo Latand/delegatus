@@ -6,7 +6,7 @@ import { intlLocale } from "@/components/activity/format";
 import { compact, money } from "@/components/activity/tokenParts";
 import { EngineMark } from "@/components/EngineMark";
 import { TooltipBubble } from "@/components/TooltipBubble";
-import type { SpendBudget, SpendRange, TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
+import type { SpendRange, TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
 import { useLocale, type Locale, type TFunction } from "@/lib/i18n";
 
 import { useTaskSpend } from "./taskSpendSummaries";
@@ -41,31 +41,27 @@ function floorText(pp: number, locale: Locale): string {
 /** The provider's headline figure: «≈3%», «<1%», «≥12%». */
 function headline(provider: TaskSpendProvider, locale: Locale): string {
   const kind = providerKind(provider);
-  if (kind === "floor") return `≥${floorText(provider.weeklyPp, locale)}`;
+  if (kind === "floor") return `≈${floorText(provider.weeklyPp, locale)}`;
   if (kind === "tiny") return "<1%";
   return `≈${Math.round(provider.weeklyPp)}%`;
 }
 
-/** An account's figure, its sign apart so the digits start at one x on every line. */
-function accountFigure(pp: number, floor: boolean, locale: Locale): { sign: string; num: string } {
-  if (floor) return { sign: "≥", num: floorText(pp, locale) };
-  if (pp >= 1) return { sign: "≈", num: `${Math.round(pp)}%` };
-  if (pp >= 0.1) return { sign: "≈", num: `${decimal(Math.round(pp * 10) / 10, locale)}%` };
-  return { sign: "<", num: `${decimal(0.1, locale)}%` };
+function accountPlan(account: TaskSpendAccount): string | null {
+  if (account.plan === "max" && account.planTier === "default_claude_max_20x") return "Max 20×";
+  if (account.plan === "max" && account.planTier === "default_claude_max_5x") return "Max 5×";
+  const plan = account.plan?.trim();
+  return plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : null;
 }
 
-const wholeOrUnder = (pp: number) => (pp >= 1 ? `${Math.round(pp)}%` : "<1%");
-
-function planName(plan: string | null, tier: string | null): string | null {
-  if (plan === "max" && tier === "default_claude_max_20x") return "Max 20×";
-  if (plan === "max" && tier === "default_claude_max_5x") return "Max 5×";
-  const trimmed = plan?.trim();
-  return trimmed ? trimmed.charAt(0).toUpperCase() + trimmed.slice(1) : null;
+function accountBudget(account: TaskSpendAccount, locale: Locale, t: TFunction): string | null {
+  if (!account.budget) return null;
+  const number = new Intl.NumberFormat(intlLocale(locale), { maximumFractionDigits: 0 });
+  return t("taskSpend.budget", { low: number.format(account.budget.low), high: number.format(account.budget.high), grade: t(`taskSpend.grade.${account.budget.grade}`) });
 }
 
-function accountName(account: TaskSpendAccount, t: TFunction): string {
-  const label = account.key === "unknown" ? t("taskSpend.unattributed") : account.label;
-  return [label, planName(account.plan, account.planTier)].filter(Boolean).join(" · ");
+function budgetText(budget: SpendRange & { grade: string }, locale: Locale, t: TFunction): string {
+  const number = new Intl.NumberFormat(intlLocale(locale), { maximumFractionDigits: 0 });
+  return t("taskSpend.budget", { low: number.format(budget.low), high: number.format(budget.high), grade: t(`taskSpend.grade.${budget.grade}`) });
 }
 
 /** What a screen reader hears for the marks: one clause per provider. */
@@ -75,7 +71,7 @@ export function taskSpendAria(t: TFunction, summary: TaskSpendSummary, locale: L
     const kind = providerKind(provider);
     if (kind === "tokens") return t("taskSpend.aria.tokens", { engine, tokens: compact(provider.tokens, locale) });
     if (kind === "tiny") return t("taskSpend.aria.tiny", { engine });
-    if (kind === "floor") return t("taskSpend.aria.floor", { engine, value: floorText(provider.weeklyPp, locale) });
+    if (kind === "floor") return t("taskSpend.aria.approx", { engine, value: `${floorText(provider.weeklyPp, locale)} (estimate)` });
     return t("taskSpend.aria.approx", { engine, value: `${Math.round(provider.weeklyPp)}%` });
   });
   return t("taskSpend.aria", { parts: parts.join(", ") });
@@ -100,7 +96,6 @@ function Marks({ summary }: { summary: TaskSpendSummary }) {
             <EngineMark engine={provider.engine} size={12} />
             {kind === "tokens" ? <span className="spend-n">{compact(provider.tokens, locale)}</span> : (
               <>
-                {kind === "floor" ? <span className="scale-floor" aria-hidden>≥</span> : null}
                 <Scale cells={providerCells(provider)} />
               </>
             )}
@@ -108,34 +103,6 @@ function Marks({ summary }: { summary: TaskSpendSummary }) {
         );
       })}
     </>
-  );
-}
-
-function Meter({ provider, account }: { provider: TaskSpendProvider; account: TaskSpendAccount }) {
-  const { t, locale } = useLocale();
-  const name = accountName(account, t);
-  const figure = account.weeklyPp === null ? null : accountFigure(account.weeklyPp, provider.bound === "floor", locale);
-  const used = account.week ? Math.max(0, Math.min(100, account.week.usedPercent)) : null;
-  /* The task's part of this week, drawn at the end of what the week has used. */
-  const part = used !== null && account.week?.taskPp ? Math.min(used, Math.max(0, account.week.taskPp)) : 0;
-  return (
-    <span className="meter" data-spend-account={account.key}>
-      <span className="meter-label">{name}</span>
-      {/* The figure and its bar wrap as one, so a label too long for the line leaves them together at its end. */}
-      <span className="meter-figure">
-        <span className="meter-value">
-          {figure ? <>{t("taskSpend.task")} <b className="meter-task"><span className="meter-sign">{figure.sign}</span><span className="meter-num">{figure.num}</span></b></>
-            : t("taskSpend.tokens", { tokens: compact(account.tokens, locale) })}
-          {used !== null ? <> · {t("taskSpend.week", { value: `${Math.round(used)}%` })}</> : null}
-        </span>
-        {used !== null ? (
-          <span className="meter-bar" aria-hidden>
-            <span className="week" style={{ width: `${used}%` }} />
-            {part > 0 ? <span className="task" data-engine={provider.engine} style={{ left: `${used - part}%`, width: `${part}%` }} /> : null}
-          </span>
-        ) : null}
-      </span>
-    </span>
   );
 }
 
@@ -151,23 +118,17 @@ function rangeText(range: SpendRange, locale: Locale): string {
   return `(${decimalCents(range.low, locale)}–${decimalCents(range.high, locale)}%)`;
 }
 
-function budgetText(budget: SpendBudget, locale: Locale, t: TFunction): string {
-  const number = new Intl.NumberFormat(intlLocale(locale), { maximumFractionDigits: 0 });
-  return t("taskSpend.budget", { low: number.format(budget.low), high: number.format(budget.high), grade: t(`taskSpend.grade.${budget.grade}`) });
-}
-
 /** The card popover and the phone task screen share the same estimates. */
-function SpendLines({ summary }: { summary: TaskSpendSummary }) {
+function SpendLines({ summary, accountDetails = false }: { summary: TaskSpendSummary; accountDetails?: boolean }) {
   const { t, locale } = useLocale();
   const tokens = summary.providers.reduce((total, p) => total + p.tokens, 0);
-  const priced = summary.providers.reduce((total, p) => total + p.apiPricedTokens, 0);
-  const apiTotal = summary.providers.reduce<number | null>((total, p) => p.apiUsd == null ? total : (total ?? 0) + p.apiUsd, null);
   return (
     <>
       {summary.providers.map((provider) => {
         const engine = ENGINE_NAME[provider.engine];
         const kind = providerKind(provider);
-        const api = provider.apiUsd === null ? null : usd(provider.apiUsd, locale);
+        const api = provider.apiUsd === null ? t("taskSpend.noApi")
+          : t(provider.unpricedTokens > 0 ? "taskSpend.partialApi" : "taskSpend.api", { value: usd(provider.apiUsd, locale) });
         const range = provider.range;
         return (
           <span key={engine} className="pop-block" data-spend-provider={provider.engine} data-kind={kind}>
@@ -177,33 +138,36 @@ function SpendLines({ summary }: { summary: TaskSpendSummary }) {
                 <b>{engine}{kind === "tokens" ? "" : ` ${headline(provider, locale)}`}</b>
                 {" "}{kind === "tokens" ? t("taskSpend.tokens", { tokens: compact(provider.tokens, locale) }) : t("taskSpend.ofWeek")}
                 {range ? <> <span className="spend-unit">{rangeText(range, locale)}</span></> : null}
+                {provider.budgets.map(budget => <span key={`${budget.low}:${budget.high}:${budget.grade}`} className="spend-unit"> · {budgetText(budget,locale,t)}</span>)}
                 {api ? <> · <span className="spend-unit">{api}</span></> : null}
+                {provider.engine === "codex" ? <> · <span className="spend-unit">{t("taskSpend.cacheWriteAssumption")}</span></> : null}
               </span>
             </span>
-            {provider.accounts?.map((account) => <Meter key={account.key} provider={provider} account={account} />)}
-            {provider.basis ? <span className="pop-sub meter-note">{t(`taskSpend.basis.${provider.basis}`)}</span> : null}
-            {provider.budgets.map(budget => (
-              <span key={`${budget.low}:${budget.high}:${budget.grade}`} className="pop-sub meter-note">{budgetText(budget, locale, t)}</span>
-            ))}
-            {provider.outsideBudget ? <span className="pop-sub meter-note">{t("taskSpend.outsideBudget")}</span> : null}
+            {provider.basis || provider.floor ? <span className={`pop-sub meter-note${provider.floor ? " pop-warn" : ""}`}>
+              {provider.basis ? t(`taskSpend.basis.${provider.basis}`) : null}
+              {provider.basis && provider.floor ? " · " : null}
+              {provider.floor ? t("taskSpend.floor.before-counting") : null}
+            </span> : null}
             {provider.issues.map(issue => <span key={issue} className="pop-sub meter-note">{t(`taskSpend.issue.${issue}`)}</span>)}
+            {accountDetails ? provider.accounts?.map(account => {
+              const label = account.key === "unknown" ? t("taskSpend.unattributed") : account.label;
+              const plan = accountPlan(account);
+              const share = account.weeklyPp === null ? t("taskSpend.tokens", { tokens: compact(account.tokens, locale) }) : `≈${Math.round(account.weeklyPp)}%`;
+              return <span key={account.key} className="pop-sub meter-note" data-spend-account={account.key}>
+                {label}{plan ? ` · ${plan}` : ""} · {t("taskSpend.accountShare", { value: share })}
+                {accountBudget(account,locale,t) ? ` · ${accountBudget(account,locale,t)}` : ""}
+                {account.week ? ` · ${t("taskSpend.week", { value: `${Math.round(account.week.usedPercent)}%` })}` : ""}
+                {account.sessionPp !== null && account.sessionPp > 0 ? ` · ${t("taskSpend.sessionEstimate", { value: `≈${Math.round(account.sessionPp)}%` })}` : ""}
+              </span>;
+            }) : null}
             {provider.unpricedTokens > 0 ? <span className="pop-sub meter-note">
               {t("taskSpend.unpriced", { tokens: compact(provider.unpricedTokens, locale) })}
               {provider.unpricedModels.length > 0 ? <> ({provider.unpricedModels.join(", ")})</> : null}
             </span> : null}
-            {provider.floor ? <span className="pop-sub meter-note pop-warn">{t("taskSpend.floor.before-counting")}</span> : null}
-            {(provider.accounts ?? []).filter(account => (account.sessionPp ?? 0) > 0).map(account => (
-              <span key={account.key} className="pop-sub meter-note" data-spend-session={account.key}>
-                {t("taskSpend.session", { value: wholeOrUnder(account.sessionPp!), account: account.label })}
-              </span>
-            ))}
           </span>
         );
       })}
-      <span className="pop-note">
-        {t("taskSpend.tokens", { tokens: compact(tokens, locale) })}
-        {" · "}{apiTotal === null ? t("taskSpend.noApi") : t(priced < tokens ? "taskSpend.partialApi" : "taskSpend.api", { value: usd(apiTotal, locale) })}
-      </span>
+      <span className="pop-note">{t("taskSpend.tokens", { tokens: compact(tokens, locale) })}</span>
     </>
   );
 }
@@ -282,7 +246,7 @@ export function PhoneTaskSpend({ taskId, headingClass }: { taskId: string; headi
   return (
     <section data-phone-task-spend={taskId} className="flex shrink-0 flex-col gap-2">
       <h2 className={`${headingClass} m-0`}>{t("taskSpend.section")}</h2>
-      <div className="phone-spend"><SpendLines summary={summary} /></div>
+      <div className="phone-spend"><SpendLines summary={summary} accountDetails /></div>
     </section>
   );
 }

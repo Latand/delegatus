@@ -65,6 +65,14 @@ test("dated snapshot ids price as their model; unknown and synthetic models read
   expect(tokenCost("fixture-model", "standard", million({ input: 1e6 }))).toBeNull();
 });
 
+test("Codex cache writes and Flex Terra have their published API equivalents; expired promotions use no rate", () => {
+  const cached = million({ cacheWrite: 1e6, cacheWrite1h: 1e6 });
+  expect(tokenCost("gpt-6.2-sol", "standard", cached)).toBe(5);
+  expect(tokenCost("gpt-6.1-terra", "flex", million({ input: 1e6 }))).toBe(0.5);
+  expect(tokenCost("gpt-6.2-sol", "ultrafast", million({ input: 1e6 }), "2027-02-28")).toBe(6);
+  expect(tokenCost("gpt-6.2-sol", "ultrafast", million({ input: 1e6 }), "2027-03-01")).toBe(12);
+});
+
 test("an estimate sums priced rows and keeps unpriced counts and models apart", () => {
   const rows = [
     { model: "claude-opus-5-5", tier: "standard", counts: million({ input: 1e6 }) },

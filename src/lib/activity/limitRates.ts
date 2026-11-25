@@ -90,6 +90,14 @@ export async function refreshLimitRates(db: Database, now: number, deps: RateDep
     samplesByAccountWindow.set(accountWindow, ordered);
   }
   const today = utcDay(now), changed = new Map<string, RateChange>();
+  const meterVersion = ESTIMATE_VERSION;
+  const latestPlan = new Map<string,string>();
+  const latestTier = new Map<string, { plan: string; tier: string }>();
+  for (const row of db.query<{account:string;plan:string;plan_tier:string|null},[]>(`SELECT account,plan,plan_tier FROM usage_limit_rates
+    WHERE plan IS NOT NULL AND trim(plan)!='' AND lower(trim(plan))!='unknown' ORDER BY day DESC,computed_at DESC`).all()) {
+    if (!latestPlan.has(row.account)) latestPlan.set(row.account,row.plan);
+    if (row.plan_tier && !latestTier.has(row.account)) latestTier.set(row.account,{plan:row.plan,tier:row.plan_tier});
+  }
   const coverageComplete = deps.coverageComplete ?? true;
   const revalidateFrozen = deps.revalidateFrozen ?? false;
   const reprice = deps.reprice ?? false;
@@ -113,6 +121,10 @@ export async function refreshLimitRates(db: Database, now: number, deps: RateDep
     for (const account of accounts) for (const window of ["weekly", "session"] as const) {
       const prior = previous.get(`${account}|${window}`);
       const historyCovered = covers(samplesByAccountWindow.get(`${account}|${window}`) ?? [], from, end);
+      if (prior && prior.meter_version !== null && prior.meter_version !== meterVersion && prior.rate !== null) {
+        pending.push({ ...prior, rate: null, rise: 0, weight: 0, source: "none", meter_version: meterVersion, frozen: 0, computed_at: now });
+        continue;
+      }
       if (prior && ((prior.frozen && coverageComplete && !revalidateFrozen && !reprice)
         || (prior.rate !== null && !historyCovered && !revalidateFrozen))) {
         pending.push(prior);
@@ -125,10 +137,13 @@ export async function refreshLimitRates(db: Database, now: number, deps: RateDep
       const observation = deps.observations.get(account);
       const observedPlan = reportedPlan(observation?.plan);
       const priorPlan = reportedPlan(prior?.plan);
-      const plan = observedPlan ?? priorPlan;
-      const planTier = (observedPlan ? observation?.planTier : null) ?? (plan === priorPlan ? prior?.plan_tier ?? null : null);
+      const plan = observedPlan ?? priorPlan ?? latestPlan.get(account) ?? null;
+      const historicalTier = latestTier.get(account);
+      const planTier = (observedPlan ? observation?.planTier : null)
+        ?? (plan === priorPlan ? prior?.plan_tier ?? null : null)
+        ?? (historicalTier?.plan === plan ? historicalTier.tier : null);
       pending.push({ account, window, day, rate, rise, weight, source: rate === null ? "none" : "own",
-        plan, plan_tier: planTier, meter_version: ESTIMATE_VERSION,
+        plan, plan_tier: planTier, meter_version: meterVersion,
         frozen: coverageComplete && historyCovered && day < today ? 1 : 0, computed_at: now });
     }
     for (const row of pending) {

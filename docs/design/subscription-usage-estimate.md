@@ -409,10 +409,18 @@ api_usd(row)   = c.input·P(m,t).input + c.cacheRead·P(m,t).cachedInput
 meter_usd(row) = cost of c at P(m,"standard") × M(e,m,t)
 ```
 
-- **Cached input** counts at its own published cached price.
-  For Codex this is published: credits are 25 per API dollar for every kind,
-  and cache writes have no separate charge, so written tokens count as input
-  (`tokenPrices.ts:32` already does this). For Claude it is inferred.
+The Codex subscription meter keeps its historical calibration unit: cache
+writes count at the model's standard input weight, even when the API tariff
+publishes separate write rates. The calibration rate and task numerator carry
+the same meter version; a stale pair is discarded and the task uses the plan
+budget estimate until compatible samples are available. API equivalents use
+the separate published cache-write rates where the stored counts support them.
+
+- **Cached input** counts at its own published cached price. Codex cache writes
+  have published 30-minute and 12-hour rates, but the collected Codex counters
+  do not retain cache age. The API equivalent states its 30-minute assumption
+  on Codex task rows; use the 12-hour published rate as the high side when
+  comparing a retained cache write.
 - **Reasoning tokens** are inside output on both providers and are not added
   twice: `reasoning` is stored as a part of `output`, and a record where it is
   larger is refused (`src/lib/activity/tokenUsage.ts:84-86`, `:102-103`).
@@ -541,12 +549,16 @@ reads the file. One row per line, so a price change is a one-line diff.
 Rules, enforced by a test of the file itself:
 
 - Every row names a key present in `sources` and an ISO `date`. `version`
-  changes with any row (a date plus a counter).
-- `prices`: one row per model and tier. An OpenAI row has no cache-write
-  fields, and writes price as input. A Claude row may omit the writes: 1.25×
-  and 2× input then apply. Dollars per million tokens. `until` marks a dated
-  promotion; past that date the row stays in use until edited, and the test
-  fails, which prompts the edit.
+  identifies the researched snapshot. The runtime repricing key hashes the
+  currently applicable price rows, so a one-row price edit invalidates stored
+  equivalents even when this editorial version is unchanged.
+- `prices`: one row per model, tier, and effective date. Dollars per million
+  tokens. `cacheWrite5m` and `cacheWrite1h` record Anthropic's published
+  durations; `cacheWrite30m` and `cacheWrite12h` record OpenAI's. Missing
+  duration rates use the model's input rate as the stated approximation.
+  `until` is inclusive, and `effectiveFrom` starts a scheduled rate row. The
+  calculator chooses the applicable row by an explicit date (the default is
+  the current UTC date), so an expired rate never remains active by accident.
 - `meter`: optional multiplier per engine, model and speed tier, relative to
   Standard. A missing row means the API price ratio of that tier.
 - `budgets`: meter dollars per window; `low ≤ mid ≤ high`; `grade` is
@@ -567,12 +579,12 @@ and never «невідомо».
 | 2 | Pure module: `meterCost`, `apiCost`, `planBudget`, `estimateShare` | new `src/lib/activity/subscriptionEstimate.ts` | one place for the math, tested alone |
 | 3 | The rate weight uses `meterCost` | `limitRates.ts:21-23` | rate and task weight in one unit |
 | 4 | `task_limit_spend` gains `api_usd REAL`, summed in `computeTaskRows` beside `weight` (same loop, no extra read). `limit_spend_meta` gains `estimate_version`. When the data file's `version` differs, tasks are re-dirtied in pages of 200, as the `aggregate_schema` migration does | `taskLimitSpend.ts:103-106`, `:159-166`; schema at `tokenStore.ts:58` | a price edit reprices stored figures; bounded by the existing per-pass limits (100 tasks, 2 000 owner pages, 50 000 hour rows, `taskLimitSpend.ts:146-147`) |
-| 5 | Keep a stored non-null rate when its 7-day history is no longer covered: such a day is skipped and its stored rate stays | `limitRates.ts:117-124` | D1 |
+| 5 | Keep a stored non-null rate only while its meter version matches. A mismatched pair is invalidated and falls back to a plan budget when history has expired | `limitRates.ts` | D1; avoids combining the older Codex calibration unit with current task weights |
 | 6 | A row is a lower bound only for work before counting began; drop `uncounted` from coverage and from unrated weight | `taskLimitSpend.ts:99-100`, `:382-384`, `:398` | D2 |
 | 7 | The Claude observation carries `planTier` from `claudeAiOauth.rateLimitTier`, read where `subscriptionType` is read now | `src/lib/limits.ts:556`, `:574`; optional field on `EngineLimits`, `src/lib/types.ts:707-721` | D4; no new read, the credential document is already loaded. Check that the registry's normaliser keeps the field (`src/lib/agent/registry.ts:5200`) |
 | 8 | `usage_limit_rates` gains `plan_tier`, written beside `plan` from the observation | `limitRates.ts:123` | D6: the last known plan and tier survive a lost observation |
-| 9 | `readTaskLimitSpend` computes per account and provider `share`, `range`, `basis`, `apiUsd`, `budget`, and states `tokens` for the no-share cases of §3.5. The plan comes from the observation, else from one indexed read of the account's latest non-null `plan` row (once per account per request; the accounts number under ten) | `taskLimitSpend.ts:365-404`; types in `taskLimitSpendTypes.ts` | arithmetic on the rows of the existing primary-key read (`:374`), plus at most one small read per account |
-| 10 | Card: the face never prints «невідомо» for counted tokens; the popover adds the API price, the tokens and a basis line; the account line's second figure becomes the account's week; en and uk | `TaskSpend.tsx`, `src/lib/i18n/en.ts:7889-7908`, `uk.ts:7798-7817` | acceptance 3 |
+| 9 | `readTaskLimitSpend` computes per account and provider `share`, `range`, `basis`, `apiUsd`, `budget`, and states `tokens` for the no-share cases of §3.5. Plan fallback history is fetched in one indexed batch for accounts present in the requested task rows | `taskLimitSpend.ts`; types in `taskLimitSpendTypes.ts` | one bounded account query, independent of the number of accounts; the worker owns rate refresh and historical tier retention |
+| 10 | Card: all share figures use an estimate marker; compact popovers show one line per provider and total tokens, while the phone task view includes per-account details and bases in en and uk | `TaskSpend.tsx`, `src/lib/i18n/en.ts`, `src/lib/i18n/uk.ts` | acceptance 3; avoids repeating account rows and a duplicate API total in the card popover |
 
 Tests (acceptance 4), each by path with isolated `HOME`, `XDG_CONFIG_HOME`,
 `TMPDIR` and `LLV_STATE_DIR`:
@@ -623,14 +635,16 @@ the agent rows.
   mark and the four-cell scale, Claude then Codex; no pill, no new row, no
   digits beyond what is there. The only new face text is the compact token
   count, in the rare no-share cases of §3.5.
-- Popover (desktop card, open or closed, and the phone task screen's «Ліміти»
-  section), at most six lines:
+- Popover (desktop card) keeps provider summaries compact. The phone task
+  screen's «Ліміти» section includes per-account estimates and their basis:
   1. «Витрата задачі»
   2. per provider: «✳ Claude ≈1% тижня (1–3%) · ≈ $23»
-  3. per account, owner only: «A · Max 20×: задача 1% · акаунт за тиждень 80%»
-  4. «115 млн токенів · ≈ $32 за цінами API»
-  5. basis, muted: «Частка — оцінка: темп акаунта за 7 днів» or «… бюджет
-     плану з відкритих джерел ($900–2 300 за тиждень)»
+  3. in the phone view, per account: «A · Max 20×: оцінка задачі ≈1% · акаунт
+     за тиждень 80%»
+  4. total tokens appears once; each provider line carries its API price
+     equivalent and price coverage note.
+  5. basis, muted: «Частка — оцінка: темп акаунта за 7 днів» or the plan budget
+     range, sourced in the estimate table.
   6. only when it applies: the before-counting or no-price note.
 - Whether the API price should also sit on the face is a choice for the
   visual stage. The recommended default is no: the state line has no room

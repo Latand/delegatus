@@ -5,7 +5,7 @@ import path from "node:path";
 import { ActivityStore, conversationDigest, type TurnOwner } from "./store";
 import { commitUsage, DAY, HOUR, maintainUsage } from "./tokenStore";
 import { usageRecord, USAGE_NOW } from "./tokenUsage.fixture";
-import { refreshTaskLimitSpend, readTaskLimitSpend, TASK_SPEND_DUE_SQL, type SpendDependencies } from "./taskLimitSpend";
+import { refreshTaskLimitSpend, readTaskLimitSpend, retainExpiredContributions, TASK_SPEND_DUE_SQL, type SpendDependencies, type SpendRow } from "./taskLimitSpend";
 import { LIMIT_RATE_SCHEMA } from "./limitRates";
 import type { BoardTask } from "@/lib/tasks/types";
 
@@ -80,6 +80,16 @@ test("rated, partial, unpriced and unattributed rows retain their bound and wind
   expect(readTaskLimitSpend(store.db,["a"],{ canChoose: true },deps).tasks.a!.providers[0]).toMatchObject({ bound: "approx",floor: null,weeklyPp: 4 });
   expect(readTaskLimitSpend(store.db,["a"],{ canChoose: false },deps).tasks.a!.providers[0]!.accounts).toBeNull();
   expect(computeTaskRows(task("a"),[h],rates,observations,now,now)[0]!.floor).toBe("before-counting");
+});
+
+test("a calibration from an expired meter version cannot price current task shares", async () => {
+  const { computeTaskRows } = await import("./taskLimitSpend");
+  const now=USAGE_NOW, hour=Math.floor(now/HOUR), day=new Date(hour*HOUR).toISOString().slice(0,10);
+  const h={hour,conversation:"fixture",model:"claude-sonnet-5",tier:"standard",account:"claude:a",engine:"claude",pipeline:null,role:"builder",
+    requests:1,input:1_000_000,cache_read:0,cache_write:0,cache_write_1h:0,output:0,reasoning:0};
+  const stale={account:"claude:a",window:"weekly" as const,day,rate:2,weight:2.5,rise:10,source:"own" as const,plan:"max",frozen:0,computed_at:now,meter_version:"expired-pricing-version"};
+  const [row]=computeTaskRows(task("stale"),[h],[stale],new Map(),now-3*DAY,now);
+  expect(row).toMatchObject({tokens:1_000_000,weekly_pp:null,rated_weight:0,weight:2});
 });
 
 test("pipeline binding changes remap old and new tasks without another token write", async () => {
@@ -480,14 +490,76 @@ test("an indexed plan fallback prices the unrated days and keeps account metadat
   expect(owner.range?.high).toBeCloseTo(13 + 80 / 900 * 100);
   const member = readTaskLimitSpend(store.db, ["a"], { canChoose: false }, deps).tasks.a!.providers[0]!;
   expect(member).toEqual({ ...owner, accounts: null });
-  const queryPlan = store.db.query(`EXPLAIN QUERY PLAN SELECT plan,plan_tier FROM usage_limit_rates
-    WHERE account=? AND plan IS NOT NULL AND lower(trim(plan)) NOT IN ('', 'unknown')
-    ORDER BY day DESC, computed_at DESC LIMIT 1`).all(account);
+  const queryPlan = store.db.query(`EXPLAIN QUERY PLAN SELECT account,plan,plan_tier FROM usage_limit_rates
+    WHERE account IN (?,?) AND plan IS NOT NULL AND lower(trim(plan)) NOT IN ('', 'unknown')
+    ORDER BY account,day DESC,computed_at DESC`).all(account,"codex:b");
   expect(JSON.stringify(queryPlan)).toContain("usage_limit_rates_latest_plan");
+});
+
+test("plan-history lookup keeps read statement count flat as matching accounts grow", () => {
+  const accounts = Array.from({ length: 12 }, (_, index) => `claude:account-${index}`);
+  const put = store.db.query(`INSERT INTO task_limit_spend
+    (task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,first_hour,last_hour,computed_at,api_usd,api_priced_tokens)
+    VALUES(?,?,'claude',1000,0,0,0,NULL,1,1,?,0,1000)`);
+  for (let index = 0; index < accounts.length; index++) {
+    const id = `account-task-${index}`;
+    put.run(id, accounts[index]!, USAGE_NOW);
+  }
+  const deps = world(accounts.map((_, index) => task(`account-task-${index}`)));
+  const statements = (ids: string[]) => {
+    let count = 0;
+    const query = store.db.query.bind(store.db);
+    const db = new Proxy(store.db, {
+      get(target, property) {
+        if (property === "query") return (...args: Parameters<typeof store.db.query>) => {
+          count++;
+          return query(...args);
+        };
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as typeof store.db;
+    readTaskLimitSpend(db, ids, { canChoose: false }, deps);
+    return count;
+  };
+  const one = statements(["account-task-0"]);
+  expect(statements(accounts.map((_, index) => `account-task-${index}`))).toBe(one);
+});
+
+test("repricing preserves the expired part of an aggregate that straddles retention on later refreshes", () => {
+  const common: SpendRow = { task:"a", account:"claude:a", engine:"claude", tokens:0, unpriced_tokens:0, weight:0,
+    rated_weight:0, weekly_pp:null, window_start:null, window_pp:null, session_start:null, session_pp:null,
+    first_hour:10, last_hour:10, floor:null, computed_at:1, api_usd:0, api_priced_tokens:0, unpriced_models:"[]" };
+  const old = { ...common, tokens:2_000_000, weight:20, rated_weight:20, weekly_pp:2, first_hour:10, last_hour:150,
+    api_usd:8, api_priced_tokens:2_000_000 };
+  const rebuilt = { ...common, tokens:1_000_000, weight:10, rated_weight:10, weekly_pp:1, first_hour:120, last_hour:130,
+    api_usd:4, api_priced_tokens:1_000_000 };
+  const upgraded = retainExpiredContributions([rebuilt],[old],100);
+  expect(upgraded[0]).toMatchObject({ tokens:2_000_000, weight:20, rated_weight:20, weekly_pp:2, api_usd:8, api_priced_tokens:2_000_000 });
+  expect(retainExpiredContributions([rebuilt],upgraded,100)[0]).toMatchObject({ tokens:2_000_000, api_usd:8 });
+});
+
+test("Enterprise and Edu keep measured fixed-window shares, while unmeasured flexible plans stay explicitly unknown", () => {
+  const now=USAGE_NOW, hour=Math.floor(now/HOUR), day=new Date(hour*HOUR).toISOString().slice(0,10);
+  const put=store.db.query(`INSERT INTO task_limit_spend
+    (task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,first_hour,last_hour,computed_at,api_usd,api_priced_tokens)
+    VALUES(?,?,'codex',1000000,0,?,?,?,?,?,?,1,1000000)`);
+  put.run("measured","codex:enterprise",10,10,2,hour,hour,now);
+  put.run("unmeasured","codex:edu",10,0,null,hour,hour,now);
+  for (const [account,plan] of [["codex:enterprise","Enterprise"],["codex:edu","Edu"]] as const) {
+    store.db.query("INSERT INTO usage_limit_rates(account,window,day,rate,rise,weight,source,plan,frozen,computed_at) VALUES(?,'weekly',?,1,10,10,'own',?,0,?)")
+      .run(account,day,plan,now);
+  }
+  const tasks=[task("measured"),task("unmeasured")],deps={...world(tasks),observations:()=>new Map()};
+  const measured=readTaskLimitSpend(store.db,["measured"],{canChoose:true},deps).tasks.measured!.providers[0]!;
+  const unmeasured=readTaskLimitSpend(store.db,["unmeasured"],{canChoose:true},deps).tasks.unmeasured!.providers[0]!;
+  expect(measured).toMatchObject({weeklyPp:2,bound:"approx",issues:[]});
+  expect(unmeasured).toMatchObject({bound:"tokens",issues:["noFixedLimit"],accounts:[{weeklyPp:null,plan:"Edu"}]});
 });
 
 test("a price version change queues at most 200 stored tasks at a time and reprices retained hours after reopening", async () => {
   const { ESTIMATE_VERSION } = await import("./subscriptionEstimate");
+  const estimateVersion = ESTIMATE_VERSION;
   const tasks = Array.from({ length: 201 }, (_, i) => task(`priced-${String(i).padStart(3, "0")}`, ["work"]));
   const deps = world(tasks);
   const ownerKey = `c:${conversationDigest("work")}`;
@@ -508,14 +580,14 @@ test("a price version change queues at most 200 stored tasks at a time and repri
   });
   const meta = () => store.db.query("SELECT estimate_version,estimate_cursor FROM limit_spend_meta").get();
   expect((await refreshTaskLimitSpend(store, deps)).tasks).toBe(100);
-  expect(meta()).toEqual({ estimate_version: ESTIMATE_VERSION, estimate_cursor: "priced-199" });
+  expect(meta()).toEqual({ estimate_version: estimateVersion, estimate_cursor: "priced-199" });
   const provider = (id: string) => readTaskLimitSpend(store.db, [id], { canChoose: false }, deps).tasks[id]!.providers[0]!;
   expect(provider("priced-000")).toMatchObject({ tokens: 1_000_000, apiUsd: 2, floor: null, bound: "tokens" });
   expect(provider("priced-200")).toMatchObject({ tokens: 1_000_000, apiUsd: 99, floor: null, bound: "tokens" });
   store.close();
   store = ActivityStore.open(path.join(root, "records.sqlite"));
   expect((await refreshTaskLimitSpend(store, deps)).tasks).toBe(100);
-  expect(meta()).toEqual({ estimate_version: ESTIMATE_VERSION, estimate_cursor: null });
+  expect(meta()).toEqual({ estimate_version: estimateVersion, estimate_cursor: null });
   expect((await refreshTaskLimitSpend(store, deps)).tasks).toBe(1);
   expect(provider("priced-200")).toMatchObject({ tokens: 1_000_000, apiUsd: 2, floor: null, bound: "tokens" });
 });
