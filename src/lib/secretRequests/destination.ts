@@ -13,6 +13,7 @@ export const UNSAFE_TEXT = /[\p{Cc}\u202a-\u202e\u2066-\u2069]/u;
 const FILE_LIMIT = 64 * 1024;
 const ENV_NAME = /^(?:\.env(?:\..+)?|.+\.env)$/u;
 type FileStats = Awaited<ReturnType<typeof stat>>;
+type AllowedRoot = { lexical: string; real: string; identity: FileIdentity };
 const stat = (filename: string) => fs.lstat(filename, { bigint: true });
 
 export function fileIdentity(stats: { dev: bigint; ino: bigint }): FileIdentity {
@@ -56,8 +57,8 @@ function safeRoot(root: string, homes: string[]): boolean {
 
 // Extra roots are resolved at configuration read. Cache the one current
 // setting and home across requests, and recheck private areas at admission.
-let configuredRoots: { key: string; roots: Promise<{ lexical: string; real: string }[]> } | undefined;
-async function rootsAt(paths: string[], homes: string[]) {
+let configuredRoots: { key: string; roots: Promise<AllowedRoot[]> } | undefined;
+async function rootsAt(paths: string[], homes: string[]): Promise<AllowedRoot[]> {
   const roots = await Promise.all([...new Set(paths)].filter(root => path.isAbsolute(root)).map(async raw => {
     const lexical = path.resolve(raw);
     if (!safeRoot(lexical, homes)) return null;
@@ -69,7 +70,7 @@ async function rootsAt(paths: string[], homes: string[]) {
     if (!stats?.isDirectory()) return null;
     return { lexical, real, identity: fileIdentity(stats) };
   }));
-  return roots.filter(root => root !== null);
+  return roots.filter((root): root is AllowedRoot => root !== null);
 }
 
 async function allowedRoots(project: string) {
