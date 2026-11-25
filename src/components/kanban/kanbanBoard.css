@@ -300,10 +300,10 @@
 .kb [data-layout-animating="content"].mglyph::before,
 .kb [data-layout-animating="content"] .mglyph::before,
 .kb [data-layout-animating="content"] .emark-neon::before,
-.kb [data-layout-animating="content"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase, .mg-neon-gas),
+.kb [data-layout-animating="content"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase, .mg-flick, .mg-neon-gas),
 .kb [data-column-text-held] .mglyph::before,
 .kb [data-column-text-held] .emark-neon::before,
-.kb [data-column-text-held] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase, .mg-neon-gas),
+.kb [data-column-text-held] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase, .mg-flick, .mg-neon-gas),
 .kb :is([data-layout-animating="content"], [data-column-text-held]) :is(.pedge, .pdot, .pmark),
 .kb :is([data-layout-animating="content"], [data-column-text-held]) .pmark::before { animation-play-state: paused !important; }
 .kb .column.wide {
@@ -436,7 +436,7 @@
    page when the attribute is set (a 4000-element recalculation). */
 [data-card-drag] .mglyph[data-live="1"]::before,
 [data-card-drag] .emark-neon[data-live="1"]::before,
-[data-card-drag] :is(.mglyph[data-live="1"], .emark-neon[data-live="1"]) :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase, .mg-neon-gas),
+[data-card-drag] :is(.mglyph[data-live="1"], .emark-neon[data-live="1"]) :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase, .mg-flick, .mg-neon-gas),
 [data-card-drag] .animate-pulse,
 [data-card-drag] .motion-safe\:animate-pulse,
 [data-card-drag] .pedge.live,

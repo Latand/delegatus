@@ -5,7 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, u
 
 import { formatConversationHash, isArchivedPredecessor, parseConversationHash, resolveConversationTarget, withoutArchivedPredecessors, type ConversationHash } from "@/lib/accounts/identity";
 import { navigateToFragment, NOTIFICATION_OPEN_MESSAGE, setFragmentNavigator } from "@/lib/navigation/fragmentNavigation";
-import { createTraversalFence, FOCUS_HISTORY_STATE_KEY, focusEntryFor, parseFocusHistoryState, recordFocusNavigation, recordProjectNavigation, retargetRecordedProject, setFocusHistoryOwner } from "@/lib/navigation/focusHistory";
+import { createTraversalFence, FOCUS_HISTORY_STATE_KEY, focusEntryFor, parseFocusHistoryState, recordFocusNavigation, recordProjectNavigation, releaseFocusNavigation, retargetRecordedProject, setFocusHistoryOwner } from "@/lib/navigation/focusHistory";
 import { onAccountPanelRequest } from "@/lib/accounts/openPanel";
 import { useFleetCues } from "@/hooks/useFleetCues";
 import { useWorkCues } from "@/hooks/useWorkCues";
@@ -1036,7 +1036,14 @@ function ViewerApp() {
   const releaseCatalogFile = useCallback((path: string) => {
     dispatchCatalogPin({ kind: "release", path });
     setFocusRequest((current) => current?.path === path ? null : current);
-    if (catalogPin?.path === path) recordProjectNavigation(projectUrl(project));
+    /* A closed conversation leaves the address: a reload reads the hash back,
+       so a hash still naming it would reopen what the operator closed. The
+       entry is rewritten in place (see releaseFocusNavigation). */
+    const closed = phoneRef.current.files.find((file) => file.path === path) ?? { path };
+    if (releaseFocusNavigation(closed, projectUrl(project))) return;
+    /* The address names another conversation: that one is still the operator's. */
+    const addressed = readHash();
+    if (catalogPin?.path === path && !addressed.conversationId && !addressed.filePath) recordProjectNavigation(projectUrl(project));
   }, [catalogPin, project]);
 
   useEffect(() => {
