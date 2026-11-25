@@ -29,7 +29,7 @@ function retainFirstMessage(journal: RuntimeJournal, launchId: string, conversat
   journal.transitionOperation(operationId, "uncertain");
 }
 
-async function fixture(trigger: "resume" | "takeover" | "retry-stage" = "resume", outcome?: "first-message" | "second-refusal") {
+async function fixture(trigger: "resume" | "takeover" | "retry-stage" = "resume", outcome?: "first-message" | "second-refusal" | "native-turn") {
   let sequence = 0;
   const ids = spyOn(crypto, "randomUUID").mockImplementation(() =>
     `00007000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
@@ -125,6 +125,12 @@ async function fixture(trigger: "resume" | "takeover" | "retry-stage" = "resume"
       const reason = trigger === "retry-stage" ? `${FAILURE}; holder=migration.stop.sweep` : FAILURE;
       journal.transitionOperation(receipt.launchId, "failed", { reason });
       if (outcome === "first-message") retainFirstMessage(journal, receipt.launchId, receipt.conversationId, input.prompt);
+      if (outcome === "native-turn") {
+        journal.append({ scope: { type: "session", id: receipt.conversationId }, kind: "turn-started",
+          payload: { conversationId: receipt.conversationId, turnId: "retained-auto-turn" } });
+        journal.append({ scope: { type: "session", id: receipt.conversationId }, kind: "turn-ended",
+          payload: { conversationId: receipt.conversationId, turnId: "retained-auto-turn" } });
+      }
       await registry.failStructuredSpawnOffLoop(receipt.launchId, reason);
       registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, receipt.admissionOwner!);
       // The production adapter invalidates its pass projection when launch
@@ -194,6 +200,21 @@ test("a setup writer refusal with a journaled first message retains the original
   } finally { await f.close(); }
 });
 
+test("automatic setup retry retains a launch with native turn evidence", async () => {
+  const f = await fixture("resume", "native-turn");
+  try {
+    await f.launchOnce();
+    const launchId = f.launch();
+    expect(f.row().state).toBe("needs_decision");
+    expect(f.row().stateDetail).toContain("retry-stage with the original launch ID");
+    expect(f.registry.spawnReceipt(launchId)?.retryClaim).toBeUndefined();
+    f.advance(60_000);
+    await tickPipelines([], f.h.ports);
+    expect(f.tries()).toBe(1);
+    expect(f.row().runs[0]!.attempts.at(-1)?.launchId).toBe(launchId);
+  } finally { await f.close(); }
+});
+
 test("a second setup writer refusal keeps the replacement and spends no further launch", async () => {
   const f = await fixture("resume", "second-refusal");
   try {
@@ -253,7 +274,7 @@ async function connect(f: Awaited<ReturnType<typeof fixture>>) {
   };
 }
 
-test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-down", "owner-change", "pre-host-writer"].map(delivery => ({ explicit, delivery }))))
+test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-down", "owner-change", "pre-host-writer", "waiter-refused", "native-turn", "compacted-prehost"].map(delivery => ({ explicit, delivery }))))
 ("MCP retry-stage reconciles a stuck replacement: %j", async ({ explicit, delivery }) => {
   const f = await fixture();
   let sdk: Awaited<ReturnType<typeof connect>> | undefined;
@@ -279,8 +300,14 @@ test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-dow
     const active = replacement.receipt;
     f.journal.executeOperation({ kind: "spawn", operationId: active.launchId, idempotencyKey: active.launchId,
       conversationId: active.conversationId, engine: "codex", cwd: lane.worktreeDir!, prompt: "Review" });
-    const failure = delivery === "pre-host-writer" ? EARLY_FAILURE : FAILURE;
-    if (delivery !== "pre-host-writer") f.registry.beginStructuredHostSetup(active.launchId, active.admissionOwner!, Date.parse(f.h.ports.now()));
+    const failure = ["pre-host-writer", "compacted-prehost", "native-turn"].includes(delivery) ? EARLY_FAILURE : FAILURE;
+    if (!["pre-host-writer", "compacted-prehost", "native-turn"].includes(delivery)) {
+      f.registry.beginStructuredHostSetup(active.launchId, active.admissionOwner!, Date.parse(f.h.ports.now()));
+      if (delivery === "waiter-refused") {
+        f.registry.recordStructuredHostSetup(active.launchId, active.admissionOwner!);
+        f.registry.confirmStructuredHostSetupCleanup(active.launchId, active.admissionOwner!);
+      }
+    }
     f.journal.transitionOperation(active.launchId, "failed", { reason: failure });
     await f.registry.failStructuredSpawnOffLoop(active.launchId, failure);
     attempt.error = failure;
@@ -296,8 +323,12 @@ test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-dow
       retainFirstMessage(f.journal, active.launchId, active.conversationId, "Review");
       expect(f.journal.operationResult(`spawn_message_${active.launchId}`)?.receipt.status).toBe("uncertain");
     }
-    if (delivery === "pre-host-writer") {
-      f.client.events = async () => { throw new Error("runtime host request cancelled"); };
+    if (delivery === "compacted-prehost") f.client.operationStatus = async () => null;
+    if (delivery === "native-turn") {
+      f.journal.append({ scope: { type: "session", id: active.conversationId }, kind: "turn-started",
+        payload: { conversationId: active.conversationId, turnId: "retained-turn" } });
+      f.journal.append({ scope: { type: "session", id: active.conversationId }, kind: "turn-ended",
+        payload: { conversationId: active.conversationId, turnId: "retained-turn" } });
     }
     if (delivery === "owner-change") {
       const events = f.client.events;
@@ -317,7 +348,7 @@ test.each([false, true].flatMap(explicit => ["absent", "uncertain", "journal-dow
     sdk = await connect(current);
     const answer = await sdk.retry(explicit);
     expect(sdk.calls()).toBe(1);
-    if (delivery === "absent" || delivery === "pre-host-writer") {
+    if (["absent", "pre-host-writer", "compacted-prehost", "waiter-refused"].includes(delivery)) {
       expect(answer.isError, JSON.stringify(answer)).not.toBe(true);
       expect(f.row().cursor!.state).toBe("pending");
       expect(f.row().runs[0]!.attempts.at(-1)).toMatchObject({ n: 2, state: "failed" });

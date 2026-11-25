@@ -2366,9 +2366,11 @@ export function defaultPipelinePorts(
       const [launch, message] = await Promise.all([
         client.operationStatus(launchId), client.operationStatus(`spawn_message_${launchId}`),
       ]);
-      if (!launch || launch.operationId !== launchId || launch.receipt.operationId !== launchId || launch.receipt.kind !== "spawn"
+      const durablePreHostProof = before.preHostWriterRefusal === true;
+      if (launch && (launch.operationId !== launchId || launch.receipt.operationId !== launchId || launch.receipt.kind !== "spawn"
         || launch.receipt.conversationId !== before.conversationId
-        || !["failed", "rejected"].includes(launch.receipt.status) || message !== null) return false;
+        || !["failed", "rejected"].includes(launch.receipt.status))
+        || !launch && !durablePreHostProof || message !== null) return false;
       if (isLaunchWriterRefusal(before.error ?? "")) {
         if (before.transport !== "structured" || before.purpose !== "launch"
           || before.key || before.pane || before.verifiedHost || before.artifactPath
@@ -2376,13 +2378,13 @@ export function defaultPipelinePorts(
             || before.hostSetup.phase === "executing" || before.hostSetup.processes.length > 0)
           || before.admissionOwner && processIdentityMayRun(before.admissionOwner)
           || registry.conversation(before.conversationId)) return false;
-        if (!before.hostSetup && !before.hostSetupStartedAt && isPreHostWriterRefusal(before.error ?? "")) {
-          // These writes precede the durable host-setup marker. The exact
-          // terminal receipt and empty native and delivery custody also fence
-          // a missing first-message lookup after its journal rows aged out.
+        if (!before.hostSetup && !before.hostSetupStartedAt && durablePreHostProof
+          && isPreHostWriterRefusal(before.error ?? "")) {
+          // This receipt marker survives journal compaction. Continue through
+          // the journal scan so retained native turn evidence remains decisive.
           const delivery = registry.deliverySnapshotForOperation(`spawn_message_${launchId}`);
-          return current() && !Object.keys(delivery.heldDeliveries).length
-            && !Object.keys(delivery.deliveryOperationOwners).length;
+          if (!current() || Object.keys(delivery.heldDeliveries).length
+            || Object.keys(delivery.deliveryOperationOwners).length || registry.conversation(before.conversationId)) return false;
         }
       }
       // Null lookup can also mean compaction. Require the original admission
@@ -2399,17 +2401,18 @@ export function defaultPipelinePorts(
           if (event.seq > snapshot.snapshotSeq) break;
           if (event.scope.type === "operation" && event.scope.id === launchId
             && event.producer.kind === "viewer-command"
-            && event.producer.eventKey === `operation:${before.conversationId}:${launch.receipt.idempotencyKey}`) admitted = true;
-          if (admitted && ((event.scope.type === "operation" && event.scope.id === `spawn_message_${launchId}`)
-            || (event.kind === "turn-started" && (event.payload.conversationId === before.conversationId
-              || event.scope.type === "session" && event.scope.id === before.conversationId)))) return false;
+            && launch && event.producer.eventKey === `operation:${before.conversationId}:${launch.receipt.idempotencyKey}`) admitted = true;
+          if ((event.scope.type === "operation" && event.scope.id === `spawn_message_${launchId}`)
+            || ((event.kind === "turn-started" || event.kind === "turn-ended")
+              && (event.payload.conversationId === before.conversationId
+                || event.scope.type === "session" && event.scope.id === before.conversationId))) return false;
         }
         const last = replay.events.at(-1)!.seq;
         if (last <= after) return false;
         after = last;
         covered = after >= snapshot.snapshotSeq;
       }
-      if (!admitted || !covered) return false;
+      if ((!admitted && !durablePreHostProof) || !covered) return false;
       const evidence = registry.deliverySnapshotForOperation(`spawn_message_${launchId}`, { recipientEvidence: true });
       if (!current()) return false;
       return !Object.values(evidence.heldDeliveries).some((delivery) =>

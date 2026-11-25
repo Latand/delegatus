@@ -1178,6 +1178,37 @@ test("an older stop's unfinished sweep, resumed in the instant of a newer stop, 
   }
 });
 
+test("rollback selects live deliveries before reading payloads from concentrated terminal history", () => {
+  const fixture = fixtureCopy();
+  const seeded = open(fixture);
+  const id = fixture.sourceConversationIds.at(-1)! as ConversationId;
+  const terminal = seeded.holdDelivery(id, "retained cancellation payload", "rollback-terminal-template");
+  const state = structuredClone(seeded.readOnlySnapshot());
+  const row = state.heldDeliveries[terminal.id]!;
+  row.state = "failed";
+  row.error = "migration cancellation";
+  row.text = "retained payload ".repeat(128);
+  for (let index = 0; index < 5_000; index += 1) {
+    const key = `rollback-terminal-${index.toString().padStart(5, "0")}`;
+    state.heldDeliveries[key] = { ...structuredClone(row), id: key,
+      command: { ...row.command, operationId: `rollback-terminal-op-${index}` } };
+  }
+  seeded.close();
+  for (const suffix of ["", "-wal", "-shm"]) fs.rmSync(`${fixture.sqliteFilename}${suffix}`, { force: true });
+  fs.writeFileSync(fixture.filename, JSON.stringify(state));
+  let deliveryPayloadReads = 0;
+  const registry = new AgentRegistry(fixture.filename, undefined, undefined, { sqliteMode: "sqlite",
+    onSqliteRowPayloadRead: (collection, count) => { if (collection === "heldDeliveries") deliveryPayloadReads += count; } });
+  try {
+    const migration = registry.requestConversationReseat(id, LATER_TARGET).migration;
+    expect(migration).not.toBeNull();
+    deliveryPayloadReads = 0;
+    expect(registry.rollbackConversationMigration(id, migration!.revision).migration?.phase).toBe("rolled-back");
+    expect(deliveryPayloadReads).toBeLessThanOrEqual(1);
+    expect(registry.readOnlySnapshot().heldDeliveries[terminal.id]?.state).toBe("failed");
+  } finally { registry.close(); }
+});
+
 test("a withdrawal and a stop made in one instant are told apart in both orders", async () => {
   const fixture = fixtureCopy();
   const registry = open(fixture);

@@ -409,6 +409,9 @@ export interface SpawnReceipt {
   createdAt: string;
   /** Runtime admission acknowledged; the host's setup ceiling starts here. */
   hostSetupStartedAt?: string;
+  /** The exact pre-host writer boundary refused before setup admission. Kept
+      with the receipt so journal compaction cannot erase this no-effect proof. */
+  preHostWriterRefusal?: true;
   /** Pre-session custody. `preparing` proves no engine exec was admitted;
       `executing` without process evidence remains an uncertain launch. */
   hostSetup?: { phase: "preparing" | "executing"; processes: ProcessIdentity[]; cleanupConfirmed?: true; adoptionClaimEpoch?: number };
@@ -2262,12 +2265,13 @@ function rearmRolledBackMigrationDeliveries(
   file: RegistryFile,
   conversation: RegistryConversation,
   assignedAt: string,
+  deliveryIds: readonly string[],
 ): void {
   const current = conversation.generations.at(-1);
-  for (const delivery of Object.values(file.heldDeliveries)) {
-    if (delivery.conversationId !== conversation.id
-      || delivery.state === "delivered"
-      || delivery.state === "failed") continue;
+  for (const id of deliveryIds) {
+    const delivery = file.heldDeliveries[id];
+    if (!delivery || resolveConversationAlias(file, delivery.conversationId) !== conversation.id
+      || !["held", "assigned", "delivery-uncertain"].includes(delivery.state)) continue;
     if (!current || delivery.state === "delivery-uncertain") {
       terminalizeHeldDelivery(file, delivery, ROLLED_BACK_MIGRATION_DELIVERY_REASON);
       continue;
@@ -9624,6 +9628,14 @@ export class AgentRegistry {
       }
       receipt.state = "failed";
       receipt.error = error;
+      const refusalCause = error.replace(/^structured spawn interrupted before identity staging: /, "");
+      if (!receipt.hostSetup && !receipt.hostSetupStartedAt && !receipt.key && !receipt.pane
+        && !receipt.verifiedHost && !receipt.artifactPath
+        && ["registry.rotateSpawnCapabilityForReceipt", "registry.setReceiptViewerMcpTransport", "spawn.begin-host-setup"]
+          .some(label => refusalCause === `${REGISTRY_WRITER_BUSY} (${label})`
+            || refusalCause.startsWith(`${REGISTRY_WRITER_BUSY} (${label}); holder=`))) {
+        receipt.preHostWriterRefusal = true;
+      }
       markFailedLaunchReporting(receipt, options.announce !== false);
       if (receipt.queuedPinnedSpawn) {
         receipt.launchProfile = emptyLaunchProfile(
@@ -13703,7 +13715,12 @@ export class AgentRegistry {
           order: nextMigrationDecisionOrder(file, conversation.engine),
         };
       }
-      rearmRolledBackMigrationDeliveries(file, conversation, rolledAt);
+      const deliveryIds = registryOpenDeliveryKeys(file, conversation.id,
+        ["held", "assigned", "delivery-uncertain"], "", 100);
+      // The admission path caps live deliveries for one conversation at 100;
+      // indexed state selection keeps retained terminal history out of this
+      // transaction and gives the follow-on work a hard row bound.
+      rearmRolledBackMigrationDeliveries(file, conversation, rolledAt, deliveryIds);
       conversation.migration = { ...conversation.migration, phase: "rolled-back", error: null, errorCode: null, updatedAt: rolledAt };
       conversation.updatedAt = rolledAt;
       advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
