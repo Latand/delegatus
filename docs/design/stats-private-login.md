@@ -105,8 +105,9 @@ to another content type.
 | any other `/stats/*` | — | — | 404 |
 
 The stats page CSP becomes `default-src 'none'; style-src 'unsafe-inline'; form-action
-'self'; frame-ancestors 'none'; base-uri 'none'`; the sign-in and enrollment pages add
-`script-src 'nonce-<16 random bytes>'; connect-src 'self'`. The sign-in page first calls
+'self'; frame-ancestors 'none'; base-uri 'none'`. The stats document sets a same-origin
+referrer policy for its forms so browsers include the Origin header. The sign-in and
+enrollment pages add `script-src 'nonce-<16 random bytes>'; connect-src 'self'`. The sign-in page first calls
 `GET /stats/session`: a same-origin fetch carries the SameSite=Strict cookie, which a
 navigation from a messenger link omits, so on 204 the page replaces itself with /stats and the
 operator sees the stats with no prompt. Otherwise it shows one "Sign in with passkey" button,
@@ -199,8 +200,8 @@ CREATE TABLE imported_days (day TEXT PRIMARY KEY, imported_at INTEGER NOT NULL);
 ```
 
 Days are UTC `YYYY-MM-DD`, times Unix milliseconds. The constructor creates the schema under
-`blockConcurrencyWhile`, sets `live_since` and the challenge key once and arms the alarm. The
-SQL stays within SQLite 3.39: Bun tests run it on `bun:sqlite`, the system SQLite on macOS.
+`blockConcurrencyWhile`, sets `live_since` and the challenge key once, and arms the alarm on
+the first valid metric write or authentication RPC. The SQL stays within SQLite 3.39: Bun tests run it on `bun:sqlite`, the system SQLite on macOS.
 
 ### 3.6 Page sections from the store
 
@@ -260,6 +261,7 @@ rows with the newest winning, and adds event totals to any live rows of that day
 attempts on one day stop the import with `import_error` set to a fixed class (`http`,
 `network`, `shape`, `limit`), shown in the Access section. A new deployment, including a
 `wrangler secret put`, restarts the object, and its constructor resumes a stopped import once.
+The `STATS_VERSION` binding identifies the deployment so an eviction leaves the stop in place.
 Logging: the auth and store paths log only `stats-import day=<day> ok`, `… stopped <class>`
 and `… complete days=<n>`. No token, cookie, assertion, key, challenge, credential id or
 metric value reaches a log, an error or any page except the signed-in stats page.
@@ -283,7 +285,8 @@ count as new until the store holds 92 days.
 "assets": { /* unchanged, plus */ "run_worker_first": ["/api/*", "/stats", "/stats/", "/stats/*"] },
 "vars": { "STATS_ORIGIN": "https://delegatus.org", "STATS_RP_ID": "delegatus.org" },
 "durable_objects": { "bindings": [{ "name": "STATS", "class_name": "StatsStore" }] },
-"migrations": [{ "tag": "v1", "new_sqlite_classes": ["StatsStore"] }]
+"migrations": [{ "tag": "v1", "new_sqlite_classes": ["StatsStore"] }],
+"version_metadata": { "binding": "STATS_VERSION" }
 ```
 
 The Access vars and `analytics_engine_datasets` go. Secrets: the new STATS_ENROLLMENT, plus
@@ -291,7 +294,7 @@ STATS_AE_TOKEN and STATS_ACCOUNT_ID until the import completes. The config uses 
 only; a Worker once deployed with the newer `exports` field cannot go back.
 
 Files: `landing/entry.ts` is the Wrangler entry; it re-exports the fetch handler and a
-15-line shell, `StatsStore extends DurableObject`, that forwards its RPC methods and `alarm()`
+thin `StatsStore extends DurableObject` shell that forwards its RPC methods and `alarm()`
 to `StatsCore`. `landing/worker.ts` keeps routes, cookies and pages and loses `validAccess`
 and the JWKS cache. `landing/stats/store.ts` holds `StatsCore` over a small storage interface;
 `landing/stats/webauthn.ts` the base64url, DER and WebAuthn record checks;
@@ -346,9 +349,13 @@ through the existing `STATS_RENDER_DIR` export and the capture of
 2. Deploy. Seat: bounded `wrangler tail`, then `bunx wrangler deploy --config
    landing/wrangler.jsonc`; the migration creates the object. Access still covers /stats, so a
    defective release exposes nothing; rollback across the class creation is blocked.
-3. Import. Seat: wait for `stats-import complete` (about 12 minutes: 93 steps and the 10-minute
-   wait). On `stopped`, put STATS_AE_TOKEN again through stdin once and wait again. Then
-   `wrangler secret delete` STATS_AE_TOKEN and STATS_ACCOUNT_ID: no API token reads metrics.
+3. Import. A valid install ping or site event starts the object. If traffic is quiet, open the
+   landing page and play its demo to generate a normal event. Deploy and start the object at
+   least ten minutes before UTC midnight so the cutover falls within one UTC day. Wait for
+   `stats-import complete` (about 12 minutes: 93 steps and the cutover wait). On `stopped`, put the existing
+   `STATS_AE_TOKEN` again through stdin once with the landing config and wait for the new
+   version's import. After completion, run `wrangler secret delete` for both `STATS_AE_TOKEN`
+   and `STATS_ACCOUNT_ID` with the landing config.
 4. Enroll, cut over, revoke. Seat: run the enrollment script and send the link in one private
    message with §6. Operator: §6, one visit that deletes the Access application and revokes
    the token (step 3 already finished with it), then the passkey.
