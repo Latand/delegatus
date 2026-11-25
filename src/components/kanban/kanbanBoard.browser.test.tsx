@@ -5057,7 +5057,8 @@ describe("shipped role defaults rendered evidence", () => {
     const browser = await chromium.launch(LAUNCH);
     const cases: Record<string, unknown>[] = [];
     try {
-      for (const locale of ["en", "uk"] as const) for (const width of [1280, 390]) {
+      /* 700 and 660 are the two sides of the table's own floor (the fixture pads the table by 24 px a side). */
+      for (const locale of ["en", "uk"] as const) for (const width of [1280, 1024, 700, 660, 390]) {
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=role-defaults&mapping=1`, { width, height: 844 }, "light", locale, "reduce", width === 390);
         try {
           await page.locator('[data-mapping-row="reviewer"]').waitFor();
@@ -5099,14 +5100,57 @@ describe("shipped role defaults rendered evidence", () => {
           }
           const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
           expect(overflow).toBeFalse();
+          /* The engine choice in each row, measured: three engines inside their own cell and clear of the model
+             select (the table), a visible and spoken state on a not-ready engine (the card), and no model name
+             cut by the select's arrow. */
+          const layout = await page.locator("[data-agent-mapping]").getAttribute("data-mapping-layout");
+          expect(layout).toBe(width >= 700 ? "table" : "card");
+          const geometry = await page.evaluate(() => {
+            const ARROW = 24;
+            const canvas = document.createElement("canvas").getContext("2d")!;
+            return Array.from(document.querySelectorAll<HTMLElement>("[data-mapping-row]")).map((row) => {
+              const group = row.querySelector<HTMLElement>("[role=radiogroup]")!;
+              const cell = group.parentElement!.getBoundingClientRect();
+              const box = group.getBoundingClientRect();
+              const select = row.querySelector<HTMLSelectElement>("select")!;
+              const selectBox = select.getBoundingClientRect();
+              const style = getComputedStyle(select);
+              canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+              const label = select.selectedOptions[0]?.textContent ?? "";
+              const room = select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - ARROW;
+              const agy = row.querySelector<HTMLElement>("[data-engine-segment=antigravity]")!;
+              return {
+                id: row.dataset.mappingRow!,
+                groupOverCell: Math.round((box.right - cell.right) * 10) / 10,
+                selectClear: Math.round((selectBox.left - box.right) * 10) / 10,
+                segmentsInside: Array.from(group.querySelectorAll("button")).every((button) => button.getBoundingClientRect().right <= box.right + 0.5),
+                label,
+                labelRoom: Math.round((room - canvas.measureText(label).width) * 10) / 10,
+                agyLabel: agy.getAttribute("aria-label"),
+                agyDot: agy.querySelector("[data-engine-state-dot]") !== null,
+              };
+            });
+          });
+          const notReady = translate(locale, "onboarding.agents.blocked", { engine: "Antigravity" });
+          for (const row of geometry) {
+            if (layout === "table") {
+              expect(row.groupOverCell).toBeLessThanOrEqual(0);
+              expect(row.segmentsInside).toBe(true);
+              expect(row.selectClear).toBeGreaterThanOrEqual(0);
+              expect(row.labelRoom).toBeGreaterThanOrEqual(0);
+            }
+            /* The visual critic is locked to Claude: its other segments say so instead. */
+            expect(row.agyLabel).toBe(row.id === "visual-critic" ? translate(locale, "onboarding.agents.engineLocked", { role: translate(locale, "onboarding.agents.role.visualCritic"), engine: "Claude" }) : notReady);
+            expect(row.agyDot).toBe(true);
+          }
           expect(pageErrors).toEqual([]);
-          cases.push({ locale, width, rows, overflow, pageErrors });
+          cases.push({ locale, width, layout, rows, geometry, overflow, pageErrors });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/role-defaults", { recursive: true });
       fs.writeFileSync("evidence/role-defaults/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 120_000);
+  }, 240_000);
 });
 
 describe("linked boards M3 remote agents", () => {

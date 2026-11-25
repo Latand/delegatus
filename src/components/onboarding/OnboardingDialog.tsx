@@ -275,7 +275,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
     claude: { connected: engineReady(claude, cli.claude), missing: cli.claude === "missing", account: engineAccount(claude) },
     codex: { connected: engineReady(codex, cli.codex), missing: cli.codex === "missing", account: engineAccount(codex) },
     /* Signed in is what a check or a launch observed; `agy` being installed proves nothing about its Google sign-in. */
-    antigravity: { connected: agyCli === "found" && antigravity.auth === "signed_in", missing: agyCli === "missing", account: null, reason: antigravity.auth === "signed_out" ? "signed-out" : "unknown" },
+    antigravity: { connected: agyCli === "found" && antigravity.auth === "signed_in", missing: agyCli === "missing", account: null },
   };
   /* A visited Engines step earns its check only when an engine can run; with
      none it carries the warning its own screen shows. */

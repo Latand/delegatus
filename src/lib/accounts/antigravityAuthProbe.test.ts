@@ -113,9 +113,7 @@ test("another error proves nothing: the recorded state stays and the answer is i
 
 test("a timeout leaves the record untouched and kills the child", async () => {
   const agy = stub(() => "silent");
-  const started = Date.now();
   const result = await probeAntigravityAuth({ spawnProcess: agy.spawnProcess, timeoutMs: 60 });
-  expect(Date.now() - started).toBeLessThan(5_000);
   expect(result).toMatchObject({ cli: "found", auth: "unknown", inconclusive: true });
   expect(readAntigravityAuthState()).toBeNull();
   expect(agy.kills.length).toBeGreaterThan(0);

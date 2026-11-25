@@ -146,9 +146,14 @@ export function antigravityHomeOwningSessionPath(pathname: string): string | nul
 /** ACP's "authentication required" code, and the words an agy build uses when it refuses a session for lack of a Google sign-in. One rule for the launch path and the probe. */
 export const ACP_AUTH_REQUIRED_CODE = -32000;
 
+/* agy answers a spent quota with the same -32000 as a missing sign-in; the account is still signed in then. */
+const QUOTA_REFUSAL = /quota|exhaust|rate.?limit|too many requests/i;
+
 export function isAntigravityAuthFailure(failure: { code?: unknown; message?: unknown }): boolean {
+  const message = typeof failure.message === "string" ? failure.message : "";
+  if (QUOTA_REFUSAL.test(message)) return false;
   if (failure.code === ACP_AUTH_REQUIRED_CODE) return true;
-  return typeof failure.message === "string" && /auth|sign.?in|log.?in|credential|oauth/i.test(failure.message);
+  return /auth|sign.?in|log.?in|credential|oauth/i.test(message);
 }
 
 export function antigravityAccountContext(account: AntigravityAccount): AccountContext {

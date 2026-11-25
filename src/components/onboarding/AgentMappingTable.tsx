@@ -33,8 +33,6 @@ export type EngineStatus = {
   missing?: boolean;
   /** The engine's active account, for the headroom line. */
   account: AccountOption | null;
-  /** Why an installed engine is not connected: its sign-in was observed absent, or has not been observed. */
-  reason?: "signed-out" | "unknown";
 };
 
 type RowKey = { roleId: RoleId; variant?: RoleVariantId };
@@ -43,12 +41,13 @@ const ENGINE_NAME: Record<RoleEngine, string> = { claude: "Claude", codex: "Code
 
 /* One track list for the head and every row. The model column stops at 220 px
    and the role column takes what is left, so the standalone surface (no step
-   rail) widens the names instead of stretching one select. */
-const TABLE_GRID = "grid-cols-[minmax(176px,1fr)_100px_minmax(0,220px)_104px_104px]";
+   rail) widens the names instead of stretching one select. Its floor holds the
+   longest Claude and Codex model label beside the select's own arrow. */
+const TABLE_GRID = "grid-cols-[minmax(176px,1fr)_100px_minmax(160px,220px)_104px_104px]";
 
-/* The tracks' smallest sum (176 + 100 + 124 + 104 + 104). Narrower than this the
+/* The tracks' smallest sum (176 + 100 + 160 + 104 + 104). Narrower than this the
    table has nowhere to put the model select, so the rows take the card layout. */
-const TABLE_MIN = 608;
+const TABLE_MIN = 644;
 
 function blockedText(t: TFunction, engine: RoleEngine, status: EngineStatus): string {
   return t(status.missing ? "onboarding.agents.blockedMissing" : "onboarding.agents.blocked", { engine: ENGINE_NAME[engine] });
@@ -252,8 +251,9 @@ function Headroom({ config, status, compact = false, onConnect }: { config: Role
 function EngineSegments({ value, label, locked, statuses, compact, onChange }: { value: RoleEngine; label: string; locked: RoleEngine | null; statuses: Record<RoleEngine, EngineStatus>; compact: boolean; onChange: (engine: RoleEngine) => void }) {
   const { t } = useLocale();
   /* The table's engine column is 100 px: three 28 px marks fit it, three names
-     (229 px) do not. The name and the state ride on the button's title and
-     label. A phone card has the width and keeps the names. */
+     (229 px) do not, so the mark carries a state dot. A phone card has the width
+     and keeps the names, with the same dot. The name and the state ride on the
+     button's label in both layouts. */
   return (
     <div role="radiogroup" aria-label={t("onboarding.agents.engineAria", { role: label })} className={`inline-flex shrink-0 rounded-[8px] border border-border bg-sunken p-0.5 ${compact ? "" : "h-8 max-sm:h-auto"}`}>
       {(["claude", "codex", "antigravity"] as const).map((engine) => {
@@ -270,7 +270,7 @@ function EngineSegments({ value, label, locked, statuses, compact, onChange }: {
             type="button"
             role="radio"
             aria-checked={checked}
-            aria-label={compact ? name : undefined}
+            aria-label={name}
             data-engine-segment={engine}
             /* A disconnected engine stays selectable: someone who connects Codex
                tomorrow may still point a role at it today. */
@@ -281,7 +281,7 @@ function EngineSegments({ value, label, locked, statuses, compact, onChange }: {
           >
             <EngineMark engine={engine} size={compact ? 14 : 12} />
             {compact ? null : ENGINE_NAME[engine]}
-            {compact && !ready ? <span aria-hidden data-engine-state-dot={engine} className={`absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full ${statuses[engine].missing ? "bg-danger" : "bg-warning"}`} /> : null}
+            {!ready ? <span aria-hidden data-engine-state-dot={engine} className={`absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full ${statuses[engine].missing ? "bg-danger" : "bg-warning"}`} /> : null}
           </button>
         );
       })}

@@ -765,6 +765,8 @@ const ONBOARDING_VIEWPORTS: readonly OnboardingViewport[] = [
   { width: 1440, height: 900, tag: "desktop-1440", phone: false },
   { width: 1280, height: 900, tag: "desktop-1280", phone: false },
   { width: 1024, height: 768, tag: "desktop-1024", phone: false },
+  /* The guide's body is about 650 px wide here, just above the table's own floor, where the model names are tightest. */
+  { width: 1000, height: 768, tag: "desktop-1000", phone: false },
   { width: 390, height: 844, tag: "phone-390", phone: true },
 ];
 
@@ -1120,8 +1122,127 @@ function healthAnswer(state: HealthState): unknown {
   };
 }
 
+/* BOARD_CAPTURE_CASE=agy-accounts: Antigravity's sign-in where it lives in the
+   account settings, outside the setup guide. The sidebar footer's flyout at
+   1440, 1024 and 820 and the phone's accounts screen at 390, with a stub `agy`
+   missing (after a recorded sign-in, which is what makes the row appear),
+   signed out and signed in with a tier. The flyout and the screen stay inside
+   the viewport, nothing scrolls sideways, no state line is cut, and the sign-in
+   check's button is a 44 px target on the phone. */
+type AgyAccountState = "missing" | "signed-out" | "signed-in";
+async function captureAgyAccounts(ctx: { baseUrl: string; browser: Browser; resetInstall: (codexInstalled: boolean) => Promise<void>; must: (ok: boolean, message: string) => void; report: Record<string, unknown> }): Promise<void> {
+  const { baseUrl, browser, resetInstall, must, report } = ctx;
+  const agyRecord = path.join(STATE_DIR, "antigravity-auth-state.json");
+  const viewports: OnboardingViewport[] = [
+    { width: 1440, height: 900, tag: "desktop-1440", phone: false },
+    { width: 1024, height: 768, tag: "desktop-1024", phone: false },
+    { width: 820, height: 768, tag: "desktop-820", phone: false },
+    { width: 390, height: 844, tag: "phone-390", phone: true },
+  ];
+  /* The record the app shows is the last observation: signed in first, so a
+     missing command still has a row to show. */
+  const settle = async (state: AgyAccountState): Promise<void> => {
+    fs.rmSync(agyRecord, { force: true });
+    if (state === "missing") fakeAgy("signed-in");
+    else fakeAgy(state);
+    await fetch(`${baseUrl}/api/accounts/cli`);
+    await fetch(`${baseUrl}/api/accounts/antigravity`, { method: "POST", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ action: "probe" }) });
+    if (state === "missing") { fakeAgy("missing"); await fetch(`${baseUrl}/api/accounts/cli`); }
+  };
+  /* AGY_CAPTURE_VIEWPORTS=phone-390,desktop-820 reruns only those. */
+  const only = process.env.AGY_CAPTURE_VIEWPORTS?.split(",").map((tag) => tag.trim()).filter(Boolean);
+  for (const viewport of viewports.filter((item) => !only?.length || only.includes(item.tag))) for (const colorScheme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) {
+    const tag = `${viewport.tag}-${colorScheme}-${locale}`;
+    const frames: Record<string, unknown> = {};
+    await resetInstall(false);
+    const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale, source: "chosen" }) });
+    must(localeWrite.ok, `${tag}: the interface language write answered ${localeWrite.status}`);
+    /* The guide is done: these frames are the settings it points to. */
+    await fetch(`${baseUrl}/api/onboarding`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }) }).catch(() => {});
+    const context = await browser.newContext({
+      viewport: { width: viewport.width, height: viewport.height },
+      colorScheme,
+      reducedMotion: "reduce",
+      ...(viewport.phone ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}),
+    });
+    await context.addInitScript((lang: string) => {
+      Object.defineProperty(globalThis, "EventSource", { configurable: true, value: undefined });
+      localStorage.clear();
+      sessionStorage.clear();
+      localStorage.setItem("llv_lang", lang);
+      localStorage.setItem("llvSound", "0");
+    }, locale);
+    const page = await context.newPage();
+    try {
+      for (const state of ["missing", "signed-out", "signed-in"] as const) {
+        await settle(state);
+        await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+        await page.waitForSelector("[data-onboarding-dialog]", { state: "detached", timeout: 5_000 }).catch(() => {});
+        /* The daily telemetry notice sits over the footer and the phone's sheet until it is acknowledged. */
+        const acknowledge = page.getByRole("button", { name: translate(locale, "telemetry.dismiss"), exact: true });
+        if (await acknowledge.waitFor({ timeout: 4_000 }).then(() => true, () => false)) await acknowledge.click();
+        const expected = state === "signed-in" ? translate(locale, "onboarding.engines.connected", { plan: "Google AI Pro" }) : null;
+        const root = viewport.phone ? '[data-mobile2-accounts-engine="antigravity"]' : "[data-antigravity-panel]";
+        if (viewport.phone) {
+          /* The accounts screen is a route of its own on the phone. */
+          await page.goto(`${baseUrl}/#accounts`, { waitUntil: "domcontentloaded", timeout: 60_000 });
+          await page.waitForSelector("[data-mobile2-accounts]", { timeout: 60_000 });
+        } else {
+          await page.waitForSelector('[data-engine-limits="antigravity"] [data-meter-line]', { timeout: 60_000 });
+          await page.click('[data-engine-limits="antigravity"] [data-meter-line]');
+        }
+        await page.waitForSelector(root, { timeout: 30_000 });
+        await page.waitForFunction((want: string | null) => !want || (document.querySelector("[data-antigravity-panel], [data-mobile2-accounts-engine=antigravity]")?.textContent ?? "").includes(want.split(" ")[0]!), expected, { timeout: 30_000 });
+        await page.locator(root).scrollIntoViewIfNeeded();
+        await page.waitForTimeout(350);
+        const reading = await page.evaluate(({ rootSelector, phone }) => {
+          const node = document.querySelector<HTMLElement>(rootSelector)!;
+          const r = node.getBoundingClientRect();
+          const cut = Array.from(node.querySelectorAll<HTMLElement>("*")).filter((el) => {
+            const text = (el.childNodes.length === 1 && el.firstChild?.nodeType === 3) ? el.textContent ?? "" : "";
+            return text.trim() !== "" && el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).textOverflow === "ellipsis";
+          }).map((el) => (el.textContent ?? "").trim().slice(0, 60));
+          const small = phone ? Array.from(node.querySelectorAll<HTMLElement>("button")).filter((el) => { const b = el.getBoundingClientRect(); return b.height > 0 && b.height < 43.5; }).map((el) => (el.textContent ?? "").trim().slice(0, 40)) : [];
+          return {
+            box: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+            viewport: { w: innerWidth, h: innerHeight },
+            documentOverflowX: document.documentElement.scrollWidth - innerWidth,
+            sideways: node.scrollWidth - node.clientWidth,
+            cut,
+            small,
+            text: (node.textContent ?? "").replace(/\s+/g, " ").trim(),
+            check: node.querySelector("[data-antigravity-check]")?.textContent ?? null,
+            installCommand: node.querySelector("code")?.textContent ?? null,
+          };
+        }, { rootSelector: root, phone: viewport.phone });
+        frames[state] = reading;
+        await page.screenshot({ path: path.join(OUT_DIR, `${tag}-account-agy-${state}.png`) });
+        const b = reading.box;
+        must(viewport.phone || (b.x >= 0 && b.y >= 0 && b.x + b.w <= reading.viewport.w && b.y + b.h <= reading.viewport.h), `${tag} ${state}: the flyout ${JSON.stringify(b)} leaves the ${reading.viewport.w}×${reading.viewport.h} viewport`);
+        must(reading.documentOverflowX <= 0, `${tag} ${state}: the page scrolls sideways by ${reading.documentOverflowX}px`);
+        must(reading.sideways <= 1, `${tag} ${state}: the surface overflows sideways by ${reading.sideways}px`);
+        must(reading.cut.length === 0, `${tag} ${state}: cut state text ${JSON.stringify(reading.cut)}`);
+        must(reading.small.length === 0, `${tag} ${state}: targets under 44px: ${reading.small.join("; ")}`);
+        if (state === "missing") must(reading.installCommand === ANTIGRAVITY_INSTALL_COMMAND.command, `${tag}: the missing surface shows ${reading.installCommand} as its install command`);
+        if (state === "signed-out") must(reading.check === translate(locale, "onboarding.engines.checkSignin"), `${tag}: the signed-out surface offers ${reading.check}`);
+        if (state === "signed-in") must(reading.text.includes("Google AI Pro"), `${tag}: the signed-in surface does not show the tier: ${reading.text}`);
+        if (!viewport.phone) await page.keyboard.press("Escape");
+      }
+    } catch (error) {
+      await page.screenshot({ path: path.join(OUT_DIR, `${tag}-error.png`) }).catch(() => {});
+      must(false, `${tag}: stopped: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+    }
+    report[tag] = frames;
+    await context.close();
+  }
+  fs.rmSync(agyRecord, { force: true });
+  fakeAgy("missing");
+  await fetch(`${baseUrl}/api/accounts/cli`);
+}
+
 async function captureOnboarding(): Promise<void> {
   const providerOnly = process.env.BOARD_CAPTURE_CASE === "provider-account";
+  const agyAccounts = process.env.BOARD_CAPTURE_CASE === "agy-accounts";
   process.env.HOME = HOME;
   process.env.XDG_CONFIG_HOME = path.join(HOME, ".config");
   process.env.LLV_STATE_DIR = STATE_DIR;
@@ -1140,7 +1261,7 @@ async function captureOnboarding(): Promise<void> {
 
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
-  const report: Record<string, unknown> = { commit: captureCommit(), case: providerOnly ? "provider-account" : "onboarding" };
+  const report: Record<string, unknown> = { commit: captureCommit(), case: providerOnly ? "provider-account" : agyAccounts ? "agy-accounts" : "onboarding" };
   let server: ChildProcess | null = null;
   let browser: Browser | null = null;
   const tailscale = createTailscaleStub({ root: BASE });
@@ -1174,7 +1295,8 @@ async function captureOnboarding(): Promise<void> {
     report.firstRunMarker = first.marker;
     browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || undefined, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 
-    for (const viewport of (providerOnly ? ONBOARDING_VIEWPORTS.filter((item) => item.width === 1280 || item.width === 390) : ONBOARDING_VIEWPORTS)) {
+    if (agyAccounts) await captureAgyAccounts({ baseUrl, browser, resetInstall, must, report });
+    else for (const viewport of (providerOnly ? ONBOARDING_VIEWPORTS.filter((item) => item.width === 1280 || item.width === 390) : ONBOARDING_VIEWPORTS)) {
       for (const colorScheme of (providerOnly ? ["light"] : ["light", "dark"]) as Array<"light" | "dark">) {
         for (const locale of ["en", "uk"] as const) {
           const tag = `${viewport.tag}-${colorScheme}-${locale}`;
@@ -1488,7 +1610,7 @@ async function captureOnboarding(): Promise<void> {
               await shot("agents-agy-missing", (r) => {
                 const action = r.connectActions.find((item) => item.engine === "antigravity");
                 must(action?.text === text("onboarding.agents.howToInstall"), `${tag}: a missing agy offers "${action?.text}"`);
-                must((r.agySegment?.label ?? "").length > "Antigravity".length && (viewport.phone || r.agySegment?.dot === true), `${tag}: Antigravity's segment reads ${JSON.stringify(r.agySegment)}`);
+                must((r.agySegment?.label ?? "").length > "Antigravity".length && r.agySegment?.dot === true, `${tag}: Antigravity's segment reads ${JSON.stringify(r.agySegment)}`);
                 must(viewport.phone ? r.mappingLayout === "card" : r.mappingLayout === "table", `${tag}: the mapping is laid out as ${r.mappingLayout}`);
               });
               await page.click('[data-mapping-row="builder"] [data-mapping-connect="antigravity"]');
@@ -2055,12 +2177,12 @@ async function captureOnboarding(): Promise<void> {
     process.exitCode = 1;
     console.error(`onboarding acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
   } else {
-    console.log(providerOnly ? "provider account form rendered at 1280 and 390 in English and Ukrainian." : "onboarding acceptance passed at 1440, 1280 and 390, light and dark, English and Ukrainian.");
+    console.log(agyAccounts ? "Antigravity's account settings rendered at 1440, 1024, 820 and 390, light and dark, English and Ukrainian." : providerOnly ? "provider account form rendered at 1280 and 390 in English and Ukrainian." : "onboarding acceptance passed at 1440, 1280 and 390, light and dark, English and Ukrainian.");
   }
 }
 
 async function main(): Promise<void> {
-  if (process.env.BOARD_CAPTURE_CASE === "onboarding" || process.env.BOARD_CAPTURE_CASE === "provider-account") {
+  if (process.env.BOARD_CAPTURE_CASE === "onboarding" || process.env.BOARD_CAPTURE_CASE === "provider-account" || process.env.BOARD_CAPTURE_CASE === "agy-accounts") {
     await captureOnboarding();
     return;
   }

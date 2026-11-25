@@ -15,8 +15,8 @@ import type { EngineStatus } from "./AgentMappingTable";
  * table's 100 px engine column (the labelled ones measured 229 px and painted
  * the Antigravity mark over the model select), labelled segments in a card,
  * and a sign-in or install action on every row whose engine is not ready.
- * jsdom measures no layout; the geometry itself is asserted in the browser
- * case of `scripts/capture-board-geometry.ts`.
+ * jsdom measures no layout; the geometry itself is asserted in the mapping case of
+ * `src/components/kanban/kanbanBoard.browser.test.tsx`.
  */
 
 const dom = installOnboardingDom();
@@ -71,24 +71,21 @@ test("the table's three engine segments carry a mark and no text, named by their
   expect(host.querySelector("[data-engine-state-dot]")).toBeNull();
 });
 
-test("the engine column is the 100 px track the three 28 px segments fit", async () => {
-  const host = await mount({ claude: ready, codex: ready, antigravity: ready });
-  const head = host.querySelector(".grid")!;
-  expect(head.className).toContain("grid-cols-[minmax(176px,1fr)_100px_minmax(0,220px)_104px_104px]");
-  /* 3 × 28 + 2 × 2 padding + 2 × 1 border = 90 px, 10 px under the track. */
-  for (const node of Array.from(host.querySelectorAll("[data-mapping-row='builder'] [data-engine-segment]"))) {
-    expect(node.className).toContain("h-7 w-7");
-  }
-});
-
 test("an Antigravity that is not connected shows a state dot and a label that says so", async () => {
-  const host = await mount({ claude: ready, codex: ready, antigravity: { connected: false, account: null, reason: "signed-out" } });
+  const host = await mount({ claude: ready, codex: ready, antigravity: { connected: false, account: null } });
   const button = segment(host, "builder", "antigravity");
   expect(button.querySelector("[data-engine-state-dot]")).not.toBeNull();
   expect(button.getAttribute("aria-label")).toBe("Antigravity is not connected");
   expect(button.getAttribute("title")).toBe("Antigravity is not connected");
   /* A ready engine in the same row carries none. */
   expect(segment(host, "builder", "claude").querySelector("[data-engine-state-dot]")).toBeNull();
+});
+
+test("a missing engine reads not installed on its card segment too", async () => {
+  const host = await mount({ claude: ready, codex: { connected: false, missing: true, account: null }, antigravity: ready }, "card");
+  const codex = segment(host, "builder", "codex");
+  expect(codex.getAttribute("aria-label")).toBe("Codex is not installed");
+  expect(codex.querySelector("[data-engine-state-dot]")).not.toBeNull();
 });
 
 test("a missing engine reads not installed on its segment", async () => {
@@ -99,7 +96,7 @@ test("a missing engine reads not installed on its segment", async () => {
 test("a row on Antigravity signed out offers Sign in, which asks for that engine", async () => {
   builderEngine = "antigravity";
   const asked: RoleEngine[] = [];
-  const host = await mount({ claude: ready, codex: ready, antigravity: { connected: false, account: null, reason: "signed-out" } }, "table", (engine) => asked.push(engine));
+  const host = await mount({ claude: ready, codex: ready, antigravity: { connected: false, account: null } }, "table", (engine) => asked.push(engine));
   const row = host.querySelector("[data-mapping-row='builder']")!;
   expect(row.getAttribute("data-mapping-blocked")).toBe("");
   const action = row.querySelector<HTMLButtonElement>("[data-mapping-connect=antigravity]")!;
@@ -140,7 +137,12 @@ test("the phone card keeps the engine names on its segments and the same action 
   const host = await mount({ claude: ready, codex: ready, antigravity: { connected: false, account: null } }, "card", (engine) => asked.push(engine));
   const labels = Array.from(host.querySelectorAll("[data-mapping-row='builder'] [data-engine-segment]")).map((node) => node.textContent);
   expect(labels).toEqual(["Claude", "Codex", "Antigravity"]);
-  expect(host.querySelector("[data-mapping-row='builder'] [data-engine-state-dot]")).toBeNull();
+  /* A touch screen never shows a title: the state is a visible mark and part of the accessible name. */
+  const unready = segment(host, "builder", "antigravity");
+  expect(unready.querySelector("[data-engine-state-dot]")).not.toBeNull();
+  expect(unready.getAttribute("aria-label")).toBe("Antigravity is not connected");
+  expect(segment(host, "builder", "claude").querySelector("[data-engine-state-dot]")).toBeNull();
+  expect(segment(host, "builder", "claude").getAttribute("aria-label")).toBe("Claude");
   const action = host.querySelector<HTMLButtonElement>("[data-mapping-row='builder'] [data-mapping-connect=antigravity]")!;
   await act(async () => { action.click(); });
   expect(asked).toEqual(["antigravity"]);

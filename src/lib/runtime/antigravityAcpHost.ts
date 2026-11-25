@@ -1271,8 +1271,9 @@ export class AntigravityAcpHost implements EngineHost {
     try {
       opened = await this.openSession(resumeSessionId);
     } catch (error) {
-      /* A refusal for lack of a Google sign-in is the one observation that says signed out. */
-      if (isAntigravityAuthFailure({ code: (error as { rpcCode?: unknown }).rpcCode, message: error instanceof Error ? error.message : "" })) {
+      /* A refusal of a fresh session for lack of a Google sign-in is the one launch observation that says signed out.
+         A failed resume says nothing about the account (the stored session may be gone), and a spent quota is not a sign-out. */
+      if (resumeSessionId === null && isAntigravityAuthFailure({ code: (error as { rpcCode?: unknown }).rpcCode, message: error instanceof Error ? error.message : "" })) {
         try { recordAntigravityAuthState({ authenticated: false, tierName: null, tierId: null, checkedAt: new Date().toISOString() }); } catch { /* best-effort metadata update */ }
       }
       throw error;
