@@ -58,6 +58,8 @@ const vanished = (error: unknown) => ["ENOENT", "ENOTDIR"].includes((error as No
  * or when the pid is present again, the process counts as alive. */
 const allExited = (pids: readonly (number | null)[] | undefined) => process.platform === "linux" && !!pids?.length
   && pids.every(pid => pid !== null && !fs.existsSync(`/proc/${pid}`));
+/** `/proc` entries describe processes; none of them is a working checkout. */
+const procCwd = (cwd: string) => { const resolved = path.resolve(cwd); return resolved === "/proc" || resolved.startsWith("/proc/"); };
 const LINK_HOP_LIMIT = 256;
 const segments = (file: string) => file.split(path.sep).filter(Boolean);
 
@@ -410,13 +412,20 @@ export class RepositoryLinkInventory {
   }
   /** The nearest enclosing checkout of a process cwd, held by `pids` in the scan. */
   repositoryOf(cwd: string, pids: readonly (number | null)[] = []): string | null {
+    // A sandboxed browser renderer keeps its cwd inside the `/proc` entry of a
+    // helper that has since exited. Nothing under `/proc` is a checkout, and
+    // a directory that no longer exists cannot be read for links: either way
+    // this process names no checkout. Its other references still count.
+    if (procCwd(cwd)) { this.repositoriesOf.delete(cwd); this.holders.delete(cwd); return null; }
     if (pids.length) this.holders.set(cwd, pids);
     // Record negative results too: an existing cwd outside a checkout can
     // become a checkout while another awaited observation is in flight.
     let discovery: RepositoryDiscovery;
     try { discovery = this.discoverRepository(cwd); }
     catch (error) {
-      if (vanished(error) && this.abandoned(cwd)) { this.repositoriesOf.delete(cwd); return null; }
+      // An earlier discovery of a live process's cwd stays recorded, so the
+      // dispatch fence still sees that the directory changed under it.
+      if (vanished(error)) { if (this.abandoned(cwd)) this.repositoriesOf.delete(cwd); return null; }
       throw error;
     }
     this.repositoriesOf.set(cwd, discovery);

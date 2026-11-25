@@ -98,7 +98,7 @@ if (process.argv[4] === "backfill") {
 if (process.argv[4] === "pressure-cursor") {
   try {
     // Each restart reads the durable pass and advances it by 32 roots.
-    const pass = store.pressurePass(Number(process.argv[3])), page: string[] = [];
+    const pass = store.pressurePass(Number(process.argv[3]))!, page: string[] = [];
     for (let next = store.pressurePassRoot(pass.position); next && page.length < 32; next = store.pressurePassRoot(pass.position)) {
       pass.position = next.seq; page.push(path.basename(next.directory));
     }

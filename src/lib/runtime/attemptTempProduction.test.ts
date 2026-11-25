@@ -4,7 +4,8 @@ import * as attemptRemoval from "./attemptTempRemoval";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { buildPipeline, savePipelines, findPipelineRecord, pipelineIdentity } from "@/lib/pipelines/store";
+import { Database } from "bun:sqlite";
+import { buildPipeline, savePipelines, findPipelineRecord, loadPipelines, pipelineIdentity } from "@/lib/pipelines/store";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { materializeOwnedStructuredHostAccess, materializeStructuredHostAccess, tempOwnerForConversation } from "./structuredSpawn";
 import { AgentRegistry } from "@/lib/agent/registry";
@@ -691,6 +692,100 @@ function workScratchFixture(total: number, overdue: number) {
   });
   return { store, directories };
 }
+
+test("absent allocation entries and recurring deferrals leave a path to the tail of the due ledger", async () => {
+  const count = 2050;
+  const { store, directories } = workScratchFixture(count, count);
+  const deep = directories[count - 2]!;
+  const firstPage = new Set(store.due(WORK_TICK, 32, true).map(owner => owner.directory));
+  const absent = Array.from({ length: 4 }, (_, index) => statePath("scratch", `llv-stage-absent${index}`));
+  const live = statePath("scratch", "llv-stage-live");
+  const clock = spyOn(Date, "now");
+  try {
+    for (const [index, directory] of absent.entries()) {
+      fs.mkdirSync(directory);
+      store.register({ directory, pipelineId: "young-lane", launchId: `absent-${index}`,
+        retainUntilClose: false, createdAt: WORK_TICK - 20 * 86400_000 });
+      fs.rmSync(directory, { recursive: true });
+    }
+    const pipeline = finishedLane(path.dirname(live), new Date(WORK_TICK - 3 * 86400_000).toISOString());
+    pipeline.state = "paused";
+    savePipelines([...loadPipelines(), { ...pipeline, ...pipelineIdentity("live-lane", pipeline.task, pipeline.repoDir), id: "live-lane" }]);
+    fs.mkdirSync(live);
+    store.register({ directory: live, pipelineId: "live-lane", launchId: "live-launch", retainUntilClose: true, createdAt: WORK_TICK - 1 });
+    store.retainRoot(live, WORK_TICK - 1);
+    fs.writeFileSync(path.join(live, "payload"), "live data");
+    fs.writeFileSync(path.join(deep, "payload"), Buffer.alloc(8 * 1024 ** 2, 1));
+    store.measure(deep, 0, 0);
+    // Recycled names still have due ledger entries. Their old identities must
+    // be refused cheaply while the scheduler walks past them.
+    const db = new Database(store.filename);
+    try {
+      const replace = db.query("UPDATE roots SET identity='fixture-replaced' WHERE directory=?");
+      db.transaction(() => {
+        for (const directory of directories) if (directory !== deep && !firstPage.has(directory)) replace.run(directory);
+      })();
+    } finally { db.close(); }
+
+    const seen = new Set<string>();
+    const maxTicks = Math.ceil((count + 1) / 32) + 1;
+    for (let i = 0; i < maxTicks && fs.existsSync(deep); i++) {
+      clock.mockReturnValue(WORK_TICK + i * 60_000);
+      const report = i === 1 ? await productionFixtureTick(Date.now()) : (await runAttemptTempSweep({ ...workPorts, references: (original, current, scan) => {
+        if (firstPage.has(original)) throw new AttemptTempBudgetDeferred("attempt protection inventory checkpointed; retry next tick");
+        return references(original, current, scan);
+      } }, workMode))!;
+      expect(report.pressure).toBeFalse();
+      expect(report.errors).toBe(0);
+      for (const row of report.outcomes) seen.add(row.directory);
+      if (i === 0) expect(store.allocationDue(WORK_TICK).map(owner => owner.directory)).toContain(deep);
+      if (i === 1) {
+        expect(report.checked).toBe(32);
+        expect(report.outcomes.some((row: { directory: string }) => firstPage.has(row.directory))).toBeFalse();
+        expect(store.owner(deep)?.bytes).toBeGreaterThanOrEqual(8 * 1024 ** 2);
+      }
+    }
+    expect(seen.size).toBeGreaterThanOrEqual(count);
+    expect(store.has(deep)).toBeFalse();
+    expect(fs.existsSync(deep)).toBeFalse();
+    expect(fs.readFileSync(path.join(live, "payload"), "utf8")).toBe("live data");
+    expect([...firstPage].every(directory => fs.existsSync(directory))).toBeTrue();
+  } finally { clock.mockRestore(); store.close(); }
+}, 180_000);
+
+test("registered live allocation is measured over cap and a pending quarantine keeps its bytes", async () => {
+  const { store } = workScratchFixture(0, 0);
+  const live = statePath("scratch", "llv-stage-allocation"), gone = statePath("scratch", "llv-stage-quarantine");
+  const clock = spyOn(Date, "now").mockReturnValue(WORK_TICK);
+  const payloadBytes = 2 * 1024 ** 2, quarantineBytes = 32 * 1024;
+  try {
+    const lane = finishedLane(path.dirname(live), new Date(WORK_TICK - 3 * 86400_000).toISOString());
+    lane.state = "running";
+    savePipelines([lane]);
+    for (const directory of [live, gone]) {
+      fs.mkdirSync(directory);
+      store.register({ directory, pipelineId: lane.id, launchId: path.basename(directory),
+        retainUntilClose: false, createdAt: WORK_TICK - 1 });
+    }
+    fs.writeFileSync(path.join(live, "payload"), Buffer.alloc(payloadBytes, 1));
+    store.measure(gone, quarantineBytes, 0);
+    const stat = fs.lstatSync(gone), identity = `${stat.dev}:${stat.ino}`;
+    const trash = statePath("scratch", ".delegatus-trash-llv-stage-quarantine-fixture");
+    fs.renameSync(gone, trash);
+    fs.writeFileSync(attemptTempJournalPath(gone), JSON.stringify({ directory: gone, trash, identity, uid: stat.uid, disposable: true }));
+    store.queueTrashIntent(gone, identity);
+    const report = await runAttemptTempSweep(workPorts, { ...workMode, LLV_ATTEMPT_TEMP_CAP_BYTES: String(payloadBytes / 2) });
+    // Production ticks report the allocation; the leased Cleaner pass owns
+    // pressure retirement under the current mainline scheduling contract.
+    expect(report).toMatchObject({ pressure: false, removed: 0 });
+    expect(report!.overCapBytes).toBeGreaterThan(0);
+    expect(report!.bytes).toBeGreaterThanOrEqual(payloadBytes + quarantineBytes);
+    expect(store.owner(live)?.bytes).toBeGreaterThanOrEqual(payloadBytes);
+    expect(store.owner(gone)?.bytes).toBe(quarantineBytes);
+    expect(fs.existsSync(trash)).toBeTrue();
+    expect(fs.statSync(path.join(live, "payload")).size).toBe(payloadBytes);
+  } finally { clock.mockRestore(); store.close(); }
+});
 
 test("work-shaped backlog visits beyond four and drains the 279 overdue registered roots", async () => {
   const { store, directories } = workScratchFixture(812, 279);
