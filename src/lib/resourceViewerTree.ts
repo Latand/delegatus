@@ -53,6 +53,16 @@ export function measureViewerTree(
   agentRoots: Iterable<number>,
   dependencies: ViewerTreeDependencies,
 ): ResourcesViewer | null {
+  const groups = viewerProcessGroups(agentRoots, dependencies);
+  return summarizeViewerTree(groups, dependencies.memory(groups.flatMap((group) => group.tree)), dependencies);
+}
+
+type ViewerProcessGroup = { pid: number; role: ResourcesViewerProcess["role"]; tree: number[] };
+
+function viewerProcessGroups(
+  agentRoots: Iterable<number>,
+  dependencies: Omit<ViewerTreeDependencies, "memory">,
+): ViewerProcessGroup[] {
   const agents = new Set(agentRoots);
   const isAgent = (pid: number) => agents.has(pid)
     || dependencies.hostStamp(pid) !== null
@@ -75,7 +85,7 @@ export function measureViewerTree(
     return tree;
   };
 
-  const groups: Array<{ pid: number; role: ResourcesViewerProcess["role"]; tree: number[] }> = [];
+  const groups: ViewerProcessGroup[] = [];
   const addRoot = (pid: number, role: "server" | "runtime-host") => {
     if (seen.has(pid)) return;
     seen.add(pid);
@@ -92,8 +102,14 @@ export function measureViewerTree(
   addRoot(dependencies.selfPid, "server");
   const runtimeHost = dependencies.runtimeHostPid();
   if (runtimeHost !== null) addRoot(runtimeHost, "runtime-host");
+  return groups;
+}
 
-  const memory = dependencies.memory(groups.flatMap((group) => group.tree));
+function summarizeViewerTree(
+  groups: ViewerProcessGroup[],
+  memory: ReadonlyMap<number, ProcessMemory>,
+  dependencies: Pick<ViewerTreeDependencies, "selfPid" | "argv" | "now">,
+): ResourcesViewer | null {
   if (!memory.has(dependencies.selfPid)) return null;
   const processes: ResourcesViewerProcess[] = [];
   for (const group of groups) {
@@ -205,6 +221,15 @@ export function defaultViewerTreeDependencies(): ViewerTreeDependencies {
   };
 }
 
+function viewerTreeRead(viewer: ResourcesViewer | null): ViewerTreeRead {
+  return viewer ? { viewer, unavailable: null } : { viewer: null, unavailable: "measurement-failed" };
+}
+
+function viewerTreeFailure(error: unknown): ViewerTreeRead {
+  console.error(`[resources] viewer process tree failed: ${error instanceof Error ? error.message : String(error)}`);
+  return viewerTreeRead(null);
+}
+
 export type ViewerTreeRead = { viewer: ResourcesViewer | null; unavailable: ResourcesViewerUnavailable | null };
 
 /** Never throws: a failed measurement leaves the section out and the rest of the payload whole.
@@ -221,10 +246,40 @@ export function readViewerTree(
 ): ViewerTreeRead {
   if (stateOwner(env) !== "viewer") return { viewer: null, unavailable: "not-the-viewer" };
   try {
-    const viewer = measureViewerTree(agentRoots, dependencies());
-    return viewer ? { viewer, unavailable: null } : { viewer: null, unavailable: "measurement-failed" };
+    return viewerTreeRead(measureViewerTree(agentRoots, dependencies()));
   } catch (error) {
-    console.error(`[resources] viewer process tree failed: ${error instanceof Error ? error.message : String(error)}`);
-    return { viewer: null, unavailable: "measurement-failed" };
+    return viewerTreeFailure(error);
+  }
+}
+
+/** Resources use the same async process snapshot as discovery on macOS and
+    Windows, including when reading the Viewer's own tree. */
+export async function readViewerTreeAsync(agentRoots: Iterable<number>): Promise<ViewerTreeRead> {
+  if (stateOwner() !== "viewer") return { viewer: null, unavailable: "not-the-viewer" };
+  const { resourcePpidMap, resourceListProcesses, resourceProcessMemory } = procBackend;
+  if (!resourcePpidMap || !resourceListProcesses || !resourceProcessMemory) return viewerTreeRead(null);
+  try {
+    const [ppids, entries] = await Promise.all([resourcePpidMap(), resourceListProcesses()]);
+    const children = new Map<number, number[]>();
+    for (const [pid, parent] of ppids) {
+      if (pid === parent) continue;
+      const list = children.get(parent);
+      if (list) list.push(pid);
+      else children.set(parent, [pid]);
+    }
+    const argv = new Map(entries.map((entry) => [entry.pid, entry.argv]));
+    const dependencies = {
+      selfPid: process.pid,
+      runtimeHostPid: () => runtimeHostPidFromFence(runtimeHostFence()),
+      children: (pid: number) => children.get(pid) ?? [],
+      argv: (pid: number) => argv.get(pid) ?? [],
+      hostStamp: readStructuredHostStamp,
+      now: Date.now,
+    };
+    const groups = viewerProcessGroups(agentRoots, dependencies);
+    const memory = await resourceProcessMemory(groups.flatMap((group) => group.tree));
+    return viewerTreeRead(summarizeViewerTree(groups, memory, dependencies));
+  } catch (error) {
+    return viewerTreeFailure(error);
   }
 }

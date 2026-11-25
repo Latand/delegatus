@@ -89,7 +89,8 @@ export interface ProcBackend {
   /** Async equivalents for resource collection, whose bounded reads must not
       block the Viewer event loop on cold OS probes. */
   resourceSystemMemory?(): Promise<SystemMemory | null>;
-  resourcePpidMap?(): Promise<Map<number, number>>;
+  resourceListProcesses?(): Promise<ProcSnapshotEntry[]>;
+  resourcePpidMap?(fresh?: boolean): Promise<Map<number, number>>;
   resourceProcessMemory?(pids: Iterable<number>): Promise<Map<number, ProcessMemory>>;
 
   /**

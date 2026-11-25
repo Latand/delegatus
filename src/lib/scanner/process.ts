@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
-import { procBackend } from "@/lib/proc";
+import { procBackend, type ProcSnapshotEntry } from "@/lib/proc";
 import { ROOTS } from "./roots";
 
 /* Outlives the client's 10 s /api/files poll so these memos survive a full
@@ -204,18 +204,28 @@ export function readEnvVar(pid: number, name: string): string | null {
   return procBackend.readEnvVar(pid, name);
 }
 
-/** All non-helper claude/codex processes currently alive, memoised briefly. */
-export function agentProcesses(fresh = false): AgentProcess[] {
-  const now = Date.now();
-  if (!fresh && agentMemo && now - agentMemo.at < HOLDERS_TTL_MS) return agentMemo.list;
-
+function selectAgentProcesses(processes: ProcSnapshotEntry[]): AgentProcess[] {
   const list: AgentProcess[] = [];
-  for (const proc of procBackend.listProcesses()) {
+  for (const proc of processes) {
     const engine = argvEngine(proc.argv);
     if (engine === null || isHelperArgv(proc.argv)) continue;
     if (proc.cwd === null) continue;
     list.push({ pid: proc.pid, engine, argv: proc.argv, cwd: proc.cwd, tty: proc.tty });
   }
+  return list;
+}
+
+/** All non-helper claude/codex processes currently alive, memoised briefly. */
+export function agentProcesses(fresh = false): AgentProcess[] {
+  const now = Date.now();
+  if (!fresh && agentMemo && now - agentMemo.at < HOLDERS_TTL_MS) return agentMemo.list;
+  const list = selectAgentProcesses(procBackend.listProcesses());
   agentMemo = { at: now, list };
   return list;
+}
+
+export async function resourceAgentProcesses(fresh: boolean): Promise<AgentProcess[]> {
+  return procBackend.resourceListProcesses
+    ? selectAgentProcesses(await procBackend.resourceListProcesses())
+    : agentProcesses(fresh);
 }
