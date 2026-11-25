@@ -1055,11 +1055,11 @@ describe("the rest of the surface", () => {
     expect(el.querySelector('[data-error="action"]')).toBeNull();
   });
 
-  /* The confirmation scrolls the phone layout to the Update card, below the
-     header, so the card's own actions (Update, Retry) draw their outcome in
-     that card there and in the header everywhere else. The dialog decides the
-     layout (`phone`), and the view draws exactly one copy for it. */
-  describe("an Update or Retry outcome is drawn where the dialog's layout looks", () => {
+  /* The confirmation scrolls the dialog to the Update card, which sits below
+     the header whenever the content stacks in one column, so the card's own
+     actions (Update, Retry) draw their outcome in that card at every size and
+     the header draws only the other actions'. */
+  describe("an Update or Retry outcome is drawn in the Update card", () => {
     const refusal = actionError(409, { code: "deployment-refused", detail: "red",
       green: { state: "red" as const, detail: "typecheck", checks: ["privacy-publication", "typecheck"] } });
     const updateOutcome = { error: refusal, optionalCheckFailures: ["Windows (native)"] };
@@ -1067,45 +1067,40 @@ describe("the rest of the surface", () => {
     const WARNED = "Optional CI checks failed for this update (Windows (native)).";
     const running = { ...idleUpdate(CHECKOUT_STEPS), state: "running" as const, trigger: "operator" as const, target: NEW, targetShort: NEW.slice(0, 7), targetVersion: "1.2.3", startedAt: new Date(NOW - 5_000).toISOString(), steps: steps(["running"]) };
     const failed = { ...idleUpdate(CHECKOUT_STEPS), state: "failed" as const, target: NEW, targetShort: NEW.slice(0, 7), steps: steps(["failed"]) };
+    const done = { ...idleUpdate(CHECKOUT_STEPS), state: "done" as const, trigger: "operator" as const, target: NEW, targetShort: NEW.slice(0, 7), targetVersion: "1.2.3", startedAt: new Date(NOW - 5_000).toISOString(), finishedAt: new Date(NOW).toISOString(), steps: steps(["done"]) };
     const states: [string, Snapshot][] = [
       ["nothing to update", snapshot()],
       ["an update to confirm", snapshot(available())],
       ["a running update", snapshot({ ...available(), busy: "update", update: running })],
+      ["a finished update", snapshot({ ...available(), update: done })],
       ["a failed update", snapshot({ ...available(), update: failed })],
     ];
     const outcomeLines = (root: Element | null) => [...(root?.querySelectorAll('[data-error="action"], [data-warning="optional-checks"]') ?? [])].map(text);
 
-    test.each(states)("%s: the phone layout draws it in the Update card, once", (_name, s) => {
-      const el = render(s, { phone: true, updateOutcome });
+    test.each(states)("%s: the card draws it once and the header draws none of it", (_name, s) => {
+      const el = render(s, { updateOutcome });
       expect(outcomeLines(section(el, "update"))).toEqual([REFUSED, WARNED]);
       expect(outcomeLines(section(el, "header"))).toEqual([]);
       expect(outcomeLines(el)).toHaveLength(2);
     });
 
-    test.each(states)("%s: every other layout draws it in the header, once", (_name, s) => {
-      const el = render(s, { phone: false, updateOutcome });
-      expect(outcomeLines(section(el, "header"))).toEqual([REFUSED, WARNED]);
-      expect(outcomeLines(section(el, "update"))).toEqual([]);
-      expect(outcomeLines(el)).toHaveLength(2);
-    });
-
-    test.each([true, false])("another action's outcome stays in the header beside the card's own (phone: %p)", (phone) => {
-      const el = render(snapshot(available()), { phone, updateOutcome, error: actionError(502, null) });
-      expect(outcomeLines(section(el, "update"))).toEqual(phone ? [REFUSED, WARNED] : []);
-      expect(outcomeLines(section(el, "header"))).toEqual(phone ? ["The request failed (HTTP 502)."] : ["The request failed (HTTP 502).", REFUSED, WARNED]);
+    test("another action's outcome stays in the header beside the card's own", () => {
+      const el = render(snapshot(available()), { updateOutcome, error: actionError(502, null) });
+      expect(outcomeLines(section(el, "update"))).toEqual([REFUSED, WARNED]);
+      expect(outcomeLines(section(el, "header"))).toEqual(["The request failed (HTTP 502)."]);
     });
 
     test("a refusal alone leaves no warning behind, and the reverse", () => {
-      let el = render(snapshot(available()), { phone: true, updateOutcome: { error: refusal } });
+      let el = render(snapshot(available()), { updateOutcome: { error: refusal } });
       expect(outcomeLines(section(el, "update"))).toEqual([REFUSED]);
       flushSync(() => root!.unmount());
-      el = render(snapshot(available()), { phone: true, updateOutcome: { error: null, optionalCheckFailures: ["Windows (native)"] } });
+      el = render(snapshot(available()), { updateOutcome: { error: null, optionalCheckFailures: ["Windows (native)"] } });
       expect(outcomeLines(section(el, "update"))).toEqual([WARNED]);
     });
 
     test("Ukrainian wording reaches the card", () => {
       setLocale("uk");
-      const el = render(snapshot(available()), { phone: true, updateOutcome });
+      const el = render(snapshot(available()), { updateOutcome });
       const card = section(el, "update")!;
       expect(text(card.querySelector('[data-error="action"]'))).toBe("Вибрана ревізія ще не має зеленого статусу CI (privacy-publication, typecheck).");
       expect(text(card.querySelector('[data-warning="optional-checks"]'))).toBe("Необов’язкові перевірки CI для цього оновлення не пройшли (Windows (native)).");
@@ -1128,35 +1123,32 @@ describe("the rest of the surface", () => {
       ["an unsupported layout with a start action", snapshot({ mode: "unsupported", unsupportedReason: "no-launcher", action: { id: "start-service", button: true, unit: "delegatus.service" } })],
     ];
 
-    test.each(states)("%s: the card draws it once, whatever the layout", (_name, s) => {
-      for (const phone of [true, false]) {
-        const el = render(s, { phone, installOutcome });
-        expect(outcomeLines(section(el, "install-action"))).toEqual([REFUSED, WARNED]);
-        expect(outcomeLines(section(el, "header"))).toEqual([]);
-        expect(outcomeLines(el)).toHaveLength(2);
-        flushSync(() => root!.unmount()); root = null; host?.remove();
-      }
+    test.each(states)("%s: the card draws it once", (_name, s) => {
+      const el = render(s, { installOutcome });
+      expect(outcomeLines(section(el, "install-action"))).toEqual([REFUSED, WARNED]);
+      expect(outcomeLines(section(el, "header"))).toEqual([]);
+      expect(outcomeLines(el)).toHaveLength(2);
     });
 
     test("the outcome heads the card, above the words and the button it answers", () => {
-      const card = section(render(snapshot({ ...available(), action }), { phone: true, installOutcome }), "install-action")!;
+      const card = section(render(snapshot({ ...available(), action }), { installOutcome }), "install-action")!;
       expect(card.firstElementChild?.getAttribute("data-error")).toBe("action");
       expect(card.querySelector('[data-action="install-action"]')).not.toBeNull();
     });
 
-    test.each([true, false])("the card's outcome and another action's stay apart (phone: %p)", (phone) => {
-      const el = render(snapshot({ ...available(), action }), { phone, installOutcome, error: actionError(502, null) });
+    test("the card's outcome and another action's stay apart", () => {
+      const el = render(snapshot({ ...available(), action }), { installOutcome, error: actionError(502, null) });
       expect(outcomeLines(section(el, "install-action"))).toEqual([REFUSED, WARNED]);
       expect(outcomeLines(section(el, "header"))).toEqual(["The request failed (HTTP 502)."]);
     });
 
     test("without an install outcome the card draws no outcome line", () => {
-      expect(outcomeLines(section(render(snapshot({ ...available(), action }), { phone: true, updateOutcome: { error: refusal } }), "install-action"))).toEqual([]);
+      expect(outcomeLines(section(render(snapshot({ ...available(), action }), { updateOutcome: { error: refusal } }), "install-action"))).toEqual([]);
     });
 
     test("Ukrainian wording reaches the card", () => {
       setLocale("uk");
-      const card = section(render(snapshot({ ...available(), action }), { phone: true, installOutcome }), "install-action")!;
+      const card = section(render(snapshot({ ...available(), action }), { installOutcome }), "install-action")!;
       expect(text(card.querySelector('[data-error="action"]'))).toBe("Вибрана ревізія ще не має зеленого статусу CI (privacy-publication, typecheck).");
       expect(text(card.querySelector('[data-warning="optional-checks"]'))).toBe("Необов’язкові перевірки CI для цього оновлення не пройшли (Windows (native)).");
     });

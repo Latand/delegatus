@@ -327,15 +327,16 @@ describe("the automatic-updates switch", () => {
 
 /* An answer is drawn where its own action's button is, however many actions
    the person started before it came back: the Update card's refusal belongs in
-   that card on the phone layout (portrait or landscape) and in the header on
-   the desktop, and Check now's answer always belongs in the header. */
+   that card at every window size, because the confirmation scrolls the dialog
+   to that card, and Check now's answer always belongs in the header. */
 describe("an action's answer lands with the action that asked", () => {
   const REFUSED = "The selected revision is not green (typecheck).";
   const CHECK_FAILED = "The request failed (HTTP 500).";
   const VIEWPORTS = [
-    ["a portrait phone", 390, 844, true],
-    ["a landscape phone", 844, 390, true],
-    ["a desktop", 1440, 900, false],
+    ["a portrait phone", 390, 844],
+    ["a landscape phone", 844, 390],
+    ["a short desktop window in one column", 800, 650],
+    ["a desktop", 1440, 900],
   ] as const;
 
   const held = () => {
@@ -363,7 +364,7 @@ describe("an action's answer lands with the action that asked", () => {
   afterAll(() => { delete (dom as unknown as { matchMedia?: unknown }).matchMedia; });
   afterEach(() => { viewport = { width: 1024, height: 768 }; });
 
-  for (const [name, width, height, phone] of VIEWPORTS) for (const order of ["update first", "check first"] as const) {
+  for (const [name, width, height] of VIEWPORTS) for (const order of ["update first", "check first"] as const) {
     test(`${name}: Update's refusal and Check now's failure keep their own places (${order})`, async () => {
       viewport = { width, height };
       const update = held();
@@ -386,20 +387,21 @@ describe("an action's answer lands with the action that asked", () => {
         : [() => check.release(json(500, {})), () => update.release(refusal())];
       for (const answer of answers) { await act(async () => { answer(); await new Promise((resolve) => setTimeout(resolve, 10)); }); }
 
-      expect(lines(where("update"))).toEqual(phone ? [REFUSED] : []);
-      expect(lines(where("header"))).toEqual(phone ? [CHECK_FAILED] : [CHECK_FAILED, REFUSED]);
+      expect(lines(where("update"))).toEqual([REFUSED]);
+      expect(lines(where("header"))).toEqual([CHECK_FAILED]);
       expect(lines(dom.document.body)).toHaveLength(2);
     });
   }
 });
 
-/* The install action (Restart launcher) has its own card above the header. Its
-   confirmation scrolls to that card and the card draws the answer, at every
-   layout, so the answer is where the person is looking. */
-describe("the install action's confirmation keeps its answer in its own card", () => {
+/* A confirmed action's answer is drawn in the card the confirmation scrolls
+   to, at every layout, and scrolled into the dialog's scroller once drawn, so
+   the answer is where the person is looking. The install action (Restart
+   launcher) has its own card above the header; Update has the Update card. */
+describe("a confirmed action keeps its answer in its own card and on screen", () => {
   const WARNED = "Optional CI checks failed for this update (Windows (native)).";
   const REFUSED = "The selected revision is not green (typecheck).";
-  const VIEWPORTS = [["a portrait phone", 390, 844], ["a landscape phone", 844, 390], ["a desktop", 1440, 900]] as const;
+  const VIEWPORTS = [["a portrait phone", 390, 844], ["a landscape phone", 844, 390], ["a short desktop window in one column", 800, 650], ["a desktop", 1440, 900]] as const;
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
   const needsRestart = (): Snapshot => ({ ...snapshot("ready"), action: { id: "restart-service", button: true, unit: "delegatus.service" } } as unknown as Snapshot);
   const lines = (scope: { querySelectorAll(selector: string): Iterable<{ textContent: string | null }> } | null) =>
@@ -417,7 +419,10 @@ describe("the install action's confirmation keeps its answer in its own card", (
       media: query, addEventListener() {}, removeEventListener() {},
     });
     originalScroll = proto.scrollIntoView;
-    proto.scrollIntoView = function (this: { getAttribute(name: string): string | null }) { scrolledTo.push(this.getAttribute("data-section")); };
+    /* A card is recorded by its section; an outcome line by the card that drew it. */
+    proto.scrollIntoView = function (this: { getAttribute(name: string): string | null; closest(selector: string): { getAttribute(name: string): string | null } | null }) {
+      scrolledTo.push(this.getAttribute("data-section") ?? `outcome:${this.closest("[data-section]")?.getAttribute("data-section")}`);
+    };
   });
   afterAll(() => {
     delete (dom as unknown as { matchMedia?: unknown }).matchMedia;
@@ -444,12 +449,47 @@ describe("the install action's confirmation keeps its answer in its own card", (
       await wait(30);
 
       expect(posts).toEqual(["/api/self-update/action"]);
-      expect(scrolledTo).toEqual(["install-action"]);
-      expect(lines(where("install-action"))).toEqual(expected);
+      /* The confirmation scrolls to the card; the answer then scrolls its own lines in. */
+      expect(scrolledTo).toEqual(["install-action", "outcome:install-action"]);
+      expect(lines(where("install-action"))).toEqual([...expected]);
       expect(lines(where("header"))).toEqual([]);
       expect(lines(dom.document.body)).toHaveLength(1);
     });
   }
+
+  /* The Update card's answer, at every size where the dialog scrolls. The
+     confirmation scrolls to the card before the answer exists, and the answer
+     adds lines under the button, so the lines are scrolled in once drawn. */
+  for (const [name, width, height] of VIEWPORTS) for (const [answer, response, expected] of [
+    ["admitted with a warning", () => json(202, { ...snapshot("ready"), optionalCheckFailures: ["Windows (native)"] }), [WARNED]],
+    ["refused for a red required check", () => json(409, { code: "deployment-refused", detail: "red", snapshot: snapshot("ready"),
+      green: { state: "red", detail: "typecheck", checks: ["typecheck"] } }), [REFUSED]],
+  ] as const) {
+    test(`${name}: the answer to a confirmed Update, ${answer}, is in the Update card and scrolled into view`, async () => {
+      viewport = { width, height };
+      globals.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST" ? response() : json(200, snapshot("ready"))) as typeof fetch;
+      await mount(<SelfUpdateDialog onClose={() => {}} />);
+      for (let tries = 0; tries < 40 && !dom.document.querySelector("[data-action='update']"); tries++) await wait(25);
+      await act(async () => { button(dom.document, "[data-action='update']").click(); });
+      await act(async () => { button(confirmDialog(), "[data-action='confirm-apply']").click(); });
+      await wait(30);
+
+      expect(scrolledTo).toEqual(["update", "outcome:update"]);
+      expect(lines(where("update"))).toEqual([...expected]);
+      expect(lines(where("header"))).toEqual([]);
+      expect(lines(dom.document.body)).toHaveLength(1);
+    });
+  }
+
+  test("an answer that carries no lines scrolls nothing beyond the card", async () => {
+    globals.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST" ? json(202, snapshot("ready")) : json(200, snapshot("ready"))) as typeof fetch;
+    await mount(<SelfUpdateDialog onClose={() => {}} />);
+    for (let tries = 0; tries < 40 && !dom.document.querySelector("[data-action='update']"); tries++) await wait(25);
+    await act(async () => { button(dom.document, "[data-action='update']").click(); });
+    await act(async () => { button(confirmDialog(), "[data-action='confirm-apply']").click(); });
+    await wait(30);
+    expect(scrolledTo).toEqual(["update"]);
+  });
 
   test("an Update confirmation still scrolls to the Update card", async () => {
     globals.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST" ? json(202, snapshot("ready")) : json(200, snapshot("ready"))) as typeof fetch;

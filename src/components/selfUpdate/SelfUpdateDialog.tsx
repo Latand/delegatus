@@ -41,6 +41,18 @@ function useClock(serverTime?: string): number {
   return now + calibration.offset;
 }
 
+/** Scrolls the outcome lines a card drew into the dialog's scroller by the
+    shortest move, so a card already in view travels no further than the
+    answer needs. */
+function showOutcome(panel: HTMLElement | null, section: "update" | "install-action") {
+  const lines = panel?.querySelectorAll(`[data-section="${section}"] [data-error="action"], [data-section="${section}"] [data-warning="optional-checks"]`);
+  if (!lines?.length) return;
+  const first = lines[0]!;
+  const last = lines[lines.length - 1]!;
+  first.scrollIntoView({ block: "nearest" });
+  if (last !== first) last.scrollIntoView({ block: "nearest" });
+}
+
 export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
@@ -143,6 +155,16 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     else if (action === "retry") void act("update", "/api/self-update/update", { key: newKey(), retry: true });
   };
 
+  /* The answer lands after the confirmation scrolled to its card, and it adds
+     lines under the button just pressed. Bring those lines into the scroller
+     too, so the whole answer is on screen wherever the dialog scrolls: the
+     card sits low in a single column (a phone, or a desktop window under two
+     columns) and the scroller is short in a landscape window. */
+  const updateOutcome = outcomes.update;
+  const installOutcome = outcomes["install-action"];
+  useEffect(() => { if (updateOutcome) showOutcome(panelRef.current, "update"); }, [updateOutcome]);
+  useEffect(() => { if (installOutcome) showOutcome(panelRef.current, "install-action"); }, [installOutcome]);
+
   const actions: ViewActions = {
     installAction: () => setConfirming("install-action"),
     /* The switch flips at once (audit B27) and stays pressable; one write is
@@ -191,7 +213,6 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     optionalCheckFailures: outcomes.header?.optionalCheckFailures,
     updateOutcome: outcomes.update,
     installOutcome: outcomes["install-action"],
-    phone: isMobile,
     waitingForWeb: webRestart !== null && (feed.offline || !web || web.pid === webRestart.pid),
     reloadTo: replaced ? (s?.serving.web?.short || s?.installed.short || null) : null,
   };

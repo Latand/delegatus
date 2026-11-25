@@ -5724,18 +5724,20 @@ describe("self-update confirmation modal", () => {
 
   /* A confirmed Update answered with a refusal (409 naming the required checks
      that failed) or admitted with a warning (202 naming the optional checks
-     that failed). The confirmation scrolls the phone layout to the Update card,
-     so the outcome has to be on the first screen there, once, without
-     scrolling: measured from its text rects against the dialog's own scroll
-     container at 390x844, 390x640 and the landscape 844x390 (the dialog's
-     phone query matches by height too), and at 1440x900 where the header shows
-     it. The install action's confirmation (Restart launcher, offered above the
-     header while a built revision waits for the older launcher) answers the
-     same two ways through the same admission, and its card, which it scrolls
-     to, shows the answer on every layout. A second action started while
-     Update's answer is out must not move it: Check now's failure stays in the
-     header and Update's refusal stays in the card, whichever answer comes
-     back first. */
+     that failed). The confirmation scrolls the dialog to the Update card, which
+     sits below the header whenever the content stacks in one column, so the
+     outcome is drawn in that card at every size and has to be whole on the
+     first screen, once, without scrolling: measured from its text rects
+     against the dialog's own scroll container at 390x844, 390x640, the
+     landscape 844x390 (the dialog's phone query matches by height too), the
+     800x650 desktop window (a scrolling dialog in one column, where the header
+     is off screen after the scroll) and 1440x900. The install action's
+     confirmation (Restart launcher, offered above the header while a built
+     revision waits for the older launcher) answers the same two ways through
+     the same admission, and its card, which it scrolls to, shows the answer on
+     every layout. A second action started while Update's answer is out must
+     not move it: Check now's failure stays in the header and Update's refusal
+     stays in the card, whichever answer comes back first. */
   browserTest("a confirmed Update's refusal and optional-check warning stay in view once, on phones and desktop, in both locales and themes", async () => {
     const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "self-update-action-outcome");
     fs.mkdirSync(out, { recursive: true });
@@ -5762,7 +5764,7 @@ describe("self-update confirmation modal", () => {
     const requiredRefusal = { code: "deployment-refused", detail: "red", green: { state: "red", detail: "typecheck", checks: ["privacy-publication", "typecheck"] }, snapshot: initial };
     const readings: Record<string, unknown>[] = [];
     try {
-      const sizes = [{ width: 390, height: 844 }, { width: 390, height: 640 }, { width: 844, height: 390 }, { width: 1440, height: 900 }];
+      const sizes = [{ width: 390, height: 844 }, { width: 390, height: 640 }, { width: 844, height: 390 }, { width: 800, height: 650 }, { width: 1440, height: 900 }];
       for (const lang of ["uk", "en"] as const) for (const { width, height } of sizes) for (const scheme of ["light", "dark"] as const) {
         /* The dialog's own decision, not a width: a landscape phone is a phone. */
         const phone = mobileLayoutViewport({ width, height });
@@ -5872,9 +5874,8 @@ describe("self-update confirmation modal", () => {
             expect(reading.inDom, `${name} is in the page once`).toBe(1);
             expect(reading.text, `${name} names the checks`).toContain(needle);
             expect(reading.whole, `${name} is whole inside the scroll container without scrolling: ${JSON.stringify(reading)}`).toBe(true);
-            /* The Update card's outcome is beside the button just pressed on the phone layout and in the header
-               elsewhere; the install action's is in its own card on every layout. */
-            const section = via === "install-action" ? "install-action" : phone ? "update" : "header";
+            /* Each action's outcome is in the card of the button just pressed, on every layout. */
+            const section = via === "install-action" ? "install-action" : "update";
             expect(reading.section, `${name} sits in the ${section} section`).toBe(section);
             await page.screenshot({ path: path.join(out, `${name}.png`) });
             readings.push({ lang, width, height, scheme, label, phone, ...reading, frame: `${name}.png` });
@@ -5911,7 +5912,7 @@ describe("self-update confirmation modal", () => {
             const failed = await read('[data-error="action"]', "500");
             expect(refused.copies, `${name}: Update's refusal is drawn once`).toBe(1);
             expect(refused.inDom, `${name}: Update's refusal is in the page once`).toBe(1);
-            expect(refused.section, `${name}: Update's refusal sits in the ${phone ? "Update card" : "header"}`).toBe(phone ? "update" : "header");
+            expect(refused.section, `${name}: Update's refusal sits in the Update card`).toBe("update");
             expect(refused.whole, `${name}: Update's refusal is whole on its card's first screen: ${JSON.stringify(refused)}`).toBe(true);
             expect(failed.copies, `${name}: Check now's failure is drawn once`).toBe(1);
             expect(failed.inDom, `${name}: Check now's failure is in the page once`).toBe(1);
@@ -5928,7 +5929,7 @@ describe("self-update confirmation modal", () => {
       }
       fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
     } finally { await browser.close(); server.stop(); }
-  }, 420_000);
+  }, 600_000);
 });
 
 /* The loading leaf draws its own header bar until the Board mounts and draws

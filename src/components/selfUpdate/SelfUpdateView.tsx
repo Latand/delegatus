@@ -55,18 +55,17 @@ export interface ViewState {
   error: ActionError | null;
   optionalCheckFailures?: readonly string[];
   /** The outcome of the Update card's own actions (Update, Retry), kept apart
-      from the other actions' so a late answer lands where its button is. */
+      from the other actions' so a late answer lands where its button is. The
+      Update card draws it on every layout: the confirmation scrolls the
+      dialog to that card, and the header sits above it, off screen wherever
+      the dialog scrolls (a phone, or a desktop window narrower than two
+      columns). */
   updateOutcome?: ActionOutcome;
   /** The outcome of the install action (Restart launcher and its kin). Its card
       draws it, on every layout, and the confirmation scrolls to that card: the
       card sits above the header, so the header is off screen after the scroll
       to the Update card, and in the unsupported layout it has no outcome line. */
   installOutcome?: ActionOutcome;
-  /** The dialog is in its phone layout (the viewport query that also makes it
-      a full screen, wide or tall). The confirmation scrolls that layout to the
-      Update card, which sits below the header, so the card shows its own
-      outcome there; every other layout shows it in the header. */
-  phone?: boolean;
   /** A web restart was asked for and nothing answers yet. */
   waitingForWeb: boolean;
   /** The web process answering now is not the one that served this page. */
@@ -249,7 +248,6 @@ function Header({ s, state, actions, t, locale }: { s: Snapshot; state: ViewStat
       </div>
       {s.check.state === "failed" && checkError ? <p data-error="check" className={ERROR_LINE}>{checkError}</p> : null}
       <OutcomeLines outcome={{ error: state.error, optionalCheckFailures: state.optionalCheckFailures }} t={t} />
-      {state.phone ? null : <OutcomeLines outcome={state.updateOutcome} t={t} />}
     </section>
   );
 }
@@ -257,13 +255,12 @@ function Header({ s, state, actions, t, locale }: { s: Snapshot; state: ViewStat
 const ERROR_LINE = "m-0 rounded-[8px] bg-danger-soft px-2 py-1.5 font-mono text-label text-danger [overflow-wrap:anywhere]";
 
 /** An action's outcome as lines: why it was refused, then the optional CI
-    checks that failed for an update the server admitted. The header draws it,
-    except the Update card's own on the phone layout, which that card draws
-    (`UpdateOutcome`), because the confirmation leaves the scroller at the
-    card and the header sits above it, and the install action's, which its
-    card draws on every layout. The choice is made here from the dialog's own
-    phone decision and not by the stylesheet, so each layout draws one copy at
-    every size. */
+    checks that failed for an update the server admitted. Each outcome is drawn
+    in the card of the action that produced it, which is the card the
+    confirmation scrolls to: the Update card for Update and Retry, the install
+    action's card for its own action. The header draws the other actions'
+    (Check now, the restarts, the auto switch). The action picks the one place
+    at every size. */
 function OutcomeLines({ outcome, t }: { outcome: ActionOutcome | undefined; t: TFunction }) {
   if (!outcome) return null;
   return <>
@@ -274,9 +271,9 @@ function OutcomeLines({ outcome, t }: { outcome: ActionOutcome | undefined; t: T
   </>;
 }
 
-/** The Update card's own outcome, drawn in the card on the phone layout. */
+/** The Update card's own outcome, drawn in the card on every layout. */
 function UpdateOutcome({ state, t }: { state: ViewState; t: TFunction }) {
-  return state.phone ? <OutcomeLines outcome={state.updateOutcome} t={t} /> : null;
+  return <OutcomeLines outcome={state.updateOutcome} t={t} />;
 }
 
 function StepRow({ step, short, state, actions, t, managed }: { step: Step; short: string; state: ViewState; actions: ViewActions; t: TFunction; managed: boolean }) {
