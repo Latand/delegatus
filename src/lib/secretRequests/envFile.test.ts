@@ -58,6 +58,26 @@ test("Bun reads every fixture value back byte-for-byte from the resulting line",
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("editing a key preserves a quoted multiline dotted assignment containing its own key-like line", async () => {
+  const original = Buffer.from('SERVICE.URL="first line\nENTRY=inside\nlast line"\n');
+  const composed = composeEnvFile(original, "ENTRY", Buffer.from("saved value"));
+  expect(composed.subarray(0, original.length)).toEqual(original);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "secret-dotenv-dotted-"));
+  try {
+    const filename = path.join(root, ".env");
+    fs.writeFileSync(filename, composed);
+    const env = { ...process.env };
+    delete env.ENTRY;
+    delete env["SERVICE.URL"];
+    const child = Bun.spawn([process.execPath, "--env-file", filename, "-e",
+      "process.stdout.write(JSON.stringify([process.env['SERVICE.URL'], process.env.ENTRY]))"],
+    { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+    const [output, exit] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+    expect(exit).toBe(0);
+    expect(JSON.parse(output)).toEqual(["first line\nENTRY=inside\nlast line", "saved value"]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test("refuses bytes that cannot be quoted consistently and checks byte length and format", () => {
   for (const value of ["quote'", "back\\slash", "has\$dollar", "has\nLF", "has\rCR"]) {
     expect(() => compose("", Buffer.from(value))).toThrow("secret_env_value_unquotable");

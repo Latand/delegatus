@@ -109,6 +109,16 @@ export class SecretParentDirectory {
     }
   }
 
+  async renameTo(from: string, target: SecretParentDirectory, to: string) {
+    if (darwinCalls) {
+      if (darwinCalls.symbols.renameat(this.handle.fd, cName(from), target.handle.fd, cName(to)) !== 0) {
+        throw new SecretRequestError("secret_destination_unavailable");
+      }
+      return;
+    }
+    await fs.rename(this.entry(from), target.entry(to));
+  }
+
   async unlink(name: string) {
     if (!darwinCalls) return fs.unlink(this.entry(name));
     if (darwinCalls.symbols.unlinkat(this.handle.fd, cName(name), 0) !== 0) {

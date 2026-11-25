@@ -4,6 +4,7 @@ export type SecretDestination =
 
 export type ResolvedSecretDestination = {
   path: string;
+  authorizedRoot: { path: string; identity: FileIdentity };
   git: "outside-repository" | "ignored";
   previous?: { size: number; modifiedAt: number };
 } & (
@@ -72,6 +73,6 @@ export interface SecretRequest {
 
 export type SecretRequestRecord = SecretRequest & (
   | { state: "pending" | "cancelled" | "expired" }
-  | { state: "writing"; write: { id: string; length: number; parent: FileIdentity; temporary?: FileIdentity } }
+  | { state: "writing"; write: { id: string; length: number; parent: FileIdentity; stagingPath: string; stagingParent: FileIdentity; temporary?: FileIdentity } }
   | { state: "entered"; enteredAt: number; length: number; file: FileIdentity }
 );

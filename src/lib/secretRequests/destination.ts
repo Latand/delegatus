@@ -61,9 +61,13 @@ async function rootsAt(paths: string[], homes: string[]) {
   const roots = await Promise.all([...new Set(paths)].filter(root => path.isAbsolute(root)).map(async raw => {
     const lexical = path.resolve(raw);
     if (!safeRoot(lexical, homes)) return null;
+    const named = await lstatIfPresent(lexical).catch(() => null);
+    if (!named?.isDirectory() || named.isSymbolicLink()) return null;
     const real = await fs.realpath(lexical).catch(() => null);
     if (!real || !safeRoot(real, homes)) return null;
-    return { lexical, real };
+    const stats = await stat(real).catch(() => null);
+    if (!stats?.isDirectory()) return null;
+    return { lexical, real, identity: fileIdentity(stats) };
   }));
   return roots.filter(root => root !== null);
 }
@@ -122,10 +126,27 @@ export async function gitStatus(parent: string, name: string): Promise<ResolvedS
   return "ignored";
 }
 
+export async function secretStagingDirectory(destination: ResolvedSecretDestination, parent: string): Promise<string> {
+  if (destination.git === "outside-repository") {
+    return path.join(destination.authorizedRoot.path, ".delegatus-secret-staging");
+  }
+  const env: Partial<NodeJS.ProcessEnv> = {
+    LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_OPTIONAL_LOCKS: "0",
+  };
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("GIT_") && !(key in env)) env[key] = undefined;
+  }
+  const result = await realExec("git", ["-c", "core.fsmonitor=false", "rev-parse", "--absolute-git-dir"], parent,
+    env, { timeoutMs: 15_000, maxOutputBytes: 4096 });
+  const directory = result.stdout.trim();
+  if (result.code !== 0 || !path.isAbsolute(directory)) throw new SecretRequestError("secret_destination_unavailable");
+  return path.join(await fs.realpath(directory), "delegatus-secret-staging");
+}
+
 export function destinationRevision(destination: ResolvedSecretDestination): string {
   return createHash("sha256").update(JSON.stringify([
     destination.path, destination.kind, destination.kind === "env" ? destination.key : null,
-    destination.effect, destination.git,
+    destination.effect, destination.git, destination.authorizedRoot,
   ])).digest("hex");
 }
 
@@ -153,7 +174,8 @@ export async function readExistingEnv(filename: string, expected: FileStats): Pr
   }
 }
 
-export async function inspectDestination(project: string, target: SecretDestination) {
+export async function inspectDestination(project: string, target: SecretDestination,
+  authorizedRoot?: ResolvedSecretDestination["authorizedRoot"]) {
   try {
     if (process.platform !== "linux" && process.platform !== "darwin") throw new SecretRequestError("secret_platform_unsupported");
     checkName(target.path);
@@ -161,8 +183,13 @@ export async function inspectDestination(project: string, target: SecretDestinat
     if (!path.isAbsolute(written)) throw new SecretRequestError("secret_destination_outside_roots");
     const filename = path.resolve(written);
     const roots = await allowedRoots(project);
-    if (!roots.some(root => filename !== root.lexical && underRoot(filename, root.lexical))) {
+    const lexicalRoots = roots.filter(root => filename !== root.lexical && underRoot(filename, root.lexical));
+    if (!lexicalRoots.length) {
       throw new SecretRequestError("secret_destination_outside_roots");
+    }
+    if (authorizedRoot && !lexicalRoots.some(root => root.real === authorizedRoot.path
+      && root.identity.device === authorizedRoot.identity.device && root.identity.inode === authorizedRoot.identity.inode)) {
+      throw new SecretRequestError("secret_destination_changed");
     }
     checkPrivate(filename);
     const name = path.basename(filename);
@@ -183,7 +210,10 @@ export async function inspectDestination(project: string, target: SecretDestinat
     }
     const real = path.join(realParent, name);
     checkName(real);
-    if (!roots.some(root => real !== root.real && underRoot(real, root.real))) throw new SecretRequestError("secret_destination_link");
+    const matchingRoot = lexicalRoots.find(root => real !== root.real && underRoot(real, root.real)
+      && (!authorizedRoot || (root.real === authorizedRoot.path
+        && root.identity.device === authorizedRoot.identity.device && root.identity.inode === authorizedRoot.identity.inode)));
+    if (!matchingRoot) throw new SecretRequestError("secret_destination_link");
     checkPrivate(real);
     const parent = await stat(realParent);
     if (!parent.isDirectory()) throw new SecretRequestError("secret_parent_missing");
@@ -197,7 +227,7 @@ export async function inspectDestination(project: string, target: SecretDestinat
 
     const git = await gitStatus(realParent, name);
     const previous = existing ? { size: Number(existing.size), modifiedAt: Number(existing.mtimeMs) } : undefined;
-    const base = { path: real, git, ...(previous && { previous }) };
+    const base = { path: real, git, authorizedRoot: { path: matchingRoot.real, identity: matchingRoot.identity }, ...(previous && { previous }) };
     let destination: ResolvedSecretDestination;
     if (target.kind === "env") {
       const bytes = existing ? await readExistingEnv(real, existing) : Buffer.alloc(0);
@@ -209,6 +239,12 @@ export async function inspectDestination(project: string, target: SecretDestinat
     }
     if (!(await fs.realpath(parentPath) === realParent) || !sameInode(await stat(realParent), fileIdentity(parent))
       || !sameEntry(await lstatIfPresent(real), existing)) {
+      throw new SecretRequestError("secret_destination_changed");
+    }
+    const currentRoot = await lstatIfPresent(matchingRoot.lexical);
+    if (!currentRoot?.isDirectory() || currentRoot.isSymbolicLink()
+      || !sameInode(currentRoot, matchingRoot.identity)
+      || await fs.realpath(matchingRoot.lexical) !== matchingRoot.real) {
       throw new SecretRequestError("secret_destination_changed");
     }
     return { destination, parent: fileIdentity(parent), existing };

@@ -89,6 +89,20 @@ test("resolves parent links inside the roots and refuses escaping or final links
   expect((await file(path.join(folder, "inside", "entry"))).destination.path).toBe(path.join(nested, "entry"));
 });
 
+test("a recorded project root cannot be redirected into another registered project", async () => {
+  const entry = path.join(folder, "recorded-entry");
+  const initial = await resolveSecretDestination(project, { kind: "file", path: entry });
+  const moved = path.join(root, "project-moved");
+  fs.renameSync(folder, moved);
+  fs.symlinkSync(other, folder, "dir");
+  await expect(resolveSecretDestination(project, { kind: "file", path: entry }))
+    .rejects.toMatchObject({ code: "secret_destination_outside_roots" });
+  expect(initial.destination.authorizedRoot).toEqual({
+    path: folder,
+    identity: { device: String(fs.statSync(moved).dev), inode: String(fs.statSync(moved).ino) },
+  });
+});
+
 test("vetoes private areas even beneath admitted roots and refuses unsafe names", async () => {
   process.env.LLV_SECRET_ROOTS = other;
   const fenced = path.join(folder, "fenced");

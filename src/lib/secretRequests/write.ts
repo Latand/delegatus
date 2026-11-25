@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { isStagingMode } from "@/lib/staging";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
-import { confirmPlace, destinationRevision, fsCode, gitStatus, inspectDestination, readExistingEnv, sameEntry, sameInode } from "./destination";
+import { confirmPlace, destinationRevision, fsCode, gitStatus, inspectDestination, readExistingEnv, sameEntry, sameInode, secretStagingDirectory } from "./destination";
 import { composeEnvFile } from "./envFile";
 import { SecretParentDirectory } from "./parentDirectory";
 import { auditTransition, entryRefusals, findSecretRequestRecord, transition, updateSecretRequest, writingSecretRequests } from "./store";
@@ -35,7 +36,26 @@ function destinationLockName(filename: string) {
 }
 
 function temporaryName(record: Writing): string {
-  return `${path.basename(record.destination.path)}.${record.write.id}.tmp`;
+  return `.delegatus-secret-${record.write.id}.tmp`;
+}
+
+async function openStagingDirectory(filename: string, expected?: FileIdentity) {
+  await fs.mkdir(filename, { recursive: true, mode: 0o700 });
+  const stats = await fs.lstat(filename, { bigint: true });
+  const identity = { device: String(stats.dev), inode: String(stats.ino) };
+  if (!stats.isDirectory() || Number(stats.uid) !== process.geteuid?.()
+    || (stats.mode & BigInt(0o777)) !== BigInt(0o700)
+    || (expected && (identity.device !== expected.device || identity.inode !== expected.inode))) {
+    throw new SecretRequestError("secret_destination_changed");
+  }
+  const directory = await SecretParentDirectory.open(filename, identity);
+  await directory.handle.chmod(0o700);
+  const opened = await directory.handle.stat({ bigint: true });
+  if ((opened.mode & BigInt(0o777)) !== BigInt(0o700) || !sameInode(opened, identity)) {
+    await directory.handle.close();
+    throw new SecretRequestError("secret_destination_changed");
+  }
+  return { directory, identity };
 }
 
 function isPrivateFile(stats: Awaited<ReturnType<SecretParentDirectory["stat"]>>): stats is NonNullable<typeof stats> {
@@ -70,29 +90,33 @@ async function interrupt(record: Writing, code: SecretRefusal, actor: SecretActo
 
 async function recoverLocked(record: Writing, now: number, refusal?: SecretRefusal): Promise<SecretRequestRecord> {
   const filename = record.destination.path;
-  const dir = await SecretParentDirectory.open(path.dirname(filename), record.write.parent);
+  const dir = await SecretParentDirectory.open(path.dirname(filename), record.write.parent).catch(() => null);
+  const staged = await openStagingDirectory(record.write.stagingPath, record.write.stagingParent);
   try {
     const name = path.basename(filename);
-    const found = await dir.stat(name);
+    const found = dir ? await dir.stat(name) : null;
     const temporary = record.write.temporary;
     if (found && temporary && sameInode(found, temporary)) {
       if (!isPrivateFile(found)) throw new SecretRequestError("secret_destination_changed");
-      await dir.handle.sync();
-      await dir.confirm();
+      await dir!.handle.sync();
+      await dir!.confirm();
       return await finish(record, temporary, "recovery", now);
     }
-    const leftover = await dir.temporaryStat(temporaryName(record));
+    const leftover = await staged.directory.temporaryStat(temporaryName(record));
     if (leftover) {
       // A crash before the inode checkpoint can leave only an empty file.
       // Never delete a mismatched or linked entry while replaying the journal.
-      if (!isPrivateFile(leftover) || (temporary ? !sameInode(leftover, temporary) : leftover.size !== BigInt(0))) {
+      if (temporary ? (!isPrivateFile(leftover) || !sameInode(leftover, temporary))
+        : (!leftover.isFile() || Number(leftover.uid) !== process.geteuid?.() || leftover.nlink !== BigInt(1)
+          || leftover.size !== BigInt(0))) {
         throw new SecretRequestError("secret_destination_changed");
       }
-      await dir.unlink(temporaryName(record));
-      await dir.handle.sync();
+      await staged.directory.unlink(temporaryName(record));
+      await staged.directory.handle.sync();
     }
+    if (!dir && !leftover) throw new SecretRequestError("secret_destination_changed");
     return await interrupt(record, refusal ?? "secret_entry_interrupted", refusal ? "operator" : "recovery", now);
-  } finally { await dir.handle.close(); }
+  } finally { await dir?.handle.close(); await staged.directory.handle.close(); }
 }
 
 export async function readSecretRequest(id: string, now = Date.now()): Promise<SecretRequestRecord | null> {
@@ -172,13 +196,14 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
       let writing: Writing | undefined;
       let dir: SecretParentDirectory | undefined;
       let handle: Awaited<ReturnType<SecretParentDirectory["create"]>> | undefined;
+      let staged: Awaited<ReturnType<typeof openStagingDirectory>> | undefined;
       let temporary: FileIdentity | undefined;
       let content: Buffer | undefined;
       let renameAttempted = false;
       let refreshed = false;
       try {
         const length = secretLength(value, record.format, record.minLength);
-        const inspected = await inspectDestination(record.project, record.target).catch(error => {
+        const inspected = await inspectDestination(record.project, record.target, record.destination.authorizedRoot).catch(error => {
           if (error instanceof SecretRequestError && ["secret_destination_exists", "secret_env_key_duplicated"].includes(error.code)) {
             throw new SecretRequestError("secret_destination_changed");
           }
@@ -202,6 +227,11 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
 
         const parentPath = path.dirname(destination.path);
         dir = await SecretParentDirectory.open(parentPath, parent);
+        const stagingPath = await secretStagingDirectory(destination, parentPath);
+        staged = await openStagingDirectory(stagingPath);
+        if ((await staged.directory.handle.stat({ bigint: true })).dev !== (await dir.handle.stat({ bigint: true })).dev) {
+          throw new SecretRequestError("secret_destination_unavailable");
+        }
         if (record.target.kind === "env") {
           const old = existing ? await readExistingEnv(destination.path, existing) : Buffer.alloc(0);
           try { content = composeEnvFile(old, record.target.key, value); }
@@ -217,7 +247,8 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
           const at = now();
           if (current.expiresAt <= at) throw new SecretRequestError("secret_expired");
           return {
-            ...current, destination, state: "writing", write: { id: randomBytes(16).toString("hex"), parent, length },
+            ...current, destination, state: "writing", write: { id: randomBytes(16).toString("hex"), parent, length,
+              stagingPath, stagingParent: staged!.identity },
             transitions: transition(current, "writing", "operator", at),
           };
         });
@@ -225,11 +256,11 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
         await checkpoint?.("writing");
 
         const tmp = temporaryName(writing);
-        handle = await dir.create(tmp, identity => { temporary = identity; });
+        handle = await staged.directory.create(tmp, identity => { temporary = identity; });
+        await checkpoint?.("created");
         await handle.chmod(0o600);
         const inode = temporary!;
         if (!sameInode(await handle.stat({ bigint: true }), inode)) throw new SecretRequestError("secret_destination_changed");
-        await checkpoint?.("created");
         // Durably bind ownership before the temporary can contain any bytes.
         const writeId = writing.write.id;
         writing = await updateSecretRequest(id, current => {
@@ -237,8 +268,8 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
           return { ...current, write: { ...current.write, temporary: inode } };
         });
         await checkpoint?.("journaled");
-        await dir.confirm();
-        await confirmPlace(handle, path.join(parentPath, tmp));
+        await staged.directory.confirm();
+        await confirmPlace(handle, path.join(stagingPath, tmp));
         await handle.writeFile(content ?? value);
         await checkpoint?.("written");
         await handle.sync();
@@ -248,14 +279,15 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
         await checkpoint?.("before-rename");
         if (await gitStatus(parentPath, name) !== destination.git) throw new SecretRequestError("secret_destination_changed");
         await dir.confirm();
-        const owned = await dir.temporaryStat(tmp);
+        const owned = await staged.directory.temporaryStat(tmp);
         if (!isPrivateFile(owned) || !sameInode(owned, inode) || !sameEntry(await dir.stat(name), existing)) {
           throw new SecretRequestError("secret_destination_changed");
         }
         renameAttempted = true;
-        await dir.rename(tmp, name);
+        await staged.directory.renameTo(tmp, dir, name);
         await checkpoint?.("renamed");
         await dir.handle.sync();
+        await staged.directory.handle.sync();
         await checkpoint?.("directory-synced");
         await dir.confirm();
         const installed = await dir.stat(name);
@@ -273,13 +305,13 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
         } else if (writing && dir) {
           const tmp = temporaryName(writing);
           if (temporary) {
-            const stat = await dir.temporaryStat(tmp);
+            const stat = await staged?.directory.temporaryStat(tmp);
             if (stat && !sameInode(stat, temporary)) throw new SecretRequestError("secret_destination_changed");
             if (stat) {
-              await dir.unlink(tmp);
-              await dir.handle.sync();
+              await staged!.directory.unlink(tmp);
+              await staged!.directory.handle.sync();
             }
-          } else if (await dir.temporaryStat(tmp)) {
+          } else if (await staged?.directory.temporaryStat(tmp)) {
             // A failed create can be ambiguous. Let recovery check the name
             // and its ownership before any later request reuses the path.
             throw refusal;
@@ -293,6 +325,7 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
       } finally {
         content?.fill(0);
         await handle?.close().catch(() => {});
+        await staged?.directory.handle.close().catch(() => {});
         await dir?.handle.close().catch(() => {});
       }
     });

@@ -17,6 +17,10 @@ function keyByte(byte: number): boolean {
   return byte === 95 || (byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122);
 }
 
+function existingNameByte(byte: number): boolean {
+  return keyByte(byte) || byte === 45 || byte === 46;
+}
+
 function lineEnd(bytes: Buffer, from: number): number {
   const lf = bytes.indexOf(10, from);
   return lf === -1 ? bytes.length : lf;
@@ -40,7 +44,7 @@ export function scanEnvFile(bytes: Buffer, key: string): EnvScan {
       while (horizontal(bytes[cursor])) cursor++;
     }
     const nameFrom = cursor;
-    while (keyByte(bytes[cursor])) cursor++;
+    while (existingNameByte(bytes[cursor])) cursor++;
     const nameTo = cursor;
     while (horizontal(bytes[cursor])) cursor++;
     if (nameTo === nameFrom || bytes[cursor] !== 61) {

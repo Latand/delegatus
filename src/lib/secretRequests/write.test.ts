@@ -104,7 +104,7 @@ test("writes an env entry with no canary in records, refusals, exceptions, logs 
     expect(await readSecretRequest(request.id, NOW)).toMatchObject({
       state: "pending", refusals: [{ at: NOW, code: "secret_destination_unavailable" }],
     });
-    expect(fs.readdirSync(project)).toEqual([".env"]);
+    expect(fs.readdirSync(project).sort()).toEqual([".delegatus-secret-staging", ".env"]);
     expect(fs.readFileSync(filename, "utf8")).toBe("OTHER=untouched\nexport ENTRY=old\n");
     const value = Buffer.from(canary);
     const receipt = await writeSecretRequest(request.id, request.destinationRevision, value, fixedClock);
@@ -132,7 +132,7 @@ test("refuses stale, expired and concurrently edited destinations", async () => 
     },
   })).rejects.toMatchObject({ code: "secret_destination_changed" });
   expect(fs.readFileSync(filename, "utf8")).toBe("ENTRY=changed in parallel\n");
-  expect(fs.readdirSync(project)).toEqual([".env"]);
+  expect(fs.readdirSync(project).sort()).toEqual([".delegatus-secret-staging", ".env"]);
   await expect(write(request.destinationRevision, { now: () => request.expiresAt })).rejects.toMatchObject({ code: "secret_expired" });
   expect(await readSecretRequest(request.id, NOW)).toMatchObject({ state: "expired" });
 });
@@ -204,7 +204,10 @@ async function crashAt(request: Awaited<ReturnType<typeof create>>, step: WriteC
     const { FIXTURE_ID, FIXTURE_REVISION, FIXTURE_STEP, FIXTURE_NOW } = process.env;
     await writeSecretRequest(FIXTURE_ID, FIXTURE_REVISION, Buffer.from("new fixture"), {
       now: () => Number(FIXTURE_NOW),
-      checkpoint(step) { if (step === FIXTURE_STEP) process.kill(process.pid, "SIGKILL"); },
+      checkpoint(step) {
+        if (step === "writing" && FIXTURE_STEP === "created") process.umask(0o777);
+        if (step === FIXTURE_STEP) process.kill(process.pid, "SIGKILL");
+      },
     });
   `], {
     env: { ...process.env, FIXTURE_ID: request.id, FIXTURE_REVISION: request.destinationRevision, FIXTURE_STEP: step, FIXTURE_NOW: String(NOW) },
@@ -229,9 +232,64 @@ for (const step of crashSteps) test(`recovers after process loss at ${step}`, as
   expect(recovered?.state).toBe(installed ? "entered" : "pending");
   if (!installed) expect(recovered?.refusals.at(-1)?.code).toBe("secret_entry_interrupted");
   if (installed) expect(fs.statSync(filename).mode & 0o777).toBe(0o600);
-  expect(fs.readdirSync(project)).toEqual([".env"]);
+  expect(fs.readdirSync(project).sort()).toEqual([".delegatus-secret-staging", ".env"]);
   expect(await readSecretRequest(request.id, NOW)).toEqual(recovered);
 }, 15_000);
+
+test("recovers a synced temporary when its parent moved and its old name was recreated", async () => {
+  const parent = path.join(project, "parent");
+  const moved = path.join(project, "moved-parent");
+  fs.mkdirSync(parent);
+  const filename = path.join(parent, "entry");
+  fs.writeFileSync(filename, "old bytes\n");
+  const request = await create({ kind: "file", path: filename, replace: true });
+  await crashAt(request, "file-synced");
+  fs.renameSync(parent, moved);
+  fs.mkdirSync(parent);
+  expect(fs.readdirSync(moved)).toEqual(["entry"]);
+  const recovered = await readSecretRequest(request.id, NOW);
+  expect(recovered).toMatchObject({ state: "pending", refusals: [{ code: "secret_entry_interrupted" }] });
+  expect(fs.readFileSync(path.join(moved, "entry"), "utf8")).toBe("old bytes\n");
+  expect(fs.readdirSync(parent)).toEqual([]);
+  expect(await readSecretRequest(request.id, NOW)).toEqual(recovered);
+  await expect(writeSecretRequest(request.id, request.destinationRevision, Buffer.from("retry"), fixedClock))
+    .rejects.toMatchObject({ code: "secret_destination_changed" });
+  const refreshed = await readSecretRequest(request.id, NOW);
+  expect(refreshed?.destinationRevision).not.toBe(request.destinationRevision);
+  await writeSecretRequest(request.id, refreshed!.destinationRevision, Buffer.from("retry"), fixedClock);
+  expect(fs.readFileSync(path.join(parent, "entry"), "utf8")).toBe("retry\n");
+});
+
+test("keeps Git untracked and unignored listings clear during and after an interrupted write", async () => {
+  const runGit = (...args: string[]) => {
+    const result = Bun.spawnSync(["git", ...args], { cwd: project, stdout: "pipe", stderr: "pipe" });
+    if (result.exitCode !== 0) throw new Error("fixture Git command failed");
+    return result.stdout.toString();
+  };
+  runGit("init");
+  fs.writeFileSync(path.join(project, ".gitignore"), "credential.bin\n");
+  runGit("add", ".gitignore");
+  const filename = path.join(project, "credential.bin");
+  const request = await create({ kind: "file", path: filename });
+  await crashAt(request, "file-synced");
+  expect(runGit("ls-files", "--others", "--exclude-standard").trim()).toBe("");
+  expect(await readSecretRequest(request.id, NOW)).toMatchObject({ state: "pending" });
+  expect(runGit("ls-files", "--others", "--exclude-standard").trim()).toBe("");
+});
+
+test("uses a bounded staging name for long basenames and settles pre-create failures", async () => {
+  const longName = "x".repeat(220);
+  const filename = path.join(project, longName);
+  const request = await create({ kind: "file", path: filename });
+  await expect(writeSecretRequest(request.id, request.destinationRevision, Buffer.from("ok"), fixedClock))
+    .resolves.toMatchObject({ state: "entered" });
+  expect(fs.readFileSync(filename, "utf8")).toBe("ok\n");
+  const retry = await create({ kind: "file", path: path.join(project, "pre-create") }, "pre-create");
+  await expect(writeSecretRequest(retry.id, retry.destinationRevision, Buffer.from("value"), {
+    ...fixedClock, checkpoint(step) { if (step === "writing") throw new Error("stop before create"); },
+  })).rejects.toMatchObject({ code: "secret_destination_unavailable" });
+  expect(await readSecretRequest(retry.id, NOW)).toMatchObject({ state: "pending" });
+});
 
 test("a later writer recovers a committed inode before replacing the same path", async () => {
   const filename = path.join(project, "entry");
@@ -259,6 +317,6 @@ test.skipIf(process.platform !== "linux")("settles an installed inode even if th
       .rejects.toMatchObject({ code: "secret_destination_unavailable" });
     expect(await readSecretRequest(request.id, NOW)).toMatchObject({ state: "entered" });
     expect(fs.readFileSync(filename, "utf8")).toBe("fixture\n");
-    expect(fs.readdirSync(project)).toEqual(["entry"]);
+    expect(fs.readdirSync(project).sort()).toEqual([".delegatus-secret-staging", "entry"]);
   } finally { interrupted.mockRestore(); }
 });
