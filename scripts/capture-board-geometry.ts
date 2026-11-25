@@ -5969,8 +5969,34 @@ async function limitsChartMain(): Promise<void> {
         must(open.known === account.known && open.estimated === account.estimated, `${tag}: ${open.known} solid and ${open.estimated} dashed spans, expected ${account.known} and ${account.estimated}`);
         must(!/No history yet|Історії ще немає/.test(open.text), `${tag}: the dialog says there is no history`);
         must(Boolean(open.readout), `${tag}: no readout`);
-        must(open.keys.actual !== null && open.keys.actual.dash === null, `${tag}: the remaining key is not a solid line`);
-        must(open.keys.ideal?.dash === "4 3", `${tag}: the even-pace key reads ${JSON.stringify(open.keys.ideal)}, not the chart's 4 3 dash`);
+        /* The legend keys only the lines the chart draws: the remaining key needs a solid reading, the even-pace key a known window. */
+        must(account.known > 0 ? open.keys.actual !== null && open.keys.actual.dash === null : open.keys.actual === null, `${tag}: the remaining key reads ${JSON.stringify(open.keys.actual)} with ${account.known} solid runs`);
+        must(account.state === "none" ? open.keys.ideal === null : open.keys.ideal?.dash === "4 3", `${tag}: the even-pace key reads ${JSON.stringify(open.keys.ideal)}, not the chart's 4 3 dash`);
+        /* A dashed level is a line inside the plot: clear of the frame's top and bottom edge, never drawn on it. */
+        const levelGap = await page.evaluate(() => {
+          const frame = document.querySelector('[role="dialog"] svg[role="img"] rect')?.getBoundingClientRect();
+          const lines = [...document.querySelectorAll('[role="dialog"] svg[role="img"] [data-burndown-estimated]')].map((node) => node.getBoundingClientRect());
+          return frame && lines.length ? { top: Math.min(...lines.map((r) => r.top - frame.top)), bottom: Math.min(...lines.map((r) => frame.bottom - r.bottom)) } : null;
+        });
+        if (account.estimated > 0) must(levelGap !== null && levelGap.top >= 4 && levelGap.bottom >= 4, `${tag}: a dashed span sits on the plot frame ${JSON.stringify(levelGap)}`);
+        /* The no-reading note keeps «100%» on the line of the word before it. */
+        if (account.state === "none") {
+          const glued = await page.evaluate(() => {
+            const readout = document.querySelector('[role="dialog"] [data-burndown-readout]');
+            const walker = document.createTreeWalker(readout!, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+              const text = node.textContent ?? "";
+              const at = text.indexOf("100%");
+              if (at < 0) continue;
+              const range = document.createRange();
+              range.setStart(node, text.lastIndexOf(" ", at - 1) + 1);
+              range.setEnd(node, at + 4);
+              return range.getClientRects().length === 1;
+            }
+            return false;
+          });
+          must(glued, `${tag}: «100%» wraps onto a line of its own`);
+        }
         must(account.estimated === 0 ? open.keys.estimated === null : open.keys.estimated?.dash === "2 3" && open.keys.estimated.width >= 12, `${tag}: the estimated key reads ${JSON.stringify(open.keys.estimated)} with ${account.estimated} dashed spans`);
         must(!open.readoutCovered, `${tag}: another element covers the readout`);
         must(open.contrast !== null && open.contrast >= 4.5, `${tag}: readout contrast ${open.contrast}`);

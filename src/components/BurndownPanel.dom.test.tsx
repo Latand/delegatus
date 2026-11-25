@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { Window } from "happy-dom";
 
 import { installActEnv } from "@/test-helpers/actEnv";
+import { getLocale, setLocale } from "@/lib/i18n";
 import type { BurndownPayload, BurndownSeries, EngineLimits } from "@/lib/types";
 
 const dom = new Window();
@@ -297,4 +298,68 @@ test("the legend keys draw the chart's own dashes: estimated and even pace dashe
   expect(dash("actual")).toBeNull();
   // The estimated key shows exactly the dash the chart's estimated segment carries.
   expect(host.querySelector("svg[role=img] [data-burndown-estimated]")?.getAttribute("stroke-dasharray")).toBe(dash("estimated"));
+});
+
+test("the level of an account nobody has read is a dashed line inside the plot, and the legend keys only what is drawn", async () => {
+  payload = payloadFor("codex", "account-a", { windowStart: null, resetsAt: null, windowSeconds: 7 * 86_400, samples: [], lastReading: null });
+  const host = await render();
+  const level = host.querySelector("svg[role=img] [data-burndown-estimated]");
+  const frame = host.querySelector("svg[role=img] rect");
+  expect(level).not.toBeNull();
+  // A path "M x,y L x,y": the level's y sits clear of the frame's top edge and bottom edge.
+  const y = Number(/M [\d.]+,([\d.]+)/u.exec(level?.getAttribute("d") ?? "")?.[1]);
+  const top = Number(frame?.getAttribute("y"));
+  const bottom = top + Number(frame?.getAttribute("height"));
+  expect(y).toBeGreaterThan(top + 3);
+  expect(y).toBeLessThan(bottom);
+  expect(host.querySelector('[data-burndown-key="estimated"]')).not.toBeNull();
+  expect(host.querySelector('[data-burndown-key="actual"]')).toBeNull();
+  expect(host.querySelector('[data-burndown-key="ideal"]')).toBeNull();
+  // The note's closing "100%" never wraps onto a line of its own.
+  expect(host.textContent ?? "").toContain("drawn at\u00a0100%");
+});
+
+test("a stale reading from another calendar day names its day, in either language's own word order", async () => {
+  const windowStart = NOW - 3 * 86_400;
+  const stale = (): BurndownPayload => payloadFor("codex", "account-a", {
+    windowStart,
+    resetsAt: windowStart + 7 * 86_400,
+    windowSeconds: 7 * 86_400,
+    samples: [{ t: NOW - 31 * 3600 - 600, remaining: 62 }, { t: NOW - 31 * 3600, remaining: 60 }],
+  });
+  const previous = getLocale();
+  try {
+    payload = stale();
+    const en = await render();
+    expect(en.textContent ?? "").toMatch(/last reading on\u00a0[^\s]+\u00a0\d+\u00a0at\u00a0\d\d:\d\d/u);
+    await act(async () => { root?.unmount(); });
+    root = null;
+    document.body.replaceChildren();
+    setLocale("uk");
+    payload = stale();
+    const uk = await render();
+    expect(uk.textContent ?? "").toMatch(/зчитування \d+\u00a0[^\s]+\u00a0о\u00a0\d\d:\d\d/u);
+  } finally {
+    setLocale(previous);
+  }
+});
+
+test("readings that stand alone are keyed with a dot, and a solid run with a line", async () => {
+  const windowStart = NOW - 3 * 86_400;
+  const alone: BurndownSeries = {
+    windowStart,
+    resetsAt: windowStart + 7 * 86_400,
+    windowSeconds: 7 * 86_400,
+    samples: [{ t: NOW - 2.5 * 86_400, remaining: 98 }, { t: NOW - 1.2 * 86_400, remaining: 97 }],
+  };
+  payload = payloadFor("codex", "account-a", alone);
+  const isolated = await render();
+  expect(isolated.querySelector('[data-burndown-key="actual"] circle')).not.toBeNull();
+  expect(isolated.querySelector('[data-burndown-key="actual"] line')).toBeNull();
+  await act(async () => { root?.unmount(); });
+  root = null;
+  document.body.replaceChildren();
+  payload = payloadFor("codex", "account-a", denseSeries());
+  const run = await render();
+  expect(run.querySelector('[data-burndown-key="actual"] line')).not.toBeNull();
 });

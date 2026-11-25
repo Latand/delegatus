@@ -714,12 +714,19 @@ test.each(["en", "uk"] as const)("a non-active phone row opens its own burndown 
   }
 });
 
-test("a phone row with no reading still opens a chart, and a second press, Escape or an outside tap close it", async () => {
+test("a phone row with no reading gains no line; its open row's «no data yet» is the press that opens the chart, and a second press, Escape or an outside tap close it", async () => {
   globalThis.fetch = historyFetch([]);
   const bare = account({ id: "cl-bare", label: "Bare" });
-  const view = await mount([engineState("claude", [claudeMain, bare], claudeMain.id)]);
-  expect(view.host.querySelector('[data-mobile2-account="cl-bare"] [data-account-limits]')).toBeNull();
-  const press = () => view.host.querySelector('[data-mobile2-account="cl-bare"] [data-account-chart="cl-bare"]') as HTMLElement;
+  const signedOut = account({ id: "cl-out", label: "Out", authPresent: false, authHealth: "signed_out" });
+  const view = await mount([engineState("claude", [claudeMain, bare, signedOut], claudeMain.id)]);
+  const row = (id: string) => view.host.querySelector(`[data-mobile2-account="${id}"]`) as HTMLElement;
+  expect(row("cl-bare").querySelector('[data-account-limits]')).toBeNull();
+  // Closed, the row shows what it showed before the chart existed: no extra line, no press.
+  expect(row("cl-bare").querySelector("[data-account-chart]")).toBeNull();
+  expect(row("cl-bare").textContent).not.toContain(translate(getLocale(), "burndown.title").replace(/^./u, (c) => c.toUpperCase()));
+  await open(view.host, "cl-bare");
+  const press = () => row("cl-bare").querySelector('[data-account-chart="cl-bare"]') as HTMLElement;
+  expect(press().textContent).toBe(translate(getLocale(), "accounts.noDataYet"));
   await click(press());
   expect(dialog()?.getAttribute("aria-label")).toContain("Bare");
   await click(press());
@@ -731,6 +738,29 @@ test("a phone row with no reading still opens a chart, and a second press, Escap
   await click(press());
   await act(async () => { view.host.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); });
   expect(dialog()).toBeNull();
+  // The tap's own click, which the sheet consumes.
+  await click(view.host);
+  // A signed-out account has no quota to chart: opened or not, it offers no press.
+  await open(view.host, "cl-out");
+  expect(row("cl-out").querySelector("[data-account-chart]")).toBeNull();
+});
+
+test("the phone chart sheet is docked to the bottom edge over a dimming scrim, which closes it", async () => {
+  globalThis.fetch = historyFetch([]);
+  const view = await mount([engineState("claude", [claudeMain, claudeLab], claudeMain.id)]);
+  await click(view.host.querySelector('[data-account-chart="cl-main"]'));
+  const panel = dialog() as HTMLElement;
+  expect(panel.className).toContain("bottom-0");
+  expect(panel.className).toContain("inset-x-0");
+  expect(panel.className).toContain("env(safe-area-inset-bottom)");
+  expect(panel.className).not.toContain("bottom-3");
+  const scrim = document.body.querySelector("[data-burndown-scrim]") as HTMLElement;
+  expect(scrim).not.toBeNull();
+  expect(scrim.className).toContain("bg-black/40");
+  expect(scrim.getAttribute("aria-hidden")).toBe("true");
+  await act(async () => { scrim.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); });
+  expect(dialog()).toBeNull();
+  expect(document.body.querySelector("[data-burndown-scrim]")).toBeNull();
   // The tap's own click, which the sheet consumes.
   await click(view.host);
 });

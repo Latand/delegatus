@@ -17,6 +17,9 @@ const VB_H = 150;
 const PAD = { l: 4, r: 4, t: 8, b: 4 };
 const PW = VB_W - PAD.l - PAD.r;
 const PH = VB_H - PAD.t - PAD.b;
+/** Room kept between the plot frame and the 0% and 100% levels, so a line at
+    either level is visibly a line inside the chart and never the frame's edge. */
+const LEVEL_INSET = 12;
 
 /** Same amber-<30% / red-<10% thresholds the footer bars use; above that the
     curve keeps the engine's identity tint. */
@@ -30,12 +33,37 @@ function bcp47(): string {
   return getLocale() === "uk" ? "uk-UA" : "en-US";
 }
 
-/** Short absolute moment for the depletion projection: hour today, else + date. */
+const NBSP = "\u00a0";
+
+function sameCalendarDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function clockOf(d: Date): string {
+  return d.toLocaleTimeString(bcp47(), { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function dayOf(d: Date): string {
+  return d.toLocaleDateString(bcp47(), { day: "numeric", month: "short" }).replace(/ /gu, NBSP);
+}
+
+/** Short absolute moment for the depletion projection: the clock time on
+    today's date, else the date and the time. */
 function fmtMoment(unix: number, now: number): string {
   const d = new Date(unix * 1000);
-  const time = d.toLocaleTimeString(bcp47(), { hour: "2-digit", minute: "2-digit", hour12: false });
-  if (Math.abs(unix - now) < 86400) return time;
-  return d.toLocaleDateString(bcp47(), { day: "numeric", month: "short" }) + " " + time;
+  return sameCalendarDay(d, new Date(now * 1000)) ? clockOf(d) : `${dayOf(d)} ${clockOf(d)}`;
+}
+
+/** A reading's moment as a phrase that carries its own preposition, in the
+    language's own order: "at 19:02" today, "on Nov 24 at 19:02" on any other
+    calendar day, «о 19:02» and «24 лист. о 19:02». */
+function fmtReadingMoment(unix: number, now: number): string {
+  const d = new Date(unix * 1000);
+  const uk = getLocale() === "uk";
+  const at = `${uk ? "о" : "at"}${NBSP}${clockOf(d)}`;
+  if (sameCalendarDay(d, new Date(now * 1000))) return at;
+  // One unbreakable phrase, so a wrapped line never parts the day from its time.
+  return uk ? `${dayOf(d)}${NBSP}${at}` : `on${NBSP}${dayOf(d)}${NBSP}${at}`;
 }
 
 /** The SVG plot: ideal even-pace diagonal (dashed, muted) vs the remaining-quota
@@ -49,7 +77,7 @@ function BurndownChart({ series, segments, tint, now }: { series: BurndownSeries
   const x1 = resetsAt ?? Math.max(now, samples[samples.length - 1]?.t ?? now);
   const span = x1 > x0 ? x1 - x0 : 1;
   const xScale = (t: number) => PAD.l + (Math.max(x0, Math.min(x1, t)) - x0) / span * PW;
-  const yScale = (pct: number) => PAD.t + (100 - Math.max(0, Math.min(100, pct))) / 100 * PH;
+  const yScale = (pct: number) => PAD.t + LEVEL_INSET + (100 - Math.max(0, Math.min(100, pct))) / 100 * (PH - 2 * LEVEL_INSET);
   const point = (s: LimitSample) => `${xScale(s.t).toFixed(2)},${yScale(s.remaining).toFixed(2)}`;
 
   const idealPath =
@@ -100,7 +128,15 @@ function readingSeries(reading: EngineLimits | null, key: WindowKey, now: number
 
 /** A legend key drawn with the chart's own dash pattern: a border on a 12 px
     box renders solid however it is styled, so the key is a short SVG line. */
-function LegendKey({ kind, color, dash }: { kind: string; color: string; dash?: string }) {
+function LegendKey({ kind, color, dash, dot = false }: { kind: string; color: string; dash?: string; dot?: boolean }) {
+  // Readings with no solid stretch between them are drawn as dots, so their key is a dot.
+  if (dot) {
+    return (
+      <svg data-burndown-key={kind} width={14} height={4} viewBox="0 0 14 4" aria-hidden className="shrink-0">
+        <circle cx={7} cy={2} r={2} fill={color} />
+      </svg>
+    );
+  }
   return (
     <svg data-burndown-key={kind} width={14} height={4} viewBox="0 0 14 4" aria-hidden className="shrink-0">
       <line x1={0} y1={2} x2={14} y2={2} stroke={color} strokeWidth={dash === "4 3" ? 1.5 : 2} strokeDasharray={dash} opacity={dash === "4 3" ? 0.7 : undefined} />
@@ -185,7 +221,8 @@ export function BurndownPanel({
   const segments = series && !series.windowUnreported ? burndownSegments(series, now) : null;
   const observed = segments?.kind === "fresh" || segments?.kind === "partial";
   const pace = series && observed ? computePace(series, now) : null;
-  const atText = segments?.lastObservedAt != null ? fmtMoment(segments.lastObservedAt, now) : "";
+  const idealDrawn = series !== null && series.windowStart !== null && series.resetsAt !== null;
+  const atText = segments?.lastObservedAt != null ? fmtReadingMoment(segments.lastObservedAt, now) : "";
 
   const paceText = (() => {
     if (!pace) return null;
@@ -226,7 +263,9 @@ export function BurndownPanel({
           else if (!event.shiftKey && active === last) { event.preventDefault(); first.focus(); }
         }
       }}
-      className={`fixed bottom-3 left-1/2 ${Z.modal} flex w-[min(430px,calc(100vw-16px))] -translate-x-1/2 flex-col rounded-[12px] border border-border bg-card shadow-2 ${sheet ? "" : "sm:absolute sm:bottom-1 sm:left-full sm:ml-2 sm:translate-x-0"}`}
+      className={`fixed ${Z.modal} flex flex-col border border-border bg-card shadow-2 ${sheet
+        ? "inset-x-0 bottom-0 max-h-[85dvh] w-full overflow-y-auto rounded-t-[12px] border-b-0 pb-[env(safe-area-inset-bottom)]"
+        : "bottom-3 left-1/2 w-[min(430px,calc(100vw-16px))] -translate-x-1/2 rounded-[12px] sm:absolute sm:bottom-1 sm:left-full sm:ml-2 sm:translate-x-0"}`}
     >
       <header className="flex items-center gap-2 border-b border-border px-3 py-2">
         <span className="min-w-0 truncate text-[12.5px] font-bold" style={{ color: tint }}>{who}</span>
@@ -270,8 +309,12 @@ export function BurndownPanel({
             <BurndownChart series={series} segments={segments} tint={tint} now={now} />
             <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] text-muted">
               <span className="flex items-center gap-1">
-                <LegendKey kind="ideal" color="var(--color-muted)" dash="4 3" />
-                {t("burndown.ideal")}
+                {idealDrawn ? (
+                  <>
+                    <LegendKey kind="ideal" color="var(--color-muted)" dash="4 3" />
+                    {t("burndown.ideal")}
+                  </>
+                ) : null}
               </span>
               <span className="flex items-center gap-2">
                 {segments.estimated.length > 0 ? (
@@ -280,10 +323,12 @@ export function BurndownPanel({
                     {t("burndown.estimated")}
                   </span>
                 ) : null}
-                <span className="flex items-center gap-1">
-                  <LegendKey kind="actual" color={tint} />
-                  {t("burndown.actual")}
-                </span>
+                {segments.known.length > 0 ? (
+                  <span className="flex items-center gap-1">
+                    <LegendKey kind="actual" color={tint} dot={segments.known.every((run) => run.length < 2)} />
+                    {t("burndown.actual")}
+                  </span>
+                ) : null}
               </span>
             </div>
             <div data-burndown-readout="" className="mt-2 text-[11.5px] font-semibold text-primary">

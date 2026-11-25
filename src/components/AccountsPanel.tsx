@@ -201,13 +201,14 @@ function factsOf(account: AccountOption, engine: "claude" | "codex", activeId: s
   };
 }
 
-/** The press that opens an account's burndown chart over its reading, on the
-    phone, where the accounts screen has no footer to carry it. It covers the
-    reading itself (or the line that says there is none) so no new control is
-    drawn, and holds the platform's 44 px target. */
-function ChartPress({ account, engine, chart }: { account: AccountOption; engine: "claude" | "codex"; chart: RowSurface["chart"] }) {
+/** The press that opens an account's burndown chart, on the phone, where the
+    accounts screen has no footer to carry it. It covers a fact the row already
+    shows, so no new control or line is drawn: `inset` lays it over the
+    reading, otherwise it is a button around the text it is given. It holds the
+    platform's 44 px target. */
+function ChartPress({ account, engine, chart, inset = true, children }: { account: AccountOption; engine: "claude" | "codex"; chart: RowSurface["chart"]; inset?: boolean; children?: React.ReactNode }) {
   const { t } = useLocale();
-  if (!chart) return null;
+  if (!chart) return <>{children}</>;
   return (
     <button
       type="button"
@@ -217,8 +218,12 @@ function ChartPress({ account, engine, chart }: { account: AccountOption; engine
       aria-expanded={chart.openId === account.id}
       aria-label={t("burndown.openAria", { engine: `${engineDisplay(engine)} · ${account.label}` })}
       onClick={() => chart.toggle(account.id)}
-      className="absolute inset-0 rounded-[6px] hover:bg-canvas/60 active:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-    />
+      className={inset
+        ? "absolute inset-0 rounded-[6px] hover:bg-canvas/60 active:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        : "-my-1 flex min-h-11 min-w-0 flex-1 items-center rounded-[6px] text-left break-words hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -226,19 +231,7 @@ function ChartPress({ account, engine, chart }: { account: AccountOption; engine
 function WindowLines({ account, facts, now, engine, wide, chart }: { account: AccountOption; facts: RowFacts; now: number; engine: "claude" | "codex"; wide: boolean; chart?: RowSurface["chart"] }) {
   const { t } = useLocale();
   const s = useSizes();
-  if (facts.windows.length === 0) {
-    /* No reading at all: the chart's own name stands where the reading would
-       and is the press, so the chart (axes, window and a dashed level) still
-       opens. The open row already says "no data yet", so that is not repeated
-       here; a provider account's note already says its limits are unknown. */
-    if (!chart || account.provider) return null;
-    return (
-      <div className={`relative flex min-h-11 items-center ${s.line} text-muted`}>
-        <span data-account-line>{t("burndown.title").replace(/^./u, (first) => first.toUpperCase())}</span>
-        <ChartPress account={account} engine={engine} chart={chart} />
-      </div>
-    );
-  }
+  if (facts.windows.length === 0) return null;
   const named = new Set<number | null>([facts.noteUntil]);
   const list = (
     <dl data-account-limits={account.id} aria-label={t("accounts.limitsAria", { label: account.label })} className={`flex flex-col gap-0.5 ${chart ? "min-h-11 justify-center" : ""}`}>
@@ -343,14 +336,19 @@ function NoResetsFact({ account, facts }: { account: AccountOption; facts: RowFa
 }
 
 /** When the numbers were read, and the way to read them again. */
-function RefreshLine({ account, state, facts, receipts }: { account: AccountOption; state: EngineAccountsState; facts: RowFacts; receipts?: ReceiptStore }) {
+function RefreshLine({ account, state, facts, receipts, engine, chart }: { account: AccountOption; state: EngineAccountsState; facts: RowFacts; receipts?: ReceiptStore; engine: "claude" | "codex"; chart?: RowSurface["chart"] }) {
   const { t } = useLocale();
   const s = useSizes();
   const busy = state.limitsBusy?.accountId === account.id;
   const refreshing = busy && state.limitsBusy?.operation === "refreshLimits";
   return (
     <div data-account-line className={`flex items-center gap-2 ${s.line} text-muted ${s.endLine}`}>
-      <span className="min-w-0 flex-1 break-words">{facts.checked ? `${t("accounts.limitsChecked")} · ${facts.checked}` : t("accounts.noDataYet")}</span>
+      {/* A signed-in account with no reading has no window line to press, so this fact is its way into the chart. */}
+      {chart && facts.usable && facts.windows.length === 0 ? (
+        <ChartPress account={account} engine={engine} chart={chart} inset={false}>{facts.checked ? `${t("accounts.limitsChecked")} · ${facts.checked}` : t("accounts.noDataYet")}</ChartPress>
+      ) : (
+        <span className="min-w-0 flex-1 break-words">{facts.checked ? `${t("accounts.limitsChecked")} · ${facts.checked}` : t("accounts.noDataYet")}</span>
+      )}
       <button
         type="button"
         data-account-refresh-limits={account.id}
@@ -782,7 +780,7 @@ function AccountRow({ account, engine, quota, surface }: {
             ) : null}
             {creditsOn ? <p data-account-line className={`break-words ${s.line} text-muted`}>{t("accounts.spendCreditsOnShort")}</p> : null}
             {engine === "codex" ? <NoResetsFact account={account} facts={facts} /> : null}
-            {!account.provider && account.authPresent ? <RefreshLine account={account} state={state} facts={facts} receipts={receipts} /> : null}
+            {!account.provider && account.authPresent ? <RefreshLine account={account} state={state} facts={facts} receipts={receipts} engine={engine} chart={surface.chart} /> : null}
             {removal.armed ? null : <ToolActions account={account} state={state} facts={facts} removal={removal} onProvider={() => setProviderOpen(true)} />}
           </AccountRowOpening>
           {engine === "claude" && account.provider ? <ClaudeProviderEditor state={state} account={account} phone={phone} inRow open={providerFormOpen} onOpenChange={setProviderOpen} /> : null}
@@ -1695,7 +1693,11 @@ function PhoneBurndown({ engine, account, reading, onClose }: { engine: "claude"
     return () => window.removeEventListener("pointerdown", onDown);
   }, [account.id, engine]);
   return createPortal(
-    <BurndownPanel key={account.id} sheet engine={engine} label={engineDisplay(engine)} plan={reading?.plan ?? null} accountId={account.id} accountLabel={account.label} reading={reading} onClose={onClose} />,
+    <>
+      {/* What is behind the sheet is dimmed, and a tap on it closes the chart. */}
+      <div aria-hidden data-burndown-scrim="" className={`fixed inset-0 ${Z.modal} bg-black/40`} />
+      <BurndownPanel key={account.id} sheet engine={engine} label={engineDisplay(engine)} plan={reading?.plan ?? null} accountId={account.id} accountLabel={account.label} reading={reading} onClose={onClose} />
+    </>,
     document.body,
   );
 }

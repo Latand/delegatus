@@ -15064,6 +15064,16 @@ describe("account burndown chart on the phone", () => {
           const key = `phone-${width}-${locale}-${theme}-${scene.id}`;
           const { page, context, pageErrors } = await openFixture(browser, `${server.base}?scenario=account-row&surface=phone&engine=${scene.engine}`, { width, height: 844 }, theme, locale, "no-preference", true);
           try {
+            /* A row with a reading carries the press over its reading. A signed-in row with none shows no extra line: its open row's
+               «no data yet» is the press, so the row is opened first and no press exists before that. */
+            const rowSelector = `[data-account-row="${scene.id}"]`;
+            if (scene.id === "no-reading") {
+              await page.locator(`${rowSelector} [data-account-toggle]`).waitFor({ timeout: 15_000 });
+              if (await page.locator(press(scene.id)).count() !== 0) failures.push(`${key}: the closed no-reading row already carries a chart press`);
+              if ((await page.locator(rowSelector).innerText()).includes(translate(locale, "burndown.title").replace(/^./u, (c) => c.toUpperCase()))) failures.push(`${key}: the closed row gained a «${translate(locale, "burndown.title")}» line`);
+              await page.locator(`${rowSelector} [data-account-toggle]`).scrollIntoViewIfNeeded();
+              await page.locator(`${rowSelector} [data-account-toggle]`).tap();
+            }
             await page.locator(press(scene.id)).waitFor({ timeout: 15_000 });
             await page.locator(press(scene.id)).scrollIntoViewIfNeeded();
             const target = await page.locator(press(scene.id)).boundingBox();
@@ -15091,6 +15101,9 @@ describe("account burndown chart on the phone", () => {
                 estimated: dialog.querySelectorAll("svg[role=img] [data-burndown-estimated]").length,
                 known: dialog.querySelectorAll("svg[role=img] [data-burndown-known]").length,
                 keys: { estimated: dash("estimated"), ideal: dash("ideal"), actual: dash("actual") }, keyWidth: keySize?.width ?? 0,
+                keyPresent: { estimated: dialog.querySelector('[data-burndown-key="estimated"]') !== null, ideal: dialog.querySelector('[data-burndown-key="ideal"]') !== null, actual: dialog.querySelector('[data-burndown-key="actual"]') !== null },
+                scrim: (() => { const rect = document.querySelector("[data-burndown-scrim]")?.getBoundingClientRect(); return rect ? { w: rect.width, h: rect.height } : null; })(),
+                level: (() => { const frame = dialog.querySelector("svg[role=img] rect")?.getBoundingClientRect(); const line = dialog.querySelector("svg[role=img] [data-burndown-estimated]")?.getBoundingClientRect(); return frame && line ? { top: line.top - frame.top, bottom: frame.bottom - line.bottom } : null; })(),
                 pressOpen: document.querySelector(`[data-account-chart="${id}"]`)?.getAttribute("aria-expanded"),
                 dialogs: document.querySelectorAll("[data-burndown-dialog]").length,
               };
@@ -15101,7 +15114,15 @@ describe("account burndown chart on the phone", () => {
             if (reading.covered) failures.push(`${key}: the readout is covered`);
             if (reading.estimated < 1) failures.push(`${key}: no dashed estimated segment is drawn`);
             if (scene.id === "backup" && reading.known < 1) failures.push(`${key}: no solid reading is drawn`);
-            if (reading.keys.estimated !== "2 3" || reading.keys.ideal !== "4 3" || reading.keys.actual !== null) failures.push(`${key}: legend keys read ${JSON.stringify(reading.keys)}`);
+            // The legend keys only the lines the chart draws: a chart with no reading draws a dashed level and nothing else.
+            const noReading = scene.id === "no-reading";
+            if (reading.keys.estimated !== "2 3" || reading.keys.ideal !== (noReading ? null : "4 3") || reading.keys.actual !== null) failures.push(`${key}: legend keys read ${JSON.stringify(reading.keys)}`);
+            if (reading.keyPresent.estimated !== true || reading.keyPresent.ideal !== !noReading || reading.keyPresent.actual !== !noReading) failures.push(`${key}: legend lists ${JSON.stringify(reading.keyPresent)}`);
+            // Docked to the bottom edge over a scrim that covers the screen: no background text shows beneath the sheet.
+            if (Math.abs(reading.box.bottom - reading.inner.h) > 0.5 || Math.abs(reading.box.left) > 0.5 || Math.abs(reading.box.right - reading.inner.w) > 0.5) failures.push(`${key}: the sheet is not docked ${JSON.stringify(reading.box)}`);
+            if (!reading.scrim || reading.scrim.w < reading.inner.w - 0.5 || reading.scrim.h < reading.inner.h - 0.5) failures.push(`${key}: no scrim dims the screen behind the sheet`);
+            // A level is a line inside the plot, clear of the frame's top and bottom edges.
+            if (!reading.level || reading.level.top < 4) failures.push(`${key}: the dashed level sits on the frame (${JSON.stringify(reading.level)})`);
             if (reading.keyWidth < 13) failures.push(`${key}: the estimated key is ${reading.keyWidth} px wide`);
             if (reading.pressOpen !== "true" || reading.dialogs !== 1) failures.push(`${key}: press expanded=${reading.pressOpen}, ${reading.dialogs} dialogs`);
             if (scene.id === "no-reading" && !reading.readout.includes(translate(locale, "burndown.noReading"))) failures.push(`${key}: the readout says «${reading.readout}»`);
@@ -15111,7 +15132,9 @@ describe("account burndown chart on the phone", () => {
             await page.touchscreen.tap(width / 2, 8);
             await page.locator("[data-burndown-dialog]").waitFor({ state: "detached", timeout: 3_000 }).catch(() => failures.push(`${key}: a tap outside did not close the chart`));
             if (rows.control.calls.length > 0) failures.push(`${key}: opening the chart sent ${rows.control.calls.map((call) => call.method + call.path).join(", ")}`);
-            if (await page.locator(`[data-account-row="${scene.id}"] [data-account-toggle]`).getAttribute("aria-expanded") === "true") failures.push(`${key}: the row opened`);
+            // The no-reading row was opened on purpose to reach its press; every other row must stay closed.
+            const rowOpen = await page.locator(`[data-account-row="${scene.id}"] [data-account-toggle]`).getAttribute("aria-expanded") === "true";
+            if (rowOpen !== (scene.id === "no-reading")) failures.push(`${key}: the row is ${rowOpen ? "open" : "closed"} after the chart closed`);
             if (pageErrors.length) failures.push(`${key}: page errors ${pageErrors.join(" | ")}`);
           } finally { await context.close(); }
         }
