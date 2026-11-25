@@ -183,7 +183,7 @@ export function useOpenAiServices() {
 /* ---- The list under the OpenAI row ------------------------------------- */
 
 /** The six features under the OpenAI key; absent when the route refuses (a team member) or cannot be read. */
-export function OpenAiServicesList({ size = "menu", onOpen }: { size?: Size; onOpen: (feature: ServiceFeature) => void }) {
+export function OpenAiServicesList({ size = "menu", onOpen, planActive }: { size?: Size; onOpen: (feature: ServiceFeature) => void; planActive?: boolean }) {
   const { t } = useLocale();
   const { view } = useOpenAiServices();
   if (!view) return null;
@@ -206,7 +206,7 @@ export function OpenAiServicesList({ size = "menu", onOpen }: { size?: Size; onO
             <span className="flex min-w-0 flex-1 flex-col gap-px">
               <span className="truncate leading-4">{featureName(t, state.feature)}</span>
               <span data-openai-service-now="" className={`font-medium ${state.held ? "text-warning" : "truncate text-muted"} ${small}`}>
-                {state.held ? t("openaiServices.noKey", { name: now }) : now}
+                {state.held ? t("openaiServices.noKey", { name: now }) : planActive && state.feature === "voice" && state.effective === "api" ? t("chatgptPlan.voiceService") : now}
               </span>
             </span>
             <ChevronRight className="h-4 w-4 shrink-0 text-muted" aria-hidden />

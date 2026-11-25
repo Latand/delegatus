@@ -40,6 +40,17 @@ test("setup dependencies include dev and nested packages, omit optional platform
   } finally { f.cleanup(); }
 });
 
+test("a retained Cloud workspace refreshes ignored dependencies on retry", () => {
+  const f = fixture();
+  try {
+    reuseCloudDependencies(f.source, f.target);
+    writeFileSync(path.join(f.target, "node_modules/probe/package.json"), '{"name":"probe","version":"stale"}');
+    reuseCloudDependencies(f.source, f.target);
+    expect(readFileSync(path.join(f.target, "node_modules/probe/package.json"), "utf8"))
+      .toBe(readFileSync(path.join(f.source, "node_modules/probe/package.json"), "utf8"));
+  } finally { f.cleanup(); }
+});
+
 test("copied executable symlinks keep resolving inside the candidate installation", () => {
   const f = fixture();
   try {
@@ -160,6 +171,30 @@ for (const upload of [false, true]) for (const mismatch of [false, true]) test(`
       expect(result.stdout).not.toContain("DELEGATUS_GATE");
     } else {
       expect(result.stdout).toContain("GATE_REACHED");
+      expect(result.stdout).toContain(`DELEGATUS_GATE ${head} ${tree} ${head} ${cloudInputDigest({})} 0`);
+    }
+  } finally { f.cleanup(); }
+});
+
+test("a same-tree Cloud retry refreshes its retained dependency directory and reaches the gate twice", () => {
+  const f = fixture();
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "noreply@example.invalid" };
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: f.source, env, encoding: "utf8", stdio: "pipe" }).trim();
+  try {
+    git("init", "-q"); mkdirSync(path.join(f.source, "scripts"));
+    cpSync("scripts/cloud-check-dependencies.ts", path.join(f.source, "scripts/cloud-check-dependencies.ts"));
+    writeFileSync(path.join(f.source, ".gitignore"), "node_modules\n");
+    writeFileSync(path.join(f.source, "scripts/local-gate.ts"), 'console.log("GATE_REACHED");');
+    git("add", "."); git("commit", "-qm", "Fixture");
+    const head = git("rev-parse", "HEAD"), tree = git("rev-parse", "HEAD^{tree}");
+    const bundle = path.join(f.root, "source.bundle"); git("bundle", "create", bundle, "HEAD");
+    const bin = path.join(f.root, "bin"); mkdirSync(bin);
+    writeFileSync(path.join(bin, "bun"), `#!/bin/sh\nexec '${process.execPath}' "$@"\n`, { mode: 0o755 });
+    const job = { head, tree, base: head, inputs: {}, bundle: readFileSync(bundle).toString("base64"), timeoutMs: 10_000 };
+    const command = cloudCommand(job);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = spawnSync("bash", ["-c", command], { cwd: f.source, env: { ...env, PATH: `${bin}:${env.PATH}` }, encoding: "utf8", timeout: 15_000 });
+      expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toContain(`DELEGATUS_GATE ${head} ${tree} ${head} ${cloudInputDigest({})} 0`);
     }
   } finally { f.cleanup(); }

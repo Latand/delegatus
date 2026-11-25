@@ -8,6 +8,7 @@ export interface VoiceCompanionSettingsHook {
   busy: boolean;
   error: string | null;
   refresh(): Promise<void>;
+  refreshPlanBilling(): Promise<void>;
   update(value: Partial<Pick<CompanionSettings, "enabled" | "monthlyCapUsd" | "backend" | "callMemory" | "timerTelegram">> | { releaseUncertainSession: true }): Promise<boolean>;
   /** The caller clears its input after success. The hook never stores a key. */
   saveKey(key: string): Promise<boolean>;
@@ -71,5 +72,15 @@ export function useVoiceCompanionSettings(open: boolean): VoiceCompanionSettings
     queueMicrotask(() => { if (!disposed) void refresh(); });
     return () => { disposed = true; epoch.current++; };
   }, [open, refresh]);
-  return { settings, busy, error, refresh, update, saveKey: key => request("key", { key }) };
+  const refreshPlanBilling = useCallback(async () => {
+    const born = epoch.current;
+    const current = ++sequence.current;
+    try {
+      const response = await fetch("/api/voice-companion/settings?view=plan-billing", { cache: "no-store" });
+      if (!response.ok) return;
+      const { planBilling } = await response.json() as CompanionSettings;
+      if (born === epoch.current && current >= applied.current) setStored(stored => stored && { ...stored, planBilling });
+    } catch { /* Keep the last confirmed billing while settings are offline. */ }
+  }, []);
+  return { settings, refreshPlanBilling, busy, error, refresh, update, saveKey: key => request("key", { key }) };
 }

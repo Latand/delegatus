@@ -62,6 +62,7 @@ Object.assign(globalThis, {
     if (url.includes("/api/access")) return json({ tailnetUrl: null, phone: { state: "missing", dnsName: null, viewerPort: 8898, servingPort: null, persisted: false }, phoneError: null });
     if (url.includes("/api/orchestrator/seat")) return Promise.resolve(new Response("{}", { status: 404 }));
     if (url.includes("/api/accounts/copilot")) return json({ cli: { present: false, reason: null }, active: "", accounts: [] });
+    if (url.includes("/api/accounts/antigravity") && agyBody !== null) return json(agyBody);
     if (url.endsWith("/api/accounts") || url.includes("/api/accounts?")) return json(accountsBody);
     return json({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
   },
@@ -88,6 +89,9 @@ let reportSettings: Record<string, unknown> = { reportTelegram: null, reportDest
 /* What `/api/memory/source` answers; the Memory step's cases set it. */
 let memorySourceBody: unknown = { choice: null, phase: null, orchestrator: false };
 let botStatus: unknown = { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
+
+/* What `/api/accounts/antigravity` answers; null leaves it to the unrouted fallback, which carries no Antigravity section. */
+let agyBody: unknown = null;
 
 /* What `/api/accounts` answers; the orchestrator step's cases set it. */
 const signedIn = (id: string, label: string) => ({ id, label, kind: "legacy", authPresent: true, loginPending: false, loginState: "authenticated", deviceAuth: null, auth: { state: "authenticated" } });
@@ -328,7 +332,7 @@ test("an engine whose command is missing reads Not installed even with a credent
   document.body.appendChild(host);
   const root = createRoot(host);
   flushSync(() => root.render(
-    <EnginesStep claude={engineState("claude")} codex={engineState("codex")} cli={{ claude: "found", codex: "missing" }} now={0} onRecheck={() => {}} />,
+    <EnginesStep claude={engineState("claude")} codex={engineState("codex")} antigravity={{ cli: "found", auth: "signed_in", plan: null, loaded: true, probing: false, inconclusive: false, probe: async () => {}, reload: async () => {} }} cli={{ claude: "found", codex: "missing" }} now={0} onRecheck={() => {}} />,
   ));
   expect(host.querySelector("[data-onboarding-engine=claude]")?.getAttribute("data-engine-state")).toBe("connected");
   const codex = host.querySelector("[data-onboarding-engine=codex]")!;
@@ -1775,6 +1779,72 @@ test("the orchestrator step carries exactly one filled button, Create in the foo
     expect(host.querySelector("[data-onboarding-orchestrator]")!.querySelector("[data-onboarding-orchestrator-create]")).toBeNull();
     expect(Array.from(host.querySelectorAll("footer button")).map((button) => button.textContent)).toEqual(["Back", "Finish without it", "Create the orchestrator"]);
     /* A state with its own action in the body has no Create in the footer. */
+  } finally {
+    done();
+  }
+});
+
+/* The mapping's engine choice reads Antigravity's recorded sign-in. An `/api/accounts`
+   answer with no Antigravity section no longer reads as connected, every row on the
+   engine offers Sign in, and that action lands on the engine's own card. */
+async function openMappingOnAntigravity() {
+  const { mergeRoleDefinitions } = await import("@/lib/roles/store");
+  const { ENGINE_MODELS } = await import("@/lib/agent/models");
+  const roles = mergeRoleDefinitions({}).map((role) => ({ ...role, promptPreview: role.promptScaffold, shipped: { config: role.config } }))
+    .map((role) => role.id === "builder" ? { ...role, config: { engine: "antigravity" as const, model: ENGINE_MODELS.antigravity[0]!.id, effort: "high" } } : role);
+  rolesBody = { roles };
+  answerAccounts({ claude: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] }, codex: { active: "default", cli: "found", accounts: [signedIn("default", "Main")] } });
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  flushSync(() => root.render(<OnboardingDialog mode="mapping" marker={null} onClose={() => {}} />));
+  await until(() => Boolean(host.querySelector("[data-mapping-row='builder']")));
+  return { host, done: () => { flushSync(() => root.unmount()); host.remove(); agyBody = null; rolesBody = { roles: [] }; } };
+}
+
+test("Antigravity is not connected just because the accounts read has no section for it", async () => {
+  const { host, done } = await openMappingOnAntigravity();
+  try {
+    await until(() => Boolean(host.querySelector("[data-mapping-row='builder'] [data-mapping-connect=antigravity]")));
+    const row = host.querySelector("[data-mapping-row='builder']")!;
+    expect(row.getAttribute("data-mapping-blocked")).toBe("");
+    expect(row.querySelector("[data-mapping-connect=antigravity]")?.textContent).toBe("Sign in");
+    expect(row.querySelector("[data-engine-segment=antigravity] [data-engine-state-dot]")).not.toBeNull();
+  } finally {
+    done();
+  }
+});
+
+test("a signed-in Antigravity reads connected in the mapping, and a missing agy reads How to install", async () => {
+  agyBody = { cli: "found", active: "default", accounts: [{ id: "default", label: "Default", kind: "legacy", auth: "signed_in", plan: "Google AI Pro", checkedAt: null, authPresent: true }] };
+  const connected = await openMappingOnAntigravity();
+  try {
+    await until(() => connected.host.querySelector("[data-mapping-row='builder']")?.getAttribute("data-mapping-blocked") === null);
+    expect(connected.host.querySelector("[data-mapping-connect]")).toBeNull();
+  } finally {
+    connected.done();
+  }
+  agyBody = { cli: "missing", active: "default", accounts: [{ id: "default", label: "Default", kind: "legacy", auth: "unknown", plan: null, checkedAt: null, authPresent: false }] };
+  const missing = await openMappingOnAntigravity();
+  try {
+    await until(() => Boolean(missing.host.querySelector("[data-mapping-row='builder'] [data-mapping-connect=antigravity]")));
+    expect(missing.host.querySelector("[data-mapping-row='builder'] [data-mapping-connect=antigravity]")?.textContent).toBe("How to install");
+  } finally {
+    missing.done();
+  }
+});
+
+test("Sign in on an Antigravity row opens the Engines step on the Antigravity card with focus inside it", async () => {
+  agyBody = { cli: "found", active: "default", accounts: [{ id: "default", label: "Default", kind: "legacy", auth: "signed_out", plan: null, checkedAt: null, authPresent: false }] };
+  const { host, done } = await openMappingOnAntigravity();
+  try {
+    await until(() => Boolean(host.querySelector("[data-mapping-connect=antigravity]")));
+    flushSync(() => (host.querySelector("[data-mapping-row='builder'] [data-mapping-connect=antigravity]") as HTMLElement).click());
+    await until(() => host.querySelector("[data-onboarding-engine=antigravity] [data-antigravity-check]") === document.activeElement && document.activeElement !== null);
+    expect(host.querySelector("[data-onboarding-dialog]")?.getAttribute("data-onboarding-current")).toBe("engines");
+    const card = host.querySelector("[data-onboarding-engine=antigravity]")!;
+    expect(card.getAttribute("data-engine-state")).toBe("signed-out");
+    expect(card.contains(document.activeElement)).toBe(true);
   } finally {
     done();
   }

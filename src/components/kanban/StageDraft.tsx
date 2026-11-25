@@ -34,33 +34,40 @@ export function useStageDraft(drafts: StageDrafts, key: string): StageDraft | nu
   return useSyncExternalStore(drafts.subscribe, () => drafts.get(key), () => null);
 }
 
+const capital = (text: string): string => text.charAt(0).toLocaleUpperCase() + text.slice(1);
+
 const clockTime = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 /** The feed of a stage with no attempt yet: when it starts, its first message
     and what is added when it starts. It has no composer (#2148): until the
     stage starts there is nothing to reply to, and the line above the message
     already says when it will. */
-export function StageDraftFeed({ pipeline, stage, names, drafts, ports }: {
+export function StageDraftFeed({ pipeline, stage, names, drafts, ports, fromConversation = false }: {
   pipeline: Pipeline;
   stage: PipelineStage;
   names: ReadonlyMap<string, string>;
   drafts: StageDrafts;
   ports: PipelinePorts;
+  fromConversation?: boolean;
 }) {
   const { t } = useLocale();
   const name = names.get(stage.id) ?? stage.id;
   const facts = draftFacts(pipeline, stage);
   const nameOf = (id: string) => names.get(id) ?? id;
+  /* A stage nothing passes into but a fail edge reaches runs only when a stage that names it fails (every such stage, as its tab does); one nothing reaches at all is started by no stage, and says neither «first» nor «last». */
+  const first = pipeline.stages[0]?.id === stage.id;
+  const failedFrom = facts.after || first ? [] : pipeline.stages.filter((candidate) => candidate.onFail?.to === stage.id).map((candidate) => nameOf(candidate.id));
+  const unreached = !facts.after && !first && failedFrom.length === 0;
   const when = [
-    facts.after ? t("kanban.draft.startsAfter", { stage: nameOf(facts.after) }) : t("kanban.draft.startsFirst"),
-    facts.then ? t("kanban.draft.then", { stage: nameOf(facts.then) }) : t("kanban.draft.last"),
+    facts.after ? t("kanban.draft.startsAfter", { stage: nameOf(facts.after) }) : failedFrom.length ? t("kanban.draft.startsOnFail", { stage: failedFrom.join(t("kanban.stages.tab.or")) }) : unreached ? capital(t("kanban.stages.noStarter")) : t("kanban.draft.startsFirst"),
+    unreached ? null : facts.then ? t("kanban.draft.then", { stage: nameOf(facts.then) }) : t("kanban.draft.last"),
     facts.onFail ? t("kanban.draft.onFail", { stage: nameOf(facts.onFail.to), max: facts.onFail.max }) : null,
   ].filter(Boolean).join(" · ");
   const ended = pipelineEnded(pipeline);
   return (
     <div className="feed draft-feed" role="log" aria-label={t("kanban.draft.feedAria", { stage: name })}>
       <div className="msg event"><i className="edot" aria-hidden="true" /><span>{when}</span></div>
-      <StageDraftMessage pipeline={pipeline} stage={stage} name={name} drafts={drafts} ports={ports} />
+      <StageDraftMessage pipeline={pipeline} stage={stage} name={name} drafts={drafts} ports={ports} fromConversation={fromConversation} />
       <AddedAtStart pipeline={pipeline} stage={stage} />
       {ended ? <p className="draft-note">{t("kanban.draft.noteEnded")}</p> : null}
     </div>

@@ -1167,6 +1167,7 @@ const conversationPathSql = (records: string) => `SELECT conversation_id FROM (
     Retained conversations, entries, receipts and deliveries of a long-running
     installation fit; operation owners, the largest payloads, stay per commit. */
 const COLD_STABLE_ROW_BYTES = 48 * 1024 * 1024;
+const PROCESSLESS_ARCHIVE_ENTRY_LIMIT = 2048;
 
 /** Journalled changes a preparation replays on the published reader in one
     synchronous step. A row change is a keyed read and one normalization. */
@@ -1803,6 +1804,8 @@ export class SqliteAgentRegistryStore {
   /** Per projector, its result for each current archived version. */
   private readonly coldRowProjectionResults = new Map<string, Map<number, unknown>>();
   private coldGrantCursor: { changeId: number; stamp: string } | null = null;
+  private processlessArchiveEntries = new Map<string, number>();
+  private processlessArchiveSchemaVersion: number | null = null;
   private coldKeys = new Set<string>();
   private coldKeysStamp = "";
   /** The change journal position the cold key set was read at; 0 forces a full read. */
@@ -2537,6 +2540,8 @@ export class SqliteAgentRegistryStore {
     }
     this.fileIdentityRead = null;
     this.databaseReopens += 1;
+    this.processlessArchiveEntries.clear();
+    this.processlessArchiveSchemaVersion = null;
     // A restored file may have the same revision and counter stamp as the file
     // it replaced. No parsed row or assembled grant from the old inode holds.
     for (const rows of this.rowCache.values()) rows.clear();
@@ -5424,6 +5429,58 @@ export class SqliteAgentRegistryStore {
   terminationPathMatches(id: string, pathname: string): boolean {
     return Boolean(this.db.query<{ present: number }, [string, string]>(
       "SELECT 1 AS present FROM registry_termination_paths WHERE conversation_id=? AND path=?").get(id, pathname));
+  }
+
+  /** A processless archive version stays processless after validation. Rows with grant
+   * claims still go through admission each pass because their attestors can change. */
+  readAgentStateProcessEntries(kinds: string[], copy: (entry: AgentRegistryEntry) => AgentRegistryEntry): AgentRegistryEntry[] {
+    const cacheable = this.recordsSource === "registry_records" && !this.db.inTransaction;
+    const reopens = this.databaseReopens;
+    const next = new Map<string, number>();
+    let schemaVersion: number | null = null;
+    const entries = this.read(file => {
+      // A migration can rewrite archive bodies while retaining their IDs. Pin the
+      // schema generation to the same read transaction as the mappings and entries.
+      if (cacheable) schemaVersion = this.db.query<{ schema_version: number }, []>("PRAGMA main.schema_version").get()!.schema_version;
+      const previous = schemaVersion === this.processlessArchiveSchemaVersion ? this.processlessArchiveEntries : null;
+      const keys = registryKeysMatching(file, "entries", "structuredHost.kind", kinds);
+      const versions = new Map<string, number>();
+      if (cacheable) {
+        for (const row of this.db.query<{ row_key: string; archive_id: number }, []>(
+          "SELECT row_key, archive_id FROM registry_cold WHERE collection='entries'").all()) {
+          versions.set(row.row_key, row.archive_id);
+        }
+      }
+      const selected: AgentRegistryEntry[] = [];
+      for (const key of keys) {
+        const id = versions.get(key);
+        // Keep the first eligible keys in scan order. Overflow takes the ordinary row path.
+        if (id !== undefined && next.size < PROCESSLESS_ARCHIVE_ENTRY_LIMIT
+          && (previous?.get(key) === id || this.archivedEntryWithoutProcess(key, id))) {
+          next.set(key, id);
+          continue;
+        }
+        const entry = file.entries[key];
+        if (entry?.structuredHost?.process) selected.push(entry);
+      }
+      return selected.map(copy);
+    });
+    if (cacheable && this.databaseReopens === reopens) {
+      this.processlessArchiveEntries = next;
+      this.processlessArchiveSchemaVersion = schemaVersion;
+    }
+    return entries;
+  }
+
+  private archivedEntryWithoutProcess(key: string, id: number): boolean {
+    const stored = this.db.query<{ value_json: string }, [number, string]>(
+      "SELECT value_json FROM registry_archive WHERE id=? AND collection='entries' AND row_key=?").get(id, key);
+    if (!stored) return false;
+    this.onRowPayloadRead?.("entries", 1);
+    const raw = this.parseRow("entries", key, stored.value_json, false);
+    if (rowClaimsBeyondBaselineGrant(raw)) return false;
+    const entry = this.normalizePartial({ version: 2, entries: { [key]: raw }, receipts: {} }).entries[key];
+    return !!entry && !entry.structuredHost?.process && !rowClaimsBeyondBaselineGrant(entry);
   }
 
   read<T>(reader: (file: RegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {

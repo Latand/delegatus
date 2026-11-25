@@ -16,17 +16,17 @@ const serviceTest = test.skipIf(process.platform !== "linux"
 test("shared comparator inputs retain every split test group in publication selection", () => {
   const groups = ["scripts/local-gate-tests.test.ts", "scripts/local-gate-tests.retry.test.ts", "scripts/local-gate-tests.recovery.test.ts", "scripts/local-gate-tests.teardown.test.ts",
     "scripts/local-gate-tests.rendezvous.test.ts", "scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate-tests.dependencies.test.ts"];
-  const publication = ["scripts/local-gate.runtime.test.ts", "scripts/local-gate.execution.test.ts", "scripts/local-gate.groups.test.ts", "scripts/local-gate.invalidation.test.ts", "scripts/local-gate.git.test.ts", "scripts/local-gate.lint.test.ts", "scripts/local-gate.native.test.ts", "scripts/local-gate.binding.test.ts", "scripts/local-gate.hooks.test.ts", "scripts/local-gate.publication.test.ts", "scripts/local-gate.transport.test.ts"];
-  const checkpoints = ["scripts/local-gate.checkpoints.test.ts", "scripts/local-gate.checkpoints.hook.test.ts", "scripts/local-gate.checkpoints.stepPasses.test.ts"];
+  const checkpointFiles = ["scripts/local-gate.checkpoints.test.ts", "scripts/local-gate.checkpoints.hook.test.ts", "scripts/local-gate.checkpoints.stepPasses.test.ts"];
+  const publication = ["scripts/local-gate.runtime.test.ts", "scripts/local-gate.execution.test.ts", "scripts/local-gate.groups.test.ts", "scripts/local-gate.invalidation.test.ts", "scripts/local-gate.git.test.ts", "scripts/local-gate.lint.test.ts", "scripts/local-gate.native.test.ts", "scripts/local-gate.binding.test.ts", "scripts/local-gate.hooks.test.ts", "scripts/local-gate.publication.test.ts", "scripts/local-gate.transport.test.ts", "scripts/local-gate.transport.native.test.ts", "scripts/local-gate.transport.budget.test.ts", "scripts/local-gate.transport.custody.test.ts"];
   const context: PlanEnvironment = { base: "base", existing: new Set(["scripts/local-gate-tests.fixture.ts", "scripts/local-gate-tests.ts", "scripts/gate-cache.ts"]),
-    tests: [...groups, ...publication, ...checkpoints, "scripts/unrelated.test.ts"],
+    tests: [...groups, ...publication, ...checkpointFiles, "scripts/unrelated.test.ts"],
     linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
   const selected = (file: string) => plan("pre-push", [file], context).find(step => step.name === "touched tests")!.command.slice(4).sort();
   expect(selected("scripts/local-gate-tests.fixture.ts")).toEqual(groups.map(file => `./${file}`).sort());
   for (const shared of ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"]) {
-    expect(selected(shared)).toEqual([...groups, ...publication, ...checkpoints].map(file => `./${file}`).sort());
+    expect(selected(shared)).toEqual([...groups, ...publication, ...checkpointFiles].map(file => `./${file}`).sort());
   }
-  expect(selected("scripts/local-gate-tests.ts")).toEqual([...groups, ...checkpoints].map(file => `./${file}`).sort());
+  expect(selected("scripts/local-gate-tests.ts")).toEqual([...groups, ...checkpointFiles].map(file => `./${file}`).sort());
 });
 
 test("the shared role-memory dispatch fixture selects every test group", () => {
@@ -217,7 +217,7 @@ serviceTest("head checkpoints invalidate installed dependency bytes and the merg
   expect(run(head).match(new RegExp(checkpoint, "g"))).toHaveLength(2);
 }, 60_000);
 
-serviceTest.each(["expired", "cleanup reserve"] as const)("an aggregate deadline preserves completed files without certifying the interrupted run: %s", mode => {
+serviceTest.each(["phase", "comparison", "remaining"])("an expanded retry retains green files after the %s budget runs short", limit => {
   const f = fixture();
   rmSync(path.join(f.repo, "a.test.ts")); rmSync(path.join(f.repo, "b.test.ts"));
   const files = Array.from({ length: 12 }, (_, index) => `sample-${String(index).padStart(2, "0")}.test.ts`);
@@ -228,29 +228,85 @@ serviceTest.each(["expired", "cleanup reserve"] as const)("an aggregate deadline
   const driver = path.join(f.root, "deadline-driver.ts");
   writeFileSync(driver, `import * as comparator from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
 import { existsSync, readFileSync } from "node:fs";
-const expires = process.argv.at(-1) === "expire";
-// The parent clock advances only after the first eight owned children
-// have started. Child checks retain their real clocks and deadlines.
+const mode = process.argv.at(-1);
+const expires = mode !== "continue";
+const [elapsed, runMs] = mode === "phase" ? [20_000, 15_000] : mode === "comparison"
+  ? [41 * 60_000, 45 * 60_000] : mode === "remaining" ? [580_000, 900_000] : [0, 30_000];
+// The parent clock advances after eight children start. The workers keep
+// their real clocks and execution bounds.
 Object.defineProperty(performance, "now", { value: () => expires && existsSync(${JSON.stringify(marker)})
-  && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length >= 8 ? ${mode === "expired" ? 1_000_000 : 65_000} : 0 });
+  && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length >= 8 ? elapsed : 0 });
 try { await comparator.touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ${JSON.stringify(files)},
-  { budgets: { fileMs: 20000, runMs: 100000 } }); } catch (error) {
+  { budgets: { fileMs: 300_000, runMs } }); } catch (error) {
   const ending = comparator.comparatorEnding?.(error);
   console.error(ending?.line ?? String(error)); process.exitCode = ending?.code ?? 1;
 }
 `);
   const run = (mode: string) => spawnSync(process.execPath, [driver, mode],
     { cwd: f.repo, env: f.env, encoding: "utf8", timeout: 30_000 });
-  const stopped = run("expire");
+  const stopped = run(limit);
   expect(stopped.status, stopped.stdout + stopped.stderr).toBe(75);
-  expect(stopped.stderr).toContain(mode === "expired"
-    ? "touched-tests: no verdict: head: test run exceeded"
-    : "touched-tests: no verdict: head: remaining run budget cannot fit a full file and its cleanup");
+  const reason = limit === "remaining" ? "remaining run budget cannot fit a full file and its cleanup" : `test run exceeded its ${limit} budget`;
+  expect(stopped.stderr).toContain(`touched-tests: no verdict: head: ${reason}`);
   expect(Object.keys(f.samples())).toHaveLength(8);
   const resumed = run("continue");
   expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
   expect(resumed.stdout.match(/reused complete green head file/g)).toHaveLength(8);
   expect(f.samples()).toEqual(Object.fromEntries(files.map(file => [file, 1])));
+}, 60_000);
+
+serviceTest("a hung file still hits its individual limit on a retry with a warm checkpoint", () => {
+  const f = fixture();
+  writeFileSync(path.join(f.repo, "b.test.ts"), f.source("b").replace("expect(1).toBe(1);",
+    "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 90_000);"));
+  f.git("add", "."); f.git("commit", "-m", "Hung file fixture");
+  const base = f.git("rev-parse", "origin/main");
+  const driver = path.join(f.root, "hung-driver.ts");
+  writeFileSync(driver, `import { touchedTests } from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
+const result = await touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ["a.test.ts", "b.test.ts"],
+  { budgets: { fileMs: 5000, runMs: 60_000 } });
+process.exitCode = result.introduced.length ? 1 : 0;
+`);
+  const run = () => spawnSync(process.execPath, [driver], { cwd: f.repo, encoding: "utf8", timeout: 25_000 });
+  for (const attempt of [1, 2]) {
+    const result = run();
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("NEW b.test.ts: <runner error> runner did not finish (124)");
+    expect(f.samples()).toEqual({ a: 1, b: attempt });
+    if (attempt === 2) expect(result.stdout).toContain("reused complete green head file a.test.ts");
+  }
+}, 60_000);
+
+serviceTest.each([false, true])("a phase cutoff leaves the file incomplete (observed refusal: %s)", refused => {
+  const f = fixture();
+  const file = "a.test.ts";
+  const hung = f.source("a").replace("expect(1).toBe(1);",
+    "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 90_000);");
+  writeFileSync(path.join(f.repo, file), refused
+    ? hung.replace('test("fixture contract"', 'test("recorded refusal", () => expect(1).toBe(2));\ntest("fixture contract"')
+    : hung);
+  f.git("add", "."); f.git("commit", "-m", "Hung baseline fixture");
+  const base = f.git("rev-parse", "HEAD");
+  f.git("update-ref", "refs/remotes/origin/main", base);
+  f.git("commit", "--allow-empty", "-m", "Same hung file on head");
+  const driver = path.join(f.root, "phase-cutoff.ts");
+  writeFileSync(driver, `import { touchedTests, comparatorEnding } from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
+try {
+  const result = await touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, [${JSON.stringify(file)}],
+    { budgets: { fileMs: 8000, runMs: 4000 } });
+  process.exitCode = result.introduced.length ? 1 : 0;
+} catch (error) {
+  const ending = comparatorEnding(error);
+  console.error(ending.line);
+  process.exitCode = ending.code;
+}
+`);
+  const result = spawnSync(process.execPath, [driver], { cwd: f.repo, encoding: "utf8", timeout: 25_000 });
+  expect(result.status, result.stdout + result.stderr).toBe(refused ? 1 : 75);
+  const detail = refused ? "(fail) recorded refusal" : "phase budget exhausted";
+  expect(result.stderr).toContain(`head: a.test.ts: runner did not finish (124); ${detail}`);
+  expect(result.stdout).not.toContain("touched-tests: baseline selected");
+  expect(f.samples()).toEqual({ a: 1 });
 }, 60_000);
 
 serviceTest("an observed cleanup refusal stays decisive when the next file exhausts the aggregate", () => {
@@ -312,6 +368,20 @@ test("portable file samples remain fresh even when their assertions pass", () =>
   expect(first.status, first.output).toBe(0); expect(again.status, again.output).toBe(0);
   expect(again.output).not.toContain("reused complete green head file");
   expect(f.samples()).toEqual({ a: 2, b: 2 });
+}, 60_000);
+
+test("Cloud portable cleanup receipt preserves green files across an incomplete retry", () => {
+  const f = fixture();
+  const noManager = { LLV_GATE_CHECKPOINT_CLEANUP: "cloud-owned-runner", XDG_RUNTIME_DIR: path.join(f.root, "no-manager"),
+    DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(f.root, "no-manager", "bus")}` };
+  const first = f.run(noManager);
+  expect(first.status, first.output).toBe(1);
+  expect(first.output).not.toContain("reused complete green head file a.test.ts");
+  const retry = f.run(noManager);
+  expect(retry.status, retry.output).toBe(1);
+  expect(retry.output).toContain("reused complete green head file a.test.ts");
+  expect(retry.output).not.toContain("reused complete green head file b.test.ts");
+  expect(f.samples()).toEqual({ a: 1, b: 2 });
 }, 60_000);
 
 serviceTest.each(["CHECKPOINT_TEST_MODE", "GIT_AUTHOR_NAME", "LLV_PRIVACY_TEST_MODE", "HTTPS_PROXY"])(
