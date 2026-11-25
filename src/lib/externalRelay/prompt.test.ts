@@ -197,7 +197,15 @@ test("sticker metadata reaches each conversation prompt alongside verbatim autho
     conversation: [oldRow, described, { ...bare, text: "" }, { ...animated, text: "" }], respond_to: animated.id } });
   const original = JSON.stringify(request);
   const owner = { messageId: animated.id, text: "", requestText: null };
-  const record = { seen: [], staticDigest: null } as RelayConversation;
+  const record: RelayConversation = {
+    id: "sticker-conversation",
+    relayId: "relay", targetId: "target", chatKey: "chat", requesterKey: author.key,
+    authority: "owner-tier", anchors: [], conversationId: null,
+    engine: "codex", sessionId: null, accountId: null, cwd: null,
+    turns: 0, turnsSinceCompaction: 0, createdAt: sent_at, lastTurnAt: sent_at,
+    seen: [], staticDigest: null, lastPromptTokens: null, compactions: 0,
+    state: "idle", runningRequestId: null,
+  };
   const prompts = [answerPrompt(request), toolRoundPrompt(request, 1, { results: [], callsLeft: 16, final: false }),
     conversationTurnPrompt(request, record, "[round]").prompt,
     ownerRunPrompt(request, owner, 1), ownerContinuationPrompt(request, owner, 1, record).prompt];
