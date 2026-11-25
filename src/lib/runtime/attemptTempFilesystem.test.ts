@@ -1003,7 +1003,12 @@ test.skipIf(process.platform !== "linux")("an incomplete container inventory can
   fs.writeFileSync(docker, '#!/bin/sh\nif [ "$1" = ps ]; then printf "111111111111\\n"; else printf "[]\\n"; fi\n', { mode: 0o700 });
   const previous = process.env.PATH;
   process.env.PATH = bin + path.delimiter + previous;
-  try { expect(await attemptReferencesClear(directory, directory, { ownNamespace: null, processes: [] })).toBeFalse(); }
+  const reasons: string[] = [];
+  try {
+    expect(await attemptReferencesClear(directory, directory, { ownNamespace: null, processes: [] },
+      undefined, undefined, reason => reasons.push(reason))).toBeFalse();
+    expect(reasons).toEqual(["container_inventory_unknown"]);
+  }
   finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
 });
 
@@ -1032,7 +1037,12 @@ test.skipIf(process.platform !== "linux")("a container bind through a physical p
   const bin = path.join(parent, "bin"); fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}\nif (process.argv[2] === "ps") console.log("111111111111"); else console.log(${JSON.stringify(JSON.stringify({ Id: "111111111111", Mounts: [{ Type: "bind", Source: directory }] }))});\n`, { mode: 0o700 });
   const previous = process.env.PATH; process.env.PATH = bin + path.delimiter + (previous ?? "");
-  try { expect(await attemptReferencesClear(alias, alias, { ownNamespace: null, processes: [] })).toBeFalse(); }
+  const reasons: string[] = [];
+  try {
+    expect(await attemptReferencesClear(alias, alias, { ownNamespace: null, processes: [] },
+      undefined, undefined, reason => reasons.push(reason))).toBeFalse();
+    expect(reasons).toEqual(["container_mount_reference"]);
+  }
   finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
 });
 

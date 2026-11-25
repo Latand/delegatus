@@ -69,10 +69,10 @@ async function fixture(task?: string, reviewBudget = false) {
     }
     return realExec(command, args.map(a => a === REMOTE ? f.origin : a), cwd, env, options);
   };
-  const finish = async (summary = "Stage implementation summary.", n = 1, verdict: "pass" | "fail" = "pass") => {
+  const finish = async (summary = "Stage implementation summary.", n = 1, verdict: "pass" | "fail" = "pass", result: string | undefined = summary.length <= 160 ? summary : undefined, findings: Array<{ severity: "P0" | "P1" | "P2" | "P3"; text: string }> = [{ severity: "P2", text: "Update the checks." }]) => {
     f.h.setConversationActive(false);
-    await engineModule.reportStageCompletion({ verdict, summary,
-      ...(verdict === "fail" ? { findings: [{ severity: "P2" as const, text: "Update the checks." }] } : {}) },
+    await engineModule.reportStageCompletion({ verdict, summary, result,
+      ...(verdict === "fail" ? { findings } : {}) },
     { kind: "agent", role: n === 2 ? "reviewer" : "builder", conversationId: `conversation_stage_${n}` }, f.h.ports);
     await tickPipelines([finishReported(f.h, `/codex/stage-${n}.jsonl`, verdict, summary)], f.h.ports);
     return loadPipelines().find(p => p.id === f.id)!;

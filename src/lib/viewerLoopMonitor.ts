@@ -101,7 +101,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
   watchdogFactory: () => ReturnType<typeof startLoopWatchdog> = () => startLoopWatchdog()) {
   const sink = createLoopLogSink();
   let writeLog = log ?? sink.enqueue;
-  const context = new AsyncLocalStorage<ViewerOperation>();
+  const context = new AsyncLocalStorage<Operation>();
   const active = new Set<Operation>();
   let completed: Operation[] = [];
   let last = now();
@@ -287,7 +287,11 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
           memoryUsage: { ...sample.memoryUsage, ...(sample.memoryUsage.bun ? { bun: { ...sample.memoryUsage.bun } } : {}) },
           caches: sample.caches.map(row => ({ ...row })), gaps: { ...sample.gaps, operations: [...sample.gaps.operations], sites: [...sample.gaps.sites] } })) };
     },
-    current: () => context.getStore(),
+    current(lifetime?: "active") {
+      const op = context.getStore();
+      // A detached callback still inherits the name after the operation has settled.
+      return lifetime === "active" && op?.end !== undefined ? undefined : op?.name;
+    },
     setProfiler(next: ReturnType<typeof createLoopProfiler>) { profiler?.stop(); profiler = next; },
     setLogSink(sink: (line: string) => void) {
       const previous = writeLog;
@@ -300,6 +304,8 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       const finish = () => {
         active.delete(op);
         op.end = now();
+        // Detached callbacks can retain this context after the pass finishes.
+        op.lease = undefined;
         completed.push(op);
         if (completed.length <= 128) return;
         let shortest = 0;
@@ -309,7 +315,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
         completed.splice(shortest, 1);
         completedDropped++;
       };
-      return readAttribution.run(name, () => context.run(name, () => {
+      return readAttribution.run(name, () => context.run(op, () => {
         try {
           const result = work();
           if (result && typeof (result as unknown as Promise<unknown>).then === "function") {
