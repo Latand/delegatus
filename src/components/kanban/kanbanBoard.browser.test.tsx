@@ -48203,7 +48203,7 @@ describe("relay requester enrolment on the board", () => {
   }, 180_000);
 });
 
-describe("one set of hints and one row of controls: priority hints belong to the Inbox, the pane's «…» keeps its line, the command has one copy, a connector is whole", () => {
+describe("one set of hints and one row of controls: priority hints belong to the Inbox, the pane's «…» keeps its line, the command has one copy", () => {
   /*
    * Rendered evidence for what the phone and the desktop disagreed on in the
    * 2.3.0 frames, over the existing fixture, desktop 1440×900 (and 1024 and
@@ -48216,9 +48216,6 @@ describe("one set of hints and one row of controls: priority hints belong to the
    *     the speaker stay on its first line, in one group at the row's end;
    *   - an expanded command has one copy control, ending its meta row, clear of
    *     the output's own control;
-   *   - a connector between two panes is drawn only while the whole of it is
-   *     inside the lane's box; the same pass with the rule taken out finds a
-   *     connector cut by the edge, which shows the check can fail.
    *
    *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=… bun test \
    *     src/components/kanban/kanbanBoard.browser.test.tsx -t "one set of hints"
@@ -48295,7 +48292,7 @@ describe("one set of hints and one row of controls: priority hints belong to the
     expect(failures).toEqual([]);
   }, 600_000);
 
-  browserTest("a stage pane's «…» stays on the first line with the context chip; a command has one copy control; a connector is whole", async () => {
+  browserTest("a stage pane's «…» stays on the first line with the context chip; a command has one copy control", async () => {
     fs.mkdirSync(OUT, { recursive: true });
     fs.mkdirSync(EVIDENCE, { recursive: true });
     const server = await serveEvidenceFixture(path.resolve(".artifacts/shared-states-and-hints-bundle"));
@@ -48317,8 +48314,8 @@ describe("one set of hints and one row of controls: priority hints belong to the
           await page.mouse.move(0, 0);
           await page.screenshot({ path: path.join(OUT, `${label}.png`) });
 
-          /* The identity row: «…» (and the speaker) in one group on the first line, the row one line when its chips fit. */
-          const rows = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".gsheet .pane[data-stage]")].flatMap((pane) => {
+          /* The window draws the selected stage's pane only: read each started stage by selecting its tab, one identity row per pane. */
+          const readRows = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".gsheet .pane[data-stage]")].flatMap((pane) => {
             const row = pane.querySelector<HTMLElement>(".ch-meta.pane-id");
             const menu = row?.querySelector<HTMLElement>("[data-reader-menu]");
             const chips = row?.querySelector<HTMLElement>(".ch-chips");
@@ -48336,23 +48333,39 @@ describe("one set of hints and one row of controls: priority hints belong to the
               ctx: Boolean(row.querySelector("[data-ctx-chip]")), chipsWidth: Math.round(chips.getBoundingClientRect().width), controlsWidth: Math.round(controlsBox.width),
             }];
           }));
+          const stageIds = await page.$$eval('.gsheet [role="tab"][data-tab-stage]', (tabs) => tabs.map((tab) => (tab as HTMLElement).dataset.tabStage ?? ""));
+          const rows: Awaited<ReturnType<typeof readRows>> = [];
+          for (const stage of stageIds) {
+            await page.click(`.gsheet [role="tab"][data-tab-stage="${stage}"]`);
+            await page.waitForSelector(`.gsheet [role="tab"][data-tab-stage="${stage}"][aria-selected="true"]`, { timeout: 10_000 });
+            await page.waitForTimeout(300);
+            rows.push(...await readRows());
+          }
           readings[label] = { rows };
           if (width === 1024 && lang === "en" && scheme === "light") {
-            /* The red path: the old structure, one wrapping row of loose siblings, drops «…» to a line of its own where the chips wrap. */
-            const old = await page.evaluate(() => {
-              const style = Object.assign(document.createElement("style"), { textContent: ".kb .pane .ch-meta.pane-id { flex-wrap: wrap !important; } .kb .pane .ch-meta.pane-id > .ch-chips, .kb .pane .ch-meta.pane-id > .ch-controls { display: contents !important; }" });
+            /* The red path: a pane's identity row narrowed until its chips wrap. The old structure, one wrapping row of loose siblings, drops «…» to a line of its own there; the structure in the tree keeps it on the first line. */
+            const startedStage = rows[0]?.stage;
+            if (startedStage) await page.click(`.gsheet [role="tab"][data-tab-stage="${startedStage}"]`);
+            const narrowed = await page.evaluate((narrow) => {
+              const style = Object.assign(document.createElement("style"), { textContent: `.gsheet .pane[data-stage] .ch-meta.pane-id { width: ${narrow}px !important; max-width: ${narrow}px !important; }` });
               document.head.append(style);
-              const wrapped = [...document.querySelectorAll<HTMLElement>(".gsheet .pane[data-stage] .ch-meta.pane-id")].flatMap((row) => {
+              const tops = () => [...document.querySelectorAll<HTMLElement>(".gsheet .pane[data-stage] .ch-meta.pane-id")].flatMap((row) => {
                 const menu = row.querySelector<HTMLElement>("[data-reader-menu]");
                 return menu && row.querySelector(".ch-model") ? [Math.round((menu.getBoundingClientRect().top - row.getBoundingClientRect().top) * 10) / 10] : [];
               });
+              const current = tops();
+              const old = Object.assign(document.createElement("style"), { textContent: ".kb .pane .ch-meta.pane-id { flex-wrap: wrap !important; } .kb .pane .ch-meta.pane-id > .ch-chips, .kb .pane .ch-meta.pane-id > .ch-controls { display: contents !important; }" });
+              document.head.append(old);
+              const wrapped = tops();
+              old.remove();
               style.remove();
-              return wrapped;
-            });
-            readings[`${label}-old-structure`] = old;
-            if (!old.some((top) => top > 4)) failures.push(`${label}: with the old structure «…» stays on the first line everywhere, so the check cannot fail (${JSON.stringify(old)})`);
+              return { current, wrapped };
+            }, 280);
+            readings[`${label}-narrow-structure`] = narrowed;
+            if (!narrowed.wrapped.some((top) => top > 4)) failures.push(`${label}: with the old structure «…» stays on the first line in a narrowed row, so the check cannot fail (${JSON.stringify(narrowed)})`);
+            if (!narrowed.current.length || narrowed.current.some((top) => top > 4)) failures.push(`${label}: «…» leaves the first line of a narrowed row (${JSON.stringify(narrowed)})`);
           }
-          if (rows.length < 3) failures.push(`${label}: only ${rows.length} started panes with an identity row`);
+          if (rows.length < 3) failures.push(`${label}: only ${rows.length} started panes with an identity row across the tabs`);
           for (const row of rows) {
             if (!row.menuOnFirstLine) failures.push(`${label} ${row.stage}: «…» is not on the first line (${JSON.stringify(row)})`);
             if (!row.controlsAtEnd || !row.menuInside) failures.push(`${label} ${row.stage}: the controls leave the row's end (${JSON.stringify(row)})`);
@@ -48363,7 +48376,9 @@ describe("one set of hints and one row of controls: priority hints belong to the
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
 
           if (width === 1440) {
-            /* The window holds one pane under its tabs: no connectors between panes remain to measure. */
+            /* The window holds one pane under its tabs: select the first started stage again for the frame and the command below. */
+            if (rows[0]?.stage) await page.click(`.gsheet [role="tab"][data-tab-stage="${rows[0].stage}"]`);
+            await page.waitForTimeout(300);
             await page.screenshot({ path: path.join(OUT, `${label}-pane-start.png`) });
 
             /* The command's one copy control, in the first started pane's conversation. */
