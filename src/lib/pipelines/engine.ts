@@ -1149,6 +1149,7 @@ const KILL_CONFIRMATION_MAX_POLLS = 8;
     `failed`; everything else (`queued`, `delivering`, …) is still in flight. */
 const KILL_DELIVERED_STATES = new Set(["delivered"]);
 const KILL_REFUSED_STATES = new Set(["failed", "rejected"]);
+const IDLE_STOP_NO_EFFECT_REASONS = new Set(["idle-retirement-deferred", "structured host termination is unavailable"]);
 
 export type StageStopProbes = {
   operationId?: string;
@@ -1399,7 +1400,7 @@ async function confirmStageStop(probe: StageHostProbe, operationId: string | nul
         if (status && binding) observedStatus = status;
         if (status && KILL_DELIVERED_STATES.has(status) && !resident()) return { outcome: "stopped" };
         if (status && KILL_REFUSED_STATES.has(status)) {
-          if (binding && durable?.receipt.reason !== "idle-retirement-deferred") return {
+          if (binding && !IDLE_STOP_NO_EFFECT_REASONS.has(durable?.receipt.reason ?? "")) return {
             outcome: "unconfirmed", operationId, detail: durable?.receipt.reason ?? `kill ${status} without termination proof`,
           };
           if (probes.onlyIfIdle || binding) return { outcome: "deferred" };
@@ -1454,9 +1455,7 @@ export async function stopPipelineStageAgent(
       binding = previous ?? undefined;
       assertCurrent();
       if (previous) {
-        if (!probes.onlyIfIdle || probes.onlyIfIdle.revision <= previous.revision) {
-          return await confirmStageStop(probe, previous.operationId, null, probes, previous);
-        }
+        if (!probes.onlyIfIdle) return await confirmStageStop(probe, previous.operationId, null, probes, previous);
         const client = probes.client === undefined ? runtimeHostClient() : probes.client;
         const now = probes.now ?? (() => performance.now());
         const budget = probes.budgetMs ?? KILL_CONFIRMATION_BUDGET_MS;
@@ -1473,16 +1472,22 @@ export async function stopPipelineStageAgent(
           stopObserving?.();
         });
         assertCurrent();
-        if (now() >= receiptDeadline || !receipt || !idleStopReceiptMatches(receipt, previous) || !KILL_REFUSED_STATES.has(receipt.receipt.status)
-          || receipt.receipt.reason !== "idle-retirement-deferred") return {
-          outcome: "unconfirmed", operationId: previous.operationId, detail: "the earlier stage stop has no no-effect receipt",
+        if (now() >= receiptDeadline || !receipt || !idleStopReceiptMatches(receipt, previous)) return {
+          outcome: "unconfirmed", operationId: previous.operationId, detail: "the earlier stage stop has no verified receipt",
         };
+        if (!KILL_REFUSED_STATES.has(receipt.receipt.status)
+          || !IDLE_STOP_NO_EFFECT_REASONS.has(receipt.receipt.reason ?? "")) {
+          if (probes.onlyIfIdle.revision <= previous.revision) {
+            return await confirmStageStop(probe, previous.operationId, receipt.receipt.status, probes, previous, receiptDeadline);
+          }
+          return { outcome: "unconfirmed", operationId: previous.operationId, detail: "the earlier stage stop has no no-effect receipt" };
+        }
       }
       if (!probes.onlyIfIdle) return { outcome: "deferred" };
       const owned = await claimIdleStop(ownerKey, {
         conversationId: probe.conversationId, sessionKey: probe.key, transcriptPath: probe.transcriptPath,
         revision: probes.onlyIfIdle.revision, writerClaim: probes.onlyIfIdle.writerClaim,
-      }, previous ?? undefined);
+      }, previous ?? undefined, previous?.operationId);
       binding = owned.binding;
       assertCurrent();
       if (!idleStopTargetMatches(probe, binding)) return { outcome: "deferred" };
