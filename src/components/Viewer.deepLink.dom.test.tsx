@@ -999,6 +999,58 @@ test("Escape on the conversation's window takes it out of the address, and F5 sh
   expect(dom.location.hash).toBe(`#p=${encodeURIComponent(TARGET_PROJECT)}`);
 });
 
+/** The link opened A; the operator then switched the window to B. Kanban
+    switches never rewrite the address, so it still names A when the window is left. */
+async function openLinkedThenSwitchToSecond(): Promise<HTMLElement> {
+  dom.localStorage.setItem(
+    `llv:kanban-readers:v1:${TARGET_PROJECT}`,
+    JSON.stringify([
+      { key: CONVERSATION_ID, path: TARGET_PATH, folded: false },
+      { key: OTHER_ID, path: OTHER_PATH, folded: false },
+    ]),
+  );
+  dom.location.hash = `#c=${encodeURIComponent(CONVERSATION_ID)}`;
+  stubFetch(() => [otherRow, targetRow, secondRow]);
+  const host = await mountViewer();
+  expect(await waitFor(() => openOnBoard(host, TARGET_PATH) !== null)).toBe(true);
+  const jump = host.querySelector(`[data-open-agent-jump="${OTHER_ID}"]`);
+  expect(jump).not.toBeNull();
+  await click(jump!);
+  expect(host.querySelector(`[data-open-agent-jump="${OTHER_ID}"]`)?.getAttribute("aria-current")).toBe("true");
+  expect(dom.location.hash).toBe(`#c=${encodeURIComponent(CONVERSATION_ID)}`);
+  return host;
+}
+
+async function expectBoardAfterReload(): Promise<void> {
+  expect(dom.location.hash).toBe(`#p=${encodeURIComponent(TARGET_PROJECT)}`);
+  expect(historyWrites.length).toBeGreaterThan(0);
+  expect(historyWrites.every((write) => write.startsWith("replace:"))).toBe(true);
+  const reloaded = await reload();
+  await act(async () => { await Bun.sleep(300); });
+  expect(reloaded.querySelector("[data-agent-window-frame]")).toBeNull();
+  expect(reloaded.querySelector("[data-kanban-board]")).not.toBeNull();
+  expect(dom.location.hash).toBe(`#p=${encodeURIComponent(TARGET_PROJECT)}`);
+}
+
+test("leaving the window on another agent than the link names takes the link out of the address (close button)", async () => {
+  const host = await openLinkedThenSwitchToSecond();
+  historyWrites = [];
+  await click(host.querySelector(`[data-reader-close]`)!);
+  expect(host.querySelector("[data-agent-window-frame]")).toBeNull();
+  await expectBoardAfterReload();
+});
+
+test("leaving the window on another agent than the link names takes the link out of the address (Escape)", async () => {
+  const host = await openLinkedThenSwitchToSecond();
+  historyWrites = [];
+  await act(async () => {
+    dispatch(document, new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await Bun.sleep(80);
+  });
+  expect(host.querySelector("[data-agent-window-frame]")).toBeNull();
+  await expectBoardAfterReload();
+});
+
 test("closing a conversation the address does not name leaves the address alone", async () => {
   const host = await openTargetByLink();
   const close = host.querySelector(`[data-reader-close]`)!;

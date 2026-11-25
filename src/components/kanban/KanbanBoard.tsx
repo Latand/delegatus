@@ -635,6 +635,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
      an attention handoff and a row's × leave focus where it is. */
   const focusOnShow = useRef(false);
   const windowAgentRef = useRef<string | null>(null);
+  /* The keys of the agents in the window, kept by the list below. */
+  const windowKeysRef = useRef<readonly string[]>([]);
   /* The control outside the board's cards the window was opened from (the
      seat's expand button): closing the window gives it the keyboard back. */
   const openedFrom = useRef<HTMLElement | null>(null);
@@ -654,7 +656,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
   });
   const leaveWindow = useCallback(() => {
     if (!windowAgentRef.current) return;
-    readerClosed(windowAgentRef.current);
+    /* Nothing stays on screen, so the address must name none of the window's
+       agents: a link opened one, and a switch since may have shown another. */
+    for (const key of new Set([windowAgentRef.current, ...windowKeysRef.current])) readerClosed(key);
     setWindow(null, null);
     /* The pill brings the window back; it takes the keyboard. */
     focusAfterWindow("[data-open-agents-pill]");
@@ -760,7 +764,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
     })),
   ], [openConversations, shownDrafts, t]);
   const windowAgents = useMemo(() => (closing ? openNow.filter((agent) => agent.key !== closing.key) : openNow), [openNow, closing]);
-  const windowKeysRef = useRef<readonly string[]>([]);
   windowKeysRef.current = windowAgents.map((agent) => agent.key);
   /* The agent in the reader. One whose conversation is gone from the list
      (closed elsewhere, or its file left the board) is not shown. */
