@@ -44,6 +44,7 @@ export interface ViewState {
   pending: ReadonlySet<string>;
   /** Why the last action was refused, worded here in the operator's language. */
   error: ActionError | null;
+  optionalCheckFailures?: string[];
   /** A web restart was asked for and nothing answers yet. */
   waitingForWeb: boolean;
   /** The web process answering now is not the one that served this page. */
@@ -226,6 +227,9 @@ function Header({ s, state, actions, t, locale }: { s: Snapshot; state: ViewStat
       </div>
       {s.check.state === "failed" && checkError ? <p data-error="check" className={ERROR_LINE}>{checkError}</p> : null}
       {state.error ? <p data-error="action" className={ERROR_LINE}>{refusalText(state.error, t)}</p> : null}
+      {state.optionalCheckFailures?.length ? <p role="status" data-warning="optional-checks" className="m-0 rounded-[8px] bg-warning-soft px-2 py-1.5 text-label text-warning [overflow-wrap:anywhere]">
+        {t("selfUpdate.warning.optionalChecks", { checks: state.optionalCheckFailures.join(", ") })}
+      </p> : null}
     </section>
   );
 }

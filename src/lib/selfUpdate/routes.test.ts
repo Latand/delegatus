@@ -741,6 +741,53 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     await wait(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
   }
 
+  test.each(["optional-red", "required-red", "unreadable-protection"] as const)("manual checkout Update uses required CI on the equal-tree PR head: %s", async scenario => {
+    const h = harness({ relaunch: true, remote: "https://github.com/example/project.git" });
+    const head = "a".repeat(40), tree = "b".repeat(40);
+    const target = { sha: tipSha, short: tipSha.slice(0, 7), version: "1.0.1", date: "" };
+    const checkReads: string[] = [];
+    let builds = 0;
+    h.deps.check = async () => ({ ok: true, installed: { ...target, sha: firstSha, short: firstSha.slice(0, 7) }, available: target,
+      relation: "behind", ahead: 0, behind: 1, delta: null });
+    h.deps.createRunner = () => ({ state: idleUpdate(["fetch", "install", "build", "ready"]), restore() {}, logPath: () => "",
+      async start() { builds++; }, async retry() { throw new Error("unexpected retry"); } });
+    h.deps.green = new GreenReader({ now: () => 1000, treeOf: async () => tree, fetch: (async input => {
+      const url = String(input);
+      if (url.includes("/pulls")) return Response.json([{ merged_at: "2026-01-01", merge_commit_sha: tipSha, base: { ref: "main" }, head: { sha: head } }]);
+      if (url.includes("/branches/")) return scenario === "unreadable-protection" ? new Response(null, { status: 403 })
+        : Response.json({ protected: true, protection: { required_status_checks: { checks: [{ context: "typecheck", app_id: 15368 }] } } });
+      if (url.includes("/statuses")) return Response.json([]);
+      if (url.includes("/check-runs")) {
+        checkReads.push(url);
+        return Response.json({ check_runs: [
+          { name: "Windows (native)", status: "completed", conclusion: "failure", app: { id: 15368 } },
+          { name: "typecheck", status: "completed", conclusion: scenario === "required-red" ? "failure" : "success", app: { id: 15368 } },
+          { name: "Minimum macOS SQLite", status: "completed", conclusion: "failure", app: { id: 15368 } },
+        ] });
+      }
+      return Response.json({ commit: { tree: { sha: tree } } });
+    }) as typeof fetch });
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    try {
+      await h.service.check();
+      const response = await postUpdate(post("/update", { key: "manual-required-ci" }));
+      const body = await response.json();
+      expect(checkReads).toEqual([`https://api.github.com/repos/example/project/commits/${head}/check-runs?per_page=100`]);
+      if (scenario === "optional-red") {
+        expect(response.status).toBe(202);
+        expect(body.optionalCheckFailures).toEqual(["Minimum macOS SQLite", "Windows (native)"]);
+        expect(builds).toBe(1);
+      } else {
+        expect(response.status).toBe(409);
+        expect(body).toMatchObject(scenario === "required-red"
+          ? { code: "deployment-refused", detail: "red", green: { state: "red", checks: ["typecheck"] } }
+          : { code: "deployment-refused", detail: "unknown" });
+        expect(builds).toBe(0);
+        expect(existsSync(join(h.deps.dir, "apply.json"))).toBe(false);
+      }
+    } finally { h.service.stop(); }
+  });
+
   test("exact admission reports target CI pending and retries while the equal-tree PR head remains red", async () => {
     const h = harness({ relaunch: true, holdBuild: true });
     const head = "a".repeat(40), tree = "b".repeat(40);
@@ -2004,7 +2051,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     expect(existsSync(record.releasePointer)).toBe(false);
     const result = await h.service.startUpdate("legacy-prerequisite-build");
     expect(result).toMatchObject(verdict === "green" ? { ok: true } : { ok: false, code: "deployment-refused", detail: verdict });
-    expect(reads).toEqual([[h.deps.remote, h.deps.branch, target.sha, checkout]]);
+    expect(reads).toEqual([[h.deps.remote, h.deps.branch, target.sha, checkout, undefined, true, "manual-update"]]);
     expect(builds).toBe(verdict === "green" ? 1 : 0);
     await Bun.sleep(10);
   });
@@ -2025,7 +2072,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     expect((await h.service.snapshot()).auto?.availability).toBe(legacyToken ? "launcher-upgrade" : "hand-managed");
     const result = await h.service.startUpdate("manual-rebuild");
     expect(result).toMatchObject(verdict === "green" ? { ok: true } : { ok: false, status: 409, code: "deployment-refused", detail: "red" });
-    expect(reads).toEqual([[h.deps.remote, h.deps.branch, target.sha, checkout]]);
+    expect(reads).toEqual([[h.deps.remote, h.deps.branch, target.sha, checkout, undefined, true, "manual-update"]]);
     expect(builds).toBe(verdict === "green" ? 1 : 0);
     await Bun.sleep(10);
   });
@@ -2355,7 +2402,7 @@ for (const operation of ["update", "retry"] as const) {
     try {
       const result = operation === "update" ? await service.startUpdate("package-update") : await service.retry("package-retry");
       expect(result).toMatchObject(verdict === "green" ? { ok: true } : { ok: false, status: 409, code: "deployment-refused", detail: verdict });
-      expect(reads).toEqual([[deps.remote, deps.branch, target.sha, checkout]]);
+      expect(reads).toEqual([[deps.remote, deps.branch, target.sha, checkout, undefined, true, "manual-update"]]);
       expect(registry.mock.calls.length).toBe(verdict === "green" ? 1 : 0);
       await Bun.sleep(10);
       expect(existsSync(record.releasePointer)).toBe(false);

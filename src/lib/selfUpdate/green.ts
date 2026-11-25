@@ -4,7 +4,7 @@ import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { rollupLatestChecksByName } from "@/lib/forge/checkRollup";
 import { runGit } from "./git";
 
-export type GreenVerdict = { state: "green" | "red" | "pending" | "checks-timeout" | "no-checks" | "no-pull-request" | "untested-tree" | "unknown" | "unavailable"; detail?: string; checks?: string[]; done?: number; total?: number; nextAt?: string; firstReadAt?: string };
+export type GreenVerdict = { state: "green" | "red" | "pending" | "checks-timeout" | "no-checks" | "no-pull-request" | "untested-tree" | "unknown" | "unavailable"; detail?: string; checks?: string[]; optionalCheckFailures?: string[]; done?: number; total?: number; nextAt?: string; firstReadAt?: string };
 export interface GreenPorts {
   fetch: typeof fetch;
   treeOf(repo: string, sha: string): Promise<string>;
@@ -110,11 +110,13 @@ export class GreenReader {
     return checks;
   }
   async read(remote: string, branch: string, target: string, checkout: string, firstReadAt?: string, fresh = false,
-    policy: "automatic" | "exact-deploy" = "automatic"): Promise<GreenVerdict> {
+    policy: "automatic" | "manual-update" | "exact-deploy" = "automatic"): Promise<GreenVerdict> {
     const repository = githubRepositoryOfRemote(remote);
     if (!repository) return { state: "unavailable" };
     const exactDeploy = policy === "exact-deploy";
-    const cacheKey = exactDeploy ? `${target}:exact-deploy` : target;
+    const manualUpdate = policy === "manual-update";
+    const requiredPolicy = exactDeploy || manualUpdate;
+    const cacheKey = requiredPolicy ? `${target}:${policy}` : target;
     const cached = this.final.get(cacheKey);
     if (cached && !fresh) return cached;
     const finish = (verdict: GreenVerdict) => {
@@ -199,7 +201,7 @@ export class GreenReader {
       });
       const checks = [
         ...[...runGroups].flatMap(([appId, entries]) => {
-          if (!exactDeploy) return rollupLatestChecksByName(entries).map(check => ({ ...check, kind: "run" as const, appId }));
+          if (!requiredPolicy) return rollupLatestChecksByName(entries).map(check => ({ ...check, kind: "run" as const, appId }));
           // A queued rerun has no started_at yet. REST ids still establish
           // which same-app run is newer; a missing timestamp cannot revive
           // the preceding run's failure.
@@ -211,31 +213,36 @@ export class GreenReader {
         }),
         ...rollupLatestChecksByName(latestStatuses).map((check) => ({ ...check, kind: "status" as const, appId: null })),
       ];
-      const requiredOnly = exactDeploy && required.length > 0;
+      const requiredOnly = requiredPolicy && required.length > 0;
       if (!checks.length) {
         if (runtimeGateRed) return finish({ state: "red", detail: "runtime-gate",
-          checks: [...new Set([...required.map(check => check.name), "runtime-gate"])].sort() });
+          checks: manualUpdate ? ["runtime-gate"] : [...new Set([...required.map(check => check.name), "runtime-gate"])].sort() });
         return requiredOnly ? { state: "pending", done: 0, total: required.length, checks: required.map(check => check.name).sort() }
           : finish({ state: "no-checks", checks: required.map(check => check.name).sort() });
       }
-      // Exact deployment follows the tracked branch's required checks on the
-      // requested commit. Automatic updates retain their merged-PR policy.
-      const relevant = requiredOnly ? checks.filter(check => required.some(({ name, appId }) => check.name === name
-        && (appId === null || (check.kind === "run" && check.appId === appId)))) : checks;
-      const red = relevant.find((check) => check.verdict === "red");
+      // Manual updates and exact deploys use the same branch protection.
+      // An empty required set keeps every observed check in scope.
+      const isRequired = (check: (typeof checks)[number]) => required.some(({ name, appId }) => check.name === name
+        && (appId === null || (check.kind === "run" && check.appId === appId)));
+      const relevant = requiredOnly ? checks.filter(isRequired) : checks;
+      const red = relevant.filter(check => check.verdict === "red").map(check => check.name);
       const notGreen = [...new Set([...relevant.filter(check => check.verdict !== "green").map(check => check.name),
         ...required.filter(({ name, appId }) => !checks.some(check => check.name === name && check.verdict === "green"
           && (appId === null || (check.kind === "run" && check.appId === appId)))).map(check => check.name)])].sort();
-      if (red || runtimeGateRed) return finish({ state: "red", detail: red?.name ?? "runtime-gate",
-        checks: [...new Set([...notGreen, ...(runtimeGateRed ? ["runtime-gate"] : []), ...(runtimeGatePending ? ["runtime-gate"] : [])])].sort() });
+      if (red.length || runtimeGateRed) return finish({ state: "red", detail: red[0] ?? "runtime-gate",
+        checks: [...new Set([...(manualUpdate ? red : notGreen), ...(runtimeGateRed || (!manualUpdate && runtimeGatePending) ? ["runtime-gate"] : [])])].sort() });
       const done = requiredOnly ? required.filter(({ name, appId }) => checks.some(check => check.name === name && check.verdict === "green"
         && (appId === null || (check.kind === "run" && check.appId === appId)))).length : relevant.filter(check => check.verdict === "green").length;
       const total = requiredOnly ? required.length : relevant.length;
       const missing = required.find(({ name, appId }) => !checks.some((check) => check.name === name && check.verdict === "green"
         && (appId === null || (check.kind === "run" && check.appId === appId))));
-      if (done === total && !missing && !runtimeGatePending) return finish({ state: "green", done, total });
+      if (done === total && !missing && !runtimeGatePending) {
+        const optionalCheckFailures = manualUpdate && requiredOnly
+          ? [...new Set(checks.filter(check => check.verdict === "red" && !isRequired(check)).map(check => check.name))].sort() : [];
+        return finish({ state: "green", done, total, ...(optionalCheckFailures.length ? { optionalCheckFailures } : {}) });
+      }
       if (runtimeGatePending) return { state: "pending", done, total, detail: "runtime-gate", checks: [...new Set([...notGreen, "runtime-gate"])].sort() };
-      if (exactDeploy) return { state: "pending", done, total, detail: missing?.name, checks: notGreen };
+      if (requiredPolicy) return { state: "pending", done, total, detail: missing?.name, checks: notGreen };
       const persistedFirst = firstReadAt ? Date.parse(firstReadAt) : NaN;
       const first = this.firstPending.get(target) ?? (Number.isFinite(persistedFirst) ? persistedFirst : this.ports.now());
       this.firstPending.set(target, first);

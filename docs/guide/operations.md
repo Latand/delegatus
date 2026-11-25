@@ -12,6 +12,12 @@ release directory, then replaces and verifies the launcher, web server and
 runtime host together. If verification fails, the launcher restores the previous
 release. Running sessions reconnect and interrupted work resumes.
 
+For a GitHub checkout or packaged install, manual updates require the tracked
+branch's required CI checks to pass. The dialog names any optional checks
+that failed when it starts the update. If the branch defines no required
+checks, all observed checks must be green. If branch protection cannot be
+read, the update is refused.
+
 ### When the launcher needs a restart
 
 If an older launcher needs upgrading, the Update dialog offers **Restart

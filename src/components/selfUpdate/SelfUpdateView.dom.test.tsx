@@ -33,7 +33,7 @@ const { SelfUpdateView } = await import("./SelfUpdateView");
 const { publishBlockerNames } = await import("./blockerNames");
 const { resetDrainDecisionsForTests } = await import("./AutoDrainDecision");
 const { actionError, day } = await import("./selfUpdateCopy");
-type ActionError = import("./selfUpdateCopy").ActionError;
+type ViewState = import("./SelfUpdateView").ViewState;
 const { setLocale } = await import("@/lib/i18n");
 
 afterAll(() => { void dom.happyDOM.close(); });
@@ -142,7 +142,7 @@ afterEach(() => {
   setLocale("en");
 });
 
-function render(s: Snapshot, state: Partial<{ armed: boolean; openLogs: Set<string>; pending: Set<string>; error: ActionError | null; waitingForWeb: boolean; reloadTo: string | null }> = {}, live: "sse" | "polling" | "connecting" = "sse"): HTMLElement {
+function render(s: Snapshot, state: Partial<ViewState> = {}, live: "sse" | "polling" | "connecting" = "sse"): HTMLElement {
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -1026,6 +1026,33 @@ describe("the rest of the surface", () => {
     flushSync(() => root!.unmount());
     el = render(snapshot(), { error: actionError(502, null) });
     expect(text(el.querySelector('[data-error="action"]'))).toBe("The request failed (HTTP 502).");
+  });
+
+  test.each([
+    ["en", "The selected revision is not green (privacy-publication, typecheck)."],
+    ["uk", "Вибрана ревізія ще не має зеленого статусу CI (privacy-publication, typecheck)."],
+  ] as const)("%s renders the failed CI checks in a deployment refusal", (locale, expected) => {
+    setLocale(locale);
+    const payload = { code: "deployment-refused", detail: "red",
+      green: { state: "red" as const, detail: "typecheck", checks: ["privacy-publication", "typecheck"] } };
+    const el = render(snapshot(), { error: actionError(409, payload) });
+    expect(text(el.querySelector('[data-error="action"]'))).toBe(expected);
+  });
+
+  test("a runtime-host refusal keeps its own wording in Ukrainian", () => {
+    setLocale("uk");
+    const el = render(snapshot(), { error: actionError(503, { code: "deployment-refused" }) });
+    expect(text(el.querySelector('[data-error="action"]'))).toBe("Runtime host не прийняв розгортання");
+  });
+
+  test.each([
+    ["en", "Optional CI checks failed for this update (Minimum macOS SQLite, Windows (native))."],
+    ["uk", "Необов’язкові перевірки CI для цього оновлення не пройшли (Minimum macOS SQLite, Windows (native))."],
+  ] as const)("%s warns about all failed optional checks on an admitted update", (locale, expected) => {
+    setLocale(locale);
+    const el = render(snapshot(), { optionalCheckFailures: ["Minimum macOS SQLite", "Windows (native)"] });
+    expect(text(el.querySelector('[data-warning="optional-checks"][role="status"]'))).toBe(expected);
+    expect(el.querySelector('[data-error="action"]')).toBeNull();
   });
 
   test("Ukrainian: a memory-guard failure and a 409 refusal carry no English sentence", () => {

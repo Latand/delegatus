@@ -10,7 +10,7 @@ import type { Snapshot } from "@/lib/selfUpdate/types";
 
 import { OPEN_SELF_UPDATE_EVENT } from "./openSelfUpdate";
 import { SelfUpdateConfirm } from "./SelfUpdateConfirm";
-import { actionError, targetText, type ActionError } from "./selfUpdateCopy";
+import { actionError, targetText, type ActionError, type ActionResponse } from "./selfUpdateCopy";
 import { SelfUpdateView, type ViewActions, type ViewState } from "./SelfUpdateView";
 import { selfUpdateTicket, useSelfUpdateFeed } from "./useSelfUpdateFeed";
 
@@ -52,6 +52,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const [openLogs, setOpenLogs] = useState<Set<string>>(() => new Set());
   const [pending, setPending] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<ActionError | null>(null);
+  const [optionalCheckFailures, setOptionalCheckFailures] = useState<string[]>([]);
   const [webRestart, setWebRestart] = useState<{ pid: number | null } | null>(null);
   const [firstWebPid, setFirstWebPid] = useState<number | null | undefined>(undefined);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -72,6 +73,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const act = useCallback(async (key: string, path: string, body?: unknown) => {
     setPending((value) => new Set(value).add(key));
     setError(null);
+    setOptionalCheckFailures([]);
     /* The snapshot this action answers with is ordered from now: a stream
        state that arrives while it runs is newer and stays. Its outcome (the
        error, the restart it began) is the action's own and always shown. */
@@ -82,8 +84,9 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
         headers: body === undefined ? {} : { "content-type": "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
-      const payload = await response.json().catch(() => null) as ({ error?: string; code?: string; detail?: string; snapshot?: Snapshot } & Partial<Snapshot>) | null;
+      const payload = await response.json().catch(() => null) as ActionResponse | null;
       if (!response.ok) setError(actionError(response.status, payload));
+      else if (payload?.optionalCheckFailures?.length) setOptionalCheckFailures(payload.optionalCheckFailures);
       const next = response.ok ? payload as Snapshot | null : payload?.snapshot;
       if (next && next.meta) feed.accept(next, ticket);
       return response.ok;
@@ -178,6 +181,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     openLogs,
     pending,
     error,
+    optionalCheckFailures,
     waitingForWeb: webRestart !== null && (feed.offline || !web || web.pid === webRestart.pid),
     reloadTo: replaced ? (s?.serving.web?.short || s?.installed.short || null) : null,
   };

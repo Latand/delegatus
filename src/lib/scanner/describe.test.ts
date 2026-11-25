@@ -108,7 +108,7 @@ test("symlinked and physical sibling worktrees keep one project after deletion",
   }
 });
 
-afterAll(() => {
+afterAll(async () => {
   resetLegacyDocumentStoresForTests();
   resetStateReadonlyReaderForTests();
   // Linux permits unlinking open SQLite files; Windows requires them closed.
@@ -122,7 +122,16 @@ afterAll(() => {
   else delete process.env.LLV_STATE_DIR;
   if (REAL_HOME !== undefined) process.env.HOME = REAL_HOME;
   else delete process.env.HOME;
-  fs.rmSync(SANDBOX, { recursive: true, force: true });
+  // The Windows runner's Bun returns EBUSY directly from recursive rm.
+  for (let retries = 0; ; retries++) {
+    try {
+      fs.rmSync(SANDBOX, { recursive: true, force: true });
+      break;
+    } catch (error) {
+      if (!WINDOWS_ONLY || (error as NodeJS.ErrnoException).code !== "EBUSY" || retries >= 10) throw error;
+      await Bun.sleep(200);
+    }
+  }
 });
 
 test("parseWorktreeGitdir resolves an absolute gitdir into repo + worktree name", () => {
