@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { backendResponse, delegationCreated, FakeLiveProvider, functionCall, message } from "./fakeProvider";
 import { RESOURCE } from "@/lib/chatgptPlan/constants";
-import { complete, now as planNow, planFixture, stream } from "@/lib/chatgptPlan/plan.fixture";
+import { complete, now as planNow, planFixture, stream, until } from "@/lib/chatgptPlan/plan.fixture";
 import { PlanSession } from "@/lib/chatgptPlan/session";
 import { LIVE_BACKEND_MODEL, PLAN_TOOL_NAMESPACE } from "./sessionConfig";
 import type { BackendRequest, planBackendRequest } from "./sessionConfig";
@@ -1825,6 +1825,31 @@ test("prototype frame bytes reach backend vision while tool output and transcrip
   expect(output).toContain("Board"); expect(output).not.toContain("base64");
   expect(JSON.stringify(f.service.transcriptRecord(s.sessionId))).not.toContain("iVBORw");
   expect(f.sends()).toBe(0); await f.service.close(s.sessionId);
+});
+
+test("an eligible ChatGPT plan never receives prototype image attachments", async () => {
+  const { prototypeTask, storePrototypePictures } = await import("./prototypeRead.fixture");
+  const task = prototypeTask("task_plan_visual"); await storePrototypePictures(task);
+  const f = fixture("synthetic-credential", task);
+  const requests: ReturnType<typeof planBackendRequest>[] = [];
+  const provider = Object.assign(f.provider, {
+    respondOnPlan: async (request: ReturnType<typeof planBackendRequest>, _signal: AbortSignal, _owner: () => boolean) => {
+      requests.push(request);
+      return { output: [{ ...functionCall("plan-frame", "view_prototype_frame", { taskId: task.id, variants: [1], view: "Board", width: 1440, lang: "en" }), namespace: PLAN_TOOL_NAMESPACE }] };
+    },
+  });
+  const service = new CompanionLiveSessions(f.storage, f.admission, f.reads, provider, {
+    key: () => "synthetic-credential", timers: false, closeTimeoutMs: 20,
+    plan: { eligible: async () => true, voiceBilling: async () => "plan", owner: starter => "operator" in starter },
+  });
+  const session = await service.start({ project: "fixture", locale: "en", sdp: "v=0", startedBy: { operator: true } });
+  try {
+    provider.replay(session.providerId, delegationCreated("plan-visual-frame", 1_000));
+    await service.drain(session.sessionId);
+    expect(requests).toHaveLength(1);
+    expect(JSON.stringify(requests[0])).not.toContain("input_image");
+    expect(JSON.stringify(service.transcriptRecord(session.sessionId))).toContain("supports text only");
+  } finally { await service.close(session.sessionId); }
 });
 
 async function credentialReadFixture(options: { taskText?: (key: string) => string; messages?: (key: string) => string[] } = {}) {
@@ -3887,6 +3912,55 @@ test.each(["owner", "member", "unconfigured", "limit", "scope-policy", "context-
       expect(planRequests).toHaveLength(1);
       expect(f.provider.requests).toHaveLength(2);
     }
+  } finally {
+    await service.close(call.sessionId);
+    plan.dispose();
+    if (oldClient === undefined) delete process.env.LLV_CHATGPT_PLAN_CLIENT_ID; else process.env.LLV_CHATGPT_PLAN_CLIENT_ID = oldClient;
+  }
+});
+
+test("a concurrent policy denial stays sticky and fences the slower and next Voice turns", async () => {
+  const oldClient = process.env.LLV_CHATGPT_PLAN_CLIENT_ID;
+  process.env.LLV_CHATGPT_PLAN_CLIENT_ID = "dynamic_agent_client";
+  const f = fixture();
+  let releaseSlow!: (response: Response) => void;
+  let slowStarted!: () => void;
+  const slow = new Promise<Response>(resolve => { releaseSlow = resolve; });
+  const started = new Promise<void>(resolve => { slowStarted = resolve; });
+  const planRequests: Array<Record<string, unknown>> = [];
+  const plan = planFixture(async (url, init) => {
+    expect(url).toBe(`${RESOURCE}/responses`);
+    planRequests.push(JSON.parse(String(init?.body)));
+    if (planRequests.length === 1) { slowStarted(); return slow; }
+    return Response.json({ error: { code: "chatpass_v2_scope_not_authorized" } }, { status: 403 });
+  });
+  const session = new PlanSession(plan.store, plan.oidc, () => planNow);
+  plan.seed({ models: [LIVE_BACKEND_MODEL] });
+  const owner = (starter: import("./storage").SessionStarter) => "operator" in starter;
+  const provider = Object.assign(f.provider, {
+    respondOnPlan: (body: ReturnType<typeof planBackendRequest>, signal: AbortSignal, guard: () => boolean) => session.respond(body, signal, guard),
+  });
+  const service = new CompanionLiveSessions(f.storage, f.admission, f.reads, provider, {
+    key: () => "synthetic-credential", closeTimeoutMs: 20, timers: false,
+    plan: { eligible: model => session.eligible(model), voiceBilling: model => session.voiceBilling(model), owner },
+  });
+  const starter = { operator: true } as const;
+  const call = await service.start({ project: "fixture", locale: "en", sdp: "v=0", startedBy: starter });
+  try {
+    provider.replay(call.providerId, delegationCreated("slow-policy-race", 1_000));
+    await started;
+    provider.replay(call.providerId, delegationCreated("fast-policy-denial", 2_000));
+    await until(() => planRequests.length === 2);
+    await until(() => service.planBillingFor(starter)?.source === "blocked");
+    releaseSlow(Response.json({ error: { code: "temporary_unavailable" } }, { status: 503 }));
+    await service.drain(call.sessionId);
+    provider.replay(call.providerId, delegationCreated("next-policy-turn", 3_000));
+    await service.drain(call.sessionId);
+    expect(planRequests).toHaveLength(2);
+    expect(f.provider.requests).toHaveLength(0);
+    expect(Object.keys(f.storage.read().sessions[call.sessionId].usage!.responses)).toHaveLength(0);
+    expect(f.storage.settings().usageUsd + f.storage.settings().reservedUsd).toBeCloseTo(VOICE_SESSION_RESERVE_USD);
+    expect(service.planBillingFor(starter)).toEqual({ source: "blocked", reason: "policy_denied" });
   } finally {
     await service.close(call.sessionId);
     plan.dispose();

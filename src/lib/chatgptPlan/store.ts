@@ -14,6 +14,7 @@ export type TokenSet = {
 };
 export type Credentials = {
   version: 1; issuer: typeof ISSUER; clientId: string; savedAt: number;
+  grantId?: string;
   subject?: string; email?: string; tokens?: TokenSet; models?: string[];
   pendingRegistration?: true; pendingRotation?: true;
   registrationMode?: "dynamic";
@@ -22,7 +23,9 @@ export type Credentials = {
   planPauseUntil?: number;
   planPauseReason?: "plan_limit" | "retry_later";
   pendingGrantRefresh?: string;
-  planRestriction?: "not_eligible" | "request_invalid";
+  pendingGrantClientId?: string;
+  pendingClientId?: string;
+  planRestriction?: "not_eligible" | "request_invalid" | "policy_denied";
 };
 
 const hasOwner = (uid: number) => !process.getuid || process.getuid() === uid;
@@ -93,7 +96,10 @@ export class PlanStore {
       || (row.planPauseUntil !== undefined && !epoch(row.planPauseUntil))
       || (row.planPauseReason !== undefined && row.planPauseReason !== "plan_limit" && row.planPauseReason !== "retry_later")
       || (row.pendingGrantRefresh !== undefined && !textField(row.pendingGrantRefresh))
-      || (row.planRestriction !== undefined && row.planRestriction !== "not_eligible" && row.planRestriction !== "request_invalid")
+      || (row.pendingGrantClientId !== undefined && !clientIdValid(row.pendingGrantClientId))
+      || (row.pendingClientId !== undefined && !clientIdValid(row.pendingClientId))
+      || (row.grantId !== undefined && !textField(row.grantId))
+      || (row.planRestriction !== undefined && row.planRestriction !== "not_eligible" && row.planRestriction !== "request_invalid" && row.planRestriction !== "policy_denied")
       || (row.registrationMode !== undefined && row.registrationMode !== "dynamic")
       || (row.models !== undefined && (!Array.isArray(row.models) || row.models.length > 200 || !row.models.every(modelSlug)))
       || ["pendingRotation", "pendingRegistration", "signedOut"].some(key => row[key] !== undefined && row[key] !== true)

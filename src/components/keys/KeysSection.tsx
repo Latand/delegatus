@@ -665,7 +665,7 @@ function useChatGPTPlan(open: boolean) {
 }
 
 const visiblePlanReasons = ["declined", "client_rejected", "account_mismatch", "registration_incomplete",
-  "credential_file", "host_file", "expired", "retry_later", "busy", "not_eligible", "request_invalid"] as const;
+  "credential_file", "host_file", "expired", "retry_later", "busy", "not_eligible", "request_invalid", "policy_denied"] as const;
 
 function ChatGPTPlanRow({ size, owner, plan }: { size: Size; owner: boolean; plan: ReturnType<typeof useChatGPTPlan> }) {
   const { t } = useLocale();
@@ -725,7 +725,7 @@ function ChatGPTPlanRow({ size, owner, plan }: { size: Size; owner: boolean; pla
           <button type="button" className={`${button} border border-border`} disabled={busy} onClick={() => void action("acknowledge")}>{t("chatgptPlan.acknowledge")}</button>
         </div>
       ) : null}
-      {owner && status.revocationConfirmed === false && state === "not_connected" ? (
+      {owner && status.revocationConfirmed === false ? (
         <p className="text-ui text-warning">{t("chatgptPlan.revocation")} <a className="underline" target="_blank" rel="noopener noreferrer" href={CHATGPT_SETTINGS_URL}>{t("chatgptPlan.settings")}</a></p>
       ) : null}
       {actionFailed ? <p role="alert" className="text-ui text-warning">{t("chatgptPlan.failed")}</p> : null}

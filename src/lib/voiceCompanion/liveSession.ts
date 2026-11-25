@@ -165,8 +165,9 @@ interface ActiveSession {
   /** The latest handoff: the operator turn then latest, the turn it was given, and whether the voice spoke since. */
   lastHandoff?: { latest?: number; turn?: number; replied: boolean; attempt: string };
 }
+const planBillingOf = (active: ActiveSession): PlanBilling | undefined => active.planBilling;
 interface Options {
-  plan?: { eligible(model: string): Promise<boolean>; owner(starter: SessionStarter): boolean };
+  plan?: { eligible(model: string): Promise<boolean>; voiceBilling?(model: string): Promise<"plan" | "policy_denied" | "not_eligible" | undefined>; owner(starter: SessionStarter): boolean };
   memory?: CallMemory;
   ownerHistory?: OwnerHistoryRead;
   key?(): string; now?(): number; closeTimeoutMs?: number; timers?: boolean;
@@ -326,8 +327,8 @@ export class CompanionLiveSessions {
     const starter = input.startedBy;
     // Resolve plan eligibility alongside the media mint. The usual mint
     // receipt and close path are installed before the first await.
-    const planEligible = !codex && settings.backend === "api" && provider.respondOnPlan && starter && plan?.owner(starter)
-      ? plan.eligible(LIVE_BACKEND_MODEL).catch(() => false) : undefined;
+    const planDecision = !codex && settings.backend === "api" && provider.respondOnPlan && starter && plan?.owner(starter)
+      ? (plan.voiceBilling ? plan.voiceBilling(LIVE_BACKEND_MODEL) : plan.eligible(LIVE_BACKEND_MODEL).then(value => value ? "plan" as const : undefined)).catch(() => undefined) : undefined;
     const resumed = input.resume ? this.continued(input.resume, input.startedBy) : null;
     // Recheck after recovery/close awaited: another start may have leased this part.
     if (input.resume && this.storage.read().sessions[input.resume]?.resumedBy) throw new Error("PROVIDER_ERROR");
@@ -469,7 +470,9 @@ export class CompanionLiveSessions {
       if (echoes(minted.sdp, secrets) || active.ended) throw new Error("PROVIDER_ERROR");
       this.storage.change(document => { document.sessions[id].answerSdp = minted.sdp; });
       if (!codex) this.storage.observe(id, 15 * LIVE_USD_PER_SECOND);
-      if (planEligible && await planEligible && starter && plan?.owner(starter)) active.planBilling = { source: "plan" };
+      const billing = planDecision ? await planDecision : undefined;
+      if (billing === "plan" && starter && plan?.owner(starter)) active.planBilling = { source: "plan" };
+      else if (billing === "policy_denied" || billing === "not_eligible") active.planBilling = { source: "blocked", reason: billing };
       if (active.ended) throw new Error("PROVIDER_ERROR");
       active.connection = await provider.attach(minted.id, key, event => this.enqueue(active, event), () => this.lost(active), async (name, args, callId, turnId) => {
         await active.processing;
@@ -827,6 +830,13 @@ export class CompanionLiveSessions {
         const options = { final, locale: stored.locale, tools: active.voiceTools };
         let result: Record<string, unknown> | null = null;
         let usedPlan = false;
+        if (active.planBilling?.source === "plan" && input.some(item => item.role === "user" && Array.isArray(item.content)
+          && item.content.some(part => jsonObject(part)?.type === "input_image"))) {
+          reply(delegationSpeech(stored.locale === "uk"
+            ? "Візуальну дію зупинено: цей план підтримує лише текст. Кадр не надіслано до ChatGPT."
+            : "The visual action stopped because this plan supports text only. The frame was not sent to ChatGPT.", facts));
+          return;
+        }
         if (active.planBilling?.source === "plan" && active.provider.respondOnPlan) {
           const owner = () => this.options.plan?.owner(active.owner) === true && !active.ended && !active.closePromise;
           try {
@@ -837,14 +847,21 @@ export class CompanionLiveSessions {
           } catch (error) {
             if (active.ended || active.closePromise || active.abort.signal.aborted) return;
             const reason = fallbackReason(error);
-            active.planBilling = reason === "policy_denied" || reason === "not_eligible"
-              ? { source: "blocked", reason } : { source: "key", reason };
-            if (this.lastPlanBilling?.id === active.id) this.lastPlanBilling.billing = active.planBilling;
-            if (reason === "policy_denied" || reason === "not_eligible") {
+            const currentBilling = planBillingOf(active);
+            const nextBilling: PlanBilling = currentBilling?.source === "blocked" ? currentBilling
+              : reason === "policy_denied" || reason === "not_eligible"
+                ? { source: "blocked", reason } : { source: "key", reason };
+            active.planBilling = nextBilling;
+            if (this.lastPlanBilling?.id === active.id) this.lastPlanBilling.billing = nextBilling;
+            if (nextBilling.source === "blocked") {
               reply(delegationSpeech("This ChatGPT account is not authorized for this request. No request was sent.", facts));
               return;
             }
           }
+        }
+        if (planBillingOf(active)?.source === "blocked") {
+          reply(delegationSpeech("This ChatGPT account is not authorized for this request. No request was sent.", facts));
+          return;
         }
         if (!usedPlan) {
           const responseKey = `backend-${randomUUID()}`;

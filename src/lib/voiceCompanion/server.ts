@@ -21,7 +21,8 @@ export function companionSessions(): CompanionLiveSessions {
     const admission = new CompanionAdmission(storage, companionDeliveryPaths);
     const service = new CompanionLiveSessions(storage, admission, new CompanionBoardReads(companionBoardReadPaths),
       new OpenAILiveProvider(), { codexProvider: new CodexLiveProvider(), memory: new CallMemory(storage, admission.records), voiceTimers: voiceTimers(),
-        plan: { eligible: async model => (await import("@/lib/chatgptPlan/session")).chatgptPlan().eligible(model), owner: starter => {
+        plan: { eligible: async model => (await import("@/lib/chatgptPlan/session")).chatgptPlan().eligible(model),
+          voiceBilling: async model => (await import("@/lib/chatgptPlan/session")).chatgptPlan().voiceBilling(model), owner: starter => {
           if ("operator" in starter) return teamMode() === "solo";
           const member = existingTeamStore()?.member(starter.memberId);
           return member?.role === "owner" && member.status === "active";

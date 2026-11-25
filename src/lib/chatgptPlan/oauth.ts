@@ -34,8 +34,9 @@ const one = (params: URLSearchParams, name: string) => {
 
 export class PlanOAuth {
   private attempt?: Attempt;
+  private settling?: Attempt;
   reason?: PlanReason;
-  get pending() { return !!this.attempt; }
+  get pending() { return !!this.attempt || !!this.settling; }
   get retryUrl() { return this.attempt?.retryUrl; }
 
   constructor(private readonly store: PlanStore, private readonly oidc: PlanOidc,
@@ -51,6 +52,7 @@ export class PlanOAuth {
   private settle(attempt: Attempt, reason?: PlanReason): void {
     if (this.attempt !== attempt) return;
     this.attempt = undefined;
+    if (attempt.completion) this.settling = attempt;
     this.reason = reason;
     clearTimeout(attempt.timer);
     attempt.abort.abort();
@@ -73,13 +75,15 @@ export class PlanOAuth {
       const response = await this.oidc.http(config.revocation_endpoint, { method: "POST", redirect: "error", signal: deadline,
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ client_id: attempt.grantClientId ?? configuredClientId() ?? "", token, token_type_hint: "refresh_token" }) });
-      confirmed = response.ok;
+      confirmed = response.status === 200;
     } catch { confirmed = false; }
     try {
       await this.store.transaction("credentials", async () => {
         const row = await this.store.credentials();
         if (row?.pendingGrantRefresh !== token) return;
-        this.store.write("credentials", { ...row, pendingGrantRefresh: confirmed ? undefined : token, revocationConfirmed: confirmed });
+        this.store.write("credentials", { ...row, pendingGrantRefresh: confirmed ? undefined : token,
+          pendingGrantClientId: confirmed ? undefined : attempt.grantClientId ?? row.pendingGrantClientId,
+          pendingClientId: confirmed ? undefined : row.pendingClientId, revocationConfirmed: confirmed });
       });
     } catch { confirmed = false; }
     if (!confirmed) console.info("[chatgpt-plan] revocation-unconfirmed");
@@ -87,7 +91,7 @@ export class PlanOAuth {
   }
 
   async cancel(): Promise<boolean> {
-    const attempt = this.attempt;
+    const attempt = this.attempt ?? this.settling;
     if (attempt) {
       this.settle(attempt);
       await attempt.completion?.catch(() => undefined);
@@ -158,6 +162,7 @@ export class PlanOAuth {
       reply(200, "Return to Delegatus. You can close this tab.");
       this.closeListener(attempt);
       attempt.completion = this.complete(attempt, params, saved, host, consent, mayRetry, nonce, verifier, redirect);
+      void attempt.completion.finally(() => { if (this.settling === attempt) this.settling = undefined; });
     });
     let address = "", redirect = "";
     attempt.server = server;
@@ -179,9 +184,10 @@ export class PlanOAuth {
     address = `127.0.0.1:${bound.port}`;
     redirect = `http://${address}${CALLBACK}`;
     const url = new URL(config.authorization_endpoint);
-    const dynamicRegistration = attempt.configuredClientId === DYNAMIC_CLIENT && (!saved || saved.registrationMode === "dynamic");
+    const dynamicRegistration = attempt.configuredClientId === DYNAMIC_CLIENT && !saved?.pendingClientId
+      && (!saved || saved.registrationMode === "dynamic");
     url.search = new URLSearchParams({
-      client_id: dynamicRegistration ? DYNAMIC_CLIENT : saved?.clientId ?? attempt.configuredClientId,
+      client_id: dynamicRegistration ? DYNAMIC_CLIENT : saved?.pendingClientId ?? saved?.clientId ?? attempt.configuredClientId,
       ...(dynamicRegistration ? { agent_name_hint: "Delegatus" } : {}),
       ext_agent_host_id: host, response_type: "code", redirect_uri: redirect, resource: RESOURCE,
       scope: SCOPES, state, nonce, code_challenge_method: "S256",
@@ -204,18 +210,21 @@ export class PlanOAuth {
       if (!dynamicRegistration && !saved && attempt.configuredClientId !== DYNAMIC_CLIENT && params.has("client_id")
         && issued !== attempt.configuredClientId) throw new PlanError("account_mismatch");
       if (dynamicRegistration && !issued) throw new PlanError("registration_incomplete");
-      const clientId = dynamicRegistration ? issued : saved?.clientId ?? attempt.configuredClientId;
+      const clientId = dynamicRegistration ? issued : saved?.pendingClientId ?? saved?.clientId ?? attempt.configuredClientId;
       if (!clientIdValid(clientId)) throw new PlanError("registration_incomplete");
-      if (!saved) {
-        const registration: Credentials = { version: 1, issuer: ISSUER, clientId, savedAt: this.now(), pendingRegistration: true };
-        await this.store.transaction("credentials", async () => {
-          const current = await this.store.credentials();
-          this.check(attempt);
-          if (current) throw new PlanError("busy");
-          this.store.write("credentials", registration);
-        });
-        saved = registration;
-      }
+      const candidate: Credentials = await this.store.transaction("credentials", async () => {
+        const current = await this.store.credentials();
+        this.check(attempt);
+        if (current && saved && current.clientId !== saved.clientId && current.pendingClientId !== clientId) throw new PlanError("busy");
+        if (current && !saved) throw new PlanError("busy");
+        const next: Credentials = current
+          ? { ...current, pendingClientId: clientId, ...(current.tokens ? {} : { pendingRegistration: true }),
+            ...(!current.tokens && dynamicRegistration ? { registrationMode: "dynamic" as const } : { registrationMode: undefined }) }
+          : { version: 1, issuer: ISSUER, clientId, savedAt: this.now(), pendingRegistration: true };
+        this.store.write("credentials", next);
+        return next;
+      });
+      saved = candidate;
       this.check(attempt);
       // Once the provider accepts the code, finish the bounded exchange so
       // its rotating grant can be checkpointed and revoked after cancellation.
@@ -231,8 +240,8 @@ export class PlanOAuth {
         attempt.grantClientId = clientId;
         attempt.grantCheckpoint = this.store.transaction("credentials", async () => {
           const current = await this.store.credentials();
-          if (current?.clientId === clientId || (dynamicRegistration && current?.registrationMode === "dynamic" && current.clientId === saved?.clientId)) {
-            saved = { ...current, clientId, registrationMode: undefined, pendingRegistration: true,
+          if (current && (current.clientId === clientId || current.pendingClientId === clientId)) {
+            saved = { ...current, pendingGrantClientId: clientId,
               pendingGrantRefresh: refreshToken, revocationConfirmed: false };
             this.store.write("credentials", saved);
           }
@@ -263,8 +272,9 @@ export class PlanOAuth {
         this.check(attempt);
         if (JSON.stringify(current) !== previous) throw new PlanError("busy");
         this.store.write("credentials", {
-          version: 1, issuer: ISSUER, clientId, ...identity, tokens, models,
+          version: 1, issuer: ISSUER, clientId, ...identity, tokens, models, grantId: random(),
           savedAt: this.now(), acknowledged, pendingGrantRefresh: undefined, revocationConfirmed: undefined,
+          pendingGrantClientId: undefined, pendingClientId: undefined, registrationMode: undefined,
         } satisfies Credentials);
       });
       attempt.refreshToken = undefined;
@@ -275,8 +285,19 @@ export class PlanOAuth {
       if (error instanceof PlanError && error.reason === "client_rejected") {
         await this.store.transaction("credentials", async () => {
           const current = await this.store.credentials();
-          if (current?.clientId === (saved?.clientId ?? attempt.configuredClientId) && !current.tokens) {
-            this.store.write("credentials", { ...current, pendingRegistration: undefined, reconnect: "client_rejected" });
+          if (!current) return;
+          if (current.pendingClientId === (saved?.pendingClientId ?? saved?.clientId) || current.clientId === (saved?.clientId ?? attempt.configuredClientId)) {
+            this.store.write("credentials", { ...current, clientId: current.pendingClientId ?? current.clientId,
+              pendingRegistration: undefined, pendingClientId: undefined, registrationMode: undefined,
+              reconnect: current.tokens ? current.reconnect : "client_rejected" });
+          }
+        }).catch(() => undefined);
+      } else if (saved?.pendingClientId) {
+        await this.store.transaction("credentials", async () => {
+          const current = await this.store.credentials();
+          if (current && current.pendingClientId === saved?.pendingClientId) {
+            this.store.write("credentials", { ...current, pendingClientId: undefined,
+              registrationMode: current.tokens ? undefined : current.registrationMode });
           }
         }).catch(() => undefined);
       }

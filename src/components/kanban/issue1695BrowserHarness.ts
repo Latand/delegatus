@@ -2098,6 +2098,14 @@ const PLAN_FRAMES = [
   planKeys("firstUse", "[data-chatgpt-plan-state='connected'] button"),
   planKeys("missingModel", "[data-chatgpt-plan-state='connected']"),
   planKeys("disabled", "[data-chatgpt-plan-state='plan_disabled'] [data-chatgpt-plan-start]"),
+  planKeys("notEligible", "[data-chatgpt-plan-state='plan_disabled']", async row => {
+    await row.locator("[role=status]").nth(1).waitFor();
+    await row.locator("[data-chatgpt-plan-start]").waitFor();
+  }),
+  planKeys("requestInvalid", "[data-chatgpt-plan-state='plan_disabled']", async row => {
+    await row.locator("[role=status]").nth(1).waitFor();
+    await row.locator("[data-chatgpt-plan-start]").waitFor();
+  }),
   planKeys("reconnect", "[data-chatgpt-plan-state='reconnect_required'] [data-chatgpt-plan-start]"),
   planKeys("limit", "[data-chatgpt-plan-state='plan_limit'] [data-keys-menu]", async row => {
     await row.locator("[data-chatgpt-plan-menu]").click();
@@ -2113,6 +2121,10 @@ const PLAN_FRAMES = [
   planKeys("unsupported", "[data-chatgpt-plan-state='off_unsupported_platform']", noPlanAction),
   planKeys("declined", "[data-chatgpt-plan-state='not_connected'] [data-chatgpt-plan-start]"),
   planKeys("unconfirmed", " a[href='https://chatgpt.com/settings']"),
+  planKeys("connected-unconfirmed", " a[href='https://chatgpt.com/settings']", async row => {
+    if (!(await row.innerText()).includes("OpenAI did not confirm sign-out")
+      && !(await row.innerText()).includes("OpenAI не підтвердив вихід")) throw new Error("The connected account lost its revocation warning");
+  }),
   planKeys("error", "[data-chatgpt-plan-state='error']", noPlanAction),
   planKeys("member", "[data-chatgpt-plan-state='connected']", async row => {
     await noPlanAction(row);
@@ -2122,6 +2134,13 @@ const PLAN_FRAMES = [
     query: "chatgptplan=billing&dev=default", details: true, defining: "[data-chatgpt-plan-billing='plan']" },
   { surface: "voice", name: "chatgpt-plan-fallback", scene: "voice-file", section: "voice",
     query: "chatgptplan=fallback&dev=default", details: true, defining: "[data-chatgpt-plan-billing='key']" },
+  { surface: "voice", name: "chatgpt-plan-blocked", scene: "voice-file", section: "voice",
+    query: "chatgptplan=blocked&dev=default", details: true, defining: "[data-chatgpt-plan-billing='blocked']",
+    steps: async page => {
+      const text = await page.locator("[data-chatgpt-plan-billing='blocked']").innerText();
+      if (!/No backend request was charged to the API key|Запит до бекенда не оплачувався ключем API/.test(text))
+        throw new Error("Blocked billing does not explain that the API key was not charged");
+    } },
 ] satisfies SettingsFrame[];
 
 const SETTINGS_FRAMES: SettingsFrame[] = [
@@ -2526,7 +2545,6 @@ export async function captureSettingsWindowFrames(browser: Browser, base: string
   const jobs: { frame: SettingsFrame; device: keyof typeof SETTINGS_DEVICES; lang: "en" | "uk"; theme: "light" | "dark"; key: string }[] = [];
   for (const device of devices) for (const { lang, theme } of SETTINGS_COMBOS) for (const frame of frames) {
     /* Every state in all four combinations at the named widths; the between and short heights read in two, at rest and with Details open. */
-    if ((device === "mid" || device === "short" || device === "landscape") && !((lang === "uk" && theme === "light") || (lang === "en" && theme === "dark"))) continue;
     const key = `${frame.surface}-${device}-${frame.name}-${lang}-${theme}`;
     if (only && !only(key)) continue;
     jobs.push({ frame, device, lang, theme, key });
@@ -2552,7 +2570,6 @@ export async function captureSettingsWindowFrames(browser: Browser, base: string
           await page.evaluate((section) => window.dispatchEvent(new CustomEvent("delegatus:open-settings-window", { detail: { section } })), frame.section);
           await page.locator("[data-settings-window], [data-mobile2-sheet='settings']").waitFor();
         }
-        if (frame.steps) await frame.steps(page, phone);
         if (frame.details) {
           const toggle = page.locator("[data-settings-details-toggle]").last();
           await toggle.scrollIntoViewIfNeeded();
@@ -2560,6 +2577,7 @@ export async function captureSettingsWindowFrames(browser: Browser, base: string
           await page.locator("[data-settings-details]").waitFor();
           await page.evaluate(() => { const scroller = document.querySelector("[data-settings-scroller], [data-mobile2-sheet-body]"); if (scroller) scroller.scrollTop = scroller.scrollHeight; });
         }
+        if (frame.steps) await frame.steps(page, phone);
         if (frame.defining) await page.locator(frame.defining).first().waitFor({ timeout: 20_000 }).catch(() => reading.failures.push(`never appeared: ${frame.defining}`));
         await page.evaluate(() => document.fonts.ready.then(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))));
         /* The fold's own height moved the scroller's end, and the whole-rows fit can answer after the first scroll: the frame reads the end as it settled. */
@@ -2609,7 +2627,7 @@ export async function captureChatGPTPlanFrames(phone: boolean) {
     try {
       const { readings, failures } = await captureSettingsWindowFrames(browser, server.base, out, phone,
         frame => phone ? frame.includes("-phone-") : frame.includes("-desktop-") || frame.includes("-mid-"), PLAN_FRAMES);
-      expect(readings).toHaveLength(PLAN_FRAMES.length * (phone ? 4 : 6));
+      expect(readings).toHaveLength(PLAN_FRAMES.length * (phone ? 4 : 8));
       expect(failures).toEqual([]);
     } finally { await browser.close(); }
   } finally { sockets.close(); server.stop(); }

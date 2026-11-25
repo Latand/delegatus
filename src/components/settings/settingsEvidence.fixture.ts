@@ -94,6 +94,8 @@ const PLAN_SCENES: Record<string, PlanStatus> = {
   firstUse: { state: "connected", acknowledged: false },
   missingModel: { state: "connected", planModels: { voiceBackend: false } },
   disabled: { state: "plan_disabled" },
+  notEligible: { state: "plan_disabled", reason: "not_eligible" },
+  requestInvalid: { state: "plan_disabled", reason: "request_invalid" },
   reconnect: { state: "reconnect_required", reason: "client_rejected" },
   limit: { state: "plan_limit", usageUrl: "https://chatgpt.com/settings/usage" },
   "retry-later": { state: "retry_later", usageUrl: "https://chatgpt.com/settings/usage" },
@@ -103,6 +105,7 @@ const PLAN_SCENES: Record<string, PlanStatus> = {
   unsupported: { state: "off_unsupported_platform" },
   declined: { state: "not_connected", reason: "declined" },
   unconfirmed: { state: "not_connected", revocationConfirmed: false },
+  "connected-unconfirmed": { state: "connected", revocationConfirmed: false },
   error: { state: "error", reason: "credential_file" },
   // Exercise a plan status retained while the Keys page switches to a member.
   member: { state: "connected", account: { email: "Example account" } },
@@ -111,6 +114,7 @@ const planScene = params.get("chatgptplan") ?? "";
 let planStatus = PLAN_SCENES[planScene] ?? { state: "not_connected" };
 if (planScene === "billing") voice.planBilling = { source: "plan" };
 if (planScene === "fallback") voice.planBilling = { source: "key", reason: "plan_limit" };
+if (planScene === "blocked") voice.planBilling = { source: "blocked", reason: "policy_denied" };
 
 
 const summary = (over: Record<string, unknown>) => ({ version: 1, state: "final", startedAt: NOW - 3_900_000, endedAt: NOW - 3_600_000, projects: ["atlas"], asked: [L("Review the current layout.", "Перевірити поточний макет.")], done: [], decided: [L("Keep the compact header.", "Лишити компактний заголовок.")], open: [L("Wait for the build report.", "Чекати на звіт збірки.")], privateOmitted: false, through: 10, model: "fixture", durationMs: 1000, inputTokens: 1000, outputTokens: 100, attempts: 1, ...over });

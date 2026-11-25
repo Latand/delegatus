@@ -173,7 +173,9 @@ export function VoiceSection({ sub, go, back }: { sub: SettingsSub | null; go: (
           settings?.enabled && api && settings.planBilling ? {
             label: t("chatgptPlan.backendTurns"),
             value: <span data-chatgpt-plan-billing={settings.planBilling.source}>
-              {settings.planBilling.source === "plan" ? t("chatgptPlan.title") : t("chatgptPlan.fallback", { reason: t(`chatgptPlan.fallback.${settings.planBilling.reason}`) })}
+              {settings.planBilling.source === "plan" ? t("chatgptPlan.title") : settings.planBilling.source === "blocked"
+                ? t("chatgptPlan.blocked", { reason: t(`chatgptPlan.fallback.${settings.planBilling.reason}`) })
+                : t("chatgptPlan.fallback", { reason: t(`chatgptPlan.fallback.${settings.planBilling.reason}`) })}
               {" · "}<a href={PLAN_USAGE_URL} target="_blank" rel="noopener noreferrer" className="underline">{t("chatgptPlan.manage")}</a>
             </span>,
           } : null,

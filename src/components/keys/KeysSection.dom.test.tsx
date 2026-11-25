@@ -409,6 +409,16 @@ for (const state of ["plan_limit", "retry_later"] as const) test(`${state}: plan
   expect(plan.querySelector("[data-keys-menu-item='plan-usage']")?.textContent).toBe(translate("en", "chatgptPlan.manage"));
 });
 
+test("an uncertain disconnect warning remains visible while the prior grant is still connected", async () => {
+  serve(answer(), call => call.url === "/api/chatgpt-plan"
+    ? Response.json({ state: "connected", revocationConfirmed: false }) : undefined);
+  const host = await mount(<KeysMenuPage onImport={() => {}} />);
+  const plan = row(host, "chatgpt-plan");
+  expect(plan.getAttribute("data-chatgpt-plan-state")).toBe("connected");
+  expect(plan.textContent).toContain(translate("en", "chatgptPlan.revocation"));
+  expect(plan.querySelector(`a[href="https://chatgpt.com/settings"]`)?.textContent).toBe(translate("en", "chatgptPlan.settings"));
+});
+
 for (const lang of ["en", "uk"] as const) test(`${lang}: import shows the pasted lines masked and the server's preview, and Apply confirms exactly the rows shown`, async () => {
   setLocale(lang);
   const preview: ImportPreview = {

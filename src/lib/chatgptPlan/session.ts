@@ -21,7 +21,7 @@ export class PlanSession {
   }
 
   private unavailable(row: Credentials | undefined, model?: string) {
-    if (isStagingMode() || this.signingOut || !row || row.signedOut || row.pendingRegistration) return "not_connected";
+    if (isStagingMode() || this.signingOut || !row || row.signedOut || (row.pendingRegistration && !row.tokens)) return "not_connected";
     if (row.reconnect || (row.tokens && row.tokens.refreshedAt + REFRESH_LIFETIME <= this.now())) return "reconnect_required";
     if (row.planPauseUntil && row.planPauseUntil > this.now()) return row.planPauseReason ?? "plan_limit";
     if (row.planRestriction) return "plan_disabled";
@@ -63,6 +63,16 @@ export class PlanSession {
       const row = await this.store.credentials();
       return !this.unavailable(row, model);
     } catch { return false; }
+  }
+
+  async voiceBilling(model: string): Promise<"plan" | "policy_denied" | "not_eligible" | undefined> {
+    if (isStagingMode() || !planConfigured() || !credentialStorageSupported()) return undefined;
+    try {
+      const row = await this.store.credentials();
+      if (row?.planRestriction === "policy_denied") return "policy_denied";
+      if (row?.planRestriction === "not_eligible") return "not_eligible";
+      return this.unavailable(row, model) ? undefined : "plan";
+    } catch { return undefined; }
   }
 
   private requireConnection(row: Credentials | undefined, model: string): asserts row is Credentials & {
@@ -141,7 +151,7 @@ export class PlanSession {
     validatePlanRequest(body);
     if (!owner()) throw new PlanError("plan_disabled");
     const grantAtAdmission = await this.store.credentials();
-    const grantIdentity = grantAtAdmission && `${grantAtAdmission.clientId}\0${grantAtAdmission.subject ?? ""}`;
+    const grantIdentity = grantAtAdmission && (grantAtAdmission.grantId ?? `${grantAtAdmission.clientId}\0${grantAtAdmission.subject ?? ""}`);
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(20_000)]);
     const accessToken = await this.access(body.model, deadline, owner);
     if (!owner()) throw new PlanError("plan_disabled");
@@ -149,14 +159,13 @@ export class PlanSession {
     try { return await streamPlanResponse(this.oidc.http, accessToken, body, deadline); }
     catch (error) {
       const reason = error instanceof PlanError ? error.reason : "interrupted";
-      if (reason === "not_eligible" || reason === "request_invalid" || reason === "plan_limit" || reason === "retry_later") {
-        const grantIdentity = `${grantAtAdmission?.clientId ?? ""}\0${grantAtAdmission?.subject ?? ""}`;
+      if (reason === "not_eligible" || reason === "request_invalid" || reason === "policy_denied" || reason === "plan_limit" || reason === "retry_later") {
         const pause = reason === "plan_limit" ? 60 * 60_000 : 30_000;
         await this.store.transaction("credentials", async () => {
           const current = await this.store.credentials();
-          if (current?.tokens && !current.signedOut
-            && `${current.clientId}\0${current.subject ?? ""}` === grantIdentity) {
-            if (reason === "not_eligible" || reason === "request_invalid") {
+          const currentIdentity = current?.grantId ?? (current && `${current.clientId}\0${current.subject ?? ""}`);
+          if (current?.tokens && !current.signedOut && currentIdentity === grantIdentity) {
+            if (reason === "not_eligible" || reason === "request_invalid" || reason === "policy_denied") {
               this.store.write("credentials", { ...current, planRestriction: reason });
               return;
             }
@@ -210,16 +219,22 @@ export class PlanSession {
         const row = await this.store.credentials();
         if (!guard()) throw new PlanError("declined");
         if (!row) return exchangeRevoked && !oauthWasPending;
-        const refreshTokens = [...new Set([row.tokens?.refreshToken, row.pendingGrantRefresh].filter((token): token is string => !!token))];
+        const refreshTokens = [...new Map([
+          ...(row.tokens?.refreshToken ? [[row.tokens.refreshToken, row.clientId] as const] : []),
+          ...(row.pendingGrantRefresh ? [[row.pendingGrantRefresh, row.pendingGrantClientId ?? row.pendingClientId ?? row.clientId] as const] : []),
+        ]).entries()];
         // The durable sign-out removes the tokens before network I/O. A
         // process stop here leaves only the remote-revocation uncertainty.
         const signedOut: Credentials = { ...row, signedOut: true, tokens: undefined, pendingRotation: undefined,
           pendingRegistration: undefined, pendingGrantRefresh: undefined, reconnect: undefined,
+          pendingGrantClientId: undefined, pendingClientId: undefined, registrationMode: undefined,
           revocationConfirmed: refreshTokens.length || oauthWasPending ? false : row.revocationConfirmed ?? true };
         this.store.write("credentials", signedOut);
-        const results = await Promise.all(refreshTokens.map(token => this.revoke(row.clientId, token)));
-        const confirmed = exchangeRevoked && results.every(Boolean);
-        if (refreshTokens.length || oauthWasPending) this.store.write("credentials", { ...signedOut,
+        const results = await Promise.all(refreshTokens.map(([token, clientId]) => this.revoke(clientId, token)));
+        const confirmed = refreshTokens.length || oauthWasPending
+          ? exchangeRevoked && results.length === refreshTokens.length && results.every(Boolean)
+          : row.revocationConfirmed ?? true;
+        if (refreshTokens.length || oauthWasPending || row.revocationConfirmed !== confirmed) this.store.write("credentials", { ...signedOut,
           pendingGrantRefresh: undefined, revocationConfirmed: confirmed });
         console.info(confirmed ? "[chatgpt-plan] signed-out" : "[chatgpt-plan] revocation-unconfirmed");
         return confirmed;

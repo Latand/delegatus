@@ -237,6 +237,37 @@ test("exchange invalid_client recovery restarts OSS registration and retains the
   expect(await hostId(fixture.store)).toBe(host);
 });
 
+test.each(["invalid_grant", "invalid_client"] as const)("replacement dynamic registration keeps its issued client ID readable after %s", async code => {
+  process.env.LLV_CHATGPT_PLAN_CLIENT_ID = DYNAMIC_CLIENT;
+  const fixture = create(async (url, init) => {
+    if (url === discovery.token_endpoint && (init?.body as URLSearchParams).get("grant_type") === "authorization_code")
+      return Response.json({ error: code }, { status: 400 });
+    return Response.json({ error: "unexpected" }, { status: 500 });
+  });
+  const host = await hostId(fixture.store);
+  fixture.seed({ tokens: undefined, reconnect: "client_rejected", pendingRegistration: true,
+    registrationMode: "dynamic" });
+  const session = new PlanSession(fixture.store, fixture.oidc, () => now);
+  await session.replaceRejectedRegistration(DYNAMIC_CLIENT, allowed);
+  const first = params(await session.start(false, allowed));
+  expect(first.get("client_id")).toBe(DYNAMIC_CLIENT);
+  await http(callback(first));
+  if (code === "invalid_grant") {
+    await until(() => !!session.oauth.retryUrl);
+    expect(params(session.oauth.retryUrl).get("client_id")).toBe(clientId);
+    expect(await fixture.store.credentials()).toMatchObject({ pendingClientId: clientId, clientId,
+      pendingRegistration: true, registrationMode: "dynamic" });
+    await session.oauth.cancel();
+  } else {
+    await until(() => !session.oauth.pending);
+    expect(await fixture.store.credentials()).toMatchObject({ clientId, reconnect: "client_rejected" });
+    expect(await fixture.store.credentials()).not.toHaveProperty("pendingRegistration");
+    expect(await fixture.store.credentials()).not.toHaveProperty("registrationMode");
+  }
+  expect(await hostId(fixture.store)).toBe(host);
+  expect(await fixture.store.credentials()).toBeDefined();
+});
+
 test("cancel after the grant is issued revokes the uncommitted refresh token", async () => {
   let nonce = "";
   let releaseModels!: (response: Response) => void;
@@ -321,4 +352,76 @@ test("cancel reports uncertain revocation when an admitted exchange outcome is u
   rejectExchange(new Error("unknown exchange outcome"));
   expect(await cancelled).toBe(false);
   expect(await fixture.store.credentials()).toMatchObject({ pendingRegistration: true, revocationConfirmed: false });
+});
+
+test("reauthorization subject mismatch revokes only the candidate and preserves the connected grant", async () => {
+  let nonce = "";
+  const fixture = create(async (url, init) => {
+    if (url === discovery.jwks_uri) return jwks();
+    if (url === modelsUrl) return Response.json({ models: [] });
+    if (url === discovery.revocation_endpoint) return new Response(null, { status: 200 });
+    return Response.json({ ...grant(nonce), id_token: jwt(nonce, { sub: "different-subject" }) });
+  });
+  await hostId(fixture.store);
+  const original = fixture.seed();
+  const session = new PlanSession(fixture.store, fixture.oidc, () => now);
+  const authorize = params(await session.start(false, allowed));
+  nonce = authorize.get("nonce")!;
+  await http(callback(authorize));
+  await until(() => fixture.oauth.pending === false && fixture.requests.some(row => row.url === discovery.revocation_endpoint));
+  const revokeDeadline = performance.now() + 1_500;
+  while ((await fixture.store.credentials())?.revocationConfirmed !== true) {
+    if (performance.now() > revokeDeadline) throw new Error("Candidate revocation did not settle");
+    await Bun.sleep(5);
+  }
+  expect(await fixture.store.credentials()).toMatchObject({ clientId, subject: original.subject, tokens: original.tokens });
+  expect(await session.eligible(model)).toBe(true);
+  expect(fixture.requests.filter(row => row.url === discovery.revocation_endpoint)).toHaveLength(1);
+});
+
+test("a candidate grant is not committed when cancellation races verification", async () => {
+  let nonce = "";
+  let releaseModels!: (response: Response) => void;
+  let modelsStarted!: () => void;
+  const pendingModels = new Promise<Response>(resolve => { releaseModels = resolve; });
+  const started = new Promise<void>(resolve => { modelsStarted = resolve; });
+  const fixture = create(async (url) => {
+    if (url === discovery.jwks_uri) return jwks();
+    if (url === modelsUrl) { modelsStarted(); return pendingModels; }
+    if (url === discovery.revocation_endpoint) return new Response(null, { status: 200 });
+    return Response.json(grant(nonce));
+  });
+  await hostId(fixture.store);
+  const original = fixture.seed();
+  const session = new PlanSession(fixture.store, fixture.oidc, () => now);
+  const authorize = params(await session.start(false, allowed));
+  nonce = authorize.get("nonce")!;
+  await http(callback(authorize));
+  await started;
+  const cancellation = session.oauth.cancel();
+  releaseModels(Response.json({ models: [] }));
+  expect(await cancellation).toBe(true);
+  expect(await fixture.store.credentials()).toMatchObject({ clientId, subject: original.subject, tokens: original.tokens });
+  expect(await session.eligible(model)).toBe(true);
+});
+
+test("candidate revocation requires HTTP 200 and preserves the active grant and warning", async () => {
+  let nonce = "";
+  const fixture = create(async url => {
+    if (url === discovery.jwks_uri) return jwks();
+    if (url === modelsUrl) return Response.json({ models: [] });
+    if (url === discovery.revocation_endpoint) return new Response(null, { status: 202 });
+    return Response.json({ ...grant(nonce), id_token: jwt(nonce, { sub: "different-subject" }) });
+  });
+  await hostId(fixture.store);
+  const original = fixture.seed();
+  const session = new PlanSession(fixture.store, fixture.oidc, () => now);
+  const authorize = params(await session.start(false, allowed));
+  nonce = authorize.get("nonce")!;
+  await http(callback(authorize));
+  await until(() => fixture.requests.some(row => row.url === discovery.revocation_endpoint));
+  expect(await fixture.store.credentials()).toMatchObject({ clientId, subject: original.subject, tokens: original.tokens,
+    pendingGrantRefresh: synth("refresh"), revocationConfirmed: false });
+  expect(await session.eligible(model)).toBe(true);
+  expect(fixture.requests.filter(row => row.url === discovery.revocation_endpoint)).toHaveLength(1);
 });

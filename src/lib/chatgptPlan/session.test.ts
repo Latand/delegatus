@@ -148,6 +148,18 @@ test.each([
   expect((await restarted.status(model, true, true))).toMatchObject({ state: "plan_disabled", reason: restriction });
 });
 
+test("policy denial is durable for the grant and prevents plan and Voice fallback on a later call", async () => {
+  const session = create(undefined, () => Response.json({ error: { code: "chatpass_v2_scope_not_authorized" } }, { status: 403 }));
+  fixture.seed({ grantId: "policy-grant" });
+  await expect(session.respond(body, signal(), owner)).rejects.toThrow("policy_denied");
+  expect(await fixture.store.credentials()).toMatchObject({ planRestriction: "policy_denied" });
+  const restarted = new PlanSession(new PlanStore(() => fixture.directory), fixture.oidc, () => now);
+  expect(await restarted.voiceBilling(model)).toBe("policy_denied");
+  expect(await restarted.eligible(model)).toBe(false);
+  await expect(restarted.respond(body, signal(), owner)).rejects.toThrow("plan_disabled");
+  expect(inferences()).toHaveLength(1);
+});
+
 test("above the refresh window reuses the token and below it serializes independent sessions", async () => {
   const session = create((url, init) => {
     if (url === discovery.jwks_uri) return jwks();
@@ -285,6 +297,31 @@ test.each([200, 503])("revocation status %i stops plan use and retains the regis
   const row = await fixture.store.credentials();
   expect(row).toMatchObject({ signedOut: true, clientId, revocationConfirmed: status === 200 });
   expect(row?.tokens).toBeUndefined();
+});
+
+test("replaying sign-out preserves an unconfirmed revocation across a new session", async () => {
+  const session = create(async () => new Response(null, { status: 503 }));
+  fixture.seed();
+  expect(await session.signOut(owner)).toBe(false);
+  const restarted = new PlanSession(new PlanStore(() => fixture.directory), fixture.oidc, () => now);
+  expect(await restarted.signOut(owner)).toBe(false);
+  expect(await fixture.store.credentials()).toMatchObject({ signedOut: true, revocationConfirmed: false });
+});
+
+test("a late same-account failure cannot restrict a reauthorized grant with a new grant identity", async () => {
+  let release!: (response: Response) => void;
+  let requestStarted!: () => void;
+  const held = new Promise<Response>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { requestStarted = resolve; });
+  const session = create(undefined, () => { requestStarted(); return held; });
+  const old = fixture.seed({ grantId: "old-grant" });
+  const pending = session.respond(body, signal(), owner).catch(error => error);
+  await started;
+  fixture.store.write("credentials", { ...old, grantId: "new-grant" });
+  release(Response.json({ error: { code: "subscription_sharing_usage_limit_exceeded" } }, { status: 429 }));
+  await pending;
+  expect(await fixture.store.credentials()).toMatchObject({ grantId: "new-grant" });
+  expect(await fixture.store.credentials()).not.toHaveProperty("planPauseUntil");
 });
 
 test("sign-out attempts both active and checkpointed grants and clears both locally", async () => {
