@@ -10,7 +10,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
 import { RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
-import { sweepEvidenceCopies } from "./attemptEvidenceCopies";
+import { attributeCopyBeforeRootRetirement, sweepEvidenceCopies } from "./attemptEvidenceCopies";
 import { measureAttemptAllocation } from "./attemptTempFilesystem";
 import { agentRegistry } from "@/lib/agent/registry";
 import { finishedAgent } from "./temporaryDataProduction";
@@ -180,7 +180,7 @@ function recordedReport(file: string, mode: TickCondition["mode"]): { condition:
 
 /** Every minute tick writes fresh cleanup counters; console output remains
  * limited to removals, holds, failures and changed forecasts. */
-export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "scan" | "references">, env: NodeJS.ProcessEnv = process.env) {
+export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "scan" | "references" | "availableBytes">, env: NodeJS.ProcessEnv = process.env) {
   const mode = tempSweepMode(env);
   if (!mode || attemptTempRemaining() <= 0) return null;
   const cpuStarted = process.cpuUsage();
@@ -193,6 +193,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
   try {
     let backfill: Awaited<ReturnType<typeof backfillAttemptTempRetention>> = { checked: 0, updated: 0 };
     let cleanupChildCpuSeconds = 0;
+    let sourceAttributedBeforeRetirement = 0;
     const options: AttemptTempSweepOptions = {
       runBudgetMs: attemptTempRemaining(40_000),
       state: recordingAttemptTempState(store), authority: attemptScratchAuthority, evidenceAuthority: attemptTempAuthority,
@@ -219,6 +220,9 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
         if (attemptScratchAuditDue(store.schedulePosition().auditAfter, Date.now()))
           backfill = await backfillAttemptTempRetention(store, { audit: true, remaining });
       },
+      beforeRootRetirement: (directory, identity) => {
+        sourceAttributedBeforeRetirement += attributeCopyBeforeRootRetirement(store, directory, identity);
+      },
       onRetired: (count, bytes) => console.log(`[attempt temp] retired ${count} directories, ${bytes} attributed bytes`),
       capBytes: setting(env.LLV_ATTEMPT_TEMP_CAP_BYTES, 100 * 1024 ** 3),
       maxAgeMs: setting(env.LLV_ATTEMPT_TEMP_MAX_AGE_DAYS, 1) * 86400000,
@@ -226,6 +230,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     };
     const roots = await sweepAttemptTemps(store, options);
     const copies = await sweepEvidenceCopies(store, { ...options, authority: attemptTempAuthority }, { agentCopiesManagedSeparately: true });
+    copies.sourceAttributed += sourceAttributedBeforeRetirement;
     const cpu = process.cpuUsage(cpuStarted);
     const cleanup = store.cleanupMetrics(Date.now(), roots.reclaimedBytes, (cpu.user + cpu.system) / 1e6 + cleanupChildCpuSeconds);
     const report = { ...roots, errors: roots.errors + (backfill.errors ?? 0), copies, backfill,
@@ -238,7 +243,7 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
     const previous = recordedReport(file, mode);
     const changed = JSON.stringify(previous.condition) !== JSON.stringify(condition);
     const forecastChanged = previous.retention !== undefined && JSON.stringify(previous.retention) !== JSON.stringify(report.retention);
-    const noteworthy = report.pass || report.adopted || report.operatorHeld || report.removed || copies.removed || report.errors || copies.errors
+    const noteworthy = report.pass || report.adopted || report.operatorHeld || report.removed || copies.removed || copies.sourceAttributed || report.errors || copies.errors
       || report.spaceError || report.lowSpace || report.deferred || report.overCapBytes || changed || forecastChanged
       || report.retention.dueBytes || report.retention.upcomingBytes;
     {
@@ -250,13 +255,14 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
         + (last ? `Last pass ${last.ended === "complete" ? "completed" : "ended when pressure cleared"} in ${minutes(last.durationMs)} over ${last.ticks} ticks, `
           + `${last.visited} visits, ${last.removed} roots removed (${gb(last.removedBytes)}). ` : "")
         + (full && last?.ended !== "complete" ? `Last full pass completed in ${minutes(full.durationMs)} over ${full.ticks} ticks. ` : "");
-      const summary = passText + `${report.lowSpace ? "Low free space: reclaim ended attempt temp regardless of cap or retention. " : ""}`
+      const summary = passText + `${report.lowSpace ? "Low free space: prioritize expired attempt scratch regardless of cap. " : ""}`
         + `${report.spaceError ? `Scratch free-space observation failed: ${report.spaceError}. ` : ""}`
         + `Recorded allocation ${gb(report.bytes)}; cap ${gb(report.capBytes)}; ${mode === "dry-run" ? "would reclaim" : "reclaimed"} ${gb(report.removedBytes)} attributed; `
         + `budget deferred ${gb(report.deferredBytes)}; held live ${gb(report.liveHeldBytes)}; held by evidence ${gb(report.evidenceHeldBytes)}; `
         + `held for the operator ${gb(report.operatorHeldBytes)}; other holds ${gb(report.otherHeldBytes)}; failed ${gb(report.failedBytes)}; outside this page ${gb(report.unexaminedBytes)}. `
         + `${report.blocked.roots} roots in the ledger (${gb(report.blocked.bytes)}) hold directories this user cannot remove; they are listed under "blocked". `
-        + `automatic copies reclaimed ${gb(copies.removedBytes)}; unattributed copies retained ${gb(copies.unattributed.bytes)}. `
+        + `automatic copies reclaimed ${gb(copies.removedBytes)}; unattributed copies retained ${gb(copies.unattributed.bytes)}; `
+        + `${copies.sourceAttributed} legacy copies matched registered scratch this tick. `
         + "Hold categories describe this page; unexamined allocation still needs classification.";
       writeJsonDurably(file, { at: new Date().toISOString(), condition, summary, ...report });
       if (noteworthy) console.log(`[attempt temp] ${mode === "dry-run" ? "would remove" : "removed"} ${report.removed} directories, ${report.removedBytes} bytes; `

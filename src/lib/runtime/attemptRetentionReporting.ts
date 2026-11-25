@@ -1,8 +1,13 @@
 import type { Database } from "bun:sqlite";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
+import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
 const indexes = declaredIndexes([`CREATE INDEX IF NOT EXISTS retention_sources_expiry ON retention_sources(expiresAt DESC)
   WHERE eligible=1 AND unattributed=0 AND expiresAt IS NOT NULL`]);
+// A verified source changes attribution only. The copy remains under its
+// existing retention owner and stays outside the reclaimable-byte forecast.
+const unknownCopy = `c.kind='unattributed' AND NOT EXISTS
+  (SELECT 1 FROM copy_registered_sources a WHERE a.destination=c.destination)`;
 
 /** Incremental byte sums in seven radix levels. Each prefix reads at most
  * 255 buckets per level, regardless of the number of retained paths. Old
@@ -11,6 +16,8 @@ export class AttemptRetentionReporting {
   constructor(private db: Database, directory: string) {
     db.transaction(() => {
       indexes.assertRepairAuthority(db, directory);
+      const sourceAttributionInstalled = db.query("SELECT 1 FROM sqlite_master WHERE name='copy_registered_sources'").get();
+      if (!sourceAttributionInstalled) assertStateStartupMutation(directory, "attempt evidence copy attribution");
       db.exec(`CREATE TABLE IF NOT EXISTS retention_sources (
         source TEXT NOT NULL, entry TEXT NOT NULL, bytes REAL NOT NULL,
         expiresAt REAL, unattributed INTEGER NOT NULL, eligible INTEGER NOT NULL,
@@ -21,7 +28,9 @@ export class AttemptRetentionReporting {
         INSERT OR IGNORE INTO retention_unattributed VALUES(1,0,0);
         CREATE TABLE IF NOT EXISTS retention_backfill (source TEXT PRIMARY KEY, cursor TEXT NOT NULL, done INTEGER NOT NULL);
         INSERT OR IGNORE INTO retention_backfill VALUES('root','',0),('copy','',0);
-        CREATE TABLE IF NOT EXISTS copy_eligibility(destination TEXT PRIMARY KEY, eligible INTEGER NOT NULL);`);
+        CREATE TABLE IF NOT EXISTS copy_eligibility(destination TEXT PRIMARY KEY, eligible INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS copy_registered_sources(destination TEXT PRIMARY KEY);
+        INSERT OR IGNORE INTO retention_backfill VALUES('copy-source','',0);`);
       indexes.install(db, directory);
       const contribution = (row: string, sign: number) => {
         // Ceil to integer milliseconds without optional SQLite math extensions.
@@ -44,7 +53,7 @@ export class AttemptRetentionReporting {
         ON CONFLICT(source,entry) DO UPDATE SET bytes=excluded.bytes,expiresAt=excluded.expiresAt
           WHERE retention_sources.bytes IS NOT excluded.bytes OR retention_sources.expiresAt IS NOT excluded.expiresAt;`;
       const copy = (key: string) => `INSERT INTO retention_sources
-        SELECT 'copy',c.destination,c.bytes,c.expiresAt,c.kind='unattributed',coalesce(e.eligible,1)
+        SELECT 'copy',c.destination,c.bytes,c.expiresAt,${unknownCopy},c.kind<>'unattributed' AND coalesce(e.eligible,1)
         FROM copies c LEFT JOIN copy_eligibility e ON e.destination=c.destination WHERE c.destination=${key}
         ON CONFLICT(source,entry) DO UPDATE SET bytes=excluded.bytes,expiresAt=excluded.expiresAt,
           unattributed=excluded.unattributed,eligible=excluded.eligible
@@ -61,9 +70,14 @@ export class AttemptRetentionReporting {
             : refresh(keyRef);
           const columns = table === "roots" ? "bytes" : table === "root_retention" ? "expiresAt"
             : table === "copies" ? "bytes,expiresAt,kind" : "eligible";
+          if (!sourceAttributionInstalled && source === "copy") db.exec(`DROP TRIGGER IF EXISTS retention_${table}_${event.toLowerCase()}`);
           db.exec(`CREATE TRIGGER IF NOT EXISTS retention_${table}_${event.toLowerCase()} AFTER ${event === "UPDATE" ? `UPDATE OF ${columns}` : event} ON ${table} BEGIN ${sql} END;`);
         }
       }
+      db.exec(`CREATE TRIGGER IF NOT EXISTS retention_copy_source_insert AFTER INSERT ON copy_registered_sources
+        BEGIN ${copy("NEW.destination")} END;
+        CREATE TRIGGER IF NOT EXISTS retention_copy_source_forget AFTER DELETE ON copies
+        BEGIN DELETE FROM copy_registered_sources WHERE destination=OLD.destination; END;`);
     })();
   }
 
@@ -80,7 +94,7 @@ export class AttemptRetentionReporting {
             SELECT 'root',r.directory,r.bytes,t.expiresAt,0,1 FROM roots r LEFT JOIN root_retention t USING(directory)
             WHERE r.directory=? ON CONFLICT(source,entry) DO NOTHING`).run(entry);
           else this.db.query(`INSERT INTO retention_sources
-            SELECT 'copy',c.destination,c.bytes,c.expiresAt,c.kind='unattributed',coalesce(e.eligible,1)
+            SELECT 'copy',c.destination,c.bytes,c.expiresAt,${unknownCopy},c.kind<>'unattributed' AND coalesce(e.eligible,1)
             FROM copies c LEFT JOIN copy_eligibility e ON e.destination=c.destination
             WHERE c.destination=? ON CONFLICT(source,entry) DO NOTHING`).run(entry);
           this.db.query("UPDATE retention_backfill SET cursor=? WHERE source=?").run(entry, source);
@@ -106,7 +120,7 @@ export class AttemptRetentionReporting {
     const dueBytes = this.prefix(now), upcomingBytes = this.prefix(now + retentionMs) - dueBytes;
     const until = this.db.query<{ expiresAt: number }, [number]>(`SELECT expiresAt FROM retention_sources
       WHERE eligible=1 AND unattributed=0 AND expiresAt IS NOT NULL AND expiresAt<=? ORDER BY expiresAt DESC LIMIT 1`).get(now + retentionMs)?.expiresAt ?? null;
-    const pending = !!this.db.query("SELECT 1 FROM retention_backfill WHERE done=0 LIMIT 1").get();
+    const pending = !!this.db.query("SELECT 1 FROM retention_backfill WHERE source IN ('root','copy') AND done=0 LIMIT 1").get();
     return { periodDays: retentionMs / 86400000, dueBytes, upcomingBytes, until, partial: pending };
   }
   unattributed() {

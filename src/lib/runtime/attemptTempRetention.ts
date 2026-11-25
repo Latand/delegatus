@@ -5,12 +5,13 @@ import type { Database } from "bun:sqlite";
 import { statePath } from "@/lib/configDir";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { withFileTransactionAsync, FileTransactionBusyError } from "@/lib/state/fileTransaction";
-import { attemptTempJournalPath, sweepStaleTempDirs, resolvePhysicalPath, type ProcessScan } from "@/lib/tempSweep";
-import { allocatedAttemptBytes, attemptReferencesClear, attemptProcessReferencesClear, blockedSubtrees, inspectAttemptTree, measureAttemptAllocation,
+import { attemptTempJournalPath, mountPointsUnder, sweepStaleTempDirs, resolvePhysicalPath, type ProcessScan } from "@/lib/tempSweep";
+import { allocatedAttemptBytes, attemptReferencesClear, attemptTreeHold, attemptProcessReferencesClear, blockedSubtrees, inspectAttemptTree, measureAttemptAllocation,
   privilegedCleanupUnavailable, snapshotAttemptProtection, closedAttemptProtection, removeAttemptTree, RepositoryLinkInventory, repositoryReferencesAttemptTemp, ledgerLinkedEvidence,
   type BlockedSubtree, type RetainedCheckoutReads, type AttemptNamespaceProtection, type AttemptProtection } from "./attemptTempFilesystem";
-import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
+import { AttemptTempBudgetDeferred, attemptTempDeferralCode, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { preserveAttemptEvidence, type AttemptEvidenceSelection } from "./attemptTempEvidence";
+import { attemptEvidenceKey } from "./attemptEvidenceBinding";
 import { recordedRootHeld, readRecorded, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
 import { trackSqliteMemory } from "@/lib/sqliteMemoryDiagnostics";
 import { AttemptRetentionReporting } from "./attemptRetentionReporting";
@@ -73,6 +74,8 @@ export type CompletedPressurePass = { startedAt: number; endedAt: number; durati
   total: number; ticks: number; visited: number; removed: number; removedBytes: number };
 /** How long a root held past its lane's retention waits for its next visit. */
 export const EXPIRED_HOLD_RETRY_MS = 30 * 60_000;
+/** Retry an unsuccessful full proof less often than a resumable inventory. */
+const EXPIRED_PROOF_RETRY_MS = 15 * 60_000;
 /** How long a root waits for the operator to remove what this user cannot. */
 export const BLOCKED_SUBTREE_RETRY_MS = 60 * 60_000;
 /** An unchanged leaf inode cannot authorize a rebound parent or evidence. */
@@ -84,7 +87,7 @@ function attemptTempPathAdmitted(directory: string): boolean {
 }
 /** Roots whose blocked subtrees one report lists in full. */
 const BLOCKED_REPORT_ROOTS = 32;
-export type BlockedRoot = { directory: string; bytes: number; count: number; entries: BlockedSubtree[]; at: number };
+export type BlockedRoot = { directory: string; bytes: number; count: number; entries: BlockedSubtree[]; at: number; reasonCode: "operator_permissions" };
 
 const attemptTempIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS trash_recovery_due ON trash_recovery(checkedAt,turn,directory) WHERE restored=0",
@@ -98,6 +101,7 @@ const attemptTempIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS copies_inspection ON copies(destination) WHERE kind<>'unattributed'",
   "CREATE INDEX IF NOT EXISTS copies_expiry ON copies(expiresAt,destination)",
   "CREATE INDEX IF NOT EXISTS roots_retention_expiry ON root_retention(expiresAt)",
+  "CREATE INDEX IF NOT EXISTS roots_retention_expiry_order ON root_retention(expiresAt,directory)",
 ]);
 
 /** A separate, small ledger: selecting a tick never reads pipeline history or
@@ -142,6 +146,7 @@ export class AttemptTempStore {
       this.db.exec("CREATE TABLE IF NOT EXISTS copy_retention_failures(destination TEXT PRIMARY KEY, failure TEXT NOT NULL)");
       this.db.exec("CREATE TABLE IF NOT EXISTS copy_adoption(id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL, done INTEGER NOT NULL)");
       this.db.exec("CREATE TABLE IF NOT EXISTS copy_inspection(id INTEGER PRIMARY KEY CHECK(id=1), cursor TEXT NOT NULL)");
+      this.db.exec("CREATE TABLE IF NOT EXISTS copy_source_repairs(seq INTEGER PRIMARY KEY, destination TEXT NOT NULL UNIQUE)");
       this.recovery = new AttemptTrashRecovery(this.db, path.join(path.dirname(filename), "scratch"));
       attemptTempIndexes.install(this.db, path.dirname(filename));
       this.db.exec("CREATE TABLE IF NOT EXISTS totals (id INTEGER PRIMARY KEY CHECK(id=1), bytes REAL NOT NULL)");
@@ -178,8 +183,10 @@ export class AttemptTempStore {
         const stat = fs.lstatSync(owner.directory);
         if (!stat.isDirectory() || stat.isSymbolicLink() || !/^llv-(?:read-only-stage|stage|stage-config)-/.test(path.basename(owner.directory)))
           throw new Error("Attempt temp root is not an owned directory");
+        const directory = path.resolve(owner.directory), identity = `${stat.dev}:${stat.ino}`;
         this.db.query("INSERT INTO roots(directory,pipelineId,launchId,retainUntilClose,createdAt,identity,checkedAt) VALUES(?,?,?,?,?,?,?)")
-          .run(path.resolve(owner.directory), owner.pipelineId, owner.launchId, Number(owner.retainUntilClose), owner.createdAt, `${stat.dev}:${stat.ino}`, owner.createdAt);
+          .run(directory, owner.pipelineId, owner.launchId, Number(owner.retainUntilClose), owner.createdAt, identity, owner.createdAt);
+        this.queueCopySourceRepair(directory, identity);
         fs.writeFileSync(path.join(owner.directory, ".delegatus-attempt-owner"), "attempt-temp.sqlite\n", { mode: 0o600, flag: "wx" });
       }
     }).immediate();
@@ -250,7 +257,10 @@ export class AttemptTempStore {
         VALUES(?,?,?,0,?,?,?) ON CONFLICT(directory) DO UPDATE SET pipelineId=excluded.pipelineId,launchId=excluded.launchId,createdAt=excluded.createdAt
         WHERE roots.pipelineId IS NULL AND roots.launchId='adopted' AND roots.identity=excluded.identity`)
         .run(directory, binding.pipelineId, binding.launchId, createdAt, identity, now);
-      if (result.changes) this.retainRoot(directory, attemptScratchExpiry(pipeline, { ...binding, createdAt, retainUntilClose: false }));
+      if (result.changes) {
+        this.retainRoot(directory, attemptScratchExpiry(pipeline, { ...binding, createdAt, retainUntilClose: false }));
+        this.queueCopySourceRepair(directory, identity);
+      }
       return result.changes > 0;
     }).immediate();
   }
@@ -383,14 +393,18 @@ export class AttemptTempStore {
     return row ? { ...row, durationMs: Math.max(0, row.endedAt - row.startedAt) } : null;
   }
   due(now: number, limit: number, scheduledOnly = false): Row[] {
+    // The completion clock orders routine scratch, even when a larger root
+    // keeps needing retries. Size still orders the separate pressure pass.
+    if (scheduledOnly) return this.db.query<Row, [number, number, number]>(`SELECT r.* FROM root_retention t
+      JOIN roots r ON r.directory=t.directory WHERE t.expiresAt<=? AND r.checkedAt<=?
+      ORDER BY t.expiresAt,t.directory LIMIT ?`).all(now, now, limit);
     // A root whose lane retention ended has the first claim on every page,
     // across the whole ledger and largest allocation first. Up to half of the
     // page, so a run of held expired roots cannot starve the other visits; a
     // held one is moved back by `EXPIRED_HOLD_RETRY_MS` after its visit.
     const expired = this.db.query<Row, [number, number, number]>(`SELECT r.* FROM root_retention t JOIN roots r ON r.directory=t.directory
       WHERE t.expiresAt IS NOT NULL AND t.expiresAt<=? AND r.checkedAt<=? ORDER BY r.bytes DESC,t.expiresAt,r.createdAt,r.directory LIMIT ?`)
-      .all(now, now, scheduledOnly ? limit : Math.ceil(limit / 2));
-    if (scheduledOnly) return expired;
+      .all(now, now, Math.ceil(limit / 2));
     const selected = new Set(expired.map(row => row.directory));
     const rest = (query: string, count: number) => count <= 0 ? [] : this.db.query<Row, [number, number]>(query)
       .all(now, count + selected.size).filter(row => !selected.has(row.directory)).slice(0, count);
@@ -398,8 +412,9 @@ export class AttemptTempStore {
       .sort((a, b) => b.bytes - a.bytes);
   }
   allocationDue(now: number, limit = 4): Row[] {
-    return this.db.query<Row, [number, number]>("SELECT * FROM roots WHERE measuredAt<=? ORDER BY measuredAt,createdAt,directory LIMIT ?")
-      .all(now - 60_000, limit);
+    return this.db.query<Row, [number, number, number, number]>(`SELECT r.* FROM roots r WHERE measuredAt<=?
+      AND (r.checkedAt<=? OR NOT EXISTS (SELECT 1 FROM root_retention t WHERE t.directory=r.directory AND t.expiresAt<=?))
+      ORDER BY measuredAt,createdAt,directory LIMIT ?`).all(now - 60_000, now, now, limit);
   }
   /** Subtrees of a root that this user cannot remove, as last observed. */
   recordBlocked(directory: string, blocked: { count: number; entries: BlockedSubtree[] } | null, at: number) {
@@ -412,7 +427,7 @@ export class AttemptTempStore {
       FROM root_blocked b JOIN roots r ON r.directory=b.directory`).get()!;
     const listed = this.db.query<{ directory: string; bytes: number; count: number; entries: string; at: number }, [number]>(`SELECT b.directory,r.bytes,b.count,b.entries,b.at
       FROM root_blocked b JOIN roots r ON r.directory=b.directory ORDER BY r.bytes DESC,b.directory LIMIT ?`).all(limit)
-      .map(row => ({ ...row, entries: JSON.parse(row.entries) as BlockedSubtree[] }));
+      .map(row => ({ ...row, entries: JSON.parse(row.entries) as BlockedSubtree[], reasonCode: "operator_permissions" as const }));
     return { roots: totals.roots, bytes: totals.bytes ?? 0, listed };
   }
   /** The recorded end of the root's lane retention, or null when none is known. */
@@ -495,6 +510,48 @@ export class AttemptTempStore {
     return this.db.query<Pick<EvidenceCopy, "destination" | "kind">, [string, number]>(
       "SELECT destination,kind FROM copies WHERE destination>? ORDER BY destination LIMIT ?").all(after, limit);
   }
+  copySourcePage(after: string, limit: number) {
+    return this.db.query<Pick<EvidenceCopy, "destination">, [string, number]>(`SELECT destination FROM copies
+      WHERE destination>? AND kind='unattributed' AND NOT EXISTS
+        (SELECT 1 FROM copy_registered_sources a WHERE a.destination=copies.destination)
+      ORDER BY destination LIMIT ?`).all(after, limit);
+  }
+  copySourceCursor() {
+    return this.db.query<{ cursor: string; done: number }, []>("SELECT cursor,done FROM retention_backfill WHERE source='copy-source'").get()!;
+  }
+  copySourcePending(destination: string) {
+    return !!this.db.query(`SELECT 1 FROM copies WHERE destination=? AND kind='unattributed' AND NOT EXISTS
+      (SELECT 1 FROM copy_registered_sources a WHERE a.destination=copies.destination)`).get(destination);
+  }
+  private queueCopySourceRepair(original: string, identity: string) {
+    const destination = statePath("evidence", "attempt-temp", attemptEvidenceKey(original, identity));
+    this.db.query(`INSERT OR IGNORE INTO copy_source_repairs(destination) SELECT destination FROM copies
+      WHERE destination=? AND kind='unattributed' AND NOT EXISTS
+        (SELECT 1 FROM copy_registered_sources a WHERE a.destination=copies.destination)`).run(destination);
+  }
+  pendingCopySourceRepairs(limit: number) {
+    return this.db.query<{ destination: string }, [number]>(
+      "SELECT destination FROM copy_source_repairs ORDER BY seq LIMIT ?").all(limit);
+  }
+  finishCopySourceRepair(destination: string, attributed: boolean) {
+    return this.db.transaction(() => {
+      const changed = attributed ? this.attributeCopySource(destination) : 0;
+      this.db.query("DELETE FROM copy_source_repairs WHERE destination=?").run(destination);
+      return changed;
+    })();
+  }
+  attributeCopySource(destination: string) {
+    return Number(!!this.db.query(`INSERT OR IGNORE INTO copy_registered_sources
+      SELECT destination FROM copies WHERE destination=? AND kind='unattributed'
+      RETURNING destination`).get(destination));
+  }
+  checkpointCopySource(cursor: string, done: boolean, attributed = false) {
+    return this.db.transaction(() => {
+      const changed = attributed ? this.attributeCopySource(cursor) : 0;
+      this.db.query("UPDATE retention_backfill SET cursor=?,done=? WHERE source='copy-source'").run(cursor, Number(done));
+      return changed;
+    })();
+  }
   registerCopy(row: EvidenceCopy) {
     this.db.query(`INSERT INTO copies VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(destination) DO UPDATE SET
       expiresAt=excluded.expiresAt,checkedAt=excluded.checkedAt,bytes=excluded.bytes`)
@@ -518,6 +575,7 @@ export class AttemptTempStore {
       this.db.query("DELETE FROM copies WHERE destination=?").run(destination);
       this.db.query("DELETE FROM copy_eligibility WHERE destination=?").run(destination);
       this.db.query("DELETE FROM copy_retention_failures WHERE destination=?").run(destination);
+      this.db.query("DELETE FROM copy_source_repairs WHERE destination=?").run(destination);
     })();
   }
   copyFailure(destination: string, failure: string | null) {
@@ -567,6 +625,7 @@ export type AttemptTempSweepOptions = {
   retentionMs?: number;
   remove?: (directory: string, guard: () => Promise<boolean>, dispatch: () => boolean, mutationStarted: () => void) => Promise<void>;
   mode?: "on" | "dry-run";
+  beforeRootRetirement?: (directory: string, identity: string) => void;
   onRetired?: (count: number, bytes: number) => void;
   /** Checkout reads kept by a caller that lives across ticks. Passing it also
    * lets one reference observation reuse a validation of the last seconds. */
@@ -619,7 +678,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   const capBytes = freeBytes === null ? configuredCapBytes : Math.min(configuredCapBytes,
     Math.max(0, Math.floor(Math.min((store.bytes() + freeBytes) / 2, store.bytes() + freeBytes - ATTEMPT_TEMP_LOW_SPACE_BYTES))));
   const pressure = !!options.selection || lowSpace || store.bytes() > capBytes;
-  type Outcome = { directory: string; disposition: "deferred" | "live" | "evidence" | "held" | "operator" | "failed" | "removed"; bytes: number; reason: string;
+  // An ordinary page; under pressure an explicit maxRoots limits the tick.
+  const budget = Math.max(1, Math.min(32, options.maxRoots ?? (options.scheduledOnly ? 32 : 4)));
+  type Outcome = { directory: string; disposition: "deferred" | "live" | "evidence" | "held" | "operator" | "failed" | "removed"; bytes: number;
+    reason: string; reasonCode: string; retryAt?: number;
     /** Part of the tree could not be read; `bytes` counts the rest. */
     unreadable?: true; allocation?: "recorded" };
   const report = { adopted: adoption.adopted, checked: 0, removed: 0, removedBytes: 0,
@@ -629,13 +691,15 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     evidenceSelections: {} as Record<string, AttemptEvidenceSelection>,
     bytes: store.bytes(), reclaimedBytes: 0, capBytes, configuredCapBytes, overCapBytes: 0, inventoryWalks: 0, outcomes: [] as Outcome[],
     pressure, lowSpace, freeBytes, lowSpaceThresholdBytes: ATTEMPT_TEMP_LOW_SPACE_BYTES, spaceError,
-    rootBudgetMs: pressure ? ATTEMPT_TEMP_ROOT_BUDGET_MS : null,
+    rootBudgetMs: pressure || options.scheduledOnly ? ATTEMPT_TEMP_ROOT_BUDGET_MS : null,
+    rootPageLimit: pressure ? null : budget,
     /** Every root the ledger holds for the operator, not only this page's. */
     blocked: { roots: 0, bytes: 0, listed: [] as BlockedRoot[] } };
   const partiallyRead = new Set<string>();
   const recordedAllocation = new Set<string>();
-  const outcome = (directory: string, disposition: Outcome["disposition"], bytes: number, reason: string) => {
-    report.outcomes.push({ directory, disposition, bytes, reason, ...(partiallyRead.has(directory) ? { unreadable: true as const } : {}),
+  const outcome = (directory: string, disposition: Outcome["disposition"], bytes: number, reason: string,
+    reasonCode: string) => {
+    report.outcomes.push({ directory, disposition, bytes, reason, reasonCode, ...(partiallyRead.has(directory) ? { unreadable: true as const } : {}),
       ...(recordedAllocation.has(directory) ? { allocation: "recorded" as const } : {}) });
     if (disposition === "deferred") { report.deferred++; report.deferredBytes += bytes; }
     else if (disposition === "failed") { report.failedBytes += bytes; }
@@ -647,30 +711,29 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       else report.otherHeldBytes += bytes;
     }
   };
-  // An ordinary page; under pressure `maxRoots` limits the visits of one tick.
-  const budget = Math.max(1, Math.min(32, options.maxRoots ?? 4));
   // A caller that lives across ticks keeps completed checkout reads, and its
   // repeated validations inside one reference observation reuse a result of
   // the last few seconds. Each destructive step below still waits for
   // `unchangedAll`, which reads every inventoried directory again.
   const inventory = new RepositoryLinkInventory({ now, budgetMs: Math.min(30_000, remaining()),
     retained: options.checkoutReads, validationReuseMs: options.checkoutReads ? 5_000 : 0 });
-  const references = options.references
-    ?? ((original: string, current: string, scan: ProcessScan) => attemptReferencesClear(original, current, scan, undefined, inventory));
   const recovery = options.selection ? { entries: 0, manifestEntries: 0, checks: 0, restored: 0, adopted: 0, recoveredDirectory: null, outcomes: [] }
     : store.recoverTrash(now, deadline, budgetNow, options.scheduledOnly);
   let recoveredIntent: Row | null = null;
   report.adopted += recovery.adopted;
-  for (const row of recovery.outcomes) outcome(row.directory, row.disposition, row.bytes, row.reason);
+  for (const row of recovery.outcomes) outcome(row.directory, row.disposition, row.bytes, row.reason,
+    row.disposition === "deferred" ? "recovery_binding_scan"
+      : row.reason === "recovered attempt owner" ? "recovery_owner_recovered" : "recovery_owner_unknown");
   if (options.scheduledOnly && recovery.recoveredDirectory && remaining() > 0) {
     recoveredIntent = store.owner(recovery.recoveredDirectory);
     if (recoveredIntent) await options.state(recoveredIntent, inventory);
   }
-  const visit = async (owner: Row) => {
+  const visit = async (owner: Row, deadlineCode: "tick_budget" | "root_budget" = "tick_budget") => {
     report.checked++;
     let bytes = owner.bytes;
     let disposition: "live" | "evidence" | "held" | "operator" = "held";
     let reason = "identity changed";
+    let reasonCode = "root_identity_changed";
     // Persist fairness before the first await; a killed helper resumes elsewhere.
     const retirement: { release?: () => void } = {};
     let recoveredTrash = false;
@@ -706,15 +769,15 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         store.defer(owner.directory, Math.max(store.owner(owner.directory)?.checkedAt ?? 0, now() + BLOCKED_SUBTREE_RETRY_MS));
         if (noteFailure(detail)) console.error("[attempt temp] root held for the operator", detail);
         outcome(owner.directory, "operator", bytes, (`${blocked.count} director${blocked.count === 1 ? "y" : "ies"} this user cannot remove; `
-          + `operator action (${detail})`).slice(0, 512));
+          + `operator action (${detail})`).slice(0, 512), "operator_permissions");
       } catch (error) {
         if (!stateDatabaseBusy(error) && !(error instanceof FileTransactionBusyError)) throw error;
-        outcome(owner.directory, "deferred", bytes, `operator hold bookkeeping is busy; retry next pass: ${detail}`.slice(0, 512));
+        outcome(owner.directory, "deferred", bytes, `operator hold bookkeeping is busy; retry next pass: ${detail}`.slice(0, 512), "ledger_busy");
       }
     };
     try {
       if (options.selection && !options.selection.current(owner)) {
-        outcome(owner.directory, "held", bytes, "approved manifest binding or root identity changed"); return;
+        outcome(owner.directory, "held", bytes, "approved manifest binding or root identity changed", "approved_binding_changed"); return;
       }
       store.defer(owner.directory, now() + 60_000);
       recoveredTrash = store.recoveredTrash(owner.directory);
@@ -730,8 +793,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         return current?.dev === parentStat?.dev && current?.ino === parentStat?.ino
           && resolvePhysicalPath(parent) === parentPhysical && attemptTempPathAdmitted(directory);
       };
-      if (!pathCurrent(owner.directory)) { outcome(owner.directory, "held", bytes, "physical ancestry changed or protected"); return; }
-      if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}` !== owner.identity)) { outcome(owner.directory, disposition, bytes, reason); return; }
+      if (!pathCurrent(owner.directory)) { outcome(owner.directory, "held", bytes, "physical ancestry changed or protected", "root_ancestry_changed"); return; }
+      if (stat && (!stat.isDirectory() || stat.isSymbolicLink() || `${stat.dev}:${stat.ino}` !== owner.identity)) { outcome(owner.directory, disposition, bytes, reason, reasonCode); return; }
       // Custody survives a missing namespace with zero allocation. A pending
       // quarantine retains its allocation projection until replay resolves.
       const pendingJournal = fs.existsSync(attemptTempJournalPath(owner.directory));
@@ -739,7 +802,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       if (recoveredTrash) {
         if (!store.recoveredTrashCurrent(owner.directory)) {
           store.refreshTrashRecovery(owner.directory);
-          outcome(owner.directory, "held", bytes, "owner-unknown"); return;
+          outcome(owner.directory, "held", bytes, "owner-unknown", "recovery_owner_unknown"); return;
         }
         const state = await options.state(owner, inventory);
         const authority = await observeOwner(owner);
@@ -752,11 +815,12 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
             && authority.isCurrent() && authority.state !== "expired" && !stat) {
             restoreRefusedAttemptTrash(owner.directory, owner.identity);
             store.clearTrashRecovery(owner.directory);
-            outcome(owner.directory, authorityDisposition(authority.state), bytes, "interrupted quarantine restored before expiry");
+            outcome(owner.directory, authorityDisposition(authority.state), bytes, "interrupted quarantine restored before expiry", "recovery_restored_before_expiry");
             return;
           }
           disposition = authorityDisposition(authority.state);
-          outcome(owner.directory, disposition, bytes, `ownership ${authority.state}; recovered trash requires current expired lane`);
+          outcome(owner.directory, disposition, bytes, `ownership ${authority.state}; recovered trash requires current expired lane`,
+            authority.state === "expired" ? "authority_changed" : `owner_${authority.state}`);
           return;
         }
         if (authority.expiresAt != null) store.requireRootExpiry(owner.directory, authority.expiresAt);
@@ -769,7 +833,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       if (stat) {
         const initialState = options.scheduledOnly || owner.pipelineId && pressure ? await options.state(owner, inventory) : null;
         if (options.scheduledOnly && initialState && initialState !== "expired") {
-          outcome(owner.directory, authorityDisposition(initialState), bytes, `ownership ${initialState}; awaiting confirmed expiry`);
+          outcome(owner.directory, authorityDisposition(initialState), bytes, `ownership ${initialState}; awaiting confirmed expiry`, `owner_${initialState}`);
           return;
         }
         // Under pressure, use the last measurement for a known hold. Roots
@@ -777,7 +841,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         if (owner.bytes > 0 && (initialState === "live" || initialState === "unknown")
           && !recordedRootHeld(owner.directory)) {
           recordedAllocation.add(owner.directory);
-          outcome(owner.directory, initialState === "live" ? "live" : "held", bytes, `ownership ${initialState}; allocation retained`);
+          outcome(owner.directory, initialState === "live" ? "live" : "held", bytes, `ownership ${initialState}; allocation retained`, `owner_${initialState}`);
           return;
         }
         const recordedOnly = owner.bytes > 0 && initialState !== null && finished(initialState)
@@ -793,7 +857,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       if (!stat && !pendingTrash) store.measure(owner.directory, 0);
       if (stat) {
         const measured = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
-        if (!measured?.isDirectory() || measured.isSymbolicLink() || `${measured.dev}:${measured.ino}` !== owner.identity) { outcome(owner.directory, disposition, owner.bytes, reason); return; }
+        if (!measured?.isDirectory() || measured.isSymbolicLink() || `${measured.dev}:${measured.ino}` !== owner.identity) { outcome(owner.directory, disposition, owner.bytes, reason, reasonCode); return; }
         store.measure(owner.directory, bytes);
       }
       checkBudget();
@@ -803,7 +867,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       if (recordedRootHeld(owner.directory)) {
         // Expiring one check releases its other roots as a cascade. Exact-list
         // execution leaves that shared transition to the ordinary owner.
-        if (options.selection) { outcome(owner.directory, "evidence", bytes, "recorded check evidence hold; exact selection cannot release shared holds"); return; }
+        if (options.selection) { outcome(owner.directory, "evidence", bytes, "recorded check evidence hold; exact selection cannot release shared holds", "recorded_evidence_hold"); return; }
         const initialAuthority = await observeOwner(owner);
         retentionExpiry = initialAuthority.expiresAt ?? null;
         let custodyExpiry = retentionExpiry;
@@ -815,7 +879,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
             store.retainRoot(owner.directory, retentionExpiry); store.rootEligible(owner.directory, false);
             if (custody.state === "closed" && custody.expiresAt && custody.expiresAt > now() && custody.isCurrent())
               store.defer(owner.directory, custody.expiresAt);
-            outcome(owner.directory, "evidence", bytes, "recorded check retains its independent evidence lifetime"); return;
+            outcome(owner.directory, "evidence", bytes, "recorded check retains its independent evidence lifetime", "recorded_evidence_lifetime"); return;
           }
           custodyExpiry = custody.expiresAt ?? null;
           custodyCurrent = custody.isCurrent;
@@ -840,7 +904,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         if (recordedRootHeld(owner.directory) && (options.scheduledOnly || !(options.mode === "dry-run" && initialAuthority.state === "expired"))) {
           if (pendingTrash && !recoveredTrash && options.mode !== "dry-run") restoreRefusedAttemptTrash(owner.directory, owner.identity);
           if (initialAuthority.expiresAt && initialAuthority.expiresAt > now()) store.defer(owner.directory, initialAuthority.expiresAt);
-          outcome(owner.directory, "evidence", bytes, "recorded check evidence hold"); return;
+          outcome(owner.directory, "evidence", bytes, "recorded check evidence hold", "recorded_evidence_hold"); return;
         }
       }
       let namespaceOnly = false;
@@ -882,8 +946,14 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       const rootWatches = (directory: string) => [...(namespaceProtection ? [] : [directory]), ...attemptPathWatches([directory], false)];
       const mutationDirectories = (directory: string) => [...rootWatches(directory), ...authorityWatches(),
         ...(dispatchEvidence?.mutationDirectories ?? []), ...inventory.mutationDirectories()];
-      const processInputsClear = (directory: string) => (!pressure && dispatchState !== "expired" && (dispatchState === undefined || !finished(dispatchState)))
-        || attemptProcessReferencesClear(owner.directory, directory, options.scan([owner.directory, directory]));
+      const processInputsClear = (directory: string) => {
+        if (!pressure && dispatchState !== "expired" && (dispatchState === undefined || !finished(dispatchState))
+          || attemptProcessReferencesClear(owner.directory, directory, options.scan([owner.directory, directory]))) return true;
+        disposition = "live";
+        reason = "live process reference at dispatch";
+        reasonCode = "process_reference";
+        return false;
+      };
       const dispatchEligible = (directory: string) => attemptMutationCurrent(
         mutationDirectories(directory),
         () => retirementAuthorityCurrent(directory) && processInputsClear(directory) && dispatchEvidence?.current() === true, remaining(), ownerAuthorityCurrent);
@@ -902,13 +972,18 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
             if (!checkout || containsCheckout || await repositoryReferencesAttemptTemp(checkout, owner.directory, directory, inventory)) {
               disposition = "live";
               reason = "open lane checkout has an unresolved scratch dependency";
+              reasonCode = !checkout ? "checkout_unknown" : "checkout_link_reference";
               return false;
             }
           }
-          const clear = await references(owner.directory, directory, scan());
+          const snapshot = scan();
+          let holdCode = "reference_observer_hold";
+          const clear = options.references ? await options.references(owner.directory, directory, snapshot)
+            : await attemptReferencesClear(owner.directory, directory, snapshot, undefined, inventory, code => { holdCode = code; });
           if (!clear) {
             disposition = "live";
             reason = "live process, socket, checkout link or container mount";
+            reasonCode = holdCode;
           }
           return clear;
         }
@@ -918,6 +993,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
             disposition = "operator";
             // The detail names what vanished or refused: a process cwd or a
             // consumer checkout whose process is still alive.
+            reasonCode = "checkout_unreadable";
             reason = `consumer checkout became unreadable during retirement: ${attemptTempFailureDetail(error)}`.slice(0, 512);
             return false;
           }
@@ -928,7 +1004,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // this root. Repeated eligibility checks validate the same snapshot;
       // they do not enumerate the tree again. Only this root is retained,
       // and a renamed quarantine or an aged snapshot needs a fresh proof.
-      let treeProof: { directory: string; at: number; protection: AttemptProtection; unpinned: boolean } | undefined;
+      let treeProof: { directory: string; at: number; protection: AttemptProtection; hold: Awaited<ReturnType<typeof attemptTreeHold>> } | undefined;
       const protectedTree = async (directory: string) => {
         if (treeProof?.directory === directory && now() >= treeProof.at
           && now() - treeProof.at < ATTEMPT_TEMP_PROTECTION_MAX_AGE_MS
@@ -938,49 +1014,56 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const snapshot = await snapshotAttemptProtection(directory, remaining(), true, bytes, owner.directory);
         const protection: AttemptProtection = { ...snapshot, current: () => now() >= at
           && now() - at < ATTEMPT_TEMP_PROTECTION_MAX_AGE_MS && snapshot.current() };
-        const unpinned = await inspectAttemptTree(directory, owner.directory, { budgetMs: remaining(), bytes });
-        treeProof = { directory, at, protection, unpinned };
+        const hold = await attemptTreeHold(directory, owner.directory, { budgetMs: remaining(), bytes });
+        treeProof = { directory, at, protection, hold };
         return treeProof;
       };
       const eligible = async (directory = owner.directory) => {
         currentDirectory = directory;
+        reasonCode = "dispatch_refused";
         checkBudget();
-        if (options.selection && !options.selection.current(owner)) { reason = "approved manifest authority changed"; return false; }
+        if (options.selection && !options.selection.current(owner)) { reason = "approved manifest authority changed"; reasonCode = "approved_binding_changed"; return false; }
         const state = await options.state(owner, inventory);
         if (options.requireExpired && state !== "expired") {
           disposition = state === "live" ? "live" : "held";
-          reason = "scratch requires confirmed completion strictly older than 24 hours"; return false;
+          reason = "scratch requires confirmed completion strictly older than 24 hours"; reasonCode = "expiry_unconfirmed"; return false;
         }
         if (recoveredTrash && state !== "expired") {
-          disposition = authorityDisposition(state); reason = `ownership ${state}; recovered trash requires expired lane`; return false;
+          disposition = authorityDisposition(state); reason = `ownership ${state}; recovered trash requires expired lane`; reasonCode = `owner_${state}`; return false;
         }
         if (!expiryCurrent(state)) {
           disposition = "evidence"; reason = "previously held root awaits lane expiry";
+          reasonCode = "expiry_admission";
           store.rootEligible(owner.directory, false);
           if (requiredExpiry !== null && requiredExpiry > now()) store.defer(owner.directory, requiredExpiry);
           return false;
         }
-        if (options.selection && !options.selection.current(owner)) { reason = "approved manifest authority changed after owner observation"; return false; }
-        if (recordedRootHeld(owner.directory) && !(options.mode === "dry-run" && state === "expired")) { disposition = "evidence"; reason = "recorded check evidence hold"; return false; }
+        if (options.selection && !options.selection.current(owner)) { reason = "approved manifest authority changed after owner observation"; reasonCode = "approved_binding_changed"; return false; }
+        if (recordedRootHeld(owner.directory) && !(options.mode === "dry-run" && state === "expired")) { disposition = "evidence"; reason = "recorded check evidence hold"; reasonCode = "recorded_evidence_hold"; return false; }
         checkBudget();
         disposition = state === "live" ? "live" : state === "settled" && owner.retainUntilClose ? "evidence" : "held";
         reason = state === "live" ? "live lane or checkout dependency" : state === "settled" && owner.retainUntilClose
           ? "declared evidence until lane close" : `ownership ${state}`;
+        reasonCode = state === "settled" && owner.retainUntilClose ? "declared_evidence_hold" : `owner_${state}`;
         const current = fs.lstatSync(directory, { throwIfNoEntry: false });
-        if (!pathCurrent(directory) || !current?.isDirectory() || current.isSymbolicLink() || `${current.dev}:${current.ino}` !== owner.identity) { reason = "physical ancestry or identity changed during authority read"; return false; }
+        if (!pathCurrent(directory) || !current?.isDirectory() || current.isSymbolicLink() || `${current.dev}:${current.ino}` !== owner.identity) { reason = "physical ancestry or identity changed during authority read"; reasonCode = "root_ancestry_changed"; return false; }
         const settled = state === "closed" || state === "expired" || state === "settled" && !owner.retainUntilClose
           || state === "orphan" && now() - owner.createdAt >= (options.maxAgeMs ?? 86400000);
         if (!settled) return false;
         if ((pressure || options.requireExpired) && ledgerLinkedEvidence(owner.directory).length) {
           store.rootEligible(owner.directory, false);
-          disposition = "evidence"; reason = "linked report evidence hold"; return false;
+          disposition = "evidence"; reason = "linked report evidence hold"; reasonCode = "linked_evidence_hold"; return false;
+        }
+        if (mountPointsUnder(directory).length) {
+          store.rootEligible(owner.directory, false);
+          disposition = "evidence"; reason = "mounted tree"; reasonCode = "mount_boundary"; return false;
         }
         const proof = pressure || state === "expired" || options.mode === "dry-run" ? await protectedTree(directory) : null;
         const protection: AttemptProtection = proof?.protection ?? { current: () => true };
         namespaceProtection = protection.namespace;
-        const unpinned = proof?.unpinned ?? await inspectAttemptTree(directory, owner.directory, { budgetMs: remaining(), bytes });
-        store.rootEligible(owner.directory, unpinned);
-        if (!unpinned) { disposition = "evidence"; reason = "tree evidence, mount or Git boundary"; return false; }
+        const treeHold = proof ? proof.hold : await attemptTreeHold(directory, owner.directory, { budgetMs: remaining(), bytes });
+        store.rootEligible(owner.directory, treeHold === null);
+        if (treeHold) { disposition = "evidence"; reason = "tree evidence, mount or Git boundary"; reasonCode = treeHold; return false; }
         checkBudget();
         if (!await observeReferences(directory)) return false;
         checkBudget();
@@ -1017,11 +1100,11 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         }
         checkBudget();
         const final = fs.lstatSync(directory, { throwIfNoEntry: false });
-        if (recordedRootHeld(owner.directory) && !(options.mode === "dry-run" && state === "expired")) { disposition = "evidence"; reason = "recorded check evidence hold"; return false; }
-        if (authority !== state) { reason = `authority changed from ${state} to ${authority}`; return false; }
-        if (!expiryCurrent(authority)) { disposition = "evidence"; reason = "lane expiry revoked after observations"; return false; }
-        if (!final?.isDirectory() || final.isSymbolicLink() || `${final.dev}:${final.ino}` !== owner.identity) { reason = "identity changed after observations"; return false; }
-        if (!protection.current() || !evidence.current()) { disposition = "evidence"; reason = "evidence changed after preservation"; return false; }
+        if (recordedRootHeld(owner.directory) && !(options.mode === "dry-run" && state === "expired")) { disposition = "evidence"; reason = "recorded check evidence hold"; reasonCode = "recorded_evidence_hold"; return false; }
+        if (authority !== state) { reason = `authority changed from ${state} to ${authority}`; reasonCode = "authority_changed"; return false; }
+        if (!expiryCurrent(authority)) { disposition = "evidence"; reason = "lane expiry revoked after observations"; reasonCode = "expiry_revoked"; return false; }
+        if (!final?.isDirectory() || final.isSymbolicLink() || `${final.dev}:${final.ino}` !== owner.identity) { reason = "identity changed after observations"; reasonCode = "root_identity_changed"; return false; }
+        if (!protection.current() || !evidence.current()) { disposition = "evidence"; reason = "evidence changed after preservation"; reasonCode = "evidence_changed"; return false; }
         // Checkout state can change while evidence and producer authority are
         // awaited. Repeat every process/socket/container reference observation
         // at the last eligibility boundary before quarantine or removal.
@@ -1036,34 +1119,40 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         // Decide from their synchronous snapshots so nothing can yield between
         // the final consumer-reference validation and dispatch.
         const dispatchRoot = fs.lstatSync(directory, { throwIfNoEntry: false });
-        if (recordedRootHeld(owner.directory) && !(options.mode === "dry-run" && state === "expired")) { disposition = "evidence"; reason = "recorded check evidence hold"; return false; }
-        if (authority !== state) { disposition = authorityDisposition(authority); reason = `authority changed from ${state} to ${authority} before dispatch`; return false; }
-        if (!expiryCurrent(authority)) { disposition = "evidence"; reason = "lane expiry revoked before dispatch"; return false; }
+        if (recordedRootHeld(owner.directory) && !(options.mode === "dry-run" && state === "expired")) { disposition = "evidence"; reason = "recorded check evidence hold"; reasonCode = "recorded_evidence_hold"; return false; }
+        if (authority !== state) { disposition = authorityDisposition(authority); reason = `authority changed from ${state} to ${authority} before dispatch`; reasonCode = "authority_changed"; return false; }
+        if (!expiryCurrent(authority)) { disposition = "evidence"; reason = "lane expiry revoked before dispatch"; reasonCode = "expiry_revoked"; return false; }
         if (typeof authorityObservation !== "string" && !authorityObservation.isCurrent()) {
           disposition = "live";
           reason = `authority revision ${authorityObservation.revision} changed before dispatch`;
+          reasonCode = "authority_changed";
           return false;
         }
         if (!dispatchRoot?.isDirectory() || dispatchRoot.isSymbolicLink() || `${dispatchRoot.dev}:${dispatchRoot.ino}` !== owner.identity) {
           reason = "identity changed before dispatch";
+          reasonCode = "root_identity_changed";
           return false;
         }
-        if (!protection.current() || !evidence.current()) { disposition = "evidence"; reason = "evidence changed before dispatch"; return false; }
+        if (!protection.current() || !evidence.current()) { disposition = "evidence"; reason = "evidence changed before dispatch"; reasonCode = "evidence_changed"; return false; }
         // The final synchronous validation includes negative checkout
         // discoveries and physical symlink destinations from the inventory.
         if (!inventory.unchangedAll()) {
           disposition = "live";
           reason = "checkout changed during final authority read";
+          reasonCode = "checkout_changed";
           return false;
         }
         dispatchAuthority = typeof authorityObservation === "string" ? undefined : authorityObservation;
         dispatchState = authority;
         dispatchEvidence = { current: () => protection.current() && evidence.current(),
           mutationDirectories: protection.mutationDirectories, permissionChange: protection.permissionChange };
+        reason = "retirement dispatch refused";
+        reasonCode = "dispatch_refused";
         return true;
       };
-      if (stat && !await eligible()) { outcome(owner.directory, disposition, bytes, reason); return; }
+      if (stat && !await eligible()) { outcome(owner.directory, disposition, bytes, reason, reasonCode); return; }
       if (options.mode !== "dry-run") {
+        options.beforeRootRetirement?.(owner.directory, owner.identity);
         if (options.scheduledOnly && stat) store.queueTrashIntent(owner.directory, owner.identity);
         await recordRootRetirement(owner.directory, owner.identity, attemptTempJournalPath(owner.directory),
           stat ? "admitted" : "missing-unexplained", stat ? "acknowledged owned-root retirement admitted" : "missing-unexplained; no removal outcome observed", remaining);
@@ -1141,12 +1230,29 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       const failure = failures.join("; ").slice(0, 1024) || null;
       if (noteFailure(failure)) console.error("[attempt temp] retirement retained", failure);
       if (recoveredTrash && !result.removed.length && !result.trashFinished && !store.recoveredTrashCurrent(owner.directory)) {
-        reason = "owner-unknown"; store.refreshTrashRecovery(owner.directory);
+        reason = "owner-unknown"; reasonCode = "recovery_owner_unknown"; store.refreshTrashRecovery(owner.directory);
       }
-      if (!result.removed.length && !result.trashFinished) outcome(owner.directory,
-        deferred ? "deferred" : result.errors.length ? "failed" : disposition, bytes,
-        result.errors.join("; ") || (!stat && !fs.existsSync(attemptTempJournalPath(owner.directory)) ? "absent; forgotten" : reason));
-      if (result.removed.length || result.trashFinished) outcome(owner.directory, "removed", result.removedBytes, "retirement completed");
+      if (!result.removed.length && !result.trashFinished) {
+        const observed = result.held?.[0];
+        if (observed?.reason === "mount-boundary" || observed?.reason === "pinned") {
+          disposition = "evidence";
+          reason = observed.reason;
+          reasonCode = observed.reason === "pinned" ? "keep_marker" : "mount_boundary";
+        } else if (result.held?.some(held => held.reason === "process_reference")) {
+          disposition = "live";
+          reason = "live process references the attempt root";
+          reasonCode = "process_reference";
+        } else if (reason === "retirement dispatch refused" && result.kept.inUse) {
+          disposition = "live";
+          reason = "live reference or changed retirement guard";
+          reasonCode = "dispatch_reference_or_changed";
+        }
+        const absent = !stat && !fs.existsSync(attemptTempJournalPath(owner.directory)) && !fs.existsSync(owner.directory);
+        outcome(owner.directory, deferred ? "deferred" : result.errors.length ? "failed" : disposition, bytes,
+          result.errors.join("; ") || (absent ? "absent; forgotten" : reason),
+          deferred ? attemptTempDeferralCode(result.errors.join("; "), deadlineCode) : result.errors.length ? "retirement_failed" : absent ? "root_missing" : reasonCode);
+      }
+      if (result.removed.length || result.trashFinished) outcome(owner.directory, "removed", result.removedBytes, "retirement completed", "retired");
       if ((result.removed.length || result.trashFinished) && options.mode !== "dry-run") {
         // Physical accounting does not depend on the subsequent custody
         // receipt succeeding. Keep the row for recovery if that write fails.
@@ -1168,13 +1274,15 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     } catch (error) {
       if (error instanceof AttemptTempBudgetDeferred || stateDatabaseBusy(error) || error instanceof FileTransactionBusyError) {
         outcome(owner.directory, "deferred", bytes, error instanceof AttemptTempBudgetDeferred ? error.message
-          : stateDatabaseBusy(error) ? "root database is locked; retry next pass" : "root state admission is busy; retry next pass");
+          : stateDatabaseBusy(error) ? "root database is locked; retry next pass" : "root state admission is busy; retry next pass",
+          error instanceof AttemptTempBudgetDeferred ? attemptTempDeferralCode(error.message, deadlineCode)
+            : stateDatabaseBusy(error) ? "ledger_busy" : "admission_busy");
         return;
       }
       if (privilegedCleanupUnavailable(error)) { await holdForOperator(bytes, attemptTempFailureDetail(error)); return; }
       report.errors++;
       const detail = attemptTempFailureDetail(error);
-      outcome(owner.directory, "failed", bytes, detail);
+      outcome(owner.directory, "failed", bytes, detail, "retirement_failed");
       if (noteFailure(detail)) console.error("[attempt temp] root retained", detail);
     } finally {
       // A pre-delete refusal restores the original namespace. Its temporary
@@ -1194,15 +1302,27 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
       // A root still held after its retention ended steps back from the
       // expired share of the page, so the next oldest gets its visit.
       const last = report.outcomes.at(-1), ended = store.retentionExpiry(owner.directory);
-      if (ended !== null && ended <= now() && store.has(owner.directory)
-        && !(last?.directory === owner.directory && (last.disposition === "deferred"
-          || options.scheduledOnly && last.disposition === "removed")))
-        store.defer(owner.directory, Math.max(store.owner(owner.directory)?.checkedAt ?? 0, now() + EXPIRED_HOLD_RETRY_MS));
+      if (ended !== null && ended <= now() && last?.directory === owner.directory
+        && (!options.scheduledOnly || last.disposition !== "removed")) {
+        const current = store.owner(owner.directory);
+        if (current) {
+          const actionable = ["tick_budget", "protection_checkpoint", "ledger_busy", "admission_busy"].includes(last.reasonCode)
+            || last.reasonCode === "root_budget" && AttemptProtectionInventory.exists(owner.directory);
+          const quarantined = !fs.existsSync(owner.directory) && fs.existsSync(attemptTempJournalPath(owner.directory));
+          const fullProofWithoutProgress = ["checkout_budget", "namespace_budget", "root_budget", "mutation_fence_budget"].includes(last.reasonCode);
+          const retryMs = last.disposition !== "deferred" ? EXPIRED_HOLD_RETRY_MS
+            : !quarantined && !actionable && (options.scheduledOnly && !pressure || pressure && fullProofWithoutProgress)
+              ? EXPIRED_PROOF_RETRY_MS : 0;
+          const retryAt = retryMs ? Math.max(current.checkedAt, now() + retryMs) : current.checkedAt;
+          if (retryAt !== current.checkedAt) store.defer(owner.directory, retryAt);
+          last.retryAt = retryAt;
+        }
+      }
       } catch (error) {
         if (!stateDatabaseBusy(error)) throw error;
         const last = report.outcomes.at(-1);
         if (last?.directory === owner.directory) last.reason += "; root bookkeeping database is locked; retry next pass";
-        else outcome(owner.directory, "deferred", bytes, "root bookkeeping database is locked; retry next pass");
+        else outcome(owner.directory, "deferred", bytes, "root bookkeeping database is locked; retry next pass", "ledger_busy");
       }
     }
   };
@@ -1213,17 +1333,21 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     // deferred row admits another directory from the ordinary sweep.
     for (const directory of options.selection.directories.slice(0, 32)) {
       const owner = store.owner(directory);
-      if (!owner) { outcome(directory, "held", 0, "approved root absent from registry"); continue; }
-      if (remaining() <= 0) { outcome(directory, "deferred", owner.bytes, "run budget exhausted; retry selected root"); continue; }
+      if (!owner) { outcome(directory, "held", 0, "approved root absent from registry", "registry_missing"); continue; }
+      if (remaining() <= 0) { outcome(directory, "deferred", owner.bytes, "run budget exhausted; retry selected root", "tick_budget"); continue; }
       const window = Math.min(ATTEMPT_TEMP_LARGE_ROOT_BUDGET_MS, remaining());
-      await withAttemptTempDeadline(sweepMonotonicNow() + window + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));
+      await withAttemptTempDeadline(sweepMonotonicNow() + window + ATTEMPT_TEMP_REPLY_MARGIN_MS,
+        () => visit(owner, window < ATTEMPT_TEMP_LARGE_ROOT_BUDGET_MS ? "tick_budget" : "root_budget"));
     }
   } else if (!pressure) {
     for (const owner of store.due(now(), budget, options.scheduledOnly)) {
-      if (remaining() <= 0) { outcome(owner.directory, "deferred", owner.bytes, "run budget exhausted; retry next tick"); continue; }
+      if (remaining() <= 0) { outcome(owner.directory, "deferred", owner.bytes, "run budget exhausted; retry next tick", "tick_budget"); continue; }
       if (options.scheduledOnly) {
-        const window = Math.min(owner.bytes ? attemptTempRootWindow(owner.bytes) : ATTEMPT_TEMP_LARGE_ROOT_BUDGET_MS, remaining());
-        await withAttemptTempDeadline(sweepMonotonicNow() + window + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));
+        const rootWindow = !owner.bytes || AttemptProtectionInventory.exists(owner.directory)
+          ? ATTEMPT_TEMP_LARGE_ROOT_BUDGET_MS : attemptTempRootWindow(owner.bytes);
+        const window = Math.min(rootWindow, remaining());
+        await withAttemptTempDeadline(sweepMonotonicNow() + window + ATTEMPT_TEMP_REPLY_MARGIN_MS,
+          () => visit(owner, window < rootWindow ? "tick_budget" : "root_budget"));
       } else await visit(owner);
     }
   } else {
@@ -1257,7 +1381,8 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         ? ATTEMPT_TEMP_LARGE_ROOT_BUDGET_MS : attemptTempRootWindow(owner.bytes);
       const window = Math.min(rootWindow, remaining());
       const removedBefore = report.removed, removedBytesBefore = report.removedBytes, deferredBefore = report.deferred;
-      await withAttemptTempDeadline(sweepMonotonicNow() + window + ATTEMPT_TEMP_REPLY_MARGIN_MS, () => visit(owner));
+      await withAttemptTempDeadline(sweepMonotonicNow() + window + ATTEMPT_TEMP_REPLY_MARGIN_MS,
+        () => visit(owner, window < rootWindow ? "tick_budget" : "root_budget"));
       pass.removed += report.removed - removedBefore;
       pass.removedBytes += report.removedBytes - removedBytesBefore;
       const deferred = report.deferred > deferredBefore;
