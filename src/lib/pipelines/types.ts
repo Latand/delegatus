@@ -1133,6 +1133,9 @@ export type PipelineDelivery = {
   /** A final-fix body refresh deferred while Git proved publication. The body
       is reconstructed from this summary and the PR's later verified body. */
   pendingPullRequestRefresh?: { epoch: number; sha: string; number: number; summary: string; nextAttemptAt?: string };
+  /** A Git-verified pass handed off to review while the forge could not list
+      its first PR. The controller retries discovery/creation from this pass. */
+  pendingFirstPullRequest?: { epoch: number; sha: string; stageId: string; attempt: number };
   operation?: {
     id: string;
     /** Pending reservation consumed by this execution. Keeps logical recovery

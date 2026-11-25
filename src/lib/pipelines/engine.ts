@@ -5354,6 +5354,38 @@ function resumablePassedPublication(pipeline: Pipeline): boolean {
       && (operation.passedStage === true || (operation.state === "settled" && operation.result?.ok === false))));
 }
 
+function checkoutVerificationPark(pipeline: Pipeline, attempt: PipelineStageAttempt | null): boolean {
+  return pipeline.state === "needs_decision" && pipeline.cursor?.state === "committing" && stageHeadAccepted(attempt)
+    && (attempt?.state === "passed" || attempt?.state === "needs_decision")
+    && (pipeline.stateDetail?.startsWith("the worktree moved to ") === true
+      || pipeline.stateDetail?.startsWith("the accepted head cannot be verified before completion:") === true);
+}
+
+function runningPassWithPublishedHead(pipeline: Pipeline): boolean {
+  const delivery = pipeline.delivery;
+  const attempt = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
+  const resumablePark = checkoutVerificationPark(pipeline, attempt);
+  return (pipeline.state === "running" || resumablePark) && !pipeline.closedAt && !pipeline.hiddenAt && awaitingPassedPublication(pipeline)
+    && !!delivery?.target.remote && publishesRemoteBranch(pipeline) && !!settledPublicationForHead(pipeline, pipeline.lastPassedCommit)
+    && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...delivery.target, active: true }));
+}
+
+/** A verified publication receipt outranks repair evidence for an older SHA.
+ * Checkout verification can park after publication; reopening that exact pass
+ * must preserve its receipt and leave rollback custody for normal settlement. */
+function restoreParkedPublishedPass(pipeline: Pipeline): boolean {
+  const attempt = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
+  if (!checkoutVerificationPark(pipeline, attempt) || !runningPassWithPublishedHead(pipeline)) return false;
+  if (!attempt) return false;
+  attempt.state = "passed";
+  attempt.error = null;
+  if (pipeline.delivery?.operation?.sha === pipeline.lastPassedCommit) pipeline.delivery.operation.passedStage = true;
+  pipeline.state = "running";
+  pipeline.pausedState = null;
+  pipeline.stateDetail = null;
+  return true;
+}
+
 function passedPublicationEvidence(pipeline: Pipeline): string {
   const attempt = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
   return JSON.stringify([attempt?.verdict, attempt?.reviewHeadSha, attempt?.expectedReviewHeadSha,
@@ -5673,9 +5705,16 @@ async function retryTerminalStagePublication(
     await advancePipeline(pipeline, stage, ports, attempt);
     return;
   }
-  if (attempt.publicationRepair && !await settlePublicationRepair(pipeline, stage, attempt, ports, persist)) return;
+  const repair = attempt.publicationRepair;
+  // A rejected turn for an older SHA cannot restore over a newer accepted
+  // head that has its own publication receipt. Pending cleanup still owns
+  // the checkout. The newer head must pass the normal clean checkout proof.
+  const publishedAfterRejection = !!repair?.settledAt && repair.outcome?.status === "rejected"
+    && !repair.committedSha && repair.sha !== pipeline.lastPassedCommit
+    && (!repair.rollback || repair.rollback.phase === "done") && runningPassWithPublishedHead(pipeline);
+  if (repair && !publishedAfterRejection && !await settlePublicationRepair(pipeline, stage, attempt, ports, persist)) return;
   const current = (await currentPipelineBranchHead(pipeline, ports.exec));
-  if (current.ok && current.sha !== pipeline.lastPassedCommit && stage.kind === "run" && attempt.effectiveRole.access === "read-write") {
+  if (!publishedAfterRejection && current.ok && current.sha !== pipeline.lastPassedCommit && stage.kind === "run" && attempt.effectiveRole.access === "read-write") {
     const repaired = await performanceSpans.wait("pipeline.attempt-push-proof", () => settleStageAttemptPush(pipeline, attempt, ports.exec, ports.now(), { acceptedHead: pipeline.lastPassedCommit }));
     if (repaired?.ok) {
       pipeline.lastPassedCommit = repaired.sha;
@@ -5703,6 +5742,7 @@ async function retryTerminalStagePublication(
   const published = queuePipelinePublication(pipeline, ports.exec, {
     acceptedSha: pipeline.lastPassedCommit,
     publishedSha: pipeline.publishedCommit ?? null,
+    unchangedHead: true,
   });
   if (!published.ok) {
     if (await retryRefusedPublication(pipeline, attempt, published, ports)) return;
@@ -6242,6 +6282,7 @@ async function reconcileParkedPublicationRepair(pipeline: Pipeline, ports: Pipel
   const attempt = stage && currentAttempt(pipeline, stage.id);
   if (pipeline.state !== "needs_decision" || !stage || !attempt
     || !passedStagePublicationPark(pipeline, attempt)) return false;
+  if (restoreParkedPublishedPass(pipeline)) return true;
   const before = JSON.stringify([attempt.publicationRepair, attempt.publicationRepairAbandonment]);
   const detail = publicationCodeRepairDetail(pipeline, attempt);
   const evidence = await readRepairProducerEvidence(pipeline, stage, attempt, ports, !!detail);
@@ -14088,6 +14129,48 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
   let changed = false;
   for (const preview of await selectControllerPipelines("running")) {
     if (preview.state !== "running" || preview.hiddenAt || preview.closedAt) continue;
+    const firstPr = preview.delivery?.pendingFirstPullRequest;
+    if (firstPr && preview.delivery?.active && preview.delivery.publish === "enabled"
+      && preview.delivery.target.pr === undefined && firstPr.epoch === preview.delivery.epoch
+      && firstPr.sha === preview.publishedCommit && settledPublicationForHead(preview, firstPr.sha)) {
+      const stage = preview.stages.find(candidate => candidate.id === firstPr.stageId);
+      const attempt = stage && runFor(preview, stage.id)?.attempts.find(candidate => candidate.n === firstPr.attempt && !candidate.historical);
+      if (stage && attempt?.verdict?.status === "pass") {
+        const candidate = structuredClone(preview);
+        const candidateAttempt = runFor(candidate, firstPr.stageId)?.attempts.find(item => item.n === firstPr.attempt && !item.historical);
+        if (!candidateAttempt) continue;
+        const stillOwnsObligation = () => {
+          const current = findPipelineRecord(preview.id);
+          const owned = !!current && current.delivery?.epoch === firstPr.epoch
+            && current.delivery.ownerId === preview.id && current.delivery.active && current.delivery.target.pr === undefined
+            && !!settledPublicationForHead(current, firstPr.sha)
+            && current.delivery.pendingFirstPullRequest?.epoch === firstPr.epoch
+            && current.delivery.pendingFirstPullRequest.sha === firstPr.sha;
+          return owned;
+        };
+        const result = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () =>
+          ensureStagePullRequest(candidate, candidateAttempt, ports.exec, firstPr.sha, undefined, { authorize: stillOwnsObligation })));
+        const retryError = result.ok ? candidateAttempt.error : result.error;
+        await withPipelineMutation(async (pipelines, persist) => {
+          const current = pipelines.find(candidate => candidate.id === preview.id);
+          if (!current || current.delivery?.epoch !== firstPr.epoch || current.delivery.ownerId !== preview.id
+            || !current.delivery.active || current.delivery.target.pr !== undefined
+            || !settledPublicationForHead(current, firstPr.sha)
+            || current.delivery.pendingFirstPullRequest?.epoch !== firstPr.epoch
+            || current.delivery.pendingFirstPullRequest.sha !== firstPr.sha) return;
+          if (result.ok) {
+            if (candidate.delivery!.target.pr !== undefined) current.delivery!.target.pr = candidate.delivery!.target.pr;
+            if (candidate.delivery!.pendingFirstPullRequest) current.delivery!.pendingFirstPullRequest = structuredClone(candidate.delivery!.pendingFirstPullRequest);
+            else delete current.delivery!.pendingFirstPullRequest;
+          }
+          const recorded = runFor(current, firstPr.stageId)?.attempts.find(candidate => candidate.n === firstPr.attempt && !candidate.historical);
+          if (recorded) recorded.error = retryError;
+          await persist([current]);
+          changed = true;
+        });
+        if (!result.ok) ports.scheduleTick?.(1_000);
+      }
+    }
     // A revoked grant cannot change the active publisher's control fence.
     if (preview.delivery?.operation?.state === "running" && proactivePipelineExecutionError(preview, "prepare")) continue;
     const stage = currentStage(preview);
@@ -14963,7 +15046,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       for (const lane of await selectControllerPipelines("running")) {
         const stage = currentStage(lane);
         const attempt = stage && currentAttempt(lane, stage.id);
-        if (lane.cursor?.state !== "committing" && !(stage?.kind === "review-loop" && attempt?.flowId && ports.getFlow(attempt.flowId)?.state === "approved")) continue;
+        if (lane.cursor?.state !== "committing" && !lane.delivery?.pendingFirstPullRequest
+          && !(stage?.kind === "review-loop" && attempt?.flowId && ports.getFlow(attempt.flowId)?.state === "approved")) continue;
         settlementOwnedPublications.add(lane.id);
         if (attempt?.settlementAdmissionRetry && unixMs(attempt.settlementAdmissionRetry.retryAt) > unixMs(ports.now())) continue;
         const jobPorts = { ...ports };
@@ -15614,19 +15698,20 @@ export function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchRe
  * A caller that names the stage (and the attempt) it saw is refused when the
  * pipeline is no longer waiting on exactly that: not waiting on a decision, on
  * another stage, or on another latest own attempt of the same stage. A
- * lineage-adopted (historical) attempt is never the one compared.
+ * lineage-adopted (historical) attempt is never the one compared. A retry
+ * can also wake the running stage's published pass for settlement.
  * `expectedAttempt: 0` states that the stage has no own attempt yet (a
  * provisioning park waits on its first stage before any attempt exists), so a
  * pipeline that has since started attempt 1 there is refused too.
  */
-function expectedStageRefusal(pipeline: Pipeline, req: PatchPipelineRequest): PipelinePatchResult | null {
+function expectedStageRefusal(pipeline: Pipeline, req: PatchPipelineRequest, retryPublishedPass = false): PipelinePatchResult | null {
   if (req.expectedStageId === undefined) return null;
   const pendingRetry = req.action === "retry-stage" && ["running", "paused"].includes(pipeline.state)
     && pipeline.cursor?.state === "pending" && unstartedPendingAttempt(currentAttempt(pipeline, pipeline.cursor.stageId));
   const waiting = pipeline.state === "needs_decision" || (req.action === "retry-stage"
     && (pipeline.state === "running" && ["running", "spawning"].includes(pipeline.cursor?.state ?? "")
       || pipeline.state === "paused" && pipeline.cursor?.state === "spawning")
-    && ["running", "spawning"].includes(currentAttempt(pipeline, pipeline.cursor!.stageId)?.state ?? "")) || pendingRetry
+    && ["running", "spawning"].includes(currentAttempt(pipeline, pipeline.cursor!.stageId)?.state ?? "")) || pendingRetry || retryPublishedPass
     ? pipeline.cursor?.stageId ?? null : null;
   if (waiting !== req.expectedStageId) {
     const repair = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId)?.publicationRepair : undefined;
@@ -17554,11 +17639,21 @@ async function applyPipelinePatch(
       if (moved && current.delivery?.operation?.state === "running") return { error: "publisher is still in flight; reconcile before accepting a moved head", status: 409 };
       const ownerError = current.delivery && deliveryOwnerError(current, pipelineDeliveryLookup({ ...current.delivery.target, active: true }));
       if (ownerError) return { error: ownerError, status: 409 };
+      if (req.acceptedSha === undefined && restoreParkedPublishedPass(current)) {
+        await persist(); requestPipelineTick();
+        return { pipeline: current };
+      }
       if (current.delivery?.operation?.state === "running") {
         requestPipelineTick();
         return { pipeline: current };
       }
       const attempt = current.cursor ? currentAttempt(current, current.cursor.stageId) : null;
+      if (req.acceptedSha === undefined && attempt && runningPassWithPublishedHead(current)) {
+        delete attempt.settlementAdmissionRetry;
+        renewPullRequestInspection(current, attempt, ports.now());
+        await persist(); requestPipelineTick();
+        return { pipeline: current };
+      }
       if (req.acceptedSha === undefined && current.state === "needs_decision" && passedStageCustodyPark(current, attempt)) {
         // Custody stopped before lastPassedCommit could accept the stage head.
         // Retry that proof outside the mutation lease before reserving a push.
@@ -17637,6 +17732,20 @@ async function applyPipelinePatch(
     const snapshot = findPipelineRecord(id);
     const snapshotStage = snapshot ? currentStage(snapshot) : null;
     const snapshotAttempt = snapshot && snapshotStage ? currentAttempt(snapshot, snapshotStage.id) : null;
+    if (req.action === "retry-stage" && snapshot && snapshotAttempt
+      && snapshot.state === "needs_decision" && restoreParkedPublishedPass(snapshot)) {
+      const resumed = await withDeliveryMutationAsync<PipelinePatchResult>(tx => {
+        const current = tx.get(id);
+        if (!current) return { error: "the lane changed during publication recovery; read it again", status: 409 };
+        const expectation = expectedStageRefusal(current, req, true);
+        if (expectation) return expectation;
+        if (!restoreParkedPublishedPass(current)) return { error: "the lane changed during publication recovery; read it again", status: 409 };
+        tx.put(current);
+        return { pipeline: current };
+      });
+      if (resumed.pipeline) requestPipelineTick();
+      return resumed;
+    }
     if (snapshot && snapshotAttempt && snapshot.state === "needs_decision"
       && (passedStagePublicationPark(snapshot, snapshotAttempt) || passedStageCustodyPark(snapshot, snapshotAttempt))) {
       if (req.action === "resolve-decision") {
@@ -18132,7 +18241,8 @@ async function applyPipelinePatch(
       if (explicitReceiptRetry && (typeof req.stageId !== "string" || typeof req.launchId !== "string")) {
         return { error: "receipt retry requires both stageId and launchId", status: 400 };
       }
-      const expectation = expectedStageRefusal(pipeline, req);
+      const retryPublishedPass = !explicitReceiptRetry && runningPassWithPublishedHead(pipeline);
+      const expectation = expectedStageRefusal(pipeline, req, retryPublishedPass);
       if (expectation) return expectation;
       if (explicitReceiptRetry && stage?.id !== req.stageId) {
         return { error: "the clicked launch belongs to a different pipeline stage", status: 409 };
@@ -18142,6 +18252,12 @@ async function applyPipelinePatch(
       }
       const elsewhere = pipelineTasksRunElsewhere(pipeline.taskIds, loadTasksForList());
       if (elsewhere) return elsewhere;
+      if (attempt && retryPublishedPass) {
+        delete attempt.settlementAdmissionRetry;
+        renewPullRequestInspection(pipeline, attempt, ports.now());
+        await persist(); requestPipelineTick();
+        return { pipeline };
+      }
       const switchRetry = attempt && recoverableRuntimeSwitch(attempt);
       if (stage && attempt && switchRetry && ["running", "needs_decision"].includes(pipeline.state)) {
         if (attempt.report) return { error: "stage already reported", status: 409 };
