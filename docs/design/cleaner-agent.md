@@ -101,6 +101,13 @@ conversation runs there (`:620-622`), no pipeline worktree overlaps it (`:762-77
 holds no `.delegatus-keep` (`:746`). Removal is journal-then-rename-then-recheck
 (`:410-445`).
 
+The same sweep considers private `agyc-*`, `agent-scratch-*` and `delegatus-local-gate-*`
+roots in temporary storage. Agent trees need a registry cwd with ended ownership
+recorded after the directory was created. Gate trees need the allocation journal, a matching
+directory identity and proof that the gate process and its supervisor ended. Both use
+the existing freshness, tree-preservation and live-process checks, including argv.
+Missing owner evidence and explicit gate retention keep the directory held.
+
 Cannot prove, and holds or skips instead:
 
 - **Names it did not choose.** `delegatus-test-comparison-*` (`scripts/local-gate-tests.ts:483`),

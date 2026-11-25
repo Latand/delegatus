@@ -15,6 +15,7 @@ import { STRUCTURED_HOST_STAMP_ENV } from "@/lib/scanner/process";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { OWNED_TEMP_PREFIX } from "@/lib/tempDirs";
 import { attemptTempFailureDetail } from "@/lib/runtime/attemptTempDiagnostics";
+import { gateSandboxOwnerEnded, LOCAL_GATE_SANDBOX_NAME } from "../../scripts/gateSandboxRecords";
 
 /**
  * The bounded sweeper for temp directories Delegatus left behind (#1957).
@@ -26,8 +27,9 @@ import { attemptTempFailureDetail } from "@/lib/runtime/attemptTempDiagnostics";
  * killed before it got there, and the residue that predates them. The sweeper
  * removes those, and nothing else:
  *
- * - **Only owned names.** `llv-*`, plus three test prefixes from before the
- *   per-run root existed. `llv-spawn-sandbox` (every agent's config root, kept
+ * - **Only owned names.** `llv-*`, three legacy test prefixes, and private
+ *   agent or local gate directories with recorded owner evidence.
+ *   `llv-spawn-sandbox` (every agent's config root, kept
  *   on purpose so a resumed agent finds its own), `llv-tmux-cwd` and the
  *   `llv-gate` admission slots are never
  *   candidates. A name Delegatus did not choose is never touched, however old.
@@ -79,6 +81,12 @@ const LEGACY_OWNED_PREFIXES = ["pending-producer-", "inflight-producer-", "child
 const KEPT_OWNED_NAMES = new Set(["llv-spawn-sandbox", "llv-tmux-cwd", "llv-gate"]);
 /** Environment variables whose directory a process is using even while it holds nothing open there. */
 const IN_USE_ENV = ["HOME", "TMPDIR", "TMP", "TEMP", "LLV_STATE_DIR", "XDG_CONFIG_HOME", "CLAUDE_CODE_TMPDIR"] as const;
+const AGENT_TEMP_NAME = /^(?:agyc|agent-scratch)-[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function detachedTempOwner(name: string): "agent" | "gate" | null {
+  if (LOCAL_GATE_SANDBOX_NAME.test(name)) return "gate";
+  return AGENT_TEMP_NAME.test(name) ? "agent" : null;
+}
 
 export function isOwnedTempName(name: string): boolean {
   if (KEPT_OWNED_NAMES.has(name)) return false;
@@ -112,12 +120,13 @@ export type ScannedProcess = {
   namespace: string | null;
   /** Carries the structured-host stamp: an agent Delegatus started. */
   stamped: boolean;
+  cwd?: string;
   /** Paths it is using: cwd, open files, and the directories named by {@link IN_USE_ENV}. */
   paths: string[];
   references?: string[];
 };
 
-export type ProcessScan = { ownNamespace: string | null; processes: ScannedProcess[] };
+export type ProcessScan = { ownNamespace: string | null; processes: ScannedProcess[]; unverified?: boolean };
 
 export function processPathWithinLimits(file: string): boolean {
   return Buffer.byteLength(file) < 4096 && file.split(path.sep).every(name => Buffer.byteLength(name) <= 255);
@@ -139,7 +148,7 @@ export function scanProcesses(procRoot = "/proc", extraRoots: readonly string[] 
   try {
     entries = fs.readdirSync(procRoot);
   } catch {
-    return portableScan(extraRoots);
+    return { ...portableScan(extraRoots), ...(process.platform === "linux" ? { unverified: true } : {}) };
   }
   const processes: ScannedProcess[] = [];
   for (const name of entries) {
@@ -188,7 +197,7 @@ export function scanProcesses(procRoot = "/proc", extraRoots: readonly string[] 
     } catch {
       /* Exited mid-scan, or not ours. */
     }
-    processes.push({ pid: Number(name), namespace, stamped, paths: [...paths], references });
+    processes.push({ pid: Number(name), namespace, stamped, ...(cwd ? { cwd } : {}), paths: [...paths], references });
   }
   return { ownNamespace: readLink(path.join(procRoot, "self", "ns", "mnt")), processes };
   });
@@ -196,18 +205,20 @@ export function scanProcesses(procRoot = "/proc", extraRoots: readonly string[] 
 
 /** Without `/proc`: working directories and open files through the platform backend, one namespace. */
 function portableScan(extraRoots: readonly string[] = []): ProcessScan {
-  const byPid = new Map<number, string[]>();
-  for (const entry of procBackend.listProcesses()) byPid.set(entry.pid, entry.cwd ? [entry.cwd] : []);
+  const byPid = new Map<number, ScannedProcess>();
+  for (const { pid, cwd, argv } of procBackend.listProcesses()) {
+    byPid.set(pid, { pid, namespace: null, stamped: false, ...(cwd ? { cwd } : {}), paths: cwd ? [cwd] : [], references: argv });
+  }
   for (const root of new Set([...ownTempRoots(), ...extraRoots])) {
     procBackend.scanFdTargetsUnder(root, (target, pid) => {
-      const list = byPid.get(pid) ?? [];
-      list.push(target);
-      byPid.set(pid, list);
+      const entry = byPid.get(pid) ?? { pid, namespace: null, stamped: false, paths: [] };
+      entry.paths.push(target);
+      byPid.set(pid, entry);
     });
   }
   return {
     ownNamespace: null,
-    processes: [...byPid].map(([pid, paths]) => ({ pid, namespace: null, stamped: false, paths })),
+    processes: [...byPid.values()],
   };
 }
 
@@ -314,6 +325,25 @@ function inside(candidate: string, directory: string): boolean {
   return candidate === directory || candidate.startsWith(directory + path.sep);
 }
 
+type OwnerHold = "agent-owner-unverified" | "gate-owner-unverified" | "conversation_reference";
+type ReferenceHold = OwnerHold | "process_reference" | "process-scan-unverified";
+
+/** Include flag values and path arguments inside a shell command, alongside
+ * the paths the existing process scan collects from cwd and open descriptors. */
+function processUsesTemp(proc: ScannedProcess, holds: (file: string) => boolean): boolean {
+  if (proc.paths.some(holds)) return true;
+  const argumentHolds = (argument: string) => {
+    const absolute = path.isAbsolute(argument) ? argument : proc.cwd && path.join(proc.cwd, argument);
+    return !!absolute && processPathWithinLimits(absolute) && holds(absolute);
+  };
+  return proc.references?.some(value => {
+    const argument = /^--?[^=\s]+=([\s\S]*)$/.exec(value)?.[1] ?? value;
+    if (argument && !argument.startsWith("-") && argumentHolds(argument)) return true;
+    return [...value.matchAll(/["']((?:\/|\.\.?\/)[^"']+)["']|(?:\/|\.\.?\/)[^\s\x00'"\x60=;|&<>]+/g)]
+      .some(match => argumentHolds(match[1] ?? match[0]));
+  }) ?? false;
+}
+
 export type TempSweepRemoval = { path: string; via: string; bytes: number; ageHours: number };
 
 export type TempSweepReport = {
@@ -331,8 +361,8 @@ export type TempSweepReport = {
   kept: { young: number; inUse: number; worktree: number; deferred: number; ledger?: number };
   /** Allocations retained under each guard; absent in older report versions. */
   keptBytes?: TempSweepReport["kept"];
-  /** Git or inspection holds beyond the pipeline worktree list. */
-  held?: { path: string; via: string; reason: TreeHold | "pinned" | "attempt-owner-unlisted" | "process_reference"; bytes: number }[];
+  /** The reason specific directories remain protected. */
+  held?: { path: string; via: string; reason: TreeHold | ReferenceHold | "pinned" | "attempt-owner-unlisted"; bytes: number }[];
   errors: string[];
 };
 
@@ -343,10 +373,13 @@ export type TempSweepOptions = {
   mountPoints?: (directory: string, via: string) => string[];
   currentScan?: () => ProcessScan;
   conversationCwds?: () => readonly string[];
+  /** Current registry proof for detached agent temp trees. */
+  conversationProtection?: () => { held: readonly string[]; ended: ReadonlyMap<string, number> };
   remove?: (directory: string, mutationStarted: () => void) => Promise<void>;
   now?: () => number;
   uid?: number | null;
   roots?: TempSweepRoot[];
+  scratchRoot?: string | null;
   scan?: ProcessScan;
   /** Pipeline worktrees; never removed, nor any directory holding one. */
   worktrees?: string[];
@@ -735,7 +768,8 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   const now = options.now?.() ?? Date.now();
   const procRoot = options.procRoot ?? "/proc";
   const uid = options.uid === undefined ? (process.getuid?.() ?? null) : options.uid;
-  const readScan = () => options.currentScan?.() ?? options.scan ?? scanProcesses(procRoot);
+  const extraRoots = options.roots?.map(root => root.path);
+  const readScan = () => options.currentScan?.() ?? options.scan ?? scanProcesses(procRoot, extraRoots);
   const scan = readScan();
   const roots = options.roots ?? sweepRoots(scan, ownTempRoots(), procRoot);
   const inUse = [...new Set(scan.processes.flatMap(process => process.paths.map(entry => path.resolve(entry))))];
@@ -764,11 +798,56 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       return { newestMs: 0, entries: 0, hold: "unreadable-tree" as const };
     }
   };
-  const conversationHolds = (candidate: string, via = "") => (options.conversationCwds?.() ?? []).some(entry =>
+  const pathHolds = (root: TempSweepRoot, ...directories: string[]) => {
+    const physical = directories.map(directory => resolvePhysicalPath(root.via + directory));
+    return (file: string) => {
+      const resolved = path.resolve(file.replace(/ \(deleted\)$/, ""));
+      return directories.some(directory => inside(resolved, directory))
+        || physical.some(directory => inside(resolvePhysicalPath(root.via + resolved), directory));
+    };
+  };
+  const conversationHolds = (candidate: string, via = "") => (options.conversationCwds?.() ?? options.conversationProtection?.().held ?? []).some(entry =>
     inside(path.resolve(entry), via && candidate.startsWith(via) ? candidate.slice(via.length) : candidate)
       || inside(resolvePhysicalPath(via + entry), resolvePhysicalPath(candidate)));
+  const detachedOwner = (root: TempSweepRoot, name: string) => !options.onlyDirectories && root.path !== options.scratchRoot
+    ? detachedTempOwner(name) : null;
+  const detachedHold = (kind: "agent" | "gate", root: TempSweepRoot, original: string, reachable: string, observed: ProcessScan): ReferenceHold | null => {
+    const current = root.via ? reachable.slice(root.via.length) : reachable;
+    const holds = pathHolds(root, original, current);
+    const processHolds = (match: (file: string) => boolean) => observed.processes.some(proc => processUsesTemp(proc, match));
+    if (processHolds(holds)) return "process_reference";
+    if (observed.unverified) return "process-scan-unverified";
+    const protection = options.conversationProtection?.();
+    if ((protection?.held ?? options.conversationCwds?.() ?? []).some(holds)) return "conversation_reference";
+    if (kind === "agent") {
+      const originalHolds = pathHolds(root, original);
+      const stat = fs.lstatSync(reachable);
+      const recorded = stat.birthtimeMs > 0 && protection && [...protection.ended].some(([cwd, at]) =>
+        Math.floor(stat.birthtimeMs) <= at && originalHolds(cwd));
+      if (!recorded) return "agent-owner-unverified";
+      // A registry cwd is a path spelling. It cannot select between two
+      // different trees with that name in known mount namespaces.
+      for (const other of roots) {
+        if (other.path !== root.path || other.via === root.via || !namespaceStill(other.anchor, procRoot)) continue;
+        try {
+          const alias = fs.lstatSync(other.via + original, { throwIfNoEntry: false });
+          if (alias && (alias.dev !== stat.dev || alias.ino !== stat.ino)) return "agent-owner-unverified";
+        } catch { return "agent-owner-unverified"; }
+      }
+      return null;
+    }
+    return gateSandboxOwnerEnded(reachable, original, root.via, journal => processHolds(pathHolds(root, journal)))
+      ? null : "gate-owner-unverified";
+  };
   const trashHolds = (root: TempSweepRoot, trash: string, original: string, bytes = 0) => {
-    if (!namespaceStill(root.anchor, procRoot) || conversationHolds(trash, root.via)) return true;
+    if (!namespaceStill(root.anchor, procRoot)) return true;
+    const owner = detachedOwner(root, path.basename(original));
+    if (owner) {
+      const hold = detachedHold(owner, root, original, trash, readScan());
+      if (hold) report.held!.push({ path: original, via: root.via, reason: hold, bytes });
+      return !!hold;
+    }
+    if (conversationHolds(trash, root.via)) return true;
     const physical = resolvePhysicalPath(trash);
     const canonical = root.via && trash.startsWith(root.via) ? trash.slice(root.via.length) : trash;
     const processReferenced = readScan().processes.some(proc => proc.paths.some(entry => inside(path.resolve(entry), canonical)
@@ -784,6 +863,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     && (options.attemptLedger(original) || original !== physical && options.attemptLedger(physical));
   const trashPolicyHolds = (root: TempSweepRoot, trash: string, original: string) => {
     if (!options.onlyDirectories && (listedAttempt(original) || fs.existsSync(path.join(trash, ".delegatus-attempt-owner")))) return true;
+    if (detachedOwner(root, path.basename(original)) && (fs.lstatSync(trash).mode & 0o077) !== 0) return true;
     const inspection = inspect(trash, root, original, true);
     const protectedTrees = [...readWorktrees(), ...accounted].map(entry => path.resolve(entry));
     return !!pinned(trash) || !!inspection.hold || (options.now?.() ?? Date.now()) - inspection.newestMs < options.maxAgeMs
@@ -825,15 +905,19 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         const row = JSON.parse(fs.readFileSync(journal, "utf8"));
         if (options.onlyDirectories && !options.onlyDirectories.includes(row.directory)) continue;
         if (options.eligible && !await options.eligible(row.trash)) continue;
-        if (path.dirname(row.directory) !== root.via + root.path || !isOwnedTempName(path.basename(row.directory))) continue;
+        if (path.dirname(row.directory) !== root.via + root.path
+          || !(isOwnedTempName(path.basename(row.directory)) || detachedOwner(root, path.basename(row.directory)))) continue;
         const original = path.resolve(row.directory);
         const candidate = path.join(root.path, path.basename(original));
-        if (await finishTreeTrash(journal, async trash => (options.eligible && !await options.eligible(trash)) || trashHolds(root, trash, candidate), options.remove,
-          trash => !trashPolicyHolds(root, trash, original) && (!options.dispatchGuard || options.dispatchGuard(trash)), options.disposable, undefined, options.keepRefusedTrash)) report.trashFinished!++;
+        const owner = detachedOwner(root, path.basename(candidate));
+        if (await finishTreeTrash(journal,
+          async trash => (options.eligible && !await options.eligible(trash)) || (!owner && trashHolds(root, trash, candidate)),
+          options.remove, trash => !trashPolicyHolds(root, trash, owner ? candidate : original) && (!options.dispatchGuard || options.dispatchGuard(trash)),
+          options.disposable, owner ? trash => !trashHolds(root, trash, candidate) : undefined, options.keepRefusedTrash)) report.trashFinished!++;
       } catch (error) { report.errors.push(String(error)); }
     }
     for (const name of names.sort()) {
-      if (!isOwnedTempName(name)) continue;
+      if (!isOwnedTempName(name) && !detachedOwner(root, name)) continue;
       if (options.onlyDirectories && !options.onlyDirectories.includes(path.join(root.path, name))) continue;
       const candidate = path.join(root.path, name);
       let modified: number;
@@ -871,6 +955,8 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         continue;
       }
       if (!stat.isDirectory() || (uid !== null && stat.uid !== uid)) continue;
+      const owner = detachedOwner(root, path.basename(candidate));
+      if (owner && (uid === null || (stat.mode & 0o077) !== 0)) continue;
       const identity = `${stat.dev}:${stat.ino}`;
       if (seenCandidates.has(identity)) continue;
       seenCandidates.add(identity);
@@ -886,6 +972,9 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         report.keptBytes![reason] = (report.keptBytes![reason] ?? 0) + bytes;
         return true;
       };
+      const keepReference = async (reason: ReferenceHold, bytes: number) => {
+        if (await keep("inUse", bytes)) report.held!.push({ path: candidate, via: root.via, reason, bytes });
+      };
       // The attempt ledger owns this root: it measures it with one native
       // `du` and decides its retirement. This sweep never removes it, so a
       // walk of its tree here would only repeat that measurement. A marked
@@ -896,6 +985,13 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         const listed = listedAttempt(candidate, originalPath);
         if (listed || fs.existsSync(path.join(reachable, ".delegatus-attempt-owner"))) {
           if (await keep("ledger", 0) && listed === false) report.held!.push({ path: candidate, via: root.via, reason: "attempt-owner-unlisted", bytes: 0 });
+          continue;
+        }
+      }
+      if (owner) {
+        const hold = detachedHold(owner, root, candidate, reachable, scan);
+        if (hold) {
+          await keepReference(hold, 0);
           continue;
         }
       }
@@ -913,7 +1009,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       }
       const processHolds = (entry: string) => inside(entry, candidate)
         || inside(resolvePhysicalPath(root.via + entry), originalPath);
-      if (inUse.some(processHolds) || conversationHolds(reachable, root.via)) {
+      if (!owner && (inUse.some(processHolds) || conversationHolds(reachable, root.via))) {
         await keep("inUse");
         if (inUse.some(processHolds)) report.held!.push({ path: candidate, via: root.via, reason: "process_reference", bytes: 0 });
         continue;
@@ -944,17 +1040,19 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       try {
         const bytes = await measure(reachable, seenAllocations, includeRoot, excluded);
         const freshScan = readScan();
-        const processReferenced = freshScan.processes.some(process => process.paths.some(entry => processHolds(path.resolve(entry))));
-        if (processReferenced || conversationHolds(reachable, root.via)) {
-          await keep("inUse", bytes);
-          if (processReferenced)
-            report.held!.push({ path: candidate, via: root.via, reason: "process_reference", bytes });
+        const hold = owner ? detachedHold(owner, root, candidate, reachable, freshScan)
+          : freshScan.processes.some(process => process.paths.some(entry => processHolds(path.resolve(entry)))) ? "process_reference"
+          : conversationHolds(reachable, root.via) ? "conversation_reference" : null;
+        if (hold) {
+          if (owner || hold === "process_reference") await keepReference(hold, bytes);
+          else await keep("inUse", bytes);
           continue;
         }
         // Measurement yields to new owners and filesystem activity. Date and
         // inspect the same physical tree again immediately before removal.
         const current = fs.lstatSync(reachable);
-        if (!current.isDirectory() || (uid !== null && current.uid !== uid) || `${current.dev}:${current.ino}` !== identity
+        if (!current.isDirectory() || (uid !== null && current.uid !== uid) || (owner && (current.mode & 0o077) !== 0)
+          || `${current.dev}:${current.ino}` !== identity
           || fs.realpathSync(reachable) !== originalPath) {
           report.errors.push(`${reachable}: temp directory changed during measurement; skipped`);
           continue;
@@ -982,8 +1080,9 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         if (options.eligible && !await options.eligible(reachable)) { await keep("inUse", bytes); continue; }
         if (options.mode !== "dry-run" && !await removeTreeViaTrash(reachable, {
           journal: trashJournal(root, candidate), remove: options.remove, disposable: options.disposable,
-          held: async trash => (options.eligible && !await options.eligible(trash)) || trashHolds(root, trash, candidate, bytes),
+          held: async trash => (options.eligible && !await options.eligible(trash)) || (!owner && trashHolds(root, trash, candidate, bytes)),
           validate: trash => !trashPolicyHolds(root, trash, path.resolve(candidate)) && (!options.dispatchGuard || options.dispatchGuard(trash)),
+          ...(owner ? { dispatch: (trash: string) => !trashHolds(root, trash, candidate, bytes) } : {}),
         })) { await keep("inUse", bytes); continue; }
         report.removed.push({ path: candidate, via: root.via, bytes, ageHours: Math.round((now - newest) / HOUR_MS) });
         report.removedBytes += bytes;
@@ -1015,10 +1114,12 @@ export function tempSweepStatus(report: TempSweepReport | null = readTempSweepRe
     heldCounts[hold.reason] = (heldCounts[hold.reason] ?? 0) + 1;
     heldBytes[hold.reason] = (heldBytes[hold.reason] ?? 0) + hold.bytes;
   }
+  const heldFor = ["agent-owner-unverified", "gate-owner-unverified", "conversation_reference", "process-scan-unverified", "process_reference"]
+    .some(reason => heldCounts[reason]) ? "by safety checks" : "for Git preservation or tree inspection";
   return {
     at: report.at, ...(report.failed ? { failed: true } : {}), mode: report.mode ?? "on", trashFinished: report.trashFinished ?? 0, removed: report.removed.length, removedBytes: report.removedBytes,
     kept: { ...report.kept }, keptBytes: report.keptBytes ? { ...report.keptBytes } : null, heldCounts, heldBytes, errors: report.errors.length,
-    summary: `[temp sweep] ${report.mode === "dry-run" ? "would remove" : "removed"} ${report.removed.length} directories (${megabytes(report.removedBytes)}); held ${(report.held ?? []).length} for Git preservation or tree inspection; ${report.errors.length} error(s)`,
+    summary: `[temp sweep] ${report.mode === "dry-run" ? "would remove" : "removed"} ${report.removed.length} directories (${megabytes(report.removedBytes)}); held ${(report.held ?? []).length} ${heldFor}; ${report.errors.length} error(s)`,
   };
 }
 
@@ -1041,11 +1142,17 @@ function megabytes(bytes: number): string {
 }
 
 async function cleanupWorktrees() {
-  const [{ loadPipelinesForList }, { readWorktreeSweepReport, liveOrWaitingConversationCwds }, { agentRegistry }] = await Promise.all([
+  const [{ loadPipelinesForList }, { readWorktreeSweepReport, conversationCwdStatus, liveOrWaitingConversationCwds }, { agentRegistry }] = await Promise.all([
     import("@/lib/pipelines/store"), import("@/lib/pipelines/worktreeSweep"), import("@/lib/agent/registry"),
   ]);
+  const snapshot = () => agentRegistry().worktreeProtectionSnapshot();
   return {
-    conversationCwds: () => liveOrWaitingConversationCwds(agentRegistry().worktreeProtectionSnapshot()),
+    conversationCwds: () => liveOrWaitingConversationCwds(snapshot()),
+    conversationProtection: () => {
+      const ended = new Map<string, number>();
+      const { held, deferred } = conversationCwdStatus(snapshot(), undefined, undefined, ended);
+      return { held: [...held, ...deferred], ended };
+    },
     worktrees: loadPipelinesForList().map(pipeline => pipeline.worktreeDir).filter((dir): dir is string => !!dir),
     currentWorktrees: () => loadPipelinesForList().map(pipeline => pipeline.worktreeDir).filter((dir): dir is string => !!dir),
     accountedWorktrees: (readWorktreeSweepReport()?.kept ?? []).map(row => row.path),
@@ -1093,7 +1200,7 @@ export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env,
     try { ledger = new (await import("@/lib/runtime/attemptTempRetention")).AttemptTempStore(); }
     catch (error) { console.error("[temp sweep] attempt ledger unavailable", error instanceof Error ? error.message : String(error)); }
     const opened = ledger;
-    try { report = await sweepStaleTempDirs({ maxAgeMs, mode, ...(opened ? { attemptLedger: (directory: string) => opened.has(directory) } : {}), ...ports, roots, ...checkouts }); }
+    try { report = await sweepStaleTempDirs({ maxAgeMs, mode, ...(opened ? { attemptLedger: (directory: string) => opened.has(directory) } : {}), ...ports, roots, scratchRoot: scratch, ...checkouts }); }
     finally { opened?.close(); await view.close(); }
   } catch (error) {
     report = { at: new Date(ports.now?.() ?? Date.now()).toISOString(), failed: true, mode,

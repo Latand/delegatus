@@ -1,12 +1,13 @@
 import { STRUCTURED_HOST_STAMP_ENV } from "@/lib/scanner/process";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import * as attemptRemoval from "./runtime/attemptTempRemoval";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { procBackend } from "@/lib/proc";
-import { agentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { plantKeepMarker, removeKeepMarkers } from "./runtime/keepMarker.testSupport";
 
 import {
@@ -136,6 +137,142 @@ test("owned names are llv-* and three legacy test prefixes; shared roots, gate n
     expect(isOwnedTempConsumerName(name)).toBe(["llv-spawn-sandbox", "llv-tmux-cwd", "llv-gate"].includes(name));
   }
 });
+
+test.skipIf(process.platform !== "linux")("production sweep removes a proven ended agent tree and records live and unknown owners", async () => {
+  const root = tempRoot();
+  const make = (name: string) => {
+    const directory = path.join(root, name);
+    fs.mkdirSync(directory, { mode: 0o700 });
+    return directory;
+  };
+  const ended = make("agyc-ended"), live = make("agent-scratch-live"), running = make("agyc-running");
+  const unknown = make("agyc-operator"), unrelated = make("unrelated"), young = make("agyc-young");
+  const now = fs.statSync(ended).ctimeMs + 2 * DAY;
+  fs.utimesSync(young, new Date(now), new Date(now));
+  const previous = agentRegistry();
+  const registry = new AgentRegistry(path.join(root, "registry.json"));
+  setAgentRegistryForTests(registry);
+  try {
+    for (const [cwd, status] of [[ended, "dead"], [live, "dead"], [running, "live"], [young, "dead"]] as const) {
+      registry.upsert({ key: { engine: "codex", sessionId: path.basename(cwd) }, artifactPath: path.join(cwd, "owner.jsonl"),
+        cwd, status, host: null, accountId: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+    }
+    const child = spawn("sleep", ["60"], { cwd: live });
+    children.push(child);
+    await once(child, "spawn");
+    const report = (await runTempSweepInHelper({ NODE_ENV: "test", LLV_TEMP_SWEEP: "on" }, {
+      roots: [{ path: root, via: "" }], now: () => now, scan: scanProcesses(fixtureProcRoot([child])),
+    }))!;
+    expect(report.errors).toEqual([]);
+    expect(report.removed.map(row => row.path)).toEqual([ended]);
+    expect(report.held?.map(row => [row.path, row.reason]).sort()).toEqual([
+      [unknown, "agent-owner-unverified"], [running, "conversation_reference"], [live, "process_reference"],
+    ].sort());
+    expect(report.kept.young).toBe(1);
+    expect(fs.existsSync(ended)).toBeFalse();
+    expect([live, running, unknown, unrelated, young].every(directory => fs.existsSync(directory))).toBeTrue();
+    expect(tempSweepStatus()?.heldCounts).toEqual({ "agent-owner-unverified": 1, conversation_reference: 1, process_reference: 1 });
+  } finally {
+    setAgentRegistryForTests(previous);
+    registry.close();
+  }
+});
+
+test.skipIf(process.platform !== "linux").each(["flag", "descriptor", "changed-conversation", "quarantine-flag"] as const)(
+  "a late %s holds detached agent scratch after measurement", async kind => {
+    const root = tempRoot(), directory = path.join(root, "agent-scratch-late");
+    fs.mkdirSync(directory, { mode: 0o700 });
+    const file = path.join(directory, "payload");
+    fs.writeFileSync(file, "keep");
+    const now = fs.statSync(file).ctimeMs + 2 * DAY;
+    const proc = tempRoot();
+    fs.mkdirSync(path.join(proc, "10", "ns"), { recursive: true });
+    fs.symlinkSync("mnt:[1]", path.join(proc, "10", "ns", "mnt"));
+    let held: string[] = [];
+    const report = await realSweep({
+      roots: [{ path: root, via: "" }], maxAgeMs: DAY, now: () => now,
+      currentScan: () => {
+        if (kind === "quarantine-flag" && !fs.existsSync(directory))
+          fs.writeFileSync(path.join(proc, "10", "cmdline"), `tool\0--input=${file}\0`);
+        return scanProcesses(proc);
+      },
+      conversationProtection: () => ({ held, ended: new Map([[directory, now - DAY]]) }),
+      measure: async () => {
+        if (kind === "flag") fs.writeFileSync(path.join(proc, "10", "cmdline"), `tool\0--input=${file}\0`);
+        if (kind === "descriptor") {
+          fs.mkdirSync(path.join(proc, "10", "fd"));
+          fs.symlinkSync(file, path.join(proc, "10", "fd", "3"));
+        }
+        if (kind === "changed-conversation") held = [directory];
+        return 0;
+      },
+    });
+    expect(report.errors).toEqual([]);
+    expect(report.removed).toEqual([]);
+    expect(report.held?.map(row => row.reason)).toEqual([kind === "changed-conversation" ? "conversation_reference" : "process_reference"]);
+    expect(fs.readFileSync(file, "utf8")).toBe("keep");
+  },
+);
+
+test.skipIf(process.platform !== "linux")("a reused path or a second mount view prevents agent ownership from being inferred", async () => {
+  const root = tempRoot(), otherView = tempRoot();
+  const recreated = path.join(root, "agyc-recreated"), ambiguous = path.join(root, "agent-scratch-ambiguous");
+  for (const directory of [recreated, ambiguous, otherView + ambiguous]) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const born = fs.lstatSync(recreated).birthtimeMs;
+  const now = Date.now() + 2 * DAY;
+  const report = await realSweep({
+    roots: [{ path: root, via: "" }, { path: root, via: otherView }], maxAgeMs: DAY, now: () => now,
+    scan: { ownNamespace: null, processes: [] }, mountPoints: () => [],
+    conversationProtection: () => ({ held: [], ended: new Map([[recreated, Math.floor(born) - 1], [ambiguous, now - DAY]]) }),
+  });
+  expect(report.errors).toEqual([]);
+  expect(report.removed).toEqual([]);
+  expect(report.held?.map(row => [row.path, row.reason]).sort()).toEqual([
+    [recreated, "agent-owner-unverified"], [ambiguous, "agent-owner-unverified"], [ambiguous, "agent-owner-unverified"],
+  ].sort());
+  expect([recreated, ambiguous, otherView + ambiguous].every(directory => fs.existsSync(directory))).toBeTrue();
+});
+
+test.skipIf(process.platform !== "linux").each(["ended", "retained"] as const)(
+  "a gate sandbox is checked against its real allocation journal after the owner exits (%s)", async outcome => {
+    const root = tempRoot();
+    const directory = path.join(root, "delegatus-local-gate-A1b2C3");
+    const imitation = path.join(root, "delegatus-local-gate-D4e5F6");
+    fs.mkdirSync(directory, { mode: 0o700 });
+    fs.mkdirSync(imitation, { mode: 0o700 });
+    const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: root };
+    delete env.LLV_GATE_SANDBOX_RECORD;
+    const records = JSON.stringify(path.resolve(import.meta.dir, "../../scripts/gateSandboxRecords.ts"));
+    const child = spawn(process.execPath, ["-e", `
+      import { ownGateSandboxes, recordGateSandbox, retainGateSandbox } from ${records};
+      ownGateSandboxes();
+      recordGateSandbox(process.argv[1]);
+      ${outcome === "retained" ? "retainGateSandbox(process.argv[1]);" : ""}
+      console.log("ready");
+      process.stdin.resume();
+      await new Promise(resolve => process.stdin.once("end", resolve));
+    `, directory], { env, stdio: ["pipe", "pipe", "inherit"] });
+    children.push(child);
+    const ready = await Promise.race([once(child.stdout!, "data"), once(child, "exit")]);
+    expect(String(ready[0]).trim()).toBe("ready");
+    const now = Date.now() + 2 * DAY;
+    const procRoot = fixtureProcRoot([child]);
+    const options = { roots: [{ path: root, via: "" }], procRoot, maxAgeMs: DAY, now: () => now };
+    const active = await realSweep(options);
+    expect(active.removed).toEqual([]);
+    expect(active.held?.find(row => row.path === directory)?.reason).toBe("process_reference");
+    const exited = once(child, "exit");
+    child.kill("SIGKILL");
+    await exited;
+    const report = await realSweep(options);
+    expect(report.errors).toEqual([]);
+    expect(report.removed.map(row => row.path)).toEqual(outcome === "ended" ? [directory] : []);
+    expect(report.held?.map(row => [row.path, row.reason]).sort()).toEqual((outcome === "ended" ? [imitation] : [directory, imitation])
+      .map(candidate => [candidate, "gate-owner-unverified"]).sort());
+    expect(fs.existsSync(directory)).toBe(outcome === "retained");
+    expect(fs.existsSync(imitation)).toBeTrue();
+  },
+);
 
 test("the threshold defaults to 24 h, reads hours from the environment, and 0 turns the sweep off", () => {
   expect(tempSweepMaxAgeMs({})).toBe(DAY);

@@ -616,24 +616,32 @@ function identityProofKey(identity: Readonly<ProcessIdentity>): string {
 
 /** A captured host tree can outlive its processes while leaving `idle` in the
     registry. Drop that hold only with dead owners and a settled turn. Unknown
-    ownership, setup and runnable deliveries continue protecting their cwd. */
+    ownership, setup and runnable deliveries continue protecting their cwd.
+    Temp retention can also request the recorded time of positively ended
+    owners to reject a newer directory at a recycled cwd. */
 export function conversationCwdStatus(
   file: RegistryShape,
   now = Date.now(),
   provenDead: (identity: Readonly<ProcessIdentity>) => boolean = processIdentityProvenDead,
+  endedCwds?: Map<string, number>,
 ): ConversationCwdStatus {
   const held = new Set<string>();
   const deferred = new Set<string>();
   const settled = new Set<string>();
+  const unsettled = new Set<string>();
   for (const conversation of Object.values(file.conversations ?? {})) {
     const generation = conversation.generations?.at(-1);
     // A migration can still launch into this cwd before a host row appears.
     if (conversation.migration && !["committed", "rolled-back", "failed-recoverable"].includes(conversation.migration.phase)) {
       if (generation?.launchProfile?.cwd) held.add(generation.launchProfile.cwd);
+      if (endedCwds && generation?.id && conversation.engine) unsettled.add(`${conversation.engine}:${generation.id}`);
       continue;
     }
-    if (generation?.id && conversation.engine && (conversation.turn?.state === "terminal" || conversation.turn?.state === "idle"))
-      settled.add(`${conversation.engine}:${generation.id}`);
+    if (generation?.id && conversation.engine) {
+      const key = `${conversation.engine}:${generation.id}`;
+      if (conversation.turn?.state === "terminal" || conversation.turn?.state === "idle") settled.add(key);
+      else if (endedCwds) unsettled.add(key);
+    }
   }
   const entries = Object.entries(file.entries ?? {}).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
   const ownersFor = (entry: NonNullable<(typeof entries)[number][1]>) => {
@@ -700,6 +708,10 @@ export function conversationCwdStatus(
       const proof = identityProofKey(identity);
       cachedProofs.push(proof);
       cachedProofSet.add(proof);
+    }
+    if (endedCwds && Number.isFinite(updated) && unknownOwners.length === selectedOwners.length && !unsettled.has(key)
+      && (ended || entry.status === "dead" && !entry.pendingAction && !entry.structuredHost?.activeTurnRef)) {
+      endedCwds.set(entry.cwd, Math.max(endedCwds.get(entry.cwd) ?? 0, updated));
     }
   }
   const liveProofs = [...new Set(cachedProofs.filter(key => currentIdentities.has(key)))].slice(-OWNER_PROOF_CACHE_LIMIT);
