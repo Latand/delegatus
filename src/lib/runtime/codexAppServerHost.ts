@@ -5332,7 +5332,14 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private startFailureCleanup(): void {
-    void this.release().catch(() => {
+    // Socket failure and child close can arrive outside the active release's
+    // async context. The admitted attempt owns every remaining signal. After
+    // it succeeds these observers only need to flush their checkpoint.
+    const admitted = this.releasePromise;
+    const cleanup = admitted
+      ? admitted.then(() => this.persistenceFlush?.(), () => this.release())
+      : this.release();
+    void cleanup.catch(() => {
       if (this.released || this.failureCleanupTimer) return;
       this.failureCleanupTimer = setTimeout(() => {
         this.failureCleanupTimer = null;
