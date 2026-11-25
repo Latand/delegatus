@@ -349,17 +349,14 @@ export const SHOTS: ReadmeShot[] = [
     id: "pipeline",
     subjects: ["[data-stages-sheet]"],
     target: { kind: "project", project: "harbor-api" },
-    /* Each stage column keeps its agent's head on one line and the tail of
-       its conversation whole. The sheet is 26 px narrower than the screen and
-       a pane is 600 px up to a 1363 px screen, so at 1272 px the lane holds the
-       first two panes with the same 12 px edge on both sides and the third
-       pane starts just past its right edge. A wider screen shows a sliver of
-       that pane. */
+    /* The stage tabs run along the top of the sheet and the selected stage's
+       pane stands under them, so the frame holds one conversation whole
+       beside no sliver of another. */
     viewport: { width: 1272, height: WIDE.height },
-    /* "first stage" is the Build pane's own line, so the frame fails without
-       the builder's column; innerText counts a column scrolled out of the
-       lane, which the whole-column check in prepare covers. */
-    requiredText: ["Idempotent refunds", "Build", "Review", "Verify", "passed", "running", "waiting", "first stage", "Worked for"],
+    /* The tabs name every stage and its state, and the selected Review pane
+       is mid-turn and carries its commentary ("Reading the diff"); the
+       tabs-and-pane check in prepare covers the layout. */
+    requiredText: ["Idempotent refunds", "Build", "Review", "Verify", "passed", "running", "waiting", "Reading the diff"],
     prepare: async (page) => {
       await foldOrchestrator(page);
       await page.waitForTimeout(500);
