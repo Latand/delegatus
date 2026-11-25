@@ -33,6 +33,7 @@ import { receipts as tabReceipts, type ReceiptStore } from "./mobile/MobileRecei
 import { formatCheckedClock, formatQuotaAsOf, formatResetClock, windowLabel } from "./rateLimit";
 import { engineTintOf } from "./utils";
 import { Z } from "@/components/layers";
+import { AntigravityBody, useAntigravityAccount } from "./onboarding/AntigravityCard";
 import { TransferAccountsChecklist, useImportedAccounts } from "./TransferAccountsChecklist";
 
 const AUTH_HEALTH_KEY = {
@@ -1762,6 +1763,7 @@ export function ProjectAwareMobileAccountsBody({ engines, now, project, focusAcc
 /** The screen the shell mounts under its bar: both engines' stores, the
     presentation clock, and the focus a badge asked for. */
 export function MobileAccountsPanel({ receipts, project }: { receipts?: ReceiptStore; project?: string | null }) {
+  const { t } = useLocale();
   const claude = useEngineAccounts("claude");
   const codex = useEngineAccounts("codex");
   const [focus, setFocus] = useState<string | null>(null);
@@ -1777,5 +1779,18 @@ export function MobileAccountsPanel({ receipts, project }: { receipts?: ReceiptS
     if (pending) setFocus(pending.accountId);
     return onAccountPanelRequest((request) => setFocus(request.accountId));
   }, []);
-  return <ProjectAwareMobileAccountsBody engines={[claude, codex]} now={now} project={project} focusAccountId={focus} receipts={receipts} />;
+  const antigravity = useAntigravityAccount();
+  /* Antigravity has no account store: its one host sign-in and the check that reads it. Shown once `agy` is installed or its sign-in recorded. */
+  const antigravityShown = antigravity.cli === "found" || antigravity.auth !== "unknown";
+  return (
+    <>
+      <ProjectAwareMobileAccountsBody engines={[claude, codex]} now={now} project={project} focusAccountId={focus} receipts={receipts} />
+      {antigravityShown ? (
+        <section data-mobile2-accounts-engine="antigravity" aria-label={t("accounts.titleFor", { engine: "Antigravity" })} className="-mt-3 pb-5">
+          <div className="flex min-h-[34px] items-center px-3 pt-1.5 text-label font-semibold text-secondary">Antigravity</div>
+          <div className="px-3"><AntigravityBody agy={antigravity} /></div>
+        </section>
+      ) : null}
+    </>
+  );
 }

@@ -9,6 +9,7 @@ import { StringDecoder } from "node:string_decoder";
 import {
   ANTIGRAVITY_DEFAULT_ACCOUNT_ID,
   antigravityDefaultHome,
+  isAntigravityAuthFailure,
   readAntigravityAuthState,
   recordAntigravityAuthState,
 } from "@/lib/accounts/antigravity";
@@ -1213,15 +1214,8 @@ export class AntigravityAcpHost implements EngineHost {
     }
   }
 
-  private async handshake(resumeSessionId: string | null): Promise<void> {
-    const initialized = record(await this.request("initialize", {
-      protocolVersion: ACP_PROTOCOL_VERSION,
-      clientCapabilities: {},
-    }));
-    const agentInfo = record(initialized?.agentInfo);
-    this.protocolVersion = stringField(agentInfo, "version")
-      ?? (initialized?.protocolVersion !== undefined ? String(initialized.protocolVersion) : null);
-
+  /** `session/resume` or `session/new`, with the session id and the payload it answered. */
+  private async openSession(resumeSessionId: string | null): Promise<{ sessionId: string; sessionPayload: JsonObject | null }> {
     let sessionId: string;
     let sessionPayload: JsonObject | null = null;
     if (resumeSessionId) {
@@ -1261,6 +1255,29 @@ export class AntigravityAcpHost implements EngineHost {
       if (!minted) throw new Error("Antigravity session/new returned no session id");
       sessionId = validateAntigravitySessionId(minted);
     }
+    return { sessionId, sessionPayload };
+  }
+
+  private async handshake(resumeSessionId: string | null): Promise<void> {
+    const initialized = record(await this.request("initialize", {
+      protocolVersion: ACP_PROTOCOL_VERSION,
+      clientCapabilities: {},
+    }));
+    const agentInfo = record(initialized?.agentInfo);
+    this.protocolVersion = stringField(agentInfo, "version")
+      ?? (initialized?.protocolVersion !== undefined ? String(initialized.protocolVersion) : null);
+
+    let opened: { sessionId: string; sessionPayload: JsonObject | null };
+    try {
+      opened = await this.openSession(resumeSessionId);
+    } catch (error) {
+      /* A refusal for lack of a Google sign-in is the one observation that says signed out. */
+      if (isAntigravityAuthFailure({ code: (error as { rpcCode?: unknown }).rpcCode, message: error instanceof Error ? error.message : "" })) {
+        try { recordAntigravityAuthState({ authenticated: false, tierName: null, tierId: null, checkedAt: new Date().toISOString() }); } catch { /* best-effort metadata update */ }
+      }
+      throw error;
+    }
+    const { sessionId, sessionPayload } = opened;
 
     const tier = record(record(record(sessionPayload?._meta)?.antigravity)?.tier);
     this.tierName = stringField(tier, "name");

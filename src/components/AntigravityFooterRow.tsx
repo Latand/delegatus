@@ -1,10 +1,14 @@
 "use client";
 
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+
 import { useLocale } from "@/lib/i18n";
 import { isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
 import type { EngineLimits, LimitsProvenance } from "@/lib/types";
 
+import { Z } from "./layers";
 import { barColor, LimitWindowLine, quotaAsOfHint } from "./LimitRow";
+import { AntigravityBody, antigravityCardState, antigravityStateLine, useAntigravityAccount } from "./onboarding/AntigravityCard";
 import { windowLabel } from "./rateLimit";
 import { LINE_EDGE, ReserveBar, type SidebarFooterDensity } from "./railFooterDensity";
 import { engineTintOf } from "./utils";
@@ -13,8 +17,11 @@ import { engineTintOf } from "./utils";
  * Antigravity CLI quota row in the sidebar footer (docs/design/antigravity-engine.md §3.6).
  *
  * Antigravity exposes quota state when a 5-hour window is exhausted (`RESOURCE_EXHAUSTED`).
- * The row appears when an active session quota reading is present and disappears cleanly
- * once the reset window elapses.
+ * The quota line appears when an active session quota reading is present and disappears
+ * cleanly once the reset window elapses. The row itself also shows while `agy` is installed
+ * or its sign-in has been recorded, and opens the sign-in card in a flyout (the account
+ * settings this engine had no entry in). A machine that never had `agy` shows nothing,
+ * as Copilot's row does.
  */
 export function AntigravityFooterRow({ limits, limitsAccountId, now, provenance, density }: {
   density: SidebarFooterDensity;
@@ -24,26 +31,57 @@ export function AntigravityFooterRow({ limits, limitsAccountId, now, provenance,
   provenance?: LimitsProvenance;
 }) {
   const { t, locale } = useLocale();
+  const agy = useAntigravityAccount();
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [maxHeight, setMaxHeight] = useState<number | null>(null);
+  /* Bounded by the room above the row, as the other flyouts are. */
+  useLayoutEffect(() => {
+    if (!open) return;
+    const fit = () => {
+      const node = panelRef.current;
+      if (node) setMaxHeight(Math.max(160, Math.floor(node.getBoundingClientRect().bottom - 8)));
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: PointerEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener("pointerdown", onDown);
+    return () => window.removeEventListener("pointerdown", onDown);
+  }, [open]);
+
   const session = limits?.session ?? null;
-  if (!session || !limitsAccountId) return null;
-  if (!isAntigravitySessionWindowActive(session, now)) return null;
+  const quota = !!session && !!limitsAccountId && isAntigravitySessionWindowActive(session, now);
+  const state = antigravityCardState(agy);
+  const known = agy.cli === "found" || agy.auth !== "unknown";
+  if (!quota && !known) return null;
 
   const tint = engineTintOf("antigravity");
-  const left = Math.max(0, Math.min(100, 100 - session.usedPercent));
-  const color = barColor(left, tint.color);
-  const label = windowLabel(t, "session", session.windowMinutes);
+  const left = quota && session ? Math.max(0, Math.min(100, 100 - session.usedPercent)) : null;
+  const color = left === null ? tint.color : barColor(left, tint.color);
+  const label = quota && session ? windowLabel(t, "session", session.windowMinutes) : "";
+  const stateText = antigravityStateLine(t, state, agy.plan);
   const summary = [
     "Antigravity",
-    limits?.plan ?? null,
-    `${label} ${t("limits.left")} ${Math.round(left)}%`,
+    limits?.plan ?? agy.plan,
+    left === null ? stateText : `${label} ${t("limits.left")} ${Math.round(left)}%`,
   ].filter(Boolean).join(" · ");
 
   return (
-    <div className="relative" data-engine-limits="antigravity" data-limits-source={provenance?.source ?? "transcript"}>
-      <div
+    <div ref={containerRef} className="relative" data-engine-limits="antigravity" data-limits-source={provenance?.source ?? "transcript"}>
+      <button
+        type="button"
         data-meter-line=""
+        aria-expanded={open}
         title={summary}
-        className={`flex h-[26px] w-full items-center gap-1.5 ${LINE_EDGE} text-left`}
+        onClick={() => { setOpen((value) => !value); if (!open) void agy.reload(); }}
+        className={`flex h-[26px] w-full items-center gap-1.5 ${LINE_EDGE} text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
       >
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
           <span data-meter-name="" className="min-w-0 truncate text-[11.5px] font-semibold text-primary">Antigravity</span>
@@ -51,12 +89,18 @@ export function AntigravityFooterRow({ limits, limitsAccountId, now, provenance,
             <span className="h-2 w-2 rounded-full" style={{ backgroundColor: tint.color }} />
           </span>
         </span>
-        <span data-meter-value="" className="shrink-0 text-[11px] tabular-nums text-muted">
-          {t("limits.left")} <span className="font-bold text-primary">{Math.round(left)}%</span>
-        </span>
-        <ReserveBar percent={left} color={color} />
-      </div>
-      {density === "detail" ? (
+        {left === null ? (
+          <span data-antigravity-state={state} className={`min-w-0 shrink truncate text-[10px] ${state === "connected" ? "text-muted" : "text-warning"}`}>{stateText}</span>
+        ) : (
+          <>
+            <span data-meter-value="" className="shrink-0 text-[11px] tabular-nums text-muted">
+              {t("limits.left")} <span className="font-bold text-primary">{Math.round(left)}%</span>
+            </span>
+            <ReserveBar percent={left} color={color} />
+          </>
+        )}
+      </button>
+      {density === "detail" && quota && session ? (
         <div data-limits-windows="" className={`${LINE_EDGE} pb-1`}>
           {limits?.plan ? (
             <span data-meter-note="" className="-mt-0.5 block truncate pb-0.5 text-[10px] leading-[13px] text-muted">
@@ -70,6 +114,19 @@ export function AntigravityFooterRow({ limits, limitsAccountId, now, provenance,
             now={now}
             staleHint={session.observedAt != null && now - session.observedAt > 300 ? quotaAsOfHint(session.observedAt, locale) : null}
           />
+        </div>
+      ) : null}
+      {open ? (
+        <div
+          ref={panelRef}
+          role="dialog"
+          aria-label="Antigravity"
+          data-antigravity-panel=""
+          style={maxHeight === null ? undefined : { maxHeight }}
+          onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }}
+          className={`absolute bottom-1 left-full ml-2 ${Z.modal} flex w-[min(360px,calc(100vw-264px))] flex-col gap-2 overflow-y-auto overscroll-contain rounded-[14px] border border-border bg-card px-3.5 py-2.5 text-[11.5px] shadow-2 [&>*]:shrink-0`}
+        >
+          <AntigravityBody agy={agy} />
         </div>
       ) : null}
     </div>

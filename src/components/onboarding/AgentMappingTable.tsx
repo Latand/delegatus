@@ -33,6 +33,8 @@ export type EngineStatus = {
   missing?: boolean;
   /** The engine's active account, for the headroom line. */
   account: AccountOption | null;
+  /** Why an installed engine is not connected: its sign-in was observed absent, or has not been observed. */
+  reason?: "signed-out" | "unknown";
 };
 
 type RowKey = { roleId: RoleId; variant?: RoleVariantId };
@@ -42,7 +44,11 @@ const ENGINE_NAME: Record<RoleEngine, string> = { claude: "Claude", codex: "Code
 /* One track list for the head and every row. The model column stops at 220 px
    and the role column takes what is left, so the standalone surface (no step
    rail) widens the names instead of stretching one select. */
-const TABLE_GRID = "grid-cols-[minmax(176px,1fr)_136px_minmax(0,220px)_104px_104px]";
+const TABLE_GRID = "grid-cols-[minmax(176px,1fr)_100px_minmax(0,220px)_104px_104px]";
+
+/* The tracks' smallest sum (176 + 100 + 124 + 104 + 104). Narrower than this the
+   table has nowhere to put the model select, so the rows take the card layout. */
+const TABLE_MIN = 608;
 
 function blockedText(t: TFunction, engine: RoleEngine, status: EngineStatus): string {
   return t(status.missing ? "onboarding.agents.blockedMissing" : "onboarding.agents.blocked", { engine: ENGINE_NAME[engine] });
@@ -213,13 +219,18 @@ function CostChip({ config }: { config: RoleConfig }) {
   );
 }
 
-function Headroom({ config, status, compact = false }: { config: RoleConfig; status: EngineStatus; compact?: boolean }) {
+function Headroom({ config, status, compact = false, onConnect }: { config: RoleConfig; status: EngineStatus; compact?: boolean; onConnect?: (engine: RoleEngine) => void }) {
   const { t } = useLocale();
   if (!status.connected) {
     return (
-      <span className="flex items-center gap-1 text-label font-semibold text-warning">
+      <span className="flex flex-wrap items-center gap-x-1 text-label font-semibold text-warning">
         <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />
         {blockedText(t, config.engine, status)}
+        {onConnect ? (
+          <button type="button" data-mapping-connect={config.engine} onClick={() => onConnect(config.engine)} className="shrink-0 rounded-[6px] px-0.5 font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:-my-3.5 max-sm:min-h-11">
+            {t(status.missing ? "onboarding.agents.howToInstall" : "onboarding.agents.signIn")}
+          </button>
+        ) : null}
       </span>
     );
   }
@@ -238,32 +249,39 @@ function Headroom({ config, status, compact = false }: { config: RoleConfig; sta
     : <span data-mapping-headroom="" className={`text-label ${tone}`}>{full}</span>;
 }
 
-function EngineSegments({ value, label, locked, statuses, onChange }: { value: RoleEngine; label: string; locked: RoleEngine | null; statuses: Record<RoleEngine, EngineStatus>; onChange: (engine: RoleEngine) => void }) {
+function EngineSegments({ value, label, locked, statuses, compact, onChange }: { value: RoleEngine; label: string; locked: RoleEngine | null; statuses: Record<RoleEngine, EngineStatus>; compact: boolean; onChange: (engine: RoleEngine) => void }) {
   const { t } = useLocale();
+  /* The table's engine column is 100 px: three 28 px marks fit it, three names
+     (229 px) do not. The name and the state ride on the button's title and
+     label. A phone card has the width and keeps the names. */
   return (
-    <div role="radiogroup" aria-label={t("onboarding.agents.engineAria", { role: label })} className="inline-flex h-8 shrink-0 rounded-[8px] border border-border bg-sunken p-0.5 max-sm:h-auto">
+    <div role="radiogroup" aria-label={t("onboarding.agents.engineAria", { role: label })} className={`inline-flex shrink-0 rounded-[8px] border border-border bg-sunken p-0.5 ${compact ? "" : "h-8 max-sm:h-auto"}`}>
       {(["claude", "codex", "antigravity"] as const).map((engine) => {
         const checked = value === engine;
         /* A role locked to one engine (visual judgement runs on Claude) cannot be pointed at the other. */
         const refused = !!locked && engine !== locked;
+        const ready = statuses[engine].connected;
+        const name = locked && refused
+          ? t("onboarding.agents.engineLocked", { role: label, engine: ENGINE_NAME[locked] })
+          : ready ? ENGINE_NAME[engine] : blockedText(t, engine, statuses[engine]);
         return (
           <button
             key={engine}
             type="button"
             role="radio"
             aria-checked={checked}
+            aria-label={compact ? name : undefined}
             data-engine-segment={engine}
             /* A disconnected engine stays selectable: someone who connects Codex
                tomorrow may still point a role at it today. */
-            title={locked && refused
-              ? t("onboarding.agents.engineLocked", { role: label, engine: ENGINE_NAME[locked] })
-              : statuses[engine].connected ? ENGINE_NAME[engine] : blockedText(t, engine, statuses[engine])}
+            title={name}
             disabled={refused}
             onClick={() => { if (!checked && !refused) onChange(engine); }}
-            className={`inline-flex min-w-0 items-center gap-1 rounded-[6px] px-1.5 text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 max-sm:min-h-11 max-sm:flex-1 max-sm:justify-center ${checked ? "bg-card text-primary shadow-1 ring-1 ring-inset ring-strong" : refused ? "cursor-not-allowed text-muted opacity-50" : "text-muted hover:text-primary"}`}
+            className={`relative inline-flex items-center rounded-[6px] text-ui font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${compact ? "h-7 w-7 shrink-0 justify-center" : "min-w-0 gap-1 px-1.5 max-sm:min-h-11 max-sm:flex-1 max-sm:justify-center"} ${checked ? "bg-card text-primary shadow-1 ring-1 ring-inset ring-strong" : refused ? "cursor-not-allowed text-muted opacity-50" : "text-muted hover:text-primary"}`}
           >
-            <EngineMark engine={engine} size={12} />
-            {ENGINE_NAME[engine]}
+            <EngineMark engine={engine} size={compact ? 14 : 12} />
+            {compact ? null : ENGINE_NAME[engine]}
+            {compact && !ready ? <span aria-hidden data-engine-state-dot={engine} className={`absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full ${statuses[engine].missing ? "bg-danger" : "bg-warning"}`} /> : null}
           </button>
         );
       })}
@@ -287,7 +305,7 @@ function modelOptions(row: RowKey, engine: RoleEngine, current: string) {
   return models.filter((option) => !mappingRowRefusal(row.roleId, { engine, model: option.id }, row.variant));
 }
 
-function RowControls({ row, config, shipped, reset, promptCustom, statuses, layout, onChange, onResetPrompt }: {
+function RowControls({ row, config, shipped, reset, promptCustom, statuses, layout, onChange, onResetPrompt, onConnect }: {
   row: RowKey;
   config: RoleConfig;
   shipped: RoleConfig | null;
@@ -299,6 +317,8 @@ function RowControls({ row, config, shipped, reset, promptCustom, statuses, layo
   layout: "table" | "card";
   onChange: (config: RoleConfig | null) => void;
   onResetPrompt: () => void;
+  /** Sign in to, or install, the row's engine. */
+  onConnect: (engine: RoleEngine) => void;
 }) {
   const { t } = useLocale();
   const label = rowLabel(row, t);
@@ -333,7 +353,7 @@ function RowControls({ row, config, shipped, reset, promptCustom, statuses, layo
       {scale.map((tier) => <option key={tier} value={tier}>{tier}</option>)}
     </select>
   );
-  const engineControl = <EngineSegments value={config.engine} label={label} locked={lockedEngine(row.roleId)} statuses={statuses} onChange={(engine) => onChange(equivalentConfig(config, engine, row))} />;
+  const engineControl = <EngineSegments value={config.engine} label={label} locked={lockedEngine(row.roleId)} statuses={statuses} compact={layout === "table"} onChange={(engine) => onChange(equivalentConfig(config, engine, row))} />;
   /* The state sits on its own line under the name, so the longest Ukrainian
      names («Розробник, виправлення», «Аудитор продакшену») keep the whole
      column when a row is changed. */
@@ -386,7 +406,7 @@ function RowControls({ row, config, shipped, reset, promptCustom, statuses, layo
         <div className="flex [&>div]:flex-1">{engineControl}</div>
         {modelSelect}
         {effortSelect}
-        <Headroom config={config} status={status} />
+        <Headroom config={config} status={status} onConnect={onConnect} />
         {nudgeLine}
       </div>
     );
@@ -406,14 +426,14 @@ function RowControls({ row, config, shipped, reset, promptCustom, statuses, layo
       {!status.connected || nudgeLine ? (
         <div className={`grid ${TABLE_GRID} items-start pt-1`}>
           <span />
-          <span className="col-span-4 flex min-w-0 flex-col gap-0.5">{!status.connected ? <Headroom config={config} status={status} /> : null}{nudgeLine}</span>
+          <span className="col-span-4 flex min-w-0 flex-col gap-0.5">{!status.connected ? <Headroom config={config} status={status} onConnect={onConnect} /> : null}{nudgeLine}</span>
         </div>
       ) : null}
     </div>
   );
 }
 
-export function AgentMappingTable({ statuses: rawStatuses, layout, onConnect }: {
+export function AgentMappingTable({ statuses: rawStatuses, layout: requestedLayout, onConnect }: {
   statuses: { claude: EngineStatus; codex: EngineStatus; antigravity?: EngineStatus };
   layout: "table" | "card";
   /** Opens the Engines step (or the accounts surface) for the missing engine. */
@@ -425,6 +445,20 @@ export function AgentMappingTable({ statuses: rawStatuses, layout, onConnect }: 
     antigravity: rawStatuses.antigravity ?? { connected: false, account: null },
   };
   const { t } = useLocale();
+  /* The table's tracks need TABLE_MIN px. Where the surface gives it less (the
+     guide between a phone and a wide window), the rows are cards. Without a
+     ResizeObserver (jsdom) the requested layout stands. */
+  const [rootNode, setRootNode] = useState<HTMLDivElement | null>(null);
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    if (!rootNode || typeof ResizeObserver === "undefined") return;
+    const measure = () => setNarrow(rootNode.clientWidth > 0 && rootNode.clientWidth < TABLE_MIN);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(rootNode);
+    return () => observer.disconnect();
+  }, [rootNode]);
+  const layout = requestedLayout === "table" && narrow ? "card" : requestedLayout;
   const [roles, setRoles] = useState<MappingCatalogItem[] | null>(null);
   const [resets, setResets] = useState<RoleMappingReset[]>([]);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -506,7 +540,7 @@ export function AgentMappingTable({ statuses: rawStatuses, layout, onConnect }: 
   };
 
   return (
-    <div data-agent-mapping="" className="flex flex-col gap-3">
+    <div ref={setRootNode} data-agent-mapping="" data-mapping-layout={layout} className="flex flex-col gap-3">
       {/* The legend comes before the first chip it explains. */}
       <p data-mapping-legend="" className="text-label text-muted">{t("onboarding.agents.legend")}</p>
       {connectedEngines.length === 0 ? (
@@ -582,6 +616,7 @@ export function AgentMappingTable({ statuses: rawStatuses, layout, onConnect }: 
                       layout={layout}
                       onChange={(next) => { setReceipt(null); void save([{ row, config: next }]); }}
                       onResetPrompt={() => { setReceipt(null); void resetPrompt(row.roleId); }}
+                      onConnect={onConnect}
                     />
                   );
                 })}
