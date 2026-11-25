@@ -794,6 +794,10 @@ export interface BurndownSeries {
       e.g. a Codex plan that reports only a weekly limit. The chart then names
       that reason instead of the generic "no history yet" (issue #606). */
   windowUnreported?: boolean;
+  /** The newest observation of this window, even when it falls before the
+      current window (the quota was read, then the window rolled over). The chart
+      tells "reset since the last reading" from "never observed" by it. */
+  lastReading?: LimitSample | null;
 }
 
 /** Both windows' burndown series for one engine. */

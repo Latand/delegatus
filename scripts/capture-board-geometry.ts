@@ -96,6 +96,23 @@
  * control in it, the panel inside the viewport with nothing overflowing
  * sideways, and 44 px targets on the phone.
  *
+ * With BOARD_CAPTURE_CASE=limits-chart it opens the burndown chart from every
+ * account line of the limits footer, active or not: three Claude and four
+ * Codex accounts (`Account A` to `Account G`) in seven states, a fresh dense
+ * history, a partial one (late first sample and a mid-week gap), a stale last
+ * reading, a fresh 5h window, no reading at all, a window that reset after the
+ * last reading and a plan with no 5h window. `/api/accounts`, `/api/limits` and
+ * `/api/limits/history` answer from the fixture, the last honouring `engine`
+ * and `account`. The rail footer at 1440, 1360 and 1280 wide, en and uk, light
+ * and dark. It requires a chart for every account, the dashed spans each state
+ * names, the readout whole on the first screen, the dialog inside the
+ * viewport, no "No history yet" text, 4.5:1 contrast on the readout and the
+ * legend keys drawn with the chart's dashes (estimated and even pace dashed,
+ * remaining solid). The phone's projects sheet carries only the resources
+ * footer, so no chart opens there; the phone's accounts screen opens each
+ * account's chart, and `src/components/mobile/issue1671Evidence.browser.test.tsx`
+ * ("account burndown chart on the phone") covers it.
+ *
  * With BOARD_CAPTURE_CASE=activity it renders the activity dashboard
  * (docs/design/activity-dashboard-v2.md) on a home seeded with the design's
  * invented, uneven work: thirteen projects with a long tail, ten of them git
@@ -5734,6 +5751,298 @@ async function resourcesMain(): Promise<void> {
 }
 
 /* ------------------------------------------------------------------------- */
+/* BOARD_CAPTURE_CASE=limits-chart: the burndown chart of any account           */
+/* ------------------------------------------------------------------------- */
+
+type LimitsChartState = "fresh" | "partial" | "stale" | "fresh-5h" | "none" | "reset" | "no-5h";
+
+interface LimitsChartAccount {
+  engine: "claude" | "codex";
+  id: string;
+  label: string;
+  state: LimitsChartState;
+  active: boolean;
+  usedPercent: number | null;
+  /** Dashed spans the weekly chart must draw, and the solid runs around them. */
+  estimated: number;
+  known: number;
+  /** Seconds since the last reading the row itself carries. */
+  readAgo: number | null;
+}
+
+const LIMITS_CHART_ACCOUNTS: LimitsChartAccount[] = [
+  { engine: "claude", id: "claude-a", label: "Account A", state: "fresh", active: true, usedPercent: 22, estimated: 0, known: 1, readAgo: 60 },
+  { engine: "claude", id: "claude-b", label: "Account B", state: "partial", active: false, usedPercent: 41, estimated: 2, known: 2, readAgo: 120 },
+  { engine: "claude", id: "claude-c", label: "Account C", state: "stale", active: false, usedPercent: 57, estimated: 1, known: 1, readAgo: 6 * 3600 },
+  { engine: "codex", id: "codex-d", label: "Account D", state: "fresh-5h", active: true, usedPercent: 35, estimated: 0, known: 1, readAgo: 60 },
+  { engine: "codex", id: "codex-e", label: "Account E", state: "none", active: false, usedPercent: null, estimated: 1, known: 0, readAgo: null },
+  { engine: "codex", id: "codex-f", label: "Account F", state: "reset", active: false, usedPercent: 88, estimated: 1, known: 0, readAgo: 2 * 86_400 },
+  { engine: "codex", id: "codex-g", label: "Account G", state: "no-5h", active: false, usedPercent: 18, estimated: 0, known: 1, readAgo: 300 },
+];
+
+const LIMITS_CHART_WEEK = 7 * 86_400;
+const LIMITS_CHART_NOW = () => Math.round(Date.now() / 1000);
+
+/** The accounts payload `GET /api/accounts` answers, in the fixture's states. */
+function limitsChartAccounts() {
+  const now = LIMITS_CHART_NOW();
+  const row = (account: LimitsChartAccount) => ({
+    id: account.id, label: account.label, kind: "managed", authPresent: true, auth: { state: "authenticated" },
+    loginPending: false, loginState: "authenticated", deviceAuth: null, effective: undefined,
+    limits: account.usedPercent === null || account.readAgo === null ? null : {
+      state: account.readAgo > 1200 ? "stale" : "fresh", session: null,
+      weekly: { usedPercent: account.usedPercent, resetsAt: now + 4 * 86_400, windowMinutes: 10_080, observedAt: now - account.readAgo },
+      checkedAt: new Date((now - account.readAgo) * 1000).toISOString(),
+    },
+  });
+  const of = (engine: "claude" | "codex") => {
+    const rows = LIMITS_CHART_ACCOUNTS.filter((account) => account.engine === engine);
+    return { active: rows.find((account) => account.active)!.id, accounts: rows.map(row) };
+  };
+  return { claude: of("claude"), codex: of("codex") };
+}
+
+/** The limits payload for the two active accounts. */
+function limitsChartLimits() {
+  const now = LIMITS_CHART_NOW();
+  const reading = (account: LimitsChartAccount, plan: string) => ({
+    session: { usedPercent: 12, resetsAt: now + 3 * 3600, windowMinutes: 300, observedAt: now - 60 },
+    weekly: { usedPercent: account.usedPercent!, resetsAt: now + 4 * 86_400, windowMinutes: 10_080, observedAt: now - 60 },
+    plan, capturedAt: now - 60,
+  });
+  const [claude, codex] = [LIMITS_CHART_ACCOUNTS[0]!, LIMITS_CHART_ACCOUNTS[3]!];
+  return {
+    claude: reading(claude, "max"), codex: reading(codex, "pro"), claudeAccountId: claude.id, codexAccountId: codex.id,
+    provenance: { claude: { source: "live", reason: null, staleSince: null }, codex: { source: "live", reason: null, staleSince: null } },
+  };
+}
+
+/** The history `GET /api/limits/history?engine=&account=` answers for one account. */
+function limitsChartHistory(engine: "claude" | "codex", accountId: string) {
+  const account = LIMITS_CHART_ACCOUNTS.find((item) => item.engine === engine && item.id === accountId);
+  if (!account) return null;
+  const now = LIMITS_CHART_NOW();
+  const dense = (from: number, to: number, startPct: number, endPct: number) => {
+    const steps = Math.max(1, Math.floor((to - from) / 600));
+    return Array.from({ length: steps + 1 }, (_, i) => ({ t: Math.round(from + (to - from) * i / steps), remaining: startPct + (endPct - startPct) * i / steps }));
+  };
+  const series = (windowSeconds: number, ageOfStart: number, samples: (windowStart: number) => { t: number; remaining: number }[], over: Record<string, unknown> = {}) => {
+    const windowStart = now - ageOfStart;
+    const list = samples(windowStart);
+    return { windowStart, resetsAt: windowStart + windowSeconds, windowSeconds, samples: list, lastReading: list[list.length - 1] ?? null, ...over };
+  };
+  const unreported = (windowSeconds: number) => ({ windowStart: null, resetsAt: null, windowSeconds, samples: [], windowUnreported: true });
+  const left = 100 - (account.usedPercent ?? 0);
+  const weekly = (() => {
+    switch (account.state) {
+      case "partial": return series(LIMITS_CHART_WEEK, 3 * 86_400, (ws) => [...dense(ws + 8 * 3600, ws + 86_400, 96, 80), ...dense(now - 86_400, now, 70, left)]);
+      case "stale": return series(LIMITS_CHART_WEEK, 3 * 86_400, (ws) => dense(ws, now - 6 * 3600, 100, left));
+      case "none": return series(LIMITS_CHART_WEEK, 3 * 86_400, () => [], { windowStart: null, resetsAt: null, lastReading: null });
+      case "reset": return series(LIMITS_CHART_WEEK, 3600, () => [], { lastReading: { t: now - 2 * 86_400, remaining: left } });
+      default: return series(LIMITS_CHART_WEEK, 2 * 86_400, (ws) => dense(ws, now, 100, left));
+    }
+  })();
+  const session = account.state === "no-5h" || account.state === "partial" || account.state === "stale" || account.state === "reset"
+    ? unreported(5 * 3600)
+    : account.state === "none"
+      ? series(5 * 3600, 3600, () => [], { windowStart: null, resetsAt: null, lastReading: null })
+      : series(5 * 3600, 2 * 3600, (ws) => dense(ws, now, 100, 60));
+  const payload = { claude: null as unknown, codex: null as unknown, claudeAccountId: null as string | null, codexAccountId: null as string | null, historySince: new Date((now - 8 * 86_400) * 1000).toISOString() };
+  if (engine === "claude") { payload.claude = { session, weekly }; payload.claudeAccountId = accountId; }
+  else { payload.codex = { session, weekly }; payload.codexAccountId = accountId; }
+  return payload;
+}
+
+/** Contrast of a text range against the first opaque background above it, and
+    where its glyphs are drawn: a range's rects see a cut that a box does not. */
+function readLimitsChart() {
+  const parse = (value: string) => {
+    const m = value.match(/rgba?\(([^)]+)\)/);
+    if (!m) return null;
+    const [r, g, b, a] = m[1]!.split(/[ ,/]+/).filter(Boolean).map(Number);
+    return { r: r!, g: g!, b: b!, a: a ?? 1 };
+  };
+  const lum = (c: { r: number; g: number; b: number }) => {
+    const f = (v: number) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
+    return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
+  };
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"][aria-label*="burndown" i], [role="dialog"][aria-label*="графік" i]');
+  const readout = dialog?.querySelector<HTMLElement>("[data-burndown-readout]") ?? null;
+  const chart = dialog?.querySelector('svg[role="img"]') ?? null;
+  let contrast: number | null = null;
+  const rects: { x: number; y: number; w: number; h: number }[] = [];
+  if (readout) {
+    const fg = parse(getComputedStyle(readout).color);
+    let bg: { r: number; g: number; b: number; a: number } | null = null;
+    for (let node: Element | null = readout; node && !bg; node = node.parentElement) {
+      const c = parse(getComputedStyle(node).backgroundColor);
+      if (c && c.a >= 0.99) bg = c;
+    }
+    if (fg && bg) {
+      const [hi, lo] = [lum(fg), lum(bg)].sort((a, b) => b - a);
+      contrast = Math.round(((hi! + 0.05) / (lo! + 0.05)) * 100) / 100;
+    }
+    const range = document.createRange();
+    range.selectNodeContents(readout);
+    for (const r of range.getClientRects()) rects.push({ x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) });
+  }
+  const box = dialog?.getBoundingClientRect();
+  const trigger = (id: string | null) => id ? document.querySelector<HTMLElement>(`[data-footer-chart="${id}"]`)?.getBoundingClientRect().height ?? null : null;
+  return {
+    viewport: { w: window.innerWidth, h: window.innerHeight },
+    pageOverflowX: document.documentElement.scrollWidth - window.innerWidth,
+    dialog: box ? { x: Math.round(box.x), y: Math.round(box.y), w: Math.round(box.width), h: Math.round(box.height) } : null,
+    header: dialog?.querySelector("header span")?.textContent ?? null,
+    hasChart: Boolean(chart),
+    known: chart?.querySelectorAll("[data-burndown-known]").length ?? 0,
+    estimated: chart?.querySelectorAll("[data-burndown-estimated]").length ?? 0,
+    readout: readout?.textContent ?? null,
+    /* The legend keys are lines drawn with the chart's own dashes: a bordered box reads solid at this size. */
+    keys: Object.fromEntries(["ideal", "estimated", "actual"].map((kind) => {
+      const key = dialog?.querySelector(`[data-burndown-key="${kind}"]`);
+      return [kind, key ? { dash: key.querySelector("line")?.getAttribute("stroke-dasharray") ?? null, width: Math.round(key.getBoundingClientRect().width) } : null];
+    })) as Record<"ideal" | "estimated" | "actual", { dash: string | null; width: number } | null>,
+    readoutRects: rects,
+    readoutCovered: rects.some((r) => { const hit = document.elementFromPoint(r.x + r.w / 2, r.y + r.h / 2); return !hit || !dialog?.contains(hit); }),
+    text: dialog?.textContent ?? "",
+    contrast,
+    triggerHeight: trigger(document.activeElement?.getAttribute("data-footer-chart") ?? null),
+  };
+}
+
+async function limitsChartMain(): Promise<void> {
+  seedHome();
+  const failures: string[] = [];
+  const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
+  const port = await freePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let server: ChildProcess | null = null;
+  let browser: Browser | null = null;
+  const report: Record<string, unknown> = { commit: captureCommit() };
+  try {
+    server = startServer(port);
+    await waitForServer(baseUrl, server);
+    await waitForBoard(baseUrl, false);
+    const dismissed = await fetch(`${baseUrl}/api/onboarding`, {
+      method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }),
+    });
+    must(dismissed.ok, `dismissing the setup guide answered ${dismissed.status}`);
+    /* The telemetry notice sits where the footer's chart opens. */
+    const telemetry = await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
+    must(telemetry.ok, `dismissing the telemetry notice answered ${telemetry.status}`);
+    browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const desktop = [1440, 1360, 1280].flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ width, lang, colorScheme }))));
+    const historyRequests: string[] = [];
+    for (const shot of desktop) {
+      const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: shot.lang, source: "chosen" }) });
+      must(localeWrite.ok, `writing the ${shot.lang} locale answered ${localeWrite.status}`);
+      const height = shot.width === 1280 ? 800 : 900;
+      const context = await browser.newContext({ viewport: { width: shot.width, height }, colorScheme: shot.colorScheme, reducedMotion: "reduce" });
+      await context.addInitScript(seedInit);
+      await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), shot.lang);
+      await context.route("**/api/accounts", (route) => route.fulfill({ json: limitsChartAccounts() }));
+      await context.route("**/api/limits", (route) => route.fulfill({ json: limitsChartLimits() }));
+      await context.route("**/api/limits/history*", (route) => {
+        const url = new URL(route.request().url());
+        historyRequests.push(`${url.pathname}${url.search}`);
+        const engine = url.searchParams.get("engine");
+        const account = url.searchParams.get("account");
+        const payload = engine === "claude" || engine === "codex" ? limitsChartHistory(engine, account ?? "") : null;
+        return payload ? route.fulfill({ json: payload }) : route.fulfill({ status: 404, json: { error: "unknown account" } });
+      });
+      const page = await context.newPage();
+      await page.goto(`${baseUrl}/`);
+      await page.waitForSelector('[data-footer-chart="claude-a"]', { timeout: 30_000 }).catch(() => {});
+      const targets = LIMITS_CHART_ACCOUNTS.map((account) => account.id);
+      for (const id of targets) {
+        const account = LIMITS_CHART_ACCOUNTS.find((item) => item.id === id)!;
+        const tag = `${shot.width}-${shot.lang}-${shot.colorScheme}-${account.state}`;
+        const trigger = page.locator(`[data-footer-chart="${id}"]`);
+        if (!(await trigger.count())) { must(false, `${tag}: no chart button for ${account.label}`); continue; }
+        await trigger.scrollIntoViewIfNeeded();
+        await trigger.click();
+        await page.waitForSelector('[role="dialog"] svg[role="img"]', { timeout: 10_000 }).catch(() => {});
+        await page.waitForTimeout(250);
+        const open = await page.evaluate(readLimitsChart);
+        must(open.hasChart, `${tag}: no chart drawn`);
+        must(open.header === `${account.engine === "claude" ? "Claude" : "Codex"} · ${account.label}`, `${tag}: the header reads «${open.header}»`);
+        must(open.known === account.known && open.estimated === account.estimated, `${tag}: ${open.known} solid and ${open.estimated} dashed spans, expected ${account.known} and ${account.estimated}`);
+        must(!/No history yet|Історії ще немає/.test(open.text), `${tag}: the dialog says there is no history`);
+        must(Boolean(open.readout), `${tag}: no readout`);
+        /* The legend keys only the lines the chart draws: the remaining key needs a solid reading, the even-pace key a known window. */
+        must(account.known > 0 ? open.keys.actual !== null && open.keys.actual.dash === null : open.keys.actual === null, `${tag}: the remaining key reads ${JSON.stringify(open.keys.actual)} with ${account.known} solid runs`);
+        must(account.state === "none" ? open.keys.ideal === null : open.keys.ideal?.dash === "4 3", `${tag}: the even-pace key reads ${JSON.stringify(open.keys.ideal)}, not the chart's 4 3 dash`);
+        /* A dashed level is a line inside the plot: clear of the frame's top and bottom edge, never drawn on it. */
+        const levelGap = await page.evaluate(() => {
+          const frame = document.querySelector('[role="dialog"] svg[role="img"] rect')?.getBoundingClientRect();
+          const lines = [...document.querySelectorAll('[role="dialog"] svg[role="img"] [data-burndown-estimated]')].map((node) => node.getBoundingClientRect());
+          return frame && lines.length ? { top: Math.min(...lines.map((r) => r.top - frame.top)), bottom: Math.min(...lines.map((r) => frame.bottom - r.bottom)) } : null;
+        });
+        if (account.estimated > 0) must(levelGap !== null && levelGap.top >= 4 && levelGap.bottom >= 4, `${tag}: a dashed span sits on the plot frame ${JSON.stringify(levelGap)}`);
+        /* The no-reading note keeps «100%» on the line of the word before it. */
+        if (account.state === "none") {
+          const glued = await page.evaluate(() => {
+            const readout = document.querySelector('[role="dialog"] [data-burndown-readout]');
+            const walker = document.createTreeWalker(readout!, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+              const text = node.textContent ?? "";
+              const at = text.indexOf("100%");
+              if (at < 0) continue;
+              const range = document.createRange();
+              range.setStart(node, text.lastIndexOf(" ", at - 1) + 1);
+              range.setEnd(node, at + 4);
+              return range.getClientRects().length === 1;
+            }
+            return false;
+          });
+          must(glued, `${tag}: «100%» wraps onto a line of its own`);
+        }
+        must(account.estimated === 0 ? open.keys.estimated === null : open.keys.estimated?.dash === "2 3" && open.keys.estimated.width >= 12, `${tag}: the estimated key reads ${JSON.stringify(open.keys.estimated)} with ${account.estimated} dashed spans`);
+        must(!open.readoutCovered, `${tag}: another element covers the readout`);
+        must(open.contrast !== null && open.contrast >= 4.5, `${tag}: readout contrast ${open.contrast}`);
+        must(open.pageOverflowX <= 0, `${tag}: the page overflows sideways by ${open.pageOverflowX}px`);
+        if (open.dialog) {
+          must(open.dialog.x >= 0 && open.dialog.y >= 0 && open.dialog.x + open.dialog.w <= open.viewport.w && open.dialog.y + open.dialog.h <= open.viewport.h,
+            `${tag}: dialog ${JSON.stringify(open.dialog)} leaves the ${open.viewport.w}×${open.viewport.h} viewport`);
+          for (const r of open.readoutRects) must(r.x >= open.dialog.x - 1 && r.x + r.w <= open.dialog.x + open.dialog.w + 1 && r.y >= 0 && r.y + r.h <= open.viewport.h, `${tag}: a readout line at ${JSON.stringify(r)} is cut`);
+        } else must(false, `${tag}: no dialog`);
+        const key = account.state === "none" ? "burndown.noReading" : account.state === "reset" ? "burndown.resetSince" : account.state === "stale" ? "burndown.leftEstimated" : "burndown.left";
+        const stem = translate(shot.lang, key, { pct: "\u0001", at: "\u0001" }).split("\u0001").map((part) => part.trim()).sort((x, y) => y.length - x.length)[0]!;
+        must(Boolean(open.readout?.includes(stem)), `${tag}: the readout «${open.readout}» lacks «${stem}»`);
+        await page.screenshot({ path: path.join(OUT_DIR, `limits-chart-${tag}.png`) });
+        /* The tab a state names: the fresh 5h window draws, a plan with no 5h window says so. */
+        if (account.state === "fresh-5h" || account.state === "no-5h") {
+          await page.locator('[role="dialog"] [role="tab"]').nth(1).click();
+          await page.waitForTimeout(150);
+          const session = await page.evaluate(readLimitsChart);
+          if (account.state === "fresh-5h") must(session.known === 1 && session.estimated === 0, `${tag}: the 5h tab draws ${session.known} solid and ${session.estimated} dashed spans`);
+          else must(!session.hasChart && /5h|5 год/.test(session.text), `${tag}: the 5h tab does not name the missing window`);
+          await page.screenshot({ path: path.join(OUT_DIR, `limits-chart-${tag}-5h.png`) });
+        }
+        report[tag] = open;
+        await page.keyboard.press("Escape");
+        await page.waitForSelector('[role="dialog"] svg[role="img"]', { state: "detached", timeout: 5_000 }).catch(() => {});
+      }
+      await context.close();
+    }
+    must(historyRequests.length > 0 && historyRequests.every((request) => /^\/api\/limits\/history\?engine=(claude|codex)&account=[a-z-]+$/.test(request)), `history requests: ${JSON.stringify([...new Set(historyRequests)])}`);
+    report.historyRequests = [...new Set(historyRequests)];
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    await stop(server);
+  }
+  report.failures = failures;
+  fs.writeFileSync(path.join(OUT_DIR, "limits-chart.json"), JSON.stringify(report, null, 2) + "\n", "utf8");
+  console.log(`limits-chart measurements: ${path.join(OUT_DIR, "limits-chart.json")}`);
+  if (failures.length) {
+    process.exitCode = 1;
+    console.error(`limits-chart acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
+  } else {
+    console.log("limits-chart acceptance passed at 1440, 1360 and 1280 wide.");
+  }
+}
+
+/* ------------------------------------------------------------------------- */
 /* BOARD_CAPTURE_CASE=activity: the activity dashboard                         */
 /* ------------------------------------------------------------------------- */
 
@@ -8808,6 +9117,7 @@ else if (process.env.BOARD_CAPTURE_CASE === "activity-members") await activityMe
 else if (process.env.BOARD_CAPTURE_CASE === "activity-tokens") await activityTokensMain();
 else if (process.env.BOARD_CAPTURE_CASE === "lightbox") await lightboxMain();
 else if (process.env.BOARD_CAPTURE_CASE === "resources") await resourcesMain();
+else if (process.env.BOARD_CAPTURE_CASE === "limits-chart") await limitsChartMain();
 else if (process.env.BOARD_CAPTURE_CASE === "file-preview") await filePreviewMain();
 else if (process.env.BOARD_CAPTURE_CASE === "account-removal") await accountRemovalMain();
 else if (process.env.BOARD_CAPTURE_CASE === "claude-login") await claudeLoginMain();
