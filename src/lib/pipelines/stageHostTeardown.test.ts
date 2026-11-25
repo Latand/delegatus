@@ -39,7 +39,7 @@ mock.module("@/lib/conversation/actions", () => ({
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { procBackend } = await import("@/lib/proc");
 const { sessionKeyId } = await import("@/lib/agent/sessionKey");
-const { defaultPipelinePorts, stopPipelineStageAgent } = await import("./engine");
+const { defaultPipelinePorts, retirePipelineStageAgent, stopPipelineStageAgent } = await import("./engine");
 type RuntimeHostClient = import("@/lib/runtime/client").RuntimeHostClient;
 
 type Registry = InstanceType<typeof AgentRegistry>;
@@ -229,6 +229,57 @@ test("a queued kill whose operation terminally failed leaves the host still runn
 
   expect(result).toEqual({ outcome: "failed", error: "host process did not exit" });
   setAgentRegistryForTests(null);
+});
+
+test.each(["idle-retirement-deferred", "structured host termination is unavailable"] as const)(
+  "a proven no-effect idle stop (%s) gets a fresh operation at the same writer revision",
+  async reason => {
+    const fixture = hostedConversation();
+    const { terminalIdleStopKey } = await import("./stageControlCustody");
+    const recorded = { ...target(fixture.conversationId, fixture.path), launchId: fixture.launchId };
+    const ownerKey = terminalIdleStopKey(recorded);
+    const operationIds: string[] = [];
+    let statusReads = 0;
+    let sessionReads = 0;
+    let activeTurn = false;
+    const onlyIfIdle = { revision: 7, writerClaim: "fixture:writer" };
+    const client = {
+      readSession: async () => {
+        sessionReads++;
+        return { conversationId: fixture.conversationId, sessionKey: fixture.key, host: "hosted",
+          turn: activeTurn ? "running" : "idle", activeTurnId: activeTurn ? "fixture-turn" : null,
+          attentionIds: [], retirementBlocked: false, writerClaim: onlyIfIdle.writerClaim,
+          artifactPath: fixture.path, revision: onlyIfIdle.revision };
+      },
+      operationStatus: async (operationId: string) => {
+        statusReads++;
+        return { operationId, receipt: { operationId, idempotencyKey: operationId, conversationId: fixture.conversationId,
+          kind: "kill", origin: "system", originAuthenticated: true, status: "failed",
+          reason, at: "fixture" }, replayed: false };
+      },
+    } as unknown as RuntimeHostClient;
+    const action = async (request: { operationId?: string }) => {
+      const operationId = request.operationId!;
+      operationIds.push(operationId);
+      if (operationIds.length === 1) return { status: 200, body: { ok: true, structured: true, operationId,
+        receipt: { status: "failed", reason } } };
+      fixture.registry.terminateStructuredHost(fixture.key);
+      return { status: 200, body: { ok: true, structured: true, operationId, receipt: { status: "delivered" } } };
+    };
+    try {
+      expect(await retirePipelineStageAgent(recorded, { operationId: ownerKey, client, action })).toEqual({ outcome: "deferred" });
+      activeTurn = true;
+      expect(await retirePipelineStageAgent(recorded, { operationId: ownerKey, client, action })).toEqual({ outcome: "deferred" });
+      expect(operationIds).toHaveLength(1);
+      expect(await defaultPipelinePorts().stageHostResident(recorded)).toBe(true);
+      activeTurn = false;
+      expect(await retirePipelineStageAgent(recorded, { operationId: ownerKey, client, action })).toEqual({ outcome: "stopped" });
+      expect(statusReads).toBeGreaterThanOrEqual(2);
+      expect(sessionReads).toBe(3);
+      expect(operationIds).toHaveLength(2);
+      expect(operationIds[0]).not.toBe(operationIds[1]);
+      expect(await defaultPipelinePorts().stageHostResident(recorded)).toBe(false);
+    } finally { setAgentRegistryForTests(null); }
 });
 
 test("queued stop confirmation gives each status read only its remaining budget", async () => {

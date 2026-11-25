@@ -47,7 +47,7 @@ test.skipIf(process.platform !== "linux")("a thousand roots progress through rea
     let removed = 0, ticks = 0, completedPasses = 0;
     worker = realParentWorker(true, 5000);
     for (; ticks < maxTicks && performance.now() < until; ticks++) {
-      fs.writeFileSync(config, JSON.stringify({ now: NOW + ticks * 105_000, freeBytes: 1e12, realClock: true, tickClock: true, measureCost: 0,
+      fs.writeFileSync(config, JSON.stringify({ pressureInventory: true, now: NOW + ticks * 105_000, freeBytes: 1e12, realClock: true, tickClock: true, measureCost: 0,
         ...(ticks === 0 ? { stallMeasurement: "llv-stage-000998" } : {}) }));
       // Exercise a cold owner after the actual deadline cut and midway through
       // the inventory; the remaining ticks use production warm continuations.

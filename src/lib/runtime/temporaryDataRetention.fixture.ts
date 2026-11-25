@@ -2,8 +2,9 @@ import { TemporaryDataStore } from "./temporaryDataStore";
 import { sweepTemporaryData } from "./temporaryDataRetention";
 import fs from "node:fs";
 import { attemptTempJournalPath } from "@/lib/tempSweep";
+import { cleanerJournal } from "@/lib/cleaner/diskJournal";
 
-const [filename, mode, time] = process.argv.slice(2);
+const [filename, mode, time, pass] = process.argv.slice(2);
 const store = new TemporaryDataStore(filename!);
 if (mode === "production-recover") {
   Date.now = () => Number(time);
@@ -27,7 +28,7 @@ if (mode === "crash-before-rename" || mode === "crash-after-restore") {
     }
   };
 }
-if (mode === "crash-after-remove") {
+if (mode === "crash-after-remove" || mode === "cleaner-recover-after-audit") {
   const journal = attemptTempJournalPath(store.due(Number(time))[0]!.directory), unlink = fs.unlinkSync;
   fs.unlinkSync = file => { if (String(file) === journal) { process.stdout.write("removed\n"); process.exit(0); } return unlink(file); };
 }
@@ -39,10 +40,12 @@ try {
       return { expiresAt: mode === "recover-held" || mode === "crash-after-restore" ? null : Number(time) - 1, reason: "open-lane", revision: "fixture", current: () => true };
     },
     references: async (row, current) => {
-      if (mode === "crash" && current !== row.directory) { process.stdout.write("quarantined\n"); process.exit(0); }
+      if ((mode === "crash" || mode === "cleaner-crash") && current !== row.directory) { process.stdout.write("quarantined\n"); process.exit(0); }
       if (mode === "references-error") throw new Error("references-unavailable");
       return mode !== "references-held";
     },
+    taskReferences: () => mode === "task-held",
+    ...(pass ? { mode: "on", cleaner: { id: pass, allowed: () => true, journal: cleanerJournal(pass, "evidence"), processClear: () => true } } : {}),
   });
   process.stdout.write(JSON.stringify(report));
 } finally { store.close(); }

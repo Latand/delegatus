@@ -37,12 +37,45 @@ Release and the terminal change feed record a scratch deadline from confirmed
 completion. Stage scratch becomes due strictly after 24 hours, including
 under pressure. Roots marked retain-until-close use the lane's finish clock.
 An independent 128-root metadata audit repairs older ledger entries without
-reading directory contents. Its durable cursor also visits open lanes.
+reading directory contents. It visits open lanes and standalone launches.
+Allocation measurement cannot use the audit's share of the preparation budget.
+A change-feed gap wakes the audit. An audit already in progress finishes its
+current page sequence and starts another to cover earlier keys. The feed
+resumes above the retained history floor.
 Ownership revisions and root bindings are checked again after awaited reads.
 Schema and index creation uses `assertStateStartupMutation`.
 
-The ordinary tick selects up to 32 due roots by recorded expiry. Under
-pressure a durable cursor visits expired roots in allocation order.
+The ordinary tick selects up to 32 due roots in expiry and directory order.
+It checkpoints each visit before awaiting the root so successive ticks reach
+the rest of the backlog, even when earlier roots are ready to retry. A root
+that would get a partial window after another visit starts on the next tick.
+The cursor wraps after the due range ends.
+An independent allocation queue visits up to four registered roots per tick
+within a five-second preparation window inside the 40-second root tick.
+Live roots and roots with zero allocation or measurements at least an hour
+old remain measurable during retirement backoff.
+Absent paths, replaced inodes and refused observations advance that queue.
+An absent path with surviving quarantine custody keeps its recorded allocation
+until recovery resolves it. A removal visit that uses recorded bytes leaves the
+last measurement time available to the allocation queue.
+The disk watch sends pressure-triggered retirement through the leased Cleaner
+pass. That pass visits registered roots in directory order, 16 per page, and
+measures each visited root. A pass outside the Cleaner lease orders its
+inventory by the recorded ledger size, which can be stale; every visit still
+measures the root again. The inventory is built a page at a time across ticks,
+never in one transaction, and a tick whose budget is spent builds none of it.
+A root is admitted only when its canonical parent is the real scratch
+namespace or the real config namespace: a parent redirected through a symlink
+(for example into the backups directory) holds the root under a reason code at
+registration and at every dispatch.
+A process whose working directory lies under `/proc` (a sandboxed browser
+renderer keeps one inside the entry of an exited helper) or no longer exists
+names no checkout and holds no root; its open files, command line and any
+working directory inside the root still count. A discovery recorded earlier
+for a live process stays, so the final dispatch fence still sees a change.
+A removal reports the filesystem space it freed apart from the root's
+attributed ledger bytes, so a stale ledger value neither shrinks nor inflates
+the reclaim figure.
 Temporary preservation holds suppress the allocation forecast while
 retaining the owner's deadline. That date nominates a future visit.
 Identity, live consumers, check custody, keep markers and ownership fence
@@ -52,9 +85,9 @@ and any ledger retry time. See [Attempt temp under disk pressure](attempt-temp-p
 The effective scratch cap is the smaller of its configured cap and half the
 sum of measured scratch allocation and available filesystem space, leaving at
 least the existing 20 GiB working reserve. With 80 GiB of scratch and 75 GiB
-free, the effective cap is 77.5 GiB. Pressure cleanup can retire expired
-scratch without making another evidence copy. A failed free-space
-observation is reported and preserves the configured cap.
+free, the effective cap is 77.5 GiB. This cap and the working reserve are
+reported by the ordinary tick. A failed free-space observation preserves
+the configured cap.
 
 ## Finished host event journals
 

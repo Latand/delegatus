@@ -246,9 +246,8 @@ test.each([["en", "Claude Code cloud", "Local after Claude Code cloud failure: m
   expect(draw(undefined, "header").querySelector("[data-stage-place]")).toBeNull();
 });
 
-test("Neon draws the periodic-table Ne tile across all five states and falls back for other Antigravity models", () => {
+test("Neon draws the periodic-table Ne tile across all five states", () => {
   const neon = { engine: "antigravity", model: "gemini-4-neon" };
-  const argon = { engine: "antigravity", model: "gemini-4-argon" };
   const host = mount(
     <>
       <StageGlyph state="running" model={neon} motion="ordinary" fallback="mark" />
@@ -257,7 +256,6 @@ test("Neon draws the periodic-table Ne tile across all five states and falls bac
       <StageGlyph state="failed" model={neon} fallback="mark" />
       <StageGlyph state="needs_decision" model={neon} fallback="mark" />
       <StageGlyph state="running" model={neon} motion="still" fallback="mark" />
-      <StageGlyph state="running" model={argon} motion="ordinary" fallback="mark" />
     </>,
   );
   const glyphs = [...host.querySelectorAll<HTMLElement>(".mglyph")];
@@ -273,8 +271,69 @@ test("Neon draws the periodic-table Ne tile across all five states and falls bac
   expect(glyphs[0]!.querySelector("rect.mg-neon-gas")).not.toBeNull();
   expect(glyphs[0]!.querySelectorAll(".mg-neon-num")).toHaveLength(2);
   expect(glyphs[0]!.querySelector("path.mg-neon-sym")).not.toBeNull();
-  /* Other Antigravity models keep the host fallback mark. */
+  expect(host.querySelectorAll(".pmark")).toHaveLength(0);
+});
+
+/* The Antigravity catalogue, drawn: every model has its own glyph in all five
+   states, and only an uncatalogued id keeps the host's mark. */
+const AGY_GLYPHS: ReadonlyArray<readonly [model: string, kind: string]> = [
+  ["gemini-4-neon", "neon"], ["gemini-4-argon", "argon"], ["gemini-4-hydrogen", "hydrogen"], ["gemini-3.8-flash", "flash"],
+  ["claude-opus-5-5", "opus"], ["claude-sonnet-5-5", "sonnet"], ["gpt-oss-120b-medium", "oss"],
+  ["gemini-pro-orchestrator-neon", "orch-neon"], ["gemini-pro-orchestrator-g1-pro", "orch-argon"],
+];
+
+test("every Antigravity model draws its own glyph in the five states, and an unknown id keeps the mark", () => {
+  const states = [
+    ["running", "ordinary", "running", true, false], ["pending", "waiting", "waiting", false, false], ["passed", "still", "passed", false, true],
+    ["failed", "still", "failed", false, true], ["needs_decision", "still", "needs", false, true],
+  ] as const;
+  const host = mount(
+    <>
+      {AGY_GLYPHS.map(([model]) => states.map(([state, motion]) => (
+        <StageGlyph key={`${model}-${state}`} state={state} model={{ engine: "antigravity", model }} motion={motion} fallback="mark" />
+      )))}
+      <StageGlyph state="running" model={{ engine: "antigravity", model: "gemini-9-krypton" }} motion="ordinary" fallback="mark" />
+    </>,
+  );
+  const glyphs = [...host.querySelectorAll<HTMLElement>(".mglyph")];
+  expect(glyphs).toHaveLength(AGY_GLYPHS.length * states.length);
+  AGY_GLYPHS.forEach(([, kind], row) => states.forEach(([, , reading, live, badge], column) => {
+    const glyph = glyphs[row * states.length + column]!;
+    expect([glyph.dataset.glyph, glyph.dataset.glyphEngine, glyph.dataset.glyphState, glyph.dataset.live === "1", Boolean(glyph.querySelector(".mg-badge"))]).toEqual([kind, "antigravity", reading, live, badge]);
+    expect(glyph.querySelector("svg")!.children.length).toBeGreaterThan(0);
+  }));
   expect(host.querySelectorAll(".pmark")).toHaveLength(1);
+  /* The seven Antigravity-only drawings differ from each other and from the Claude glyphs they sit beside. */
+  const drawn = new Map<string, string>();
+  for (const glyph of glyphs) drawn.set(glyph.dataset.glyph!, glyph.querySelector("svg")!.innerHTML.replace(/id="[^"]*"|url\(#[^)]*\)/g, ""));
+  expect(new Set(drawn.values()).size).toBe(AGY_GLYPHS.length);
+});
+
+test("the element cells keep their own frame and symbol, and an orchestrator adds a cue to its base element's cell", () => {
+  const draw = (model: string) => mount(<StageGlyph state="running" model={{ engine: "antigravity", model }} motion="still" fallback="mark" />).querySelector(".mglyph")!;
+  const symbol = (glyph: Element) => glyph.querySelector("path.mg-neon-sym")!.getAttribute("d");
+  for (const model of ["gemini-4-neon", "gemini-4-argon", "gemini-4-hydrogen"]) {
+    const glyph = draw(model);
+    expect(glyph.classList.contains("g-cell")).toBe(true);
+    expect(glyph.querySelector("rect.mg-tile")).not.toBeNull();
+    expect(glyph.querySelector("rect.mg-neon-gas")).not.toBeNull();
+    expect(glyph.querySelector(".mg-cue")).toBeNull();
+  }
+  expect(new Set(["gemini-4-neon", "gemini-4-argon", "gemini-4-hydrogen"].map((model) => symbol(draw(model)))).size).toBe(3);
+  expect(symbol(draw("gemini-pro-orchestrator-neon"))).toBe(symbol(draw("gemini-4-neon")));
+  expect(symbol(draw("gemini-pro-orchestrator-g1-pro"))).toBe(symbol(draw("gemini-4-argon")));
+  for (const model of ["gemini-pro-orchestrator-neon", "gemini-pro-orchestrator-g1-pro"]) {
+    expect(draw(model).querySelectorAll(".mg-cue circle")).toHaveLength(3);
+  }
+  expect(draw("gemini-3.8-flash").classList.contains("g-cell")).toBe(false);
+  expect(draw("gpt-oss-120b-medium").querySelector("path.mg-ring")).not.toBeNull();
+});
+
+test("every Antigravity glyph's accessible name is the catalogue label", () => {
+  for (const [model, label] of [["gemini-4-hydrogen", "Gemini 4 Hydrogen"], ["gemini-3.8-flash", "Gemini 3.8 Flash"], ["gpt-oss-120b-medium", "GPT-OSS 120B (Medium)"], ["gemini-pro-orchestrator-g1-pro", "Orchestrator (Argon)"], ["claude-sonnet-5-5", "Claude Sonnet 5.5"]] as const) {
+    const named = <StageGlyph state="running" model={{ engine: "antigravity", model }} motion="ordinary" fallback="dot" named />;
+    expect(mount(named).querySelector("[role=img]")!.getAttribute("aria-label")).toBe(`${label}: running`);
+  }
 });
 
 test("Neon glyph carries the catalogue label in en and uk, and StageIdentity omits the engine mark only when the glyph draws", () => {
@@ -288,7 +347,7 @@ test("Neon glyph carries the catalogue label in en and uk, and StageIdentity omi
   const host = mount(
     <>
       <span data-case="neon-glyph"><StageIdentity identity={identity("gemini-4-neon")} density="node" glyph /></span>
-      <span data-case="argon-fallback"><StageIdentity identity={identity("gemini-4-argon")} density="node" glyph /></span>
+      <span data-case="argon-fallback"><StageIdentity identity={identity("gemini-9-krypton")} density="node" glyph /></span>
       <span data-case="alone"><StageIdentity identity={identity("gemini-4-neon")} density="node" /></span>
     </>,
   );
@@ -296,7 +355,7 @@ test("Neon glyph carries the catalogue label in en and uk, and StageIdentity omi
   expect([mark("neon-glyph"), mark("argon-fallback"), mark("alone")]).toEqual([null, "antigravity", "antigravity"]);
 });
 
-test("Neon places its settled status badge top-right while other model glyphs keep theirs bottom-right", () => {
+test("every periodic-table cell places its settled status badge top-right while other model glyphs keep theirs bottom-right", () => {
   const style = document.createElement("style");
   style.textContent = fs.readFileSync(path.join(import.meta.dir, "modelGlyph.css"), "utf8");
   document.head.append(style);
@@ -304,6 +363,9 @@ test("Neon places its settled status badge top-right while other model glyphs ke
     const neon = { engine: "antigravity", model: "gemini-4-neon" };
     const host = mount(
       <>
+        <span data-case="argon-passed"><StageGlyph state="passed" model={{ engine: "antigravity", model: "gemini-4-argon" }} fallback="mark" /></span>
+        <span data-case="orch-failed"><StageGlyph state="failed" model={{ engine: "antigravity", model: "gemini-pro-orchestrator-neon" }} fallback="mark" /></span>
+        <span data-case="flash-passed"><StageGlyph state="passed" model={{ engine: "antigravity", model: "gemini-3.8-flash" }} fallback="mark" /></span>
         <span data-case="neon-passed"><StageGlyph state="passed" model={neon} fallback="mark" /></span>
         <span data-case="neon-failed"><StageGlyph state="failed" model={neon} fallback="mark" /></span>
         <span data-case="neon-needs"><StageGlyph state="needs_decision" model={neon} fallback="mark" /></span>
@@ -313,14 +375,14 @@ test("Neon places its settled status badge top-right while other model glyphs ke
       </>,
     );
 
-    for (const key of ["neon-passed", "neon-failed", "neon-needs"]) {
-      const badge = host.querySelector<HTMLElement>(`[data-case="${key}"] .mglyph.g-neon .mg-badge`);
-      expect(badge, `${key} renders .mg-badge inside .mglyph.g-neon`).not.toBeNull();
+    for (const key of ["neon-passed", "neon-failed", "neon-needs", "argon-passed", "orch-failed"]) {
+      const badge = host.querySelector<HTMLElement>(`[data-case="${key}"] .mglyph.g-cell .mg-badge`);
+      expect(badge, `${key} renders .mg-badge inside .mglyph.g-cell`).not.toBeNull();
       const computed = window.getComputedStyle(badge!);
       expect([computed.top, computed.right, computed.bottom], `${key} top-right badge`).toEqual(["-4px", "-4px", "auto"]);
     }
 
-    for (const key of ["sol-passed", "terra-failed", "haiku-needs"]) {
+    for (const key of ["sol-passed", "terra-failed", "haiku-needs", "flash-passed"]) {
       const badge = host.querySelector<HTMLElement>(`[data-case="${key}"] .mglyph .mg-badge`);
       expect(badge, `${key} renders .mg-badge`).not.toBeNull();
       const computed = window.getComputedStyle(badge!);

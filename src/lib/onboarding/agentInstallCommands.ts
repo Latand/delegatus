@@ -18,3 +18,14 @@ export const AGENT_INSTALL_COMMANDS: Record<"claude" | "codex", { command: strin
     segments: ["curl -fsSL ", "https://chatgpt.com/", "codex/", "install.sh | sh"],
   },
 };
+
+/**
+ * The Antigravity CLI's installer, from Google's install page. Kept out of
+ * `AGENT_INSTALL_COMMANDS` because that table is held equal to `delegatus
+ * start`'s message, and `agy` is an optional engine that message does not
+ * install.
+ */
+export const ANTIGRAVITY_INSTALL_COMMAND: { command: string; segments: readonly string[] } = {
+  command: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+  segments: ["curl -fsSL ", "https://antigravity.google/", "cli/", "install.sh | bash"],
+};
