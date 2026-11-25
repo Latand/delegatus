@@ -378,6 +378,10 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     return false;
   }
   const previous = row.provisioningJob;
+  const { signal } = handle.abort;
+  const stalePlan = previous?.planSubject !== undefined && previous.planSubject !== planSubject(row);
+  let heldAddFence: ProvisioningGrant | undefined;
+  let recoveredAddFence: ProvisioningGrant | undefined;
   if (subject(row) !== handle.subject || (previous?.subject !== undefined && previous.subject !== handle.subject) || !eligible(row)) {
     if (!validProvisioningRecord(previous)) return false;
     const abort = new AbortController();
@@ -447,48 +451,102 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     }
   }
   if (claimed && expired) {
-    const reason = previous.admittedAdd ? "checkout-writer-unverified" : wall >= previous.executionDeadlineAt
-      ? "provision-execution-budget-exhausted" : "provision-step-timeout";
-    const earlier = transientWait(row, previous.admittedAdd);
-    const retryBudget = earlier?.budgetMs ?? RETRY_MS;
-    const spent = earlier ? retryTimeUsed(earlier, wall, previous.retryPausedAt)
-      + (previous.retryPausedAt === undefined ? 0 : Math.ceil(clock.monotonicMs() - claimObservedMono)) : 0;
-    const remaining = retryBudget - spent;
-    const rounds = earlier?.rounds ?? 0, retryMaxMs = earlier?.retryMaxMs ?? 60_000;
-    const retryAt = wall + Math.min(5_000 * 2 ** rounds, retryMaxMs, Math.max(1, remaining));
-    const nextRetry: PipelineBoundedWait | undefined = remaining > 0
-      ? { startedAt: earlier?.startedAt ?? asDate(wall - spent), rounds: rounds + 1, retryAfter: asDate(retryAt),
-        budgetMs: retryBudget, retryMaxMs } : undefined;
-    const transitioned = await withProvisioningCheckpoint(tx => {
-      const current = tx.get(id);
-      const saved = current?.provisioningJob;
-      if (!current || !eligible(current) || subject(current) !== handle.subject || saved?.token !== previous.token
-        || saved.deadlineAt !== previous.deadlineAt || saved.executionDeadlineAt !== previous.executionDeadlineAt
-        || (saved.status !== "running" && saved.status !== "awaitingApply")) return false;
-      current.provisioningJob = remaining > 0
-        ? { ...saved, token: randomUUID(), status: "waiting", retryAt,
-          ...(saved.admittedAdd && nextRetry ? { admittedAdd: { ...saved.admittedAdd, previousWait: nextRetry } } : {}),
-          waitReason: reason,
-          interruption: saved.interruption ?? { step: saved.step, since: saved.since, deadlineAt: saved.deadlineAt, observedAt: wall, reason } }
-        : { ...saved, token: randomUUID(), status: "parked", retryAt: undefined,
-          waitReason: "provision-retry-window-exhausted",
-          interruption: saved.interruption ?? { step: saved.step, since: saved.since, deadlineAt: saved.deadlineAt,
-            observedAt: wall, reason: "provision-retry-window-exhausted" } };
-      if (!remaining) current.state = "needs_decision";
-      current.stateDetail = remaining > 0 ? `provisioning deferred: ${reason}`
-        : `${reason}; provision-retry-window-exhausted; inspect the last provisioning step and retry-stage`;
-      tx.put(current);
-      return true;
-    }, 500);
-    if (transitioned && remaining > 0) schedule(pool, retryAt, clock, ports);
-    if (transitioned && remaining <= 0) {
-      const parked = await findControllerPipeline(id);
-      if (parked) hooks.parked(parked);
-      requestPipelineTick();
+    if (previous.admittedAdd && !stalePlan) {
+      const add = previous.admittedAdd;
+      const custodyDeadline = add.since + PROVISION_STEPS.waitingForCheckoutWriter;
+      const fence = await tryProvisioningLock(root, "add", add.stripe, git.native, signal, grant => { recoveredAddFence = grant; });
+      if (fence) {
+        // The original writer has released its lock. Keep this proof through
+        // checkout repair and receipt consumption; a second add may not race
+        // into the gap between the probe and verification.
+        heldAddFence = fence;
+        expired = false;
+      } else {
+        const reason = "checkout-writer-unverified";
+        const earlier = transientWait(row, add);
+        const retryBudget = earlier?.budgetMs ?? RETRY_MS;
+        const spent = earlier ? retryTimeUsed(earlier, wall, previous.retryPausedAt)
+          + (previous.retryPausedAt === undefined ? 0 : Math.ceil(clock.monotonicMs() - claimObservedMono)) : 0;
+        const remaining = retryBudget - spent;
+        const rounds = earlier?.rounds ?? 0, retryMaxMs = earlier?.retryMaxMs ?? 60_000;
+        const retryAt = wall + Math.min(5_000 * 2 ** rounds, retryMaxMs, Math.max(1, remaining), Math.max(1, custodyDeadline - wall));
+        const waitReason = wall >= custodyDeadline ? reason
+          : remaining <= 0 ? "provision-retry-window-exhausted" : reason;
+        const waiting = wall < custodyDeadline && remaining > 0;
+        const nextRetry: PipelineBoundedWait | undefined = waiting
+          ? { startedAt: earlier?.startedAt ?? asDate(wall - spent), rounds: rounds + 1,
+            retryAfter: asDate(retryAt), budgetMs: retryBudget, retryMaxMs } : undefined;
+        const transitioned = await withProvisioningCheckpoint(tx => {
+          const current = tx.get(id);
+          const saved = current?.provisioningJob;
+          if (!current || !eligible(current) || subject(current) !== handle.subject || saved?.token !== previous.token
+            || saved.deadlineAt !== previous.deadlineAt || saved.executionDeadlineAt !== previous.executionDeadlineAt
+            || (saved.status !== "running" && saved.status !== "awaitingApply")) return false;
+          current.provisioningJob = {
+            ...saved,
+            token: randomUUID(),
+            step: "waitingForCheckoutWriter",
+            since: add.since,
+            deadlineAt: custodyDeadline,
+            status: waiting ? "waiting" : "parked",
+            retryAt: waiting ? retryAt : undefined,
+            retryPausedAt: wall,
+            admittedAdd: nextRetry ? { ...add, previousWait: nextRetry } : add,
+            waitReason,
+            interruption: { step: "waitingForCheckoutWriter", since: add.since, deadlineAt: custodyDeadline,
+              observedAt: wall, reason: waitReason },
+          };
+          if (!waiting) current.state = "needs_decision";
+          current.stateDetail = waiting ? `provisioning deferred: ${reason}` : waitReason;
+          tx.put(current);
+          return true;
+        }, 500);
+        if (transitioned && waiting) schedule(pool, retryAt, clock, ports);
+        if (transitioned && !waiting) {
+          const parked = await findControllerPipeline(id);
+          if (parked) hooks.parked(parked);
+          requestPipelineTick();
+        }
+        return transitioned;
+      }
     }
-    return transitioned;
+    if (expired && !previous.admittedAdd) {
+      const reason = wall >= previous.executionDeadlineAt ? "provision-execution-budget-exhausted" : "provision-step-timeout";
+      const earlier = transientWait(row, previous.admittedAdd);
+      const retryBudget = earlier?.budgetMs ?? RETRY_MS;
+      const spent = earlier ? retryTimeUsed(earlier, wall, previous.retryPausedAt)
+        + (previous.retryPausedAt === undefined ? 0 : Math.ceil(clock.monotonicMs() - claimObservedMono)) : 0;
+      const remaining = retryBudget - spent;
+      const rounds = earlier?.rounds ?? 0, retryMaxMs = earlier?.retryMaxMs ?? 60_000;
+      const retryAt = wall + Math.min(5_000 * 2 ** rounds, retryMaxMs, Math.max(1, remaining));
+      const transitioned = await withProvisioningCheckpoint(tx => {
+        const current = tx.get(id);
+        const saved = current?.provisioningJob;
+        if (!current || !eligible(current) || subject(current) !== handle.subject || saved?.token !== previous.token
+          || saved.deadlineAt !== previous.deadlineAt || saved.executionDeadlineAt !== previous.executionDeadlineAt
+          || (saved.status !== "running" && saved.status !== "awaitingApply")) return false;
+        current.provisioningJob = remaining > 0
+          ? { ...saved, token: randomUUID(), status: "waiting", retryAt, waitReason: reason,
+            interruption: saved.interruption ?? { step: saved.step, since: saved.since, deadlineAt: saved.deadlineAt, observedAt: wall, reason } }
+          : { ...saved, token: randomUUID(), status: "parked", retryAt: undefined,
+            waitReason: "provision-retry-window-exhausted",
+            interruption: saved.interruption ?? { step: saved.step, since: saved.since, deadlineAt: saved.deadlineAt,
+              observedAt: wall, reason: "provision-retry-window-exhausted" } };
+        if (!remaining) current.state = "needs_decision";
+        current.stateDetail = remaining > 0 ? `provisioning deferred: ${reason}`
+          : `${reason}; provision-retry-window-exhausted; inspect the last provisioning step and retry-stage`;
+        tx.put(current);
+        return true;
+      }, 500);
+      if (transitioned && remaining > 0) schedule(pool, retryAt, clock, ports);
+      if (transitioned && remaining <= 0) {
+        const parked = await findControllerPipeline(id);
+        if (parked) hooks.parked(parked);
+        requestPipelineTick();
+      }
+      return transitioned;
+    }
   }
-  const { signal } = handle.abort;
   const priorRetry = transientWait(row, previous?.admittedAdd);
   let slot: ProvisioningRecord = {
     ...previous, version: 1, kind: "provision", subject: handle.subject, planSubject: planSubject(row), generation: (previous?.generation ?? 0) + 1,
@@ -501,7 +559,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
   if (claimed && expired && !slot.interruption) {
     slot.interruption = { step: previous.step, since: previous.since, deadlineAt: previous.deadlineAt, observedAt: wall, reason: "provision-step-timeout" };
   }
-  const stale = previous?.planSubject !== undefined && previous.planSubject !== slot.planSubject;
+  const stale = stalePlan;
   if (stale) {
     if (previous?.admittedAdd || previous?.worker) return false;
     delete slot.plan;
@@ -524,6 +582,7 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
     if (signal.aborted) grant.close();
     else grants.add(grant);
   };
+  if (recoveredAddFence) own(recoveredAddFence);
   const cleanup = () => {
     armed = undefined;
     cancelTimer?.();
@@ -643,7 +702,6 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
       : worktreeDiskWait(lane.repoDir, lane.worktreeDir, undefined, undefined, undefined, lane.stages.some(stage => stage.effectiveRole.engine === "claude"));
   };
   let checkoutStripe = 0;
-  let heldAddFence: ProvisioningGrant | undefined;
   let provedRepository: string | undefined;
   let provedCheckout: string | undefined;
   const lock = (kind: "checkout" | "repo" | "add", stripe: number) => tryProvisioningLock(root, kind, stripe, git.native, signal, own);
@@ -816,9 +874,9 @@ async function runProvisioningJob(id: string, root: string, ports: ProvisionPort
         prepareInterruptedIndexRepair: async () => {
           const add = slot.admittedAdd;
           if (!add) throw new Error("interrupted checkout repair has no admitted add custody");
-          const grant = await lock("add", add.stripe);
+          const grant = heldAddFence ?? await lock("add", add.stripe);
           if (!grant) throw deferAdd(add.since);
-          own(grant);
+          if (grant !== heldAddFence) own(grant);
           heldAddFence = grant;
           await dispatch("repair-index-lock");
         },
