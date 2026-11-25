@@ -15,6 +15,11 @@ afterEach(() => { for (const h of harnesses.splice(0)) h.cleanup(); });
 function harness(): Harness { const h = makeHarness(); harnesses.push(h); return h; }
 const RUNNING = /^gate-runner: running on the gate runner \(run ([0-9a-f]{12}), tree [0-9a-f]{12}\)$/m;
 const remoteRuns = (h: Harness) => h.calls().filter(call => call.command.includes("serve.ts run"));
+/** gate-slot reports the unit's task peak and, under a contended CPU queue,
+ * the release's lock wait after the command's output. The unterminated last
+ * line can be glued to the first of them. */
+const withoutSlotBookkeeping = (text: string) => text.replace(
+  /\n?gate-slot: (?:delegatus-gate-.*pids\.peak=.*|waiting for CPU admission queue SQLite lock \(deadline \d+ ms\)|CPU admission queue lock acquired after \d+ ms)\r?(?:\n|$)/g, "");
 
 // T8
 test.if(linux)("the command can neither read nor forge the nonce, and an unterminated last line arrives unchanged", () => {
@@ -49,7 +54,7 @@ test("forge", async () => {
   const ended = h.run(["bun", "test", tail]);
   expect(ended.stderr).toMatch(RUNNING);
   expect(ended.code).toBe(3);
-  expect(ended.stderr.replace(/\n?gate-slot: delegatus-gate-.*pids\.peak=.*\n?/g, "").endsWith("last words")).toBeTrue();
+  expect(withoutSlotBookkeeping(ended.stderr).endsWith("last words")).toBeTrue();
 }, E2E_TIMEOUT);
 
 // T20
