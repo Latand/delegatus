@@ -25,7 +25,7 @@ function tasks(): BoardTask[] {
 }
 afterEach(() => { saveTasks([]); clearSeatRoundsForTests(); });
 
-test("warm decision reads skip unrelated dismissals and keep each response detached across peer commits", () => {
+test("cold and warm decision reads skip unrelated dismissals and keep each response detached across peer commits", () => {
   const originalDir = process.env.LLV_STATE_DIR;
   const dir = fs.mkdtempSync(path.join(state, "dismissal-projection-"));
   process.env.LLV_STATE_DIR = dir;
@@ -45,22 +45,24 @@ test("warm decision reads skip unrelated dismissals and keep each response detac
     const read = () => readPrototypeReviews(task).rounds[0]!.hidden?.by;
     expect(read()).toEqual(author);
     dismissals.importLegacyAttentionDismissals();
-    const held = read();
+    let unrelatedCopies = 0;
+    const clone = globalThis.structuredClone;
+    function countedRead() {
+      try {
+        globalThis.structuredClone = (value, ...args) => {
+          const unrelatedRow = (row: unknown) => (row as { key?: string } | null)?.key === "d:other-0";
+          if (unrelatedRow(value) || (Array.isArray(value) && value.some(unrelatedRow)) || (value instanceof Map && value.has("other-0"))) unrelatedCopies++;
+          return clone(value, ...args);
+        };
+        return read();
+      } finally { globalThis.structuredClone = clone; }
+    }
+    const held = countedRead();
     expect(held).toEqual(author);
     if (held?.kind !== "manager") throw new Error("missing dismissal owner");
     held.via!.deputy = "client edit";
 
-    let unrelatedCopies = 0;
-    const clone = globalThis.structuredClone;
-    let fresh: ReturnType<typeof read>;
-    try {
-      globalThis.structuredClone = (value, ...args) => {
-        const unrelatedRow = (row: unknown) => (row as { key?: string } | null)?.key === "d:other-0";
-        if (unrelatedRow(value) || (Array.isArray(value) && value.some(unrelatedRow)) || (value instanceof Map && value.has("other-0"))) unrelatedCopies++;
-        return clone(value, ...args);
-      };
-      fresh = read();
-    } finally { globalThis.structuredClone = clone; }
+    const fresh = countedRead();
     expect(fresh).toEqual(author);
     const peer = new SqliteStateCollection<{ key: string; value: unknown }>(path.join(dir, "state.sqlite"), {
       collection: "attention_dismissals", schemaVersion: 1, busyMessage: "busy",
@@ -69,10 +71,10 @@ test("warm decision reads skip unrelated dismissals and keep each response detac
     try {
       // Even an ordinary dismissal can shadow a prototype subject through its path.
       peer.boundedPatch(1, tx => tx.put({ key: "d:alias-owner", value: { ...aliased, kind: undefined } }));
-      expect(read()).toBeUndefined();
+      expect(countedRead()).toBeUndefined();
       peer.boundedPatch(1, tx => tx.put({ key: "d:alias-owner", value: { ...aliased, restoredAt: at, restoredBy: { kind: "operator" } } }));
     } finally { peer.close(); }
-    expect(read()).toEqual({ kind: "operator" });
+    expect(countedRead()).toEqual({ kind: "operator" });
     expect(fresh).toEqual(author);
     expect(held.via!.deputy).toBe("client edit");
     expect(unrelatedCopies).toBe(0);

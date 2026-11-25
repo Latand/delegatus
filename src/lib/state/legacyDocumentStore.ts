@@ -122,8 +122,8 @@ export class LegacyDocumentStore<D> {
     });
   }
 
-  /** For projections determined entirely by stored rows. The ordered source changes on a
-   * collection commit or database replacement. Each caller owns its returned projection. */
+  /** fromRows and build must treat stored values as read-only. A collection commit or database
+   * replacement changes the ordered source. Each caller owns its returned projection. */
   existingIndex<V>(build: (document: D) => Map<string, V>): (filePath: string) => Map<string, V> {
     const indices = new WeakMap<readonly DocumentRow[], Map<string, V>>();
     return filePath => this.guard(() => {
@@ -132,8 +132,7 @@ export class LegacyDocumentStore<D> {
       const rows = this.open(database).loadReadonly();
       let index = indices.get(rows);
       if (!index) {
-        const detached = performanceSpans.sync("state.copy", () => rows.map(row => structuredClone(row)), rows.length);
-        index = build(this.options.fromRows(detached));
+        index = build(this.options.fromRows(rows));
         indices.set(rows, index);
       }
       return performanceSpans.sync("state.copy", () => structuredClone(index), index.size);
