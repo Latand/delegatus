@@ -780,6 +780,36 @@ test("a termination refused before its first effect withdraws its capture, and o
   expect(releasedByRuntime.effects).toEqual(["capture", "runtime-release", "first-effect", "retire"]);
 });
 
+test("runtime release checks synchronous authority after asynchronous refresh", async () => {
+  let runtimeAdmitted = false;
+  let authorized = true;
+  const outcome = await terminateStructuredHostTree(
+    ref({ pid: 6_009, startIdentity: "6009:start", sessionId: CLAUDE_SESSION }),
+    {
+      processIdentity: () => "6009:start",
+      pidAlive: () => true,
+      ppidMap: () => new Map(),
+      processGroupId: () => null,
+      protectedPids: () => new Set(),
+      authorizeAsync: async () => {
+        await Promise.resolve();
+        if (runtimeAdmitted) authorized = false;
+        return null;
+      },
+      authorize: () => authorized ? null : { status: 409, error: "authority lost during refresh" },
+      terminateOwnedHost: async (_key, _expected, authorize) => {
+        runtimeAdmitted = true;
+        expect(await authorize?.()).toMatchObject({ status: 409, error: "authority lost during refresh" });
+        return false;
+      },
+      signal: () => { throw new Error("unexpected signal"); },
+    },
+  );
+  expect(outcome).toMatchObject({ ok: false, status: 409, error: "authority lost during refresh" });
+  expect(outcome).not.toHaveProperty("stoppedVia");
+  expect(runtimeAdmitted).toBe(true);
+});
+
 test("a refused signal reports each survivor with the identity it carried (#1501)", async () => {
   const outcome = await terminateStructuredHostTree(
     ref({ pid: 6_100, startIdentity: "6100:start", sessionId: CLAUDE_SESSION }),

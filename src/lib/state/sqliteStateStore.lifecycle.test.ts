@@ -174,9 +174,12 @@ test("reopening repairs every core index before indexed queries can run", () => 
       ).all();
       const complete = schema();
       const indexes = complete.filter(row => row.type === "index" && ["state_rows", "state_changes"].includes(row.tbl_name) && !row.name.startsWith("sqlite_autoindex_"));
-      expect(indexes.filter(row => row.name.startsWith("state_rows_task_"))).toHaveLength(11);
-      expect(indexes.some(row => row.name === "state_rows_task_finding")).toBe(true);
-      expect(indexes.some(row => row.name === "state_rows_task_due")).toBe(true);
+      const taskIndexes = indexes.map(row => row.name).filter(name => name.startsWith("state_rows_task_"));
+      expect(taskIndexes).toHaveLength(13);
+      expect(taskIndexes).toContain("state_rows_task_finding");
+      expect(taskIndexes).toContain("state_rows_task_due");
+      expect(taskIndexes).toContain("state_rows_task_list_v1");
+      expect(taskIndexes).toContain("state_rows_task_list_project_v1");
       for (const { name } of indexes) {
         db.exec(`DROP INDEX "${name}"`);
         initializeStateCollections(filename, seed);

@@ -26,6 +26,7 @@ export type ViewerOperation = "pipelines.from-conversation.preview" | "pipelines
   | "pipelines.controller-read" | "pipelines.controller-decode" | "pipelines.controller-materialize"
   | "pipelines.controller-checkpoint" | "pipelines.controller-select" | "pipelines.delivery-liveness"
   | "memory.curation-authority"
+  | "memory.curation-panel.metadata" | "mcp.tasks.indexed-page"
   | "recorded-check.observe" | "pipelines.retirement-evidence" | "pipelines.retirement-check" | "pipelines.prior-writer-stop" | "pipelines.evidence" | "pipelines.get" | "pipelines.laneChanges" | "files.get" | "files.health" | "controller.scan" | "controller.pipelines" | "controller.flows" | "activity.ingest" | "controller.account-quota" | "controller.account-credit-guard" | "account-credit-guard.store"
   | "runtime-journal.maintenance"
   | "orchestrator.deploy-attribution" | "orchestrator.deploy-attribution.write"
@@ -261,7 +262,7 @@ export function createViewerLoopMonitor(log?: (line: string) => void, now = () =
       lastSummary = at;
     }
     readAttribution.clear();
-    spans.clear();
+    spans.clearSpans();
     activeDropped = completedDropped = 0;
     last = at;
   };

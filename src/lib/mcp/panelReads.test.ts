@@ -2,6 +2,7 @@ import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import * as cooperative from "@/lib/cooperative";
 import { roleMemoryCollection } from "@/lib/memory/roleStore";
 import type { RoleMemoryRule } from "@/lib/memory/roleTypes";
+import { claimPass, patchPass } from "@/lib/memory/curation/store";
 import { viewerMcpBindings, viewerMcpToolPolicy } from "./bindings";
 import { createMcpToolService, SqliteMcpReceiptStore } from "./server";
 import { readSeatTickSettings, writeSeatTickSettings } from "@/lib/monitor/seatTickSettings";
@@ -30,9 +31,13 @@ function seedHistory() {
   });
 }
 
-test("curation expiry preserves settings with an explicit unavailable panel and durable replay", async () => {
+test("curation expiry preserves saved controls and run metadata with named omissions and durable replay", async () => {
   setSystemTime(new Date(NOW));
   seedHistory();
+  writeSeatTickSettings(PROJECT, { ...readSeatTickSettings(PROJECT), enabled: true,
+    curation: { enabled: true, intervalHours: 9, updatedAt: AT, setBy: { kind: "manager", conversationId: SEAT, project: PROJECT, seatEpoch: 1 } } });
+  const run = claimPass({ project: PROJECT, repoDir: null, now: NOW })!;
+  patchPass(run.id, { state: "succeeded", endedAt: AT, conversationId: "conversation_completed_panel", counts: { ...run.counts, calls: 3 } });
   const originalYield = cooperative.yieldToRuntime;
   let yielded = false;
   const hook = spyOn(cooperative, "yieldToRuntime").mockImplementation(async () => {
@@ -46,12 +51,19 @@ test("curation expiry preserves settings with an explicit unavailable panel and 
   try {
     const answer = await service.callTool("seat_tick_settings", args, { deadlineAt: NOW + 10_000 });
     expect(yielded).toBe(true);
-    expect(answer).toMatchObject({ ok: true, partial: true, omissions: ["curation"], settings: { project: PROJECT }, curation: { status: "unavailable" } });
+    expect(answer).toMatchObject({ ok: true, partial: true, omissions: ["curation.counts", "curation.nextRunAt"], settings: { project: PROJECT },
+      curation: { enabled: true, intervalHours: 9, lastRun: { id: run.id, state: "succeeded", endedAt: AT, conversationId: "conversation_completed_panel" },
+        live: null, nextRunAt: null, runsError: "curation panel read timed out" } });
     expect(answer).toHaveProperty("maintenance");
     expect(answer).toHaveProperty("effective");
     if (!answer.ok) throw Error("settings read refused");
-    expect((answer.curation as { runsError: string }).runsError).toContain("timed out");
+    expect(answer.curation).not.toHaveProperty("status");
+    expect(answer.curation).not.toHaveProperty("lastRun.counts");
     expect(await service.callTool("seat_tick_settings", args)).toMatchObject({ ok: true, replayed: true, partial: true });
+    hook.mockRestore();
+    const complete = await service.callTool("seat_tick_settings", { verbose: true, clientRequestId: "curation-complete" });
+    expect(complete).toMatchObject({ ok: true, curation: { lastRun: { id: run.id, counts: { calls: 3 } }, runsError: null } });
+    expect(complete).not.toHaveProperty("omissions");
   } finally { hook.mockRestore(); store.close(); }
 });
 

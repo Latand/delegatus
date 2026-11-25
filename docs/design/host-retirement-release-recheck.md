@@ -34,11 +34,11 @@ Other verdict refusals retain their cause.
 The sweep credits an accepted runtime release or process signal after the
 captured tree is confirmed exited, using the latest durable capture for that
 same target. Reconciliation still reports a changed target or registry write
-failure; that diagnostic does not erase a proven stop. A retained descendant
-that is alive or unverifiable keeps the stop uncredited until a later sweep
-proves the full tree gone. Runtime writer failures retain the accepted stop
-method and their diagnostic. A tree that exited on its own appears in `gone`
-and contributes no reclaim totals.
+failure while preserving credit for a proven stop. A retained descendant
+that is alive or unverifiable leaves the sweep with zero stop credit. Later
+reconciliation can settle cleanup without adding credit for the earlier attempt.
+Runtime writer failures retain the accepted stop method and their diagnostic.
+A tree that exited on its own appears in `gone` and contributes no reclaim totals.
 
 ## Verification
 
@@ -52,9 +52,9 @@ runtime release and scope awaits, including a dead former owner, plus changed
 ownership, process identity, scope, turn, attention, live seats, queued events
 and transcript changes. Both engines run these cases with and without a scope;
 transcript replacement cases refresh the real central projection. Tests also
-publish a retained live descendant during reconciliation admission and verify
-that the sweep refuses cleanup without crediting a stop. An unchanged
-transcript still retires after capture and central reconciliation. The existing
-five-minute schedule and grace-bounded eight-host batch remain unchanged.
+publish a retained live descendant during reconciliation admission, including
+after an accepted runtime stop, and verify that the sweep gives no stop credit.
+An unchanged transcript still retires after capture and central reconciliation.
+The existing five-minute schedule and grace-bounded eight-host batch remain unchanged.
 
 Deployment and verification of the installed fleet belong to the release owner.

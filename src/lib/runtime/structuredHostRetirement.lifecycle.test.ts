@@ -7,16 +7,16 @@ import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { AgentStateService } from "@/lib/agentState/service";
 import { entryRevision, subjectId } from "@/lib/agentState/store";
 import { clearAgentObservations } from "@/lib/agentState/projectionCache";
-import { fixtureRecords, fixtureRegistry, FIXTURE_NOW, FIXTURE_SESSION } from "@/lib/agentState/testFixture";
+import { fixtureRecords, fixtureRegistry, FIXTURE_NOW, FIXTURE_SESSION, FIXTURE_TURN } from "@/lib/agentState/testFixture";
 import { captureProcessIdentity, systemBootEpoch, type ProcessIdentity } from "@/lib/processIdentity";
 import { fixtureReport, ownFixtureTree, stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { procBackend } from "@/lib/proc";
-import { descendantPids } from "@/lib/proc/memory";
 import { determined, undetermined } from "./determinable";
 import type { EngineHost } from "./engineHost";
 import * as control from "./structuredHostControl";
 import * as delivery from "./structuredDeliveryController";
 import { statePath } from "@/lib/configDir";
+import { buildPipeline, loadPipelinesForRetirement, savePipelines } from "@/lib/pipelines/store";
 import { durableRuntimeEventTailSeq, FileRuntimeEventStore } from "./eventStore";
 import { runStructuredHostRetirementSweep, type StructuredHostRetirementDependencies } from "./structuredHostRetirement";
 
@@ -24,7 +24,13 @@ const identities: ProcessIdentity[] = [];
 const children: ChildProcess[] = [];
 const roots: string[] = [];
 const originalTerminate = control.terminateStructuredHostTree;
+const originalStateDirectory = process.env.LLV_STATE_DIR;
+const hostWithChild = `import { spawn } from "node:child_process";
+  const child = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+  child.unref(); console.log(JSON.stringify({ pid: child.pid })); setInterval(() => {}, 1000);`;
 afterEach(async () => {
+  if (originalStateDirectory === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = originalStateDirectory;
   for (const identity of identities.splice(0).reverse()) await stopFixtureIdentity(identity);
   // Kernel exit can precede the ChildProcess exit notification. Reap the
   // original handles before the file's ownership guardian judges teardown.
@@ -33,6 +39,105 @@ afterEach(async () => {
   setAgentRegistryForTests(null);
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
+
+for (const engine of ["codex", "claude"] as const) {
+  for (const [boundary, change] of [
+    ["none", "none"], ["open-turn", "none"],
+    ["measurement", "resume"], ["capture", "resume"], ["release", "resume"],
+    ["measurement", "unrelated"], ["capture", "unrelated"], ["release", "unrelated"],
+  ] as const) {
+    test(`${engine}: recent passed stage retirement, ${change} at ${boundary}`, async () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "stage-host-lifecycle-"));
+      roots.push(root);
+      process.env.LLV_STATE_DIR = path.join(root, "state");
+      const child = ownFixtureTree(spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" }));
+      children.push(child);
+      const identity = captureProcessIdentity(child.pid!);
+      identities.push(identity);
+      const file = fixtureRegistry(root, engine, identity, null);
+      const entry = file.entries[`${engine}:${FIXTURE_SESSION}`]!;
+      entry.status = "idle";
+      entry.structuredHostOperationId = null;
+      entry.structuredHost!.activeTurnRef = null;
+      const records = fixtureRecords(engine);
+      const openTurn = boundary === "open-turn";
+      const sweepAt = FIXTURE_NOW;
+      const native = [...records.open, ...(openTurn ? [] : records.close)].map(row => JSON.stringify(row)).join("\n") + "\n";
+      fs.writeFileSync(entry.artifactPath!, native);
+      fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+      const filename = path.join(root, "registry.json");
+      fs.writeFileSync(filename, JSON.stringify(file));
+      const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") });
+      setAgentRegistryForTests(registry);
+      const conversation = Object.values(file.conversations)[0]!;
+      const lane = buildPipeline({ id: "stage-lifecycle", task: "Fixture", project: "fixture", repoDir: "/fixture", srcPath: null, srcConversationId: null,
+        now: new Date(FIXTURE_NOW - 1000).toISOString(), stages: [{ id: "review", kind: "run", prompt: "Review", next: null,
+          effectiveRole: { roleId: null, engine, model: null, effort: null, access: "read-only", promptScaffold: null } }] });
+      lane.state = "running";
+      lane.runs[0]!.attempts = [{ n: 1, state: "passed", effectiveRole: lane.stages[0]!.effectiveRole, launchId: null, conversationId: conversation.id,
+        sessionId: FIXTURE_SESSION, agentPath: entry.artifactPath, paneId: null, flowId: null, startedAt: lane.createdAt,
+        completedAt: new Date(FIXTURE_NOW).toISOString(), input: null, activatedBy: null, output: null, error: null, verdict: { status: "pass", findings: [] } }];
+      const unrelated = buildPipeline({ id: "unrelated-lane", task: "Unrelated", project: lane.project, repoDir: lane.repoDir,
+        srcPath: null, srcConversationId: null, now: lane.createdAt, stages: [], state: "draft" });
+      savePipelines([lane, unrelated]);
+      const writePipeline = () => {
+        if (change === "resume") lane.runs[0]!.attempts[0]!.state = "running";
+        else unrelated.stateDetail = "Unrelated update";
+        savePipelines([lane, unrelated]);
+      };
+      const service = new AgentStateService({ registry, now: () => sweepAt, owns: () => true,
+        process: value => procBackend.pidAlive(value.pid) ? "alive" : "dead", memory: () => null, release: "fixture", publish: async () => true });
+      const holds = spyOn(delivery, "hasStructuredDeliveryHost").mockReturnValue(false);
+      await service.request();
+      let signals = 0;
+      const terminate = spyOn(control, "terminateStructuredHostTree").mockImplementation((ref, dependencies) => originalTerminate(ref, {
+        ...dependencies, graceMs: 50, deadlineMs: 2000,
+        persistCapturedTree: async captured => {
+          const result = await dependencies!.persistCapturedTree!(captured);
+          if (boundary === "capture") writePipeline();
+          return result;
+        },
+        terminateOwnedHost: async () => { if (boundary === "release") writePipeline(); return false; },
+        signal: (pid, signal) => { signals++; process.kill(pid, signal); },
+      }));
+      try {
+        const report = await runStructuredHostRetirementSweep({ snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
+          publicationState: () => "ready", now: () => sweepAt, handoffRows: () => determined([]), durableEventTail: () => determined(0),
+          realtimeBound: () => determined(false), orchestratorSeatConversations: () => determined(new Set()), revokedSeatConversations: () => determined(new Set()),
+          readCursor: () => null, writeCursor: () => {}, treePss: async () => {
+            await Promise.resolve();
+            if (boundary === "measurement") writePipeline();
+            return { bytes: null, measuredProcesses: 0 };
+          } });
+        expect(fs.readFileSync(entry.artifactPath!, "utf8")).toBe(native);
+        expect(loadPipelinesForRetirement()[0]!.runs[0]!.attempts[0]!.verdict?.status).toBe("pass");
+        if (!openTurn && change !== "resume") {
+          expect(report.failed).toEqual([]);
+          expect(report.retired).toMatchObject([{ reason: "stage verdict", idleMs: 0 }]);
+          expect(signals).toBeGreaterThan(0);
+          expect(registry.hostEntry(entry.key)).toMatchObject({ status: "dead", structuredHost: null });
+          expect(JSON.parse(fs.readFileSync(statePath("host-retirement-report.json"), "utf8")).retired[0].reason).toBe("stage verdict");
+          expect(JSON.parse(fs.readFileSync(statePath("host-retirement-journal.ndjson"), "utf8").trim().split("\n").at(-1)!).retired[0].reason).toBe("stage verdict");
+        } else {
+          expect(report.retired).toEqual([]);
+          if (openTurn) {
+            const nativeId = engine === "codex" ? FIXTURE_TURN : "native-prompt-one";
+            expect(registry.readOnlySnapshot().agentStates[subjectId(entry)]?.facts.turn)
+              .toMatchObject({ determined: true, value: { state: "open", nativeId } });
+            expect(registry.hostEntry(entry.key)?.structuredHost?.activeTurnRef).toBeNull();
+            expect(report.refused).toMatchObject([{ clause: "turn-settled", reason: `turn ${nativeId} is in flight` }]);
+          } else {
+            const reason = "the pipeline no longer releases this host for prompt retirement";
+            if (boundary === "measurement") expect(report.refused).toMatchObject([{ clause: "transcript-idle", reason, changed: true }]);
+            else expect(report.failed).toMatchObject([{ error: `scope retirement target changed: verdict transcript-idle: ${reason}` }]);
+          }
+          expect(signals).toBe(0);
+          expect(procBackend.pidAlive(identity.pid)).toBe(true);
+        }
+      } finally { terminate.mockRestore(); holds.mockRestore(); service.stop(); registry.close(); }
+    });
+  }
+}
 
 for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex", true], ["claude", true]] as const) {
   for (const change of ["released-owner", "capture-release", "capture-replacement", "capture-release-epoch", "capture-release-writer", "missing-identity", "already-reconciled", "live-owner", "new-generation", "reopened-turn",
@@ -43,26 +148,18 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-close-"));
       roots.push(root);
       const script = path.join(root, "host.mjs");
-      fs.writeFileSync(script, 'import { spawn } from "node:child_process"; spawn("sleep", ["60"], { detached: true, stdio: "ignore" }).unref(); setInterval(() => {}, 1000);');
-      const child = spawn(process.execPath, [script], { stdio: "ignore" });
+      fs.writeFileSync(script, hostWithChild);
+      const child = ownFixtureTree(spawn(process.execPath, [script], { stdio: ["ignore", "pipe", "ignore"] }));
       children.push(child);
       const identity = captureProcessIdentity(child.pid!);
       identities.push(identity);
-      let tree: ProcessIdentity[] = [];
       let lateRetained: ProcessIdentity | null = null;
-      for (let attempt = 0; attempt < 200 && tree.length < 2; attempt++) {
-        await Bun.sleep(10);
-        tree = descendantPids(identity.pid, procBackend.ppidMap()).map(pid => captureProcessIdentity(pid));
-      }
-      identities.push(...tree.filter(value => value.pid !== identity.pid));
-      expect(tree.length).toBeGreaterThanOrEqual(2);
-      const stopAndWaitForExit = async (member: ProcessIdentity) => {
-        await stopFixtureIdentity(member);
-        // A zombie is terminal for fixture cleanup. Reconciliation also needs
-        // the recorded PID to have been reaped in this test's signal domain.
-        for (let attempt = 0; attempt < 200 && procBackend.pidAlive(member.pid); attempt++) await Bun.sleep(10);
-        expect(procBackend.pidAlive(member.pid)).toBe(false);
-      };
+      const { pid } = await fixtureReport<{ pid: number }>(child, "retirement host", [], 4_000);
+      const descendant = captureProcessIdentity(pid);
+      identities.push(descendant);
+      expect(descendant.startIdentity).not.toBeNull();
+      const tree = [identity, descendant];
+      const ppidMap = () => new Map([[identity.pid, process.pid], [descendant.pid, identity.pid]]);
       const file = fixtureRegistry(root, engine, identity,
         { pid: 2_147_483_647, startIdentity: "fixture-owner", bootEpoch: identity.bootEpoch });
       const entry = file.entries[`${engine}:${FIXTURE_SESSION}`]!;
@@ -91,12 +188,21 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
       let signals = 0;
       let closed = false;
       let admitted = false;
+      let captureAdmissionStarted = false;
+      const stopCapturedMember = async (member: ProcessIdentity) => {
+        await stopFixtureIdentity(member);
+        // Exit can be visible as a zombie before procfs stops reporting the
+        // PID. The fixture models a released claim with the tree already gone.
+        for (let attempt = 0; attempt < 200 && procBackend.pidAlive(member.pid); attempt++) await Bun.sleep(10);
+        expect(procBackend.pidAlive(member.pid)).toBe(false);
+      };
       const admit = registry.deliveryWriteOrBusy.bind(registry);
       const admission = spyOn(registry, "deliveryWriteOrBusy").mockImplementation(async (correlation, write) => {
         if (correlation.label === "registry.idle-stop-capture" && change.startsWith("capture-")) {
+          captureAdmissionStarted = true;
           // Exit and release while the capture waits for writer admission.
           await Promise.resolve();
-          for (const member of [...tree].reverse()) await stopAndWaitForExit(member);
+          for (const member of [...tree].reverse()) await stopCapturedMember(member);
           expect(registry.releaseStructuredHostClaim(entry.key, entry.claimOwner!, entry.claimEpoch)).toBe(true);
           if (change !== "capture-release") registry.agentStateWrite(state => {
             const current = state.entries[`${engine}:${FIXTURE_SESSION}`]!;
@@ -123,14 +229,20 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
       });
       const outcomes: control.StructuredHostTerminationOutcome[] = [];
       const terminate = spyOn(control, "terminateStructuredHostTree").mockImplementation(async (ref, dependencies) => {
-        const outcome = await originalTerminate(ref, { ...dependencies,
+        const outcome = await originalTerminate(ref, { ...dependencies, ppidMap,
           persistCapturedTree: async captured => {
-            const accepted = await dependencies!.persistCapturedTree!(captured);
-            if (change.startsWith("capture-")) { expect(accepted).toBe(false); return false; }
+            const persistence = dependencies!.persistCapturedTree!(captured);
+            const started = captureAdmissionStarted;
+            const accepted = await persistence;
+            if (change.startsWith("capture-")) {
+              expect(started).toBe(true);
+              expect(accepted).toBe(false);
+              return false;
+            }
             expect(accepted).toBe(true);
             expect(captured).toHaveLength(tree.length);
             for (const member of tree.filter(value => !["live-child", "empty-diagnostics-live-child"].includes(change) || value.pid === identity.pid).reverse()) {
-              await stopAndWaitForExit(member);
+              await stopCapturedMember(member);
             }
             expect(procBackend.pidAlive(identity.pid)).toBe(false);
             closed = true;
@@ -187,7 +299,7 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
           bootEpoch: change === "admission-boot" ? () => admitted ? determined("replacement-boot") : determined(systemBootEpoch()!) : undefined,
           ownerProcess: change === "unverified-owner" ? () => closed ? "unverified" : "dead" : undefined,
           owned: change === "locally-owned" ? () => closed : undefined,
-          treePss: () => ({ bytes: null, measuredProcesses: 0 }),
+          treePss: () => ({ bytes: null, measuredProcesses: 0 }), ppidMap,
           readCursor: () => null, writeCursor: () => {},
         };
         const report = await runStructuredHostRetirementSweep(options);
@@ -215,7 +327,7 @@ for (const [engine, eventDebt] of [["codex", false], ["claude", false], ["codex"
             expect(report.reclaimed.processes).toBe(0);
             expect(report.failed).toHaveLength(1);
             expect(procBackend.pidAlive(lateRetained!.pid)).toBe(true);
-            expect(report.failed[0]!.error).toContain("retained descendant is alive or its exit cannot be verified");
+            expect(report.failed[0]!.error).toContain("captured tree exit cannot be verified in its original boot and namespace");
           }
           return;
         }
@@ -251,13 +363,13 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
     for (const change of boundary === "measurement" || boundary === "pre-authorize" ? ["conversation-turn"] as const
       : ["none", "held", "dead-owner", "publication", "entry missing", "process identity", "pid", "claimEpoch", "claimOwner", "writerClaimEpoch", "scope", "turn", "conversation-turn", "flags", "attention", "seat", "queue", "transcript", "moved-transcript", "replaced-transcript", "refresh-unchanged", "busy-memory",
         ...(boundary === "admission" ? ["seat-restored"] as const : []),
-        ...(boundary === "release" ? ["runtime-exit", "runtime-live-child", "runtime-write-error"] as const : []),
+        ...(boundary === "release" ? ["runtime-exit", "runtime-live-child", "runtime-write-error", "runtime-late-retained-child"] as const : []),
         ...(boundary === "scope" ? ["late-cas", "closed-event-tail"] as const : [])] as const) {
       test(`${engine} ${scoped ? "scope" : "tree"}: central-state retirement after ${boundary}, ${change}`, async () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), "retirement-lifecycle-"));
         roots.push(root);
         const script = path.join(root, "host.mjs");
-        fs.writeFileSync(script, 'import { spawn } from "node:child_process"; const child = spawn("sleep", ["60"], { detached: true, stdio: "ignore" }); child.unref(); console.log(JSON.stringify({pid:child.pid})); setInterval(() => {}, 1000);');
+        fs.writeFileSync(script, hostWithChild);
         const child = ownFixtureTree(spawn(process.execPath, [script], { detached: true, stdio: ["ignore", "pipe", "ignore"] }));
         children.push(child);
         child.unref();
@@ -267,8 +379,10 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
         const descendant = captureProcessIdentity(report.pid);
         expect(descendant.startIdentity).not.toBeNull();
         const tree = [identity.pid, descendant.pid];
+        const ppidMap = () => new Map([[identity.pid, process.pid], [descendant.pid, identity.pid]]);
         identities.push(descendant);
-        const runtimeStop = change === "runtime-exit" || change === "runtime-live-child" || change === "runtime-write-error";
+        const runtimeStop = change === "runtime-exit" || change === "runtime-live-child" || change === "runtime-write-error"
+          || change === "runtime-late-retained-child";
         const owner = change === "held" ? captureProcessIdentity(process.pid) : change === "dead-owner" || change === "late-cas" || runtimeStop
           ? { pid: 2_147_483_647, startIdentity: "fixture-dead-owner", bootEpoch: identity.bootEpoch } : null;
         const file = fixtureRegistry(root, engine, identity, owner);
@@ -355,6 +469,7 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
           }
         };
         const admit = registry.deliveryWriteOrBusy.bind(registry);
+        let lateRetainedPid: number | undefined;
         const admission = spyOn(registry, "deliveryWriteOrBusy").mockImplementation(async (correlation, write) => {
           if (boundary === "admission" && correlation.label === "registry.idle-stop-capture") {
             await Promise.resolve();
@@ -364,13 +479,22 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
           if (change === "late-cas" && correlation.label === "termination.retire") {
             expect(registry.releaseStructuredHostClaim(entry.key, entry.claimOwner!, entry.claimEpoch)).toBe(true);
           }
+          if (change === "runtime-late-retained-child" && correlation.label === "registry.idle-reconcile-gone") {
+            await Promise.resolve();
+            const retained = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+            children.push(retained);
+            lateRetainedPid = retained.pid!;
+            const captured = captureProcessIdentity(lateRetainedPid);
+            identities.push(captured);
+            expect(registry.captureStructuredTerminationSurvivors(entry.key, identity, [captured], "fixture-late-admission")).not.toBeNull();
+          }
           return admit(correlation, write);
         });
         const outcomes: control.StructuredHostTerminationOutcome[] = [];
         const signals: Array<{ pid: number; signal: NodeJS.Signals }> = [];
         let snapshotReads = 0;
         const terminate = spyOn(control, "terminateStructuredHostTree").mockImplementation(async (ref, dependencies) => {
-          const outcome = await originalTerminate(ref, { ...dependencies,
+          const outcome = await originalTerminate(ref, { ...dependencies, ppidMap,
             // Isolate the two revision changes. The capture case uses the real durable capture.
             persistCapturedTree: async identities => {
               const accepted = await dependencies!.persistCapturedTree!(identities);
@@ -381,10 +505,10 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
             terminateOwnedHost: async (_key, _expected, _authorize, onAccepted) => {
               released++;
               if (runtimeStop) {
-                if (change === "runtime-exit" || change === "runtime-write-error") await stopFixtureIdentity(descendant);
+                if (change !== "runtime-live-child") await stopFixtureIdentity(descendant);
                 await stopFixtureIdentity(identity);
                 await stopFixtureProcess(child);
-                if (change === "runtime-exit" || change === "runtime-write-error") {
+                if (change !== "runtime-live-child") {
                   for (let attempt = 0; attempt < 200 && procBackend.pidAlive(descendant.pid); attempt++) await Bun.sleep(10);
                   expect(procBackend.pidAlive(descendant.pid)).toBe(false);
                 }
@@ -426,7 +550,7 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
             realtimeBound: () => determined(false),
             orchestratorSeatConversations: () => determined(new Set<string>(changed && ["seat", "seat-restored"].includes(change) ? Object.keys(file.conversations) : [])),
             revokedSeatConversations: () => determined(new Set<string>()),
-            readCursor: () => null, writeCursor: () => {}, record: accountingCase ? undefined : () => {},
+            readCursor: () => null, writeCursor: () => {}, record: accountingCase ? undefined : () => {}, ppidMap,
             treePss: async () => {
               await Promise.resolve();
               if (boundary === "measurement") mutate();
@@ -444,6 +568,15 @@ for (const [engine, scoped] of [["codex", true], ["codex", false], ["claude", tr
               expect(report).toMatchObject({ retired: [], gone: [], reclaimed: { processes: 0 },
                 failed: [{ error: expect.stringContaining(cause), remaining: [descendant.pid] }] });
               expect(procBackend.pidAlive(descendant.pid)).toBe(true);
+              return;
+            }
+            if (change === "runtime-late-retained-child") {
+              expect(outcomes[0]).toMatchObject({ stoppedVia: "runtime", survivors: [] });
+              expect(lateRetainedPid).toBeDefined();
+              expect(procBackend.pidAlive(lateRetainedPid!)).toBe(true);
+              expect(report).toMatchObject({ retired: [], gone: [], reclaimed: { processes: 0 },
+                failed: [{ error: expect.stringContaining("captured tree exit cannot be verified") }] });
+              expect(report.failed).toHaveLength(1);
               return;
             }
             const via = runtimeStop ? "runtime" : "process-group";

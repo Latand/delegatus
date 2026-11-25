@@ -5,6 +5,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { FLOW_RETIREMENT } from "@/lib/flows/retirement";
 import { ISSUE_REPORT_RESPONSE_RULE } from "@/lib/issueReports/approvalForm";
 import { cloneFileCallBudgetMs } from "@/lib/externalRelay/cloneToolBudget";
+import { telegramReactionMessageIdSchema, telegramReactionSchema } from "@/lib/telegram/bot/reactions";
 import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
 import { trackMcpClaim, installMcpLifecycle, logMcpLifecycle, drainMcpClaims } from "../../../bin/mcp-lifecycle.mjs";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
@@ -154,8 +155,11 @@ export const MCP_TOOL_NAMES = [
   "telegram_bot_send",
   "telegram_bot_send_media",
   "telegram_bot_send_document",
+  "telegram_bot_reactions",
+  "telegram_bot_set_reaction",
   "telegram_bot_messages",
   "relay_owner_history",
+  "relay_trusted_requesters",
   "relay_answer",
   "relay_service_tools",
   "issue_report",
@@ -242,11 +246,11 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
      replayed clientRequestId must answer with what the first call recorded
      rather than switch and record a second time. */
   "auto_updates",
-  /* Posts into a Telegram chat. A replayed clientRequestId must answer with
-     the message ids the first call posted, never post a second time. */
+  /* Posts or reacts in a Telegram chat. Replay the first receipt under the same key. */
   "telegram_bot_send",
   "telegram_bot_send_media",
   "telegram_bot_send_document",
+  "telegram_bot_set_reaction",
   /* Records a preview and files one issue (#2518). A replayed clientRequestId
      must answer with the issue the first call filed, never file a second. */
   "issue_report",
@@ -254,11 +258,12 @@ export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
 ]);
 
 /** Private request data is never receipted. Service actions use the relay call id for idempotency. */
-export const RECEIPT_FREE_READ_TOOLS = new Set<McpToolName>(["relay_owner_history", "relay_answer", "relay_service_tools"]);
+export const RECEIPT_FREE_READ_TOOLS = new Set<McpToolName>(["relay_owner_history", "relay_answer", "relay_service_tools", "relay_trusted_requesters"]);
 
 /** Explicit allowlist: read-like tools with durable effects still need keys. */
 export const OPTIONAL_READ_KEY_TOOLS = new Set<McpToolName>([
   "relay_owner_history",
+  "relay_trusted_requesters",
   "relay_answer",
   "relay_service_tools",
   "read_prototype_review",
@@ -344,25 +349,45 @@ function interruptedCallIsRecoverable(toolName: McpToolName, args: McpToolArgs):
 
 export type McpToolArgs = Record<string, unknown> & { clientRequestId?: unknown };
 export type McpToolPayload = Record<string, unknown>;
-/** Call-local checks survive awaited service/SDK wrappers, never a wire frame. */
+const BOARD_READ_TOOLS = new Set(["list_tasks", "list_pipelines"]);
 export interface McpResponseAuthority { checks: Array<() => void> }
+
+function boardReadFailure(tool: string, args: McpToolArgs, error: unknown): McpToolResult {
+  const details = error instanceof McpToolRefusal ? error.details : undefined;
+  return failure(tool, clientRequestId(args), typeof details?.code === "string" ? details.code : "tool_failed",
+    error instanceof Error ? error.message : String(error), details ? details.retryable === true : true, false, details);
+}
 
 function responseAuthorityResult(tool: string, args: McpToolArgs, authority: McpResponseAuthority | undefined, result: McpToolResult): McpToolResult {
   try { for (const check of authority?.checks ?? []) check(); return result; }
   catch (error) {
+    if (BOARD_READ_TOOLS.has(tool)) return boardReadFailure(tool, args, error);
     const code = error instanceof McpToolRefusal && typeof error.details.code === "string" ? error.details.code : "caller_unidentified";
-    return failure(tool, clientRequestId(args), code, code === "workspace_forbidden" ? "workspace access denied" : "caller authority changed before response", false, false, { code });
+    return failure(tool, clientRequestId(args), code, error instanceof McpToolRefusal ? error.message : "caller authority changed before response", false, false,
+      error instanceof McpToolRefusal ? error.details : { code });
   }
 }
 
-function retainResponseAuthority(context: McpToolCallContext, check: () => void): void {
+export function retainResponseAuthority(context: McpToolCallContext, check: () => void): void {
   if (!context.responseAuthority) return;
-  const runInCallerContext = AsyncLocalStorage.snapshot();
-  context.responseAuthority.checks.push(() => runInCallerContext(check));
+  const withinCall = AsyncLocalStorage.snapshot();
+  context.responseAuthority.checks.push(() => withinCall(check));
+}
+
+export interface McpBoardRead {
+  project: string;
+  scope: string;
+  assert(): void;
 }
 
 export interface McpToolCallContext {
   responseAuthority?: McpResponseAuthority;
+  /** Board selection and current authority captured before normalization can await. */
+  boardRead?: McpBoardRead;
+  /** Canonical selection resolved by the workspace fence; never a wire argument. */
+  resolvedBoardProject?: string;
+  /** Authenticated in-process operator selection; never read from tool arguments. */
+  operatorBoardProject?: string;
   /** Call-local curator disclosure fence, retained through SDK serialization. */
   curatorResponse?: { assertCurrent?: () => void };
   /** Trusted read projection; never accepted from serialized tool arguments. */
@@ -375,6 +400,8 @@ export interface McpToolCallContext {
   priorAcceptedDeployment?: { deploymentId: string; revision: string };
   /** Numeric transport subphases, supplied by the service, never tool arguments. */
   recordTiming?: (phase: "http", milliseconds: number) => void;
+  /** Encoded HTTP-validated prototype identity; the effect endpoint rechecks it. */
+  prototypeReceiptScope?: string;
   /** #1490: the durable binding this call's dispatch must use. Present only on
       a recoverable mutation's single dispatch; the binding reads its downstream
       idempotency key from here rather than deriving one of its own. */
@@ -469,6 +496,7 @@ function curatorDisclosureResult(tool: string, args: McpToolArgs, authority: Mcp
   }
 }
 export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) => Promise<McpToolPayload>) & {
+  captureBoardRead?: (args: McpToolArgs, context: McpToolCallContext) => McpBoardRead;
   /** Curator apply only: pin current disclosure authority and read its atomic
    * domain acknowledgement. This hook must never dispatch an apply. */
   curatorApplyRecovery?: (args: McpToolArgs) => Promise<{ assertCurrent: () => void; recoverCommitted: () => McpToolPayload | null }>;
@@ -485,6 +513,10 @@ export type McpToolBinding = ((args: McpToolArgs, context?: McpToolCallContext) 
       caller's clientRequestId never answers another's. A refusal burns nothing.
       Must not mutate state. */
   receiptScope?: (args: McpToolArgs, context?: McpToolCallContext) => Promise<string | null>;
+  /** Optional identity-only scope for a settled receipt read before workspace
+   * admission. Must prove current caller ownership without consulting workspace
+   * grants or dispatching. Null requires the ordinary admission path. */
+  replayReceiptScope?: (args: McpToolArgs) => string | null;
   /** Resolve guarded references to their retained full identity before hashing a receipt. */
   canonicalizeReceiptArgs?: (args: McpToolArgs) => McpToolArgs;
 };
@@ -752,7 +784,7 @@ export interface McpRequestBindingInput {
   downstreamKey: string;
   /** Relay admission's server-derived text and author, captured before dispatch
       so recovery verifies the actual durable payload after rotation/restart. */
-  sendPayload?: { text: string; origin: MessageOrigin };
+  sendPayload?: { text: string; origin: MessageOrigin; requesterRequestId?: string };
   /** Sender outbox CAS fence carried only by a safe same-key retry. */
   seatMessageFence?: string;
 }
@@ -1112,7 +1144,8 @@ export function validRequestBinding(value: unknown, toolName?: McpToolName, requ
   if (typeof value.clientRequestId !== "string" || (requestId !== undefined && value.clientRequestId !== requestId)) return false;
   if (typeof value.downstreamKey !== "string" || !value.downstreamKey) return false;
   if (value.sendPayload !== undefined && (!isRecord(value.sendPayload)
-    || typeof value.sendPayload.text !== "string" || !parseMessageOrigin(value.sendPayload.origin))) return false;
+    || typeof value.sendPayload.text !== "string" || !parseMessageOrigin(value.sendPayload.origin)
+    || value.sendPayload.requesterRequestId !== undefined && typeof value.sendPayload.requesterRequestId !== "string")) return false;
   if (typeof value.claimedAt !== "string") return false;
   const { caller, target, owner } = value;
   if (!isRecord(caller) || !["root", "worker", "unidentified"].includes(String(caller.kind))
@@ -2482,6 +2515,8 @@ function failure(
 
 export interface McpToolService {
   callTool(toolName: string, args: McpToolArgs, context?: McpToolCallContext): Promise<McpToolResult>;
+  /** Read an already settled, caller-owned receipt; never claim or dispatch. */
+  replayTool?(toolName: string, args: McpToolArgs): Promise<McpToolResult | null>;
 }
 
 type McpTimingOutcome = "success" | "failure" | "replay" | "conflict" | "pending" | "deadline" | "cancelled";
@@ -2850,6 +2885,35 @@ export function createMcpToolService(
   const pendingLocalReleases = new Map<string, { digest: string; binding: McpRequestBinding; store: McpRecoveryReceiptStore }>();
   bindings = witnessStoreWriters(bindings);
   const service: McpToolService = {
+    async replayTool(toolName, args) {
+      if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName) || !supportsMcpRecovery(receipts)) return null;
+      const tool = toolName as McpToolName;
+      const scopeOf = bindings[tool].replayReceiptScope;
+      if (!scopeOf) return null;
+      const effective = (await normalizeShortIdArgs(normalizeBoundedMcpNumerics(tool, args).args));
+      const requestId = clientRequestId(effective);
+      const scope = scopeOf(effective);
+      if (!requestId || !scope) return null;
+      const permit = () => policy?.permit(tool, effective);
+      const verdict = permit();
+      if (verdict && !verdict.allowed) return failure(tool, requestId, verdict.code, verdict.error, false);
+      let record: McpReceiptRecord | null;
+      try { record = await receipts.lookup(receiptKey(tool, requestId, scope)); }
+      catch { return failure(tool, requestId, "receipt_unavailable", "the caller's receipt could not be read", true, false, { check: "receipt-store" }); }
+      // Storage may yield across a caller switch or a seat replacement. A
+      // receipt read cannot acquire the departed caller's authority.
+      if (scopeOf(effective) !== scope) return null;
+      const current = permit();
+      if (current && !current.allowed) return failure(tool, requestId, current.code, current.error, false);
+      if (!record?.result) return null;
+      const digest = requestDigest(tool, bindings[tool].canonicalizeReceiptArgs?.(effective) ?? effective);
+      if (record.digest !== digest) return failure(tool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
+      // A retryable publication still needs the Viewer's claim recovery path.
+      if (!record.result.ok && record.result.retryable) return null;
+      let result = withoutPrototypeTaskFields({ ...record.result, replayed: true });
+      if (effective.full !== true) result = shortIdsInAnswer(result);
+      return result;
+    },
     callTool: async function callTool(toolName: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
       if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName)) {
         if ((RETIRED_FLOW_TOOL_NAMES as readonly string[]).includes(toolName)) {
@@ -2894,6 +2958,7 @@ export function createMcpToolService(
         ? undefined
         : Math.max(0, context.deadlineAt - Date.now());
       const finish = (result: McpToolResult, outcome: McpTimingOutcome, unfinishedAgeMs?: number): McpToolResult => {
+        if (BOARD_READ_TOOLS.has(typedTool)) result = responseAuthorityResult(typedTool, args, context.responseAuthority, result);
         const images = relayImages(result);
         const imageGuard = relayImageGuard(result);
         const imageNote = relayImageNote(result);
@@ -2905,7 +2970,7 @@ export function createMcpToolService(
         // The consumer must receive the exact bytes the custody ledger stores.
         // Media SHA-256 is content verification data used by the caller.
         const exactHistoryMedia = typedTool === "relay_service_tools" || typedTool === "relay_owner_history" && effectiveArgs.action === "media";
-        if (effectiveArgs.full !== true && typedTool !== "recorded_check" && !exactHistoryMedia && !(typedTool === "curate_rules" && effectiveArgs.action === "apply")) result = shortIdsInAnswer(result);
+        if (effectiveArgs.full !== true && typedTool !== "recorded_check" && typedTool !== "relay_trusted_requesters" && !exactHistoryMedia && !(typedTool === "curate_rules" && effectiveArgs.action === "apply")) result = shortIdsInAnswer(result);
         if (rawRelayResults && result && typeof result === "object") {
           Object.defineProperty(result, MCP_PAGE_CURSOR_RAW_RELAY_RESULTS, { value: rawRelayResults });
         }
@@ -2937,6 +3002,7 @@ export function createMcpToolService(
           error instanceof Error ? error.message : String(error), details.code === undefined, false, details),
           context.signal?.aborted ? "cancelled" : "failure");
       }
+      try { context.boardRead?.assert(); } catch (error) { return boardReadFailure(typedTool, args, error); }
       const retention: ReceiptRetention = MUTATING_MCP_TOOL_NAMES.has(typedTool) ? "durable" : "bounded";
       const requestId = clientRequestId(effectiveArgs);
       // Omitted keys on pure reads mean a fresh observation, without a receipt.
@@ -2949,12 +3015,14 @@ export function createMcpToolService(
         if (verdict && !verdict.allowed) return finish(failure(typedTool, null, verdict.code, verdict.error, false), "failure");
         try {
           await measure("caller", async () => bindings[typedTool].authorizeReceipt?.(effectiveArgs));
+          context.boardRead?.assert();
           if (context.signal?.aborted) throw context.signal.reason;
           const payload = await measure("binding", () => bindings[typedTool](effectiveArgs, context));
           if (context.signal?.aborted) throw context.signal.reason;
           return finish({ ...payload, ...(normalized.clamped ? { clamped: normalized.clamped } : {}),
             ok: true, toolName: typedTool, clientRequestId: null, replayed: false }, "success");
         } catch (error) {
+          if (BOARD_READ_TOOLS.has(typedTool)) return finish(boardReadFailure(typedTool, args, error), "failure");
           const reason = context.signal?.aborted ? context.signal.reason : error;
           const outcome = reason instanceof DeadlineExceededError ? "deadline" : context.signal?.aborted ? "cancelled" : "failure";
           return finish(failure(typedTool, null,
@@ -2996,6 +3064,7 @@ export function createMcpToolService(
       let curatorApply: Awaited<ReturnType<NonNullable<McpToolBinding["curatorApplyRecovery"]>>> | undefined;
       let scope: string | null;
       try {
+        context.boardRead?.assert();
         if (typedTool === "curate_rules" && effectiveArgs.action === "apply") {
           curatorApply = await bindings[typedTool].curatorApplyRecovery?.(effectiveArgs);
           curatorApply?.assertCurrent();
@@ -3003,10 +3072,18 @@ export function createMcpToolService(
           const assertCaller = context.assertCaller;
           if (curatorApply) context = { ...context, assertCaller: () => { assertCaller?.(); curatorApply!.assertCurrent(); } };
         }
-        scope = await measure("caller", async () => await bindings[typedTool].receiptScope?.(effectiveArgs, context) ?? null);
+        scope = await measure("caller", async () => context.boardRead?.scope ?? await bindings[typedTool].receiptScope?.(effectiveArgs, context) ?? null);
         curatorApply?.assertCurrent();
+        context.boardRead?.assert();
       } catch (error) {
+        if (BOARD_READ_TOOLS.has(typedTool)) return finish(boardReadFailure(typedTool, args, error), "failure");
         // Nothing is claimed yet, so the same key may be tried again as it is.
+        if (error instanceof McpToolRefusal && error.details.code === "workspace_forbidden") {
+          return finish(failure(typedTool, requestId, "workspace_forbidden", error.message, false, false, error.details), "failure");
+        }
+        if (error instanceof McpToolRefusal && error.details.code === "prototype_project_unavailable") {
+          return finish(failure(typedTool, requestId, "prototype_project_unavailable", error.message, true, false, error.details), "failure");
+        }
         if (error instanceof McpToolRefusal && error.details.code === "short_id_ambiguous") {
           return finish(failure(typedTool, requestId, "short_id_ambiguous", error.message, false, false, error.details), "failure");
         }
@@ -3602,7 +3679,9 @@ export function createMcpToolService(
             }, false);
           }
         }
-        const claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding));
+        context.boardRead?.assert();
+        const claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding, context.boardRead?.assert));
+        context.boardRead?.assert();
         curatorApply?.assertCurrent();
         if (claim.kind === "conflict") {
           outcome = "conflict";
@@ -3726,6 +3805,7 @@ export function createMcpToolService(
         let unadmitted = false;
         const bindingStartedAt = performance.now();
         try {
+          context.boardRead?.assert();
           const payload = await bindings[typedTool](effectiveArgs, typedTool === "deploy_exact_sha" && (retryDeployment || claim.kind === "pending")
             ? { ...context, priorAttemptUncertain: true,
               ...(retryDeployment && claim.result.ok && claim.result.state === "accepted"
@@ -3775,13 +3855,14 @@ export function createMcpToolService(
           /* bridge_report's one refusal (a report with nothing left after the
              privacy scrub) names its code the same way: the same call fails the
              same way, so it is not retryable as sent. */
-          const botRefusal = (typedTool === "telegram_bot_send" || typedTool === "telegram_bot_send_media" || typedTool === "telegram_bot_send_document" || typedTool === "bridge_report") && error instanceof McpToolRefusal
+          const botRefusal = (typedTool === "telegram_bot_send" || typedTool === "telegram_bot_send_media" || typedTool === "telegram_bot_send_document"
+            || typedTool === "telegram_bot_reactions" || typedTool === "telegram_bot_set_reaction" || typedTool === "bridge_report") && error instanceof McpToolRefusal
             && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
             ? { code: error.details.code, retryable: error.details.retryable } : null;
-          /* Named issue, cross-project and orchestrator refusals preserve the
+          /* Named issue, workspace, cross-project and orchestrator refusals preserve the
              server's cause and whether the same call can succeed later. */
           const namedRefusal = error instanceof McpToolRefusal && typeof error.details.code === "string" && typeof error.details.retryable === "boolean"
-            && (error instanceof McpUnadmittedRefusal || typedTool === "issue_report" || typedTool === "github_app_connect" || typedTool === "message_receipt" || typedTool === "leave_lesson" || typedTool === "pipeline_action" || error.details.code === "cross_project_refused"
+            && (error instanceof McpUnadmittedRefusal || BOARD_READ_TOOLS.has(typedTool) || typedTool === "issue_report" || typedTool === "github_app_connect" || typedTool === "message_receipt" || typedTool === "leave_lesson" || typedTool === "pipeline_action" || error.details.code === "cross_project_refused" || error.details.code === "workspace_forbidden"
               || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel", "deploy_exact_sha"].includes(typedTool)
               || error.details.code === "CONVERSATION_NOT_FOUND" && error.details.retryable === false)
             ? { code: error.details.code, retryable: error.details.retryable } : null;
@@ -3856,11 +3937,12 @@ export function createMcpToolService(
           phaseDurations.completion = performance.now() - releaseStartedAt;
           return settled;
         }
-        // Authority is a disclosure verdict. Preserve the committed witness
-        // and the unsettled claim when the owner is no longer authorized.
+        // Preserve the curator committed witness if disclosure authority changes.
         curatorApply?.assertCurrent();
+        context.boardRead?.assert();
         settled = bindMcpPageCursorResult(typedTool, settled, pageCaller);
         await measure("completion", () => receipts.complete(key, digest, settled, retention));
+        context.boardRead?.assert();
         curatorApply?.assertCurrent();
         return settled;
       })();
@@ -3904,11 +3986,36 @@ export function createMcpToolService(
       return await runWithMcpCallerResolution(() => service.callTool(tool, args, context));
     } finally { finish(); }
   } });
-  return { async callTool(tool, args, context = {}) {
-    const authority = context.responseAuthority ?? (tool === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined);
+  return { replayTool: (tool, args) => service.replayTool!(tool, args), callTool: async function callTool(tool: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
+    const board = BOARD_READ_TOOLS.has(tool);
+    // Establish native proof and the canonical board before cursor filter matching.
+    if (board && "nativeCallerProof" in args) {
+      const { nativeCallerProof, ...logicalArgs } = args;
+      if (nativeCallerProof !== undefined && (typeof nativeCallerProof !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(nativeCallerProof))) {
+        return failure(tool, clientRequestId(args), "invalid_request", "nativeCallerProof must be a hook-generated proof; do not invent or copy it", false);
+      }
+      return runWithNativeCallProof(typeof nativeCallerProof === "string" ? nativeCallerProof : undefined, tool, logicalArgs,
+        () => callTool(tool, logicalArgs, context));
+    }
     const curatorResponse = context.curatorResponse ?? (tool === "curate_rules" ? {} : undefined);
-    const result = await paged.callTool(tool, args, { ...context, responseAuthority: authority, curatorResponse });
-    return responseAuthorityResult(tool, args, authority, curatorDisclosureResult(tool, args, curatorResponse, result));
+    const authority = context.responseAuthority ?? (board || tool === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined);
+    context = { ...context, responseAuthority: authority, curatorResponse };
+    try {
+      if (board) {
+        const boardRead = runWithMcpCallerResolution(() => bindings[tool as McpToolName].captureBoardRead?.(args, context));
+        if (boardRead) {
+          context = { ...context, boardRead };
+          args = { ...args, project: boardRead.project };
+          retainResponseAuthority(context, boardRead.assert);
+          boardRead.assert();
+        }
+      }
+      const result = await paged.callTool(tool, args, context);
+      return responseAuthorityResult(tool, args, authority, curatorDisclosureResult(tool, args, curatorResponse, result));
+    } catch (error) {
+      if (board) return responseAuthorityResult(tool, args, authority, boardReadFailure(tool, args, error));
+      throw error;
+    }
   } };
 }
 
@@ -3950,7 +4057,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   create_task: [
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
     "Create a durable board task. Give every promise a future dueAt. Pass dueTz with dueAt when creating the task. A promise within an existing outcome is an open step on that task, whose dueAt must be no later than the earliest open promise.",
-    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. A wait for a free worker slot is kind worker; resource means the machine is short of memory, disk or similar, named in note. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
+    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. Kind operator moves the task to Waiting for an action only the operator can take, such as answering a published decision form or supplying access or a setting they control. Other kinds keep the task in its work column. Delegatus brings the wait back to the seat when it clears or nobody carries it. Use worker for a free worker slot and resource for machine capacity. Clear or update the hold when work resumes.",
     "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
     "`text` is written for the HUMAN who reviews the board: a title of 3 to 10 words on the first line, then at most a few plain sentences saying what the work has to achieve. A role name, a stage id, a prompt excerpt or a state dump is not a title.",
     "Everything an AGENT needs and the operator does not (the prompt, the working context, the rules, the ids, the file fences, a state card) goes in `details`, condensed. The card and the task's opened view show it behind one collapsed Details row, so long agent text costs the operator one line instead of the whole description.",
@@ -3964,7 +4071,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record.",
     "Give an undated open task a dueAt when you touch it. Reschedule with a future dueAt and dueReason (1 to 200 UTF-16 code units after trimming) when moving a passed date later; this records a slip. Moves before the date passes or to an earlier instant count nothing. Only the operator may clear a date. Keep the task due no later than its earliest open promise.",
     "Update a durable board task. Orchestrators and stage agents: set note whenever the situation changes — why it is parked, what or whom it waits for, or what runs now. Keep it current in one or two short plain sentences in the operator's language (at most 280 UTF-16 code units after whitespace collapse; recommended target 220). A write replaces it; null clears it.",
-    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. A wait for a free worker slot is kind worker; resource means the machine is short of memory, disk or similar, named in note. Stop work while waiting, then clear or update the hold when work resumes. A bare blocked status remains accepted and reads as no reason given.",
+    "When work stops, set hold with its kind and one-line reason, plus a reference or until date when relevant. Kind operator moves the task to Waiting for an action only the operator can take, such as answering a published decision form or supplying access or a setting they control. Other kinds keep the task in its work column. Delegatus brings the wait back to the seat when it clears or nobody carries it. Use worker for a free worker slot and resource for machine capacity. Clear or update the hold when work resumes.",
     "Use steps for partial outcomes: each step has a stable id, human text, declared state, and optional pipeline, issue or PR reference; attach hold to an open step when it waits.",
     "`text` and `details` are separate fields: an update carrying only `details` leaves `text` untouched, and the reverse. `text` stays the human title and description; agent context goes in `details`, and null or an empty string clears it.",
     "`refine` writes only the human part, as it always has. `text` and `refine.text` are written in the operator's interface language; another language is stored with a warning.",
@@ -4029,10 +4136,10 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   deploy_exact_sha: "Deploy the serving Delegatus application by commit SHA or unique prefix of at least 7 characters on the tracked branch. Never a branch name. Only its server-attributed designated seat deploys; other projects cannot deploy through this tool. Idempotent by clientRequestId; deployments serialize at admission. Green means the tracked branch's required checks passed on the requested SHA. A not-green refusal gives outcome:not-executed, the green state and check names; retry the same key once green. A permanently closed key gives outcome:not-executed and nextAction:new-request-permitted. Checkout admission has a ten-second work budget plus admission-lock settlement, and waits up to one second for a transient holder at each custody observation. Busy names a live deployment, retention, update or pending restart, without a finished deployment id; it is not executed and the same key can be retried after its holder settles. A control timeout gets a separate five-second admission reconciliation budget: accepted names the deployment id; a fenced absence gives not-executed. If the reconciliation source itself is unavailable, preserve the original key for recovery. A matching SHA already deploying joins that deployment; a different SHA stays busy. An accepted deploy records wakeOnSettle:true for the seat: end the turn, and its next wake reports the terminal phase and paused lanes.",
   get_pipeline: "Read one pipeline by durable id, with stageDigests and graphDigest for a guarded graph edit. Use full:true for delivery ownership, closeReport, work links and retained bodies. Compact by default; full:true or compact:false returns the whole record, prompts, role scaffolds and attempt transcripts included. `stageId` narrows the answer to that stage and one attempt (the latest by default, or `attempt`): its verdict, findings, reported summary, conversation and error, with no prompts or transcripts. `compact: true` answers the list_pipelines compact row plus the digests.",
   board_snapshot: "Read a bounded, redacted snapshot of the Delegatus board, durable placement, and the selected project's hidden conversation count.",
-  list_pipelines: "List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
+  list_pipelines: "Accepts a project key, display name or repository folder in any letter case; omission uses the caller's existing board scope. List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
   conversation_action: "Control or archive Delegatus conversations. speed applies serviceTier in place without cutting a turn; stage conversations use the stage runtime switch. interrupt, kill, resume, compact and permission accept one conversation by id, transcript path, or selected-card reference. A host's tool permission requests are answered with permission and decision allow (once) or deny, optionally naming requestId, and its native question or plan with answer, requestId (the question's reason id) and answers, text, or approve. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
   operator_snapshot: "Read the bounded, secret-redacted Delegatus state currently visible to the operator.",
-  list_tasks: "List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it); follow nextCursor with the same filters. Every omitted page/record is counted. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
+  list_tasks: "Accepts a project key, display name or repository folder in any letter case; omission uses the caller's existing board scope. List durable board tasks, newest updatedAt first, compact by default: id, project, status, first line of text, updatedAt, revision, pipelineIds, assignmentCount, detailsLength. Filter by status set, openOnly, updatedSince, ids, query and placement. Pages stop at the row limit or 24 KB (one explicit full record can exceed it). Follow nextCursor with the same filters, including after an empty page with a continuation. Partial answers name deferred fields in omissions. full:true reads complete records; compact:false restores the previous truncated-details projection. get_task reads one complete record; never write a truncated value back.",
   get_task: "Read one durable board task, including the whole agent-facing `details`.",
   deployment_status: "Read Delegatus deployment or runtime operation status, or list recent deployments, newest first. `compact: true` answers each deployment as {deploymentId, phase, sha, terminal, startedAt, finishedAt, error}; without it, the full record. `kind: host-retirement` with project lets its designated seat and Delegatus-spawned workers read their own project. The server attributes your session; workers resolve their own spawn receipt automatically. Optional callerLaunchId selects an explicit receipt belonging to your session; a designated seat needs no receipt. This reads the latest durable sweep report, capped at 100 records and 100 examined subjects per page, at most 20 pages. Pass cursor unchanged with a fresh clientRequestId while hasMore. A changed report requires restarting pagination. Historical operation/PID identity and current ownership remain explicitly unknown where the authority does not record them; current registry identity is separate. `refusedByFlag` counts, across the whole sweep and every project, the flags behind each no-active-flags refusal, and a refused item names its own `flags`. No sweep or process control is triggered. Earlier individual refusals are not retained, so an absent target never proves completion.",
   resources: "Read system memory, session count/memory totals and Delegatus's own processes. full:true or compact:false includes complete session rows. freshness reports requestedAt, the system block's capturedAt and ageMs, the session table's sessionsCapturedAt, sessionsAgeMs and sessionsStale, the cache source, and refreshSucceeded (fresh:true only). A process with no observation yet answers within a second: freshness.pending is true with reason \"collecting\", the system block is current and the session table is empty until a later call; fresh:true waits for the collection instead. When the session collector failed, the rows come from an earlier capture: sessionsStale is true and every row carries stale:true with its capturedAt, so read them as history of what ran then. viewer lists the web server, runtime host and workers with their memory; it is not actionable, since nothing in it is an agent to kill. Launched agents delegate this read to the Viewer, over either transport. A legacy stdio client without a launch capability measures locally and returns viewer:null with viewerUnavailable \"not-the-viewer\".",
@@ -4042,7 +4149,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   lifecycle_events: "Query the durable lifecycle event journal by lineage and cursor, or poll a bounded relay digest of what changed since the last one.",
   request_attention: [
     'Use waitFor:"accepted" to return after durable acceptance with accepted:true, arrival:"pending" and handoff:null. The default waits for durable browser arrival.',
-    "Move the operator's one active Delegatus view to a typed target immediately and verify the arrival — no confirmation prompt, no pending offer. Execution is gated on server-derived authority: only the operator's root/gateway session or the target project's designated orchestrator seat may direct it; workers and unidentified callers are refused (ATTENTION_NOT_PERMITTED) with nothing recorded. The latest-interaction active view is chosen deterministically (down to the one executing browser tab); success is returned only after that view's camera/focus actually landed, and a missing view, lost target, or timeout is an explicit bounded failure. Durably attributed to the calling session, idempotent by clientRequestId across restarts, and the operator keeps a one-action Return control that restores exactly where they were. On a phone the request shows as a notice; the phone's view never moves. With no desktop to move and a phone open, the call answers at once with delivered: \"notice\" and no handoff.",
+    "Move the operator's one active Delegatus view to a typed target immediately and verify the arrival — no confirmation prompt, no pending offer. Execution is gated on server-derived authority: only the operator's root/gateway session or the target project's designated orchestrator seat may direct it; workers and unidentified callers are refused (ATTENTION_NOT_PERMITTED) with nothing recorded. The latest-interaction active view is chosen deterministically (down to the one executing browser tab); success is returned only after that view's camera/focus actually landed, and a missing view, lost target, or timeout is an explicit bounded failure. Durably attributed to the calling session, idempotent by clientRequestId across restarts, and the operator keeps a one-action Return control that restores exactly where they were. On a phone the request shows as a notice; the phone's view never moves. With no desktop to move and a phone open, the call answers at once with delivered: \"notice\" and no handoff. The same answer comes when the operator's active view is in a different project than the target's: the view stays where it is and they get the notification, whose click opens the target; only a target in the project they are in moves their view.",
     `Targets are typed and discriminated by \`kind\`, one shape per kind: ${FOCUS_TARGET_SHAPES.map((shape) => `${shape.kind} — ${shape.example}`).join("; ")}.`,
     "A conversation target takes either its durable conversationId (resolved server-side to that conversation's current transcript, and the form to prefer because it survives resume and migration) or that transcript's path.",
     "A draft target also needs the top-level project argument; region and point accept intent \"show\" only. A rejected target names the kind it read and the fields that kind expects.",
@@ -4070,6 +4177,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   create_orchestrator: "Create a project's orchestrator or adopt one eligible registered conversation: designate it as the project's selected orchestrator and deliver the approved versioned mandate (editable). Idempotent by clientRequestId.",
   send_message_to_orchestrator: [
     "A designated orchestrator seat may relay to another project's designated seat. The recipient sees the sending project and agent authorship, never operator authority. A live owner-tier relay verified by the paired service may also hand the owner's request to a designated seat with operator authority; the server quotes the original owner request and retains agent authorship. A resolved Telegram report reply includes the stored report and is bound to its project and source seat; forward the approval verbatim. Ask one short question for an unresolved ambiguous approval before creating work. Other workers, non-owner relays, pipeline stages, deputies and unidentified callers are refused. If a handoff fails, carry on with your available tools or explain the failure and the owner's concrete next action. Owner relay board tasks default to assigned so the seat tick can wake on unstarted-task; report the task and project, checking that a seat and its tick are enabled. Seat relays must omit Delegatus authority markers and bridge trailers; a seat cannot create a missing recipient. The operator's voice gateway keeps its existing path.",
+    "Only a live owner-tier relay may omit project. The Viewer uses the project configured for the relay target and requires its designated seat. For explicit cross-project requests or report replies, pass the intended project. When the project cannot be resolved, ask the owner which project should receive the request.",
     "For a shared project, pass machine as the linked machine label, install id or prefix; get_orchestrator names linkedSeats. Both machines must support seat messages. Unshared, revoked, unreachable and older peers are refused with project_not_linked, link_revoked, peer_unreachable or peer_cannot_relay. Only the shared project's seat sends remotely. Replies use the same tool back to the sending machine. A remote operationId has prefix seatmsg_; message_receipt reports queued, accepted or refused.",
     "Deliver a message to the project's selected orchestrator, resolved server-side. A dead selected conversation is resumed; with none designated, one is created first. A message still queued when the seat rotates is carried to the new seat; recovery under the same key never sends twice. The answer reports acceptance: ask message_receipt what became of the operationId.",
     RECOVERY_CONTRACT_DESCRIPTION,
@@ -4143,15 +4251,25 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   telegram_bot_send_document: [
     "Post one file as a Telegram document (sendDocument) through the operator's Telegram bot into an allowlisted chat — the way to share a report: markdown and long text read badly as messages. The chat must be allowlisted by the operator, as for telegram_bot_send.",
     "`document.path` is absolute on the Viewer host and must resolve, symlinks followed, under a document root the operator set in the Telegram panel (by default `handoff/` in the Viewer host's home), so write reports there first. Paths through a dot-directory are refused pending owner confirmation; the Delegatus state directory is always refused.",
-    "Types: .md .markdown .txt .log .json .csv .pdf .png .jpg .jpeg .html, non-empty, at most 20 MB; text files are scanned, as UTF-8 and UTF-16, for private keys, tokens and credentials (including `password: word` assignments) and refused with document_secret naming the class (`details.secretClass`). Other refusals: document_invalid, document_outside_roots, document_forbidden_path, document_type, document_too_large.",
-    "A secret, dot-directory or outside-roots refusal offers `details.confirmation` with an expiring Delegatus URL. The paired owner signs in and approves there; that action rechecks and sends this exact file to this exact chat and topic once. Show the owner the link and detector reasons. Agents cannot approve, and ordinary retries still run all detectors. The confirmation expires after ten minutes and becomes unavailable after Viewer restart. `document.filename` is the shown name (default the file's own name) and must keep the file's type class (text, PDF or image: a .md may be shown as .txt, never as .pdf); `document.caption` up to 1024 characters, plain or html by `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. Success includes sentBy; per-bot refusals and selection follow telegram_bot_send. The post appears in telegram_bot_messages with kind document and its filename.",
+    "Types are .md .markdown .txt .log .json .csv .pdf .png .jpg .jpeg .html .xlsx .docx .pptx, non-empty, at most 20 MB. Text and Office files are scanned for private keys, tokens and credentials (including `password: word` assignments). A match returns document_secret with the class in details.secretClass. Office inspection includes expanded ZIP members, decoded XML and embedded Office packages up to two levels deep, with a 20 MB total expanded limit and at most 4096 entries across all levels. An Office package that cannot be fully inspected, including one that embeds an OLE object or nests packages deeper, returns document_invalid. Other refusals include document_outside_roots, document_forbidden_path, document_type and document_too_large.",
+    "A secret, dot-directory or outside-roots refusal offers `details.confirmation` with an expiring Delegatus URL. The paired owner signs in and approves there; that action rechecks and sends this exact file to this exact chat and topic once. Show the owner the link and detector reasons. Agents cannot approve, and ordinary retries still run all detectors. The confirmation expires after ten minutes and becomes unavailable after Viewer restart. `document.filename` is the shown name (default the file's own name) and must keep the file's type class (for example, a .md may be shown as .txt). Office filenames keep their extension. `document.caption` accepts up to 1024 characters, as plain text or HTML according to `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. Success includes sentBy; per-bot refusals and selection follow telegram_bot_send. The post appears in telegram_bot_messages with kind document and its filename.",
   ].join(" "),
   relay_answer: relayAnswerDescription,
   relay_service_tools: "Only while you answer a relay message as its owner: the chat service tools for that message. op list searches the compact index; op describe (names) returns parameters and guidance; op call (calls: up to four {tool, arguments, cursor}) runs direct tools under the relay call, output and confirmation limits. in_progress means repeat unchanged. Ready photos and video frames include image content beside metadata; in code mode, forward image blocks with image(block). Reuse unexpired photo refs as seed_media_refs only on generate_image or update_self_profile_photo. Video frames cannot be seeds. relay_answer attachments can select media_ref from this request. Refused in any other conversation and once answered.",
+  relay_trusted_requesters: "Manage trusted requesters for one relay target. The installation operator's own conversation can list entries and propose start_enrolment, confirm, decline or remove. Use the exact entry id from list. A proposal returns a single-use path to open on the Delegatus board. The signed-in owner reviews and approves it there. The enrolment code is shown in the owner browser after approval.",
   relay_owner_history: [
     "Read the operator's Telegram groups where Celestia or a clone is present. action groups lists them; action messages reads one page for chat and today or inclusive from/to dates. The existing owner-tools switch defaults OFF. The operator's stored time zone is sent to Celestia. Messages are oldest first; sentAt is when Celestia stored them. A short page may continue: pass nextCursor alone as cursor, retaining the original dates and zone; nextCursor null ends the range. oldestStoredAt marks retained history. editsReported says whether the service reports edits; editedAt marks one. Media includes kind, fileName, mimeType, size, duration, dimensions and fetch availability when the service supplies them. Older services cannot report edits or all media facts. Telegram-side deletions may remain stored. Author ids are excluded. Live relay agents replying in Telegram cannot read this history. No MCP receipt is stored, even with an explicit clientRequestId.",
     "action media takes chat, messageId and optional directory: pass your LLV_EVIDENCE_DIR, an existing directory under the installation's evidence root; the default is evidence/relay-media. It streams one photo, document or video through the paired service, up to 2 GiB, and returns done with path, kind, mimeType, size and SHA-256 only after verification. Repeat the identical call on in_progress to join the same job. not_offered means the paired service must implement relay_owner_media first; too_large names the limit and how to lift it. Files, their contents and original names stay private to this conversation: never copy them into reports, messages to other agents, tasks, commits, pull requests, issues, lessons, Telegram hand-off folders or other chats.",
     "Use history only to answer the operator in this conversation. Never copy message text, names, usernames, chat titles or chat ids into bridge reports, requests or messages to other agents or seats, spawn prompts, task text or details, files, commits, pull requests, issues or lessons. A report may say the answer is in this conversation.",
+  ].join(" "),
+  telegram_bot_reactions: [
+    "Read the reactions available in an allowlisted Telegram chat using a connected Bot API bot. Use the chat alias or ID from telegram_bot_chats.",
+    "The result's catalog is {kind: 'explicit', reactions: [...]} when the chat sets a list, including an empty list when no reactions are allowed. {kind: 'standard'} means Telegram's standard emoji reactions are available. Paid entries in an explicit catalog are visible but cannot be set by bots.",
+  ].join(" "),
+  telegram_bot_set_reaction: [
+    "Set one reaction on a specific message in an allowlisted Telegram chat using a connected Bot API bot. Supply the chat alias or ID and the message ID within that chat.",
+    "Use {type: 'emoji', emoji: '👍'} or an explicitly allowed {type: 'custom_emoji', custom_emoji_id: '…'} from telegram_bot_reactions. The bot's reaction replaces its prior reaction on that message. Paid reactions return reaction_paid_unsupported. Unavailable reactions return reaction_not_allowed. Telegram's per-message limit returns reaction_limit_reached. If delivery is uncertain, reaction_uncertain means Telegram may have applied the change.",
+    "Telegram applies an album reaction to the first surviving message in the album.",
   ].join(" "),
   telegram_bot_messages: [
     "Read recent messages the operator's Telegram bot received in one chat, newest first, from Delegatus's local store — a bot has no history API, so only what arrived while it was connected exists.",
@@ -4248,7 +4366,7 @@ const pipelineStageSchema = z.object({
       .describe("Values for the role's declared parameters, substituted into its scaffold. Only the role's own keys, validated against the registry."),
   }).strict().optional()
     .describe("Role reference ONLY. Runtime overrides do not go here — put engine/model/effort/access on the stage itself."),
-  engine: z.enum(["claude", "codex"]).optional()
+  engine: z.enum(["claude", "codex", "antigravity"]).optional()
     .describe("Stage-level engine override; defaults to the role's registry engine."),
   model: z.string().nullable().optional()
     .describe("Stage-level model override, or null to inherit the role default. Must be a model the stage engine supports."),
@@ -4376,8 +4494,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
        own named violation, so that schema leaves the entries to it. */
     taskId: z.string().refine((value) => value.trim().length > 0, { message: "taskId must name a board task; omit the field to launch without one" }).optional()
       .describe("Board task this agent works on (#1720). The launch joins that task when its receipt is reserved, and an id naming no task refuses the launch before any agent starts — a blank id is refused here, since the launch would otherwise read it as no task at all. The task must belong to the project resolved from cwd after project aliases are resolved; a task from another project is refused before any request is claimed or dispatched. Use a task on the target project's board, or omit taskId. Omitting it, the launch joins every task held by the parent this call names (parentConversationId, src or parent — this tool never infers one from the caller) and by the conversation it reviews; when the call names neither, or neither holds a task, it is given a named task of its own, which is a duplicate card. A reviewer that names a parent therefore joins that parent's card beside the reviewed work's, so pass taskId on reviewer spawns too — an explicit id wins over inheritance."),
-    engine: z.enum(["claude", "codex", "copilot"]).optional()
-      .describe("Agent CLI. copilot runs the GitHub Copilot CLI over ACP on the structured transport; its account is named or the selected one (no automatic pick), model auto or an id the account offers, effort none…max."),
+    engine: z.enum(["claude", "codex", "copilot", "antigravity"]).optional()
+      .describe("Agent CLI. copilot runs the GitHub Copilot CLI over ACP on the structured transport; antigravity runs the Antigravity CLI (`agy acp`) over ACP on the structured transport with models from `agy models` and effort low…max."),
     account: z.string().nullable().optional()
       .describe("Account this agent runs on, including role-preset spawns, or null to let the project's own selection choose. Honored only when the target project allows that account; an account outside the project's allowed set is refused with the allowed ones named. A project with no binding allows every account. The launch receipt records the account used."),
     model: z.string().optional(),
@@ -4430,6 +4548,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     crossProjectRequest: z.string().optional()
       .describe("Only for a designated orchestrator seat acting on ANOTHER project's board, which is refused by default: hand the work to that project's seat with send_message_to_orchestrator. When the operator explicitly asked you to act on that project directly, quote their request here."),
     text: z.string().min(1).describe("Hard maximum 6000 UTF-16 code units after task text normalization; recommended target 4500. The HUMAN part of the card: a title of 3 to 10 words on the first line, then at most a few plain sentences about the outcome. Agent context belongs in details."),
+    status: z.unknown().optional().describe('Legacy "blocked" request to park the task. Use an operator hold naming the next action. Other holds keep the task in Inbox.'),
     hold: taskHoldInputSchema.optional(),
     steps: taskStepsInputSchema.optional(),
     details: normalizedUtf16Text(TASK_DETAILS_LIMIT, value => value.trim()).optional()
@@ -4772,7 +4891,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema.optional(),
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
-    project: z.string().optional(),
+    project: z.string().optional().describe("Project key, display name or repository folder, case-insensitive. Omission uses the designated seat or workspace project; unrestricted readers retain all projects."),
     state: z.unknown().optional()
       .describe("A pipeline state or array of states; open includes every state except completed and closed. Unknown values are ignored."),
     includeClosed: z.boolean().optional(),
@@ -4837,7 +4956,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     includeHints: z.boolean().optional().describe("true includes the static readMore hint; full:true also includes it."),
     clientRequestId: clientRequestIdSchema.optional(),
     full: z.unknown().optional().describe("true returns the full record; default answers omit large bodies and name the detail read."),
-    project: z.string().optional(),
+    project: z.string().optional().describe("Project key, display name or repository folder, case-insensitive. Omission uses the designated seat or workspace project; unrestricted readers retain all projects."),
     status: z.unknown().optional().describe("One status or an array: inbox, assigned, blocked, done. Unknown values are ignored."),
     statuses: z.unknown().optional().describe("Alias for a status set; takes precedence over status."),
     openOnly: z.unknown().optional().describe("true excludes done tasks."),
@@ -5010,7 +5129,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   send_message_to_orchestrator: z.object({
     clientRequestId: clientRequestIdSchema,
     recoveryOnly: recoveryOnlySchema,
-    project: z.string().min(1).describe("Known project key, display name or repository name whose selected orchestrator receives the message. Case and surrounding whitespace are ignored; ambiguous and unknown names refuse immediately with candidates or close matches."),
+    project: z.string().min(1).optional().describe("Project key, display name or repository name. Required except on a verified owner relay using its configured project. Ambiguous or unknown projects are refused."),
     machine: z.string().min(1).optional().describe("Linked machine label, install id or 8-hex prefix for this shared project; omit for the local seat."),
     text: z.string().min(1).describe("The message. The recipient is resolved server-side; a dead session is resumed, a missing one created first."),
   }).passthrough(),
@@ -5129,7 +5248,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).passthrough(),
   account_limits: z.object({
     clientRequestId: clientRequestIdSchema.optional(),
-    engine: z.enum(["claude", "codex", "copilot"]).optional().describe("Only this engine's accounts."),
+    engine: z.enum(["claude", "codex", "copilot", "antigravity"]).optional().describe("Only this engine's accounts."),
     accountId: z.string().trim().min(1).optional().describe("Only this account."),
   }).passthrough(),
   issue_report: z.object({
@@ -5183,8 +5302,25 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     topicId: z.number().int().positive().optional().describe("Forum topic (message_thread_id) to post into."),
     silent: z.boolean().optional().describe("Send without a notification sound."),
   }).passthrough(),
+  telegram_bot_reactions: z.object({
+    clientRequestId: clientRequestIdSchema,
+    chat: z.string().trim().min(1).describe("The allowlisted chat's alias or ID."),
+  }).passthrough(),
+  telegram_bot_set_reaction: z.object({
+    clientRequestId: clientRequestIdSchema,
+    chat: z.string().trim().min(1).describe("The allowlisted chat's alias or ID."),
+    messageId: telegramReactionMessageIdSchema.describe("ID of the message within the specified chat."),
+    reaction: telegramReactionSchema.describe("One reaction. Telegram bots can set standard or explicitly allowed custom emoji."),
+  }).passthrough(),
   relay_answer: relayAnswerSchema,
   relay_service_tools: relayServiceToolsSchema,
+  relay_trusted_requesters: z.strictObject({
+    action: z.enum(["list", "start_enrolment", "confirm", "decline", "remove"]),
+    relay: z.string().min(1).max(128), target: z.string().min(1).max(128),
+    label: z.string().max(128).optional().describe("Required for start_enrolment."),
+    entryId: z.string().max(128).optional().describe("Required for confirm, decline and remove. Use the id returned by list."),
+    clientRequestId: clientRequestIdSchema.optional(),
+  }),
   relay_owner_history: z.object({
     action: z.enum(["groups", "messages", "media"]), chat: z.string().optional(), from: z.string().optional(), to: z.string().optional(),
     messageId: z.number().int().min(1).max(2147483647).optional(), directory: z.string().max(4096).optional(),
@@ -5368,7 +5504,7 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
       });
       const finishClaim = trackMcpClaim(`${toolName}:${clientRequestId(args as McpToolArgs) ?? "unkeyed"}`);
       try {
-        const authority: McpResponseAuthority | undefined = toolName === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined;
+        const authority: McpResponseAuthority | undefined = BOARD_READ_TOOLS.has(toolName) || toolName === "pipeline_action" && args.action === "set-src" ? { checks: [] } : undefined;
         const curatorResponse: McpToolCallContext["curatorResponse"] = toolName === "curate_rules" ? {} : undefined;
         const call = () => service.callTool(toolName, args as McpToolArgs, {
           responseAuthority: authority,
@@ -5534,7 +5670,7 @@ export async function createProductionViewerMcpService(hostHealthProbe = false, 
   );
   return withMcpDispatchTurns(hostHealthProbe ? service : withWorkspaceMcpFence(
     service, productionDomainDependencies,
-    async () => (await prepareAgentRegistry()).prepareNativeCallerArtifacts(),
+    async signal => (await prepareAgentRegistry(signal)).prepareNativeCallerArtifacts(signal),
   ));
 }
 

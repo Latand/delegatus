@@ -67,7 +67,7 @@ const { LimitsFooter, fmtQuotaStaleHint } = await import("./LimitsFooter");
 
 let root: Root | null = null;
 
-function engineBlock(host: HTMLElement, engine: "claude" | "codex" | "copilot"): HTMLElement {
+function engineBlock(host: HTMLElement, engine: "claude" | "codex" | "copilot" | "antigravity"): HTMLElement {
   return host.querySelector(`[data-engine-limits="${engine}"]`) as HTMLElement;
 }
 
@@ -143,6 +143,40 @@ for (const density of DENSITIES) test(`the Copilot ${density} renders its monthl
     expect(windows?.textContent).toContain("Month");
     expect(windows?.textContent).toContain("100%");
     expect(windows?.textContent).toContain("reset");
+  }
+});
+
+for (const density of DENSITIES) test(`the Antigravity ${density} renders an active 5h quota exhaustion and clears when expired`, async () => {
+  limits = {
+    claude: null,
+    codex: null,
+    copilot: null,
+    antigravity: {
+      session: { usedPercent: 100, resetsAt: NOW + 7_200, windowMinutes: 300, observedAt: NOW, source: "account" },
+      weekly: null,
+      tiers: [],
+      plan: "Pro",
+      capturedAt: NOW,
+    },
+    claudeAccountId: "claude-a",
+    codexAccountId: "account-a",
+    copilotAccountId: null,
+    antigravityAccountId: "default",
+    provenance: {
+      claude: { source: "unavailable", reason: null, staleSince: null },
+      codex: { source: "unavailable", reason: null, staleSince: null },
+      antigravity: { source: "transcript", reason: null, staleSince: null },
+    },
+  };
+  const block = engineBlock(await render(density), "antigravity");
+  expect(meterLine(block)).toMatchObject({ name: "Antigravity", value: "left 0%" });
+  const windows = block.querySelector("[data-limits-windows]");
+  expect(Boolean(windows)).toBe(density === "detail");
+  if (density === "detail") {
+    expect(windows?.textContent).toContain("5h");
+    expect(windows?.textContent).toContain("0%");
+    expect(windows?.textContent).toContain("reset");
+    expect(windows?.textContent).toContain("Pro");
   }
 });
 
@@ -678,4 +712,25 @@ test("Codex lines are unchanged: each account names its weekly window", async ()
     { id: "codex-b", name: "Codex B", value: "week 60%", active: false },
     { id: "codex-c", name: "Codex C", value: "no data yet", active: false },
   ]);
+});
+
+test("AntigravityFooterRow expires reset-less exhaustion at observedAt + 5h without refresh", async () => {
+  const { AntigravityFooterRow } = await import("./AntigravityFooterRow");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const shown = (at: number, reset: number | null) => renderToStaticMarkup(
+    <AntigravityFooterRow
+      limits={{ session: { usedPercent: 100, observedAt: NOW, resetsAt: reset, windowMinutes: 300 }, weekly: null, plan: null, capturedAt: NOW }}
+      limitsAccountId="default"
+      now={at}
+      density="line"
+    />,
+  ).includes('data-engine-limits="antigravity"');
+
+  expect(shown(NOW + 17_999, NOW + 18_000)).toBe(true);
+  expect(shown(NOW + 18_000, NOW + 18_000)).toBe(false);
+  expect(shown(NOW + 18_001, NOW + 18_000)).toBe(false);
+
+  expect(shown(NOW + 17_999, null)).toBe(true);
+  expect(shown(NOW + 18_000, null)).toBe(false);
+  expect(shown(NOW + 18_001, null)).toBe(false);
 });

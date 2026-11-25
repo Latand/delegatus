@@ -9,7 +9,10 @@ import { pathToFileURL } from "node:url";
 import {
   createLauncherRecord,
   createReadinessJournal,
+  accessKeyCanRoundTrip,
+  releaseHasRevisionReadiness,
   TERMINAL_BOOTSTRAP_TIMEOUT_MS,
+  waitForViewerReadiness,
   waitForPageAndChunk,
   exitError,
   hostEntrypoint,
@@ -437,6 +440,184 @@ test.each(["gate-expired", "issuer-changed", "launcher-changed"] as const)("watc
   } finally { resume(); watcher.stop(); }
 });
 
+
+describe("revision-bound Viewer readiness", () => {
+  const revision = "a".repeat(40);
+  const fixtureKey = ["readiness", "probe"].join("-");
+  const fixtureAuthorization = ["Bearer", fixtureKey].join(" ");
+  const authorizationHeader = ["author", "ization"].join("");
+  const fixtureHeaders = () => ({ [authorizationHeader]: fixtureAuthorization });
+  for (const legacy of [false, true]) {
+    test(`probes the selected revision and uses the legacy path only after a 404 (${legacy})`, async () => {
+      const journalFile = join(root, `endpoint-${legacy}.json`);
+      const journal = createReadinessJournal(journalFile, { revision, pid: 123 });
+      const requests: string[] = [];
+      const server = createServer((request, response) => {
+        requests.push(request.url!);
+        if (request.url === `/api/ready?revision=${revision}` && request.headers["x-test-probe"] === "fixture") {
+          response.writeHead(legacy ? 404 : 200, legacy ? {} : { "x-delegatus-viewer-revision": revision }).end();
+        } else if (legacy && request.url === "/api/files" && request.headers[authorizationHeader] === fixtureAuthorization) {
+          response.writeHead(200).end();
+        } else if (legacy && request.url === "/api/files") {
+          response.writeHead(403).end();
+        } else response.writeHead(503).end();
+      });
+      await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+      try {
+        const address = server.address() as { port: number };
+        const ready = await waitForViewerReadiness(address.port, {
+          revision, timeoutMs: 5_000, allowLegacyFallback: legacy,
+          probeAccess: () => ({ headers: { "x-test-probe": "fixture", ...fixtureHeaders() } }), onPhase: journal.observe,
+        });
+        expect(ready).toBeTrue();
+        journal.finish();
+        expect(requests).toEqual([`/api/ready?revision=${revision}`, ...(legacy ? ["/api/files"] : [])]);
+        const observations = JSON.parse(readFileSync(journalFile, "utf8")).runs[0].phases.files.observations;
+        expect(observations).toEqual(legacy
+          ? [
+            { endpoint: "/api/ready", httpStatus: 404, status: "failed", elapsedMs: expect.any(Number) },
+            { endpoint: "/api/files", httpStatus: 200, status: "ready", elapsedMs: expect.any(Number) },
+          ]
+          : [{ endpoint: "/api/ready", httpStatus: 200, status: "ready", elapsedMs: expect.any(Number) }]);
+      } finally {
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
+    });
+  }
+
+  test("a perimeter refusal falls back with launcher credentials, while missing credentials and pending readiness fail", async () => {
+    const attempts: string[] = [];
+    const legacy = await waitForViewerReadiness(43123, {
+      revision, timeoutMs: 1_000, allowLegacyFallback: true, probeAccess: () => ({ headers: fixtureHeaders() }),
+      probe: async (_port, endpoint, _revision, _budget, headers) => {
+        attempts.push(`${endpoint}:${headers[authorizationHeader] ?? "missing"}`);
+        return endpoint === "/api/ready" ? { httpStatus: 403 } : { httpStatus: headers[authorizationHeader] ? 200 : 403 };
+      },
+      sleep: async () => {},
+    });
+    expect(legacy).toBeTrue();
+    expect(attempts).toEqual([`/api/ready:${fixtureAuthorization}`, `/api/files:${fixtureAuthorization}`]);
+
+    for (const headers of [{}, fixtureHeaders()]) {
+      attempts.length = 0;
+      let refusalNow = 0;
+      const refused = await waitForViewerReadiness(43123, {
+        revision, timeoutMs: 1_000, allowLegacyFallback: true, now: () => refusalNow, probeAccess: () => ({ headers }),
+        probe: async (_port, endpoint, _revision, budget) => {
+          attempts.push(endpoint);
+          refusalNow += endpoint === "/api/ready" ? 1 : budget;
+          return { httpStatus: endpoint === "/api/ready" ? 404 : 403 };
+        },
+        sleep: async () => {},
+      });
+      expect(refused).toBeFalse();
+      expect(attempts).toEqual(["/api/ready", "/api/files"]);
+    }
+
+    attempts.length = 0;
+    let now = 0;
+    const pending = await waitForViewerReadiness(43123, {
+      revision, timeoutMs: 1_000, now: () => now,
+      probe: async (_port, endpoint) => {
+        attempts.push(endpoint);
+        now = 1_000;
+        return { httpStatus: endpoint === "/api/ready" ? 503 : 200, revision };
+      },
+      sleep: async () => {},
+    });
+    expect(pending).toBeFalse();
+    expect(attempts).toEqual(["/api/ready"]);
+  });
+
+  test("a stale build under a newer expected revision cannot use legacy fallback", async () => {
+    const attempts: string[] = [];
+    let now = 0;
+    const ready = await waitForViewerReadiness(43123, {
+      revision, timeoutMs: 1_000, allowLegacyFallback: false, now: () => now,
+      probe: async (_port, endpoint) => {
+        attempts.push(endpoint);
+        now = 1_000;
+        return { httpStatus: endpoint === "/api/ready" ? 404 : 200 };
+      }, sleep: async () => {},
+    });
+    expect(ready).toBeFalse();
+    expect(attempts).toEqual(["/api/ready"]);
+  });
+
+  test("protocol is selected from the release artifact and keys must round-trip exactly", async () => {
+    const dir = join(root, "protocol-release");
+    const route = join(dir, ".next/server/app/api/ready/route.js");
+    const source = join(dir, "src/app/api/ready/route.ts");
+    mkdirSync(join(dir, ".next/server/app/api/ready"), { recursive: true });
+    mkdirSync(join(dir, "src/app/api/ready"), { recursive: true });
+    writeFileSync(source, "export {};\n");
+    // The source revision is readiness-capable even when the retained build
+    // artifact was made before the route existed.
+    expect(releaseHasRevisionReadiness({ dir })).toBeTrue();
+    rmSync(source);
+    expect(releaseHasRevisionReadiness({ dir })).toBeFalse();
+    const packagedRoute = join(dir, "dist/standalone/.next/server/app/api/ready/route.js");
+    mkdirSync(join(dir, "dist/standalone/.next/server/app/api/ready"), { recursive: true });
+    writeFileSync(join(dir, "dist/standalone/server.js"), "");
+    writeFileSync(packagedRoute, "export {};");
+    expect(releaseHasRevisionReadiness({ dir })).toBeTrue();
+    const endpoints: string[] = [];
+    let now = 0;
+    const accepted = await waitForViewerReadiness(43123, {
+      revision, timeoutMs: 1_000, now: () => now,
+      allowLegacyFallback: !releaseHasRevisionReadiness({ dir }),
+      probe: async (_port, endpoint) => {
+        endpoints.push(endpoint);
+        now += 1;
+        return { httpStatus: endpoint === "/api/ready" ? 404 : 200 };
+      }, sleep: async milliseconds => { now += milliseconds; },
+    });
+    expect(accepted).toBeFalse();
+    expect(endpoints.length).toBeGreaterThan(0);
+    expect(endpoints.every(endpoint => endpoint === "/api/ready")).toBeTrue();
+    rmSync(packagedRoute);
+    expect(releaseHasRevisionReadiness({ dir })).toBeFalse();
+    writeFileSync(route, "export {};\n");
+    expect(releaseHasRevisionReadiness({ dir })).toBeTrue();
+    rmSync(route);
+    expect(releaseHasRevisionReadiness({ dir })).toBeFalse();
+    expect(accessKeyCanRoundTrip("fixture-roundtrip-value")).toBeTrue();
+    expect(accessKeyCanRoundTrip("fixture-roundtrip-value ")).toBeFalse();
+  });
+
+  test("a pending or wrong revision never falls back and a no-answer attempt gets only the remaining budget", async () => {
+    let now = 0;
+    const attempts: Array<[string, number]> = [];
+    const journalFile = join(root, "pending-revision.json");
+    const journal = createReadinessJournal(journalFile, { revision, pid: 123 }, () => now);
+    const ready = await waitForViewerReadiness(43123, {
+      revision, timeoutMs: 5_000, onPhase: journal.observe,
+      now: () => now, sleep: async milliseconds => { now += milliseconds; },
+      probe: async (_port, endpoint, _revision, budget) => {
+        attempts.push([endpoint, budget]);
+        if (attempts.length === 1) { now += 10; return { httpStatus: 503 }; }
+        if (attempts.length === 2) { now += 10; return { httpStatus: 409 }; }
+        if (attempts.length === 3) { now += 10; return { httpStatus: 200, revision: "b".repeat(40) }; }
+        now += budget;
+        return { error: "deadline" };
+      },
+    });
+    expect(ready).toBeFalse();
+    expect(now).toBe(5_000);
+    expect(attempts).toEqual([["/api/ready", 5_000], ["/api/ready", 4_790], ["/api/ready", 4_580], ["/api/ready", 4_370]]);
+    journal.finish("Viewer readiness deadline expired");
+    expect(JSON.parse(readFileSync(journalFile, "utf8")).runs[0]).toMatchObject({
+      status: "failed", detail: "deadline",
+      phases: { files: { elapsedMs: 5_000, observations: [
+        { status: "failed", elapsedMs: 10, httpStatus: 503 },
+        { status: "failed", elapsedMs: 10, httpStatus: 409 },
+        { status: "failed", elapsedMs: 10, httpStatus: 200, error: "revision-mismatch" },
+        { status: "failed", elapsedMs: 4_370, error: "deadline" },
+      ] } },
+    });
+  });
+});
 
 describe("bounded page and chunk readiness", () => {
   for (const slowPhase of ["page", "html", "chunk"] as const) {

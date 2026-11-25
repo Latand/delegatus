@@ -11,7 +11,7 @@ import { requestSchema, type ExternalRelayRequest } from "./protocol";
 import { contextRequest } from "./request.fixture";
 import { ownerTierFor } from "./profile";
 import { observeOwnerTurn, ownerAnswer, ownerRunPrompt, ownerStopRetryDelayMs, runOwnerAgent, revokeOwnerRuns, settleOwnerFirstPrompt, confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
-import { reserveRun, readRunLedger, externalRelayFile, dropRun } from "./store";
+import { reserveRun, readRunLedger, externalRelayFile, dropRun, updateRelayStore, type PairedRelay } from "./store";
 import { sweepExternalRelayOrphans } from "./poller";
 import { appDirIn } from "../../../bin/appDir.mjs";
 import { retainProviderRedactionSecrets } from "@/lib/accounts/providerSecretRedaction";
@@ -68,7 +68,7 @@ test("owner prompt isolates the single request and escapes every data section", 
   expect(ownerRunPrompt(r, instruction(), 30)).not.toContain("[handoff]");
 });
 
-test("owner continuation sends each unseen service and recovered message once", async () => {
+test("owner continuation sends each recent service and recovered message once", async () => {
   const { ownerContinuationPrompt } = await import("./ownerRun");
   const r = request();
   r.input.conversation = [
@@ -76,7 +76,7 @@ test("owner continuation sends each unseen service and recovered message once", 
     { ...r.input.conversation[0]!, id: "new-message" },
   ];
   r.input.respond_to = "new-message";
-  const owner = { ...instruction(), localContext: { resolution: "history" as const, questionIds: [], origins: {},
+  const owner = { ...instruction(), messageId: "new-message", localContext: { resolution: "history" as const, questionIds: [], origins: {},
     conversation: [
       { ...r.input.conversation[0]!, id: "seen-message" },
       { ...r.input.conversation[0]!, id: "new-message" },
@@ -84,8 +84,8 @@ test("owner continuation sends each unseen service and recovered message once", 
     ] } };
   const turn = ownerContinuationPrompt(r, owner, 1, { seen: ["seen-message"], staticDigest: null });
   const sections = [...turn.prompt.matchAll(/<conversation>\n([^]*?)\n<\/conversation>/g)].map(match => JSON.parse(match[1]!));
-  expect(sections.flat().map((message: { id: string }) => message.id)).toEqual(["new-message", "recovered-message"]);
-  expect(turn.seen).toEqual(["seen-message", "new-message", "recovered-message", "m1"]);
+  expect(sections.flat().map((message: { id: string }) => message.id)).toEqual(["seen-message", "recovered-message", "new-message"]);
+  expect(turn.seen).toEqual(["seen-message", "recovered-message", "new-message"]);
 });
 
 test("final answer redacts before truncation, keeps sentinels and counts Unicode code points", () => {
@@ -729,23 +729,28 @@ test("owner continuation preserves source scalars across a reverse read boundary
 test("queued owner continuation authority is bound to its durable operation and conversation", async () => {
   const { ownerRelayOperationAuthorized } = await import("./ownerAuthority");
   const { procBackend } = await import("@/lib/proc");
-  const { writeRelayFile } = await import("./store");
   const previous = process.env.LLV_STATE_DIR;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "owner-operation-authority-"));
   process.env.LLV_STATE_DIR = root;
   const requestId = "operation-authority-fixture";
   const operationId = `relay-owner-${requestId}`;
+  const relay: PairedRelay = {
+    id: "relay-fixture", origin: "http://127.0.0.1:1", api_base: "http://127.0.0.1:1/v1",
+    name: "Fixture pairing", description: "", credential: "fixture",
+    owner: { namespace: "telegram", id: "101", display_name: "Fixture owner", handle: null },
+    pairedAt: "2026-10-17T12:00:00Z", paused: false,
+    limits: { max_response_bytes: 1048576, max_wait_s: 25, max_answer_chars: 4000 },
+    targets: [{ ...target, ownerTier: true }],
+  };
   try {
-    writeRelayFile(externalRelayFile("relays"), { v: 1, relays: [{ id: "relay-fixture", paused: false,
-      targets: [{ id: "target-fixture", enabled: true, ownerTier: true }] }] });
-    reserveRun({ requestId, leaseId: "lease-fixture", relayId: "relay-fixture", targetId: "target-fixture",
+    updateRelayStore(store => ({ ...store, relays: [relay] }));
+    reserveRun({ requestId, leaseId: "lease-fixture", relayId: relay.id, targetId: target.id,
       childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: procBackend.processIdentity(process.pid)!,
-      runDir: root, startedAt: new Date().toISOString(), conversationId: "conversation_pinned",
+      runDir: root, startedAt: relay.pairedAt, conversationId: "conversation_pinned",
       ownerTurn: { clientAttemptId: `relay-owner-${requestId}`, continuation: { operationId } } });
     expect(ownerRelayOperationAuthorized(operationId, "conversation_pinned")).toBe(true);
     expect(ownerRelayOperationAuthorized(operationId, "conversation_other")).toBe(false);
-    writeRelayFile(externalRelayFile("relays"), { v: 1, relays: [{ id: "relay-fixture", paused: false,
-      targets: [{ id: "target-fixture", enabled: true, ownerTier: false }] }] });
+    updateRelayStore(store => ({ ...store, relays: [{ ...relay, targets: [{ ...target, ownerTier: false }] }] }));
     expect(ownerRelayOperationAuthorized(operationId, "conversation_pinned")).toBe(false);
   } finally {
     dropRun(requestId); fs.rmSync(root, { recursive: true, force: true });

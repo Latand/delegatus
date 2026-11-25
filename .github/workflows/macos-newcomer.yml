@@ -77,7 +77,7 @@ jobs:
           ref: ${{ steps.release.outputs.revision || github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
       # workflow_run checks an immutable release revision; use this workflow's
-      # reader so recovery works for tags created before --registry-view existed.
+      # reader and rehearsal so older releases get the current verification.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
         with:
@@ -139,8 +139,9 @@ jobs:
         if: github.event_name != 'workflow_run' || steps.npm-publication.outputs.npm_succeeded == 'true'
         env:
           NEWCOMER_PACKAGE: ${{ steps.package.outputs.target }}
+          NEWCOMER_DRIVER: ${{ github.event_name == 'workflow_run' && 'workflow-source/scripts/newcomer-install.mjs' || 'scripts/newcomer-install.mjs' }}
         # Node supervises the probe; the installed launcher uses its own Bun.
-        run: node scripts/newcomer-install.mjs "$NEWCOMER_PACKAGE" "$RUNNER_TEMP/newcomer-report"
+        run: node "$NEWCOMER_DRIVER" "$NEWCOMER_PACKAGE" "$RUNNER_TEMP/newcomer-report" "$PWD"
       - name: Record short report
         if: always()
         uses: actions/upload-artifact@v4

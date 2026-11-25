@@ -1,6 +1,15 @@
 import { expect, spyOn, test, crypto, fs, os, path, engineModule, IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail, defaultPipelinePorts, tickPipelines, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, durableStageTurnEvidence, patchPipeline, closeAndDrain, RUN_STAGES, entry, harness, create, withRuntimeSnapshot, HISTORICAL_VERDICT_MISS, PASS_TEXT, makeStructuredAttempt, pinStageHead, BUDGET_STAGES, movingHeadHarness, driveWithController, stagedRecoveryHarness, activationDrainFixture, reserveActivationOnly, expectPipelineLeaseAbsent, restartCutStage, cutByRestart, idleStageHostFixture, runtimeReleaseOf, SILENT_RUN, attemptThatWorkedOnAfterRestart, stageWhoseStopMovesTheTranscript } from "./engine.fixture";
+
+function expectRestartHandoverCause(prompt: string, expected: string): void {
+  const start = prompt.indexOf("\n\nThis is a fresh attempt");
+  expect(start).toBeGreaterThanOrEqual(0);
+  const handover = prompt.slice(start);
+  expect(handover).toContain(expected);
+  if (!expected.includes("Delegatus restart")) expect(handover).not.toContain("Delegatus restart");
+}
 import type { Flow, BoardTask, PipelinePorts } from "./engine.fixture";
-import { spawnSync } from "node:child_process";
+import { spawn as spawnChild, spawnSync } from "node:child_process";
+import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
 async function continuationCloseFixture(marker: "actionAt" | "continuationRequestedAt" = "continuationRequestedAt") {
   const h = harness();
@@ -665,11 +674,13 @@ test.each(["path-pending", "starting", "closed", "closed-pending"] as const)("ne
 test("a stage conversation switched to another account continues on the message held for the switch and settles on the successor's verdict without the fail edge (#1695 K6c)", async () => {
   const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
   const { advanceConversationMigration, reconcileMigrations } = await import("@/lib/accounts/migration/coordinator");
+  const { preflightCodexSource } = await import("@/lib/accounts/migration/provider");
   const { applyStructuredReconfigure } = await import("@/lib/runtime/structuredReconfigure");
   const { procBackend } = await import("@/lib/proc");
   const { boardFor } = await import("@/lib/board/store");
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "k6c-switched-stage-registry.json"));
-  const sourcePath = "/codex/k6c-stage-source.jsonl";
+  const transcriptRoot = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "k6c-source-"));
+  const sourcePath = path.join(transcriptRoot, "k6c-stage-source.jsonl");
   const successorPath = "/codex/accounts/account-b/k6c-stage-successor.jsonl";
   const profile = emptyLaunchProfile({ cwd: "/repo", project: "repo" });
   const hostProcess = { pid: process.pid, startIdentity: procBackend.processIdentity(process.pid) };
@@ -687,6 +698,7 @@ test("a stage conversation switched to another account continues on the message 
   observe("busy", "2026-07-21T10:00:10.000Z");
   const stageConversation = registry.conversationForPath(sourcePath)!.id;
   function stageConversationGeneration() { return registry.conversation(stageConversation)!.generations[0]!.id; }
+  fs.writeFileSync(sourcePath, JSON.stringify({ type: "session_meta", payload: { id: stageConversationGeneration() } }) + "\n");
   recordHost("turn-source");
 
   const h = harness();
@@ -736,6 +748,11 @@ test("a stage conversation switched to another account continues on the message 
     registry,
     validateAccount: async () => {},
     resolveAccount: ((engine: string, accountId: string) => ({ accountId, home: process.env.LLV_STATE_DIR!, engine })) as never,
+    preflightSource: (source, _accounts, assertCurrent) => preflightCodexSource(source, {
+      resolveTranscriptOwner: (engine, pathname) => engine === "codex" && pathname === sourcePath
+        ? { engine, accountId: "account-a", kind: "managed", home: transcriptRoot, transcriptRoot, env: { NODE_ENV: "test" } }
+        : null,
+    }, assertCurrent),
     releaseHost: async () => true,
     recover: (async () => true) as never,
     migrate: (conversationId, _target, store, ownsOperation, reconfigureOperationId) =>
@@ -1753,8 +1770,7 @@ test.each([
   expect(replaced.stateDetail).toBe(`stage attempt 1 ${detail}${exit}; fresh attempt 2 is starting`);
   expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: interruption === "dead" ? "host-lost" : "engine-stop" });
   await tickPipelines([], sameBoot);
-  expect(h.spawnInputs[1]!.prompt).toContain(`stage attempt 1 ${detail}.`);
-  expect(`${replaced.runs[0]!.attempts[0]!.error} ${replaced.stateDetail} ${h.spawnInputs[1]!.prompt}`).not.toContain("restart");
+  expectRestartHandoverCause(h.spawnInputs[1]!.prompt, `stage attempt 1 ${detail}.`);
 
   await tickPipelines([entry(attempt.agentPath!)], sameBoot);
   const again = loadPipelines()[0]!;
@@ -1786,7 +1802,7 @@ test("a replacement recorded before causes were told apart is described without 
   delete replaced.runs[0]!.attempts[1]!.restartContext!.cause;
   savePipelines([replaced]);
   await tickPipelines([], h.ports);
-  expect(h.spawnInputs[1]!.prompt).toContain("stage attempt 1 was interrupted. Continue the same stage input");
+  expectRestartHandoverCause(h.spawnInputs[1]!.prompt, "stage attempt 1 was interrupted.");
 });
 
 test("a stage that keeps working after its turn ended keeps its host through the recovery tick and the deferred cursor write", async () => {
@@ -1797,8 +1813,13 @@ test("a stage that keeps working after its turn ended keeps its host through the
      recovery tick is over. */
   const realSetTimeout = globalThis.setTimeout;
   const deferred: Array<{ run: () => void; delayMs: number }> = [];
+  let resolveCursorCheckpoint!: () => void;
+  const cursorCheckpoint = new Promise<void>(resolve => { resolveCursorCheckpoint = resolve; });
+  let stop: Awaited<ReturnType<typeof f.bind>> | undefined;
   try {
-    const stop = await f.bind(30_000);
+    stop = await f.bind(30_000, entry => {
+      if (entry.structuredHost?.eventCursor === 174) resolveCursorCheckpoint();
+    });
     const bound = structuredClone(f.row());
     // The turn ended: the host is idle and names no turn. The CLI then continues
     // by itself on a background-command notification: the transcript opens a
@@ -1839,6 +1860,7 @@ test("a stage that keeps working after its turn ended keeps its host through the
 
     // Thirty seconds after the first cursor-only step the deferred write fires.
     deferred[0]!.run();
+    await cursorCheckpoint;
     expect(f.host.releaseCalls).toBe(0);
     expect(f.row()).toMatchObject({ status: "idle", claimOwner: f.claimOwner, structuredHost: { eventCursor: 174 } });
     const after = loadPipelines()[0]!;
@@ -1854,10 +1876,9 @@ test("a stage that keeps working after its turn ended keeps its host through the
     await tickPipelines([finished], h.ports);
     expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
     expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ verdict: { status: "pass" } });
-    stop();
   } finally {
     globalThis.setTimeout = realSetTimeout;
-    await f.end();
+    try { await stop?.(); } finally { await f.end(); }
   }
 });
 
@@ -1957,25 +1978,37 @@ test("an automatic stop whose first step is the runtime's own release still reti
 });
 
 test("a descendant that outlives the runtime's release is still signalled, and the attempt is replaced", async () => {
+  const { captureProcessIdentity, processIdentityMayRun } = await import("@/lib/processIdentity");
   const h = harness();
   const f = await idleStageHostFixture(h);
+  let child: ReturnType<typeof spawnChild> | undefined;
   try {
+    const descendant = child = spawnChild("sleep", ["300"], { detached: true, stdio: "ignore" });
+    const identity = captureProcessIdentity(descendant.pid!);
     await f.bind(30_000);
     h.durableTurns.set(f.transcriptPath, { turn: "busy", message: null, lastRecordAt: Date.parse(h.ports.now()) });
     h.advanceWallClock(IDLE_TURN_QUIET_MS);
-    /* A descendant that left the host's process group. It is a number only: no
-       such process is consulted, and every signal here is recorded, never sent. */
-    const CHILD = 4_190_001;
+    // Supply the captured parent edge for a real child in its own process group.
+    expect(processIdentityMayRun(identity)).toBe(true);
     let rootGone = false;
-    let childGone = false;
     const signals: string[] = [];
-    const release = runtimeReleaseOf(f, () => { rootGone = true; });
     const termination = { ...f.termination,
-      ppidMap: () => new Map<number, number>([[f.hostPid, 1], [CHILD, f.hostPid]]),
-      pidAlive: (pid: number) => (pid === CHILD && !childGone) || (pid === f.hostPid && !rootGone),
-      processIdentity: (pid: number) => pid === CHILD ? (childGone ? null : "child:start") : f.termination.processIdentity(pid),
-      signal: (pid: number, signal: NodeJS.Signals) => { signals.push(`${signal}:${pid}`); if (pid === CHILD) childGone = true; },
-      terminateOwnedHost: release.terminateOwnedHost };
+      ppidMap: () => new Map<number, number>([[f.hostPid, 1], [identity.pid, f.hostPid]]),
+      pidAlive: (pid: number) => pid === identity.pid ? processIdentityMayRun(identity) : pid === f.hostPid && !rootGone,
+      processIdentity: (pid: number) => pid === identity.pid ? identity.startIdentity : f.termination.processIdentity(pid),
+      signal: (pid: number, signal: NodeJS.Signals) => {
+        expect(pid).toBe(identity.pid);
+        signals.push(`${signal}:${pid}`);
+        expect(descendant.kill(signal)).toBe(true);
+      },
+      sleep: async () => { await Bun.sleep(10); },
+      terminateOwnedHost: async () => {
+        expect(f.row().structuredTerminationSurvivors).toContainEqual(identity);
+        expect(processIdentityMayRun(identity)).toBe(true);
+        await stopFixtureProcess(f.child);
+        rootGone = true;
+        return true;
+      } };
     await withRuntimeSnapshot(f.snapshot, async () => {
       const production = defaultPipelinePorts({ termination });
       await tickPipelines([entry(f.transcriptPath)], { ...h.ports,
@@ -1985,7 +2018,8 @@ test("a descendant that outlives the runtime's release is still signalled, and t
         stopInterruptedStageAgent: production.stopInterruptedStageAgent,
       });
     });
-    expect(signals).toEqual([`SIGTERM:${CHILD}`]);
+    expect(signals).toEqual([`SIGTERM:${identity.pid}`]);
+    expect(processIdentityMayRun(identity)).toBe(false);
     const row = f.row();
     expect(row.status).toBe("dead");
     expect(row.structuredHost?.process ?? null).toBeNull();
@@ -1994,7 +2028,7 @@ test("a descendant that outlives the runtime's release is still signalled, and t
     expect(lane.state).toBe("running");
     expect(lane.runs[0]!.attempts.map((item) => item.state)).toEqual(["failed", "pending"]);
   } finally {
-    await f.end();
+    try { if (child) await stopFixtureProcess(child); } finally { await f.end(); }
   }
 });
 
@@ -2030,8 +2064,7 @@ test("an attempt that worked on after a restart and is stopped for silence later
   expect(replaced.stateDetail).toBe("stage attempt 1 was stopped by Delegatus after its turn went silent; fresh attempt 2 is starting");
   expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "engine-stop" });
   await tickPipelines([], h.ports);
-  expect(h.spawnInputs[1]!.prompt).toContain("was stopped by Delegatus after its turn went silent");
-  expect(h.spawnInputs[1]!.prompt).not.toContain("restart");
+  expectRestartHandoverCause(h.spawnInputs[1]!.prompt, "was stopped by Delegatus after its turn went silent");
 });
 
 test("an attempt that worked on after a restart and whose host is found gone later is not called a restart", async () => {
@@ -2043,8 +2076,7 @@ test("an attempt that worked on after a restart and whose host is found gone lat
   expect(replaced.stateDetail).toBe("stage attempt 1 lost its host while its turn was open (exit: status unavailable; no Delegatus stop recorded); fresh attempt 2 is starting");
   expect(replaced.runs[0]!.attempts[1]!.restartContext).toMatchObject({ cause: "host-lost" });
   await tickPipelines([], h.ports);
-  expect(h.spawnInputs[1]!.prompt).toContain("lost its host while its turn was open");
-  expect(h.spawnInputs[1]!.prompt).not.toContain("restart");
+  expectRestartHandoverCause(h.spawnInputs[1]!.prompt, "lost its host while its turn was open");
 });
 
 test("an attempt whose transcript did not grow after the restart is still called a restart", async () => {

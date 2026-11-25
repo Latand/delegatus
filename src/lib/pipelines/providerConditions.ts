@@ -7,6 +7,8 @@ export type ProviderCondition = {
   label: string;
 };
 
+export const CODEX_WORKSPACE_REQUIREMENTS_FAILURE = "workspace requirements failure";
+
 /** Call only for a provider error record, never an ordinary agent message. */
 export function classifyProviderCondition(engine: RuntimeEngine, errorClass: string | null | undefined, text: string): ProviderCondition {
   const code = (errorClass ?? "").toLowerCase();
@@ -30,6 +32,15 @@ export function classifyProviderCondition(engine: RuntimeEngine, errorClass: str
   }
   if ((code === "server_error" && race) || ["overloaded", "rate_limit", "stream_disconnected", "stream_disconnect", "stream_connection_failed", "http_connection_failed"].includes(code)) {
     return { kind: "transient", scope: null, resetLabel: null, label: race ? "auth refresh race" : "transient provider error" };
+  }
+  if (engine === "codex" && code === "cyber_policy") {
+    return { kind: "other", scope: null, resetLabel: null, label: "Codex cybersecurity refusal" };
+  }
+  if (engine === "codex" && /^failed to load workspace requirements(?::|$)/i.test(text.trim())) {
+    return { kind: "transient", scope: null, resetLabel: null, label: CODEX_WORKSPACE_REQUIREMENTS_FAILURE };
+  }
+  if (engine === "codex" && /^(?:API Error:\s*)?This content was flagged for possible cybersecurity risk(?:\.|$)/i.test(text.trim())) {
+    return { kind: "other", scope: null, resetLabel: null, label: "Codex cybersecurity refusal" };
   }
   return { kind: "other", scope: null, resetLabel: null, label: "provider error" };
 }

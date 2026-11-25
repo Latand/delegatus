@@ -6,17 +6,19 @@ import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { procBackend } from "../src/lib/proc";
+import { captureProcessIdentity, processIdentityMayOwn, processIdentityMayRun, type ProcessIdentity } from "../src/lib/processIdentity";
 import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { ALWAYS_IN_SCOPE, changedSinceBase, executedPaths, platformScope, workflowEntries } from "./ci-platform-scope";
-import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
-import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
+import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget, reportCpuWait } from "../src/lib/runtime/cpuAdmissionBudget";
+import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, shellStartupFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 import { publicationCheckBinding, consumePublicationCheckReceipt, writePublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
-import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
+import { publicationDeadlineOnly, PUBLICATION_MEMORY_DEFERRAL } from "../src/lib/pipelines/publication";
 import { readSafeRegularFile } from "./privacy-safe-path";
+import { publicationMemoryBytes, samplePublicationRss, waitForPublicationMemory } from "./publication-memory";
 
 export type Mode = "pre-commit" | "pre-push";
 export interface Step {
@@ -50,6 +52,7 @@ export interface PlanEnvironment {
   codexVersions: readonly string[];
 }
 const isTest = (file: string) => /\.test\.[cm]?[jt]sx?$/.test(file) && !file.includes(".browser.test.");
+const checkpointTest = /^scripts\/local-gate\.checkpoints(?:\.[^.]+)?\.test\.ts$/;
 const lintable = (file: string) => /\.(?:ts|tsx|js|mjs|cjs)$/.test(file);
 /** Prose the compiler never reads. Anything else can change what it checks. */
 const proseOnly = (file: string) => /\.(?:md|mdx|txt)$/i.test(file);
@@ -90,7 +93,8 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (mode === "pre-commit") return steps;
   const touched = new Set(env.privacySelfTests);
   if (changedFiles.some(file => ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"].includes(file))) {
-    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:receipts|checkpoints|hooks|publication|transport|git|lint|native|binding|runtime|execution|groups|invalidation)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
+    for (const test of env.tests) if (checkpointTest.test(test)
+      || /^scripts\/(?:local-gate(?:\.(?:receipts|hooks|publication|transport|git|lint|native|binding|runtime|execution|groups|invalidation)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
   }
   if (changedFiles.some(file => ["scripts/owned-runner.integration.fixture.ts", "scripts/owned-runner.cleanup.ts"].includes(file))) {
     for (const test of env.tests) if (/^scripts\/owned-runner(?:\.[^.]+)+\.test\.ts$/.test(test)) touched.add(test);
@@ -101,8 +105,11 @@ export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvir
   if (changedFiles.includes("scripts/local-gate-tests.fixture.ts")) {
     for (const test of env.tests) if (test.startsWith("scripts/local-gate-tests.") && isTest(test)) touched.add(test);
   }
-  if (changedFiles.includes("scripts/local-gate-tests.ts") && env.tests.includes("scripts/local-gate.checkpoints.test.ts")) {
-    touched.add("scripts/local-gate.checkpoints.test.ts");
+  if (changedFiles.includes("scripts/local-gate-tests.ts")) {
+    for (const test of env.tests) if (checkpointTest.test(test)) touched.add(test);
+  }
+  if (changedFiles.includes("src/lib/pipelines/engine.roleMemoryDispatch.fixture.ts")) {
+    for (const test of env.tests) if (test.startsWith("src/lib/pipelines/engine.roleMemoryDispatch.") && isTest(test)) touched.add(test);
   }
   for (const file of files.filter(isTest)) touched.add(file);
   for (const file of files.filter(lintable)) {
@@ -228,9 +235,13 @@ export function createGateSandbox(
   }
 }
 
+export const ISOLATED_DIRECTORY_KEYS = ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR",
+  "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"] as const;
+
 /** Everything that might resolve state, including build imports, is sandboxed. */
 export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...inherited };
+  if (inherited.LLV_DOCKER_NSENTER_SHIMS === "1" || process.env.LLV_DOCKER_NSENTER_SHIMS === "1") env.LLV_DOCKER_NSENTER_SHIMS = "1";
   // Git exports these to hooks. Keeping them makes a fixture's `git -C`
   // operate on the pushing repository instead of the fixture repository.
   for (const key of [
@@ -244,7 +255,7 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
   // Preserve explicit slot/queue overrides through isolation. Leave the
   // default unset: gate-slot keeps its shared /var/tmp locks, while the CPU
   // queue remains in the same writable machine cache as the Viewer.
-  for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
+  for (const key of ISOLATED_DIRECTORY_KEYS) {
     env[key] = path.join(root, key.toLowerCase());
     mkdirSync(env[key]!, { recursive: true });
   }
@@ -417,12 +428,9 @@ function cgroupOf(pid: number | "self"): string | null {
   try { return readFileSync(`/proc/${pid}/cgroup`, "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3) ?? null; }
   catch { return null; }
 }
-/** Only ESRCH proves a process gone. /proc, where there is one, also tells a
-    zombie (exited, waiting to be reaped) from a running process; unreadable
-    metadata proves nothing, so the process counts as running. */
 function live(pid: number): boolean {
   try { process.kill(pid, 0); } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
-  try { return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return true; }
+  return process.platform !== "linux" || !procBackend.processExited(pid);
 }
 function procEntries(): number[] | null {
   try { return readdirSync("/proc").filter(name => /^\d+$/.test(name)).map(Number); } catch { return null; }
@@ -445,17 +453,21 @@ function ps(columns: string[], cleanup: Cleanup, environment = false): string[] 
 /** Every process that inherited this step's token, wherever it was reparented;
     null when no process table could be read. */
 function holders(token: string, cleanup: Cleanup): number[] | null {
+  const holds = (environment: string, separator: string) => {
+    const binding = `${separator}${STEP_TOKEN}=`;
+    const at = environment.indexOf(binding);
+    if (at < 0) return false;
+    const start = at + binding.length;
+    const end = environment.indexOf(separator, start);
+    return environment.slice(start, end < 0 ? undefined : end).split(",").includes(token);
+  };
   const entries = procEntries();
   if (!entries) {
-    const mark = ` ${STEP_TOKEN}=${token}`;
-    return ps(["pid", "command"], cleanup, true)?.flatMap(line => {
-      const at = line.indexOf(mark), end = line.charAt(at + mark.length);
-      return at >= 0 && (end === "" || end === " ") ? [Number(line.trim().split(/\s+/)[0])] : [];
-    }) ?? null;
+    return ps(["pid", "command"], cleanup, true)?.flatMap(line =>
+      holds(line, " ") ? [Number(line.trim().split(/\s+/)[0])] : []) ?? null;
   }
-  const mark = `\0${STEP_TOKEN}=${token}\0`;
   return entries.filter(pid => {
-    try { return `\0${readFileSync(`/proc/${pid}/environ`, "latin1")}`.includes(mark); } catch { return false; }
+    try { return holds(`\0${readFileSync(`/proc/${pid}/environ`, "latin1")}`, "\0"); } catch { return false; }
   });
 }
 function scopeMembers(scope: string): number[] {
@@ -498,7 +510,7 @@ function descendants(root: number, cleanup: Cleanup): number[] | null {
   for (let queue = [root]; queue.length;) for (const child of children.get(queue.shift()!) ?? []) { found.push(child); queue.push(child); }
   return found;
 }
-/** Each started step carries a token of its own in its environment. */
+/** Each started step carries its own token and those of its enclosing checks. */
 const STEP_TOKEN = "LLV_GATE_STEP";
 /** Stops the step this hook started: its process tree, every process that
     inherited its token, and every owned service or transient scope those run
@@ -516,6 +528,9 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
   const remember = (member: number) => {
     if (!signalled.has(member)) signalled.set(member, captureProcessIdentity(member));
   };
+  // Linux can prove that every thread has exited even before the parent reaps
+  // the PID. Keep the identity check elsewhere to avoid a per-PID ps probe.
+  const stillRunning = process.platform === "linux" ? processIdentityMayRun : processIdentityMayOwn;
   remember(pid);
   const cleanup: Cleanup = { ends: Date.now() + CLEANUP_MS, late: false };
   let blind = false;
@@ -542,7 +557,7 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
     const inherited = holders(token, cleanup);
     if (!inherited) blind = true;
     for (const member of [...inherited ?? [], ...[...scopes].flatMap(scopeMembers)]) remember(member);
-    return [...signalled.values()].filter(identity => processIdentityStatus(identity) !== "dead").map(identity => identity.pid);
+    return [...signalled.values()].filter(identity => stillRunning(identity)).map(identity => identity.pid);
   };
   let survivors = left();
   for (let attempt = 1; survivors.length && Date.now() < cleanup.ends; attempt++) {
@@ -577,11 +592,12 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
   const started = Date.now();
   const fd = log ? openSync(log, "w") : undefined;
   const token = `${process.pid}-${started}-${Math.random().toString(36).slice(2)}`;
+  const ancestry = env[STEP_TOKEN] ? `${env[STEP_TOKEN]},${token}` : token;
   let stopping = false, cancelled = false, stopTimer: (() => void) | undefined, onCancel: (() => void) | undefined;
   const budget = cpuWaitBudget(env);
   try {
     const output = fd ?? (log === null ? "ignore" : "inherit");
-    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...budget.env, [STEP_TOKEN]: token,
+    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...budget.env, [STEP_TOKEN]: ancestry,
       ...(Number.isFinite(until) ? { LLV_OWNED_RUN_TIMEOUT_MS: String(supervisorTimeoutMs(until, env)) } : {}),
     }, stdio: [fd === undefined && log !== null ? "inherit" : "ignore", output, output] });
     let stopped!: (leaked: string | null) => void;
@@ -646,6 +662,9 @@ export interface StepPasses { reused(step: Step, until?: number): boolean; passe
 /** The bytes and configuration every local check actually consumes. */
 export function gateInputSnapshot(root: string, base: string, steps: readonly Step[], env: NodeJS.ProcessEnv = process.env) {
   const checkEnv = checkEnvironment(env);
+  // The caller's paths never reach a local step. Its executor allocates them.
+  for (const key of ISOLATED_DIRECTORY_KEYS) delete checkEnv[key];
+  delete checkEnv.LLV_GATE_RUNNER;
   const toolRoot = path.resolve(import.meta.dir, "..");
   const toolFiles = gateToolFiles(toolRoot);
   let unavailableReason = "dirty worktree";
@@ -668,7 +687,7 @@ export function gateInputSnapshot(root: string, base: string, steps: readonly St
         ...["node_modules/.bun/lock", "node_modules/typescript/package.json", "node_modules/eslint/package.json"].map(file => path.join(root, file))];
       // Hash what the checks receive, never store its values. Execution roots,
       // deadlines and CPU tickets belong to a run, rather than its result.
-      const environment = environmentFingerprint(checkEnv);
+      const environment = fingerprint([environmentFingerprint(checkEnv), shellStartupFingerprint(root, env.BASH_ENV)]);
       const toolchain = [...tools.map(file => file ? fileFingerprint(file) : "missing"), ...toolFiles.map(file => fileFingerprint(path.join(toolRoot, file)))];
       const components = {
         head: fingerprint(head), tree: fingerprint(tree), base: fingerprint(base),
@@ -1081,7 +1100,18 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
   // The outer hook also allocates logs and Cloud input. Acquire its cleanup
   // owner before allocation; admitted children inherit the same journal.
   if (import.meta.main && !process.env.LLV_GATE_SANDBOX_RECORD) {
-    const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) };
+    const parent = captureProcessIdentity(process.pid);
+    const parentProof = JSON.stringify(parent);
+    // The dispatch marker binds this direct cleanup launch to its live parent.
+    // Admission accepts it only beside that exact parent identity.
+    const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: parentProof, LLV_GATE_HOOK_DISPATCH: parentProof };
+    const entry = publicationPrepare ? path.join(root, "scripts/local-gate.ts") : import.meta.path;
+    if (publicationPrepare) {
+      // The outer runner owns cleanup while its child queues for checks. Give
+      // admission the live parent evidence it uses to distinguish this runner
+      // from a slotless legacy holder.
+      env.LLV_GATE_UNADMITTED_HOOK_BOOTSTRAP = JSON.stringify({ parent, mode, entry: realpathSync(entry) });
+    }
     if (deadline) {
       const inherited = Number(env.LLV_OWNED_RUN_TIMEOUT_MS);
       const allowance = supervisorTimeoutMs(deadline.at, env);
@@ -1089,13 +1119,15 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       env.LLV_GATE_PUSH_DEADLINE = String(deadline.at);
     }
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "owned-runner.ts"),
-      ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, ...process.execArgv, import.meta.path, ...process.argv.slice(2)],
+      ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, ...process.execArgv, entry, ...process.argv.slice(2)],
       { cwd: root, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
     const code = await child.exited;
     if (code !== 0) throw new AdmittedGateFailed(code);
     return;
   }
   const sandbox = createGateSandbox();
+  const imagePreparation = publicationPrepare && process.platform === "linux" && process.env.LLV_DOCKER_NSENTER_SHIMS === "1";
+  const peakRss = imagePreparation ? samplePublicationRss() : undefined;
   let sandboxRetained = false;
   try {
     // Pre-push checks see one canonical environment, so a producer's pass and
@@ -1111,6 +1143,13 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       delete env.LLV_GATE_TYPES_CHECKED;
       delete env.LLV_GATE_FULL_TYPES;
       if (step.name === "privacy") Object.assign(env, privacyEnv);
+      if (path.basename(process.execPath) === "bun-container") {
+        const executable = Bun.which(command[0]!, { PATH: env.PATH ?? "" });
+        if (command[0] === "bun" && executable === "/usr/local/bin/bun") command[0] = process.execPath;
+        // The installed compiler is already in the locked dependency tree.
+        // Use it directly so bunx cannot invoke the image's host shell shim.
+        if (step.name === "types" && executable === "/usr/local/bin/bunx") command.splice(0, 2, "node", "node_modules/typescript/bin/tsc");
+      }
       if (step.pinned) {
         runtime ??= pinnedRuntime(root, cache, until, cancel, env);
         command[0] = await runtime;
@@ -1211,6 +1250,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
     const passes = mode === "pre-push" && !transport ? stepPasses(root, base, steps, console.error) : undefined;
     const options = { root, deadline, logDir: sandbox, prepare, passes, ...(branch ? { ref: branch } : {}) };
+    const checksStarted = performance.now();
     if (selected) {
       // The normal runner owns cleanup and records exactly this step's pass.
       // A later push still runs privacy and validates every step in the plan.
@@ -1236,9 +1276,11 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       console.error("pre-push: verified completed checks for this publication; transport admitted");
     } else if (mode === "pre-push" && !admitted) {
       const privacy = (cancel?: AbortSignal) => runSteps(mode, steps.filter(step => step.name === "privacy"), { ...options, cancel });
+      const memoryBytes = imagePreparation && steps.some(step => step.name === "types" || step.name === "Viewer build")
+        ? String(publicationMemoryBytes(process.env.NODE_OPTIONS)) : undefined;
       const localChecks = (cancel: AbortSignal) => runAdmittedChecks(
         ["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "pre-push", "--admitted"], root,
-        { ...process.env, LLV_GATE_RUNNER: "off" }, deadline, cancel);
+        { ...process.env, LLV_GATE_RUNNER: "off", LLV_GATE_PUBLICATION_MEMORY_BYTES: memoryBytes }, deadline, cancel);
       const privacyHead = git(root, ["rev-parse", "HEAD"]);
       const checks = async (cancel: AbortSignal) => {
         if (!config) return localChecks(cancel);
@@ -1277,11 +1319,34 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
         } else await runPushPair(privacy, checks);
       } else await privacy();
     } else {
-      await runSteps(mode, admitted ? steps.filter(step => step.name !== "privacy") : steps, options);
+      let pending = admitted ? steps.filter(step => step.name !== "privacy") : steps;
+      const memoryBudget = process.env.LLV_GATE_PUBLICATION_MEMORY_BYTES;
+      if (admitted && memoryBudget !== undefined) {
+        const memoryBytes = Number(memoryBudget);
+        if (!Number.isSafeInteger(memoryBytes) || memoryBytes <= 0) throw new Error("invalid publication memory admission budget");
+        const admitMemory = async () => {
+          const finishWait = reportCpuWait();
+          try {
+            if (!await waitForPublicationMemory(memoryBytes, console.error)) {
+              throw new AdmittedGateFailed(75, `pre-push: ${PUBLICATION_MEMORY_DEFERRAL}`);
+            }
+          } finally { finishWait(); }
+        };
+        await admitMemory();
+        // The frozen install runs before the parallel group and may change
+        // headroom. Recheck before launching any member of that group.
+        if (pending[0]?.name === "frozen install") {
+          await runSteps(mode, pending.slice(0, 1), options);
+          await admitMemory();
+          pending = pending.slice(1);
+        }
+      }
+      await runSteps(mode, pending, options);
     }
     if (publicationPrepare) {
+      const checksMs = Math.max(0, Math.round(performance.now() - checksStarted));
       assertPublicationInputs("checks");
-      writePublicationCheckReceipt(receiptFile!, binding!, fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)]), checkComponents);
+      writePublicationCheckReceipt(receiptFile!, binding!, fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)]), checkComponents, checksMs, peakRss?.sample());
     }
   } catch (error) {
     if (error instanceof UnconfirmedStepExit) {
@@ -1291,6 +1356,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
     }
     throw error;
   } finally {
+    peakRss?.close();
     if (!sandboxRetained) releaseGateSandbox(sandbox);
   }
 }

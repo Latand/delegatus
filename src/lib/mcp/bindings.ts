@@ -1,3 +1,6 @@
+import { prototypeStageForConversation, prototypeProjectReceiptScope, PROTOTYPE_RECEIPT_SCOPE_HEADER } from "@/lib/prototypeReview/world";
+import { existingTeamStore } from "@/lib/team/store";
+import { workspaceDirectory } from "@/lib/team/workspaces";
 import { protectNativeMediaContext } from "@/lib/externalRelay/nativeMediaContext";
 import { publicationLanguageHints } from "@/lib/forge/publicationLanguage";
 import { briefWarningAnswer, briefWarnings } from "@/lib/pipelines/briefWarnings";
@@ -9,17 +12,17 @@ import { controlFetch } from "./controlTransport";
 import { CONTROL_REQUEST_HEADER, CONTROL_RECOVERY_PATH, controlRequestId, type ControlEvidence } from "./controlEvidence";
 import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import { AsyncResource } from "node:async_hooks";
-import { redactMonitorText } from "@/lib/monitor/redact";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { conversationCatalogEntry } from "@/lib/scanner/conversationCatalog";
 import { assertWorkspaceMcpCall, workspaceGuardedBindings } from "./workspaceFence";
+import { hasWorkspaceExecution } from "@/lib/team/workspaceExecution";
 import { conversationWorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 import { previewAgentMemoryCap, PIPELINE_MEMORY_DEFAULT_ROLE } from "@/lib/runtime/agentMemorySettings";
 import { readSelf } from "@/lib/links/self";
 import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
 import { STAGE_RETIREMENT } from "@/lib/flows/retirement";
 import { performanceSpans } from "@/lib/performanceSpans";
-import { curationAnswerCooperatively } from "@/lib/memory/curation/answer";
+import { readCurationPanel } from "@/lib/memory/curation/answer";
 import { resolvePrototypeReviewId as resolveStoredReviewId } from "@/lib/prototypeReview/store";
 import { resolveIssueReportDigest } from "@/lib/issueReports/store";
 import { shortId, shortenHashesInText } from "@/lib/shortIds";
@@ -41,13 +44,13 @@ import { turboChangeContext } from "@/lib/monitor/turboRuntime";
 import { changeSeatTickSettings, markAutonomyReported, markAutonomyDecisionReview } from "@/lib/monitor/seatTickSettings";
 import { pipelinePublishesRemoteBranch } from "@/lib/pipelines/publication";
 import { recordSeatProjectSuccessions, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
-import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "@/lib/projects/nameResolution";
+import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal, type NamedProjectDirectory } from "@/lib/projects/nameResolution";
 import { releaseStatus } from "@/lib/release/answer";
 import { releaseControlChange } from "@/lib/release/store";
 import { RELEASE_DEFAULTS } from "@/lib/release/settings";
-import { liveOwnerRelayConversation, ownerRelayPayload, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
+import { hasRequesterRelayCustody, liveOwnerRelayProject, ownerRelayHandoffOnlyGrant, recordOwnerRelayHandoffOutcome, liveOwnerRelayConversation, ownerRelayHandoff, ownerRelayProjectMatches, ownerRelayTargetMatches } from "@/lib/externalRelay/ownerAuthority";
 import { peerSeatMessages } from "@/lib/links/boardLinks";
-import { recoverSeatMessage, seatMessageRetryFence, resolveSeatMessageMachine, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
+import { recoverSeatMessage, seatMessageRetryFence, resolveSeatMessageMachine, seatMessageMachineAddress, seatMessageReceipt, SeatMessageRefusal } from "@/lib/links/seatMessages";
 import { ROTATION_NOTE } from "@/app/api/orchestrator/seat/status/incumbent";
 import { autoRotationFailureAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 import { readBridgeReportLog } from "@/lib/bridge/store";
@@ -81,6 +84,7 @@ import { projectWorkerCounts } from "@/lib/orchestrator/workerCount";
 import { activeClaudeAccountId, claudeAccountsForPrivacy, listClaudeAccounts } from "@/lib/accounts/claude";
 import { activeCodexAccountId, codexAccountsForPrivacy, listCodexAccounts } from "@/lib/accounts/codex";
 import { activeCopilotAccountId, copilotAccountsForPrivacy, listCopilotAccounts } from "@/lib/accounts/copilot";
+import { activeAntigravityAccountId, listAntigravityAccounts } from "@/lib/accounts/antigravity";
 import { projectEngineAccounts } from "@/lib/accounts/projectAccountsView";
 import {
   accountProjectBindings,
@@ -90,11 +94,11 @@ import {
   unbindAccountFromProject,
   type BindingEngine,
 } from "@/lib/accounts/projectBindings";
-import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
+import { agentRegistry, readOnlyConversationLookupFromSnapshot, type ConversationLookup } from "@/lib/agent/registry";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { ENGINE_MODELS, validateLaunchModel } from "@/lib/agent/models";
 import { nativeCallerSources } from "@/lib/attention/nativeCallerSources";
-import { nativeCallerRefusal, resolveNativeCaller } from "@/lib/attention/nativeCaller";
+import { nativeCallerRefusal, resolveNativeCaller, type NativeCallerReason } from "@/lib/attention/nativeCaller";
 import { processIdentityStatus, sameRecordedProcessIdentity, systemBootEpoch, type ProcessIdentityProbe } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { ensureOperatorSpawnCapability } from "@/lib/agent/operatorCapability";
@@ -200,7 +204,7 @@ import { checkoutDeploymentByIdempotencyKey } from "@/lib/selfUpdate/deployments
 import { statePath } from "@/lib/configDir";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, readOrchestratorSeatFileOrNull, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
-import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
+import { isCurrentOperatorSeat, productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
 import { cloneFileCallBudgetMs } from "@/lib/externalRelay/cloneToolBudget";
 import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/orchestrator/prompt";
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
@@ -256,13 +260,14 @@ import {
   type SessionRecord,
   type SessionRecordKind,
 } from "@/lib/session/reader";
+import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import {
   decodeMessagesCursor,
   encodeMessagesCursor,
   InvalidMessagesCursorError,
   messagesCursorScope,
   readMessagesPage,
-  readMessageAuthorContext,
+  readMessageAuthorContextWithStats,
   StaleMessagesCursorError,
 } from "@/lib/session/messagesPage";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
@@ -270,7 +275,7 @@ import { overlaySessionTitles } from "@/lib/session/titleProjection";
 import { linkedContext, withOwnership } from "@/lib/links/linked";
 import { applyAssignmentPatches, createTask, patchTask, taskDuePatch, type CreateTaskInput, type PatchTaskInput } from "@/lib/tasks/commands";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
-import { agentBrowserAccess, TeamError, recordAuthors, type AgentBrowserSeat, type RecordAuthor } from "@/lib/team";
+import { agentBrowserAccess, hasConversationMessageAuthors, TeamError, recordAuthors, type AgentBrowserSeat, type RecordAuthor } from "@/lib/team";
 import { pipelineWorkLinks, pullRequestSummary, taskWorkLinkContext, taskWorkLinks } from "@/lib/forge/resolve";
 import { normalizedBoardQuery, pullRequestQuery, titleHasPullRequest } from "./pullRequestQuery";
 import { bridgeReportsEnabled, effectiveReportTelegram, mergeOnReviewEnabled, reportHeaderName, pipelineStageRuntimeSetting, setPipelineStageRuntime, validPipelineStageRuntime, type EffectiveReportTelegram } from "@/lib/projects/settings";
@@ -309,6 +314,8 @@ import {
   type McpToolBindings,
   type McpToolBinding,
   type McpToolCallContext,
+  type McpBoardRead,
+  retainResponseAuthority,
   type McpToolName,
   type McpToolPayload,
 } from "./server";
@@ -332,6 +339,7 @@ import {
   type AccountLimitsInput,
 } from "./compactAnswers";
 import { changedFieldNames, fieldValues, compactTask, firstLine, fullAnswer, answerHint, listPage, listPageAsync, recordRevision, sinceTime, stringSet, taskAcknowledgement } from "./listAnswers";
+import { deferredTaskPage, indexedTaskPage, taskListLinks, withTaskReferenceBudget } from "./taskListPage";
 
 import { viewerControlOrigin, viewerControlToken } from "./controlEndpoint";
 import {
@@ -574,6 +582,9 @@ async function getViewerControl(
       error,
       status: response.status,
       ...(text(result.code) ? { code: text(result.code) } : {}),
+      ...(text(result.check) ? { check: text(result.check) } : {}),
+      ...(pathname.startsWith("/api/telegram/bot/agent?op=reactions&") && typeof result.retryAfterSeconds === "number"
+        ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
       ...(requestHealth ? { runtimeHostRequests: requestHealth } : {}),
     });
   }
@@ -670,6 +681,9 @@ async function postViewerControl(
       code: "short_id_ambiguous", retryable: false, status: response.status,
       field: text(result.field) || "reviewId",
       ...(Array.isArray(result.candidates) ? { candidates: result.candidates.filter(value => typeof value === "string").slice(0, 8) } : {}),
+    });
+    if (result.code === "workspace_forbidden") throw new McpToolRefusal(message, {
+      code: "workspace_forbidden", retryable: false, status: response.status, check: text(result.check) || "route-target",
     });
     if (pathname === "/api/forge/app-connect") throw new McpToolRefusal(message, {
       code: text(result.code) || "app_connection_unavailable", status: response.status, retryable: response.status >= 500,
@@ -934,6 +948,20 @@ function readViewerControl(
   return control.get(pathname);
 }
 
+async function readViewerStartupStatus(control: ViewerControlDependencies, context?: McpToolCallContext) {
+  // Startup diagnostics include installation-wide host keys and require an
+  // unrestricted workspace call.
+  if (!control.get || hasWorkspaceExecution()) return null;
+  const deadlineAt = Math.min(context?.deadlineAt ?? Infinity, Date.now() + 750);
+  try {
+    const result = await viewerControlForCall(control, { ...context, deadlineAt }).get!("/api/runtime/deployments/capabilities/v1");
+    if (result.capability === "viewer-deployments" && result.version === 1 && objectRecord(result.structuredHostStartup)) {
+      return result.structuredHostStartup;
+    }
+  } catch { /* Older and unreachable Viewers still permit a seat read. */ }
+  return null;
+}
+
 function viewerControlForCall(
   control: ViewerControlDependencies,
   context?: McpToolCallContext,
@@ -986,7 +1014,7 @@ export interface ViewerMcpDomainDependencies {
   registrySnapshot(): RegistrySnapshot;
   /** Fresh seat and delivered-wake admission for curator reads and writes. */
   curatorSnapshot?(conversationId: string): RegistrySnapshot;
-  curatorAdmission?(conversationId: string | null): Promise<void | (() => void)>;
+  curatorAdmission?(conversationId: string | null): Promise<void | (() => void | ReturnType<typeof curatorCallerOf>)>;
   boardFor(project: string): ReturnType<typeof boardFor>;
   applyBoardCommand(input: unknown, snapshot: RegistrySnapshot): ReturnType<typeof applyBoardCommand>;
   getFlowsWithPresets(): ReturnType<typeof getFlowsWithPresets>;
@@ -1616,15 +1644,11 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
   adoptRootSession: () => { adoptLiveRootSession(rootSessionSource()); },
   raiseAttentionRequest,
   attentionAuthority: () => attentionCallerAuthority(attentionCallerSources()),
-  callerAttribution: () => {
-    let seats: ReturnType<typeof authorizedManagerSeats> | null = null;
-    const managers = () => (seats ??= authorizedManagerSeats(productionManagerAuthoritySources()));
-    return callerAttributionFrom(
-      authorityOf(productionDomainDependencies),
-      (conversationId) => managers().some((seat) => seat.conversationId === conversationId),
-      (conversationId) => productionDeputyPrincipal(conversationId)?.seatConversationId ?? null,
-    );
-  },
+  callerAttribution: () => callerAttributionFrom(
+    authorityOf(productionDomainDependencies),
+    conversationId => isCurrentOperatorSeat(conversationId, agentRegistry()),
+    conversationId => productionDeputyPrincipal(conversationId)?.seatConversationId ?? null,
+  ),
   findDeploymentByIdempotencyKey: async idempotencyKey => {
     const checkout = checkoutDeploymentByIdempotencyKey(statePath("self-update"), idempotencyKey);
     if (checkout) return checkout;
@@ -1640,11 +1664,11 @@ function text(value: unknown): string {
 function validateExplicitMcpLaunchModel(args: McpToolArgs, fallbackRole?: string): void {
   const model = text(args.model);
   if (!model) return;
-  if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex" && args.engine !== "copilot") return;
+  if (args.engine !== undefined && args.engine !== "claude" && args.engine !== "codex" && args.engine !== "copilot" && args.engine !== "antigravity") return;
   const roleId = text(args.role) || fallbackRole;
   const role = roleId ? resolveSpawnRole({ role: roleId, roleParams: args.roleParams, confirm: args.confirm }) : null;
-  let engine: "claude" | "codex" | "copilot" | null = null;
-  if (args.engine === "claude" || args.engine === "codex" || args.engine === "copilot") engine = args.engine;
+  let engine: "claude" | "codex" | "copilot" | "antigravity" | null = null;
+  if (args.engine === "claude" || args.engine === "codex" || args.engine === "copilot" || args.engine === "antigravity") engine = args.engine;
   else if (role?.ok && role.value) engine = role.value.config.engine;
   if (!engine) return;
   const validation = validateLaunchModel(engine, model);
@@ -1983,6 +2007,8 @@ async function sendMessage(
          is the server's own caller attribution, so the feed can say WHO relayed. */
       origin: mcpSenderOrigin(dependencies),
       ...(orchestratorRelayProject ? { project: orchestratorRelayProject } : {}),
+      ...(orchestratorRelayProject && context?.binding?.sendPayload?.requesterRequestId
+        ? { requesterRequestId: context.binding.sendPayload.requesterRequestId } : {}),
     };
     outcome = await withNativeRelayHandoff(body, orchestratorRelayProject ? nativeOrchestratorRelayCaller() : null,
       headers => dispatchControl(control)(orchestratorRelayProject ? "/api/orchestrator/message" : "/api/conversation-host", body,
@@ -2025,7 +2051,11 @@ async function sendMessage(
        over the operation id is where the end of the story lives. */
     settled: settledOutcome === "delivered",
     deliveryConfirmed: settledOutcome === "delivered",
-    ...(settledOutcome !== "delivered" ? { notice: "Accepted for delivery; arrival is unconfirmed." } : {}),
+    ...(settledOutcome !== "delivered" ? {
+      notice: typeof outcome.detail === "string" ? outcome.detail : "Accepted for delivery; arrival is unconfirmed.",
+      ...(typeof outcome.waitReason === "string" ? { waitReason: outcome.waitReason } : {}),
+      ...(typeof outcome.deadlineAt === "string" ? { deadlineAt: outcome.deadlineAt } : {}),
+    } : {}),
   };
 }
 
@@ -2376,7 +2406,6 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
   }
   const maintainer = dependencies ? maintenanceCaller(dependencies) : null;
   const caller = dependencies ? attributionOf(dependencies) : null;
-  const ownerRelay = dependencies ? ownerRelayCaller(dependencies) : false;
   assertMaintenanceWrite(maintainer, args, undefined, true);
   refuseCrossProjectFromSeat("create_task", () => text(args.project) || null, args, dependencies);
   const input: CreateTaskInput = {
@@ -2391,7 +2420,8 @@ async function createBoardTask(args: McpToolArgs, dependencies?: ViewerMcpDomain
     let outcome = createTask(state.tasks, input, state.recentCreates, { requireDue: true, dueTimeZone: operatorTimeZone() ?? undefined, explicit: true, actor: "agent", noteAuthor: caller?.kind === "manager" ? { kind: "orchestrator", conversationId: caller.conversationId } : { kind: "agent", conversationId: caller?.conversationId ?? null }, conversationId: caller?.conversationId ?? undefined, seatHolding: taskSeatHoldingSnapshot(), ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
     // Publish the new owner task and its seat-tick eligibility atomically.
     // Replays and matched findings retain the task's existing status.
-    if (outcome.ok && !outcome.replay && !outcome.matched && ownerRelay && !outcome.task.hold) {
+    if (outcome.ok && !outcome.replay && !outcome.matched && !outcome.task.hold && dependencies
+      && ownerRelayCaller(dependencies, outcome.task.project)) {
       const assigned = patchTask(outcome.tasks, outcome.task.id, { status: "assigned" }, outcome.task.createdAt,
         { actor: "agent", ...(dependencies ? { statusActor: pauseResumeActorOf(dependencies) } : {}) });
       if (!assigned.ok) return { state: undefined, result: assigned };
@@ -3485,7 +3515,7 @@ async function listConversations(
   const conversations = source.items
     .filter(objectRecord) as unknown as FileEntry[];
   const rows = conversations
-    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
+    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot" || entry.engine === "antigravity")
     .slice(0, limit)
     .map((entry) => ({
       conversationId: entry.conversationId ?? null,
@@ -3776,10 +3806,11 @@ async function conversationDeliverability(
 const CONVERSATION_MESSAGE_KINDS = ["message", "reasoning", "tool_call", "tool_result", "trace"] as const;
 const CONVERSATION_MESSAGE_ROLES = ["user", "assistant", "system", "tool"] as const;
 
-function conversationEngineForRoot(rootName: PinnedTranscript["rootName"]): "claude" | "codex" | "copilot" | null {
+function conversationEngineForRoot(rootName: PinnedTranscript["rootName"]): "claude" | "codex" | "copilot" | "antigravity" | null {
   if (rootName === "codex-sessions") return "codex";
   if (rootName === "claude-projects") return "claude";
   if (rootName === "copilot-sessions") return "copilot";
+  if (rootName === "antigravity-sessions") return "antigravity";
   return null;
 }
 
@@ -3836,7 +3867,7 @@ async function conversationMessages(
 
   let transcriptPath = requestedPath;
   let conversationId: string | null = null;
-  let engine: "claude" | "codex" | "copilot" | null = null;
+  let engine: "claude" | "codex" | "copilot" | "antigravity" | null = null;
   if (requestedId) {
     const target = selectedConversationTarget({ conversationId: requestedId }, selectedDependencies);
     transcriptPath = target.path!;
@@ -3907,16 +3938,20 @@ async function conversationMessages(
         code: "conversation_messages_transcript_changed",
       });
     }
+    /* sign-in-and-team §7.1: a human message names its member. */
+    const authored = withRecordAuthors(conversationId, transcriptPath, page.records, {
+      descriptor: pinned.descriptor, size: pinned.stat.size, engine, redactText: context.redactText,
+    });
+    const scanned = authored.scannedBytes > 0
+      ? { ...page.scanned, bytes: page.scanned.bytes + authored.scannedBytes }
+      : page.scanned;
     return redactPayload({
       conversationId,
       ...(args.full === true || args.includeMetadata === true ? { transcriptPath, engine, lastRecordAt: page.lastRecordAt } : {}),
-      /* sign-in-and-team §7.1: a human message names its member. */
-      records: withRecordAuthors(conversationId, transcriptPath, page.records, {
-        descriptor: pinned.descriptor, size: pinned.stat.size, engine, redactText: context.redactText,
-      }),
+      records: authored.records,
       hasMore: page.hasMore,
       cursor: page.cursor ? encodeMessagesCursor(page.cursor, scope) : null,
-      ...(args.full === true || args.includeMetadata === true || page.scanned.capped ? { scanned: page.scanned } : {}),
+      ...(args.full === true || args.includeMetadata === true || scanned.capped ? { scanned } : {}),
       ...selectedContextEcho(selected.target),
     });
   } finally {
@@ -3928,10 +3963,15 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
   conversationId: string | null,
   transcriptPath: string,
   records: T[],
-  source: { descriptor: number; size: number; engine: "claude" | "codex" | "copilot"; redactText?: (text: string) => string },
-): Array<T & { author?: RecordAuthor | AgentRecordAuthor }> {
-  if (!records.some((record) => record.role === "user")) return records;
-  const context = readMessageAuthorContext(source, records);
+  source: { descriptor: number; size: number; engine: "claude" | "codex" | "copilot" | "antigravity"; redactText?: (text: string) => string },
+): { records: Array<T & { author?: RecordAuthor | AgentRecordAuthor }>; scannedBytes: number } {
+  if (!records.some((record) => record.role === "user")) return { records, scannedBytes: 0 };
+  const needsOccurrenceContext = hasConversationMessageAuthors(conversationId)
+    || deliveredMessageOccurrences(transcriptPath).length > 0;
+  const authorContext = needsOccurrenceContext
+    ? readMessageAuthorContextWithStats(source, records)
+    : { records: null, scannedBytes: 0 };
+  const context = authorContext.records;
   const authorRecords = context ?? records;
   const claudeOrigins = source.engine === "claude" ? claudeMessageProvenance(transcriptPath) : undefined;
   const agentAuthors = agentRecordAuthors(transcriptPath, source.engine, authorRecords, context, claudeOrigins);
@@ -3939,11 +3979,13 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
     value => hardenedRedact(source.redactText ? source.redactText(value) : value)) : new Map();
   const contextPartAuthors = claudeOrigins ? agentRecordPartAuthors(transcriptPath, authorRecords, claudeOrigins) : new Map();
   const humanBySeq = new Map<number, RecordAuthor>();
-  for (const [index, author] of recordAuthors(conversationId, authorRecords.map((record, index) => ({
-    role: agentAuthors.has(index) || contextPartAuthors.has(index) ? "system" : record.role,
-    ts: record.ts,
-    text: record.sourceText ?? record.text,
-  })))) humanBySeq.set(authorRecords[index]!.seq, author);
+  if (context) {
+    for (const [index, author] of recordAuthors(conversationId, context.map((record, index) => ({
+      role: agentAuthors.has(index) || contextPartAuthors.has(index) ? "system" : record.role,
+      ts: record.ts,
+      text: record.sourceText ?? record.text,
+    })))) humanBySeq.set(context[index]!.seq, author);
+  }
   const agentBySeq = new Map<number, AgentRecordAuthor>();
   for (const [index, author] of agentAuthors) agentBySeq.set(authorRecords[index]!.seq, author);
   const authors = new Map<number, RecordAuthor | AgentRecordAuthor>();
@@ -3953,9 +3995,12 @@ function withRecordAuthors<T extends { seq: number; role: string; ts: string | n
     if (human) authors.set(index, human);
     else if (agent) authors.set(index, agent);
   });
-  return records.map((record, index) => partAuthors.has(index)
-    ? { ...record, parts: partAuthors.get(index)! }
-    : authors.has(index) ? { ...record, author: authors.get(index)! } : record);
+  return {
+    records: records.map((record, index) => partAuthors.has(index)
+      ? { ...record, parts: partAuthors.get(index)! }
+      : authors.has(index) ? { ...record, author: authors.get(index)! } : record),
+    scannedBytes: authorContext.scannedBytes,
+  };
 }
 
 type ViewerSeatRefusal = "deputy" | "not-designated" | "no-seat" | "cross-project" | "foreign-project";
@@ -5062,7 +5107,7 @@ async function getOrchestrator(args: McpToolArgs, dependencies: ViewerMcpDomainD
   const remote = await readRemoteAgentRows(project);
   const linkedSeats = linkedContext().links.filter(link => link.projects.has(project)).map(link => {
     const row = remote.rows.find(row => row.install === link.install && row.seat === 1);
-    return { machine: link.label, install: link.install, seat: row ? { engine: row.e, model: row.m, state: row.st, lastActivity: new Date(row.at).toISOString(), stale: row.stale }
+    return { machine: seatMessageMachineAddress(link), install: link.install, seat: row ? { engine: row.e, model: row.m, state: row.st, lastActivity: new Date(row.at).toISOString(), stale: row.stale }
       : peerSeatMessages(link.key) ? null : "unknown" };
   });
   const revocations = orchestratorRevocations().filter((revocation) => revocation.project === project);
@@ -5528,8 +5573,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? 50,
       ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
       ...autoRotationFailureAnswer(project) },
-    ...("status" in curation ? { partial: true, omissions: ["curation"] } : {}),
-    ...(verbose || "status" in curation || settings.curation || curation.lastRun || curation.live || curation.runsError ? { curation } : {}),
+    ...(curation.partial ? { partial: true, omissions: curation.omissions } : {}),
+    ...(verbose || curation.partial || settings.curation || curation.lastRun || curation.live || curation.runsError ? { curation } : {}),
     maintenance: boardMaintenanceAnswer(project, effective, { verbose }),
     ...(typeof args.problemId === "string" ? { problem: readMemoryProblem(project, args.problemId) } : {}),
     defaultWakeIntervalMinutes: Math.round(SEAT_TICK_WAKE_INTERVAL_MS / 60_000),
@@ -5548,38 +5593,10 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
 async function readSeatCuration(project: string, initial: SeatTickSettings,
   readSettings: (project: string) => SeatTickSettings, context: McpToolCallContext) {
   throwIfCallEnded(context);
-  const timeout = new AbortController();
   const budget = Math.max(0, Math.min(5000, (context.deadlineAt ?? Infinity) - Date.now() - 500));
-  const panelDeadlineAt = Date.now() + budget;
-  const timer = setTimeout(() => timeout.abort(budget < 5000
-    ? new DeadlineExceededError("MCP tool deadline exceeded", 0) : Error("curation panel read timed out")), budget);
-  const signal = context.signal ? AbortSignal.any([context.signal, timeout.signal]) : timeout.signal;
-  let settings = initial;
-  try {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      throwIfCallEnded(context);
-      signal.throwIfAborted();
-      if (Date.now() >= panelDeadlineAt) throw Error("curation panel read timed out");
-      const now = Date.now(), revision = recordRevision(settings);
-      const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
-      const curation = await curationAnswerCooperatively(project, effective, now, signal);
-      throwIfCallEnded(context);
-      signal.throwIfAborted();
-      if (Date.now() >= panelDeadlineAt) throw Error("curation panel read timed out");
-      const fresh = readSettings(project);
-      if (recordRevision(fresh) === revision) return { settings, now, effective, curation };
-      settings = fresh;
-    }
-    throw Error("seat tick settings changed while being read");
-  } catch (error) {
-    throwIfCallEnded(context);
-    const now = Date.now();
-    const effective = effectiveSeatTickSettings(settings, now, SEAT_TICK_WAKE_INTERVAL_MS);
-    return { settings, now, effective, curation: {
-      status: "unavailable" as const, lastRun: null, live: null,
-      runsError: redactMonitorText(error instanceof Error ? error.message : "curation panel unavailable").slice(0, 300),
-    } };
-  } finally { clearTimeout(timer); }
+  const panel = await readCurationPanel(project, initial, readSettings, { budget, wakeIntervalMs: SEAT_TICK_WAKE_INTERVAL_MS, signal: context.signal });
+  throwIfCallEnded(context);
+  return panel;
 }
 
 /** Turbo for the seat: whether it is on, the credit approval and the switch progress. */
@@ -5975,11 +5992,13 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
       claude: listClaudeAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent })),
       codex: listCodexAccounts().map((account) => ({ accountId: account.id, authPresent: account.authPresent, spendCredits: account.spendCredits === true })),
       copilot: listCopilotAccounts().map((account) => ({ accountId: account.id })),
+      antigravity: listAntigravityAccounts().map((account) => ({ accountId: account.id })),
     },
     active: {
       claude: snapshot.engineRouting.claude.activeAccountId ?? activeClaudeAccountId(),
       codex: snapshot.engineRouting.codex.activeAccountId ?? activeCodexAccountId(),
       copilot: snapshot.engineRouting.copilot.activeAccountId ?? activeCopilotAccountId(),
+      antigravity: snapshot.engineRouting.antigravity.activeAccountId ?? activeAntigravityAccountId(),
     },
     observations: snapshot.quotaObservations,
     project,
@@ -5996,15 +6015,17 @@ function productionAccountLimitsSource(): Omit<AccountLimitsInput, "engine" | "a
  */
 function accountLimitsTool(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): McpToolPayload {
   const engine = text(args.engine);
-  if (engine && engine !== "claude" && engine !== "codex" && engine !== "copilot") throw new Error("engine must be claude, codex or copilot");
+  if (engine && engine !== "claude" && engine !== "codex" && engine !== "copilot" && engine !== "antigravity") {
+    throw new Error("engine must be claude, codex, copilot or antigravity");
+  }
   const accountId = text(args.accountId);
   const source = (dependencies.accountLimitsSource ?? productionAccountLimitsSource)();
   const accounts = accountLimitRows({
     ...source,
-    ...(engine ? { engine: engine as "claude" | "codex" | "copilot" } : {}),
+    ...(engine ? { engine: engine as "claude" | "codex" | "copilot" | "antigravity" } : {}),
     ...(accountId ? { accountId } : {}),
   });
-  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude, codex or copilot"} account has the id ${accountId}`);
+  if (accountId && accounts.length === 0) throw new Error(`no ${engine || "claude, codex, copilot or antigravity"} account has the id ${accountId}`);
   return redactPayload({ count: accounts.length, accounts });
 }
 
@@ -6024,7 +6045,7 @@ async function relayOwnerHistory(args: McpToolArgs, control: ViewerControlDepend
 
 /*
  * The Telegram bot account (docs/design/telegram-bot-account.md, Decision 6).
- * The Viewer is the only process that holds the bot token, so all three tools
+ * The Viewer is the only process that holds the bot token, so the bot tools
  * reach it through the agent route; none of them carries the token or the
  * bot's id either way. The send forwards the calling session's capability,
  * which is how the route attributes the post to this conversation.
@@ -6041,6 +6062,33 @@ async function telegramBotMessages(args: McpToolArgs, control: ViewerControlDepe
     if (typeof value === "number" || (typeof value === "string" && value !== "")) query.set(field, String(value));
   }
   return redactPayload(await readViewerControl(control, `/api/telegram/bot/agent?${query}`));
+}
+
+function telegramReactionRefusal(error: unknown): never {
+  if ((error instanceof McpToolRefusal || error instanceof McpDispatchVerdictError) && typeof error.details.code === "string") {
+    const { code, retryAfterSeconds } = error.details;
+    throw new McpToolRefusal(error.message, {
+      code,
+      retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+      ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
+    });
+  }
+  throw error;
+}
+
+async function telegramBotReactions(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  const query = new URLSearchParams({ op: "reactions", chat: required(args, "chat") });
+  return redactPayload(await readViewerControl(control, `/api/telegram/bot/agent?${query}`).catch(telegramReactionRefusal));
+}
+
+async function telegramBotSetReaction(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
+  return redactPayload(await dispatchControl(control)("/api/telegram/bot/agent", {
+    op: "set_reaction",
+    clientRequestId: requestId(args),
+    chat: required(args, "chat"),
+    messageId: args.messageId,
+    reaction: args.reaction,
+  }, callerCapabilityHeaders()).catch(telegramReactionRefusal));
 }
 
 async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
@@ -6182,13 +6230,14 @@ async function sendMessageToOrchestrator(
   context?: McpToolCallContext,
 ): Promise<McpToolPayload> {
   requireOrchestratorRelayCaller(dependencies);
-  const project = context?.binding?.target.project ?? await resolveOrchestratorToolProject(required(args, "project"), dependencies);
+  const project = context?.binding?.target.project ?? resolveOrchestratorToolProject(
+    orchestratorSendProject(args, ownerRelayCaller(dependencies) ? attributionOf(dependencies).conversationId : null), dependencies);
   requiredMessageText(args);
   const key = requestId(args);
   const bound = context?.binding;
   const machine = bound?.target.identity?.startsWith("machine:") ? bound.target.identity.slice(8) : text(args.machine);
   if (machine) {
-    const link = resolveRemoteSeatMachine(machine, project, dependencies);
+    const link = resolveRemoteSeatMachine(machine, project, dependencies, !!bound?.target.identity?.startsWith("machine:"));
     if (link) {
       try {
         const message = bound?.sendPayload ? splitRelayMessageText(bound.sendPayload.text)?.body ?? bound.sendPayload.text
@@ -6196,6 +6245,7 @@ async function sendMessageToOrchestrator(
         const clientMessageId = bound?.downstreamKey ?? orchestratorSendDownstreamKey(key);
         const response = await dispatchControl(control)("/api/orchestrator/message", {
           project, machine: link.install, text: message,
+          ...(bound?.target.identity?.startsWith("machine:") ? { boundMachineInstall: link.install } : {}),
           clientMessageId,
           ...(bound?.seatMessageFence ? { seatMessageFence: bound.seatMessageFence } : {}),
         }, callerCapabilityHeaders());
@@ -6471,7 +6521,7 @@ async function boardSnapshot(
   }
   const files = (await dependencies.completedFileScan()).snapshot.files;
   const conversations = files
-    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot")
+    .filter((entry) => entry.engine === "claude" || entry.engine === "codex" || entry.engine === "copilot" || entry.engine === "antigravity")
     .filter((entry) => !project || entry.project === project)
     .filter((entry) => !activity || entry.activity === activity)
     .filter((entry) => !liveOnly || entry.activity === "live" || entry.activity === "stalled")
@@ -6514,21 +6564,194 @@ function mutationReceipt(operationId: string): { operationId: string; receipt: {
   return { operationId, receipt: { operationId, status: "delivered" } };
 }
 
-/** A seat's list scope comes from its authenticated designation. */
-function boardReadProject(
-  args: McpToolArgs,
-  dependencies: Pick<ViewerMcpDomainDependencies, "callerAttribution" | "authorizedSeats"> & Partial<Pick<ViewerMcpDomainDependencies, "attentionAuthority">>,
-): string {
-  const requested = text(args.project);
-  const caller = dependencies.attentionAuthority ? attributionOf(dependencies as ViewerMcpDomainDependencies) : dependencies.callerAttribution?.() ?? null;
-  if (!caller || (caller.kind !== "manager" && caller.kind !== "gateway")) return requested ? canonicalProject(requested) : "";
-  const seat = caller.conversationId && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+function boardProjectDirectory(dependencies: ViewerMcpDomainDependencies): NamedProjectDirectory {
+  const store = existingTeamStore();
+  const projects = store ? workspaceDirectory(store).workspaces.flatMap(workspace => workspace.projects) : [];
+  return namedProjectDirectory(dependencies, projects);
+}
+
+/** Resolve explicit board names without performing seat succession writes.
+ * The directory that accepted the spelling is returned with the selection so
+ * the alias proof reads the same accepted sources. */
+export function resolveBoardSelection(named: string, dependencies: ViewerMcpDomainDependencies): { project: string; directory: NamedProjectDirectory } {
+  try {
+    const directory = boardProjectDirectory(dependencies);
+    return { project: resolveNamedProject(named, directory, false), directory };
+  }
+  catch (error) {
+    if (error instanceof ProjectNameRefusal) throw new McpToolRefusal(error.message, error.details);
+    throw error;
+  }
+}
+
+/** A domain that supplies no catalog source has no project directory of its
+ * own. A project the shared resolver cannot name is then read as an exact key,
+ * as on main, and the seat fence still compares it before any row is read. A
+ * domain with a catalog source (production) keeps the unknown-name refusal. */
+function boardSelectionOrKey(named: string, dependencies: ViewerMcpDomainDependencies): { project: string; directory?: NamedProjectDirectory } {
+  try { return resolveBoardSelection(named, dependencies); }
+  catch (error) {
+    if (typeof dependencies.lastCompletedCatalog === "function"
+      || !(error instanceof McpToolRefusal) || error.details.code !== "unknown_project") throw error;
+    return { project: canonicalProject(named) };
+  }
+}
+
+export function resolveBoardProject(named: string, dependencies: ViewerMcpDomainDependencies): string {
+  return resolveBoardSelection(named, dependencies).project;
+}
+
+/** Board reads keep main's tolerance for a domain without an authority source:
+ * its explicit attribution, or none, names the caller. */
+function boardAttribution(dependencies: ViewerMcpDomainDependencies): CallerAttribution {
+  return typeof dependencies.attentionAuthority === "function" ? attributionOf(dependencies)
+    : dependencies.callerAttribution?.() ?? { kind: "unidentified", conversationId: null, role: null };
+}
+
+/** The authenticated designation remains the policy after name resolution. */
+function boardReadProject(requested: string, dependencies: ViewerMcpDomainDependencies): string {
+  const caller = boardAttribution(dependencies);
+  if (caller.kind !== "manager" && caller.kind !== "gateway") return requested;
+  const seat = caller.conversationId && (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources(), caller.conversationId))
     .find(candidate => candidate.conversationId === caller.conversationId);
-  if (!seat && caller.kind === "gateway") return requested ? canonicalProject(requested) : "";
-  if (!seat || !seat.project) throw new McpToolRefusal("the caller's project designation is unavailable; nothing was read", { code: "project_scope_refused", status: 403 });
+  if (!seat && caller.kind === "gateway") return requested;
+  if (!seat || !seat.project) throw new McpToolRefusal("the caller's project designation is unavailable; nothing was read", { code: "project_scope_refused", status: 403, retryable: false });
   const own = canonicalProject(seat.project);
-  if (requested && canonicalProject(requested) !== own) throw new McpToolRefusal("an orchestrator seat reads only its own project's board; use send_message_to_orchestrator for another project", { code: "cross_project_refused", status: 403, retryable: false });
+  if (requested && requested !== own) throw new McpToolRefusal("an orchestrator seat reads only its own project's board; use send_message_to_orchestrator for another project", { code: "cross_project_refused", status: 403, retryable: false });
   return own;
+}
+
+/** Native admission reasons that mean no identity evidence was presented at
+ * all: an authenticated compatibility adapter or a process with no Claude
+ * parent reads as unidentified, exactly as on main. Every other reason is a
+ * presented credential or session that failed and refuses the board read. */
+const NO_IDENTITY_PRESENTED: ReadonlySet<NativeCallerReason> = new Set(["no-claude-ancestor", "platform-unverified"]);
+
+/** Pin caller authority before resolution, including refusals with suggestions. */
+export function captureBoardCaller(dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext): { fingerprint: string; assert(): void } {
+  const refuse = (): never => { throw new McpToolRefusal("board caller authority changed; nothing was read", { code: "project_scope_refused", status: 403, retryable: false }); };
+  const snapshot = () => runWithMcpCallerResolution(() => {
+    context.assertCaller?.();
+    const caller = boardAttribution(dependencies);
+    const operator = context.operatorBoardProject !== undefined;
+    if (operator && (caller.kind !== "gateway" || caller.conversationId !== null)) refuse();
+    const authority = operator ? undefined : dependencies.attentionAuthority?.();
+    if (authority?.kind === "unidentified" && authority.admission && !NO_IDENTITY_PRESENTED.has(authority.admission.reason)) {
+      throw new McpToolRefusal("board caller identity is unavailable", { code: "caller_unidentified", retryable: false });
+    }
+    const id = authority && authority.kind !== "unidentified" ? authority.conversationId : caller.via?.deputy ?? caller.conversationId;
+    const inspect = (lookup: Pick<ConversationLookup, "conversation" | "canonicalConversationId"> | null, registry?: RegistrySnapshot) => {
+      for (const owner of new Set([id, caller.conversationId])) {
+        try {
+          if (revokedSeatPipelineRefusal(owner, value => lookup?.canonicalConversationId(value as `conversation_${string}`) ?? value)) {
+            throw new McpToolRefusal("the caller's orchestrator designation was revoked", { code: "orchestrator_seat_revoked", retryable: false });
+          }
+        } catch (error) {
+          if (error instanceof SeatRevocationStoreUnavailableError) throw new McpToolRefusal(error.message, { code: "orchestrator_seat_authority_unavailable", retryable: true });
+          throw error;
+        }
+      }
+      const record = id ? lookup?.conversation(id as `conversation_${string}`) : null;
+      const generation = record?.generations.at(-1);
+      if (record?.supersededBy || generation?.archivedAt) refuse();
+      const seat = caller.conversationId ? orchestratorSeatIdentityForConversation(caller.conversationId) : null;
+      const principal = conversationWorkspacePrincipal(dependencies.workspaceConversation ?? registry ?? (() => null), id);
+      return JSON.stringify([caller, authority, principal, record ? [record.id, record.projectOwnership,
+        generation?.id, generation?.path, generation?.launchProfile.project, generation?.launchProfile.cwd, generation?.launchProfile.workspace] : null, seat]);
+    };
+    if (!id && !caller.conversationId) return inspect(null);
+    if (dependencies.registrySnapshot === productionDomainDependencies.registrySnapshot) return agentRegistry().withBoardCallerLookup(inspect);
+    const registry = dependencies.registrySnapshot?.();
+    return inspect(registry ? readOnlyConversationLookupFromSnapshot(registry) : null, registry);
+  });
+  const pinned = snapshot();
+  const assert = () => { if (snapshot() !== pinned) refuse(); };
+  retainResponseAuthority(context, assert);
+  return { fingerprint: pinned, assert };
+}
+
+/** Pin alias edges without resolving the selected board again after an await. */
+export function captureBoardAliasProof(
+  named: string,
+  project: string,
+  aliases: Readonly<Record<string, string>>,
+  displayNames: Readonly<Record<string, string>> = {},
+  dependencies?: ViewerMcpDomainDependencies,
+  directory?: NamedProjectDirectory,
+): () => boolean {
+  // Match the spelling vocabulary accepted by the shared named-project resolver.
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/[._/\\-]+/gu, "-").replace(/^-|-$/gu, "");
+  const spelling = normalize(named);
+  const matchingKeys = (current: Readonly<Record<string, string>>, currentNames: Readonly<Record<string, string>>) => {
+    const resolvesToProject = (start: string) => {
+      let key = start;
+      const seen = new Set<string>();
+      while (Object.hasOwn(current, key) && current[key] && !seen.has(key)) { seen.add(key); key = current[key]!; }
+      return !seen.has(key) && key === project;
+    };
+    const prefix = /^(repo|dir)-[a-f0-9]{7,31}$/i.test(named.trim()) ? named.trim().toLowerCase() : "";
+    return Object.keys(current).filter(key => spelling && (normalize(key) === spelling
+      || prefix && key.toLowerCase().startsWith(prefix) && resolvesToProject(key)
+      || normalize(currentNames[key] ?? "") === spelling && resolvesToProject(key))).sort();
+  };
+  const keys = matchingKeys(aliases, displayNames);
+  // Any source the resolver accepted for this spelling (a catalog row, a
+  // retained file, a manual project, an alias, a remote, ...) can be several
+  // alias edges away from the selected canonical project. Take those source
+  // keys from the resolver's own index, never from a separate list here.
+  const accepted = spelling ? directory ?? (dependencies ? boardProjectDirectory(dependencies) : undefined) : undefined;
+  const retainedSourceKeys = accepted ? accepted.sources(named).filter(key => accepted.canonical(key) === project) : [];
+  const displayProof = new Map(keys.filter(key => normalize(displayNames[key] ?? "") === spelling)
+    .map(key => [key, displayNames[key]]));
+  const proof = new Map<string, string | undefined>();
+  for (const start of [project, named, ...keys, ...retainedSourceKeys]) {
+    let key = start;
+    while (key && !proof.has(key)) {
+      const target = Object.hasOwn(aliases, key) ? aliases[key] : undefined;
+      // Retain terminal absence too: introducing an alias changes the proof.
+      proof.set(key, target);
+      if (!target) break;
+      key = target;
+    }
+  }
+  return () => {
+    const current = projectAliasSnapshot({ strict: true });
+    return JSON.stringify(matchingKeys(current.aliases, current.displayNames)) === JSON.stringify(keys)
+      && [...displayProof].every(([key, name]) => current.displayNames[key] === name)
+      && [...proof].every(([key, target]) => (Object.hasOwn(current.aliases, key) ? current.aliases[key] : undefined) === target);
+  };
+}
+
+/** One selection per call; fresh authority at every read/disclosure boundary. */
+function captureBoardRead(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext): McpBoardRead {
+  assertWorkspaceMcpCall();
+  const caller = captureBoardCaller(dependencies, context);
+  const named = text(args.project);
+  const operatorProject = context.operatorBoardProject;
+  // The voice adapter passes the canonical selection already proved by its reader.
+  // Only an in-process context can carry this; serialized tool arguments cannot.
+  if (operatorProject !== undefined && named !== operatorProject) {
+    throw new McpToolRefusal("board selection changed", { code: "project_scope_refused", retryable: false });
+  }
+  const resolved = context.resolvedBoardProject;
+  if (resolved !== undefined && named !== resolved) {
+    throw new McpToolRefusal("board selection changed", { code: "project_scope_refused", retryable: false });
+  }
+  const aliasSnapshot = projectAliasSnapshot({ strict: true });
+  const aliases = aliasSnapshot.aliases;
+  const selection = operatorProject === undefined && resolved === undefined && named ? boardSelectionOrKey(named, dependencies) : undefined;
+  const requested = operatorProject !== undefined ? canonicalProject(operatorProject)
+    : resolved !== undefined ? resolved : selection?.project ?? "";
+  const project = boardReadProject(requested, dependencies);
+  const aliasesUnchanged = captureBoardAliasProof(named, project, aliases, aliasSnapshot.displayNames, dependencies, selection?.directory);
+  return { project, scope: `board-read:${crypto.createHash("sha256").update(JSON.stringify([project, caller.fingerprint])).digest("hex")}`, assert() {
+    assertWorkspaceMcpCall();
+    caller.assert();
+    if (canonicalProject(project) !== project || !aliasesUnchanged()
+      || boardReadProject(requested, dependencies) !== project) {
+      throw new McpToolRefusal("board caller authority changed; nothing was read", { code: "project_scope_refused", status: 403, retryable: false });
+    }
+  } };
 }
 
 function pipelineReferenceRows(dependencies: ViewerMcpDomainDependencies, project: string): Pipeline[] {
@@ -6547,7 +6770,7 @@ function recordMatchesPr(title: string, resolved: ReturnType<typeof pipelineWork
     || (!matching.some(link => link.kind === "issue") && titleHasPullRequest(title, number));
 }
 
-function taskReferenceIds(dependencies: ViewerMcpDomainDependencies, project: string, number: number): string[] {
+function taskReferenceMatch(dependencies: ViewerMcpDomainDependencies, project: string, number: number) {
   const pipelines = pipelineReferenceRows(dependencies, project);
   const carrying = new Map<string, Set<string>>();
   for (const pipeline of pipelines) if (pipelineMatchesPr(pipeline, number)) {
@@ -6555,11 +6778,8 @@ function taskReferenceIds(dependencies: ViewerMcpDomainDependencies, project: st
     for (const id of pipeline.taskIds ?? []) ids.add(id);
     carrying.set(canonicalProject(pipeline.project), ids);
   }
-  const source = dependencies.taskSelectionSource?.();
-  const tasks = source ? boardSelection(source.filename, "tasks").referenceRecords(source, project)
-    : (dependencies.listTaskRecords?.() ?? dependencies.loadTasks()).filter(row => !project || canonicalProject(row.project) === project);
-  return tasks.filter(task => carrying.get(canonicalProject(task.project))?.has(task.id)
-    || recordMatchesPr(task.text, taskWorkLinks(task, []), number)).map(task => task.id).sort();
+  return (task: Pick<import("@/lib/tasks/types").BoardTask, "id" | "project" | "text" | "workLinks">) =>
+    !!carrying.get(canonicalProject(task.project))?.has(task.id) || recordMatchesPr(task.text, taskWorkLinks(task, []), number);
 }
 
 /** Lists reuse the store's immutable generation and materialize one page. */
@@ -6568,9 +6788,11 @@ async function listPipelines(
   dependencies: ViewerMcpDomainDependencies,
   context: McpToolCallContext = {},
 ): Promise<McpToolPayload> {
+  const board = context.boardRead ?? captureBoardRead(args, dependencies, context);
+  board.assert();
   throwIfCallEnded(context);
   const states = stringSet(args.state, ["open", "draft", "provisioning", "running", "paused", "needs_decision", "needs_review", "completed", "closed"]);
-  const scope = { project: boardReadProject(args, dependencies), states, includeClosed: args.includeClosed === true,
+  const scope = { project: board.project, states, includeClosed: args.includeClosed === true,
     ids: stringSet(args.ids), query: normalizedBoardQuery(text(args.query)), updatedSince: sinceTime(args.updatedSince),
     queryIds: undefined as string[] | undefined };
   // Resolve explicit ids once so PR matching and paging share the same
@@ -6613,8 +6835,9 @@ async function listPipelines(
       && (scope.queryIds !== undefined ? scope.queryIds.includes(pipeline.id) : !scope.query || pipeline.task.toLowerCase().includes(scope.query))
       && (!scope.updatedSince || pipeline.createdAt >= scope.updatedSince),
     project,
-  }, () => throwIfCallEnded(context));
+  }, () => { throwIfCallEnded(context); board.assert(); });
   throwIfCallEnded(context);
+  board.assert();
   const { rows: pipelines, ...pagination } = page;
   return redactPayload({ ...pagination, pipelines, compact: !fullAnswer(args),
     omittedRecordCount: args.full === true ? 0 : pipelines.length,
@@ -6657,31 +6880,60 @@ function taskReadModel(dependencies: ViewerMcpDomainDependencies) {
 
 /** Kept for callers explicitly requesting the previous list projection. */
 export const LIST_TASKS_DETAILS_CHARS = 400;
-function listTaskRow(task: TaskPipelineReadModel) {
+function listTaskRow<T extends { details?: string }>(task: T) {
   const details = task.details;
   return typeof details === "string" && details.length > LIST_TASKS_DETAILS_CHARS
     ? { ...task, details: details.slice(0, LIST_TASKS_DETAILS_CHARS), detailsTruncated: true } : task;
 }
 
-function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext = {}): McpToolPayload {
+async function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, context: McpToolCallContext = {}): Promise<McpToolPayload> {
+  const deadline = performance.now() + Math.max(0, Math.min(4000, (context.deadlineAt ?? Infinity) - Date.now() - 750));
+  const board = context.boardRead ?? captureBoardRead(args, dependencies, context);
+  board.assert();
+  throwIfCallEnded(context);
   const statuses = stringSet(args.statuses ?? args.status, ["inbox", "assigned", "blocked", "done"]);
-  const scope = { project: boardReadProject(args, dependencies), statuses, placement: stringSet(args.placement, ["pinned", "unplaced"])[0] ?? "",
+  const scope = { project: board.project, statuses, placement: stringSet(args.placement, ["pinned", "unplaced"])[0] ?? "",
     openOnly: args.openOnly === true, updatedSince: sinceTime(args.updatedSince), ids: stringSet(args.ids), query: normalizedBoardQuery(text(args.query)),
-    queryIds: undefined as string[] | undefined,
     priorities: stringSet(args.priority, [...TASK_PRIORITIES]) };
-  const number = pullRequestQuery(scope.query);
-  if (number !== null) scope.queryIds = taskReferenceIds(dependencies, scope.project, number);
+  const productionSource = dependencies.taskSelectionSource === productionDomainDependencies.taskSelectionSource;
   const source = dependencies.taskSelectionSource?.();
-  const project = (source: TaskPipelineReadModel) => {
+  const pipelineSource = !source ? null
+    : dependencies.pipelineSelectionSource === productionDomainDependencies.pipelineSelectionSource
+      ? { filename: statePath("state.sqlite"), read: () => null }
+      : dependencies.pipelineSelectionSource?.() ?? null;
+  const number = pullRequestQuery(scope.query);
+  const project = (source: Omit<TaskPipelineReadModel, "pipelineIds"> & { pipelineIds?: string[] }) => {
     const task = projectReadText(source, context);
     return args.full === true ? withOwnership(task) : args.compact === false ? withOwnership(listTaskRow(task)) : compactTask(task);
   };
-  const selectionPage = (links?: (task: string) => string[]) => boardSelection(source!.filename, "tasks").page(source!, scope, args.cursor,
-    Math.max(1, Math.min(200, integer(args.limit, 100))), task => project(taskWithLinks(task, dependencies, links)));
-  const pipelineSource = source ? dependencies.pipelineSelectionSource?.() : null;
-  const page = source ? pipelineSource ? boardSelection(pipelineSource.filename, "pipelines").withLinks(selectionPage) : selectionPage()
-    : listPage(taskReadModel(dependencies), {
-    scope, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, 100))),
+  let linksOmitted = false;
+  const links = pipelineSource ? taskListLinks(pipelineSource.filename) : undefined;
+  const reference = number === null ? undefined : pipelineSource
+    ? (task: Pick<import("@/lib/tasks/types").BoardTask, "id" | "project" | "text" | "workLinks">) => {
+      if (recordMatchesPr(task.text, taskWorkLinks(task, []), number)) return true;
+      const ids = links?.(task.id);
+      if (!ids) return undefined;
+      if (!ids.length) return false;
+      const owner = canonicalProject(task.project);
+      const lanes = withTaskReferenceBudget(pipelineSource.filename, ids, database =>
+        boardSelection(pipelineSource.filename, "pipelines").referenceRecords({ ...pipelineSource, database }, owner, ids));
+      return lanes?.some(lane => canonicalProject(lane.project) === owner && pipelineMatchesPr(lane, number));
+    }
+    : !productionSource ? taskReferenceMatch(dependencies, scope.project, number) : undefined;
+  const fallback = !source && !productionSource ? taskReadModel(dependencies) : [];
+  const queryIds = reference && !source
+    ? fallback.filter(task => (!scope.project || canonicalProject(task.project) === scope.project) && reference(task)).map(task => task.id).sort() : undefined;
+  const matchingIds = queryIds ? new Set(queryIds) : undefined;
+  const page = source ? await withViewerOperation("mcp.tasks.indexed-page", () => indexedTaskPage(source, scope, args.cursor,
+      Math.max(1, Math.min(200, integer(args.limit, 100))), task => {
+        if (!pipelineSource && !productionSource) return project(taskWithLinks(task, dependencies));
+        const pipelineIds = links?.(task.id);
+        if (pipelineIds === undefined) linksOmitted = true;
+        return project({ ...taskWithoutPrototypeDetails(task), ...(pipelineIds === undefined ? {} : { pipelineIds }) });
+      }, { checkpoint: () => throwIfCallEnded(context), deadline, matchesReference: reference, signal: context.signal }))
+    : productionSource ? deferredTaskPage()
+    : listPage(fallback, {
+    scope: { ...scope, queryIds }, cursor: args.cursor, limit: Math.max(1, Math.min(200, integer(args.limit, 100))),
     identity: task => ({ id: task.id, time: task.updatedAt ?? "" }),
     matches: task => (!scope.project || canonicalProject(task.project) === scope.project)
       && (!statuses.length || statuses.includes(task.status)) && (!scope.openOnly || task.status !== "done")
@@ -6689,11 +6941,15 @@ function listTasks(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies,
       && (!scope.priorities.length || scope.priorities.includes(taskPriority(task)))
       && (!scope.updatedSince || task.updatedAt >= scope.updatedSince)
       && (!scope.ids.length || scope.ids.includes(task.id))
-      && (scope.queryIds !== undefined ? scope.queryIds.includes(task.id) : !scope.query || task.text.toLowerCase().includes(scope.query)),
+      && (matchingIds ? matchingIds.has(task.id) : !scope.query || task.text.toLowerCase().includes(scope.query)),
     project,
   });
+  board.assert();
+  throwIfCallEnded(context);
   const { rows: tasks, ...pagination } = page;
+  const omissions = "omissions" in pagination ? pagination.omissions ?? [] : [];
   return redactPayload({ ...pagination, tasks, compact: !fullAnswer(args),
+    ...(linksOmitted ? { partial: true, omissions: [...omissions, "pipelineIds"] } : {}),
     omittedRecordCount: args.full === true ? 0 : tasks.length,
     ...answerHint(args, "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. get_task(taskId) or full:true reads complete records; compact:false returns the previous truncated-details projection. Never write a truncated value back.") });
 }
@@ -6958,7 +7214,7 @@ async function deploymentStatus(
   const limit = Math.max(1, Math.min(100, integer(args.limit, 25)));
   const cursor = text(args.cursor);
   const query = `limit=${limit}${args.compact === true ? "&compact=true" : ""}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
-  const result = await readViewerControl(control, `/api/runtime/deployments?${query}`)
+  const result: Record<string, unknown> = await readViewerControl(control, `/api/runtime/deployments?${query}`)
     .catch(async (error: unknown) => {
       if (!isUnservedControlRoute(error)) throw error;
       if (cursor) throw new Error("Viewer deployment pagination is unavailable during hand-over; restart the list");
@@ -6976,6 +7232,7 @@ async function deploymentStatus(
   return redactPayload({
     count: deployments.length,
     deployments: args.compact === true ? deployments.map(row => isDeploymentSummary(row) ? row : compactDeployment(row)) : deployments,
+    ...(objectRecord(result.structuredHostStartup) ? { structuredHostStartup: result.structuredHostStartup } : {}),
     ...(nextCursor !== undefined ? { nextCursor, hasMore } : {}),
     ...(legacySnapshot ? { legacySnapshot } : {}),
     ...(runtimeHostRequests ? { runtimeHostRequests } : {}),
@@ -7871,7 +8128,14 @@ async function requestAttention(
        the answer: two tabs share a device id, and only the named tab may run
        the move. */
     const view = resolveDirectedAttentionView();
-    if (!view && (dependencies.noticeCapableViewOpen ?? noticeCapableViewOpen)()) {
+    /* The project boundary: the operator is in another project than the
+       target's, so the request reaches them as the notification and moves
+       nothing. Both keys are canonical, so an alias of the same project is the
+       same project. A view with no project open (the overview) has none to
+       protect. */
+    const crossesProject = view !== null && view.project !== null
+      && canonicalOrchestratorProject(view.project) !== project;
+    if ((!view && (dependencies.noticeCapableViewOpen ?? noticeCapableViewOpen)()) || crossesProject) {
       dependencies.adoptRootSession();
       const raised = dependencies.raiseAttentionRequest({
         origin: "root-agent",
@@ -7950,6 +8214,10 @@ async function requestAttention(
     timeoutMs: budget,
     ...(context.signal ? { signal: context.signal } : {}),
   });
+  /* The directed view stood down at the project boundary after this call
+     chose it (the operator changed project while the request was in flight):
+     the request is the notice, the view did not move. */
+  if (outcome.kind === "notice") return noticeAnswer(outcome.request, created);
   const deviceId = request.acknowledgedBy ?? null;
   if (outcome.kind === "failed") {
     const messages: Record<typeof outcome.code, string> = {
@@ -8287,6 +8555,12 @@ export function viewerMcpToolPolicy(
   );
   return {
     permit: (tool, args) => {
+      if (!hostHealthProbe && tool !== "send_message_to_orchestrator" && typeof domainDependencies.attentionAuthority === "function") {
+        const caller = authorityOf(domainDependencies);
+        if (caller.kind === "worker" && ownerRelayHandoffOnlyGrant(caller.conversationId)) {
+          return { allowed: false, code: "tool_not_permitted", error: "Guest-origin owner relays may use Viewer only for the verified project-seat handoff." };
+        }
+      }
       // An admitted agent's read surface is independent of role/seat identity.
       // Resolve authority only where the policy uses it. Bindings still verify
       // their own operation authority and recoverable receipts before dispatch.
@@ -8381,24 +8655,54 @@ function orchestratorSendDownstreamKey(key: string): string {
   return `mcp_orchestrator_${crypto.createHash("sha256").update(key).digest("hex")}`;
 }
 
+function orchestratorSendProject(args: McpToolArgs, ownerConversationId: string | null): string {
+  if (args.project !== undefined || !ownerConversationId) return required(args, "project");
+  const project = text(liveOwnerRelayProject(ownerConversationId));
+  if (project) return project;
+  throw new McpToolRefusal("This relay target has no configured project. Ask which project should receive the request.", {
+    code: "project_required", outcome: "not-executed", evidence: "project-resolution", nextAction: "new-request-permitted", retryable: false,
+  });
+}
+
 async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
+  try { return await bindOrchestratorSendCore(args, dependencies, forRecovery); }
+  catch (error) {
+    const attribution = attributionOf(dependencies);
+    if (!forRecovery && ownerRelayCaller(dependencies) && attribution.conversationId) {
+      const details = error && typeof error === "object" ? (error as { details?: { code?: unknown } }).details : undefined;
+      await recordOwnerRelayHandoffOutcome(attribution.conversationId, {
+        status: error instanceof McpDispatchUncertainError ? "uncertain" : "refused",
+        project: typeof args.project === "string" ? args.project : liveOwnerRelayProject(attribution.conversationId),
+        code: typeof details?.code === "string" ? details.code : null,
+      }).catch(() => false);
+    }
+    throw error;
+  }
+}
+
+async function bindOrchestratorSendCore(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies, forRecovery = false): Promise<McpRequestBindingInput> {
   requireOrchestratorRelayCaller(dependencies);
-  const named = required(args, "project");
   const message = requiredMessageText(args);
   const caller = recoveryCaller(dependencies);
   const attribution = attributionOf(dependencies);
-  // Match HTTP admission: a designated seat takes precedence even when the
-  // root caller's general attribution also identifies it as the voice gateway.
-  const seat = (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
+  const handoff = attribution.conversationId && !attribution.via ? ownerRelayHandoff(message, attribution.conversationId) : null;
+  const relayPayload = handoff?.payload;
+  const owner = attribution.kind === "agent" || relayPayload?.requesterRequestId ? relayPayload : null;
+  // The active requester grant scopes this turn even if the conversation has
+  // an independent seat designation.
+  const seat = handoff?.requester ? null : (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
     .find((candidate) => candidate.conversationId === attribution.conversationId);
-  const owner = ownerRelayCaller(dependencies) ? ownerRelayPayload(message, attribution.conversationId!) : null;
-  if (!seat && !owner && (attribution.kind !== "gateway" || !attribution.conversationId)) {
+  if (!seat && !owner && (handoff?.requester || attribution.kind !== "gateway" || !attribution.conversationId)) {
     throw new McpToolRefusal("the relay sender could not be bound to an authenticated conversation; continue the requested work with your tools, or explain the failure and the owner's next action", {
       code: "orchestrator_relay_refused", retryable: false,
     });
   }
-  const project = forRecovery ? null : await resolveOrchestratorToolProject(named, dependencies);
-  if (!seat && owner && project && !ownerRelayTargetMatches(attribution.conversationId!, project, orchestratorSeatFor(project).active?.conversationId)) {
+  const ownerConversationId = !seat && owner && !owner.requesterRequestId ? attribution.conversationId : null;
+  // An original claim already froze its project, including a default from the relay target.
+  if (forRecovery && (args.project !== undefined || !ownerConversationId)) required(args, "project");
+  const project = forRecovery ? null : await resolveOrchestratorToolProject(orchestratorSendProject(args, ownerConversationId), dependencies);
+  if (!seat && owner && project && !ownerRelayTargetMatches(attribution.conversationId!, project, orchestratorSeatFor(project).active?.conversationId, owner.requesterRequestId)) {
+    if (owner.requesterRequestId) throw new McpToolRefusal("the trusted requester's handoff must stay within its granted project", { code: "trusted_requester_project_refused", retryable: false });
     throw new McpToolRefusal("the quoted report's source seat is unavailable for this handoff; explain the failure and ask the owner to open that project's seat", { code: "owner_report_seat_unavailable", retryable: false });
   }
   const link = project && text(args.machine) ? resolveRemoteSeatMachine(text(args.machine), project, dependencies) : null;
@@ -8418,12 +8722,13 @@ async function bindOrchestratorSend(args: McpToolArgs, dependencies: ViewerMcpDo
   };
 }
 
-function resolveRemoteSeatMachine(machine: string, project: string, dependencies: ViewerMcpDomainDependencies) {
+function resolveRemoteSeatMachine(machine: string, project: string, dependencies: ViewerMcpDomainDependencies, exactInstallOnly = false) {
   const caller = attributionOf(dependencies);
   const seat = (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources()))
     .find(seat => seat.conversationId === caller.conversationId && seat.project && canonicalOrchestratorProject(seat.project) === project);
-  if (!seat || caller.via) throw new McpToolRefusal("only this project's designated seat may relay over a link", { code: "orchestrator_relay_refused", retryable: false });
-  try { return resolveSeatMessageMachine(machine, project); }
+  if (!seat || caller.via || hasRequesterRelayCustody(seat.conversationId))
+    throw new McpToolRefusal("only this project's designated seat may relay over a link", { code: "orchestrator_relay_refused", retryable: false });
+  try { return resolveSeatMessageMachine(machine, project, { exactInstallOnly }); }
   catch (error) {
     if (error instanceof SeatMessageRefusal) throw new McpToolRefusal(error.message, { code: error.code, outcome: "not-executed", nextAction: "new-request-permitted" });
     throw error;
@@ -8431,9 +8736,10 @@ function resolveRemoteSeatMachine(machine: string, project: string, dependencies
 }
 
 /** The Viewer binds this ordinary agent to one live owner request. */
-function ownerRelayCaller(dependencies: ViewerMcpDomainDependencies): boolean {
+function ownerRelayCaller(dependencies: ViewerMcpDomainDependencies, project?: string): boolean {
   const caller = attributionOf(dependencies);
-  return caller.kind === "agent" && !caller.via && !!caller.conversationId && liveOwnerRelayConversation(caller.conversationId);
+  if (caller.kind !== "agent" || caller.via || !caller.conversationId) return false;
+  return project === undefined ? liveOwnerRelayConversation(caller.conversationId) : ownerRelayProjectMatches(caller.conversationId, project);
 }
 
 /** Seats, the gateway and live owner relay agents can message a seat.
@@ -8441,6 +8747,8 @@ function ownerRelayCaller(dependencies: ViewerMcpDomainDependencies): boolean {
 function requireOrchestratorRelayCaller(dependencies: ViewerMcpDomainDependencies): void {
   nativeOrchestratorRelayCaller()?.();
   const caller = attributionOf(dependencies);
+  if (caller.conversationId && hasRequesterRelayCustody(caller.conversationId) && !ownerRelayCaller(dependencies))
+    throw new McpToolRefusal("the trusted requester relay turn is no longer authorized", { code: "orchestrator_relay_refused", retryable: false });
   if (caller.kind === "gateway" || ownerRelayCaller(dependencies)) return;
   if (caller.conversationId && !caller.via) {
     const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
@@ -8841,7 +9149,39 @@ async function prototypeReceiptScope(mode: "publish" | "read" | "resend",args: M
     { mode, ...(args.taskId === undefined ? {} : { taskId: args.taskId }), ...(args.reviewId === undefined ? {} : { reviewId: args.reviewId }) },{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
   /* A seat asking without a task is scoped to its own questions (docs/design/operator-decision-forms.md §2.1). */
   if (typeof scope.conversationId !== "string" || (typeof scope.taskId !== "string" && scope.taskId !== null)) throw new Error("the Viewer did not name the caller and task of this prototype call");
+  if (mode !== "resend") {
+    if (typeof scope.project !== "string" || !scope.project) throw new McpToolRefusal("the Viewer did not prove the project of this prototype call", {
+      code: "prototype_project_unavailable", retryable: true, check: "prototype-project",
+    });
+    const identity = prototypeProjectReceiptScope(scope.conversationId, scope.taskId, scope.project);
+    if (context) context.prototypeReceiptScope = encodeURIComponent(identity);
+    return identity;
+  }
   return `${scope.conversationId}\n${scope.taskId ?? "seat"}`;
+}
+
+/** A current seat may recover its own settled form without asking a workspace
+ * grant again. Fresh calls still use prototypeReceiptScope and the HTTP fence.
+ * Workers keep the Viewer-validated scope, including implicit task selection. */
+function prototypeSeatReceiptScope(mode: "publish" | "read", args: McpToolArgs, dependencies: ViewerMcpDomainDependencies): string | null {
+  const caller = dependencies.attentionAuthority();
+  if ((caller.kind !== "root" && caller.kind !== "worker") || !caller.conversationId) return null;
+  const seats = dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources());
+  const projects = new Set<string>();
+  for (const seat of seats) {
+    if (seat.conversationId !== caller.conversationId) continue;
+    if (!seat.project) return null;
+    projects.add(canonicalProject(seat.project));
+  }
+  if (projects.size !== 1) return null;
+  const project = [...projects][0];
+  if (!project) return null;
+  if (args.taskId !== undefined && (typeof args.taskId !== "string" || !args.taskId)) return null;
+  const stage = prototypeStageForConversation(caller.conversationId,
+    dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines);
+  if (stage && stage.taskIds.length !== 1 && (mode === "publish" || args.taskId === undefined)) return null;
+  if (mode === "publish" && stage && args.taskId !== undefined && args.taskId !== stage.taskIds[0]) return null;
+  return prototypeProjectReceiptScope(caller.conversationId, (args.taskId as string | undefined) ?? stage?.taskIds[0] ?? null, project);
 }
 
 /**
@@ -8905,7 +9245,7 @@ export function viewerReadTools(
 ) {
   return {
     get_orchestrator: (args: McpToolArgs) => getOrchestrator(args, domainDependencies),
-    list_tasks: (args: McpToolArgs, context?: McpToolCallContext) => Promise.resolve(listTasks(args, domainDependencies, context)),
+    list_tasks: (args: McpToolArgs, context?: McpToolCallContext) => listTasks(args, domainDependencies, context),
     get_task: (args: McpToolArgs, context?: McpToolCallContext) => getTask(args, domainDependencies, context),
     list_pipelines: (args: McpToolArgs, context?: McpToolCallContext) => listPipelines(args, domainDependencies, context),
     get_pipeline: (args: McpToolArgs, context?: McpToolCallContext) => getPipeline(args, domainDependencies, context),
@@ -8934,13 +9274,13 @@ async function curatorApplyAuthority(args: McpToolArgs, dependencies: ViewerMcpD
     const admission = await dependencies.curatorAdmission?.(conversationId);
     const assertCurrent = AsyncResource.bind(() => {
       try {
-        if (typeof admission === "function") admission();
         const current = dependencies.attentionAuthority();
+        const admittedPass = typeof admission === "function" ? admission() : undefined;
         if (!conversationId || current.kind === "unidentified" || current.conversationId !== initial.conversationId
           || current.conversationId !== conversationId || current.nativeProof !== initial.nativeProof) {
           throw new RoleMemoryRefusal("CURATE_CALLER", "curator caller changed during this operation");
         }
-        const owner = curatorCallerOf(conversationId, snapshot());
+        const owner = admittedPass ?? curatorCallerOf(conversationId, snapshot());
         if (owner.id !== pass.id || owner.conversationId !== conversationId || canonicalProject(owner.project) !== project) {
           throw new RoleMemoryRefusal("CURATE_CALLER", "the original curator pass no longer authorizes this operation");
         }
@@ -9092,7 +9432,7 @@ export function viewerMcpBindings(
       try {
         const conversationId = attributionOf(domainDependencies).conversationId;
         const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);
-        if (typeof assertAdmission === "function") assertAdmission();
+        if (typeof assertAdmission === "function" && assertAdmission()) return;
         curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
       } catch (error) {
         if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });
@@ -9125,8 +9465,8 @@ export function viewerMcpBindings(
     },
     get_pipeline: reads.get_pipeline,
     board_snapshot: (args) => boardSnapshot(args, domainDependencies),
-    list_pipelines: reads.list_pipelines,
-    list_tasks: reads.list_tasks,
+    list_pipelines: Object.assign(reads.list_pipelines, { captureBoardRead: (args: McpToolArgs, context: McpToolCallContext) => captureBoardRead(args, domainDependencies, context) }),
+    list_tasks: Object.assign(reads.list_tasks, { captureBoardRead: (args: McpToolArgs, context: McpToolCallContext) => captureBoardRead(args, domainDependencies, context) }),
     get_task: reads.get_task,
     operator_snapshot: (args) => operatorSnapshot(args, domainDependencies),
     deployment_status: (args, context) => deploymentStatus(args, viewerControlForCall(controlDependencies, context), domainDependencies),
@@ -9155,8 +9495,10 @@ export function viewerMcpBindings(
     publish_prototype_review: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new Error("prototype publication requires an identified caller");
-      return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
-    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("publish",args,controlDependencies,context) }),
+      return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews",args,{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability,
+        ...(context?.prototypeReceiptScope ? { [PROTOTYPE_RECEIPT_SCOPE_HEADER]: context.prototypeReceiptScope } : {}) });
+    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("publish",args,controlDependencies,context),
+      replayReceiptScope: (args: McpToolArgs) => prototypeSeatReceiptScope("publish", args, domainDependencies) }),
     resend_prototype_review_telegram: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new Error("prototype resend requires an identified caller");
@@ -9165,14 +9507,19 @@ export function viewerMcpBindings(
     read_prototype_review: Object.assign((args: McpToolArgs,context?: McpToolCallContext) => {
       const capability = callerCapability();
       if (!capability) throw new Error("prototype reads require an identified caller");
-      return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/read",withoutKeys(args,["clientRequestId"]),{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability });
-    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("read",args,controlDependencies,context) }),
+      return viewerControlForCall(controlDependencies,context).post("/api/prototype-reviews/read",withoutKeys(args,["clientRequestId"]),{ [VIEWER_SPAWN_CAPABILITY_HEADER]: capability,
+        ...(context?.prototypeReceiptScope ? { [PROTOTYPE_RECEIPT_SCOPE_HEADER]: context.prototypeReceiptScope } : {}) });
+    },{ receiptScope: (args: McpToolArgs,context?: McpToolCallContext) => prototypeReceiptScope("read",args,controlDependencies,context),
+      replayReceiptScope: (args: McpToolArgs) => prototypeSeatReceiptScope("read", args, domainDependencies) }),
     dismiss_attention: Object.assign((args: McpToolArgs, context?: McpToolCallContext) => dismissAttentionTool(args, domainDependencies, controlDependencies, context), {
       authorizeReceipt: (args: McpToolArgs) => prototypeDismissalAuthority(args, domainDependencies),
     }),
     bridge_report: (args, context) => bridgeReport(args, domainDependencies, viewerControlForCall(controlDependencies, context)),
     bridge_directive: orchestratorProjectBinding(domainDependencies, (args, context) => bridgeDirective(args, viewerControlForCall(controlDependencies, context), domainDependencies), true),
-    get_orchestrator: orchestratorProjectBinding(domainDependencies, (args) => getOrchestrator(args, domainDependencies)),
+    get_orchestrator: orchestratorProjectBinding(domainDependencies, async (args, context) => {
+      const [seat, startup] = await Promise.all([getOrchestrator(args, domainDependencies), readViewerStartupStatus(controlDependencies, context)]);
+      return startup ? { ...seat, structuredHostStartup: redactPayload(startup) } : seat;
+    }),
     seat_tick_settings: seatTickSettingsBinding(domainDependencies),
     /* Async bindings expose synchronous refusals as rejected promises. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
@@ -9201,13 +9548,40 @@ export function viewerMcpBindings(
     voice_tools: (args, context) => voiceTools(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)), false, false),
-    send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
+    send_message_to_orchestrator: async (args, context) => {
+      const attribution = attributionOf(domainDependencies);
+      const ownerConversationId = ownerRelayCaller(domainDependencies) ? attribution.conversationId : null;
+      try {
+        const result = await sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context);
+        if (ownerConversationId) {
+          const value = objectRecord(result) ? result : {};
+          await recordOwnerRelayHandoffOutcome(ownerConversationId, {
+            status: value.ok === true || value.state === "queued" || value.outcome === "queued" ? "accepted" : value.ok === false ? "refused" : "uncertain",
+            project: typeof value.project === "string" ? value.project : typeof args.project === "string" ? args.project : liveOwnerRelayProject(ownerConversationId),
+            code: typeof value.code === "string" ? value.code : null,
+          }).catch(() => false);
+        }
+        return result;
+      } catch (error) {
+        if (ownerConversationId) {
+          const details = error && typeof error === "object" ? (error as { details?: { code?: unknown } }).details : undefined;
+          await recordOwnerRelayHandoffOutcome(ownerConversationId, {
+            status: error instanceof McpDispatchUncertainError ? "uncertain" : "refused",
+            project: typeof args.project === "string" ? args.project : liveOwnerRelayProject(ownerConversationId),
+            code: typeof details?.code === "string" ? details.code : null,
+          }).catch(() => false);
+        }
+        throw error;
+      }
+    },
     ask_orchestrator_in_parallel: orchestratorProjectBinding(domainDependencies, (args, context) => askOrchestratorInParallelTool(args, viewerControlForCall(controlDependencies, context))),
     rotate_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => rotateOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies)),
     telegram_bot_chats: (args, context) => telegramBotChats(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send: (args, context) => telegramBotSend(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_media: (args, context) => telegramBotSendMedia(args, viewerControlForCall(controlDependencies, context)),
     telegram_bot_send_document: (args, context) => telegramBotSendDocument(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_reactions: (args, context) => telegramBotReactions(args, viewerControlForCall(controlDependencies, context)),
+    telegram_bot_set_reaction: (args, context) => telegramBotSetReaction(args, viewerControlForCall(controlDependencies, context)),
     relay_answer: async (args) => {
       const caller = attributionOf(domainDependencies);
       try {
@@ -9240,6 +9614,14 @@ export function viewerMcpBindings(
         ? await relayServiceToolsOp(caller.conversationId, args) : null;
       if (result === null) throw new McpToolRefusal("Service tools exist only while you answer a relay message as its owner.", { code: "relay_tools_unavailable", retryable: false });
       return result;
+    },
+    relay_trusted_requesters: (args, context) => {
+      context?.signal?.throwIfAborted();
+      context?.assertCaller?.();
+      const { clientRequestId: _clientRequestId, ...operation } = args;
+      const control = viewerControlForCall(controlDependencies, context);
+      const send = operation.action === "list" ? control.post : dispatchControl(control);
+      return send("/api/external-relay/trusted-requesters/proposal", operation, callerCapabilityHeaders(), context);
     },
     relay_owner_history: (args, context) => relayOwnerHistory(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
     telegram_bot_messages: (args, context) => telegramBotMessages(args, viewerControlForCall(controlDependencies, context)),

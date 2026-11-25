@@ -1,11 +1,11 @@
+import { requestWorkload } from "./requestWorkload";
 import path from "node:path";
 import type { NextTracer } from "next/dist/server/lib/trace/tracer";
 import { performanceSpans } from "./performanceSpans";
 import { viewerLoopMonitor } from "./viewerLoopMonitor";
 
 // Load the serving Next instance, outside the instrumentation webpack bundle.
-// Only static span types cross the diagnostic boundary; route names, headers,
-// render arguments and errors never enter the retained ring.
+// Only catalogued route templates and static span types cross the diagnostic boundary.
 const shared = globalThis as typeof globalThis & { __delegatusRenderTracers?: WeakSet<object> };
 const installed = shared.__delegatusRenderTracers ??= new WeakSet<object>();
 const renderTypes = new Set([
@@ -29,18 +29,29 @@ export function installNextRenderMonitor(
   const original = tracer.trace;
   const wrapped = function (this: typeof tracer, ...args: Parameters<NextTracer["trace"]>) {
     const run = () => original.apply(this, args);
+    if (args[0] === "BaseServer.renderToResponse") {
+      const options = args[1];
+      const route = typeof options === "object" ? options.attributes?.["next.route"] : undefined;
+      return requestWorkload.withRoute(route, run);
+    }
     if (!renderTypes.has(args[0])) return run();
+    const routeClass = requestWorkload.label();
     // The synchronous prefix sets the watchdog site. The operation encloses
     // the returned promise too; overlapping awaits alone do not prove CPU use.
     let result: unknown;
     const tracked = monitor.run("http.render", () => {
-      result = spans.sync("http.render", run);
-      if (!result || typeof (result as PromiseLike<unknown>).then !== "function") return result;
+      try { result = spans.sync("http.render", run); }
+      catch (error) { requestWorkload.completedRender(routeClass); throw error; }
+      if (!result || typeof (result as PromiseLike<unknown>).then !== "function") {
+        requestWorkload.completedRender(routeClass);
+        return result;
+      }
       /* Route handlers answer inside the same span and it stays open while
          the body is sent. An open stream then read as a render that never
          finished; after the bound it is counted under its own name. */
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const settled = Promise.resolve(result).then(() => undefined, () => undefined);
+      const completed = () => requestWorkload.completedRender(routeClass);
+      const settled = Promise.resolve(result).then(completed, completed);
       const bound = new Promise<typeof STILL_OPEN>((resolve) => {
         timer = setTimeout(() => resolve(STILL_OPEN), streamAfterMs);
         timer.unref?.();

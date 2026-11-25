@@ -1,8 +1,9 @@
+import { measureRegistryRead } from "./registryReadPerformance";
 import { incomingDeliveryOutcome, normalizeIncomingDeliveryHealth, type IncomingDeliveryHealth } from "@/lib/runtime/incomingDeliveryHealth";
 import { invalidateAgentState } from "@/lib/agentState/invalidation";
-import type { AgentProjection, AgentStateJournal, AgentStateMetrics } from "@/lib/agentState/model";
-import { validNativePromptAnchor } from "@/lib/agentState/model";
-import { normalizeAgentStateRows } from "@/lib/agentState/store";
+import type { AgentProjection, AgentStateJournal, AgentStateMetrics, AgentStateMetricsRow } from "@/lib/agentState/model";
+import { agentStateMetricsForStorage, emptyAgentStateMetrics, validNativePromptAnchor } from "@/lib/agentState/model";
+import { normalizeAgentStateMetrics, normalizeAgentStateRows } from "@/lib/agentState/store";
 import { normalizeViewerMcpObservation, type ViewerMcpObservation } from "@/lib/runtime/engineHost";
 import { recordedAgentScope, recordedScopeProcess, normalizeAgentScope, sameAgentScope, type AgentScopeIdentity } from "@/lib/runtime/agentScope";
 import { registryWriterDetail } from "./registryWriter";
@@ -50,6 +51,7 @@ import { accountProjectBindings, projectAccountRefusalDetail } from "@/lib/accou
 import { admitAutomaticAccountTarget, placedAccountHolds } from "@/lib/accounts/projectSelection";
 import {
   emptyLaunchProfile,
+  DELIVERY_ATTEMPT_LIMIT,
   normalizeProjectOwnership,
   validExplicitProject,
   type AutoBalancePolicy,
@@ -116,6 +118,13 @@ import {
   type RegistryBackendResolution,
 } from "./registryBackendIdentity";
 import {
+  ANTIGRAVITY_AGENT_STATES_ACCESS,
+  ANTIGRAVITY_JSON_STATES,
+  antigravityStatesHandleForRecord,
+  registryConversationForStorage,
+  registryEntryForStorage,
+  type AntigravityAgentStatesMutable,
+  type AntigravityAgentStatesView,
   SqliteAgentRegistryStore,
   registryCollectionPage, type RowCollection,
   registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryOpenDeliveryKeys, registryHasDeliveryPredecessor, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
@@ -189,7 +198,7 @@ export interface StructuredHostColumns {
   scope?: AgentScopeIdentity;
   /** Why the recorded host ended (#2790); kept with the terminal row. */
   ended?: HostEndCause;
-  kind: "codex-app-server" | "claude-broker" | "copilot-acp";
+  kind: "codex-app-server" | "claude-broker" | "copilot-acp" | "antigravity-acp";
   endpoint: string;
   process: ProcessIdentity | null;
   eventCursor: number;
@@ -348,6 +357,9 @@ export interface SpawnReceipt {
   launchId: string;
   /** Client-owned idempotency key. Legacy callers leave this null. */
   clientAttemptId: string | null;
+  /** Controller provenance for a scheduled Cleaner launch, derived by the
+      spawn route from its durable run record and retained for recovery. */
+  scheduledCleanerRunId?: string;
   /** SHA-256 of the public launch shape. Prompt/image contents never enter this identity field. */
   requestDigest: string | null;
   /** The identity wave replaced this receipt's generic launch title. */
@@ -558,7 +570,7 @@ export interface DurableConversationMembership {
       parse the materialized transcript with its owning engine. Pipeline
       stages run Claude or Codex; Copilot is not a stage engine yet. */
   runtime?: {
-    engine: Extract<AgentEngine, "claude" | "codex">;
+    engine: Extract<AgentEngine, "claude" | "codex" | "antigravity">;
     model: string | null;
     effort: string | null;
   } | null;
@@ -576,6 +588,8 @@ export interface SpawnRequest {
   ownStartingActuation?: boolean;
   launchProfile?: Partial<LaunchProfile>;
   clientAttemptId?: string | null;
+  /** Trusted in-process marker; request bodies cannot set receipt provenance. */
+  scheduledCleanerRunId?: string | null;
   requestDigest?: string | null;
   spawnCapabilityDigest?: string | null;
   accountId?: string | null;
@@ -1020,7 +1034,7 @@ export interface RegistryFile {
   _jsonStoreId?: string | null;
   agentStates: Record<string, AgentProjection>;
   agentStateJournal: Record<string, AgentStateJournal>;
-  agentStateMetrics: Record<string, AgentStateMetrics>;
+  agentStateMetrics: Record<string, AgentStateMetricsRow>;
   entries: Record<string, AgentRegistryEntry>;
   receipts: Record<string, SpawnReceipt>;
   lineageEdges: Record<string, SpawnLineageEdge>;
@@ -1058,6 +1072,8 @@ export interface RegistryFile {
 export type McpCallerRegistryRows = Pick<RegistryFile, "conversations" | "entries"> & {
   nativeGenerationAmbiguous?: true;
   nativeHostsIncomplete?: true;
+  /** The completed bounded lookup found more host evidence than it can inspect. */
+  nativeHostsLookupLimitExceeded?: true;
   nativeArtifact?: string;
 };
 
@@ -1459,9 +1475,9 @@ function migrationReadinessSignature(
   engine: AgentEngine,
   paths: ReadonlySet<string>,
 ): string {
-  /* Account migration covers Claude and Codex; Copilot has no migration scope
-     (docs/design/copilot-engine.md, slices 2–4). */
-  if (engine === "copilot") return "";
+  /* Account migration covers Claude and Codex; Copilot and Antigravity have no
+     migration scope. */
+  if (engine === "copilot" || engine === "antigravity") return "";
   const conversations = [...new Map([...paths].flatMap(path => registryConversationsForPath(file, path))
     .filter(conversation => conversation.engine === engine && paths.has(conversation.generations.at(-1)?.path ?? ""))
     .map(conversation => [conversation.id, conversation])).values()];
@@ -1507,7 +1523,7 @@ function advanceMigrationScopeRevision(
   previousSignature: string,
   paths: ReadonlySet<string>,
 ): void {
-  if (engine === "copilot") return;
+  if (engine === "copilot" || engine === "antigravity") return;
   if (migrationReadinessSignature(file, engine, paths) === previousSignature) return;
   file.conversationRevision[engine] += 1;
   file.engineRouting[engine].revision += 1;
@@ -2049,7 +2065,9 @@ function migrationEnrollmentAdmission(
   intent: MigrationIntent,
 ): MigrationEnrollmentAdmission {
   if (intent.origin !== "auto") return { kind: "accepted" };
-  if (conversation.engine === "copilot") return { kind: "refused", reason: "account migration does not cover Copilot conversations" };
+  if (conversation.engine === "copilot" || conversation.engine === "antigravity") {
+    return { kind: "refused", reason: `account migration does not cover ${conversation.engine === "antigravity" ? "Antigravity" : "Copilot"} conversations` };
+  }
   const project = conversationProjectKey(conversation.projectOwnership, source.launchProfile);
   try {
     const resolution = admitAutomaticAccountTarget({
@@ -2671,11 +2689,11 @@ const EMPTY: RegistryFile = {
   legacyResumePanes: { serverPid: null, panes: {} },
   conversations: {},
   conversationAliases: {},
-  conversationRevision: { claude: 0, codex: 0, copilot: 0 },
+  conversationRevision: { claude: 0, codex: 0, copilot: 0, antigravity: 0 },
   migrationIntents: {},
-  engineRouting: { claude: { activeAccountId: null, revision: 0 }, codex: { activeAccountId: null, revision: 0 }, copilot: { activeAccountId: null, revision: 0 } },
-  autoBalance: { claude: emptyPolicy(), codex: emptyPolicy(), copilot: emptyPolicy() },
-  quotaObservations: { claude: {}, codex: {}, copilot: {} },
+  engineRouting: { claude: { activeAccountId: null, revision: 0 }, codex: { activeAccountId: null, revision: 0 }, copilot: { activeAccountId: null, revision: 0 }, antigravity: { activeAccountId: null, revision: 0 } },
+  autoBalance: { claude: emptyPolicy(), codex: emptyPolicy(), copilot: emptyPolicy(), antigravity: emptyPolicy() },
+  quotaObservations: { claude: {}, codex: {}, copilot: {}, antigravity: {} },
   heldDeliveries: {},
   deliveryOperationOwners: {},
   deliveryEvidenceCompactions: {},
@@ -2805,13 +2823,23 @@ function nativeGenerationId(pathname: string): string {
   return path.basename(pathname).match(/([0-9a-f-]{36})(?:\.jsonl)?$/i)?.[1] ?? crypto.randomUUID();
 }
 
-function normalizeGeneration(value: NativeGeneration, policy?: McpGrantPolicy): NativeGeneration {
-  return {
+function normalizeGeneration(value: NativeGeneration, policy?: McpGrantPolicy, engine?: AgentEngine): NativeGeneration {
+  const raw = value as NativeGeneration & { antigravityAccountId?: unknown };
+  const restoredAccountId = engine === "antigravity"
+    && value.accountId === null
+    && typeof raw.antigravityAccountId === "string"
+    && raw.antigravityAccountId.length > 0
+    ? raw.antigravityAccountId
+    : value.accountId;
+  const normalized: NativeGeneration & { antigravityAccountId?: unknown } = {
     ...value,
+    accountId: restoredAccountId,
     launchProfile: emptyLaunchProfile(value.launchProfile ?? {}, policy),
     historyHash: typeof value.historyHash === "string" ? value.historyHash : null,
     host: value.host && typeof value.host === "object" ? value.host : null,
   };
+  delete normalized.antigravityAccountId;
+  return normalized;
 }
 
 function normalizeProviderRetry(value: unknown): ProviderRetryEvidence | null {
@@ -2829,7 +2857,7 @@ function normalizeProviderRetry(value: unknown): ProviderRetryEvidence | null {
 function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
   if (!value || typeof value !== "object") return null;
   const host = value as Partial<StructuredHostColumns>;
-  if (host.kind !== "codex-app-server" && host.kind !== "claude-broker" && host.kind !== "copilot-acp") return null;
+  if (host.kind !== "codex-app-server" && host.kind !== "claude-broker" && host.kind !== "copilot-acp" && host.kind !== "antigravity-acp") return null;
   const eventCursor = (value as Record<string, unknown>).eventCursor;
   if (eventCursor !== undefined && (!Number.isSafeInteger(eventCursor) || (eventCursor as number) < 0)) {
     throw new Error("structured host event cursor is invalid");
@@ -2954,8 +2982,20 @@ export function storedPaneAgentRuns(
 
 function normalizeEntry(value: AgentRegistryEntry, policy?: McpGrantPolicy): AgentRegistryEntry {
   const terminationSurvivors = normalizeStructuredTerminationSurvivors(value.structuredTerminationSurvivors);
-  return {
+  const raw = value as AgentRegistryEntry & { antigravityAccountId?: unknown };
+  const restoredAccountId = value.key?.engine === "antigravity"
+    && value.accountId === null
+    && typeof raw.antigravityAccountId === "string"
+    && raw.antigravityAccountId.length > 0
+    ? raw.antigravityAccountId
+    : value.accountId;
+  const normalized: AgentRegistryEntry & {
+    antigravityAccountId?: unknown;
+    antigravityProjection?: unknown;
+    antigravityProjections?: unknown;
+  } = {
     ...value,
+    accountId: restoredAccountId,
     ...(value.launchProfile ? { launchProfile: emptyLaunchProfile(value.launchProfile, policy) } : {}),
     /* A row written while agents ran in terminal panes names a pane as its
        host. Nothing can reach that pane any more, so the row loads without a
@@ -2968,6 +3008,10 @@ function normalizeEntry(value: AgentRegistryEntry, policy?: McpGrantPolicy): Age
     ...(value.structuredHost?.exitProcess ? { hostExitProcess: value.structuredHost.exitProcess } : {}),
     ...(terminationSurvivors === undefined ? {} : { structuredTerminationSurvivors: terminationSurvivors }),
   };
+  delete normalized.antigravityAccountId;
+  delete normalized.antigravityProjection;
+  delete normalized.antigravityProjections;
+  return normalized;
 }
 
 function normalizeLineageEdge(value: SpawnLineageEdge): SpawnLineageEdge {
@@ -2996,7 +3040,7 @@ function normalizeMemberships(value: unknown): RegistryFile["memberships"] {
         || typeof row.role !== "string" || !row.role
         || typeof row.slot !== "string" || !row.slot) return [];
       const runtime = row.runtime && typeof row.runtime === "object"
-        && (row.runtime.engine === "claude" || row.runtime.engine === "codex")
+        && (row.runtime.engine === "claude" || row.runtime.engine === "codex" || row.runtime.engine === "antigravity")
         ? {
             engine: row.runtime.engine,
             model: typeof row.runtime.model === "string" ? row.runtime.model : null,
@@ -3111,7 +3155,7 @@ function normalizeSwitchHold(value: unknown): ConversationSwitchHold | null {
 
 function normalizeConversation(value: RegistryConversation, policy?: McpGrantPolicy): RegistryConversation {
   const generations = Array.isArray(value.generations)
-    ? value.generations.map((generation) => normalizeGeneration(generation, policy))
+    ? value.generations.map((generation) => normalizeGeneration(generation, policy, value.engine))
     : [];
   const current = generations.at(-1);
   const legacyContinuity = (value.migration as (ConversationMigration & { continuityPaths?: unknown }) | null)?.continuityPaths;
@@ -4254,6 +4298,21 @@ function recordObservedLineage(
   };
 }
 
+function curatorRows(file: RegistryFile, conversationIds: readonly string[]): RegistryFile {
+  const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+  const ids = new Set(conversationIds.map(id => resolveConversationAlias(file, id as ViewerConversationId)));
+  for (const id of ids) {
+    for (const identity of conversationIdentities(file, id)) {
+      if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
+    }
+    if (file.conversations[id]) result.conversations[id] = clone(file.conversations[id]!);
+    if (file.lineageEdges[id]) result.lineageEdges[id] = clone(file.lineageEdges[id]!);
+    if (file.memberships[id]) result.memberships[id] = clone(file.memberships[id]!);
+    for (const receipt of registryRowsMatching(file, "receipts", "conversationId", id)) result.receipts[receipt.launchId] = clone(receipt);
+  }
+  return result;
+}
+
 /** Every id that resolves to `conversationId`: itself and each alias whose
     chain ends there, found through the alias index where the file has one. */
 export function conversationIdsResolvingTo(file: RegistryFile, conversationId: ViewerConversationId): ViewerConversationId[] {
@@ -4770,7 +4829,7 @@ function normalizeQueuedPinnedSpawn(value: unknown, policy?: McpGrantPolicy): Qu
     || !candidate.accountId
     || (candidate.locale !== "en" && candidate.locale !== "uk")
     || !spec
-    || (spec.engine !== "claude" && spec.engine !== "codex" && spec.engine !== "copilot")
+    || (spec.engine !== "claude" && spec.engine !== "codex" && spec.engine !== "copilot" && spec.engine !== "antigravity")
     || typeof spec.command !== "string"
     || typeof spec.cwd !== "string"
     || typeof spec.windowName !== "string"
@@ -4907,7 +4966,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     telegramSeatGrant: value.telegramSeatGrant === true,
     state,
     artifactLifecycle: value.artifactLifecycle === "materialized" ? "materialized" : "pending",
-    key: value.key && typeof value.key === "object" && (value.key.engine === "claude" || value.key.engine === "codex" || value.key.engine === "copilot") && typeof value.key.sessionId === "string" ? value.key : null,
+    key: value.key && typeof value.key === "object" && (value.key.engine === "claude" || value.key.engine === "codex" || value.key.engine === "copilot" || value.key.engine === "antigravity") && typeof value.key.sessionId === "string" ? value.key : null,
     pane,
     verifiedHost: value.verifiedHost && typeof value.verifiedHost === "object" && value.verifiedHost.kind === "tmux" ? value.verifiedHost : null,
     target: pane?.paneId ?? (typeof value.target === "string" && /^%\d+$/.test(value.target) ? value.target : null),
@@ -5060,6 +5119,7 @@ function upgradeV1(parsed: Omit<Partial<RegistryFile>, "version">, policy?: McpG
       claude: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
       codex: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
       copilot: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
+      antigravity: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
     },
     entries: (parsed.entries as RegistryFile["entries"]) ?? {},
     receipts: Object.fromEntries(Object.entries((parsed.receipts as RegistryFile["receipts"]) ?? {}).map(([id, receipt]) => [id, normalizeReceipt(receipt, policy)])),
@@ -5099,7 +5159,7 @@ export function normalizeRegistry(
         ? parsed._jsonStoreId : null,
       agentStates: normalizeAgentStateRows(parsed.agentStates, "projection"),
       agentStateJournal: normalizeAgentStateRows(parsed.agentStateJournal, "journal"),
-      agentStateMetrics: normalizeAgentStateRows(parsed.agentStateMetrics, "metrics"),
+      agentStateMetrics: normalizeAgentStateRows(parsed.agentStateMetrics, "metrics", true),
       entries: Object.fromEntries(Object.entries(parsed.entries).map(([id, entry]) => [id, normalizeEntry(entry, policy)])),
       receipts: Object.fromEntries(Object.entries(parsed.receipts).map(([id, receipt]) => [id, normalizeReceipt(receipt, policy)])),
       lineageEdges: parsed.lineageEdges && typeof parsed.lineageEdges === "object"
@@ -5123,11 +5183,12 @@ export function normalizeRegistry(
       migrationIntents: parsed.migrationIntents && typeof parsed.migrationIntents === "object" ? parsed.migrationIntents : {},
       engineRouting: normalizeEngineRouting(parsed.engineRouting),
       autoBalance: parsed.autoBalance && typeof parsed.autoBalance === "object"
-        ? { claude: normalizePolicy(parsed.autoBalance.claude), codex: normalizePolicy(parsed.autoBalance.codex), copilot: normalizePolicy(parsed.autoBalance.copilot) }
+        ? { claude: normalizePolicy(parsed.autoBalance.claude), codex: normalizePolicy(parsed.autoBalance.codex), copilot: normalizePolicy(parsed.autoBalance.copilot), antigravity: normalizePolicy(parsed.autoBalance.antigravity) }
         : {
             claude: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
             codex: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
             copilot: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
+            antigravity: emptyPolicy(LEGACY_POLICY_RESTARTED_AT),
           },
       quotaObservations: parsed.quotaObservations && typeof parsed.quotaObservations === "object"
         ? normalizeQuotaObservations(parsed.quotaObservations)
@@ -5140,7 +5201,41 @@ export function normalizeRegistry(
         : {},
       pendingSupersedence: normalizePendingSupersedence(parsed.pendingSupersedence),
   });
-  return deferStoredGrantDecision ? normalized : reboundStoredMcpGrants(normalized, policy);
+  const result = deferStoredGrantDecision ? normalized : reboundStoredMcpGrants(normalized, policy);
+  const rawAgStates = (parsed as { antigravityAgentStates?: unknown }).antigravityAgentStates;
+  const entryMirroredRaw: Record<string, unknown> = {};
+  for (const rawEntry of Object.values(parsed.entries)) {
+    const entryObj = rawEntry as {
+      antigravityProjection?: { subject?: unknown };
+      antigravityProjections?: Record<string, { subject?: unknown }>;
+    } | null | undefined;
+    const single = entryObj?.antigravityProjection;
+    if (single && typeof single === "object" && typeof single.subject === "string" && single.subject.length > 0) {
+      entryMirroredRaw[single.subject] = single;
+    }
+    const multi = entryObj?.antigravityProjections;
+    if (multi && typeof multi === "object" && !Array.isArray(multi)) {
+      for (const [key, candidate] of Object.entries(multi)) {
+        if (candidate && typeof candidate === "object" && typeof candidate.subject === "string" && candidate.subject.length > 0) {
+          entryMirroredRaw[candidate.subject] = candidate;
+        } else if (key.length > 0 && candidate && typeof candidate === "object") {
+          entryMirroredRaw[key] = candidate;
+        }
+      }
+    }
+  }
+  const hasEntryMirrors = Object.keys(entryMirroredRaw).length > 0;
+  if (rawAgStates !== undefined || hasEntryMirrors) {
+    const fromEntries = hasEntryMirrors ? normalizeAgentStateRows(entryMirroredRaw, "projection") : {};
+    const fromTopLevel = rawAgStates !== undefined ? normalizeAgentStateRows(rawAgStates, "projection") : {};
+    Object.defineProperty(result, ANTIGRAVITY_JSON_STATES, {
+      configurable: true,
+      enumerable: false,
+      writable: true,
+      value: { ...fromEntries, ...fromTopLevel },
+    });
+  }
+  return result;
 }
 
 /* A registry persisted before an engine existed (Copilot, #2045) carries no
@@ -5238,25 +5333,59 @@ function compactLaunchProfile(profile: LaunchProfile): Partial<LaunchProfile> {
 }
 
 function serializeRegistry(value: RegistryFile, sqliteRevision?: number): string {
+  const agStates = (value as RegistryFile & { [ANTIGRAVITY_JSON_STATES]?: Record<string, AgentProjection> })[ANTIGRAVITY_JSON_STATES];
+  const hasAgStates = Boolean(agStates && Object.keys(agStates).length > 0);
+  // In pure JSON (`off`) mode (`sqliteRevision === undefined`), also mirror all
+  // Antigravity projections onto their owning entry (`antigravityProjections`,
+  // keyed by subjectId so multiple retained process generations under one
+  // `entryKey` all survive!) because prior releases spread `{ ...value }` in
+  // `normalizeEntry`, preserving them even when they drop unknown top-level keys.
+  // Omit from `entries` in SQLite/dual-write modes so prior releases'
+  // `assertSqliteParity` matches SQLite byte-for-byte.
+  const entryProjectionsByKey = new Map<string, Record<string, AgentProjection>>();
+  if (sqliteRevision === undefined && hasAgStates && agStates) {
+    for (const [subject, projection] of Object.entries(agStates)) {
+      if (projection && typeof projection.entryKey === "string") {
+        let bucket = entryProjectionsByKey.get(projection.entryKey);
+        if (!bucket) {
+          bucket = {};
+          entryProjectionsByKey.set(projection.entryKey, bucket);
+        }
+        bucket[subject] = projection;
+      }
+    }
+  }
   const storage = {
     _jsonStoreId: value._jsonStoreId,
     ...value,
     ...(sqliteRevision === undefined ? {} : { _sqliteRevision: sqliteRevision }),
-    entries: Object.fromEntries(Object.entries(value.entries).map(([id, entry]) => [id, {
-      ...entry,
-      ...(entry.launchProfile ? { launchProfile: compactLaunchProfile(entry.launchProfile) } : {}),
-    }])),
+    agentStates: Object.fromEntries(
+      Object.entries(value.agentStates).filter(([, row]) => row?.facts?.engine !== "antigravity"),
+    ),
+    ...(hasAgStates ? { antigravityAgentStates: agStates } : {}),
+    entries: Object.fromEntries(Object.entries(value.entries).map(([id, entry]) => {
+      const storedEntry = registryEntryForStorage(entry);
+      const mirroredProjections = entryProjectionsByKey.get(id);
+      return [id, {
+        ...storedEntry,
+        ...(storedEntry.launchProfile ? { launchProfile: compactLaunchProfile(storedEntry.launchProfile) } : {}),
+        ...(mirroredProjections ? { antigravityProjections: mirroredProjections } : {}),
+      }];
+    })),
     receipts: Object.fromEntries(Object.entries(value.receipts).map(([id, receipt]) => [id, {
       ...receipt,
       launchProfile: compactLaunchProfile(receipt.launchProfile),
     }])),
-    conversations: Object.fromEntries(Object.entries(value.conversations).map(([id, conversation]) => [id, {
-      ...conversation,
-      generations: conversation.generations.map((generation) => ({
-        ...generation,
-        launchProfile: compactLaunchProfile(generation.launchProfile),
-      })),
-    }])),
+    conversations: Object.fromEntries(Object.entries(value.conversations).map(([id, conversation]) => {
+      const storedConversation = registryConversationForStorage(conversation);
+      return [id, {
+        ...storedConversation,
+        generations: storedConversation.generations.map((generation) => ({
+          ...generation,
+          launchProfile: compactLaunchProfile(generation.launchProfile),
+        })),
+      }];
+    })),
   };
   return JSON.stringify(storage) + "\n";
 }
@@ -5504,6 +5633,7 @@ export class AgentRegistry {
   private writerAdmissionTail: Promise<void> = Promise.resolve();
   private readonly mcpGrantPolicy: McpGrantPolicy | undefined;
   private readonly sqliteStore: SqliteAgentRegistryStore | null;
+  private antigravityStuckCount: number | undefined;
   private lastDeliveryCompactionChangeId: number | null = null;
   private nextDeliveryCompactionAt: number | null = null;
   /** Synchronous writer admission lends its JSON claim to the mutation. */
@@ -5614,10 +5744,12 @@ export class AgentRegistry {
     if (this.sqliteMode === "off" && mayRunStartupMaintenance) {
       this.cleanupStaleTempFiles();
       this.compactAtStartup();
+      this.migrateLegacyJsonAntigravityAccountIds();
     }
     if (this.sqliteMode === "dual-write" && mayRunStartupMaintenance) {
       this.cleanupStaleTempFiles();
       this.synchronizeDualWriteStartup(storage.beforeDualWriteStartupReplace);
+      this.migrateLegacyJsonAntigravityAccountIds();
     }
     if (this.sqliteMode === "read") {
       const sqlite = this.sqliteStore!.snapshot();
@@ -5654,6 +5786,40 @@ export class AgentRegistry {
        install an identity a reader would then trust. */
     if ((backend.source === "environment" || backend.source === "default") && mayRunStartupMaintenance) {
       publishRegistryBackendIdentity(filename, this.sqliteMode, sqliteFilename);
+    }
+  }
+
+  private migrateLegacyJsonAntigravityAccountIds(): void {
+    try {
+      if (!fs.existsSync(this.filename)) return;
+      const rawText = fs.readFileSync(this.filename, "utf8");
+      if (!rawText.includes('"antigravity"')) return;
+      const parsed = JSON.parse(rawText) as {
+        antigravityAgentStates?: Record<string, unknown>;
+        entries?: Record<string, {
+          key?: { engine?: string };
+          accountId?: unknown;
+          antigravityProjection?: unknown;
+          antigravityProjections?: unknown;
+        }>;
+        conversations?: Record<string, { engine?: string; generations?: Array<{ accountId?: unknown }> }>;
+      };
+      const needsEntryMigration = Object.values(parsed.entries ?? {}).some(
+        (entry) => entry?.key?.engine === "antigravity" && typeof entry.accountId === "string" && entry.accountId.length > 0,
+      );
+      const needsConvMigration = Object.values(parsed.conversations ?? {}).some(
+        (conv) => conv?.engine === "antigravity" && Array.isArray(conv.generations)
+          && conv.generations.some((gen) => typeof gen?.accountId === "string" && gen.accountId.length > 0),
+      );
+      const needsTopLevelProjectionRestore = this.sqliteMode === "off"
+        && (!parsed.antigravityAgentStates || Object.keys(parsed.antigravityAgentStates).length === 0)
+        && Object.values(parsed.entries ?? {}).some(
+          (entry) => entry?.antigravityProjection !== undefined || entry?.antigravityProjections !== undefined,
+        );
+      if (!needsEntryMigration && !needsConvMigration && !needsTopLevelProjectionRestore) return;
+      this.mutate(() => {}, { deliveryOnly: true });
+    } catch {
+      /* Best-effort compatibility rewrite; normal reads/writes still normalize safely. */
     }
   }
 
@@ -5978,6 +6144,17 @@ export class AgentRegistry {
       this.assertSqliteParity(sqlite);
       this.compactAtStartupLocked(sqlite.revision);
       const file = readFile(this.filename, this.mcpGrantPolicy);
+      if (!(ANTIGRAVITY_JSON_STATES in file)) {
+        const recovered = this.sqliteStore!.readAllAntigravityAgentStates();
+        if (Object.keys(recovered).length > 0) {
+          Object.defineProperty(file, ANTIGRAVITY_JSON_STATES, {
+            configurable: true,
+            enumerable: false,
+            writable: true,
+            value: recovered,
+          });
+        }
+      }
       beforeReplace?.();
       const replacement = this.sqliteStore!.replace(file, sqlite.revision, { noWait: accountMutationHeld() });
       if (!replacement.replaced) {
@@ -6650,8 +6827,8 @@ export class AgentRegistry {
   }
 
   private readKeyed<T>(reader: (file: RegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {
-    return withViewerOperation("registry.read", () => performanceSpans.sync("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
-      ? this.sqliteStore.read(reader, options) : reader(this.readOnlySnapshot())));
+    return measureRegistryRead("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+      ? this.sqliteStore.read(reader, options) : reader(this.readOnlySnapshot()), true);
   }
 
   /** Ordered controller discovery, with predicates applied before payloads are
@@ -6707,7 +6884,7 @@ export class AgentRegistry {
       in one keyed read transaction without materializing unrelated history. */
   conversationRetentionSnapshot(conversationId: string): Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> {
     if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
-      return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.conversationRetentionSnapshot(conversationId));
+      return measureRegistryRead("registry.keyed", () => this.sqliteStore!.conversationRetentionSnapshot(conversationId));
     }
     return this.readKeyed(file => {
       const result: Pick<RegistryFile, "conversations" | "entries" | "receipts" | "conversationAliases"> = {
@@ -6755,30 +6932,31 @@ export class AgentRegistry {
 
   /** A detached delivery view for one conversation, including historical aliases. */
   conversationDeliverySnapshot(target: { conversationId?: string | null; path?: string }): RegistryFile {
-    return this.scopedConversationSnapshot(target, false);
+    return this.scopedConversationSnapshot(target, "delivery");
   }
 
   /** Curator authority needs one identity and its receipts, role and project.
       Keyed reads preserve alias resolution without hydrating retained history. */
   curatorConversationSnapshot(conversationId: string): RegistryFile {
+    return this.readKeyed(file => curatorRows(file, [conversationId]));
+  }
+
+  /** Detached facts from one registry generation for a synchronous admission check. */
+  curatorAdmissionFacts(seatId: ViewerConversationId, clientAttemptId?: string, callerId?: string) {
     return this.readKeyed(file => {
-      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
-      const id = resolveConversationAlias(file, conversationId as ViewerConversationId);
-      for (const identity of conversationIdentities(file, id)) {
-        if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
-      }
-      if (file.conversations[id]) result.conversations[id] = clone(file.conversations[id]!);
-      if (file.lineageEdges[id]) result.lineageEdges[id] = clone(file.lineageEdges[id]!);
-      if (file.memberships[id]) result.memberships[id] = clone(file.memberships[id]!);
-      for (const receipt of registryRowsMatching(file, "receipts", "conversationId", id)) result.receipts[receipt.launchId] = clone(receipt);
-      return result;
+      const seat = file.conversations[resolveConversationAlias(file, seatId)];
+      const receipt = clientAttemptId ? registryRowsMatching(file, "receipts", "clientAttemptId", clientAttemptId)[0] : undefined;
+      const ids = callerId ? [callerId] : [];
+      if (receipt) ids.push(receipt.conversationId);
+      return { seat: seat ? { supersededBy: Boolean(seat.supersededBy) } : null, receipt: receipt ? clone(receipt) : null,
+        snapshot: curatorRows(file, ids) };
     });
   }
 
   /** Activity attribution needs one conversation's custody, role and launch
       receipts. It must not hydrate unrelated retained history. */
   activityConversationSnapshot(artifactPath: string): RegistryFile {
-    return this.scopedConversationSnapshot({ path: artifactPath }, true);
+    return this.scopedConversationSnapshot({ path: artifactPath }, "attribution");
   }
 
   /** Liveness needs every generation and artifact-path owner for one
@@ -6786,7 +6964,24 @@ export class AgentRegistry {
       so a targeted poll does not hydrate unrelated host rows from retained
       registry history. */
   livenessConversationSnapshot(conversationId: string): RegistryFile {
-    return this.scopedConversationSnapshot({ conversationId }, true, true);
+    return this.scopedConversationSnapshot({ conversationId }, "custody");
+  }
+
+  /** The targeted agent activity observation reads host and receipt evidence
+      and one witness for its undelivered-message guard. Recovery callers use
+      the complete custody view above. */
+  targetedActivitySnapshot(conversationId: string): Pick<RegistryFile, "entries" | "conversations" | "conversationAliases" | "receipts" | "heldDeliveries"> {
+    return this.scopedConversationSnapshot({ conversationId }, "targeted-activity");
+  }
+
+  /** Accepted launch evidence for a target whose transcript is still unavailable. */
+  latestAcceptedSpawnReceipt(conversationId: string): SpawnReceipt | null {
+    return this.readKeyed(file => {
+      const latest = registryReceiptsForConversation(file, conversationId)
+        .filter(row => !row.rejection)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.launchId.localeCompare(a.launchId))[0];
+      return latest ? clone(latest) : null;
+    }, { skipColdKeyInitialization: true });
   }
 
   /** Read bounded termination evidence. The cursor visits retained generations,
@@ -6894,23 +7089,25 @@ export class AgentRegistry {
     } finally { fs.closeSync(descriptor); }
   }
 
-  private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, activity: boolean, liveness = false): RegistryFile {
+  private scopedConversationSnapshot(target: { conversationId?: string | null; path?: string }, mode: "delivery" | "attribution" | "custody" | "targeted-activity"): RegistryFile {
+    const liveness = mode === "custody" || mode === "targeted-activity";
     return this.readKeyed(file => {
       const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
       const id = target.conversationId ? resolveConversationAlias(file, target.conversationId as ViewerConversationId)
         : target.path ? registryConversationsForPath(file, target.path)[0]?.id : undefined;
       if (!id) return result;
       const conversation = file.conversations[id];
-      for (const identity of conversationIdentities(file, id)) {
+      const identities = conversationIdentities(file, id);
+      for (const identity of identities) {
         if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
       }
       if (conversation) {
         result.conversations[id] = clone(conversation);
         result.conversationRevision[conversation.engine] = file.conversationRevision[conversation.engine];
         const generation = conversation.generations.at(-1);
-        if (generation) {
+        if (generation && !liveness) {
           const key = `${conversation.engine}:${generation.id}`;
-          if (file.entries[key]) result.entries[key] = liveness ? this.cloneLivenessEntry(file.entries[key]!) : clone(file.entries[key]!);
+          if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
         }
         if (liveness) {
           const paths = new Set([
@@ -6923,28 +7120,63 @@ export class AgentRegistry {
           }
           for (const pathname of paths) {
             for (const entry of registryRowsMatching(file, "entries", "artifactPath", pathname)) {
-              result.entries[`${entry.key.engine}:${entry.key.sessionId}`] = this.cloneLivenessEntry(entry);
+              const key = sessionKeyId(entry.key);
+              result.entries[key] ??= this.cloneLivenessEntry(entry);
             }
           }
         }
       }
-      if (activity) {
+      if (mode !== "delivery") {
         if (file.memberships[id]) result.memberships[id] = clone(file.memberships[id]!);
         if (file.lineageEdges[id]) result.lineageEdges[id] = clone(file.lineageEdges[id]!);
-        for (const key of registryKeysMatching(file, "receipts", "conversationId", conversationIdentities(file, id))) {
+        for (const key of registryKeysMatching(file, "receipts", "conversationId", identities)) {
           const receipt = file.receipts[key]!;
           result.receipts[key] = clone(receipt);
           const parent = receipt.parentConversationId;
           if (parent && file.conversations[parent]) result.conversations[parent] = clone(file.conversations[parent]!);
         }
       }
+      if (mode === "targeted-activity") {
+        const key = this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+          ? this.sqliteStore.firstUndeliveredKey(identities)
+          : Object.keys(file.heldDeliveries).find(key => {
+            const row = file.heldDeliveries[key]!;
+            return identities.includes(row.conversationId) && row.state !== "delivered";
+          });
+        if (key !== undefined) result.heldDeliveries[key] = clone(file.heldDeliveries[key]!);
+        return result;
+      }
       for (const collection of ["heldDeliveries", "deliveryOperationOwners", "deliveryEvidenceCompactions"] as const) {
-        for (const key of registryKeysMatching(file, collection, "conversationId", conversationIdentities(file, id))) {
+        for (const key of registryKeysMatching(file, collection, "conversationId", identities)) {
           (result[collection] as Record<string, unknown>)[key] = clone(file[collection][key]);
         }
       }
       return result;
-    });
+    }, { skipColdKeyInitialization: mode === "targeted-activity" });
+  }
+
+  /** Discover only deliveries associated with this revoked seat, preserving registry order.
+      A retained operation owner may refer to a delivery under a different conversation. */
+  revokedSeatDeliveries(conversationId: ViewerConversationId) {
+    return this.readKeyed(file => {
+      const ids = conversationIdsResolvingTo(file, resolveConversationAlias(file, conversationId));
+      const owners = registryRowsMatching(file, "deliveryOperationOwners", "conversationId", ids).map(row => clone(row));
+      const held = registryRowsMatching(file, "heldDeliveries", "conversationId", ids).map(row => clone(row));
+      const byId = new Map(held.map(row => [row.id, row]));
+      for (const { deliveryId } of owners) {
+        if (byId.has(deliveryId)) continue;
+        const row = file.heldDeliveries[deliveryId];
+        if (row) byId.set(deliveryId, clone(row));
+      }
+      return { owners, held, byId };
+    }, { skipColdKeyInitialization: true });
+  }
+
+  heldDeliveryById(id: string): HeldDelivery | undefined {
+    return this.readKeyed(file => {
+      const row = file.heldDeliveries[id];
+      return row && clone(row);
+    }, { skipColdKeyInitialization: true });
   }
 
   deliverySnapshotForOperation(operationId: string, options: { recipientEvidence?: boolean } = {}): RegistryFile {
@@ -7279,7 +7511,7 @@ export class AgentRegistry {
   /** Caller identity reads only the capability and ancestry candidates. */
   mcpCallerSnapshot(conversationId: string | null, ancestry: readonly number[], configuredRootId: string | null) {
     if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
-      return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.mcpCallerSnapshot(conversationId, ancestry, configuredRootId));
+      return measureRegistryRead("registry.keyed", () => this.sqliteStore!.mcpCallerSnapshot(conversationId, ancestry, configuredRootId));
     }
     const snapshot = this.readOnlySnapshot();
     return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
@@ -7287,15 +7519,15 @@ export class AgentRegistry {
 
   mcpNativeCallerSnapshot(sessionId: string, configuredRootId: string | null) {
     if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
-      return performanceSpans.sync("registry.keyed", () => this.sqliteStore!.mcpNativeCallerSnapshot(sessionId, configuredRootId));
+      return measureRegistryRead("registry.keyed", () => this.sqliteStore!.mcpNativeCallerSnapshot(sessionId, configuredRootId));
     }
     const snapshot = this.readOnlySnapshot();
     return { snapshot, rootConversationId: liveRootSession({ conversations: Object.values(snapshot.conversations), configuredRootId })?.conversationId ?? null };
   }
 
-  async prepareNativeCallerArtifacts(): Promise<void> {
+  async prepareNativeCallerArtifacts(signal?: AbortSignal, options?: { waitUntilReady?: boolean }): Promise<void> {
     if (this.sqliteMode === "read" || this.sqliteMode === "sqlite") {
-      await this.sqliteStore?.prepareNativeCallerArtifacts();
+      await this.sqliteStore?.prepareNativeCallerArtifacts(signal, options);
     }
   }
 
@@ -7402,18 +7634,74 @@ export class AgentRegistry {
     });
   }
 
-  agentStateRead<T>(read: (file: RegistryFile) => T): T {
-    return this.readKeyed(read);
+  private jsonAntigravityStatesRecord(file: RegistryFile): Record<string, AgentProjection> {
+    const tagged = file as RegistryFile & { [ANTIGRAVITY_JSON_STATES]?: Record<string, AgentProjection> };
+    if (!tagged[ANTIGRAVITY_JSON_STATES]) {
+      const recovered = this.sqliteMode === "dual-write" && this.sqliteStore
+        ? this.sqliteStore.readAllAntigravityAgentStates()
+        : {};
+      Object.defineProperty(file, ANTIGRAVITY_JSON_STATES, {
+        configurable: true,
+        enumerable: false,
+        writable: true,
+        value: recovered,
+      });
+    }
+    return tagged[ANTIGRAVITY_JSON_STATES]!;
   }
 
-  agentStateWrite<T>(write: (file: RegistryFile) => T): T {
-    return this.mutate(write, { deliveryOnly: true });
+  agentStateRead<T>(read: (file: RegistryFile, antigravityStates: AntigravityAgentStatesView) => T): T {
+    return this.readKeyed(file => {
+      const sqliteHandle = (file as RegistryFile & { [ANTIGRAVITY_AGENT_STATES_ACCESS]?: AntigravityAgentStatesView })[ANTIGRAVITY_AGENT_STATES_ACCESS];
+      if (sqliteHandle) return read(file, sqliteHandle);
+      const tagged = file as RegistryFile & { [ANTIGRAVITY_JSON_STATES]?: Record<string, AgentProjection> };
+      const jsonRecord = tagged[ANTIGRAVITY_JSON_STATES]
+        ?? (this.sqliteMode === "dual-write" && this.sqliteStore ? this.sqliteStore.readAllAntigravityAgentStates() : {});
+      return read(file, antigravityStatesHandleForRecord(jsonRecord));
+    });
+  }
+
+  agentStateMetricsRead(): AgentStateMetrics {
+    return this.readKeyed(file => this.currentAgentStateMetrics(file));
+  }
+
+  private currentAgentStateMetrics(file: RegistryFile): AgentStateMetrics {
+    const metrics = normalizeAgentStateMetrics(file.agentStateMetrics.current) ?? emptyAgentStateMetrics();
+    if (this.antigravityStuckCount !== undefined) metrics.stuckByEngine.antigravity = this.antigravityStuckCount;
+    return metrics;
+  }
+
+  agentStateWrite<T>(write: (file: RegistryFile, readMetrics: () => AgentStateMetrics, antigravityStates: AntigravityAgentStatesMutable) => T): T {
+    let nextAntigravityCount: number | undefined;
+    const result = this.mutate(file => {
+      // SQLite tracks changed rows lazily. For a whole-file write, compare to
+      // the input here so compaction and mirrors can serialize history as-is.
+      const previous = this.sqliteMode === "off" || this.sqliteMode === "dual-write"
+        ? clone(file.agentStateMetrics) : null;
+      const storedCount = file.agentStateMetrics.current?.stuckByEngine.antigravity;
+      const sqliteHandle = (file as RegistryFile & { [ANTIGRAVITY_AGENT_STATES_ACCESS]?: AntigravityAgentStatesMutable })[ANTIGRAVITY_AGENT_STATES_ACCESS];
+      const antigravityStates = sqliteHandle ?? antigravityStatesHandleForRecord(this.jsonAntigravityStatesRecord(file));
+      const result = write(file, () => this.currentAgentStateMetrics(file), antigravityStates);
+      const count = file.agentStateMetrics.current?.stuckByEngine.antigravity;
+      nextAntigravityCount = count === storedCount ? this.antigravityStuckCount ?? count : count;
+      if (previous) {
+        for (const [key, metrics] of Object.entries(file.agentStateMetrics)) {
+          const before = previous[key];
+          if (isDeepStrictEqual(before, metrics)) continue;
+          const stored = agentStateMetricsForStorage(metrics);
+          file.agentStateMetrics[key] = before && isDeepStrictEqual(stored, agentStateMetricsForStorage(before)) ? before : stored;
+        }
+      }
+      return result;
+    }, { deliveryOnly: true });
+    if (nextAntigravityCount !== undefined) this.antigravityStuckCount = nextAntigravityCount;
+    return result;
   }
 
   /** Revocation inspects current hosted rows without loading cold history. */
   memberHostEntries(memberId: string): AgentRegistryEntry[] {
     return this.readKeyed(file => registryRowsMatching(file, "entries", "structuredHost.kind",
-      ["codex-app-server", "claude-broker", "copilot-acp"])
+      ["codex-app-server", "claude-broker", "copilot-acp", "antigravity-acp"])
       .filter(entry => !entry.launchProfile || entry.launchProfile.workspace?.memberId === memberId && !entry.launchProfile.workspace.fromMessage).map(entry => clone(entry)));
   }
 
@@ -7421,7 +7709,7 @@ export class AgentRegistry {
   structuredHostEntries(prepared?: RegistryFile): AgentRegistryEntry[] {
     const file = prepared ?? this.readOnlySnapshot();
     return registryRowsMatching(file, "entries", "structuredHost.kind",
-      ["codex-app-server", "claude-broker", "copilot-acp"]).map(entry => clone(entry));
+      ["codex-app-server", "claude-broker", "copilot-acp", "antigravity-acp"]).map(entry => clone(entry));
   }
 
   diagnosticSpawnAttempt(launchId?: string, conversationId?: string): string | undefined {
@@ -8147,6 +8435,8 @@ export class AgentRegistry {
       const receipt: SpawnReceipt = {
         launchId: crypto.randomUUID(),
         clientAttemptId: input.clientAttemptId ?? null,
+        ...(input.scheduledCleanerRunId && input.scheduledCleanerRunId === input.clientAttemptId
+          ? { scheduledCleanerRunId: input.scheduledCleanerRunId } : {}),
         requestDigest: input.requestDigest ?? null,
         pendingOrchestratorSeatIdentity: null,
         transport: input.transport ?? null,
@@ -10612,6 +10902,21 @@ export class AgentRegistry {
   }
 
   /** Alias resolution needs no conversation payload or grant normalization. */
+  /** Resolve a decision's aliases against the same registry generation. The
+      resolver is valid only for the synchronous duration of the callback. */
+  withConversationAliases<T>(read: (resolve: (id: string) => string) => T): T {
+    return this.readKeyed(file => read(id => resolveConversationAlias(file, id as ViewerConversationId)),
+      { skipColdKeyInitialization: true });
+  }
+
+  /** Board disclosure checks use keyed rows and aliases from one registry read. */
+  withBoardCallerLookup<T>(read: (lookup: Pick<ConversationLookup, "conversation" | "canonicalConversationId">) => T): T {
+    return this.readKeyed(file => read({
+      canonicalConversationId: id => resolveConversationAlias(file, id),
+      conversation: id => file.conversations[resolveConversationAlias(file, id)] ?? null,
+    }), { skipColdKeyInitialization: true });
+  }
+
   canonicalConversationId(id: ViewerConversationId): ViewerConversationId {
     return this.readKeyed(file => resolveConversationAlias(file, id), { skipColdKeyInitialization: true });
   }
@@ -11360,7 +11665,7 @@ export class AgentRegistry {
     settleStoppedMigration(file, conversation);
     if (conversation.pinnedAccountId) return clone(conversation);
     /* Account migration covers Claude and Codex only. */
-    if (conversation.engine === "copilot") return clone(conversation);
+    if (conversation.engine === "copilot" || conversation.engine === "antigravity") return clone(conversation);
     const targetId = file.engineRouting[conversation.engine].activeAccountId;
     const source = conversation.generations.at(-1);
     if (!targetId || !source || source.accountId === null || source.accountId === targetId) return clone(conversation);
@@ -11477,7 +11782,9 @@ export class AgentRegistry {
       const canonicalId = resolveConversationAlias(file, id);
       const conversation = file.conversations[canonicalId];
       if (!conversation) throw new Error("viewer conversation is unknown");
-      if (conversation.engine === "copilot") throw new Error("account migration does not cover Copilot conversations");
+      if (conversation.engine === "copilot" || conversation.engine === "antigravity") {
+        throw new Error(`account migration does not cover ${conversation.engine === "antigravity" ? "Antigravity" : "Copilot"} conversations`);
+      }
       settleStoppedMigration(file, conversation);
       if (reconfigureOwner
         && (conversation.reconfigure?.operationId !== reconfigureOwner.operationId
@@ -11967,14 +12274,19 @@ export class AgentRegistry {
    */
   async stopMigrationIntent(
     id: string,
-    options: { expectedRevision?: number; reason?: string } = {},
+    options: { expectedRevision?: number; reason?: string; canStop?: (file: RegistryFile) => boolean } = {},
   ): Promise<{ acquired: true; value: MigrationIntent } | { acquired: false }> {
     const reason = options.reason ?? STOPPED_MIGRATION_DELIVERY_REASON;
     const owned = await conversationIdsWhere(Object.values((await this.migrationStopView()).conversations),
       (conversation) => conversation.migration?.intentId === id && conversation.migration.phase !== "committed");
     const stopped = await this.deliveryWrite({ label: "migration.stop" },
-      () => this.mutate((file) => stopMigrationIntentInFile(file, id, options.expectedRevision, reason, owned)));
-    if (!stopped.acquired) return stopped;
+      () => this.mutate((file) => {
+        const intent = file.migrationIntents[id];
+        if (!intent) throw new Error("migration intent is unknown");
+        if (options.canStop && !options.canStop(file)) return clone(intent);
+        return stopMigrationIntentInFile(file, id, options.expectedRevision, reason, owned);
+      }));
+    if (!stopped.acquired || stopped.value.state !== "stopped") return stopped;
     await yieldToRuntime();
     try {
       await this.continueMigrationStop(id, reason);
@@ -12604,6 +12916,10 @@ export class AgentRegistry {
       if (claimed) settleStoppedMigrationOf(file, claimed.conversationId);
       const delivery = file.heldDeliveries[id];
       if (!delivery || delivery.state !== "assigned" || delivery.generationId !== generationId) return null;
+      if (delivery.attempts >= DELIVERY_ATTEMPT_LIMIT) {
+        this.recordDeliveryOutcomeInFile(file, id, "failed", "delivery attempt limit reached; verify the recipient before retrying", "unverified");
+        return null;
+      }
       const conversation = file.conversations[resolveConversationAlias(file, delivery.conversationId)];
       // Recovery authorizes exactly the selected candidate under the same
       // writer as its claim. A replacement admission or newly started migration

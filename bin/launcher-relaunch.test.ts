@@ -10,6 +10,7 @@ import { isAlive } from "../src/lib/selfUpdate/pid";
 import { ApplyController } from "../src/lib/selfUpdate/apply";
 import type { LauncherRecord } from "../src/lib/selfUpdate/launcher";
 import { readStartIdentity } from "./self-update-supervisor.mjs";
+import { STUB_READY } from "./__fixtures__/cli-self-update";
 import { terminalClosed, terminalExited } from "./__fixtures__/terminal-lifecycle";
 
 const roots: string[] = [];
@@ -100,7 +101,9 @@ async function fixture(equalsPort = false) {
     writeFileSync(path.join(directory, "dist", "standalone", "server.js"), `
       const server = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.PORT), fetch(request) {
         if (request.headers.get("authorization") !== "Bearer synthetic-terminal-key") return new Response("Unauthorized", { status: 401 });
-        return new Response(new URL(request.url).pathname === "/chunk.js" ? "void 0" : '<script src="/chunk.js"></script>' + process.cwd());
+        const pathname = new URL(request.url).pathname;
+        ${STUB_READY}
+        return new Response(pathname === "/chunk.js" ? "void 0" : '<script src="/chunk.js"></script>' + process.cwd());
       } });
       process.on("SIGTERM", () => { server.stop(true); process.exit(0); });
     `);

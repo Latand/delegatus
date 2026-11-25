@@ -1,20 +1,26 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { createPublicationFixtures } from "./publicationHook.fixture";
 import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
-import { PUBLICATION_TRANSPORT_MS, publicationCheckBinding, readPublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
+import { publicationCheckBinding, readPublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
 import { publishPipelineBranch } from "../src/lib/pipelines/git";
+import { recoverablePublication } from "../src/lib/pipelines/publicationHistory";
 import { pipelineCorpus } from "../src/lib/pipelines/fixtures/corpus";
 import { findPipelineRecord, loadPipelines, savePipelines } from "../src/lib/pipelines/store";
 import { realExec, type ExecPort } from "../src/lib/workflows/provision";
-import { DEFAULT_PUBLICATION_PUSH_MS, PUBLICATION_PACK_MARGIN_MS } from "../src/lib/pipelines/gateBudget";
 
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
 const nativeTest = test.skipIf(process.platform !== "linux" || !["x64", "arm64"].includes(process.arch));
 afterEach(() => { for (const dir of roots.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
+// The publisher under test routes admission from its own environment, as the
+// Viewer does. Give it the fixture's gate interpreter: the `bun` on the
+// fixture's PATH only stands in for checks.
+const inheritedGateBun = process.env.LLV_GATE_BUN;
+beforeAll(() => { process.env.LLV_GATE_BUN = process.execPath; });
+afterAll(() => { if (inheritedGateBun === undefined) delete process.env.LLV_GATE_BUN; else process.env.LLV_GATE_BUN = inheritedGateBun; });
 const { fixture, nativeFixture, touchedChecks, commitFixtureInputs, httpFixture } = createPublicationFixtures(root, roots);
 
 nativeTest("a first cold native publication completes one check phase before one gated push", async () => {
@@ -30,12 +36,14 @@ nativeTest("a first cold native publication completes one check phase before one
       if (command === "git" && args[0] === "push") {
         pushes++;
         expect(readPublicationCheckReceipt(overrides!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(overrides!)).inputs).toMatch(/^[a-f0-9]{64}$/);
+        expect(readPublicationCheckReceipt(overrides!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(overrides!)).checksMs).toEqual(expect.any(Number));
         expect(touchedChecks(f)).toHaveLength(1);
       }
       return realExec(command, args, cwd, { ...f.env, ...overrides }, options);
     };
     expect(await publishPipelineBranch(subject, exec, { acceptedSha: f.head })).toMatchObject({ ok: true, sha: f.head, remote: "published" });
     expect(pushes).toBe(1); expect(http.rpc()).toBe(1); expect(http.rejected()).toBe(0);
+    expect(findPipelineRecord(subject.id)!.delivery!.journal.at(-1)!.reason).toMatch(/phases preparation=\d+ms checks=\d+ms transport=\d+ms/);
     expect(f.calls().filter(call => call.args[0] === "native-install").map(call => call.args[2]))
       .toEqual(SUPPORTED_CODEX_VERSIONS.map(version => `@openai/codex@${version}`));
     expect(touchedChecks(f)).toHaveLength(1);
@@ -89,13 +97,41 @@ test.each(["active", "expired"] as const)("native Git expires its discovered pas
   } finally { savePipelines(previous); http.close(); }
 }, 150_000);
 
+test("retired publication marker 2 refuses without transport or uploaded objects", async () => {
+  const f = fixture();
+  fs.writeFileSync(f.writablePath("scripts/local-gate-capabilities.json"), '{"publicationPrepare":2}\n');
+  commitFixtureInputs(f);
+  const http = await httpFixture(f, false), previous = loadPipelines();
+  try {
+    const subject = pipelineCorpus(2, 1)[1]!;
+    Object.assign(subject, { project: "fixture", repoDir: path.join(path.dirname(f.dir), "source"), worktreeDir: f.dir, lastPassedCommit: f.head });
+    subject.delivery = { target: { repository: "repo-fixture", remote: http.remote, branch: "refs/heads/main" },
+      disposition: "owner", publish: "enabled", active: true, ownerId: subject.id, epoch: 1, journal: [] };
+    savePipelines([subject]);
+    const commands: string[] = [];
+    const exec: ExecPort = (command, args, cwd, env, options) => {
+      if (command !== "git" || !["rev-parse", "status", "branch"].includes(args[0]!)) commands.push([command, ...args].join(" "));
+      return realExec(command, args, cwd, { ...f.env, ...env }, options);
+    };
+    const result = await publishPipelineBranch(subject, exec, { acceptedSha: f.head });
+    expect(result).toEqual({ ok: false, error: "publication capability 2 is retired; update the checkout to current main" });
+    if (result.ok) throw new Error("expected terminal refusal");
+    expect(recoverablePublication(result)).toBeFalse();
+    expect(commands).toEqual([]);
+    expect(http.events()).toEqual([]);
+    expect(http.rpc()).toBe(0);
+    expect(f.git("--git-dir", http.bare, "for-each-ref").toString()).toBe("");
+    expect(f.git("--git-dir", http.bare, "cat-file", "--batch-all-objects", "--batch-check").toString()).toBe("");
+  } finally { savePipelines(previous); http.close(); }
+}, 90_000);
+
 for (const capability of ["absent", "unsupported", "malformed"] as const) {
   test(`a gate with ${capability} preparation capability keeps one ordinary gated push`, async () => {
     const f = fixture();
     delete f.env.LLV_GATE_PUBLICATION_RECEIPT;
-    const marker = path.join(f.dir, "scripts/local-gate-capabilities.json");
+    const marker = f.writablePath("scripts/local-gate-capabilities.json");
     if (capability === "absent") fs.rmSync(marker);
-    else fs.writeFileSync(marker, capability === "unsupported" ? '{"publicationPrepare":2}' : '{');
+    else fs.writeFileSync(marker, capability === "unsupported" ? '{"publicationPrepare":4}' : '{');
     // The native entry point retains the ordinary pre-push protocol. In
     // particular, nothing may try its unknown --publication-prepare argument.
     f.git("-c", "core.hooksPath=/dev/null", "add", "scripts/local-gate-capabilities.json", "scripts/local-gate.ts");
@@ -124,9 +160,10 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
   }, 90_000);
 }
 
-for (const scenario of ["slow privacy", "changed input", "capped budget", "over cap"] as const) {
-  test(`measured publication transport handles ${scenario}`, async () => {
+for (const [scenario, capability] of [["slow privacy", 1], ["changed input", 3], ["long preparation", 1], ["over cap", 3]] as const) {
+  test(`measured publication transport handles ${scenario} with capability ${capability}`, async () => {
     const f = fixture();
+    fs.writeFileSync(f.writablePath("scripts/local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: capability }));
     // This path is embedded in tracked record.ts and scanned by the real
     // privacy gate, so keep it independent of the checkout's absolute path.
     const clock = ".git/privacy-elapsed";
@@ -138,8 +175,8 @@ for (const scenario of ["slow privacy", "changed input", "capped budget", "over 
     f.env.HOOK_CLOCK = preload;
     f.env.HOOK_PRIVACY = path.join(root, "scripts/privacy-publication-gate.ts");
     fs.copyFileSync(path.join(root, "scripts/privacy-known-value-fingerprints.json"), path.join(f.dir, "scripts/privacy-known-value-fingerprints.json"));
-    const preparationMs = ["capped budget", "over cap"].includes(scenario) ? 600_000 : 70_000;
-    const transportMs = scenario === "over cap" ? DEFAULT_PUBLICATION_PUSH_MS - PUBLICATION_PACK_MARGIN_MS + 1 : preparationMs;
+    const preparationMs = ["long preparation", "over cap"].includes(scenario) ? 600_000 : 70_000;
+    const transportMs = scenario === "over cap" ? 180_001 : scenario === "long preparation" ? 170_000 : 70_000;
     // After each real scan, its child advances the shared clock. The over-cap
     // child stays pending until the hook cancels it, keeping the verdict stable.
     fs.appendFileSync(path.join(f.dir, "record.ts"), `\nif (process.argv[2] === "scripts/privacy-publication-gate.ts") {
@@ -176,16 +213,15 @@ for (const scenario of ["slow privacy", "changed input", "capped budget", "over 
         expect(result.ok ? "" : result.error).toContain("publication inputs cannot be certified: dirty worktree");
       } else if (scenario === "over cap") {
         expect(result).toMatchObject({ ok: false, failure: { retryableDeadline: true, hookStoppedCheck: "privacy" } });
+        expect(spawnSync("git", ["--git-dir", http.bare, "rev-parse", "--verify", "refs/heads/main"], { env: f.env }).status).not.toBe(0);
       } else {
         expect(result).toMatchObject({ ok: true, sha: f.head, remote: "published" });
         expect(spawnSync("git", ["--git-dir", http.bare, "rev-parse", "refs/heads/main"], { env: f.env, encoding: "utf8" }).stdout.trim()).toBe(f.head);
       }
-      expect(transportBudget).toBeGreaterThanOrEqual(Math.min(DEFAULT_PUBLICATION_PUSH_MS, 2 * preparationMs + PUBLICATION_PACK_MARGIN_MS));
-      expect(transportBudget).toBeLessThanOrEqual(DEFAULT_PUBLICATION_PUSH_MS);
-      if (scenario === "capped budget") expect(transportBudget).toBe(DEFAULT_PUBLICATION_PUSH_MS);
-      expect(hookAllowance).toBe(transportBudget - PUBLICATION_PACK_MARGIN_MS);
+      expect(transportBudget).toBe(240_000);
+      expect(hookAllowance).toBe(180_000);
       expect(pushes).toBe(1);
-      expect(http.rpc()).toBe(["slow privacy", "capped budget"].includes(scenario) ? 1 : 0);
+      expect(http.rpc()).toBe(["slow privacy", "long preparation"].includes(scenario) ? 1 : 0);
       expect(http.events().filter(event => event.kind === "checks")).toHaveLength(1);
       expect(f.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toHaveLength(scenario === "changed input" ? 1 : 2);
       expect(findPipelineRecord(subject.id)!.delivery!.operation!.state).toBe("settled");
@@ -193,11 +229,11 @@ for (const scenario of ["slow privacy", "changed input", "capped budget", "over 
   }, 90_000);
 }
 
-test.each([["short preparation", 10_000], ["long preparation", 40_000]] as const)("an overrun after %s ends with its deadline verdict before Git's pack timeout", async (_label, preparationMs) => {
+test.each([["short preparation", 70_000], ["long preparation", 600_000]] as const)("an overrun after %s ends with its deadline verdict before Git's pack timeout", async (_label, preparationMs) => {
   const f = fixture();
   const clock = path.join(f.dir, ".git", "transport-clock");
   const preload = path.join(f.dir, ".git", "transport-clock.ts");
-  const startedAt = Date.now();
+  const startedAt = Date.UTC(2030, 0, 1);
   fs.writeFileSync(clock, String(startedAt));
   fs.writeFileSync(preload, `import fs from "node:fs"; Date.now = () => Number(fs.readFileSync(${JSON.stringify(clock)}, "utf8"));`);
   f.env.HOOK_CLOCK = preload;
@@ -206,8 +242,9 @@ test.each([["short preparation", 10_000], ["long preparation", 40_000]] as const
   fs.appendFileSync(path.join(f.dir, "record.ts"), `\nif (process.argv[2] === "scripts/privacy-publication-gate.ts" && process.env.LLV_GATE_PUBLICATION_OBSERVED) require("node:fs").writeFileSync(${JSON.stringify(clock)}, String(Number(process.env.LLV_GATE_PUSH_DEADLINE) + 1));\n`);
   const http = await httpFixture(f), previous = loadPipelines();
   let elapsedMonotonicMs = 0;
-  let preparationCompletedAt = 0;
   const monotonic = spyOn(performance, "now").mockImplementation(() => elapsedMonotonicMs);
+  // Keep the controller and hook on the same wall clock until the hook runs.
+  const date = spyOn(Date, "now").mockImplementation(() => startedAt);
   try {
     const subject = pipelineCorpus(2, 1)[1]!;
     Object.assign(subject, { project: "fixture", repoDir: path.join(path.dirname(f.dir), "source"), worktreeDir: f.dir, lastPassedCommit: f.head });
@@ -220,15 +257,10 @@ test.each([["short preparation", 10_000], ["long preparation", 40_000]] as const
       const result = await realExec(command, args, cwd, { ...f.env, ...env }, options);
       if (command === "bun" && args.includes("--publication-prepare") && result.code === 0) {
         elapsedMonotonicMs = preparationMs;
-        preparationCompletedAt = Date.now();
       }
       if (command === "git" && args[0] === "push") {
-        const expectedBudget = Math.min(DEFAULT_PUBLICATION_PUSH_MS,
-          Math.max(PUBLICATION_TRANSPORT_MS, 2 * preparationMs) + PUBLICATION_PACK_MARGIN_MS);
-        const deadline = Number(env?.LLV_GATE_PUSH_DEADLINE);
-        expect(options?.timeoutMs).toBe(expectedBudget);
-        expect(deadline).toBeGreaterThanOrEqual(preparationCompletedAt + expectedBudget - PUBLICATION_PACK_MARGIN_MS);
-        expect(deadline).toBeLessThanOrEqual(Date.now() + expectedBudget - PUBLICATION_PACK_MARGIN_MS);
+        expect(options?.timeoutMs).toBe(240_000);
+        expect(Number(env?.LLV_GATE_PUSH_DEADLINE) - startedAt).toBe(180_000);
       }
       return result;
     };
@@ -238,7 +270,9 @@ test.each([["short preparation", 10_000], ["long preparation", 40_000]] as const
     expect(findPipelineRecord(subject.id)!.delivery!.operation!.state).toBe("settled");
     expect(http.events().map(event => event.kind)).toEqual(["checks", "mint"]);
     expect(pushes).toBe(1); expect(http.rpc()).toBe(0);
-  } finally { monotonic.mockRestore(); savePipelines(previous); http.close(); }
+    expect(f.calls().filter(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toHaveLength(2);
+    expect(spawnSync("git", ["--git-dir", http.bare, "rev-parse", "--verify", "refs/heads/main"], { env: f.env }).status).not.toBe(0);
+  } finally { monotonic.mockRestore(); date.mockRestore(); savePipelines(previous); http.close(); }
 }, 90_000);
 
 for (const change of ["pause", "epoch", "owner", "head", "authentication", "lost-reply"] as const) {
@@ -270,6 +304,7 @@ for (const change of ["pause", "epoch", "owner", "head", "authentication", "lost
       const result = await publishPipelineBranch(subject, exec, { acceptedSha: f.head });
       if (change === "lost-reply") {
         expect(result).toMatchObject({ ok: true, remote: "unreachable", uncertain: true });
+        expect(result.phaseTimings).toMatchObject({ preparationMs: expect.any(Number), checksMs: expect.any(Number), transportMs: expect.any(Number) });
         expect(http.rpc()).toBe(1);
         // A fresh controller process reads the durable operation and reconciles
         // the already-written remote without another transport or credential.
@@ -281,6 +316,11 @@ for (const change of ["pause", "epoch", "owner", "head", "authentication", "lost
         const child = await realExec(process.execPath, [childSource], root, { ...f.env, LLV_STATE_DIR: process.env.LLV_STATE_DIR }, { timeoutMs: 30_000 });
         expect(child.code, child.stderr).toBe(0);
         expect(findPipelineRecord(subject.id)!.publishedCommit).toBe(f.head);
+        const settled = findPipelineRecord(subject.id)!.delivery!.operation!;
+        expect(settled.result?.phaseTimings).toEqual(result.phaseTimings);
+        expect(settled.executor?.result?.phaseTimings).toEqual(result.phaseTimings);
+        expect(findPipelineRecord(subject.id)!.delivery!.journal.at(-1)!.reason)
+          .toMatch(/publisher quiescent; remote reconciled; phases preparation=\d+ms checks=\d+ms transport=\d+ms/);
       } else {
         expect(result.ok).toBeFalse();
         expect(http.rpc()).toBe(0);

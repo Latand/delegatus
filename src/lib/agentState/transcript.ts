@@ -4,7 +4,7 @@ import { isClaudePrompt } from "@/lib/claudeProtocolUser";
 import { turnStateFromRecords } from "./nativeTurnState";
 import { fact, unknown, type Evidence, type Fact, type NativeTurn, type TranscriptVersion, type NativePromptAnchor } from "./model";
 
-type Engine = "codex" | "claude" | "copilot" | "claude-ledger";
+type Engine = "codex" | "claude" | "copilot" | "antigravity" | "claude-ledger";
 type RecordLike = Record<string, unknown>;
 const object = (v: unknown): RecordLike => v && typeof v === "object" && !Array.isArray(v) ? v as RecordLike : {};
 const string = (v: unknown): string | null => typeof v === "string" && v.length <= 256 ? v : null;
@@ -31,6 +31,7 @@ export interface BoundaryEvent {
   opensWork?: boolean;
   synthetic?: boolean;
   release?: boolean;
+  nativeCodexTerminal?: boolean;
 }
 
 /** Remove message bodies before retaining any recovery page. */
@@ -44,7 +45,7 @@ export function nativeBoundaryEvent(record: RecordLike, engine: Engine, localRef
     return record.kind === "item" && record.turnId === localRef && isClaudePrompt(item) && uuid
       ? { kind: "start", type: "host-user-frame", id: uuid, at: time(record.accountingAt) } : null;
   }
-  const data = engine === "codex" ? object(record.payload) : engine === "copilot" ? object(record.data) : record;
+  const data = engine === "codex" ? object(record.payload) : engine === "copilot" || engine === "antigravity" ? object(record.data) : record;
   const type = string(data.type ?? record.type) ?? "";
   const id = identity(data.turn_id ?? data.turnId ?? record.uuid ?? record.id);
   const at = time(record.timestamp);
@@ -53,7 +54,8 @@ export function nativeBoundaryEvent(record: RecordLike, engine: Engine, localRef
     // The ordinary user echo has no native id and follows task_started. It
     // must not erase that id and let an older cached terminal close this turn.
     if (type === "user_message") return { kind: "start", type, id, at };
-    if (["task_complete", "turn_complete", "turn_completed", "turn_aborted"].includes(type)) return { kind: "terminal", type, id, at, outcome: type === "turn_aborted" ? "interrupted" : "completed" };
+    if (["task_complete", "turn_complete", "turn_completed", "turn_aborted"].includes(type)) return { kind: "terminal", type, id, at, outcome: type === "turn_aborted" ? "interrupted" : "completed",
+      ...(record.type === "event_msg" && (data.turn_id ?? data.turnId) ? { nativeCodexTerminal: true } : {}) };
     if (/tool|function|command/.test(type)) return { kind: /output|_result$/.test(type) ? "output" : "tool", type, id, at };
     return null;
   }
@@ -95,7 +97,19 @@ export function nativeBoundaryEvent(record: RecordLike, engine: Engine, localRef
   if (type === "assistant.message") {
     return { kind: "continue", type, id: null, at, tools: Array.isArray(data.toolRequests) && data.toolRequests.length > 0 };
   }
-  if (["assistant.turn_end", "abort", "session.shutdown"].includes(type)) return { kind: "terminal", type, id: null, at, outcome: type === "abort" ? "interrupted" : type === "session.shutdown" ? "error" : "completed" };
+  if (["assistant.turn_end", "abort", "session.shutdown", "session.error", "session.quota_exhausted"].includes(type)) {
+    return {
+      kind: "terminal",
+      type,
+      id: null,
+      at,
+      outcome: type === "abort"
+        ? "interrupted"
+        : type === "session.shutdown" || type === "session.error" || type === "session.quota_exhausted"
+          ? "error"
+          : "completed",
+    };
+  }
   if (["assistant.turn_start", "tool.execution_start", "tool.execution_complete"].includes(type)) return { kind: "continue", type, id: null, at };
   return null;
 }
@@ -115,8 +129,8 @@ export function foldNativeBoundaries(events: readonly BoundaryEvent[], engine: E
         turn.tools = 0; continue;
       }
       if (engine === "claude" && turn?.state === "closed") recoveryClosed = { ...turn };
-      if (engine === "copilot") promptOrdinal++;
-      turn = { state: "open", nativeId: event.id, localRef, opening: event.type, closing: null, at: event.at, tools: 0, ...(engine === "copilot" ? { promptOrdinal, modelReady: false } : {}), ...(engine === "claude" ? { ancestry: event.id ? [event.id] : [] } : {}) };
+      if (engine === "copilot" || engine === "antigravity") promptOrdinal++;
+      turn = { state: "open", nativeId: event.id, localRef, opening: event.type, closing: null, at: event.at, tools: 0, ...(engine === "copilot" || engine === "antigravity" ? { promptOrdinal, modelReady: false } : {}), ...(engine === "claude" ? { ancestry: event.id ? [event.id] : [] } : {}) };
       requestedTools = false;
     } else if (event.kind === "terminal") {
       // Native ids on Codex terminals must agree with the latest start, or
@@ -128,7 +142,7 @@ export function foldNativeBoundaries(events: readonly BoundaryEvent[], engine: E
       if (!turn && engine !== "codex") continue;
       turn = { state: "closed", nativeId: turn?.nativeId ?? event.id, localRef,
         opening: turn?.opening ?? null, closing: event.type, at: event.at, tools: 0,
-        ...(engine === "claude" ? { ancestry: [...new Set([...(turn?.ancestry ?? []), ...(event.id ? [event.id] : [])])].slice(-16) } : {}), ...(engine === "copilot" ? { promptOrdinal } : {}), ...(event.outcome ? { outcome: event.outcome } : {}) };
+        ...(engine === "claude" ? { ancestry: [...new Set([...(turn?.ancestry ?? []), ...(event.id ? [event.id] : [])])].slice(-16) } : {}), ...(engine === "copilot" || engine === "antigravity" ? { promptOrdinal } : {}), ...(event.outcome ? { outcome: event.outcome } : {}) };
     } else if (turn) {
       if (event.type === "tool-summary") {
         turn.tools = Math.max(event.toolFloor ?? 0, turn.tools + (event.toolDelta ?? 0));
@@ -148,7 +162,7 @@ export function foldNativeBoundaries(events: readonly BoundaryEvent[], engine: E
       }
       if (event.kind === "tool") { turn.tools++; turn.state = "open"; turn.closing = null; }
       else if (event.kind === "output") { turn.tools = Math.max(0, turn.tools - 1); }
-      else if (engine === "copilot") {
+      else if (engine === "copilot" || engine === "antigravity") {
         if (event.type === "assistant.turn_start" || event.type === "assistant.message") turn.modelReady = true;
         if (event.tools !== undefined) { requestedTools = event.tools; turn.tools = event.tools ? 1 : 0; }
         turn.state = "open"; turn.closing = null;
@@ -194,10 +208,13 @@ interface Cached {
   /** The turn came from the tail after an unrecoverable record, without its
       opening. Appends rescan the tail rather than fold onto it. */
   tail?: boolean;
+  tailTerminal?: BoundaryEvent;
 }
 export interface TranscriptAcquisition {
   turn: Fact<NativeTurn>;
   readonly transcript: Fact<TranscriptVersion>;
+  /** A native boundary awaiting independent confirmation from the host. */
+  readonly tailTerminal?: BoundaryEvent;
 }
 export class AgentTranscriptCache {
   private readonly rows = new Map<string, Cached>();
@@ -242,7 +259,7 @@ export class AgentTranscriptCache {
       const signature = fileSignature(stat);
       const size = Number(stat.size);
       if (!stat.isFile() || !Number.isSafeInteger(size)) return uncertain("artifact is not a bounded regular file");
-      const anchor = input.engine === "copilot" ? input.anchor : null;
+      const anchor = (input.engine === "copilot" || input.engine === "antigravity") ? input.anchor : null;
       const base = anchor?.offset ?? 0;
       if (base > size || anchor && anchor.device !== null && (String(stat.dev) !== anchor.device || String(stat.ino) !== anchor.inode)) return uncertain("native prompt anchor identity changed");
       const artifact = crypto.createHash("sha256").update(input.path).digest("hex").slice(0, 24);
@@ -332,7 +349,7 @@ export class AgentTranscriptCache {
         const skip = start > base ? buffer.indexOf(10) + 1 : 0;
         if (start > base && skip <= 0) return uncertain("native record exceeds page budget");
         const events = parseBoundaryPage(buffer.subarray(skip), input.engine, input.localRef);
-        if (input.engine === "copilot") cached.promptStarts = (cached.promptStarts ?? 0) + events.filter(event => event.kind === "start").length;
+        if (input.engine === "copilot" || input.engine === "antigravity") cached.promptStarts = (cached.promptStarts ?? 0) + events.filter(event => event.kind === "start").length;
         cached.events = [...events, ...cached.events];
         if (input.engine === "codex") {
           const start = cached.events.findLastIndex(event => event.kind === "start" && event.id !== null);
@@ -340,7 +357,7 @@ export class AgentTranscriptCache {
           cached.events = compactCodexWork(cached.events);
         }
 
-        if (input.engine === "copilot") {
+        if (input.engine === "copilot" || input.engine === "antigravity") {
           const latestStart = cached.events.findLastIndex(event => event.kind === "start");
           if (latestStart > 0) cached.events = cached.events.slice(latestStart);
         }
@@ -352,9 +369,9 @@ export class AgentTranscriptCache {
         const recoveryPending = input.engine === "claude" && cached.events.at(-1)?.release && turn?.state !== "closed";
         cached.complete = cached.before === base || (input.engine === "claude-ledger"
           ? cached.events.some(event => event.type === "host-turn-start")
-          : input.engine !== "copilot" && !recoveryPending && Boolean(turn?.opening)
+          : input.engine !== "copilot" && input.engine !== "antigravity" && !recoveryPending && Boolean(turn?.opening)
             && (input.engine !== "codex" || turn?.nativeId !== null));
-        if (turn && input.engine === "copilot") turn.promptOrdinal = cached.before === base ? cached.promptStarts ?? 0 : null;
+        if (turn && (input.engine === "copilot" || input.engine === "antigravity")) turn.promptOrdinal = cached.before === base ? cached.promptStarts ?? 0 : null;
         cached.turn = turn;
         if (!cached.complete && (cached.events.length > MAX_EVENTS || JSON.stringify(cached.events).length > 256 * 1024)) {
           if (input.engine === "codex") {
@@ -399,7 +416,7 @@ export class AgentTranscriptCache {
     finally { await handle?.close(); }
   }
   private answer(cached: Cached, evidence: Evidence, localRef: string | null): TranscriptAcquisition {
-    return { transcript: fact(cached.version, evidence), turn: cached.complete && cached.turn
+    return { transcript: fact(cached.version, evidence), ...(cached.tailTerminal ? { tailTerminal: cached.tailTerminal } : {}), turn: cached.complete && cached.turn
       ? fact({ ...cached.turn, localRef }, { ...evidence, ...(cached.turn.at === null ? {} : { eventAt: cached.turn.at }) })
       : cached.complete && cached.version.size === 0 && localRef === null
         ? fact({ state: "absent", nativeId: null, localRef: null, opening: null, closing: null, at: null, tools: 0 }, evidence)
@@ -414,6 +431,10 @@ export async function transcriptVersionMatches(path: string, signature: string):
 }
 
 function settleFromTail(cached: Cached, turn: NativeTurn | null, refusal: string): void {
+  const last = cached.events.at(-1);
+  if (!turn && last?.nativeCodexTerminal && last.id && !cached.events.some(event => event.kind === "start")) {
+    cached.tailTerminal = last;
+  }
   cached.events = []; cached.complete = true; cached.turn = turn; cached.tail = true;
   if (turn) delete cached.refusal; else cached.refusal = refusal;
 }

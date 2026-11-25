@@ -42,7 +42,7 @@ export interface HandoffRowInput {
   operationId: string;
   /** Conversation identity, preserved across the handoff. */
   conversationId: string;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   /** Engine session identity (native generation id). */
   engineSessionId: string;
   kind: HandoffKind;
@@ -102,6 +102,7 @@ export interface HandoffQueueStore {
   saveDrainingGenerations?(generations: readonly string[]): void;
   /** Runs one read-modify-write cycle while holding the store's durable lock. */
   transaction?<T>(mutation: (state: HandoffQueueStoreState) => T): T;
+  hasPendingForConversation?(conversationId: string): boolean;
 }
 
 export class InMemoryHandoffQueueStore implements HandoffQueueStore {
@@ -214,6 +215,12 @@ export class HandoffQueue {
 
   rows(): HandoffRow[] {
     return this.store.load().map((row) => structuredClone(row));
+  }
+
+  hasPendingForConversation(conversationId: string): boolean {
+    if (this.store.hasPendingForConversation) return this.store.hasPendingForConversation(conversationId);
+    return this.store.load().some(row => row.conversationId === conversationId
+      && row.pendingDeliveries.some(delivery => !row.replayedDeliveryIds.includes(delivery.deliveryId)));
   }
 
   /** Completed operation rows retained outside the one-row active lease set. */
@@ -432,7 +439,7 @@ export class HandoffQueue {
 export interface HandoffCandidateSnapshot {
   conversations: Record<string, {
     id: string;
-    engine: "claude" | "codex" | "copilot";
+    engine: "claude" | "codex" | "copilot" | "antigravity";
     supersededBy: unknown | null;
     turn: { state: HandoffTurnState };
     generations: Array<{
@@ -456,7 +463,7 @@ export interface HandoffCandidateSnapshot {
 
 const HANDOFF_DELIVERY_STATES = new Set(["held", "assigned", "delivery-uncertain"]);
 
-function sessionEntryKey(engine: "claude" | "codex" | "copilot", sessionId: string): string {
+function sessionEntryKey(engine: "claude" | "codex" | "copilot" | "antigravity", sessionId: string): string {
   return `${engine}:${sessionId}`;
 }
 

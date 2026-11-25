@@ -1,36 +1,49 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AgentRegistry, setAgentRegistryForTests, structuredClaimIdentity } from "@/lib/agent/registry";
+import { AgentStateService } from "@/lib/agentState/service";
+import { observeAgentProcess } from "@/lib/agentState/process";
+import { readAgentProjection, subjectId } from "@/lib/agentState/store";
 import { clearAgentObservations } from "@/lib/agentState/projectionCache";
 import { fixtureRecords, fixtureRegistry, FIXTURE_CONVERSATION, FIXTURE_NOW, FIXTURE_SESSION, FIXTURE_TURN as FIXTURE_TURN_ID } from "@/lib/agentState/testFixture";
-import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { statePath } from "@/lib/configDir";
-import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
+import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
+import { ownFixtureTree, stopFixtureIdentity, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { determined } from "./determinable";
-import { durableRuntimeEventTailSeq, FileRuntimeEventStore } from "./eventStore";
+import { durableRuntimeEventTailSeq, FileRuntimeEventStore, hostTurnRecordIdentity } from "./eventStore";
+import { adoptCodexRegistryHosts } from "./registry";
 import type { HandoffRow } from "./handoffQueue";
 import * as control from "./structuredHostControl";
-import { runStructuredHostRetirementSweep, trustedMcpCommand, trustedMcpEntry } from "./structuredHostRetirement";
+import { runStructuredHostRetirementSweep, trustedMcpCommand, trustedMcpEntry, type StructuredHostRetirementDependencies } from "./structuredHostRetirement";
 
 const identities: ProcessIdentity[] = [], roots: string[] = [], registries: AgentRegistry[] = [];
+const children = new Map<ChildProcess, ProcessIdentity>();
+const identityKey = (identity: ProcessIdentity) => `${identity.pid}:${identity.startIdentity}`;
 const originalMcpRoot = process.env.LLV_MCP_RUNTIME_ROOT;
+const originalStateDirectory = process.env.LLV_STATE_DIR;
 // Provenance probes have a one-second deadline and can retry. Give recovery
 // more than one attempt before fixture teardown ends any remaining children.
 const MCP_PROOF_WAIT_MS = 5_000;
 afterEach(async () => {
   if (originalMcpRoot === undefined) delete process.env.LLV_MCP_RUNTIME_ROOT;
   else process.env.LLV_MCP_RUNTIME_ROOT = originalMcpRoot;
-  const owned = new Map(identities.splice(0).map(identity => [`${identity.pid}:${identity.startIdentity}`, identity]));
+  if (originalStateDirectory === undefined) delete process.env.LLV_STATE_DIR;
+  else process.env.LLV_STATE_DIR = originalStateDirectory;
+  const direct = new Map([...children].map(([child, identity]) => [identityKey(identity), child]));
+  const owned = new Map([...children.values(), ...identities.splice(0)].map(identity => [identityKey(identity), identity]));
+  children.clear();
   if (process.platform === "linux") {
-    const pending = [...owned.values()].map(identity => identity.pid), visited = new Set<number>();
+    const pending = [...owned.values()], visited = new Set<number>();
     while (pending.length && visited.size < 512) {
-      const pid = pending.shift()!;
-      if (visited.has(pid)) continue;
+      const parent = pending.shift()!;
+      const { pid } = parent;
+      if (visited.has(pid) || processIdentityStatus(parent) !== "alive") continue;
       visited.add(pid);
       let tids: string[];
       try { tids = fs.readdirSync(`/proc/${pid}/task`).filter(tid => /^\d+$/.test(tid)); } catch { continue; }
@@ -41,22 +54,32 @@ afterEach(async () => {
           const childPid = Number(child);
           if (!Number.isSafeInteger(childPid) || childPid <= 0 || visited.has(childPid)) continue;
           const identity = captureProcessIdentity(childPid);
-          owned.set(`${identity.pid}:${identity.startIdentity}`, identity);
-          pending.push(childPid);
+          if (procBackend.readPpid(childPid) !== pid || processIdentityStatus(parent) !== "alive"
+            || processIdentityStatus(identity) !== "alive") continue;
+          owned.set(identityKey(identity), identity);
+          pending.push(identity);
         }
       }
     }
   }
-  for (const identity of [...owned.values()].reverse()) await stopFixtureIdentity(identity);
+  const errors: unknown[] = [];
+  for (const [key, identity] of [...owned].reverse()) {
+    try {
+      const child = direct.get(key);
+      if (child) await stopFixtureProcess(child);
+      else await stopFixtureIdentity(identity);
+    } catch (error) { errors.push(error); }
+  }
   clearAgentObservations();
   setAgentRegistryForTests(null);
   for (const registry of registries.splice(0)) registry.close();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  if (errors.length) throw new AggregateError(errors, "abandoned host fixture cleanup failed");
 });
 
-function start(args: string[]): ChildProcess {
-  const child = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "pipe"] });
-  identities.push(captureProcessIdentity(child.pid!));
+function start(args: string[], detached = false): ChildProcess {
+  const child = ownFixtureTree(spawn(process.execPath, args, { detached, stdio: ["ignore", "pipe", "pipe"] }));
+  children.set(child, captureProcessIdentity(child.pid!));
   return child;
 }
 async function ready(child: ChildProcess): Promise<number> {
@@ -64,8 +87,7 @@ async function ready(child: ChildProcess): Promise<number> {
     const timer = setTimeout(() => reject(new Error("fixture readiness deadline")), 4000);
       child.stdout!.once("data", chunk => { clearTimeout(timer); const value = String(chunk).trim();
         const pid = (() => { try { return JSON.parse(value).pid; } catch { return Number(value); } })();
-        const tracked = identities.findIndex(identity => identity.pid === child.pid);
-        if (tracked >= 0) identities[tracked] = captureProcessIdentity(child.pid!);
+        children.set(child, captureProcessIdentity(child.pid!));
         resolve(pid); });
     child.once("exit", code => { clearTimeout(timer); reject(new Error(`fixture exited before ready: ${code}`)); });
   });
@@ -138,12 +160,212 @@ const reconcile = `
     { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") });
   const service = new AgentStateService({ registry, now: () => Number(process.argv[2]),
     owns: () => true, process: observeAgentProcess, memory: () => null, release: "fixture", publish: async () => true });
-  await service.request(); service.stop(); registry.close();
+  await service.request();
+  console.log(service.cache.counters.payloadBytes);
+  service.stop(); registry.close();
 `;
 
-for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "oversized-stale-terminal", "oversized-stale-terminal-unheld", "oversized-stale-terminal-abandoned", "oversized-unanchored-terminal", "oversized-closed", "oversized-open", "oversized-unknown", "oversized-unknown-recent", "oversized-open-live-owner", "oversized-unknown-live-owner", "oversized-delivered", "oversized-pending-image", "oversized-uncertain-image", "oversized-pending-text", "oversized-invalid", "unflushed-dead-owner", "unflushed-open-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone"] as const) {
+test.skipIf(process.platform !== "linux")("Codex adoption refuses stale oversized-turn ledger proof with assigned delivery", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-adoption-ledger-race-")); roots.push(root);
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  const host = start(["--eval", "console.log(process.pid); setInterval(()=>{},1000)"]);
+  await ready(host);
+  const identity = children.get(host)!;
+  const initial = fixtureRegistry(root, "codex", identity, null);
+  const entry = initial.entries[`codex:${FIXTURE_SESSION}`]!;
+  entry.status = "idle";
+  entry.structuredHost!.activeTurnRef = null;
+  entry.structuredHost!.eventCursor = 4;
+  const records = fixtureRecords("codex");
+  fs.writeFileSync(entry.artifactPath!, [...records.open,
+    { type: "response_item", payload: { type: "function_call_output", output: "x".repeat(5 * 1024 * 1024) } },
+    ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n");
+  fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+  fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(initial));
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  registries.push(registry); setAgentRegistryForTests(registry);
+  const delivery = registry.holdDelivery(FIXTURE_CONVERSATION, "accepted fixture delivery", "codex-adoption-ledger-race");
+  expect(delivery.state).toBe("assigned");
+  const ledgerDir = statePath("structured-host-events");
+  const ledger = new FileRuntimeEventStore(ledgerDir);
+  ledger.append(FIXTURE_SESSION, { kind: "turn-started", turnId: FIXTURE_TURN_ID, seq: 1 });
+  ledger.append(FIXTURE_SESSION, { kind: "item", turnId: FIXTURE_TURN_ID, phase: "completed", item: { output: "x".repeat(256 * 1024) }, seq: 2 });
+  ledger.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: FIXTURE_TURN_ID, status: "completed", seq: 3 });
+  ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 4 });
+
+  setSystemTime(new Date(FIXTURE_NOW + 48 * 3_600_000));
+  const service = new AgentStateService({ registry, now: () => FIXTURE_NOW + 48 * 3_600_000,
+    owns: () => true, process: observeAgentProcess, memory: () => null, release: "fixture", publish: async () => true });
+  try {
+    await service.request();
+    const projection = readAgentProjection(registry, subjectId(entry));
+    expect(projection?.facts.turn).toMatchObject({ determined: true, evidence: { source: "operation-ledger" } });
+    expect(projection).toMatchObject({ verdict: { state: "unowned", quality: "verified", missing: [] }, facts: {
+      process: { determined: true, value: { status: "alive", identity } }, owner: { determined: true, value: "absent" },
+      obligations: { determined: true, value: [`delivery:${delivery.state}`, "delivery-owner"] }, transcript: { determined: true },
+    } });
+    const provedLedger = projection!.facts.turn.evidence.ref;
+    const signals: NodeJS.Signals[] = [];
+    let advanced = false;
+    const terminate = control.terminateStructuredHostTree;
+    const stop = spyOn(control, "terminateStructuredHostTree").mockImplementation((ref, dependencies) => terminate(ref, {
+      ...dependencies,
+      terminateOwnedHost: async () => false,
+      graceMs: 20,
+      deadlineMs: 200,
+      persistCapturedTree: async identities => {
+        const captured = await dependencies!.persistCapturedTree!(identities);
+        if (captured && !advanced) {
+          ledger.append(FIXTURE_SESSION, { kind: "turn-started", turnId: "newer-turn", seq: 5 });
+          advanced = true;
+          expect(hostTurnRecordIdentity(FIXTURE_SESSION)).not.toBe(provedLedger);
+        }
+        return captured;
+      },
+      signal: (pid, signal) => {
+        signals.push(signal);
+        process.kill(pid, signal);
+      },
+    }));
+    try {
+      await adoptCodexRegistryHosts(registry, async () => { throw new Error("unexpected adoption"); },
+        { NODE_ENV: "test", LLV_STRUCTURED_HOSTS: "1" }, () => true);
+    } finally { stop.mockRestore(); }
+    expect(advanced).toBe(true);
+    expect(signals).toEqual([]);
+    expect(processIdentityStatus(identity)).toBe("alive");
+    expect(registry.readOnlySnapshot().heldDeliveries[delivery.id]).toMatchObject({ state: "assigned", generationId: FIXTURE_SESSION });
+  } finally {
+    service.stop();
+    setSystemTime();
+  }
+}, 20_000);
+
+for (const scenario of ["settled", "late-native-flush", "idle-before-terminal", "idle-checkpoint", "historical-active", "newer-active", "ledger-limit", "mismatched-checkpoint", "open", "pending-delivery", "changed-ledger", "changed-after-capture", "retry"] as const) {
+  test.skipIf(process.platform !== "linux")(`retirement of oversized Codex rollout with host ledger: ${scenario}`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-ledger-fixture-")); roots.push(root);
+    process.env.LLV_STATE_DIR = path.join(root, "state");
+    const host = start(["--eval", "console.log(process.pid); setInterval(()=>{},1000)"]);
+    await ready(host);
+    const identity = children.get(host)!;
+    const file = fixtureRegistry(root, "codex", identity, null);
+    const entry = file.entries[`codex:${FIXTURE_SESSION}`]!;
+    entry.status = "idle";
+    entry.structuredHost!.activeTurnRef = null;
+    const largeLedger = scenario === "idle-checkpoint" || scenario === "ledger-limit" || scenario === "idle-before-terminal" || scenario === "newer-active";
+    entry.structuredHost!.eventCursor = scenario === "idle-checkpoint" || scenario === "idle-before-terminal" || scenario === "historical-active" ? 4 : scenario === "newer-active" ? 5 : 3;
+    const records = fixtureRecords("codex");
+    const open = scenario === "open";
+    const text = [...records.open, ...(open ? [{ type: "event_msg", payload: { type: "task_started", turn_id: "newer-turn" } }] : []),
+      { type: "response_item", payload: { type: "function_call_output", output: "x".repeat(5 * 1024 * 1024) } },
+      ...records.close].map(row => JSON.stringify(row)).join("\n") + "\n";
+    fs.writeFileSync(entry.artifactPath!, text);
+    fs.utimesSync(entry.artifactPath!, new Date(FIXTURE_NOW), new Date(FIXTURE_NOW));
+    fs.writeFileSync(path.join(root, "registry.json"), JSON.stringify(file));
+    const ledgerDir = statePath("structured-host-events");
+    const ledgerPath = path.join(ledgerDir, `${FIXTURE_SESSION}.jsonl`);
+    const ledger = new FileRuntimeEventStore(ledgerDir);
+    const writeLedger = () => {
+      ledger.append(FIXTURE_SESSION, { kind: "turn-started", turnId: FIXTURE_TURN_ID, seq: 1 });
+      if (open) ledger.append(FIXTURE_SESSION, { kind: "turn-started", turnId: "newer-turn", seq: 2 });
+      else if (largeLedger) ledger.append(FIXTURE_SESSION, { kind: "item", turnId: FIXTURE_TURN_ID, phase: "completed",
+        item: { output: "x".repeat(256 * 1024) }, seq: 2 });
+      else if (scenario === "settled" || scenario === "late-native-flush") {
+        ledger.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: FIXTURE_TURN_ID, status: "completed", seq: 2 });
+        ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 3 });
+      } else if (!largeLedger) ledger.append(FIXTURE_SESSION, { kind: "session-status", status: scenario === "mismatched-checkpoint" || scenario === "historical-active" ? "active" : "idle", seq: 2 });
+      if (scenario === "idle-before-terminal") ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 3 });
+      if (scenario !== "settled" && scenario !== "late-native-flush") {
+        ledger.append(FIXTURE_SESSION, { kind: "turn-ended", turnId: FIXTURE_TURN_ID, status: "completed", seq: scenario === "idle-before-terminal" ? 4 : 3 });
+      }
+      if (scenario === "idle-checkpoint") ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 4 });
+      if (scenario === "historical-active") ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 4 });
+      if (scenario === "newer-active") {
+        ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "idle", seq: 4 });
+        ledger.append(FIXTURE_SESSION, { kind: "session-status", status: "active", seq: 5 });
+      }
+      const stamp = new Date(FIXTURE_NOW + (scenario === "late-native-flush" ? 1000 : 2000));
+      fs.utimesSync(ledgerPath, stamp, stamp);
+      if (scenario === "late-native-flush") {
+        const laterNativeFlush = new Date(FIXTURE_NOW + 2000);
+        fs.utimesSync(entry.artifactPath!, laterNativeFlush, laterNativeFlush);
+      }
+    };
+    if (scenario !== "retry") writeLedger();
+    const now = FIXTURE_NOW + (open || scenario === "late-native-flush" || scenario === "ledger-limit" || scenario === "retry" ? 7 : 1) * 3_600_000;
+    const reconcileOnce = async () => {
+      const successor = Bun.spawn([process.execPath, "--eval", reconcile, root, String(now), ""], { stdout: "pipe", stderr: "pipe" });
+      identities.push(captureProcessIdentity(successor.pid));
+      const [exit, stdout, stderr] = await Promise.all([successor.exited, new Response(successor.stdout).text(), new Response(successor.stderr).text()]);
+      expect(stderr).toBe(""); expect(exit).toBe(0);
+      expect(Number(stdout.trim())).toBeGreaterThan(0);
+      expect(Number(stdout.trim())).toBeLessThanOrEqual(4 * 1024 * 1024 + 64);
+    };
+    await reconcileOnce();
+    if (scenario === "historical-active") await reconcileOnce();
+    const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined,
+      { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") });
+    registries.push(registry); setAgentRegistryForTests(registry);
+    if (scenario === "pending-delivery") registry.holdDelivery(FIXTURE_CONVERSATION, "fixture work", "fixture-held-message");
+    const deps: StructuredHostRetirementDependencies = { snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
+      now: () => now, publicationState: () => "ready", handoffRows: () => determined([]),
+      realtimeBound: () => determined(false), orchestratorSeatConversations: () => determined(new Set<string>()),
+      revokedSeatConversations: () => determined(new Set<string>()), readCursor: () => null, writeCursor: () => {}, graceMs: 50,
+      ppidMap: () => new Map(), processMemory: () => new Map(), treePss: () => ({ bytes: 0, measuredProcesses: 1 }) };
+    const reopenLedger = () => ledger.append(FIXTURE_SESSION, { kind: "turn-started", turnId: "newer-turn", seq: 4 });
+    const signals: number[] = [];
+    const terminate = control.terminateStructuredHostTree;
+    const stop = spyOn(control, "terminateStructuredHostTree").mockImplementation((ref, dependencies) => terminate(ref, {
+      ...dependencies, terminateOwnedHost: async () => false, graceMs: 50, deadlineMs: 2000,
+      persistCapturedTree: async captured => {
+        const accepted = await dependencies!.persistCapturedTree!(captured);
+        if (scenario === "changed-after-capture") reopenLedger();
+        return accepted;
+      },
+      signal: (pid, signal) => { expect(pid).toBe(identity.pid); signals.push(pid); process.kill(pid, signal); },
+    }));
+    try {
+      if (scenario === "retry") {
+        const first = await runStructuredHostRetirementSweep(deps);
+        expect(first.refused).toMatchObject([{ clause: "turn-settled", undetermined: true, reason: "native record exceeds acquisition budget" }]);
+        expect(first.retired).toEqual([]);
+        writeLedger();
+        await reconcileOnce();
+      }
+      if (scenario === "changed-ledger") deps.treePss = async () => {
+        reopenLedger();
+        return { bytes: 0, measuredProcesses: 1 };
+      };
+      const result = await runStructuredHostRetirementSweep(deps);
+      if (scenario === "changed-after-capture") {
+        expect(result.failed).toMatchObject([{ error: "scope retirement target changed: verdict turn-settled: Codex host ledger settlement changed" }]);
+        expect(result.retired).toEqual([]);
+        expect(signals).toEqual([]);
+        expect(processIdentityStatus(identity)).toBe("alive");
+        return;
+      }
+      expect(result.failed).toEqual([]);
+      if (["settled", "late-native-flush", "idle-before-terminal", "idle-checkpoint", "historical-active", "retry"].includes(scenario)) {
+        expect(result.refused).toEqual([]);
+        expect(result.retired).toHaveLength(1);
+        expect(result.retired[0]!.reason).toBeUndefined();
+        expect(signals).toContain(identity.pid);
+        expect(registry.hostEntry(entry.key)?.status).toBe("dead");
+      } else {
+        expect(result.retired).toEqual([]);
+        expect(result.refused).toMatchObject([{ clause: scenario === "pending-delivery" ? "handoff-queue-drained" : "turn-settled" }]);
+        if (scenario === "changed-ledger") expect(result.refused[0]?.changed).toBe(true);
+        expect(signals).toEqual([]);
+        expect(processIdentityStatus(identity)).toBe("alive");
+      }
+    } finally { stop.mockRestore(); }
+  }, 20_000);
+}
+
+for (const scenario of ["closed-hour", "open-62h", "open-76h", "passed-stage-open", "terminal-lane-open", "running-stage-open", "six-hours", "shipped-mcp", "stable-mcp", "bundled-mcp", "historical-mcp", "absent-owner", "legacy-owner", "legacy-dead-closed", "legacy-dead-open", "legacy-live-closed", "legacy-live-open", "foreign-owner-closed", "foreign-owner-open", "delivery", "held-delivery", "question", "tool", "mcp-tool", "preload-tool", "hidden-live-owner", "live-owner", "owner-proc-denied", "recent", "setup", "flags", "tree-denied", "capture-tool", "capture-delivery", "capture-owner", "capture-transcript", "oversized-stale-terminal", "oversized-stale-terminal-unheld", "oversized-stale-terminal-abandoned", "oversized-unanchored-terminal", "oversized-closed", "oversized-open", "oversized-unknown", "oversized-unknown-recent", "oversized-open-live-owner", "oversized-unknown-live-owner", "oversized-delivered", "oversized-pending-image", "oversized-uncertain-image", "oversized-pending-text", "oversized-invalid", "unflushed-dead-owner", "unflushed-open-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone"] as const) {
   test.skipIf(process.platform !== "linux")(`restart retirement: ${scenario}`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "abandoned-fixture-")); roots.push(root);
+    const pipelineOwnsHost = scenario === "passed-stage-open" || scenario === "terminal-lane-open" || scenario === "running-stage-open";
     fs.mkdirSync(path.join(root, "bin"));
     fs.mkdirSync(path.join(root, "dist"));
     fs.writeFileSync(path.join(root, "lifetime.mjs"), "setInterval(() => {}, 1000);");
@@ -191,22 +413,29 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     const mcpReady = path.join(root, "mcp-ready");
     if (scenario === "preload-tool") fs.writeFileSync(mcpToolPreload,
       `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(mcpReady)}, "non-MCP tool active"); await new Promise(() => { setInterval(() => {}, 1000); });`);
+    const idleMcp = ["shipped-mcp", "stable-mcp", "historical-mcp"].includes(scenario);
     const childArgs = ["mcp-tool", "preload-tool"].includes(scenario) ? ["--preload", mcpToolPreload, launchedScript]
-      : ["--preload", ["shipped-mcp", "stable-mcp", "historical-mcp"].includes(scenario) ? lifetimePreload : path.join(root, "lifetime.mjs"), launchedScript];
-    const realMcp = ["shipped-mcp", "stable-mcp", "historical-mcp", "mcp-tool"].includes(scenario);
+      : ["--preload", idleMcp ? lifetimePreload : path.join(root, "lifetime.mjs"), launchedScript];
+    const realMcp = idleMcp || scenario === "mcp-tool";
     const spawnChild = realMcp || ["tool", "bundled-mcp", "preload-tool"].includes(scenario);
     fs.writeFileSync(hostScript, `import {spawn} from "node:child_process"; import fs from "node:fs";
       const childEnv={...process.env}; delete childEnv.LLV_SPAWN_CAPABILITY;
-      const c=${spawnChild ? `spawn(process.execPath,${JSON.stringify(childArgs)},{detached:true,env:childEnv,stdio:${realMcp ? '["pipe","pipe","inherit"]' : '["ignore","pipe","inherit"]'}})` : "null"};
+      const c=${spawnChild ? `spawn(process.execPath,${JSON.stringify(childArgs)},{detached:${!idleMcp},env:childEnv,stdio:${realMcp ? '["pipe","pipe","inherit"]' : '["ignore","pipe","inherit"]'}})` : "null"};
       ${realMcp ? `let pending=""; c.stdout.on("data", chunk => { pending += chunk; for (;;) { const end=pending.indexOf("\\n"); if(end<0) break; const line=pending.slice(0,end); pending=pending.slice(end+1); try { const msg=JSON.parse(line); if(msg.id===1 && msg.result) fs.writeFileSync(${JSON.stringify(mcpReady)},"ready"); } catch {} } });
       c.stdin.write(JSON.stringify({jsonrpc:"2.0",id:1,method:"initialize",params:{protocolVersion:"2025-03-26",capabilities:{},clientInfo:{name:"retirement-fixture",version:"1"}}})+"\\n");` : ""}
+      process.on("SIGTERM", () => {
+        if (!c || c.exitCode !== null || c.signalCode !== null) process.exit(0);
+        // The retirement ladder signals the captured child tree. Stay
+        // alive to reap the direct child when that ladder ends it.
+        c.once("exit", () => process.exit(0));
+      });
       console.log(JSON.stringify({pid:c?.pid ?? process.pid}));
-      process.on("SIGTERM", () => { if (c?.stdin && !c.stdin.destroyed) c.stdin.end(); if (c) c.once("exit", () => process.exit(0)); else process.exit(0); });
       setInterval(()=>{},1000);`);
-    const host = start([hostScript]);
+    // Match the provider's process group for the shipped launcher and worker.
+    const host = start([hostScript], idleMcp);
     const mcpPid = await ready(host);
-    const identity = identities[identities.length - 1]!;
-    identities.push(captureProcessIdentity(mcpPid));
+    const identity = children.get(host)!;
+    if (mcpPid !== identity.pid) identities.push(captureProcessIdentity(mcpPid));
     if (scenario === "preload-tool") {
       const deadline = Date.now() + 4000;
       while (!fs.existsSync(mcpReady) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
@@ -228,13 +457,8 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     }
     const predecessor = start(["--eval", "console.log(process.pid); setInterval(()=>{},1000)"]);
     await ready(predecessor);
-    const owner = identities[identities.length - 1]!;
-    if (scenario !== "hidden-live-owner") {
-      await stopFixtureIdentity(owner);
-      if (predecessor.exitCode === null && predecessor.signalCode === null) {
-        await new Promise<void>(resolve => predecessor.once("exit", () => resolve()));
-      }
-    }
+    const owner = children.get(predecessor)!;
+    if (scenario !== "hidden-live-owner") await stopFixtureProcess(predecessor);
     const file = fixtureRegistry(root, "codex", identity, ["absent-owner", "oversized-stale-terminal-unheld"].includes(scenario) ? null
       : scenario === "hidden-live-owner" ? owner
         : ["legacy-dead-closed", "legacy-dead-open"].includes(scenario) ? { pid: owner.pid, startIdentity: owner.startIdentity }
@@ -246,6 +470,22 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
           : owner);
     const entry = file.entries[`codex:${FIXTURE_SESSION}`]!;
     entry.structuredHostOperationId = null;
+    if (pipelineOwnsHost) {
+      process.env.LLV_STATE_DIR = path.join(root, "state");
+      const lane = buildPipeline({ id: "abandoned-stage", task: "Fixture", project: "fixture", repoDir: "/fixture", srcPath: null, srcConversationId: null,
+        now: new Date(FIXTURE_NOW - 1000).toISOString(), stages: [{ id: "review", kind: "run", prompt: "Review", next: null,
+          effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-only", promptScaffold: null } }] });
+      const passed = scenario !== "running-stage-open";
+      lane.state = scenario === "terminal-lane-open" ? "completed" : "running";
+      if (lane.state === "completed") lane.cursor = null;
+      lane.runs[0]!.attempts = [{
+        n: 1, state: passed ? "passed" : "running", effectiveRole: lane.stages[0]!.effectiveRole, launchId: null,
+        conversationId: FIXTURE_CONVERSATION, sessionId: FIXTURE_SESSION, agentPath: entry.artifactPath, paneId: null,
+        flowId: null, startedAt: lane.createdAt, completedAt: passed ? new Date(FIXTURE_NOW).toISOString() : null,
+        input: null, activatedBy: null, output: null, error: null, verdict: passed ? { status: "pass", findings: [] } : null,
+      }];
+      savePipelines([lane]);
+    }
     if (scenario === "oversized-stale-terminal-unheld") entry.structuredHost!.activeTurnRef = null;
     if (scenario === "question") entry.structuredHost!.pendingAttention = ["fixture-question"];
     if (scenario === "flags") entry.structuredHost!.activeFlags = ["fixture-active-work"];
@@ -285,7 +525,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     }
     const hours = ["closed-hour", "unflushed-dead-owner", "unflushed-live-owner", "unflushed-capture-owner", "unflushed-measurement-exit", "unflushed-already-gone",  "legacy-owner", "legacy-dead-closed", "legacy-live-closed", "foreign-owner-closed", "oversized-closed", "oversized-stale-terminal", "oversized-stale-terminal-unheld", "oversized-unanchored-terminal"].includes(scenario) ? 1
       : ["recent", "oversized-unknown-recent"].includes(scenario) ? 6 - 1 / 60
-      : scenario === "six-hours" ? 6 : scenario === "open-76h" ? 76 : 62;
+      : scenario === "six-hours" || pipelineOwnsHost ? 6 : scenario === "open-76h" ? 76 : 62;
     const now = FIXTURE_NOW + hours * 3_600_000;
     const successor = Bun.spawn([process.execPath, "--eval", reconcile, root, String(now), scenario === "hidden-live-owner" ? String(owner.pid) : ""], { stdout: "pipe", stderr: "pipe" });
     identities.push(captureProcessIdentity(successor.pid));
@@ -296,9 +536,12 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     registries.push(registry); setAgentRegistryForTests(registry);
     if (scenario === "held-delivery") registry.holdDelivery(FIXTURE_CONVERSATION, "fixture work", "fixture-held-message");
     const original = control.terminateStructuredHostTree;
-    let captures = 0, signals = 0, capturedTree: readonly ProcessIdentity[] = [];
+    let captures = 0, capturedTree: readonly ProcessIdentity[] = [];
+    const signalTargets: number[] = [];
     const stop = spyOn(control, "terminateStructuredHostTree").mockImplementation((ref, dependencies) => original(ref, {
-      ...dependencies, terminateOwnedHost: async () => false, graceMs: 50, deadlineMs: 2000,
+      ...dependencies, terminateOwnedHost: async () => false,
+      // Allow the real launcher time to reap its worker during group shutdown.
+      graceMs: idleMcp ? 2000 : 50, deadlineMs: idleMcp ? 4000 : 2000,
       persistCapturedTree: async tree => {
         capturedTree = tree;
         const accepted = await dependencies!.persistCapturedTree!(tree);
@@ -308,7 +551,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
           await ready(tool);
           // Enrol a fixture-owned tool as a newly retained member, exactly as
           // a child found during captured-tree expansion would be enrolled.
-          expect(registry.recordStructuredTerminationSurvivors(entry.key, identity, [...tree, identities[identities.length - 1]!])).toBe(true);
+          expect(registry.recordStructuredTerminationSurvivors(entry.key, identity, [...tree, children.get(tool)!])).toBe(true);
         }
         if (["capture-owner", "unflushed-capture-owner"].includes(scenario)) registry.agentStateWrite(rows => {
           rows.entries[`codex:${FIXTURE_SESSION}`]!.claimOwner = `structured-host:${JSON.stringify(captureProcessIdentity(process.pid))}`;
@@ -317,7 +560,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         if (scenario === "capture-transcript") fs.appendFileSync(entry.artifactPath!, '{"type":"fixture-write"}\n');
         return accepted;
       },
-      signal: (pid, signal) => { signals++; process.kill(pid, signal); },
+      signal: (pid, signal) => { signalTargets.push(pid); process.kill(pid, signal); },
     }));
     const read = fs.readdirSync.bind(fs);
     const denied = scenario === "tree-denied" ? spyOn(fs, "readdirSync").mockImplementation(((pathname: fs.PathLike, ...args: unknown[]) => {
@@ -326,6 +569,10 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
     }) as typeof fs.readdirSync) : null;
     const stat = fs.statSync.bind(fs);
     const persisted = Object.values(registry.readOnlySnapshot().agentStates ?? {})[0];
+    if (pipelineOwnsHost) {
+      expect(persisted?.facts.owner).toMatchObject({ determined: true, value: "absent" });
+      expect(persisted?.facts.turn).toMatchObject({ determined: true, value: { state: "open", nativeId: FIXTURE_TURN_ID } });
+    }
     if (scenario === "oversized-closed") expect(persisted?.facts.turn).toMatchObject({ determined: true, value: { state: "closed", nativeId: FIXTURE_TURN_ID } });
     if (["oversized-open", "oversized-open-live-owner"].includes(scenario)) expect(persisted?.facts.turn).toMatchObject({ determined: true, value: { state: "open", nativeId: null } });
     if (["oversized-unknown", "oversized-unknown-recent", "oversized-unknown-live-owner"].includes(scenario)) {
@@ -344,12 +591,9 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         predecessorGeneration: null, successorGeneration: null, replayedDeliveryIds: [], interruptionOutcome: null,
         lastError: null, enqueuedAt: new Date(FIXTURE_NOW).toISOString(), updatedAt: new Date(FIXTURE_NOW).toISOString() };
       if (realMcp) expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(true);
-      const exitHost = async () => {
-        await stopFixtureIdentity(identity);
-        if (host.exitCode === null && host.signalCode === null) await new Promise<void>(resolve => host.once("exit", () => resolve()));
-      };
+      const exitHost = () => stopFixtureProcess(host);
       if (scenario === "unflushed-already-gone") await exitHost();
-      const report = await runStructuredHostRetirementSweep({ snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
+      const sweepDependencies: StructuredHostRetirementDependencies = { snapshot: () => registry.readOnlySnapshot(), requireAgentState: true,
         now: () => now, publicationState: () => "ready", handoffRows: () => determined(scenario === "delivery" ? [row] : []),
         durableEventTail: sessionId => durableRuntimeEventTailSeq(sessionId, path.join(root, "events")), realtimeBound: () => determined(false),
         orchestratorSeatConversations: () => determined(new Set<string>()), revokedSeatConversations: () => determined(new Set<string>()),
@@ -361,19 +605,22 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
             return { bytes: null, measuredProcesses: 0 };
           },
         } : {}),
-      });
-      if (["shipped-mcp", "stable-mcp", "historical-mcp"].includes(scenario)) {
-        expect(report.failed).toMatchObject([{ error: "scope retirement target changed: verdict turn-settled: turn native-turn-one is in flight" }]);
-        expect(report.retired).toEqual([]);
-        return;
+      };
+      if (scenario === "passed-stage-open") {
+        const kept = await runStructuredHostRetirementSweep({ ...sweepDependencies, idleMs: 7 * 3_600_000 });
+        expect(kept.refused).toMatchObject([{ clause: "transcript-idle" }]);
+        expect(kept.retired).toEqual([]);
+        expect(captures).toBe(0);
+        expect(signalTargets).toEqual([]);
       }
+      const report = await runStructuredHostRetirementSweep(sweepDependencies);
       if (["hidden-live-owner", "preload-tool", "legacy-dead-closed", "legacy-dead-open"].includes(scenario)) {
-        console.log(JSON.stringify({ probe: scenario, retired: report.retired.length, signals, captures }));
+        console.log(JSON.stringify({ probe: scenario, retired: report.retired.length, signals: signalTargets.length, captures }));
       }
       if (["unflushed-measurement-exit", "unflushed-already-gone"].includes(scenario)) {
         expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
         expect(report.retired).toEqual([]); expect(report.gone).toHaveLength(1);
-        expect(captures).toBe(0); expect(signals).toBe(0);
+        expect(captures).toBe(0); expect(signalTargets).toEqual([]);
         expect(registry.hostEntry(entry.key)).toMatchObject({ status: "dead", claimOwner: null, structuredHost: null });
         expect(events.load(FIXTURE_SESSION)).toEqual(eventsBefore);
         const unflushed = { cursor: 0, tail: 2, ownerPid: owner.pid,
@@ -385,12 +632,13 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         expect(journal.gone[0].unflushedEvents).toEqual(unflushed);
         return;
       }
-      const eligible = ["closed-hour", "unflushed-dead-owner", "unflushed-open-dead-owner", "open-62h", "open-76h", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner",
+      const eligible = ["closed-hour", "unflushed-dead-owner", "unflushed-open-dead-owner", "open-62h", "open-76h", "passed-stage-open", "terminal-lane-open", "running-stage-open", "six-hours", "shipped-mcp", "stable-mcp", "historical-mcp", "absent-owner",
         "oversized-closed", "oversized-open", "oversized-unknown", "oversized-delivered", "oversized-stale-terminal-abandoned"].includes(scenario);
       if (eligible) {
         expect(report.failed).toEqual([]); expect(report.refused).toEqual([]);
-        expect(report.retired).toHaveLength(1); expect(captures).toBeGreaterThan(0); expect(signals).toBeGreaterThan(0);
-        if (realMcp) {
+        expect(report.retired).toHaveLength(1); expect(captures).toBeGreaterThan(0); expect(signalTargets.length).toBeGreaterThan(0);
+        if (idleMcp) {
+          expect(signalTargets).toEqual([-identity.pid]);
           expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(false);
           expect(capturedTree.some(member => member.pid === mcpPid)).toBe(true);
         }
@@ -408,9 +656,9 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
             console.log(JSON.stringify([report.retired[0].unflushedEvents,
               JSON.parse(journal.at(-1)).retired[0].unflushedEvents]));
           `, statePath("host-retirement-report.json"), statePath("host-retirement-journal.ndjson")], { stdout: "pipe", stderr: "pipe" });
-          const replayed = await new Response(reader.stdout).json();
-          expect(await reader.exited).toBe(0);
-          expect(replayed).toEqual([report.retired[0]!.unflushedEvents, report.retired[0]!.unflushedEvents]);
+          const [readerExit, replayed] = await Promise.all([reader.exited, new Response(reader.stdout).text()]);
+          expect(readerExit).toBe(0);
+          expect(JSON.parse(replayed)).toEqual([report.retired[0]!.unflushedEvents, report.retired[0]!.unflushedEvents]);
         }
         if (!["closed-hour", "unflushed-dead-owner", "oversized-closed"].includes(scenario)) {
           expect(report.retired[0]!.reason).toBe("abandoned turn");
@@ -422,7 +670,7 @@ for (const scenario of ["closed-hour", "open-62h", "open-76h", "six-hours", "shi
         expect(procBackend.pidAlive(identity.pid) && !procBackend.processExited(identity.pid)).toBe(false);
         expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(false);
       } else {
-        expect(report.retired).toEqual([]); expect(signals).toBe(0);
+        expect(report.retired).toEqual([]); expect(signalTargets).toEqual([]);
         expect(procBackend.pidAlive(identity.pid)).toBe(true);
         if (scenario === "hidden-live-owner") expect(() => process.kill(owner.pid, 0)).not.toThrow();
         if (scenario === "preload-tool") expect(procBackend.pidAlive(mcpPid) && !procBackend.processExited(mcpPid)).toBe(true);

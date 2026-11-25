@@ -595,14 +595,14 @@ function spawnCard(
   );
   return {
     path: `spawn:${receipt.launchId}`,
-    root: receipt.engine === "codex" ? "codex-sessions" : receipt.engine === "copilot" ? "copilot-sessions" : "claude-projects",
+    root: receipt.engine === "codex" ? "codex-sessions" : receipt.engine === "copilot" ? "copilot-sessions" : receipt.engine === "antigravity" ? "antigravity-sessions" : "claude-projects",
     name: `spawn:${receipt.launchId}`,
     project: attribution.project ?? path.basename(receipt.cwd),
     ...(projectOwnership ? { projectOwnership } : {}),
     cwd: receipt.cwd,
     projectRoot: projectRootForCwd(receipt.cwd) ?? null,
     ...(attribution.worktree ? { worktree: attribution.worktree } : {}),
-    title: receipt.launchProfile.title ?? (receipt.engine === "codex" ? "Codex" : receipt.engine === "copilot" ? "Copilot" : "Claude"),
+    title: receipt.launchProfile.title ?? (receipt.engine === "codex" ? "Codex" : receipt.engine === "copilot" ? "Copilot" : receipt.engine === "antigravity" ? "Antigravity" : "Claude"),
     engine: receipt.engine,
     kind: "session",
     fmt: receipt.engine,

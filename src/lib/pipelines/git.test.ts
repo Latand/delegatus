@@ -21,6 +21,9 @@ import { shortId } from "@/lib/shortIds";
 import { publicationPushBudgetMs } from "./gateBudget";
 import { recoverablePublication } from "./publicationHistory";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
+import { publicationCheckBinding, writePublicationCheckReceipt } from "../git/publicationCheckReceipt";
+import { gateAdmissionInterpreter } from "../runtime/gateAdmissionLauncher";
+import { PUBLICATION_LAUNCH_PROOF_ENV, publicationLaunchDigest } from "../runtime/cpuAdmission";
 
 test("delivery remote resolution distinguishes absence, read failures and relative push aliases", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-remote-"));
@@ -95,37 +98,61 @@ test("an unpinned base without origin resolves local main without fetching", asy
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+function publicationChildReachedCloseBarrier(markerExists: boolean, commandFinished: boolean): boolean {
+  return markerExists && !commandFinished;
+}
+
+test("lane-close barrier rejects a publication marker from an expired probe", () => {
+  expect(publicationChildReachedCloseBarrier(true, true)).toBe(false);
+});
+
 test.each(["probe", "push-reply"] as const)("closing a lane during a real publication %s fences its outcome", async (phase) => {
   const box = await publishSandbox();
   const { patchPipeline, defaultPipelinePorts } = await import("./engine");
   const { registerPipelineTick } = await import("./controllerSignal");
-  const restoreTick = registerPipelineTick(async () => {});
-  const head = await box.commit("accepted.txt", "accepted\n");
+  const entered = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
   const bin = path.join(box.root, "bin"); fs.mkdirSync(bin);
-  const entered = path.join(bin, "entered"), released = path.join(bin, "released");
-  const gitBinary = Bun.which("git")!;
+  const enteredPath = path.join(box.root, "publish-entered");
+  const releasedPath = path.join(box.root, "publish-released");
+  const gitBinary = Bun.which("git", { PATH: process.env.PATH });
+  if (!gitBinary) throw new Error("git is unavailable on the sanitized PATH");
   fs.writeFileSync(path.join(bin, "git"), phase === "probe"
     ? '#!/bin/sh\nif [ "$1" = "ls-remote" ]; then touch "$PUBLISH_ENTERED"; while [ ! -f "$PUBLISH_RELEASED" ]; do sleep 0.01; done; fi\nexec "$PUBLISH_GIT" "$@"\n'
     : '#!/bin/sh\nif [ "$1" = "push" ]; then "$PUBLISH_GIT" "$@" || exit $?; touch "$PUBLISH_ENTERED"; while [ ! -f "$PUBLISH_RELEASED" ]; do sleep 0.01; done; exit 0; fi\nexec "$PUBLISH_GIT" "$@"\n', { mode: 0o700 });
-  const previous = { PATH: process.env.PATH, PUBLISH_ENTERED: process.env.PUBLISH_ENTERED, PUBLISH_RELEASED: process.env.PUBLISH_RELEASED, PUBLISH_GIT: process.env.PUBLISH_GIT };
-  Object.assign(process.env, { PATH: `${bin}:${previous.PATH}`, PUBLISH_ENTERED: entered, PUBLISH_RELEASED: released, PUBLISH_GIT: gitBinary });
+  const restoreTick = registerPipelineTick(async () => {});
+  let publicationCommandFinished = false;
+  const exec: ExecPort = async (command, args, cwd, env, options) => {
+    const resultPromise = realExec(command, args, cwd, command === "git" ? {
+      ...env,
+      PATH: `${bin}:${env?.PATH ?? process.env.PATH ?? ""}`,
+      PUBLISH_ENTERED: enteredPath,
+      PUBLISH_RELEASED: releasedPath,
+      PUBLISH_GIT: gitBinary,
+    } : env, options);
+    if (command === "git" && args[0] === (phase === "probe" ? "ls-remote" : "push")) {
+      void Promise.resolve(resultPromise).then(() => { publicationCommandFinished = true; }, () => { publicationCommandFinished = true; });
+      while (!fs.existsSync(enteredPath) && !publicationCommandFinished) await Bun.sleep(5);
+      if (fs.existsSync(enteredPath)) entered.resolve();
+    }
+    return resultPromise;
+  };
   let pending: ReturnType<typeof publishPipelineBranch> | undefined;
   try {
-    pending = publishPipelineBranch(box.subject, realExec, { acceptedSha: head });
-    // Wait for the actual Git boundary. Startup under a busy runner is outside
-    // the publication contract; the test's infrastructure deadline bounds it.
-    let settled = false;
-    void pending.then(() => { settled = true; }, () => { settled = true; });
-    while (!fs.existsSync(entered) && !settled) await Bun.sleep(5);
-    expect(fs.existsSync(entered)).toBe(true);
+    const head = await box.commit("accepted.txt", "accepted\n");
+    pending = publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(await Promise.race([entered.promise.then(() => true), pending.then(() => false)])).toBe(true);
+    // The marker alone is insufficient: an expired probe may create it as it
+    // exits. The child must still be live when the lane-close barrier begins.
+    expect(publicationChildReachedCloseBarrier(fs.existsSync(enteredPath), publicationCommandFinished)).toBe(true);
     const ports = { ...defaultPipelinePorts(), stopStageAgent: async () => ({ outcome: "not-running" as const }), paneAgentAlive: async () => false, stageHostResident: async () => false };
     expect((await patchPipeline(box.subject.id, { action: "close" }, ports)).error).toBeUndefined();
-    fs.writeFileSync(released, "");
+    fs.writeFileSync(releasedPath, "");
     expect(await pending).toMatchObject(phase === "probe" ? { ok: false, error: expect.stringContaining("superseded") }
       : { ok: true, remote: "unreachable", uncertain: true, detail: expect.stringContaining("superseded") });
     expect(findPipelineRecord(box.subject.id)!.state).toBe("closed");
     expect(findPipelineRecord(box.subject.id)!.publishedCommit).not.toBe(head);
-    const remote = await realExec(gitBinary, ["show-ref", "--verify", `refs/heads/${box.subject.branch}`], box.origin);
+    const remote = await realExec("git", ["show-ref", "--verify", `refs/heads/${box.subject.branch}`], box.origin);
     if (phase === "probe") expect(remote.code).not.toBe(0);
     else {
       expect(remote.code).toBe(0);
@@ -134,10 +161,9 @@ test.each(["probe", "push-reply"] as const)("closing a lane during a real public
       expect(findPipelineRecord(box.subject.id)!.delivery!.journal.at(-1)!.reason).toContain("reconcile");
     }
   } finally {
-    fs.writeFileSync(released, "");
+    fs.writeFileSync(releasedPath, "");
     try { await pending; }
     finally {
-      for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
       restoreTick(); fs.rmSync(box.root, { recursive: true, force: true });
     }
   }
@@ -419,7 +445,7 @@ for (const advanceRemote of [false, true]) {
       (await git(subject.worktreeDir, "add", "stage.txt"));
       (await git(subject.worktreeDir, "commit", "-m", "accepted stage"));
       const accepted = (await git(subject.worktreeDir, "rev-parse", "HEAD"));
-      expect(await publishPipelineBranch(subject, realExec, { acceptedSha: accepted })).toEqual({ ok: true, sha: accepted, remote: "published" });
+      expect(await publishPipelineBranch(subject, realExec, { acceptedSha: accepted })).toMatchObject({ ok: true, sha: accepted, remote: "published" });
       expect((await git(repo, "ls-remote", "--heads", "origin", subject.delivery!.target.branch)).split(/\s+/)[0]).toBe(accepted);
       expect((await git(repo, "ls-remote", "--heads", "origin", `refs/heads/${subject.branch}`))).toBe("");
       // The remote can advance after publication's head probe and before push.
@@ -882,7 +908,8 @@ test.each(["direct", "provision"] as const)("portable base consumers fetch witho
     await git(source, "push", "origin", "main");
     const head = await git(source, "rev-parse", "HEAD");
     fs.mkdirSync(bin);
-    fs.symlinkSync(Bun.which("git")!, path.join(bin, "git"));
+    // Use the PATH sanitized by the test preload, since Bun.which defaults to the startup PATH.
+    fs.symlinkSync(Bun.which("git", { PATH: process.env.PATH })!, path.join(bin, "git"));
     expect(Bun.which("timeout", { PATH: bin })).toBeNull();
     expect(Bun.which("gtimeout", { PATH: bin })).toBeNull();
     const calls: Array<{ command: string; args: string[]; timeoutMs?: number }> = [];
@@ -2253,6 +2280,217 @@ test.each(["pure", "assertion", "privacy", "started", "cleanup"] as const)("admi
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 }, 60_000);
 
+test.each([1, 3] as const)("capability %i uses its own publication path and lands one push", async capability => {
+  const box = await publishSandbox();
+  const execPath = process.execPath;
+  const inheritedReceipt = process.env.LLV_GATE_PUBLICATION_RECEIPT;
+  const inheritedBun = process.env.LLV_GATE_BUN;
+  const containerRuntime = "/usr/local/bin/bun-container";
+  try {
+    const scripts = path.join(box.subject.worktreeDir, "scripts");
+    fs.mkdirSync(scripts);
+    fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// publication gate fixture\n");
+    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: capability }));
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "bun.lock"), "{}\n");
+    const head = await box.commit("change.txt", "accepted work\n");
+    expect(fs.existsSync(path.join(box.subject.worktreeDir, "node_modules"))).toBeFalse();
+    const runtime = capability === 3 ? containerRuntime : "bun";
+    const installs: string[] = [];
+    const preparations: string[] = [];
+    const pushes: number[] = [];
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      if (args[0] === "install") {
+        installs.push(command);
+        expect(cwd).toBe(box.subject.worktreeDir);
+        expect(args).toEqual(["install", "--frozen-lockfile", "--backend=copyfile"]);
+        expect(options?.inheritFd).toEqual(expect.any(Number));
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare") {
+        expect(installs).toEqual([runtime]);
+        preparations.push(command);
+        if (capability === 3 && process.platform === "linux") {
+          expect(gateAdmissionInterpreter(env?.LLV_GATE_BUN)).toBeNull();
+          expect(fs.readFileSync(env!.LLV_GATE_BUN!, "utf8")).toContain(`exec '${containerRuntime}'`);
+        }
+        writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(env!), "a".repeat(64), {}, 1, 123_456);
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (command === "git" && args[0] === "push") {
+        pushes.push(options?.timeoutMs ?? 0);
+      }
+      return realExec(command, args, cwd, env, options);
+    };
+    process.execPath = containerRuntime;
+    delete process.env.LLV_GATE_BUN;
+    process.env.LLV_GATE_PUBLICATION_RECEIPT = path.join(box.root, "inherited.json");
+    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(result).toMatchObject({ ok: true, sha: head, remote: "published", phaseTimings: { checksMs: 1, peakRssBytes: 123_456 } });
+    expect(findPipelineRecord(box.subject.id)?.delivery?.journal.at(-1)?.reason).toContain("peak RSS=123456B");
+    expect(preparations).toEqual([runtime]);
+    expect(pushes).toEqual([240_000]);
+    expect(await box.originHead()).toBe(head);
+  } finally {
+    if (inheritedReceipt === undefined) delete process.env.LLV_GATE_PUBLICATION_RECEIPT;
+    else process.env.LLV_GATE_PUBLICATION_RECEIPT = inheritedReceipt;
+    if (inheritedBun === undefined) delete process.env.LLV_GATE_BUN;
+    else process.env.LLV_GATE_BUN = inheritedBun;
+    process.execPath = execPath;
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test.skipIf(process.platform !== "linux")("the Viewer records the publication preparer it launches while it runs and removes the record after", async () => {
+  const box = await publishSandbox();
+  const lockDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-publication-launch-"));
+  const inheritedLock = process.env.LLV_GATE_LOCK_DIR;
+  const queueRows = () => {
+    const db = new Database(path.join(lockDir, "admission.sqlite"), { readonly: true });
+    try { return db.query<{ identity: string; operation: string; proof: string }, []>("SELECT identity, operation, proof FROM publication_launch_proofs").all(); }
+    finally { db.close(); }
+  };
+  try {
+    process.env.LLV_GATE_LOCK_DIR = lockDir;
+    const scripts = path.join(box.subject.worktreeDir, "scripts");
+    fs.mkdirSync(scripts);
+    fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// publication gate fixture\n");
+    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: 1 }));
+    const head = await box.commit("change.txt", "accepted work\n");
+    const barrier = path.join(lockDir, "release");
+    const observed: { pid?: number; rows?: { identity: string; operation: string; proof: string }[]; operation?: string; proof?: string } = {};
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      if (args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare") {
+        // A stand-in preparer that lives until the record has been read.
+        const running = realExec(process.execPath, ["-e", `while (!require("node:fs").existsSync(${JSON.stringify(barrier)})) await Bun.sleep(10);`], cwd, env, {
+          ...options, onSpawn: pid => { observed.pid = pid; options?.onSpawn?.(pid); } });
+        const until = Date.now() + 10_000;
+        while (Date.now() < until) {
+          try { if (queueRows().length) break; } catch { /* the table appears with the first record */ }
+          await Bun.sleep(10);
+        }
+        observed.rows = queueRows();
+        observed.operation = env?.LLV_GATE_PUBLICATION_ID;
+        observed.proof = env?.[PUBLICATION_LAUNCH_PROOF_ENV];
+        fs.writeFileSync(barrier, "release");
+        const result = await running;
+        expect(result.code, result.stderr).toBe(0);
+        writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, publicationCheckBinding(env!), "a".repeat(64), {}, 1, 1);
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(result).toMatchObject({ ok: true, sha: head });
+    expect(observed.operation).toEqual(expect.any(String));
+    // The secret reached the preparer's environment; the queue holds only its digest.
+    expect(observed.proof).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(observed.rows).toEqual([{ identity: expect.stringContaining(`"pid":${observed.pid},`), operation: observed.operation!, proof: publicationLaunchDigest(observed.proof!) }]);
+    expect(JSON.parse(observed.rows![0]!.identity).startIdentity).toStartWith(`${observed.pid}:`);
+    expect(queueRows()).toEqual([]);
+  } finally {
+    if (inheritedLock === undefined) delete process.env.LLV_GATE_LOCK_DIR;
+    else process.env.LLV_GATE_LOCK_DIR = inheritedLock;
+    fs.rmSync(lockDir, { recursive: true, force: true });
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test.skipIf(process.platform !== "linux")("capability 3 scopes a cold shared dependency install under in-image Bun", async () => {
+  const { setCpuPortsForTests } = await import("@/lib/runtime/cpuPlacement");
+  const box = await publishSandbox();
+  const execPath = process.execPath;
+  const cpu = process.env.LLV_AGENT_CPU;
+  const runtime = "/usr/local/bin/bun-container";
+  try {
+    const worktree = box.subject.worktreeDir;
+    fs.mkdirSync(path.join(worktree, "scripts"));
+    fs.writeFileSync(path.join(worktree, "scripts/local-gate.ts"), "// image gate fixture\n");
+    fs.writeFileSync(path.join(worktree, "scripts/local-gate-capabilities.json"), '{"publicationPrepare":3}\n');
+    fs.writeFileSync(path.join(worktree, "package.json"), '{"name":"delegatus-cli"}\n');
+    fs.writeFileSync(path.join(worktree, "bun.lock"), "{}\n");
+    const head = await box.commit(".gitignore", "node_modules\n");
+    expect(fs.existsSync(path.join(worktree, "node_modules"))).toBeFalse();
+    process.execPath = runtime;
+    process.env.LLV_AGENT_CPU = "auto";
+    setCpuPortsForTests({ probe: () => ({ kind: "available", systemdVersion: 255 }), workSlice: "test-agents-work.slice", runner: () => "", cpus: 24 });
+    const installs: string[][] = [];
+    const later: string[] = [];
+    const exec: ExecPort = (command, args, cwd, env, options) => {
+      const inner = command === "systemd-run" ? args.slice(args.indexOf("--") + 1) : [command, ...args];
+      if (inner[1] === "install") {
+        installs.push(inner);
+        expect(command).toBe("systemd-run");
+        expect(args).toContain("--slice=test-agents-work.slice");
+        expect(path.basename(cwd)).toMatch(/^building-[a-f0-9]{64}$/);
+        expect(options?.inheritFd).toEqual(expect.any(Number));
+        expect(options?.additionalInheritedFds).toEqual([expect.any(Number), expect.any(Number)]);
+        return { code: 1, stdout: "", stderr: "error: lockfile had changes" };
+      }
+      if (inner[1] === "scripts/local-gate.ts" || inner[1] === "push") later.push(inner[1]);
+      return realExec(command, args, cwd, env, options);
+    };
+    expect(await publishPipelineBranch(box.subject, exec, { acceptedSha: head })).toMatchObject({
+      ok: false, failure: { step: "preparing publication dependencies", code: 1, outputTail: expect.stringContaining("frozen lockfile does not match the manifest") },
+    });
+    expect(installs).toEqual([[runtime, "install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile", "--config=stage-install.toml"]]);
+    expect(later).toEqual([]);
+    expect(await box.originHead()).toBe("");
+  } finally {
+    setCpuPortsForTests(null);
+    if (cpu === undefined) delete process.env.LLV_AGENT_CPU; else process.env.LLV_AGENT_CPU = cpu;
+    process.execPath = execPath;
+    fs.rmSync(box.root, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test.each([true, false])("retired publication capability 2 refuses before any transport (gate script present=%s)", async guarded => {
+  const box = await publishSandbox();
+  try {
+    const original = await box.commit("change.txt", "previously published\n");
+    await git(box.subject.worktreeDir, "push", "origin", `HEAD:refs/heads/${box.subject.branch}`);
+    const scripts = path.join(box.subject.worktreeDir, "scripts");
+    fs.mkdirSync(scripts);
+    if (guarded) fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// retired gate fixture\n");
+    const head = await box.commit("scripts/local-gate-capabilities.json", '{"publicationPrepare":2}\n');
+    const unexpected: string[] = [];
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      if (command !== "git" || ["ls-remote", "fetch", "push"].includes(args[0]!)) unexpected.push([command, ...args].join(" "));
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(result).toEqual({ ok: false, error: "publication capability 2 is retired; update the checkout to current main" });
+    if (result.ok) throw new Error("expected terminal refusal");
+    expect(recoverablePublication(result)).toBeFalse();
+    expect(unexpected).toEqual([]);
+    expect(await box.originHead()).toBe(original);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+}, 60_000);
+
+test("prepared publication memory deferral retries without opening push transport", async () => {
+  const box = await publishSandbox();
+  try {
+    fs.mkdirSync(path.join(box.subject.worktreeDir, "scripts"));
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "scripts/local-gate.ts"), "// memory deferral fixture\n");
+    const head = await box.commit("scripts/local-gate-capabilities.json", '{"publicationPrepare":3}\n');
+    const pushes: string[][] = [];
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      if (args.includes("--publication-prepare")) {
+        return { code: 75, stdout: "PRIVACY GATE: PASS\n", stderr: "pre-push: publication memory admission deferred before checks started\nadmitted checks exited 75\n" };
+      }
+      if (args[0] === "push") pushes.push(args);
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(result).toMatchObject({ ok: false, outcome: "not-landed", failure: { code: 75, retryableDeadline: true, memoryAdmissionDeferred: true } });
+    if (result.ok) throw new Error("expected memory deferral");
+    expect(result.error.split("\n")[0]).toBe("publication memory admission deferred before checks started");
+    expect(recoverablePublication(result)).toBeTrue();
+    expect(pushes).toEqual([]);
+    expect(await box.originHead()).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+}, 60_000);
+
 test.each(["pure", "assertion", "cleanup"] as const)("publication timeout recovery preserves decisive hook evidence: %s", async kind => {
   const box = await publishSandbox();
   try {
@@ -2467,8 +2705,12 @@ store.leaveLessons({ request: ${JSON.stringify(request)}, source: { ...${JSON.st
     let damaged = false;
     const damage = () => {
       const database = new Database(path.join(publicationState, "state.sqlite"));
-      try { expect(database.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key LIKE 'r:%'").run(JSON.stringify({ kind: "rule", id: 7, rule })).changes).toBe(1); }
-      finally { database.close(); }
+      try {
+        database.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key LIKE 'r:%'")
+          .run(JSON.stringify({ kind: "rule", id: 7, rule }));
+        // Bun's run().changes also counts the privacy revision trigger.
+        expect(database.query<{ count: number }, []>("SELECT changes() AS count").get()).toEqual({ count: 1 });
+      } finally { database.close(); }
       damaged = true;
     };
     if (when === "before") damage();
@@ -2577,7 +2819,7 @@ test("stage reconciliation skips unrelated large main-only patches and still pub
     if (!result.ok) throw new Error(result.error);
     expect((await git(box.subject.worktreeDir, "rev-parse", `${result.sha}^{tree}`))).toBe(tree);
     expect((await git(box.subject.worktreeDir, "rev-list", "--parents", "-n", "1", result.sha))).toBe(`${result.sha} ${head} ${accepted}`);
-    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: result.sha })).toEqual({
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: result.sha })).toMatchObject({
       ok: true, sha: result.sha, remote: "published",
     });
     expect((await box.originHead())).toBe(result.sha);
@@ -3248,7 +3490,7 @@ test("publishPipelineBranch pushes the passed commit and confirms origin carries
     const passed = (await box.commit("stage.txt", "stage work\n"));
     expect((await box.originHead())).toBe("");
 
-    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: passed })).toEqual({ ok: true, sha: passed, remote: "published" });
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: passed })).toMatchObject({ ok: true, sha: passed, remote: "published" });
     expect((await box.originHead())).toBe(passed);
   } finally {
     fs.rmSync(box.root, { recursive: true, force: true });
@@ -3262,7 +3504,7 @@ test("publishPipelineBranch fast-forwards a branch it already published", async 
     expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: first })).toMatchObject({ ok: true, sha: first });
     const second = (await box.commit("two.txt", "two\n"));
 
-    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: second, publishedSha: first })).toEqual({ ok: true, sha: second, remote: "published" });
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: second, publishedSha: first })).toMatchObject({ ok: true, sha: second, remote: "published" });
     expect((await box.originHead())).toBe(second);
   } finally {
     fs.rmSync(box.root, { recursive: true, force: true });
@@ -3643,7 +3885,7 @@ test("the publication's dependency install and its push run without the Viewer's
       if (step) seen.set(step, { ...process.env, ...env });
       return step === "install" ? { code: 0, stdout: "", stderr: "" } : realExec(command, args, cwd, env, options);
     };
-    expect(await publishPipelineBranch(box.subject, exec, { acceptedSha: head })).toEqual({ ok: true, sha: head, remote: "published" });
+    expect(await publishPipelineBranch(box.subject, exec, { acceptedSha: head })).toMatchObject({ ok: true, sha: head, remote: "published" });
     expect([...seen.keys()].sort()).toEqual(["install", "push"]);
     for (const env of seen.values()) {
       for (const key of Object.keys(settings)) expect(env[key]).toBeUndefined();
@@ -3666,7 +3908,7 @@ test.each([undefined, "", "--max-old-space-size=2048 --no-warnings", "--max-old-
     await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
     if (options === undefined) { delete process.env.NODE_OPTIONS; delete process.env.LLV_GATE_MEM; }
     else { process.env.NODE_OPTIONS = options; process.env.LLV_GATE_MEM = "24G"; }
-    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: head })).toEqual({ ok: true, sha: head, remote: "published" });
+    expect(await publishPipelineBranch(box.subject, realExec, { acceptedSha: head })).toMatchObject({ ok: true, sha: head, remote: "published" });
     expect(fs.readFileSync(path.join(box.subject.worktreeDir, "hook-memory.txt"), "utf8"))
       .toBe(`${options ?? "--max-old-space-size=11264"}\n${options === undefined ? "14G" : "24G"}\n`);
   } finally {
@@ -3905,7 +4147,7 @@ test("publication pushes only the immutable accepted revision when the branch ad
     /* The local branch really did move on mid-publish ... */
     expect((await git(box.subject.worktreeDir, "rev-parse", "HEAD"))).toBe(racy!);
     /* ... and origin carries exactly the accepted revision, never the racy one. */
-    expect(published).toEqual({ ok: true, sha: accepted, remote: "published" });
+    expect(published).toMatchObject({ ok: true, sha: accepted, remote: "published" });
     expect((await box.originHead())).toBe(accepted);
   } finally {
     fs.rmSync(box.root, { recursive: true, force: true });
@@ -4004,7 +4246,7 @@ test("publication prepares dependencies and pushes, hooks included, from CPU wor
       if (inner[0] === "bun") return { code: 0, stdout: "", stderr: "" };
       return await realExec(inner[0]!, inner.slice(1), cwd, env, options);
     };
-    expect(await publishPipelineBranch(box.subject, scoped, { acceptedSha: head })).toEqual({ ok: true, sha: head, remote: "published" });
+    expect(await publishPipelineBranch(box.subject, scoped, { acceptedSha: head })).toMatchObject({ ok: true, sha: head, remote: "published" });
     const work = launches.filter(([command]) => command === "systemd-run").map((launch) => launch.slice(launch.indexOf("--") + 1, launch.indexOf("--") + 3));
     expect(work).toEqual([["bun", "install"], ["git", "push"]]);
     for (const launch of launches.filter(([command]) => command === "systemd-run")) expect(launch).toContain("--slice=test-agents-work.slice");
@@ -4062,7 +4304,7 @@ test("publication dependency preparation waits for CPU pressure, starts once in 
     expect(pushes).toEqual([]);
     // Ten seconds below the release threshold admit exactly one install.
     pressure = 5;
-    expect(await held).toEqual({ ok: true, sha: head, remote: "published" });
+    expect(await held).toMatchObject({ ok: true, sha: head, remote: "published" });
     expect(installs).toHaveLength(1);
     expect(installs[0]).toEqual(expect.arrayContaining(["--slice=test-agents-work.slice", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms", "CPUWeight=100"]));
     expect(pushes).toHaveLength(1);
@@ -4071,7 +4313,10 @@ test("publication dependency preparation waits for CPU pressure, starts once in 
     // A failed sample starts the install, still in its work scope.
     pressure = null;
     const sampled = await box.commit("sampled.txt", "sampled\n");
-    expect(await publishPipelineBranch(box.subject, scoped, { acceptedSha: sampled })).toEqual({ ok: true, sha: sampled, remote: "published" });
+    expect(await publishPipelineBranch(box.subject, scoped, { acceptedSha: sampled })).toEqual({
+      ok: true, sha: sampled, remote: "published",
+      phaseTimings: { preparationMs: 0, checksMs: 0, transportMs: expect.any(Number) },
+    });
     expect(installs).toHaveLength(2);
     expect(installs[1]).toContain("--slice=test-agents-work.slice");
 

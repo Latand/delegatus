@@ -27,8 +27,13 @@ import {
   tempSweepMaxAgeMs,
   tempSweepStatus,
   writableRoots,
+  attemptTempJournalPath,
+  finishTreeTrash,
+  removeTreeViaTrash,
+  readAttemptTempTrash,
   type ProcessScan,
 } from "./tempSweep";
+import { removeTreeWithinAttemptBudget } from "./runtime/attemptTempRemoval";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -53,6 +58,41 @@ function tempRoot(): string {
   made.push(directory);
   return directory;
 }
+
+test("a process restart resolves an inode-claimed quarantine and completes its journaled removal", async () => {
+  const scratch = tempRoot(), directory = path.join(scratch, "llv-stage-recovery"), trash = path.join(scratch, ".delegatus-trash-llv-stage-recovery-first");
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "payload"), "retained payload");
+  const stat = fs.lstatSync(directory), identity = `${stat.dev}:${stat.ino}`;
+  fs.renameSync(directory, trash);
+  const journal = attemptTempJournalPath(directory);
+  fs.writeFileSync(journal, JSON.stringify({ directory, trash, uid: stat.uid, identity, disposable: true }));
+  const failAfterClaim = async (target: string, started: () => void) => removeTreeWithinAttemptBudget(target, started,
+    (async () => { throw new Error("simulated process loss after inode claim"); }) as never, identity);
+  await expect(finishTreeTrash(journal, () => false, failAfterClaim, () => true, true, () => true, true)).rejects.toThrow("simulated process loss");
+  const recovered = readAttemptTempTrash(journal, scratch);
+  expect(recovered?.identity).toBe(identity);
+  expect(recovered?.trash).not.toBe(trash);
+  expect(fs.readFileSync(path.join(recovered!.trash, "payload"), "utf8")).toBe("retained payload");
+  expect(await finishTreeTrash(journal, () => false, undefined, () => true, true, () => true, true)).toBeTrue();
+  expect(fs.existsSync(journal)).toBeFalse();
+  expect(fs.readdirSync(scratch).filter(name => name.startsWith(".delegatus-trash-claim-"))).toEqual([]);
+});
+
+test.each(["repo-pipeline-fixture", "evidence-copy-fixture"])("a restarted removal completes a partial claim for %s", async name => {
+  const root = tempRoot(), directory = path.join(root, name), journal = path.join(root, `${name}.json`);
+  fs.mkdirSync(directory); fs.writeFileSync(path.join(directory, "partial"), "remove");
+  fs.writeFileSync(path.join(directory, "remaining"), "keep until replay");
+  const identity = `${fs.lstatSync(directory).dev}:${fs.lstatSync(directory).ino}`;
+  const interrupted = async (target: string, started: () => void) => removeTreeWithinAttemptBudget(target, started,
+    (async (_exe: string, args: string[], _opts: unknown) => {
+      fs.unlinkSync(path.join(args[2]!, "partial"));
+      throw new Error("owned remover interrupted");
+    }) as never, identity);
+  await expect(removeTreeViaTrash(directory, { journal, disposable: true, held: () => false, remove: interrupted })).rejects.toThrow("owned remover interrupted");
+  expect(await finishTreeTrash(journal, () => false, undefined, undefined, true, () => true, true)).toBeTrue();
+  expect(fs.existsSync(journal)).toBeFalse();
+  expect(fs.readdirSync(root).some(file => file.startsWith(".delegatus-trash-claim-"))).toBeFalse();
+});
 
 /** A directory with a few entries, every modification time `ageMs` in the past. */
 function aged(root: string, name: string, ageMs: number): string {
@@ -1071,10 +1111,10 @@ test("temp cleanup protects a live owner without loading full registry history",
   } finally {full.mockRestore();fs.rmSync(root,{recursive:true,force:true});}
 });
 
-test("a root owned by the attempt ledger is kept without a walk of its tree", async () => {
+test.each([false, true])("a registered attempt root skips inspection even when its marker write is interrupted (%s)", async marked => {
   const root = tempRoot();
   const owned = aged(root, "llv-stage-ledger", 2 * DAY), plain = aged(root, "llv-stage-plain", 2 * DAY);
-  fs.writeFileSync(path.join(owned, ".delegatus-attempt-owner"), "attempt-temp.sqlite\n");
+  if (marked) fs.writeFileSync(path.join(owned, ".delegatus-attempt-owner"), "attempt-temp.sqlite\n");
   fs.writeFileSync(path.join(owned, "payload"), "kept");
   const inspected: string[] = [], measured: string[] = [];
   const report = await sweepStaleTempDirs({ maxAgeMs: DAY, roots: [{ path: root, via: "" }],

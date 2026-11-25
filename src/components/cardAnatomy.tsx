@@ -6,7 +6,7 @@ import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
 import { hueFromId } from "./scheme/agentLinks";
-import { EngineBadge } from "./EngineMark";
+import { EngineBadge, EngineMark } from "./EngineMark";
 import { effortTint, effortTitle, engineBadge, fileModelLabel } from "./utils";
 
 /**
@@ -133,20 +133,21 @@ export function AccountSwitchChip({
  * shared so every compact card resolves identity the same way instead of
  * stacking an engine chip AND a model chip.
  */
-export function CardIdentityChip({ file, fontClassName = "text-[9.5px]" }: { file: FileEntry; fontClassName?: string }) {
+export function CardIdentityChip({ file, fontClassName = "text-[9.5px]", working = false }: { file: FileEntry; fontClassName?: string; working?: boolean }) {
   const badge = engineBadge(file);
   if (file.model) {
     return (
       <span
-        className={`min-w-0 truncate rounded-full px-1.5 py-0.5 font-mono font-semibold ${fontClassName}`}
+        className={`inline-flex min-w-0 items-center gap-1 truncate rounded-full px-1.5 py-0.5 font-mono font-semibold ${fontClassName}`}
         style={{ backgroundColor: effortTint(file).soft, color: effortTint(file).color }}
         title={[badge.label, effortTitle(file)].filter(Boolean).join(" · ")}
       >
-        {fileModelLabel(file)}
+        {file.engine === "antigravity" ? <EngineMark engine="antigravity" size={12} tone="engine" working={working} /> : null}
+        <span className="min-w-0 truncate">{fileModelLabel(file)}</span>
       </span>
     );
   }
   return (
-    <EngineBadge engine={file.engine} className={`px-1.5 py-0.5 font-bold ${fontClassName}`} title={effortTitle(file)} />
+    <EngineBadge engine={file.engine} className={`px-1.5 py-0.5 font-bold ${fontClassName}`} title={effortTitle(file)} working={working} />
   );
 }

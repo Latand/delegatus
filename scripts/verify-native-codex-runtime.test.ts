@@ -3,10 +3,23 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { nativeBatches } from "./verify-native-codex-runtime";
 
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("the native verifier gives host callback and MCP recovery contracts their own shared runs", () => {
+  const contracts = [
+    "src/lib/runtime/codexAppServerHost.test.ts",
+    "src/lib/runtime/codexAppServerHost.callbacks.test.ts",
+    "src/lib/runtime/codexAppServerHost.mcpRecovery.test.ts",
+  ];
+  for (const files of [nativeBatches().flat(), nativeBatches("--shared-only").flat()]) {
+    expect(files.filter(file => contracts.includes(file))).toEqual(contracts);
+  }
+  expect(nativeBatches("--engine-only").flat().filter(file => contracts.includes(file))).toEqual([]);
 });
 
 test.each(["success", "failure"])("the native verifier uses the project test timeout and retains the %s verdict", outcome => {

@@ -116,7 +116,7 @@ Retain every existing assertion and parameterized case in these consumers:
 | `scripts/local-gate.publication.test.ts` | Cold/warm native preparation; installation/deadline/custody refusal; cleanup-owned PATH regression; one-shot consumption; all binding/input drift variants; privacy refresh, missing data and symlinks; drift during checks and final validation. |
 | `scripts/local-gate.transport.test.ts` | Cold native publication; credential-order red control; legacy capability fallback; measured deadlines; `prepared publication preserves custody and reconciliation on` pause, epoch, owner, head, authentication and lost reply. |
 | `src/lib/pipelines/engine.publication.test.ts` | All existing controller cases, especially in-flight publication, remote adoption ownership races and refused-push recovery. |
-| `src/lib/pipelines/engine.settlement.test.ts` | `an undispatched same-head retry keeps its publication receipt without publishing again`, plus unresolved-evidence and invalidation variants. Keep #3743 behavior. |
+| `src/lib/pipelines/engine.settlement.publicationRetry.test.ts` | `an undispatched same-head retry keeps its publication receipt without publishing again`, plus unresolved-evidence and invalidation variants. Keep #3743 behavior. |
 
 Recheck ownership before each renewed consumer. Existing owner/epoch/head cuts
 must continue to refuse effects; authority assertions remain active across the

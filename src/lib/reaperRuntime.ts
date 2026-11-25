@@ -22,10 +22,13 @@ import {
   ROLLED_BACK_MIGRATION_DELIVERY_REASON,
 } from "@/lib/accounts/migration/intentLiveness";
 import { procBackend } from "@/lib/proc";
+import { processIdentityStatus } from "@/lib/processIdentity";
 import { readReaperEvidence, recordReaperEvidence, type ReaperEvidence } from "@/lib/reaperState";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { readJsonCache, writeJsonDurably } from "@/lib/state/durableJson";
 import { runtimeHostClient } from "@/lib/runtime/client";
+import { readEvidenceWithin } from "@/lib/runtime/evidence";
+import { readTranscriptCutEvidence } from "@/lib/runtime/liveness";
 import { reconcileDeadStructuredRegistryHostsOffLoop } from "@/lib/runtime/registry";
 import { terminalizeStaleStructuredSpawns } from "@/lib/runtime/structuredSpawn";
 import { isNativeCodexSubagentTranscript } from "@/lib/scanner/codexNative";
@@ -368,6 +371,51 @@ function migrationSourceHasLiveOwner(
     && receiptIsLive(snapshot, receipt, probe));
 }
 
+/** A waiting-turn marker alone can outlive the turn. Protect current work,
+ * keeping the native entry lookup keyed to the migration's source generation. */
+function migrationSourceIsWorking(snapshot: RegistryFile, conversation: RegistryConversation, probe: LivenessProbe): boolean {
+  const source = conversation.generations.find(generation => generation.id === conversation.migration?.sourceGenerationId);
+  if (!source) return false;
+  const entry = snapshot.entries[`${conversation.engine}:${source.id}`];
+  const busy = conversation.turn.state === "busy";
+  if (!busy && !entry?.structuredHost?.activeTurnRef) return false;
+  if (entry?.artifactPath === source.path && entryIsLive(entry, probe)) return true;
+  if (!busy) return false;
+  if (identityAlive(source.host?.tmuxHost?.agent, probe)) return true;
+  return registryRowsMatching(snapshot, "receipts", "conversationId", conversation.id).some(receipt =>
+    receipt.engine === conversation.engine && receiptIsLive(snapshot, receipt, probe));
+}
+
+/** Native work can precede the registry checkpoint. Bind that read to the
+ * migration's source owner and artifact, including replacement at the same path.
+ * The writer compares versions only; it never parses a transcript under lock. */
+function migrationSourceObservation(snapshot: RegistryFile, conversation: RegistryConversation): string {
+  const source = conversation.generations.find(generation => generation.id === conversation.migration?.sourceGenerationId);
+  const entry = source ? snapshot.entries[`${conversation.engine}:${source.id}`] : null;
+  let version = "absent";
+  if (source) {
+    try {
+      const stat = fs.statSync(source.path, { bigint: true, throwIfNoEntry: false });
+      if (stat) version = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+    } catch { version = "unreadable"; }
+  }
+  return JSON.stringify([conversation.engine, conversation.migration, conversation.turn, source, entry, version]);
+}
+
+async function migrationSourceHasNativeWork(snapshot: RegistryFile, conversation: RegistryConversation, now: number): Promise<boolean> {
+  const engine = conversation.engine;
+  const source = conversation.generations.find(generation => generation.id === conversation.migration?.sourceGenerationId);
+  const entry = source ? snapshot.entries[`${conversation.engine}:${source.id}`] : null;
+  if (!source || entry?.artifactPath !== source.path || entry.status === "dead"
+    || !entry.structuredHost?.process || processIdentityStatus(entry.structuredHost.process) !== "alive"
+    || (engine !== "claude" && engine !== "codex")) return false;
+  const evidence = await readEvidenceWithin(() => readTranscriptCutEvidence(engine, source.path),
+    10_000, "migration source turn evidence is unavailable");
+  return evidence.readable && evidence.value.verified && evidence.value.turn === "busy"
+    && evidence.value.lastWork !== null && evidence.value.lastWork.at <= now
+    && processIdentityStatus(entry.structuredHost.process) === "alive";
+}
+
 /* The hygiene pass needs two identity fields of every conversation and held
    delivery. Read through a projection, an archived row is parsed once for the
    life of the store; enumerating the rows themselves parsed the whole archive
@@ -499,11 +547,25 @@ export async function terminalizeStaleUndeliverableHeldDeliveries(
       }
     }
     if (!noProgress) continue;
+    if (owned.some(conversation => migrationSourceIsWorking(snapshot, conversation, probe))) continue;
+    const observations = new Map(owned.map(conversation => [conversation.id, migrationSourceObservation(snapshot, conversation)]));
+    let nativeWork = false;
+    for (const conversation of owned) {
+      if (await migrationSourceHasNativeWork(snapshot, conversation, now)) { nativeWork = true; break; }
+    }
+    if (nativeWork) continue;
     const reason =
       `delivery cancelled because its owning account migration made no progress for ${MIGRATION_INTENT_PROGRESS_TIMEOUT_MS}ms; send again to authorize a fresh delivery`;
     /* The stop takes the write lock for the intent's own conversations and
        gives it up between the slices of its engine-wide opt-out. */
-    if (!(await registry.stopMigrationIntent(intent.id, { expectedRevision: intent.revision, reason })).acquired) continue;
+    if (!(await registry.stopMigrationIntent(intent.id, { expectedRevision: intent.revision, reason,
+      canStop: current => !owned.some(conversation => {
+        const latest = current.conversations[conversation.id];
+        return latest?.migration?.intentId === intent.id
+          && (migrationSourceIsWorking(current, latest, probe)
+            || migrationSourceObservation(current, latest) !== observations.get(conversation.id));
+      }),
+    })).acquired) continue;
     const settledSnapshot = registry.readOnlySnapshot();
     for (const id of activeIds) {
       if (settledSnapshot.heldDeliveries[id]?.state === "failed") terminalized.add(id);
