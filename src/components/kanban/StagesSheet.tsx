@@ -100,6 +100,8 @@ export function StagesSheet(props: {
   const [zoom, setZoom] = useState<SheetZoom>("fit");
   const [focus, setFocus] = useState<string | null>(props.initialFocus ?? order[0]?.id ?? null);
   const [inView, setInView] = useState<ReadonlySet<string>>(new Set());
+  /* The stages whose connector lies whole inside the lane's box (see markLane). */
+  const [connected, setConnected] = useState<ReadonlySet<string>>(new Set());
   const lane = useRef<HTMLDivElement>(null);
   const sheet = useRef<HTMLElement>(null);
   const canvas = useRef<HTMLDivElement>(null);
@@ -119,6 +121,15 @@ export function StagesSheet(props: {
       }
     });
     setInView((current) => (current.size === seen.size && [...seen].every((id) => current.has(id)) ? current : seen));
+    /* A connector is drawn only while the whole of it is inside the lane's box,
+       with no margin: a connector the scroll edge cuts would show a few pixels
+       of an arrow that leads nowhere. It is either whole or absent. */
+    const whole = new Set<string>();
+    element.querySelectorAll<HTMLElement>(".lane-conn[data-conn-to]").forEach((connector) => {
+      const rect = connector.getBoundingClientRect();
+      if (rect.left >= bounds.left - 0.5 && rect.right <= bounds.right + 0.5) whole.add(connector.dataset.connTo!);
+    });
+    setConnected((current) => (current.size === whole.size && [...whole].every((id) => current.has(id)) ? current : whole));
   }, []);
 
   const scrollLaneTo = useCallback((stageId: string, smooth = true) => {
@@ -160,6 +171,14 @@ export function StagesSheet(props: {
   useEffect(() => {
     markLane();
   }, [panes, markLane]);
+  /* The lane's box changes with the window, not only with its scroll. */
+  useEffect(() => {
+    const element = lane.current;
+    if (!element || typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(() => markLane());
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [markLane]);
 
   /* The graph fits the width the sheet has: left to right from 640 px. */
   useLayoutEffect(() => {
@@ -329,7 +348,7 @@ export function StagesSheet(props: {
               if (!pane) return null;
               const previous = order[index - 1];
               return (
-                <PaneSlot key={stage.id} connector={index > 0 ? (previous?.next === stage.id ? "pass" : "loose") : null}>
+                <PaneSlot key={stage.id} stageId={stage.id} whole={connected.has(stage.id)} connector={index > 0 ? (previous?.next === stage.id ? "pass" : "loose") : null}>
                   <StagePane
                     {...props}
                     pane={pane}
@@ -348,10 +367,10 @@ export function StagesSheet(props: {
   );
 }
 
-function PaneSlot({ connector, children }: { connector: "pass" | "loose" | null; children: React.ReactNode }) {
+function PaneSlot({ connector, stageId, whole, children }: { connector: "pass" | "loose" | null; stageId: string; whole: boolean; children: React.ReactNode }) {
   return (
     <>
-      {connector ? <span className={`lane-conn${connector === "loose" ? " loose" : ""}`} aria-hidden="true">{connector === "pass" ? "→" : "·"}</span> : null}
+      {connector ? <span className={`lane-conn${connector === "loose" ? " loose" : ""}`} data-conn-to={stageId} data-whole={whole ? "1" : "0"} aria-hidden="true">{connector === "pass" ? "→" : "·"}</span> : null}
       {children}
     </>
   );

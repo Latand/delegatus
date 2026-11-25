@@ -541,3 +541,15 @@ test("an open decision turns a finished row into «waiting» with the decision b
   expect(mobileRowState({ ...finished, activity: "recent" } as FileEntry, NOW, { decisionWaiting: true }).key).toBe("waiting");
   expect(mobileRowState(working(finished), NOW, { decisionWaiting: true }).key).toBe("working");
 });
+
+test("an idle hosted seat reads «waiting» quietly: a neutral dot, no badge, the recent section; working, a form and a question keep their own words", () => {
+  const finished = { path: "/p/seat.jsonl", activity: "idle", mtime: NOW - 1044 } as FileEntry;
+  expect(mobileRowState(finished, NOW).key).toBe("done");
+  expect(mobileRowState(finished, NOW, { seatWaiting: true })).toMatchObject({ key: "waiting", section: "recent", dot: "neutral", edge: null, badge: null, seconds: 1044 });
+  /* A recently finished turn is the same quiet wait, not «returned». */
+  expect(mobileRowState({ ...finished, activity: "recent" } as FileEntry, NOW, { seatWaiting: true })).toMatchObject({ key: "waiting", badge: null });
+  /* An open form keeps its warning tone and its badge. */
+  expect(mobileRowState(finished, NOW, { seatWaiting: true, decisionWaiting: true })).toMatchObject({ key: "waiting", dot: "warning", badge: "decision" });
+  /* A running seat reads «working». */
+  expect(mobileRowState(working(finished), NOW, { seatWaiting: true }).key).toBe("working");
+});
