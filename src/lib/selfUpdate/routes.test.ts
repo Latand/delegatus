@@ -741,7 +741,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     await wait(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
   }
 
-  test.each(["optional-red", "required-red", "unreadable-protection"] as const)("manual checkout Update uses required CI on the equal-tree PR head: %s", async scenario => {
+  test.each(["optional-red", "empty-required-optional-red", "required-red", "unreadable-protection"] as const)("manual checkout Update uses required CI on the equal-tree PR head: %s", async scenario => {
     const h = harness({ relaunch: true, remote: "https://github.com/example/project.git" });
     const head = "a".repeat(40), tree = "b".repeat(40);
     const target = { sha: tipSha, short: tipSha.slice(0, 7), version: "1.0.1", date: "" };
@@ -755,6 +755,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       const url = String(input);
       if (url.includes("/pulls")) return Response.json([{ merged_at: "2026-01-01", merge_commit_sha: tipSha, base: { ref: "main" }, head: { sha: head } }]);
       if (url.includes("/branches/")) return scenario === "unreadable-protection" ? new Response(null, { status: 403 })
+        : scenario === "empty-required-optional-red" ? Response.json({ protected: false })
         : Response.json({ protected: true, protection: { required_status_checks: { checks: [{ context: "typecheck", app_id: 15368 }] } } });
       if (url.includes("/statuses")) return Response.json([]);
       if (url.includes("/check-runs")) {
@@ -773,7 +774,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       const response = await postUpdate(post("/update", { key: "manual-required-ci" }));
       const body = await response.json();
       expect(checkReads).toEqual([`https://api.github.com/repos/example/project/commits/${head}/check-runs?per_page=100`]);
-      if (scenario === "optional-red") {
+      if (scenario === "optional-red" || scenario === "empty-required-optional-red") {
         expect(response.status).toBe(202);
         expect(body.optionalCheckFailures).toEqual(["Minimum macOS SQLite", "Windows (native)"]);
         expect(builds).toBe(1);
@@ -2349,6 +2350,8 @@ for (const operation of ["update", "retry", "deploy", "rebuild"] as const) test.
   const update = operation === "retry" ? { ...idleUpdate(["fetch", "install", "ready"]), state: "failed", target: tipSha, targetVersion: target.version } : null;
   writeFileSync(join(dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), installed: operation === "rebuild" ? target : null, available: operation === "rebuild" ? null : target, check: { ...initialCheck().check, state: operation === "rebuild" ? "up-to-date" : "update-available", relation: operation === "rebuild" ? "equal" : "behind" } }, update }));
   const tree = await git(work, "rev-parse", `${targetSha}^{tree}`);
+  // The branch requires `test`, so a red `test` refuses the manual operations and the exact deploy alike.
+  const requiredTest = { protected: true, protection: { required_status_checks: { checks: [{ context: "test", app_id: null }] } } };
   const reader = new GreenReader({ now: Date.now, treeOf: async (directory, sha) => {
     const result = await runGit(["rev-parse", "--verify", `${sha}^{tree}`], directory);
     if (result.code !== 0) throw new Error("target tree is unreadable"); return result.stdout.trim();
@@ -2356,7 +2359,7 @@ for (const operation of ["update", "retry", "deploy", "rebuild"] as const) test.
     const url = String(input);
     return Response.json(url.includes("/pulls") ? [{ merged_at: "2026-01-01", merge_commit_sha: targetSha, base: { ref: "main" }, head: { sha: targetSha } }]
       : url.includes("/check-runs") ? { check_runs: [{ name: "test", status: "completed", conclusion: verdict === "green" ? "success" : "failure" }] }
-      : url.includes("/statuses") ? [] : url.includes("/branches/") ? { protected: false } : { commit: { tree: { sha: tree } } });
+      : url.includes("/statuses") ? [] : url.includes("/branches/") ? requiredTest : { commit: { tree: { sha: tree } } });
   }) as typeof fetch });
   const service = new SelfUpdateService(baseDeps(dir, { remote: forge, mode: async () => ({ mode: "package", reason: null, record }), prepareCheckRepo: async () => repo, green: reader }));
   let deliveryReads = 0;

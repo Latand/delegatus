@@ -481,6 +481,64 @@ describe("a confirmed action keeps its answer in its own card and on screen", ()
     });
   }
 
+  /* A confirmed Restart launcher relaunches the Viewer. The snapshot that
+     answers afterwards comes from a different web process and carries no
+     action (a relaunch-capable launcher needs none), so the card that held the
+     answer loses its action. The answer stays, once, beside the new-version
+     banner, and is scrolled in again because the banner moved the card. */
+  const relaunched = (): Snapshot => ({ ...snapshot("ready"), processes: { web: { ...proc(51377), port: 45123 }, runtimeHost: proc(48190) }, action: null } as unknown as Snapshot);
+  const afterRelaunch = async (response: () => Response) => {
+    let reconnected = false;
+    globals.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") { reconnected = true; return response(); }
+      return json(200, reconnected ? relaunched() : needsRestart());
+    }) as typeof fetch;
+    await mount(<SelfUpdateDialog onClose={() => {}} />);
+    for (let tries = 0; tries < 40 && !dom.document.querySelector("[data-action='install-action']"); tries++) await wait(25);
+    await act(async () => { button(dom.document, "[data-action='install-action']").click(); });
+    await act(async () => { button(confirmDialog(), "[data-action='confirm-apply']").click(); });
+    await wait(30);
+    // The answer is drawn, and the action is still offered.
+    expect(dom.document.querySelector("[data-banner='reload']")).toBeNull();
+    for (let tries = 0; tries < 60 && !dom.document.querySelector("[data-banner='reload']"); tries++) await wait(50);
+  };
+
+  for (const [name, width, height] of VIEWPORTS) {
+    test(`${name}: a Restart launcher's optional-check warning stays once, beside the new-version banner, when the action disappears`, async () => {
+      viewport = { width, height };
+      await afterRelaunch(() => json(202, { ...needsRestart(), optionalCheckFailures: ["Windows (native)"] }));
+
+      const banner = dom.document.querySelector("[data-banner='reload']");
+      const card = where("install-action");
+      expect(banner).not.toBeNull();
+      expect(dom.document.querySelector("[data-action='install-action']")).toBeNull();
+      expect(card).not.toBeNull();
+      expect(lines(card)).toEqual([WARNED]);
+      expect(lines(dom.document.body)).toHaveLength(1);
+      // Banner first, then the card holding only the answer.
+      expect(banner!.compareDocumentPosition(card as never) & 4).toBe(4);
+      expect(card!.textContent).toBe(WARNED);
+      // The confirmation, the answer, then the new-version banner each brought the lines into the scroller.
+      expect(scrolledTo).toEqual(["install-action", "outcome:install-action", "outcome:install-action"]);
+    });
+  }
+
+  test("a Restart launcher's refusal stays once when the action it was refused for disappears", async () => {
+    await afterRelaunch(() => json(409, { code: "deployment-refused", detail: "red", snapshot: needsRestart(),
+      green: { state: "red", detail: "typecheck", checks: ["typecheck"] } }));
+    expect(dom.document.querySelector("[data-action='install-action']")).toBeNull();
+    expect(lines(where("install-action"))).toEqual([REFUSED]);
+    expect(lines(dom.document.body)).toHaveLength(1);
+  });
+
+  test("an install card with no action and no answer is not drawn", async () => {
+    globals.fetch = (async (_input: RequestInfo | URL, _init?: RequestInit) => json(200, relaunched())) as typeof fetch;
+    await mount(<SelfUpdateDialog onClose={() => {}} />);
+    await wait(60);
+    expect(dom.document.querySelector("[data-section='header']")).not.toBeNull();
+    expect(where("install-action")).toBeNull();
+  });
+
   test("an answer that carries no lines scrolls nothing beyond the card", async () => {
     globals.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST" ? json(202, snapshot("ready")) : json(200, snapshot("ready"))) as typeof fetch;
     await mount(<SelfUpdateDialog onClose={() => {}} />);

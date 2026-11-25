@@ -5735,7 +5735,8 @@ describe("self-update confirmation modal", () => {
      confirmation (Restart launcher, offered above the header while a built
      revision waits for the older launcher) answers the same two ways through
      the same admission, and its card, which it scrolls to, shows the answer on
-     every layout. A second action started while Update's answer is out must
+     every layout, and keeps it beside the new-version banner when the
+     relaunched Viewer answers without the action. A second action started while Update's answer is out must
      not move it: Check now's failure stays in the header and Update's refusal
      stays in the card, whichever answer comes back first. */
   browserTest("a confirmed Update's refusal and optional-check warning stay in view once, on phones and desktop, in both locales and themes", async () => {
@@ -5884,6 +5885,28 @@ describe("self-update confirmation modal", () => {
           await show(202, { ...running, optionalCheckFailures: ["Windows (native)", "Minimum macOS SQLite"] }, '[data-warning="optional-checks"]', "Windows (native), Minimum macOS SQLite", "optional-ci-warning");
           await show(409, { ...requiredRefusal, snapshot: awaitingLauncher }, '[data-error="action"]', "privacy-publication, typecheck", "launcher-required-ci-refusal", "install-action");
           await show(202, { ...awaitingLauncher, optionalCheckFailures: ["Windows (native)", "Minimum macOS SQLite"] }, '[data-warning="optional-checks"]', "Windows (native), Minimum macOS SQLite", "launcher-optional-ci-warning", "install-action");
+
+          /* The launcher's restart relaunches the Viewer. The snapshot that answers afterwards comes from another
+             web process and carries no action (the relaunch-capable launcher needs none), so the install card keeps
+             only its answer. The answer stays once, and it is whole on the first screen beside the new-version banner. */
+          {
+            const name = `${lang}-${width}x${height}-${scheme}-launcher-warning-after-relaunch`;
+            await emit({ ...initial, processes: { ...initial.processes, web: { ...proc(5151), port: 8899 } } });
+            await dialog.locator('[data-banner="reload"]').waitFor();
+            await settled();
+            const warning = await read('[data-warning="optional-checks"]', "Windows (native), Minimum macOS SQLite");
+            const banner = await read('[data-banner="reload"]', old.slice(0, 7));
+            expect(warning.copies, `${name}: the warning is drawn once`).toBe(1);
+            expect(warning.inDom, `${name}: the warning is in the page once`).toBe(1);
+            expect(warning.section, `${name}: the warning stays in the install card`).toBe("install-action");
+            expect(warning.whole, `${name}: the warning is whole beside the banner without scrolling: ${JSON.stringify(warning)}`).toBe(true);
+            expect(banner.copies, `${name}: the new-version banner is drawn once`).toBe(1);
+            expect(banner.whole, `${name}: the banner is whole with the warning: ${JSON.stringify(banner)}`).toBe(true);
+            expect(await dialog.locator('[data-action="install-action"]').count(), `${name}: the restart action is gone`).toBe(0);
+            await page.screenshot({ path: path.join(out, `${name}.png`) });
+            readings.push({ lang, width, height, scheme, label: "launcher-warning-after-relaunch", phone, warning, banner, frame: `${name}.png` });
+            await emit(initial);
+          }
 
           /* A second action while Update's answer is out: Update is confirmed and held, Check now is pressed
              (it scrolls to the header), the person goes back to the Update card, and the answers come back in

@@ -164,6 +164,11 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const installOutcome = outcomes["install-action"];
   useEffect(() => { if (updateOutcome) showOutcome(panelRef.current, "update"); }, [updateOutcome]);
   useEffect(() => { if (installOutcome) showOutcome(panelRef.current, "install-action"); }, [installOutcome]);
+  /* The new-version banner lands above the install card when the relaunched
+     Viewer answers, and moves the card (which then holds only its answer, the
+     action having gone with the relaunch). The answer stays whole in the
+     scroller beside the banner. */
+  useEffect(() => { if (replaced) showOutcome(panelRef.current, "install-action"); }, [replaced]);
 
   const actions: ViewActions = {
     installAction: () => setConfirming("install-action"),

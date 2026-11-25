@@ -220,11 +220,15 @@ export class GreenReader {
         return requiredOnly ? { state: "pending", done: 0, total: required.length, checks: required.map(check => check.name).sort() }
           : finish({ state: "no-checks", checks: required.map(check => check.name).sort() });
       }
-      // Manual updates and exact deploys use the same branch protection.
-      // An empty required set keeps every observed check in scope.
+      // Manual updates and exact deploys use the same branch protection. An
+      // exact deploy with an empty required set keeps every observed check in
+      // scope. A manual update gates on the required checks alone, so a branch
+      // that confirms none (a readable answer, never an unreadable one, which
+      // is "unknown" above) leaves nothing to gate on: every observed check is
+      // optional there, and a red one is the warning, not a refusal.
       const isRequired = (check: (typeof checks)[number]) => required.some(({ name, appId }) => check.name === name
         && (appId === null || (check.kind === "run" && check.appId === appId)));
-      const relevant = requiredOnly ? checks.filter(isRequired) : checks;
+      const relevant = requiredOnly ? checks.filter(isRequired) : manualUpdate ? [] : checks;
       const red = relevant.filter(check => check.verdict === "red").map(check => check.name);
       const notGreen = [...new Set([...relevant.filter(check => check.verdict !== "green").map(check => check.name),
         ...required.filter(({ name, appId }) => !checks.some(check => check.name === name && check.verdict === "green"
@@ -237,7 +241,7 @@ export class GreenReader {
       const missing = required.find(({ name, appId }) => !checks.some((check) => check.name === name && check.verdict === "green"
         && (appId === null || (check.kind === "run" && check.appId === appId))));
       if (done === total && !missing && !runtimeGatePending) {
-        const optionalCheckFailures = manualUpdate && requiredOnly
+        const optionalCheckFailures = manualUpdate
           ? [...new Set(checks.filter(check => check.verdict === "red" && !isRequired(check)).map(check => check.name))].sort() : [];
         return finish({ state: "green", done, total, ...(optionalCheckFailures.length ? { optionalCheckFailures } : {}) });
       }

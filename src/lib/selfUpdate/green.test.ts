@@ -5,7 +5,7 @@ const SHA = "a".repeat(40);
 const HEAD = "b".repeat(40);
 const TREE = "c".repeat(40);
 
-function reader(options: { runs?: Record<string, unknown>[]; targetRuns?: Record<string, unknown>[]; statuses?: Record<string, unknown>[]; required?: string[]; requiredChecks?: { context: string; app_id: number }[]; workflowRuns?: Record<string, unknown>[]; pull?: boolean; mergeSha?: string; tree?: string; response?: number; invalidBranch?: boolean } = {}) {
+function reader(options: { runs?: Record<string, unknown>[]; targetRuns?: Record<string, unknown>[]; statuses?: Record<string, unknown>[]; required?: string[]; requiredChecks?: { context: string; app_id: number }[]; workflowRuns?: Record<string, unknown>[]; pull?: boolean; mergeSha?: string; tree?: string; response?: number; invalidBranch?: boolean; unprotected?: boolean; branchStatus?: number } = {}) {
   let reads = 0;
   let now = 1_000;
   const calls: string[] = [];
@@ -14,11 +14,12 @@ function reader(options: { runs?: Record<string, unknown>[]; targetRuns?: Record
     reads += 1;
     calls.push(url);
     if (options.response) return new Response("{}", { status: options.response });
+    if (options.branchStatus && url.includes("/branches/")) return new Response("{}", { status: options.branchStatus });
     const body = url.includes("/pulls") ? (options.pull === false ? [] : [{ merged_at: "2026-01-01", merge_commit_sha: options.mergeSha ?? SHA, base: { ref: "main" }, head: { sha: HEAD } }])
       : url.includes("/check-runs") ? { check_runs: (url.includes(`/commits/${SHA}/`) ? options.targetRuns : undefined) ?? options.runs ?? [{ name: "test", status: "completed", conclusion: "success", started_at: "2026-01-01" }] }
       : url.includes("/statuses") ? options.statuses ?? []
       : url.includes("/actions/runs?") ? { workflow_runs: options.workflowRuns ?? [] }
-      : url.includes("/branches/") ? (options.invalidBranch ? {} : { protected: true, protection: { required_status_checks: { contexts: options.required ?? [], checks: options.requiredChecks ?? [] } } })
+      : url.includes("/branches/") ? (options.invalidBranch ? {} : options.unprotected ? { protected: false } : { protected: true, protection: { required_status_checks: { contexts: options.required ?? [], checks: options.requiredChecks ?? [] } } })
       : { commit: { tree: { sha: options.tree ?? TREE } } };
     return Response.json(body);
   };
@@ -292,5 +293,59 @@ describe("green merge evidence", () => {
     const subject = new GreenReader({ fetch: (async () => new Response("{}", { status: 403, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(reset) } })) as unknown as typeof fetch,
       treeOf: async () => TREE, now: () => 1_000 });
     expect(await subject.read("github.com/example/project", "main", SHA, "/checkout")).toMatchObject({ state: "unknown", nextAt: new Date(reset * 1_000).toISOString() });
+  });
+});
+
+describe("a manual update gates on the required checks alone", () => {
+  const OPTIONAL_RED = [
+    { id: 1, name: "Windows (native)", status: "completed", conclusion: "failure", app: { id: 15368 } },
+    { id: 2, name: "Minimum macOS SQLite", status: "completed", conclusion: "failure", app: { id: 15368 } },
+  ];
+  const read = (h: ReturnType<typeof reader>, policy?: "manual-update" | "exact-deploy") =>
+    h.subject.read("github.com/example/project", "main", SHA, "/checkout", undefined, true, policy);
+
+  test.each([
+    ["an unprotected branch", { unprotected: true }],
+    ["a protected branch that requires no check", {}],
+  ] as const)("%s admits an update whose failed checks are all optional and names them", async (_name, branch) => {
+    const h = reader({ ...branch, runs: [...OPTIONAL_RED, { id: 3, name: "typecheck", status: "completed", conclusion: "success", app: { id: 15368 } }] });
+    expect(await read(h, "manual-update")).toEqual({ state: "green", done: 0, total: 0, optionalCheckFailures: ["Minimum macOS SQLite", "Windows (native)"] });
+  });
+
+  test("an unprotected branch does not wait for an optional check that is still running", async () => {
+    const h = reader({ unprotected: true, runs: [...OPTIONAL_RED, { id: 3, name: "build", status: "in_progress", conclusion: null, app: { id: 15368 } }] });
+    expect(await read(h, "manual-update")).toMatchObject({ state: "green", optionalCheckFailures: ["Minimum macOS SQLite", "Windows (native)"] });
+  });
+
+  test("an unprotected branch with nothing red admits without a warning", async () => {
+    const h = reader({ unprotected: true, runs: [{ id: 1, name: "test", status: "completed", conclusion: "success", app: { id: 15368 } }] });
+    const verdict = await read(h, "manual-update");
+    expect(verdict.state).toBe("green");
+    expect(verdict.optionalCheckFailures).toBeUndefined();
+  });
+
+  test("an unprotected branch that reports no check at all stays refused", async () => {
+    expect(await read(reader({ unprotected: true, runs: [] }), "manual-update")).toMatchObject({ state: "no-checks" });
+  });
+
+  test("the empty required set keeps every check in scope for the automatic policy and for an exact deploy", async () => {
+    for (const policy of [undefined, "exact-deploy"] as const) {
+      expect(await read(reader({ unprotected: true, runs: OPTIONAL_RED }), policy))
+        .toMatchObject({ state: "red", checks: ["Minimum macOS SQLite", "Windows (native)"] });
+    }
+  });
+
+  test("a red required check still refuses, and the optional failures beside it are not listed", async () => {
+    const h = reader({ requiredChecks: [{ context: "typecheck", app_id: 15368 }], runs: [...OPTIONAL_RED,
+      { id: 3, name: "typecheck", status: "completed", conclusion: "failure", app: { id: 15368 } }] });
+    const verdict = await read(h, "manual-update");
+    expect(verdict).toMatchObject({ state: "red", detail: "typecheck", checks: ["typecheck"] });
+    expect(verdict.optionalCheckFailures).toBeUndefined();
+  });
+
+  test.each([["forbidden", { branchStatus: 403 }], ["malformed", { invalidBranch: true }]] as const)("an unreadable branch protection (%s) refuses even when only optional checks failed", async (_name, branch) => {
+    const verdict = await read(reader({ ...branch, runs: OPTIONAL_RED }), "manual-update");
+    expect(verdict.state).toBe("unknown");
+    expect(verdict.optionalCheckFailures).toBeUndefined();
   });
 });

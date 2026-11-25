@@ -1146,6 +1146,46 @@ describe("the rest of the surface", () => {
       expect(outcomeLines(section(render(snapshot({ ...available(), action }), { updateOutcome: { error: refusal } }), "install-action"))).toEqual([]);
     });
 
+    /* A confirmed Restart launcher relaunches the Viewer; the snapshot that
+       answers afterwards has no action. The card the person pressed in keeps
+       the answer and drops the action's words and button. */
+    describe("once the action has gone with a relaunch", () => {
+      const warned = { error: null, optionalCheckFailures: ["Windows (native)"] };
+      const gone: [string, Snapshot][] = [
+        ["a relaunched checkout", snapshot(available())],
+        ["an unsupported layout", snapshot({ mode: "unsupported", unsupportedReason: "no-launcher" })],
+      ];
+
+      test.each(gone)("%s: the card keeps the warning once and offers nothing to press", (_name, s) => {
+        const el = render(s, { installOutcome: warned });
+        const card = section(el, "install-action")!;
+        expect(outcomeLines(card)).toEqual([WARNED]);
+        expect(outcomeLines(el)).toHaveLength(1);
+        expect(card.children).toHaveLength(1);
+        expect(card.querySelector("button, code")).toBeNull();
+      });
+
+      test("a refusal stays too", () => {
+        const el = render(snapshot(available()), { installOutcome: { error: refusal } });
+        expect(outcomeLines(section(el, "install-action"))).toEqual([REFUSED]);
+        expect(outcomeLines(el)).toHaveLength(1);
+      });
+
+      test("an outcome with neither an error nor a warning draws no card", () => {
+        expect(section(render(snapshot(available()), { installOutcome: { error: null, optionalCheckFailures: [] } }), "install-action")).toBeNull();
+      });
+
+      test("with no action and no answer there is no install card", () => {
+        expect(section(render(snapshot(available())), "install-action")).toBeNull();
+      });
+
+      test("Ukrainian wording reaches the answer-only card", () => {
+        setLocale("uk");
+        const card = section(render(snapshot(available()), { installOutcome: warned }), "install-action")!;
+        expect(text(card.querySelector('[data-warning="optional-checks"]'))).toBe("Необов’язкові перевірки CI для цього оновлення не пройшли (Windows (native)).");
+      });
+    });
+
     test("Ukrainian wording reaches the card", () => {
       setLocale("uk");
       const card = section(render(snapshot({ ...available(), action }), { installOutcome }), "install-action")!;

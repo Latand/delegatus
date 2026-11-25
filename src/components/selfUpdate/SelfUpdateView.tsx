@@ -747,15 +747,25 @@ function Footer({ s, live, t }: { s: Snapshot; live: Live; t: TFunction }) {
   );
 }
 
+/** The install action's card. A confirmed Restart launcher relaunches the
+    Viewer, and the snapshot that answers afterwards carries no action: the
+    relaunch-capable launcher needs none. The card the person pressed in then
+    stays for as long as it holds the answer (the optional CI checks that
+    failed for the build it started), without the action's own text and
+    button, so that answer does not vanish with the action beside the new-
+    version banner. */
 function InstallActionCard({ s, actions, state, t }: { s: Snapshot; actions: ViewActions; state: ViewState; t: TFunction }) {
   const action = s.action;
-  if (!action) return null;
+  const outcome = state.installOutcome;
+  if (!action && !outcome?.error && !outcome?.optionalCheckFailures?.length) return null;
   return <section data-section="install-action" className={CARD}>
-    <OutcomeLines outcome={state.installOutcome} t={t} />
-    <p className="m-0 text-ui text-secondary">{t(action.terminalEveryUpdate ? "selfUpdate.action.restart-terminal-windows" : `selfUpdate.action.${action.id}`, { unit: action.unit ?? "" })}</p>
-    {action.command ? <code className="text-label text-primary [overflow-wrap:anywhere] whitespace-pre-wrap">{action.command}</code> : null}
-    {action.button ? <Button action="install-action" tone="primary" disabled={state.pending.has("install-action")}
-      label={t(`selfUpdate.actionButton.${action.id}` as MessageKey)} onClick={action.id === "update-first" ? actions.update : () => actions.installAction?.()} /> : null}
+    <OutcomeLines outcome={outcome} t={t} />
+    {action ? <>
+      <p className="m-0 text-ui text-secondary">{t(action.terminalEveryUpdate ? "selfUpdate.action.restart-terminal-windows" : `selfUpdate.action.${action.id}`, { unit: action.unit ?? "" })}</p>
+      {action.command ? <code className="text-label text-primary [overflow-wrap:anywhere] whitespace-pre-wrap">{action.command}</code> : null}
+      {action.button ? <Button action="install-action" tone="primary" disabled={state.pending.has("install-action")}
+        label={t(`selfUpdate.actionButton.${action.id}` as MessageKey)} onClick={action.id === "update-first" ? actions.update : () => actions.installAction?.()} /> : null}
+    </> : null}
   </section>;
 }
 
