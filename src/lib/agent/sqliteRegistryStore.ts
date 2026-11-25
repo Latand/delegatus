@@ -5387,9 +5387,9 @@ export class SqliteAgentRegistryStore {
           continue;
         }
         const entry = file.entries[key];
-        if (entry?.structuredHost?.process) selected.push(copy(entry));
+        if (entry?.structuredHost?.process) selected.push(entry);
       }
-      return selected;
+      return selected.map(copy);
     });
     if (cacheable && this.databaseReopens === reopens) this.processlessArchiveEntries = next;
     return entries;
