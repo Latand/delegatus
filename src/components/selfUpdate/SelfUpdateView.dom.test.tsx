@@ -1055,6 +1055,50 @@ describe("the rest of the surface", () => {
     expect(el.querySelector('[data-error="action"]')).toBeNull();
   });
 
+  /* The confirmation scrolls the phone to the Update card, so an Update or
+     Retry outcome is drawn there as well as in the header (the stylesheet
+     shows one of the two at each width; the Chromium driver measures that). */
+  describe("an Update or Retry outcome is drawn in the Update card", () => {
+    const refusal = actionError(409, { code: "deployment-refused", detail: "red",
+      green: { state: "red" as const, detail: "typecheck", checks: ["privacy-publication", "typecheck"] } });
+    const outcome = { error: refusal, optionalCheckFailures: ["Windows (native)"] };
+    const running = { ...idleUpdate(CHECKOUT_STEPS), state: "running" as const, trigger: "operator" as const, target: NEW, targetShort: NEW.slice(0, 7), targetVersion: "1.2.3", startedAt: new Date(NOW - 5_000).toISOString(), steps: steps(["running"]) };
+    const failed = { ...idleUpdate(CHECKOUT_STEPS), state: "failed" as const, target: NEW, targetShort: NEW.slice(0, 7), steps: steps(["failed"]) };
+    const states: [string, Snapshot][] = [
+      ["nothing to update", snapshot()],
+      ["an update to confirm", snapshot(available())],
+      ["a running update", snapshot({ ...available(), busy: "update", update: running })],
+      ["a failed update", snapshot({ ...available(), update: failed })],
+    ];
+
+    test.each(states)("%s: the card names the failed checks, once per outcome", (_name, s) => {
+      const el = render(s, { ...outcome, outcomeInUpdateCard: true });
+      const card = section(el, "update")!;
+      const refused = card.querySelectorAll('[data-error="action"]');
+      expect(refused).toHaveLength(1);
+      expect(text(refused[0])).toBe("The selected revision is not green (privacy-publication, typecheck).");
+      const warned = card.querySelectorAll('[data-warning="optional-checks"]');
+      expect(warned).toHaveLength(1);
+      expect(text(warned[0])).toBe("Optional CI checks failed for this update (Windows (native)).");
+      /* The header keeps its own copy for the desktop. */
+      expect(section(el, "header")!.querySelectorAll('[data-error="action"], [data-warning="optional-checks"]')).toHaveLength(2);
+    });
+
+    test.each(states)("%s: an outcome of any other action stays in the header only", (_name, s) => {
+      const el = render(s, outcome);
+      expect(section(el, "update")!.querySelector('[data-error="action"], [data-warning="optional-checks"]')).toBeNull();
+      expect(section(el, "header")!.querySelectorAll('[data-error="action"], [data-warning="optional-checks"]')).toHaveLength(2);
+    });
+
+    test("Ukrainian wording reaches the card", () => {
+      setLocale("uk");
+      const el = render(snapshot(available()), { ...outcome, outcomeInUpdateCard: true });
+      const card = section(el, "update")!;
+      expect(text(card.querySelector('[data-error="action"]'))).toBe("Вибрана ревізія ще не має зеленого статусу CI (privacy-publication, typecheck).");
+      expect(text(card.querySelector('[data-warning="optional-checks"]'))).toBe("Необов’язкові перевірки CI для цього оновлення не пройшли (Windows (native)).");
+    });
+  });
+
   test("Ukrainian: a memory-guard failure and a 409 refusal carry no English sentence", () => {
     setLocale("uk");
     const failedSteps = steps(["done", "done", "failed"], { 2: { tail: [], exitCode: null, failure: { kind: "memory", availableMb: 2048, neededMb: 4096 } } });

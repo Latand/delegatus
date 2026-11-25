@@ -5505,7 +5505,7 @@ describe("Updates dialog first state", () => {
    Framed at 1440 and 390, light and dark, en and uk. */
 describe("self-update confirmation modal", () => {
   browserTest("variant 1 on desktop and phone, light and dark, en and uk", async () => {
-    const out = path.resolve(".artifacts/self-update-confirm");
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "self-update-confirm");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch(LAUNCH);
@@ -5721,6 +5721,138 @@ describe("self-update confirmation modal", () => {
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 600_000);
+
+  /* A confirmed Update answered with a refusal (409 naming the required checks
+     that failed) or admitted with a warning (202 naming the optional checks
+     that failed). The confirmation scrolls the phone to the Update card, so the
+     outcome has to be on the first screen there, once, without scrolling:
+     measured from its text rects against the dialog's own scroll container,
+     at 390x844 and 390x640, and once at 1440x900 where the header shows it. */
+  browserTest("a confirmed Update's refusal and optional-check warning stay in view once, on phones and desktop, in both locales and themes", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "self-update-action-outcome");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const { CHECKOUT_STEPS, idleCheck, idleUpdate, stoppedProcess } = await import("@/lib/selfUpdate/types");
+    const old = "36accb1".padEnd(40, "1"), target = "e7893bc".padEnd(40, "e");
+    const at = "2026-10-11T12:34:20.000Z";
+    const revision = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1.11.0", date: "2026-10-11T09:00:00.000Z" });
+    const proc = (pid: number) => ({ ...stoppedProcess(), state: "healthy" as const, pid, startedAt: at, lastHealthAt: at, lastHealthOk: true, revision: old.slice(0, 7), tail: [] });
+    const initial = {
+      mode: "checkout", unsupportedReason: null, installed: revision(old), serving: { web: revision(old), runtimeHost: revision(old) },
+      available: revision(target), check: { ...idleCheck(), state: "update-available", at, nextPollAt: at, relation: "behind", behind: 1 },
+      update: idleUpdate(CHECKOUT_STEPS), busy: null, processes: { web: { ...proc(4141), port: 8899 }, runtimeHost: proc(4242) },
+      meta: { branch: "main", remote: "https://github.com/example/delegatus", checkout: "/fixture/checkout", pollMinutes: 60, serverTime: at },
+      workEvidence: { state: "ready", since: at, at, error: null, phases: null },
+      resumeWork: { turns: 0, stages: 0, turnList: [], stageList: [], unreadable: null },
+    };
+    const running = { ...initial, busy: "update", update: { ...idleUpdate(CHECKOUT_STEPS), state: "running", trigger: "operator", target, targetShort: target.slice(0, 7), targetVersion: "1.11.0", startedAt: at,
+      steps: idleUpdate(CHECKOUT_STEPS).steps.map((step, index) => ({ ...step, state: index === 0 ? "running" : "pending", startedAt: index === 0 ? at : null })) } };
+    const readings: Record<string, unknown>[] = [];
+    try {
+      const sizes = [{ width: 390, height: 844 }, { width: 390, height: 640 }, { width: 1440, height: 900 }];
+      for (const lang of ["uk", "en"] as const) for (const { width, height } of sizes) for (const scheme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height }, colorScheme: scheme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", error => pageErrors.push(error.message));
+        try {
+          await page.addInitScript(({ lang, initial, running }) => {
+            localStorage.setItem("llv_lang", lang);
+            const streams: { listeners: Record<string, ((event: { data: string }) => void)[]> }[] = [];
+            let Source = window.EventSource;
+            Object.defineProperty(window, "EventSource", { configurable: true,
+              get: () => Source,
+              set: (Next: typeof EventSource) => { Source = class extends Next {
+                constructor(url: string | URL) {
+                  super(url);
+                  if (String(url).startsWith("/api/self-update/events") && !String(url).includes("readOnly")) {
+                    const stream = { listeners: {} as Record<string, ((event: { data: string }) => void)[]> };
+                    streams.push(stream);
+                    Object.assign(this, { addEventListener: (type: string, listener: (event: { data: string }) => void) => { (stream.listeners[type] ??= []).push(listener); } });
+                  }
+                }
+              } as typeof EventSource; },
+            });
+            let answer: { status: number; body: unknown } = { status: 202, body: running };
+            const interceptFetch = (next: typeof fetch) => ((input: RequestInfo | URL, init?: RequestInit) => {
+              const url = input instanceof Request ? input.url : String(input);
+              const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+              const pathname = new URL(url, location.href).pathname;
+              if (pathname === "/api/self-update/update" && method === "POST") return Promise.resolve(new Response(JSON.stringify(answer.body), { status: answer.status, headers: { "content-type": "application/json" } }));
+              if (pathname === "/api/self-update") return Promise.resolve(new Response(JSON.stringify(initial), { status: 200, headers: { "content-type": "application/json" } }));
+              return next(input, init);
+            }) as typeof fetch;
+            let fetcher = interceptFetch(window.fetch);
+            Object.defineProperty(window, "fetch", { configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => { fetcher = interceptFetch(next); },
+            });
+            Object.assign(window, {
+              selfUpdateEmit: (data: unknown) => { for (const stream of streams) for (const listener of stream.listeners.state ?? []) listener({ data: JSON.stringify(data) }); return streams.length; },
+              selfUpdateAnswer: (status: number, body: unknown) => { answer = { status, body }; },
+            });
+          }, { lang, initial, running });
+          await page.goto(server.base);
+          await page.waitForSelector("[data-phone-card], [data-mobile2-shell], [data-mobile-shell], [data-kanban-board]", { timeout: 15_000 }).catch(() => {});
+          await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
+          const dialog = page.locator("[data-self-update-dialog]");
+          await dialog.waitFor();
+          const emit = (snapshot: unknown) => page.evaluate(snapshot => (window as unknown as { selfUpdateEmit(value: unknown): number }).selfUpdateEmit(snapshot), snapshot);
+          for (let attempt = 0; attempt < 30; attempt++) {
+            if (await emit(initial)) break;
+            await page.waitForTimeout(100);
+          }
+          await dialog.locator('[data-action="update"]:not([disabled])').waitFor({ timeout: 5_000 }).catch(async () => {
+            throw new Error(JSON.stringify({ dialog: await dialog.innerText().catch(() => "missing"), pageErrors }));
+          });
+          const show = async (status: number, body: unknown, selector: string, expectedNames: string, label: string) => {
+            await page.evaluate(({ status, body }) => (window as unknown as { selfUpdateAnswer(status: number, body: unknown): void }).selfUpdateAnswer(status, body), { status, body });
+            await emit(initial);
+            await dialog.locator('[data-action="update"]:not([disabled])').click();
+            const confirmation = page.locator("[data-team-dialog='self-update-confirm']");
+            await confirmation.locator('[data-action="confirm-apply"]').click();
+            await confirmation.waitFor({ state: "detached" });
+            await dialog.locator(`${selector}:visible`).first().waitFor();
+            /* The confirmation's own scroll to the Update card settles first. */
+            await page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+            const reading = await dialog.evaluate((root, selector) => {
+              const drawn = (element: HTMLElement) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
+              const copies = [...root.querySelectorAll<HTMLElement>(selector)].filter(drawn);
+              const element = copies[0]!;
+              /* The dialog's scroll container, not the content inside it, bounds what is in view. */
+              let port: HTMLElement | null = element.parentElement;
+              while (port && !/auto|scroll/.test(getComputedStyle(port).overflowY)) port = port.parentElement;
+              const box = port!.getBoundingClientRect();
+              const range = document.createRange(); range.selectNodeContents(element);
+              return {
+                copies: copies.length,
+                text: (element.textContent ?? "").replace(/\s+/g, " ").trim(),
+                rects: [...range.getClientRects()].map(rect => ({ top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right })),
+                port: { top: Math.max(box.top, 0), bottom: Math.min(box.bottom, window.innerHeight), left: Math.max(box.left, 0), right: Math.min(box.right, window.innerWidth) },
+                inUpdateCard: Boolean(element.closest("[data-section='update']")),
+              };
+            }, selector);
+            expect(reading.copies, `${label} is shown once`).toBe(1);
+            expect(reading.text, `${label} names the checks`).toContain(expectedNames);
+            expect(reading.rects.length, `${label} has rendered text`).toBeGreaterThan(0);
+            expect(reading.rects.every(rect => rect.top >= reading.port.top && rect.bottom <= reading.port.bottom && rect.left >= reading.port.left && rect.right <= reading.port.right),
+              `${label} is whole inside the scroll container without scrolling: ${JSON.stringify(reading)}`).toBe(true);
+            /* The phone shows it beside the Update button just pressed; the desktop keeps it in the header. */
+            expect(reading.inUpdateCard, `${label} sits ${phone ? "in the Update card" : "in the header"}`).toBe(phone);
+            const frame = `${lang}-${width}x${height}-${scheme}-${label}.png`;
+            await page.screenshot({ path: path.join(out, frame) });
+            readings.push({ lang, width, height, scheme, label, ...reading, frame });
+          };
+          await show(409, { code: "deployment-refused", detail: "red", green: { state: "red", detail: "typecheck", checks: ["privacy-publication", "typecheck"] }, snapshot: initial }, '[data-error="action"]', "privacy-publication, typecheck", "required-ci-refusal");
+          await show(202, { ...running, optionalCheckFailures: ["Windows (native)", "Minimum macOS SQLite"] }, '[data-warning="optional-checks"]', "Windows (native), Minimum macOS SQLite", "optional-ci-warning");
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+    } finally { await browser.close(); server.stop(); }
+  }, 180_000);
 });
 
 /* The loading leaf draws its own header bar until the Board mounts and draws

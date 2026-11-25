@@ -53,6 +53,9 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
   const [pending, setPending] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<ActionError | null>(null);
   const [optionalCheckFailures, setOptionalCheckFailures] = useState<string[]>([]);
+  /* The Update card's own actions (Update and Retry) show their outcome in
+     that card on the phone; every other action keeps it in the header. */
+  const [outcomeInUpdateCard, setOutcomeInUpdateCard] = useState(false);
   const [webRestart, setWebRestart] = useState<{ pid: number | null } | null>(null);
   const [firstWebPid, setFirstWebPid] = useState<number | null | undefined>(undefined);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -74,6 +77,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     setPending((value) => new Set(value).add(key));
     setError(null);
     setOptionalCheckFailures([]);
+    setOutcomeInUpdateCard(key === "update");
     /* The snapshot this action answers with is ordered from now: a stream
        state that arrives while it runs is newer and stays. Its outcome (the
        error, the restart it began) is the action's own and always shown. */
@@ -182,6 +186,7 @@ export function SelfUpdateDialog({ onClose }: { onClose: () => void }) {
     pending,
     error,
     optionalCheckFailures,
+    outcomeInUpdateCard,
     waitingForWeb: webRestart !== null && (feed.offline || !web || web.pid === webRestart.pid),
     reloadTo: replaced ? (s?.serving.web?.short || s?.installed.short || null) : null,
   };
