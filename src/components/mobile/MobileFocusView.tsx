@@ -901,7 +901,7 @@ const BAR_META_STATE = "min-w-0 max-w-[calc(100%-0.625rem)] truncate";
  * an ellipsis inside that; a line without the floor wraps the whole group out of
  * sight, so a model is never a single letter or a sliver.
  */
-function ChatIdentity({ file }: { file: FileEntry }) {
+function ChatIdentity({ file, working = false }: { file: FileEntry; working?: boolean }) {
   const { t } = useLocale();
   const badge = engineBadge(file);
   const modelName = conversationModelLabel(file);
@@ -913,7 +913,7 @@ function ChatIdentity({ file }: { file: FileEntry }) {
   return (
     <span data-mobile2-chat-identity className="flex min-w-[calc(14px_+_0.5rem_+_6.5ch)] max-w-max grow basis-0 items-center gap-1">
       <span aria-hidden className="shrink-0 text-muted">·</span>
-      <ChatEngineMark file={file} />
+      <ChatEngineMark file={file} working={working} />
       <span data-mobile2-chat-model className="min-w-0 truncate" title={tier ? `${model} — ${tier}` : model}>{model}</span>
     </span>
   );
@@ -1021,7 +1021,7 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskC
           <span data-mobile2-chat-state title={bits.phrase} className={`${BAR_META_STATE} ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
           {offline ? null : (
             <>
-              <ChatIdentity file={file} />
+              <ChatIdentity file={file} working={bits.key === "working"} />
               {stage?.current ? (
                 <span className="flex shrink-0 items-center gap-1">
                   <span aria-hidden className="text-muted">·</span>
@@ -1086,7 +1086,7 @@ export function EntryBarTitle({ entry, offline, bump }: { entry: SwitchEntry; of
           )}
           {/* The round on screen is a conversation like any other: it says which
               model, tier and account the sheet on this surface would change. */}
-          {!offline && entry.file ? <ChatIdentity file={entry.file} /> : null}
+          {!offline && entry.file ? <ChatIdentity file={entry.file} working={bits?.key === "working"} /> : null}
         </span>
         {/* The same standing contract as the conversation's own cell (#165). */}
         {entry.file?.pendingWakeup ? (

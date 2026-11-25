@@ -374,6 +374,10 @@ export interface DurableQuotaObservation {
   /** The provider said the limit is reached whatever the windows show; see
       `QuotaObservation.limitReached`. Absent when the reading did not say. */
   limitReached?: boolean;
+  /** Unix-second watermark of the newest actual quota exhaustion event ever
+      recorded for this account (Antigravity). Preserved across empty polls and
+      expired windows so older transcripts cannot resurrect an already-reset window. */
+  lastQuotaEventAt?: number;
 }
 
 export interface AccountSelectionSnapshot {

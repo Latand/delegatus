@@ -2,6 +2,7 @@ import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import { readCpuPriority, type CpuPrioritySource } from "./cpuPriority";
 import type { TaskPriority } from "../tasks/types";
@@ -13,9 +14,9 @@ import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext 
 export const CPU_QUEUE_MAX_WAIT_MS = 10 * 60_000;
 export const CPU_QUEUE_SPACING_MS = 2_000;
 export const CPU_STAGE_POLL_MS = 5_000;
-/** A waiting stage polls every five seconds. An ownerless ticket nobody has
- * polled for this long stops counting ahead of others, for every release
- * sharing the file; it keeps its row. */
+/** A waiting stage polls every five seconds. Ownerless tickets, bounded Linux
+ * gate waiters and unverifiable owners that stop polling keep their rows but
+ * stop counting ahead of others, for every release sharing the file. */
 export const CPU_QUEUE_UNPOLLED_MS = 60_000;
 /** An ownerless ticket unpolled for this long, and held by no fence, is
  * removed; so is a ticket whose owner no kernel check here can prove alive. */
@@ -24,6 +25,31 @@ export const CPU_QUEUE_ABANDONED_MS = 24 * 60 * 60_000;
 export const CPU_QUEUE_STALE_GRACE_MS = 60_000;
 const BOUNDED_GATE_PREFIX = "command:bounded:";
 export const ACTIVE_GATE_PREFIX = "command:gate-active:";
+/** True when unified cgroup membership names the declared service or a child. */
+export function cgroupScopeContainsUnit(scope: string, unit: string): boolean {
+  if (!/^[A-Za-z0-9_.@:-]+\.(?:service|scope)$/.test(unit)) return false;
+  return scope.split("\n").some(line => {
+    if (!line.startsWith("0::/")) return false;
+    const membership = line.slice(3).replace(/\/$/, "");
+    return membership === `/${unit}` || membership.endsWith(`/${unit}`) || membership.includes(`/${unit}/`);
+  });
+}
+const PUBLICATION_LAUNCHES = "publication_launch_proofs";
+/** More live publications than this never run on one machine. */
+const PUBLICATION_LAUNCH_LIMIT = 64;
+/** The per-launch secret the Viewer puts into the exec environment of a
+ * publication preparer it spawns. Its queue row stores only the digest. */
+export const PUBLICATION_LAUNCH_PROOF_ENV = "LLV_GATE_PUBLICATION_LAUNCH_PROOF";
+export function publicationLaunchDigest(proof: string): string {
+  return createHash("sha256").update(proof).digest("hex");
+}
+function readPublicationLaunch(stored: string): ProcessIdentity | null {
+  try {
+    const identity = JSON.parse(stored) as ProcessIdentity | null;
+    return identity && Number.isSafeInteger(identity.pid) && identity.pid > 0 && typeof identity.startIdentity === "string"
+      && typeof identity.bootEpoch === "string" && identity.bootEpoch ? identity : null;
+  } catch { return null; }
+}
 /** `stalledMs` is set only while the head is past its bound and nothing is admitted. */
 export type CpuQueueWait = { since: number; position: number; waitedMs: number; heldBy: "queue" | "pressure"; priority?: TaskPriority; stalledMs?: number };
 /** Recent kernel capacity evidence from before admission. Any intervening
@@ -37,7 +63,53 @@ function matchesUrgentStage(decision: UrgentStageDecision): boolean {
   try { return decision.currentRevision() === decision.evidence.revision; }
   catch { return false; } // A state reader with no current evidence cannot authorize an early start.
 }
-type Ticket = { seq: number; fifo_seq: number; key: string; since: number; owner: string | null; priority: number; source: string | null; polled: number | null; low_pressure: number };
+type Ticket = { seq: number; fifo_seq: number; key: string; since: number; owner: string | null; priority: number; source: string | null; polled: number | null; low_pressure: number; linux_poll: string | null };
+const boundedLinuxGateWaiter = (row: Ticket) =>
+  process.platform === "linux" && row.low_pressure === 1 && row.key.startsWith(BOUNDED_GATE_PREFIX);
+type LinuxGatePoll = { domain: string; ms: number };
+/** A time namespace shows CLOCK_BOOTTIME plus its own offset. Null when this
+ * process is in a time namespace whose offset cannot be read. */
+function linuxBootOffsetMs(): number | null {
+  try {
+    const offset = /^boottime\s+(-?\d+)\s+(\d+)\s*$/m.exec(fs.readFileSync("/proc/self/timens_offsets", "utf8"));
+    return offset ? Number(offset[1]) * 1000 + Number(offset[2]) / 1_000_000 : null;
+  } catch {
+    // A kernel without time namespaces has neither file and no offset.
+    return fs.existsSync("/proc/self/ns/time") ? null : 0;
+  }
+}
+function openLinuxGateClock(): (() => LinuxGatePoll | null) | null {
+  try {
+    const epoch = systemBootEpoch()?.split(":")[1];
+    const ffi = process.getBuiltinModule?.("bun:ffi") as typeof import("bun:ffi") | undefined;
+    const offset = linuxBootOffsetMs();
+    if (!epoch || !ffi || offset === null) return null;
+    // Samples are kept on the host's boot clock, so helpers in different time
+    // namespaces of one boot age a ticket on the same clock.
+    const domain = `${epoch}:host-boottime`;
+    const library = ffi.dlopen("libc.so.6", { clock_gettime: { args: ["i32", "ptr"], returns: "i32" } });
+    const time = new BigInt64Array(2);
+    return () => {
+      // CLOCK_BOOTTIME is shared by the independent helpers and is immune to
+      // wall-clock steps. Bun's hrtime starts over in each helper.
+      if (library.symbols.clock_gettime(7, ffi.ptr(time)) !== 0) return null;
+      return { domain, ms: Number(time[0]) * 1000 + Number(time[1]) / 1_000_000 - offset };
+    };
+  } catch { return null; }
+}
+let readLinuxGateClock: ReturnType<typeof openLinuxGateClock> | undefined;
+function linuxGateClock(): LinuxGatePoll | null {
+  if (readLinuxGateClock === undefined) readLinuxGateClock = openLinuxGateClock();
+  return readLinuxGateClock?.() ?? null;
+}
+const linuxPollStamp = (poll: LinuxGatePoll) => `${poll.domain}:${poll.ms}`;
+function linuxPollAge(row: Ticket, clock: LinuxGatePoll | null): number | null {
+  if (!clock || !row.linux_poll) return null;
+  const split = row.linux_poll.lastIndexOf(":");
+  if (split <= 0 || row.linux_poll.slice(0, split) !== clock.domain || split === row.linux_poll.length - 1) return null;
+  const ms = Number(row.linux_poll.slice(split + 1));
+  return Number.isFinite(ms) && ms >= 0 && ms <= clock.ms ? clock.ms - ms : null;
+}
 type GateSlot = { slot: number | null; cap: number };
 type ActiveGateSlot = GateSlot & { key: string; owner: string };
 /** The queue judges owners with these; `log` receives one line for each ticket
@@ -165,7 +237,7 @@ export class CpuAdmissionQueue {
   constructor(file: string, private readonly now = Date.now, private readonly spacingMs = CPU_QUEUE_SPACING_MS, private readonly maxWaitMs = CPU_QUEUE_MAX_WAIT_MS, private readonly unpolledMs = CPU_QUEUE_UNPOLLED_MS,
     private readonly observer: CpuOwnerObserver = {
       status: processIdentityStatus, exited: identity => procBackend.processExited(identity.pid),
-    }, busyTimeoutMs = 5_000) {
+    }, busyTimeoutMs = 5_000, private readonly linuxClock = linuxGateClock) {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite?.Database) throw new Error("CPU admission requires the supported Bun runtime");
@@ -181,8 +253,8 @@ export class CpuAdmissionQueue {
         const triggers = new Map(this.db.query<{ name: string; sql: string }, []>("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'").all().map(row => [row.name, row.sql]));
         const columns = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all().map(row => row.name));
         const cutoverColumns = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(legacy_gate_cutover)").all().map(row => row.name));
-        return triggers.has("legacy_gate_retired") && triggers.get("tickets_fifo") === TICKETS_FIFO && triggers.get("tickets_poll") === TICKETS_POLL
-          && ["priority", "source", "low_pressure", "aging", "fifo_seq"].every(name => columns.has(name)) && cutoverColumns.has("admission");
+        return triggers.has("legacy_gate_retired") && triggers.has("tickets_linux_poll_reset") && triggers.get("tickets_fifo") === TICKETS_FIFO && triggers.get("tickets_poll") === TICKETS_POLL
+          && ["priority", "source", "low_pressure", "aging", "fifo_seq", "linux_poll"].every(name => columns.has(name)) && cutoverColumns.has("admission");
       };
       if (!schemaReady()) {
         const opened = this.now();
@@ -219,6 +291,12 @@ export class CpuAdmissionQueue {
           // Set by a ticket's own check: it starts only while measured pressure is
           // low. Helpers that predate the column leave it 0, the old behaviour.
           if (!columns.some(column => column.name === "low_pressure")) this.db.exec("ALTER TABLE tickets ADD COLUMN low_pressure INTEGER NOT NULL DEFAULT 0");
+          // Legacy checkers still publish wall-clock polls through tickets_poll.
+          // Their writes invalidate the boot-clock sample, even for a repeated
+          // wall timestamp. This release writes its sample after that update.
+          if (!columns.some(column => column.name === "linux_poll")) this.db.exec("ALTER TABLE tickets ADD COLUMN linux_poll TEXT");
+          this.db.exec(`CREATE TRIGGER IF NOT EXISTS tickets_linux_poll_reset AFTER UPDATE OF polled ON tickets
+            WHEN NEW.linux_poll IS NOT NULL BEGIN UPDATE tickets SET linux_poll = NULL WHERE key = NEW.key; END`);
           // Only a ticket checked by an aging-aware owner may gain effective rank.
           // Legacy owners keep comparing task rank/seq and cannot act on its age.
           if (!columns.some(column => column.name === "aging")) this.db.exec("ALTER TABLE tickets ADD COLUMN aging INTEGER NOT NULL DEFAULT 0");
@@ -361,9 +439,52 @@ export class CpuAdmissionQueue {
       return read();
     }).immediate();
   }
-  waitingGateOwners(): string[] {
-    return this.db.query<{ owner: string }, []>(`SELECT DISTINCT owner FROM tickets
-      WHERE owner IS NOT NULL AND key GLOB 'command:*' AND key NOT GLOB '${ACTIVE_GATE_PREFIX}*'`).all().map(row => row.owner);
+  waitingGateTickets(): { key: string; owner: string }[] {
+    return this.db.query<{ key: string; owner: string }, []>(`SELECT key, owner FROM tickets
+      WHERE owner IS NOT NULL AND key GLOB 'command:*' AND key NOT GLOB '${ACTIVE_GATE_PREFIX}*'`).all();
+  }
+  /** The Viewer records each publication preparer it starts by the kernel
+   * identity of the process it spawned, the operation it handed that process
+   * and the digest of a secret it put only into that process's exec
+   * environment. Gate helpers read the rows to tell the preparer's cleanup
+   * runner from a legacy holder, whatever bytes the lane's checkout carries.
+   * A row proves nothing alone: a reader must match it to a live process that
+   * still carries the same operation and the secret behind the digest, which
+   * a row written for a process the Viewer did not launch cannot name.
+   * Older releases never read this table. */
+  recordPublicationLaunch(identity: ProcessIdentity, operation: string, proofDigest: string): void {
+    // Probe the processes before taking the writer, as check() does.
+    const ended = this.publicationLaunchRows().filter(row => {
+      const launch = readPublicationLaunch(row.identity);
+      return !launch || this.observer.status(launch) === "dead";
+    }).map(row => row.identity);
+    this.db.transaction(() => {
+      this.db.exec(`CREATE TABLE IF NOT EXISTS ${PUBLICATION_LAUNCHES} (identity TEXT PRIMARY KEY, operation TEXT NOT NULL, proof TEXT NOT NULL, recorded INTEGER NOT NULL)`);
+      const remove = this.db.query(`DELETE FROM ${PUBLICATION_LAUNCHES} WHERE identity = ?`);
+      for (const row of ended) remove.run(row);
+      this.db.query(`INSERT OR REPLACE INTO ${PUBLICATION_LAUNCHES} VALUES (?, ?, ?, ?)`).run(JSON.stringify(identity), operation, proofDigest, this.now());
+      // A Viewer that dies before forgetting leaves its row until the process
+      // is seen dead. The newest rows are the live publications.
+      this.db.query(`DELETE FROM ${PUBLICATION_LAUNCHES} WHERE identity NOT IN
+        (SELECT identity FROM ${PUBLICATION_LAUNCHES} ORDER BY recorded DESC, rowid DESC LIMIT ?)`).run(PUBLICATION_LAUNCH_LIMIT);
+    }).immediate();
+  }
+  forgetPublicationLaunch(identity: ProcessIdentity): void {
+    if (!this.hasPublicationLaunches()) return;
+    this.db.query(`DELETE FROM ${PUBLICATION_LAUNCHES} WHERE identity = ?`).run(JSON.stringify(identity));
+  }
+  publicationLaunches(): { identity: ProcessIdentity; operation: string; proof: string }[] {
+    return this.publicationLaunchRows().flatMap(row => {
+      const identity = readPublicationLaunch(row.identity);
+      return identity && /^[0-9a-f]{64}$/.test(row.proof) ? [{ identity, operation: row.operation, proof: row.proof }] : [];
+    });
+  }
+  private hasPublicationLaunches(): boolean {
+    return this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(PUBLICATION_LAUNCHES) !== null;
+  }
+  private publicationLaunchRows(): { identity: string; operation: string; proof: string }[] {
+    if (!this.hasPublicationLaunches()) return [];
+    return this.db.query<{ identity: string; operation: string; proof: string }, []>(`SELECT identity, operation, proof FROM ${PUBLICATION_LAUNCHES}`).all();
   }
   activeGateSlots(): ActiveGateSlot[] {
     if (!this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gate_slots'").get()) return [];
@@ -434,15 +555,21 @@ export class CpuAdmissionQueue {
       }
     };
     const sampledAt = this.now();
+    let sampledClock: LinuxGatePoll | null | undefined;
+    const preflightClock = () => sampledClock === undefined ? sampledClock = this.linuxClock() : sampledClock;
     const sampledTickets = new Map(this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE (source IS NOT NULL AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)) OR key = ?").all(key).map(row => [row.key, row]));
     for (const row of sampledTickets.values()) {
       const observed = owners.get(row.owner!);
       if (observed?.dead) continue;
       // The calling ticket returns from a hold and refreshes its binding below.
       if (row.key === key) { if (!source && row.source) rank(row.source); continue; }
-      const quiet = sampledAt - (row.polled ?? (row.owner === null ? sampledAt : row.since));
-      if ((quiet > this.unpolledMs || quiet > CPU_QUEUE_ABANDONED_MS)
-        && (row.owner === null || observed?.status === "unverified")) continue;
+      const wallQuiet = sampledAt - (row.polled ?? (row.owner === null ? sampledAt : row.since));
+      // Without a boot clock here, the poll's wall-clock age applies.
+      const quiet = boundedLinuxGateWaiter(row) && row.owner !== null && preflightClock()
+        ? linuxPollAge(row, preflightClock()) ?? 0 : wallQuiet;
+      const unverifiable = row.owner === null || observed?.status === "unverified";
+      if (quiet > this.unpolledMs && (unverifiable || boundedLinuxGateWaiter(row))
+        || quiet > CPU_QUEUE_ABANDONED_MS && unverifiable) continue;
       if (row.source) rank(row.source);
     }
     if (source) rank(JSON.stringify(source));
@@ -450,6 +577,8 @@ export class CpuAdmissionQueue {
     const decisions: string[] = [];
     const wait = this.db.transaction(() => {
       const now = this.now();
+      let committedClock: LinuxGatePoll | null | undefined;
+      const clock = () => committedClock === undefined ? committedClock = this.linuxClock() : committedClock;
       const activeSlots = this.activeGateSlots();
       const gateHolders = new Set(activeSlots.map(gate => gate.key));
       // A release that predates polls released these from a hold since the last check.
@@ -466,17 +595,26 @@ export class CpuAdmissionQueue {
         }
         // An owner recorded in another PID namespace, or one the kernel will
         // not describe, is never proven alive or dead here, so its polls stand
-        // for it as for an ownerless ticket. One the kernel shows alive keeps
-        // its place however long it waits.
-        if (status !== "unverified" || row.key === key) continue;
-        const quiet = now - (row.polled ?? row.since);
-        if (quiet > CPU_QUEUE_ABANDONED_MS) {
+        // for it as for an ownerless ticket. A stopped Linux gate wrapper can
+        // also be alive without making progress on its bounded wait.
+        if (row.key === key || status !== "unverified" && !boundedLinuxGateWaiter(row)) continue;
+        let quiet = now - (row.polled ?? row.since);
+        const sample = boundedLinuxGateWaiter(row) ? clock() : null;
+        if (sample) {
+          const age = linuxPollAge(row, sample);
+          // An older writer or a reboot gets one full interval from
+          // observation. Initialize it under the writer lock.
+          if (age === null) this.db.query("UPDATE tickets SET linux_poll = ? WHERE key = ?").run(linuxPollStamp(sample), row.key);
+          quiet = age ?? 0;
+        }
+        if (status === "unverified" && quiet > CPU_QUEUE_ABANDONED_MS) {
           this.cancel(row.key);
           decisions.push(`removed ${row.key}: its owner process ${identity.pid} cannot be verified from here and has not checked in for ${Math.round(quiet / 3_600_000)} h`);
         } else if (quiet > this.unpolledMs && !this.db.query("SELECT 1 FROM suspended WHERE key = ?").get(row.key)) {
           this.db.query("INSERT INTO suspended VALUES (?)").run(row.key);
           this.db.query("INSERT INTO unpolled VALUES (?)").run(row.key);
-          decisions.push(`passed over ${row.key}: its owner process ${identity.pid} cannot be verified from here and has not checked in for ${Math.round(quiet / 1_000)} s; its next check returns it to its place`);
+          const reason = status === "unverified" ? " cannot be verified from here and" : "";
+          decisions.push(`passed over ${row.key}: its owner process ${identity.pid}${reason} has not checked in for ${Math.round(quiet / 1_000)} s; its next check returns it to its place`);
         }
       }
       // The insert is the poll: tickets_poll stamps an existing row with `now`.
@@ -484,6 +622,10 @@ export class CpuAdmissionQueue {
       this.db.query("DELETE FROM suspended WHERE key = ?").run(key);
       this.db.query("DELETE FROM stage_admissions WHERE key = ?").run(key);
       this.touch(key);
+      if (owner && requireLowPressure && process.platform === "linux" && key.startsWith(BOUNDED_GATE_PREFIX)) {
+        const sample = clock();
+        if (sample) this.db.query("UPDATE tickets SET linux_poll = ? WHERE key = ?").run(linuxPollStamp(sample), key);
+      }
       this.db.query("UPDATE tickets SET aging = 1 WHERE key = ? AND aging = 0").run(key);
       this.db.query("UPDATE tickets SET low_pressure = ? WHERE key = ? AND low_pressure IS NOT ?").run(requireLowPressure ? 1 : 0, key, requireLowPressure ? 1 : 0);
       if (source) {

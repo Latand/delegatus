@@ -16,12 +16,30 @@ import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 import { KEEP_MARKER, plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import { nameInReport } from "./attemptTempRetention.testSupport";
-import type { ProcessScan } from "@/lib/tempSweep";
+import { scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 const exec = promisify(execFile);
 const roots: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { removeKeepMarkers(); for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(reportMediaRoot(), { recursive: true, force: true }); });
 const root = () => { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-filesystem-")); roots.push(directory); return directory; };
+
+test.skipIf(process.platform !== "linux")("a long process command line holds only the attempt it references", async () => {
+  const parent = root(), proc = path.join(parent, "proc"), pid = path.join(proc, "41");
+  const held = path.join(parent, "llv-stage-held"), ended = path.join(parent, "llv-stage-ended");
+  fs.mkdirSync(path.join(pid, "ns"), { recursive: true });
+  fs.symlinkSync("mnt:[41]", path.join(pid, "ns/mnt"));
+  fs.symlinkSync(parent, path.join(pid, "cwd"));
+  fs.mkdirSync(held); fs.mkdirSync(ended);
+  const alias = path.join(parent, "profile alias");
+  fs.symlinkSync(held, alias);
+  const flags = Array.from({ length: 80 }, (_, index) => `--fixture-flag-${index}=off`).join(" ");
+  fs.writeFileSync(path.join(pid, "cmdline"), `${path.join(parent, "chrome")} ${flags} --profile="${alias}"\0`);
+  const scan = () => scanProcesses(proc);
+  expect(await attemptReferencesClear(ended, ended, scan(), async () => true)).toBeTrue();
+  expect(await attemptReferencesClear(held, held, scan(), async () => true)).toBeFalse();
+  fs.writeFileSync(path.join(pid, "cmdline"), `/opt/chrome\0${alias}\0`);
+  expect(await attemptReferencesClear(held, held, scan(), async () => true)).toBeFalse();
+});
 
 test("native recursive removal is awaited, killed at the shared cutoff, and reported as a deferral", async () => {
   const directory = root(); fs.writeFileSync(path.join(directory, "payload"), "owned");
@@ -985,7 +1003,12 @@ test.skipIf(process.platform !== "linux")("an incomplete container inventory can
   fs.writeFileSync(docker, '#!/bin/sh\nif [ "$1" = ps ]; then printf "111111111111\\n"; else printf "[]\\n"; fi\n', { mode: 0o700 });
   const previous = process.env.PATH;
   process.env.PATH = bin + path.delimiter + previous;
-  try { expect(await attemptReferencesClear(directory, directory, { ownNamespace: null, processes: [] })).toBeFalse(); }
+  const reasons: string[] = [];
+  try {
+    expect(await attemptReferencesClear(directory, directory, { ownNamespace: null, processes: [] },
+      undefined, undefined, reason => reasons.push(reason))).toBeFalse();
+    expect(reasons).toEqual(["container_inventory_unknown"]);
+  }
   finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
 });
 
@@ -1014,7 +1037,12 @@ test.skipIf(process.platform !== "linux")("a container bind through a physical p
   const bin = path.join(parent, "bin"); fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}\nif (process.argv[2] === "ps") console.log("111111111111"); else console.log(${JSON.stringify(JSON.stringify({ Id: "111111111111", Mounts: [{ Type: "bind", Source: directory }] }))});\n`, { mode: 0o700 });
   const previous = process.env.PATH; process.env.PATH = bin + path.delimiter + (previous ?? "");
-  try { expect(await attemptReferencesClear(alias, alias, { ownNamespace: null, processes: [] })).toBeFalse(); }
+  const reasons: string[] = [];
+  try {
+    expect(await attemptReferencesClear(alias, alias, { ownNamespace: null, processes: [] },
+      undefined, undefined, reason => reasons.push(reason))).toBeFalse();
+    expect(reasons).toEqual(["container_mount_reference"]);
+  }
   finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
 });
 

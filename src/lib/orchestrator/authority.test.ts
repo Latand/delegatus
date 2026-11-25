@@ -97,24 +97,68 @@ test("identity survives migration: seats and revocations compare by canonical al
   }))).toEqual([{ conversationId: "conversation_new", path: null, project: "proj-a" }]);
 });
 
-test("revocations resolve once per decision and a later decision reads a new revocation", () => {
+test("a snapshot resolves each relevant alias once and a later decision reads a new revocation", () => {
   let resolutions = 0;
-  const revocations: OrchestratorRevocation[] = Array.from({ length: 100 }, (_, index) => ({
-    project: "project-a", conversationId: `conversation_revoked-${index}`, seatEpoch: 1,
-    revokedAt: "2026-10-01T00:00:00.000Z",
-  }));
+  const revocations: OrchestratorRevocation[] = [
+    ...Array.from({ length: 100 }, (_, index) => ({
+      project: "project-a", conversationId: `conversation_older-${index}`, seatEpoch: 1,
+      revokedAt: "2026-10-01T00:00:00.000Z",
+    })),
+    ...Array.from({ length: 10 }, (_, index) => ({
+      project: "project-a", conversationId: `conversation_peer-${index % 5}`, seatEpoch: 2,
+      revokedAt: "2026-10-01T00:00:30.000Z",
+    })),
+  ];
   const value = sources({
     activeSeats: () => [seat({ conversationId: "conversation_a", project: "project-a", seatEpoch: 2 }),
       seat({ conversationId: "conversation_b", project: "project-b", seatEpoch: 2 })],
     revocations: () => revocations,
-    resolveAlias: id => { resolutions++; return id === "conversation_old" ? "conversation_a" : id; },
+    withAliases: read => read(id => { resolutions++; return id === "conversation_old" ? "conversation_a" : id; }),
   });
   expect(ids(value)).toEqual(["conversation_a", "conversation_b"]);
-  expect(resolutions).toBe(102);
+  // 2 active seats + 5 unique peer revocations at epoch >= 2; all 100 epoch-1 rows skipped.
+  expect(resolutions).toBe(7);
   revocations.push({ project: "project-a", conversationId: "conversation_old", seatEpoch: 2, revokedAt: "2026-10-01T00:01:00.000Z" });
   resolutions = 0;
   expect(ids(value)).toEqual(["conversation_b"]);
-  expect(resolutions).toBe(103);
+  expect(resolutions).toBe(8);
+});
+
+test("conflicting multi-project seats skip revocation scans and caller-scoped minEpoch prunes unrelated history", () => {
+  let revocationReads = 0;
+  let resolutions = 0;
+  const conflict = sources({
+    activeSeats: () => [
+      seat({ conversationId: "conversation_a", project: "proj-a", seatEpoch: 1 }),
+      seat({ conversationId: "conversation_a", project: "proj-b", seatEpoch: 2 }),
+    ],
+    revocations: () => { revocationReads++; return []; },
+    resolveAlias: id => id,
+  });
+  expect(authorizedManagerSeats(conflict, "conversation_a")).toEqual([]);
+  expect(revocationReads).toBe(0);
+
+  const history: OrchestratorRevocation[] = Array.from({ length: 50 }, (_, index) => ({
+    project: "proj-old", conversationId: `conversation_hist_${index}`, seatEpoch: index + 1,
+    revokedAt: "2026-10-01T00:00:00.000Z",
+  }));
+  const scoped = sources({
+    activeSeats: () => [
+      seat({ conversationId: "conversation_old_seat", project: "proj-old", seatEpoch: 1 }),
+      seat({ conversationId: "conversation_fresh_seat", project: "proj-fresh", seatEpoch: 51 }),
+    ],
+    revocations: () => history,
+    resolveAlias: id => { resolutions++; return id === "conversation_alias" ? "conversation_fresh_seat" : id; },
+  });
+  expect(authorizedManagerSeats(scoped, "conversation_fresh_seat")).toEqual([
+    { conversationId: "conversation_fresh_seat", path: null, project: "proj-fresh" },
+  ]);
+  // Only the 2 active seats resolved; all 50 revocations with epoch < 51 skipped.
+  expect(resolutions).toBe(2);
+  history.push({ project: "proj-fresh", conversationId: "conversation_alias", seatEpoch: 51, revokedAt: "2026-10-01T00:01:00.000Z" });
+  resolutions = 0;
+  expect(authorizedManagerSeats(scoped, "conversation_fresh_seat")).toEqual([]);
+  expect(resolutions).toBe(3);
 });
 
 test("a named caller checks only its canonical claim, skipping history when no active seat matches", () => {

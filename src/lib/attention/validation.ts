@@ -136,6 +136,9 @@ export function validateAttentionEvent(value: unknown): AttentionEvent {
        machine accepts it only from `accepted`, and only from the device the
        record names as the acknowledger. */
     case "abandon":
+    /* `stand-down` is the directed device closing its own move the project
+       boundary stopped: accepted state and acknowledger only, as `abandon`. */
+    case "stand-down":
       return { kind: body.kind, deviceId: text(body.deviceId, "deviceId", 256) };
     case "accept": {
       const via = body.via;

@@ -119,6 +119,10 @@ export type ScannedProcess = {
 
 export type ProcessScan = { ownNamespace: string | null; processes: ScannedProcess[] };
 
+export function processPathWithinLimits(file: string): boolean {
+  return Buffer.byteLength(file) < 4096 && file.split(path.sep).every(name => Buffer.byteLength(name) <= 255);
+}
+
 function readLink(file: string): string | null {
   try {
     return fs.readlinkSync(file);
@@ -162,7 +166,9 @@ export function scanProcesses(procRoot = "/proc", extraRoots: readonly string[] 
     try {
       for (const token of fs.readFileSync(path.join(base, "cmdline"), "utf8").split("\0")) {
         references.push(token);
-        if (token.startsWith("/")) paths.add(token);
+        // A process can rewrite argv as one command line. Keep it as text
+        // for argument matching when it cannot be a filesystem path.
+        if (token.startsWith("/") && processPathWithinLimits(token)) paths.add(token);
       }
       for (const line of fs.readFileSync(path.join(base, "maps"), "utf8").split("\n")) {
         const target = /^\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\/.*)$/.exec(line)?.[1];
@@ -326,7 +332,7 @@ export type TempSweepReport = {
   /** Allocations retained under each guard; absent in older report versions. */
   keptBytes?: TempSweepReport["kept"];
   /** Git or inspection holds beyond the pipeline worktree list. */
-  held?: { path: string; via: string; reason: TreeHold | "pinned" | "attempt-owner-unlisted"; bytes: number }[];
+  held?: { path: string; via: string; reason: TreeHold | "pinned" | "attempt-owner-unlisted" | "process_reference"; bytes: number }[];
   errors: string[];
 };
 
@@ -761,12 +767,14 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   const conversationHolds = (candidate: string, via = "") => (options.conversationCwds?.() ?? []).some(entry =>
     inside(path.resolve(entry), via && candidate.startsWith(via) ? candidate.slice(via.length) : candidate)
       || inside(resolvePhysicalPath(via + entry), resolvePhysicalPath(candidate)));
-  const trashHolds = (root: TempSweepRoot, trash: string) => {
+  const trashHolds = (root: TempSweepRoot, trash: string, original: string, bytes = 0) => {
     if (!namespaceStill(root.anchor, procRoot) || conversationHolds(trash, root.via)) return true;
     const physical = resolvePhysicalPath(trash);
     const canonical = root.via && trash.startsWith(root.via) ? trash.slice(root.via.length) : trash;
-    return readScan().processes.some(proc => proc.paths.some(entry => inside(path.resolve(entry), canonical)
+    const processReferenced = readScan().processes.some(proc => proc.paths.some(entry => inside(path.resolve(entry), canonical)
       || inside(resolvePhysicalPath(root.via + entry), physical)));
+    if (processReferenced) report.held!.push({ path: original, via: root.via, reason: "process_reference", bytes });
+    return processReferenced;
   };
   const pinned = (directory: string) => {
     try { fs.lstatSync(path.join(directory, ".delegatus-keep")); return true; } catch { return false; }
@@ -818,8 +826,10 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         if (options.onlyDirectories && !options.onlyDirectories.includes(row.directory)) continue;
         if (options.eligible && !await options.eligible(row.trash)) continue;
         if (path.dirname(row.directory) !== root.via + root.path || !isOwnedTempName(path.basename(row.directory))) continue;
-        if (await finishTreeTrash(journal, async trash => (options.eligible && !await options.eligible(trash)) || trashHolds(root, trash), options.remove,
-          trash => !trashPolicyHolds(root, trash, path.resolve(row.directory)) && (!options.dispatchGuard || options.dispatchGuard(trash)), options.disposable, undefined, options.keepRefusedTrash)) report.trashFinished!++;
+        const original = path.resolve(row.directory);
+        const candidate = path.join(root.path, path.basename(original));
+        if (await finishTreeTrash(journal, async trash => (options.eligible && !await options.eligible(trash)) || trashHolds(root, trash, candidate), options.remove,
+          trash => !trashPolicyHolds(root, trash, original) && (!options.dispatchGuard || options.dispatchGuard(trash)), options.disposable, undefined, options.keepRefusedTrash)) report.trashFinished!++;
       } catch (error) { report.errors.push(String(error)); }
     }
     for (const name of names.sort()) {
@@ -905,6 +915,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         || inside(resolvePhysicalPath(root.via + entry), originalPath);
       if (inUse.some(processHolds) || conversationHolds(reachable, root.via)) {
         await keep("inUse");
+        if (inUse.some(processHolds)) report.held!.push({ path: candidate, via: root.via, reason: "process_reference", bytes: 0 });
         continue;
       }
       const physicallyOverlaps = (entries: readonly string[]) => entries.some(entry => (root.via ? [entry, root.via + entry] : [entry]).some(accessible => {
@@ -932,8 +943,12 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       }
       try {
         const bytes = await measure(reachable, seenAllocations, includeRoot, excluded);
-        if (readScan().processes.some(process => process.paths.some(entry => processHolds(path.resolve(entry)))) || conversationHolds(reachable, root.via)) {
+        const freshScan = readScan();
+        const processReferenced = freshScan.processes.some(process => process.paths.some(entry => processHolds(path.resolve(entry))));
+        if (processReferenced || conversationHolds(reachable, root.via)) {
           await keep("inUse", bytes);
+          if (processReferenced)
+            report.held!.push({ path: candidate, via: root.via, reason: "process_reference", bytes });
           continue;
         }
         // Measurement yields to new owners and filesystem activity. Date and
@@ -967,7 +982,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         if (options.eligible && !await options.eligible(reachable)) { await keep("inUse", bytes); continue; }
         if (options.mode !== "dry-run" && !await removeTreeViaTrash(reachable, {
           journal: trashJournal(root, candidate), remove: options.remove, disposable: options.disposable,
-          held: async trash => (options.eligible && !await options.eligible(trash)) || trashHolds(root, trash),
+          held: async trash => (options.eligible && !await options.eligible(trash)) || trashHolds(root, trash, candidate, bytes),
           validate: trash => !trashPolicyHolds(root, trash, path.resolve(candidate)) && (!options.dispatchGuard || options.dispatchGuard(trash)),
         })) { await keep("inUse", bytes); continue; }
         report.removed.push({ path: candidate, via: root.via, bytes, ageHours: Math.round((now - newest) / HOUR_MS) });

@@ -27,6 +27,8 @@ export type CaptionWhat =
 export type CaptionTarget =
   | { kind: "conversation"; path?: string; conversationId?: string }
   | { kind: "lane"; pipelineId: string; project: string }
+  /** A target no card shows (a region, a task, a draft): the project it lives in. */
+  | { kind: "project"; project: string }
   | { kind: "needs-you"; entryId: string; then: CaptionTarget | null };
 
 export interface CueCaption {

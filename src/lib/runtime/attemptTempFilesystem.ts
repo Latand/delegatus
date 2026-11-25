@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { measureTempBytes, resolvePhysicalPath, type ProcessScan, isUvCacheMarker } from "@/lib/tempSweep";
+import { measureTempBytes, processPathWithinLimits, resolvePhysicalPath, type ProcessScan, isUvCacheMarker } from "@/lib/tempSweep";
 import { reportMediaIndex } from "@/lib/reportMedia/lookup";
 import { recordedRootHeld } from "@/lib/recordedChecks/store";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
@@ -510,25 +510,33 @@ export function attemptProcessReferencesClear(original: string, current: string,
       const candidates = [value, ...(assignment === undefined ? [] : [assignment]),
         ...[...value.matchAll(/["'](\/[^"']+)["']|\/(?:[^\s\x00'"`=;|&<>])+/g)].map(match => match[1] ?? match[0])];
       return candidates.some(candidate => {
-        if (candidate.length > 4096 || segments(candidate).some(name => Buffer.byteLength(name) > 255)) return false;
-        if (path.isAbsolute(candidate)) return referenced(candidate);
+        if (path.isAbsolute(candidate)) return processPathWithinLimits(candidate) && referenced(candidate);
         const cwd = process.paths[0];
         return !!cwd && candidate.length > 0 && !candidate.startsWith("-")
           && (!/\s/.test(candidate) || candidate === assignment)
+          && processPathWithinLimits(cwd + path.sep + candidate)
           && referenced(cwd + path.sep + candidate);
       });
     }));
 }
 export async function attemptReferencesClear(original: string, current: string, scan: ProcessScan,
-  containers: (roots: readonly string[]) => Promise<boolean> = containerMountsClear,
-  inventory = new RepositoryLinkInventory()): Promise<boolean> {
+  containers?: (roots: readonly string[]) => Promise<boolean>,
+  inventory = new RepositoryLinkInventory(), onHold?: (reasonCode: string) => void): Promise<boolean> {
+  const hold = await attemptReferenceHold(original, current, scan, containers, inventory);
+  if (hold) onHold?.(hold);
+  return hold === null;
+}
+
+async function attemptReferenceHold(original: string, current: string, scan: ProcessScan,
+  containers?: (roots: readonly string[]) => Promise<boolean>,
+  inventory = new RepositoryLinkInventory()) {
   const roots = attemptRoots(original, current);
   const referenced = (file: string) => [file, resolvePhysicalPath(file)].some(referencesRoot(roots));
-  if (!attemptProcessReferencesClear(original, current, scan)) return false;
+  if (!attemptProcessReferencesClear(original, current, scan)) return "process_reference";
   if (process.platform === "linux") {
     for (const line of fs.readFileSync("/proc/net/unix", "utf8").split("\n").slice(1)) {
       const socket = line.trim().split(/\s+/).slice(7).join(" ");
-      if (socket.startsWith(path.sep) && referenced(socket)) return false;
+      if (socket.startsWith(path.sep) && referenced(socket)) return "unix_socket_reference";
     }
   }
   const repositories = new Set<string>();
@@ -564,41 +572,51 @@ export async function attemptReferencesClear(original: string, current: string, 
     return false;
   };
   discover();
-  if (await checkoutLinksIn()) return false;
-  if (process.platform === "linux" && !await containers([original, current])) return false;
+  if (await checkoutLinksIn()) return "checkout_link_reference";
+  if (process.platform === "linux") {
+    const hold = containers
+      ? await containers([original, current]) ? null : "container_reference_observer_hold"
+      : await containerReferenceHold([original, current]);
+    if (hold) return hold;
+  }
   // The container query yields. Re-resolve every consumer checkout and links
   // after it, then synchronously validate the directory snapshots so a late
   // disappearance, permission change, replacement, or link creation cannot
   // ride on the earlier negative inventory.
   discover();
-  if (await checkoutLinksIn()) return false;
-  return [...repositories].every(repository => inventory.unchanged(repository));
+  if (await checkoutLinksIn()) return "checkout_link_reference";
+  return [...repositories].every(repository => inventory.unchanged(repository)) ? null : "checkout_changed";
 }
 
 async function containerMountsClear(roots: readonly string[], remaining?: () => number): Promise<boolean> {
+  return await containerReferenceHold(roots, remaining) === null;
+}
+
+async function containerReferenceHold(roots: readonly string[], remaining?: () => number) {
   const physicalRoots = [...new Set(roots.flatMap(root => [root, resolvePhysicalPath(root)]))];
   let active: string[];
   try { active = (await run("docker", ["ps", "-q"], remaining?.())).stdout.trim().split(/\s+/).filter(Boolean); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return true; throw error; }
-  if (active.length > 1024 || new Set(active).size !== active.length) return false;
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+  if (active.length > 1024 || new Set(active).size !== active.length) return "container_inventory_unknown";
   for (let offset = 0; offset < active.length; offset += 32) {
     const ids = active.slice(offset, offset + 32);
     // Read only ownership metadata, in bounded replies. Whole inspect output
     // also includes credentials and unrelated configuration.
     const output = (await run("docker", ["inspect", "--format", '{"Id":{{json .Id}},"Mounts":{{json .Mounts}}}', ...ids], remaining?.())).stdout;
     const containers = output.trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
-    if (containers.length !== ids.length) return false;
-    if (!ids.every(id => {
+    if (containers.length !== ids.length) return "container_inventory_unknown";
+    for (const id of ids) {
       const matches = containers.filter(container => typeof container?.Id === "string" && container.Id.startsWith(id));
-      if (matches.length !== 1 || !Array.isArray(matches[0].Mounts)) return false;
-      return matches[0].Mounts.every((mount: { Type?: string; Source?: string }) => {
-        if (mount.Type === "tmpfs") return true;
-        return typeof mount.Source === "string" && path.isAbsolute(mount.Source)
-          && ![mount.Source, resolvePhysicalPath(mount.Source)].some(source => physicalRoots.some(root => inside(source, root) || inside(root, source)));
-      });
-    })) return false;
+      if (matches.length !== 1 || !Array.isArray(matches[0].Mounts)) return "container_inventory_unknown";
+      for (const mount of matches[0].Mounts as { Type?: string; Source?: string }[]) {
+        if (mount.Type === "tmpfs") continue;
+        if (typeof mount.Source !== "string" || !path.isAbsolute(mount.Source)) return "container_inventory_unknown";
+        if ([mount.Source, resolvePhysicalPath(mount.Source)].some(source => physicalRoots.some(root => inside(source, root) || inside(root, source))))
+          return "container_mount_reference";
+      }
+    }
   }
-  return true;
+  return null;
 }
 
 const markers = ["(", "-name", ".delegatus-keep", "-o", "-path", "*/worktrees/*/gitdir",
@@ -846,6 +864,11 @@ function removeEmptyNamespaceRoot(directory: string, identity: string, postDelet
  * each command impose time bounds instead of permanently retaining it at an
  * entry-count ceiling. Linked worktrees remain with their preservation owner. */
 export async function inspectAttemptTree(directory: string, original = directory, settings: NamespaceBudget = {}): Promise<boolean> {
+  return await attemptTreeHold(directory, original, settings) === null;
+}
+
+export async function attemptTreeHold(directory: string, original = directory, settings: NamespaceBudget = {}) {
+  const markerCode = (file: string) => path.basename(file) === ".delegatus-keep" ? "keep_marker" : "git_boundary";
   if (process.platform === "win32") {
     const pending = [directory]; let found = 0;
     while (pending.length) {
@@ -853,22 +876,25 @@ export async function inspectAttemptTree(directory: string, original = directory
       for (const entry of await fs.promises.readdir(current, { withFileTypes: true })) {
         const file = path.join(current, entry.name);
         const marker = protectionMarker(file, entry.isDirectory());
-        if (marker && (++found > MARKER_LIMIT || markerHolds(file, directory, original))) return false;
+        if (marker && ++found > MARKER_LIMIT) return "protection_marker_limit";
+        if (marker && markerHolds(file, directory, original)) return markerCode(file);
         if (entry.isDirectory()) pending.push(file);
       }
     }
-    return true;
+    return null;
   }
   const until = performance.now() + attemptTempRemaining(namespaceTimeout(settings));
   try {
     const found = (await run("find", [directory, "-xdev", ...markers, "-print0"], Math.max(1, Math.min(15_000, Math.floor(attemptTempRemaining(until - performance.now())))))).stdout.split("\0").filter(Boolean);
-    return found.length <= MARKER_LIMIT && !found.some(file => markerHolds(file, directory, original));
+    if (found.length > MARKER_LIMIT) return "protection_marker_limit";
+    const held = found.find(file => markerHolds(file, directory, original));
+    return held ? markerCode(held) : null;
   }
   catch (error) {
     if (error instanceof AttemptTempBudgetDeferred || process.platform !== "linux") throw error;
     try { await containerCommand(directory, "inspect", original, undefined, false, undefined,
-      { ...settings, budgetMs: attemptTempRemaining(until - performance.now()) }); return true; }
-    catch (fallbackError) { if (fallbackError instanceof AttemptTempBudgetDeferred) throw fallbackError; return false; }
+      { ...settings, budgetMs: attemptTempRemaining(until - performance.now()) }); return null; }
+    catch (fallbackError) { if (fallbackError instanceof AttemptTempBudgetDeferred) throw fallbackError; return "namespace_tree_hold"; }
   }
 }
 

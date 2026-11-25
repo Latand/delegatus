@@ -253,7 +253,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
   const stateWord = rowStateWord(t, row);
   const tone = DOT_TONE[row.dot] ?? "tone-neutral";
   const working = row.key === "working";
-  const engine = file.engine === "claude" || file.engine === "codex" ? file.engine : null;
+  const engine = file.engine === "claude" || file.engine === "codex" || file.engine === "antigravity" ? file.engine : null;
   /* The header names the stage the way the stage list does, with the attempt
      once it ran twice, «Critique · 2», and keeps the role preset for the
      tooltip (#1865). */
@@ -296,7 +296,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
     <>
       {engine ? (
         <span className="ch-engine" data-engine={engine}>
-          <EngineMark engine={engine} size={12} />
+          <EngineMark engine={engine} size={12} working={working} />
           <span>{engineWord(engine)}</span>
         </span>
       ) : null}
@@ -307,7 +307,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
           {file.effort ? <span className="ch-effort">{file.effort}</span> : null}
         </span>
       ) : null}
-      {engine ? <ConversationAccountChip file={file} session={runtime?.session ?? null} readerKey={readerKey} name={role ?? title} /> : null}
+      {engine === "claude" || engine === "codex" ? <ConversationAccountChip file={file} session={runtime?.session ?? null} readerKey={readerKey} name={role ?? title} /> : null}
       {file.ctx ? <CtxChip ctx={file.ctx} /> : null}
       {/* Supersedence lineage (#383), as the pane's own header carries it: the retired predecessor's history is one
           click away, and the Viewer opens the `#c=` link in place. */}

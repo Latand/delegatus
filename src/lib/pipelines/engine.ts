@@ -40,7 +40,7 @@ import { assertOperationLease, awaitLeasedOperation, currentOperationLease, leas
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { pipelineRuntimeReads } from "./runtimeReads";
 import { readRuntimeSnapshot } from "@/lib/runtime/snapshotReads";
-import { pipelinePublishesRemoteBranch, MISSING_DELIVERY_REMOTE, LOCAL_DELIVERY_PUBLISH_REFUSAL } from "./publication";
+import { pipelinePublishesRemoteBranch, MISSING_DELIVERY_REMOTE, LOCAL_DELIVERY_PUBLISH_REFUSAL, PUBLICATION_MEMORY_DEFERRAL } from "./publication";
 import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { controllerSnapshotPorts } from "./controllerSnapshot";
 import { claimIdleStop, claimWithdrawal, consumeWithdrawalRefusal, hasWithdrawalRefusal, idleStopReceiptMatches, readIdleStop, readWithdrawal, recordWithdrawalRefusal, settleDeadWithdrawal, terminalIdleStopKey, terminalIdleStopOwner, withdrawalSettledDead, type IdleStopBinding, type WithdrawalBinding } from "./stageControlCustody";
@@ -5366,6 +5366,7 @@ function publicationNotLanded(published: RefusedPublication): boolean {
 function publicationDeadlineCause(published: RefusedPublication): string | null {
   if (publicationDependencyValidationDeadline(published)) return "validation of the existing dependency installation reached its deadline";
   if (!published.failure?.retryableDeadline) return null;
+  if (published.failure.memoryAdmissionDeferred) return PUBLICATION_MEMORY_DEFERRAL;
   return published.failure.admissionDeadline ? "the pre-push hook's CPU admission lock-wait budget expired before checks started"
     : "a check reached its execution deadline without a verdict";
 }
@@ -5823,6 +5824,21 @@ async function routeFailedAttempt(
     return true;
   }
   return false;
+}
+
+/** Like a passed stage's publication, a failed terminal verdict refreshes the
+ * forge outside the shared mutation lease, before retaining its budget park. */
+async function publishFailedTerminalRecheck(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts): Promise<void> {
+  const pr = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () =>
+    ensureStagePullRequest(pipeline, attempt, ports.exec)));
+  if (!pr.ok) { await park(pipeline, pr.error, attempt); return; }
+  const verdict = attempt.verdict!;
+  const parsed = { verdict, output: attempt.output ?? "" };
+  const routed = verdictRoutesAsFail(parsed) && await routeFailedAttempt(pipeline, stage, attempt, failEdgeInput(parsed),
+    verdict.findings?.[0] ?? "stage verdict: fail", verdict.status === "fail", true, ports.now());
+  if (routed && verdict.status === "needs_decision") attempt.decisionRequested = true;
+  if (!routed) await park(pipeline, verdict.findings?.[0] ?? `stage verdict: ${verdict.status}`, attempt);
 }
 
 /**
@@ -7036,6 +7052,7 @@ async function settleStageVerdict(
     await commitPassedStage(pipeline, stage, attempt, ports, persist);
     return;
   }
+  if (attempt.activatedBy?.budgetRecheck) attempt.reviewedHead ??= pipeline.lastPassedCommit;
   if (parsed.verdict.status !== "pass") {
     attempt.state = parsed.verdict.status === "fail" ? "failed" : "needs_decision";
     attempt.completedAt = ports.now();
@@ -7064,6 +7081,11 @@ async function settleStageVerdict(
        waits in needs_review when the fix wrote a new head (#2187). */
     if (parsed.verdict.blocked === true) {
       await park(pipeline, parsed.verdict.blockedReason!, attempt);
+      return;
+    }
+    if (attempt.activatedBy?.budgetRecheck && stage.next === null && publishesRemoteBranch(pipeline)) {
+      if (ports.deferStageGit) setCursorState(pipeline, stage.id, "committing");
+      else await publishFailedTerminalRecheck(pipeline, stage, attempt, ports);
       return;
     }
     const routesAsFail = verdictRoutesAsFail(parsed);
@@ -14185,7 +14207,9 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
         if (ownershipInvalidated && preview.delivery?.operation?.state === "pending") throw preparationRefusal();
         continue;
       }
-      if (["passed", "skipped"].includes(candidateAttempt.state)) await retryTerminalStagePublication(candidate, candidateStage, candidateAttempt, outside, persistIntent);
+      if (candidateAttempt.activatedBy?.budgetRecheck && ["failed", "needs_decision"].includes(candidateAttempt.state))
+        await publishFailedTerminalRecheck(candidate, candidateStage, candidateAttempt, outside);
+      else if (["passed", "skipped"].includes(candidateAttempt.state)) await retryTerminalStagePublication(candidate, candidateStage, candidateAttempt, outside, persistIntent);
       else if (candidateStage.kind !== "review-loop" || await approvedReviewHeadHolds(candidate, candidateAttempt, outside)) {
         if (candidateStage.kind === "review-loop" && candidateAttempt.state !== "committing") {
           candidateAttempt.output = `Review loop approved after ${flow!.rounds.length} round(s).`;

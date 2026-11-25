@@ -1,4 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { startupDiagnostic } from "./startupDiagnostics";
 
 /**
@@ -42,9 +45,16 @@ export interface StateLockHolder {
   ageMs: number;
 }
 
+export interface FileLockHolder extends StateLockHolder {
+  /** True when the contending lock file belongs to the waiting process. */
+  sameProcess: boolean;
+}
+
 export interface BlockingWaitSample {
-  /** Bounded caller coordinates for a slow registry wait, relative to source. */
+  /** Bounded caller coordinates for a slow registry or file-transaction wait, relative to source. */
   callSite?: string;
+  /** Lock holder observed when a file-transaction wait first contended. */
+  holder?: FileLockHolder;
   stateWait?: { callSite: string; reason: string; outcome: string; attempts: number; maxSliceMs: number; backoffMs: number; synchronousSleepMs: number; pid: number; processKind: string; release: string | null; holder?: StateLockHolder };
   site: BlockingWaitSite;
   /** `LLV_STATE_OWNER` of this process, or `unowned`. */
@@ -143,24 +153,258 @@ function round(value: number): number {
   return Math.max(0, Math.round(value * 10) / 10);
 }
 
+const KNOWN_BLOCKING_WAIT_ROLES: ReadonlySet<string> = new Set([
+  "viewer",
+  "runtime-host",
+  "mcp",
+  "tool",
+  "worker",
+  "helper",
+  "cli",
+  "embedded",
+  "test",
+  "other-process",
+  "unowned",
+]);
+
+/** Closed set of permitted wait labels for `file-transaction` blocking-wait
+ * diagnostics (including explicit `withWaitCorrelation` labels). Untrusted
+ * caller labels are never echoed verbatim into `[blocking-wait]` logs. */
+export const KNOWN_FILE_TRANSACTION_WAIT_LABELS: ReadonlySet<string> = new Set([
+  "file-transaction",
+  "recorded-check.host-custody",
+  "recorded-check.handoff",
+  "recorded-check.acknowledgement",
+  "recorded-check.observation",
+  "attempt-temp.sweep",
+  "attempt-evidence.copy",
+  "attempt-temp.approved",
+  "temporary-data.retention",
+  "done.media",
+  "report.media",
+  "prototype.decision",
+  "prototype.publication",
+  "telegram.review-polls",
+  "telegram.review-post",
+  "operator.settings",
+  "operator.worker-limit",
+  "state.hot-authority",
+  "state.retirement-guard",
+  "state.disk-pressure",
+  "state.disk-pressure-notices",
+  "release.runs",
+  "loop-profiler.store",
+  "memory.import",
+  "memory.source",
+  "memory.settings",
+  "memory.role-history",
+  "metadata.collection",
+  "account-guard.obligations",
+  "account-credit-guard.obligations",
+  "interruption.index",
+  "interruption.evidence",
+  "pipeline.initialize",
+  "accounts.migration",
+  "voice.settings",
+  "voice-settings.write",
+  "provider.settings",
+  "keys.store",
+  "voice-companion.state",
+  "asks-you.settings",
+  "attention.native-proof",
+  "codex.subagent-boundary",
+  "git.forge-credentials",
+  "state.staged-recovery",
+  "registry.staged-recovery",
+  // Closed canonical file-transaction subjects also serve as fallback labels.
+  "recorded-check-host-fences/<slot>",
+  "recorded-check-observers/<slot>",
+  "seat-quota-recovery/<entry>",
+  "done-media/owner.lock",
+  "report-media/owner",
+  "prototype-reviews/<entry>",
+  "prototype-reviews/<id>.polls.lock",
+  "prototype-reviews/<id>.telegram.lock",
+  "prototype-reviews/publication.lock",
+  "telegram/<entry>",
+  "codex-update/<entry>",
+  "interruption-obligations",
+  "attempt-temp.sqlite.sweep",
+  "hot-state-authority.json",
+  "lifecycle-journal.json",
+  "operator-settings.json",
+  "worker-limit.json",
+  "project-settings.json",
+  "tasks-row-preparation.json",
+  "disk-pressure.json",
+  "disk-pressure-notices.json",
+  "release-runs.json",
+  "structured-user-metadata-publication",
+  ".delegatus-initialization",
+  "import-job",
+  "publication.lock",
+  "openai-api-key",
+  "voice-settings.json",
+  "accounts.json",
+  "asks-you-settings.json",
+  "companion-state.json",
+  "memory-settings.json",
+  "role-memory-history.json",
+  "provider-settings.json",
+  "loop-profiler.json",
+]);
+
+export function sanitizeFileTransactionWaitLabel(rawLabel: unknown, fallback = "file-transaction"): string {
+  const candidate = typeof rawLabel === "string" ? rawLabel.trim() : "";
+  if (candidate && KNOWN_FILE_TRANSACTION_WAIT_LABELS.has(candidate)) return candidate;
+  const safeFallback = fallback.trim();
+  return KNOWN_FILE_TRANSACTION_WAIT_LABELS.has(safeFallback) ? safeFallback : "file-transaction";
+}
+
+/** Closed set of permitted operation-kind prefixes for `file-transaction`
+ * blocking-wait correlation ids. Any suffix after the first `:` (such as an
+ * engine or account id) is stripped; unknown kinds are dropped (`null`). */
+export const KNOWN_FILE_TRANSACTION_OPERATION_KINDS: ReadonlySet<string> = new Set([
+  "account-removal",
+  "account-switch",
+  "account-migration",
+  "delivery",
+  "spawn",
+  "pipeline",
+  "recorded-check",
+  "release",
+  "state-recovery",
+  "voice-settings",
+  "quota",
+  "memory",
+]);
+
+export function sanitizeFileTransactionOperationId(rawOperationId: unknown): string | null {
+  if (typeof rawOperationId !== "string") return null;
+  const trimmed = rawOperationId.trim();
+  if (!trimmed) return null;
+  const colonIndex = trimmed.indexOf(":");
+  const kind = (colonIndex >= 0 ? trimmed.slice(0, colonIndex) : trimmed).trim();
+  return KNOWN_FILE_TRANSACTION_OPERATION_KINDS.has(kind) ? kind : null;
+}
+
+const KNOWN_SRC_TOP_ENTRIES: ReadonlySet<string> = new Set([
+  "app",
+  "components",
+  "hooks",
+  "lib",
+  "runtime-host",
+  "styles",
+  "test-helpers",
+  "instrumentation.ts",
+  "instrumentation.test.ts",
+  "proxy.ts",
+  "proxy.test.ts",
+  "proxy.host.test.ts",
+  "proxy.team.test.ts",
+  "middleware.ts",
+]);
+
+const VERIFIED_SOURCE_ROOTS: readonly string[] = (() => {
+  const roots = new Set<string>();
+  const addRootFrom = (rawPath: string) => {
+    const normalized = rawPath.replaceAll("\\", "/");
+    const marker = Math.max(
+      normalized.lastIndexOf("/src/"),
+      normalized.lastIndexOf("/.next/server/"),
+      normalized.lastIndexOf("/dist/"),
+    );
+    if (marker > 0) roots.add(normalized.slice(0, marker));
+  };
+  try {
+    const raw = import.meta.url.startsWith("file://") ? fileURLToPath(import.meta.url) : import.meta.url;
+    const resolved = path.resolve(raw);
+    addRootFrom(resolved);
+    try {
+      addRootFrom(fs.realpathSync(resolved));
+    } catch { /* realpath unavailable */ }
+  } catch { /* fallback empty */ }
+  return [...roots];
+})();
+
+export function normalizeBlockingWaitHolderKind(rawRole: unknown, fallback = "other-process"): string {
+  const candidate = typeof rawRole === "string" ? rawRole.trim() : "";
+  if (KNOWN_BLOCKING_WAIT_ROLES.has(candidate)) return candidate;
+  const safeFallback = fallback.trim();
+  return KNOWN_BLOCKING_WAIT_ROLES.has(safeFallback) ? safeFallback : "other-process";
+}
+
 export function blockingWaitRole(env: NodeJS.ProcessEnv = process.env): string {
   const owner = env.LLV_STATE_OWNER?.trim();
   return owner ? owner.slice(0, 32) : "unowned";
 }
 
-/** Keep source coordinates, never the absolute path or function arguments.
- * Capture only on the slow path; ordinary registry writes allocate no stack. */
-export function registryWaitCallSite(stack: string | undefined): string {
+function relativeVerifiedCallSite(rawFramePath: string): string | null {
+  if (!VERIFIED_SOURCE_ROOTS.length) return null;
+  const split = rawFramePath.match(/^(.*\.[cm]?[jt]sx?)(:\d+:\d+)$/);
+  if (!split) return null;
+  let filePart = split[1]!;
+  const coordSuffix = split[2]!;
+  if (filePart.startsWith("file://")) {
+    try {
+      filePart = fileURLToPath(filePart);
+    } catch {
+      return null;
+    }
+  }
+  if (!path.isAbsolute(filePart)) return null;
+  let resolvedFile: string;
+  try {
+    resolvedFile = fs.realpathSync(path.resolve(filePart));
+  } catch {
+    // Missing or unreadable source file: never emit an unverified lexical path.
+    return null;
+  }
+  const normalized = resolvedFile.replaceAll("\\", "/");
+  let rel: string | null = null;
+  for (const verifiedRoot of VERIFIED_SOURCE_ROOTS) {
+    if (normalized.startsWith(`${verifiedRoot}/`)) {
+      rel = normalized.slice(verifiedRoot.length + 1);
+      break;
+    }
+  }
+  if (!rel || rel.includes("..")) return null;
+  if (!/^(?:src|\.next\/server|dist)\/[A-Za-z0-9_./[\]-]+\.[cm]?[jt]sx?$/.test(rel)) {
+    return null;
+  }
+  if (rel.startsWith("src/")) {
+    const firstSegment = rel.slice("src/".length).split("/")[0] ?? "";
+    if (!KNOWN_SRC_TOP_ENTRIES.has(firstSegment)) return null;
+  }
+  return `${rel}${coordSuffix}`;
+}
+
+function collectVerifiedCallSite(stack: string | undefined, fallback: "unresolved" | "external"): string {
   const locations: string[] = [];
   for (const frame of stack?.split("\n").slice(1) ?? []) {
-    const location = frame.match(/(?:^|\/)((?:src|\.next\/server|dist)\/[A-Za-z0-9_./[\]-]+\.[cm]?[jt]sx?:\d+:\d+)\)?$/)?.[1];
-    if (!location || /(?:blockingWaits|sqliteRegistryStore|agent\/registry)\.[cm]?[jt]sx?:/.test(location)) continue;
+    const rawLocation = frame.trim().match(/\(?((?:file:\/\/)?[^\s()]+?\.[cm]?[jt]sx?:\d+:\d+)\)?$/)?.[1];
+    if (!rawLocation) continue;
+    const location = relativeVerifiedCallSite(rawLocation);
+    if (!location || /(?:blockingWaits|sqliteRegistryStore|agent\/registry|state\/fileTransaction)\.[cm]?[jt]sx?:/.test(location)) continue;
     locations.push(location);
     if (locations.length === 8) break;
   }
   // Bundled helpers share one chunk: retain the caller frames as well as the
   // first coordinate so that its minified name cannot hide the write's origin.
-  return locations.length ? locations.join(" <- ").slice(0, 1_024) : "unresolved";
+  return locations.length ? locations.join(" <- ").slice(0, 1_024) : fallback;
+}
+
+/** Keep source coordinates strictly relative to the verified project or build root,
+ * never an absolute path, parent directory name, or external caller path.
+ * Capture only on the slow path; ordinary registry writes allocate no stack. */
+export function registryWaitCallSite(stack: string | undefined): string {
+  return collectVerifiedCallSite(stack, "unresolved");
+}
+
+/** Repo-relative caller coordinates for file-transaction waits; frames outside
+ * the verified project or build root are dropped and collapse to `"external"`. */
+export function fileTransactionCallSite(stack: string | undefined): string {
+  return collectVerifiedCallSite(stack, "external");
 }
 
 /** Runs `operation` with a correlation every wait inside it reports. */
@@ -185,22 +429,43 @@ export function recordBlockingWait(input: {
   subject?: string | null;
   correlation?: BlockingWaitCorrelation | null;
   refused?: boolean;
+  callSite?: string;
+  holder?: FileLockHolder;
   stateWait?: BlockingWaitSample["stateWait"];
 }): void {
   if (!Number.isFinite(input.durationMs) || (input.durationMs <= 0 && !input.refused)) return;
   const deferred = input.stateWait?.outcome === "deferred";
   const context = input.correlation ?? currentWaitCorrelation();
+  const resolvedCallSite = input.callSite
+    ? input.callSite.slice(0, 1_024)
+    : (input.site === "registry-lock" || input.site === "registry-revision-retry" || input.site === "registry-lock-async") && input.durationMs >= BLOCKING_WAIT_LOG_MS
+      ? registryWaitCallSite(new Error().stack)
+      : input.site === "file-transaction" && input.durationMs >= 50
+        ? fileTransactionCallSite(new Error().stack)
+        : undefined;
   const sample: BlockingWaitSample = {
     site: input.site,
-    ...((input.site === "registry-lock" || input.site === "registry-revision-retry" || input.site === "registry-lock-async") && input.durationMs >= BLOCKING_WAIT_LOG_MS
-      ? { callSite: registryWaitCallSite(new Error().stack) } : {}),
+    ...(resolvedCallSite ? { callSite: resolvedCallSite } : {}),
+    ...(input.holder ? {
+      holder: {
+        kind: normalizeBlockingWaitHolderKind(input.holder.kind, "other-process"),
+        ageMs: round(input.holder.ageMs),
+        sameProcess: Boolean(input.holder.sameProcess),
+      },
+    } : {}),
     ...(input.stateWait ? { stateWait: input.stateWait } : {}),
-    role: blockingWaitRole(),
+    role: input.site === "file-transaction"
+      ? normalizeBlockingWaitHolderKind(blockingWaitRole(), "unowned")
+      : blockingWaitRole(),
     durationMs: round(input.durationMs),
     synchronous: input.synchronous,
     subject: input.subject ? input.subject.slice(0, 80) : null,
-    label: context?.label ? context.label.slice(0, 80) : null,
-    operationId: context?.operationId ? context.operationId.slice(0, 120) : null,
+    label: input.site === "file-transaction"
+      ? (context?.label ? sanitizeFileTransactionWaitLabel(context.label, "file-transaction") : null)
+      : (context?.label ? context.label.slice(0, 80) : null),
+    operationId: input.site === "file-transaction"
+      ? sanitizeFileTransactionOperationId(context?.operationId)
+      : (context?.operationId ? context.operationId.slice(0, 120) : null),
     ...(deferred ? { deferred: true as const } : input.refused ? { refused: true as const } : {}),
     at: new Date().toISOString(),
   };
@@ -242,7 +507,19 @@ export function blockingWaitDiagnostics(): BlockingWaitDiagnostics {
     durations.sort((left, right) => left - right);
     sites[site]!.p95Ms = durations[Math.max(0, Math.ceil(durations.length * 0.95) - 1)] ?? 0;
   }
-  const longest = [...samples].sort((left, right) => right.durationMs - left.durationMs).slice(0, LONGEST_LIMIT);
+  const longest = [...samples]
+    .sort((left, right) => right.durationMs - left.durationMs)
+    .slice(0, LONGEST_LIMIT)
+    .map((sample) => ({
+      ...sample,
+      ...(sample.holder ? { holder: { ...sample.holder } } : {}),
+      ...(sample.stateWait ? {
+        stateWait: {
+          ...sample.stateWait,
+          ...(sample.stateWait.holder ? { holder: { ...sample.stateWait.holder } } : {}),
+        },
+      } : {}),
+    }));
   return { role: blockingWaitRole(), sites, longest };
 }
 
