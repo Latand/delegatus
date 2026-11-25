@@ -7735,7 +7735,10 @@ describe("message document links", () => {
       },
       "/outside.png": async () => {
         offScopeServerRequests++;
-        return new Response(fixtureRasterPng(), { headers: { "content-type": "image/png" } });
+        const png = fixtureRasterPng();
+        const body = new Uint8Array(png.byteLength);
+        body.set(png);
+        return new Response(body.buffer, { headers: { "content-type": "image/png" } });
       },
     };
     const sockets = ownedBrowserSocketEnvironment();

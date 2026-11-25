@@ -174,7 +174,7 @@ test("workspace removal revokes a live session's evidence document and raster gr
   store.putWorkspaceMember(workspaceId, member.id, "member", owner.member.id, new Date().toISOString());
   const dir = path.join(home, "state/evidence/agents/workspace-fixture");
   write("state/evidence/agents/workspace-fixture/index.html", "<h1>Workspace report</h1>");
-  write("state/evidence/agents/workspace-fixture/chart.png", KEEP_PNG);
+  fs.writeFileSync(path.join(home, "state/evidence/agents/workspace-fixture/chart.png"), KEEP_PNG);
   const scope = mintFrameScope(dir, Date.now(), signedIn.session.id, "evidence", "repo-evidence");
   const target = (name: string) => `/api/artifact/frame/${scope}/${name}`;
   try {
@@ -184,7 +184,7 @@ test("workspace removal revokes a live session's evidence document and raster gr
     expect((await GET(frameRequest(target("index.html")))).status).toBe(403);
     expect((await GET(frameRequest(target("chart.png")))).status).toBe(403);
   } finally {
-    replaceConversationCatalog(priorCatalog);
+    replaceConversationCatalog([...priorCatalog]);
   }
 });
 
