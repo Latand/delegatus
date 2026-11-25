@@ -741,7 +741,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     await wait(() => existsSync(readLauncherRecord(h.recordFile)!.requestFile));
   }
 
-  test.each(["optional-red", "empty-required-optional-red", "required-red", "unreadable-protection"] as const)("manual checkout Update uses required CI on the equal-tree PR head: %s", async scenario => {
+  test.each(["optional-red", "empty-required-optional-red", "required-red", "unreadable-protection", "ruleset-required-red", "ruleset-required-green", "malformed-protection", "unreadable-rules"] as const)("manual checkout Update uses required CI on the equal-tree PR head: %s", async scenario => {
     const h = harness({ relaunch: true, remote: "https://github.com/example/project.git" });
     const head = "a".repeat(40), tree = "b".repeat(40);
     const target = { sha: tipSha, short: tipSha.slice(0, 7), version: "1.0.1", date: "" };
@@ -754,15 +754,21 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     h.deps.green = new GreenReader({ now: () => 1000, treeOf: async () => tree, fetch: (async input => {
       const url = String(input);
       if (url.includes("/pulls")) return Response.json([{ merged_at: "2026-01-01", merge_commit_sha: tipSha, base: { ref: "main" }, head: { sha: head } }]);
+      // The ruleset-only branch confirms its requirement through the active
+      // rules; classic protection is protected and requires nothing.
+      if (url.includes("/rules/branches/")) return scenario === "unreadable-rules" ? new Response(null, { status: 403 })
+        : Response.json(scenario.startsWith("ruleset-required") ? [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "typecheck", integration_id: 15368 }] } }] : []);
       if (url.includes("/branches/")) return scenario === "unreadable-protection" ? new Response(null, { status: 403 })
         : scenario === "empty-required-optional-red" ? Response.json({ protected: false })
+        : scenario === "malformed-protection" ? Response.json({ protected: true, protection: { required_status_checks: "unreadable" } })
+        : scenario.startsWith("ruleset-required") ? Response.json({ protected: true, protection: { required_status_checks: { contexts: [], checks: [] } } })
         : Response.json({ protected: true, protection: { required_status_checks: { checks: [{ context: "typecheck", app_id: 15368 }] } } });
       if (url.includes("/statuses")) return Response.json([]);
       if (url.includes("/check-runs")) {
         checkReads.push(url);
         return Response.json({ check_runs: [
           { name: "Windows (native)", status: "completed", conclusion: "failure", app: { id: 15368 } },
-          { name: "typecheck", status: "completed", conclusion: scenario === "required-red" ? "failure" : "success", app: { id: 15368 } },
+          { name: "typecheck", status: "completed", conclusion: ["required-red", "ruleset-required-red", "malformed-protection"].includes(scenario) ? "failure" : "success", app: { id: 15368 } },
           { name: "Minimum macOS SQLite", status: "completed", conclusion: "failure", app: { id: 15368 } },
         ] });
       }
@@ -774,15 +780,15 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
       const response = await postUpdate(post("/update", { key: "manual-required-ci" }));
       const body = await response.json();
       expect(checkReads).toEqual([`https://api.github.com/repos/example/project/commits/${head}/check-runs?per_page=100`]);
-      if (scenario === "optional-red" || scenario === "empty-required-optional-red") {
+      if (["optional-red", "empty-required-optional-red", "ruleset-required-green"].includes(scenario)) {
         expect(response.status).toBe(202);
         expect(body.optionalCheckFailures).toEqual(["Minimum macOS SQLite", "Windows (native)"]);
         expect(builds).toBe(1);
       } else {
         expect(response.status).toBe(409);
-        expect(body).toMatchObject(scenario === "required-red"
+        expect(body).toMatchObject(["required-red", "ruleset-required-red"].includes(scenario)
           ? { code: "deployment-refused", detail: "red", green: { state: "red", checks: ["typecheck"] } }
-          : { code: "deployment-refused", detail: "unknown" });
+          : { code: "deployment-refused", detail: "unknown", green: { state: "unknown" } });
         expect(builds).toBe(0);
         expect(existsSync(join(h.deps.dir, "apply.json"))).toBe(false);
       }
@@ -800,7 +806,8 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
           { id: 12, name: "runtime-gate", status: green ? "completed" : "in_progress", conclusion: green ? "success" : null, app: { id: 15368 } },
           { id: 13, name: "build", status: "in_progress", conclusion: null, app: { id: 15368 } },
         ] : [{ name: "Minimum macOS SQLite", status: "completed", conclusion: "failure", app: { id: 15368 } }] }
-        : url.includes("/statuses") ? [] : url.includes("/branches/") ? { protected: true, protection: { required_status_checks: { checks: [{ context: "runtime-gate", app_id: 15368 }] } } }
+        : url.includes("/statuses") ? [] : url.includes("/rules/branches/") ? []
+        : url.includes("/branches/") ? { protected: true, protection: { required_status_checks: { checks: [{ context: "runtime-gate", app_id: 15368 }] } } }
         : { commit: { tree: { sha: tree } } };
       return Response.json(body);
     }) as typeof fetch });
@@ -2359,7 +2366,7 @@ for (const operation of ["update", "retry", "deploy", "rebuild"] as const) test.
     const url = String(input);
     return Response.json(url.includes("/pulls") ? [{ merged_at: "2026-01-01", merge_commit_sha: targetSha, base: { ref: "main" }, head: { sha: targetSha } }]
       : url.includes("/check-runs") ? { check_runs: [{ name: "test", status: "completed", conclusion: verdict === "green" ? "success" : "failure" }] }
-      : url.includes("/statuses") ? [] : url.includes("/branches/") ? requiredTest : { commit: { tree: { sha: tree } } });
+      : url.includes("/statuses") ? [] : url.includes("/rules/branches/") ? [] : url.includes("/branches/") ? requiredTest : { commit: { tree: { sha: tree } } });
   }) as typeof fetch });
   const service = new SelfUpdateService(baseDeps(dir, { remote: forge, mode: async () => ({ mode: "package", reason: null, record }), prepareCheckRepo: async () => repo, green: reader }));
   let deliveryReads = 0;

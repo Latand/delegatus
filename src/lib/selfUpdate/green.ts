@@ -87,12 +87,33 @@ export class GreenReader {
     const key = `${repository}:${branch}`;
     const cached = this.required.get(key);
     if (!fresh && cached && this.ports.now() - cached.at < 30 * 60_000) return cached.checks;
-    const branchView = (await this.page(`https://api.github.com/repos/${repository}/branches/${encodeURIComponent(branch)}`)).body as { protected?: unknown; protection?: { required_status_checks?: { contexts?: unknown; checks?: unknown } } };
-    if (typeof branchView?.protected !== "boolean" || (branchView.protected && (!branchView.protection || typeof branchView.protection !== "object"))) {
+    // A branch confirms its required checks in two places: classic protection
+    // and the active rules that apply to it (rulesets, including inherited
+    // ones). Both are read and validated before either is believed, so a
+    // branch whose only requirement lives in a ruleset is not mistaken for one
+    // that requires nothing.
+    const api = `https://api.github.com/repos/${repository}`;
+    const [branchPage, rules] = await Promise.all([
+      this.page(`${api}/branches/${encodeURIComponent(branch)}`),
+      this.list(`${api}/rules/branches/${encodeURIComponent(branch)}?per_page=100`),
+    ]);
+    const branchView = branchPage.body as { protected?: unknown; protection?: unknown } | null;
+    if (!branchView || typeof branchView !== "object" || typeof branchView.protected !== "boolean") {
       throw new Error("GitHub returned an invalid branch protection response");
     }
-    const contexts = branchView?.protection?.required_status_checks?.contexts;
-    const configured = branchView?.protection?.required_status_checks?.checks;
+    const protection = branchView.protection;
+    if (protection === undefined || protection === null) {
+      if (branchView.protected) throw new Error("GitHub returned an invalid branch protection response");
+    } else if (typeof protection !== "object" || Array.isArray(protection)) {
+      throw new Error("GitHub returned an invalid branch protection response");
+    }
+    // An absent object is an empty required set. A present one that is not an
+    // object is unreadable, and its members must never be defaulted past it.
+    const status = (protection as { required_status_checks?: unknown } | undefined | null)?.required_status_checks;
+    if (status !== undefined && (!status || typeof status !== "object" || Array.isArray(status))) {
+      throw new Error("GitHub returned an invalid required status checks response");
+    }
+    const { contexts, checks: configured } = (status ?? {}) as { contexts?: unknown; checks?: unknown };
     if (contexts !== undefined && (!Array.isArray(contexts) || !contexts.every((name) => typeof name === "string"))) {
       throw new Error("GitHub returned invalid required checks");
     }
@@ -105,6 +126,26 @@ export class GreenReader {
       .map(({ context, app_id }) => ({ name: context, appId: app_id === -1 ? null : app_id }));
     for (const name of (contexts as string[] | undefined) ?? []) {
       if (!checks.some((check) => check.name === name)) checks.push({ name, appId: null });
+    }
+    // Every rule is read, so a malformed one anywhere refuses the whole read
+    // instead of hiding the requirement it may carry.
+    for (const rule of rules) {
+      if (!rule || typeof rule !== "object" || typeof (rule as { type?: unknown }).type !== "string") {
+        throw new Error("GitHub returned an invalid branch rule");
+      }
+      if ((rule as { type: string }).type !== "required_status_checks") continue;
+      const configuredByRule = (rule as { parameters?: { required_status_checks?: unknown } }).parameters?.required_status_checks;
+      if (!Array.isArray(configuredByRule) || !configuredByRule.every((check) =>
+        check && typeof check === "object" && typeof check.context === "string" && check.context
+        && (check.integration_id === undefined || check.integration_id === null || Number.isInteger(check.integration_id)))) {
+        throw new Error("GitHub returned invalid ruleset required checks");
+      }
+      for (const { context, integration_id } of configuredByRule as { context: string; integration_id?: number | null }[]) {
+        // The rule's integration binds the check to its GitHub App, as classic
+        // protection does; an absent one accepts the check from any source.
+        const appId = integration_id === undefined || integration_id === -1 ? null : integration_id;
+        if (!checks.some((check) => check.name === context && check.appId === appId)) checks.push({ name: context, appId });
+      }
     }
     this.required.set(key, { at: this.ports.now(), checks });
     return checks;
