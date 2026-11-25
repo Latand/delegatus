@@ -148,9 +148,9 @@ test("on this machine: a worker child counts, a child running an agent binary do
   const env = { ...process.env };
   delete env[STRUCTURED_HOST_STAMP_ENV];
   const worker = spawn("sleep", ["30"], { stdio: "ignore", env });
-  /* `codex` is only the script's $0 here, so the command line names an agent
-     binary while running nothing but a shell. */
-  const agent = spawn("bash", ["-c", "sleep 30; true", "codex"], { stdio: "ignore", env });
+  /* Give the sleeper an agent argv[0]. Replacing the shell keeps teardown
+     responsible for a single process. */
+  const agent = spawn("bash", ["-c", "exec -a codex sleep 30"], { stdio: "ignore", env });
   children.push(worker, agent);
   await new Promise((resolve) => setTimeout(resolve, 50));
 

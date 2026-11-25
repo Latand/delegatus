@@ -1308,6 +1308,7 @@ describe("resource recurring reads", () => {
     ["portable", "ps"],
     ["portable", "lsof"],
     ["portable", "rss"],
+    ["portable", "kern.boottime"],
     ["windows", "powershell.exe"],
   ])("%s production read keeps a held %s probe off the event loop", async (backend, probe) => {
     const directory = mkdtempSync(path.join(os.tmpdir(), "resource-held-probe-"));

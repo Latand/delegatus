@@ -3,7 +3,7 @@ import { normalizeAgentStateMetrics } from "@/lib/agentState/store";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { procBackend } from "@/lib/proc";
 import type { ProcBackend } from "@/lib/proc";
-import { systemBootEpoch } from "@/lib/processIdentity";
+import { systemBootEpoch, systemBootEpochAsync } from "@/lib/processIdentity";
 import crypto from "node:crypto";
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
@@ -384,7 +384,7 @@ export interface ResourceSnapshotDependencies {
   readFiles(fresh: boolean): Promise<ResourceFileObservation[]>;
   proc: Pick<ProcBackend, "systemMemory" | "ppidMap" | "processMemory" | "resourceSystemMemory" | "resourcePpidMap" | "resourceProcessMemory">;
   sampleSystem?(): Promise<ResourcesPayload["system"]>;
-  bootEpoch?(): string | null;
+  bootEpoch?(): string | null | Promise<string | null>;
   /** Structured-host records the registry holds. The viewer reads them and
       hands them to the collector; nothing here ever opens the registry. */
   readStructuredHosts?(fresh: boolean): Promise<StructuredHostRecord[]>;
@@ -507,7 +507,7 @@ async function structuredHostTrees(
 ): Promise<Array<{ record: StructuredHostRecord & { startIdentity: string }; tree: number[] }>> {
   const records = (await dependencies.readStructuredHosts?.(fresh)) ?? [];
   const identity = dependencies.processIdentity ?? ((pid: number) => procBackend.processIdentity(pid));
-  const currentBootEpoch = (dependencies.bootEpoch ?? systemBootEpoch)();
+  const currentBootEpoch = await (dependencies.bootEpoch ?? systemBootEpochAsync)();
   const stampOf = dependencies.hostStamp ?? readStructuredHostStamp;
   const ourStamp = structuredHostStamp();
   const live: Array<StructuredHostRecord & { startIdentity: string }> = [];

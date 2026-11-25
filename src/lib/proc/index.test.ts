@@ -37,8 +37,9 @@ test("an unrecognised override falls back to the platform default", () => {
 });
 
 test("every backend answers the whole contract", () => {
-  /* A backend that silently lacks a method would throw deep inside a scan. */
-  const methods = Object.keys(linuxBackend).sort();
+  /* Resources use async discovery for the command-backed platforms. Linux
+     retains its existing agent-process scan. */
+  const methods = [...Object.keys(linuxBackend), "resourceListProcesses"].sort();
   expect(Object.keys(windowsBackend).sort()).toEqual(methods);
   expect(Object.keys(portableBackend).sort()).toEqual(methods);
 });

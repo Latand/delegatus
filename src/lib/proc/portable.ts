@@ -158,7 +158,9 @@ function parseFdEntries(stdout: string, visit: (target: string, pid: number, wri
   }
 }
 
-let snapshotMemo: { at: number; byPid: Map<number, SnapshotRow> } | null = null;
+type ProcessSnapshot = { at: number; byPid: Map<number, SnapshotRow> };
+
+let snapshotMemo: ProcessSnapshot | null = null;
 const PROCESS_ARGS = ["-axo", "pid=,ppid=,tty=,args="];
 // One bulk cwd read, restricted to lsof's cwd pseudo-fd.
 const CWD_ARGS = ["-w", "-d", "cwd", "-Fpn"];
@@ -190,7 +192,7 @@ function snapshot(): Map<number, SnapshotRow> {
 }
 
 let resourceSnapshotFlight: Promise<Map<number, SnapshotRow>> | null = null;
-let resourceSnapshotMemo: typeof snapshotMemo = null;
+let resourceSnapshotMemo: ProcessSnapshot | null = null;
 
 function resourceSnapshot(fresh = false): Promise<Map<number, SnapshotRow>> {
   if (resourceSnapshotFlight) return resourceSnapshotFlight;

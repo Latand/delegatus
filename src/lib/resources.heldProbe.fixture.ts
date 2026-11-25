@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-const WATCHDOG_MS = 400;
+const HOLD_MS = 400;
+const WATCHDOG_MS = 1_100;
 const WAIT_MS = 75;
 const HEARTBEAT_MS = 25;
 const HOST_PID = 41_100;
@@ -56,7 +57,7 @@ async function startedProbe(ignored: string[] = []): Promise<string> {
 }
 
 function releaseProbe(started: string): void {
-  assert.deepEqual(markers("expired-"), [], `${heldProbe} blocked the Viewer until the 400 ms watchdog released it`);
+  assert.deepEqual(markers("expired-"), [], `${heldProbe} blocked the Viewer until the watchdog released it`);
   writeFileSync(path.join(directory, started.replace("started-", "release-")), "");
 }
 
@@ -67,20 +68,19 @@ async function exerciseProductionRead(): Promise<void> {
   const { agentRegistry } = await import("./agent/registry");
   const { setFileCatalogMembershipProbeForTests, setFileScanRunnerForTests } = await import("./scanner/scanCache");
   const { readResourcesWithDiagnostic } = await import("./resources");
-  const { readDiskPressure } = await import("./state/diskPressure");
+  await import("./state/diskPressure");
   const { stopWorktreeSweepWorker } = await import("./pipelines/worktreeSweepWorker");
   await Promise.all([
     import("./agentState/service"), import("./pipelines/worktreeSweep"), import("./tempSweep"),
     import("./selfUpdate/retention"), import("./scanner/filesResponseResults"),
   ]);
-  Object.defineProperty(process, "platform", { value: procBackend.name === "portable" ? "darwin" : "win32" });
   // Fix unrelated inputs, leaving snapshot assembly and response handling real.
   mkdirSync(statePath(), { recursive: true });
   agentRegistry().readOnlySnapshot();
   setFileCatalogMembershipProbeForTests(async () => null);
   setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: true }));
   writeFileSync(statePath("viewer-release.json"), JSON.stringify({ endpoint: "http://127.0.0.1:2" }));
-  await readDiskPressure();
+  Object.defineProperty(process, "platform", { value: procBackend.name === "portable" ? "darwin" : "win32" });
   procBackend.processIdentity = (pid) => pid === HOST_PID ? "fixture-start" : null;
   procBackend.readEnvVar = (pid, name) => pid === HOST_PID && name === "LLV_STRUCTURED_HOST" ? statePath() : null;
 
@@ -92,6 +92,7 @@ async function exerciseProductionRead(): Promise<void> {
     const started = await startedProbe();
     assert.deepEqual(markers("expired-"), [], `${heldProbe} blocked before its start acknowledgment could be observed`);
     const start = performance.now();
+    const hold = Bun.sleep(HOLD_MS);
     const [pending, heartbeatAt] = await Promise.all([
       readResourcesWithDiagnostic(false, { waitMs: WAIT_MS }).then((read) => ({ read, at: performance.now() - start })),
       Bun.sleep(HEARTBEAT_MS).then(() => performance.now() - start),
@@ -102,7 +103,8 @@ async function exerciseProductionRead(): Promise<void> {
     assert.deepEqual(pending.read.payload.sessions, []);
     if (heldProbe === "vm_stat" || heldProbe === "vm.swapusage") assert.equal(pending.read.payload.system, null);
     assert.ok(heartbeatAt < WAIT_MS, `25 ms heartbeat fired after ${heartbeatAt.toFixed(1)} ms`);
-    assert.ok(pending.at < 250, `75 ms read returned after ${pending.at.toFixed(1)} ms`);
+    assert.ok(pending.at < WAIT_MS * 2, `75 ms read returned after ${pending.at.toFixed(1)} ms`);
+    await hold;
     releaseProbe(started);
 
     // Darwin's separate Viewer-tree RSS sample uses the same command. A
@@ -134,7 +136,7 @@ async function exerciseProductionRead(): Promise<void> {
     const next = await readResourcesWithDiagnostic(false, { waitMs: WAIT_MS });
     assert.equal(next.diagnostic.status, "complete");
     assert.equal(next.diagnostic.generation, completed.diagnostic.generation);
-    console.log(`${heldProbe}: heartbeat ${heartbeatAt.toFixed(1)} ms, pending ${pending.at.toFixed(1)} ms, complete after release`);
+    console.log(`${heldProbe}: heartbeat ${heartbeatAt.toFixed(1)} ms, pending ${pending.at.toFixed(1)} ms, complete after a ${HOLD_MS} ms hold`);
   } finally {
     // Let every command we started settle, including one entered on failure.
     for (const started of markers("started-")) {
