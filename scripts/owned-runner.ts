@@ -8,7 +8,7 @@ import path from "node:path";
 
 import { captureProcessIdentity, processIdentityStatus, systemBootEpoch, type ProcessIdentity } from "../src/lib/processIdentity";
 import { procBackend } from "../src/lib/proc";
-import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
+import { ownFixtureTree, stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { admitPortableTestRunner } from "../src/lib/testing/portableTestAdmission";
 import { cpuBudgetTimer, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cpuSlotForOwner, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
@@ -272,7 +272,9 @@ if (args[0] === "--namespace-guardian") {
   // token to this command's PID. A nested test cannot reuse its parent's token.
   const shell = timedCommand(launch.command, 'export LLV_OWNED_TEST_RUNNER_PID=$$; ');
   const argv = launch.namespace ? sandboxGateEntryCommand(launch.owner, launch.cwd, shell) : shell;
-  const child = spawnOwnedCommand(argv, { cwd: launch.cwd, env: { ...budget.env, INVOCATION_ID: invocation, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, marker: true });
+  const child = ownFixtureTree(spawnOwnedCommand(argv, {
+    cwd: launch.cwd, env: { ...budget.env, INVOCATION_ID: invocation, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, marker: true,
+  }));
   const execution = observeCommandExecution(child);
   // Capture before any await; systemd owns every fork in the cgroup from birth.
   const identity = producerCommandIdentity(child.pid);
@@ -289,18 +291,26 @@ if (args[0] === "--namespace-guardian") {
     await stopNotify();
     try { if (saveTasks().denied > 0) code = GATE_TASK_LIMIT_EXIT; }
     catch (error) { console.error(`GATE_TASK_OBSERVATION_FAILED: ${launch.unit}: ${(error as Error).message}`); code = 1; }
+    const timedOut = code === 124 && commandExit === null && commandSignal === null;
+    if (timedOut) {
+      // Cancel through the command supervisor so its subreaper can drain the
+      // owned tree before systemd stops the entire group. A group-wide TERM
+      // can kill the main command before its subreaper observes cancellation.
+      try { await stopFixtureProcess(child); }
+      catch (error) {
+        console.error(`owned runner: budget cleanup failed: ${(error as Error).message}`);
+        code = 1;
+      }
+    }
     const survivors = await serviceSurvivors(members, async () => {
       try { await broker.close(); } finally { budget.close(); }
     });
-    // A deadline ends the main process before systemd drains the cgroup.
-    // Its pending children are expected; the waiting client returns only after
-    // that cleanup. A normal exit with children still refuses the check.
-    if (survivors.length) console.error(`owned runner: ${code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(member => `${member.pid} (${member.startIdentity})`).join(", ")}`);
+    if (survivors.length) console.error(`owned runner: surviving owned processes: ${survivors.map(member => `${member.pid} (${member.startIdentity})`).join(", ")}`);
     if ((commandExit !== null || commandSignal !== null) && survivors.length === 0) writeCompletionReceipt();
     // Exit of the service main process invokes systemd's control-group TERM,
     // followed by KILL after TimeoutStopSec, including detached descendants.
     producerReport("service", identity, { ...await execution(), service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct", phase: "close", commandExit, commandSignal, cancellation, cleanup: "pending" });
-    process.exit(survivors.length && code === 0 ? 1 : code);
+    process.exit(survivors.length && (code === 0 || code === 124) ? 1 : code);
   };
   child.once("error", error => { console.error(`owned runner: command could not start: ${error.message}`); void finish(1); });
   child.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; void finish(commandStatus(code, signal)); });
