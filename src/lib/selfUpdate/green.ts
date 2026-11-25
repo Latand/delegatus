@@ -4,7 +4,7 @@ import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { rollupLatestChecksByName } from "@/lib/forge/checkRollup";
 import { runGit } from "./git";
 
-export type GreenVerdict = { state: "green" | "red" | "pending" | "checks-timeout" | "no-checks" | "no-pull-request" | "untested-tree" | "unknown" | "unavailable"; detail?: string; checks?: string[]; done?: number; total?: number; nextAt?: string; firstReadAt?: string };
+export type GreenVerdict = { state: "green" | "red" | "pending" | "checks-timeout" | "no-checks" | "no-pull-request" | "untested-tree" | "unknown" | "unavailable"; detail?: string; checks?: string[]; optionalCheckFailures?: string[]; done?: number; total?: number; nextAt?: string; firstReadAt?: string };
 export interface GreenPorts {
   fetch: typeof fetch;
   treeOf(repo: string, sha: string): Promise<string>;
@@ -87,12 +87,40 @@ export class GreenReader {
     const key = `${repository}:${branch}`;
     const cached = this.required.get(key);
     if (!fresh && cached && this.ports.now() - cached.at < 30 * 60_000) return cached.checks;
-    const branchView = (await this.page(`https://api.github.com/repos/${repository}/branches/${encodeURIComponent(branch)}`)).body as { protected?: unknown; protection?: { required_status_checks?: { contexts?: unknown; checks?: unknown } } };
-    if (typeof branchView?.protected !== "boolean" || (branchView.protected && (!branchView.protection || typeof branchView.protection !== "object"))) {
+    // A branch confirms its required checks in two places: classic protection
+    // and the active rules that apply to it (rulesets, including inherited
+    // ones). Both are read and validated before either is believed, so a
+    // branch whose only requirement lives in a ruleset is not mistaken for one
+    // that requires nothing.
+    const api = `https://api.github.com/repos/${repository}`;
+    const [branchPage, rules] = await Promise.all([
+      this.page(`${api}/branches/${encodeURIComponent(branch)}`),
+      this.list(`${api}/rules/branches/${encodeURIComponent(branch)}?per_page=100`),
+    ]);
+    const branchView = branchPage.body as { protected?: unknown; protection?: unknown } | null;
+    if (!branchView || typeof branchView !== "object" || typeof branchView.protected !== "boolean") {
       throw new Error("GitHub returned an invalid branch protection response");
     }
-    const contexts = branchView?.protection?.required_status_checks?.contexts;
-    const configured = branchView?.protection?.required_status_checks?.checks;
+    const protection = branchView.protection;
+    // GitHub omits the member for an unprotected branch; an explicit null is
+    // not a confirmed answer and must not stand in for an empty required set.
+    if (protection === undefined) {
+      if (branchView.protected) throw new Error("GitHub returned an invalid branch protection response");
+    } else if (protection === null || typeof protection !== "object" || Array.isArray(protection)) {
+      throw new Error("GitHub returned an invalid branch protection response");
+    }
+    // An absent object is an empty required set. A present one that is not an
+    // object is unreadable, and its members must never be defaulted past it.
+    // A present object must also state the set itself (contexts or checks);
+    // one that states neither is unreadable, not an empty requirement.
+    const status = (protection as { required_status_checks?: unknown } | undefined | null)?.required_status_checks;
+    if (status !== undefined && (!status || typeof status !== "object" || Array.isArray(status))) {
+      throw new Error("GitHub returned an invalid required status checks response");
+    }
+    const { contexts, checks: configured } = (status ?? {}) as { contexts?: unknown; checks?: unknown };
+    if (status !== undefined && contexts === undefined && configured === undefined) {
+      throw new Error("GitHub returned required status checks without a required set");
+    }
     if (contexts !== undefined && (!Array.isArray(contexts) || !contexts.every((name) => typeof name === "string"))) {
       throw new Error("GitHub returned invalid required checks");
     }
@@ -106,15 +134,37 @@ export class GreenReader {
     for (const name of (contexts as string[] | undefined) ?? []) {
       if (!checks.some((check) => check.name === name)) checks.push({ name, appId: null });
     }
+    // Every rule is read, so a malformed one anywhere refuses the whole read
+    // instead of hiding the requirement it may carry.
+    for (const rule of rules) {
+      if (!rule || typeof rule !== "object" || typeof (rule as { type?: unknown }).type !== "string") {
+        throw new Error("GitHub returned an invalid branch rule");
+      }
+      if ((rule as { type: string }).type !== "required_status_checks") continue;
+      const configuredByRule = (rule as { parameters?: { required_status_checks?: unknown } }).parameters?.required_status_checks;
+      if (!Array.isArray(configuredByRule) || !configuredByRule.every((check) =>
+        check && typeof check === "object" && typeof check.context === "string" && check.context
+        && (check.integration_id === undefined || check.integration_id === null || Number.isInteger(check.integration_id)))) {
+        throw new Error("GitHub returned invalid ruleset required checks");
+      }
+      for (const { context, integration_id } of configuredByRule as { context: string; integration_id?: number | null }[]) {
+        // The rule's integration binds the check to its GitHub App, as classic
+        // protection does; an absent one accepts the check from any source.
+        const appId = integration_id === undefined || integration_id === -1 ? null : integration_id;
+        if (!checks.some((check) => check.name === context && check.appId === appId)) checks.push({ name: context, appId });
+      }
+    }
     this.required.set(key, { at: this.ports.now(), checks });
     return checks;
   }
   async read(remote: string, branch: string, target: string, checkout: string, firstReadAt?: string, fresh = false,
-    policy: "automatic" | "exact-deploy" = "automatic"): Promise<GreenVerdict> {
+    policy: "automatic" | "manual-update" | "exact-deploy" = "automatic"): Promise<GreenVerdict> {
     const repository = githubRepositoryOfRemote(remote);
     if (!repository) return { state: "unavailable" };
     const exactDeploy = policy === "exact-deploy";
-    const cacheKey = exactDeploy ? `${target}:exact-deploy` : target;
+    const manualUpdate = policy === "manual-update";
+    const requiredPolicy = exactDeploy || manualUpdate;
+    const cacheKey = requiredPolicy ? `${target}:${policy}` : target;
     const cached = this.final.get(cacheKey);
     if (cached && !fresh) return cached;
     const finish = (verdict: GreenVerdict) => {
@@ -199,7 +249,7 @@ export class GreenReader {
       });
       const checks = [
         ...[...runGroups].flatMap(([appId, entries]) => {
-          if (!exactDeploy) return rollupLatestChecksByName(entries).map(check => ({ ...check, kind: "run" as const, appId }));
+          if (!requiredPolicy) return rollupLatestChecksByName(entries).map(check => ({ ...check, kind: "run" as const, appId }));
           // A queued rerun has no started_at yet. REST ids still establish
           // which same-app run is newer; a missing timestamp cannot revive
           // the preceding run's failure.
@@ -211,31 +261,40 @@ export class GreenReader {
         }),
         ...rollupLatestChecksByName(latestStatuses).map((check) => ({ ...check, kind: "status" as const, appId: null })),
       ];
-      const requiredOnly = exactDeploy && required.length > 0;
+      const requiredOnly = requiredPolicy && required.length > 0;
       if (!checks.length) {
         if (runtimeGateRed) return finish({ state: "red", detail: "runtime-gate",
-          checks: [...new Set([...required.map(check => check.name), "runtime-gate"])].sort() });
+          checks: manualUpdate ? ["runtime-gate"] : [...new Set([...required.map(check => check.name), "runtime-gate"])].sort() });
         return requiredOnly ? { state: "pending", done: 0, total: required.length, checks: required.map(check => check.name).sort() }
           : finish({ state: "no-checks", checks: required.map(check => check.name).sort() });
       }
-      // Exact deployment follows the tracked branch's required checks on the
-      // requested commit. Automatic updates retain their merged-PR policy.
-      const relevant = requiredOnly ? checks.filter(check => required.some(({ name, appId }) => check.name === name
-        && (appId === null || (check.kind === "run" && check.appId === appId)))) : checks;
-      const red = relevant.find((check) => check.verdict === "red");
+      // Manual updates and exact deploys use the same branch protection. An
+      // exact deploy with an empty required set keeps every observed check in
+      // scope. A manual update gates on the required checks alone, so a branch
+      // that confirms none (a readable answer, never an unreadable one, which
+      // is "unknown" above) leaves nothing to gate on: every observed check is
+      // optional there, and a red one is the warning, not a refusal.
+      const isRequired = (check: (typeof checks)[number]) => required.some(({ name, appId }) => check.name === name
+        && (appId === null || (check.kind === "run" && check.appId === appId)));
+      const relevant = requiredOnly ? checks.filter(isRequired) : manualUpdate ? [] : checks;
+      const red = relevant.filter(check => check.verdict === "red").map(check => check.name);
       const notGreen = [...new Set([...relevant.filter(check => check.verdict !== "green").map(check => check.name),
         ...required.filter(({ name, appId }) => !checks.some(check => check.name === name && check.verdict === "green"
           && (appId === null || (check.kind === "run" && check.appId === appId)))).map(check => check.name)])].sort();
-      if (red || runtimeGateRed) return finish({ state: "red", detail: red?.name ?? "runtime-gate",
-        checks: [...new Set([...notGreen, ...(runtimeGateRed ? ["runtime-gate"] : []), ...(runtimeGatePending ? ["runtime-gate"] : [])])].sort() });
+      if (red.length || runtimeGateRed) return finish({ state: "red", detail: red[0] ?? "runtime-gate",
+        checks: [...new Set([...(manualUpdate ? red : notGreen), ...(runtimeGateRed || (!manualUpdate && runtimeGatePending) ? ["runtime-gate"] : [])])].sort() });
       const done = requiredOnly ? required.filter(({ name, appId }) => checks.some(check => check.name === name && check.verdict === "green"
         && (appId === null || (check.kind === "run" && check.appId === appId)))).length : relevant.filter(check => check.verdict === "green").length;
       const total = requiredOnly ? required.length : relevant.length;
       const missing = required.find(({ name, appId }) => !checks.some((check) => check.name === name && check.verdict === "green"
         && (appId === null || (check.kind === "run" && check.appId === appId))));
-      if (done === total && !missing && !runtimeGatePending) return finish({ state: "green", done, total });
+      if (done === total && !missing && !runtimeGatePending) {
+        const optionalCheckFailures = manualUpdate
+          ? [...new Set(checks.filter(check => check.verdict === "red" && !isRequired(check)).map(check => check.name))].sort() : [];
+        return finish({ state: "green", done, total, ...(optionalCheckFailures.length ? { optionalCheckFailures } : {}) });
+      }
       if (runtimeGatePending) return { state: "pending", done, total, detail: "runtime-gate", checks: [...new Set([...notGreen, "runtime-gate"])].sort() };
-      if (exactDeploy) return { state: "pending", done, total, detail: missing?.name, checks: notGreen };
+      if (requiredPolicy) return { state: "pending", done, total, detail: missing?.name, checks: notGreen };
       const persistedFirst = firstReadAt ? Date.parse(firstReadAt) : NaN;
       const first = this.firstPending.get(target) ?? (Number.isFinite(persistedFirst) ? persistedFirst : this.ports.now());
       this.firstPending.set(target, first);

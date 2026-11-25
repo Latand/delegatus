@@ -5505,7 +5505,7 @@ describe("Updates dialog first state", () => {
    Framed at 1440 and 390, light and dark, en and uk. */
 describe("self-update confirmation modal", () => {
   browserTest("variant 1 on desktop and phone, light and dark, en and uk", async () => {
-    const out = path.resolve(".artifacts/self-update-confirm");
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "self-update-confirm");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch(LAUNCH);
@@ -5719,6 +5719,238 @@ describe("self-update confirmation modal", () => {
         } finally { await context.close(); }
       }
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 600_000);
+
+  /* A confirmed Update answered with a refusal (409 naming the required checks
+     that failed) or admitted with a warning (202 naming the optional checks
+     that failed). The confirmation scrolls the dialog to the Update card, which
+     sits below the header whenever the content stacks in one column, so the
+     outcome is drawn in that card at every size and has to be whole on the
+     first screen, once, without scrolling: measured from its text rects
+     against the dialog's own scroll container at 390x844, 390x640, the
+     landscape 844x390 (the dialog's phone query matches by height too), the
+     800x650 desktop window (a scrolling dialog in one column, where the header
+     is off screen after the scroll) and 1440x900. The install action's
+     confirmation (Restart launcher, offered above the header while a built
+     revision waits for the older launcher) answers the same two ways through
+     the same admission, and its card, which it scrolls to, shows the answer on
+     every layout, and keeps it beside the new-version banner when the
+     relaunched Viewer answers without the action. A second action started while Update's answer is out must
+     not move it: Check now's failure stays in the header and Update's refusal
+     stays in the card, whichever answer comes back first. */
+  browserTest("a confirmed Update's refusal and optional-check warning stay in view once, on phones and desktop, in both locales and themes", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "self-update-action-outcome");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const { CHECKOUT_STEPS, idleCheck, idleUpdate, stoppedProcess } = await import("@/lib/selfUpdate/types");
+    const { mobileLayoutViewport } = await import("@/lib/attention/eligibility");
+    const old = "36accb1".padEnd(40, "1"), target = "e7893bc".padEnd(40, "e");
+    const at = "2026-10-11T12:34:20.000Z";
+    const revision = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1.11.0", date: "2026-10-11T09:00:00.000Z" });
+    const proc = (pid: number) => ({ ...stoppedProcess(), state: "healthy" as const, pid, startedAt: at, lastHealthAt: at, lastHealthOk: true, revision: old.slice(0, 7), tail: [] });
+    const initial = {
+      mode: "checkout", unsupportedReason: null, installed: revision(old), serving: { web: revision(old), runtimeHost: revision(old) },
+      available: revision(target), check: { ...idleCheck(), state: "update-available", at, nextPollAt: at, relation: "behind", behind: 1 },
+      update: idleUpdate(CHECKOUT_STEPS), busy: null, processes: { web: { ...proc(4141), port: 8899 }, runtimeHost: proc(4242) },
+      meta: { branch: "main", remote: "https://github.com/example/delegatus", checkout: "/fixture/checkout", pollMinutes: 60, serverTime: at },
+      workEvidence: { state: "ready", since: at, at, error: null, phases: null },
+      resumeWork: { turns: 0, stages: 0, turnList: [], stageList: [], unreadable: null },
+    };
+    const running = { ...initial, busy: "update", update: { ...idleUpdate(CHECKOUT_STEPS), state: "running", trigger: "operator", target, targetShort: target.slice(0, 7), targetVersion: "1.11.0", startedAt: at,
+      steps: idleUpdate(CHECKOUT_STEPS).steps.map((step, index) => ({ ...step, state: index === 0 ? "running" : "pending", startedAt: index === 0 ? at : null })) } };
+    /* The built revision waits for the older launcher's restart: the install card offers it above the header. */
+    const awaitingLauncher = { ...initial, action: { id: "restart-service", button: true, unit: "delegatus.service" } };
+    const requiredRefusal = { code: "deployment-refused", detail: "red", green: { state: "red", detail: "typecheck", checks: ["privacy-publication", "typecheck"] }, snapshot: initial };
+    const readings: Record<string, unknown>[] = [];
+    try {
+      const sizes = [{ width: 390, height: 844 }, { width: 390, height: 640 }, { width: 844, height: 390 }, { width: 800, height: 650 }, { width: 1440, height: 900 }];
+      for (const lang of ["uk", "en"] as const) for (const { width, height } of sizes) for (const scheme of ["light", "dark"] as const) {
+        /* The dialog's own decision, not a width: a landscape phone is a phone. */
+        const phone = mobileLayoutViewport({ width, height });
+        const context = await browser.newContext({ viewport: { width, height }, colorScheme: scheme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", error => pageErrors.push(error.message));
+        try {
+          await page.addInitScript(({ lang, initial, running, awaitingLauncher }) => {
+            localStorage.setItem("llv_lang", lang);
+            const streams: { listeners: Record<string, ((event: { data: string }) => void)[]> }[] = [];
+            let Source = window.EventSource;
+            Object.defineProperty(window, "EventSource", { configurable: true,
+              get: () => Source,
+              set: (Next: typeof EventSource) => { Source = class extends Next {
+                constructor(url: string | URL) {
+                  super(url);
+                  if (String(url).startsWith("/api/self-update/events") && !String(url).includes("readOnly")) {
+                    const stream = { listeners: {} as Record<string, ((event: { data: string }) => void)[]> };
+                    streams.push(stream);
+                    Object.assign(this, { addEventListener: (type: string, listener: (event: { data: string }) => void) => { (stream.listeners[type] ??= []).push(listener); } });
+                  }
+                }
+              } as typeof EventSource; },
+            });
+            /* Each POST has its own answer and can be held until the driver releases it. */
+            const answers: Record<string, { status: number; body: unknown }> = { update: { status: 202, body: running }, check: { status: 200, body: initial }, action: { status: 202, body: awaitingLauncher } };
+            const holds: Record<string, { on: boolean; release: () => void }> = { update: { on: false, release: () => {} }, check: { on: false, release: () => {} }, action: { on: false, release: () => {} } };
+            const gate = (name: string) => holds[name]!.on ? new Promise<void>(done => { holds[name]!.release = () => done(); }) : Promise.resolve();
+            const reply = (name: string) => gate(name).then(() => new Response(JSON.stringify(answers[name]!.body), { status: answers[name]!.status, headers: { "content-type": "application/json" } }));
+            const interceptFetch = (next: typeof fetch) => ((input: RequestInfo | URL, init?: RequestInit) => {
+              const url = input instanceof Request ? input.url : String(input);
+              const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+              const pathname = new URL(url, location.href).pathname;
+              if (pathname === "/api/self-update/update" && method === "POST") return reply("update");
+              if (pathname === "/api/self-update/check" && method === "POST") return reply("check");
+              if (pathname === "/api/self-update/action" && method === "POST") return reply("action");
+              if (pathname === "/api/self-update") return Promise.resolve(new Response(JSON.stringify(initial), { status: 200, headers: { "content-type": "application/json" } }));
+              return next(input, init);
+            }) as typeof fetch;
+            let fetcher = interceptFetch(window.fetch);
+            Object.defineProperty(window, "fetch", { configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => { fetcher = interceptFetch(next); },
+            });
+            Object.assign(window, {
+              selfUpdateEmit: (data: unknown) => { for (const stream of streams) for (const listener of stream.listeners.state ?? []) listener({ data: JSON.stringify(data) }); return streams.length; },
+              selfUpdateAnswer: (name: string, status: number, body: unknown) => { answers[name] = { status, body }; },
+              selfUpdateHold: (name: string, on: boolean) => { holds[name]!.on = on; if (!on) holds[name]!.release(); },
+            });
+          }, { lang, initial, running, awaitingLauncher });
+          await page.goto(server.base);
+          await page.waitForSelector("[data-phone-card], [data-mobile2-shell], [data-mobile-shell], [data-kanban-board]", { timeout: 15_000 }).catch(() => {});
+          await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
+          const dialog = page.locator("[data-self-update-dialog]");
+          await dialog.waitFor();
+          const emit = (snapshot: unknown) => page.evaluate(snapshot => (window as unknown as { selfUpdateEmit(value: unknown): number }).selfUpdateEmit(snapshot), snapshot);
+          for (let attempt = 0; attempt < 30; attempt++) {
+            if (await emit(initial)) break;
+            await page.waitForTimeout(100);
+          }
+          await dialog.locator('[data-action="update"]:not([disabled])').waitFor({ timeout: 5_000 }).catch(async () => {
+            throw new Error(JSON.stringify({ dialog: await dialog.innerText().catch(() => "missing"), pageErrors }));
+          });
+          const answer = (name: string, status: number, body: unknown) => page.evaluate(({ name, status, body }) => (window as unknown as { selfUpdateAnswer(name: string, status: number, body: unknown): void }).selfUpdateAnswer(name, status, body), { name, status, body });
+          const hold = (name: string, on: boolean) => page.evaluate(({ name, on }) => (window as unknown as { selfUpdateHold(name: string, on: boolean): void }).selfUpdateHold(name, on), { name, on });
+          const settled = () => page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+          /* The outcome line that names `needle`, as the person sees it: how many copies are drawn, whether its
+             text is whole inside the dialog's own scroll container (not the content inside it), and which section holds it. */
+          const read = (selector: string, needle: string) => dialog.evaluate((root, { selector, needle }) => {
+            const drawn = (element: HTMLElement) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
+            const all = [...root.querySelectorAll<HTMLElement>(selector)].filter(element => (element.textContent ?? "").includes(needle));
+            const copies = all.filter(drawn);
+            const element = copies[0] ?? all[0]!;
+            let port: HTMLElement | null = element.parentElement;
+            while (port && !/auto|scroll/.test(getComputedStyle(port).overflowY)) port = port.parentElement;
+            const box = port!.getBoundingClientRect();
+            const range = document.createRange(); range.selectNodeContents(element);
+            const rects = [...range.getClientRects()].map(rect => ({ top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right }));
+            const view = { top: Math.max(box.top, 0), bottom: Math.min(box.bottom, window.innerHeight), left: Math.max(box.left, 0), right: Math.min(box.right, window.innerWidth) };
+            return {
+              copies: copies.length, inDom: all.length,
+              text: (element.textContent ?? "").replace(/\s+/g, " ").trim(),
+              rects, port: view,
+              whole: rects.length > 0 && rects.every(rect => rect.top >= view.top && rect.bottom <= view.bottom && rect.left >= view.left && rect.right <= view.right),
+              section: element.closest("[data-section]")?.getAttribute("data-section") ?? null,
+            };
+          }, { selector, needle });
+          /* «Update» and the install card's «Restart launcher» ask the same question and apply the same way. */
+          const confirmVia = async (via: "update" | "install-action") => {
+            await dialog.locator(`[data-action="${via}"]:not([disabled])`).click();
+            const confirmation = page.locator("[data-team-dialog='self-update-confirm']");
+            await confirmation.locator('[data-action="confirm-apply"]').click();
+            await confirmation.waitFor({ state: "detached" });
+          };
+          const confirmUpdate = () => confirmVia("update");
+          /* The confirmation's own scroll to its card settles first. */
+          const show = async (status: number, body: unknown, selector: string, needle: string, label: string, via: "update" | "install-action" = "update") => {
+            await answer(via === "update" ? "update" : "action", status, body);
+            await emit(via === "update" ? initial : awaitingLauncher);
+            await confirmVia(via);
+            await dialog.locator(`${selector}:visible`).first().waitFor();
+            await settled();
+            const reading = await read(selector, needle);
+            const name = `${lang}-${width}x${height}-${scheme}-${label}`;
+            expect(reading.copies, `${name} is drawn once`).toBe(1);
+            expect(reading.inDom, `${name} is in the page once`).toBe(1);
+            expect(reading.text, `${name} names the checks`).toContain(needle);
+            expect(reading.whole, `${name} is whole inside the scroll container without scrolling: ${JSON.stringify(reading)}`).toBe(true);
+            /* Each action's outcome is in the card of the button just pressed, on every layout. */
+            const section = via === "install-action" ? "install-action" : "update";
+            expect(reading.section, `${name} sits in the ${section} section`).toBe(section);
+            await page.screenshot({ path: path.join(out, `${name}.png`) });
+            readings.push({ lang, width, height, scheme, label, phone, ...reading, frame: `${name}.png` });
+          };
+          await show(409, requiredRefusal, '[data-error="action"]', "privacy-publication, typecheck", "required-ci-refusal");
+          await show(202, { ...running, optionalCheckFailures: ["Windows (native)", "Minimum macOS SQLite"] }, '[data-warning="optional-checks"]', "Windows (native), Minimum macOS SQLite", "optional-ci-warning");
+          await show(409, { ...requiredRefusal, snapshot: awaitingLauncher }, '[data-error="action"]', "privacy-publication, typecheck", "launcher-required-ci-refusal", "install-action");
+          await show(202, { ...awaitingLauncher, optionalCheckFailures: ["Windows (native)", "Minimum macOS SQLite"] }, '[data-warning="optional-checks"]', "Windows (native), Minimum macOS SQLite", "launcher-optional-ci-warning", "install-action");
+
+          /* The launcher's restart relaunches the Viewer. The snapshot that answers afterwards comes from another
+             web process and carries no action (the relaunch-capable launcher needs none), so the install card keeps
+             only its answer. The answer stays once, and it is whole on the first screen beside the new-version banner. */
+          {
+            const name = `${lang}-${width}x${height}-${scheme}-launcher-warning-after-relaunch`;
+            await emit({ ...initial, processes: { ...initial.processes, web: { ...proc(5151), port: 8899 } } });
+            await dialog.locator('[data-banner="reload"]').waitFor();
+            await settled();
+            const warning = await read('[data-warning="optional-checks"]', "Windows (native), Minimum macOS SQLite");
+            const banner = await read('[data-banner="reload"]', old.slice(0, 7));
+            expect(warning.copies, `${name}: the warning is drawn once`).toBe(1);
+            expect(warning.inDom, `${name}: the warning is in the page once`).toBe(1);
+            expect(warning.section, `${name}: the warning stays in the install card`).toBe("install-action");
+            expect(warning.whole, `${name}: the warning is whole beside the banner without scrolling: ${JSON.stringify(warning)}`).toBe(true);
+            expect(banner.copies, `${name}: the new-version banner is drawn once`).toBe(1);
+            expect(banner.whole, `${name}: the banner is whole with the warning: ${JSON.stringify(banner)}`).toBe(true);
+            expect(await dialog.locator('[data-action="install-action"]').count(), `${name}: the restart action is gone`).toBe(0);
+            await page.screenshot({ path: path.join(out, `${name}.png`) });
+            readings.push({ lang, width, height, scheme, label: "launcher-warning-after-relaunch", phone, warning, banner, frame: `${name}.png` });
+            await emit(initial);
+          }
+
+          /* A second action while Update's answer is out: Update is confirmed and held, Check now is pressed
+             (it scrolls to the header), the person goes back to the Update card, and the answers come back in
+             either order. Update's refusal stays in the card; Check now's failure stays in the header. */
+          for (const order of ["update-first", "check-first"] as const) {
+            const name = `${lang}-${width}x${height}-${scheme}-interleaved-${order}`;
+            await answer("update", 409, requiredRefusal);
+            await answer("check", 500, {});
+            await hold("update", true);
+            await hold("check", true);
+            await emit(initial);
+            await confirmUpdate();
+            await dialog.locator('[data-action="check"]:not([disabled])').click();
+            const releaseCheck = async () => { await hold("check", false); await dialog.locator('[data-error="action"]', { hasText: "500" }).waitFor({ state: "attached" }); };
+            const releaseUpdate = async () => { await hold("update", false); await dialog.locator('[data-error="action"]', { hasText: "privacy-publication, typecheck" }).waitFor({ state: "attached" }); };
+            if (order === "check-first") await releaseCheck();
+            await dialog.evaluate(root => root.querySelector("[data-section='update']")!.scrollIntoView({ block: "start" }));
+            await settled();
+            await releaseUpdate();
+            if (order === "update-first") await releaseCheck();
+            await settled();
+            /* Update's refusal is read where the person is looking: the Update card, back on screen. */
+            await dialog.evaluate(root => root.querySelector("[data-section='update']")!.scrollIntoView({ block: "start" }));
+            await settled();
+            const refused = await read('[data-error="action"]', "privacy-publication, typecheck");
+            const failed = await read('[data-error="action"]', "500");
+            expect(refused.copies, `${name}: Update's refusal is drawn once`).toBe(1);
+            expect(refused.inDom, `${name}: Update's refusal is in the page once`).toBe(1);
+            expect(refused.section, `${name}: Update's refusal sits in the Update card`).toBe("update");
+            expect(refused.whole, `${name}: Update's refusal is whole on its card's first screen: ${JSON.stringify(refused)}`).toBe(true);
+            expect(failed.copies, `${name}: Check now's failure is drawn once`).toBe(1);
+            expect(failed.inDom, `${name}: Check now's failure is in the page once`).toBe(1);
+            expect(failed.section, `${name}: Check now's failure stays in the header`).toBe("header");
+            await page.screenshot({ path: path.join(out, `${name}.png`) });
+            readings.push({ lang, width, height, scheme, label: `interleaved-${order}`, phone, refused, failed, frame: `${name}.png` });
+            await hold("update", false);
+            await hold("check", false);
+            await answer("check", 200, initial);
+            await emit(initial);
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
     } finally { await browser.close(); server.stop(); }
   }, 600_000);
 });
