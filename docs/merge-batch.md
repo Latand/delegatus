@@ -139,11 +139,11 @@ A new failure gets three subsequent observations of its file. Every confirmation
 rerun discovers additional failures against the same baseline; a new identity
 needs its own three observations. Six rounds bound confirmation. A passing
 observation permits an intermittent failure; missing or skipped assertions never
-provide passing evidence. Exhausting the budget stops the batch.
+provide passing evidence. Exhausting the budget stops local validation.
 
 Confirmed failures are checked on subjects with each PR removed, preserving the
 exact detector under investigation. Every subject installs frozen dependencies.
-A behaviour conflict stops the pass. A clearing omission names the responsible
+A behaviour conflict stops local validation. A clearing omission names the responsible
 PR; multiple clearing omissions report `integration: needs both`. If no single
 omission clears it, combined removals find a minimal clearing set. If all
 implementation removals leave a failure, native test inventories are checked on
@@ -160,8 +160,9 @@ including unchanged parameterized and computed titles. Each matching failure
 must then occur in a full native main file run before it grants an exemption.
 The filter can skip setup tests and make a healthy main case fail; that filtered
 observation alone supplies no baseline verdict.
-Otherwise the gate retains the detector and refuses publication with its
-attribution rule. The baseline inventory and partial decisions survive refusal.
+Otherwise local validation retains the detector and reports which attribution
+rule prevented a verdict. The baseline inventory and partial decisions survive
+the refusal.
 
 Removal subjects rebuild main plus the remaining PRs' actual changes. Only the
 detector under investigation is held fixed: either the native merged test or a
@@ -169,8 +170,8 @@ reviewed test file its PR actually changed, with any clean main-contract
 adaptation described above. This applies to single omissions, combined removals
 and the all-removed control. Untouched files keep each subject's native contents.
 If the all-removed control remains red without native evidence of a moved
-failure or member-added case, retain the detector and refuse the batch without
-assigning a culprit. Historical stale-copy attribution records remain
+failure or member-added case, the local gate retains the detector and refuses
+to assign a culprit. Historical stale-copy attribution records remain
 readable in the append-only report; new validations never create them.
 A case that passes on main and breaks on the candidate, a new file fault
 included, drops only the PR whose removal clears it; the batch is rebuilt and
@@ -219,8 +220,9 @@ failed attempt kept for inspection.
 
 The report separates pre-existing, intermittent and attributed test failures,
 including confirmation and omission evidence when local checks ran. It also
-records hosted check attribution. It has one row per input: `merged <main sha>`, `needs-review <sha>`,
-`culprit <check: attribution>` or `head-moved`, plus the batch URL. A deferred
+records hosted check attribution. Each input gets a row with `merged <main sha>`,
+`needs-review <sha>`, `culprit <check: attribution>` or `head-moved`. The
+report also gives the batch URL. A deferred
 row initially says `needs-review pending resolution`; it is unfinished until
 the merger resolves it or reports why the pass failed. The run succeeds when
 every row is final and the batch merged or became empty. GitHub failures,
