@@ -738,20 +738,23 @@ async function failStructuredLaunchAndReap(
           }
         }
       }
-      // The terminal receipt wins cleanup ownership, while this caller still
-      // reconciles the matching runtime operation from its original evidence.
-      let operation: RuntimeOperationResult | null = null;
-      let message: RuntimeOperationResult | null = null;
-      let runtime: RuntimeSnapshot | null = null;
-      let messageEvidenceAvailable = true;
-      try { operation = await client.operationStatus(launchId); }
-      catch { /* Keep the terminal operation unresolved without read proof. */ }
-      try { message = await client.operationStatus(`spawn_message_${launchId}`, { currentRetryLeaf: true }); }
-      catch { messageEvidenceAvailable = false; }
-      try { runtime = await client.snapshot(); }
-      catch { /* The settlement helper retains uncertainty without a snapshot. */ }
-      await settleTerminalStructuredSpawnOperation(launchId, registry, client, operation, message, runtime,
-        options.assertActive ?? (() => {}), messageEvidenceAvailable);
+      if (receipt.state === "failed") {
+        // A failed receipt can be written before its journal operation settles.
+        // A concurrent completed receipt belongs to the successful caller; its
+        // normal reconciliation owns the operation transition.
+        let operation: RuntimeOperationResult | null = null;
+        let message: RuntimeOperationResult | null = null;
+        let runtime: RuntimeSnapshot | null = null;
+        let messageEvidenceAvailable = true;
+        try { operation = await client.operationStatus(launchId); }
+        catch { /* Keep the terminal operation unresolved without read proof. */ }
+        try { message = await client.operationStatus(`spawn_message_${launchId}`, { currentRetryLeaf: true }); }
+        catch { messageEvidenceAvailable = false; }
+        try { runtime = await client.snapshot(); }
+        catch { /* The settlement helper retains uncertainty without a snapshot. */ }
+        await settleTerminalStructuredSpawnOperation(launchId, registry, client, operation, message, runtime,
+          options.assertActive ?? (() => {}), messageEvidenceAvailable);
+      }
     }
     return { claimed: false, receipt };
   }
@@ -3276,7 +3279,7 @@ export async function recoverStagedStructuredLaunch(
         if (!canPublishOrDispatch()) return false;
         curatorAuthorize();
         return true;
-      }, launchId);
+      }, undefined, launchId);
       if ((continuation && !await continuation.owns()) || !canPublishOrDispatch()) return read();
       curatorAuthorize();
       if (continuation) {

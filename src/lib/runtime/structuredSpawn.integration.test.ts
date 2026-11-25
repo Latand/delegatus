@@ -4656,14 +4656,13 @@ test.each(["codex", "claude"] as const)("issue 1074: a %s launch fails when shar
   let appendCalls = 0;
   const client = {
     ...durableClient,
-    append: async (event: Parameters<RuntimeHostClient["append"]>[0], authorize?: () => void) => {
+    appendSessionFenced: async (...args: Parameters<NonNullable<RuntimeHostClient["appendSessionFenced"]>>) => {
       appendCalls += 1;
-      if (appendCalls !== 1) return await durableClient.append(event);
+      if (appendCalls !== 1) return await durableClient.appendSessionFenced!(...args);
       publicationStarted.resolve();
       await releasePublication.promise;
       try {
-        authorize?.();
-        return await durableClient.append(event);
+        return await durableClient.appendSessionFenced!(...args);
       } finally {
         publicationFinished.resolve();
       }
