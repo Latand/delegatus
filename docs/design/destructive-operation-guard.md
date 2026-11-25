@@ -710,17 +710,25 @@ fresh files and reported in the stage evidence:
 | Launch-time verification (section 6.5) | ≤ 20 ms, login-shell probe excluded (cached) |
 | Journal ingest per line | ≤ 5 ms, no whole-journal read per tick |
 
-`destructiveGuard.performance.test.ts` runs inside the publication gate beside
-other test files, under a CPU quota and uncontrolled host load. It therefore
-holds each time budget scaled by a host factor taken from the same run:
+`destructiveGuard.performance.test.ts` and, for the 3 000 separate calls,
+`destructiveGuard.performanceSeparate.test.ts` run inside the publication gate
+beside other test files, under a CPU quota and uncontrolled host load. Each
+file stays well inside the gate's five-minute file deadline. They hold each
+time budget scaled by a host factor taken from the same run:
 max(1, median plain `rm -f` of 3 000 files ÷ 24 ms), the idle measurement
-above. Contention slows both sides of every pair, and the factor loosens the
-absolute bounds in the same proportion. The one-call fast path is held to
-1.5 × plain plus one wrapper start (30 ms), because a 24 ms baseline cannot
-absorb a fixed start cost as a ratio. The 3 000 separate calls are held to the
-fast path's 2 ms added per call. The slow path is judged on its median. The
-"well under a second" bound for 3 000 targets stays unscaled. The report line
-`guard-performance` carries the factor with the raw runs.
+above; the separate-calls file takes that sample in each of its rounds.
+Contention slows both sides of every pair, and the factor loosens the
+absolute bounds in the same proportion. The hook and the launch-time check
+are CPU-bound process work measured after the rm rounds, so a load change
+there would escape the rm factor. Each of their calls is interleaved with a
+`bun -e 0` start, and their bounds scale by the larger of the host factor and
+max(1, median start ÷ 5 ms), the idle start above. The one-call fast path is
+held to 1.5 × plain plus one wrapper start (30 ms), because a 24 ms baseline
+cannot absorb a fixed start cost as a ratio. The 3 000 separate calls are held
+to the fast path's 2 ms added per call. The slow path is judged on its median.
+The "well under a second" bound for 3 000 targets stays unscaled. The report
+lines `guard-performance` and `guard-performance-separate` carry the factors
+with the raw runs.
 
 ## 10. Item 7: role rules
 
@@ -817,7 +825,7 @@ Test files (by path; none named after the issue):
 | `src/lib/agent/destructiveGuard.install.test.ts` | fake account homes for both engines (legacy, managed, managed with linked `config.toml`, a home behind a symlinked ancestor, a personal PreToolUse group present); install; drift cases: handler removed, command edited, trust hash wrong, trust key under the logical path, guard file bytes changed, guard file replaced by a symlink; each repaired by a launch-time verification; personal bytes preserved |
 | `src/lib/agent/destructiveGuard.native.test.ts` | real CLIs: literal refusal for both engines; the incident shape for both engines; the Codex `app-server` path with thread-level hooks plus account `hooks.json`; a trusted account install runs exactly once per Bash call |
 | `src/lib/agent/destructiveGuard.refusals.test.ts` | journal → lifecycle event, stage attempt record, Needs-you `refusal` row, delivered message, cursor resume after restart, rotation |
-| `src/lib/agent/destructiveGuard.performance.test.ts` | the budgets of section 9 |
+| `src/lib/agent/destructiveGuard.performance.test.ts`, `destructiveGuard.performanceSeparate.test.ts` | the budgets of section 9 |
 | existing: `spawnPolicy.test.ts`, `codexAppServerHost.test.ts`, `scripts/gate-cache.test.ts`, `scripts/gateSandboxRecords.test.ts`, `scripts/gate-runner/remote*.test.ts`, the external relay conversation tests, the two browser drivers | the changed contracts |
 
 The incident test, for each engine: the model stub issues one tool call,
@@ -856,7 +864,7 @@ Acceptance for slice 1, from the pinned specification:
 | Incident shape refused at the nested layer for both engines, protected paths survive, refusal reaches the board record; fake tree, fake roots | `destructiveGuard.native.test.ts` incident cases (section 12) |
 | The hook refuses literal destructive forms for both engines with the real JSON contract | `destructiveGuard.hook.test.ts` (recorded payloads) and the native literal cases |
 | Hooks installed for every account; a launch re-installs a drifted hook | `destructiveGuard.install.test.ts`, plus the native case proving the installed trust is accepted |
-| Ordinary worktree deletes keep working; 3 000 targets well under a second, measured and reported | admitted cases in the policy test; `destructiveGuard.performance.test.ts` with the numbers in the stage report |
+| Ordinary worktree deletes keep working; 3 000 targets well under a second, measured and reported | admitted cases in the policy test; `destructiveGuard.performance.test.ts` and `destructiveGuard.performanceSeparate.test.ts` with the numbers in the stage report |
 | Four findings fixed with focused tests | section 11 |
 | Builder and reviewer role texts carry the item-7 rules | section 10, read in review |
 | Project checks pass; the pre-push touched-tests selection shows zero new failures against main | the publication gate |
