@@ -40,7 +40,10 @@ const PROJECT_TOOLS = new Set([
 ]);
 // A project's seat keeps the Telegram grant on its record under member reach
 // (`seatHoldsTelegramGrant`), with the chats the agent route serves any caller.
-const SEAT_TELEGRAM_TOOLS = new Set(["telegram_bot_send", "telegram_bot_send_media", "telegram_bot_send_document", "telegram_bot_chats", "telegram_bot_messages"]);
+const SEAT_TELEGRAM_TOOLS = new Set([
+  "telegram_bot_send", "telegram_bot_send_media", "telegram_bot_send_document",
+  "telegram_bot_chats", "telegram_bot_messages", "telegram_bot_reactions", "telegram_bot_set_reaction",
+]);
 // These reach a Viewer route that applies the workspace fence itself to the
 // caller's forwarded capability, so the route judges their arguments.
 const ROUTE_FENCED_TOOLS = new Set(["publish_prototype_review", "read_prototype_review"]);

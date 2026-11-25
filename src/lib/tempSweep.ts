@@ -119,6 +119,10 @@ export type ScannedProcess = {
 
 export type ProcessScan = { ownNamespace: string | null; processes: ScannedProcess[] };
 
+export function processPathWithinLimits(file: string): boolean {
+  return Buffer.byteLength(file) < 4096 && file.split(path.sep).every(name => Buffer.byteLength(name) <= 255);
+}
+
 function readLink(file: string): string | null {
   try {
     return fs.readlinkSync(file);
@@ -162,7 +166,9 @@ export function scanProcesses(procRoot = "/proc", extraRoots: readonly string[] 
     try {
       for (const token of fs.readFileSync(path.join(base, "cmdline"), "utf8").split("\0")) {
         references.push(token);
-        if (token.startsWith("/")) paths.add(token);
+        // A process can rewrite argv as one command line. Keep it as text
+        // for argument matching when it cannot be a filesystem path.
+        if (token.startsWith("/") && processPathWithinLimits(token)) paths.add(token);
       }
       for (const line of fs.readFileSync(path.join(base, "maps"), "utf8").split("\n")) {
         const target = /^\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+(\/.*)$/.exec(line)?.[1];

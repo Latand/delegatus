@@ -21,7 +21,7 @@ import { CHECKOUT_MERGER_OPERATION_PREFIX } from "./checkoutMergerRecovery";
 import type { RuntimeRetirementClaim, RuntimeTransitionOptions, RuntimeInjectionBinding, RuntimeSendSettings, RuntimeTransitionDetails } from "./contracts";
 import { captureProcessIdentity, processIdentityProvenDead, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { evidenceAgrees, readEvidence, readEvidenceWithin, readOptionalEvidence, type Evidence } from "./evidence";
-import type { CompactCapableHost, DeliveryReceipt, DeliveryTimingMark, DeliveryTimingObserver, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome, RuntimeSteerOutcome } from "./engineHost";
+import type { CompactCapableHost, DeliveryAcceptanceObservation, DeliveryReceipt, DeliveryTimingMark, DeliveryTimingObserver, EngineHost, FirstDispatchEvidence, HostState, QueueEntry, RuntimeInjectOutcome, RuntimeSteerOutcome } from "./engineHost";
 import { NATIVE_INJECT_CAPABILITY } from "./codexCapabilityFlags";
 import { hostSupportsCompact, hostSupportsInject, StructuredDispatchDeferredError, StructuredAnswerError, StructuredCompactError, StructuredInjectError, StructuredSendRefusedError } from "./engineHost";
 import {
@@ -30,6 +30,7 @@ import {
   type StructuredMessageContent,
 } from "./structuredContent";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
+import { withLiveReconfigureHost } from "./structuredReconfigure";
 import { StructuredOrphanGraceError, StructuredOrphanStopRefusedError, StructuredStageHostGoneError, StructuredRecoveryHeldForUpdateError, StructuredRecoverySynchronizingError, type StructuredRecoveryRequest } from "./structuredRecovery";
 import { StageAttemptSettledError } from "./stageGitEnvironment";
 import type { DeliveryProgressNote, DeliveryProgressRecord, DeliveryProgressSink } from "./deliveryProgress";
@@ -347,7 +348,7 @@ interface ControlEffect {
   attentionId?: string;
   resolution?: unknown;
   turnId?: string | null;
-  sessionKey?: { engine: "codex" | "claude"; sessionId: string };
+  sessionKey?: { engine: "codex" | "claude" | "copilot" | "antigravity"; sessionId: string };
   pendingSendIds?: string[];
   eventSeq: number;
 }
@@ -366,7 +367,7 @@ export interface StructuredReconfigureEffect {
   operationId: string;
   conversationId: string;
   kind: "reconfigure";
-  sessionKey?: { engine: "codex" | "claude" | "copilot"; sessionId: string };
+  sessionKey?: { engine: "codex" | "claude" | "copilot" | "antigravity"; sessionId: string };
   model: string;
   effort: string;
   fast: boolean | null;
@@ -575,7 +576,8 @@ function controlEffect(effect: StructuredDeliveryEffect): ControlEffect | null {
     const key = effect.payload.sessionKey;
     if (!key || typeof key !== "object" || Array.isArray(key)) return null;
     const candidate = key as Record<string, unknown>;
-    if ((candidate.engine !== "codex" && candidate.engine !== "claude") || typeof candidate.sessionId !== "string") return null;
+    if ((candidate.engine !== "codex" && candidate.engine !== "claude" && candidate.engine !== "copilot" && candidate.engine !== "antigravity")
+      || typeof candidate.sessionId !== "string") return null;
     const pendingSendIds = effect.payload.pendingSendIds;
     if (pendingSendIds !== undefined && (!Array.isArray(pendingSendIds)
       || pendingSendIds.some(id => typeof id !== "string" || !id || id.length > 200))) return null;
@@ -950,7 +952,7 @@ export class StructuredDeliveryQueue {
     private readonly resolveHost: StructuredHostResolver,
     private readonly terminateHost: (
       conversationId: string,
-      sessionKey: { engine: "codex" | "claude"; sessionId: string },
+      sessionKey: { engine: "codex" | "claude" | "copilot" | "antigravity"; sessionId: string },
       onlyIfIdle?: import("./contracts").RuntimeIdleKillFence,
       authority?: { operationId: string; claim: RuntimeRetirementClaim },
       providerRecovery?: import("./contracts").RuntimeProviderRecoveryRef,
@@ -2816,7 +2818,7 @@ export class StructuredDeliveryQueue {
         }
         if (context.priorDeliveryUnverified || current.value?.deliveryUnverified === true
           || current.value?.reason === "delivery-auto-retry") {
-          await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`);
+          await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`, context.clearedRoute);
           return "next";
         }
         // This refusal is raised by the last authorization check before the
@@ -2824,7 +2826,7 @@ export class StructuredDeliveryQueue {
         // immutable: replay cannot authorize them. Record non-execution so
         // launch recovery can retire this launch and prepare a current one;
         // other callers receive the same truthful, safely failed receipt.
-        await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason, ...context.clearedRoute });
         return "next";
       }
       if (error instanceof StructuredDispatchDeferredError) {
@@ -2840,7 +2842,7 @@ export class StructuredDeliveryQueue {
         const current = await this.readStatus(effect.operationId);
         if (!current.readable || !current.value) { this.retrySoon(); return "stop"; }
         if (context.priorDeliveryUnverified || current.value.deliveryUnverified === true) {
-          await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`);
+          await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`, context.clearedRoute);
           return "next";
         }
         await this.transitionUnlessSettled(effect.operationId, "queued", { reason });
@@ -2855,7 +2857,7 @@ export class StructuredDeliveryQueue {
           this.retrySoon();
           return "stop";
         }
-        await this.transitionUnlessSettled(effect.operationId, "failed", { reason });
+        await this.transitionUnlessSettled(effect.operationId, "failed", { reason, ...context.clearedRoute });
         return "next";
       }
       /* The one resend below is allowed only where the host is READ to be
@@ -2895,7 +2897,7 @@ export class StructuredDeliveryQueue {
          engine": the distinction settlement reads to decide whether a resend
          is safe. The cost is that a precondition the host refused by throwing
          reads as unverified too; one verification is the cheaper error. */
-      await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`);
+      await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`, context.clearedRoute);
       /* A host that is gone takes the rest of this conversation's queue with
          it; a live one keeps draining behind the send it could not answer. */
       if (hostIsGone) return "stop";
@@ -2919,6 +2921,16 @@ export class StructuredDeliveryQueue {
       this.noteWait(effect, "awaiting-turn", { detail: receipt.refusal ?? receipt.reason ?? "the host declined the hand-over" });
       return "stop";
     }
+    if (receipt.outcome === "turn-started" && receipt.observeAcceptance) {
+      const settling = this.settleObservedAcceptance(effect, receipt.observeAcceptance, context).finally(() => {
+        this.activeSteers.delete(effect.operationId);
+        this.retrySoon();
+      });
+      this.activeSteers.set(effect.operationId, { conversationId: effect.conversationId, turnId: receipt.turnId, settling });
+      this.noteWait(effect, "dispatching", { wake: "none", detail: "handed over; awaiting engine delivery confirmation" });
+      void settling.catch(() => undefined);
+      return "next";
+    }
     await this.transitionUnlessSettled(effect.operationId, "delivered", {
       turnId: receipt.turnId,
       /* A message that ended a running turn to start its own says so; the
@@ -2930,6 +2942,35 @@ export class StructuredDeliveryQueue {
         : {}),
     });
     return "next";
+  }
+
+  private async settleObservedAcceptance(
+    effect: SendEffect,
+    observe: () => Promise<DeliveryAcceptanceObservation>,
+    context: SendSettlementContext,
+  ): Promise<void> {
+    let observed: DeliveryAcceptanceObservation;
+    try { observed = await observe(); }
+    catch (error) { observed = { outcome: "uncertain", reason: failureReason(error) }; }
+    if (observed.outcome === "accepted") {
+      await this.transitionUnlessSettled(effect.operationId, "delivered", {
+        turnId: observed.turnId,
+        ...(context.interruptedTurnId
+          ? { delivery: "interrupt-then-turn-started" as const, interruptedTurnId: context.interruptedTurnId }
+          : {}),
+      });
+    } else if (observed.outcome === "rejected") {
+      await this.transitionUnlessSettled(effect.operationId, "failed", {
+        reason: observed.reason,
+        ...context.clearedRoute,
+      });
+    } else {
+      await this.terminalizeUnverified(
+        effect.operationId,
+        `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${observed.reason}`,
+        context.clearedRoute,
+      );
+    }
   }
 
   private async settleObservedSteer(effect: SendEffect, outcome: RuntimeSteerOutcome): Promise<void> {
@@ -3523,11 +3564,12 @@ export class StructuredDeliveryQueue {
    * before #862 rejects it; the operation must still settle rather than wedge
    * the conversation's queue behind a receipt no pass can ever clear.
    */
-  private async terminalizeUnverified(operationId: string, reason: string): Promise<void> {
+  private async terminalizeUnverified(operationId: string, reason: string, extra?: RuntimeTransitionDetails): Promise<void> {
+    const details: RuntimeTransitionDetails = { ...extra, reason };
     try {
-      await this.transitionUnlessSettled(operationId, "uncertain", { reason });
+      await this.transitionUnlessSettled(operationId, "uncertain", details);
     } catch {
-      await this.transitionUnlessSettled(operationId, "failed", { reason });
+      await this.transitionUnlessSettled(operationId, "failed", details);
     }
   }
 
@@ -3581,10 +3623,10 @@ export class StructuredDeliveryQueue {
     if (!await this.transitionReconfigure(effect, "applying")) return false;
     let outcome: Awaited<ReturnType<typeof this.reconfigure>>;
     try {
-      outcome = await this.reconfigure(effect, {
+      outcome = await withLiveReconfigureHost(host, () => this.reconfigure(effect, {
         isCurrent: () => this.isCurrentReconfigure(effect),
         ...(carriedSends.length ? { carriedSends } : {}),
-      });
+      }));
     } catch (error) {
       /* A registry write the lock refused changed nothing: the switch is
          neither failed nor applied, and it stays listed for a later pass

@@ -16,6 +16,8 @@ import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisi
 import { guardedDiskCleanerProfile, type CleanerSandboxObservation } from "@/lib/agent/cleanerLaunchPolicy";
 import { assertCleanerSandboxAvailable } from "./cleanerSandboxProbe";
 import { assertStageGitRehostProvable, stageGitEnvironment } from "./stageGitEnvironment";
+import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
+import { findPipelineRecord } from "@/lib/pipelines/store";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { DEPLOY_ADMISSION_BUDGET_MS, structuredSetupStartedAt } from "./admissionBudget";
 import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
@@ -245,7 +247,8 @@ export function materializeStructuredHostAccess(
       configDirectory = fs.mkdtempSync(path.join(configParent, "llv-stage-config-"));
       const store = new AttemptTempStore();
       try {
-        for (const directory of [scratchDirectory, configDirectory]) store.register({ ...owner, directory, createdAt: Date.now() });
+        const createdAt = Date.now();
+        store.register({ ...owner, directory: scratchDirectory, createdAt }, { ...owner, directory: configDirectory, createdAt });
       } finally { store.close(); }
     }
     const cleanup = owner ? () => {
@@ -303,15 +306,23 @@ export function materializeStructuredHostAccess(
   }
 }
 
-export function tempOwnerForConversation(registry: AgentRegistry, conversationId: string | undefined, launchId: string) {
+export function tempOwnerForConversation(registry: AgentRegistry, conversationId: string | undefined, launchId: string, stageReceipt?: string) {
   const id = conversationId?.startsWith("conversation_") ? registry.canonicalConversationId(conversationId as ViewerConversationId) : null;
-  const memberships = id ? registry.readOnlySnapshot().memberships[id] ?? [] : [];
-  const owners = memberships.filter(member => member.kind === "pipeline");
-  return { pipelineId: owners.length === 1 ? owners[0]!.containerId : null, launchId, retainUntilClose: false };
-}
-
-function tempOwnerForSpawn(input: StructuredSpawnInput) {
-  return tempOwnerForConversation(input.registry, input.receipt.conversationId, input.receipt.launchId);
+  const owners = (id ? registry.conversationMemberships(id) : []).filter(member => member.kind === "pipeline");
+  const lanes = new Set(owners.map(owner => owner.containerId));
+  const pipelineId = lanes.size === 1 ? owners[0]!.containerId : null;
+  if (stageReceipt && pipelineId && id) {
+    // A restarted host has its own operation or session id. Only the
+    // restored stage guard and the matching conversation may bind that
+    // host's new scratch to the original attempt's settlement.
+    const pipeline = findPipelineRecord(pipelineId);
+    const attempts = pipeline?.runs.flatMap(run => run.attempts.filter(attempt =>
+      owners.some(owner => owner.stageId === run.stageId && owner.round === attempt.n)
+      && attempt.launchId && stageGitReceiptDirectory(attempt.launchId) === stageReceipt
+      && attempt.conversationId && registry.canonicalConversationId(attempt.conversationId as ViewerConversationId) === id));
+    if (attempts?.length === 1) launchId = attempts[0]!.launchId!;
+  }
+  return { pipelineId, launchId, retainUntilClose: false };
 }
 
 export function materializeOwnedStructuredHostAccess(
@@ -327,7 +338,8 @@ async function materializeAttemptAccess(input: StructuredSpawnInput, capability:
   // Queued starts and resume successors reconstruct the account environment.
   // Recover the exact launch's binding before either engine builds its policy.
   const guard = await stageGitEnvironment(input.registry, input.receipt.conversationId, input.receipt.launchId, input.spec.cwd);
-  return materializeOwnedStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), { ...input.account.env, ...guard }, capability, () => tempOwnerForSpawn(input));
+  return materializeOwnedStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), { ...input.account.env, ...guard }, capability,
+    () => tempOwnerForConversation(input.registry, input.receipt.conversationId, input.receipt.launchId, guard.LLV_STAGE_GIT_RECEIPT));
 }
 
 type DiskCleanerHostIdentity = {

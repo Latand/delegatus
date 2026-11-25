@@ -3938,7 +3938,7 @@ async function adoptStructuredHostsPass(
           structuredHostAccessPolicy(launchProfile),
           stageEnvironment,
           capability,
-          () => tempOwnerForConversation(registry, conversation.id, sessionKeyId(entry.key)),
+          () => tempOwnerForConversation(registry, conversation.id, sessionKeyId(entry.key), stageEnvironment.LLV_STAGE_GIT_RECEIPT),
         );
         const nativeMemoryEnabled = await codexNativeMemoryEnabled(owner?.home, launchProfile?.allowSubagents ?? false, launchProfile?.cleanMemory === true);
         const options = {
@@ -4023,7 +4023,7 @@ async function adoptStructuredHostsPass(
             { ...startupEnvironment, ...guard },
             registry.conversationForPath(entry.artifactPath)?.agentRole,
             memoryStartIdentity(registry, conversation.id),
-            () => tempOwnerForConversation(registry, conversation.id, sessionKeyId(entry.key)),
+            () => tempOwnerForConversation(registry, conversation.id, sessionKeyId(entry.key), guard.LLV_STAGE_GIT_RECEIPT),
           ),
           validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
         };

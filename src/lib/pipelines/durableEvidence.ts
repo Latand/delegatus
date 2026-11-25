@@ -21,9 +21,9 @@ type RecordLike = Record<string, unknown>;
  * completion authority for a pipeline attempt. Independent of the scanner
  * projection (which can transiently lose the transcript) and of the runtime
  * session ledger (which can stay `running` past the end of the turn). `turn` is
- * "terminal" only on native lifecycle evidence (Claude end-turn stop, Codex
- * task/turn completion with no open tool calls), so a mid-work assistant
- * message can never present as a completed turn.
+ * "terminal" only on native lifecycle evidence. A matching Codex completion
+ * closes its turn-local tool ledger even when an output is missing. Independent
+ * background work has its own evidence.
  */
 export type StageTurnEvidence = {
   /** Native snapshot used to fence an awaited control lookup before launch. */

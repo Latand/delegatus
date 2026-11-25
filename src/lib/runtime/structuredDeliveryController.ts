@@ -585,7 +585,7 @@ async function reconcileTerminalDeliveries(
             disposition: confirmed.verdict.disposition,
             ...(confirmed.verdict.primaryFailure ? { primaryFailure: confirmed.verdict.primaryFailure } : {}),
             receiptOperationId: confirmed.operationId,
-            route: null,
+            route: confirmed.route,
           };
         }
         const result = await client.operationStatus(delivery.command.operationId, { currentRetryLeaf: true });
@@ -1609,6 +1609,18 @@ export async function bindStructuredDeliveryQueue(
       registry,
       ownsOperation: ownership.isCurrent,
       ...(ownership.carriedSends ? { carriedSends: ownership.carriedSends } : {}),
+      ...(dependencies.reconfigure?.reconfigureLiveHost ? {} : {
+        reconfigureLiveHost: async (key, settings) => {
+          const live = hosts.get(sessionKeyId(key));
+          if (!live || typeof live.reconfigure !== "function") return false;
+          let health;
+          try { health = await live.health(); }
+          catch { return false; }
+          if (health.status !== "idle" || health.activeTurnRef !== null || health.sessionKey !== key.sessionId) return false;
+          await live.reconfigure(settings);
+          return true;
+        },
+      }),
     }),
     async (conversationId) => {
       const liveness = await conversationTurnLiveness(registry, conversationId, dependencies.liveness ?? {});
@@ -2853,6 +2865,21 @@ export async function completeStructuredDeliveryQueueStartup(
 
 export async function republishStructuredDeliveryHost(key: SessionKey): Promise<boolean> {
   return await state.republishActiveHost?.(key) ?? false;
+}
+
+export async function reconfigureLiveStructuredDeliveryHost(
+  key: SessionKey,
+  settings: { model?: string | null; effort?: string | null },
+): Promise<boolean> {
+  const id = sessionKeyId(key);
+  const host = state.activeHosts?.get(id) ?? unpublishedLaunchHosts.get(id)?.host;
+  if (!host || typeof host.reconfigure !== "function") return false;
+  let health;
+  try { health = await host.health(); }
+  catch { return false; }
+  if (health.status !== "idle" || health.activeTurnRef !== null || health.sessionKey !== key.sessionId) return false;
+  await host.reconfigure(settings);
+  return true;
 }
 
 export async function releaseStructuredDeliveryHost(key: SessionKey, expectedHost?: EngineHost): Promise<boolean> {

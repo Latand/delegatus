@@ -771,7 +771,10 @@ test("the operator browser edits lines with no known author and removes seat not
   seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
   writeSeatTickSettings(PROJECT, { ...readSeatTickSettings(PROJECT, settingsFile), reason: "Older line.\nOlder line to edit." }, settingsFile);
   setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
-  await put({ project: PROJECT, reason: "First seat note.\nSecond seat note." }, { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY });
+  /* The active seat's replacement includes the unattributed lines it inherits. */
+  const seededBySeat = await put({ project: PROJECT, reason: "Older line.\nOlder line to edit.\nFirst seat note.\nSecond seat note." },
+    { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY });
+  expect(seededBySeat.status).toBe(200);
   setCallerConversationResolverForTests(() => null);
   const seeded = readSeatTickSettings(PROJECT, settingsFile).instructionLines!;
   expect(seeded.map(line => line.author?.kind ?? null)).toEqual([null, null, "manager", "manager"]);
