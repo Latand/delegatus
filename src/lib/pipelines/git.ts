@@ -1,4 +1,6 @@
 import { proactivePipelineExecutionError } from "@/lib/tasks/proactiveExecution";
+import { isPublicationPreparationInvocation } from "./publicationInvocation";
+export { isPublicationPreparationInvocation } from "./publicationInvocation";
 import { APP_PUSH_RETRY_WINDOW_MS, APP_PUSH_WINDOW_ENDED_REASON } from "./publicationHistory";
 import { isolateWorktreeDependencies, prepareWorktreeDependencies } from "./worktreeDependencies";
 import { dependencyInstallFailure, prepareLockedDependencies } from "./lockedDependencies";
@@ -19,7 +21,7 @@ import { compactSensitiveText, staticSensitiveClasses } from "@/lib/privacy/stat
 import { mailboxPattern } from "@/lib/privacy/mailbox";
 import publicationFingerprints from "../../../scripts/privacy-known-value-fingerprints.json";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
-import { publicationCheckBinding, publicationPreparationVersion, readPublicationCheckReceipt } from "@/lib/git/publicationCheckReceipt";
+import { PUBLICATION_TRANSPORT_MS, publicationCheckBinding, publicationPreparationVersion, readPublicationCheckReceipt, supportsPublicationCheckpoints } from "@/lib/git/publicationCheckReceipt";
 import { networkFailureIsTransient } from "@/lib/git/transientFailure";
 import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/projects/identity";
 import { procBackend } from "@/lib/proc";
@@ -1761,12 +1763,21 @@ async function publicationBudget(pipeline: Pipeline, acceptedSha: string, exec: 
       return { ms: PIPELINE_PUBLICATION_PUSH_MS, recheck: true };
     }
     const changed = await publicationChangedPaths(pipeline, acceptedSha, exec, DEFAULT_PIPELINE_BASE_BRANCH);
-    return { ms: publicationPushBudgetMs(changed), recheck: true };
+    const retryAfterDeadline = pipeline.publicationRecovery?.[acceptedSha]?.history
+      .some(entry => entry.cause === "infrastructure-deadline") ?? false;
+    return { ms: publicationPushBudgetMs(changed, retryAfterDeadline), recheck: true };
   }));
 }
 
 const REMOTE_READ_TIMEOUT = "5s";
-
+export function appendGitConfigOverride(env: Record<string, string | undefined>, key: string, value: string): boolean {
+  const count = Number(env.GIT_CONFIG_COUNT ?? "0");
+  if (!Number.isInteger(count) || count < 0 || count > 64) return false;
+  env.GIT_CONFIG_COUNT = String(count + 1);
+  env[`GIT_CONFIG_KEY_${count}`] = key;
+  env[`GIT_CONFIG_VALUE_${count}`] = value;
+  return true;
+}
 /** A child can retain both inherited kernel fences after its Viewer exits.
     Probe the shared inode and the unique run fence without waiting. The
     executor's own command deadline still owns cancellation and cleanup. */
@@ -2115,7 +2126,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       fs.futimesSync(descriptor, new Date(), new Date());
       const usesBun = command === "bun" || command === process.execPath;
       const preparingDependencies = usesBun && args[0] === "install";
-      const preparingChecks = usesBun && args[0] === "scripts/local-gate.ts" && args[2] === "--publication-prepare";
+      const preparingChecks = isPublicationPreparationInvocation(command, args, process.cwd());
       // The push runs the repository's pre-push gates; both leave the
       // production service for a work scope. Its PID, group and the inherited
       // lock descriptor stay this command's.
@@ -2424,7 +2435,8 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   }
   const capability = publicationPreparationVersion(pipeline.worktreeDir);
   if (capability === 2) return { ok: false, error: "publication capability 2 is retired; update the checkout to current main" };
-  const preparation = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts")) ? capability : undefined;
+  const hasCandidateGate = fs.existsSync(path.join(pipeline.worktreeDir, "scripts/local-gate.ts"));
+  const preparation = hasCandidateGate ? capability : undefined;
   if (request.publishedSha && request.publishedSha === acceptedSha) return { ok: true, sha: acceptedSha, remote: "published" };
 
   const origin = pipeline.delivery
@@ -2465,7 +2477,8 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     if (remoteIsAncestor.code !== 0) return failure("comparing local and remote pipeline revisions", remoteIsAncestor);
   }
 
-  const runtime = preparation === 3 && process.execPath === "/usr/local/bin/bun-container" ? process.execPath : "bun";
+  const imageRuntime = process.execPath === "/usr/local/bin/bun-container" ? process.execPath : undefined;
+  const runtime = preparation === 3 ? imageRuntime ?? "bun" : "bun";
   // Read-only stages can pass without dependencies. Prepare a Bun worktree before
   // its full repository hook runs, keeping privacy and every other gate active.
   // Frozen installation cannot upgrade the accepted lockfile. The same bounded,
@@ -2516,9 +2529,17 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
   // inputs and scans fresh privacy data under a separate transport deadline.
   // The installed launcher takes precedence over gate-slot's image detection.
   // Keep its CPU helper and run it under the same Bun as the native hook.
+  // The packaged Viewer runs from the runtime root. Next does not preserve
+  // import.meta.dir here, and the image copies the gate into that root.
+  const canonicalRoot = path.resolve(process.cwd());
+  const canonicalGate = path.join(canonicalRoot, "scripts/local-gate.ts");
+  const checkpoints = hasCandidateGate && supportsPublicationCheckpoints(pipeline.worktreeDir);
+  const canonicalTools = hasCandidateGate && !checkpoints && fs.existsSync(canonicalGate);
+  const canonicalRuntime = imageRuntime ?? (process.env.LLV_GATE_IMAGE_BUN === "bun-container" ? "bun-container" : "bun");
+  const gateRuntime = canonicalTools ? canonicalRuntime : runtime;
   const forgeEnv = engineForgeWriteEnv();
   const pushEnv: Partial<NodeJS.ProcessEnv> = { ...pipelinePublicationHookEnv(), ...lessons, ...forgeEnv,
-    ...installedGateAdmissionEnv({ ...process.env, ...forgeEnv }, runtime === "bun" ? undefined : runtime),
+    ...installedGateAdmissionEnv({ ...process.env, ...forgeEnv }, gateRuntime === "bun" ? undefined : gateRuntime),
     // Only the new operation can supply a receipt to its hook.
     LLV_GATE_PUBLICATION_RECEIPT: undefined,
     // Older branches run their own hook scripts, so supply the gate's current
@@ -2528,8 +2549,9 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     LLV_GATE_LANE_ID: pipeline.id, LLV_GATE_PUSH_HEAD: acceptedSha, LLV_GATE_STATE_DIR: stateDir(),
     ...(pipeline.cursor?.stageId ? { LLV_GATE_STAGE_ID: pipeline.cursor.stageId } : {}),
     LLV_GATE_PUSH_DEADLINE: String(publicationHookDeadline(budget.ms, Date.now())) };
-  const transportBudgetMs = Math.min(budget.ms, PUBLICATION_TRANSPORT_HOOK_MS + PUBLICATION_PACK_MARGIN_MS);
-  const receiptFile = preparation ? path.join(pipelineArtifactsDir(pipeline.id), `publication-checks-${pipeline.delivery!.operation!.id}.json`) : undefined;
+  let transportBudgetMs = Math.min(budget.ms, PUBLICATION_TRANSPORT_HOOK_MS + PUBLICATION_PACK_MARGIN_MS);
+  const receiptFile = preparation || canonicalTools
+    ? path.join(pipelineArtifactsDir(pipeline.id), `publication-checks-${pipeline.delivery!.operation!.id}.json`) : undefined;
   let phaseTimings: NonNullable<PipelinePublishResult["phaseTimings"]> = { preparationMs: 0, checksMs: 0, transportMs: 0 };
   let push: ExecResult;
   try {
@@ -2543,10 +2565,28 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
         LLV_GATE_PUBLICATION_REF: pipeline.delivery!.target.branch,
         LLV_GATE_PUBLICATION_REMOTE_HEAD: remoteSha || "0".repeat(40),
       });
+      if (canonicalTools) {
+        pushEnv.LLV_GATE_CANONICAL_TOOLS = "1";
+        if (path.basename(gateRuntime) === "bun-container") pushEnv.LLV_GATE_IMAGE_BUN = "bun-container";
+        // Keep the ExecPort contract (`git push` is argv[0]) while selecting
+        // the trusted hook for this command only. The hook clears these Git
+        // selectors before launching any child check.
+        if (!appendGitConfigOverride(pushEnv, "core.hooksPath", path.join(canonicalRoot, ".githooks"))) {
+          return { ok: false, error: "Git credential configuration could not be preserved; nothing was published" };
+        }
+      }
       const checkStarted = performance.now();
-      const checked = await exec(runtime, ["scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
+      const checked = await exec(gateRuntime, [canonicalTools ? canonicalGate : "scripts/local-gate.ts", "pre-push", "--publication-prepare"], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms });
       if (checked.code !== 0) return { ...failure("checking the publication before transport", checked), phaseTimings: { ...phaseTimings, preparationMs: Math.max(0, Math.round(performance.now() - checkStarted)) } };
-      const preparationElapsed = Math.max(0, Math.round(performance.now() - checkStarted));
+      const elapsed = performance.now() - checkStarted;
+      const preparationElapsed = Math.max(0, Math.round(elapsed));
+      // Version 3 checkpoints run a fresh privacy check inside Git's transport,
+      // so keep their deadline within the measured SSH receive-pack window.
+      // Preparation has its own publication budget and cannot enlarge it.
+      if (preparation !== 3 && (checkpoints || preparation === undefined)) {
+        transportBudgetMs = Math.min(budget.ms, Math.max(PUBLICATION_TRANSPORT_MS,
+          Math.ceil(2 * elapsed)) + PUBLICATION_PACK_MARGIN_MS);
+      }
       // An older or failed gate cannot turn an exit code into a check receipt.
       const checkReceipt = readPublicationCheckReceipt(receiptFile, publicationCheckBinding(pushEnv));
       phaseTimings = { preparationMs: Math.max(0, preparationElapsed - (checkReceipt.checksMs ?? preparationElapsed)),
