@@ -17,7 +17,6 @@ import { guardedDiskCleanerProfile, type CleanerSandboxObservation } from "@/lib
 import { assertCleanerSandboxAvailable } from "./cleanerSandboxProbe";
 import { assertStageGitRehostProvable, stageGitEnvironment } from "./stageGitEnvironment";
 import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
-import { findPipelineRecord } from "@/lib/pipelines/store";
 import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { DEPLOY_ADMISSION_BUDGET_MS, structuredSetupStartedAt } from "./admissionBudget";
 import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
