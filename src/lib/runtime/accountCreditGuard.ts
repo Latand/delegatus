@@ -173,8 +173,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
       : undefined;
     const retainedGuardLineage = guardReseatIntent?.scope === "conversation"
       && guardReseatIntent.state === "stopped"
-      && guardReseatIntent.requestIds.some(request => request.startsWith(`reseat:${conversation.id}:`))
-      && (!conversation.migration || conversation.migration.intentId === conversation.creditGuardReseat?.intentId);
+      && guardReseatIntent.requestIds.includes(`reseat:${conversation.id}:${generation.id}`);
     const migrationOwner = conversation.migration ? registry.migrationIntent(conversation.migration.intentId) : null;
     const unrelatedMigrationOwnsRecovery = Boolean(migrationOwner?.state === "draining"
       && conversation.migration?.intentId !== conversation.creditGuardReseat?.intentId);

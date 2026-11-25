@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { AgentRegistry } from "@/lib/agent/registry";
+import { AgentRegistry, type RegistryConversation } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { MIGRATION_INTENT_PROGRESS_TIMEOUT_MS } from "@/lib/accounts/migration/intentLiveness";
 import { accountManager } from "@/lib/accounts/manager";
@@ -24,7 +25,8 @@ function observe(registry: AgentRegistry, accountId: string, usedPercent: number
     limits: { session: null, weekly: { usedPercent, resetsAt: null, observedAt: Date.now() / 1000, source: "live" }, plan: "pro", capturedAt: Date.now() / 1000,
       credits: { hasCredits: true, balance: "10", unlimited: false } } });
 }
-function fixture(mode: "off" | "sqlite" = "sqlite", seat?: { project: string; seatEpoch: number }) {
+function fixture(mode: "off" | "sqlite" = "sqlite", seat?: { project: string; seatEpoch: number }
+  | ((conversation: RegistryConversation) => { project: string; seatEpoch: number })) {
   clock(0);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "guard-reseat-")); roots.push(root);
   const registry = new AgentRegistry(path.join(root, "registry.json"), () => false, undefined, { sqliteMode: mode, sqliteWriterDeadlineMs: 60 });
@@ -36,6 +38,7 @@ function fixture(mode: "off" | "sqlite" = "sqlite", seat?: { project: string; se
     launchProfile: emptyLaunchProfile({ cwd: root }), turn: { state: "busy", source: "lifecycle", terminalAt: null },
     observedAt: new Date().toISOString() }]);
   const conversation = registry.conversationForPath(transcript)!;
+  const seatSnapshot = typeof seat === "function" ? seat(conversation) : seat;
   const generation = conversation.generations.at(-1)!;
   const key = { engine: "codex" as const, sessionId: generation.id };
   registry.upsert({ key, artifactPath: transcript, cwd: root, accountId: "account-a", launchProfile: generation.launchProfile,
@@ -46,7 +49,7 @@ function fixture(mode: "off" | "sqlite" = "sqlite", seat?: { project: string; se
   const store = interruptionObligationStore(interruptionObligationDirectory(registry.filename));
   const cut = store.record({ conversationId: conversation.id, engine: "codex", hostKey: `codex:${generation.id}`,
     path: transcript, owner: null, claimEpoch: 1, turnRef: "interrupted-turn", boundary: "paid-credit-guard",
-    reason: "account-guard", checkpoint: { lastEventKind: null, lastEventAt: epoch }, seat: seat ?? null }).obligation;
+    reason: "account-guard", checkpoint: { lastEventKind: null, lastEventAt: epoch }, seat: seatSnapshot ?? null }).obligation;
   const poll = () => enforceAccountCreditGuard(registry, [], async () => { throw new Error("unexpected host stop"); },
     async () => false, async () => null);
   return { root, registry, conversation, key, store, cut, poll, mode };
@@ -264,23 +267,28 @@ test("restored capacity on the current successor delivers the preserved cut thro
 });
 
 test("seat rotation during reseat writer admission leaves no stale-seat migration", async () => {
-  const f = fixture("sqlite", { project: "fixture-project", seatEpoch: 1 });
-  const select = selection(f.root);
-  const seatProject = "fixture-project";
+  const seatProject = `fixture-project-${randomUUID()}`;
   const designate = (requestId: string, conversationId: string) => {
     orchestratorSeats.beginOrchestratorSeatIntent({ project: seatProject, mandate: "fixture", clientRequestId: requestId,
       mode: "existing", now: new Date(epoch).toISOString() });
     return orchestratorSeats.completeOrchestratorSeatIntent({ project: seatProject, clientRequestId: requestId,
       conversationId, path: null, now: new Date(epoch).toISOString() });
   };
-  designate("initial-seat", f.conversation.id);
-  let rotateDuringResolution = false;
+  const f = fixture("sqlite", conversation => {
+    designate("initial-seat", conversation.id);
+    return { project: seatProject, seatEpoch: orchestratorSeats.orchestratorSeatFor(seatProject).active!.seatEpoch };
+  });
+  const select = selection(f.root);
+  expect(orchestratorSeats.orchestratorSeatFor(seatProject).active)
+    .toMatchObject({ project: seatProject, conversationId: f.conversation.id });
+  expect(orchestratorSeats.orchestratorSeatFor(seatProject).active?.seatEpoch).toBe(f.cut.seat?.seatEpoch);
+  expect(f.store.list()).toMatchObject([{ id: f.cut.id, state: "owed" }]);
+  let rotateDuringResolution = true;
   let rotated = false;
   select.mockImplementation((engine, request) => {
-    if (rotateDuringResolution && !rotated && request?.requestedId === "account-b") {
-      // This is the target-resolution await after the guard's initial custody
-      // read and before it acquires the shared writer fence. Rotate through the
-      // real durable seat API, which commits under that same fence.
+    if (rotateDuringResolution && !rotated) {
+      // Complete a real durable seat rotation during account target resolution,
+      // after the guard read its seat epoch and before it can commit the reseat.
       rotated = true;
       designate("rotated-seat", "conversation_successor");
     }
@@ -288,15 +296,15 @@ test("seat rotation during reseat writer admission leaves no stale-seat migratio
       home: f.root, transcriptRoot: f.root, env: { NODE_ENV: "test" } } };
   });
   try {
-    await f.poll(); await stopAndClean(f);
-    rotateDuringResolution = true;
     await expect(f.poll()).rejects.toThrow("lost orchestrator seat custody");
+    rotateDuringResolution = false;
     expect(rotated).toBe(true);
-    expect(orchestratorSeats.orchestratorSeatFor(seatProject).active)
-      .toMatchObject({ seatEpoch: 2, conversationId: "conversation_successor" });
+    const rotatedSeat = orchestratorSeats.orchestratorSeatFor(seatProject).active;
+    expect(rotatedSeat).toMatchObject({ project: seatProject, conversationId: "conversation_successor" });
+    expect(rotatedSeat!.seatEpoch).toBeGreaterThan(f.cut.seat!.seatEpoch);
     expect(f.registry.conversation(f.conversation.id)?.migration).toBeNull();
     expect(Object.values(f.registry.readOnlySnapshot().migrationIntents).filter(intent =>
-      intent.requestIds.some(requestId => requestId.startsWith(`reseat:${f.conversation.id}:`)))).toHaveLength(1);
+      intent.requestIds.some(requestId => requestId.startsWith(`reseat:${f.conversation.id}:`)))).toHaveLength(0);
     expect(Object.values(f.registry.conversationDeliverySnapshot({ conversationId: f.conversation.id }).heldDeliveries)
       .filter(delivery => delivery.clientMessageId === f.cut.id)).toHaveLength(0);
   } finally { select.mockRestore(); f.registry.close(); }
@@ -338,7 +346,8 @@ test("a stopped guard cut waits for an independent engine drain and resumes afte
     expect(f.store.list()).toMatchObject([{ id: f.cut.id, state: "owed", attempts: 0 }]);
 
     expect((await f.registry.stopMigrationIntent(drain.id)).acquired).toBe(true);
-    expect(f.registry.conversation(f.conversation.id)?.migration).toBeNull();
+    expect(f.registry.migrationIntent(drain.id)?.state).toBe("stopped");
+    expect(f.registry.conversation(f.conversation.id)?.migration).toMatchObject({ intentId: drain.id, phase: "rolled-back" });
     await f.poll();
     const queued = Object.values(f.registry.conversationDeliverySnapshot({ conversationId: f.conversation.id }).heldDeliveries)
       .filter(delivery => delivery.clientMessageId === f.cut.id);
