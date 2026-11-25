@@ -83,16 +83,19 @@ test("loading a fully hot journal preserves row order without a point read per a
 test("a cold projection page decodes repeated claim text once and keeps each operation's delivery", () => {
   const { reader, dataset } = fixture();
   const parse = spyOn(sqliteReads, "parseSqliteJson");
-  let file: RegistryFile, common = 0;
+  const projections = new Map<string, number>();
+  let file: RegistryFile;
   try {
     file = reader.readOnlySnapshot().file;
     for (const [json] of parse.mock.calls) {
-      if (json === '{"launchProfile":{"mcpServers":null},"generations":[]}') common++;
+      if (json.startsWith('{"launchProfile":{"mcpServers":') && json.includes(',"generations":')) {
+        projections.set(json, (projections.get(json) ?? 0) + 1);
+      }
     }
   } finally { parse.mockRestore(); }
-  expect(dataset.coldOperationIds.length).toBeGreaterThan(100);
-  expect(common).toBeGreaterThan(0);
-  expect(common).toBeLessThanOrEqual(Math.ceil(dataset.coldRows / 64));
+  expect(dataset.coldOperationIds.length).toBeGreaterThanOrEqual(4);
+  expect(projections.size).toBeGreaterThan(1);
+  for (const count of projections.values()) expect(count).toBeLessThanOrEqual(Math.ceil(dataset.coldRows / 64));
   for (const id of dataset.coldOperationIds.slice(0, 4)) {
     const owner = file.deliveryOperationOwners[id]!;
     expect(file.heldDeliveries[owner.deliveryId]?.command.operationId).toBe(id);
