@@ -2207,7 +2207,7 @@ export async function bindStructuredDeliveryQueue(
        is never handed on: the successor carried it over only if it still
        existed at the swap, and re-driving a released host would republish it. */
     if (abandoned()) return async () => {};
-    if (superseded()) return await registerThroughSuccessor(item, ownsOperation, stagedLaunchId);
+    if (superseded()) return await registerThroughSuccessor(item, ownsOperation, ownsStartupHost, stagedLaunchId);
     if (launchId && !ownsLaunchWriter()) throw new Error("staged launch writer changed before host registration");
     const observable = item.host as ObservableEngineHost;
     let deliveryState = deliveryStateKey(initialState);
