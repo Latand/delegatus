@@ -907,3 +907,109 @@ onTestClock("navigating away from a pending link clears its notice and stops ask
   expect(requestLog.slice(settled).filter((url) => url.includes(`path=${CONVERSATION_ID}`))).toEqual([]);
   expect(onBoard(host, TARGET_PATH)).toBeNull();
 });
+
+/* F5 brings back what the operator was on, and only that: the hash a reload
+   reads has to leave the address when the conversation is closed. */
+function click(target: Element): Promise<void> {
+  return act(async () => {
+    dispatch(target, new dom.MouseEvent("click", { bubbles: true, cancelable: true }));
+    await Bun.sleep(80);
+  });
+}
+
+/** A browser reload: the page unmounts, the URL, the history entry and the
+    browser's storage stay, and a new page mounts over them. */
+async function reload(): Promise<HTMLElement> {
+  unmountViewer();
+  document.body.replaceChildren();
+  resetFilesClientCacheForTests();
+  historyWrites = [];
+  return mountViewer();
+}
+
+async function openTargetByLink(): Promise<HTMLElement> {
+  dom.location.hash = `#c=${encodeURIComponent(CONVERSATION_ID)}`;
+  /* The plain catalog carries the conversation, so the board stays populated after it is closed. */
+  stubFetch(() => [otherRow, targetRow]);
+  const host = await mountViewer();
+  expect(await waitFor(() => openOnBoard(host, TARGET_PATH) !== null)).toBe(true);
+  return host;
+}
+
+test("F5 on an open conversation reopens that conversation", async () => {
+  await openTargetByLink();
+  const host = await reload();
+  expect(await waitFor(() => openOnBoard(host, TARGET_PATH) !== null)).toBe(true);
+  expect(dom.location.hash).toBe(`#c=${encodeURIComponent(CONVERSATION_ID)}`);
+});
+
+test("the window's close takes the conversation out of the address, and F5 shows the board", async () => {
+  const host = await openTargetByLink();
+  const close = host.querySelector(`[data-reader-close]`);
+  expect(close).not.toBeNull();
+  historyWrites = [];
+  await click(close!);
+
+  expect(host.querySelector("[data-agent-window-frame]")).toBeNull();
+  expect(dom.location.hash).toBe(`#p=${encodeURIComponent(TARGET_PROJECT)}`);
+  /* Rewritten in place: a push would leave the closed conversation one Back away. */
+  expect(historyWrites.length).toBeGreaterThan(0);
+  expect(historyWrites.every((write) => write.startsWith("replace:"))).toBe(true);
+  expect(parseState(dom.history.state)).toBeNull();
+
+  const reloaded = await reload();
+  await act(async () => { await Bun.sleep(300); });
+  expect(reloaded.querySelector("[data-agent-window-frame]")).toBeNull();
+  expect(reloaded.querySelector("[data-kanban-board]")).not.toBeNull();
+  expect(dom.location.hash).toBe(`#p=${encodeURIComponent(TARGET_PROJECT)}`);
+  expect(reloaded.querySelector("[data-stale-focus-notice]")).toBeNull();
+});
+
+test("closing the agent for good takes it out of the address and out of the readers a reload restores", async () => {
+  const host = await openTargetByLink();
+  const close = host.querySelector(`[data-open-agent-close="${CONVERSATION_ID}"]`);
+  expect(close).not.toBeNull();
+  historyWrites = [];
+  await click(close!);
+
+  expect(dom.location.hash).toBe(`#p=${encodeURIComponent(TARGET_PROJECT)}`);
+  expect(historyWrites.every((write) => write.startsWith("replace:"))).toBe(true);
+  expect(dom.localStorage.getItem(`llv:kanban-readers:v1:${TARGET_PROJECT}`)).not.toContain(CONVERSATION_ID);
+
+  const reloaded = await reload();
+  await act(async () => { await Bun.sleep(300); });
+  expect(openOnBoard(reloaded, TARGET_PATH)).toBeNull();
+  expect(reloaded.querySelector("[data-kanban-board]")).not.toBeNull();
+  expect(dom.location.hash).toBe(`#p=${encodeURIComponent(TARGET_PROJECT)}`);
+});
+
+test("Escape on the conversation's window takes it out of the address, and F5 shows the board", async () => {
+  const host = await openTargetByLink();
+  expect(host.querySelector("[data-agent-window-frame]")).not.toBeNull();
+  await act(async () => {
+    dispatch(document, new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await Bun.sleep(80);
+  });
+  expect(host.querySelector("[data-agent-window-frame]")).toBeNull();
+  expect(dom.location.hash).toBe(`#p=${encodeURIComponent(TARGET_PROJECT)}`);
+
+  const reloaded = await reload();
+  await act(async () => { await Bun.sleep(300); });
+  expect(reloaded.querySelector("[data-agent-window-frame]")).toBeNull();
+  expect(dom.location.hash).toBe(`#p=${encodeURIComponent(TARGET_PROJECT)}`);
+});
+
+test("closing a conversation the address does not name leaves the address alone", async () => {
+  const host = await openTargetByLink();
+  const close = host.querySelector(`[data-reader-close]`)!;
+  /* The tab moved on to a different conversation's link before this close. */
+  dom.history.replaceState(null, "", `#c=${encodeURIComponent("conversation_elsewhere")}`);
+  historyWrites = [];
+  await click(close);
+  expect(dom.location.hash).toBe(`#c=${encodeURIComponent("conversation_elsewhere")}`);
+  expect(historyWrites).toEqual([]);
+});
+
+function parseState(state: unknown): unknown {
+  return state && typeof state === "object" && "llvFocus" in state ? (state as Record<string, unknown>).llvFocus : null;
+}

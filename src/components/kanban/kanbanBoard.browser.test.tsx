@@ -48027,3 +48027,141 @@ describe("one set of hints and one row of controls: priority hints belong to the
     expect(failures).toEqual([]);
   }, 900_000);
 });
+
+describe("a closed conversation leaves the address", () => {
+  /*
+   * F5 reopens the conversation the operator is on and shows the board once
+   * they have closed it: the hash a reload reads names the open conversation
+   * only while it is open. In the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=loose`, in Chromium:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "a closed conversation leaves the address"
+   *
+   * Each run opens `#c=<id>` (frame 1), reloads (frame 2: the conversation is
+   * back), closes it, and reloads again (frame 3: the board, an address that
+   * names no conversation). The desktop closes with the window's ✕ and again
+   * with Escape; the phone (390 px, touch) closes with ‹. The history length
+   * does not grow on a close: the entry is rewritten, so Back cannot return
+   * to the closed conversation.
+   *
+   * Frames go to `$LLV_EVIDENCE_DIR/closed-conversation-address/`, readings to
+   * `evidence/closed-conversation-address/rendered.json`. `LLV_CLOSED_ADDRESS_ONLY`
+   * takes a comma-separated list of run names (`1440x900-en-light-x`) to rerun some.
+   */
+  const OUT = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "closed-conversation-address");
+  const EVIDENCE = path.resolve("evidence/closed-conversation-address");
+  const ID = "conversation_export-review";
+  const VIEWPORTS = [
+    { width: 1440, height: 900, phone: false },
+    { width: 1000, height: 700, phone: false },
+    { width: 390, height: 844, phone: true },
+  ];
+
+  /** What a person sees of the conversation: its reader (the window or the phone's screen) with text, whole in the viewport. */
+  const readConversation = (page: Page, phone: boolean) => page.evaluate(({ id, onPhone }) => {
+    const reader = document.querySelector<HTMLElement>(onPhone ? '[data-mobile2-screen="chat"]' : `[data-agent-window-frame] [data-kanban-reader="${id}"]`);
+    if (!reader || !reader.checkVisibility({ visibilityProperty: true })) return { visible: false, text: "", inViewport: false };
+    const box = reader.getBoundingClientRect();
+    return {
+      visible: box.width > 0 && box.height > 0,
+      text: (reader.textContent ?? "").trim().slice(0, 80),
+      inViewport: box.left >= -0.5 && box.top >= -0.5 && box.right <= innerWidth + 0.5 && box.bottom <= innerHeight + 0.5,
+    };
+  }, { id: ID, onPhone: phone });
+
+  /** The board a reload lands on: drawn, with its own text, and no conversation open over it. */
+  const readBoard = (page: Page, phone: boolean) => page.evaluate(({ id, onPhone }) => {
+    const board = document.querySelector<HTMLElement>(onPhone ? "[data-phone-kanban]" : "[data-kanban-board]");
+    const box = board?.getBoundingClientRect();
+    return {
+      drawn: Boolean(board && box && box.width > 0 && box.height > 0 && board.checkVisibility({ visibilityProperty: true })),
+      text: (board?.textContent ?? "").trim().slice(0, 80),
+      windowOpen: document.querySelector("[data-agent-window-frame]") !== null,
+      screenOpen: document.querySelector('[data-mobile2-screen="chat"]') !== null,
+      readerOnScreen: [...document.querySelectorAll<HTMLElement>(`[data-agent-window-frame] [data-kanban-reader="${id}"]`)].some((element) => element.checkVisibility({ visibilityProperty: true })),
+      notice: document.querySelector("[data-stale-focus-notice]") !== null,
+      hash: location.hash,
+      entries: history.length,
+    };
+  }, { id: ID, onPhone: phone });
+
+  const settled = async (page: Page, phone: boolean) => {
+    await page.waitForFunction((onPhone) => onPhone ? Boolean(document.querySelector('[data-mobile2-screen="chat"]')) : Boolean(document.querySelector("[data-agent-window-frame] [data-kanban-reader]")), phone, { timeout: 30_000 });
+    await page.waitForTimeout(500);
+  };
+
+  for (const way of ["close", "escape"] as const) browserTest(`F5 reopens the open conversation and shows the board once it is closed (${way})`, async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const bundle = fs.mkdtempSync(path.join(os.tmpdir(), "closed-address-"));
+    const server = await serveEvidenceFixture(bundle);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const viewport of VIEWPORTS) {
+        if (viewport.phone && way === "escape") continue;
+        for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+          const key = `${viewport.width}x${viewport.height}-${lang}-${scheme}-${viewport.phone ? "back" : way}`;
+          if (process.env.LLV_CLOSED_ADDRESS_ONLY && !process.env.LLV_CLOSED_ADDRESS_ONLY.split(",").includes(key)) continue;
+          let step = "opening the link";
+          const fail = (message: string) => failures.push(`${key}: ${message}`);
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=loose#c=${ID}`, viewport, scheme, lang, "no-preference", viewport.phone);
+          const reading: Record<string, unknown> = {};
+          const shot = (name: string) => page.screenshot({ path: path.join(OUT, `${key}-${name}.png`) });
+          try {
+            await settled(page, viewport.phone);
+            reading.opened = await readConversation(page, viewport.phone);
+            await shot("1-open");
+
+            step = "reloading on the open conversation";
+            await page.reload();
+            await settled(page, viewport.phone);
+            const reopened = await readConversation(page, viewport.phone);
+            reading.reopened = reopened;
+            await shot("2-reloaded-open");
+            if (!reopened.visible || !reopened.text) fail("F5 did not reopen the open conversation");
+            if (!reopened.inViewport) fail("the reopened conversation leaves the viewport");
+            if (await page.evaluate(() => location.hash) !== `#c=${ID}`) fail("the reload changed the address of the open conversation");
+
+            step = "closing it";
+            const before = await page.evaluate(() => history.length);
+            if (viewport.phone) await page.locator("[data-mobile2-back]").click();
+            else if (way === "escape") await page.keyboard.press("Escape");
+            else await page.locator(`[data-agent-window-frame] [data-reader-close]`).first().click();
+            await page.waitForFunction((onPhone) => onPhone ? !document.querySelector('[data-mobile2-screen="chat"]') : !document.querySelector("[data-agent-window-frame]"), viewport.phone, { timeout: 15_000 });
+            await page.waitForTimeout(300);
+            const closed = await readBoard(page, viewport.phone);
+            reading.closed = closed;
+            await shot("3-closed");
+            if (/#[cf]=/.test(closed.hash)) fail(`the address still names the conversation: ${closed.hash}`);
+            if (closed.entries > before) fail(`closing added history entries (${before} → ${closed.entries})`);
+
+            step = "reloading after the close";
+            await page.reload();
+            await page.waitForFunction((onPhone) => document.querySelector(onPhone ? "[data-phone-kanban]" : "[data-kanban-board]") !== null, viewport.phone, { timeout: 30_000 });
+            await page.waitForTimeout(800);
+            const board = await readBoard(page, viewport.phone);
+            reading.board = board;
+            await shot("4-reloaded-board");
+            if (!board.drawn || !board.text) fail("the board is not drawn after the reload");
+            if (board.windowOpen || board.screenOpen || board.readerOnScreen) fail("the closed conversation came back after the reload");
+            if (/#[cf]=/.test(board.hash)) fail(`the address names the conversation after the reload: ${board.hash}`);
+            if (board.notice) fail("a not-found notice appeared");
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            fail(`${step}: ${error instanceof Error ? error.message.split("\n")[0]! : String(error)}`);
+            await page.screenshot({ path: path.join(OUT, `${key}-failed.png`) }).catch(() => {});
+          } finally { await context.close(); }
+          readings[key] = reading;
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      fs.rmSync(bundle, { recursive: true, force: true });
+    }
+    if (!process.env.LLV_CLOSED_ADDRESS_ONLY) fs.writeFileSync(path.join(EVIDENCE, `rendered-${way}.json`), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=loose", readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 1_500_000);
+});
