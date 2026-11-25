@@ -4301,11 +4301,12 @@ for (const admission of ["failed_receipt", "lost_response"] as const) test(`owne
   } finally { recover = true; await done; await service.close(); }
 });
 
-test.each(["negotiated", "legacy", "locally refused"] as const)("owner Markdown at completion (%s)", async mode => {
+test.each(["negotiated", "legacy", "locally refused"] as const)("owner Markdown at completion with a query and a port (%s)", async mode => {
   const { relayAnswerOp } = await import("./ownerAnswer");
   const url = "https://example.blog/?p=12345";
-  const markdown = `**Reading list**\n\n- [Open the post](${url})\n- *Read next*`;
-  const plain = `Reading list\n\n- Open the post ${url}\n- Read next`;
+  const index = "https://example.test:8443";
+  const markdown = `**Reading list**\n\n- [Open the post](${url})\n- *Read next* at [the index](${index})`;
+  const plain = `Reading list\n\n- Open the post ${url}\n- Read next at the index ${index}`;
   const rich = mode !== "legacy";
   const guide = richRequest().input.format!;
   const request = { ...contextRequest, request_id: `owner_markdown_${mode.replace(" ", "_")}`,

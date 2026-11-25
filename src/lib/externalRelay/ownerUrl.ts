@@ -7,22 +7,25 @@ const PRIVATE_PARAMETER = /^(?:auth|code|key|access_key|client_assertion|jwt|oau
 
 export function redactOwnerUrls(text: string): string {
   return text.replace(/https?:\/\/[^\s<>"'\\]+/gi, raw => {
-    const decoded = decodeSensitiveText(raw, false, undefined, true);
-    if (!decoded.error && !hasUrlCredentials(raw, decoded.text)) return raw;
-    // Keep any Markdown link delimiter or prose punctuation that the scanner
-    // included. Balanced parentheses can be part of the destination itself.
-    let depth = 0;
-    let closing = raw.length;
-    for (let i = 0; i < raw.length; i++) {
-      if (raw[i] === "(") depth++;
-      else if (raw[i] === ")") {
-        if (depth) depth--;
-        else { closing = i; break; }
-      }
-    }
-    const suffix = raw.slice(closing).match(/^\)+[.,;!?]*/)?.[0] ?? "";
-    return "[redacted-url]" + suffix;
+    const suffix = markdownLinkSuffix(raw);
+    const destination = raw.slice(0, raw.length - suffix.length);
+    const decoded = decodeSensitiveText(destination, false, undefined, true);
+    return decoded.error || hasUrlCredentials(destination, decoded.text) ? "[redacted-url]" + suffix : raw;
   });
+}
+
+/** A closing Markdown delimiter can follow a bare port or IPv6 address.
+ * Balanced parentheses belong to the destination. */
+function markdownLinkSuffix(raw: string): string {
+  let depth = 0;
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] === "(") depth++;
+    else if (raw[i] === ")") {
+      if (depth) depth--;
+      else return /^\)+[.,;!?]*$/.test(raw.slice(i)) ? raw.slice(i) : "";
+    }
+  }
+  return "";
 }
 
 function hasUrlCredentials(raw: string, decoded: string): boolean {
