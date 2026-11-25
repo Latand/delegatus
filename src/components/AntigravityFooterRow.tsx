@@ -83,14 +83,14 @@ export function AntigravityFooterRow({ limits, limitsAccountId, now, provenance,
         onClick={() => { setOpen((value) => !value); if (!open) void agy.reload(); }}
         className={`flex h-[26px] w-full items-center gap-1.5 ${LINE_EDGE} text-left hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40`}
       >
-        <span className="flex min-w-0 flex-1 items-center gap-1.5">
-          <span data-meter-name="" className="min-w-0 truncate text-[11.5px] font-semibold text-primary">Antigravity</span>
+        <span className="flex min-w-max flex-1 items-center gap-1.5">
+          <span data-meter-name="" className="text-[11.5px] font-semibold text-primary">Antigravity</span>
           <span role="img" aria-label="Antigravity" title="Antigravity" className="grid h-3 w-3 shrink-0 place-items-center">
             <span className="h-2 w-2 rounded-full" style={{ backgroundColor: tint.color }} />
           </span>
         </span>
         {left === null ? (
-          <span data-antigravity-state={state} className={`min-w-0 shrink truncate text-[10px] ${state === "connected" ? "text-muted" : "text-warning"}`}>{stateText}</span>
+          <span data-antigravity-state={state} title={stateText ?? undefined} className={`min-w-0 shrink truncate text-[10px] ${state === "connected" ? "text-muted" : "text-warning"}`}>{stateText}</span>
         ) : (
           <>
             <span data-meter-value="" className="shrink-0 text-[11px] tabular-nums text-muted">

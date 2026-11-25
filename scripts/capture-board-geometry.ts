@@ -1211,6 +1211,8 @@ async function captureAgyAccounts(ctx: { baseUrl: string; browser: Browser; rese
             cut,
             small,
             text: (node.textContent ?? "").replace(/\s+/g, " ").trim(),
+            /* The sidebar row keeps the engine's name whole; its state line may end in an ellipsis (the flyout carries the full text). */
+            footerNameCut: (() => { const name = document.querySelector<HTMLElement>('[data-engine-limits="antigravity"] [data-meter-name]'); return name ? name.scrollWidth > name.clientWidth + 1 : false; })(),
             check: node.querySelector("[data-antigravity-check]")?.textContent ?? null,
             installCommand: node.querySelector("code")?.textContent ?? null,
           };
@@ -1221,6 +1223,7 @@ async function captureAgyAccounts(ctx: { baseUrl: string; browser: Browser; rese
         must(viewport.phone || (b.x >= 0 && b.y >= 0 && b.x + b.w <= reading.viewport.w && b.y + b.h <= reading.viewport.h), `${tag} ${state}: the flyout ${JSON.stringify(b)} leaves the ${reading.viewport.w}×${reading.viewport.h} viewport`);
         must(reading.documentOverflowX <= 0, `${tag} ${state}: the page scrolls sideways by ${reading.documentOverflowX}px`);
         must(reading.sideways <= 1, `${tag} ${state}: the surface overflows sideways by ${reading.sideways}px`);
+        must(!reading.footerNameCut, `${tag} ${state}: the sidebar row's engine name is cut`);
         must(reading.cut.length === 0, `${tag} ${state}: cut state text ${JSON.stringify(reading.cut)}`);
         must(reading.small.length === 0, `${tag} ${state}: targets under 44px: ${reading.small.join("; ")}`);
         if (state === "missing") must(reading.installCommand === ANTIGRAVITY_INSTALL_COMMAND.command, `${tag}: the missing surface shows ${reading.installCommand} as its install command`);
@@ -1243,6 +1246,7 @@ async function captureAgyAccounts(ctx: { baseUrl: string; browser: Browser; rese
 async function captureOnboarding(): Promise<void> {
   const providerOnly = process.env.BOARD_CAPTURE_CASE === "provider-account";
   const agyAccounts = process.env.BOARD_CAPTURE_CASE === "agy-accounts";
+  const onlyViewports = process.env.ONBOARDING_CAPTURE_VIEWPORTS?.split(",").map((tag) => tag.trim()).filter(Boolean);
   process.env.HOME = HOME;
   process.env.XDG_CONFIG_HOME = path.join(HOME, ".config");
   process.env.LLV_STATE_DIR = STATE_DIR;
@@ -1296,7 +1300,8 @@ async function captureOnboarding(): Promise<void> {
     browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || undefined, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
 
     if (agyAccounts) await captureAgyAccounts({ baseUrl, browser, resetInstall, must, report });
-    else for (const viewport of (providerOnly ? ONBOARDING_VIEWPORTS.filter((item) => item.width === 1280 || item.width === 390) : ONBOARDING_VIEWPORTS)) {
+    /* ONBOARDING_CAPTURE_VIEWPORTS=phone-390 reruns only those tags. */
+    else for (const viewport of (providerOnly ? ONBOARDING_VIEWPORTS.filter((item) => item.width === 1280 || item.width === 390) : ONBOARDING_VIEWPORTS.filter((item) => !onlyViewports?.length || onlyViewports.includes(item.tag)))) {
       for (const colorScheme of (providerOnly ? ["light"] : ["light", "dark"]) as Array<"light" | "dark">) {
         for (const locale of ["en", "uk"] as const) {
           const tag = `${viewport.tag}-${colorScheme}-${locale}`;
@@ -1321,6 +1326,9 @@ async function captureOnboarding(): Promise<void> {
             localStorage.setItem("llvSound", "0");
           }, locale);
           const page = await context.newPage();
+          /* The daily telemetry notice sits over the phone's footer until it is acknowledged; the first run shows it,
+             and every reload brings it back, so it is answered whenever it blocks an action. */
+          await page.addLocatorHandler(page.getByRole("button", { name: translate(locale, "telemetry.dismiss"), exact: true }), async (button) => { await button.click(); });
           if (providerOnly) await page.route("**/api/accounts", async (route) => {
             const response = await route.fetch();
             const body = await response.json() as { claude?: { accounts?: Record<string, unknown>[] } };
