@@ -156,13 +156,15 @@ export class ManagedCodexRuntime {
   private recordDrain: Promise<void> | null = null;
   private recordRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private recordRetryAttempt = 0;
-  private readonly startClient: (home: string) => Promise<CodexAppServerClient>;
+  private readonly startClient: (home: string, profile?: "quota") => Promise<CodexAppServerClient>;
   private readonly now: () => number;
   private readonly observeSignedIn: (accountId: string) => Promise<void>;
   private readonly stateFile: string;
 
   constructor(options: ManagedCodexRuntimeOptions = {}) {
-    this.startClient = options.startClient ?? ((home) => CodexAppServerClient.start({ home }));
+    const start = options.startClient;
+    this.startClient = start ? home => start(home)
+      : (home, protocolProfile) => CodexAppServerClient.start({ home, protocolProfile });
     this.observeSignedIn = options.observeSignedIn ?? (async (accountId) => {
       const { refreshAccountLimits } = await import("@/lib/accounts/liveLimits");
       await refreshAccountLimits("codex", accountId, { phase: "login-complete" });
@@ -418,7 +420,7 @@ export class ManagedCodexRuntime {
   private async probeQuotaUnlocked(account: CodexAccount): Promise<CodexQuotaProbe> {
     const active = this.active.get(canonicalHome(account.home));
     if (active?.client) return this.probeQuotaFrom(active.client);
-    const client = await this.startClient(account.home);
+    const client = await this.startClient(account.home, "quota");
     try { return await this.probeQuotaFrom(client); }
     finally { client.close(); }
   }
