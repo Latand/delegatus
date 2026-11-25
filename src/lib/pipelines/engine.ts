@@ -5336,9 +5336,26 @@ function resumablePassedPublication(pipeline: Pipeline): boolean {
 
 function runningPassWithPublishedHead(pipeline: Pipeline): boolean {
   const delivery = pipeline.delivery;
-  return pipeline.state === "running" && !pipeline.closedAt && !pipeline.hiddenAt && awaitingPassedPublication(pipeline)
+  const attempt = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
+  const resumablePark = pipeline.state === "needs_decision" && passedStagePublicationPark(pipeline, attempt);
+  return (pipeline.state === "running" || resumablePark) && !pipeline.closedAt && !pipeline.hiddenAt && awaitingPassedPublication(pipeline)
     && !!delivery?.target.remote && publishesRemoteBranch(pipeline) && !!settledPublicationForHead(pipeline, pipeline.lastPassedCommit)
     && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...delivery.target, active: true }));
+}
+
+/** A verified publication receipt outranks repair evidence for an older SHA.
+ * Checkout verification can park after publication; reopening that exact pass
+ * must preserve its receipt and leave rollback custody for normal settlement. */
+function restoreParkedPublishedPass(pipeline: Pipeline): boolean {
+  if (!runningPassWithPublishedHead(pipeline) || pipeline.state !== "needs_decision") return false;
+  const attempt = currentAttempt(pipeline, pipeline.cursor!.stageId)!;
+  attempt.state = "passed";
+  attempt.error = null;
+  if (pipeline.delivery?.operation?.sha === pipeline.lastPassedCommit) pipeline.delivery.operation.passedStage = true;
+  pipeline.state = "running";
+  pipeline.pausedState = null;
+  pipeline.stateDetail = null;
+  return true;
 }
 
 function passedPublicationEvidence(pipeline: Pipeline): string {
@@ -6222,6 +6239,7 @@ async function reconcileParkedPublicationRepair(pipeline: Pipeline, ports: Pipel
   const attempt = stage && currentAttempt(pipeline, stage.id);
   if (pipeline.state !== "needs_decision" || !stage || !attempt
     || !passedStagePublicationPark(pipeline, attempt)) return false;
+  if (restoreParkedPublishedPass(pipeline)) return true;
   const before = JSON.stringify([attempt.publicationRepair, attempt.publicationRepairAbandonment]);
   const detail = publicationCodeRepairDetail(pipeline, attempt);
   const evidence = await readRepairProducerEvidence(pipeline, stage, attempt, ports, !!detail);
@@ -14039,6 +14057,48 @@ export async function settlePendingStageGit(ports: PipelinePorts = defaultPipeli
   let changed = false;
   for (const preview of await selectControllerPipelines("running")) {
     if (preview.state !== "running" || preview.hiddenAt || preview.closedAt) continue;
+    const firstPr = preview.delivery?.pendingFirstPullRequest;
+    if (firstPr && preview.delivery?.active && preview.delivery.publish === "enabled"
+      && preview.delivery.target.pr === undefined && firstPr.epoch === preview.delivery.epoch
+      && firstPr.sha === preview.publishedCommit && settledPublicationForHead(preview, firstPr.sha)) {
+      const stage = preview.stages.find(candidate => candidate.id === firstPr.stageId);
+      const attempt = stage && runFor(preview, stage.id)?.attempts.find(candidate => candidate.n === firstPr.attempt && !candidate.historical);
+      if (stage && attempt?.verdict?.status === "pass") {
+        const candidate = structuredClone(preview);
+        const candidateAttempt = runFor(candidate, firstPr.stageId)?.attempts.find(item => item.n === firstPr.attempt && !item.historical);
+        if (!candidateAttempt) continue;
+        const stillOwnsObligation = () => {
+          const current = findPipelineRecord(preview.id);
+          const owned = !!current && current.delivery?.epoch === firstPr.epoch
+            && current.delivery.ownerId === preview.id && current.delivery.active && current.delivery.target.pr === undefined
+            && !!settledPublicationForHead(current, firstPr.sha)
+            && current.delivery.pendingFirstPullRequest?.epoch === firstPr.epoch
+            && current.delivery.pendingFirstPullRequest.sha === firstPr.sha;
+          return owned;
+        };
+        const result = await withViewerOperation("pipelines.controller-job", () => performanceSpans.wait("pipeline.pull-request", () =>
+          ensureStagePullRequest(candidate, candidateAttempt, ports.exec, firstPr.sha, undefined, { authorize: stillOwnsObligation })));
+        const retryError = result.ok ? candidateAttempt.error : result.error;
+        await withPipelineMutation(async (pipelines, persist) => {
+          const current = pipelines.find(candidate => candidate.id === preview.id);
+          if (!current || current.delivery?.epoch !== firstPr.epoch || current.delivery.ownerId !== preview.id
+            || !current.delivery.active || current.delivery.target.pr !== undefined
+            || !settledPublicationForHead(current, firstPr.sha)
+            || current.delivery.pendingFirstPullRequest?.epoch !== firstPr.epoch
+            || current.delivery.pendingFirstPullRequest.sha !== firstPr.sha) return;
+          if (result.ok) {
+            if (candidate.delivery!.target.pr !== undefined) current.delivery!.target.pr = candidate.delivery!.target.pr;
+            if (candidate.delivery!.pendingFirstPullRequest) current.delivery!.pendingFirstPullRequest = structuredClone(candidate.delivery!.pendingFirstPullRequest);
+            else delete current.delivery!.pendingFirstPullRequest;
+          }
+          const recorded = runFor(current, firstPr.stageId)?.attempts.find(candidate => candidate.n === firstPr.attempt && !candidate.historical);
+          if (recorded) recorded.error = retryError;
+          await persist([current]);
+          changed = true;
+        });
+        if (!result.ok) ports.scheduleTick?.(1_000);
+      }
+    }
     // A revoked grant cannot change the active publisher's control fence.
     if (preview.delivery?.operation?.state === "running" && proactivePipelineExecutionError(preview, "prepare")) continue;
     const stage = currentStage(preview);
@@ -14912,7 +14972,8 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
       for (const lane of await selectControllerPipelines("running")) {
         const stage = currentStage(lane);
         const attempt = stage && currentAttempt(lane, stage.id);
-        if (lane.cursor?.state !== "committing" && !(stage?.kind === "review-loop" && attempt?.flowId && ports.getFlow(attempt.flowId)?.state === "approved")) continue;
+        if (lane.cursor?.state !== "committing" && !lane.delivery?.pendingFirstPullRequest
+          && !(stage?.kind === "review-loop" && attempt?.flowId && ports.getFlow(attempt.flowId)?.state === "approved")) continue;
         settlementOwnedPublications.add(lane.id);
         if (attempt?.settlementAdmissionRetry && unixMs(attempt.settlementAdmissionRetry.retryAt) > unixMs(ports.now())) continue;
         const jobPorts = { ...ports };
@@ -17504,6 +17565,10 @@ async function applyPipelinePatch(
       if (moved && current.delivery?.operation?.state === "running") return { error: "publisher is still in flight; reconcile before accepting a moved head", status: 409 };
       const ownerError = current.delivery && deliveryOwnerError(current, pipelineDeliveryLookup({ ...current.delivery.target, active: true }));
       if (ownerError) return { error: ownerError, status: 409 };
+      if (req.acceptedSha === undefined && restoreParkedPublishedPass(current)) {
+        await persist(); requestPipelineTick();
+        return { pipeline: current };
+      }
       if (current.delivery?.operation?.state === "running") {
         requestPipelineTick();
         return { pipeline: current };
@@ -17593,6 +17658,17 @@ async function applyPipelinePatch(
     const snapshot = findPipelineRecord(id);
     const snapshotStage = snapshot ? currentStage(snapshot) : null;
     const snapshotAttempt = snapshot && snapshotStage ? currentAttempt(snapshot, snapshotStage.id) : null;
+    if (req.action === "retry-stage" && snapshot && snapshotAttempt
+      && snapshot.state === "needs_decision" && restoreParkedPublishedPass(snapshot)) {
+      const resumed = await withDeliveryMutationAsync<PipelinePatchResult>(tx => {
+        const current = tx.get(id);
+        if (!current || !restoreParkedPublishedPass(current)) return { error: "the lane changed during publication recovery; read it again", status: 409 };
+        tx.put(current);
+        return { pipeline: current };
+      });
+      if (resumed.pipeline) requestPipelineTick();
+      return resumed;
+    }
     if (snapshot && snapshotAttempt && snapshot.state === "needs_decision"
       && (passedStagePublicationPark(snapshot, snapshotAttempt) || passedStageCustodyPark(snapshot, snapshotAttempt))) {
       if (req.action === "resolve-decision") {

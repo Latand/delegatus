@@ -4,7 +4,7 @@ import { settlePipelineControllerJobs } from "./controllerJobs";
 import { publishPipelineBranch } from "./git";
 import { recordPublicationFailure, PUBLICATION_RETRY_DELAYS_MS } from "./publicationHistory";
 
-test.each(["automatic", "publish", "retry-stage", "dirty", "moved", "rollback-pending"] as const)(
+test.each(["automatic", "publish", "retry-stage", "dirty-tick", "dirty-publish", "dirty-retry-stage", "moved", "rollback-pending"] as const)(
   "a settled publication reaches the pass edge after interrupted pushes and a retired admission (%s)", async action => {
     const h = harness();
     const box = publishHarness(h, { remoteReadFails: true });
@@ -75,7 +75,7 @@ test.each(["automatic", "publish", "retry-stage", "dirty", "moved", "rollback-pe
     checkoutWrites.length = 0;
     const reads = box.remoteReadAttempts();
     const seat = { kind: "agent", role: "orchestrator", conversationId: "conversation_creator" } as const;
-    if (action === "dirty") box.setDirty(true);
+    if (action.startsWith("dirty")) box.setDirty(true);
     if (action === "moved") box.setLocalHead("9".repeat(40));
     if (action === "publish") expect((await rawPatchPipeline(lane.id, { action }, h.ports, seat)).error).toBeUndefined();
     if (action === "retry-stage") {
@@ -87,7 +87,7 @@ test.each(["automatic", "publish", "retry-stage", "dirty", "moved", "rollback-pe
     await tickPipelinesController([], h.ports);
     await settlePipelineControllerJobs();
     const after = loadPipelines()[0]!;
-    const checkoutRefused = action === "dirty" || action === "moved";
+    const checkoutRefused = action.startsWith("dirty") || action === "moved";
     expect(after.publicationRecovery).toEqual(history);
     expect(after.delivery!.operation).toEqual(checkoutRefused ? { ...receipt, passedStage: false } : receipt);
     expect(after.runs[0]!.attempts).toHaveLength(1);
@@ -99,8 +99,30 @@ test.each(["automatic", "publish", "retry-stage", "dirty", "moved", "rollback-pe
       expect(after.cursor).toMatchObject({ stageId: "build", state: "committing" });
       expect(prCreates).toBe(0);
       if (checkoutRefused) expect(after.state).toBe("needs_decision");
-      if (action === "dirty") expect(after.stateDetail).toContain("uncommitted changes");
+      if (action.startsWith("dirty")) expect(after.stateDetail).toContain("uncommitted changes");
       if (action === "moved") expect(after.stateDetail).toContain("the worktree moved");
+      if (action.startsWith("dirty")) {
+        expect(after.delivery!.operation).toEqual({ ...receipt, passedStage: false });
+        expect(after.runs[0]!.attempts[0]!.state).toBe("passed");
+        box.setDirty(false);
+        box.setLocalHead(box.passedSha);
+        if (action === "dirty-publish") {
+          expect((await rawPatchPipeline(lane.id, { action: "publish" }, h.ports, seat)).error).toBeUndefined();
+        } else if (action === "dirty-retry-stage") {
+          expect((await rawPatchPipeline(lane.id, { action: "retry-stage", expectedStageId: "build",
+            expectedAttempt: attempt.n }, h.ports, seat)).error).toBeUndefined();
+        }
+        await tickPipelinesController([], h.ports);
+        await settlePipelineControllerJobs();
+        const recovered = loadPipelines()[0]!;
+        expect(recovered).toMatchObject({ state: "running", stateDetail: null,
+          delivery: { target: { pr: 42 }, operation: receipt },
+          cursor: { stageId: "review", state: "pending", activatedBy: { stageId: "build", attempt: attempt.n, edge: "pass" } } });
+        expect(recovered.runs[0]!.attempts).toHaveLength(1);
+        expect(recovered.runs[0]!.attempts[0]!.publicationRepair).toEqual(attempt.publicationRepair);
+        expect(box.order).toEqual(["commit"]);
+        expect(prCreates).toBe(1);
+      }
       return;
     }
     expect(after).toMatchObject({ state: "running", stateDetail: null, delivery: { target: { pr: 42 } },
@@ -150,6 +172,55 @@ test.each(["paused", "closed"] as const)("a quiescent accepted publication settl
   expect(box.order.filter((item) => item.startsWith("push:"))).toHaveLength(pushesBefore);
   if (state === "paused") expect(settled.cursor).toMatchObject({ stageId: "build", state: "committing" });
   else expect(settled.cursor).toBeNull();
+});
+
+test("Git proof hands off to review and retains a first-PR obligation after a transient forge lookup failure", async () => {
+  const h = harness();
+  const box = publishHarness(h);
+  const exec = h.ports.exec;
+  const remote = "https://github.com/fixture/project.git";
+  let forgeReady = false;
+  let createCalls = 0;
+  const forgeCalls: string[] = [];
+  h.ports.exec = async (command, args, cwd, env, options) => {
+    if (command === "git" && args[0] === "remote" && args[1] === "get-url")
+      return { code: 0, stdout: `${remote}\n`, stderr: "" };
+    if (command === "gh" && args[0] === "pr" && args[1] === "list") {
+      forgeCalls.push(`${forgeReady}: ${args.join(" ")}`);
+      if (!forgeReady) return { code: 1, stdout: "", stderr: "temporary forge outage" };
+      return { code: 0, stdout: JSON.stringify([{ number: 42,
+        headRefName: loadPipelines()[0]!.branch, baseRefName: "main", state: "OPEN",
+        headRefOid: box.passedSha, isCrossRepository: false }]), stderr: "" };
+    }
+    if (command === "gh" && args[0] === "pr" && args[1] === "create") {
+      createCalls++;
+      return { code: 0, stdout: "created", stderr: "" };
+    }
+    return exec(command, args, cwd, env, options);
+  };
+  await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
+  const lane = loadPipelines()[0]!;
+  lane.delivery!.target.remote = remote;
+  savePipelines([lane]);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass", "Accepted output")], h.ports);
+  const handedOff = loadPipelines()[0]!;
+  expect(handedOff).toMatchObject({ state: "running", cursor: { stageId: "review", state: "pending" },
+    delivery: { pendingFirstPullRequest: { sha: box.passedSha, stageId: "build", attempt: 1 } } });
+  expect(createCalls).toBe(0);
+
+  forgeReady = true;
+  for (let tick = 0; tick < 3; tick++) {
+    await tickPipelines([], h.ports);
+    await settlePipelineControllerJobs();
+  }
+  expect(forgeCalls.length).toBeGreaterThan(1);
+  const final = loadPipelines()[0]!;
+  expect(createCalls).toBe(0);
+  expect(final).toMatchObject({ cursor: { stageId: "review" }, delivery: { target: { pr: 42 } } });
+  expect(final.delivery!.pendingFirstPullRequest).toBeUndefined();
+  expect(h.spawnInputs).toHaveLength(2);
 });
 
 test("a same-owner publication waits through another tick, then advances once settled (#1939)", async () => {
