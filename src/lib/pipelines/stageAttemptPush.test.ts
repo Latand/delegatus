@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from "bun:test";
+import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { realExec } from "@/lib/workflows/provision";
@@ -9,6 +9,8 @@ import type { PipelineStageAttempt } from "./types";
 import { bindMergerContract } from "./mergerContract.fixture";
 import { git as batchGit } from "../../../scripts/merge-batch";
 import { commitThenDie, fixture, nextFixture, START, NOW } from "./stageAttemptPush.fixture";
+
+setDefaultTimeout(15_000);
 
 test.each(["batch", "earlier producer", "pull ref only", "tracking ref"] as const)("merger contract native boundary: %s", async mode => {
   const f = await fixture(true);
@@ -697,7 +699,7 @@ test.each((["accepted", "accepted replacement", "published"] as const).flatMap(p
     if (lostLaunch) await fs.rm(stageGitReceiptDirectory(lostLaunch), { recursive: true, force: true });
     await f.close();
   }
-}, 15_000);
+});
 
 test.each(["another worktree", "hooks off", "missing receipt"] as const)(
   "a replacement cannot hide an unproved divergent starting prefix (%s)", async origin => {
