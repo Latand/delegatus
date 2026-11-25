@@ -357,6 +357,9 @@ export type StructuredHostTerminationOutcome =
       /** A runtime termination or signal was attempted; refusals must retain
           its effects even when authority is subsequently lost. */
       terminationStarted?: true;
+      /** Runtime release succeeded or the kernel accepted a signal for the
+          captured tree. Exit still has to be independently verified. */
+      stoppedVia?: "runtime" | "process-group";
       /** The authority this target carried is spent: the pid is no longer the
           process the snapshot listed, so the target is consumed, not retried. */
       stale?: true;
@@ -386,7 +389,9 @@ export interface StructuredHostTerminationDependencies {
       row and the transcript change because of this termination, so a caller
       comparing them against what it observed beforehand stops comparing. */
   onFirstEffect?(): void;
-  terminateOwnedHost?(key: SessionKey, expected: ProcessIdentity): Promise<boolean>;
+  terminateOwnedHost?(key: SessionKey, expected: ProcessIdentity,
+    authorizeAsync?: () => Promise<Extract<StructuredHostTerminationOutcome, { ok: false }> | null>,
+    onAccepted?: () => void): Promise<boolean>;
   retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[], custody: StructuredHostCustody | null, confirmedScope?: AgentScopeIdentity | null): boolean | void | Promise<boolean | void>;
   /** Captured from the caller's registry before this termination can await. */
   registryCustody?: StructuredHostCustody | null;
@@ -672,6 +677,7 @@ async function terminateStructuredHostTreeFenced(
   }
   let terminationStarted = false;
   let completed = false;
+  let stoppedVia: "runtime" | "process-group" | undefined;
   /* Asking the runtime is not an effect: an answer of false means it holds
      nothing of this host and ended nothing, so a refusal that follows still
      owes the row its capture back. */
@@ -686,7 +692,7 @@ async function terminateStructuredHostTreeFenced(
       try { return processIdentityStatus(identity, identityProbe) !== "dead"; }
       catch { return true; }
     });
-    return { survivors, terminationStarted: true as const };
+    return { survivors, terminationStarted: true as const, ...(stoppedVia ? { stoppedVia } : {}) };
   };
   const identityRefusal = (): Extract<StructuredHostTerminationOutcome, { ok: false }> | null => {
     for (const [candidate, expectedIdentity] of identities) {
@@ -730,21 +736,26 @@ async function terminateStructuredHostTreeFenced(
      which is why the process this kill was authorized for goes with the ask.
      False means nothing the runtime holds is ours to end through it: the
      released/orphaned case, which only the process group reaches. */
+  let runtimeFailureReason: string | null = null;
   try {
     const refusedBeforeRuntime = await readAuthority() ?? authorityRefusal();
     if (refusedBeforeRuntime) return refusedBeforeRuntime;
-    let via: "runtime" | "process-group" = "process-group";
     let runtimeFailure = false;
     if (key && rootAlive && (dependencies.retainedSurvivors?.length ?? 0) === 0) {
       try {
-        if (await withHostStopOrigin(dependencies.stopOrigin ?? { path: "structured-host-kill", operationId: key.sessionId }, () => terminateOwned(key, expected))) {
-          via = "runtime";
+        if (await withHostStopOrigin(dependencies.stopOrigin ?? { path: "structured-host-kill", operationId: key.sessionId },
+          () => terminateOwned(key, expected, async () => await readAuthority() ?? authorityRefusal(), () => {
+            stoppedVia = "runtime";
+            markStarted();
+          }))) {
+          stoppedVia = "runtime";
           markStarted();
         }
-      } catch {
+      } catch (error) {
         /* A release that threw may have ended the host before it failed. */
         markStarted();
         runtimeFailure = true;
+        runtimeFailureReason = error instanceof Error ? error.message : String(error);
         const changed = identityRefusal();
         if (changed) return changed;
       }
@@ -755,7 +766,9 @@ async function terminateStructuredHostTreeFenced(
        been rebound while we waited, and a recycled group leader must never
        receive the fallback signal. The caller's authority crosses it too. */
     const refusedAfterRuntime = await readAuthority() ?? authorityRefusal();
-    if (refusedAfterRuntime) return refusedAfterRuntime;
+    if (refusedAfterRuntime) return runtimeFailureReason
+      ? { ...refusedAfterRuntime, error: `${refusedAfterRuntime.error}; runtime cleanup failed: ${runtimeFailureReason}` }
+      : refusedAfterRuntime;
     const changedAfterRuntime = identityRefusal();
     if (changedAfterRuntime) return changedAfterRuntime;
 
@@ -766,6 +779,7 @@ async function terminateStructuredHostTreeFenced(
         const changed = identityRefusal();
         if (changed) throw new Error(changed.error);
         signal(target, value);
+        stoppedVia ??= "process-group";
         return true;
       } catch (error) {
         const code = signalErrorCode(error);
@@ -855,7 +869,7 @@ async function terminateStructuredHostTreeFenced(
       /* Partial is not success: the registry row keeps describing the host that
          is still running, and the target keeps its authority for a retry. */
       let error: string;
-      if (runtimeFailure) error = "the runtime host termination failed and the process tree survived";
+      if (runtimeFailure) error = `the runtime host termination failed${runtimeFailureReason ? `: ${runtimeFailureReason}` : ""} and the process tree survived`;
       else if (refusals.length > 0) error = `the kill was refused (${refusals[0]})`;
       else error = `${remaining.length} process${remaining.length === 1 ? "" : "es"} outlived the kill`;
       return {
@@ -870,18 +884,33 @@ async function terminateStructuredHostTreeFenced(
        Retire only after the full captured tree has passed identity checks, and
        require the registry to accept that exact evidence on every path. */
     const scopeRefusal = await endScope();
-    if (scopeRefusal) return scopeRefusal;
+    if (scopeRefusal) return {
+      ...scopeRefusal,
+      ...(runtimeFailureReason ? { error: `${scopeRefusal.error}; runtime cleanup failed: ${runtimeFailureReason}` } : {}),
+      ...partialEvidence(),
+    };
     if (key && await retire(key, expected, [...identities.values()], registryCustody) === false) {
-      return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
+      const error = "structured host changed before registry retirement";
+      return { ok: false, status: 409,
+        error: runtimeFailureReason ? `${error}; runtime cleanup failed: ${runtimeFailureReason}` : error,
+        remaining: [], ...partialEvidence() };
     }
     completed = true;
-    return { ok: true, via, pids: tree };
+    if (runtimeFailureReason) return {
+      ok: false,
+      status: 500,
+      error: `runtime cleanup failed: ${runtimeFailureReason}`,
+      remaining: [],
+      ...partialEvidence(),
+    };
+    return { ok: true, via: stoppedVia ?? "already-exited", pids: stoppedVia ? tree : [] };
   } catch (error) {
     const evidence = partialEvidence();
+    const reason = error instanceof Error ? error.message : String(error);
     return {
       ok: false,
       status: 409,
-      error: `termination evidence became unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      error: `termination evidence became unavailable: ${reason}${runtimeFailureReason ? `; runtime cleanup failed: ${runtimeFailureReason}` : ""}`,
       remaining: evidence.survivors.map((identity) => identity.pid),
       ...evidence,
     };
