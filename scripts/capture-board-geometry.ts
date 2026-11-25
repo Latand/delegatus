@@ -104,11 +104,11 @@
  * last reading and a plan with no 5h window. `/api/accounts`, `/api/limits` and
  * `/api/limits/history` answer from the fixture, the last honouring `engine`
  * and `account`. The rail footer at 1440, 1360 and 1280 wide, en and uk, light
- * and dark, and the phone's projects sheet at 390 × 844 (en light, en dark, uk
- * light) tapping the partial, stale and unobserved lines. It requires a chart
- * for every account, the dashed spans each state names, the readout whole on
- * the first screen, the dialog inside the viewport, no "No history yet" text,
- * 4.5:1 contrast on the readout and 44 px targets on the phone.
+ * and dark. It requires a chart for every account, the dashed spans each state
+ * names, the readout whole on the first screen, the dialog inside the
+ * viewport, no "No history yet" text and 4.5:1 contrast on the readout. The
+ * phone's projects sheet carries only the resources footer, no account lines,
+ * so no chart opens there and no phone shot exists.
  *
  * With BOARD_CAPTURE_CASE=activity it renders the activity dashboard
  * (docs/design/activity-dashboard-v2.md) on a home seeded with the design's
@@ -5919,20 +5919,13 @@ async function limitsChartMain(): Promise<void> {
     });
     must(dismissed.ok, `dismissing the setup guide answered ${dismissed.status}`);
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
-    const desktop = [1440, 1360, 1280].flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ phone: false, width, lang, colorScheme }))));
-    const phones = [
-      { phone: true, width: 390, lang: "en" as const, colorScheme: "light" as const },
-      { phone: true, width: 390, lang: "en" as const, colorScheme: "dark" as const },
-      { phone: true, width: 390, lang: "uk" as const, colorScheme: "light" as const },
-    ];
+    const desktop = [1440, 1360, 1280].flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ width, lang, colorScheme }))));
     const historyRequests: string[] = [];
-    for (const shot of [...desktop, ...phones]) {
+    for (const shot of desktop) {
       const localeWrite = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: shot.lang, source: "chosen" }) });
       must(localeWrite.ok, `writing the ${shot.lang} locale answered ${localeWrite.status}`);
-      const height = shot.phone ? 844 : shot.width === 1280 ? 800 : 900;
-      const context = await browser.newContext(shot.phone
-        ? { viewport: { width: 390, height }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, colorScheme: shot.colorScheme, reducedMotion: "reduce" }
-        : { viewport: { width: shot.width, height }, colorScheme: shot.colorScheme, reducedMotion: "reduce" });
+      const height = shot.width === 1280 ? 800 : 900;
+      const context = await browser.newContext({ viewport: { width: shot.width, height }, colorScheme: shot.colorScheme, reducedMotion: "reduce" });
       await context.addInitScript(seedInit);
       await context.addInitScript((value: string) => localStorage.setItem("llv_lang", value), shot.lang);
       await context.route("**/api/accounts", (route) => route.fulfill({ json: limitsChartAccounts() }));
@@ -5947,16 +5940,11 @@ async function limitsChartMain(): Promise<void> {
       });
       const page = await context.newPage();
       await page.goto(`${baseUrl}/`);
-      if (shot.phone) {
-        await page.waitForSelector('[data-mobile2-open="projects"]', { timeout: 30_000 });
-        await page.click('[data-mobile2-open="projects"]');
-        await page.waitForSelector('[data-mobile2-sheet="projects"]', { timeout: 10_000 });
-      }
       await page.waitForSelector('[data-footer-chart="claude-a"]', { timeout: 30_000 }).catch(() => {});
-      const targets = shot.phone ? ["claude-b", "claude-c", "codex-e"] : LIMITS_CHART_ACCOUNTS.map((account) => account.id);
+      const targets = LIMITS_CHART_ACCOUNTS.map((account) => account.id);
       for (const id of targets) {
         const account = LIMITS_CHART_ACCOUNTS.find((item) => item.id === id)!;
-        const tag = `${shot.phone ? "phone" : shot.width}-${shot.lang}-${shot.colorScheme}-${account.state}`;
+        const tag = `${shot.width}-${shot.lang}-${shot.colorScheme}-${account.state}`;
         const trigger = page.locator(`[data-footer-chart="${id}"]`);
         if (!(await trigger.count())) { must(false, `${tag}: no chart button for ${account.label}`); continue; }
         await trigger.scrollIntoViewIfNeeded();
@@ -5976,7 +5964,6 @@ async function limitsChartMain(): Promise<void> {
             `${tag}: dialog ${JSON.stringify(open.dialog)} leaves the ${open.viewport.w}×${open.viewport.h} viewport`);
           for (const r of open.readoutRects) must(r.x >= open.dialog.x - 1 && r.x + r.w <= open.dialog.x + open.dialog.w + 1 && r.y >= 0 && r.y + r.h <= open.viewport.h, `${tag}: a readout line at ${JSON.stringify(r)} is cut`);
         } else must(false, `${tag}: no dialog`);
-        if (shot.phone) must((await trigger.evaluate((node) => node.getBoundingClientRect().height)) >= 44, `${tag}: the chart button is under 44 px tall`);
         const key = account.state === "none" ? "burndown.noReading" : account.state === "reset" ? "burndown.resetSince" : account.state === "stale" ? "burndown.leftEstimated" : "burndown.left";
         const stem = translate(shot.lang, key, { pct: "\u0001", at: "\u0001" }).split("\u0001").map((part) => part.trim()).sort((x, y) => y.length - x.length)[0]!;
         must(Boolean(open.readout?.includes(stem)), `${tag}: the readout «${open.readout}» lacks «${stem}»`);
@@ -6009,7 +5996,7 @@ async function limitsChartMain(): Promise<void> {
     process.exitCode = 1;
     console.error(`limits-chart acceptance FAILED (${failures.length}):\n  ${failures.join("\n  ")}`);
   } else {
-    console.log("limits-chart acceptance passed at 1440, 1360, 1280 and 390 wide.");
+    console.log("limits-chart acceptance passed at 1440, 1360 and 1280 wide.");
   }
 }
 
