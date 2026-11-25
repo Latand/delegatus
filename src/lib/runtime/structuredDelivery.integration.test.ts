@@ -204,6 +204,7 @@ function runtimeJournalClient(journal: RuntimeJournal): RuntimeHostClient {
     readSession: async (identity) => journal.readSession(identity),
     events: async (afterEventSeq) => journal.replay(afterEventSeq),
     append: async (event) => journal.append(event),
+    appendSessionFenced: async (event) => journal.append(event),
     command: async (command) => journal.executeOperation(command),
     operationStatus: async (operationId) => journal.operationResult(operationId),
     producerCursor: async (producerKind, eventKeyPrefix) => journal.producerCursor(producerKind, eventKeyPrefix),

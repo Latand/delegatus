@@ -7968,7 +7968,7 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
         }, {
           startHost: async () => host,
           publishHost: async (key, runningHost, ownsOperation, stagedLaunchId) => {
-            const unregister = await publishStructuredDeliveryHost({ key, host: runningHost }, ownsOperation, stagedLaunchId);
+            const unregister = await publishStructuredDeliveryHost({ key, host: runningHost }, ownsOperation, undefined, stagedLaunchId);
             projectionReady = true;
             return unregister;
           },

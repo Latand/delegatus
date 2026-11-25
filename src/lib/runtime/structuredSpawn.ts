@@ -3410,7 +3410,7 @@ export async function spawnStructuredConversation(
   }
   const bindHost = dependencies.bindHost ?? defaultBindHost;
   const publishHost = dependencies.publishHost
-    ?? ((key, host, ownsOperation, stagedLaunchId) => publishStructuredDeliveryHost({ key, host }, ownsOperation, stagedLaunchId));
+    ?? ((key, host, ownsOperation, stagedLaunchId) => publishStructuredDeliveryHost({ key, host }, ownsOperation, undefined, stagedLaunchId));
   const deliverFirst = dependencies.deliverFirst ?? defaultDeliverFirst;
   const processIdentity = dependencies.processIdentity ?? (() => captureProcessIdentity(process.pid));
   const now = dependencies.now ?? Date.now;
