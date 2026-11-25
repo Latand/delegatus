@@ -8,6 +8,12 @@ type Admission = { file: string; active: boolean; exited?: boolean; observers?: 
 const shared = process as typeof process & { __delegatusRecordedHostFence?: AsyncLocalStorage<Admission> };
 const context = shared.__delegatusRecordedHostFence ??= new AsyncLocalStorage<Admission>();
 
+/** A background release outlives its caller. Make it acquire its own ticket
+ * even when its callback was registered inside another reservation. */
+export function outsideRecordedHostFence<T>(operation: () => T): T {
+  return context.exit(operation);
+}
+
 /** Capture the outer reservation while an effect is admitted. A detached
  * observer can await its exit without requesting permission for another
  * effect. A caller already inside that reservation remains reentrant. */

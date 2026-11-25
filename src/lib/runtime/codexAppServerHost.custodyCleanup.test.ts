@@ -1,4 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
+import fs from "node:fs";
+import path from "node:path";
+import { statePath } from "@/lib/configDir";
 import * as fence from "@/lib/recordedChecks/hostFence";
 import * as checks from "@/lib/recordedChecks/store";
 import { CodexAppServerHost } from "./codexAppServerHost";
@@ -66,6 +69,61 @@ test("failed admitted cleanup retries through live recorded custody", async () =
     expect(signals).toEqual(sent);
   } finally {
     held = false; child.emit("close", 0, null); await host.release(); custody.mockRestore();
+  }
+});
+
+test("a failed reap inside a reservation holds a fresh ticket through the retry's last signal", async () => {
+  const child = new FakeAppServer("custody-failed-reap");
+  const owner = hostExitProcess(child.pid, "owned")!;
+  const directory = statePath("recorded-check-host-fences");
+  function ticket(): string | null {
+    const lock = fs.readdirSync(directory).find(name => name.endsWith(".write-lock"));
+    if (!lock) return null;
+    try { return JSON.parse(fs.readFileSync(path.join(directory, lock), "utf8")).token; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  }
+  const primary: Array<{ signal: string; ticket: string | null }> = [];
+  const retry: typeof primary = [];
+  let firstFailed = false, flushed = false;
+  const host = await CodexAppServerHost.start({
+    cwd: "/repo", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child),
+    pidAlive: () => true, processIdentity: () => "owned", shutdownGraceMs: 30,
+    signalProcess: (_pid, signal) => {
+      (firstFailed ? retry : primary).push({ signal, ticket: ticket() });
+      if (firstFailed && signal === "SIGKILL") queueMicrotask(() => child.emit("close", 0, null));
+    },
+  });
+  const checked: Array<string | null> = [];
+  const custody = spyOn(checks, "recordedOwnerHeld").mockImplementation(() => {
+    checked.push(ticket());
+    return false;
+  });
+  host.setPersistenceFlush(async () => { flushed = true; });
+  try {
+    await fence.withRecordedHostFence(owner, async () => {
+      const release = host.release();
+      await waitForCondition(() => primary.length > 0, "first signal");
+      child.emit("error", new Error("fixture transport closed"));
+      await expect(release).rejects.toThrow("could not be reaped");
+      firstFailed = true;
+    });
+    await waitForCondition(() => flushed, "retried reap checkpoint");
+    expect(primary.map(item => item.signal)).toContain("SIGKILL");
+    expect(retry.map(item => item.signal)).toContain("SIGKILL");
+    const originalTicket = primary[0].ticket, retryTicket = retry[0].ticket;
+    expect(originalTicket).toBeString();
+    expect(retryTicket).toBeString();
+    expect(retryTicket).not.toBe(originalTicket);
+    expect(primary.every(item => item.ticket === originalTicket)).toBe(true);
+    expect(retry.every(item => item.ticket === retryTicket)).toBe(true);
+    expect(checked).toContain(originalTicket);
+    expect(checked).toContain(retryTicket);
+  } finally {
+    child.emit("close", 0, null);
+    try { await host.release(); } finally { custody.mockRestore(); }
   }
 });
 

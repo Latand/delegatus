@@ -37,7 +37,7 @@ import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "n
 import { createHash, randomUUID, type Hash } from "node:crypto";
 import fs from "node:fs";
 import { recordedOwnerHeld } from "@/lib/recordedChecks/store";
-import { currentRecordedHostFenceExit, withRecordedHostFence } from "@/lib/recordedChecks/hostFence";
+import { currentRecordedHostFenceExit, outsideRecordedHostFence, withRecordedHostFence } from "@/lib/recordedChecks/hostFence";
 
 import type { ProcessIdentity } from "@/lib/agent/registry";
 import { procBackend } from "@/lib/proc";
@@ -5342,12 +5342,13 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     // the observer's checkpoint on the same side of the outer retirement.
     const admitted = this.releasePromise;
     const fenceExit = this.releaseFenceExit;
+    const releaseWithOwnTicket = () => outsideRecordedHostFence(() => this.release());
     const cleanup = admitted && fenceExit
       ? admitted.then(async () => {
         await fenceExit();
         await this.persistenceFlush?.();
-      }, () => this.release())
-      : this.release();
+      }, releaseWithOwnTicket)
+      : releaseWithOwnTicket();
     void cleanup.catch(() => {
       if (this.released || this.failureCleanupTimer) return;
       this.failureCleanupTimer = setTimeout(() => {
