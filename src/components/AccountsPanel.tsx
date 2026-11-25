@@ -212,6 +212,7 @@ function ChartPress({ account, engine, chart }: { account: AccountOption; engine
     <button
       type="button"
       data-account-chart={account.id}
+      data-account-chart-engine={engine}
       aria-haspopup="dialog"
       aria-expanded={chart.openId === account.id}
       aria-label={t("burndown.openAria", { engine: `${engineDisplay(engine)} · ${account.label}` })}
@@ -1650,21 +1651,49 @@ function MobileAddAccountRow({ state, engineName, loginBusy }: { state: EngineAc
   );
 }
 
+/** Drops the click that completes the tap now in progress. The sheet that
+    asked for it unmounts as it closes, so the guard lives here, outside it. A
+    gesture that never clicks (a scroll) cannot leave it armed: the next
+    pointer press or a short time lifts it. */
+function consumeNextClick() {
+  const swallow = (click: MouseEvent) => {
+    click.stopPropagation();
+    click.preventDefault();
+    release();
+  };
+  const timer = setTimeout(() => release(), 600);
+  function release() {
+    window.removeEventListener("click", swallow, true);
+    window.removeEventListener("pointerdown", release, true);
+    clearTimeout(timer);
+  }
+  window.addEventListener("click", swallow, true);
+  window.addEventListener("pointerdown", release, true);
+}
+
 /** An account's burndown chart as a bottom sheet over the phone's accounts
     screen. It sits on the document body, clear of the screen's own scrolling
-    and stacking, and a tap outside it closes it, as the footer's chart does. Its own press is
-    left to toggle it, so a second press closes rather than reopens. */
+    and stacking. A tap outside it closes it and is consumed: the click that
+    follows reaches nothing behind, so one tap never both dismisses the chart
+    and operates a row. Its own press (named by engine and id, since ids repeat
+    across engines) is left to toggle it, so a second press closes rather than
+    reopens. */
 function PhoneBurndown({ engine, account, reading, onClose }: { engine: "claude" | "codex"; account: AccountOption; reading: EngineLimits | null; onClose: () => void }) {
   const closeRef = useRef(onClose);
   useEffect(() => { closeRef.current = onClose; });
   useEffect(() => {
     const onDown = (event: PointerEvent) => {
       const target = event.target as Element | null;
-      if (target && !target.closest(`[data-burndown-dialog], [data-account-chart="${account.id}"]`)) closeRef.current();
+      if (!target || target.closest("[data-burndown-dialog]")) return;
+      const press = target.closest("[data-account-chart]");
+      if (press && press.getAttribute("data-account-chart") === account.id && press.getAttribute("data-account-chart-engine") === engine) return;
+      // Another chart's press only opens a chart, so its click goes through; any other control's is consumed.
+      if (!press) consumeNextClick();
+      closeRef.current();
     };
     window.addEventListener("pointerdown", onDown);
     return () => window.removeEventListener("pointerdown", onDown);
-  }, [account.id]);
+  }, [account.id, engine]);
   return createPortal(
     <BurndownPanel key={account.id} sheet engine={engine} label={engineDisplay(engine)} plan={reading?.plan ?? null} accountId={account.id} accountLabel={account.label} reading={reading} onClose={onClose} />,
     document.body,

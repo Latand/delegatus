@@ -731,6 +731,8 @@ test("a phone row with no reading still opens a chart, and a second press, Escap
   await click(press());
   await act(async () => { view.host.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); });
   expect(dialog()).toBeNull();
+  // The tap's own click, which the sheet consumes.
+  await click(view.host);
 });
 
 test("opening another account's chart replaces the first, and a provider row with no reading gets no chart line", async () => {
@@ -743,4 +745,71 @@ test("opening another account's chart replaces the first, and a provider row wit
   expect(document.body.querySelectorAll("[data-burndown-dialog]").length).toBe(1);
   expect(dialog()?.getAttribute("aria-label")).toContain("Lab");
   expect(view.host.querySelector('[data-account-chart="cl-provider"]')).toBeNull();
+});
+
+test("a Claude and a Codex account that share an id each open their own chart, one sheet at a time, and the history request names the pressed engine", async () => {
+  const urls: string[] = [];
+  globalThis.fetch = historyFetch(urls);
+  const withReading = (label: string) => ({ ...claudeLab, id: "default", label });
+  const view = await mount([
+    engineState("claude", [{ ...claudeMain, id: "other", label: "Other" } as AccountOption, withReading("ClaudeShared")], "other"),
+    engineState("codex", [{ ...codexMain, id: "other-cx", label: "OtherCx" } as AccountOption, { ...codexMain, id: "default", label: "CodexShared" } as AccountOption], "other-cx"),
+  ]);
+  const press = (engine: string) => view.host.querySelector(`[data-mobile2-accounts-engine="${engine}"] [data-account-chart="default"]`) as HTMLElement;
+  expect(press("claude").getAttribute("data-account-chart-engine")).toBe("claude");
+  expect(press("codex").getAttribute("data-account-chart-engine")).toBe("codex");
+  await click(press("claude"));
+  expect(document.body.querySelectorAll("[data-burndown-dialog]").length).toBe(1);
+  expect(dialog()?.getAttribute("aria-label")).toContain("ClaudeShared");
+  // The pointer goes down on the other engine's press first, as a tap does.
+  await act(async () => { press("codex").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); });
+  await click(press("codex"));
+  expect(document.body.querySelectorAll("[data-burndown-dialog]").length).toBe(1);
+  expect(dialog()?.getAttribute("aria-label")).toContain("CodexShared");
+  await act(async () => { press("claude").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); });
+  await click(press("claude"));
+  expect(document.body.querySelectorAll("[data-burndown-dialog]").length).toBe(1);
+  expect(dialog()?.getAttribute("aria-label")).toContain("ClaudeShared");
+  expect(urls).toEqual([
+    "/api/limits/history?engine=claude&account=default",
+    "/api/limits/history?engine=codex&account=default",
+    "/api/limits/history?engine=claude&account=default",
+  ]);
+});
+
+test("a tap outside the phone chart sheet closes it and reaches nothing behind it, and the next tap works again", async () => {
+  globalThis.fetch = historyFetch([]);
+  let selections = 0;
+  const view = await mount([engineState("claude", [claudeMain, claudeLab], claudeMain.id, { select: async () => { selections++; return true; } })]);
+  await click(view.host.querySelector('[data-account-chart="cl-main"]'));
+  expect(dialog()).not.toBeNull();
+  const row = view.host.querySelector('[data-account-toggle="cl-lab"]') as HTMLElement;
+  expect(row.getAttribute("aria-expanded")).toBe("false");
+  // One tap: pointerdown dismisses the sheet, its click is consumed.
+  await act(async () => { row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })); });
+  expect(dialog()).toBeNull();
+  await click(row);
+  expect(row.getAttribute("aria-expanded")).toBe("false");
+  expect(selections).toBe(0);
+  // The following tap, with no sheet open, is an ordinary press.
+  await click(row);
+  expect(row.getAttribute("aria-expanded")).toBe("true");
+});
+
+test("the phone chart sheet keeps Tab inside itself", async () => {
+  globalThis.fetch = historyFetch([]);
+  const view = await mount([engineState("claude", [claudeMain, claudeLab], claudeMain.id)]);
+  await click(view.host.querySelector('[data-account-chart="cl-main"]'));
+  const panel = dialog() as HTMLElement;
+  const stops = Array.from(panel.querySelectorAll<HTMLElement>("button"));
+  const last = stops[stops.length - 1]!;
+  last.focus();
+  const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+  await act(async () => { last.dispatchEvent(tab); });
+  expect(tab.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(stops[0]!);
+  const back = new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true });
+  await act(async () => { stops[0]!.dispatchEvent(back); });
+  expect(back.defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(last);
 });

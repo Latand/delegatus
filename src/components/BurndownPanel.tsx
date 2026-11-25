@@ -213,7 +213,19 @@ export function BurndownPanel({
       data-burndown-dialog=""
       aria-label={t("burndown.openAria", { engine: who })}
       tabIndex={-1}
-      onKeyDown={(event) => handleOverlayEscape(event, onClose)}
+      onKeyDown={(event) => {
+        handleOverlayEscape(event, onClose);
+        // The phone sheet is modal: Tab cycles inside it rather than into the screen behind.
+        if (sheet && event.key === "Tab" && !event.defaultPrevented) {
+          const stops = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex='-1'])"));
+          const first = stops[0];
+          const last = stops[stops.length - 1];
+          const active = document.activeElement;
+          if (!first || !last) event.preventDefault();
+          else if (event.shiftKey && (active === first || active === event.currentTarget)) { event.preventDefault(); last.focus(); }
+          else if (!event.shiftKey && active === last) { event.preventDefault(); first.focus(); }
+        }
+      }}
       className={`fixed bottom-3 left-1/2 ${Z.modal} flex w-[min(430px,calc(100vw-16px))] -translate-x-1/2 flex-col rounded-[12px] border border-border bg-card shadow-2 ${sheet ? "" : "sm:absolute sm:bottom-1 sm:left-full sm:ml-2 sm:translate-x-0"}`}
     >
       <header className="flex items-center gap-2 border-b border-border px-3 py-2">
