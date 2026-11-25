@@ -2,7 +2,7 @@ import { expect, test, afterAll, afterEach, beforeAll } from "bun:test";
 import { writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { report, git, MergeBatch, commandRunner, type CommandRunner } from "./merge-batch";
-import { cleanupBatchFixtures, fixture, isolateBatchGateLocks, landingFixture, realTests, successfulCommand, unchangedCulprit } from "./merge-batch.fixture";
+import { cleanupBatchFixtures, extendPr, isolateBatchGateLocks, landingFixture, realTests, reviewedDetectorsGreen, successfulCommand, unchangedCulprit } from "./merge-batch.fixture";
 
 afterEach(cleanupBatchFixtures);
 let restoreGateLocks: () => void;
@@ -376,46 +376,6 @@ test("an overlapping main contract patch is deferred and cannot supersede anothe
   expect(state.gated!.adapted ?? []).toEqual([]);
   expect(state.gated!.notApplicable.some(entry => entry.reason.includes("superseded"))).toBeFalse();
 }, 60_000);
-
-function extendPr(f: ReturnType<typeof fixture>, number: number, changes: Record<string, string | null>): string {
-  git(f.repo, ["checkout", `topic-${number}`]);
-  for (const [file, contents] of Object.entries(changes)) {
-    if (contents === null) rmSync(join(f.repo, file));
-    else writeFileSync(join(f.repo, file), contents);
-  }
-  git(f.repo, ["add", "."]); git(f.repo, ["commit", "-m", "Complete reviewed patch"]);
-  const head = git(f.repo, ["rev-parse", "HEAD"]);
-  git(f.repo, ["push", "origin", `${head}:refs/pull/${number}/head`, `${head}:refs/heads/topic-${number}`]);
-  f.views.get(number)!.headRefOid = head;
-  git(f.repo, ["checkout", "main"]);
-  return head;
-}
-
-async function reviewedDetectorsGreen(f: ReturnType<typeof landingFixture>, heads: string[]) {
-  const seen = new Set<string>();
-  for (const head of ["HEAD", ...heads]) {
-    const files = git(f.repo, ["ls-tree", "-r", "--name-only", head]).split("\n").filter(file => /\.test\.ts$/.test(file));
-    for (const file of files) {
-      const contents = git(f.repo, ["show", `${head}:${file}`]);
-      const key = JSON.stringify([file, contents]);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const path = join(f.repo, file), original = existsSync(path) ? readFileSync(path) : undefined;
-      try {
-        writeFileSync(path, contents);
-        const result = await commandRunner(f.repo, [process.execPath, "test", `./${file}`], {
-          ...process.env, LLV_STATE_DIR: join(f.root, "landed-check-state"),
-        });
-        expect(result.output).not.toContain("(fail)");
-        expect(result.code).toBe(0);
-      } finally {
-        if (original) writeFileSync(path, original);
-        else rmSync(path);
-      }
-    }
-  }
-  expect(git(f.repo, ["status", "--porcelain"])).toBe("");
-}
 
 test("round 1 landing confirms a newly discovered failure before publishing a fresh remainder", async () => {
   let runs = 0;

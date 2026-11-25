@@ -224,6 +224,46 @@ export function restartBatch(f: ReturnType<typeof landingFixture>, gh = f.batch.
 export const realTests: CommandRunner = async (cwd, args, env) => args[2] === "bun" && args[3] === "test"
   ? commandRunner(cwd, args.slice(2), env) : successfulCommand(args);
 
+export function extendPr(f: ReturnType<typeof fixture>, number: number, changes: Record<string, string | null>): string {
+  git(f.repo, ["checkout", `topic-${number}`]);
+  for (const [file, contents] of Object.entries(changes)) {
+    if (contents === null) rmSync(join(f.repo, file));
+    else writeFileSync(join(f.repo, file), contents);
+  }
+  git(f.repo, ["add", "."]); git(f.repo, ["commit", "-m", "Complete reviewed patch"]);
+  const head = git(f.repo, ["rev-parse", "HEAD"]);
+  git(f.repo, ["push", "origin", `${head}:refs/pull/${number}/head`, `${head}:refs/heads/topic-${number}`]);
+  f.views.get(number)!.headRefOid = head;
+  git(f.repo, ["checkout", "main"]);
+  return head;
+}
+
+export async function reviewedDetectorsGreen(f: ReturnType<typeof landingFixture>, heads: string[]) {
+  const seen = new Set<string>();
+  for (const head of ["HEAD", ...heads]) {
+    const files = git(f.repo, ["ls-tree", "-r", "--name-only", head]).split("\n").filter(file => /\.test\.ts$/.test(file));
+    for (const file of files) {
+      const contents = git(f.repo, ["show", `${head}:${file}`]);
+      const key = JSON.stringify([file, contents]);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const path = join(f.repo, file), original = existsSync(path) ? readFileSync(path) : undefined;
+      try {
+        writeFileSync(path, contents);
+        const result = await commandRunner(f.repo, [process.execPath, "test", `./${file}`], {
+          ...process.env, LLV_STATE_DIR: join(f.root, "landed-check-state"),
+        });
+        expect(result.output).not.toContain("(fail)");
+        expect(result.code).toBe(0);
+      } finally {
+        if (original) writeFileSync(path, original);
+        else rmSync(path);
+      }
+    }
+  }
+  expect(git(f.repo, ["status", "--porcelain"])).toBe("");
+}
+
 export function unchangedCulprit(f: ReturnType<typeof landingFixture>, number: number, head: string) {
   expect(f.batch.read().rows.find(row => row.number === number)!.head).toBe(head);
   expect(git(f.repo, ["ls-remote", "origin", `refs/heads/topic-${number}`]).split(/\s/)[0]).toBe(head);
