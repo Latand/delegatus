@@ -7869,6 +7869,30 @@ async function continueRestoredClaudeStage(
   // A real running turn keeps working. Idle/dead runtime evidence also covers
   // the busy transcript Claude leaves after its synthetic no-response record.
   if (!outstanding && active === true && !interrupted && durable?.turn === "busy") return true;
+  const now = ports.now();
+  const priorBackgroundWait = attempt.backgroundWait;
+  const backgroundMayBeRunning = durable?.backgroundTasks
+    ? liveBackgroundTasks(durable.backgroundTasks, unixMs(now)).length > 0
+    : Boolean(priorBackgroundWait);
+  if (backgroundMayBeRunning) {
+    const host = await ports.conversationHostProcess?.(conversationId);
+    if (!current() || durable?.snapshot && stageTurnEvidenceCurrent(durable) !== true) return true;
+    // An idle Claude can spend this turn waiting for a task notification.
+    // Use the task's persisted park-at time before spending the delivery budget.
+    // A gone host must still be eligible for the existing re-host and send.
+    const holdsBackground = host?.state === "alive"
+      || Boolean(priorBackgroundWait && host?.state !== "gone" && interrupted !== "dead");
+    if (holdsBackground && await holdForBackgroundTasks(pipeline, attempt, durable, ports, persist, now) !== "none") return true;
+  }
+  if (priorBackgroundWait) {
+    // Give the same delivery key time to reach the engine once the wait ends,
+    // whether the send is still owed or was already admitted.
+    delete attempt.backgroundWait;
+    if (pipeline.stateDetail?.startsWith(BACKGROUND_TASK_WAIT_DETAIL_PREFIX)) pipeline.stateDetail = null;
+    recovery.deadline = new Date(Math.max(unixMs(recovery.deadline), unixMs(ports.now()) + RESTORE_CONTINUATION_WAIT_MS)).toISOString();
+    await persist();
+    if (!current()) return true;
+  }
   if (durable?.turn === "busy" && (durable.lastAgentOutputAt ?? 0) > unixMs(recovery.cutAt) && !idleTurnSilent(durable, ports)) return true;
   if (unixMs(ports.now()) >= unixMs(recovery.deadline)) {
     if (!recovery.acceptedAt || outstanding || !completed) return parkRestore(deliveryError ?? "continuation delivery did not complete before its deadline");
@@ -8200,8 +8224,8 @@ async function holdForBackgroundTasks(
   durable: StageTurnEvidence | null,
   ports: PipelinePorts,
   persist: () => void | Promise<void>,
+  now = ports.now(),
 ): Promise<"none" | "waiting" | "parked"> {
-  const now = ports.now();
   /* A read that could not see the work cannot say it ended: a wait already
      under way holds, to its own bound, until a read can. */
   if (!durable?.backgroundTasks) {

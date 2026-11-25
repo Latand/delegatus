@@ -5,6 +5,7 @@ import type { PipelinePorts } from "./engine";
 import { driveRuntimeSwitch, switchOperationKey } from "./runtimeSwitch";
 import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
+import { BACKGROUND_TASK_WAIT_CEILING_MS } from "./backgroundTasks";
 
 const WAIT = 3 * 60_000;
 
@@ -74,7 +75,7 @@ async function restoredStage(toolResultOffset = -1000) {
   };
 }
 
-async function tickFromFreshController(r: Awaited<ReturnType<typeof restoredStage>>, cutAt = r.cutAt) {
+async function tickFromFreshController(r: Awaited<ReturnType<typeof restoredStage>>, cutAt = r.cutAt, outstanding = false) {
   const probe = path.join(path.dirname(r.f.transcriptPath), "restore-probe.ts");
   const moduleUrl = (file: string) => new URL(file, import.meta.url).href;
   fs.writeFileSync(probe, `
@@ -97,8 +98,9 @@ async function tickFromFreshController(r: Awaited<ReturnType<typeof restoredStag
       conversationAgentActive: async () => null, conversationTurnInterrupted: async () => "idle",
       conversationRestartCutHeld: () => false, conversationInterruption: () => null,
       conversationRestartCut: () => ({recordedAt: ${JSON.stringify(cutAt)}}),
-      conversationOperatorStopped: async () => false, conversationDeliveryOutstanding: () => false,
-      conversationDeliveryCompleted: () => true,
+      conversationOperatorStopped: async () => false, conversationDeliveryOutstanding: () => ${outstanding},
+      conversationHostProcess: async () => ({ state: "alive", pid: ${r.f.hostPid} }),
+      conversationDeliveryCompleted: () => ${!outstanding},
       durableTurnEvidence: durableStageTurnEvidence,
       resumeSeveredTurn: async input => {
         if (!await input.continuationAllowed()) return false;
@@ -108,7 +110,8 @@ async function tickFromFreshController(r: Awaited<ReturnType<typeof restoredStag
     };
     await tickPipelines([], ports);
     const current = loadPipelines()[0];
-    console.log(JSON.stringify({keys, state: current.state, recovery: current.runs[0].attempts[0].restoreContinuation}));
+    const saved = current.runs[0].attempts[0];
+    console.log(JSON.stringify({keys, state: current.state, recovery: saved.restoreContinuation, backgroundWait: saved.backgroundWait}));
     await (await import(${JSON.stringify(moduleUrl("../links/taskPageWorker.ts"))})).shutdownTaskPageWorker();
   `);
   const child = spawn(process.execPath, [probe, r.ports.now()], { env: { ...process.env, LLV_STRUCTURED_HOSTS: "0" }, stdio: ["ignore", "pipe", "pipe"] });
@@ -429,6 +432,118 @@ test("a pending delivery holds the restore continuation and cannot spend a secon
     await tickPipelines([], r.ports);
     expect(r.sends).toHaveLength(1);
     expect(loadPipelines()[0]!.state).toBe("needs_decision");
+  } finally { await r.f.end(); }
+});
+
+function declareBackgroundCommand(r: Awaited<ReturnType<typeof restoredStage>>) {
+  const timestamp = new Date(Date.parse(r.cutAt) - 1000).toISOString();
+  r.records.splice(2, r.records.length - 2,
+    { type: "user", timestamp, toolUseResult: { backgroundTaskId: "background-command" },
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: "background-command", content: "Command running in background" }] } },
+    { type: "assistant", timestamp, message: { role: "assistant", model: "claude-test", stop_reason: "end_turn",
+      content: [{ type: "text", text: "Waiting for the check to finish." }] } });
+  r.write();
+}
+
+function finishBackgroundCommand(r: Awaited<ReturnType<typeof restoredStage>>) {
+  r.records.push({ type: "user", timestamp: r.ports.now(), origin: "task-notification",
+    message: { role: "user", content: "<task-notification><task-id>background-command</task-id><status>completed</status></task-notification>" } });
+  r.write();
+}
+
+test.each(["deferred", "already queued"] as const)("Claude continuation (%s) keeps the same attempt reportable through a live background wait", async disposition => {
+  const r = await restoredStage();
+  try {
+    const queued = disposition === "already queued";
+    declareBackgroundCommand(r);
+    if (queued) {
+      r.ports.conversationHostProcess = async () => ({ state: "unknown", pid: null });
+      await tickPipelines([], r.ports);
+      r.setOutstanding(true);
+    }
+    r.ports.conversationHostProcess = defaultPipelinePorts().conversationHostProcess;
+    expect(await r.ports.conversationHostProcess!(r.f.attempt.conversationId!)).toEqual({ state: "alive", pid: r.f.hostPid });
+    await tickPipelines([], r.ports);
+    const waiting = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+    const key = waiting.restoreContinuation!.clientMessageId;
+    const parkAt = new Date(Date.parse(r.cutAt) + BACKGROUND_TASK_WAIT_CEILING_MS).toISOString();
+    r.advance(WAIT + 1000);
+    const { result } = await tickFromFreshController(r, r.cutAt, queued);
+    expect(result).toMatchObject({ state: "running", keys: [], recovery: { count: 1, clientMessageId: key }, backgroundWait: { until: parkAt } });
+    expect(r.sends).toHaveLength(queued ? 1 : 0);
+    expect(waiting.backgroundWait?.until).toBe(parkAt);
+
+    finishBackgroundCommand(r);
+    await tickPipelines([], r.ports);
+    expect(r.sends.map(send => send.clientMessageId)).toEqual([key]);
+    r.setOutstanding(false);
+    const report = await engineModule.reportStageCompletion({ verdict: "pass", summary: "The background check passed" },
+      { kind: "agent", role: "builder", conversationId: r.f.attempt.conversationId! }, r.ports);
+    expect(report).not.toHaveProperty("error");
+    r.advance(1000);
+    r.records.push({ type: "assistant", timestamp: r.ports.now(), message: { role: "assistant", model: "claude-test",
+      stop_reason: "end_turn", content: [{ type: "text", text: "The background check passed." }] } });
+    r.write();
+    await tickPipelines([], r.ports);
+    const attempts = loadPipelines()[0]!.runs[0]!.attempts;
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]!.verdict?.status).toBe("pass");
+  } finally { await r.f.end(); }
+});
+
+test("a live background wait still parks at its persisted silence bound", async () => {
+  const r = await restoredStage();
+  try {
+    r.ports.conversationHostProcess = defaultPipelinePorts().conversationHostProcess;
+    declareBackgroundCommand(r);
+    await tickPipelines([], r.ports);
+    r.advance(BACKGROUND_TASK_WAIT_CEILING_MS);
+    const { result } = await tickFromFreshController(r);
+    expect(result).toMatchObject({ state: "needs_decision", keys: [],
+      backgroundWait: { until: r.ports.now() }, recovery: { count: 1 } });
+    expect(loadPipelines()[0]!.stateDetail).toContain("background task background-command exceeded 60 min");
+  } finally { await r.f.end(); }
+});
+
+test("a task that finishes during the host probe can continue at the park-at time", async () => {
+  const r = await restoredStage();
+  try {
+    const hostProcess = defaultPipelinePorts().conversationHostProcess!;
+    r.ports.conversationHostProcess = hostProcess;
+    declareBackgroundCommand(r);
+    await tickPipelines([], r.ports);
+    r.advance(BACKGROUND_TASK_WAIT_CEILING_MS);
+    r.ports.conversationHostProcess = async id => {
+      finishBackgroundCommand(r);
+      return hostProcess(id);
+    };
+    await tickPipelines([], r.ports);
+    expect(loadPipelines()[0]!.state).toBe("running");
+    expect(r.sends).toHaveLength(0);
+    r.ports.conversationHostProcess = hostProcess;
+    await tickPipelines([], r.ports);
+    expect(loadPipelines()[0]!.state).toBe("running");
+    expect(r.sends).toHaveLength(1);
+  } finally { await r.f.end(); }
+});
+
+test("a gone host still gets a continuation with an unfinished background task in its transcript", async () => {
+  const r = await restoredStage();
+  try {
+    declareBackgroundCommand(r);
+    const production = defaultPipelinePorts({ liveness: { pidAlive: () => false, processIdentity: () => null } });
+    r.ports.conversationHostProcess = production.conversationHostProcess;
+    r.ports.conversationTurnInterrupted = production.conversationTurnInterrupted;
+    r.ports.conversationAgentActive = production.conversationAgentActive;
+    expect(await r.ports.conversationHostProcess!(r.f.attempt.conversationId!)).toMatchObject({ state: "gone" });
+    await withRuntimeSnapshot({ sessions: [{ conversationId: r.f.attempt.conversationId,
+      host: "dead", turn: "idle", attentionIds: [] }] }, async () => { await tickPipelines([], r.ports); });
+    const attempts = loadPipelines()[0]!.runs[0]!.attempts;
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({ state: "running", restoreContinuation: { count: 1, acceptedAt: r.ports.now() } });
+    expect(attempts[0]!.backgroundWait).toBeUndefined();
+    expect(r.sends).toHaveLength(1);
+    expect(r.sends[0]).toMatchObject({ conversationId: r.f.attempt.conversationId, transcriptPath: r.f.transcriptPath });
   } finally { await r.f.end(); }
 });
 
