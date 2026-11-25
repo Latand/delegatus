@@ -5334,10 +5334,17 @@ function resumablePassedPublication(pipeline: Pipeline): boolean {
       && (operation.passedStage === true || (operation.state === "settled" && operation.result?.ok === false))));
 }
 
+function checkoutVerificationPark(pipeline: Pipeline, attempt: PipelineStageAttempt | null): boolean {
+  return pipeline.state === "needs_decision" && pipeline.cursor?.state === "committing" && stageHeadAccepted(attempt)
+    && (attempt?.state === "passed" || attempt?.state === "needs_decision")
+    && (pipeline.stateDetail?.startsWith("the worktree moved to ") === true
+      || pipeline.stateDetail?.startsWith("the accepted head cannot be verified before completion:") === true);
+}
+
 function runningPassWithPublishedHead(pipeline: Pipeline): boolean {
   const delivery = pipeline.delivery;
   const attempt = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
-  const resumablePark = pipeline.state === "needs_decision" && passedStagePublicationPark(pipeline, attempt);
+  const resumablePark = checkoutVerificationPark(pipeline, attempt);
   return (pipeline.state === "running" || resumablePark) && !pipeline.closedAt && !pipeline.hiddenAt && awaitingPassedPublication(pipeline)
     && !!delivery?.target.remote && publishesRemoteBranch(pipeline) && !!settledPublicationForHead(pipeline, pipeline.lastPassedCommit)
     && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...delivery.target, active: true }));
@@ -5347,8 +5354,9 @@ function runningPassWithPublishedHead(pipeline: Pipeline): boolean {
  * Checkout verification can park after publication; reopening that exact pass
  * must preserve its receipt and leave rollback custody for normal settlement. */
 function restoreParkedPublishedPass(pipeline: Pipeline): boolean {
-  if (!runningPassWithPublishedHead(pipeline) || pipeline.state !== "needs_decision") return false;
-  const attempt = currentAttempt(pipeline, pipeline.cursor!.stageId)!;
+  const attempt = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
+  if (!checkoutVerificationPark(pipeline, attempt) || !runningPassWithPublishedHead(pipeline)) return false;
+  if (!attempt) return false;
   attempt.state = "passed";
   attempt.error = null;
   if (pipeline.delivery?.operation?.sha === pipeline.lastPassedCommit) pipeline.delivery.operation.passedStage = true;
