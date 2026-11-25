@@ -65,7 +65,7 @@ async function exerciseProductionRead(): Promise<void> {
   process.env.LLV_TEST_PROBE_VIEWER_PID = String(process.pid);
   const { procBackend } = await import("./proc");
   const { statePath } = await import("./configDir");
-  const { agentRegistry } = await import("./agent/registry");
+  const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("./agent/registry");
   const { setFileCatalogMembershipProbeForTests, setFileScanRunnerForTests } = await import("./scanner/scanCache");
   const { readResourcesWithDiagnostic } = await import("./resources");
   await import("./state/diskPressure");
@@ -76,6 +76,11 @@ async function exerciseProductionRead(): Promise<void> {
   ]);
   // Fix unrelated inputs, leaving snapshot assembly and response handling real.
   mkdirSync(statePath(), { recursive: true });
+  if (heldProbe === "kern.boottime") {
+    // The SQLite writer normally primes boot identity at Viewer startup.
+    // Use an empty read-only inventory here so this probe starts cold.
+    setAgentRegistryForTests(new AgentRegistry(statePath("fixture-registry.json"), undefined, undefined, { sqliteMode: "off" }));
+  }
   agentRegistry().readOnlySnapshot();
   setFileCatalogMembershipProbeForTests(async () => null);
   setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: true }));
