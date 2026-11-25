@@ -7,8 +7,8 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { activeSeatsByCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
 
 import { emptyRepositoryEntry, forgeCacheFile, clearForgeNudges, pendingForgeNudges, readForgeCache, updateForgeCache, proposalIssueSnapshot, PROPOSAL_ISSUE_LIMIT, type ForgeRepositoryEntry, type ForgeSweepError, type StoredPullRequest } from "./cache";
-import { pipelineRepository, taskRepository } from "./resolve";
-import { githubRepositoryOfRemote, type PullRequestState } from "./workLinks";
+import { pipelineRepository, taskRepository, taskRepositoryOrCarrier } from "./resolve";
+import { githubRepositoryOfRemote, normalizeWorkLinkInput, type PullRequestState } from "./workLinks";
 import { githubReadDiagnostic } from "./githubReadFailure";
 
 /*
@@ -104,16 +104,32 @@ function collectDemand(ports: ForgeSweepPorts): Map<string, Demand> {
     if (!entry) demand.set(repository, entry = { live: false, numbers: new Set() });
     return entry;
   };
+  const carriers = new Map<string, Pipeline[]>();
   for (const pipeline of ports.loadPipelines()) {
+    for (const taskId of pipeline.taskIds ?? []) {
+      const list = carriers.get(taskId) ?? [];
+      list.push(pipeline);
+      carriers.set(taskId, list);
+    }
     const own = want(pipelineRepository(pipeline));
     if (own && pipeline.state !== "completed" && pipeline.state !== "closed" && !pipeline.hiddenAt) own.live = true;
     if (own && pipeline.delivery?.target.pr) own.numbers.add(pipeline.delivery.target.pr);
     for (const link of pipeline.workLinks ?? []) want(link.repository)?.numbers.add(link.number);
   }
   for (const task of ports.loadTasks()) {
-    if (!task.workLinks?.length) continue;
-    want(taskRepository(task));
-    for (const link of task.workLinks) want(link.repository)?.numbers.add(link.number);
+    const repository = taskRepositoryOrCarrier(task, carriers.get(task.id) ?? []);
+    if (task.workLinks?.length) want(repository);
+    for (const link of task.workLinks ?? []) want(link.repository)?.numbers.add(link.number);
+    if (task.status !== "done" && task.hold?.kind === "pr" && task.hold.ref) {
+      const hold = normalizeWorkLinkInput(task.hold.ref, { repository, kind: "pr" });
+      if (hold.ok) {
+        const entry = want(hold.link.repository);
+        if (entry) {
+          entry.live = true;
+          entry.numbers.add(hold.link.number);
+        }
+      }
+    }
   }
   let seatProjects: readonly string[] = [];
   try { seatProjects = ports.loadSeatProjects?.() ?? []; }
