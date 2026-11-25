@@ -1769,6 +1769,8 @@ export class SqliteAgentRegistryStore {
     forgets: number;
     /** Operation owners synthesized from archived deliveries that no stored owner names. */
     syntheticOwners: Map<string, string>;
+    /** Immutable hot collections used to build this generation's row maps. */
+    hotSources: Map<RowCollection, object>;
     /** `built` yields the merged collection, making it on first use when only
         its hot rows changed; `cold` is the reader of its archived rows,
         carried from build to build while its versions and decisions stand. */
@@ -4475,7 +4477,9 @@ export class SqliteAgentRegistryStore {
       }
     }
     const hot = { ...snapshot.file };
-    if (syntheticOwners.size) {
+    const ownersAlreadyFiltered = prior?.syntheticOwners === syntheticOwners
+      && prior.hotSources.get("deliveryOperationOwners") === hot.deliveryOperationOwners;
+    if (syntheticOwners.size && !ownersAlreadyFiltered) {
       hot.deliveryOperationOwners = { ...hot.deliveryOperationOwners };
       for (const key of syntheticOwners.keys()) {
         delete hot.deliveryOperationOwners[key];
@@ -4483,6 +4487,8 @@ export class SqliteAgentRegistryStore {
       }
     }
     for (const [collection,keys] of coldKeys) {
+      // The previous generation filtered this frozen collection against these keys.
+      if (prior && prior.hotSources.get(collection) === hot[collection] && prior.coldKeys.get(collection) === keys) continue;
       const rows: Record<string, unknown> = {};
       for (const key in hot[collection]) {
         if (Object.hasOwn(hot[collection],key) && !keys.has(key)) rows[key] = hot[collection][key];
@@ -4519,8 +4525,10 @@ export class SqliteAgentRegistryStore {
        unchanged), its pinned grant decisions, and for operation owners the
        deliveries they normalize against and the owners synthesized from them. */
     const hotRows = function* (collection: RowCollection): Generator<void, Map<string, unknown>> {
-      const rows = new Map<string, unknown>();
       const source = file[collection] as Record<string, unknown>;
+      const kept = prior?.collections.get(collection);
+      if (kept && prior?.hotSources.get(collection) === source) return kept.hot;
+      const rows = new Map<string, unknown>();
       for (const key in source) {
         if (Object.hasOwn(source,key)) rows.set(key,source[key]);
         yield;
@@ -4528,6 +4536,7 @@ export class SqliteAgentRegistryStore {
       return rows;
     };
     const sameRows = function* (left: Map<string, unknown> | undefined, right: Map<string, unknown>): Generator<void, boolean> {
+      if (left === right) return true;
       if (!left || left.size !== right.size) return false;
       /* In the same order too: a row deleted and added again with the same
          content is the same frozen row at a new place. */
@@ -4555,7 +4564,7 @@ export class SqliteAgentRegistryStore {
       yield;
     }
     const synthetic = syntheticHash.digest("hex");
-    const nextCache: NonNullable<typeof this.coldViewCache> = { signature,headers,coldKeys,coldIds,grouped,coldSignatures,forgets: this.coldGrantForgets,syntheticOwners,collections: new Map() };
+    const nextCache: NonNullable<typeof this.coldViewCache> = { signature,headers,coldKeys,coldIds,grouped,coldSignatures,forgets: this.coldGrantForgets,syntheticOwners,hotSources: new Map(),collections: new Map() };
     const reused = new Set<RowCollection>();
     /* Collections whose archived versions and pinned decisions are the ones
        the previous build held: only their hot rows differ, so the accessors
@@ -4565,9 +4574,11 @@ export class SqliteAgentRegistryStore {
     /* Read every hot side before any collection is replaced by a merged one. */
     const hotSides = new Map<RowCollection, Map<string, unknown>>();
     for (const collection of layered) {
+      nextCache.hotSources.set(collection,file[collection]);
       hotSides.set(collection,yield* hotRows(collection));
     }
-    const hotDeliveries = layered.includes("deliveryOperationOwners") ? yield* hotRows("heldDeliveries") : undefined;
+    const hotDeliveries = layered.includes("deliveryOperationOwners")
+      ? hotSides.get("heldDeliveries") ?? (yield* hotRows("heldDeliveries")) : undefined;
     for (const collection of layered) {
       /* Another writer's archive pass changed the mapping: a collection whose
          own archived versions are the ones it held reuses its build. */

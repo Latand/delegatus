@@ -42,8 +42,38 @@ function fixture() {
   const delivery = dataset.pendingDeliveryIds[0]!;
   expect(first.receipts[receipt]).toBeDefined();
   expect(first.heldDeliveries[delivery]).toBeDefined();
-  return { reader, writer, first, receipt, delivery };
+  return { reader, writer, first, receipt, delivery, entry: dataset.activeEntryKeys[0]! };
 }
+
+test("a peer delivery commit leaves the immutable hot entry collection out of snapshot assembly", () => {
+  const { reader, writer, first, delivery, entry } = fixture();
+  const retained = first.entries[entry];
+  expect(retained).toBeDefined();
+  const priorText = first.heldDeliveries[delivery]!.text;
+  writer.mutate(file => { file.heldDeliveries[delivery]!.text = "peer revision"; }, false);
+
+  const entries = Object.entries, set = Map.prototype.set;
+  let enumerations = 0, inserts = 0;
+  const refresh = () => {
+    try {
+      Object.entries = ((object: object) => {
+        if (Object.getOwnPropertyDescriptor(object, entry)?.value === retained) enumerations++;
+        return entries(object);
+      }) as typeof Object.entries;
+      Map.prototype.set = function (key, value) {
+        if (key === entry && value === retained) inserts++;
+        return set.call(this, key, value);
+      };
+      return reader.readOnlySnapshot().file;
+    } finally { Object.entries = entries; Map.prototype.set = set; }
+  };
+  const current = refresh();
+  expect(current.entries[entry]).toBe(retained);
+  expect(Object.keys(current.entries)).toEqual(Object.keys(first.entries));
+  expect(current.heldDeliveries[delivery]!.text).toBe("peer revision");
+  expect(first.heldDeliveries[delivery]!.text).toBe(priorText);
+  expect({ enumerations, inserts }).toEqual({ enumerations: 0, inserts: 0 });
+});
 
 /**
  * Every view a caller still holds stays readable, so the cells one view costs
