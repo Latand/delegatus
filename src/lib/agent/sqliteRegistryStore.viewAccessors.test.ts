@@ -23,19 +23,20 @@ function census() {
   return { accessors: types.GetterSetter ?? 0, functions: types.Function ?? 0, scopes: types.JSLexicalEnvironment ?? 0 };
 }
 
-function fixture() {
+function fixture(onRowPayloadRead?: (collection: string, count: number) => void) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "registry-accessors-"));
   directories.push(directory);
   const dataset = buildRegistryPerformanceDataset(directory, scaledRegistryPerformanceShape(0.05));
-  const open = () => {
+  const open = (observe?: typeof onRowPayloadRead) => {
     const store = new SqliteAgentRegistryStore(dataset.filename, {
       normalize: normalizeRegistry,
       initialSnapshot: () => { throw new Error("the dataset must already exist"); },
+      onRowPayloadRead: observe,
     });
     stores.push(store);
     return store;
   };
-  const reader = open();
+  const reader = open(onRowPayloadRead);
   const writer = open();
   const first = reader.readOnlySnapshot().file;
   const receipt = dataset.grantSubjects.find(subject => subject.collection === "receipts")!.key;
@@ -44,6 +45,64 @@ function fixture() {
   expect(first.heldDeliveries[delivery]).toBeDefined();
   return { reader, writer, first, receipt, delivery, entry: dataset.activeEntryKeys[0]! };
 }
+
+test("removing the last archived entry evicts its hot source and row map", () => {
+  const { reader, first, entry } = fixture();
+  const cache = () => (reader as unknown as { coldViewCache: {
+    hotSources: Map<string, unknown>; collections: Map<string, unknown>;
+  } }).coldViewCache;
+  const peer = new Database(reader.filename);
+  try {
+    const archived = peer.query<{ row_key: string }, []>(
+      "SELECT row_key FROM registry_cold WHERE collection='entries' ORDER BY row_key").all();
+    expect(archived.length).toBeGreaterThan(1);
+    const last = archived[0]!.row_key;
+    peer.run(`DELETE FROM registry_rows WHERE collection='entries' AND row_key != ?
+      AND row_key IN (SELECT row_key FROM registry_cold WHERE collection='entries')`, [last]);
+    const layered = reader.readOnlySnapshot().file;
+    expect(layered.entries[last]).toEqual(first.entries[last]!);
+    expect(cache().hotSources.has("entries")).toBe(true);
+    expect(cache().collections.has("entries")).toBe(true);
+
+    expect(peer.query("DELETE FROM registry_rows WHERE collection='entries' AND row_key=? RETURNING row_key").get(last))
+      .toEqual({ row_key: last });
+    const current = reader.readOnlySnapshot().file;
+    expect(current.entries[last]).toBeUndefined();
+    expect(current.entries[entry]).toEqual(first.entries[entry]!);
+    expect(layered.entries[last]).toBeDefined();
+    expect(cache().hotSources.has("entries")).toBe(false);
+    expect(cache().collections.has("entries")).toBe(false);
+    expect(cache().hotSources.has("receipts")).toBe(true);
+  } finally { peer.close(); }
+});
+
+test("a peer commit during refresh leaves the held, in-flight and next snapshots at their own revisions", () => {
+  let commitDuringRead: (() => void) | undefined;
+  const { reader, writer, first, receipt, delivery } = fixture((collection, count) => {
+    if (!count || (collection !== "receipts" && collection !== "heldDeliveries")) return;
+    const commit = commitDuringRead;
+    commitDuringRead = undefined;
+    commit?.();
+  });
+  const values = (file: RegistryFile) => [file.receipts[receipt]!.clientAttemptId, file.heldDeliveries[delivery]!.text];
+  const initial = values(first);
+  const write = (value: string) => writer.mutate(file => {
+    file.receipts[receipt]!.clientAttemptId = value;
+    file.heldDeliveries[delivery]!.text = value;
+  }, false);
+  write("first commit");
+  const revision = writer.revision();
+  commitDuringRead = () => { write("second commit"); };
+  const inFlight = reader.readOnlySnapshot();
+  expect(commitDuringRead).toBeUndefined();
+  const next = reader.readOnlySnapshot();
+  expect(values(first)).toEqual(initial);
+  expect(values(inFlight.file)).toEqual(["first commit", "first commit"]);
+  expect(inFlight.revision).toBe(revision);
+  expect(values(next.file)).toEqual(["second commit", "second commit"]);
+  expect(next.revision).toBe(writer.revision());
+  expect(next.revision).toBeGreaterThan(revision);
+});
 
 test("a peer delivery commit leaves the immutable hot entry collection out of snapshot assembly", () => {
   const { reader, writer, first, delivery, entry } = fixture();
