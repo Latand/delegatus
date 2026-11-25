@@ -35,6 +35,10 @@ function readAlarms(registry: AgentRegistry): OrphanAlarmRecords {
   }
 }
 
+export function orphanedHostAlarmKeys(registry: AgentRegistry): string[] {
+  return Object.keys(readAlarms(registry));
+}
+
 /* Every read-modify-write of one alarm file runs in turn, so a recovery that
    closes a row's alarm and a startup scan that raises another never lose
    each other's record. A scan uses one turn and one file read for the whole
