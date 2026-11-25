@@ -5895,6 +5895,7 @@ function readLimitsChart() {
     estimated: chart?.querySelectorAll("[data-burndown-estimated]").length ?? 0,
     readout: readout?.textContent ?? null,
     readoutRects: rects,
+    readoutCovered: rects.some((r) => { const hit = document.elementFromPoint(r.x + r.w / 2, r.y + r.h / 2); return !hit || !dialog?.contains(hit); }),
     text: dialog?.textContent ?? "",
     contrast,
     triggerHeight: trigger(document.activeElement?.getAttribute("data-footer-chart") ?? null),
@@ -5918,6 +5919,9 @@ async function limitsChartMain(): Promise<void> {
       method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ dismissed: true }),
     });
     must(dismissed.ok, `dismissing the setup guide answered ${dismissed.status}`);
+    /* The telemetry notice sits where the footer's chart opens. */
+    const telemetry = await fetch(`${baseUrl}/api/telemetry`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ enabled: false, noticeDismissed: true }) });
+    must(telemetry.ok, `dismissing the telemetry notice answered ${telemetry.status}`);
     browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
     const desktop = [1440, 1360, 1280].flatMap((width) => (["en", "uk"] as const).flatMap((lang) => (["light", "dark"] as const).map((colorScheme) => ({ width, lang, colorScheme }))));
     const historyRequests: string[] = [];
@@ -5957,6 +5961,7 @@ async function limitsChartMain(): Promise<void> {
         must(open.known === account.known && open.estimated === account.estimated, `${tag}: ${open.known} solid and ${open.estimated} dashed spans, expected ${account.known} and ${account.estimated}`);
         must(!/No history yet|Історії ще немає/.test(open.text), `${tag}: the dialog says there is no history`);
         must(Boolean(open.readout), `${tag}: no readout`);
+        must(!open.readoutCovered, `${tag}: another element covers the readout`);
         must(open.contrast !== null && open.contrast >= 4.5, `${tag}: readout contrast ${open.contrast}`);
         must(open.pageOverflowX <= 0, `${tag}: the page overflows sideways by ${open.pageOverflowX}px`);
         if (open.dialog) {
