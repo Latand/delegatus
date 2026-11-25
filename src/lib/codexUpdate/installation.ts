@@ -61,19 +61,73 @@ export async function waitForCodexProcess(handle: number | { pid?: number }, tim
   }
 }
 
-export async function withCodexCliLaunch<T>(binary: string, operation: () => Promise<T>, observable?: (result: T) => Promise<void>): Promise<T> {
+function managedLaunchBinary(binary: string): string | undefined {
   if (binary === "codex") binary = findAgentBinary("codex") ?? binary;
   try { installedTarget(binary); }
   catch (error) {
-    if (error instanceof UnsupportedCodexInstallError || ["ENOENT", "EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return operation();
+    if (error instanceof UnsupportedCodexInstallError || ["ENOENT", "EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return undefined;
     throw new Error("Codex CLI install location could not be read safely", { cause: error });
   }
   fs.mkdirSync(updateDirectory(binary), { recursive: true, mode: 0o700 });
-  return withCliSwitch(binary, async () => {
+  return binary;
+}
+
+export async function withCodexCliLaunch<T>(binary: string, operation: () => Promise<T>, observable?: (result: T) => Promise<void>): Promise<T> {
+  const managed = managedLaunchBinary(binary);
+  if (!managed) return operation();
+  return withCliSwitch(managed, async () => {
     const result = await operation();
     await observable?.(result);
     return result;
   });
+}
+
+type JoinQuotaLaunch = <T>(operation: () => Promise<T>) => Promise<T>;
+const quotaLaunches = new Map<string, JoinQuotaLaunch>();
+
+function soleSwitchTicket(binary: string): string | undefined {
+  const queue = path.join(updateDirectory(binary), "switch.write-locks");
+  try {
+    const tickets = fs.readdirSync(queue).filter(name => name.endsWith(".json"));
+    if (tickets.length === 1) return path.join(queue, tickets[0]);
+  } catch { /* Fall back to normal file admission on an unreadable queue. */ }
+}
+
+/** Quota clients read the same installed version and initialize independent
+ * children. They may share our active ticket until any other ticket queues.
+ * Switches and launches from older releases still see the physical lock. */
+export async function withCodexQuotaLaunch<T>(binary: string, operation: () => Promise<T>): Promise<T> {
+  const managed = managedLaunchBinary(binary);
+  if (!managed) return operation();
+  const existing = quotaLaunches.size ? soleSwitchTicket(managed) : undefined;
+  const share = existing && quotaLaunches.get(existing);
+  if (share) return share(operation);
+
+  const first = Promise.withResolvers<T>();
+  const drained = Promise.withResolvers<void>();
+  let ticket: string | undefined, readers = 0;
+  const guard = withCliSwitch(managed, () => {
+    ticket = soleSwitchTicket(managed);
+    if (ticket) quotaLaunches.set(ticket, join);
+    first.resolve(join(operation));
+    return drained.promise;
+  });
+  void guard.catch(first.reject); // Includes a refusal before the first launch.
+  return first.promise;
+
+  async function join<R>(start: () => Promise<R>): Promise<R> {
+    readers++;
+    try {
+      // Start in admission order, after the physical guard promise is bound.
+      return await Promise.resolve().then(start);
+    } finally {
+      if (--readers === 0) {
+        if (ticket) quotaLaunches.delete(ticket);
+        drained.resolve();
+        await guard;
+      }
+    }
+  }
 }
 
 export function switchCli(binary: string, expected: string, target: string): void {

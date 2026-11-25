@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 
 import type { CodexAccount } from "./codex";
 import type { CodexAppServerClient as CodexAppServerClientType } from "./codexAppServer";
@@ -80,6 +80,86 @@ class FakeChild extends EventEmitter {
 function account(id: string, home: string): CodexAccount {
   return { id, label: id, kind: "managed", home, sessionsDir: home + "/sessions", authPresent: false, loginPane: null, createdAt: 0 };
 }
+
+test.skipIf(process.platform === "win32")("cold quota clients initialize together and give a queued CLI switch its turn", async () => {
+  const root = fs.mkdtempSync(path.join(RUNTIME_SANDBOX, "quota-launch-"));
+  const binary = path.join(root, "codex");
+  const target = (name: string) => path.join(root, name, "node_modules/@openai/codex/bin/codex.js");
+  for (const name of ["old", "new"]) {
+    fs.mkdirSync(path.dirname(target(name)), { recursive: true });
+    fs.writeFileSync(target(name), name);
+  }
+  fs.symlinkSync(target("old"), binary);
+  const next = path.join(root, "next");
+  fs.symlinkSync(target("new"), next);
+  const gates = new Map(["first", "second", "late"].map(id => [id, Promise.withResolvers<void>()]));
+  const started = new Map<string, string>();
+  const start = CodexAppServerClient.start.bind(CodexAppServerClient);
+  const clients = spyOn(CodexAppServerClient, "start").mockImplementation(options => {
+    const id = path.basename(options.home), child = new FakeChild();
+    child.authenticated = true;
+    const respond = child.onWrite.bind(child);
+    child.onWrite = msg => {
+      if (msg.method !== "initialize") return respond(msg);
+      started.set(id, fs.realpathSync(binary));
+      void gates.get(id)!.promise.then(() => {
+        if (id === "second") child.exit();
+        else respond(msg);
+      });
+    };
+    return start({ ...options, launchBinary: binary, readProtocolVersion: () => "0.162.1", spawn: () => child as never });
+  });
+  const runtime = fixtureRuntime();
+  const probe = (id: string) => runtime.probeQuota(account(id, path.join(root, id)));
+  const pending: Promise<unknown>[] = [];
+  const lock = path.join(root, ".delegatus-codex", "switch");
+  const queue = `${lock}.write-locks`;
+  const tickets = () => fs.readdirSync(queue).filter(name => name.endsWith(".json")).length;
+  async function until(condition: () => boolean) {
+    const deadline = Date.now() + 5_000;
+    while (!condition() && Date.now() < deadline) await Bun.sleep(5);
+    expect(condition()).toBe(true);
+  }
+  try {
+    const first = probe("first");
+    pending.push(first);
+    await until(() => started.has("first"));
+    const second = probe("second").then(() => "unexpected success", () => "failed");
+    pending.push(second);
+    await until(() => started.has("second") || tickets() > 1);
+    expect(started.get("second")).toBe(target("old"));
+    expect(tickets()).toBe(1);
+
+    // An independent writer uses the existing on-disk protocol.
+    const writer = Bun.spawn([process.execPath, "-e", `
+      import fs from "node:fs";
+      import { withFileTransaction } from ${JSON.stringify(path.resolve(import.meta.dir, "../state/fileTransaction.ts"))};
+      await withFileTransaction(process.argv[1], "fixture switch", () => fs.renameSync(process.argv[2], process.argv[3]));
+    `, lock, next, binary], { stdout: "ignore", stderr: "pipe" });
+    const switched = writer.exited;
+    pending.push(switched);
+    await until(() => tickets() === 2);
+    // The legacy queue sorts ticket names by millisecond, then process id.
+    await until(() => fs.readdirSync(queue).every(name => Number(name.split("-")[0]) < Date.now()));
+    const late = probe("late");
+    pending.push(late);
+    await until(() => tickets() === 3 || started.has("late"));
+    expect(started.has("late")).toBe(false);
+    gates.get("first")!.resolve();
+    expect((await first).authenticated).toBe(true);
+    expect(fs.realpathSync(binary)).toBe(target("old"));
+    gates.get("second")!.resolve();
+    expect(await second).toBe("failed");
+    expect(await switched).toBe(0);
+    gates.get("late")!.resolve();
+    expect((await late).rateLimits.primary?.usedPercent).toBe(7);
+    expect(started.get("late")).toBe(target("new"));
+  } finally {
+    for (const gate of gates.values()) gate.resolve();
+    await Promise.allSettled(pending);
+    clients.mockRestore();
+  }
+}, 15_000);
 
 test("ManagedCodexRuntime.record commits a completion behind a short foreign holder before returning", async () => {
   const dir = path.join(RUNTIME_SANDBOX, "foreign-completion");
