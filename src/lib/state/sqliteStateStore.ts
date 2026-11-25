@@ -599,6 +599,13 @@ const interruptionRecipientIndex = `CREATE INDEX IF NOT EXISTS state_rows_interr
   ON state_rows(collection, ${interruptionRecipientExpression}, row_key)
   WHERE collection GLOB 'interruption_obligations:*'`;
 
+// Membership includes raw project keys from these four collections. Keep large
+// JSON bodies out of the distinct-key scan after a collection revision changes.
+const projectKeyCollections: readonly string[] = ["tasks", "pipelines", "pipelines_archive", "flows"];
+const projectKeyScope = `collection IN (${projectKeyCollections.map(name => `'${name}'`).join(",")})`;
+const projectKeyText = "json_valid(value_json) AND json_type(value_json, '$.project') = 'text'";
+const projectKeyValue = "json_extract(value_json, '$.project')";
+
 const stateSchema = [
   // The source and its recipient index share the same SQLite transaction.
   `CREATE TABLE IF NOT EXISTS state_collections (
@@ -706,6 +713,8 @@ const stateSchema = [
   interruptionRecipientIndex,
   `CREATE INDEX IF NOT EXISTS state_rows_collection_order
     ON state_rows(collection, row_order)`,
+  `CREATE INDEX IF NOT EXISTS state_rows_project_membership
+    ON state_rows(collection, ${projectKeyValue}) WHERE ${projectKeyScope} AND ${projectKeyText}`,
   `CREATE INDEX IF NOT EXISTS state_rows_task_project
     ON state_rows(json_extract(value_json,'$.project'), row_key)
     WHERE collection='tasks' AND json_valid(value_json)`,
@@ -1740,7 +1749,7 @@ export function readStateCollectionRows(filename: string, collection: string): u
 /** Return project membership without decoding or materializing persisted rows. */
 export function readStateProjectKeys(
   filename: string,
-  collections: readonly string[] = ["tasks", "pipelines", "pipelines_archive", "flows"],
+  collections: readonly string[] = projectKeyCollections,
 ): string[] {
   if (!fs.existsSync(filename)) return [];
   if (collections.length === 0) return [];
@@ -1748,12 +1757,12 @@ export function readStateProjectKeys(
   try {
     const placeholders = collections.map(() => "?").join(", ");
     const bindings = [...collections] as [string, ...string[]];
+    // SQLite needs the literal partial-index predicate alongside the bound
+    // subset. A caller requesting other collections keeps the generic read.
+    const scope = collections.every(name => projectKeyCollections.includes(name)) ? `AND ${projectKeyScope}` : "";
     return db.query<{ project: string | null }, [string, ...string[]]>(`
-      SELECT DISTINCT json_extract(value_json, '$.project') AS project
-      FROM state_rows
-      WHERE collection IN (${placeholders})
-        AND json_valid(value_json)
-        AND json_type(value_json, '$.project') = 'text'
+      SELECT DISTINCT ${projectKeyValue} AS project FROM state_rows
+      WHERE collection IN (${placeholders}) ${scope} AND ${projectKeyText}
     `).all(...bindings).flatMap(row => row.project ? [row.project] : []);
   } catch (error) {
     if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return [];
