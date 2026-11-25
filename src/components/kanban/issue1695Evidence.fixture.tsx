@@ -4389,7 +4389,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (SCENARIO === "role-defaults" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => {
     const variants = ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS];
-    return { ...role, variants, promptPreview: role.promptScaffold, shipped: { config: role.config, variants } };
+    /* `agy=1`: the builder row is mapped to Antigravity on its longest listed model, so the table measures that engine's own labels. */
+    const config = role.id === "builder" && new URLSearchParams(location.search).has("agy") ? { engine: "antigravity", model: "gpt-oss-120b-medium", effort: "high" } : role.config;
+    return { ...role, config, variants, promptPreview: role.promptScaffold, shipped: { config: role.config, variants } };
   }) });
   /* A draft's stage configuration names the stage's own role in its select. */
   if (FROM_CONVERSATION && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, shipped: { config: role.config } })) });

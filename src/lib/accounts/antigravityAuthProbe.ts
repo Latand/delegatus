@@ -8,7 +8,7 @@ import { antigravityChildEnv } from "@/lib/runtime/antigravityAcpHost";
 import { signalDetachedProcessGroup } from "@/lib/processGroup";
 
 import { cliResolvable, type CliPresence } from "./engineConnection";
-import { isAntigravityAuthFailure, readAntigravityAuthState, recordAntigravityAuthState } from "./antigravity";
+import { antigravityDefaultHome, isAntigravityAuthFailure, readAntigravityAuthState, recordAntigravityAuthState } from "./antigravity";
 
 /**
  * A real ACP check of Antigravity's Google sign-in (the "Check sign-in" button).
@@ -23,7 +23,11 @@ import { isAntigravityAuthFailure, readAntigravityAuthState, recordAntigravityAu
  * - a timeout, a spawn failure or any other error proves nothing, so the
  *   recorded state is left as it was and the caller sees `unknown`.
  *
- * Credentials live in the host keyring, so `HOME` is not redirected.
+ * The child runs in the environment a launch uses: `HOME` is the default
+ * account's `native-home`, so `session/new` writes its native session state
+ * there and never into the operator's own `~/.gemini`. OAuth resolves
+ * host-wide under a redirected `HOME` (docs/design/antigravity-engine.md §3.6),
+ * so confining the probe changes no answer.
  */
 
 export type AntigravityProbeResult = {
@@ -58,7 +62,7 @@ async function runProbe(spawnProcess: AntigravityProbeSpawn, timeoutMs: number):
   let child: ChildProcessWithoutNullStreams | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
-    const env = antigravityChildEnv(process.env);
+    const env = antigravityChildEnv(process.env, antigravityDefaultHome());
     child = spawnProcess(resolveAntigravityBinary(), ["acp", "--disable-telemetry"], { cwd: scratch, env, detached: true });
     const proc = child;
     const pending = new Map<number, (outcome: RpcOutcome) => void>();

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 
-import { readAntigravityAuthState, recordAntigravityAuthState } from "./antigravity";
+import { antigravityDefaultHome, readAntigravityAuthState, recordAntigravityAuthState } from "./antigravity";
 import { probeAntigravityAuth, type AntigravityProbeSpawn } from "./antigravityAuthProbe";
 
 /*
@@ -37,11 +37,11 @@ afterEach(() => {
 });
 
 function stub(script: Script) {
-  const launches: { command: string; args: string[]; cwd: string | undefined }[] = [];
+  const launches: { command: string; args: string[]; cwd: string | undefined; home: string | undefined }[] = [];
   const requests: { method: string; params: Record<string, unknown> }[] = [];
   const kills: (NodeJS.Signals | number | undefined)[] = [];
   const spawnProcess: AntigravityProbeSpawn = (command, args, options) => {
-    launches.push({ command, args, cwd: options.cwd?.toString() });
+    launches.push({ command, args, cwd: options.cwd?.toString(), home: options.env?.HOME });
     const stdin = new PassThrough();
     const stdout = new PassThrough();
     const stderr = new PassThrough();
@@ -86,6 +86,15 @@ test("a session that opens means signed in, and the tier is recorded", async () 
   expect(readAntigravityAuthState()).toMatchObject({ authenticated: true, tierName: "Google AI Pro", tierId: "g1-pro-tier" });
   /* The child is stopped. */
   expect(agy.kills.length).toBeGreaterThan(0);
+});
+
+test("the probe runs with the account's native home, never the operator's own HOME", async () => {
+  const agy = stub(signedIn);
+  await probeAntigravityAuth({ spawnProcess: agy.spawnProcess });
+  const home = agy.launches[0]!.home;
+  expect(home).toBe(path.join(antigravityDefaultHome(), "native-home"));
+  expect(home).not.toBe(process.env.HOME);
+  expect(fs.existsSync(home!)).toBe(true);
 });
 
 test("the ACP auth-required error (-32000) records signed out and clears a stale tier", async () => {

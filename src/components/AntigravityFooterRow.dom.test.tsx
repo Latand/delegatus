@@ -72,10 +72,29 @@ test("a check made elsewhere (the setup guide) updates the row without a reload"
   expect(row.querySelector("[data-antigravity-state]")?.textContent).toBe("Connected · Google AI Ultra");
 });
 
-test("a machine that never had agy shows no row", async () => {
+test("a machine that never had agy shows Not installed, and the flyout carries the install command", async () => {
   recorded = { cli: "missing", auth: "unknown", plan: null };
   const host = await mount();
+  const row = host.querySelector("[data-engine-limits=antigravity]")!;
+  expect(row).not.toBeNull();
+  expect(row.querySelector("[data-antigravity-state]")?.textContent).toBe("Not installed");
+  await act(async () => { row.querySelector<HTMLButtonElement>("[data-meter-line]")!.click(); await settle(); });
+  expect(row.querySelector("[data-antigravity-panel] [data-onboarding-engine-header]")?.textContent).toBe("Not installed");
+  expect(row.querySelector("[data-antigravity-panel] code")?.textContent).toBe("curl -fsSL https://antigravity.google/cli/install.sh | bash");
+});
+
+test("a server that has not answered about agy shows no row", async () => {
+  dom.setRoute((url) => (url.includes("/api/accounts/antigravity") ? jsonResponse({}, 500) : undefined));
+  const host = await mount();
   expect(host.querySelector("[data-engine-limits=antigravity]")).toBeNull();
+  dom.setRoute((url, init) => {
+    if (!url.includes("/api/accounts/antigravity")) return undefined;
+    if (init?.method === "POST") {
+      recorded = { cli: "found", auth: "signed_in", plan: "Google AI Pro" };
+      return jsonResponse({ ...body(recorded), probe: { inconclusive: false } });
+    }
+    return jsonResponse(body(recorded));
+  });
 });
 
 test("a missing agy with a recorded sign-in still shows the row, with how to install it", async () => {
@@ -86,11 +105,25 @@ test("a missing agy with a recorded sign-in still shows the row, with how to ins
   expect(row.querySelector("[data-antigravity-panel] code")?.textContent).toBe("curl -fsSL https://antigravity.google/cli/install.sh | bash");
 });
 
-test("Escape closes the flyout", async () => {
+test("Escape closes the flyout opened by a click while focus is on the row button, and keeps focus there", async () => {
   const host = await mount();
   const row = host.querySelector("[data-engine-limits=antigravity]")!;
-  await act(async () => { row.querySelector<HTMLButtonElement>("[data-meter-line]")!.click(); await settle(); });
-  const panel = row.querySelector("[data-antigravity-panel]")!;
-  await act(async () => { panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  const button = row.querySelector<HTMLButtonElement>("[data-meter-line]")!;
+  await act(async () => { button.focus(); button.click(); await settle(); });
+  expect(row.querySelector("[data-antigravity-panel]")).not.toBeNull();
+  expect(document.activeElement).toBe(button);
+  await act(async () => { button.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
   expect(row.querySelector("[data-antigravity-panel]")).toBeNull();
+  expect(document.activeElement).toBe(button);
+});
+
+test("Escape from inside the flyout closes it and returns focus to the row button", async () => {
+  const host = await mount();
+  const row = host.querySelector("[data-engine-limits=antigravity]")!;
+  const button = row.querySelector<HTMLButtonElement>("[data-meter-line]")!;
+  await act(async () => { button.click(); await settle(); });
+  const check = row.querySelector<HTMLButtonElement>("[data-antigravity-check]")!;
+  await act(async () => { check.focus(); check.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  expect(row.querySelector("[data-antigravity-panel]")).toBeNull();
+  expect(document.activeElement).toBe(button);
 });

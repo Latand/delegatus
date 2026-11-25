@@ -1780,8 +1780,8 @@ export function MobileAccountsPanel({ receipts, project }: { receipts?: ReceiptS
     return onAccountPanelRequest((request) => setFocus(request.accountId));
   }, []);
   const antigravity = useAntigravityAccount();
-  /* Antigravity has no account store: its one host sign-in and the check that reads it. Shown once `agy` is installed or its sign-in recorded. */
-  const antigravityShown = antigravity.cli === "found" || antigravity.auth !== "unknown";
+  /* Antigravity has no account store: its one host sign-in and the check that reads it. Shown once the server has answered, so a machine without `agy` reads "Not installed" with the install command. */
+  const antigravityShown = antigravity.cli !== null;
   return (
     <>
       <ProjectAwareMobileAccountsBody engines={[claude, codex]} now={now} project={project} focusAccountId={focus} receipts={receipts} />

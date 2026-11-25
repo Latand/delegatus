@@ -52,8 +52,11 @@ test("a signed-in agy reads connected with its tier", async () => {
   expect(host.querySelector("[data-mobile2-accounts-engine=antigravity] [data-onboarding-engine-header]")?.textContent).toBe("Connected · Google AI Pro");
 });
 
-test("a machine that never had agy shows no Antigravity section", async () => {
+test("a machine that never had agy gets a Not installed section with the install command", async () => {
   agy = { cli: "missing", auth: "unknown", plan: null };
   const host = await mount();
-  expect(host.querySelector("[data-mobile2-accounts-engine=antigravity]")).toBeNull();
+  const section = host.querySelector("[data-mobile2-accounts-engine=antigravity]")!;
+  expect(section).not.toBeNull();
+  expect(section.querySelector("[data-onboarding-engine-header]")?.textContent).toBe("Not installed");
+  expect(section.querySelector("code")?.textContent).toBe("curl -fsSL https://antigravity.google/cli/install.sh | bash");
 });

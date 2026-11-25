@@ -5057,8 +5057,8 @@ describe("shipped role defaults rendered evidence", () => {
     const browser = await chromium.launch(LAUNCH);
     const cases: Record<string, unknown>[] = [];
     try {
-      /* 700 and 660 are the two sides of the table's own floor (the fixture pads the table by 24 px a side). */
-      for (const locale of ["en", "uk"] as const) for (const width of [1280, 1024, 700, 660, 390]) {
+      /* 740 and 700 are the two sides of the table's own floor, 668 px (the fixture pads the table by 24 px a side). */
+      for (const locale of ["en", "uk"] as const) for (const width of [1280, 1024, 740, 700, 660, 390]) {
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=role-defaults&mapping=1`, { width, height: 844 }, "light", locale, "reduce", width === 390);
         try {
           await page.locator('[data-mapping-row="reviewer"]').waitFor();
@@ -5104,7 +5104,7 @@ describe("shipped role defaults rendered evidence", () => {
              select (the table), a visible and spoken state on a not-ready engine (the card), and no model name
              cut by the select's arrow. */
           const layout = await page.locator("[data-agent-mapping]").getAttribute("data-mapping-layout");
-          expect(layout).toBe(width >= 700 ? "table" : "card");
+          expect(layout).toBe(width >= 740 ? "table" : "card");
           const geometry = await page.evaluate(() => {
             const ARROW = 24;
             const canvas = document.createElement("canvas").getContext("2d")!;
@@ -5118,6 +5118,8 @@ describe("shipped role defaults rendered evidence", () => {
               canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
               const label = select.selectedOptions[0]?.textContent ?? "";
               const room = select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - ARROW;
+              /* The room left by the widest label this select offers, not only the one it shows. */
+              const widest = Math.max(...Array.from(select.options).map((option) => canvas.measureText(option.textContent ?? "").width));
               const agy = row.querySelector<HTMLElement>("[data-engine-segment=antigravity]")!;
               return {
                 id: row.dataset.mappingRow!,
@@ -5126,6 +5128,7 @@ describe("shipped role defaults rendered evidence", () => {
                 segmentsInside: Array.from(group.querySelectorAll("button")).every((button) => button.getBoundingClientRect().right <= box.right + 0.5),
                 label,
                 labelRoom: Math.round((room - canvas.measureText(label).width) * 10) / 10,
+                optionRoom: Math.round((room - widest) * 10) / 10,
                 agyLabel: agy.getAttribute("aria-label"),
                 agyDot: agy.querySelector("[data-engine-state-dot]") !== null,
               };
@@ -5138,6 +5141,7 @@ describe("shipped role defaults rendered evidence", () => {
               expect(row.segmentsInside).toBe(true);
               expect(row.selectClear).toBeGreaterThanOrEqual(0);
               expect(row.labelRoom).toBeGreaterThanOrEqual(0);
+              expect(row.optionRoom).toBeGreaterThanOrEqual(0);
             }
             /* The visual critic is locked to Claude: its other segments say so instead. */
             expect(row.agyLabel).toBe(row.id === "visual-critic" ? translate(locale, "onboarding.agents.engineLocked", { role: translate(locale, "onboarding.agents.role.visualCritic"), engine: "Claude" }) : notReady);
@@ -5149,6 +5153,46 @@ describe("shipped role defaults rendered evidence", () => {
       }
       fs.mkdirSync("evidence/role-defaults", { recursive: true });
       fs.writeFileSync("evidence/role-defaults/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
+
+  browserTest("an Antigravity row on its longest model keeps every label clear of the select's arrow", async () => {
+    const out = path.resolve(".artifacts/role-defaults-agy");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1280, 1024, 740, 700]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=role-defaults&mapping=1&agy=1`, { width, height: 844 }, "light", locale, "reduce", false);
+        try {
+          const row = page.locator('[data-mapping-row="builder"]');
+          await row.waitFor();
+          expect(await page.locator("[data-agent-mapping]").getAttribute("data-mapping-layout")).toBe(width >= 740 ? "table" : "card");
+          expect(await row.locator("[data-engine-segment=antigravity]").getAttribute("aria-checked")).toBe("true");
+          const reading = await row.evaluate((node) => {
+            const ARROW = 24;
+            const select = node.querySelector<HTMLSelectElement>("select")!;
+            const style = getComputedStyle(select);
+            const canvas = document.createElement("canvas").getContext("2d")!;
+            canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+            const room = select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - ARROW;
+            return {
+              selected: select.selectedOptions[0]?.textContent ?? "",
+              selectWidth: select.getBoundingClientRect().width,
+              labels: Array.from(select.options).map((option) => ({ label: option.textContent ?? "", room: Math.round((room - canvas.measureText(option.textContent ?? "").width) * 10) / 10 })),
+            };
+          });
+          expect(reading.selected).toBe("GPT-OSS 120B (Medium)");
+          expect(reading.labels.length).toBeGreaterThanOrEqual(9);
+          for (const entry of reading.labels) expect(entry.room).toBeGreaterThanOrEqual(0);
+          expect(pageErrors).toEqual([]);
+          await row.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-agy-row.png`) });
+          cases.push({ locale, width, ...reading, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync("evidence/role-defaults/agy-rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 240_000);
 });

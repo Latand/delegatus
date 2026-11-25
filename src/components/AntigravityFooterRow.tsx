@@ -19,9 +19,9 @@ import { engineTintOf } from "./utils";
  * Antigravity exposes quota state when a 5-hour window is exhausted (`RESOURCE_EXHAUSTED`).
  * The quota line appears when an active session quota reading is present and disappears
  * cleanly once the reset window elapses. The row itself also shows while `agy` is installed
- * or its sign-in has been recorded, and opens the sign-in card in a flyout (the account
- * settings this engine had no entry in). A machine that never had `agy` shows nothing,
- * as Copilot's row does.
+ * or not (once the server has answered), and opens the sign-in card in a flyout (the account
+ * settings this engine had no entry in). A machine without `agy` reads "Not installed" and
+ * the flyout carries the install command, so the operator can find how to get this engine.
  */
 export function AntigravityFooterRow({ limits, limitsAccountId, now, provenance, density }: {
   density: SidebarFooterDensity;
@@ -34,6 +34,7 @@ export function AntigravityFooterRow({ limits, limitsAccountId, now, provenance,
   const agy = useAntigravityAccount();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const rowButtonRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const [maxHeight, setMaxHeight] = useState<number | null>(null);
   /* Bounded by the room above the row, as the other flyouts are. */
@@ -52,15 +53,25 @@ export function AntigravityFooterRow({ limits, limitsAccountId, now, provenance,
     const onDown = (event: PointerEvent) => {
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) setOpen(false);
     };
+    /* Focus stays on the row button after a click, outside the panel, so Escape is read on the window. */
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      rowButtonRef.current?.focus();
+    };
     window.addEventListener("pointerdown", onDown);
-    return () => window.removeEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
   }, [open]);
 
   const session = limits?.session ?? null;
   const quota = !!session && !!limitsAccountId && isAntigravitySessionWindowActive(session, now);
   const state = antigravityCardState(agy);
-  const known = agy.cli === "found" || agy.auth !== "unknown";
-  if (!quota && !known) return null;
+  /* The server has answered about `agy` (installed or not): the row names that state. */
+  if (!quota && agy.cli === null) return null;
 
   const tint = engineTintOf("antigravity");
   const left = quota && session ? Math.max(0, Math.min(100, 100 - session.usedPercent)) : null;
@@ -76,6 +87,7 @@ export function AntigravityFooterRow({ limits, limitsAccountId, now, provenance,
   return (
     <div ref={containerRef} className="relative" data-engine-limits="antigravity" data-limits-source={provenance?.source ?? "transcript"}>
       <button
+        ref={rowButtonRef}
         type="button"
         data-meter-line=""
         aria-expanded={open}
@@ -123,7 +135,6 @@ export function AntigravityFooterRow({ limits, limitsAccountId, now, provenance,
           aria-label="Antigravity"
           data-antigravity-panel=""
           style={maxHeight === null ? undefined : { maxHeight }}
-          onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }}
           className={`absolute bottom-1 left-full ml-2 ${Z.modal} flex w-[min(360px,calc(100vw-264px))] flex-col gap-2 overflow-y-auto overscroll-contain rounded-[14px] border border-border bg-card px-3.5 py-2.5 text-[11.5px] shadow-2 [&>*]:shrink-0`}
         >
           <AntigravityBody agy={agy} />

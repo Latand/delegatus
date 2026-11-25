@@ -1125,8 +1125,9 @@ function healthAnswer(state: HealthState): unknown {
 /* BOARD_CAPTURE_CASE=agy-accounts: Antigravity's sign-in where it lives in the
    account settings, outside the setup guide. The sidebar footer's flyout at
    1440, 1024 and 820 and the phone's accounts screen at 390, with a stub `agy`
-   missing (after a recorded sign-in, which is what makes the row appear),
-   signed out and signed in with a tier. The flyout and the screen stay inside
+   missing (no sign-in ever recorded: the operator's own machine, where the
+   surface still says Not installed and shows the install command), signed out
+   and signed in with a tier. The flyout and the screen stay inside
    the viewport, nothing scrolls sideways, no state line is cut, and the sign-in
    check's button is a 44 px target on the phone. */
 type AgyAccountState = "missing" | "signed-out" | "signed-in";
@@ -1139,15 +1140,13 @@ async function captureAgyAccounts(ctx: { baseUrl: string; browser: Browser; rese
     { width: 820, height: 768, tag: "desktop-820", phone: false },
     { width: 390, height: 844, tag: "phone-390", phone: true },
   ];
-  /* The record the app shows is the last observation: signed in first, so a
-     missing command still has a row to show. */
+  /* The record the app shows is the last observation. A missing command has
+     none: the frame is a machine that never had `agy`. */
   const settle = async (state: AgyAccountState): Promise<void> => {
     fs.rmSync(agyRecord, { force: true });
-    if (state === "missing") fakeAgy("signed-in");
-    else fakeAgy(state);
+    fakeAgy(state);
     await fetch(`${baseUrl}/api/accounts/cli`);
-    await fetch(`${baseUrl}/api/accounts/antigravity`, { method: "POST", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ action: "probe" }) });
-    if (state === "missing") { fakeAgy("missing"); await fetch(`${baseUrl}/api/accounts/cli`); }
+    if (state !== "missing") await fetch(`${baseUrl}/api/accounts/antigravity`, { method: "POST", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ action: "probe" }) });
   };
   /* AGY_CAPTURE_VIEWPORTS=phone-390,desktop-820 reruns only those. */
   const only = process.env.AGY_CAPTURE_VIEWPORTS?.split(",").map((tag) => tag.trim()).filter(Boolean);
@@ -1226,10 +1225,15 @@ async function captureAgyAccounts(ctx: { baseUrl: string; browser: Browser; rese
         must(!reading.footerNameCut, `${tag} ${state}: the sidebar row's engine name is cut`);
         must(reading.cut.length === 0, `${tag} ${state}: cut state text ${JSON.stringify(reading.cut)}`);
         must(reading.small.length === 0, `${tag} ${state}: targets under 44px: ${reading.small.join("; ")}`);
+        if (state === "missing") must(reading.text.includes(translate(locale, "onboarding.engines.missing")), `${tag}: the missing surface reads ${reading.text}`);
         if (state === "missing") must(reading.installCommand === ANTIGRAVITY_INSTALL_COMMAND.command, `${tag}: the missing surface shows ${reading.installCommand} as its install command`);
         if (state === "signed-out") must(reading.check === translate(locale, "onboarding.engines.checkSignin"), `${tag}: the signed-out surface offers ${reading.check}`);
         if (state === "signed-in") must(reading.text.includes("Google AI Pro"), `${tag}: the signed-in surface does not show the tier: ${reading.text}`);
-        if (!viewport.phone) await page.keyboard.press("Escape");
+        if (!viewport.phone) {
+          await page.keyboard.press("Escape");
+          must((await page.locator("[data-antigravity-panel]").count()) === 0, `${tag} ${state}: Escape left the flyout open`);
+          must(await page.evaluate(() => document.activeElement?.closest('[data-engine-limits="antigravity"]') !== null), `${tag} ${state}: focus did not return to the Antigravity row`);
+        }
       }
     } catch (error) {
       await page.screenshot({ path: path.join(OUT_DIR, `${tag}-error.png`) }).catch(() => {});

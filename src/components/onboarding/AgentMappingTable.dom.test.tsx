@@ -81,6 +81,16 @@ test("an Antigravity that is not connected shows a state dot and a label that sa
   expect(segment(host, "builder", "claude").querySelector("[data-engine-state-dot]")).toBeNull();
 });
 
+test("missing and signed-out engines carry one and the same mark, so colour alone never tells them apart", async () => {
+  const host = await mount({ claude: ready, codex: { connected: false, missing: true, account: null }, antigravity: { connected: false, account: null } });
+  const missing = segment(host, "builder", "codex").querySelector("[data-engine-state-dot]")!;
+  const signedOut = segment(host, "builder", "antigravity").querySelector("[data-engine-state-dot]")!;
+  expect(missing.className).toBe(signedOut.className);
+  /* The words that tell them apart ride on the labels. */
+  expect(segment(host, "builder", "codex").getAttribute("aria-label")).toBe("Codex is not installed");
+  expect(segment(host, "builder", "antigravity").getAttribute("aria-label")).toBe("Antigravity is not connected");
+});
+
 test("a missing engine reads not installed on its card segment too", async () => {
   const host = await mount({ claude: ready, codex: { connected: false, missing: true, account: null }, antigravity: ready }, "card");
   const codex = segment(host, "builder", "codex");

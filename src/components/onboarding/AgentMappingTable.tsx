@@ -42,12 +42,13 @@ const ENGINE_NAME: Record<RoleEngine, string> = { claude: "Claude", codex: "Code
 /* One track list for the head and every row. The model column stops at 220 px
    and the role column takes what is left, so the standalone surface (no step
    rail) widens the names instead of stretching one select. Its floor holds the
-   longest Claude and Codex model label beside the select's own arrow. */
-const TABLE_GRID = "grid-cols-[minmax(176px,1fr)_100px_minmax(160px,220px)_104px_104px]";
+   longest model label of all three engines ("GPT-OSS 120B (Medium)", 142 px at
+   the select's font) beside the select's own arrow. */
+const TABLE_GRID = "grid-cols-[minmax(176px,1fr)_100px_minmax(184px,220px)_104px_104px]";
 
-/* The tracks' smallest sum (176 + 100 + 160 + 104 + 104). Narrower than this the
+/* The tracks' smallest sum (176 + 100 + 184 + 104 + 104). Narrower than this the
    table has nowhere to put the model select, so the rows take the card layout. */
-const TABLE_MIN = 644;
+const TABLE_MIN = 668;
 
 function blockedText(t: TFunction, engine: RoleEngine, status: EngineStatus): string {
   return t(status.missing ? "onboarding.agents.blockedMissing" : "onboarding.agents.blocked", { engine: ENGINE_NAME[engine] });
@@ -281,7 +282,7 @@ function EngineSegments({ value, label, locked, statuses, compact, onChange }: {
           >
             <EngineMark engine={engine} size={compact ? 14 : 12} />
             {compact ? null : ENGINE_NAME[engine]}
-            {!ready ? <span aria-hidden data-engine-state-dot={engine} className={`absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full ${statuses[engine].missing ? "bg-danger" : "bg-warning"}`} /> : null}
+            {!ready ? <span aria-hidden data-engine-state-dot={engine} className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-warning" /> : null}
           </button>
         );
       })}
