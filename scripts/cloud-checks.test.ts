@@ -789,7 +789,8 @@ for (const selection of ["default", "cloud", "local"]) for (const failure of [fa
   const fixture = createHookFixture(process.cwd(), roots);
   try {
     writeFileSync(path.join(fixture.dir, "example.ts"), "export const value = 2;\n");
-    fixture.git("commit", "-am", "Candidate");
+    fixture.git("add", "example.ts");
+    fixture.git("commit", "-m", "Candidate");
     // This routing fixture records check commands; native admission has its own suites.
     // Its caller already owns the test run's gate and lifetime.
     const routing = path.join(fixture.dir, ".git", "routing-shims");
