@@ -225,6 +225,8 @@ export const withoutRunnerLines = (text: string) => text.split("\n").filter(line
 export const normalizeRunnerOutput = (text: string) => withoutRunnerLines(text)
   .replace(/\[[\d.]+m?s\]/g, "[t]")
   .replace(/^bun test v.*$/m, "")
-  .replace(/^gate-slot: Waiting for the CPU queue.*\n/gm, "")
+  // Admission progress (CPU queue, heavy slots, a legacy drain, pressure)
+  // depends on what else the host runs at that moment, never on the command.
+  .replace(/^gate-slot: Waiting for .*\r?(?:\n|$)/gm, "")
   .replace(/^gate-slot: delegatus-gate-.*pids\.peak=.*\n?/gm, "")
   .replace(/^gate-slot: (?:waiting for CPU admission queue SQLite lock \(deadline \d+ ms\)|CPU admission queue lock acquired after \d+ ms)\r?$\n?/gm, "");

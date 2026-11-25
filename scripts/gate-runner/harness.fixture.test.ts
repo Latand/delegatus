@@ -25,6 +25,22 @@ test("runner parity ignores queue timings emitted by admission and preserves its
   expect(normalizeRunnerOutput(lines.join("\n") + "\n" + failure.message + "\n")).toBe(failure.message + "\n");
 });
 
+test("runner parity ignores every admission progress line and keeps other gate-slot reports", () => {
+  const progress = [
+    "gate-slot: Waiting for the CPU queue · 2nd · waited 1 min · normal priority",
+    "gate-slot: Waiting for a heavy command slot · all 6 busy · waited 0 min",
+    "gate-slot: Waiting for legacy heavy commands to drain · waited 10 min",
+    "gate-slot: Waiting for measured CPU pressure to stay below 20% for 0 s · 1st in CPU queue · waited 0 min",
+  ];
+  for (const line of progress) {
+    expect(normalizeRunnerOutput(`${line}\napplication output\n`)).toBe("application output\n");
+    expect(normalizeRunnerOutput(`application output\n${line}`)).toBe("application output\n");
+  }
+  const refusal = "gate-slot: no verdict: legacy heavy-command ownership is unverified; retry after the older gate drains or upgrade its wrapper. This check did not start.";
+  expect(normalizeRunnerOutput(`${refusal}\n`)).toBe(`${refusal}\n`);
+  expect(normalizeRunnerOutput("application output: Waiting for the CPU queue\n")).toBe("application output: Waiting for the CPU queue\n");
+});
+
 test("SSH double records and refuses arbitrary shell text, including metacharacters around a known verb", () => {
   const h = makeHarness();
   try {
