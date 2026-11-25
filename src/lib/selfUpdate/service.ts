@@ -1,4 +1,6 @@
-import { registerDiskPressureSweep } from "@/lib/state/diskPressureSweeps";
+import { registerCleanerReleaseSweep, registerDiskPressureSweep } from "@/lib/state/diskPressureSweeps";
+import type { CleanerSlice } from "@/lib/cleaner/diskJournal";
+import { diskCleanerAllowed } from "@/lib/cleaner/diskState";
 import { checkoutAdmission } from "./deploymentAdmission";
 import { resolveTrackedRevision } from "./git";
 import { prepareLauncherCredentials, releaseLauncherCredentials } from "../../../bin/launcher-credentials.mjs";
@@ -23,7 +25,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { realExec } from "@/lib/workflows/provision";
 
 import { cancelUntakenRequest, DIALOG_WRITER, readAuto, requestAutoRestart, restorePointer, writeAuto, type AutoState, type AutoView, type AutoWriter } from "./auto";
-import { type RetentionInputs } from "./retention";
+import { type RetentionInputs, type RetentionReport } from "./retention";
 import { runRetentionPass } from "./retentionPass";
 import { activeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS, DRAIN_START_WINDOW_MS, releaseDrain, writeDrain } from "./drain";
 import { GreenReader, type GreenVerdict } from "./green";
@@ -208,6 +210,7 @@ export class SelfUpdateService {
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private retaining = false;
   private stopPressureSweep?: () => void;
+  private stopCleanerSweep?: () => void;
   private retentionChecking = false;
   private retentionAbort: AbortController | null = null;
   private runner: RunnerPort | null = null;
@@ -306,6 +309,7 @@ export class SelfUpdateService {
   /** Called only by the release-owning web process after its fence is active. */
   startAuto(): void {
     this.stopPressureSweep ??= registerDiskPressureSweep("releases", () => { void this.retentionTick(); });
+    this.stopCleanerSweep ??= registerCleanerReleaseSweep(id => this.retainForCleaner(id));
     if (this.autoTimer) return;
     // Restore durable custody before startup hands pending stages or seats to
     // their controllers, even when future automatic updates are switched off.
@@ -854,15 +858,23 @@ export class SelfUpdateService {
     await this.retain(record, rollback);
   }
 
-  private async retain(record: LauncherRecord, rollback: string | null = null): Promise<void> {
+  private async retainForCleaner(id: string): Promise<CleanerSlice> {
+    const decision = await this.deps.mode();
+    if (this.stopped || !diskCleanerAllowed(id) || decision.mode !== "checkout" || !decision.record) return { kept: [], errors: 0 };
+    const report = await this.retain(decision.record, null, id);
+    if (!report) return { kept: [{ path: decision.record.releasesDir, bytes: 0, reason: "release owner is busy" }], errors: 0 };
+    return { kept: report.kept.map(row => ({ path: row.dir, bytes: row.bytes, reason: row.reason })), errors: report.errors.length };
+  }
+
+  private async retain(record: LauncherRecord, rollback: string | null = null, cleanerId?: string): Promise<RetentionReport | null> {
     if (this.retaining || this.runner?.state.state === "running" || this.pendingRestart || this.auto.pending || this.auto.managedPending
       || this.deploying || managedActive(this.managed)
-      || ["building", "ready", "switching"].includes(this.apply.current?.state ?? "")) return;
-    if (existsSync(record.requestFile)) return;
+      || ["building", "ready", "switching"].includes(this.apply.current?.state ?? "")) return null;
+    if (existsSync(record.requestFile)) return null;
     this.retaining = true;
     const abort = this.retentionAbort = new AbortController();
-    const current = () => {
-      if (this.stopped) throw new Error("retention owner stopped");
+    const current = async () => {
+      if (this.stopped || cleanerId && !diskCleanerAllowed(cleanerId)) throw new Error("retention owner stopped");
       const file = this.deps.env[LAUNCHER_RECORD_ENV]?.trim() || launcherControlFile(record.requestFile, "launcher");
       const owner = readLauncherRecord(file);
       if (!owner) throw new Error("cannot read launcher record for retention");
@@ -875,22 +887,26 @@ export class SelfUpdateService {
           ...(intent && ["building", "ready", "switching", "failed"].includes(intent.state) ? [releaseDirFor(record.releasesDir, intent.target)] : []),
         ],
       };
-      return { record: owner ?? record, inputs };
+      const { readReleasePipelineClaims } = await import("./retention");
+      const pipelineClaims = await readReleasePipelineClaims();
+      return { record: owner ?? record, inputs, pipelineClaims };
     };
     try {
       if (this.deps.prune) await this.deps.prune(record, rollback);
       // The owner's hold fence: while `retaining` is set, reserve() refuses
       // every build, apply, restart and pointer change, and the automatic
       // rollback capture waits on active(), so no hold lands during the pass.
-      else await runRetentionPass(record, current().inputs, { env: this.deps.env, signal: abort.signal,
+      else return await runRetentionPass(record, (await current()).inputs, { env: this.deps.env, signal: abort.signal, cleanerId,
         reportFile: join(this.deps.dir, "retention.json"), current,
         fence: () => this.retaining && this.retentionAbort === abort && !abort.signal.aborted && !this.stopped });
     } catch (error) {
+      if (cleanerId) throw error;
       const message = error instanceof Error ? error.message : String(error);
       try { writeJsonDurably(join(this.deps.dir, "retention.json"), { at: new Date(this.deps.now()).toISOString(), removed: [], reclaimedCacheBytes: 0, kept: [], errors: [message] }); }
       catch (error) { console.error("[self-update] cannot write retention report", error instanceof Error ? error.message : String(error)); }
       console.error("[self-update] release cleanup failed", message);
     } finally { this.retaining = false; this.retentionAbort = null; }
+    return null;
   }
 
   private finishManagedAuto(snapshot?: Snapshot): void {
@@ -2521,6 +2537,7 @@ export class SelfUpdateService {
 
   stop(): void {
     this.stopPressureSweep?.(); this.stopPressureSweep = undefined;
+    this.stopCleanerSweep?.(); this.stopCleanerSweep = undefined;
     this.stopped = true;
     this.retentionAbort?.abort();
     if (this.comparisonRefreshTimer) clearTimeout(this.comparisonRefreshTimer);

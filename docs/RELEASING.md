@@ -208,7 +208,8 @@ chooses «Випустити й більше не питати» or turns the ch
    in `Release-Cut: <full-sha>`; older tags without that field use the tag commit.
    Pick minor for additions/changes, patch for
    fixes/security. Breaking changes require an operator decision. Bump
-   `package.json` and open the release PR.
+   `package.json` and open the release PR with a `Release-Cut: <full-cut-sha>`
+   line in its body.
 3. Build and run `scripts/capture-readme-media.ts` under isolated state through
    `scripts/gate-slot.sh`. Commit the eight vectors and their provenance. Have
    the pictures checked visually, then have the complete release reviewed.
@@ -256,13 +257,26 @@ latest stable release tag and no live release owns the version bump. The seat
 can see it in `seat_tick_settings`. The controller holds new release requests
 until the version and tag agree.
 
-If main is ahead, find the merged release PR, its recorded production cut and
-its integrated commit. Resume publication for that same version from step 4
-with the usual release checks and approval. If the evidence cannot be
-recovered, or the version bump was unintended, bring a release-metadata
-correction through the normal review and merge queue to restore the tagged
-version on main. If main is behind the latest tag, reconcile the version on
-main with the immutable release through the same queue.
+If main is ahead, the controller can resume publication from step 4 for the
+same version and frozen production cut. When GitHub records a release PR as
+merged and the preparation has no local merge receipt, the controller binds
+the PR to the preparation's delivery branch, including a completed fix-only
+successor that took ownership. It checks the cut in the PR body against the
+saved release run and compares both the saved reviewed head and forge-reported
+head against one range ending at that PR's integration commit. A squash is
+bound to its first parent; a rebase range is bound to the reviewed first-parent
+commit count. A watcher receipt for a PR merged outside the engine triggers
+this content proof during live handoff and again at publisher admission. The
+engine's own merge handoff remains valid. When several merged PRs share the release title,
+the controller recovers only the unique PR that matches the preparation, cut
+and content. The publish-only review and the usual release checks and approval
+still apply. The seat can also resume from step 4 after verifying the merged
+PR, frozen cut and integrated commit.
+
+If the evidence cannot be recovered, or the version bump was unintended,
+bring a release-metadata correction through the normal review and merge queue
+to restore the tagged version on main. If main is behind the latest tag,
+reconcile the version on main with the immutable release through the same queue.
 
 Never retag, delete the tag or publish a version again. A failed publish can be
 recovered by dispatching `publish.yml` with the existing immutable tag; it skips

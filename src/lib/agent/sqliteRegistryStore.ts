@@ -5986,7 +5986,9 @@ export class SqliteAgentRegistryStore {
     return { result, file: null, revision };
   }
 
-  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { operationName?: string; noWait?: boolean; spawnMarkerRepair?: SpawnMarkerRepair } = {}): SqliteRegistryMutation<T> {
+  mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: {
+    operationName?: string; noWait?: boolean; skipColdKeyInitialization?: boolean; spawnMarkerRepair?: SpawnMarkerRepair;
+  } = {}): SqliteRegistryMutation<T> {
     if (options.spawnMarkerRepair && (!this.writerHeld || this.mutationBatch)) {
       throw new Error("spawn marker settlement needs its own admitted writer");
     }
@@ -6006,7 +6008,10 @@ export class SqliteAgentRegistryStore {
       let result: T;
       try {
         if (pessimistic && !writerHeld) this.noteWriterWait(performance.now() - waitStartedAt, operationName, options.noWait);
-        current = this.loadLazyInTransaction();
+        // A keyed sweep already selected its candidates. Read each payload
+        // directly from the admitted revision without refreshing the archive
+        // index or filling the hot cache with historical rows.
+        current = this.loadLazyInTransaction(true, !options.skipColdKeyInitialization, false, options.skipColdKeyInitialization);
         result = operation(current.file);
         changes = current.changes();
         if (!pessimistic) this.db.exec("COMMIT");
@@ -7367,6 +7372,11 @@ export class SqliteAgentRegistryStore {
       `).run(collection, key, valueJson, order);
       return;
     }
+    // Existing rows, including the compatibility copy of archived rows,
+    // retain their position. Their update triggers promote cold payloads.
+    // Skip the archive and ordering lookups on this common write path.
+    if (this.db.query("UPDATE registry_rows SET value_json=? WHERE collection=? AND row_key=?")
+      .run(valueJson, collection, key).changes) return;
     /* The next position comes from the two order indexes. Aggregating over
        registry_records expanded every cold row of the collection on each
        insert, under the writer lock (#2761). */

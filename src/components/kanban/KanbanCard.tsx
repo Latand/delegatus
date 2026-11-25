@@ -2,7 +2,6 @@
 
 import { CardStatusBadge } from "@/components/CardStatusBadge";
 import { rowStateWord } from "@/components/mobile/mobileBoardModel";
-import { isSettledLaunchPlaceholder } from "@/components/launchHistoryModel";
 
 import { Bot, Flag } from "lucide-react";
 import { memo, useRef, useState } from "react";
@@ -159,7 +158,7 @@ const MemberTile = memo(function MemberTile({ member, workspace, open, onOpen }:
   const parts = member.stage && place ? stageCardLabelParts(t, member.stage.stage, place) : null;
   const engine = member.file.engine === "claude" || member.file.engine === "codex" || member.file.engine === "antigravity" ? engineWord(member.file.engine) : null;
   const hint = member.stage && place ? stageLabelTitle(t, member.stage.stage, place, engine) : undefined;
-  const state = rowStateWord(t, { key: member.state, activity: member.activity, settledLaunch: isSettledLaunchPlaceholder(member.file) });
+  const state = rowStateWord(t, { key: member.state, activity: member.activity });
   const stateClass = member.needsYou ? "needs" : member.working ? "working" : member.state;
   return (
     <button

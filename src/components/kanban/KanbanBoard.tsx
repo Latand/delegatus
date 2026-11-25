@@ -32,6 +32,8 @@ import { kanbanColumnTracks, kanbanLayoutModeBeside, type KanbanLayoutMode } fro
 import { KanbanColumnsSkeleton } from "@/components/skeletons";
 import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import { useKanbanSeat } from "./kanbanSeatStore";
+import { resolveSeatFile, seatLivenessOf } from "@/components/orchestrator/seatState";
+import { useSeatSurface } from "@/components/orchestrator/useSeatSurface";
 import { useKanbanWide, type KanbanWideState } from "./kanbanWideStore";
 import { changeColumnWidth, COLUMN_LAYOUT_END } from "./columnLayoutAnimation";
 import { DWELL_CUE_MS, useColumnDwell } from "./useColumnDwell";
@@ -495,6 +497,17 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The orchestrator seat sits above the columns or, docked at the side,
      between the rail and them (#1841): one choice per browser. */
   const seatFrame = useKanbanSeat(project);
+  /* Whether the seat is idle between turns with its host alive, read once from
+     the same seat state its head reads, for every desktop surface that names
+     the seat (its reader header and its open-agents entry): they say «waiting»
+     where the head does, and «done» nowhere. */
+  const seatFileForState = useMemo(
+    () => resolveSeatFile({ files, conversationId: seatRefs?.conversationIds[0] ?? null, seatPath: seatRefs?.paths[0] ?? null, currentPath: null }),
+    [files, seatRefs],
+  );
+  const seatSurfaceForState = useSeatSurface(seatFileForState);
+  const seatIdle = seatFileForState !== null
+    && seatLivenessOf({ file: seatFileForState, surface: seatSurfaceForState, incumbent: null, hostLive: false }) === "waiting";
   const wideColumns = useKanbanWide();
   /* One column holds the wide share (#1841): Assigned, or the shelf the
      operator widened. Tabs already show one column at full width, and the
@@ -686,7 +699,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         file,
         inSheet: sheetSlots.has(reader.key),
         owner: owner && card ? stableOwner(reader.key, { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: owner.stage }) : null,
-        ...(isCurrentSeatConversation(seatRefs, file) ? { seat: true, ...(seatPlaceholder?.key === reader.key ? { composerPlaceholder: seatPlaceholder.text } : {}) } : {}),
+        ...(isCurrentSeatConversation(seatRefs, file) ? { seat: true, seatWaiting: seatIdle, ...(seatPlaceholder?.key === reader.key ? { composerPlaceholder: seatPlaceholder.text } : {}) } : {}),
         /* The window is the operator's conversation window: the agent in its
            reader takes the one composer from any other place of the same
            conversation, the seat's included. */
@@ -708,7 +721,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       }
     }
     return views;
-  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, shownState, sheetSlots, sheetSummary, sheetPanes, seatRefs, seatPlaceholder]);
+  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, shownState, sheetSlots, sheetSummary, sheetPanes, seatRefs, seatPlaceholder, seatIdle]);
   useEffect(() => {
     for (const view of readerViews) lastSeenFiles.current.set(view.readerKey, view.file);
   }, [readerViews]);
@@ -1598,7 +1611,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       onPick: (color) => setColor(card, color),
     };
     if (value.kind === "colour") return { label: t("kanban.colour"), items: [{ type: "head", label: t("kanban.colour") }, swatches] };
-    /* Only the Inbox sorts by it, so the hints say where the card goes there. */
+    /* Only the Inbox sorts by it, so the hints say where the card goes there
+       and only an Inbox card carries them. */
     const priorityItems: KanbanMenuItem[] = card.task ? [
       { type: "sep" },
       { type: "head", label: t("kanban.priority") },
@@ -1606,7 +1620,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         type: "radio",
         id: `priority:${priority}`,
         label: t(`kanban.priority.${priority}`),
-        why: priority === "normal" ? null : t(`kanban.priorityHint.${priority}`),
+        why: priority === "normal" || card.status !== "inbox" ? null : t(`kanban.priorityHint.${priority}`),
         checked: card.priority === priority,
         onSelect: () => setPriority(card, priority),
       })),

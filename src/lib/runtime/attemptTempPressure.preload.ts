@@ -10,6 +10,7 @@ import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
 import { agentRegistry } from "../agent/registry";
 import * as mutation from "./attemptMutationFence";
 import * as removal from "./attemptTempRemoval";
+import * as retention from "./attemptTempRetention";
 
 const fixture = process.env.LLV_PRESSURE_FIXTURE;
 if (!fixture) throw new Error("pressure fixture requires an isolated root");
@@ -22,10 +23,18 @@ const config = JSON.parse(fs.readFileSync(fixture, "utf8")) as { now: number; fr
   fixtureRemoval?: boolean;
   forbidFullMeasurement?: boolean;
   realClock?: boolean;
+  pressureInventory?: boolean;
   stallMeasurement?: string;
   stalledMeasurement?: string;
   tickClock?: boolean;
   slowProof?: { phase: "allocation" | "protection"; prefix: number; requiredCost?: number; timeoutPrefix?: number }; windows?: number[]; elapsed?: number };
+// Exercise the lower-level pressure inventory inside the leased test helper.
+// The production completion-age check still governs every retirement.
+if (config.pressureInventory) {
+  const sweep = retention.sweepAttemptTemps;
+  spyOn(retention, "sweepAttemptTemps").mockImplementation((store, options) =>
+    sweep(store, { ...options, scheduledOnly: undefined }));
+}
 let elapsed = 0;
 // Large cursor fixtures own every mutation. Native watcher races have their
 // own real-kernel tests; ambient mount churn is outside this fixture's clock.

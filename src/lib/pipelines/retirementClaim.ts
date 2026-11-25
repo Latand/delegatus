@@ -11,7 +11,7 @@ type Claim = { directories: string[]; revision: string; owner: ProcessIdentity }
 /** Called only by the serialized sweep after its removal has settled without
  * dispatch or error. Preserve a refused replay's surviving tree, then cancel
  * its intent before releasing the lane claim. Changed bindings stay fenced. */
-export function restoreRefusedAttemptTrash(directory: string, expectedIdentity?: string) {
+export function restoreRefusedAttemptTrash(directory: string, expectedIdentity?: string, retainJournal = false) {
   const journal = attemptTempJournalPath(directory);
   if (!fs.existsSync(journal)) return;
   const row = JSON.parse(fs.readFileSync(journal, "utf8")) as {
@@ -32,10 +32,10 @@ export function restoreRefusedAttemptTrash(directory: string, expectedIdentity?:
     && stat.dev === fs.statSync(path.dirname(directory)).dev;
   // A crash between restore and journal removal leaves the original identity
   // in place. Complete that cancellation without touching a replacement.
-  if (owned(current) && !trash) { fs.unlinkSync(journal); return; }
+  if (owned(current) && !trash) { if (!retainJournal) fs.unlinkSync(journal); return; }
   if (current || !owned(trash)) throw new Error("refused attempt quarantine identity changed");
   fs.renameSync(trashPath, directory);
-  fs.unlinkSync(journal);
+  if (!retainJournal) fs.unlinkSync(journal);
 }
 
 function claimPath(pipelineId: string) {
