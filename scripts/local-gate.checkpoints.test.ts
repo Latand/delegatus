@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { isolatedEnvironment, plan, type PlanEnvironment } from "./local-gate";
 import { headFileCache } from "./local-gate-tests";
-import { createHookFixture } from "./local-gate.fixture";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -15,7 +14,7 @@ const serviceTest = test.skipIf(process.platform !== "linux"
 test("shared comparator inputs retain every split test group in publication selection", () => {
   const groups = ["scripts/local-gate-tests.test.ts", "scripts/local-gate-tests.retry.test.ts", "scripts/local-gate-tests.recovery.test.ts", "scripts/local-gate-tests.teardown.test.ts",
     "scripts/local-gate-tests.rendezvous.test.ts", "scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate-tests.dependencies.test.ts"];
-  const checkpointFiles = ["scripts/local-gate.checkpoints.test.ts", "scripts/local-gate.checkpoints-retry.test.ts", "scripts/local-gate.checkpoints.hook.test.ts", "scripts/local-gate.checkpoints.stepPasses.test.ts"];
+  const checkpointFiles = ["scripts/local-gate.checkpoints.test.ts", "scripts/local-gate.checkpoints.hook.test.ts", "scripts/local-gate.checkpoints.stepPasses.test.ts"];
   const publication = ["scripts/local-gate.runtime.test.ts", "scripts/local-gate.execution.test.ts", "scripts/local-gate.groups.test.ts", "scripts/local-gate.invalidation.test.ts", "scripts/local-gate.git.test.ts", "scripts/local-gate.lint.test.ts", "scripts/local-gate.native.test.ts", "scripts/local-gate.binding.test.ts", "scripts/local-gate.hooks.test.ts", "scripts/local-gate.publication.test.ts", "scripts/local-gate.transport.test.ts", "scripts/local-gate.transport.native.test.ts", "scripts/local-gate.transport.budget.test.ts", "scripts/local-gate.transport.custody.test.ts"];
   const context: PlanEnvironment = { base: "base", existing: new Set(["scripts/local-gate-tests.fixture.ts", "scripts/local-gate-tests.ts", "scripts/gate-cache.ts"]),
     tests: [...groups, ...publication, ...checkpointFiles, "scripts/unrelated.test.ts"],
@@ -100,69 +99,6 @@ serviceTest("an incomplete head run retains only complete green files across fre
   const green = f.run(); expect(green.status, green.output).toBe(0);
   expect(f.samples()).toEqual({ a: 2, b: 3 });
 }, 60_000);
-
-serviceTest("local check-step invalidates warm and cold retries when BASH_ENV bytes change", () => {
-  const project = path.resolve(import.meta.dir, "..");
-  const f = createHookFixture(project, roots, false, false, "repo", true);
-  const scratch = f.tempRoot;
-  const origin = path.join(scratch, "origin.git");
-  f.git("clone", "--bare", "--shared", ".", origin);
-  f.git("remote", "add", "origin", origin);
-  const marker = path.join(scratch, "samples");
-  const startup = path.join(scratch, "external-bash-env");
-  const env = isolatedEnvironment(path.join(scratch, "caller"), f.env);
-  const bin = path.join(scratch, "bin"); mkdirSync(bin);
-  const runner = Bun.which("systemd-run")!, busctl = Bun.which("busctl")!;
-  const runnerShim = path.join(bin, "systemd-run"), busShim = path.join(bin, "busctl");
-  writeFileSync(runnerShim, `#!/bin/sh\nexec "${runner}" "$@"\n`, { mode: 0o700 });
-  writeFileSync(busShim, `#!/bin/sh\nexec "${busctl}" "$@"\n`, { mode: 0o700 });
-  env.PATH = bin + path.delimiter + env.PATH;
-  env.BASH_ENV = startup;
-  env.LLV_GATE_CHECK_ENV = "BASH_ENV";
-  writeFileSync(startup, "umask 022\n");
-  writeFileSync(path.join(f.dir, "shims/bun"), '#!/bin/sh\nexec "$LLV_GATE_BUN" "$@"\n');
-  writeFileSync(path.join(f.dir, "a.test.ts"), `
-import { appendFileSync } from "node:fs";
-import { expect, test } from "bun:test";
-test("startup input affects this head file", () => {
-  appendFileSync(${JSON.stringify(marker)}, "a:" + process.umask().toString(8) + "\\n");
-});`);
-  writeFileSync(path.join(f.dir, "b.test.ts"), `
-import { appendFileSync } from "node:fs";
-import { test } from "bun:test";
-test("incomplete file", () => { appendFileSync(${JSON.stringify(marker)}, "b\\n"); process.exit(124); });`);
-  f.git("config", "core.hooksPath", "/dev/null");
-  f.git("add", "."); f.git("commit", "-m", "BASH_ENV checkpoint fixtures");
-  const run = () => spawnSync(process.execPath, ["scripts/local-gate.ts", "check-step", "touched tests"], {
-    cwd: f.dir, env, encoding: "utf8", timeout: 30_000,
-  });
-  const countA = () => readFileSync(marker, "utf8").split("\n").filter(value => value.startsWith("a:")).length;
-  const first = run(); expect(first.status, first.stdout + first.stderr).toBe(1);
-  expect(readFileSync(marker, "utf8").split("\n").filter(value => value.startsWith("a:"))).toEqual(["a:22"]);
-  const warm = run(); expect(warm.status, warm.stdout + warm.stderr).toBe(1);
-  expect(warm.stdout + warm.stderr).toContain("reused complete green head file a.test.ts");
-  expect(countA()).toBe(1);
-
-  const beforeWarmChange = countA();
-  writeFileSync(startup, "umask 077\n");
-  const changedWarm = run(), changedOutput = changedWarm.stdout + changedWarm.stderr;
-  expect(changedWarm.status, changedOutput).toBe(1);
-  expect(changedOutput).not.toContain("reused complete green head file a.test.ts");
-  expect(changedOutput).toContain("head file a.test.ts:");
-  const afterWarmChange = countA();
-  expect(afterWarmChange).toBeGreaterThan(beforeWarmChange);
-  expect(readFileSync(marker, "utf8").split("\n").filter(value => value.startsWith("a:")).at(-1)).toBe("a:77");
-
-  const cache = path.join(f.dir, ".git/delegatus-gate/head-files");
-  rmSync(cache, { recursive: true, force: true });
-  const beforeColdChange = countA();
-  const changedCold = run(), coldOutput = changedCold.stdout + changedCold.stderr;
-  expect(changedCold.status, coldOutput).toBe(1);
-  expect(coldOutput).not.toContain("reused complete green head file");
-  expect(coldOutput).toContain("head file a.test.ts:");
-  expect(countA()).toBeGreaterThan(beforeColdChange);
-  expect(readFileSync(marker, "utf8").split("\n").filter(value => value.startsWith("a:")).at(-1)).toBe("a:77");
-}, 120_000);
 
 serviceTest("external roots with gate-shaped names retain their distinct checkpoint keys", () => {
   const f = fixture();

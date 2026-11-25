@@ -34,7 +34,7 @@ const linux = process.platform === "linux" ? ["Linux backend", "Linux tests"] : 
 const runtime = ["runtime verdict tests", "Viewer build", "MCP size budgets", "Viewer runtime", "runtime host", "runtime negative controls",
   ...SUPPORTED_CODEX_VERSIONS.map(version => `native Codex ${version}`), "native Codex shared contracts"];
 
-test("a canonical comparator selects split retry tests and has its own plan identity", () => {
+test("a canonical comparator selects a historical retry file and has its own plan identity", () => {
   const f = fixture();
   const retry = "scripts/local-gate.checkpoints-retry.test.ts";
   write(f, retry);
