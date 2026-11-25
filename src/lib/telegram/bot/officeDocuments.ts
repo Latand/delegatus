@@ -649,14 +649,12 @@ function sheetTable(cells: Map<string, SheetCell>, formulas: Map<string, string>
   for (const reference of new Set([...cells.keys(), ...formulas.keys()])) {
     const parsed = /^([A-Z]{1,3})([0-9]+)$/.exec(reference);
     const stored = cells.get(reference);
-    if (parsed && (stored ? stored.textual : formulas.has(reference))) entries.push({ reference, row: Number(parsed[2]), column: columnNumber(parsed[1]!) });
+    /* A formula cell is always read through its formula: the result a writer stored beside it, often a placeholder zero, says nothing of what it shows. */
+    if (parsed && (formulas.has(reference) || stored?.textual)) entries.push({ reference, row: Number(parsed[2]), column: columnNumber(parsed[1]!) });
   }
   entries.sort((one, other) => one.row - other.row || one.column - other.column);
   return { cells, formulas, entries };
 }
-
-/** A formula that only joins what it names, with no function or operator whose result is not text: what it shows is what it reads, whatever result the file stored for it. */
-const joinsOnly = (formula: string) => !/[+\-*/^=<>%,()]/.test(formula.replace(/"(?:[^"]|"")*"/g, ""));
 
 /** The stored cells of a worksheet part, by reference, and its formulas as written. */
 function sheetCells(bytes: Buffer, sharedStrings: readonly string[] | undefined): { cells: Map<string, SheetCell>; formulas: Map<string, string> } {
@@ -958,8 +956,8 @@ function officeXmlTextInspection(name: string, bytes: Buffer, styles?: WordStyle
     budget.left -= text.length;
     formulaReadings.push(text);
   };
-  /* A formula that only joins what it names shows what it joins once a reader recalculates it and the result stored beside it
-     where one does not: each view is read, the stored one first. */
+  /* A formula cell shows its stored result to a reader that does not recalculate it and what its formula reads to one that does,
+     and a writer's stored result (often a placeholder zero) says nothing of the latter: each view is read, the stored one first. */
   let differs = false;
   const pass = (recalculated: boolean) => {
     /* The reading of a formula cell, memoised per sheet; null while it is being read, so a loop is seen. */
@@ -996,7 +994,6 @@ function officeXmlTextInspection(name: string, bytes: Buffer, styles?: WordStyle
       const stored = table.cells.get(reference)?.text;
       if (formula === undefined) return stored;
       if (stored === undefined) return reading(table, reference);
-      if (!joinsOnly(formula)) return stored;
       const joined = reading(table, reference);
       if (joined !== stored) differs = true;
       return recalculated ? joined : stored;

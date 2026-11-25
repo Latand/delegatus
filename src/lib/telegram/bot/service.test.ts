@@ -540,6 +540,16 @@ test("Office imported parts and alternate displayed text stay behind confirmatio
       [`chain-loop-${suffix}.xlsx`, "xlsx", xlsx(sheetOf(`<row r="1">${cell("A1", "B1")}${cell("B1", "A1&amp;C1")}${text("C1", 0)}</row>`), "", flag, halves)],
     );
   }
+  /* XlsxWriter stores a numeric placeholder zero beside every formula; that result is not what the cell shows. */
+  const placeholder = (reference: string, formula: string) => `<c r="${reference}"><f>${formula}</f><v>0</v></c>`;
+  for (const flag of [true, false]) {
+    const suffix = flag ? "recalc" : "plain";
+    fixtures.push(
+      [`placeholder-trim-chain-${suffix}.xlsx`, "xlsx", xlsx(sheetOf(`<row r="1">${text("A1", 0)}${text("B1", 1)}${placeholder("C1", "TRIM(A1)")}${placeholder("D1", "C1&amp;B1")}</row>`), "", flag, halves)],
+      [`placeholder-concat-chain-${suffix}.xlsx`, "xlsx", xlsx(sheetOf(`<row r="1">${text("A1", 0)}${text("B1", 1)}${placeholder("C1", "CONCAT(A1)")}${placeholder("D1", "CONCAT(C1,B1)")}</row>`), "", flag, halves)],
+      [`placeholder-range-${suffix}.xlsx`, "xlsx", xlsx(sheetOf(`<row r="1">${text("A1", 0)}${text("B1", 1)}${placeholder("C1", "A1")}${placeholder("D1", "B1")}${placeholder("F1", "CONCAT(C1:E1)")}</row>`), "", flag, halves)],
+    );
+  }
   for (const [name, extension, bytes] of fixtures) {
     const file = documentFile(path.join(HANDOFF, name), bytes);
     const error = await refusal(() => sendDocument({ path: file }, { clientRequestId: name }));
@@ -600,6 +610,28 @@ test("an ordinary spreadsheet with formulas and computed text sends without a se
   const file = documentFile(path.join(HANDOFF, "staffing.xlsx"), ordinary);
   transport.script("sendDocument", ok({ message_id: 201, date: T0 + 100 }));
   expect(await sendDocument({ path: file }, { clientRequestId: "ordinary-spreadsheet" })).toMatchObject({ messageIds: [201] });
+  expect(transport.callsOf("sendDocument")).toHaveLength(1);
+});
+
+test("an XlsxWriter-shaped spreadsheet with a placeholder zero beside every formula sends without a secret warning", async () => {
+  await allowedTeam();
+  const strings = ["Full name", "First", "Last", "Hours", "Anna", "Kovalenko", "Total", "over", "ok"];
+  const placeholder = (reference: string, formula: string) => `<c r="${reference}"><f>${formula}</f><v>0</v></c>`;
+  const rows = [
+    '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c><c r="D1" t="s"><v>3</v></c></row>',
+    `<row r="2">${placeholder("A2", "B2&amp;&quot; &quot;&amp;C2")}<c r="B2" t="s"><v>4</v></c><c r="C2" t="s"><v>5</v></c><c r="D2"><v>160</v></c></row>`,
+    `<row r="3"><c r="A3" t="s"><v>6</v></c>${placeholder("D3", "SUM(D2:D2)")}${placeholder("E3", "IF(D3&gt;300,&quot;over&quot;,&quot;ok&quot;)")}${placeholder("F3", "COUNTIF(B2:C2,B2)")}</row>`,
+  ].join("");
+  const workbook = officeZip({
+    ...officeParts("xlsx"),
+    "xl/workbook.xml": '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Report" sheetId="1" r:id="rId1"/></sheets><calcPr calcId="124519" fullCalcOnLoad="1"/></workbook>',
+    "xl/worksheets/sheet1.xml": `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rows}</sheetData></worksheet>`,
+    "xl/sharedStrings.xml": `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${strings.map(text => `<si><t>${text}</t></si>`).join("")}</sst>`,
+    "xl/_rels/workbook.xml.rels": '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rIdT" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>',
+  });
+  const file = documentFile(path.join(HANDOFF, "xlsxwriter.xlsx"), workbook);
+  transport.script("sendDocument", ok({ message_id: 203, date: T0 + 100 }));
+  expect(await sendDocument({ path: file }, { clientRequestId: "xlsxwriter-spreadsheet" })).toMatchObject({ messageIds: [203] });
   expect(transport.callsOf("sendDocument")).toHaveLength(1);
 });
 
