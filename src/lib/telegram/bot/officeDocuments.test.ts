@@ -282,7 +282,7 @@ test("a formula reads the text cells of a range and of a sheet named in the work
 test("a range reads rows in order, and only the columns it names", () => {
   const strings = ["a", "b", "c", "d"];
   const report = '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="D1" t="s"><v>2</v></c></row><row r="2"><c r="A2" t="s"><v>3</v></c><c r="C2" t="s"><v>3</v></c></row>'
-    + '<row r="9"><c r="A9"><f>A1:C2</f></c><c r="B9"><f>B:C</f></c><c r="C9"><f>1:1</f></c></row>';
+    + '<row r="9"><c r="E9"><f>A1:C2</f></c><c r="F9"><f>B:C</f></c><c r="G9"><f>1:1</f></c></row>';
   const lines = readParts(twoSheets(report, "", strings)).get("xl/worksheets/sheet1.xml")!.lines;
   expect(lines).toContain("abdd");
   expect(lines).toContain("bd");
@@ -290,11 +290,58 @@ test("a range reads rows in order, and only the columns it names", () => {
 });
 
 test("a range over more cells than the package may visit asks for consent", () => {
-  /* 3 600 ranges over a sheet of 6 000 text cells visit 21 600 000 cells, past the package's 20 000 000, though each reads no text. */
+  /* 3 600 distinct ranges over a sheet of 6 000 text cells visit 21 600 000 cells, past the package's 20 000 000, though each reads no text. */
   const heavy = Array.from({ length: 6000 }, (_, row) => `<row r="${row + 1}"><c r="A${row + 1}" t="inlineStr"><is><t>x</t></is></c></row>`).join("");
-  const many = (count: number) => Array.from({ length: count }, (_, at) => `<row r="${at + 1}"><c r="C${at + 1}"><f>LEN('Key Sheet'!B1:B6000)</f></c></row>`).join("");
+  const letters = (number: number) => (number > 26 ? letters(Math.floor((number - 1) / 26)) : "") + column(((number - 1) % 26) + 1);
+  const many = (count: number) => Array.from({ length: count }, (_, at) => `<row r="${at + 1}"><c r="C${at + 1}"><f>LEN('Key Sheet'!B1:${letters(at + 2)}6000)</f></c></row>`).join("");
   expect(readParts(twoSheets(many(3000), heavy, [])).get("xl/worksheets/sheet1.xml")!.consent).toBe(false);
   expect(readParts(twoSheets(many(3600), heavy, [])).get("xl/worksheets/sheet1.xml")!.consent).toBe(true);
+});
+
+test("a range that many formulas name is read once, whatever their number", () => {
+  const heavy = Array.from({ length: 6000 }, (_, row) => `<row r="${row + 1}"><c r="A${row + 1}" t="inlineStr"><is><t>x</t></is></c></row>`).join("");
+  const same = Array.from({ length: 4000 }, (_, at) => `<row r="${at + 1}"><c r="C${at + 1}"><f>LEN('Key Sheet'!B1:B6000)</f></c></row>`).join("");
+  expect(readParts(twoSheets(same, heavy, [])).get("xl/worksheets/sheet1.xml")!.consent).toBe(false);
+});
+
+test("a long range keeps its ends in each formula that joins it, and its whole text once", () => {
+  const rows = Array.from({ length: 400 }, (_, row) => `<row r="${row + 1}"><c r="A${row + 1}" t="inlineStr"><is><t>${String(row).padStart(3, "0")}</t></is></c></row>`).join("");
+  const report = '<row r="1"><c r="C1"><f>"["&amp;\'Key Sheet\'!A1:A400&amp;"|"</f></c><c r="D1"><f>\'Key Sheet\'!A1:A400</f></c></row>';
+  const lines = readParts(twoSheets(report, rows, [])).get("xl/worksheets/sheet1.xml")!.lines;
+  const whole = Array.from({ length: 400 }, (_, row) => String(row).padStart(3, "0")).join("");
+  expect(lines.filter(line => line === whole)).toHaveLength(1);
+  /* Lines end where the ends meet, so the head and the tail show on neighbouring lines. */
+  expect(lines).toContain(`[${whole.slice(0, 256)}`);
+  expect(lines).toContain(`${whole.slice(-256)}|`);
+});
+
+test("a formula that joins formula cells with no stored result reads what those cells join", () => {
+  const strings = ["Left", "Right"];
+  const report = '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1"><f>A1</f></c><c r="D1"><f>C1&amp;B1</f></c></row>';
+  const part = readParts(twoSheets(report, "", strings)).get("xl/worksheets/sheet1.xml")!;
+  expect(part.consent).toBe(false);
+  expect(part.lines).toContain("LeftRight");
+});
+
+test("a cell with a stored result that only joins what it names is read as stored and as recalculated", () => {
+  /* A reader that recalculates shows what the formula joins, one that does not shows the stored result: each view is read. */
+  const strings = ["Left", "Right"];
+  const report = '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="str"><f>A1</f><v>Stale</v></c><c r="D1"><f>C1&amp;B1</f></c><c r="E1" t="str"><f>UPPER(A1)</f><v>LEFT</v></c><c r="F1"><f>E1&amp;B1</f></c></row>';
+  const lines = readParts(twoSheets(report, "", strings)).get("xl/worksheets/sheet1.xml")!.lines;
+  expect(lines).toContain("StaleRight");
+  expect(lines).toContain("LeftRight");
+  /* A function's result is only the stored one. */
+  expect(lines).toContain("LEFTRight");
+});
+
+test("formula cells that name one another in a loop, or in a chain too deep to follow, ask for consent", () => {
+  const consent = (report: string) => readParts(twoSheets(report, "", [])).get("xl/worksheets/sheet1.xml")!.consent;
+  expect(consent('<row r="1"><c r="A1"><f>B1</f></c><c r="B1"><f>A1</f></c></row>')).toBe(true);
+  expect(consent('<row r="1"><c r="A1"><f>A1</f></c></row>')).toBe(true);
+  const chain = (length: number) => `<row r="1">${Array.from({ length }, (_, at) => `<c r="${letters(at + 1)}1"><f>${letters(at + 2)}1</f></c>`).join("")}</row>`;
+  function letters(number: number): string { return (number > 26 ? letters(Math.floor((number - 1) / 26)) : "") + column(((number - 1) % 26) + 1); }
+  expect(consent(chain(20))).toBe(false);
+  expect(consent(chain(80))).toBe(true);
 });
 
 test("the recalculation flag alone asks for no consent, and computed text beyond the reading bound does", () => {

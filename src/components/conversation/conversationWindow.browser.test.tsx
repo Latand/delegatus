@@ -7100,8 +7100,14 @@ describe("owner confirmation of one Telegram file send", () => {
   const recorded = new Map<string, Record<string, unknown>>();
   /* `gap-*`: the owner has not met a step this page needs yet, and the page says which and offers it (the server's `missing`). */
   const GAPS = ["team", "owner", "pairing", "telegram_link", "telegram_account", "telegram_session"] as const;
-  const STATES = ["pending", "details", "status", "sending", "sent", "rejected", "expired", "uncertain", "failed", "unavailable", "owner", ...GAPS.map(gap => `gap-${gap}` as const)] as const;
+  /* `step-*`: a gap's Telegram step driven to one stage, with the gap that offers it: waiting for Start, the code form,
+     the name shown before the cookie is taken, and each way the step can end in an alert. */
+  const STEPS = { waiting: "telegram_link", code: "telegram_link", confirmed: "telegram_session", notLinked: "telegram_session", taken: "telegram_link", expired: "telegram_link", unavailable: "telegram_link" } as const;
+  type StepName = keyof typeof STEPS;
+  const STEP_NAMES = Object.keys(STEPS) as StepName[];
+  const STATES = ["pending", "details", "status", "sending", "sent", "rejected", "expired", "uncertain", "failed", "unavailable", "owner", ...GAPS.map(gap => `gap-${gap}` as const), ...STEP_NAMES.map(step => `step-${step}` as const)] as const;
   const gapOf = (state: string) => GAPS.find(gap => state === `gap-${gap}`);
+  const stepOf = (state: string) => STEP_NAMES.find(step => state === `step-${step}`);
   type Frame = { width: 390 | 600 | 820 | 1000 | 1440; lang: "en" | "uk"; theme: "light" | "dark"; state: (typeof STATES)[number]; data?: "media" | "long" };
   const LONG_FILE = `quarterly-${"revenue-".repeat(5)}export-final-v2.json`;
   const LONG_CHAT = "Fixture reports for the regional and international operations office";
@@ -7123,8 +7129,9 @@ describe("owner confirmation of one Telegram file send", () => {
         const phone = width === 390;
         const viewport = { width, height: phone ? 844 : 900 };
         const chat = data === "long" ? LONG_CHAT : "Fixture reports";
-        const opened = ["pending", "details", "status", "sending", "sent", "rejected"].includes(state) ? "pending" : state;
-        const query = `case=file-confirmation&state=${opened}&lang=${lang}&id=fixture-confirmation${data ? `&data=${data}` : ""}${state === "sending" ? "&post=hold" : ""}`;
+        const step = stepOf(state);
+        const opened = ["pending", "details", "status", "sending", "sent", "rejected"].includes(state) ? "pending" : step ? `gap-${STEPS[step]}` : state;
+        const query = `case=file-confirmation&state=${opened}${step ? `&step=${step}` : ""}&lang=${lang}&id=fixture-confirmation${data ? `&data=${data}` : ""}${state === "sending" ? "&post=hold" : ""}`;
         const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`, viewport, theme, lang, "reduce", phone);
         try {
           await page.locator("[data-file-confirmation-heading]").waitFor();
@@ -7135,8 +7142,30 @@ describe("owner confirmation of one Telegram file send", () => {
             : (lang === "uk" ? "Схоже, у цьому файлі приватний ключ" : "This file looks like it holds a private key"), lang);
           const gapHeadings = Object.fromEntries(GAPS.map(gap => [`gap-${gap}`, typesetFileConfirmation(words.missing[gap].title, lang)])) as Record<`gap-${(typeof GAPS)[number]}`, string>;
           const heading = { pending: pendingHeading, details: pendingHeading, status: pendingHeading, sending: pendingHeading, sent: typesetFileConfirmation(words.sentTitle(chat), lang), rejected: typesetFileConfirmation(words.rejectedTitle(chat), lang), expired: words.expiredTitle, uncertain: words.uncertainTitle, failed: words.failedTitle, unavailable: words.unavailableTitle, owner: words.ownerTitle,
-            ...gapHeadings }[state];
+            ...gapHeadings, ...Object.fromEntries(STEP_NAMES.map(name => [`step-${name}`, gapHeadings[`gap-${STEPS[name]}`]])) as Record<`step-${StepName}`, string> }[state];
           const asking = ["pending", "details", "status", "sending"].includes(state);
+          if (step) {
+            /* The person presses the step, and what the bot answers is the fixture's; the page stays where it is and leads nowhere else. */
+            await page.click(`[data-telegram-step="${STEPS[step] === "telegram_session" ? "sign-in" : "link"}"]`);
+            const alert = { notLinked: words.notLinked, taken: translate(lang, "team.error.telegramTaken"), expired: translate(lang, "team.signIn.expired"), unavailable: translate(lang, "team.telegram.unavailable") } as Partial<Record<StepName, string>>;
+            if (step === "waiting") {
+              await page.locator('[data-telegram-step-stage="waiting"]').waitFor();
+              if (await page.locator("[data-telegram-step-open]").getAttribute("href") !== "https://t.me/fixture_bot?start=one-time") failures.push(`${name}: the Open Telegram link is missing`);
+            } else if (step !== "unavailable") {
+              await page.locator("[data-telegram-code]").waitFor();
+              if (step !== "code") { await page.fill("[data-telegram-code]", "123456"); await page.press("[data-telegram-code]", "Enter"); }
+            }
+            if (step === "confirmed") {
+              await page.locator('[data-telegram-step-stage="confirmed"]').waitFor();
+              if (!(await page.locator("[data-file-confirmation-card]").innerText()).includes(translate(lang, "team.signIn.signingInAs", { name: "Owner" }))) failures.push(`${name}: «Signing in as» is missing`);
+              if (await page.locator("[data-telegram-step-not-me]").count() !== 1) failures.push(`${name}: «Not me» is missing`);
+            } else if (alert[step]) {
+              await page.locator('[role="alert"]').waitFor();
+              if ((await page.locator('[role="alert"]').innerText()).trim() !== alert[step]) failures.push(`${name}: the alert reads «${await page.locator('[role="alert"]').innerText()}», expected «${alert[step]}»`);
+            }
+            if (await page.locator('a[href*="/sign-in"]').count() !== 0) failures.push(`${name}: a link leads to sign-in`);
+            if (await page.evaluate(() => location.pathname + location.search) !== `/?${query}`) failures.push(`${name}: the page navigated away`);
+          }
           /* Before any press or scroll: the heading, and while the decision is open both answers and the real file, are whole on the first screen. */
           const firstScreen = await page.evaluate((media) => {
             const whole = (box: DOMRect | undefined) => box ? box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth : null;
@@ -7354,7 +7383,7 @@ describe("owner confirmation of one Telegram file send", () => {
               cardWidth: Math.round(cardBox.width),
               background: getComputedStyle(main).backgroundColor,
             };
-          }, { coarse: phone, uk: lang === "uk", strip: [chat, "Fixture reports", data === "long" ? LONG_FILE : "weekly-report.json", "Requested file", "Before", "After"] });
+          }, { coarse: phone, uk: lang === "uk", strip: [chat, "Fixture reports", data === "long" ? LONG_FILE : "weekly-report.json", "Requested file", "Before", "After", "Owner", "Stranger"] });
           if (reading.offscreen.length) failures.push(`${name}: outside the window: ${reading.offscreen.join(" | ")}`);
           if (reading.clipped.length) failures.push(`${name}: clipped: ${reading.clipped.join(" | ")}`);
           if (reading.covered.length) failures.push(`${name}: the popover covers: ${reading.covered.join(" | ")}`);
@@ -7369,7 +7398,7 @@ describe("owner confirmation of one Telegram file send", () => {
           if (latin.length) failures.push(`${name}: Latin words in a Ukrainian frame: ${[...new Set(latin)].join(", ")}`);
           if (state === "status" && !reading.popover) failures.push(`${name}: no popover`);
           if (reading.popover && !reading.popover.inCard) failures.push(`${name}: the popover crosses or touches the card's edge`);
-          if (state !== "owner" && !gap) {
+          if (state !== "owner" && !gap && !step) {
             if (reading.dotOffChevron === null || Math.abs(reading.dotOffChevron) > 1) failures.push(`${name}: the status dot's centre is ${reading.dotOffChevron} px off the Details chevron's`);
             if (!reading.detailsRow || /\d/.test(reading.detailsRow)) failures.push(`${name}: the Details row reads «${reading.detailsRow}»`);
           }
@@ -7392,6 +7421,8 @@ describe("owner confirmation of one Telegram file send", () => {
   const themed = (width: Frame["width"], lang: Frame["lang"]) => (["light", "dark"] as const).flatMap((theme) => STATES.map((state): Frame => ({ width, lang, theme, state })));
   const CASES: Array<[title: string, list: Frame[]]> = [
     ...([390, 1440] as const).flatMap((width) => (["en", "uk"] as const).map((lang): [string, Frame[]] => [`${width} px, ${lang}: every state in light and dark`, themed(width, lang)])),
+    /* One width between the phone and the desktop for every missing step and for each stage of the Telegram step. */
+    ["820 px: the missing steps and the Telegram step's stages in both languages and themes", (["en", "uk"] as const).flatMap(lang => (["light", "dark"] as const).flatMap(theme => STATES.filter(state => state.startsWith("gap-") || state.startsWith("step-")).map((state): Frame => ({ width: 820, lang, theme, state })))) ],
     ["820 px pending in both languages; long names at 390 px", [
       { width: 820, lang: "en", theme: "light", state: "pending" },
       { width: 820, lang: "uk", theme: "light", state: "pending" },

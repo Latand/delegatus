@@ -136,7 +136,7 @@ export function TelegramStep({ purpose, onDone, onMessage, buttonClassName }: {
   if (request) {
     return (
       <div className="flex flex-col items-start gap-2" data-telegram-step-stage="waiting">
-        <p className="flex items-center gap-2 text-ui text-secondary" aria-live="polite">
+        <p className="flex items-center gap-2 text-balance text-ui text-secondary" aria-live="polite">
           <span className="h-1.5 w-1.5 rounded-full bg-accent motion-safe:animate-pulse" aria-hidden />{t("team.telegram.waiting")}
         </p>
         <a href={request.url} target="_blank" rel="noreferrer" className={BUTTON.text} data-telegram-step-open="">

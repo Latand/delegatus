@@ -372,7 +372,7 @@ function packageWorkbook(members: Map<string, Buffer>, budget: number): Workbook
       if (part === undefined) return undefined;
       if (!tables.has(part)) {
         const bytes = members.get(part);
-        tables.set(part, bytes && sheetTable(sheetCells(bytes, context.sharedStrings)));
+        if (bytes) { const parsed = sheetCells(bytes, context.sharedStrings); tables.set(part, sheetTable(parsed.cells, parsed.formulas)); } else tables.set(part, undefined);
       }
       return tables.get(part);
     };
@@ -614,8 +614,10 @@ function displayedText(styles: WordStyles | undefined) {
 
 /* What the cells of one workbook hold, for reading the text its formulas join. */
 type SheetCell = { text: string; /** A text cell (`s`, `inlineStr`, `str`) rather than a number, boolean or error. */ textual: boolean };
-/** The text cells of a sheet in row-major order, for reading a range, and every stored cell by reference. */
-type SheetTable = { cells: Map<string, SheetCell>; textual: Array<{ row: number; column: number; text: string }> };
+/** A cell a range may read, in row-major order: a text cell, or a formula cell with no stored result. */
+type SheetEntry = { reference: string; row: number; column: number };
+/** The stored cells of a sheet by reference, each formula as written, and the cells a range reads. */
+type SheetTable = { cells: Map<string, SheetCell>; formulas: Map<string, string>; entries: SheetEntry[] };
 type WorkbookContext = {
   sharedStrings?: readonly string[];
   /** The cells of the sheet a name in a formula points at, when the workbook has one by that name. */
@@ -629,6 +631,10 @@ type WorkbookContext = {
 const formulaReadingBudget = (length: number) => 4 * length + (1 << 20);
 const MAX_FORMULA_REFERENCES = 64;
 const MAX_RANGE_WORK = 20_000_000;
+/** The characters at each end of a long range that a formula's reading keeps beside what it joins. */
+const RANGE_EDGE = 256;
+/** The deepest chain of formula cells that name one another which is followed. */
+const MAX_FORMULA_DEPTH = 32;
 
 const columnNumber = (letters: string) => [...letters.toUpperCase()].reduce((total, letter) => total * 26 + letter.charCodeAt(0) - 64, 0);
 const MAX_ROW = 1_048_576;
@@ -638,33 +644,40 @@ const storedCellText = (type: string, value: string, inline: string, sharedStrin
   type === "inlineStr" ? inline : type === "s" ? (/^\s*\d+\s*$/.test(value) ? sharedStrings?.[Number(value)] : undefined) ?? "" : value;
 const TEXT_CELL_TYPES = new Set(["s", "inlineStr", "str"]);
 
-function sheetTable(cells: Map<string, SheetCell>): SheetTable {
-  const textual: SheetTable["textual"] = [];
-  for (const [reference, cell] of cells) {
+function sheetTable(cells: Map<string, SheetCell>, formulas: Map<string, string>): SheetTable {
+  const entries: SheetEntry[] = [];
+  for (const reference of new Set([...cells.keys(), ...formulas.keys()])) {
     const parsed = /^([A-Z]{1,3})([0-9]+)$/.exec(reference);
-    if (cell.textual && parsed) textual.push({ row: Number(parsed[2]), column: columnNumber(parsed[1]!), text: cell.text });
+    const stored = cells.get(reference);
+    if (parsed && (stored ? stored.textual : formulas.has(reference))) entries.push({ reference, row: Number(parsed[2]), column: columnNumber(parsed[1]!) });
   }
-  textual.sort((one, other) => one.row - other.row || one.column - other.column);
-  return { cells, textual };
+  entries.sort((one, other) => one.row - other.row || one.column - other.column);
+  return { cells, formulas, entries };
 }
 
-/** The stored cells of a worksheet part, by reference. */
-function sheetCells(bytes: Buffer, sharedStrings: readonly string[] | undefined): Map<string, SheetCell> {
+/** A formula that only joins what it names, with no function or operator whose result is not text: what it shows is what it reads, whatever result the file stored for it. */
+const joinsOnly = (formula: string) => !/[+\-*/^=<>%,()]/.test(formula.replace(/"(?:[^"]|"")*"/g, ""));
+
+/** The stored cells of a worksheet part, by reference, and its formulas as written. */
+function sheetCells(bytes: Buffer, sharedStrings: readonly string[] | undefined): { cells: Map<string, SheetCell>; formulas: Map<string, string> } {
   const cells = new Map<string, SheetCell>();
-  let cell: { reference: string; type: string; value: string; inline: string } | null = null;
-  let inValue = 0, inInline = 0, inText = 0, inPhonetic = 0;
+  const formulas = new Map<string, string>();
+  let cell: { reference: string; type: string; value: string; inline: string; formula: string } | null = null;
+  let inValue = 0, inInline = 0, inText = 0, inPhonetic = 0, inFormula = 0;
   parseOfficeXml(bytes, {
     open(tag) {
       if (!SHEET.has(tag.uri)) return;
-      if (tag.local === "c") cell = { reference: (plainValue(tag, "r") ?? "").toUpperCase(), type: plainValue(tag, "t") ?? "n", value: "", inline: "" };
+      if (tag.local === "c") cell = { reference: (plainValue(tag, "r") ?? "").toUpperCase(), type: plainValue(tag, "t") ?? "n", value: "", inline: "", formula: "" };
       else if (tag.local === "v") inValue++;
       else if (tag.local === "is") inInline++;
       else if (tag.local === "t") inText++;
       else if (tag.local === "rPh") inPhonetic++;
+      else if (tag.local === "f") inFormula++;
     },
     text(text) {
       if (!cell) return;
-      if (inValue) cell.value += text;
+      if (inFormula) cell.formula += text;
+      else if (inValue) cell.value += text;
       else if (inInline && inText && !inPhonetic) cell.inline += text;
     },
     close(tag) {
@@ -673,14 +686,16 @@ function sheetCells(bytes: Buffer, sharedStrings: readonly string[] | undefined)
       else if (tag.local === "is") inInline--;
       else if (tag.local === "t") inText--;
       else if (tag.local === "rPh") inPhonetic--;
+      else if (tag.local === "f") inFormula--;
       else if (tag.local === "c" && cell) {
         const text = storedCellText(cell.type, cell.value, cell.inline, sharedStrings);
         if (cell.reference && text) cells.set(cell.reference, { text, textual: TEXT_CELL_TYPES.has(cell.type) });
+        if (cell.reference && cell.formula.trim()) formulas.set(cell.reference, cell.formula);
         cell = null;
       }
     },
   });
-  return cells;
+  return { cells, formulas };
 }
 
 export type RangeBox = { column1: number; row1: number; column2: number; row2: number };
@@ -756,6 +771,8 @@ export function formulaReading(formula: string, source: FormulaSource, limit = I
           : [1, Number(match[7]), 16384, Number(match[8])];
       added = source.range(at, { column1: Math.min(column1!, column2!), row1: Math.min(row1!, row2!), column2: Math.max(column1!, column2!), row2: Math.max(row1!, row2!) });
       if (added === null) return null;
+      /* A range read by many formulas is read once, whole, by its source; a formula keeps the ends that can join its neighbours. */
+      if (added.length > 2 * RANGE_EDGE) added = `${added.slice(0, RANGE_EDGE)}\n${added.slice(-RANGE_EDGE)}`;
     }
     text += added ?? "";
     return text.length > limit ? null : true;
@@ -832,7 +849,8 @@ function officeXmlTextInspection(name: string, bytes: Buffer, styles?: WordStyle
   let cell: Cell | null = null;
   let inValue = 0, inInline = 0, inText = 0, inPhonetic = 0;
   const storedText = new Map<string, SheetCell>();
-  const formulas: string[] = [];
+  const formulaCells = new Map<string, string>();
+  const formulas: Array<{ reference: string; formula: string }> = [];
   const open: SaxesTagNS[] = [];
   const hasChild: boolean[] = [];
   const preserve: boolean[] = [];
@@ -911,7 +929,10 @@ function officeXmlTextInspection(name: string, bytes: Buffer, styles?: WordStyle
         } else if (tag.local === "c" && cell) {
           const stored = storedCellText(cell.type, cell.value, cell.inline, workbook?.sharedStrings);
           if (cell.reference && stored) storedText.set(cell.reference, { text: stored, textual: TEXT_CELL_TYPES.has(cell.type) });
-          if (cell.formula) formulas.push(cell.formula);
+          if (cell.formula) {
+            formulas.push({ reference: cell.reference, formula: cell.formula });
+            if (cell.reference) formulaCells.set(cell.reference, cell.formula);
+          }
           cell = null;
         }
       }
@@ -922,40 +943,108 @@ function officeXmlTextInspection(name: string, bytes: Buffer, styles?: WordStyle
       shown.close(tag);
     },
   });
-  /* What each formula joins from cells, one line each. A budget that runs out, or a
-     formula too wide to read, leaves computed text nobody inspected: that needs consent. */
+  /* What each formula joins from cells, one line each. A budget that runs out, a
+     formula too wide to read, or formula cells that name one another in a loop or
+     too deep leave computed text nobody inspected: that needs consent. */
   const budget = workbook?.budget ?? { left: formulaReadingBudget(length) };
   const work = workbook?.work ?? { left: MAX_RANGE_WORK };
-  let own: SheetTable | undefined;
-  const source: FormulaSource = {
-    cell: (sheet, reference) => (sheet === null ? storedText : workbook?.sheet?.(sheet)?.cells)?.get(reference)?.text,
-    range(sheet, box) {
-      const table = sheet === null ? own ??= sheetTable(storedText) : workbook?.sheet?.(sheet);
-      if (!table) return "";
-      /* The first row of the range, found by halving, then the text cells row by row. */
-      let low = 0, high = table.textual.length;
-      while (low < high) {
-        const middle = (low + high) >> 1;
-        if (table.textual[middle]!.row < box.row1) low = middle + 1;
-        else high = middle;
-      }
-      let joined = "";
-      for (let at = low; at < table.textual.length && table.textual[at]!.row <= box.row2; at++) {
-        if (--work.left < 0) return null;
-        const item = table.textual[at]!;
-        if (item.column >= box.column1 && item.column <= box.column2) joined += item.text;
-        if (joined.length > budget.left) return joined;
-      }
-      return joined;
-    },
-  };
+  const own = sheetTable(storedText, formulaCells);
   const formulaReadings: string[] = [];
-  for (const formula of formulas) {
-    const reading = formulaReading(formula, source, budget.left);
-    if (!reading || reading.text.length > budget.left) { requiresConsent = true; break; }
-    budget.left -= reading.text.length;
-    if (reading.references && reading.text) formulaReadings.push(reading.text);
-  }
+  /* Each distinct text is kept, and charged, once, however many formulas produce it. */
+  const kept = new Set<string>();
+  const keep = (text: string) => {
+    if (!text || kept.has(text)) return;
+    kept.add(text);
+    budget.left -= text.length;
+    formulaReadings.push(text);
+  };
+  /* A formula that only joins what it names shows what it joins once a reader recalculates it and the result stored beside it
+     where one does not: each view is read, the stored one first. */
+  let differs = false;
+  const pass = (recalculated: boolean) => {
+    /* The reading of a formula cell, memoised per sheet; null while it is being read, so a loop is seen. */
+    const readings = new Map<SheetTable, Map<string, string | null>>();
+    const ranges = new Map<SheetTable, Map<string, string>>();
+    let depth = 0;
+    const reading = (table: SheetTable, reference: string): string => {
+      const formula = table.formulas.get(reference);
+      if (formula === undefined) return "";
+      let known = readings.get(table);
+      if (!known) readings.set(table, known = new Map());
+      if (known.has(reference)) {
+        const done = known.get(reference);
+        if (done === null) requiresConsent = true;
+        return done ?? "";
+      }
+      if (depth >= MAX_FORMULA_DEPTH || --work.left < 0) { requiresConsent = true; return ""; }
+      known.set(reference, null);
+      depth++;
+      const read = formulaReading(formula, sourceOf(table), budget.left);
+      depth--;
+      if (!read || read.text.length > budget.left) {
+        requiresConsent = true;
+        known.set(reference, "");
+        return "";
+      }
+      known.set(reference, read.text);
+      if (read.references) keep(read.text);
+      return read.text;
+    };
+    /* What a cell shows as text: its stored text, or the reading of its formula when it stored none. */
+    const cellShows = (table: SheetTable, reference: string): string | undefined => {
+      const formula = table.formulas.get(reference);
+      const stored = table.cells.get(reference)?.text;
+      if (formula === undefined) return stored;
+      if (stored === undefined) return reading(table, reference);
+      if (!joinsOnly(formula)) return stored;
+      const joined = reading(table, reference);
+      if (joined !== stored) differs = true;
+      return recalculated ? joined : stored;
+    };
+    const sourceOf = (table: SheetTable): FormulaSource => {
+      const target = (sheet: string | null) => (sheet === null ? table : workbook?.sheet?.(sheet));
+      return {
+        cell: (sheet, reference) => {
+          const found = target(sheet);
+          return found && cellShows(found, reference);
+        },
+        range(sheet, box) {
+          const found = target(sheet);
+          if (!found) return "";
+          let known = ranges.get(found);
+          if (!known) ranges.set(found, known = new Map());
+          const key = `${box.column1},${box.row1},${box.column2},${box.row2}`;
+          if (known.has(key)) return known.get(key)!;
+          /* The first row of the range, found by halving, then its cells row by row. */
+          let low = 0, high = found.entries.length;
+          while (low < high) {
+            const middle = (low + high) >> 1;
+            if (found.entries[middle]!.row < box.row1) low = middle + 1;
+            else high = middle;
+          }
+          let joined = "";
+          for (let at = low; at < found.entries.length && found.entries[at]!.row <= box.row2; at++) {
+            if (--work.left < 0) return null;
+            const item = found.entries[at]!;
+            if (item.column >= box.column1 && item.column <= box.column2) joined += cellShows(found, item.reference) ?? "";
+            if (joined.length > budget.left) return null;
+          }
+          /* The whole range is kept once; each formula that names it keeps its ends. */
+          if (joined.length > 2 * RANGE_EDGE) keep(joined);
+          known.set(key, joined);
+          return joined;
+        },
+      };
+    };
+    for (const { reference, formula } of formulas) {
+      if (reference) { reading(own, reference); if (requiresConsent) break; continue; }
+      const read = formulaReading(formula, sourceOf(own), budget.left);
+      if (!read || read.text.length > budget.left) { requiresConsent = true; break; }
+      if (read.references) keep(read.text);
+    }
+  };
+  pass(false);
+  if (differs && !requiresConsent) pass(true);
   // Attribute values are separate from the displayed text and from each other.
   return { text: [pieces.join(""), compact.join(""), separated.join(""), ...shown.readings(4 * length + (1 << 20)), ...formulaLiterals, ...formulaReadings, ...attributes].join("\n"), requiresConsent };
 }

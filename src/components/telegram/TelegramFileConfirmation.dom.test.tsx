@@ -19,10 +19,22 @@ const { TelegramFileConfirmation } = await import("./TelegramFileConfirmation");
 const { fileConfirmationText, typesetFileConfirmation } = await import("@/lib/telegram/bot/fileConfirmationContract");
 const { setLocale, translate } = await import("@/lib/i18n");
 
-/* The page's waits (a poll every few seconds, a beat to read the name) run at test speed. */
-const windowTimers = harness.dom as unknown as { setTimeout: (callback: () => void, delay?: number, ...rest: unknown[]) => unknown };
-const realSetTimeout = windowTimers.setTimeout.bind(harness.dom);
-windowTimers.setTimeout = (callback, delay, ...rest) => realSetTimeout(callback, (delay ?? 0) >= 1_000 ? 5 : delay, ...rest);
+/* The page's waits (a poll every few seconds, a beat to read the name) sit in a queue the test advances by hand:
+   nothing runs because time passed on the machine, so a loaded runner cannot change what a step shows. */
+const POLL_MS = 3_000;
+const CONFIRM_MS = 1_600;
+type Timer = { id: number; callback: () => void; due: number };
+const clock = { now: 0, nextId: 1, queue: [] as Timer[] };
+const windowTimers = harness.dom as unknown as {
+  setTimeout: (callback: () => void, delay?: number) => number;
+  clearTimeout: (id?: number) => void;
+};
+windowTimers.setTimeout = (callback, delay) => {
+  const id = clock.nextId++;
+  clock.queue.push({ id, callback, due: clock.now + (delay ?? 0) });
+  return id;
+};
+windowTimers.clearTimeout = id => { clock.queue = clock.queue.filter(timer => timer.id !== id); };
 
 const VIEW: FileConfirmationView = {
   id: "fixture-confirmation", digest: "a".repeat(64), kind: "document", chatId: "-1000000000101", chatTitle: "Fixture reports", topicId: null,
@@ -49,6 +61,7 @@ let mounted: { root: Root; host: HTMLDivElement } | null = null;
 
 beforeEach(() => {
   server.reads = []; server.poll = []; opened.length = 0;
+  clock.now = 0; clock.queue = [];
   server.decide = () => jsonResponse({}, 500);
   server.confirm = () => jsonResponse({ state: "linked", name: "Owner" });
   (harness.dom as unknown as { open: unknown }).open = (url: string, target?: string) => { opened.push({ url, target }); return null; };
@@ -82,8 +95,17 @@ async function mount(locale: "en" | "uk" = "en"): Promise<HTMLDivElement> {
   return host;
 }
 const click = (element: Element | null) => act(async () => { (element as HTMLElement).click(); await settle(); });
-/** Waits for the page's own timers (a poll, the beat before the cookie is taken). */
-const wait = (ms = 60) => act(async () => { await new Promise<void>(resolve => realSetTimeout(() => resolve(), ms)); await settle(); });
+/** Moves the page's clock on by `ms`, runs each timer that falls due in order, and lets the renders and answers they cause settle. */
+const advance = (ms: number) => act(async () => {
+  clock.now += ms;
+  for (let due = clock.queue.filter(timer => timer.due <= clock.now).sort((one, other) => one.due - other.due || one.id - other.id)[0]; due;
+    due = clock.queue.filter(timer => timer.due <= clock.now).sort((one, other) => one.due - other.due || one.id - other.id)[0]) {
+    clock.queue = clock.queue.filter(timer => timer !== due);
+    due.callback();
+    await settle();
+  }
+});
+const stage = (host: HTMLElement) => host.querySelector("[data-telegram-step-stage]")?.getAttribute("data-telegram-step-stage");
 const gate = (host: HTMLElement) => host.querySelector("[data-file-confirmation-gap]");
 const heading = (host: HTMLElement) => host.querySelector("[data-file-confirmation-heading]")?.textContent;
 const reads = () => harness.calls.filter(call => call.method === "GET" && call.url.startsWith("/api/telegram/bot/confirmation"));
@@ -136,8 +158,14 @@ test("an owner with no linked Telegram links one, signs in with it, and then see
   expect(host.querySelector("[data-telegram-step-stage]")?.getAttribute("data-telegram-step-stage")).toBe("waiting");
   expect(host.textContent).toContain(translate("en", "team.telegram.waiting"));
   expect(host.querySelector<HTMLAnchorElement>("[data-telegram-step-open]")?.getAttribute("href")).toBe("https://t.me/fixture_bot?start=one-time");
-  await wait();
-  expect(host.querySelector("[data-telegram-step-stage]")?.getAttribute("data-telegram-step-stage")).toBe("code");
+  /* The first poll hears nothing yet and asks again later; the second finds the code sent. */
+  await advance(POLL_MS - 1);
+  expect(stage(host)).toBe("waiting");
+  await advance(1);
+  expect(stage(host)).toBe("waiting");
+  expect(posts("/api/team/session/telegram/tg-1")).toHaveLength(1);
+  await advance(POLL_MS);
+  expect(stage(host)).toBe("code");
   expect(reads()).toHaveLength(1);
   typeInto(host.querySelector<HTMLInputElement>("[data-telegram-code]")!, "123 456");
   await act(async () => { host.querySelector<HTMLFormElement>("[data-telegram-code-form]")!.requestSubmit(); await settle(); });
@@ -155,12 +183,16 @@ test("an owner with no linked Telegram links one, signs in with it, and then see
   server.confirm = () => jsonResponse({ state: "confirmed", name: "Owner" });
   await click(host.querySelector('[data-telegram-step="sign-in"]'));
   expect(posts("/api/team/session/telegram").at(-1)).toEqual({ purpose: "sign-in" });
-  await wait();
+  await advance(POLL_MS);
+  expect(stage(host)).toBe("code");
   typeInto(host.querySelector<HTMLInputElement>("[data-telegram-code]")!, "654321");
   await act(async () => { host.querySelector<HTMLFormElement>("[data-telegram-code-form]")!.requestSubmit(); await settle(); });
-  expect(host.querySelector("[data-telegram-step-stage]")?.getAttribute("data-telegram-step-stage")).toBe("confirmed");
+  expect(stage(host)).toBe("confirmed");
   expect(host.textContent).toContain(translate("en", "team.signIn.signingInAs", { name: "Owner" }));
-  await wait();
+  /* The name stays for the beat; the cookie is taken only when it ends. */
+  await advance(CONFIRM_MS - 1);
+  expect(posts("/api/team/session/telegram/tg-1").some(body => (body as { action?: string }).action === "complete")).toBe(false);
+  await advance(1);
   expect(posts("/api/team/session/telegram/tg-1").some(body => (body as { action?: string }).action === "complete")).toBe(true);
   expect(reads()).toHaveLength(3);
   expect(gate(host)).toBeNull();
@@ -175,7 +207,7 @@ test("a Telegram account the owner has not linked is told so, nothing is left be
   server.confirm = () => jsonResponse({ state: "needs_approval", firstName: "Stranger", ownerName: "Owner" });
   const host = await mount();
   await click(host.querySelector('[data-telegram-step="sign-in"]'));
-  await wait();
+  await advance(POLL_MS);
   typeInto(host.querySelector<HTMLInputElement>("[data-telegram-code]")!, "111111");
   await act(async () => { host.querySelector<HTMLFormElement>("[data-telegram-code-form]")!.requestSubmit(); await settle(); });
   expect(posts("/api/team/session/telegram/tg-1").some(body => (body as { action?: string }).action === "not-me")).toBe(true);
@@ -194,7 +226,7 @@ test.each([
   server.confirm = () => jsonResponse(answer);
   const host = await mount();
   await click(host.querySelector('[data-telegram-step="link"]'));
-  await wait();
+  await advance(POLL_MS);
   typeInto(host.querySelector<HTMLInputElement>("[data-telegram-code]")!, "222222");
   await act(async () => { host.querySelector<HTMLFormElement>("[data-telegram-code-form]")!.requestSubmit(); await settle(); });
   expect(host.querySelector('[role="alert"]')?.textContent).toBe(translate("en", key));

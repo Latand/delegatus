@@ -524,6 +524,22 @@ test("Office imported parts and alternate displayed text stay behind confirmatio
         sheetOf('<row r="1"><c r="A1" t="s"><v>1</v></c></row>'))],
     );
   }
+  /* The secret exists only in a formula that joins formula cells that stored no result, as XlsxWriter and openpyxl leave them. */
+  const cell = (reference: string, formula: string) => `<c r="${reference}"><f>${formula}</f></c>`;
+  const text = (reference: string, index: number) => `<c r="${reference}" t="s"><v>${index}</v></c>`;
+  for (const flag of [true, false]) {
+    const suffix = flag ? "recalc" : "plain";
+    fixtures.push(
+      [`chain-one-${suffix}.xlsx`, "xlsx", xlsx(sheetOf(`<row r="1">${text("A1", 0)}${text("B1", 1)}${cell("C1", "A1")}${cell("D1", "C1&amp;B1")}</row>`), "", flag, halves)],
+      [`chain-both-${suffix}.xlsx`, "xlsx", xlsx(sheetOf(`<row r="1">${text("A1", 0)}${text("B1", 1)}${cell("C1", "A1")}${cell("E1", "B1")}${cell("D1", "C1&amp;E1")}</row>`), "", flag, halves)],
+      [`chain-range-${suffix}.xlsx`, "xlsx", xlsx(sheetOf(`<row r="1">${text("A1", 0)}${text("B1", 1)}${cell("C1", "A1")}${cell("D1", "B1")}${cell("F1", "CONCAT(C1:E1)")}</row>`), "", flag, halves)],
+      [`chain-cross-sheet-${suffix}.xlsx`, "xlsx", xlsx(
+        sheetOf(`<row r="1">${text("A1", 0)}${cell("C1", "A1&amp;Keys!B1")}</row>`), "", flag, halves,
+        sheetOf(`<row r="1">${text("A1", 1)}${cell("B1", "A1")}</row>`))],
+      /* Formulas that name one another never settle, so what they show cannot be read. */
+      [`chain-loop-${suffix}.xlsx`, "xlsx", xlsx(sheetOf(`<row r="1">${cell("A1", "B1")}${cell("B1", "A1&amp;C1")}${text("C1", 0)}</row>`), "", flag, halves)],
+    );
+  }
   for (const [name, extension, bytes] of fixtures) {
     const file = documentFile(path.join(HANDOFF, name), bytes);
     const error = await refusal(() => sendDocument({ path: file }, { clientRequestId: name }));
@@ -534,6 +550,33 @@ test("Office imported parts and alternate displayed text stay behind confirmatio
   const neutral = documentFile(path.join(HANDOFF, "neutral.xlsx"), officeZip(officeParts("xlsx")));
   transport.script("sendDocument", ok({ message_id: 199, date: T0 + 100 }));
   expect(await sendDocument({ path: neutral }, { clientRequestId: "neutral-office" })).toMatchObject({ messageIds: [199] });
+  expect(transport.callsOf("sendDocument")).toHaveLength(1);
+});
+
+test("a staffing table of a thousand rows with a lookup on every row sends without a secret warning", async () => {
+  await allowedTeam();
+  const people = 1200;
+  const strings = ["Name", "Department", "Hours", "Sales", "Operations", "Finance", "Support"];
+  /* Each row counts and sums by its department over whole columns and over a fixed span, and looks its own name up: the shapes spreadsheet writers emit. */
+  const lookups = (row: number) => [
+    `COUNTIF(B:B,B${row})`, `SUMIF($B$2:$B$5000,B${row},C:C)`, `VLOOKUP(A${row},$A$2:$C$${people + 1},3,FALSE)`,
+  ];
+  let rows = '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c></row>';
+  for (let row = 2; row <= people + 1; row++) {
+    const name = strings.push(`Employee ${row} of Team ${row % 17}`) - 1;
+    const formulaCells = lookups(row).map((formula, at) => `<c r="${"DEF"[at]}${row}"><f>${formula}</f></c>`).join("");
+    rows += `<row r="${row}"><c r="A${row}" t="s"><v>${name}</v></c><c r="B${row}" t="s"><v>${3 + (row % 4)}</v></c><c r="C${row}"><v>${140 + (row % 30)}</v></c>${formulaCells}</row>`;
+  }
+  const workbook = officeZip({
+    ...officeParts("xlsx"),
+    "xl/workbook.xml": '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Staff" sheetId="1" r:id="rId1"/></sheets><calcPr calcId="124519" fullCalcOnLoad="1"/></workbook>',
+    "xl/worksheets/sheet1.xml": `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rows}</sheetData></worksheet>`,
+    "xl/sharedStrings.xml": `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${strings.map(text => `<si><t>${text}</t></si>`).join("")}</sst>`,
+    "xl/_rels/workbook.xml.rels": '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rIdT" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>',
+  });
+  const file = documentFile(path.join(HANDOFF, "staffing-wide.xlsx"), workbook);
+  transport.script("sendDocument", ok({ message_id: 202, date: T0 + 100 }));
+  expect(await sendDocument({ path: file }, { clientRequestId: "wide-spreadsheet" })).toMatchObject({ messageIds: [202] });
   expect(transport.callsOf("sendDocument")).toHaveLength(1);
 });
 
