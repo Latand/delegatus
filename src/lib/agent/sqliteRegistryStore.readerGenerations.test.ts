@@ -49,6 +49,7 @@ test("loading a fully hot journal preserves row order without a point read per a
   let lastRead = "", journalRows = 0, journalGets = 0;
   const fresh = new SqliteAgentRegistryStore(dataset.filename, {
     normalize: normalizeRegistry,
+    initialSnapshot: () => { throw new Error("the dataset must already exist"); },
     onRowPayloadRead: (collection, count) => {
       if (collection !== "agentStateJournal") return;
       journalRows += count;
