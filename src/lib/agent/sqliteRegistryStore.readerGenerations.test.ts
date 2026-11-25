@@ -2,11 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { heapStats } from "bun:jsc";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 
 import { normalizeRegistry, type RegistryFile } from "./registry";
 import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "./registryPerformanceDataset";
 import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { readAttribution } from "@/lib/readAttribution";
+import * as sqliteReads from "@/lib/sqliteReadAttribution";
 
 const directories: string[] = [];
 const stores: SqliteAgentRegistryStore[] = [];
@@ -40,6 +42,62 @@ function accessors(): number {
   Bun.gc(true);
   return (heapStats().objectTypeCounts as Record<string, number>).GetterSetter ?? 0;
 }
+
+test("loading a fully hot journal preserves row order without a point read per additional row", () => {
+  const { reader, writer, dataset } = fixture();
+  const before = reader.readOnlySnapshot().file;
+  let lastRead = "", journalRows = 0, journalGets = 0;
+  const fresh = new SqliteAgentRegistryStore(dataset.filename, {
+    normalize: normalizeRegistry,
+    onRowPayloadRead: (collection, count) => {
+      if (collection !== "agentStateJournal") return;
+      journalRows += count;
+      if (lastRead === "registry.get") journalGets += count;
+    },
+  });
+  stores.push(fresh);
+  const original = readAttribution.sync;
+  readAttribution.sync = (name, work, ...args) => {
+    const result = original(name, work, ...args);
+    lastRead = name;
+    return result;
+  };
+  try {
+    const keys = Array.from({ length: 80 }, (_, index) => `journal-fixture-${79 - index}`);
+    writer.mutate(file => {
+      for (const [index, id] of keys.entries()) {
+        file.agentStateJournal[id] = { version: 1, id, subject: "fixture", at: index, from: null, to: null,
+          reason: "fixture", divergence: null, writer: { pid: 42, startIdentity: "fixture", bootEpoch: "fixture" },
+          release: "fixture", evidence: [] };
+      }
+    }, false);
+    const after = fresh.readOnlySnapshot().file;
+    expect(Object.keys(after.agentStateJournal)).toEqual([...Object.keys(before.agentStateJournal), ...keys]);
+    expect(keys.map(key => after.agentStateJournal[key]!.at)).toEqual(keys.map((_, index) => index));
+    expect(before.agentStateJournal[keys[0]!]).toBeUndefined();
+    expect(journalRows).toBe(Object.keys(after.agentStateJournal).length);
+    expect(journalGets).toBe(0);
+  } finally { readAttribution.sync = original; }
+});
+
+test("a cold projection page decodes repeated claim text once and keeps each operation's delivery", () => {
+  const { reader, dataset } = fixture();
+  const parse = spyOn(sqliteReads, "parseSqliteJson");
+  let file: RegistryFile, common = 0;
+  try {
+    file = reader.readOnlySnapshot().file;
+    for (const [json] of parse.mock.calls) {
+      if (json === '{"launchProfile":{"mcpServers":null},"generations":[]}') common++;
+    }
+  } finally { parse.mockRestore(); }
+  expect(dataset.coldOperationIds.length).toBeGreaterThan(100);
+  expect(common).toBeGreaterThan(0);
+  expect(common).toBeLessThanOrEqual(Math.ceil(dataset.coldRows / 64));
+  for (const id of dataset.coldOperationIds.slice(0, 4)) {
+    const owner = file.deliveryOperationOwners[id]!;
+    expect(file.heldDeliveries[owner.deliveryId]?.command.operationId).toBe(id);
+  }
+});
 
 test("a preparation after a few commits replays them and assembles no new view of the whole registry", async () => {
   const { dataset, reader, writer, judge, receipt, completeLoads } = fixture();

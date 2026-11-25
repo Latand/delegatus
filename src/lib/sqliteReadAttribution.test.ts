@@ -3,13 +3,29 @@ import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { observeSqlite, parseSqliteJson, sqliteReadCounters } from "./sqliteReadAttribution";
+import { nextSqliteRows, observeSqlite, parseSqliteJson, sqliteReadCounters } from "./sqliteReadAttribution";
 import { readAttribution, startReadAttributionSampler } from "./readAttribution";
 import { createViewerLoopMonitor } from "./viewerLoopMonitor";
 import { openCurrentDatabase } from "./state/currentDatabase";
 import { initializeStateCollections, SqliteStateCollection } from "./state/sqliteStateStore";
 import { Worker } from "node:worker_threads";
 import { attachReadAttributionWorker } from "./readAttribution";
+
+test.each([false, true])("a payload cutoff leaves the next row on the SQLite cursor (observed: %s)", observed => {
+  const raw = new Database(":memory:");
+  const db = observed ? observeSqlite(raw, "registry") : raw;
+  try {
+    const rows = db.query<{ value: string }, []>("SELECT 'aa' AS value UNION ALL SELECT 'bb' UNION ALL SELECT 'oversized' UNION ALL SELECT 'z'").iterate();
+    const batch = () => {
+      let chars = 0;
+      return nextSqliteRows(rows, 4, row => (chars += row.value.length) >= 4).map(row => row.value);
+    };
+    expect(batch()).toEqual(["aa", "bb"]);
+    expect(batch()).toEqual(["oversized"]);
+    expect(batch()).toEqual(["z"]);
+    expect(batch()).toEqual([]);
+  } finally { db.close(); }
+});
 
 test("mixed collections and later bind slots keep the generic reader label", () => {
   const db = observeSqlite(new Database(":memory:"), "state");

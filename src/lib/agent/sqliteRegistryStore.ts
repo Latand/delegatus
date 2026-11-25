@@ -3202,18 +3202,55 @@ export class SqliteAgentRegistryStore {
     return file;
   }
 
+  /** The read transaction has proved this collection has no archived rows.
+      Keep the header reader's page boundaries and buffer at most sixteen
+      payloads, stopping the batch as soon as one takes it over 16 Ki chars. */
+  private *fullyHotPayloadSteps(collection: RowCollection): Generator<Pick<StoredRow, "row_key" | "row_order" | "value_json">> {
+    const page = this.db.prepare<Pick<StoredRow, "row_key" | "row_order" | "value_json">, [string, number]>(
+      "SELECT row_key,row_order,value_json FROM registry_rows WHERE collection=? AND row_order>? ORDER BY row_order LIMIT 16");
+    let after = -1;
+    try {
+      for (;;) {
+        let count = 0;
+        const rows = page.iterate(collection, after);
+        try {
+          for (;;) {
+            let chars = 0;
+            const batch = nextSqliteRows(rows, 16, row => (chars += row.value_json.length) >= 16_384);
+            if (!batch.length) break;
+            count += batch.length;
+            after = batch[batch.length - 1]!.row_order;
+            yield* batch;
+          }
+        } finally { rows.return?.(); }
+        if (count < 16) return;
+      }
+    } finally { page.finalize(); }
+  }
+
   private *loadHotSteps(): Generator<void, SqliteRegistrySnapshot> {
     yield* this.refreshColdKeySteps();
     const input: Record<string, unknown> = { version: 2,entries: {},receipts: {} };
+    const hasCold = this.db.query("SELECT 1 FROM registry_cold WHERE collection=? LIMIT 1");
     for (const collection of ROW_COLLECTIONS) {
       const values: Record<string, unknown> = {};
       let after = -1;
+      if (!this.coldKeys.size || !hasCold.get(collection)) {
+        for (const row of this.fullyHotPayloadSteps(collection)) {
+          this.onRowPayloadRead?.(collection, 1);
+          values[row.row_key] = this.parseRow(collection, row.row_key, row.value_json, true);
+          yield;
+        }
+        input[collection] = values;
+        continue;
+      }
+      const headerPage = this.db.query<Pick<StoredRow,"row_key"|"row_order">, [string, number]>(
+        "SELECT row_key,row_order FROM registry_rows WHERE collection=? AND row_order>? ORDER BY row_order LIMIT 16");
+      const payload = this.db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM registry_rows WHERE collection=? AND row_key=?");
       for (;;) {
         // A limit on hot results can scan thousands of cold compatibility
         // rows before finding sixteen matches. Bound candidate headers first.
-        const headers = this.db.query<Pick<StoredRow,"row_key"|"row_order">, [string, number]>(
-          "SELECT row_key,row_order FROM registry_rows WHERE collection=? AND row_order>? ORDER BY row_order LIMIT 16").all(collection, after);
-        const payload = this.db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM registry_rows WHERE collection=? AND row_key=?");
+        const headers = headerPage.all(collection, after);
         for (const header of headers) {
           after = header.row_order;
           if (!this.coldKeys.has(grantDecisionKey(collection, header.row_key))) {
@@ -3999,8 +4036,16 @@ export class SqliteAgentRegistryStore {
         CASE WHEN json_type(value_json,'$.requestDigest')='text' AND json_extract(value_json,'$.requestDigest')!=''
           THEN json_extract(value_json,'$.command.operationId') END AS operation_id
         FROM registry_archive WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids);
+      // Many rows in one page carry identical projected JSON. Share its
+      // decoding, while evaluating each row and recording its own operation.
+      const decodedClaims = new Map<string, unknown>();
       for (const row of claims) {
-        this.coldRowProjections.set(row.id,{ claimsGrant: rowClaimsBeyondBaselineGrant(parseSqliteJson(row.claims, this.db)),operationId: row.operation_id });
+        let decoded = decodedClaims.get(row.claims);
+        if (decoded === undefined) {
+          decoded = parseSqliteJson(row.claims, this.db);
+          decodedClaims.set(row.claims, decoded);
+        }
+        this.coldRowProjections.set(row.id,{ claimsGrant: rowClaimsBeyondBaselineGrant(decoded),operationId: row.operation_id });
         yield;
       }
     }
