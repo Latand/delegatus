@@ -1,4 +1,4 @@
-# Telegram file confirmation: the owner sign-in loop and computed spreadsheet text
+# Telegram file confirmation: the owner sign-in loop
 
 ## Requirement
 
@@ -20,7 +20,7 @@ member has no linked Telegram account, and the page kept returning to
   ships alone.
 - (c) The detector stops flagging an ordinary spreadsheet with formulas or
   computed text, keeps real secrets in spreadsheets detected, and gets a
-  regression test.
+  regression test. Deferred to its own task, see "(c)" below.
 
 All references are to `origin/main` at `54ed826d`, read with `git show` and
 `git grep`.
@@ -235,105 +235,37 @@ control of that account. A session records its method and no Telegram id, so
 the check reads the owner's current link (`ownerTelegramGap` in
 `src/lib/team/actor.ts`).
 
-## (c) `computed_text` on ordinary spreadsheets
+## (c) `computed_text` on ordinary spreadsheets: deferred to its own task
 
-### Where it is classified
+Superseded. This lane ships (a) and (b) and leaves the secret detector
+(`src/lib/telegram/bot/officeDocuments.ts`, `documents.ts`) exactly as on
+`origin/main`. An earlier design that replaced the `fullCalcOnLoad` trigger
+with formula readings was built and reviewed for four rounds, and each round
+found a new way for a secret to escape: a split secret joined through formula
+cells that stored no result, per-formula range charging that flagged large
+staffing tables, and, at the final re-check, secrets computed by a formula.
+On 2026-11-25 the operator accepted the fallback: restore the detector to
+`origin/main`, merge (a)+(b), and take the precision work in its own task
+(33bbeab2) with a design stage.
 
-- `src/lib/telegram/bot/officeDocuments.ts:602-603` sets `requiresConsent`
-  when a SpreadsheetML `calcPr` element has `fullCalcOnLoad` set to 1, true or
-  on.
-- `officeDocuments.ts:346-358` passes that flag to the visitor for each part.
-- `src/lib/telegram/bot/documents.ts:565-566` turns it into
-  `{ secretClass: "computed_text", line: 1 }`. `:576-578` reports it as
-  `document_secret`.
+What stays true after this lane:
 
-Nothing else sets the class. The trigger is the workbook's recalculation
-flag, and that flag comes from library defaults. In the wheels the previous
-attempt inspected, openpyxl 3.1.5 defaults `CalcProperties.fullCalcOnLoad`
-to true (`openpyxl/workbook/properties.py`). XlsxWriter 3.3.4 sets
-`calc_on_load = True` and writes `fullCalcOnLoad="1"` unless the mode is
-manual (`xlsxwriter/workbook.py`, `_write_calc_pr`). So almost every workbook
-an agent writes in Python is flagged, even with no formula at all. This
-explains the observed staffing table and its fixed "line 1". Meanwhile, a
-workbook saved by Excel usually lacks the flag, so a secret it builds with a
-formula goes unflagged.
-
-The case the flag stands in for is in `src/lib/telegram/bot/service.test.ts:503`.
-A secret is split across `A1` and `B1`, and `C1 = CONCAT(A1,B1)` shows it
-whole. The scan already reads every stored text: shared strings, inline
-strings, cached values, string literals joined per formula (`:623-628`),
-number-format literals, comments, names and properties. Each cell is read as
-its own line (`officeDocuments.ts:192`). So the only text it misses is text
-that a formula joins from cells.
-
-### The narrow change
-
-The whole change is in `officeDocuments.ts`. `documents.ts` stays unchanged.
-
-1. Remove the `fullCalcOnLoad` trigger (`:602-603`). The recalculation flag
-   stops counting as evidence of a secret.
-2. Read computed text directly. For each worksheet formula, build a
-   **formula reading**: walk the formula as written, in order, and append
-   each string literal and the stored text of each single-cell reference
-   (`A1`, `$A$1`), with no separators, and the text cells of each range
-   (`A1:B9`, `A:B`, `1:3`), row by row. A reference may name a sheet of the
-   same workbook (`Keys!A1`, `'Q 1'!A1:B2`). Then append each reading as
-   its own line to that part's text, which `documentSecret` scans as it does
-   today, under the class that matches.
-   - Stored text: for `t="s"`, the shared string by index, read from the
-     part the workbook's relationships name (rich runs joined, phonetic runs
-     left out). For `t="inlineStr"`, the inline text. Otherwise, `<v>`.
-   - Shared strings are resolved per package prefix before the sheets are
-     read, as Word styles already are (`:350-355`). All members are in
-     memory at that point.
-   - Sheet names resolve through `xl/workbook.xml` and its relationships per
-     package, as shared strings do; each foreign sheet is parsed once. Text
-     cells (`s`, `inlineStr`, `str`) count inside a range, so `SUM` over
-     numbers reads as nothing. References to other workbooks, 3-D spans,
-     defined names, table references and dependents of a shared formula
-     (`<f t="shared">` without text) are not read.
-   - Bounds: at most 64 references per formula. Total reading characters
-     per package must stay within the displayed-reading budget the parser
-     already uses (`4 × length + 1 MiB`, `:637`). If the budget runs out,
-     set `requiresConsent` and stop reading further formulas. Ranges also
-     share a package bound of 20 000 000 visited cells, with the same result. `computed_text`
-     then keeps one honest meaning: computed text that could not be inspected
-     within the limits.
-
-Effect: `CONCAT(A1,B1)` over the split secret reads as the whole token and is
-still refused, with or without the flag. A connection URL whose password sits
-in its own cell is refused the same way. `=B2&" "&C2` reads as a name,
-`=SUM(B2:B10)` reads as nothing, `=IF(D2>0,"yes","no")` reads as a number
-and two words, and none of these are flagged. Every secret stored literally
-in a cell, formula, comment, name or property is matched exactly as before.
-
-### Regression tests for (c)
-
-In `service.test.ts`, next to the fixtures at `:493-515`:
-
-- an **ordinary workbook** written the way openpyxl writes one:
-  `fullCalcOnLoad="1"`, text in `xl/sharedStrings.xml`, `t="s"` cells,
-  `=SUM(...)`, `=B2&" "&C2`, `=IF(...)`, no cached values. It sends with no
-  confirmation and no `document_secret`;
-- the existing `forced-recalc.xlsx` keeps refusing as `document_secret`;
-- the same split secret over **shared-string** cells, without
-  `fullCalcOnLoad`, refuses as `document_secret`. This proves that the
-  reading resolves shared strings and no longer depends on the flag;
-- a literal secret in a shared string still refuses;
-- the split secret joined by `CONCAT(A1:B1)`, by `TEXTJOIN("",TRUE,A1:B1)` and
-  by `Report!A1&Keys!A1` across two sheets refuses as `document_secret`, with
-  `fullCalcOnLoad` and without it.
-
-A focused case in `src/lib/telegram/bot/officeDocuments.test.ts` covers the
-budget: a workbook whose formula readings exceed it reports `requiresConsent`.
+- The detector classifies a workbook with `fullCalcOnLoad` as
+  `computed_text` and reports it as `document_secret`, so an ordinary
+  openpyxl or XlsxWriter workbook still asks the owner to confirm.
+- With (a) in place that confirmation is reachable: the page names what is
+  missing and offers the Link Telegram and Telegram sign-in steps in place.
+  The false positive costs one confirmation and no longer loops.
+- The observation for the follow-up: the trigger is the library default flag,
+  not the content, so almost every Python-written workbook is flagged, while
+  an Excel-saved workbook that builds a secret with a formula is not.
 
 ## Checks for the build lane
 
 The pinned specification governs. Run only the touched test files, one per
 invocation, under `flock /var/tmp/llv-heavy-gate.lock timeout 900`, with
 isolated `HOME`, `XDG_CONFIG_HOME`, `TMPDIR` and `LLV_STATE_DIR`:
-`route.test.ts`, the new DOM test, `service.test.ts`,
-`officeDocuments.test.ts`, `src/lib/team/contract.test.ts`, and the
+`route.test.ts`, the new DOM test, `src/lib/team/contract.test.ts`, and the
 conversation-window driver case with `LLV_CONVERSATION_BROWSER_TEST=1`. Full
 typecheck stays with CI. The review runs on Claude.
 
@@ -358,7 +290,5 @@ typecheck stays with CI. The review runs on Claude.
   state again and the old request expires in 10 minutes.
 - **A deep link from the `pairing` state to the relay settings.** There is no
   stable route for that dialog today. The state names where to go in text.
-- **Formula readings through defined names, table references, other
-  workbooks, 3-D sheet spans and shared-formula dependents.** Ranges and
-  cells of a sheet named in the same workbook are read (text cells only; a
-  numeric cell adds nothing to a range).
+- **Spreadsheet detector precision (c).** Task 33bbeab2 owns it, with a design
+  stage before any build.
