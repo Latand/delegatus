@@ -5,7 +5,7 @@ import { AttemptTempStore, sweepAttemptTemps, type AttemptTempAuthority, type At
 import { pipelineChangeSource, pipelineRecordReader } from "@/lib/pipelines/store";
 import { laneFinish, FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFinish";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
-import { tempSweepMode } from "@/lib/tempSweep";
+import { attemptTempJournalPath, tempSweepMode } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import fs from "node:fs";
 import { createHash } from "node:crypto";
@@ -20,6 +20,7 @@ import { ATTEMPT_SCRATCH_AUDIT_INTERVAL_MS, ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS, AT
 
 /** The sweep helper serves every minute tick from one process. */
 const checkoutReads: RetainedCheckoutReads = new Map();
+const ALLOCATION_WINDOW_MS = 5_000;
 
 export async function attemptTempAuthority(owner: AttemptTempOwner, _inventory = new RepositoryLinkInventory(), now = Date.now,
   retentionMs = FINISHED_LANE_RETENTION_MS, scratch = false): Promise<AttemptTempAuthority> {
@@ -132,7 +133,7 @@ export async function backfillAttemptTempRetention(store: AttemptTempStore, opti
     catch (error) { if (!stateDatabaseBusy(error)) throw error; deferred++; break; }
     checked++;
   }
-  if (options.audit && !page.length) store.postponeAudit("auditAfter", Date.now() + ATTEMPT_SCRATCH_AUDIT_INTERVAL_MS);
+  if (options.audit && !page.length) store.completeRetentionAudit(Date.now() + ATTEMPT_SCRATCH_AUDIT_INTERVAL_MS);
   return { checked, updated, ...(errors ? { errors } : {}), ...(deferred ? { deferred } : {}) };
 }
 
@@ -140,14 +141,21 @@ export async function backfillAttemptTempRetention(store: AttemptTempStore, opti
  * id. The feed is durable, so a helper that dies can replay the same deadlines.
  * The independent legacy audit covers missing or truncated change history. */
 export function scheduleAttemptTempChanges(store: AttemptTempStore, remaining: () => number) {
-  const source = pipelineChangeSource(), cursor = store.schedulePosition();
+  const source = pipelineChangeSource();
+  let cursor = store.schedulePosition();
   const limit = 8;
-  const page = source.changesAfter(cursor.revision, cursor.rowKey, limit);
-  if (cursor.revision > page.revision) {
+  let page = source.changesAfter(cursor.revision, cursor.rowKey, limit);
+  const historyGap = () => cursor.revision > page.revision || cursor.revision < page.changeFloor
+    || cursor.revision === page.changeFloor && cursor.rowKey !== "";
+  if (historyGap()) {
     store.scheduleCheckpoint(page.changeFloor, "", true);
-    return;
+    if (remaining() <= 0) return;
+    cursor = store.schedulePosition();
+    // Bounded pruning can leave physical rows below the advertised floor.
+    // Read again from that floor so their keys cannot rewind the checkpoint.
+    page = source.changesAfter(cursor.revision, cursor.rowKey, limit);
+    if (historyGap()) return;
   }
-  if (cursor.revision < page.changeFloor) store.scheduleCheckpoint(page.changeFloor, "", true);
   const seen = new Set<string>();
   for (const entry of page.entries) {
     if (remaining() <= 0) return;
@@ -201,24 +209,32 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
       accountCpuSeconds: seconds => { if (Number.isFinite(seconds) && seconds > 0) cleanupChildCpuSeconds += seconds; },
       prepare: async () => {
         store.upgradeScratchRetention();
-        const end = sweepMonotonicNow() + attemptTempRemaining(1_000);
+        const end = sweepMonotonicNow() + attemptTempRemaining(ALLOCATION_WINDOW_MS);
+        const feedEnd = Math.min(end, sweepMonotonicNow() + 250);
+        scheduleAttemptTempChanges(store, () => feedEnd - sweepMonotonicNow());
+        if (attemptScratchAuditDue(store.schedulePosition().auditAfter, Date.now())) {
+          const auditEnd = Math.min(end, sweepMonotonicNow() + 350);
+          backfill = await backfillAttemptTempRetention(store, { audit: true, remaining: () => auditEnd - sweepMonotonicNow() });
+        }
         const remaining = () => end - sweepMonotonicNow();
-        scheduleAttemptTempChanges(store, remaining);
         for (const owner of store.allocationDue(Date.now(), 4)) {
           if (remaining() <= 0) break;
+          let bytes: number | null = null;
           try {
             const before = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
-            if (!before?.isDirectory() || before.isSymbolicLink() || `${before.dev}:${before.ino}` !== owner.identity) continue;
-            const measured = await measureAttemptAllocation(owner.directory, { budgetMs: Math.max(1, remaining()) });
-            const after = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
-            if (after?.isDirectory() && !after.isSymbolicLink() && `${after.dev}:${after.ino}` === owner.identity) {
-              if (measured.unreadable) store.measurementFailed(owner.directory, Date.now());
-              else store.measure(owner.directory, measured.bytes, Date.now());
+            if (!before && !store.recoveredTrash(owner.directory)
+              && !fs.lstatSync(attemptTempJournalPath(owner.directory), { throwIfNoEntry: false })) bytes = 0;
+            if (before?.isDirectory() && `${before.dev}:${before.ino}` === owner.identity) {
+              const measured = await measureAttemptAllocation(owner.directory, { budgetMs: Math.max(1, remaining()) });
+              const after = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
+              if (after?.isDirectory() && `${after.dev}:${after.ino}` === owner.identity)
+                bytes = measured.unreadable ? Math.max(owner.bytes, measured.bytes) : measured.bytes;
             }
-          } catch { /* Keep the last allocation until this bounded visit retries. */ }
+          } catch { /* Keep the last allocation when the observation could not complete. */ }
+          // Advance even on ENOENT, a replaced inode or a refused read.
+          // Ownership and any quarantine remain available for normal replay.
+          store.recordAllocation(owner, bytes, Date.now());
         }
-        if (attemptScratchAuditDue(store.schedulePosition().auditAfter, Date.now()))
-          backfill = await backfillAttemptTempRetention(store, { audit: true, remaining });
       },
       beforeRootRetirement: (directory, identity) => {
         sourceAttributedBeforeRetirement += attributeCopyBeforeRootRetirement(store, directory, identity);

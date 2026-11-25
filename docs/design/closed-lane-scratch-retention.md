@@ -37,12 +37,27 @@ Release and the terminal change feed record a scratch deadline from confirmed
 completion. Stage scratch becomes due strictly after 24 hours, including
 under pressure. Roots marked retain-until-close use the lane's finish clock.
 An independent 128-root metadata audit repairs older ledger entries without
-reading directory contents. Its durable cursor also visits open lanes.
+reading directory contents. It visits open lanes and standalone launches.
+Allocation measurement cannot use the audit's share of the preparation budget.
+A change-feed gap wakes the audit. An audit already in progress finishes its
+current page sequence and starts another to cover earlier keys. The feed
+resumes above the retained history floor.
 Ownership revisions and root bindings are checked again after awaited reads.
 Schema and index creation uses `assertStateStartupMutation`.
 
-The ordinary tick selects up to 32 due roots by recorded expiry. Under
-pressure a durable cursor visits expired roots in allocation order.
+The ordinary tick selects up to 32 due roots in expiry and directory order.
+It checkpoints each visit before awaiting the root so successive ticks reach
+the rest of the backlog, even when earlier roots are ready to retry. A root
+that would get a partial window after another visit starts on the next tick.
+The cursor wraps after the due range ends. Under pressure a separate durable
+cursor visits expired roots in allocation order.
+An independent allocation queue visits up to four registered roots per tick
+within the five-second preparation window. Live roots and roots with zero or
+stale allocation remain measurable during retirement backoff.
+Absent paths, replaced inodes and refused observations advance that queue.
+An absent path with surviving quarantine custody keeps its recorded allocation
+until recovery resolves it. A removal visit that uses recorded bytes leaves the
+last measurement time available to the allocation queue.
 Temporary preservation holds suppress the allocation forecast while
 retaining the owner's deadline. That date nominates a future visit.
 Identity, live consumers, check custody, keep markers and ownership fence
