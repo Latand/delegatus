@@ -747,7 +747,10 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
     let currentDirectory = owner.directory;
     let requiredExpiry: number | null = null;
     const finished = (state: AttemptTempState) => (!!options.cleaner || owner.pipelineId !== null) && (state === "closed" || state === "expired");
-    const disposableClosed = (state: AttemptTempState) => pressure && finished(state);
+    // Confirmed ordinary expiry still needs the bounded permission walk for
+    // large trees. The walk repeats the retirement proof before deletion.
+    const disposableClosed = (state: AttemptTempState) =>
+      finished(state) && (pressure || options.scheduledOnly === true && state === "expired");
     const noteFailure = (detail: string | null) => {
       try { return store.rootFailure(owner.directory, detail); }
       catch (error) {

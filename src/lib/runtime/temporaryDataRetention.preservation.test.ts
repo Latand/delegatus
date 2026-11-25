@@ -125,13 +125,15 @@ for (const replay of [false, true]) for (const seam of ["close", "authority"]) f
    };
    const read = fs.readFileSync, open = fs.opendirSync, readQueue = fs.readSync;
    const queueSpy = spyOn(fs, "readSync").mockImplementation(((...args: unknown[]) => {
-     if (planted && mutation === "queue-unavailable") throw Object.assign(new Error("fixture queue failure"), { code: "EIO" });
-     if (planted && mutation === "queue-overflow") {
-       const buffer = args[1] as Buffer;
-       buffer.writeInt32LE(-1); buffer.writeUInt32LE(0x4000, 4); buffer.writeUInt32LE(0, 8); buffer.writeUInt32LE(0, 12);
-       return 16;
-     }
-     return (readQueue as (...values: unknown[]) => unknown)(...args);
+     // Inject failure on the mutation queue. Replay also reads its durable
+     // intent during restoration, and that read must see the original bytes.
+     const fault = mutation === "queue-unavailable" || mutation === "queue-overflow";
+     if (!planted || !fault || fs.readlinkSync(`/proc/self/fd/${args[0]}`) !== "anon_inode:inotify")
+       return (readQueue as (...values: unknown[]) => unknown)(...args);
+     if (mutation === "queue-unavailable") throw Object.assign(new Error("fixture queue failure"), { code: "EIO" });
+     const buffer = args[1] as Buffer;
+     buffer.writeInt32LE(-1); buffer.writeUInt32LE(0x4000, 4); buffer.writeUInt32LE(0, 8); buffer.writeUInt32LE(0, 12);
+     return 16;
    }) as typeof fs.readSync);
    const mountSpy = spyOn(fs, "readFileSync").mockImplementation(((file: unknown, ...args: unknown[]) => {
      const value = (read as (...a: unknown[]) => unknown)(file, ...args);
@@ -158,7 +160,7 @@ for (const replay of [false, true]) for (const seam of ["close", "authority"]) f
        return allowed;
      } }) });
      expect(planted, JSON.stringify({ report, mounts, armed, closed })).toBeTrue();
-     expect(report.errors).toBe(0);
+     expect(report.errors, JSON.stringify(report.kept)).toBe(0);
      expect(report.removed).toBe(mutation === "none" ? 1 : 0);
      if (mutation === "none") {
        expect(fs.existsSync(directory)).toBeFalse();
