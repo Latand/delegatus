@@ -87,7 +87,7 @@ export async function confirmPlace(handle: FileHandle, expected: string): Promis
 }
 
 export async function gitStatus(parent: string, name: string): Promise<ResolvedSecretDestination["git"]> {
-  const env: NodeJS.ProcessEnv = {
+  const env: Partial<NodeJS.ProcessEnv> = {
     LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_OPTIONAL_LOCKS: "0",
   };
   for (const key of Object.keys(process.env)) {

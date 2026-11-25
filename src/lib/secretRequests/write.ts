@@ -68,7 +68,7 @@ async function interrupt(record: Writing, code: SecretRefusal, actor: SecretActo
   return saved;
 }
 
-async function recoverLocked(record: Writing, now: number): Promise<SecretRequestRecord> {
+async function recoverLocked(record: Writing, now: number, refusal?: SecretRefusal): Promise<SecretRequestRecord> {
   const filename = record.destination.path;
   const dir = await SecretParentDirectory.open(path.dirname(filename), record.write.parent);
   try {
@@ -91,7 +91,7 @@ async function recoverLocked(record: Writing, now: number): Promise<SecretReques
       await dir.unlink(temporaryName(record));
       await dir.handle.sync();
     }
-    return await interrupt(record, "secret_entry_interrupted", "recovery", now);
+    return await interrupt(record, refusal ?? "secret_entry_interrupted", refusal ? "operator" : "recovery", now);
   } finally { await dir.handle.close(); }
 }
 
@@ -174,7 +174,7 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
       let handle: Awaited<ReturnType<SecretParentDirectory["create"]>> | undefined;
       let temporary: FileIdentity | undefined;
       let content: Buffer | undefined;
-      let renamed = false;
+      let renameAttempted = false;
       let refreshed = false;
       try {
         const length = secretLength(value, record.format, record.minLength);
@@ -252,8 +252,8 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
         if (!isPrivateFile(owned) || !sameInode(owned, inode) || !sameEntry(await dir.stat(name), existing)) {
           throw new SecretRequestError("secret_destination_changed");
         }
+        renameAttempted = true;
         await dir.rename(tmp, name);
-        renamed = true;
         await checkpoint?.("renamed");
         await dir.handle.sync();
         await checkpoint?.("directory-synced");
@@ -265,7 +265,12 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
         return result;
       } catch (error) {
         const refusal = secretError(error, fsCode(error) === "ELOOP" ? "secret_destination_link" : "secret_destination_unavailable");
-        if (writing && dir && !renamed) {
+        if (writing && dir && renameAttempted) {
+          // A rejected rename can still have installed the file. Settle
+          // from its durable inode checkpoint before allowing any retry.
+          const current = findSecretRequestRecord(id);
+          if (current?.state === "writing") await recoverLocked(current, now(), refusal.code);
+        } else if (writing && dir) {
           const tmp = temporaryName(writing);
           if (temporary) {
             const stat = await dir.temporaryStat(tmp);
@@ -284,8 +289,6 @@ export async function writeSecretRequest(id: string, revision: string, value: Ui
           if (refusal.code === "secret_expired") await expirePending(id, now());
           else await refusePending(id, refusal.code, now());
         }
-        // Once rename may have landed, keep its inode checkpoint for read
-        // recovery. Replaying the write cannot overwrite a committed value.
         throw refusal;
       } finally {
         content?.fill(0);

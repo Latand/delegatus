@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -243,4 +244,21 @@ test("a later writer recovers a committed inode before replacing the same path",
   expect(await readSecretRequest(first.id, NOW)).toMatchObject({ state: "entered" });
   expect(await readSecretRequest(second.id, NOW)).toMatchObject({ state: "entered" });
   expect(fs.readFileSync(filename, "utf8")).toBe("later\n");
+});
+
+test.skipIf(process.platform !== "linux")("settles an installed inode even if the rename reports failure", async () => {
+  const filename = path.join(project, "entry");
+  const request = await create({ kind: "file", path: filename });
+  const rename = fsp.rename;
+  const interrupted = spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+    await rename(from, to);
+    if (String(to).startsWith("/proc/self/fd/")) throw new Error("rename reply interrupted");
+  });
+  try {
+    await expect(writeSecretRequest(request.id, request.destinationRevision, Buffer.from("fixture"), fixedClock))
+      .rejects.toMatchObject({ code: "secret_destination_unavailable" });
+    expect(await readSecretRequest(request.id, NOW)).toMatchObject({ state: "entered" });
+    expect(fs.readFileSync(filename, "utf8")).toBe("fixture\n");
+    expect(fs.readdirSync(project)).toEqual(["entry"]);
+  } finally { interrupted.mockRestore(); }
 });

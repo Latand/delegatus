@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { authorizeSecretCaller, type SecretCallerWorld } from "./caller";
 
 function fixture() {
-  type Conversation = NonNullable<ReturnType<SecretCallerWorld["conversation"]>>;
+  type Conversation = NonNullable<ReturnType<SecretCallerWorld["conversation"]>> & { parentConversationId?: string };
   const conversations = new Map<string, Conversation>();
   const stageRecords = new Map<string, ReturnType<SecretCallerWorld["stages"]>>();
   const add = (id: string, data: Partial<Conversation> = {}) => {
@@ -40,14 +40,14 @@ test("admits a seat, MCP launches, and a live stage with a server-attributed sou
 test("refuses caller-claimed ancestry, a rotated seat, unsupported origins and foreign projects", () => {
   const { add, stage, world } = fixture();
   add("manual");
-  add("claimed", { ...{ parentConversationId: "seat" } });
+  add("claimed", { parentConversationId: "seat" });
   add("foreign", { launcher: "seat", project: "other" });
   add("old-seat");
   add("old-child", { launcher: "old-seat" });
   add("relay", { role: "owner-relay", launcher: "seat" });
   // ensureForkedConversation copies parentConversationId into the launch
   // profile of the seat's parallel self. It leaves launcher absent.
-  add("parallel-self", { ...{ parentConversationId: "seat" } });
+  add("parallel-self", { parentConversationId: "seat" });
   stage("no-source", null);
   stage("foreign-stage", "seat", "other");
   for (const id of ["manual", "claimed", "foreign", "old-child", "relay", "parallel-self", "no-source", "foreign-stage", "remote-only"]) {
