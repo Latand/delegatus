@@ -43,6 +43,7 @@ try {
       if (mode === "references-error") throw new Error("references-unavailable");
       return mode !== "references-held";
     },
+    taskReferences: () => mode === "task-held",
   });
   process.stdout.write(JSON.stringify(report));
 } finally { store.close(); }

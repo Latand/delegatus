@@ -395,6 +395,9 @@ export function mountPointsUnder(directory: string, via = "", read = (file: stri
 export function inspectTree(directory: string, options: {
   limit?: number; threshold?: number; git?: boolean | "linked"; mounts?: readonly string[];
   preserveEvidence?: boolean;
+  preserveKeep?: boolean;
+  /** The caller proved this root's own Git registration. Nested Git still holds. */
+  registeredWorktree?: boolean;
   /** A quarantine rename may refresh only this directory's ctime. */
   ignoreRootCtime?: boolean;
   stat?: (file: string) => fs.Stats;
@@ -416,12 +419,14 @@ export function inspectTree(directory: string, options: {
       if (result.newestMs > (options.threshold ?? Infinity)) return result;
       if (!own.isDirectory()) continue;
       const names = fs.readdirSync(current);
+      if (options.preserveKeep && names.includes(".delegatus-keep")) return { ...result, hold: "evidence" };
       if (options.preserveEvidence && names.some(name => name === ".artifacts" || isPreservedMedia(name)))
         return { ...result, hold: "evidence" };
       if (options.git !== false) {
         if (options.git === "linked" && names.includes("worktrees") && (path.basename(current) === ".git" || names.includes("objects")))
           return { ...result, hold: "git-checkout" };
-        if (names.includes(".git") && (options.git !== "linked" || !stat(path.join(current, ".git")).isDirectory())
+        if (names.includes(".git") && !(options.registeredWorktree && current === directory)
+          && (options.git !== "linked" || !stat(path.join(current, ".git")).isDirectory())
           && gitCheckoutMarker(path.join(current, ".git"), stat(path.join(current, ".git")).isDirectory()))
           return { ...result, hold: "git-checkout" };
         if (options.git !== "linked" && names.includes("objects") && ["HEAD", "config", "refs"].some(name => names.includes(name)))

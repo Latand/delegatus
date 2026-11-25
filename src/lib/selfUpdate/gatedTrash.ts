@@ -23,11 +23,15 @@ export type GatedTrashRow = {
   legacyRow?: Record<string, unknown>;
   /** The release's revision and its age when it left its path. */
   context?: { sha: string; age?: number };
+  /** Cleaner ownership is durable before the release leaves its path. */
+  cleaner?: { passId: string; proof: string; bytes?: number };
 };
 export type GatedTrashOutcome = { removed: true } | { removed: false; reason: string };
 export type GatedTrashOptions = {
   /** Runs after the rename with the gate open; a reason restores the tree. */
   beforeGate?: (trash: string) => Promise<string | null>;
+  /** Last owner check after inventory, immediately before deletion starts. */
+  beforeRemove?: () => string | null | Promise<string | null>;
   /** Runs with the gate closed. Throwing restores the tree, then rethrows. */
   observe: (trash: string, gate: string) => Promise<string | null>;
   /** Runs with the gate closed and cwd at the trash: pass "." paths. */
@@ -47,16 +51,18 @@ export const isGatedTrashRow = (row: unknown): row is GatedTrashRow => {
   return !!value && typeof value.gate === "string" && typeof value.trash === "string" && typeof value.directory === "string"
     && typeof value.identity === "string" && Number.isSafeInteger(value.uid)
     && sibling(value.gate, value.directory) && value.trash === path.join(value.gate, path.basename(value.directory))
-    && (value.legacyTrash === undefined || typeof value.legacyTrash === "string" && sibling(value.legacyTrash, value.directory));
+    && (value.legacyTrash === undefined || typeof value.legacyTrash === "string" && sibling(value.legacyTrash, value.directory))
+    && (value.cleaner === undefined || typeof value.cleaner.passId === "string" && /^[a-f0-9-]{36}$/.test(value.cleaner.passId)
+      && typeof value.cleaner.proof === "string" && (value.cleaner.bytes === undefined || Number.isSafeInteger(value.cleaner.bytes) && value.cleaner.bytes >= 0));
 };
 
 /** Journal, then rename the tree out of its path. Null when it is not a plain directory. */
-export function quarantineTree(directory: string, journal: string, context?: GatedTrashRow["context"]): GatedTrashRow | null {
+export function quarantineTree(directory: string, journal: string, context?: GatedTrashRow["context"], cleaner?: GatedTrashRow["cleaner"]): GatedTrashRow | null {
   const original = fs.lstatSync(directory);
   if (!original.isDirectory() || original.isSymbolicLink()) return null;
   const gate = path.join(path.dirname(directory), `${trashName(directory)}${randomUUID()}`);
   const row: GatedTrashRow = { directory, gate, trash: path.join(gate, path.basename(directory)),
-    identity: `${original.dev}:${original.ino}`, uid: original.uid, ...(context ? { context } : {}) };
+    identity: `${original.dev}:${original.ino}`, uid: original.uid, ...(context ? { context } : {}), ...(cleaner ? { cleaner } : {}) };
   writeJsonDurably(journal, row);
   fs.mkdirSync(gate, { mode: 0o700 });
   fs.renameSync(directory, row.trash);
@@ -85,6 +91,24 @@ export function adoptLegacyTrash(journal: string, row: { directory: string; tras
 export function reopenGate(row: GatedTrashRow) {
   const gate = fs.lstatSync(row.gate, { throwIfNoEntry: false });
   if (gate?.isDirectory() && !gate.isSymbolicLink() && (!process.getuid || gate.uid === process.getuid())) fs.chmodSync(row.gate, 0o700);
+}
+
+/** Conservatively restore a Cleaner quarantine after restart when deletion has
+ * not begun. A partial deletion remains quarantined for an explicitly guarded
+ * recovery pass instead of being mistaken for a complete release. */
+export function restoreGatedTrash(journal: string, row: GatedTrashRow): boolean {
+  if (row.deleting || fs.lstatSync(row.directory, { throwIfNoEntry: false })) return false;
+  const gate = fs.lstatSync(row.gate, { throwIfNoEntry: false });
+  const tree = fs.lstatSync(row.trash, { throwIfNoEntry: false });
+  if (!gate || !gate.isDirectory() || gate.isSymbolicLink() || !tree || !tree.isDirectory() || tree.isSymbolicLink()
+    || identityOf(tree) !== row.identity || tree.uid !== row.uid
+    || (process.getuid && (gate.uid !== process.getuid() || tree.uid !== process.getuid()))) return false;
+  fs.chmodSync(row.gate, 0o700);
+  fs.renameSync(row.trash, row.directory);
+  fs.rmdirSync(row.gate);
+  dropInventory(journal);
+  fs.unlinkSync(journal);
+  return true;
 }
 
 const identityOf = (stat: fs.Stats) => `${stat.dev}:${stat.ino}`;
@@ -235,6 +259,7 @@ export async function settleGatedTrash(journal: string, row: GatedTrashRow, opti
           if (!entries) reason = "inventory-bound";
           else writeJsonDurably(inventoryFile(journal), [...entries], { space: 0 });
         }
+        if (!reason && options.beforeRemove) reason = await options.beforeRemove();
       }
     } catch (error) { failure = error; }
     if (!reason && failure === undefined) {
