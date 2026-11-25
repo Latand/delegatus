@@ -1,3 +1,4 @@
+import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { stateLockAttempt } from "./lockWait";
 import { FileTransactionBusyError } from "./fileTransaction";
@@ -118,6 +119,24 @@ export class LegacyDocumentStore<D> {
       return this.readMarker(database)
         ? this.options.fromRows(this.open(database).snapshot())
         : this.options.readLegacy(filePath);
+    });
+  }
+
+  /** For projections determined entirely by stored rows. The ordered source changes on a
+   * collection commit or database replacement. Each caller owns its returned projection. */
+  existingIndex<V>(build: (document: D) => Map<string, V>): (filePath: string) => Map<string, V> {
+    const indices = new WeakMap<readonly DocumentRow[], Map<string, V>>();
+    return filePath => this.guard(() => {
+      const database = this.databasePath(filePath);
+      if (!this.readMarker(database)) return build(this.options.readLegacy(filePath));
+      const rows = this.open(database).loadReadonly();
+      let index = indices.get(rows);
+      if (!index) {
+        const detached = performanceSpans.sync("state.copy", () => rows.map(row => structuredClone(row)), rows.length);
+        index = build(this.options.fromRows(detached));
+        indices.set(rows, index);
+      }
+      return performanceSpans.sync("state.copy", () => structuredClone(index), index.size);
     });
   }
 
