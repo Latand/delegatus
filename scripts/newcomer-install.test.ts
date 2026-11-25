@@ -70,6 +70,15 @@ test("a fresh legacy receipt passes and a capable package requires this launch's
   await checkRetentionCase("legacy-clean", { status: "completed", completionProtocol: "unavailable", errorCount: 0 }, null);
 });
 
+test("legacy receipts reject foreign run IDs and retention write diagnostics", async () => {
+  await checkRetentionCase("legacy-foreign-receipt", {
+    status: "unavailable", reason: "legacy retention receipt contains a run ID", completionProtocol: "unavailable",
+  }, "legacy retention receipt contains a run ID");
+  await checkRetentionCase("legacy-post-rename-fsync", {
+    status: "completed", completionProtocol: "unavailable", errorCount: 1,
+  }, "retention completed with 1 error(s)");
+});
+
 test.each([
   ["legacy-error", { status: "completed", errorCount: 1 }, "retention completed with 1 error(s)"],
   ["legacy-missing", { status: "unavailable", reason: "retention receipt timed out" }, "retention receipt timed out"],
@@ -137,12 +146,17 @@ const server = createServer((request, response) => {
   if (scenario === "post-rename-fsync") setTimeout(() => complete({ ...clean, errors: [] }, 1), 75);
   if (scenario === "pending-close") setTimeout(() => publish({ ...clean, runId }), 75);
   if (scenario === "foreign-receipt" || scenario === "foreign-marker") complete(clean);
-  if (["legacy-clean", "legacy-error", "legacy-old-mtime", "legacy-old-timestamp"].includes(scenario)) {
+  if (["legacy-clean", "legacy-error", "legacy-old-mtime", "legacy-old-timestamp", "legacy-foreign-receipt", "legacy-post-rename-fsync"].includes(scenario)) {
     publish({
       ...clean,
       at: scenario === "legacy-old-timestamp" ? clean.at : new Date().toISOString(),
+      ...(scenario === "legacy-foreign-receipt" && { runId: "other-launch" }),
       errors: scenario === "legacy-error" ? [${JSON.stringify(syntheticError)}] : [],
     }, scenario === "legacy-old-mtime" ? 1 : undefined);
+    if (scenario === "legacy-post-rename-fsync") {
+      console.error("[self-update] cannot write retention report: synthetic directory fsync failure");
+      console.log("[self-update] retention removed 0; reclaimed 0 cache bytes; 1 error(s)");
+    }
   }
   if (scenario === "late-stale" || scenario === "late-fresh") {
     setTimeout(() => {
@@ -169,7 +183,7 @@ server.listen(Number(process.argv[4]), "127.0.0.1", () => {
       directory, rows, retentionTimeoutMs: ["missing", "pending-close", "late-stale", "legacy-missing"].includes(scenario) ? 300 : legacy ? 1_000 : 3_000,
     }).catch((error: Error) => error.message);
     expect(await result).toBe(failure ? `neither-cli: ${failure}` : undefined);
-    const completedLegacy = legacy && (scenario === "legacy-clean" || scenario === "legacy-error");
+    const completedLegacy = legacy && ["legacy-clean", "legacy-error", "legacy-post-rename-fsync"].includes(scenario);
     expect(rows).toEqual([{
       case: label, rootStatus: 200, cli: expected.presence, message: expected.message, passed: failure === null,
       ...(retention && { retention: { ...retention, ...(completedLegacy && { at: JSON.parse(readFileSync(receipt, "utf8")).at }) } }),

@@ -88,8 +88,10 @@ async function stop(child) {
   }
 }
 
-async function waitForRetention(file, { runId, launchedAt, terminal, launcherExited, timeoutMs }) {
+async function waitForRetention(file, { runId, launchedAt, terminal, diagnostic, launcherExited, timeoutMs }) {
   const deadline = performance.now() + timeoutMs;
+  const legacyDiagnosticSettleMs = 250;
+  let legacyReceiptFirstSeenAt;
   let report;
   while (performance.now() < deadline) {
     if (launcherExited()) return { status: "unavailable", reason: "launcher exited before retention receipt" };
@@ -101,6 +103,9 @@ async function waitForRetention(file, { runId, launchedAt, terminal, launcherExi
         || !Number.isFinite(candidate.reclaimedCacheBytes) || candidate.reclaimedCacheBytes < 0) {
         return { status: "unavailable", reason: "invalid retention receipt" };
       }
+      if (!runId && Object.hasOwn(candidate, "runId")) {
+        return { status: "unavailable", reason: "legacy retention receipt contains a run ID" };
+      }
       if (!runId && (at < launchedAt || lstatSync(file).mtimeMs < launchedAt)) {
         return { status: "unavailable", reason: "retention receipt predates launcher" };
       }
@@ -111,12 +116,24 @@ async function waitForRetention(file, { runId, launchedAt, terminal, launcherExi
     }
     const completion = runId ? terminal() : report && { errorCount: report.errors.length };
     if (completion) {
+      const reportedErrors = diagnostic();
+      if (!runId && !completion.errorCount && reportedErrors === null) {
+        legacyReceiptFirstSeenAt ??= performance.now();
+        if (performance.now() - legacyReceiptFirstSeenAt < legacyDiagnosticSettleMs) {
+          await delay(Math.min(25, Math.max(0, deadline - performance.now())));
+          continue;
+        }
+      }
       if (runId && completion.runId !== runId) return { status: "unavailable", reason: "retention completion belongs to another launch" };
       if (runId && report?.runId !== runId) return { status: "unavailable", reason: "retention receipt belongs to another launch" };
       const at = Date.parse(report.at);
+      // Older releases log the retention summary after recording a failed
+      // durable write. The receipt may already have been renamed into place
+      // with an empty errors array before the directory sync fails.
+      const errorCount = Math.max(completion.errorCount, reportedErrors ?? 0);
       // The receipt may contain absolute paths and raw errors. Publish only
       // the error count and normalized pass timestamp.
-      return { status: "completed", at: new Date(at).toISOString(), errorCount: completion.errorCount };
+      return { status: "completed", at: new Date(at).toISOString(), errorCount };
     }
     await delay(Math.min(200, Math.max(0, deadline - performance.now())));
   }
@@ -177,6 +194,11 @@ export async function startCase(label, env, expected, { directory, rows, retenti
             const matches = [...output.matchAll(/\[self-update\] retention pass ([^ ]+) complete; (\d+) error\(s\)/g)];
             const match = matches.at(-1);
             return match ? { runId: match[1], errorCount: Number(match[2]) } : null;
+          },
+          diagnostic: () => {
+            const matches = [...output.matchAll(/\[self-update\] retention removed \d+; reclaimed \d+ cache bytes; (\d+) error\(s\)/g)];
+            const match = matches.at(-1);
+            return match ? Number(match[1]) : null;
           },
         });
       if (!runId) row.retention.completionProtocol = "unavailable";
