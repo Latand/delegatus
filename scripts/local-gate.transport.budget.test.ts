@@ -3,12 +3,11 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { createPublicationFixtures } from "./publicationHook.fixture";
-import { PUBLICATION_TRANSPORT_MS } from "../src/lib/git/publicationCheckReceipt";
 import { publishPipelineBranch } from "../src/lib/pipelines/git";
 import { pipelineCorpus } from "../src/lib/pipelines/fixtures/corpus";
 import { findPipelineRecord, loadPipelines, savePipelines } from "../src/lib/pipelines/store";
 import { realExec, type ExecPort } from "../src/lib/workflows/provision";
-import { DEFAULT_PUBLICATION_PUSH_MS, PUBLICATION_PACK_MARGIN_MS } from "../src/lib/pipelines/gateBudget";
+import { DEFAULT_PUBLICATION_PUSH_MS, PUBLICATION_PACK_MARGIN_MS, PUBLICATION_TRANSPORT_HOOK_MS } from "../src/lib/pipelines/gateBudget";
 
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
@@ -114,7 +113,7 @@ test.each([["short preparation", 10_000], ["long preparation", 40_000]] as const
       }
       if (command === "git" && args[0] === "push") {
         const expectedBudget = Math.min(DEFAULT_PUBLICATION_PUSH_MS,
-          Math.max(PUBLICATION_TRANSPORT_MS, 2 * preparationMs) + PUBLICATION_PACK_MARGIN_MS);
+          Math.max(PUBLICATION_TRANSPORT_HOOK_MS, 2 * preparationMs) + PUBLICATION_PACK_MARGIN_MS);
         const deadline = Number(env?.LLV_GATE_PUSH_DEADLINE);
         expect(options?.timeoutMs).toBe(expectedBudget);
         expect(deadline).toBeGreaterThanOrEqual(preparationCompletedAt + expectedBudget - PUBLICATION_PACK_MARGIN_MS);

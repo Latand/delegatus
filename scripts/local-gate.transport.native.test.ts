@@ -97,7 +97,7 @@ for (const capability of ["absent", "unsupported", "malformed"] as const) {
     delete f.env.LLV_GATE_PUBLICATION_RECEIPT;
     const marker = path.join(f.dir, "scripts/local-gate-capabilities.json");
     if (capability === "absent") fs.rmSync(marker);
-    else fs.writeFileSync(marker, capability === "unsupported" ? '{"publicationPrepare":2}' : '{');
+    else fs.writeFileSync(f.writablePath("scripts/local-gate-capabilities.json"), capability === "unsupported" ? '{"publicationPrepare":4}' : '{');
     // Historical candidates are checked by the current canonical gate. The
     // prepared receipt drives the current native hook and trusted transport gate.
     f.git("-c", "core.hooksPath=/dev/null", "add", "scripts/local-gate-capabilities.json", "scripts/local-gate.ts");

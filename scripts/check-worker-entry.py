@@ -371,7 +371,7 @@ def reuse_listener():
             if pid == child:
                 result = os.waitstatus_to_exitcode(status)
                 leaked = finish_children(cancelled)
-                return (result if result >= 0 else 128 - result) or int(leaked)
+                return result or int(leaked)
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         os.close(fd)
@@ -797,7 +797,7 @@ def main():
                     refuse(pid, "admission connect deadline expired")
                     close_ticket(pid)
         leaked = finish_children(cancelled)
-        return (result if result >= 0 else 128 - result) or int(leaked)
+        return result or int(leaked)
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         for pid in list(tickets):
@@ -812,9 +812,23 @@ def main():
         os.close(wake_write)
 
 
+def exit_with_command_status(result):
+    if result >= 0:
+        sys.exit(result)
+    # Cleanup is complete. Mirror the kernel wait status so the owner can
+    # distinguish a signal from a command that explicitly exited with 128+N.
+    sig = -result
+    if sig != signal.SIGKILL:
+        libc.prctl(4, 0, 0, 0, 0)  # PR_SET_DUMPABLE: avoid a second core dump.
+        signal.signal(sig, signal.SIG_DFL)
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, {sig})
+    os.kill(os.getpid(), sig)
+    sys.exit(128 + sig)
+
+
 if __name__ == "__main__":
     try:
-        sys.exit(main())
+        exit_with_command_status(main())
     except Exception as error:
         print(f"worker entry refused: {error}", file=sys.stderr)
         sys.exit(69)

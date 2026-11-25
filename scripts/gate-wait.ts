@@ -81,6 +81,11 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
   let queueTiming: string | null = path.join(dir, "queue-timing");
   try { if (queueTiming) fs.mkdirSync(queueTiming, { mode: 0o700 }); }
   catch { queueTiming = null; }
+  const waitOnly = path.join(dir, "wait-only.json");
+  const invalidateWaitOnly = () => {
+    try { fs.rmSync(waitOnly, { force: true }); }
+    catch { /* The broker also requires a live recorder and active child ticket. */ }
+  };
   let code = 127;
   let wrapperSignal: string | null = null;
   let cancellation: Terminal["cancellation"] = null;
@@ -93,17 +98,28 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
     const dispatch = recorderGatePaths(log, process.env.TMPDIR ?? tmpdir());
     if (dispatch.log !== log || dispatch.root !== root || physical(dispatch.root) !== rootDirectoryIdentity)
       throw new Error("gate temporary root identity changed before dispatch");
+    const recorder = process.platform === "linux" ? cpuOwnerIdentity(process.pid) : null;
     const child = spawn("bash", [path.join(import.meta.dir, "gate-slot.sh"), ...command], {
       stdio: ["ignore", fd, "pipe"],
       env: { ...process.env, LLV_GATE_WAIT_STARTED: path.join(dir, "running"),
         LLV_GATE_TIMING_DIRECTORY: dir, LLV_GATE_TIMING_DIRECTORY_IDENTITY: physical(dir),
+        LLV_GATE_RECORD_WAIT_REQUEST: recorder ? waitOnly : undefined,
+        LLV_GATE_RECORD_WAIT_PARENT: recorder ? JSON.stringify(recorder) : undefined,
+        LLV_GATE_RECORD_WAIT_ONLY: undefined,
         ...(queueTiming ? { LLV_RECORDED_CHECK_WAIT_ROOT: queueTiming } : {}), ...(descriptor ? {
         LLV_RECORDED_CHECK_DIRECTORY: dir, LLV_RECORDED_CHECK_ID: descriptor.runId,
         LLV_GATE_RUNNER: "off", LLV_OWNED_RUN_TIMEOUT_MS: String(executionAllowance),
       } : {}) },
     });
+    const wrapper = descriptor || recorder ? producerCommandIdentity(child.pid) : null;
+    if (recorder && wrapper) {
+      try {
+        writeEnvelope(waitOnly, { version: 1, runId, log, command, directoryIdentity: physical(dir),
+          recorder, wrapper, scope: fs.readFileSync("/proc/self/cgroup", "utf8") });
+      } catch { /* A recorder without live identity cannot exempt a supervisor. */ }
+    }
     if (descriptor) {
-      descriptor.wrapper = producerCommandIdentity(child.pid) as Descriptor["recorder"] | null;
+      descriptor.wrapper = wrapper as Descriptor["recorder"] | null;
       writeEnvelope(path.join(dir, "descriptor.json"), descriptor);
     }
     console.log(`gate-slot: recording started\ngate-slot: runId=${runId}`);
@@ -123,6 +139,7 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
     const cancel = (reason: NonNullable<Terminal["cancellation"]>["reason"], signal: NodeJS.Signals) => {
       cancellation ??= { reason, at: Date.now(), atUptimeMs: custodyClock() };
       if (descriptor) writeEnvelope(path.join(dir, "cancellation.json"), cancellation);
+      invalidateWaitOnly();
       child.kill(signal);
     };
     const terminate = () => cancel("SIGTERM", "SIGTERM");
@@ -143,7 +160,11 @@ export async function recordGate(log: string, command: string[], manifestFile?: 
     } finally { clearTimeout(deadlineTimer); process.off("SIGTERM", terminate); process.off("SIGINT", interrupt); }
   } catch (error) {
     fs.writeSync(fd, `gate recorder: ${error instanceof Error ? error.message : error}\n`);
-  } finally { fs.fsyncSync(fd); fs.closeSync(fd); }
+  } finally {
+    invalidateWaitOnly();
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+  }
   // Publish only after the owned gate has finished cleanup and closed output.
   if (descriptor) {
     let report = null;

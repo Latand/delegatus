@@ -3,6 +3,7 @@
 import { useId } from "react";
 
 import { useLocale } from "@/lib/i18n";
+import { NeonTileSvg } from "@/components/EngineMark";
 import { STAGE_MARK } from "@/components/pipelines/pipelineBlockModel";
 import { STAGE_TONES, type StageChipState } from "@/components/pipelines/pipelineModel";
 
@@ -20,6 +21,7 @@ import { STAGE_TONE } from "./pipelineGraph";
  * name brings to mind: Opus the Claude spark itself, Sonnet the poet's quill,
  * Haiku a sakura blossom, Fable the fable's fox. The Codex line is its sky:
  * Sol a yellow sun, Astra a blazing blue sun, Terra the Earth, Luna the Moon.
+ * Antigravity's Neon line is its periodic-table cell (element 10, Ne).
  * A model with no glyph keeps the stage dot or mark the host always drew, so
  * nothing changes for it.
  *
@@ -298,5 +300,7 @@ function GlyphDrawing({ kind }: { kind: ModelGlyphKind }) {
           <circle className="mg-fill" cx="8" cy="8" r="6.4" mask={`url(#${id})`} />
         </svg>
       );
+    case "neon":
+      return <NeonTileSvg />;
   }
 }

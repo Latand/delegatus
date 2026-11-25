@@ -44,10 +44,20 @@ if [ ! -t 0 ]; then
     fi
   done
 fi
+gate_entry=scripts/local-gate.ts
+gate_bun=bun
+# The image's plain bun is a host CLI shim. The hook and its private scratch
+# must stay in the mount namespace that Git is publishing from.
+if [[ -f /.dockerenv && -x /usr/local/bin/bun-container && $(command -v bun) == /usr/local/bin/bun ]]; then
+  gate_bun=/usr/local/bin/bun-container
+fi
 if [ "${LLV_GATE_CANONICAL_TOOLS:-0}" = "1" ]; then
   gate_root=$(cd "$(dirname "$0")/.." && pwd)
-  gate_bun=${LLV_GATE_IMAGE_BUN:-bun}
-  case "$gate_bun" in bun|bun-container) ;; *) echo "pre-push: invalid canonical Bun selection" >&2; exit 1 ;; esac
-  exec "$gate_bun" "$gate_root/scripts/local-gate.ts" pre-push
+  gate_entry=$gate_root/scripts/local-gate.ts
+  case "${LLV_GATE_IMAGE_BUN:-bun}" in
+    bun) ;;
+    bun-container) [[ "$gate_bun" == /usr/local/bin/bun-container ]] || gate_bun=bun-container ;;
+    *) echo "pre-push: invalid canonical Bun selection" >&2; exit 1 ;;
+  esac
 fi
-exec bun scripts/local-gate.ts pre-push
+exec "$gate_bun" "$gate_entry" pre-push

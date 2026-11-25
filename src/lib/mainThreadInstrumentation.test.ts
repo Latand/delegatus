@@ -264,10 +264,13 @@ test("an unavailable proc root retains its synchronous span through the portable
 });
 
 test("slow registry wait logs contain caller coordinates without a private path", () => {
-  expect(registryWaitCallSite("Error\n at privateFn (/private/root/src/lib/agent/sqliteRegistryStore.ts:10:2)\n at caller (/private/root/src/lib/runtime/deliveryQueue.ts:42:7)")).toBe("src/lib/runtime/deliveryQueue.ts:42:7");
+  expect(registryWaitCallSite(`Error\n at privateFn (${root}/src/lib/agent/sqliteRegistryStore.ts:10:2)\n at caller (${root}/src/lib/runtime/structuredDeliveryQueue.ts:42:7)`)).toBe("src/lib/runtime/structuredDeliveryQueue.ts:42:7");
   expect(registryWaitCallSite("Error\n at privateFn (/private/root/private.ts:10:2)")).toBe("unresolved");
-  expect(registryWaitCallSite("Error\n at a (/private/root/.next/server/chunks/fixture.js:1:10)\n at b (/private/root/.next/server/chunks/fixture.js:1:42)"))
-    .toBe(".next/server/chunks/fixture.js:1:10 <- .next/server/chunks/fixture.js:1:42");
+  expect(registryWaitCallSite("Error\n at external (/private/root/src/lib/runtime/structuredDeliveryQueue.ts:42:7)")).toBe("unresolved");
+  expect(registryWaitCallSite("Error\n at external (/tmp/dist/fixture-account-319/review-owner.ts:1:65)")).toBe("unresolved");
+  expect(registryWaitCallSite(`Error\n at missing (${root}/.next/server/chunks/fixture-private-741/old.js:1:2)`)).toBe("unresolved");
+  expect(registryWaitCallSite(`Error\n at a (${root}/src/lib/runtime/structuredDeliveryQueue.ts:1:10)\n at b (${root}/src/lib/recordedChecks/hostFence.ts:1:42)`))
+    .toBe("src/lib/runtime/structuredDeliveryQueue.ts:1:10 <- src/lib/recordedChecks/hostFence.ts:1:42");
   const lines: string[] = [];
   resetBlockingWaitsForTests(line => lines.push(line));
   try {

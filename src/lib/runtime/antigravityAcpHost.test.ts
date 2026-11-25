@@ -20,6 +20,7 @@ import {
   validateAntigravitySessionId,
   type AntigravityAcpHostOptions,
 } from "./antigravityAcpHost";
+import type { DeliveryReceipt } from "./engineHost";
 import { FileRuntimeEventStore } from "./eventStore";
 
 interface ScriptedAcpServer {
@@ -741,6 +742,7 @@ describe("AntigravityAcpHost", () => {
     let host = await AntigravityAcpHost.start(makeOpts());
     const firstReceipt = await host.send({ id: "delivery-one", text: "First message" });
     expect(firstReceipt.outcome).toBe("turn-started");
+    if (firstReceipt.outcome !== "turn-started") throw new Error("expected turn-started");
     expect((await host.sessionMaterializationEvidence("delivery-one")).state).toBe("absent");
     fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
     await new Promise((r) => setTimeout(r, 20));
@@ -754,7 +756,7 @@ describe("AntigravityAcpHost", () => {
     expect((await host.sessionMaterializationEvidence("delivery-two")).state).toBe("absent");
     const promptsBeforeRetry = outboundPrompts.length;
     const retryReceipt = await host.send({ id: "delivery-one", text: "First message" });
-    expect(retryReceipt).toEqual(firstReceipt);
+    expect(retryReceipt).toEqual({ outcome: "turn-started", turnId: firstReceipt.turnId });
     await new Promise((r) => setTimeout(r, 20));
     expect(outboundPrompts.length - promptsBeforeRetry).toBe(0);
     const echoesForOne = eventStore.load(mintedSessionId)
@@ -962,7 +964,7 @@ describe("AntigravityAcpHost", () => {
     expect((await host.sessionMaterializationEvidence("edge-never-sent")).state).toBe("absent");
     const promptsBeforeRetentionRetry = outboundPrompts.length;
     const retentionRetry = await host.send(firstEntry);
-    expect(retentionRetry).toEqual(firstReceipt);
+    expect(retentionRetry).toEqual({ outcome: "turn-started", turnId: firstReceipt.turnId });
     expect(outboundPrompts.length - promptsBeforeRetentionRetry).toBe(0);
 
     // Cold send after eviction: 0 ledger scans, 0 full loads.
@@ -975,8 +977,31 @@ describe("AntigravityAcpHost", () => {
     expect(scanVisits).toBe(0);
     expect(loadCalls).toBe(0);
 
-    // Second SQLite connection sees committed indexed rows immediately without lock contention.
+    // Receipt confirmation reader (`readAntigravityConfirmedDelivery`) MUST also use O(1) SQLite point reads
+    // (0 ledger scans, 0 full loads) for both accepted and absent IDs when the index fingerprint matches,
+    // and fall back cleanly to the canonical JSONL ledger on busy DB or external ledger modification.
+    const { readAntigravityConfirmedDelivery } = await import("./antigravityAcpHost");
+    const confirmedAccepted = await readAntigravityConfirmedDelivery(retentionSessionId, firstEntry.id, { eventStore: baseEventStore });
+    expect(confirmedAccepted?.turnId).toBe(firstTurnId);
+    const confirmedAbsent = await readAntigravityConfirmedDelivery(retentionSessionId, "edge-never-sent", { eventStore: baseEventStore });
+    expect(confirmedAbsent).toBeNull();
+    expect(scanVisits).toBe(0);
+    expect(loadCalls).toBe(0);
+
+    // Concurrent WAL writer (`BEGIN IMMEDIATE`) neither blocks nor forces a full scan.
     const { Database } = await import("bun:sqlite");
+    const lockerDb = new Database(path.join(antigravityHome, "delivery-acceptance.sqlite"));
+    try {
+      lockerDb.exec("BEGIN IMMEDIATE");
+      const walConcurrent = await readAntigravityConfirmedDelivery(retentionSessionId, firstEntry.id, { eventStore: baseEventStore });
+      expect(walConcurrent?.turnId).toBe(firstTurnId);
+      expect(scanVisits).toBe(0);
+    } finally {
+      try { lockerDb.exec("ROLLBACK"); } catch { /* ignore */ }
+      lockerDb.close();
+    }
+
+    // Second SQLite connection sees committed indexed rows immediately without lock contention.
     const readerDb = new Database(path.join(antigravityHome, "delivery-acceptance.sqlite"), { readonly: true });
     try {
       const rowFirst = readerDb.query<{ state: string; turn_id: string }, [string, string]>(
@@ -1069,7 +1094,342 @@ describe("AntigravityAcpHost", () => {
     const echoesForFirst = baseEventStore.load(retentionSessionId)
       .filter((ev) => ev.kind === "item" && ev.deliveryEcho?.operationId === firstEntry.id);
     expect(echoesForFirst).toHaveLength(1);
+
+    // Replacing the canonical JSONL with a same-length alternate-ID file while the
+    // host is alive MUST invalidate both FileRuntimeEventStore's cache and the
+    // derived SQLite delivery index before host.release() appends `session-status`.
+    const canonicalLedger = path.join(stateDir, "runtime-events-edge", `${retentionSessionId}.jsonl`);
+    const altId = `X${firstEntry.id.slice(1)}`;
+    const beforeBytes = fs.readFileSync(canonicalLedger, "utf8");
+    const replacedBytes = beforeBytes.replaceAll(firstEntry.id, altId);
+    expect(replacedBytes.length).toBe(beforeBytes.length);
+    expect(replacedBytes).not.toBe(beforeBytes);
+    fs.writeFileSync(`${canonicalLedger}.replace`, replacedBytes);
+    fs.renameSync(`${canonicalLedger}.replace`, canonicalLedger);
+
+    expect(await readAntigravityConfirmedDelivery(retentionSessionId, firstEntry.id, { eventStore: baseEventStore, antigravityHome })).toBeNull();
+    expect((await readAntigravityConfirmedDelivery(retentionSessionId, altId, { eventStore: baseEventStore, antigravityHome }))?.turnId).toBe(firstTurnId);
+
     await host.release();
+
+    // After release appends session-status, BOTH the in-process eventStore cache AND
+    // cold/same-process confirmed-delivery readers MUST agree with the physical file.
+    const postReleaseEvents = baseEventStore.load(retentionSessionId);
+    expect(postReleaseEvents.filter((ev) => ev.kind === "item" && ev.deliveryEcho?.operationId === firstEntry.id)).toHaveLength(0);
+    expect(postReleaseEvents.filter((ev) => ev.kind === "item" && ev.deliveryEcho?.operationId === altId)).toHaveLength(1);
+    expect(await readAntigravityConfirmedDelivery(retentionSessionId, firstEntry.id, { eventStore: baseEventStore, antigravityHome })).toBeNull();
+    expect((await readAntigravityConfirmedDelivery(retentionSessionId, altId, { eventStore: baseEventStore, antigravityHome }))?.turnId).toBe(firstTurnId);
+    const coldEventStore = new FileRuntimeEventStore(path.join(stateDir, "runtime-events-edge"));
+    expect(await readAntigravityConfirmedDelivery(retentionSessionId, firstEntry.id, { eventStore: coldEventStore, antigravityHome })).toBeNull();
+    expect((await readAntigravityConfirmedDelivery(retentionSessionId, altId, { eventStore: coldEventStore, antigravityHome }))?.turnId).toBe(firstTurnId);
+
+    // External ledger append after release invalidates the stored fingerprint and forces
+    // canonical JSONL fallback so the newly appended acceptance is observed accurately.
+    const externalId = "edge-external-after-index";
+    const externalTurn = "antigravity:external-turn";
+    const latestSeq = baseEventStore.load(retentionSessionId).at(-1)!.seq;
+    fs.appendFileSync(
+      canonicalLedger,
+      `${JSON.stringify({
+        seq: latestSeq + 1,
+        kind: "item",
+        turnId: externalTurn,
+        phase: "completed",
+        item: { type: "userMessage", content: [{ type: "text", text: "external" }] },
+        deliveryEcho: { operationId: externalId, acceptedAt: new Date().toISOString() },
+      })}\n`,
+    );
+    let fallbackScansAfterExternal = 0;
+    baseEventStore.scan = async (session, visit) => origScan(session, (event) => {
+      fallbackScansAfterExternal += 1;
+      visit(event);
+    });
+    try {
+      const externalProof = await readAntigravityConfirmedDelivery(retentionSessionId, externalId, { eventStore: baseEventStore });
+      expect(externalProof?.turnId).toBe(externalTurn);
+      expect(fallbackScansAfterExternal).toBeGreaterThan(0);
+    } finally {
+      baseEventStore.scan = origScan;
+    }
+  });
+
+  it("reconciles direct send() retries against same-length replaced, in-place overwritten, and identical-copy ledgers for evicted deliveries", async () => {
+    const ledgerDir = path.join(stateDir, "runtime-events-direct-replace");
+    const baseEventStore = new FileRuntimeEventStore(ledgerDir);
+    const { readAntigravityConfirmedDelivery } = await import("./antigravityAcpHost");
+    const outboundPrompts: string[] = [];
+    let lastPromptId = 0;
+    let fake!: ReturnType<typeof makeFakeAcpChild>;
+    const makeOpts = (sessionId: string): AntigravityAcpHostOptions => ({
+      cwd,
+      antigravityHome,
+      accountId: "default",
+      allowAll: true,
+      viewerMcpServer: null,
+      eventStore: baseEventStore,
+      shutdownGraceMs: 50,
+      processIdentity: () => "start-id-direct-replace",
+      signalProcess: ((_pid: number, signal?: NodeJS.Signals | number) => {
+        fake.signals.push(signal ?? "SIGTERM");
+        fake.closeChild(0);
+        return true;
+      }) as typeof process.kill,
+      spawnProcess: () => {
+        fake = makeFakeAcpChild((msg, api) => {
+          const id = msg.id as number | undefined;
+          const method = msg.method as string | undefined;
+          if (method === "initialize") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentInfo: { version: "1.5.14" } } });
+          } else if (method === "session/new" || method === "session/resume") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId } });
+          } else if (method === "session/prompt" && id !== undefined) {
+            lastPromptId = id;
+            outboundPrompts.push(String(id));
+          } else if (method === "session/close") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+          }
+        });
+        return fake.child;
+      },
+    });
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+    const seedEvictedSession = async (tag: string) => {
+      const sessionId = `ag_${tag}_${crypto.randomUUID().slice(0, 8)}`;
+      const firstEntry = { id: `edge-${tag}-first`, text: "First of 4097" };
+      let host = await AntigravityAcpHost.start(makeOpts(sessionId));
+      const firstReceipt = await host.send(firstEntry);
+      expect(firstReceipt.outcome).toBe("turn-started");
+      if (firstReceipt.outcome !== "turn-started") throw new Error("expected turn-started");
+      const firstTurnId = firstReceipt.turnId;
+      fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+      await tick();
+      await host.release();
+
+      const stored = baseEventStore.load(sessionId);
+      const turnEvents = stored.filter((event) => "turnId" in event && event.turnId === firstTurnId);
+      let seq = stored.at(-1)!.seq;
+      const extraLines: string[] = [];
+      for (let n = 0; n < 4096; n += 1) {
+        for (const ev of turnEvents) {
+          extraLines.push(
+            JSON.stringify({ ...ev, seq: ++seq })
+              .replaceAll(firstTurnId, `edge-${tag}-turn-${n}`)
+              .replaceAll(firstEntry.id, `edge-${tag}-later-${n}`),
+          );
+        }
+      }
+      const ledgerFile = path.join(ledgerDir, `${sessionId}.jsonl`);
+      fs.appendFileSync(ledgerFile, `${extraLines.join("\n")}\n`);
+      host = await AntigravityAcpHost.adopt(sessionId, makeOpts(sessionId));
+      return { sessionId, firstEntry, firstTurnId, ledgerFile, host };
+    };
+
+    const physicalEchoCount = (ledgerFile: string, deliveryId: string) => fs.readFileSync(ledgerFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { deliveryEcho?: { operationId?: string } })
+      .filter((event) => event.deliveryEcho?.operationId === deliveryId)
+      .length;
+
+    // 1. Atomic same-length replacement where the retried ID IS already on disk:
+    //    direct send() MUST return the original turn with 0 new prompts and 1 echo.
+    {
+      const { firstEntry, firstTurnId, ledgerFile, host } = await seedEvictedSession("already");
+      const altId = `X${firstEntry.id.slice(1)}`;
+      const originalBytes = fs.readFileSync(ledgerFile, "utf8");
+      const replacedBytes = originalBytes.replaceAll(firstEntry.id, altId);
+      expect(replacedBytes.length).toBe(originalBytes.length);
+      fs.writeFileSync(`${ledgerFile}.restore`, replacedBytes);
+      fs.renameSync(`${ledgerFile}.restore`, ledgerFile);
+
+      const promptsBefore = outboundPrompts.length;
+      const receipt = await host.send({ id: altId, text: firstEntry.text });
+      await tick();
+      expect(receipt).toEqual({ outcome: "turn-started", turnId: firstTurnId });
+      expect(outboundPrompts.length - promptsBefore).toBe(0);
+      expect(physicalEchoCount(ledgerFile, altId)).toBe(1);
+      await host.release();
+    }
+
+    // 2. Atomic same-length replacement where the retried ID was EVICTED from disk:
+    //    direct send() MUST NOT falsely confirm it and MUST dispatch exactly once.
+    {
+      const { firstEntry, firstTurnId, ledgerFile, host } = await seedEvictedSession("missing");
+      const altId = `X${firstEntry.id.slice(1)}`;
+      const originalBytes = fs.readFileSync(ledgerFile, "utf8");
+      const replacedBytes = originalBytes.replaceAll(firstEntry.id, altId);
+      expect(replacedBytes.length).toBe(originalBytes.length);
+      fs.writeFileSync(`${ledgerFile}.restore`, replacedBytes);
+      fs.renameSync(`${ledgerFile}.restore`, ledgerFile);
+
+      const promptsBefore = outboundPrompts.length;
+      const receipt = await host.send({ id: firstEntry.id, text: firstEntry.text });
+      expect(receipt.outcome).toBe("turn-started");
+      if (receipt.outcome !== "turn-started") throw new Error("expected turn-started");
+      expect(receipt.turnId).not.toBe(firstTurnId);
+      expect(outboundPrompts.length - promptsBefore).toBe(1);
+      fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+      await tick();
+      expect(physicalEchoCount(ledgerFile, firstEntry.id)).toBe(1);
+      expect(physicalEchoCount(ledgerFile, altId)).toBe(1);
+      await host.release();
+    }
+
+    // 3. Atomic byte-identical copy-rename (same history, new inode):
+    //    must preserve materialized evidence and deduplicate direct send().
+    {
+      const { sessionId, firstEntry, firstTurnId, ledgerFile, host } = await seedEvictedSession("same");
+      fs.copyFileSync(ledgerFile, `${ledgerFile}.identical`);
+      fs.renameSync(`${ledgerFile}.identical`, ledgerFile);
+
+      expect(await host.sessionMaterializationEvidence(firstEntry.id)).toEqual({ state: "materialized" });
+      const promptsBefore = outboundPrompts.length;
+      const retry = await host.send(firstEntry);
+      await host.release();
+      const confirmed = await readAntigravityConfirmedDelivery(sessionId, firstEntry.id, {
+        eventStore: baseEventStore,
+        antigravityHome,
+      });
+      expect(retry).toEqual({ outcome: "turn-started", turnId: firstTurnId });
+      expect(confirmed?.turnId).toBe(firstTurnId);
+      expect(outboundPrompts.length - promptsBefore).toBe(0);
+      expect(physicalEchoCount(ledgerFile, firstEntry.id)).toBe(1);
+    }
+
+    // 4. In-place same-inode same-length overwrite preserving mtime:
+    //    content sample digest detects the rewrite and reconciles before send().
+    {
+      const { firstEntry, firstTurnId, ledgerFile, host } = await seedEvictedSession("inplace");
+      const altId = `X${firstEntry.id.slice(1)}`;
+      const statBefore = fs.statSync(ledgerFile);
+      const originalBuf = fs.readFileSync(ledgerFile);
+      const replacedBuf = Buffer.from(originalBuf.toString("utf8").replaceAll(firstEntry.id, altId), "utf8");
+      expect(replacedBuf.length).toBe(originalBuf.length);
+      const fd = fs.openSync(ledgerFile, "r+");
+      try {
+        fs.writeSync(fd, replacedBuf, 0, replacedBuf.length, 0);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fs.utimesSync(ledgerFile, statBefore.atime, statBefore.mtime);
+
+      const promptsBefore = outboundPrompts.length;
+      const altReceipt = await host.send({ id: altId, text: firstEntry.text });
+      expect(altReceipt).toEqual({ outcome: "turn-started", turnId: firstTurnId });
+      expect(outboundPrompts.length - promptsBefore).toBe(0);
+
+      const missingReceipt = await host.send({ id: firstEntry.id, text: firstEntry.text });
+      expect(missingReceipt.outcome).toBe("turn-started");
+      if (missingReceipt.outcome !== "turn-started") throw new Error("expected turn-started");
+      expect(missingReceipt.turnId).not.toBe(firstTurnId);
+      expect(outboundPrompts.length - promptsBefore).toBe(1);
+      fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+      await tick();
+      expect(physicalEchoCount(ledgerFile, firstEntry.id)).toBe(1);
+      expect(physicalEchoCount(ledgerFile, altId)).toBe(1);
+      await host.release();
+    }
+
+    // 5. EIO while reconciling a replaced ledger MUST NOT serve stale cached delivery state:
+    //    both send() and sessionMaterializationEvidence() withhold confirmation until disk recovers.
+    {
+      const { ledgerFile, host } = await seedEvictedSession("eio");
+      const cachedId = "edge-eio-later-4095";
+      const altId = `X${cachedId.slice(1)}`;
+      const originalBytes = fs.readFileSync(ledgerFile, "utf8");
+      const replacedBytes = originalBytes.replaceAll(cachedId, altId);
+      expect(replacedBytes).not.toBe(originalBytes);
+      fs.writeFileSync(`${ledgerFile}.restore`, replacedBytes);
+      fs.renameSync(`${ledgerFile}.restore`, ledgerFile);
+
+      const origReadFileSync = fs.readFileSync;
+      let faults = 0;
+      fs.readFileSync = function (filePath: fs.PathOrFileDescriptor, ...rest: unknown[]) {
+        if (String(filePath) === ledgerFile) {
+          faults += 1;
+          throw Object.assign(new Error("fixture recoverable read error"), { code: "EIO" });
+        }
+        return (origReadFileSync as (...args: unknown[]) => unknown).call(fs, filePath, ...rest);
+      } as typeof fs.readFileSync;
+
+      const promptsBefore = outboundPrompts.length;
+      let receiptDuringEio: DeliveryReceipt;
+      let evidenceDuringEio: { state: string; reason?: string };
+      try {
+        receiptDuringEio = await host.send({ id: cachedId, text: "fixture" });
+        evidenceDuringEio = await host.sessionMaterializationEvidence(cachedId);
+      } finally {
+        fs.readFileSync = origReadFileSync;
+      }
+
+      expect(faults).toBeGreaterThan(0);
+      expect(receiptDuringEio.outcome).toBe("rejected");
+      expect(evidenceDuringEio.state).toBe("unavailable");
+      expect(outboundPrompts.length - promptsBefore).toBe(0);
+      expect(physicalEchoCount(ledgerFile, cachedId)).toBe(0);
+
+      // Once disk reads recover, the same host reconciles cleanly against canonical disk truth.
+      expect((await host.sessionMaterializationEvidence(cachedId)).state).toBe("absent");
+      expect((await host.sessionMaterializationEvidence(altId)).state).toBe("materialized");
+      await host.release();
+    }
+
+    // 6. EIO during replaced-ledger check while another prompt is IN-FLIGHT:
+    //    completing the in-flight prompt MUST NOT stamp a fresh fingerprint onto an
+    //    unreconciled empty cache or cause a duplicate dispatch of an accepted ID.
+    for (const withFault of [false, true]) {
+      const { ledgerFile, host } = await seedEvictedSession(withFault ? "inflight-fault" : "inflight-ctrl");
+      const pending = await host.send({ id: "inflight-pending-prompt", text: "normal running prompt" });
+      expect(pending.outcome).toBe("turn-started");
+      await tick();
+
+      const oldId = withFault ? "edge-inflight-fault-later-4095" : "edge-inflight-ctrl-later-4095";
+      const altId = `X${oldId.slice(1)}`;
+      const canonical = fs.readFileSync(ledgerFile, "utf8");
+      const replaced = canonical.replaceAll(oldId, altId);
+      expect(replaced).not.toBe(canonical);
+      fs.writeFileSync(`${ledgerFile}.restore`, replaced);
+      fs.renameSync(`${ledgerFile}.restore`, ledgerFile);
+
+      const origReadFileSync = fs.readFileSync;
+      let faults = 0;
+      if (withFault) {
+        fs.readFileSync = function (filePath: fs.PathOrFileDescriptor, ...rest: unknown[]) {
+          if (String(filePath) === ledgerFile) {
+            faults += 1;
+            throw Object.assign(new Error("fixture temporary read error"), { code: "EIO" });
+          }
+          return (origReadFileSync as (...args: unknown[]) => unknown).call(fs, filePath, ...rest);
+        } as typeof fs.readFileSync;
+      }
+      let duringState: string;
+      try {
+        duringState = (await host.sessionMaterializationEvidence(altId)).state;
+      } finally {
+        fs.readFileSync = origReadFileSync;
+      }
+      if (withFault) {
+        expect(faults).toBeGreaterThan(0);
+        expect(duringState).toBe("unavailable");
+      } else {
+        expect(duringState).toBe("materialized");
+      }
+
+      // Now complete the in-flight prompt cleanly via ACP.
+      fake.sendToHost({ jsonrpc: "2.0", id: lastPromptId, result: { stopReason: "end_turn" } });
+      await tick();
+
+      // Accepted ID from the restored ledger MUST still read materialized and MUST NOT resend.
+      expect((await host.sessionMaterializationEvidence(altId)).state).toBe("materialized");
+      const promptsBefore = outboundPrompts.length;
+      const retry = await host.send({ id: altId, text: "original delivery" });
+      await tick();
+      expect(retry.outcome).toBe("turn-started");
+      expect(outboundPrompts.length - promptsBefore).toBe(0);
+      expect(physicalEchoCount(ledgerFile, altId)).toBe(1);
+      await host.release();
+    }
   });
 
   it("bases delivery acceptance on ACP's actual response when interrupt races end_turn, and keeps release-mid-prompt unavailable", async () => {
@@ -1127,7 +1487,7 @@ describe("AntigravityAcpHost", () => {
     expect(await host.sessionMaterializationEvidence(raceEntry.id)).toEqual({ state: "materialized" });
     const promptsBeforeSameHostRetry = outboundPrompts.length;
     const sameHostRetry = await host.send(raceEntry);
-    expect(sameHostRetry).toEqual(initial);
+    expect(sameHostRetry).toEqual({ outcome: "turn-started", turnId: initial.turnId });
     expect(outboundPrompts.length - promptsBeforeSameHostRetry).toBe(0);
     await host.release();
 
@@ -1135,7 +1495,7 @@ describe("AntigravityAcpHost", () => {
     expect(await host.sessionMaterializationEvidence(raceEntry.id)).toEqual({ state: "materialized" });
     const promptsBeforeAdoptRetry = outboundPrompts.length;
     const adoptRetry = await host.send(raceEntry);
-    expect(adoptRetry).toEqual(initial);
+    expect(adoptRetry).toEqual({ outcome: "turn-started", turnId: initial.turnId });
     expect(outboundPrompts.length - promptsBeforeAdoptRetry).toBe(0);
 
     // B. Paired control: ACP explicitly answers stopReason="cancelled" before any updates -> failed, retry allowed.
@@ -1293,6 +1653,188 @@ describe("AntigravityAcpHost", () => {
     } finally {
       blocker.exec("ROLLBACK");
       blocker.close();
+    }
+  });
+
+  it("intercepts RESOURCE_EXHAUSTED prompt errors, appends session.quota_exhausted, emits limits event, and records durable observation", async () => {
+    const { readAntigravityTranscriptLimits } = await import("@/lib/limits/antigravityTranscriptLimits");
+    const { buildFeed } = await import("@/components/feed/parse");
+    const sessionId = `ag_quota_${crypto.randomUUID().slice(0, 8)}`;
+    const eventStore = new FileRuntimeEventStore(path.join(stateDir, "runtime-events-quota"));
+    const recorded: import("@/lib/accounts/migration/contracts").DurableQuotaObservation[] = [];
+    let fake!: ReturnType<typeof makeFakeAcpChild>;
+
+    const fixtureEmail = ["fixture-account", "example.invalid"].join("@");
+    const host = await AntigravityAcpHost.start({
+      cwd,
+      antigravityHome,
+      accountId: "default",
+      model: "gemini-4-neon",
+      effort: "high",
+      allowAll: true,
+      viewerMcpServer: null,
+      eventStore,
+      shutdownGraceMs: 40,
+      processIdentity: () => "start-quota",
+      signalProcess: (() => { fake.closeChild(0); return true; }) as typeof process.kill,
+      recordQuotaObservation: (obs) => { recorded.push(obs); },
+      spawnProcess: () => {
+        fake = makeFakeAcpChild((msg, api) => {
+          const id = msg.id as number | undefined;
+          const method = msg.method as string | undefined;
+          if (method === "initialize") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentInfo: { version: "1.5.14" } } });
+          } else if (method === "session/new") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId } });
+          } else if (method === "session/set_config_option" || method === "session/close") {
+            api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+          } else if (method === "session/prompt" && id !== undefined) {
+            api.sendToHost({
+              jsonrpc: "2.0",
+              id,
+              error: {
+                code: -32000,
+                message: `RESOURCE_EXHAUSTED: Individual quota reached for ${fixtureEmail}. Resets in 3h 20m 15s`,
+              },
+            });
+          }
+        });
+        return fake.child;
+      },
+    });
+
+    try {
+      const receipt = await host.send({ id: "quota-delivery-1", text: "trigger quota" });
+      expect(receipt.outcome).toBe("turn-started");
+      await new Promise((r) => setTimeout(r, 40));
+
+      const events = eventStore.load(sessionId);
+      const limitsEvent = events.find((event) => event.kind === "limits");
+      expect(limitsEvent).toBeDefined();
+      expect(limitsEvent && limitsEvent.kind === "limits" ? limitsEvent.snapshot : null).toMatchObject({
+        engine: "antigravity",
+        exhausted: true,
+        windowMinutes: 300,
+      });
+      const snapshotMsg = String(limitsEvent && limitsEvent.kind === "limits"
+        ? (limitsEvent.snapshot as Record<string, unknown>).message ?? ""
+        : "");
+      expect(snapshotMsg).toContain("Individual quota reached");
+      expect(snapshotMsg).not.toContain(fixtureEmail);
+
+      const transcriptLines = fs.readFileSync(host.identity.path, "utf8").trim().split("\n");
+      const quotaRecord = transcriptLines
+        .map((line) => JSON.parse(line) as { type: string; data: Record<string, unknown> })
+        .find((row) => row.type === "session.quota_exhausted");
+      expect(quotaRecord).toBeDefined();
+      expect(quotaRecord?.data.windowMinutes).toBe(300);
+      expect(quotaRecord?.data.usedPercent).toBe(100);
+      expect(typeof quotaRecord?.data.resetsAt).toBe("number");
+      expect(String(quotaRecord?.data.message ?? "")).not.toContain(fixtureEmail);
+
+      // Feed parser displays the quota exhaustion stop reason on the card.
+      const feed = buildFeed(
+        { path: host.identity.path, engine: "antigravity", fmt: "antigravity", activity: "recent" } as import("@/lib/types").FileEntry,
+        transcriptLines,
+        false,
+        "",
+      ).items;
+      expect(feed.some((item) => item.kind === "note" && item.text.includes("Individual quota reached"))).toBe(true);
+
+      // Durable QuotaObservation recorded by identity with no process spawn.
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]).toMatchObject({
+        engine: "antigravity",
+        accountId: "default",
+        authenticated: true,
+        limitReached: true,
+        provenance: { source: "transcript" },
+        limits: { session: { usedPercent: 100, windowMinutes: 300 } },
+      });
+
+      // Bounded transcript reader reads back the exact same exhaustion.
+      const read = readAntigravityTranscriptLimits(path.join(antigravityHome, "sessions"));
+      expect(read.source).toBe("transcript");
+      expect(read.data?.session?.usedPercent).toBe(100);
+      expect(read.data?.session?.windowMinutes).toBe(300);
+    } finally {
+      await host.release();
+    }
+  });
+
+  it("treats transient per-minute RESOURCE_EXHAUSTED rate limits as session.error without recording 5-hour quota exhaustion", async () => {
+    const { readAntigravityTranscriptLimits } = await import("@/lib/limits/antigravityTranscriptLimits");
+    const transientMessages = [
+      "RESOURCE_EXHAUSTED: requests per minute exceeded; retry after 10 seconds",
+      "RESOURCE_EXHAUSTED: Per-minute request quota exceeded. Retry after 10 seconds.",
+      "RESOURCE_EXHAUSTED: Quota exceeded for quota metric 'GenerateContentRequestsPerMinutePerProjectPerModel'",
+    ];
+
+    for (const [idx, message] of transientMessages.entries()) {
+      const sessionId = `ag_rpm_${idx}_${crypto.randomUUID().slice(0, 8)}`;
+      const isolatedHome = path.join(stateDir, `ag-home-transient-${idx}`);
+      fs.mkdirSync(isolatedHome, { recursive: true });
+      const eventStore = new FileRuntimeEventStore(path.join(stateDir, `runtime-events-transient-${idx}`));
+      const recorded: import("@/lib/accounts/migration/contracts").DurableQuotaObservation[] = [];
+      let fake!: ReturnType<typeof makeFakeAcpChild>;
+
+      const host = await AntigravityAcpHost.start({
+        cwd,
+        antigravityHome: isolatedHome,
+        accountId: "default",
+        model: "gemini-4-neon",
+        effort: "high",
+        allowAll: true,
+        viewerMcpServer: null,
+        eventStore,
+        shutdownGraceMs: 40,
+        processIdentity: () => `start-transient-${idx}`,
+        signalProcess: (() => { fake.closeChild(0); return true; }) as typeof process.kill,
+        recordQuotaObservation: (obs) => { recorded.push(obs); },
+        spawnProcess: () => {
+          fake = makeFakeAcpChild((msg, api) => {
+            const id = msg.id as number | undefined;
+            const method = msg.method as string | undefined;
+            if (method === "initialize") {
+              api.sendToHost({ jsonrpc: "2.0", id, result: { protocolVersion: 1, agentInfo: { version: "1.5.14" } } });
+            } else if (method === "session/new") {
+              api.sendToHost({ jsonrpc: "2.0", id, result: { sessionId } });
+            } else if (method === "session/set_config_option" || method === "session/close") {
+              api.sendToHost({ jsonrpc: "2.0", id, result: {} });
+            } else if (method === "session/prompt" && id !== undefined) {
+              api.sendToHost({
+                jsonrpc: "2.0",
+                id,
+                error: { code: -32000, message },
+              });
+            }
+          });
+          return fake.child;
+        },
+      });
+
+      try {
+        const receipt = await host.send({ id: `rpm-delivery-${idx}`, text: "trigger rpm throttle" });
+        expect(receipt.outcome).toBe("turn-started");
+        await new Promise((r) => setTimeout(r, 40));
+
+        const events = eventStore.load(sessionId);
+        expect(events.some((event) => event.kind === "limits")).toBe(false);
+        expect(recorded).toHaveLength(0);
+
+        const transcriptRecords = fs.readFileSync(host.identity.path, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as { type: string; data: Record<string, unknown> });
+        expect(transcriptRecords.some((row) => row.type === "session.quota_exhausted")).toBe(false);
+        expect(transcriptRecords.some((row) => row.type === "session.error")).toBe(true);
+
+        const read = readAntigravityTranscriptLimits(path.join(isolatedHome, "sessions"));
+        expect(read.source).toBe("unavailable");
+        expect(read.data).toBeNull();
+      } finally {
+        await host.release();
+      }
     }
   });
 });

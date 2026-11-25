@@ -15,6 +15,7 @@ import { cpuSlotForOwner, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmissi
 import { runSandboxGate, guardSandboxGate } from "../src/lib/runtime/sandboxGateRunner";
 import { cpuOwnerIdentity, hostProcessIdentity, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
 import { sandboxGateEntryCommand } from "../src/lib/runtime/sandboxGateEntry";
+import { commandStatus, spawnOwnedCommand } from "../src/lib/runtime/ownedCommandProcess";
 import { gateServiceProperties } from "../src/lib/runtime/cpuPlacement";
 import { GateTasks, GATE_TASKS_MAX, GATE_TASK_LIMIT_EXIT, gateTaskProperties, gateTaskResult, gateTaskFailure, warnGateTaskFallback, type GateTaskSnapshot } from "./gate-tasks";
 import { producerReport, producerCommandIdentity, recordedSupervisorObligation, recordedSupervisorRefusal, supervisorCancellation, reportSchema, readEnvelope, writeEnvelope, digest, type ProducerReport } from "../src/lib/recordedChecks/wire";
@@ -88,9 +89,9 @@ if (args[0] === "--namespace-guardian") {
   const allowance = Number(args[1]), command = args.slice(2);
   if (!Number.isFinite(allowance) || allowance <= 0 || !command.length) throw new Error("owned runner budget needs a finite allowance and a command");
   const budget = cpuWaitBudget(process.env);
-  const child = spawn(command[0]!, command.slice(1), { stdio: "inherit", env: { ...budget.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) } });
+  const child = spawnOwnedCommand(command, { marker: false, env: { ...budget.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) } });
   const close = new Promise<number>(resolve => {
-    child.once("exit", (code, signal) => resolve(code ?? (signal === "SIGTERM" ? 143 : 137)));
+    child.once("exit", (code, signal) => resolve(commandStatus(code, signal)));
     child.once("error", error => { console.error(`owned runner: budget launch failed: ${error.message}`); resolve(1); });
   });
   let stopped = 0, cleanup: Promise<void> | undefined;
@@ -151,17 +152,14 @@ if (args[0] === "--namespace-guardian") {
   // Only timedCommand's Linux shell writes and closes fd 3. Native Windows
   // commands have no marker writer; an unused inherited pipe can remain open
   // after the command exits and strand the verdict in execution() below.
-  const child = spawn(portableCommand[0]!, portableCommand.slice(1), {
-    stdio: process.platform === "linux" ? ["inherit", "inherit", "inherit", "pipe"] : "inherit",
-    env: budget.env,
-  });
+  const child = spawnOwnedCommand(portableCommand, { marker: process.platform === "linux", env: budget.env });
   const execution = observeCommandExecution(child);
   if (child.pid) fs.appendFileSync(ledger, `${JSON.stringify(captureProcessIdentity(child.pid))}\n`);
   const commandIdentity = producerCommandIdentity(child.pid);
   producerReport("portable", commandIdentity);
   let commandExit: number | null = null, commandSignal: string | null = null;
   const close = new Promise<number>(resolve => {
-    child.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; resolve(code ?? (signal === "SIGTERM" ? 143 : 137)); });
+    child.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; resolve(commandStatus(code, signal)); });
     child.once("error", () => resolve(1));
   });
   let interrupted = 0;
@@ -203,7 +201,8 @@ if (args[0] === "--namespace-guardian") {
   }
   fs.rmSync(directory, { recursive: true, force: true });
   producerReport("portable", commandIdentity, { ...await execution(), phase: "close", commandExit, commandSignal, cancellation, cleanup: cleanupFailed || !guardianConfirmed ? "unknown" : "confirmed" });
-  if (commandExit !== null && !cleanupFailed && guardianConfirmed) writeCompletionReceipt();
+  // An observed exit or signal is a completed command; the caller judges its status.
+  if ((commandExit !== null || commandSignal !== null) && !cleanupFailed && guardianConfirmed) writeCompletionReceipt();
   process.exit(cleanupFailed ? 1 : interrupted || code || guardian.exitCode || 0);
 } else if (args[0] === "--service") {
   const file = args[1]!;
@@ -273,7 +272,7 @@ if (args[0] === "--namespace-guardian") {
   // token to this command's PID. A nested test cannot reuse its parent's token.
   const shell = timedCommand(launch.command, 'export LLV_OWNED_TEST_RUNNER_PID=$$; ');
   const argv = launch.namespace ? sandboxGateEntryCommand(launch.owner, launch.cwd, shell) : shell;
-  const child = spawn(argv[0]!, argv.slice(1), { cwd: launch.cwd, env: { ...budget.env, INVOCATION_ID: invocation, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, stdio: ["inherit", "inherit", "inherit", "pipe"] });
+  const child = spawnOwnedCommand(argv, { cwd: launch.cwd, env: { ...budget.env, INVOCATION_ID: invocation, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, marker: true });
   const execution = observeCommandExecution(child);
   // Capture before any await; systemd owns every fork in the cgroup from birth.
   const identity = producerCommandIdentity(child.pid);
@@ -297,14 +296,14 @@ if (args[0] === "--namespace-guardian") {
     // Its pending children are expected; the waiting client returns only after
     // that cleanup. A normal exit with children still refuses the check.
     if (survivors.length) console.error(`owned runner: ${code === 124 ? "processes awaiting deadline cleanup" : "surviving owned processes"}: ${survivors.map(member => `${member.pid} (${member.startIdentity})`).join(", ")}`);
-    if (commandExit !== null && survivors.length === 0) writeCompletionReceipt();
+    if ((commandExit !== null || commandSignal !== null) && survivors.length === 0) writeCompletionReceipt();
     // Exit of the service main process invokes systemd's control-group TERM,
     // followed by KILL after TimeoutStopSec, including detached descendants.
     producerReport("service", identity, { ...await execution(), service: serviceEvidence, boundary: launch.namespace ? "namespace" : "direct", phase: "close", commandExit, commandSignal, cancellation, cleanup: "pending" });
     process.exit(survivors.length && code === 0 ? 1 : code);
   };
   child.once("error", error => { console.error(`owned runner: command could not start: ${error.message}`); void finish(1); });
-  child.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; void finish(code ?? (signal === "SIGTERM" ? 143 : 137)); });
+  child.once("exit", (code, signal) => { commandExit = code; commandSignal = signal; void finish(commandStatus(code, signal)); });
   // Reading counters needs no new task, including when fork/clone is refused.
   const taskTimer = setInterval(() => {
     try { if (tasks.sample().denied > 0) void finish(GATE_TASK_LIMIT_EXIT); }

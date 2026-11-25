@@ -145,11 +145,12 @@ export function cardAvatarRole(peer: string, t: TFunction): FrameRole | null {
 /* Mobile v2 (#1439, lane 4): the engine mark is the only avatar left on the
    phone — a 16 px glyph in secondary colour beside the engine's name in the
    message header (README §5). Proper nouns, so no locale entry. */
-export const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw" | "copilot", string> = {
+export const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw" | "copilot" | "antigravity", string> = {
   claude: "Claude",
   codex: "Codex",
   copilot: "Copilot",
   openclaw: "OpenClaw",
+  antigravity: "Antigravity",
 };
 
 /* Memoized: feed items are immutable after buildFeed, so a pane re-render

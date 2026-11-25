@@ -3,6 +3,9 @@ export const PIPELINE_PUBLICATION_PUSH_MS = 25 * 60_000;
 export const RUNTIME_PUBLICATION_PUSH_MS = 30 * 60_000;
 export const DEADLINE_RETRY_PUBLICATION_PUSH_MS = 45 * 60_000;
 export const PUBLICATION_PACK_MARGIN_MS = 60_000;
+// The forge closed idle SSH receive-pack sessions after about 360 s.
+// See docs/design/container-publication-checks.md for the measurements.
+export const PUBLICATION_TRANSPORT_HOOK_MS = 180_000;
 
 /** These changes select the measured engine suites or publication regressions.
  * A recorded deadline grants the same larger budget to all retries of that

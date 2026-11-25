@@ -1,3 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -f /.dockerenv && -x /usr/local/bin/bun-container && $(command -v bun) == /usr/local/bin/bun ]]; then
+  exec /usr/local/bin/bun-container scripts/prepare-stage-dependencies.ts
+fi
 exec bun scripts/prepare-stage-dependencies.ts
