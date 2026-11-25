@@ -796,6 +796,18 @@ type ColdMappingDelta = { removed: Map<RowCollection, Set<string>>; added: ColdH
  * a row at a time. */
 const HEADER_BATCH_ROWS = 1024;
 
+/** Bound each payload read by row count and by accumulated JSON text. */
+function* payloadBatches<Row extends { value_json: string }>(rows: IterableIterator<Row>): Generator<Row[]> {
+  try {
+    for (;;) {
+      let chars = 0;
+      const batch = nextSqliteRows(rows, 16, row => (chars += row.value_json.length) >= 16_384);
+      if (!batch.length) return;
+      yield batch;
+    }
+  } finally { rows.return?.(); }
+}
+
 /** Every row of one open statement, a measured batch for each step. The
  * statement is finished when the read ends, is refused or is abandoned. */
 function* headerRowSteps<Row>(rows: IterableIterator<Row>): Generator<void, Row[]> {
@@ -3212,17 +3224,11 @@ export class SqliteAgentRegistryStore {
     try {
       for (;;) {
         let count = 0;
-        const rows = page.iterate(collection, after);
-        try {
-          for (;;) {
-            let chars = 0;
-            const batch = nextSqliteRows(rows, 16, row => (chars += row.value_json.length) >= 16_384);
-            if (!batch.length) break;
-            count += batch.length;
-            after = batch[batch.length - 1]!.row_order;
-            yield* batch;
-          }
-        } finally { rows.return?.(); }
+        for (const batch of payloadBatches(page.iterate(collection, after))) {
+          count += batch.length;
+          after = batch[batch.length - 1]!.row_order;
+          yield* batch;
+        }
         if (count < 16) return;
       }
     } finally { page.finalize(); }
@@ -6593,24 +6599,26 @@ export class SqliteAgentRegistryStore {
         const baseline = new Map<string, string | null>();
         if (!trackMutations) {
           const storedValue = {} as typeof value;
-          const storedRows = this.db.query<Pick<StoredRow, "row_key" | "value_json">, [string]>(
-            `SELECT row_key, value_json FROM ${this.recordsSource} WHERE collection = ? ORDER BY row_order`,
-          ).all(collection);
-          this.onRowPayloadRead?.(collection, storedRows.length);
-          for (const row of storedRows) {
-            const parsed = this.parseRow(collection, row.row_key, row.value_json, useRowCache);
-            (storedValue as Record<string, unknown>)[row.row_key] = trackMutations
-              ? structuredClone(parsed)
-              : parsed;
-            if (trackMutations) baseline.set(row.row_key, row.value_json);
-          }
+          // With no cold mappings, the collection-order index can stream the hot table directly.
+          const source = this.changesReady && !this.coldKeys.size ? "registry_rows" : this.recordsSource;
+          const statement = this.db.prepare<Pick<StoredRow, "row_key" | "value_json">, [string]>(
+            `SELECT row_key, value_json FROM ${source} WHERE collection = ? ORDER BY row_order`);
+          const storedKeys = useRowCache ? new Set<string>() : undefined;
+          try {
+            for (const batch of payloadBatches(statement.iterate(collection))) {
+              this.onRowPayloadRead?.(collection, batch.length);
+              for (const row of batch) {
+                (storedValue as Record<string, unknown>)[row.row_key] = this.parseRow(collection, row.row_key, row.value_json, useRowCache);
+                storedKeys?.add(row.row_key);
+              }
+            }
+          } finally { statement.finalize(); }
           /* Every stored row is cached by now, so a larger cache holds rows
              this complete read proved gone. Without this a deleted row's parsed
              JSON stayed in the process for its lifetime. */
           const parsedRows = useRowCache ? this.rowCache.get(collection) : undefined;
-          if (parsedRows && parsedRows.size > storedRows.length) {
-            const stored = new Set(storedRows.map((row) => row.row_key));
-            for (const key of parsedRows.keys()) if (!stored.has(key)) parsedRows.delete(key);
+          if (parsedRows && storedKeys && parsedRows.size > storedKeys.size) {
+            for (const key of parsedRows.keys()) if (!storedKeys.has(key)) parsedRows.delete(key);
           }
           const input: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };
           input[collection] = storedValue;
