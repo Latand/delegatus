@@ -1998,15 +1998,18 @@ describe("MCP tool service", () => {
         "telegram_bot_send",
         "telegram_bot_send_media",
         "telegram_bot_send_document",
+        "telegram_bot_reactions",
+        "telegram_bot_set_reaction",
         "telegram_bot_messages",
         "relay_owner_history",
+        "relay_trusted_requesters",
         "relay_answer",
         "relay_service_tools",
         "issue_report",
         "github_app_connect",
       ]);
       expect(listed.tools.map(tool => tool.name)).not.toContain("suggest_replies");
-      const optionalReadKeys = new Set(["claude_cloud_task", "codex_cloud_environment", "relay_owner_history", "relay_answer", "relay_service_tools", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_pipelines", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
+      const optionalReadKeys = new Set(["claude_cloud_task", "codex_cloud_environment", "relay_owner_history", "relay_trusted_requesters", "relay_answer", "relay_service_tools", "backfill_worktree_projects", "message_receipt", "list_conversations", "search_transcripts", "get_conversation", "conversation_deliverability", "conversation_messages", "get_pipeline", "board_snapshot", "list_pipelines", "get_flow", "list_pipelines", "list_tasks", "get_task", "deployment_status", "resources", "get_orchestrator", "account_limits", "read_prototype_review", "agent_fleet"]);
       for (const tool of listed.tools) {
         if (optionalReadKeys.has(tool.name)) expect(tool.inputSchema.required ?? []).not.toContain("clientRequestId");
         else expect(tool.inputSchema.required).toContain("clientRequestId");
@@ -2087,7 +2090,7 @@ test("a real MCP client sees typed graph edits and forwards their JSON values", 
       maxRounds: { type: "integer" },
       onExhausted: { enum: ["advance", "stop-after-fix", "park"] },
       role: {},
-      engine: { enum: ["claude", "codex"] },
+      engine: { enum: ["claude", "codex", "antigravity"] },
       access: { enum: ["read-only", "read-write"] },
     });
     expect(JSON.stringify(schema.properties!.to)).toContain("null");

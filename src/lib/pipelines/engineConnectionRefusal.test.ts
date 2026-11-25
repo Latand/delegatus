@@ -24,8 +24,8 @@ type PipelinePorts = import("./engine").PipelinePorts;
 
 const REPO = path.join(sandbox, "repo");
 fs.mkdirSync(REPO, { recursive: true });
-const ACCOUNTS = { claude: [{ id: "primary", authPresent: true }], codex: [] as { id: string; authPresent: boolean }[] };
-const CLI_FOUND = { claude: true, codex: true };
+const ACCOUNTS = { claude: [{ id: "primary", authPresent: true }], codex: [] as { id: string; authPresent: boolean }[], antigravity: [] as { id: string; authPresent: boolean }[] };
+const CLI_FOUND = { claude: true, codex: true, antigravity: true };
 let spawns = 0;
 
 function ports(): PipelinePorts {

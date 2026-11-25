@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { forgeAppWriter, type ForgeAppWriter } from "@/lib/forge/appWrite";
+import { runGithubCliRead } from "@/lib/forge/githubCli";
 import { isForgeAppRepository } from "@/lib/git/agentForgeCredentials";
 import { githubRepositoryOfRemote, type ProposalIssue } from "@/lib/forge/workLinks";
 export type { ProposalIssue } from "@/lib/forge/workLinks";
@@ -95,12 +96,16 @@ export function githubRunner(cwd: string, timeoutMs: number, options: GithubRunn
     const { stdout } = await execFileAsync("gh", args, { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 });
     return stdout;
   });
-  const asApp = options.asApp ?? forgeAppWriter(cwd, timeoutMs);
+  const runRead = (args: string[], env?: NodeJS.ProcessEnv) => runGithubCliRead(args, {
+    cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env,
+  });
+  const asApp = options.asApp ?? forgeAppWriter(cwd, timeoutMs, { exec: runRead });
   const declared = options.declared ?? isForgeAppRepository;
   return async (args) => {
     const target = await readRepository(args, cwd);
     try {
-      return await (target && declared(target.repository) ? asApp(target.args, target.repository) : exec(args));
+      if (target && declared(target.repository)) return await asApp(target.args, target.repository);
+      return await (target ? options.exec ?? runRead : exec)(args);
     } catch (error) {
       // Preserve the runner budget alongside execFile diagnostics for callers
       // that persist a bounded failure reason. Both credential paths use it.

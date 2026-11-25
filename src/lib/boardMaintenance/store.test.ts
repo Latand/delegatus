@@ -21,7 +21,14 @@ test("fresh process reopens durable claim after restart", async () => {
 test("two processes admit exactly one claim in the same slot", async () => {
   held = sandbox();
   const children = [1, 2].map(() => Bun.spawn([process.execPath, "src/lib/boardMaintenance/store.sqliteChild.ts", String(NOW)], { env: { ...process.env, LLV_STATE_DIR: held.dir }, stdout: "pipe", stderr: "pipe" }));
-  const results = await Promise.all(children.map(async child => { const output = await new Response(child.stdout).text(); expect(await child.exited).toBe(0); return JSON.parse(output); }));
+  const outcomes = await Promise.all(children.map(async child => {
+    const [output, error, exitCode] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ]);
+    return { output, error, exitCode };
+  }));
+  for (const { exitCode } of outcomes) expect(exitCode).toBe(0);
+  const results = outcomes.map(({ output }) => JSON.parse(output));
   expect(results.filter(r => r.claimed).length).toBe(1);
 });
 test("continuity reads newest ended run before current, including its full durable log", () => {

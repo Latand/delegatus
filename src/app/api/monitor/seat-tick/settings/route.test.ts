@@ -771,7 +771,10 @@ test("the operator browser edits lines with no known author and removes seat not
   seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
   writeSeatTickSettings(PROJECT, { ...readSeatTickSettings(PROJECT, settingsFile), reason: "Older line.\nOlder line to edit." }, settingsFile);
   setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
-  await put({ project: PROJECT, reason: "First seat note.\nSecond seat note." }, { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY });
+  /* The active seat's replacement includes the unattributed lines it inherits. */
+  const seededBySeat = await put({ project: PROJECT, reason: "Older line.\nOlder line to edit.\nFirst seat note.\nSecond seat note." },
+    { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY });
+  expect(seededBySeat.status).toBe(200);
   setCallerConversationResolverForTests(() => null);
   const seeded = readSeatTickSettings(PROJECT, settingsFile).instructionLines!;
   expect(seeded.map(line => line.author?.kind ?? null)).toEqual([null, null, "manager", "manager"]);
@@ -809,7 +812,7 @@ test("the closed switch reads persisted state without any panel computation or e
   const expected = await (await get(`?project=${PROJECT}`)).json();
   const curation = await import("@/lib/memory/curation/answer");
   const turbo = await import("@/lib/monitor/turboRuntime");
-  const panel = spyOn(curation, "curationAnswerCooperatively").mockImplementation(async () => { throw Error("panel must stay deferred"); });
+  const panel = spyOn(curation, "readCurationPanel").mockImplementation(async () => { throw Error("panel must stay deferred"); });
   const accounts = spyOn(turbo, "turboAnswer").mockImplementation(async () => { throw Error("accounts must stay deferred"); });
   try {
     const response = await get(`?project=${PROJECT}&view=summary&turboPreview=1`);

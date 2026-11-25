@@ -1,4 +1,4 @@
-import { hasInboundMedia, MAX_INPUT_MEDIA_REFS, normalizeInputMediaDescriptor, RELAY_HISTORY_MEDIA, validateInputMediaDescriptor, validateMediaInput, type InputMedia } from "./mediaInputValidation";
+import { hasHistoryMedia, hasInboundMedia, MAX_INPUT_MEDIA_REFS, normalizeInputMediaDescriptor, validateInputMediaDescriptor, validateMediaInput, type InputMedia } from "./mediaInputValidation";
 import { z } from "zod";
 
 // JSON Schema maxLength counts Unicode code points, including astral characters.
@@ -125,6 +125,26 @@ const requesterSchema = z.object({
   is_anonymous_admin: z.boolean(),
   is_owner: z.boolean(),
 });
+type RequesterAnchor = {
+  requester?: z.infer<typeof requesterSchema> | null;
+  respond_to: string | null;
+  conversation: readonly z.infer<typeof messageSchema>[];
+};
+
+/** A requester identifies the unique, human-authored trigger in this claim. */
+export function requesterTrigger(input: RequesterAnchor) {
+  if (!input.requester || input.respond_to === null) return null;
+  const matches = input.conversation.filter(message => message.id === input.respond_to);
+  const trigger = matches[0];
+  return matches.length === 1 && trigger && !trigger.author.self && trigger.author.key === input.requester.key
+    ? trigger : null;
+}
+
+export function ownerRequesterTrigger(input: RequesterAnchor) {
+  return input.requester?.is_owner === true && !input.requester.is_anonymous_admin ? requesterTrigger(input) : null;
+}
+
+export const INVALID_REQUESTER_DETAIL = "Requester does not match the triggering author or the owner delivery context.";
 const toolSchema = z.object({
   name: boundedString(64).refine((value) => value.length > 0),
   summary: boundedString(240),
@@ -183,9 +203,9 @@ export const inputSchema = z.object({
     )
     .optional(),
 }).superRefine((input, context) => {
+  const ownerTrigger = ownerRequesterTrigger(input);
   for (const [index, message] of input.conversation.entries()) {
-    const prototypeReply = input.requester?.is_owner === true && input.requester.is_anonymous_admin === false
-      && message.id === input.respond_to && message.author.key === input.requester.key && !message.author.self
+    const prototypeReply = message === ownerTrigger
       && /#proto-[a-f0-9]{8}\b/i.test(message.text.replace(/\\([#-])/g, "$1"));
     if ([...message.text].length > 16000 && !prototypeReply) context.addIssue({ code: "custom",
       path: ["conversation", index, "text"], message: "expected at most 16000 Unicode code points" });
@@ -212,7 +232,7 @@ const answerRequestSchema = z.object({
   liveness: livenessSchema,
   // The chat key of §A.8, kept for the member limit and the records. A
   // malformed one is dropped, as an unknown field would be.
-  chat: z.object({ key: chatKey }).optional().catch(undefined),
+  chat: z.object({ key: chatKey, title: boundedString(200).optional().catch(undefined) }).optional().catch(undefined),
   input: inputSchema,
   answer: z.object({
     attachments: relayAttachmentLimitsSchema.optional().catch(undefined),
@@ -221,10 +241,18 @@ const answerRequestSchema = z.object({
   }),
 });
 /** Normalize item policy refusals on anchors; malformed anchors stay fail-closed. */
-export const requestSchema = z.preprocess(raw => {
+export const requestSchema = z.preprocess((raw, context) => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
   let value = raw as Record<string, unknown>;
-  const inbound = Array.isArray(value.features) && value.features.includes("relay_media_in");
+  const mediaPolicy = {
+    delivery: value.delivery === "guest" ? "guest" as const : undefined,
+    features: Array.isArray(value.features) ? value.features : undefined,
+  };
+  // The ordinary schema tolerates a malformed destination extension. Guest
+  // delivery cannot carry an owner destination, including a malformed one.
+  if (mediaPolicy.delivery === "guest" && value.owner_delivery !== undefined)
+    context.addIssue({ code: "custom", path: ["owner_delivery"], message: INVALID_REQUESTER_DETAIL });
+  const inbound = hasInboundMedia(mediaPolicy);
   if (!value.input || typeof value.input !== "object" || Array.isArray(value.input)) return raw;
   let input = value.input as Record<string, unknown>;
   const trigger = Array.isArray(input.conversation) ? input.conversation.find(message =>
@@ -236,13 +264,13 @@ export const requestSchema = z.preprocess(raw => {
       return { ...message, media: message.media.map((rawMedia: unknown) => {
         const parsed = claimMediaSchema.safeParse(rawMedia);
         if (!parsed.success) return rawMedia;
-        try { return normalizeInputMediaDescriptor(parsed.data, value.features as string[]); }
+        try { return normalizeInputMediaDescriptor(parsed.data, mediaPolicy.features); }
         catch { return rawMedia; }
       }) };
     }) };
     value = { ...value, input };
   }
-  const history = inbound && (value.delivery === "guest" || (value.features as string[]).includes(RELAY_HISTORY_MEDIA));
+  const history = hasHistoryMedia(mediaPolicy);
   // Anchor descriptors take precedence over conflicting historical copies.
   const refs = new Map<string, InputMedia>();
   if (Array.isArray(input.conversation)) for (const message of input.conversation) {
@@ -263,7 +291,7 @@ export const requestSchema = z.preprocess(raw => {
           const parsed = history ? inputMediaSchema.safeParse(rawMedia) : null;
           let media = parsed?.success && parsed.data.kind === "photo" ? parsed.data : null;
           if (media) {
-            try { validateInputMediaDescriptor(media, value.features as string[]); }
+            try { validateInputMediaDescriptor(media, mediaPolicy.features); }
             catch { media = null; }
           }
           const previous = media && refs.get(media.ref);
@@ -284,9 +312,18 @@ export const requestSchema = z.preprocess(raw => {
     }) } : {}),
   } };
 }, answerRequestSchema.superRefine((request, context) => {
+  const { input } = request;
+  const { requester } = input;
+  const invalidRequester = request.delivery === "guest"
+    ? !requester || !requesterTrigger(input) || requester.is_anonymous_admin
+      || !requester.is_owner && (requester.is_admin || requester.can_restrict_members || requester.can_delete_messages)
+    : requester && (!requesterTrigger(input) || requester.is_owner && requester.is_anonymous_admin
+        || request.owner_delivery && !requester.is_owner);
+  if (invalidRequester)
+    context.addIssue({ code: "custom", path: ["input", "requester"], message: INVALID_REQUESTER_DETAIL });
   if (request.delivery === "guest") {
     if (request.answer.progress !== "none" || request.owner_delivery || request.input.format || request.answer.attachments
-      || request.input.requester?.is_owner !== true || request.input.tools?.some(tool => tool.mode !== "handoff")
+      || request.input.tools?.some(tool => tool.mode !== "handoff")
       || !hasInboundMedia(request) && (request.input.conversation.some(message => message.media?.length)
         || request.input.documents.some(document => document.media_ref !== undefined)))
       context.addIssue({ code: "custom", message: "invalid guest delivery contract" });
@@ -297,6 +334,17 @@ export const requestSchema = z.preprocess(raw => {
 }));
 export type ExternalRelayRequest = z.infer<typeof requestSchema>;
 export type ExternalRelayTool = z.infer<typeof toolSchema>;
+export function relayToolAudience(request: ExternalRelayRequest) {
+  const requester = request.input.requester;
+  const matched = requesterTrigger(request.input) !== null;
+  const owner = matched && requester?.is_owner === true && !requester.is_anonymous_admin && request.delivery !== "guest";
+  const admin = matched && requester?.is_admin === true;
+  return (audience?: string) => audience === undefined || (audience === "admin" && admin) || (audience === "owner" && owner);
+}
+export function visibleRelayTools(request: ExternalRelayRequest) {
+  const mayQuote = relayToolAudience(request);
+  return (request.input.tools ?? []).filter(tool => mayQuote(tool.audience));
+}
 export const RELAY_TOOLS_ON_DEMAND = "relay_tools_on_demand";
 export const RELAY_OWNER_TOOLS = "relay_owner_tools";
 /** I9 uses the offered audience; operation names and schemas stay service-owned. */
@@ -394,7 +442,7 @@ export const replyAnswerSchema = {
 } as const;
 /** Guest delivery can return to the hosted assistant even without a tool index. */
 export const offersHandoff = (request: ExternalRelayRequest) =>
-  request.delivery === "guest" || (request.input.tools?.length ?? 0) > 0;
+  request.delivery === "guest" || visibleRelayTools(request).length > 0;
 export type RelayMention = { author_key: string; offset: number; length: number };
 export type RelayUrlButton = { text: string; url: string };
 export type RelayAttachment = { attachment_id: string; kind: RelayMediaKind; caption?: string };

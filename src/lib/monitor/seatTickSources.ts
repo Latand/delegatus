@@ -1,4 +1,4 @@
-import { observeSeatWakeResponse, type SeatWakeResponse, type WakeResponseEvidence } from "./seatWakeResponse";
+import { captureSeatWakeResponseStart, observeSeatWakeResponse, type SeatWakeResponse, type WakeResponseEvidence, type WakeResponseStart } from "./seatWakeResponse";
 import { seatTickInstructionLines, seatTickInstructionReview } from "./seatTickInstructions";
 import { issueDeliverySeatSignals } from "@/lib/forge/issueDelivery";
 import { sendFailureSignals } from "@/lib/runtime/sendFailureNotice";
@@ -36,6 +36,8 @@ import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { liveFreshObservation } from "@/lib/accounts/accountProjection";
+import { pauseReminderDue } from "@/lib/pipelines/pauseReminder";
+import type { SeatAgendaPauses } from "@/lib/attention/seatAgenda";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import fs from "node:fs";
 import path from "node:path";
@@ -65,6 +67,7 @@ import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
 import type { SeatTickReportLog } from "./seatTickReports";
 import { operatorLocale } from "@/lib/operator/settings";
 import { bridgeReportsEnabled } from "@/lib/projects/settings";
+import { diskCleanerSignals } from "@/lib/cleaner/diskReport";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
 import viewerPackageManifest from "../../../package.json";
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
@@ -539,6 +542,7 @@ function overdueTaskInputs(sources: SeatTickSources, project: string, now: numbe
 
 export interface SeatTickSources {
   wakeResponse?: (row: SeatWakeResponse, project?: string) => Promise<WakeResponseEvidence>;
+  wakeResponseStart?: (conversationId: string) => Promise<WakeResponseStart | undefined>;
   prepareRead?: () => Promise<void>;
   /** Warm problem credit without preparing general history for a deploy wake. */
   prepareMemoryProblems?: () => Promise<void>;
@@ -547,7 +551,7 @@ export interface SeatTickSources {
   /** The waits «Waiting for you» routes to this project's seat
       (docs/design/attention-auto-resolve.md), read from the board projection
       the panel itself reads. Absent: none. Null: read skipped or unavailable. */
-  workerAsks?: (project: string, seatConversationId?: string) => Promise<readonly SeatTickWorkerAskInput[] | import("./types").SeatTickAgendaInput | null>;
+  workerAsks?: (project: string, seatConversationId?: string, pauses?: SeatAgendaPauses) => Promise<readonly SeatTickWorkerAskInput[] | import("./types").SeatTickAgendaInput | null>;
   seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
   recoverQuota?: (project: string) => Promise<boolean>;
   /** Start a fresh host for a designated seat whose host is gone, without a
@@ -843,6 +847,7 @@ export function defaultSeatTickSources(): SeatTickSources {
       return readSeatTurnOutcome(conversation.engine, generation.path);
     },
     wakeResponse: observeSeatWakeResponse,
+    wakeResponseStart: captureSeatWakeResponseStart,
     recoverQuota: recoverSeatQuota,
     reviveSeatHost: async (request, dependencies) =>
       (await import("@/lib/runtime/structuredRecovery")).recoverDeadStructuredConversation(request, dependencies),
@@ -867,9 +872,9 @@ export function defaultSeatTickSources(): SeatTickSources {
       return report && typeof report === "object" ? report as StructuredHostRetirementReport : null;
     },
     retirementJournal: (sinceMs) => readRetirementJournalWindow(statePath("host-retirement-journal.ndjson"), sinceMs),
-    workerAsks: (project, seatConversationId) => withViewerOperation("seat-tick.worker-asks", () => performanceSpans.wait("seat-tick.worker-asks", async () => {
+    workerAsks: (project, seatConversationId, pauses) => withViewerOperation("seat-tick.worker-asks", () => performanceSpans.wait("seat-tick.worker-asks", async () => {
       const { operatorSeatAgenda } = await import("@/app/api/files/operatorProjection");
-      return operatorSeatAgenda(project, seatConversationId);
+      return operatorSeatAgenda(project, seatConversationId, pauses);
     })),
     openPullRequests: (options) => openPullRequestsForRepo(options),
     /* One rule for both halves: ask, and act on, the layer that is actually
@@ -1331,6 +1336,19 @@ function pauseInputs(pipelines: readonly Pipeline[], seat: SeatTickSeatInput | n
         pauseGeneration: pipeline.controlGeneration, pause: pipeline.pause, pauseConditionMet }] as const;
     }));
   });
+}
+
+function agendaPauses(pauses: ReturnType<typeof pauseInputs>, now: number, deployThrough: number): SeatAgendaPauses {
+  const quotaReadyLaneIds: string[] = [];
+  const deployLaneIds: string[] = [];
+  for (const [id, lane] of pauses) {
+    if (lane.pauseConditionMet) quotaReadyLaneIds.push(id);
+    if (deployThrough > 0 && lane.pausedBy === "seat" && Date.parse(lane.pausedAt) <= deployThrough
+      && (!lane.pause?.resumeCondition || pauseReminderDue(lane.pause, lane.pausedAt, now, lane.pauseConditionMet))) {
+      deployLaneIds.push(id);
+    }
+  }
+  return { quotaReadyLaneIds, deployLaneIds };
 }
 
 function taskSummary(task: BoardTask & { pipelineIds: string[] }): TaskSummary {
@@ -3386,13 +3404,19 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   const current = sources.seatFor(project).active;
   if (current?.conversationId !== seat.conversationId || current?.seatEpoch !== seat.seatEpoch) return null;
   const settings = effectiveSeatTickSettings(sources.settings(project), sources.now(), SEAT_TICK_WAKE_INTERVAL_MS);
+  const paused = projectRows(sources.pipelines(), project).filter(lane => isOpen(lane) && lane.state === "paused");
+  const pauses = pauseInputs(paused, seat, sources, sources.now());
+  const deployThrough = Math.max(...settledDeploys.map(deploy => Date.parse(deploy.settledAt ?? "") || 0));
+  const pauseSelection = agendaPauses(pauses, now, deployThrough);
   let workerAsksObserved = true;
+  let workerAsks: SeatTickCheckInput["workerAsks"];
   let decisionForms: SeatTickCheckInput["decisionForms"];
+  let pauseWaitingTasks: SeatTickCheckInput["pauseWaitingTasks"];
   if (sources.workerAsks) {
     try {
-      const read = await sources.workerAsks(project, seat.conversationId ?? undefined);
+      const read = await sources.workerAsks(project, seat.conversationId ?? undefined, pauseSelection);
       workerAsksObserved = read !== null;
-      if (read && "asks" in read) decisionForms = read.forms;
+      if (read && "asks" in read) { workerAsks = read.asks; decisionForms = read.forms; pauseWaitingTasks = read.pauseWaitingTasks; }
     } catch (error) {
       workerAsksObserved = false;
       console.error("[seat tick] routed asks unavailable", error instanceof Error ? error.name : "unknown");
@@ -3401,8 +3425,6 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
     const currentSeat = sources.seatFor(project).active;
     if (currentSeat?.conversationId !== seat.conversationId || currentSeat?.seatEpoch !== seat.seatEpoch) return null;
   }
-  const paused = projectRows(sources.pipelines(), project).filter(lane => isOpen(lane) && lane.state === "paused");
-  const pauses = pauseInputs(paused, seat, sources, sources.now());
   const pipelines: SeatTickPipelineInput[] = [];
   await forEachCooperatively(paused, lane => {
     const evidence = evidenceFromPipelines([{ id: lane.id, task: lane.task, project: lane.project,
@@ -3412,7 +3434,8 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   }, { batchSize: 4, timeBudgetMs: 8 });
   return { project, now: sources.now(), seat, state, policy, settings,
     pipelines, tasks: [], events: [], children: [], childrenUnavailable: null,
-    workerAsksObserved, ...(decisionForms ? { decisionForms } : {}),
+    workerAsksObserved, ...(workerAsks ? { workerAsks } : {}),
+    ...(pauseWaitingTasks ? { pauseWaitingTasks } : {}), ...(decisionForms ? { decisionForms } : {}),
     instructionReview: instructionReviewFor(project, sources.now(), settings, sources.pipelines(), sources.tasks(), seat),
     ownLanes: [], pullRequests: [], pullRequestsUnavailable: null, pullRequestsObserved: false,
     signals: [], settledDeploys, deploySettlementWakeDue: true, ...(observedReports ? { reports: observedReports } : {}),
@@ -3528,11 +3551,19 @@ async function gatherSeatTickInputWork(
   let workerAsks: readonly SeatTickWorkerAskInput[] = [];
   let workerAsksObserved = true;
   let decisionForms: SeatTickCheckInput["decisionForms"];
+  let pauseWaitingTasks: SeatTickCheckInput["pauseWaitingTasks"];
   if (seat && (settings.enabled || pendingAutonomyReports(settings, now).length > 0) && sources.workerAsks) {
     try {
-      const read = await sources.workerAsks(canonical, seat.conversationId ?? undefined);
+      const through = Math.max(Date.parse(state.deployResumeThrough ?? "") || 0,
+        ...settledDeploys.map(deploy => Date.parse(deploy.settledAt ?? "") || 0));
+      const read = await sources.workerAsks(canonical, seat.conversationId ?? undefined, agendaPauses(pauses, now, through));
       workerAsksObserved = read !== null;
-      if (read && "asks" in read) { workerAsks = read.asks; decisionForms = read.forms; }
+      if (read && "asks" in read) {
+        const remoteTasks = new Set(tasks.filter(task => task.runsOn).map(task => task.id));
+        workerAsks = read.asks.filter(ask => ask.seatOwnedLane || !ask.waitingTaskIds || !remoteTasks.has(ask.id));
+        decisionForms = read.forms;
+        pauseWaitingTasks = read.pauseWaitingTasks;
+      }
       else workerAsks = read ?? [];
     } catch (error) {
       workerAsksObserved = false;
@@ -3581,13 +3612,14 @@ async function gatherSeatTickInputWork(
     instructionReview: instructionReviewFor(canonical, now, settings, hotLanes, hotTasks, seat),
     workerAsksObserved,
     ...(decisionForms ? { decisionForms } : {}),
+    ...(pauseWaitingTasks ? { pauseWaitingTasks } : {}),
     ...(workerAsks.length ? { workerAsks } : {}),
     events,
     pullRequests,
     pullRequestsUnavailable,
     pullRequestsObserved,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? [], canonicalProject.keys(canonical)), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
+    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? [], canonicalProject.keys(canonical)), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources), ...await diskCleanerSignals(canonical, state.itemsShown ?? [], seat)],
     ownLanes,
     settledDeploys,
     settledMaintenance,

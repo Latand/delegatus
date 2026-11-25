@@ -1,3 +1,4 @@
+import { redactRequesterCodeText } from "./requesterEnrolmentContract";
 import { z } from "zod";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { withHistoryDeadline, type HistoryClock } from "./historyDeadline";
@@ -181,7 +182,7 @@ export async function readOwnerHistory(input: unknown, ports: OwnerHistoryPorts 
     return { available: true as const, chat, title: page.title, timeZone: page.timezone, start: page.start, end: page.end, oldestStoredAt: page.oldest_stored_at,
       editsReported: page.messages.every(m => m.edited_at !== undefined) && page.messages.length > 0,
       messages: page.messages.map(m => ({ messageId: m.message_id, sentAt: m.sent_at, author: { name: m.author.name, username: m.author.username },
-        fromAssistant: m.from_assistant, topicId: m.thread_id, replyToMessageId: m.reply_to_message_id, text: m.text, editedAt: m.edited_at ?? null,
+        fromAssistant: m.from_assistant, topicId: m.thread_id, replyToMessageId: m.reply_to_message_id, text: redactRequesterCodeText(m.text), editedAt: m.edited_at ?? null,
         media: m.media === null ? null : { kind: m.media.kind, description: m.media.description,
           fileName: m.media.file_name ?? null, mimeType: m.media.mime_type ?? null, size: m.media.size ?? null,
           duration: m.media.duration ?? null, width: m.media.width ?? null, height: m.media.height ?? null,

@@ -136,6 +136,7 @@ test("every library worker is bundled and traced into standalone output", async 
     { entry: {} },
     { isServer: true, nextRuntime: "nodejs" } as Parameters<NonNullable<typeof nextConfig.webpack>>[1],
   );
+  expect(configured.plugins).toHaveLength(1);
   if (typeof configured.entry !== "function") throw new Error("webpack entries are not configurable");
   const entries = await configured.entry();
   const tracingIncludes = nextConfig.outputFileTracingIncludes?.["/*"] ?? [];

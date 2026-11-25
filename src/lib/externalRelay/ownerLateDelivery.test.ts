@@ -2,18 +2,43 @@ import fs from "node:fs";
 import { expect, spyOn, test } from "bun:test";
 import { startTestRelay } from "./testRelay";
 import { clonePairing, cloneReceipt } from "./clone.fixture";
-import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
-import { changeRun, dropRun, readRunLedger, reserveRun } from "./store";
+import { deliverOwnerLateAnswer, ownerRecoveryRequest } from "./ownerLateDelivery";
+import { changeRun, dropRun, readRunLedger, reserveRun, updateRelayStore } from "./store";
+import { liveOwnerRelayRequest, ownerRelayAuthorized, ownerRelayHandoff } from "./ownerAuthority";
+import { completeRelayRequest } from "./relayCompletion";
+import { sweepExternalRelayOrphans } from "./poller";
+import { procBackend } from "@/lib/proc";
 import { requestSchema } from "./protocol";
 import { contextRequest } from "./request.fixture";
+import { endRequesterLease, openRequesterLease, requesterLeaseWriter } from "./requesterLease";
 
 const context = { chat_id: -1000000000101, reply_to_message_id: 51, message_thread_id: 12 };
 const body = { lease_id: "fixture", outcome: "answered" as const,
   answer: { action: "reply" as const, text: "Answer <with> & text", reply_to: "opaque_trigger" }, duration_ms: 121000 };
+
+for (const delivery of [undefined, "guest"] as const)
+test(`owner recovery requires the saved claim to identify the same owner trigger (${delivery ?? "ordinary"})`, () => {
+  const raw = requestSchema.parse({ ...contextRequest, delivery,
+    answer: { ...contextRequest.answer, progress: "none" },
+    input: { ...contextRequest.input, tools: [], requester: { ...contextRequest.input.requester, is_owner: true } },
+  });
+  const relay = clonePairing("http://127.0.0.1:1");
+  const run = {
+    requestId: raw.request_id, leaseId: raw.lease_id, targetId: raw.target_id, relayId: relay.id,
+    ownerPid: process.pid, ownerIdentity: null, childPid: null, childIdentity: null,
+    startedAt: raw.claimed_at, runDir: "", ownerTurn: { clientAttemptId: "relay-owner-recovery", rawRequest: raw },
+  };
+  expect(ownerRecoveryRequest(run, relay)).toEqual(raw);
+  raw.input.conversation[0]!.author.key = "different_author";
+  expect(ownerRecoveryRequest(run, relay)).toBeNull();
+});
+
 async function fixture(id: string, delivery: unknown = context, owner = true,
   handler: Parameters<typeof startTestRelay>[0] = () => ({ body: cloneReceipt() })) {
   const server = await startTestRelay(handler);
   const relay = clonePairing(server.origin);
+  relay.targets[0] = { ...relay.targets[0]!, ownerTier: true, enabled: true };
+  updateRelayStore(store => ({ ...store, relays: [...store.relays, relay] }));
   const directory = await fs.promises.mkdtemp(`${process.env.TMPDIR}/owner-late-send-`);
   reserveRun({ requestId: id, leaseId: "fixture", relayId: relay.id, targetId: "fixture-clone",
     ownerPid: process.pid, ownerIdentity: "fixture", childPid: null, childIdentity: null,
@@ -21,8 +46,79 @@ async function fixture(id: string, delivery: unknown = context, owner = true,
     ...(owner ? { ownerTurn: { clientAttemptId: `relay-owner-${id}`, delivery: delivery as typeof context } } : {}) }, 1);
   return { relay, pending: () => readRunLedger().runs.find(row => row.requestId === id)?.ownerTurn?.lateAnswer,
     send: (authorize = () => true) => deliverOwnerLateAnswer(relay, id, body, [], authorize),
-    close: async () => { dropRun(id); await server.close(); await fs.promises.rm(directory, { recursive: true, force: true }); } };
+    close: async () => {
+      dropRun(id);
+      updateRelayStore(store => ({ ...store, relays: store.relays.filter(item => item.id !== relay.id) }));
+      await server.close();
+      await fs.promises.rm(directory, { recursive: true, force: true });
+    } };
 }
+
+test.each(["owner", "unverifiable", "expired", "valid"] as const)("legacy handoff and delivery with %s authority", async lease => {
+  const requestId = "retained_legacy_reply";
+  const clock = spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-24T15:00:00Z"));
+  const completions: unknown[] = [];
+  let sends = 0;
+  const f = await fixture(requestId, context, true, (req, payload) => {
+    if (req.url?.endsWith("/complete")) {
+      completions.push(payload);
+      return { body: { status: "ok" } };
+    }
+    sends++;
+    return { body: cloneReceipt() };
+  });
+  const second = { ...f.relay, id: "different_pairing", owner: { ...f.relay.owner, id: "202" }, targets: [] };
+  if (lease !== "owner") updateRelayStore(store => ({ ...store, relays: [...store.relays, second] }));
+  const conversation = "conversation_retained_reply";
+  changeRun(requestId, row => ({
+    ...row, ownerIdentity: procBackend.processIdentity(process.pid), conversationId: conversation,
+    ownerTurn: { ...row.ownerTurn!, request: { text: "Do the work", requestText: null }, lateAnswer: { body, files: [] },
+      ...(lease === "expired" || lease === "valid" ? { leaseDeadlineAt: Date.now() + (lease === "expired" ? 0 : 20_000) } : {}) },
+  }));
+  try {
+    if (lease === "valid") {
+      const run = readRunLedger().runs.find(row => row.requestId === requestId)!;
+      const custody = { ...run, stallMs: 45_000, deadlineAt: run.ownerTurn!.leaseDeadlineAt! };
+      await openRequesterLease(custody);
+      requesterLeaseWriter(custody).acknowledge(Date.now());
+    }
+    const authorized = lease === "owner" || lease === "valid";
+    expect(liveOwnerRelayRequest(conversation)?.tier).toBe(lease === "owner" ? "owner" : authorized ? "requester" : undefined);
+    const handoff = ownerRelayHandoff("Work context", conversation);
+    expect(handoff.requester).toBe(lease !== "owner");
+    expect(!!handoff.payload).toBe(authorized);
+    const authorize = () => ownerRelayAuthorized(f.relay.id, "fixture-clone", requestId);
+    expect(await completeRelayRequest(f.relay, requestId, body, () => Date.now() + 5000, authorize))
+      .toMatchObject({ delivery: "accepted" });
+    expect(completions).toEqual([authorized ? body : { lease_id: body.lease_id, outcome: "failed", reason: "cancelled", detail: null }]);
+    if (lease === "valid") {
+      const run = readRunLedger().runs.find(row => row.requestId === requestId)!;
+      const handedOff = await completeRelayRequest(f.relay, requestId, { lease_id: body.lease_id, outcome: "declined",
+        reason: "handoff", retry_after_s: null, detail: null }, () => Date.now() + 5000, () => {
+        const allowed = authorize();
+        endRequesterLease(run);
+        return allowed;
+      });
+      const cancelled = { lease_id: body.lease_id, outcome: "failed" as const, reason: "cancelled", detail: null };
+      expect(handedOff).toEqual({ body: cancelled, delivery: "accepted" });
+      expect(completions).toEqual([body, cancelled]);
+    }
+    if (lease !== "owner") expect(await f.send()).toMatchObject({ delivery: "refused" });
+    await sweepExternalRelayOrphans();
+    if (lease === "owner") {
+      expect(sends).toBe(1);
+      expect(f.pending()).toBeUndefined();
+    } else {
+      expect(sends).toBe(0);
+      expect(f.pending()?.status).toBe("refused");
+      expect(readRunLedger().runs.find(row => row.requestId === requestId)?.capacityReleased).toBe(true);
+    }
+  } finally {
+    clock.mockRestore();
+    updateRelayStore(store => ({ ...store, relays: store.relays.filter(item => item.id !== second.id) }));
+    await f.close();
+  }
+});
 
 test("lost send ACK and repeated delivery use the persisted key and payload", async () => {
   const payloads: unknown[] = [], messages = new Set<string>();

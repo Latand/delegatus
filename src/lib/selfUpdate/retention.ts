@@ -3,6 +3,9 @@ import { withSelfObservation, type RetentionScan } from "./retentionInspection";
 import { RetentionWorker, RetentionInspectionError, type RetentionInspection } from "./retentionWorker";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
+import { cleanerAuditPending, settleCleanerAudit, type CleanerJournal } from "@/lib/cleaner/diskJournal";
+import { reconcileDiskCleanerReport } from "@/lib/cleaner/diskReport";
+import { assertRetentionTestPath } from "@/lib/retentionTestSafety";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
@@ -10,8 +13,8 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { inspectTree, matchesSnapshot, mountPointsUnder, resolvePhysicalPath, type ProcessScan } from "@/lib/tempSweep";
 import { classifyStatus, disposableGeneratedTree, disposableIgnoredPath, keptIgnored, lockCheckoutHead, parseWorktreeList } from "@/lib/pipelines/worktreeSweep";
 import { runGit } from "./git";
-import { builtRevision } from "./steps";
-import { adoptLegacyTrash, isGatedTrashRow, quarantineTree, reopenGate, settleGatedTrash } from "./gatedTrash";
+import { builtRevision, releaseBuilt } from "./steps";
+import { adoptLegacyTrash, isGatedTrashRow, quarantineTree, reopenGate, restoreGatedTrash, settleGatedTrash } from "./gatedTrash";
 import type { LauncherRecord } from "./launcher";
 import { retentionErrorDetails } from "./retentionLog";
 
@@ -23,7 +26,7 @@ export type RetentionInputs = {
   inFlight?: string[];
 };
 export type RetentionReport = {
-  at: string; removed: { dir: string; sha: string; bytes: number }[];
+  at: string; runId?: string; removed: { dir: string; sha: string; bytes: number }[];
   cursor?: { age: number; dir: string };
   recoveryCursor?: string;
   reclaimedCacheBytes: number; kept: { dir: string; reason: string; bytes: number }[]; errors: string[];
@@ -31,7 +34,7 @@ export type RetentionReport = {
 /** The owner's state. `fenced` answers a claim: the owner refuses every new
  * serving, rollback or in-flight hold on the claimed release from before this
  * read until the pass ends, so the read is the last word on its holds. */
-export type RetentionCurrent = { record: LauncherRecord; inputs: RetentionInputs; fenced?: boolean };
+export type RetentionCurrent = { record: LauncherRecord; inputs: RetentionInputs; fenced?: boolean; pipelineClaims?: Array<{ repoDir: string | null; worktreeDir: string | null }> };
 export type RetentionPorts = {
   inspection?: RetentionInspection;
   git?: typeof runGit; scan?: () => ProcessScan & Partial<Pick<RetentionScan, "uncertain">>; mountPoints?: (directory: string) => string[];
@@ -41,8 +44,43 @@ export type RetentionPorts = {
   maxCandidates?: number;
   removeTree?: (directory: string) => Promise<void>;
   lockHead?: (directory: string) => (() => void) | null;
+  cleaner?: { id: string; allowed: () => boolean; journal: CleanerJournal; dryRun: boolean };
 };
 const under = (entry: string, root: string) => entry === root || entry.startsWith(root + path.sep);
+
+/** Resolve every symlink hop even when its final target has just been moved
+ * into quarantine. realpath stops at that dangling link and loses its owner. */
+function resolveClaimPath(input: string): string {
+  const absolute = path.resolve(input), root = path.parse(absolute).root;
+  const pending = absolute.slice(root.length).split(path.sep).filter(Boolean);
+  let current = root, links = 0;
+  while (pending.length) {
+    const part = pending.shift()!;
+    if (part === ".") continue;
+    if (part === "..") { current = path.dirname(current); continue; }
+    const next = path.join(current, part);
+    const stat = fs.lstatSync(next, { throwIfNoEntry: false });
+    if (stat?.isSymbolicLink()) {
+      if (++links > 40) throw new Error("pipeline claim symlink depth exceeded");
+      const target = fs.readlinkSync(next);
+      if (path.isAbsolute(target)) current = path.parse(target).root;
+      pending.unshift(...target.split(path.sep).filter(Boolean));
+      continue;
+    }
+    current = next;
+  }
+  return current;
+}
+
+/** Live and parked lanes keep any overlapping release checkout or worktree. */
+export async function readReleasePipelineClaims() {
+  const [{ loadPipelinesForList }, { pipelineActivitySettled }] = await Promise.all([
+    import("@/lib/pipelines/store"), import("@/lib/pipelines/types"),
+  ]);
+  return loadPipelinesForList()
+    .filter(lane => lane.state !== "closed" && lane.state !== "completed" || !pipelineActivitySettled(lane))
+    .map(lane => ({ repoDir: lane.repoDir ?? null, worktreeDir: lane.worktreeDir ?? null }));
+}
 
 function pointerDir(raw: string | null): string | null {
   if (raw === null) return null;
@@ -71,7 +109,10 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   try {
   const now = ports.now ?? Date.now;
   const run = ports.git ?? runGit;
-  const report: RetentionReport = { at: new Date(now()).toISOString(), removed: [], reclaimedCacheBytes: 0, kept: [], errors: [] };
+  const cleaner = ports.cleaner;
+  const report: RetentionReport = { at: new Date(now()).toISOString(),
+    ...(typeof ports.env?.LLV_RETENTION_RUN_ID === "string" && { runId: ports.env.LLV_RETENTION_RUN_ID }),
+    removed: [], reclaimedCacheBytes: 0, kept: [], errors: [] };
   const reportFile = ports.reportFile ?? statePath("self-update", "retention.json");
   fs.mkdirSync(path.dirname(reportFile), { recursive: true });
   const previousTrash = fs.readdirSync(path.dirname(reportFile)).sort();
@@ -150,6 +191,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     }) || proc.references?.some(entry => entry.includes(dir)));
   };
   const protect = (candidate: Candidate, current: Awaited<ReturnType<typeof read>>, processes: ProcessScan, recovering = false): string | null => {
+    if (cleaner && !cleaner.allowed()) return "cleaner ownership changed";
     const { record: owner, inputs: state } = current;
     if (owner.releasesDir !== record.releasesDir || owner.checkout !== record.checkout || owner.releasePointer !== record.releasePointer)
       throw new Error("installation changed during retention");
@@ -157,6 +199,20 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     try { active = pointerDir(fs.readFileSync(owner.releasePointer, "utf8")); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     const names = (directory: string | null) => directory !== null && under(directory, candidate.dir);
+    const overlaps = (directory: string | null) => directory !== null
+      && (under(directory, candidate.dir) || under(candidate.dir, directory));
+    const physicalClaim = (directory: string | null) => {
+      if (!directory) return null;
+      // Resolve again at every owner fence: parked aliases can be retargeted
+      // while the candidate is quarantined. Resolve dangling hops after the
+      // quarantine rename so their former physical target still matches.
+      try { return fs.realpathSync(directory); }
+      catch { return resolveClaimPath(directory); }
+    };
+    if ((current.pipelineClaims ?? []).some(claim => {
+      const repo = physicalClaim(claim.repoDir), worktree = physicalClaim(claim.worktreeDir);
+      return overlaps(repo) || overlaps(worktree);
+    })) return "pipeline-checkout";
     if (names(active)) return "active";
     if ((state.rollbackPointers ?? []).some(raw => names(pointerDir(raw))) || names(state.rollbackPackage ?? null)) return "rollback";
     if ((state.inFlight ?? []).some(names)) return "in-flight";
@@ -205,6 +261,12 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   };
   const prune = async () => {
     const root = path.resolve(record.releasesDir);
+    if (cleaner) {
+      assertRetentionTestPath(root);
+      assertRetentionTestPath(reportFile);
+      if (!record.checkout) return;
+      assertRetentionTestPath(record.checkout);
+    }
     // No update cache or interrupted work exists on a clean first start.
     // In particular, it needs no Linux procfs inventory on other platforms.
     if (!previousTrash.some(file => TRASH_JOURNAL.test(file))
@@ -228,8 +290,12 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
       if (record.checkout ? !/^[a-f0-9]{12}$/.test(name) : !/^npm-\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(name)) continue;
       const registered = listed.find(entry => path.resolve(entry.path) === dir && !entry.bare && !entry.prunable);
+      if (cleaner && (dir === path.resolve(record.checkout!) || registered && listed[0] === registered)) continue;
       if (record.checkout && !registered) { report.kept.push({ dir, reason: "unregistered", bytes: 0 }); continue; }
       let sha = registered?.head ?? "";
+      if (cleaner && (!registered || registered.branch || !sha.startsWith(name) || !releaseBuilt(dir, sha))) {
+        report.kept.push({ dir, reason: "release ownership unproven", bytes: 0 }); continue;
+      }
       if (!record.checkout) {
         try { sha = JSON.parse(fs.readFileSync(path.join(dir, "node_modules/delegatus-cli/package.json"), "utf8")).gitHead ?? ""; }
         catch { /* Unknown package revision cannot match serving revisions. */ }
@@ -237,7 +303,8 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       candidates.push({ dir, sha, age: releaseAge(dir, !!record.checkout), locked: registered?.locked ?? false, identity: identity(dir) });
     }
     const rawKeep = Number((ports.env ?? process.env).LLV_SELF_UPDATE_KEEP_RELEASES?.trim() || 3);
-    const keepCount = Number.isFinite(rawKeep) ? Math.max(1, Math.floor(rawKeep)) : 3;
+    const configuredKeep = Number.isFinite(rawKeep) ? Math.max(1, Math.floor(rawKeep)) : 3;
+    const keepCount = cleaner ? Math.max(15, configuredKeep) : configuredKeep;
     // Validate every safety input before the first mutation.
     const protectedSet = new Map(candidates.map(candidate => [candidate.dir, protect(candidate, initial, processes)]));
     // A whole release an interrupted pass quarantined, still intact, is still
@@ -250,6 +317,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       if (!TRASH_JOURNAL.test(file) || !releaseJournal && !file.startsWith("package-trash-") || releaseJournal !== !!record.checkout) continue;
       try {
         const row = JSON.parse(fs.readFileSync(path.join(path.dirname(reportFile), file), "utf8"));
+        if (row.cleaner) continue; // Cleaner quarantines are owned by their audit and recovery path.
         if (typeof row?.directory !== "string" || path.dirname(row.directory) !== root || row.deleting
           || !(record.checkout ? /^[a-f0-9]{12}$/ : /^npm-\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/).test(path.basename(row.directory))
           || candidates.some(candidate => candidate.dir === row.directory)) continue;
@@ -264,9 +332,9 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
         else quarantined.push({ dir: row.directory, sha: row.context?.sha ?? "", age, locked: false, identity: String(row.identity ?? "") });
       } catch { /* An unreadable journal is replayed, and reported, below. */ }
     }
-    const newest = new Set([...candidates.filter(candidate => !protectedSet.get(candidate.dir)),
+    const newest = new Set([...candidates.filter(candidate => cleaner || !protectedSet.get(candidate.dir)),
       ...quarantined.filter(candidate => !protect(candidate, initial, processes, true))]
-      .filter(candidate => now() - candidate.age >= DAY).sort((a, b) => byAge(b, a)).slice(0, keepCount).map(candidate => candidate.dir));
+      .filter(candidate => cleaner || now() - candidate.age >= DAY).sort((a, b) => byAge(b, a)).slice(0, keepCount).map(candidate => candidate.dir));
     const safeRef = async (sha: string) => {
       const refs = await run(["for-each-ref", "--contains", sha, "--format=%(refname)", "refs/heads", "refs/remotes", "refs/self-update/tip"], record.checkout!);
       return refs.code === 0 && refs.stdout.split("\n").some(ref => ref.trim().length > 0);
@@ -293,7 +361,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           const bytes = reason === "mount-boundary" ? 0 : await bytesOf(candidate.dir);
           report.kept.push({ dir: candidate.dir, reason, bytes });
           // Runtime caches and unfinished builds are kept. Only webpack is disposable.
-          if (["mount-boundary", "in-flight", "changed"].includes(reason) || !record.checkout
+          if (cleaner || ["mount-boundary", "in-flight", "changed"].includes(reason) || !record.checkout
             || ((await read()).inputs.inFlight ?? []).some(dir => under(dir, candidate.dir))) continue;
           const head = await run(["rev-parse", "HEAD"], candidate.dir);
           if (head.code !== 0 || builtRevision(candidate.dir) !== head.stdout.trim()) continue;
@@ -341,7 +409,8 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           const listing = await run(["worktree", "list", "--porcelain", "-z"], record.checkout);
           if (listing.code !== 0) throw new Error("cannot refresh release worktree listing");
           const entry = parseWorktreeList(listing.stdout).find(entry => path.resolve(entry.path) === candidate.dir);
-          if (!entry || entry.locked || entry.head !== actualHead.stdout.trim() || await freshProtection(candidate) || mounts(candidate.dir).length) {
+          if (!entry || entry.locked || cleaner && entry.branch || entry.head !== actualHead.stdout.trim()
+            || await freshProtection(candidate) || mounts(candidate.dir).length) {
             report.kept.push({ dir: candidate.dir, reason: "changed", bytes: 0 }); continue;
           }
           let content = await worktreeStatus(candidate.dir);
@@ -354,6 +423,11 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
             const target = path.join(candidate.dir, ignored);
             let stat: fs.Stats;
             try { stat = fs.lstatSync(target); } catch { content = { ...content, ignored: [ignored] }; break; }
+            if (cleaner) {
+              const generated = stat.isDirectory() && disposableGeneratedTree(target, true);
+              if (!generated && !stat.isFile() && !stat.isSymbolicLink()) { content = { ...content, ignored: [ignored] }; break; }
+              continue;
+            }
             if (stat.isFile() || stat.isSymbolicLink()) {
               const parent = path.dirname(target), parentIdentity = identity(parent);
               const { current, processes: fresh } = await freshObservation();
@@ -432,15 +506,40 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           }
           // Rename out of the release path, recheck Git content there, then
           // remove from behind the closed gate. The ready marker goes first.
+          const preserve = (directory: string) => fs.existsSync(path.join(root, ".delegatus-keep"))
+            || !!inspectTree(directory, { registeredWorktree: true, preserveKeep: true, mounts: mounts(path.resolve(directory)) }).hold;
+          if (cleaner && (preserve(candidate.dir) || cleaner.dryRun)) {
+            report.kept.push({ dir: candidate.dir, reason: cleaner.dryRun ? "dry-run" : "keep marker, Git, or filesystem boundary", bytes }); continue;
+          }
           const journal = path.join(path.dirname(reportFile), `release-trash-${randomUUID()}.json`);
-          const row = quarantineTree(candidate.dir, journal, { sha: candidate.sha, age: candidate.age });
+          const proof = `registered release ${candidate.sha} beyond newest ${keepCount}, ref preserved, fenced owner and process checks clear`;
+          if (cleaner) cleaner.journal("intent", candidate.dir, bytes, proof);
+          const row = quarantineTree(candidate.dir, journal, { sha: candidate.sha, age: candidate.age },
+            cleaner ? { passId: cleaner.id, proof, bytes } : undefined);
+          if (cleaner && !row) cleaner.journal("refused", candidate.dir, bytes, proof);
           if (!row) { report.kept.push({ dir: candidate.dir, reason: "changed", bytes }); continue; }
           const outcome = await settleGatedTrash(journal, row, { remove: ports.removeTree, first: [".next/DELEGATUS_RELEASE_READY"],
-            beforeGate: trash => releaseContentHold(trash, candidate.sha),
-            observe: (trash, gate) => gatedReleaseHold(candidate, trash, gate) });
-          if (!outcome.removed) { report.kept.push({ dir: candidate.dir, reason: outcome.reason, bytes }); continue; }
+            retainJournal: !!cleaner,
+            beforeGate: async trash => cleaner && (preserve(trash) || !releaseBuilt(trash, candidate.sha))
+              ? "keep marker, Git, or filesystem boundary" : releaseContentHold(trash, candidate.sha),
+            observe: (trash, gate) => gatedReleaseHold(candidate, trash, gate),
+            validate: cleaner && (directory => !preserve(directory)),
+            beforeRemove: cleaner && (async () => {
+              if (!cleaner.allowed()) return "cleaner lost traffic ownership";
+              return gatedReleaseHold(candidate, row.trash, row.gate);
+            }),
+            dispatchHold: cleaner && (() => !cleaner.allowed() ? "cleaner ownership changed" : mounts(row.gate).length ? "mount-boundary" : null) });
+          if (!outcome.removed) {
+            if (cleaner && !row.deleting && restoreGatedTrash(journal, row, true)) {
+              cleaner.journal("refused", candidate.dir, bytes, proof);
+              fs.unlinkSync(journal);
+            }
+            report.kept.push({ dir: candidate.dir, reason: outcome.reason, bytes }); continue;
+          }
+          cleaner?.journal("removed", candidate.dir, bytes, proof);
           report.removed.push({ dir: candidate.dir, sha: candidate.sha, bytes });
           await dropWorktreeMetadata(candidate.dir);
+          if (cleaner) fs.unlinkSync(journal);
           continue;
         } else {
           const packageTree = inspectTree(candidate.dir, { git: true, mounts: mounts(candidate.dir) });
@@ -477,6 +576,65 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
         const packageTrash = file.startsWith("package-");
         const outputTrash = file.startsWith("release-output-");
         const releaseTrash = file.startsWith("release-trash-");
+        if (row.cleaner) {
+          if (!cleaner || !releaseTrash || !gated || !cleaner.allowed()
+            || path.dirname(row.directory) !== root || !/^[a-f0-9]{12}$/.test(path.basename(row.directory))) continue;
+          if (mounts(row.gate).length) {
+            report.kept.push({ dir: row.directory, reason: "mount-boundary", bytes: row.cleaner.bytes ?? 0 });
+            continue;
+          }
+          // A killed worker may leave mode 000 before the first unlink. Open
+          // the validated gate before reading the bound inode's contents.
+          reopenGate(row);
+          const mountHold = () => mounts(row.gate).length || mounts(row.trash).length ? "mount-boundary" : null;
+          if (mountHold()) {
+            report.kept.push({ dir: row.directory, reason: "mount-boundary", bytes: row.cleaner.bytes ?? 0 });
+            continue;
+          }
+          const trash = fs.lstatSync(row.trash, { throwIfNoEntry: false });
+          const bytes = trash ? await bytesOf(row.trash) : 0;
+          if (row.deleting) {
+            if (cleaner.dryRun && trash) {
+              report.kept.push({ dir: row.directory, reason: "dry-run", bytes: row.cleaner.bytes ?? 0 });
+              continue;
+            }
+            if (trash && !await cleanerAuditPending(row.cleaner, "release", row.directory)) {
+              report.kept.push({ dir: row.directory, reason: "Cleaner audit is already terminal", bytes });
+              continue;
+            }
+            const candidate: Candidate = { dir: row.directory, sha: row.context?.sha ?? "", age: row.context?.age ?? 0,
+              locked: false, identity: row.identity };
+            const outcome = await settleGatedTrash(journal, row, { remove: ports.removeTree,
+              retainJournal: true,
+              observe: async (tree, gate) => {
+                const { current, processes, unfenced } = await gatedObservation(tree, candidate.dir);
+                return protect(candidate, current, processes, true)
+                  ?? (heldByProcess(gate, processes) ? "process" : unfenced ? "owner-unfenced" : null);
+              },
+              dispatchHold: () => cleaner.allowed() ? mountHold() : "cleaner ownership changed" });
+            if (outcome.removed) {
+              await settleCleanerAudit(row.cleaner, "release", row.directory, "removed");
+              await reconcileDiskCleanerReport(row.cleaner.passId);
+              if (!fs.lstatSync(row.directory, { throwIfNoEntry: false })) await dropWorktreeMetadata(row.directory);
+              fs.unlinkSync(journal);
+              report.removed.push({ dir: row.directory, sha: candidate.sha, bytes });
+            } else report.kept.push({ dir: row.directory, reason: outcome.reason, bytes });
+            continue;
+          }
+          const restored = restoreGatedTrash(journal, row, true);
+          if (restored) {
+            await settleCleanerAudit(row.cleaner, "release", row.directory, "refused");
+            await reconcileDiskCleanerReport(row.cleaner.passId);
+            fs.unlinkSync(journal);
+            report.kept.push({ dir: row.directory, reason: "restored after Cleaner restart", bytes });
+          } else {
+            report.kept.push({ dir: row.directory, reason: "Cleaner quarantine requires guarded recovery", bytes });
+          }
+          continue;
+        }
+        // Historical release trash has no Cleaner pass binding. Leave replay
+        // to its original retention owner instead of deleting it unaudited.
+        if (cleaner && (!releaseTrash || !gated || !row.cleaner)) continue;
         let outputCandidate: Candidate | undefined;
         let generatedOutput = false;
         if (packageTrash) {

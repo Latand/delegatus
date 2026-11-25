@@ -316,6 +316,8 @@ function sources(over: {
   livenessThrows?: boolean;
   events?: LifecycleEvent[];
   latestDeployment?: ReturnType<SeatTickSources["latestDeployment"]>;
+  seatDeployments?: SeatTickSources["seatDeployments"];
+  deployment?: SeatTickSources["deployment"];
   settings?: ReturnType<SeatTickSources["settings"]>;
   livenessCalls?: { project?: string; conversationId?: string; stallAfterMs: number }[];
   openPullRequests?: OpenPullRequest[];
@@ -369,6 +371,8 @@ function sources(over: {
     },
     lifecycleJournal: () => journal(over.events ?? []),
     latestDeployment: () => over.latestDeployment ?? ({ state: "unreadable", error: "no ledger" }) as never,
+    ...(over.seatDeployments ? { seatDeployments: over.seatDeployments } : {}),
+    ...(over.deployment ? { deployment: over.deployment } : {}),
     retirementReport: () => null,
     ...(over.retirementJournal ? { retirementJournal: over.retirementJournal } : {}),
     settings: () => over.settings ?? defaultSeatTickSettings(PROJECT),
@@ -985,6 +989,38 @@ test("the deployment signal reports the latest deployment, and stays silent when
   /* A deployment still running is not an outcome to report at all. */
   const running = await gather({ latestDeployment: deployment({ phase: "promoting", terminal: false }) });
   expect(running.signals).toEqual([]);
+});
+
+test("a settled deploy wake carries the linked legacy seat pause and omits operator-held tasks", async () => {
+  const { gatherSeatTickDeployInput } = await import("./seatTickSources");
+  const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
+  const pipelineId = "paused-after-deploy";
+  const task = { id: "task-after-deploy", project: PROJECT, text: "Resume the release", status: "blocked", placement: "unplaced", assignments: [],
+    createdAt: new Date(NOW - 60 * 60_000).toISOString(), updatedAt: new Date(NOW - 60 * 60_000).toISOString(),
+    hold: { kind: "external", note: "Paused for deployment", since: new Date(NOW - 60 * 60_000).toISOString(), by: "agent" } };
+  const operatorTask = { ...task, id: "operator-access-task", text: "Change account access", hold: { kind: "operator", note: "Grant access to the release account", since: new Date(NOW - 60 * 60_000).toISOString(), by: "operator" } };
+  const pipeline = lane({ id: pipelineId, state: "paused", taskIds: [task.id], pausedAt: new Date(NOW - 60 * 60_000).toISOString(),
+    stateDetail: `paused by builder ${CONVERSATION}`, pause: { reason: "Deploy in progress" } });
+  pipeline.taskIds = [task.id, operatorTask.id];
+  const settledAt = new Date(NOW - 30 * 60_000).toISOString();
+  const ports = sources({ now: NOW, pipelines: [pipeline], tasks: [task, operatorTask], seatDeployments: () => [{ deploymentId: "deployment-fixture", conversationId: CONVERSATION,
+    project: PROJECT, revision: "a".repeat(40), requestedAt: new Date(NOW - 45 * 60_000).toISOString() }],
+  deployment: () => ({ state: "ok", value: { deploymentId: "deployment-fixture", phase: "succeeded", revision: "a".repeat(40), updatedAt: settledAt, terminal: true } }) as never });
+  ports.workerAsks = async (project, seatId, selection) => {
+    expect(seatId).toBe(CONVERSATION);
+    expect(selection?.deployLaneIds).toEqual([pipelineId]);
+    const waits = new Map<string, string[]>();
+    const asks = seatAgendaAsks({ files: [], pipelines: ports.pipelines(), tasks: ports.tasks() }, NOW / 1000, project, waits, selection);
+    return { asks, forms: { rows: [], count: 0 }, pauseWaitingTasks: Object.fromEntries(waits) };
+  };
+  const gathered = await gatherSeatTickDeployInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(gathered?.pauseWaitingTasks).toEqual({ [pipelineId]: [task.id] });
+  const decision = seatTickDecision(gathered!);
+  if (decision.verdict.kind !== "wake") throw new Error("settled deploy should wake the seat");
+  const resumeLabel = decision.verdict.items.find(item => item.kind === "pipeline")?.label ?? "";
+  expect(resumeLabel).toContain(task.id);
+  expect(resumeLabel).toContain("pipeline_action resume");
+  expect(resumeLabel).not.toContain(operatorTask.id);
 });
 
 /* ------------------------------------------------------------------------- *

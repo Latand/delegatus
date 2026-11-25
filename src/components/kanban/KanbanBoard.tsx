@@ -32,6 +32,8 @@ import { kanbanColumnTracks, kanbanLayoutModeBeside, type KanbanLayoutMode } fro
 import { KanbanColumnsSkeleton } from "@/components/skeletons";
 import { reachLineText, useServerReach } from "@/hooks/serverReach";
 import { useKanbanSeat } from "./kanbanSeatStore";
+import { resolveSeatFile, seatLivenessOf } from "@/components/orchestrator/seatState";
+import { useSeatSurface } from "@/components/orchestrator/useSeatSurface";
 import { useKanbanWide, type KanbanWideState } from "./kanbanWideStore";
 import { changeColumnWidth, COLUMN_LAYOUT_END } from "./columnLayoutAnimation";
 import { DWELL_CUE_MS, useColumnDwell } from "./useColumnDwell";
@@ -494,6 +496,17 @@ export function KanbanBoard(props: KanbanBoardProps) {
   /* The orchestrator seat sits above the columns or, docked at the side,
      between the rail and them (#1841): one choice per browser. */
   const seatFrame = useKanbanSeat(project);
+  /* Whether the seat is idle between turns with its host alive, read once from
+     the same seat state its head reads, for every desktop surface that names
+     the seat (its reader header and its open-agents entry): they say «waiting»
+     where the head does, and «done» nowhere. */
+  const seatFileForState = useMemo(
+    () => resolveSeatFile({ files, conversationId: seatRefs?.conversationIds[0] ?? null, seatPath: seatRefs?.paths[0] ?? null, currentPath: null }),
+    [files, seatRefs],
+  );
+  const seatSurfaceForState = useSeatSurface(seatFileForState);
+  const seatIdle = seatFileForState !== null
+    && seatLivenessOf({ file: seatFileForState, surface: seatSurfaceForState, incumbent: null, hostLive: false }) === "waiting";
   const wideColumns = useKanbanWide();
   /* One column holds the wide share (#1841): Assigned, or the shelf the
      operator widened. Tabs already show one column at full width, and the
@@ -685,7 +698,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         file,
         inSheet: sheetSlots.has(reader.key),
         owner: owner && card ? stableOwner(reader.key, { cardId: card.id, cardTitle: card.titlePending ? t("kanban.untitled") : card.title, stage: owner.stage }) : null,
-        ...(isCurrentSeatConversation(seatRefs, file) ? { seat: true, ...(seatPlaceholder?.key === reader.key ? { composerPlaceholder: seatPlaceholder.text } : {}) } : {}),
+        ...(isCurrentSeatConversation(seatRefs, file) ? { seat: true, seatWaiting: seatIdle, ...(seatPlaceholder?.key === reader.key ? { composerPlaceholder: seatPlaceholder.text } : {}) } : {}),
         ...(owner?.stage && stageAsksOperator(owner.stage.pipeline, owner.stage.stage.id) ? { composerPlaceholder: t("kanban.stages.answerPlaceholder") } : {}),
         /* The window is the operator's conversation window: the agent in its
            reader takes the one composer from any other place of the same
@@ -709,7 +722,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
       }
     }
     return views;
-  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, shownState, sheetSlots, sheetSummary, sheetPanes, seatRefs, seatPlaceholder]);
+  }, [openReaders, owners, filesByIdentity, filesByPath, cardsById, t, shownState, sheetSlots, sheetSummary, sheetPanes, seatRefs, seatPlaceholder, seatIdle]);
   useEffect(() => {
     for (const view of readerViews) lastSeenFiles.current.set(view.readerKey, view.file);
   }, [readerViews]);
@@ -1028,7 +1041,9 @@ export function KanbanBoard(props: KanbanBoardProps) {
     return true;
   };
 
-  const move = useCallback((card: KanbanCardModel, to: TaskStatus, options: { focus?: boolean; hold?: Partial<TaskHold> | null } = {}) => {
+  const [holdEditor, setHoldEditing] = useState<{ cardId: string } | null>(null);
+  const holdEditing = holdEditor?.cardId ?? null;
+  const move = useCallback((card: KanbanCardModel, to: TaskStatus, options: { focus?: boolean; hold?: Partial<TaskHold> | null; editor?: typeof holdEditor } = {}) => {
     const task = card.task ? tasksById.current.get(card.task.id) ?? card.task : null;
     if (!task) return;
     const from = card.status;
@@ -1038,16 +1053,27 @@ export function KanbanBoard(props: KanbanBoardProps) {
     const written = settles();
     const entry: HistoryEntry = { kind: "status", taskId: task.id, title: short, from, to, fromHold: controller.holdFor(task) ?? null, toHold: null, settled: written.promise };
     historyRef.current.record(entry);
-    const receiptId = show(t("kanban.moved", { title: short, status: statusLabel(t, to) }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
-    entryReceipts.current.set(entry, receiptId);
-    if (options.focus) focusMoved(card.id, to);
+    const optimisticReceiptId = to === "blocked" || options.hold === null ? null : show(t("kanban.moved", { title: short, status: statusLabel(t, to) }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
+    if (optimisticReceiptId) entryReceipts.current.set(entry, optimisticReceiptId);
+    if (options.focus && options.hold !== null) focusMoved(card.id, to);
     void controller.move(task, to, Object.hasOwn(options, "hold") ? { hold: options.hold } : {}).then((outcome: StatusMoveOutcome) => {
-      if (outcome.kind === "saved") { entry.lineages = new Map([[task.id, outcome.lineage]]); entry.toHold = outcome.task.hold ?? null; }
+      if (outcome.kind === "saved") {
+        entry.to = outcome.task.status;
+        entry.lineages = new Map([[task.id, outcome.lineage]]);
+        entry.toHold = outcome.task.hold ?? null;
+        if (options.editor) setHoldEditing(current => current === options.editor ? null : current);
+        if (options.focus && options.hold === null) focusMoved(card.id, outcome.task.status);
+        if (outcome.task.status !== to && optimisticReceiptId) dismiss(optimisticReceiptId);
+        const receiptId = optimisticReceiptId && outcome.task.status === to ? optimisticReceiptId
+          : show(t("kanban.moved", { title: short, status: statusLabel(t, outcome.task.status) }), { label: t("kanban.undo"), run: () => void step("undo", entry) });
+        entryReceipts.current.set(entry, receiptId);
+      }
       written.resolve(outcome.kind === "saved");
       /* The server already held the status: nothing of this board's is left to undo. */
-      if (outcome.kind === "settled") dismiss(receiptId);
+      if (outcome.kind === "settled") return;
       if (outcome.kind === "failed") {
-        dismiss(receiptId);
+        if (optimisticReceiptId) dismiss(optimisticReceiptId);
+        entryReceipts.current.delete(entry);
         flash(card.id);
         show(t("kanban.moveFailed", { title: short, error: outcome.error }), {
           label: t("kanban.retry"),
@@ -1057,7 +1083,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
           },
         }, { error: true });
       } else if (outcome.kind === "conflict") {
-        dismiss(receiptId);
+        if (optimisticReceiptId) dismiss(optimisticReceiptId);
+        entryReceipts.current.delete(entry);
         flash(card.id);
         show(t("kanban.movedElsewhere", { title: short, status: statusLabel(t, outcome.serverStatus) }), {
           label: t("kanban.moveAnyway"),
@@ -1069,14 +1096,18 @@ export function KanbanBoard(props: KanbanBoardProps) {
       }
     });
   }, [controller, dismiss, flash, focusMoved, show, step, t]);
+  const moveToColumn = useCallback((card: KanbanCardModel, to: TaskStatus, options: { focus?: boolean } = {}) => {
+    if (to === "blocked") { setHoldEditing({ cardId: card.id }); return; }
+    move(card, to, options);
+  }, [move]);
   const cardsByIdRef = useRef(cardsById);
   cardsByIdRef.current = cardsById;
 
   const shift = useCallback((card: KanbanCardModel, delta: -1 | 1) => {
     const index = KANBAN_STATUSES.indexOf(card.status) + delta;
     const target = KANBAN_STATUSES[index];
-    if (target) move(card, target, { focus: true });
-  }, [move]);
+    if (target) moveToColumn(card, target, { focus: true });
+  }, [moveToColumn]);
 
   /* ── Inline title and description (prototype `startEdit`/`commitEdit`) ── */
   /* Drafts belong to the board, keyed by card, so a card that re-ranks, moves
@@ -1485,16 +1516,23 @@ export function KanbanBoard(props: KanbanBoardProps) {
   }, [model]);
 
   /* ── Menus ───────────────────────────────────────────────────────────── */
-  const [holdEditing, setHoldEditing] = useState<string | null>(null);
+  useEffect(() => {
+    if (!holdEditing) return;
+    requestAnimationFrame(() => {
+      const card = [...(rootRef.current?.querySelectorAll<HTMLElement>("[data-kanban-card]") ?? [])]
+        .find(node => node.dataset.kanbanCard === holdEditing);
+      card?.querySelector<HTMLElement>("[data-hold-editor]")?.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" });
+    });
+  }, [holdEditing]);
   const statusItems = useCallback((card: KanbanCardModel, hints: boolean): KanbanMenuItem[] => [
     ...KANBAN_STATUSES.map((status): KanbanMenuItem => ({
       type: "radio", id: `status:${status}`, status, label: statusLabel(t, status),
       why: hints ? t(`kanban.statusHint.${status}`) : null,
       checked: card.status === status,
-      onSelect: () => move(card, status, { focus: true }),
+      onSelect: () => moveToColumn(card, status, { focus: true }),
     })),
-    { type: "item", id: "hold", label: t("kanban.hold.edit"), keepFocus: true, onSelect: () => setHoldEditing(card.id) },
-  ], [move, t]);
+    { type: "item", id: "hold", label: t("kanban.hold.edit"), keepFocus: true, onSelect: () => setHoldEditing({ cardId: card.id }) },
+  ], [moveToColumn, t]);
   const menuFor = (): { label: string; items: KanbanMenuItem[] } | null => {
     const open = menu.open;
     if (!open) return null;
@@ -1574,7 +1612,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       onPick: (color) => setColor(card, color),
     };
     if (value.kind === "colour") return { label: t("kanban.colour"), items: [{ type: "head", label: t("kanban.colour") }, swatches] };
-    /* Only the Inbox sorts by it, so the hints say where the card goes there. */
+    /* Only the Inbox sorts by it, so the hints say where the card goes there
+       and only an Inbox card carries them. */
     const priorityItems: KanbanMenuItem[] = card.task ? [
       { type: "sep" },
       { type: "head", label: t("kanban.priority") },
@@ -1582,7 +1621,7 @@ export function KanbanBoard(props: KanbanBoardProps) {
         type: "radio",
         id: `priority:${priority}`,
         label: t(`kanban.priority.${priority}`),
-        why: priority === "normal" ? null : t(`kanban.priorityHint.${priority}`),
+        why: priority === "normal" || card.status !== "inbox" ? null : t(`kanban.priorityHint.${priority}`),
         checked: card.priority === priority,
         onSelect: () => setPriority(card, priority),
       })),
@@ -2004,14 +2043,14 @@ export function KanbanBoard(props: KanbanBoardProps) {
       status: card.status,
       event,
       hint: dragHintText,
-      onDrop: (to) => move(card, to),
+      onDrop: (to) => moveToColumn(card, to),
       onActive: (active) => {
         dragHold.held = active;
         dragHold.now = dragHold.latest;
         if (!active) setDragReleased((count) => count + 1);
       },
     });
-  }, [move, dragHintText, dragHold]);
+  }, [moveToColumn, dragHintText, dragHold]);
 
   /* ── Keys: undo and redo, find ───────────────────────────────────────── */
   /* The Stages sheet stands over the board: while it is open, no key the
@@ -2958,9 +2997,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
     else onOpenConversations?.();
   });
   const cardSaveHold = useStableCallback((card: KanbanCardModel, hold: Partial<TaskHold> | null) => {
-    setHoldEditing(null);
     const hasOwner = card.task?.assignments.some(a => ["delivered", "spawning", "handoff", "linked"].includes(a.state));
-    move(card, hold ? "blocked" : hasOwner ? "assigned" : "inbox", { hold, focus: true });
+    move(card, hold ? "blocked" : hasOwner ? "assigned" : "inbox", { hold, focus: true, editor: holdEditor });
   });
   const cardCancelHold = useStableCallback(() => { const id = holdEditing; setHoldEditing(null); if (id) focusCard(id); });
 
@@ -3249,7 +3287,8 @@ export function KanbanBoard(props: KanbanBoardProps) {
       <div className="board-frame" id={boardId} tabIndex={-1} aria-label={t(timelineShown ? "timeline.title" : "kanban.columns")} data-walk-anchor={props.overview ? undefined : "board"}>
       {timelineShown && loaded ? (
         <BoardTimeline project={project} cards={timelineCards} members={timelineMembers}
-          pipelines={pipelines} nowMs={props.now * 1000} preference={timeline.preference} onPreference={timeline.update} />
+          pipelines={pipelines} nowMs={props.now * 1000} preference={timeline.preference} onPreference={timeline.update}
+          onOpenConversation={target => openRecorded({ path: target.agentPath, conversationId: target.conversationId })} />
       ) : null}
       <div className="board-rest" hidden={timelineShown && loaded} inert={timelineShown && loaded}>
       {!loaded ? (

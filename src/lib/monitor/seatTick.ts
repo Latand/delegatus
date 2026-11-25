@@ -7,15 +7,15 @@ import { createHash } from "node:crypto";
 import { seatTickBullet } from "./report";
 import { redactMonitorText } from "./redact";
 import { maintenanceItemLabel } from "@/lib/boardMaintenance/text";
+import { maintenanceAnnouncements, maintenancePageToken } from "./seatMaintenanceDelivery";
 import { isTerminalHighSignalEvent } from "@/lib/lifecycle/vocabulary";
 
 import { seatTickRetryGuardRef, seatTickSourceGapRef, ORCHESTRATOR_ALERT_REF, SEAT_TICK_SETTINGS_REF } from "./cards";
 import { evidenceStallReason } from "./classify";
-import { seatTickReminders, taskHasBlocker, taskIsOverdue, reminderDeliveredVersion, pauseReminderReady, recentReminderVersion, retainedWaitingSweepVersion } from "./seatTickReminders";
+import { seatTickReminders, taskIsOverdue, reminderDeliveredVersion, pauseReminderReady, recentReminderVersion, retainedWaitingSweepVersion } from "./seatTickReminders";
 import type { EffectiveSeatTickSettings } from "./seatTickSettings";
 import {
   SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT,
-  SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT,
   SEAT_TICK_REPORTED_STALLS_LIMIT,
   SEAT_TICK_CHILDREN_SHOWN_LIMIT,
   SEAT_TICK_REPORTS_OWED_LIMIT,
@@ -278,7 +278,7 @@ function childStallToken(child: SeatTickChildInput): string {
  * out on its own once nobody touches it.
  */
 function isUnstarted(task: SeatTickTaskInput, now: number, backlogAfterMs: number): boolean {
-  if (task.accepted || taskHasBlocker(task, now) || task.status !== "assigned" || task.owned || task.runsOn) return false;
+  if (task.accepted || task.hold || task.status !== "assigned" || task.owned || task.runsOn) return false;
   const movedAt = task.updatedAt ? Date.parse(task.updatedAt) : Number.NaN;
   /* A card with no readable movement instant cannot be shown to be recent, and
      the whole failure being fixed here is a reason that can never stop being
@@ -287,9 +287,9 @@ function isUnstarted(task: SeatTickTaskInput, now: number, backlogAfterMs: numbe
 }
 
 /**
- * Work the seat could still carry: an open lane, a board card that is neither
- * blocked (a recorded stop) nor done, or a pull request a finished lane left
- * open.
+ * Work the seat could still carry: an open lane, a card available for work,
+ * or a pull request a finished lane left open. Holds record a stop in any
+ * column. The task agenda owns those stops.
  *
  * The third clause is #1289. Counting only lanes and cards made "the work
  * finished" and "the work finished and left three approved pull requests
@@ -307,7 +307,7 @@ function isUnstarted(task: SeatTickTaskInput, now: number, backlogAfterMs: numbe
 function hasOpenWork(input: SeatTickCheckInput): boolean {
   return input.pipelines.some(isOpenLane)
     || input.signals.some(signal => signal.actionable)
-    || input.tasks.some((task) => task.status === "inbox" || task.status === "assigned")
+    || input.tasks.some(task => !task.hold && (task.status === "inbox" || task.status === "assigned"))
     || input.pullRequests.length > 0
     || ownSettledLanes(input).length > 0
     || seatSettledDeploys(input).length > 0
@@ -1271,14 +1271,16 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     .sort((a, b) => (a.sinceMs ?? Number.POSITIVE_INFINITY) - (b.sinceMs ?? Number.POSITIVE_INFINITY) || a.id.localeCompare(b.id));
   const overdueIds = new Set((input.overdueTasks ?? []).map(task => task.id));
   const unstarted = input.tasks.filter((task) => !overdueIds.has(task.id) && !taskIsOverdue(task, input.now) && (isUnstarted(task, input.now, input.policy.backlogAfterMs)
-    || autonomous && !task.accepted && !taskHasBlocker(task, input.now) && task.status === "inbox" && !task.owned && !task.runsOn));
-  const backlog = input.tasks.filter((task) => !task.accepted && !taskHasBlocker(task, input.now) && task.status === "assigned" && !task.owned && !task.runsOn).length - unstarted.filter(task => task.status === "assigned").length;
-  const taskPage = seatTickTaskPage(input, unstarted);
+    || autonomous && !task.accepted && !task.hold && task.status === "inbox" && !task.owned && !task.runsOn));
+  const backlog = input.tasks.filter(task => !task.accepted && !task.hold && task.status === "assigned" && !task.owned && !task.runsOn).length - unstarted.filter(task => task.status === "assigned").length;
+  const intervalDue = seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs);
+  const taskPageDue = seatTickWakeDue(input.state.lastTaskWakeAt ?? input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs);
+  const taskPage = taskPageDue ? seatTickTaskPage(input, unstarted) : undefined;
   const openWork = hasOpenWork(input) || seatOwnedLanes.length > 0 || (taskPage?.due ?? 0) > 0;
   /* The bound shortens while the seat's own children are moving (#1881): a
      child that settled or stalled since the last wake is due at the next
-     check, and running children bring the interval wake to a quarter of an
-     hour. With neither, the project's own interval stands.
+     check, and running children bring the lane news interval to a quarter of
+     an hour. Task pages and ordinary interval wakes use the project interval.
 
      A stall counts once it is confirmed, the same second sighting the stall
      reason waits for. And only a child with a live host behind it shortens the
@@ -1337,10 +1339,11 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     candidates.push({ kind: "autonomy-idle", detail: "Find and start useful work: Inbox, then GitHub issues, board-maintenance suggestions, then your findings. Prioritize autonomous-marked tasks; respect worker slots and the forbidden list." });
   }
   const verifiedIdleDue = verifiedIdleWakeDue(input);
-  if (wakeDue) {
-    /* A verdict the seat cannot decide without leads the wake — and waits for
-       the wake like everything else. Routine progress never wakes on its own,
-       and recent merges remain owed after their lane finishes.
+  const lastWake = instant(input.state.lastWakeAt);
+  if (wakeDue || laneEvents.some(event => Date.parse(event.at) > lastWake)
+    || ownLanes.some(lane => instant(lane.updatedAt) > lastWake)) {
+    /* Fresh lane events are due on the next check. Routine progress never
+       wakes on its own, and recent merges remain owed after their lane finishes.
 
        The count beside it is what the seat reads as "how much is there", so it
        counts what is owed and nothing else (#1285): "and 18 more" over a page
@@ -1383,7 +1386,10 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   const asks = input.workerAsks ?? [];
   if (asks.length > 0) {
     const more = asks.length > 1 ? ` and ${asks.length - 1} more` : "";
-    candidates.push({ kind: "worker-ask", detail: `a worker or stage waits on you first and is off the operator's list${more}: answer each where it asked, ${autonomous ? "decide yourself and record the decision with an undo path" : "or ask the operator in a decision form (publish_prototype_review) and dismiss_attention escalate {reviewId}"}` });
+    const taskAsk = asks.some(ask => ask.waitingTaskIds?.includes(ask.id) && !ask.seatOwnedLane);
+    candidates.push({ kind: "worker-ask", detail: taskAsk
+      ? "A task or agent needs the seat’s next step. Follow the action on each Waiting on seat line."
+      : `a worker or stage waits on you first and is off the operator's list${more}: answer each where it asked, ${autonomous ? "decide yourself and record the decision with an undo path" : "or ask the operator in a decision form (publish_prototype_review) and dismiss_attention escalate {reviewId}"}` });
   }
   // A newly owed outcome is due on the next check, including after a recent
   // interval wake. Delivery accounting still discharges it exactly once.
@@ -1392,7 +1398,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     const more = harvest.length > 1 ? ` and ${harvest.length - 1} more` : "";
     candidates.push({ kind: "child-terminal", detail: `a spawned child ${first.child.outcome ?? "finished"} and its outcome is not yet announced by a delivered seat-tick wake${more}. Reading the transcript alone does not acknowledge this announcement` });
   }
-  if (wakeDue) {
+  if (intervalDue) {
     /* The mirror image (#1289), and it is a wake reason rather than a silence
        for one reason: a lane that finished with its pull request unmerged is
        the seat's next obligation, and the tick could not see one. It takes no
@@ -1413,14 +1419,17 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
         detail: `pull request #${first.number}${more} left open by a lane that finished${first.lastFixUnreviewed ? "; last fix not re-reviewed" : ""}${first.mergeBlocked ? `; merge stopped: ${first.mergeBlocked}` : ""}`,
       });
     }
-    if (persistedStalls.length > 0 || persistedChildStalls.length > 0 || reminders.some(item => item.reminderKind === "pause")) {
-      candidates.push({ kind: "stalled", detail: (persistedStalls[0] ?? persistedChildStalls[0])?.reason ?? "paused lanes are due for review" });
-    }
-    const permissions = pendingPermissionItems(input);
-    if (permissions.length > 0) {
-      const more = permissions.length > 1 ? ` and ${permissions.length - 1} more` : "";
-      candidates.push({ kind: "permission-request", detail: `a turn waits on an unanswered tool permission request${more}` });
-    }
+  }
+  if (persistedChildStalls.length > 0 || verifiedIdleDue
+    || (wakeDue && (persistedStalls.length > 0 || reminders.some(item => item.reminderKind === "pause")))) {
+    candidates.push({ kind: "stalled", detail: (persistedStalls[0] ?? persistedChildStalls[0])?.reason ?? "paused lanes are due for review" });
+  }
+  const permissions = wakeDue ? pendingPermissionItems(input) : [];
+  if (permissions.length > 0) {
+    const more = permissions.length > 1 ? ` and ${permissions.length - 1} more` : "";
+    candidates.push({ kind: "permission-request", detail: `a turn waits on an unanswered tool permission request${more}` });
+  }
+  if (taskPageDue) {
     if (reminders.some(item => item.reminderKind === "overdue")) candidates.push({ kind: "overdue-task", detail: "overdue board work" });
     if (unstarted.length > 0 || reminders.some(item => item.reminderKind === "task")) {
       /* The excluded count travels with the reason so a seat reading "2" beside
@@ -1429,7 +1438,9 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       const held = backlog > 0 ? `, and ${backlog} older than the backlog bound the wake no longer names` : "";
       candidates.push({ kind: "unstarted-task", detail: `${unstarted.length} ${autonomous ? "eligible" : "assigned"} board task(s) nothing has started${held}` });
     }
-    /* The interval is a floor on wakes, never a licence to speak with nothing
+  }
+  if (intervalDue) {
+    /* The interval is a floor on routine wakes, never a licence to speak with nothing
        to say. Reaching here with no candidate means no lane event, no persisted
        stall and no unstarted task, so an interval wake would carry exactly the
        open lanes and the signals. A board whose only open work is an inbox card
@@ -1445,13 +1456,13 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       candidates.push({ kind: "interval", detail: "the wake interval elapsed while work is open" });
     }
   }
-  if (!wakeDue && verifiedIdleDue) {
-    candidates.push({ kind: "stalled", detail: (persistedStalls[0] ?? persistedChildStalls[0])!.reason });
-  }
   /* Low disk leads and does not wait for the interval: a volume that fills
      kills every agent writing to it. The episode is shown once. */
   if (input.signals.some(signal => signal.id === "disk-space" && signal.episode && signal.episode !== input.state.diskPressureShown)) {
     candidates.unshift({ kind: "disk-pressure", detail: "free space on a volume Delegatus writes to is below the warning threshold" });
+  }
+  if (input.signals.some(signal => signal.id.startsWith("disk-cleaner:") && signal.actionable !== false)) {
+    candidates.unshift({ kind: "disk-cleaner", detail: "a disk-cleaner completion is waiting for the project seat" });
   }
 
   const periodicLaneIds = new Set(input.pipelines.filter(lane => isOpenLane(lane) && !lane.pausedBy).map(lane => lane.id));
@@ -1487,8 +1498,10 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       case "permission-request": return item.kind === "permission";
       case "release-settled": return item.kind === "signal" && item.id.startsWith("release-settled:");
       case "release-blocked": return item.kind === "signal" && item.id.startsWith("release-blocked:");
+      case "maintenance-settled": return item.kind === "maintenance";
       case "worker-ask": return item.kind === "ask";
       case "disk-pressure": return item.kind === "signal" && item.id === "disk-space";
+      case "disk-cleaner": return item.kind === "signal" && item.id.startsWith("disk-cleaner:");
       case "lane-event": return item.mergeEventSeq !== undefined;
       case "own-lane-settled": return !!item.laneAnnouncement;
       case "stalled": return item.reminderKind === "pause" || !!item.stallToken || (item.kind === "pipeline" && persistedStalls.some(entry => entry.pipeline.id === item.id)) || (item.kind === "child" && persistedChildStalls.some(entry => entry.child.conversationId === item.id));
@@ -1496,7 +1509,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
       default: return false;
     }
   });
-  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "overdue-task", "own-lane-settled", "stalled", "interval", "permission-request", "worker-ask", "disk-pressure", "release-settled", "release-blocked"]);
+  const versionedReasons = new Set<SeatTickWakeReasonKind>(["unmerged-pr", "unstarted-task", "overdue-task", "own-lane-settled", "stalled", "interval", "permission-request", "worker-ask", "disk-pressure", "disk-cleaner", "release-settled", "release-blocked", "maintenance-settled"]);
   const cards: SeatTickCard[] = [];
   const reasons: SeatTickWakeReason[] = [];
   let guardHeld = 0;
@@ -1535,7 +1548,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   // Delivered or guarded obligations cannot cancel the live-work cadence.
   // This reminder carries current work only; it does not reannounce outcomes.
   let offered = all.filter(item => item.kind !== "task");
-  if (wakeDue && openWork && reasons.length === 0 && hasPeriodicWork) {
+  if ((intervalDue || (taskPage?.due ?? 0) > 0) && openWork && reasons.length === 0 && hasPeriodicWork) {
     const current = all.filter(periodicItem);
     if (current.length > 0 || (taskPage?.due ?? 0) > 0) {
       reasons.push({ kind: "interval", detail: "the wake interval elapsed while work is open" });
@@ -1545,7 +1558,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
 
   // An unchanged reason can disappear while another open lane has moved.
   // That new interval agenda must still be considered after item dedupe.
-  if (wakeDue && openWork && reasons.length === 0 && guardHeld === 0
+  if (intervalDue && openWork && reasons.length === 0 && guardHeld === 0
     && all.some(item => item.itemVersion && !shownItems.has(item.itemVersion))) {
     reasons.push({ kind: "interval", detail: "open work changed since its last delivered wake" });
   }
@@ -1553,7 +1566,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   // Reporting is a separate obligation from the agenda already delivered.
   // Only matching report/answer evidence clears it; board movement and the
   // agenda retry guard cannot discharge it. Reminders keep the configured floor.
-  if (seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs)
+  if (intervalDue
     && reasons.length === 0 && input.reports?.bridgeReports
     && (observed.reportsOwed?.length ?? 0) > 0) {
     reasons.push({ kind: "interval", detail: "bridge outcome reports remain owed" });
@@ -1598,7 +1611,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
   }
   // Partial pages promised a final report even if their remaining work has
   // since disappeared. Only a complete agenda observation can finish it.
-  if (input.state.catchUpProgress && wakeDue && !input.deploySettlementWakeDue
+  if (input.state.catchUpProgress && intervalDue && !input.deploySettlementWakeDue
     && reasons.length === 0 && gaps.length === 0 && input.workerAsksObserved !== false) {
     reasons.push({ kind: "interval", detail: "the remaining catch-up agenda is complete; its final report is owed" });
   }
@@ -1680,7 +1693,7 @@ function decide(input: SeatTickCheckInput): SeatTickDecision {
     const idle = { ...quiet(state, at), idleSince: input.state.idleSince ?? at };
     /* The proposal is a wake too — it resumes a host and spends a turn — so it
        waits out the same hour on top of its own 24-hour slot. */
-    if (!autonomous && wakeDue && elapsed(input.state.lastProposalAt, input.now, input.policy.proposalIntervalMs)) {
+    if (!autonomous && intervalDue && elapsed(input.state.lastProposalAt, input.now, input.policy.proposalIntervalMs)) {
       return {
         verdict: { kind: "proactive", detail: `no open lane, no unblocked task, and the proposal slot is due${unplaced}`, formPage: seatTickFormPage(input) },
         state: idle,
@@ -2046,10 +2059,20 @@ function wakeItems(context: {
   }
   for (const alert of input.releaseAlerts ?? []) items.push({ kind: "signal", id: alert.id, label: alert.label });
   for (const run of seatSettledMaintenance(input)) {
-    items.push({ kind: "maintenance", id: run.taskId ?? run.runId, occurredAt: run.endedAt, label: maintenanceItemLabel(run), maintenance: { runId: run.runId } });
+    const pageSize = 3;
+    const entries = run.log.seat ?? [];
+    const pages = Math.max(1, Math.ceil(entries.length / pageSize));
+    for (let page = 0; page < pages; page++) {
+      if ((input.state.announcedMaintenance ?? []).includes(maintenancePageToken(run.runId, page))) continue;
+      const pageEntries = entries.slice(page * pageSize, (page + 1) * pageSize);
+      items.push({ kind: "maintenance", id: `${run.taskId ?? run.runId}:${page + 1}`, occurredAt: run.endedAt,
+        label: maintenanceItemLabel(run, pageEntries), maintenance: { runId: run.runId, page, pages } });
+    }
   }
   for (const pipeline of seatPausedLanes(input)) {
-    items.push({ kind: "pipeline", id: pipeline.id, label: `${pipeline.title} — paused by you; resume it with pipeline_action resume once what you paused it for is done` });
+    const waiting = input.pauseWaitingTasks?.[pipeline.id] ?? [];
+    const taskLine = waiting.length ? `Waiting task(s) ${waiting.map(id => `\`${id}\``).join(", ")}: carry them back to work when you resume. ` : "";
+    items.push({ kind: "pipeline", id: pipeline.id, label: `${taskLine}${pipeline.title} — paused by you; resume it with pipeline_action resume once what you paused it for is done` });
   }
   /* A wait routed to the seat holds a worker up and is on nobody else's list,
      so it comes before the seat's own news. */
@@ -2274,7 +2297,9 @@ export function seatTickWakeCommitPlan(
   const announcedLanes = items.flatMap((item) => item.laneAnnouncement ? [item.laneAnnouncement] : []);
   /* The same rule for a settled deploy (#2063): the landing of the wake that
      carried it is what announces it, once. */
-  const announcedMaintenance = items.filter(item => item.kind === "maintenance").flatMap(item => item.maintenance ? [item.maintenance.runId] : []);
+  const maintenanceReceipts = (item: SeatTickItem) => item.maintenance
+    ? [maintenancePageToken(item.maintenance.runId, item.maintenance.page, item.maintenance.pages)] : [];
+  const announcedMaintenance = items.flatMap(maintenanceReceipts);
   const announcedDeploys = items.filter((item) => item.kind === "deploy").map((item) => item.id);
   const deployResumeThrough = items.filter(item => item.kind === "deploy" && item.occurredAt && Number.isFinite(Date.parse(item.occurredAt)))
     .map(item => item.occurredAt!).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
@@ -2301,7 +2326,7 @@ export function seatTickWakeCommitPlan(
         .filter(id => terminal.has(id)).map(id => `child:${id}`) : []),
       ...(item.stateTokens ?? []).map(id => `shown:${id}`),
       ...(item.laneAnnouncement ? [`lane:${item.laneAnnouncement}`] : []),
-      ...(item.maintenance ? [`maintenance:${item.maintenance.runId}`] : []),
+      ...maintenanceReceipts(item).map(receipt => `maintenance:${receipt}`),
       ...(item.kind === "deploy" ? [`deploy:${item.id}`] : []),
       ...(item.stallToken ? [`stall:${item.stallToken}`] : []),
       ...seatTickOwedOutcomes([item]).filter(outcome => owedKeys.has(outcome.key)).map(outcome => `report:${outcome.key}`),
@@ -2378,6 +2403,7 @@ export function seatTickWakeCommit(
   const wakeResponse = state.wakeResponse ?? (wake ? { clientMessageId: wake.clientMessageId, operationId: wake.operationId ?? wake.clientMessageId,
     conversationId: wake.conversationId, seatEpoch: wake.seatEpoch, deliveredAt: received, progressAt: received,
     preparedAt: !wake.preparationTimeUnknown && wake.preparedAt && Date.parse(wake.preparedAt) <= Date.parse(received) ? wake.preparedAt : undefined,
+    ...(wake.responseStart ? { scanFrom: wake.responseStart } : {}),
     boundMs: commit.responseBoundMs ?? seatWakeResponseBound(DEFAULT_SEAT_TICK_POLICY.checkIntervalMs, commit.wakeIntervalMs ?? SEAT_TICK_WAKE_INTERVAL_MS), action: "pending" as const } : undefined);
   const note = { wakeResponse, catchUpProgress, wakeDecidedSince: null, ...(commit.autonomyShown ? { autonomyShown: commit.autonomyShown } : {}), ...(commit.turboShown ? { turboShown: commit.turboShown } : {}), ...(commit.noteShown === undefined ? {} : { noteShown: commit.noteShown }), ...(commit.autonomySummaryFor ? { autonomySummaryFor: commit.autonomySummaryFor } : {}) };
   if (commit.proposal) {
@@ -2387,6 +2413,7 @@ export function seatTickWakeCommit(
       unreachableSince: clearsOutage ? null : state.unreachableSince,
       unreachableBacklogSince: clearsOutage ? null : state.unreachableBacklogSince,
       lastWakeAt: received,
+      lastTaskWakeAt: state.lastTaskWakeAt ?? state.lastWakeAt ?? received,
       lastProposalAt: at,
       ...(formPageAfter ? { formPageAfter } : {}),
       lastWakeReasons: [],
@@ -2399,6 +2426,9 @@ export function seatTickWakeCommit(
   }
 
   const carried = commit.reasons;
+  const agendaVersions = visibleAgendaVersions(state, commit);
+  // A mixed wake spends the task interval only when a task row reached the seat.
+  const deliveredTaskPage = agendaVersions.some(version => /^reminder:(task|overdue|waiting):/.test(version));
   /* A wake that changed nothing, counted the same way the guard reads it — an
      hour whose pull-request half was unreadable is an hour that showed no
      movement, so it accrues rather than resetting (#1298). A blind source
@@ -2417,6 +2447,7 @@ export function seatTickWakeCommit(
     unreachableSince: clearsOutage ? null : state.unreachableSince,
     unreachableBacklogSince: clearsOutage ? null : state.unreachableBacklogSince,
     lastWakeAt: received,
+    lastTaskWakeAt: deliveredTaskPage ? received : state.lastTaskWakeAt ?? state.lastWakeAt ?? received,
     lastWakeReasons: carried,
     lastWakeFingerprint: commit.fingerprint,
     wakesWithoutChange,
@@ -2429,11 +2460,11 @@ export function seatTickWakeCommit(
     releasedWake: null,
     harvestedChildren: harvested(state.harvestedChildren, commit.children),
     childrenShown: childrenShown(state.childrenShown ?? [], commit.shownChildren ?? []),
-    ...(commit.diskPressure && visibleAgendaVersions(state, commit).includes(commit.diskPressure.version) ? { diskPressureShown: commit.diskPressure.episode } : {}),
+    ...(commit.diskPressure && agendaVersions.includes(commit.diskPressure.version) ? { diskPressureShown: commit.diskPressure.episode } : {}),
     ...(formPageAfter ? { formPageAfter } : {}),
-    itemsShown: mergeAgendaVersions(state.itemsShown ?? [], visibleAgendaVersions(state, commit).map(version => reminderDeliveredVersion(version, now)), commit.activeStallTokens, now),
+    itemsShown: mergeAgendaVersions(state.itemsShown ?? [], agendaVersions.map(version => reminderDeliveredVersion(version, now)), commit.activeStallTokens, now),
     announcedLanes: announced(state.announcedLanes ?? [], commit.announcedLanes ?? []),
-    announcedMaintenance: announced(state.announcedMaintenance ?? [], commit.announcedMaintenance ?? [], SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
+    announcedMaintenance: maintenanceAnnouncements(state.announcedMaintenance ?? [], commit.announcedMaintenance ?? []),
     announcedDeploys: announced(state.announcedDeploys ?? [], commit.announcedDeploys ?? [], SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
     ...(commit.deployResumeThrough && Number.isFinite(Date.parse(commit.deployResumeThrough)) ? { deployResumeThrough: new Date(Math.max(
       Date.parse(state.deployResumeThrough ?? "") || 0, Date.parse(commit.deployResumeThrough),
@@ -2490,6 +2521,7 @@ export function seatTickSignalVersion(signal: SeatTickSignalInput, recipient: Pi
 
 function agendaVersion(item: SeatTickItem, input: SeatTickCheckInput): string | undefined {
   if (item.itemVersion) return item.itemVersion;
+  if (item.maintenance) return `maintenance:${item.maintenance.runId}:page:${item.maintenance.page}`;
   if (item.mergeEventSeq !== undefined) return mergeEventVersion(item.mergeEventSeq);
   /* A delivered idle alert belongs to the measured transcript episode. Lane
      title and update metadata can move while that episode stays unchanged. */

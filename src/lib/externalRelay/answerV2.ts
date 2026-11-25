@@ -1,6 +1,7 @@
 import { ExternalRelayError } from "./client";
 import { checkedMentions, photoReferenceSource } from "./composition";
 import net from "node:net";
+import { relayPlainText } from "./answerText";
 import { checkedAnswer, checkedRound, type ExternalRelayRequest, type ExternalRelayDecision, type RelayUrlButton, type RelayMediaKind } from "./protocol";
 
 export type AnswerDrop = { part: string; index?: number; reason: string };
@@ -168,12 +169,17 @@ export function richTextRefusal(text: string, caps: AnswerCapabilities): string 
   }
   return blocks > caps.blocks ? "blocks" : null;
 }
-export type AnswerCheckOptions = { handoff: boolean; ignore: boolean; stagedAttachments?: number };
+export type AnswerCheckOptions = { handoff: boolean; ignore: boolean; stagedAttachments?: number;
+  renderLegacyPlain?: boolean; scrubPlain?: (text: string) => string };
 export function checkedAnswerV2(value: unknown, request: ExternalRelayRequest, caps: AnswerCapabilities,
   options: AnswerCheckOptions = { handoff: true, ignore: true }, drops: AnswerDrop[] = []): ExternalRelayDecision | null {
-  if (!caps.rich) return checkedAnswer(value, { ...request, answer: { ...request.answer, max_chars: caps.plainMax } }, options);
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
+  if (!caps.rich) {
+    const answer = options.renderLegacyPlain && raw.action === "reply" && typeof raw.text === "string"
+      ? { ...raw, text: relayPlainText(raw.text, options.scrubPlain) } : raw;
+    return checkedAnswer(answer, { ...request, answer: { ...request.answer, max_chars: caps.plainMax } }, options);
+  }
   if (!caps.mentions && Array.isArray(raw.mentions) && raw.mentions.length) throw new ExternalRelayError("malformed", 400);
   const mentions = checkedMentions(raw.mentions, typeof raw.text === "string" ? raw.text : "", String(raw.format ?? "plain"), request);
   if (raw.action !== "reply" && mentions.length) throw new ExternalRelayError("malformed", 400);
@@ -186,11 +192,17 @@ export function checkedAnswerV2(value: unknown, request: ExternalRelayRequest, c
     if (source !== raw.text && !caps.imageRefs) throw new ExternalRelayError("invalid_format", 422);
   } else if (/!\[[^\]]*\]\(attachment:/.test(raw.text)) throw new ExternalRelayError("invalid_format", 422);
   let format: "plain" | "rich_markdown" = raw.format === "rich_markdown" ? "rich_markdown" : "plain";
+  let text = raw.text;
   if (format === "rich_markdown") {
-    const reason = richTextRefusal(raw.text, caps);
+    const reason = richTextRefusal(text, caps);
     if (reason && mentions.length) throw new ExternalRelayError("malformed", 400);
-    if (reason) { drops.push({ part: "text", reason }); if ([...raw.text].length > caps.plainMax) return null; format = "plain"; }
-  } else if ([...raw.text].length > caps.plainMax) { drops.push({part:"text",reason:"plain_length"}); return null; }
+    if (reason) {
+      drops.push({ part: "text", reason });
+      format = "plain";
+      text = relayPlainText(text, options.scrubPlain);
+      if ([...text].length > caps.plainMax) return null;
+    }
+  } else if ([...text].length > caps.plainMax) { drops.push({part:"text",reason:"plain_length"}); return null; }
   const files: LocalAttachment[] = [];
   if (caps.generate && Array.isArray(raw.attachments)) raw.attachments.forEach((file, index) => {
     if (index >= caps.maxItems || !file || typeof file.path !== "string" || !["photo", "document"].includes(file.kind) || !caps.kinds.includes(file.kind) || file.caption !== undefined && typeof file.caption !== "string") {
@@ -200,8 +212,8 @@ export function checkedAnswerV2(value: unknown, request: ExternalRelayRequest, c
     if (caption !== (file.caption ?? "")) drops.push({ part: "caption", index, reason: "caption_too_long" });
     files.push({ path: file.path, kind: file.kind, caption });
   });
-  if (!raw.text.trim() && !files.length && !(caps.media && (options.stagedAttachments ?? 0) > 0)) return null;
-  const answer: ExternalRelayDecision = { action: "reply", text: raw.text, reply_to: request.input.conversation.some(m => m.id === raw.reply_to) ? raw.reply_to as string : null,
+  if (!text.trim() && !files.length && !(caps.media && (options.stagedAttachments ?? 0) > 0)) return null;
+  const answer: ExternalRelayDecision = { action: "reply", text, reply_to: request.input.conversation.some(m => m.id === raw.reply_to) ? raw.reply_to as string : null,
     format, ...(caps.mentions && raw.mentions !== undefined ? { mentions } : {}), buttons: checkedButtons(raw.buttons, caps, drops) };
   localFiles.set(answer, files);
   return answer;
@@ -214,5 +226,5 @@ export function formatSection(request: ExternalRelayRequest): string {
   return answerCapabilities(request, "").rich ? `<format>\n${JSON.stringify(request.input.format).replace(/</g, "\\u003c")}\n</format>\n` : "";
 }
 export function richAnswerInstructions(caps: AnswerCapabilities, owner = false): string {
-  return `${owner ? "When relay_answer is available, call it before you finish with text set to your chat reply; its format is rich_markdown unless you set plain, and each call replaces the previous one." : 'Use format "rich_markdown" for formatted replies.'} Markdown bold, italic, links, lists, tables, headings and code render following <format>, at most ${caps.richMax} characters. format plain sends literal unformatted text, at most ${caps.plainMax} characters.${caps.mentions ? ` mentions annotates literal person labels using {author_key, offset, length}, at most 16; count offsets and lengths as Unicode scalars in your exact original text. Use only real people from this request, keep spans sorted and disjoint in one ordinary text leaf, at most 128 characters each; use [] for none.` : ""} ${owner ? "relay_answer sets" : "buttons holds"} up to ${caps.rows} rows of ${caps.perRow} https links {"text", "url"}; use [] for none.${caps.generate && !owner ? ` You may create a requested picture with your native image tool. attachments lists up to ${caps.maxItems} images you created in this turn, using the path your image tool reported, kind photo (or document for the original) and a plain caption of at most 1024 characters; use [] for none.` : ""}${owner && caps.media ? ` relay_answer also attaches up to ${caps.maxItems} files under your document roots by absolute path, kind photo, document, audio or video. Use attachment_id from the relay_answer receipt for standalone ![](attachment:id) photo blocks; every selected photo must appear once in attachment order in a contiguous run. With no references, the service appends all photos as one carousel. Never write a local path in the posted message.` : ""}`;
+  return `${owner ? "When relay_answer is available, call it before you finish with text set to your chat reply; its format is rich_markdown unless you set plain, and each call replaces the previous one." : 'Use format "rich_markdown" for formatted replies.'} Markdown bold, italic, links, lists, tables, headings and code render following <format>, at most ${caps.richMax} characters. format plain sends literal unformatted text, at most ${caps.plainMax} characters.${caps.mentions ? ` mentions annotates literal person labels using {author_key, offset, length}, at most 16; count offsets and lengths as Unicode scalars in your exact original text. Use only real people from this request, keep spans sorted and disjoint in one ordinary text leaf, at most 128 characters each; use [] for none.` : ""} ${owner ? "relay_answer sets" : "buttons holds"} up to ${caps.rows} rows of ${caps.perRow} https links {"text", "url"}; use [] for none.${caps.generate && !owner ? ` You may create a requested picture with your native image tool. attachments lists up to ${caps.maxItems} images you created in this turn, using the path your image tool reported, kind photo (or document for the original) and a plain caption of at most 1024 characters; use [] for none.` : ""}${owner && caps.media ? ` relay_answer also attaches up to ${caps.maxItems} files by absolute path from the document roots listed for this turn, kind photo, document, audio or video. Use attachment_id from the relay_answer receipt for standalone ![](attachment:id) photo blocks; every selected photo must appear once in attachment order in a contiguous run. With no references, the service appends all photos as one carousel. Never write a local path in the posted message.` : ""}`;
 }

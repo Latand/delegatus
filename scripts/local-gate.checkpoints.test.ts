@@ -1,11 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { isolatedEnvironment, plan, type PlanEnvironment } from "./local-gate";
 import { headFileCache } from "./local-gate-tests";
-import { createHookFixture } from "./local-gate.fixture";
+import { fixtureCheckAdmissionEnv } from "./local-gate.fixture";
+import { recordGateSandbox, releaseGateSandbox } from "./gateSandboxRecords";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -16,15 +17,27 @@ test("shared comparator inputs retain every split test group in publication sele
   const groups = ["scripts/local-gate-tests.test.ts", "scripts/local-gate-tests.retry.test.ts", "scripts/local-gate-tests.recovery.test.ts", "scripts/local-gate-tests.teardown.test.ts",
     "scripts/local-gate-tests.rendezvous.test.ts", "scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate-tests.dependencies.test.ts"];
   const publication = ["scripts/local-gate.runtime.test.ts", "scripts/local-gate.execution.test.ts", "scripts/local-gate.groups.test.ts", "scripts/local-gate.invalidation.test.ts", "scripts/local-gate.git.test.ts", "scripts/local-gate.lint.test.ts", "scripts/local-gate.native.test.ts", "scripts/local-gate.binding.test.ts", "scripts/local-gate.hooks.test.ts", "scripts/local-gate.publication.test.ts", "scripts/local-gate.transport.test.ts"];
+  const checkpoints = ["scripts/local-gate.checkpoints.test.ts", "scripts/local-gate.checkpoints.hook.test.ts", "scripts/local-gate.checkpoints.stepPasses.test.ts"];
   const context: PlanEnvironment = { base: "base", existing: new Set(["scripts/local-gate-tests.fixture.ts", "scripts/local-gate-tests.ts", "scripts/gate-cache.ts"]),
-    tests: [...groups, ...publication, "scripts/local-gate.checkpoints.test.ts", "scripts/unrelated.test.ts"],
+    tests: [...groups, ...publication, ...checkpoints, "scripts/unrelated.test.ts"],
     linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
   const selected = (file: string) => plan("pre-push", [file], context).find(step => step.name === "touched tests")!.command.slice(4).sort();
   expect(selected("scripts/local-gate-tests.fixture.ts")).toEqual(groups.map(file => `./${file}`).sort());
   for (const shared of ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"]) {
-    expect(selected(shared)).toEqual([...groups, ...publication, "scripts/local-gate.checkpoints.test.ts"].map(file => `./${file}`).sort());
+    expect(selected(shared)).toEqual([...groups, ...publication, ...checkpoints].map(file => `./${file}`).sort());
   }
-  expect(selected("scripts/local-gate-tests.ts")).toEqual([...groups, "scripts/local-gate.checkpoints.test.ts"].map(file => `./${file}`).sort());
+  expect(selected("scripts/local-gate-tests.ts")).toEqual([...groups, ...checkpoints].map(file => `./${file}`).sort());
+});
+
+test("the shared role-memory dispatch fixture selects every test group", () => {
+  const fixture = "src/lib/pipelines/engine.roleMemoryDispatch.fixture.ts";
+  const tests = ["src/lib/pipelines/engine.roleMemoryDispatch.test.ts", "src/lib/pipelines/engine.roleMemoryDispatch.recovery.test.ts",
+    "src/lib/pipelines/engine.roleMemoryDispatch.custody.test.ts"];
+  const context: PlanEnvironment = { base: "base", existing: new Set([fixture]),
+    tests: [...tests, "src/lib/pipelines/engine.roleMemory.test.ts"],
+    linux: false, runtime: false, native: false, linuxTests: [], runtimeTests: [], codexVersions: [] };
+  const selected = plan("pre-push", [fixture], context).find(step => step.name === "touched tests")!.command.slice(4).sort();
+  expect(selected).toEqual(tests.map(file => `./${file}`).sort());
 });
 
 test("shared compiler fixtures retain every owned launch matrix in publication selection", () => {
@@ -45,7 +58,8 @@ function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), "gate-head-checkpoint-")); roots.push(root);
   const repo = path.join(root, "repo"); mkdirSync(repo);
   const env = isolatedEnvironment(path.join(root, "environment"), process.env);
-  Object.assign(env, { GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+  Object.assign(env, fixtureCheckAdmissionEnv(repo), { LLV_GATE_LOCK_DIR: path.join(root, "cpu-gate"),
+    GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
     GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_EMAIL: "noreply@example.invalid" });
   const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, env, encoding: "utf8", stdio: "pipe" }).trim();
   git("init", "-b", "main"); git("config", "core.hooksPath", "/dev/null");
@@ -60,23 +74,31 @@ test("fixture contract", () => { ${interrupted ? "process.exit(124);" : "expect(
   const base = git("rev-parse", "HEAD"); git("update-ref", "refs/remotes/origin/main", base);
   writeFileSync(path.join(repo, "b.test.ts"), source("b", true));
   git("add", "."); git("commit", "-m", "Add incomplete check fixture");
-  const run = (extra: Partial<NodeJS.ProcessEnv> = {}, cwd = repo) => {
-    const result = spawnSync(process.execPath, [path.join(import.meta.dir, "local-gate-tests.ts"), "--base", base, "./a.test.ts", "./b.test.ts"],
+  const run = (extra: Partial<NodeJS.ProcessEnv> = {}, cwd = repo, comparison = base) => {
+    const result = spawnSync(process.execPath, [path.join(import.meta.dir, "local-gate-tests.ts"), "--base", comparison, "./a.test.ts", "./b.test.ts"],
       { cwd, env: { ...env, ...extra }, encoding: "utf8", timeout: 30_000 });
     return { status: result.status, output: result.stdout + result.stderr };
   };
   const samples = () => readFileSync(marker, "utf8").trim().split("\n").reduce((counts, name) => {
     counts[name] = (counts[name] ?? 0) + 1; return counts;
   }, {} as Record<string, number>);
-  return { root, repo, git, source, run, samples };
+  return { root, repo, env, git, source, run, samples };
 }
 
-serviceTest("an incomplete head run retains only complete green files across fresh processes", () => {
+serviceTest("an incomplete head run retains only complete green files across fresh isolated workers", () => {
   const f = fixture();
-  const first = f.run();
+  const run = (supervisor: number) => {
+    const sandbox = recordGateSandbox(mkdtempSync(path.join(f.root, "delegatus-local-gate-")));
+    try {
+      return f.run({ ...isolatedEnvironment(sandbox, { NODE_ENV: "test" }), LLV_CHECK_ENTRY_SUPERVISOR: String(supervisor) });
+    } finally {
+      releaseGateSandbox(sandbox);
+    }
+  };
+  const first = run(100);
   expect(first.status, first.output).toBe(1);
   expect(f.samples()).toEqual({ a: 1, b: 1 });
-  const repeated = f.run();
+  const repeated = run(101);
   expect(repeated.status, repeated.output).toBe(1);
   expect(repeated.output).toContain("reused complete green head file a.test.ts");
   expect(repeated.output).not.toContain("reused complete green head file b.test.ts");
@@ -89,174 +111,25 @@ serviceTest("an incomplete head run retains only complete green files across fre
   expect(f.samples()).toEqual({ a: 2, b: 3 });
 }, 60_000);
 
-serviceTest("local check-step resumes only equivalent green files across fresh private roots", () => {
-  const project = path.resolve(import.meta.dir, "..");
-  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-step-")); roots.push(scratch);
-  const f = createHookFixture(project, roots, false, false, path.join(scratch, "repo"));
-  const origin = path.join(scratch, "origin.git");
-  f.git("clone", "--bare", "--shared", ".", origin);
-  f.git("remote", "add", "origin", origin);
-  const marker = path.join(scratch, "samples");
-  const loseManager = path.join(scratch, "lose-manager");
-  const trigger = path.join(scratch, "change-during-file");
-  const changedManager = path.join(scratch, "changed-manager");
-  const env = isolatedEnvironment(path.join(scratch, "caller"), f.env);
-  const bin = path.join(scratch, "bin"); mkdirSync(bin);
-  const runner = Bun.which("systemd-run")!, busctl = Bun.which("busctl")!;
-  const runnerShim = path.join(bin, "systemd-run"), busShim = path.join(bin, "busctl");
-  const delegate = (file: string, executable: string, comment = "") =>
-    writeFileSync(file, `#!/bin/sh\n# ${comment}\nexec "${executable}" "$@"\n`, { mode: 0o700 });
-  delegate(runnerShim, runner);
-  writeFileSync(busShim, `#!/bin/sh
-test ! -e "${loseManager}" || exit 1
-if [ -e "${changedManager}" ] && [ "$7" = GetNameOwner ]; then
-  echo 's ":1.999999999"'
-  exit 0
-fi
-exec "${busctl}" "$@"
-`, { mode: 0o700 });
-  env.PATH = bin + path.delimiter + env.PATH;
-  env.LLV_GATE_CHECK_ENV = "CHECKPOINT_STEP_INPUT";
-  writeFileSync(path.join(f.dir, "shims/bun"), '#!/bin/sh\nexec "$LLV_GATE_BUN" "$@"\n');
-  symlinkSync(path.join(import.meta.dir, "local-gate-tests.ts"), path.join(f.dir, "scripts/local-gate-tests.ts"));
-  for (const name of ["a", "b"]) writeFileSync(path.join(f.dir, `${name}.test.ts`), `
-import { appendFileSync, existsSync, readdirSync, writeFileSync } from "node:fs";
-import { expect, test } from "bun:test";
-test("fixture contract", () => {
-  const { XDG_STATE_HOME: state, XDG_RUNTIME_DIR: runtime, CHECKPOINT_STEP_INPUT: input } = process.env;
-  expect(readdirSync(state)).toEqual([]);
-  expect(readdirSync(runtime)).toEqual([]);
-  appendFileSync(${JSON.stringify(marker)}, JSON.stringify({ file: "${name}", state, runtime, input }) + "\\n");
-  ${name === "b" ? `if (existsSync(${JSON.stringify(trigger)})) writeFileSync(${JSON.stringify(changedManager)}, "");
-  process.exit(124);` : ""}
-});
-`);
-  f.git("config", "core.hooksPath", "/dev/null");
-  f.git("add", "."); f.git("commit", "-m", "Independent checkpoint fixtures");
-  const run = (input = "first") => {
-    const result = spawnSync(process.execPath, ["scripts/local-gate.ts", "check-step", "touched tests"], {
-      cwd: f.dir, env: { ...env, CHECKPOINT_STEP_INPUT: input }, encoding: "utf8", timeout: 30_000,
-    });
-    const output = result.stdout + result.stderr;
-    expect(result.status, output).toBe(1);
-    expect(output).toContain("CPU admission for publication checks");
-    expect(output).toContain("NEW b.test.ts");
-    expect(output).not.toContain("reused complete green head file b.test.ts");
-    return output;
-  };
-  const receiptDir = path.join(f.dir, ".git/delegatus-gate/head-files");
-  const checkpoint = "reused complete green head file a.test.ts";
-  const first = run();
-  expect(first).not.toContain(checkpoint);
-  expect(first).toContain("head selected 2 files with 2 file workers");
-  const [retained] = readdirSync(receiptDir);
-  expect(readdirSync(receiptDir)).toEqual([retained!]);
-  const bytes = readFileSync(path.join(receiptDir, retained!), "utf8");
-  expect(JSON.parse(bytes).value.completed).toEqual(["a.test.ts"]);
-  const warm = run();
-  expect(warm).toContain(checkpoint);
-  expect(warm).toContain("head selected 1 files with 1 file workers");
-  expect(readdirSync(receiptDir)).toEqual([retained!]);
-  expect(readFileSync(path.join(receiptDir, retained!), "utf8")).toBe(bytes);
-  expect(run("second")).not.toContain(checkpoint);
-  delegate(runnerShim, runner, "replacement executable bytes");
-  expect(run()).not.toContain(checkpoint);
-  expect(run()).toContain(checkpoint);
-  const certified = readdirSync(receiptDir).sort();
-  expect(certified).toHaveLength(3);
-  // The worker still uses the real manager. An identity probe that cannot
-  // verify the manager makes both reads and writes cold.
-  writeFileSync(loseManager, "");
-  expect(run()).not.toContain(checkpoint);
-  expect(readdirSync(receiptDir).sort()).toEqual(certified);
-  rmSync(loseManager);
-  // Keep tool bytes and transport identical while changing the observed
-  // manager after the only fresh file starts.
-  writeFileSync(trigger, "");
-  const drift = run();
-  expect(drift).toContain(checkpoint);
-  expect(drift).toContain("head checkpoint inputs changed during this run; fresh checks required");
-  expect(readdirSync(receiptDir).sort()).toEqual(certified);
-
-  const rows = readFileSync(marker, "utf8").trim().split("\n").map(line => JSON.parse(line) as {
-    file: string; state: string; runtime: string; input: string;
-  });
-  expect(rows.filter(row => row.file === "a").map(row => row.input)).toEqual(["first", "second", "first", "first"]);
-  expect(rows.filter(row => row.file === "b").map(row => row.input)).toEqual(["first", "first", "second", "first", "first", "first", "first"]);
-  for (const field of ["state", "runtime"] as const) {
-    expect(new Set(rows.map(row => row[field])).size).toBe(rows.length);
-    expect(rows.some(row => existsSync(row[field]))).toBeFalse();
-  }
-}, 120_000);
-
-serviceTest("local check-step invalidates warm and cold retries when BASH_ENV bytes change", () => {
-  const project = path.resolve(import.meta.dir, "..");
-  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-bash-env-")); roots.push(scratch);
-  const f = createHookFixture(project, roots, false, false, path.join(scratch, "repo"));
-  const origin = path.join(scratch, "origin.git");
-  f.git("clone", "--bare", "--shared", ".", origin);
-  f.git("remote", "add", "origin", origin);
-  const marker = path.join(scratch, "samples");
-  const startup = path.join(scratch, "external-bash-env");
-  const env = isolatedEnvironment(path.join(scratch, "caller"), f.env);
-  const bin = path.join(scratch, "bin"); mkdirSync(bin);
-  const runner = Bun.which("systemd-run")!, busctl = Bun.which("busctl")!;
-  const runnerShim = path.join(bin, "systemd-run"), busShim = path.join(bin, "busctl");
-  writeFileSync(runnerShim, `#!/bin/sh\nexec "${runner}" "$@"\n`, { mode: 0o700 });
-  writeFileSync(busShim, `#!/bin/sh\nexec "${busctl}" "$@"\n`, { mode: 0o700 });
-  env.PATH = bin + path.delimiter + env.PATH;
-  env.BASH_ENV = startup;
-  env.LLV_GATE_CHECK_ENV = "BASH_ENV";
-  writeFileSync(startup, "umask 022\n");
-  writeFileSync(path.join(f.dir, "shims/bun"), '#!/bin/sh\nexec "$LLV_GATE_BUN" "$@"\n');
-  symlinkSync(path.join(import.meta.dir, "local-gate-tests.ts"), path.join(f.dir, "scripts/local-gate-tests.ts"));
-  writeFileSync(path.join(f.dir, "a.test.ts"), `
-import { appendFileSync } from "node:fs";
-import { expect, test } from "bun:test";
-test("startup input affects this head file", () => {
-  appendFileSync(${JSON.stringify(marker)}, "a:" + process.umask().toString(8) + "\\n");
-});`);
-  writeFileSync(path.join(f.dir, "b.test.ts"), `
-import { appendFileSync } from "node:fs";
-import { test } from "bun:test";
-test("incomplete file", () => { appendFileSync(${JSON.stringify(marker)}, "b\\n"); process.exit(124); });`);
-  f.git("config", "core.hooksPath", "/dev/null");
-  f.git("add", "."); f.git("commit", "-m", "BASH_ENV checkpoint fixtures");
-  const run = () => spawnSync(process.execPath, ["scripts/local-gate.ts", "check-step", "touched tests"], {
-    cwd: f.dir, env, encoding: "utf8", timeout: 30_000,
-  });
-  const countA = () => readFileSync(marker, "utf8").split("\n").filter(value => value.startsWith("a:")).length;
-  const first = run(); expect(first.status, first.stdout + first.stderr).toBe(1);
-  expect(readFileSync(marker, "utf8").split("\n").filter(value => value.startsWith("a:"))).toEqual(["a:22"]);
-  const warm = run(); expect(warm.status, warm.stdout + warm.stderr).toBe(1);
-  expect(warm.stdout + warm.stderr).toContain("reused complete green head file a.test.ts");
-  expect(countA()).toBe(1);
-
-  const beforeWarmChange = countA();
-  writeFileSync(startup, "umask 077\n");
-  const changedWarm = run(), changedOutput = changedWarm.stdout + changedWarm.stderr;
-  expect(changedWarm.status, changedOutput).toBe(1);
-  expect(changedOutput).not.toContain("reused complete green head file a.test.ts");
-  expect(changedOutput).toContain("head file a.test.ts:");
-  const afterWarmChange = countA();
-  expect(afterWarmChange).toBeGreaterThan(beforeWarmChange);
-  expect(readFileSync(marker, "utf8").split("\n").filter(value => value.startsWith("a:")).at(-1)).toBe("a:77");
-
-  const cache = path.join(f.dir, ".git/delegatus-gate/head-files");
-  rmSync(cache, { recursive: true, force: true });
-  const beforeColdChange = countA();
-  const changedCold = run(), coldOutput = changedCold.stdout + changedCold.stderr;
-  expect(changedCold.status, coldOutput).toBe(1);
-  expect(coldOutput).not.toContain("reused complete green head file");
-  expect(coldOutput).toContain("head file a.test.ts:");
-  expect(countA()).toBeGreaterThan(beforeColdChange);
-  expect(readFileSync(marker, "utf8").split("\n").filter(value => value.startsWith("a:")).at(-1)).toBe("a:77");
-}, 120_000);
-
 serviceTest("external roots with gate-shaped names retain their distinct checkpoint keys", () => {
   const f = fixture();
   const rootsFor = (name: string) => isolatedEnvironment(path.join(f.root, `delegatus-local-gate-${name}`), process.env);
   const first = rootsFor("aaaaaa"), second = rootsFor("bbbbbb");
+  const checkpoint = "reused complete green head file a.test.ts";
+  expect(f.run(first).output).not.toContain(checkpoint);
+  expect(f.run(second).output).not.toContain(checkpoint);
+  expect(f.run(first).output).toContain(checkpoint);
+  expect(f.samples()).toEqual({ a: 2, b: 3 });
+}, 60_000);
+
+serviceTest.each(["XDG_STATE_HOME", "XDG_RUNTIME_DIR"])("changing only an external %s invalidates head checkpoints", name => {
+  const f = fixture();
+  const pathFor = (id: string) => {
+    const directory = path.join(f.root, id);
+    mkdirSync(directory);
+    return { [name]: directory, LLV_GATE_CHECK_ENV: name };
+  };
+  const first = pathFor("first"), second = pathFor("second");
   const checkpoint = "reused complete green head file a.test.ts";
   expect(f.run(first).output).not.toContain(checkpoint);
   expect(f.run(second).output).not.toContain(checkpoint);
@@ -317,7 +190,34 @@ serviceTest("head checkpoints invalidate environment and ignored inputs, and ref
   expect(f.samples()).toEqual({ a: 5, b: 5 });
 }, 60_000);
 
-serviceTest("an aggregate deadline preserves completed files without certifying the interrupted run", () => {
+serviceTest("head checkpoints invalidate installed dependency bytes and the merge base", () => {
+  const f = fixture();
+  const dependency = path.join(f.repo, "node_modules", "fixture", "index.js");
+  mkdirSync(path.dirname(dependency), { recursive: true });
+  mkdirSync(path.join(f.repo, ".git/info"), { recursive: true });
+  writeFileSync(path.join(f.repo, ".git/info/exclude"), "node_modules/\n");
+  writeFileSync(dependency, "export default 1;\n");
+  writeFileSync(path.join(f.repo, "b.test.ts"), f.source("b"));
+  f.git("add", "."); f.git("commit", "-m", "Complete fixture check");
+  const base = f.git("rev-parse", "HEAD^"), head = f.git("rev-parse", "HEAD");
+  const run = (comparison = base) => {
+    f.git("update-ref", "refs/remotes/origin/main", comparison);
+    const result = f.run({}, f.repo, comparison);
+    expect(result.status, result.output).toBe(0);
+    return result.output;
+  };
+  const checkpoint = "reused complete green head file";
+  expect(run()).not.toContain(checkpoint);
+  expect(run().match(new RegExp(checkpoint, "g"))).toHaveLength(2);
+  writeFileSync(dependency, "export default 2;\n");
+  expect(run()).not.toContain(checkpoint);
+  expect(f.samples()).toEqual({ a: 2, b: 2 });
+  expect(run(head)).not.toContain(checkpoint);
+  expect(f.samples()).toEqual({ a: 3, b: 3 });
+  expect(run(head).match(new RegExp(checkpoint, "g"))).toHaveLength(2);
+}, 60_000);
+
+serviceTest.each(["expired", "cleanup reserve"] as const)("an aggregate deadline preserves completed files without certifying the interrupted run: %s", mode => {
   const f = fixture();
   rmSync(path.join(f.repo, "a.test.ts")); rmSync(path.join(f.repo, "b.test.ts"));
   const files = Array.from({ length: 12 }, (_, index) => `sample-${String(index).padStart(2, "0")}.test.ts`);
@@ -329,22 +229,23 @@ serviceTest("an aggregate deadline preserves completed files without certifying 
   writeFileSync(driver, `import * as comparator from ${JSON.stringify(path.join(import.meta.dir, "local-gate-tests.ts"))};
 import { existsSync, readFileSync } from "node:fs";
 const expires = process.argv.at(-1) === "expire";
-// A deterministic parent clock expires only after the first eight owned
-// children have started. Child checks retain their real clocks and budgets.
+// The parent clock advances only after the first eight owned children
+// have started. Child checks retain their real clocks and deadlines.
 Object.defineProperty(performance, "now", { value: () => expires && existsSync(${JSON.stringify(marker)})
-  && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length >= 8 ? 1000000 : 0 });
+  && readFileSync(${JSON.stringify(marker)}, "utf8").trim().split("\\n").length >= 8 ? ${mode === "expired" ? 1_000_000 : 65_000} : 0 });
 try { await comparator.touchedTests(${JSON.stringify(f.repo)}, ${JSON.stringify(base)}, ${JSON.stringify(files)},
-  { budgets: { fileMs: 300000, runMs: 15000 } }); } catch (error) {
+  { budgets: { fileMs: 20000, runMs: 100000 } }); } catch (error) {
   const ending = comparator.comparatorEnding?.(error);
   console.error(ending?.line ?? String(error)); process.exitCode = ending?.code ?? 1;
 }
 `);
   const run = (mode: string) => spawnSync(process.execPath, [driver, mode],
-    { cwd: f.repo, env: process.env, encoding: "utf8", timeout: 30_000 });
+    { cwd: f.repo, env: f.env, encoding: "utf8", timeout: 30_000 });
   const stopped = run("expire");
   expect(stopped.status, stopped.stdout + stopped.stderr).toBe(75);
-  expect(stopped.stderr).toContain("touched-tests: no verdict: head: test run exceeded");
-  expect(stopped.stderr).toContain("test run exceeded");
+  expect(stopped.stderr).toContain(mode === "expired"
+    ? "touched-tests: no verdict: head: test run exceeded"
+    : "touched-tests: no verdict: head: remaining run budget cannot fit a full file and its cleanup");
   expect(Object.keys(f.samples())).toHaveLength(8);
   const resumed = run("continue");
   expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
@@ -391,7 +292,7 @@ console.log("retryable=" + publicationDeadlineOnly(lines.join("\\n") + "\\nowned
   for (const mode of ["single", "aggregate"]) {
     rmSync(marker, { force: true });
     const result = spawnSync(process.execPath, [driver], { cwd: f.repo,
-      env: { ...process.env, CLEANUP_CONTROL_MODE: mode }, encoding: "utf8", timeout: 30_000 });
+      env: { ...f.env, CLEANUP_CONTROL_MODE: mode }, encoding: "utf8", timeout: 30_000 });
     const output = result.stdout + result.stderr;
     expect(result.status, output).toBe(1);
     expect(output).toContain("<ownership error> owned runner: surviving owned processes:");
@@ -440,6 +341,30 @@ serviceTest("service checkpoints are not consumed after switching to portable ex
   expect(portable.output).not.toContain("reused complete green head file");
   expect(portable.output).toContain("NEW a.test.ts");
   expect(portable.output).toContain("NEW b.test.ts");
+}, 60_000);
+
+serviceTest("recorded runs share green checkpoints across timing directories and bind the test input", () => {
+  const f = fixture();
+  for (const file of ["a", "b"]) writeFileSync(path.join(f.repo, `${file}.test.ts`), f.source(file).replace("expect(1).toBe(1);",
+    'expect(process.env.CHECKPOINT_TEST_MODE).toBe("green");'));
+  f.git("add", "."); f.git("commit", "-m", "Recorded comparison fixture");
+  const firstTiming = path.join(f.root, "first-recorder", "queue-timing");
+  const secondTiming = path.join(f.root, "second-recorder", "queue-timing");
+  for (const timing of [firstTiming, secondTiming]) mkdirSync(timing, { recursive: true });
+  const run = (timing: string, mode: string) => f.run({ LLV_RECORDED_CHECK_WAIT_ROOT: timing, CHECKPOINT_TEST_MODE: mode });
+  const first = run(firstTiming, "green");
+  expect(first.status, first.output).toBe(0);
+  const second = run(secondTiming, "green");
+  expect(second.status, second.output).toBe(0);
+  expect(second.output.match(/reused complete green head file/g)).toHaveLength(2);
+  expect(first.output).toContain("CPU admission;");
+  expect(second.output).toContain("CPU admission;");
+  expect(f.samples()).toEqual({ a: 1, b: 1 });
+  const changed = run(secondTiming, "red");
+  expect(changed.status, changed.output).toBe(1);
+  expect(changed.output).not.toContain("reused complete green head file");
+  expect(changed.output).toContain("NEW a.test.ts");
+  expect(changed.output).toContain("NEW b.test.ts");
 }, 60_000);
 
 serviceTest("declared transport inputs invalidate warm receipts like a fresh comparator", () => {

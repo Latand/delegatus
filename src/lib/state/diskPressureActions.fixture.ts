@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { statePath } from "@/lib/configDir";
 import { diskVolumes, observeDiskPressureReport } from "./diskPressure";
 import { productionDiskPressureActions, reconcileDiskPressure } from "./diskPressureActions";
@@ -14,6 +13,5 @@ pressure.consumers = [{ kind: "temp", bytes: 30 * 1024 ** 3, measuredAt: at! }];
 writeJsonDurably(statePath("disk-pressure-report.json"), pressure);
 const ports = productionDiskPressureActions();
 ports.project = async () => "repo-1234abcd";
-ports.early = () => fs.appendFileSync(statePath("early-passes.ndjson"), at + "\n");
 await reconcileDiskPressure(pressure, ports);
 console.log(JSON.stringify({ cards: loadTasksForList(statePath("tasks.json")), reports: readBridgeReportLog() }));

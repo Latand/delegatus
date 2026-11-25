@@ -354,7 +354,10 @@ const FEED_RECOVERY = SCENARIO === "feed-recovery";
 let feedRecoveryEcho = false;
 const delayedLaunchText = L("Keep this message until its transcript arrives.", "Збережи повідомлення до появи запису в розмові.");
 const FM_CASE = new URLSearchParams(location.search).get("case") ?? "p";
-const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || STREAMING || FIRST_MESSAGE || FEED_CONTINUITY;
+/* `&seathost=<seconds|running>`: the orchestrator seat is hosted. A number is how long its last turn has been over, so the
+   seat is idle between turns (its head says «waiting»); `running` keeps its turn open. */
+const SEAT_HOST = new URLSearchParams(location.search).get("seathost");
+const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_HOST !== null || SEAT_NOISE || STREAMING || FIRST_MESSAGE || FEED_CONTINUITY;
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
 const LOOSE = SCENARIO === "loose";
 /* A pasted `#c=` link to a conversation the plain catalog does not carry. Its own scope is a cold projection the server
@@ -753,11 +756,11 @@ function structuredSnapshot() {
       } } : {}),
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: searchVer2.path,
       capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
-    }, ...(SEAT_NOISE || FIRST_MESSAGE ? [{
+    }, ...(SEAT_NOISE || FIRST_MESSAGE || SEAT_HOST !== null ? [{
       conversationId: orchestrator.conversationId, sessionKey: { engine: orchestrator.engine, sessionId: `${orchestrator.name}-session` }, hostKind: orchestrator.engine === "codex" ? "codex-app-server" : "claude-broker", host: "hosted",
-      turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: seatUndelivered(), accountId: "default",
+      turn: SEAT_HOST_IDLE === null ? "running" : "idle", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: seatUndelivered(), accountId: "default",
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: orchestrator.path,
-      capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
+      capabilities: { steer: false, structuredAttention: true }, activeTurnId: SEAT_HOST_IDLE === null ? "turn-1" : null, pendingReconfigure: null,
     }] : []), ...(STREAMING || SEAT_UNDELIVERED ? files.filter((file) => file.activity === "live" && file.path !== searchVer2.path && (STREAMING || file === exportImpl)).map((file) => ({
       conversationId: file.conversationId, sessionKey: { engine: file.engine, sessionId: `${file.name}-session` }, hostKind: "claude-broker", host: "hosted",
       turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
@@ -772,6 +775,16 @@ const uploadPlan = add(conversation("upload-plan", "Plan: 8 MB chunks, resume to
 const uploadApi = add(conversation("upload-api", "Endpoint and resume token in place", { mtime: now - 6 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
 const uploadRevApi = add(conversation("upload-rev-api", "Round 2 approved", { mtime: now - 4 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
 const uploadUi = add(conversation("upload-ui", "Wiring the resume banner", working({ plan: { current: "Wiring the resume banner" } })));
+/* `?paneid=ctx`: the lane's started stage conversations carry what real ones carry on their identity row, an effort
+   tier and the context-window chip, so the Stages sheet's pane head has its longest ordinary row to hold. */
+if (new URLSearchParams(location.search).get("paneid") === "ctx") {
+  for (const file of [uploadPlan, uploadApi, uploadRevApi, uploadUi]) {
+    Object.assign(file, { effort: "high", ctx: { usedTokens: 520_825, windowTokens: 1_000_000, pct: 52, confidence: "exact" } });
+  }
+  Object.assign(uploadPlan, { model: "claude-opus-5-5" });
+  /* A round chip as well: the longest ordinary row, which wraps among its chips. */
+  Object.assign(uploadApi, { continues: { conversationId: "conversation_upload-api-previous", path: null, round: 3 } });
+}
 /* t-export: two plain conversations. */
 const exportImpl = add(conversation("export-impl", "Implementer: simplify the export settings", working({ plan: { current: "Writing the preset model" } })));
 const exportExplore = add(conversation("export-explore", "Explorer: list every export toggle", { mtime: now - 120 * MIN, engine: "codex", model: "gpt-5.6" }));
@@ -808,6 +821,14 @@ const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", 
   plan: { current: "Watching the search fix" },
   ...(SEAT_HEAD ? { model: "claude-opus-4-5-1m", ctx: { usedTokens: 520_825, windowTokens: 1_000_000, pct: 52, confidence: "exact" } } : {}),
 })));
+const SEAT_HOST_IDLE = SEAT_HOST === null || SEAT_HOST === "running" ? null : Number(SEAT_HOST);
+if (SEAT_HOST_IDLE !== null) {
+  Object.assign(orchestrator, {
+    activity: "idle", proc: "running", pid: 5_900, mtime: now - SEAT_HOST_IDLE,
+    lastTurn: { startedAt: (now - SEAT_HOST_IDLE - 400) * 1_000, endedAt: (now - SEAT_HOST_IDLE) * 1_000 },
+    authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(SEAT_HOST_IDLE), terminalKind: "completed" },
+  });
+}
 
 /* `&undelivered=N` (2026-10-11): the seat's composer holds N sends the host refused, the newest one
    with its arrival unconfirmed, so the undelivered chip and its list can be measured in the seat; and
@@ -2300,6 +2321,7 @@ if (SCENARIO === "hold-kinds") {
     task("hold-slot-note", "blocked", L("Start the docs lane", "Запустити лінію документації"), "", 20 * MIN, [], { hold: { kind: "worker", note: L("Three of three workers busy", "Зайняті всі три агенти"), since: iso(20 * MIN), by: "agent" } }),
     task("hold-resource-note", "blocked", L("Run the full build", "Запустити повну збірку"), "", 15 * MIN, [], { hold: { kind: "resource", note: L("4 GB of memory available, 8 GB needed", "Доступно 4 ГБ памʼяті, потрібно 8 ГБ"), since: iso(15 * MIN), by: "agent" } }),
     task("hold-resource", "blocked", L("Older resource hold", "Давніша причина про ресурси"), "", 60 * MIN, [], { hold: { kind: "resource", note: "", since: iso(60 * MIN), by: "agent" } }),
+    task("hold-editor-entry", "assigned", L("Set the release access", "Налаштувати доступ до випуску"), "", 5 * MIN),
   );
 }
 
@@ -3187,6 +3209,7 @@ const evidence = {
   publishDelayedLaunch() { feedRecoveryEcho = true; },
   delayedLaunchRetired() { return Boolean(readOutbox(searchVer2.conversationId!).find(entry => entry.id === "delayed-launch")?.retiredEchoId); },
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
+  taskPatchGate: null as Promise<void> | null,
   /* #2187: what the board's merge-setting row wrote. */
   settingWrites: [] as Array<Record<string, unknown>>,
   pipelineStageRuntime: "local" as "local" | "codex-cloud",
@@ -4341,7 +4364,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     || ["/api/files", "/api/team", "/api/tasks", "/api/tasks/accepted-control-task"].includes(url.pathname))) return serverFetch(input, init);
   // The driver supplies the real server projection for the liveness case, and the task summary case's records.
   if (["stale-working", "finished-work", "task-summary", "board-timeline"].includes(new URLSearchParams(location.search).get("scenario") ?? "")
-    && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
+    && ["/api/files", "/api/tasks", "/api/board/work-time"].includes(url.pathname)) return serverFetch(input, init);
 
   if (SCENARIO === "spend-credits" && url.pathname.startsWith("/api/accounts")) return serverFetch(input, init);
   if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings)/.test(url.pathname)) return serverFetch(input, init);
@@ -4855,6 +4878,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     evidence.taskPatches.push({ id, body });
     const write = { id, startedAt: performance.now(), answeredAt: 0 };
     evidence.taskWrites.push(write);
+    if (evidence.taskPatchGate) await evidence.taskPatchGate;
     await new Promise((resolve) => setTimeout(resolve, evidence.taskAnswerDelayMs));
     write.answeredAt = performance.now();
     if (evidence.refuseNextTaskPatch) {
@@ -4871,6 +4895,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (Object.hasOwn(body, "hold")) {
       next.hold = readTaskHold(body.hold, new Date().toISOString(), "operator", current.hold);
       if (next.hold) next.status = "blocked";
+      if (SCENARIO === "hold-kinds" && next.hold?.kind === "resource") next.status = "inbox";
     }
     if (Object.hasOwn(body, "restoreHold")) next.hold = storedTaskHold(body.restoreHold);
     if (body.board) next.board = body.board as BoardTask["board"];
@@ -5801,7 +5826,7 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "account-row" ?
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>
   </div>
-) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? (new URLSearchParams(location.search).get("via") === "row" ? <><LearnedRulesRow project="garden" size="menu" /><LearnedRulesWindowHost /></> : <RulesWindow project="garden" onClose={() => {}} />) : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
+) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? (new URLSearchParams(location.search).get("via") === "row" ? <><LearnedRulesRow project="garden" size="menu" /><LearnedRulesWindowHost /></> : <RulesWindow project="garden" focusRule={new URLSearchParams(location.search).get("focus") ?? undefined} onClose={() => {}} />) : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>

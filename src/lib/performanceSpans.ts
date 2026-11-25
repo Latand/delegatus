@@ -1,3 +1,4 @@
+import type { ViewerOperation } from "./viewerLoopMonitor";
 import { requestWorkload } from "./requestWorkload";
 import { readAttribution } from "./readAttribution";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -36,7 +37,7 @@ export const performanceSites = [
 ] as const;
 export type PerformanceSite = typeof performanceSites[number];
 type Slice = { sequence: number; span: number; parent: number; site: number; kind: "sync" | "await" | "event";
-  start: number; end: number; count: number; totalMs: number; maxMs: number; rows: number; bytes: number; failed: boolean; correlation?: string; requestClass?: string };
+  start: number; end: number; count: number; totalMs: number; maxMs: number; rows: number; bytes: number; failed: boolean; correlation?: string; requestClass?: string; registryOperation?: ViewerOperation };
 const siteIds = new Map(performanceSites.map((site, index) => [site, index]));
 const capacity = 1024;
 const requestCapacity = 256;
@@ -54,14 +55,17 @@ export function createPerformanceSpans(now = monotonicNow) {
   let observeSite: ((site: number) => void) | undefined;
   const requests = new Map<string, { id: string; method: "snapshot" | "append" | "wait" | "files" | "health" | "other";
     start: number; deadline: number | null; events: Array<{ site: number; at: number; bytes: number; failed: boolean }> }>();
-  let requestsDropped = 0;
+  let droppedExpired = 0, droppedOverflow = 0;
+  const clearSpanRecords = () => {
+    records.length = 0; longest.length = 0; cursor = 0; dropped = 0; droppedMs = 0;
+  };
   const add = (record: Slice) => {
     const previous = records.length === capacity ? records[(cursor + capacity - 1) % capacity] : records.at(-1);
     // Aggregate only adjacent tiny slices. Preserve their occupied duration
     // separately from the enclosing interval, which can include a suspension.
     if (previous && record.kind === "sync" && previous.kind === "sync" && record.maxMs < 1 && previous.maxMs < 1
       && previous.site === record.site && previous.parent === record.parent && previous.correlation === record.correlation && previous.requestClass === record.requestClass
-      && record.start - previous.end < 0.1) {
+      && previous.registryOperation === record.registryOperation && record.start - previous.end < 0.1) {
       previous.end = record.end; previous.count++; previous.totalMs += record.totalMs;
       previous.maxMs = Math.max(previous.maxMs, record.maxMs); previous.rows += record.rows; previous.bytes += record.bytes;
       previous.failed ||= record.failed;
@@ -88,9 +92,12 @@ export function createPerformanceSpans(now = monotonicNow) {
   });
   const finish = (record: Slice) => { record.end = now(); record.totalMs = record.maxMs = record.end - record.start; add(record); };
   const { delegatusPerformanceSync: sync } = {
-    delegatusPerformanceSync<T>(site: PerformanceSite, work: () => T, rows = 0, bytes = 0): T {
+    delegatusPerformanceSync<T>(site: PerformanceSite, work: () => T, rows = 0, bytes = 0, operation?: ViewerOperation): T {
       if (!enabled) return work();
       const record = begin(site, "sync", rows, bytes);
+      if (site === "registry.keyed" && !record.requestClass && operation && operation !== "registry.read") {
+        record.registryOperation = operation;
+      }
       const parentSite = currentSite, parentSpan = currentSpan;
       currentSpan = record.span;
       currentSite = record.site; observeSite?.(currentSite);
@@ -104,7 +111,7 @@ export function createPerformanceSpans(now = monotonicNow) {
     observeSite(observer?: (site: number) => void) { observeSite = observer; },
     request(id: string, method: string, timeoutMs?: number) {
       if (!enabled || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return;
-      if (requests.size >= requestCapacity) { requests.delete(requests.keys().next().value!); requestsDropped++; }
+      if (requests.size >= requestCapacity) { requests.delete(requests.keys().next().value!); droppedOverflow++; }
       requests.set(id, { id, method: method === "snapshot" || method === "append" || method === "wait" || method === "files" || method === "health" ? method : "other",
         start: now(), deadline: timeoutMs === undefined ? null : now() + timeoutMs, events: [] });
     },
@@ -124,7 +131,7 @@ export function createPerformanceSpans(now = monotonicNow) {
       record.failed = failed; finish(record);
       const request = correlation ? requests.get(correlation) : undefined;
       if (request) {
-        if (request.events.length === 16) { request.events.shift(); requestsDropped++; }
+        if (request.events.length === 16) { request.events.shift(); droppedOverflow++; }
         request.events.push({ site: record.site, at: record.end, bytes, failed });
       }
     },
@@ -136,11 +143,19 @@ export function createPerformanceSpans(now = monotonicNow) {
     },
     requests() {
       const cutoff = now() - 60_000;
-      for (const [id, request] of requests) if (request.start < cutoff) { requests.delete(id); requestsDropped++; }
+      for (const [id, request] of requests) if (request.start < cutoff) { requests.delete(id); droppedExpired++; }
       const rows = [...requests.values()];
-      return { dropped: requestsDropped, omitted: Math.max(0, rows.length - 16), records: rows.slice(-16) };
+      // Overflow includes evictions from both the request map and the per-request event buffer.
+      return { dropped: droppedExpired + droppedOverflow, droppedExpired, droppedOverflow,
+        omitted: Math.max(0, rows.length - 16), records: rows.slice(-16) };
     },
-    clear() { records.length = 0; longest.length = 0; cursor = 0; dropped = 0; droppedMs = 0; },
+    clearSpans() {
+      clearSpanRecords();
+    },
+    clear() {
+      clearSpanRecords();
+      droppedExpired = 0; droppedOverflow = 0;
+    },
   };
   return recorder;
 }

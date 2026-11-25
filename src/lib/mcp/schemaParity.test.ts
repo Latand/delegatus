@@ -240,6 +240,23 @@ test("account_limits accepts Copilot as an engine through the MCP protocol", asy
   });
 });
 
+test("account_limits accepts Antigravity as an engine through the MCP protocol", async () => {
+  let receivedEngine: unknown;
+  await withProtocolClient(inertBindings({
+    account_limits: async (args) => {
+      receivedEngine = args.engine;
+      return { count: 0, accounts: [] };
+    },
+  }), async (client) => {
+    const result = await client.callTool({
+      name: "account_limits",
+      arguments: { clientRequestId: "limits-antigravity-schema", engine: "antigravity" },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(receivedEngine).toBe("antigravity");
+  });
+});
+
 test("every harmless bounded MCP numeric clamps, coerces, and defaults before its binding", async () => {
   const calls = new Map<McpToolName, Record<string, unknown>[]>();
   const bindings = inertBindings(Object.fromEntries(
@@ -763,7 +780,7 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
       "access", "account", "agentMemoryMaxBytes", "effort", "engine", "id", "kind", "model", "next", "onFail", "outputs", "prompt", "role", "runtime", "sandbox", "serviceTier",
     ]);
     expect(stage?.kind?.enum).toEqual(["run", "review-loop"]);
-    expect(stage?.engine?.enum).toEqual(["claude", "codex"]);
+    expect(stage?.engine?.enum).toEqual(["claude", "codex", "antigravity"]);
     expect(stage?.role?.properties?.roleId?.enum).toEqual([...ROLE_IDS]);
     /* #1868: the fail edge publishes what happens once its rounds are spent. */
     type EdgeSchema = { properties?: Record<string, { enum?: string[]; description?: string }>; anyOf?: EdgeSchema[] };

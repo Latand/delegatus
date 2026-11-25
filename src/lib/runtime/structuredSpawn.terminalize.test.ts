@@ -5,7 +5,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, expect, spyOn, test } from "bun:test";
 
 import { AgentRegistry, type AgentRegistrySqliteMode, type SpawnLauncher } from "@/lib/agent/registry";
-import { failedLaunchRepairQuery } from "@/lib/agent/sqliteRegistryStore";
+import { failedLaunchRepairQuery, type RowCollection } from "@/lib/agent/sqliteRegistryStore";
 import { spawnResponseForReceipt } from "@/lib/agent/spawnResponse";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { claimPass, patchPass, readPass } from "@/lib/memory/curation/store";
@@ -19,6 +19,8 @@ import { pruneSpawnNotices, readSpawnNoticeTurn, settleSpawnNotices } from "@/li
 import { LAUNCH_FAILURE_NOTICE_WINDOW_MS } from "@/lib/tasks/launchFailureReporting";
 import { closeStateMutationActivationForTests, openStateMutationActivation, stateMutationRefusal } from "@/lib/state/stateMutationBarrier";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
+import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
+import { claimCleanerRun } from "@/lib/cleaner/store";
 
 import { RuntimeHostUnavailableError, type RuntimeHostClient } from "./client";
 import {
@@ -27,7 +29,12 @@ import {
   recoverPendingStructuredSpawns,
   reconcileStructuredSpawnReplay,
   spawnStructuredConversation,
+  settleStaleSpawnMarkerBatch,
+  settleStaleSpawnMarkers,
+  SpawnMarkerSettlementRefused,
+  spawnMarkerSettlementError,
   terminalizeStaleStructuredSpawns,
+  writeStagedRecovery,
 } from "./structuredSpawn";
 
 const DEAD_RUNTIME_CLIENT = {
@@ -313,6 +320,44 @@ test("a runtime-host transport failure becomes actionable on the structured spaw
   });
 });
 
+test("a Cleaner drain after runtime admission keeps the durable launch replayable", async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "cleaner_runtime_reply_drain", "off", true);
+  const claimed = store.claimStartingStructuredSpawn(receipt.launchId);
+  expect(claimed.claimed).toBe(true);
+  const saved = claimed.receipt.queuedPinnedSpawn;
+  let draining = false, starts = 0;
+  const client = {
+    command: async () => {
+      draining = true;
+      return {
+        operationId: receipt.launchId,
+        replayed: false,
+        receipt: { operationId: receipt.launchId, idempotencyKey: receipt.launchId,
+          conversationId: receipt.conversationId, kind: "spawn" as const, status: "queued" as const,
+          reason: null, at: receipt.createdAt, revision: 1 },
+      };
+    },
+    transitionOperation: async () => { throw new Error("drain-held launch must retain its queued operation"); },
+  } as unknown as RuntimeHostClient;
+  const account = { engine: "codex" as const, accountId: "account-a", kind: "managed" as const,
+    home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" as const } };
+  try {
+    await expect(spawnStructuredConversation({
+      engine: "codex", receipt: claimed.receipt, spec: saved!.spec, account, prompt: saved!.prompt,
+      registry: store, client,
+      authorize: () => {
+        if (draining) { const error = new Error("Cleaner admission held by update drain"); error.name = "CleanerDrainHold"; throw error; }
+      },
+    }, { startHost: async () => { starts++; throw new Error("host must not start during drain"); } }))
+      .rejects.toThrow("Cleaner admission held by update drain");
+    expect(starts).toBe(0);
+    const after = store.spawnReceipt(receipt.launchId);
+    expect(after).toMatchObject({ state: "starting", clientAttemptId: receipt.clientAttemptId,
+      admissionOwner: null });
+    expect(after?.queuedPinnedSpawn).toMatchObject({ prompt: saved!.prompt, spec: saved!.spec, imageRefs: saved!.imageRefs });
+  } finally { store.close(); }
+});
+
 test("a stale dead-evidence structured launch converges to durable retry-safe failed exactly once", async () => {
   const store = registry();
   const receipt = staleStructuredReceipt(store, "stale_20260719_a1");
@@ -524,7 +569,7 @@ test.each(["off", "sqlite"] as const)("a fresh loss stays handled when both repo
   expect(readSpawnNoticeTurn(receipt.conversationId, turn)).not.toBeNull();
   settleSpawnNotices(receipt.conversationId, [turn], { state: "sent", recipientConversationId: "conversation_current_launcher", clientMessageId: "notice-fixture", operationId: null }, new Date().toISOString());
   pruneSpawnNotices(new Date(Date.now() + 1_000).toISOString());
-  fs.rmSync(lifecycleJournalPath(), { force: true });
+  fs.rmSync(lifecycleJournalPath(), { recursive: true, force: true });
   expect(readSpawnNoticeTurn(receipt.conversationId, turn)).toBeNull();
   const reopened = new AgentRegistry(store.filename, undefined, undefined, { sqliteMode });
   await terminalizeStaleStructuredSpawns(reopened, null);
@@ -1225,22 +1270,125 @@ test("the actuation cap bounds one cycle and the remainder converges on the next
   }
 });
 
-function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: string; project: string; receiptProject?: string }, attemptId?: string, mode: AgentRegistrySqliteMode = "off") {
+async function cleanerAttemptFixture(ageMs = 0) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-cleaner-queue-"));
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
+  const now = Date.now() - ageMs;
+  const run = await claimCleanerRun({
+    project: "repo-test", cwd: root, now: () => now, episode: `queue-fixture-${ageMs}`,
+    evidence: { volumes: [], categories: [] }, allowed: () => true,
+  });
+  if (typeof run === "string") throw new Error(`failed to seed cleaner admission: ${run}`);
+  return { runId: run.runId, cleanup() {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  } };
+}
+
+function queuedOwnerFixture(transport: "tmux" | "structured", curator?: { id: string; project: string; receiptProject?: string }, attemptId?: string, mode: AgentRegistrySqliteMode = "off", cleaner = false, scheduledCleanerRunId?: string) {
   const store = registry(mode);
   const cwd = path.dirname(store.filename);
-  const profile = emptyLaunchProfile({ cwd, title: curator ? "Role memory curation" : "Owner queue fixture",
+  const profile = emptyLaunchProfile({ cwd, title: cleaner ? "Cleaner queue fixture" : curator ? "Role memory curation" : "Owner queue fixture",
+    ...(cleaner ? { agentMemoryRoleParams: { mode: "disk" }, readOnly: true, sandbox: "restricted" as const, permissionMode: "never" as const, allowSubagents: false } : {}),
     ...(curator ? { project: curator.project, role: "curator" as never } : {}) });
-  const begun = store.beginSpawnRequest({ engine: "claude", cwd, transport, ownStartingActuation: true, accountPin: true, accountId: "account-a",
+  const engine = cleaner ? "codex" as const : "claude" as const;
+  const begun = store.beginSpawnRequest({ engine, cwd, transport, ownStartingActuation: true, accountPin: true, accountId: "account-a",
+    ...(cleaner ? { role: "cleaner" } : {}),
     ...(curator ? { role: "curator", explicitProject: curator.receiptProject ?? curator.project } : {}),
-    clientAttemptId: attemptId ?? curator?.id ?? `relay-owner-queued-${transport}`, launchProfile: profile });
+    clientAttemptId: attemptId ?? curator?.id ?? `relay-owner-queued-${transport}`,
+    ...(scheduledCleanerRunId ? { scheduledCleanerRunId } : {}), launchProfile: profile });
   if (begun.kind !== "created" || !begun.receipt.admissionOwner) throw Error("queued owner fixture unavailable");
   const prompt = "Owner queue fixture instruction";
   store.queuePinnedSpawn(begun.receipt.launchId, { version: 1, retryAt: new Date(0).toISOString(), accountId: "account-a", locale: "en",
-    spec: { engine: "claude", command: "claude", cwd, windowName: "owner-fixture", launchProfile: profile },
+    spec: { engine, command: engine, cwd, windowName: "owner-fixture", launchProfile: profile },
     prompt, imageRefs: [], parentArtifactPath: null, pipelineSourceConversationId: null }, "Owner queue fixture");
   store.releaseSpawnActuation(begun.receipt.launchId, begun.receipt.admissionOwner);
   return { store, cwd, receipt: begun.receipt };
 }
+
+test.serial("queued cleaner recovery holds its saved attempt throughout an update drain", async () => {
+  const cleanerSeed = await cleanerAttemptFixture();
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, cleanerSeed.runId, "off", true, cleanerSeed.runId);
+  const saved = store.spawnReceipt(receipt.launchId)?.queuedPinnedSpawn;
+  let actuations = 0;
+  const options = {
+    resolveSpawnAccount: () => ({ engine: "codex" as const, accountId: "account-a", kind: "managed" as const, home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" as const } }),
+    resolvePinnedSpawnAdmission: async () => ({ kind: "admissible" as const, basis: "current" as const, stale: false, retryAt: null }),
+    spawnStructuredConversation: async (input: Parameters<typeof spawnStructuredConversation>[0]) => {
+      actuations++;
+      expect(input.receipt.clientAttemptId).toBe(receipt.clientAttemptId);
+      return { state: "running" } as never;
+    },
+  };
+  writeDrain(drainFile(), { id: "cleaner-recovery-drain", target: "fixture", since: new Date().toISOString(), until: Date.now() + 60_000 });
+  try {
+    const held = await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, options);
+    expect(held.examined).toBe(1);
+    expect(actuations).toBe(0);
+    expect(store.spawnReceipt(receipt.launchId)).toMatchObject({ state: "starting", admissionOwner: null, queuedPinnedSpawn: saved });
+    releaseDrain(drainFile(), "cleaner-recovery-drain");
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, options);
+    expect(actuations).toBe(1);
+    expect(store.spawnReceipt(receipt.launchId)?.clientAttemptId).toBe(receipt.clientAttemptId);
+  } finally {
+    releaseDrain(drainFile(), "cleaner-recovery-drain");
+    store.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    cleanerSeed.cleanup();
+  }
+});
+
+test.serial("queued manual guarded disk Cleaner resumes without scheduled-run state", async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "cleaner_manual_prefix_spoof", "off", true);
+  let actuations = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
+      resolveSpawnAccount: () => ({ engine: "codex", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      spawnStructuredConversation: async input => { actuations++; return { state: "running", launchId: input.receipt.launchId } as never; },
+    });
+    expect(actuations).toBe(1);
+    expect(store.spawnReceipt(receipt.launchId)?.state).not.toBe("failed");
+  } finally { store.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test.serial("queued cleaner recovery fences a reservation after its durable run deadline", async () => {
+  const cleanerSeed = await cleanerAttemptFixture(91 * 60_000);
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, cleanerSeed.runId, "off", true, cleanerSeed.runId);
+  let actuations = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
+      now: () => Date.now(),
+      resolveSpawnAccount: () => ({ engine: "codex", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      spawnStructuredConversation: async () => { actuations++; throw Error("expired Cleaner must not start"); },
+    });
+    expect(actuations).toBe(0);
+    expect(store.spawnReceipt(receipt.launchId)).toMatchObject({ state: "failed", queuedPinnedSpawn: null });
+    expect(store.spawnReceipt(receipt.launchId)?.error).toContain("disk cleaner run expired");
+  } finally {
+    store.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    cleanerSeed.cleanup();
+  }
+});
+
+test.serial("queued scheduled cleaner with a missing run record refuses actuation", async () => {
+  const { store, cwd, receipt } = queuedOwnerFixture("structured", undefined, "cleaner_missing_run", "off", true, "cleaner_missing_run");
+  let actuations = 0;
+  try {
+    await terminalizeStaleStructuredSpawns(store, DEAD_RUNTIME_CLIENT, {
+      resolveSpawnAccount: () => ({ engine: "codex", accountId: "account-a", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } }),
+      resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
+      spawnStructuredConversation: async () => { actuations++; throw Error("missing scheduled run must not start"); },
+    });
+    expect(actuations).toBe(0);
+    expect(store.spawnReceipt(receipt.launchId)).toMatchObject({ state: "failed", scheduledCleanerRunId: "cleaner_missing_run" });
+    expect(store.spawnReceipt(receipt.launchId)?.error).toContain("disk cleaner run expired");
+  } finally { store.close(); fs.rmSync(cwd, { recursive: true, force: true }); }
+});
 
 test("a launch queued by a release with the terminal transport ends failed and starts nothing", async () => {
   const { store, cwd, receipt } = queuedOwnerFixture("tmux", undefined, "queued-terminal-transport-fixture");
@@ -1716,4 +1864,469 @@ test.each(["uncertain", "delivered"] as const)("a staged %s launch stays non-ret
   fs.writeFileSync(store.filename, JSON.stringify(cleaned));
   await terminalizeStaleStructuredSpawns(restarted, client, { now: () => start + STAGED_RECOVERY_BUDGET_MS });
   expect(restarted.snapshot().receipts[receipt.launchId]!.state).toBe("failed");
+});
+
+function stagedTerminalMarker(store: AgentRegistry, attempt: string, index: number, status: "dead" | "unhosted" = "dead") {
+  const receipt = staleStructuredReceipt(store, attempt);
+  const sessionId = `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+  const key = { engine: "codex" as const, sessionId };
+  const artifactPath = path.join(path.dirname(store.filename), `rollout-2026-10-01T00-00-00-${sessionId}.jsonl`);
+  const stage = store.stageStructuredSpawn(receipt.launchId, {
+    key, artifactPath, cwd: "/repo", accountId: "work",
+    launchProfile: emptyLaunchProfile({ cwd: "/repo" }),
+    status, host: null, claimEpoch: 0, claimOwner: null, pendingAction: "spawn",
+    structuredHost: {
+      kind: "codex-app-server", endpoint: "stdio:released", process: null, eventCursor: 0, protocolVersion: "fixture",
+      writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+    },
+  });
+  if (stage.kind !== "settled") throw new Error("terminal fixture could not stage the launch");
+  const owner = stage.receipt.admissionOwner;
+  if (!owner) return { receipt: stage.receipt, key };
+  const release = store.releaseStructuredSpawnAdmissionOwner(stage.receipt.launchId, owner);
+  if (!release.released) throw new Error("terminal fixture could not hand back its launch lease");
+  return { receipt: release.receipt, key };
+}
+
+test("failed spawn marker dry run, backup comparison and guarded restore", async () => {
+  const store = registry("sqlite");
+  const directory = path.dirname(store.filename);
+  const { RuntimeJournal } = await import("../../runtime-host/journal");
+  const { BACKUP_DIRECTORY, backupDatabase, stateDatabases } = await import("@/lib/state/durability");
+  const journalPath = path.join(directory, "marker-runtime.sqlite");
+  const journal = new RuntimeJournal(journalPath, { structuredHosts: true });
+  const client = { ...DEAD_RUNTIME_CLIENT, startupGeneration: async () => "fixture-runtime" };
+  try {
+    const { receipt, key } = stagedTerminalMarker(store, "marker-backup", 1);
+    const launchId = receipt.launchId;
+    await store.failSpawnOffLoop(launchId, "fixture first delivery failed");
+    const id = `codex:${key.sessionId}`;
+    expect(store.hostEntry(key)?.pendingAction).toBe("spawn");
+    const { conversationDeliverabilityFromRecord } = await import("@/lib/conversation/deliverability");
+    expect(await conversationDeliverabilityFromRecord(store.readOnlySnapshot(), { conversationId: receipt.conversationId }))
+      .toMatchObject({ condition: "synchronizing", resumeRequired: false });
+    const database = stateDatabases(directory).find(candidate => candidate.name === "agent-registry.sqlite")!;
+    const backup = backupDatabase(database, { backupDirectory: path.join(directory, BACKUP_DIRECTORY), freeBytes: () => null });
+    expect(backup.state).toBe("taken");
+    if (backup.state !== "taken") throw new Error("fixture backup was refused");
+    const copy = new Database(backup.file, { readonly: true });
+    try {
+      const proof = {
+        name: path.basename(backup.file), revision: Number(backup.revision),
+        row: (collection: RowCollection, key: string) => copy.query<{ value_json: string }, [string, string]>(
+          "SELECT value_json FROM registry_records WHERE collection=? AND row_key=?",
+        ).get(collection, key)?.value_json ?? null,
+      };
+      const options = { apply: false, journalPath };
+      expect(await settleStaleSpawnMarkers(store, client, options)).toEqual([{ key: id, group: "M1", reason: "would-clear" }]);
+      expect(store.hostEntry(key)?.pendingAction).toBe("spawn");
+      const run = () => store.deliveryWriteOrBusy({ label: "spawn.marker-settlement" }, () =>
+        store.settleStaleSpawnMarker(id, launchId, proof, "clear", () => null));
+      const original = store.hostEntry(key)!;
+      expect(await run()).toBe("settled");
+      expect(store.hostEntry(key)).toMatchObject({ status: "dead", pendingAction: null, structuredHost: null });
+      expect(await conversationDeliverabilityFromRecord(store.readOnlySnapshot(), { conversationId: receipt.conversationId }))
+        .toMatchObject({ condition: "reclaimed", resumeRequired: true });
+      expect(store.spawnReceipt(launchId)?.state).toBe("failed");
+      const restore = () => store.deliveryWriteOrBusy({ label: "spawn.marker-restore" }, () => store.restoreSettledSpawnMarkers(launchId));
+      expect(await restore()).toBe("restored");
+      expect(store.hostEntry(key)).toEqual(original);
+      expect(await restore()).toBe("missing-journal");
+      expect(await run()).toBe("settled");
+      store.upsert({ ...store.hostEntry(key)!, status: "unhosted" });
+      expect(await restore()).toBe("changed-since-settlement");
+      expect(await run()).toBe("changed-since-backup");
+    } finally { copy.close(); }
+  } finally {
+    store.close();
+    journal.close();
+    fs.rmSync(directory, { force: true, recursive: true });
+  }
+});
+
+test("a closed stage returns its stale marker to spawn recovery while a running stage retains it", async () => {
+  const store = registry("sqlite");
+  const directory = path.dirname(store.filename);
+  const { RuntimeJournal } = await import("../../runtime-host/journal");
+  const { BACKUP_DIRECTORY, backupDatabase, stateDatabases } = await import("@/lib/state/durability");
+  const { buildPipeline, savePipelines } = await import("@/lib/pipelines/store");
+  const journalPath = path.join(directory, "marker-runtime.sqlite");
+  const journal = new RuntimeJournal(journalPath, { structuredHosts: true });
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = directory;
+  try {
+    const fixtures = ["closed", "running", "paused", "unreadable"].map((name, index) => {
+      const { receipt, key } = stagedTerminalMarker(store, `pipeline-marker-${name}`, index + 1);
+      const pipeline = buildPipeline({ id: `marker-${name}`, task: "Synthetic stage recovery", project: "fixture", repoDir: directory,
+        stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
+          effectiveRole: { roleId: null, engine: "codex", model: "gpt-5.6-sol", effort: "high", access: "read-write", promptScaffold: null } }],
+        srcPath: null, srcConversationId: null, now: "2026-10-01T00:00:00.000Z" });
+      store.rememberMembership(receipt.conversationId, { kind: "pipeline", containerId: pipeline.id, role: "builder", slot: "build",
+        stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
+      if (name === "closed") {
+        pipeline.state = "closed";
+        pipeline.closedAt = "2026-10-02T00:00:00.000Z";
+        pipeline.cursor = null;
+      } else if (name === "running") pipeline.state = "running";
+      else if (name === "paused") pipeline.state = "paused";
+      return { name, receipt, key, pipeline };
+    });
+    for (const fixture of fixtures) {
+      expect(await writeStagedRecovery(store, fixture.receipt.launchId, {
+        phase: "uncertain", startedAt: Date.parse("2026-10-01T00:00:00.000Z"), checks: 5,
+        nextTryAt: Date.parse("2026-10-01T00:00:00.000Z"), reason: "fixture stopped", stopped: true,
+      })).toBe(true);
+    }
+    savePipelines(fixtures.filter(item => item.name !== "unreadable").map(item => item.pipeline));
+    const database = stateDatabases(directory).find(candidate => candidate.name === "agent-registry.sqlite")!;
+    const backup = backupDatabase(database, { backupDirectory: path.join(directory, BACKUP_DIRECTORY), freeBytes: () => null });
+    if (backup.state !== "taken") throw new Error("fixture backup was refused");
+    const client = { ...DEAD_RUNTIME_CLIENT, startupGeneration: async () => "fixture-runtime" };
+    const rows = await settleStaleSpawnMarkers(store, client, { apply: false, journalPath, now: AGED });
+    expect(rows.map(item => `${item.key} ${item.group} ${item.reason}`)).toEqual(fixtures
+      .map(item => `codex:${item.key.sessionId} M3 ${item.name === "closed" ? "would-fail" : "pipeline-reserved"}`).sort());
+    const target = fixtures[0]!;
+    const copy = new Database(backup.file, { readonly: true });
+    try {
+      const proof = {
+        name: path.basename(backup.file), revision: Number(backup.revision),
+        row: (collection: RowCollection, key: string) => copy.query<{ value_json: string }, [string, string]>(
+          "SELECT value_json FROM registry_records WHERE collection=? AND row_key=?",
+        ).get(collection, key)?.value_json ?? null,
+      };
+      const settled = await store.deliveryWriteOrBusy({ label: "spawn.marker-settlement" }, () => store.settleStaleSpawnMarker(
+        `codex:${target.key.sessionId}`, target.receipt.launchId, proof, "fail", () => null,
+      ));
+      expect(settled).toBe("failed");
+      expect(store.hostEntry(target.key)?.pendingAction).toBeNull();
+      expect(store.spawnReceipt(target.receipt.launchId)?.state).toBe("failed");
+      for (const fixture of fixtures.slice(1)) expect(store.hostEntry(fixture.key)?.pendingAction).toBe("spawn");
+    } finally { copy.close(); }
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    store.close();
+    journal.close();
+    fs.rmSync(directory, { force: true, recursive: true });
+  }
+});
+
+/* The apply path of the stale marker settlement, run as the retirement sweep
+   runs it, in a sandboxed state directory. A fact the plan proved is changed
+   after the plan and before the write; the write must refuse it. */
+type MarkerWorld = {
+  store: AgentRegistry;
+  directory: string;
+  journalPath: string;
+  journal: import("../../runtime-host/journal").RuntimeJournal;
+  client: RuntimeHostClient;
+  /** Runs once, after every plan check and before writer admission. */
+  beforeWrite?: () => void;
+  /** The listener identity the write sees. */
+  listener: string;
+  backup(): { file: string };
+};
+
+async function withMarkerWorld(run: (world: MarkerWorld) => Promise<void>): Promise<void> {
+  const store = registry("sqlite");
+  const directory = path.dirname(store.filename);
+  const { RuntimeJournal } = await import("../../runtime-host/journal");
+  const { BACKUP_DIRECTORY, backupDatabase, stateDatabases } = await import("@/lib/state/durability");
+  const journalPath = path.join(directory, "marker-runtime.sqlite");
+  const journal = new RuntimeJournal(journalPath, { structuredHosts: true });
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = directory;
+  const world: MarkerWorld = {
+    store, directory, journalPath, journal, listener: "fixture-runtime",
+    client: undefined as never,
+    backup: () => {
+      const database = stateDatabases(directory).find(candidate => candidate.name === "agent-registry.sqlite")!;
+      const taken = backupDatabase(database, { backupDirectory: path.join(directory, BACKUP_DIRECTORY), freeBytes: () => null });
+      if (taken.state !== "taken") throw new Error("fixture backup was refused");
+      return { file: taken.file };
+    },
+  };
+  world.client = {
+    ...DEAD_RUNTIME_CLIENT,
+    startupGeneration: async () => "fixture-runtime",
+    startupListenerIdentity: () => {
+      const hook = world.beforeWrite;
+      if (!hook) return world.listener;
+      world.beforeWrite = undefined;
+      hook();
+      return "fixture-runtime";
+    },
+  } as unknown as RuntimeHostClient;
+  try { await run(world); }
+  finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    world.store.close();
+    journal.close();
+    fs.rmSync(directory, { force: true, recursive: true });
+  }
+}
+
+async function failedMarker(store: AgentRegistry, name: string, index: number, status: "dead" | "unhosted" = "dead") {
+  const { receipt, key } = stagedTerminalMarker(store, name, index, status);
+  await store.failSpawnOffLoop(receipt.launchId, "fixture first delivery failed");
+  expect(store.hostEntry(key)?.pendingAction).toBe("spawn");
+  return { receipt, key, id: `codex:${key.sessionId}` };
+}
+
+async function closedStageMarker(world: MarkerWorld, name: string, index: number, state: "closed" | "running") {
+  const { buildPipeline } = await import("@/lib/pipelines/store");
+  const { receipt, key } = stagedTerminalMarker(world.store, name, index);
+  const pipeline = buildPipeline({ id: `marker-${name}`, task: "Synthetic stage recovery", project: "fixture", repoDir: world.directory,
+    stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
+      effectiveRole: { roleId: null, engine: "codex", model: "gpt-5.6-sol", effort: "high", access: "read-write", promptScaffold: null } }],
+    srcPath: null, srcConversationId: null, now: "2026-10-01T00:00:00.000Z" });
+  world.store.rememberMembership(receipt.conversationId, { kind: "pipeline", containerId: pipeline.id, role: "builder", slot: "build",
+    stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
+  if (state === "closed") {
+    pipeline.state = "closed";
+    pipeline.closedAt = "2026-10-02T00:00:00.000Z";
+    pipeline.cursor = null;
+  } else pipeline.state = "running";
+  expect(await writeStagedRecovery(world.store, receipt.launchId, {
+    phase: "uncertain", startedAt: Date.parse("2026-10-01T00:00:00.000Z"), checks: 5,
+    nextTryAt: Date.parse("2026-10-01T00:00:00.000Z"), reason: "fixture stopped", stopped: true,
+  })).toBe(true);
+  return { receipt, key, id: `codex:${key.sessionId}`, pipeline };
+}
+
+test("the sweep's apply path settles failed launch markers and records restorable before-images (case 17)", async () => {
+  await withMarkerWorld(async world => {
+    const dead = await failedMarker(world.store, "apply-dead", 1);
+    const unhosted = await failedMarker(world.store, "apply-unhosted", 2, "unhosted");
+    const original = world.store.hostEntry(dead.key)!;
+    world.backup();
+    const rows = await settleStaleSpawnMarkers(world.store, world.client, { apply: true, journalPath: world.journalPath });
+    expect(rows).toEqual([
+      { key: dead.id, group: "M1", reason: "settled" },
+      { key: unhosted.id, group: "M2", reason: "settled" },
+    ]);
+    for (const { key } of [dead, unhosted]) {
+      expect(world.store.hostEntry(key)).toMatchObject({ status: "dead", pendingAction: null, structuredHost: null });
+    }
+    expect(world.store.spawnReceipt(dead.receipt.launchId)?.state).toBe("failed");
+    expect(await settleStaleSpawnMarkers(world.store, world.client, { apply: true, journalPath: world.journalPath })).toEqual([]);
+    expect(await world.store.deliveryWriteOrBusy({ label: "spawn.marker-restore" }, () =>
+      world.store.restoreSettledSpawnMarkers(dead.receipt.launchId))).toBe("restored");
+    expect(world.store.hostEntry(dead.key)).toEqual(original);
+  });
+});
+
+test.each([
+  ["runtime-generation-changed", (world: MarkerWorld) => { world.listener = "fixture-runtime-replaced"; }],
+  ["backup-replaced", (world: MarkerWorld, _marker: Awaited<ReturnType<typeof failedMarker>>, backup: string) => {
+    fs.copyFileSync(backup, `${backup}.replacement`);
+    fs.renameSync(`${backup}.replacement`, backup);
+  }],
+  ["outstanding-delivery", (world: MarkerWorld, marker: Awaited<ReturnType<typeof failedMarker>>) => {
+    world.store.holdDelivery(marker.receipt.conversationId, "Late instruction", "late-delivery", "text");
+  }],
+  ["operation-open", (world: MarkerWorld, marker: Awaited<ReturnType<typeof failedMarker>>) => {
+    const db = new Database(world.journalPath);
+    try {
+      db.query("INSERT INTO operations (operation_id, conversation_id, idempotency_key, request_hash, request_json, receipt_json, event_seq) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run("late-operation", marker.receipt.conversationId, "late-operation", "synthetic", "{}",
+          JSON.stringify({ operationId: "late-operation", conversationId: marker.receipt.conversationId, kind: "send", status: "pending" }), 1);
+    } finally { db.close(); }
+  }],
+  ["changed-since-backup", (world: MarkerWorld, marker: Awaited<ReturnType<typeof failedMarker>>) => {
+    world.store.upsert({ ...world.store.hostEntry(marker.key)!, cwd: "/moved-after-backup" });
+  }],
+  ["owner-changed", (world: MarkerWorld, marker: Awaited<ReturnType<typeof failedMarker>>) => {
+    world.store.upsert({ ...world.store.hostEntry(marker.key)!, status: "idle" });
+  }],
+] as const)("the write rechecks %s after the plan and leaves the marker", async (reason, change) => {
+  await withMarkerWorld(async world => {
+    const marker = await failedMarker(world.store, `recheck-${reason}`, 3);
+    const { file } = world.backup();
+    world.beforeWrite = () => change(world, marker, file);
+    const rows = await settleStaleSpawnMarkers(world.store, world.client, { apply: true, journalPath: world.journalPath });
+    expect(world.beforeWrite).toBeUndefined();
+    expect(rows).toEqual([{ key: marker.id, group: "M1", reason }]);
+    expect(world.store.hostEntry(marker.key)?.pendingAction).toBe("spawn");
+    // Nothing was written, so there is no before-image to restore.
+    expect(await world.store.deliveryWriteOrBusy({ label: "spawn.marker-restore" }, () =>
+      world.store.restoreSettledSpawnMarkers(marker.receipt.launchId))).toBe("missing-journal");
+  });
+});
+
+test.each([
+  ["a release drain", async (_world: MarkerWorld) => () => writeDrain(drainFile(), {
+    id: "fixture-drain", target: "fixture", since: new Date().toISOString(), until: Date.now() + 60_000 })],
+  ["a new release authority epoch", async (world: MarkerWorld) => {
+    const { publishHotStateAuthority } = await import("@/lib/state/hotStateAuthority");
+    return () => publishHotStateAuthority(world.directory, "legacy", null);
+  }],
+] as const)("authority lost to %s between plan and write stops the batch with its reason", async (_name, lose) => {
+  await withMarkerWorld(async world => {
+    const marker = await failedMarker(world.store, "authority-lost", 4);
+    world.backup();
+    const loss = await lose(world);
+    world.beforeWrite = () => { loss(); };
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await settleStaleSpawnMarkerBatch(world.store, world.client, { journalPath: world.journalPath })).toBeNull();
+      expect(errors.mock.calls.find(call => call[0] === "[spawn] stale marker batch failed")?.[1]).toEqual({
+        code: "authority-lost", message: "spawn marker settlement lost release or runtime journal authority" });
+    } finally {
+      errors.mockRestore();
+      releaseDrain(drainFile(), "fixture-drain");
+    }
+    expect(world.store.hostEntry(marker.key)?.pendingAction).toBe("spawn");
+  });
+});
+
+test("a runtime refusal defers one row with a reason distinct from authority loss", async () => {
+  await withMarkerWorld(async world => {
+    const marker = await failedMarker(world.store, "runtime-refused", 5);
+    world.backup();
+    world.beforeWrite = () => { throw new RuntimeHostUnavailableError("runtime host refused the identity read"); };
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    const infos = spyOn(console, "info").mockImplementation(() => {});
+    try {
+      expect(await settleStaleSpawnMarkerBatch(world.store, world.client, { journalPath: world.journalPath }))
+        .toEqual([{ key: marker.id, group: "M1", reason: "evidence-unavailable", detail: "runtime-refused" }]);
+      expect(errors.mock.calls.find(call => call[0] === "[spawn] marker settlement deferred")?.[1]).toEqual({
+        key: marker.id, code: "runtime-refused", message: "runtime host refused the identity read" });
+      expect(infos.mock.calls.find(call => call[0] === "[spawn] stale marker batch")?.[1]).toEqual({
+        rows: 1, outcomes: { "M1 evidence-unavailable (runtime-refused)": 1 } });
+    } finally { errors.mockRestore(); infos.mockRestore(); }
+    expect(world.store.hostEntry(marker.key)?.pendingAction).toBe("spawn");
+    expect(spawnMarkerSettlementError(new SpawnMarkerSettlementRefused("authority-lost", "lost")).code)
+      .not.toBe(spawnMarkerSettlementError(new RuntimeHostUnavailableError("refused")).code);
+  });
+});
+
+test("a busy release fence defers the write and the next sweep settles it", async () => {
+  const { withFileTransaction } = await import("@/lib/state/fileTransaction");
+  const { HOT_STATE_AUTHORITY_FILENAME } = await import("@/lib/state/hotStateAuthority");
+  await withMarkerWorld(async world => {
+    const marker = await failedMarker(world.store, "fence-busy", 6);
+    world.backup();
+    const held = await withFileTransaction(path.join(world.directory, HOT_STATE_AUTHORITY_FILENAME), "fixture fence holder", () =>
+      settleStaleSpawnMarkers(world.store, world.client, { apply: true, journalPath: world.journalPath }));
+    expect(held).toEqual([{ key: marker.id, group: "M1", reason: "release-fence-busy" }]);
+    expect(world.store.hostEntry(marker.key)?.pendingAction).toBe("spawn");
+    expect(await settleStaleSpawnMarkers(world.store, world.client, { apply: true, journalPath: world.journalPath }))
+      .toEqual([{ key: marker.id, group: "M1", reason: "settled" }]);
+  });
+});
+
+test("closed stage markers settle through pipeline admission; running stages and changed facts keep them (cases 18, 19)", async () => {
+  await withMarkerWorld(async world => {
+    const closed = await closedStageMarker(world, "apply-closed", 7, "closed");
+    const running = await closedStageMarker(world, "apply-running", 8, "running");
+    const { savePipelines } = await import("@/lib/pipelines/store");
+    // The store holds exactly the pipelines saved last.
+    savePipelines([closed.pipeline, running.pipeline]);
+    world.backup();
+    const plan = await settleStaleSpawnMarkers(world.store, world.client, { apply: false, journalPath: world.journalPath, now: AGED });
+    expect(plan).toEqual([
+      { key: closed.id, group: "M3", reason: "would-fail" },
+      { key: running.id, group: "M3", reason: "pipeline-reserved" },
+    ]);
+    const apply = () => settleStaleSpawnMarkers(world.store, world.client, { apply: true, journalPath: world.journalPath, now: AGED, limit: 1 });
+    const pathname = closed.receipt.artifactPath!;
+    // The staged transcript appears after the plan.
+    world.beforeWrite = () => fs.writeFileSync(pathname, "");
+    expect(await apply()).toEqual([{ key: closed.id, group: "M3", reason: "staged-evidence-changed" }]);
+    fs.rmSync(pathname);
+    expect(await apply()).toEqual([{ key: running.id, group: "M3", reason: "pipeline-reserved" }]);
+    // The pipeline reopens after the plan.
+    const { loadPipelines } = await import("@/lib/pipelines/store");
+    const stored = loadPipelines();
+    world.beforeWrite = () => savePipelines(loadPipelines().map(pipeline => pipeline.id !== closed.pipeline.id ? pipeline
+      : { ...structuredClone(pipeline), state: "running", closedAt: null, cursor: stored.find(item => item.id === running.pipeline.id)!.cursor }));
+    expect(await apply()).toEqual([{ key: closed.id, group: "M3", reason: "pipeline-reserved" }]);
+    expect(loadPipelines().find(pipeline => pipeline.id === closed.pipeline.id)?.state).toBe("running");
+    savePipelines(stored);
+    expect(await apply()).toEqual([{ key: running.id, group: "M3", reason: "pipeline-reserved" }]);
+    // Another writer holds the registry when the closed-stage write is admitted.
+    const writer = new Database(world.store.filename.replace(/\.json$/, ".sqlite"));
+    world.beforeWrite = () => writer.exec("BEGIN IMMEDIATE");
+    try {
+      expect(await apply()).toEqual([{ key: closed.id, group: "M3", reason: "writer-busy" }]);
+    } finally { writer.exec("ROLLBACK"); writer.close(); }
+    expect(world.store.hostEntry(closed.key)?.pendingAction).toBe("spawn");
+    expect(await apply()).toEqual([{ key: running.id, group: "M3", reason: "pipeline-reserved" }]);
+    expect(await apply()).toEqual([{ key: closed.id, group: "M3", reason: "failed" }]);
+    expect(world.store.hostEntry(closed.key)?.pendingAction).toBeNull();
+    expect(world.store.spawnReceipt(closed.receipt.launchId)?.state).toBe("failed");
+    expect(world.store.hostEntry(running.key)?.pendingAction).toBe("spawn");
+  });
+});
+
+test("rows that stay skipped rotate through bounded batches, log each reason once and restart from the first key (cases 20-22)", async () => {
+  await withMarkerWorld(async world => {
+    const { captureProcessIdentity } = await import("@/lib/processIdentity");
+    const live = await failedMarker(world.store, "skip-live", 9);
+    world.store.upsert({ ...world.store.hostEntry(live.key)!, hostExitProcess: captureProcessIdentity(process.pid) });
+    const delivery = await failedMarker(world.store, "skip-delivery", 10);
+    world.store.holdDelivery(delivery.receipt.conversationId, "Outstanding instruction", "outstanding", "text");
+    const changed = await failedMarker(world.store, "skip-changed", 11);
+    world.backup();
+    world.store.upsert({ ...world.store.hostEntry(changed.key)!, cwd: "/changed-after-backup" });
+    const reasons = { [live.id]: "unproven-process", [delivery.id]: "outstanding-delivery", [changed.id]: "changed-since-backup" };
+    const keys = Object.keys(reasons).sort();
+    const warnings = spyOn(console, "warn").mockImplementation(() => {});
+    const apply = (store = world.store) => settleStaleSpawnMarkers(store, world.client, { apply: true, journalPath: world.journalPath, limit: 2 });
+    const skipped = () => warnings.mock.calls.filter(call => call[0] === "[spawn] stale marker skipped").map(call => (call[1] as { key: string }).key);
+    try {
+      const batches = [await apply(), await apply(), await apply()];
+      expect(batches.map(rows => rows.map(row => row.key))).toEqual([[keys[0], keys[1]], [keys[2], keys[0]], [keys[1], keys[2]]]);
+      for (const row of batches.flat()) expect(row.reason).toBe(reasons[row.key]);
+      expect(skipped()).toEqual(keys);
+      // A restarted Viewer has no cursor and starts again at the first key.
+      world.store.close();
+      const restarted = new AgentRegistry(world.store.filename, undefined, undefined, { sqliteMode: "sqlite" });
+      try {
+        expect((await apply(restarted)).map(row => row.key)).toEqual([keys[0], keys[1]]);
+        for (const { key } of [live, delivery, changed]) expect(restarted.hostEntry(key)?.pendingAction).toBe("spawn");
+      } finally { restarted.close(); }
+    } finally { warnings.mockRestore(); }
+    world.store = new AgentRegistry(world.store.filename, undefined, undefined, { sqliteMode: "sqlite" });
+  });
+});
+
+test("settlement against an operator-shaped state directory refuses a test, a build, the sidecar and a non-owner (case 23)", async () => {
+  const { setStateOwnershipPathsForTests } = await import("@/lib/stateOwnership");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-marker-operator-"));
+  const home = path.join(root, "operator");
+  const temp = path.join(root, "temp");
+  const directory = path.join(home, ".config", "delegatus", "state");
+  fs.mkdirSync(temp);
+  fs.mkdirSync(directory, { recursive: true });
+  const store = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  await failedMarker(store, "operator-shaped", 12);
+  const previous = { TMPDIR: process.env.TMPDIR, LLV_STATE_OWNER: process.env.LLV_STATE_OWNER, NODE_ENV: process.env.NODE_ENV,
+    NEXT_PHASE: process.env.NEXT_PHASE, LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER: process.env.LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER };
+  const restorePaths = setStateOwnershipPathsForTests({ home, tempRoots: [temp] });
+  openStateMutationActivation();
+  const env = process.env as Record<string, string | undefined>;
+  const attempt = async (overrides: Record<string, string | undefined>) => {
+    Object.assign(env, { TMPDIR: temp, LLV_STATE_OWNER: "viewer", NODE_ENV: "production", NEXT_PHASE: undefined,
+      LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER: undefined }, overrides);
+    for (const [name, value] of Object.entries(env)) if (value === undefined) delete env[name];
+    return settleStaleSpawnMarkers(store, DEAD_RUNTIME_CLIENT, { apply: true }).then(() => "admitted", (error: Error) =>
+      error instanceof SpawnMarkerSettlementRefused ? error.code : error.name);
+  };
+  try {
+    expect(await attempt({ NODE_ENV: "test" })).toBe("owner-refused");
+    expect(await attempt({ NEXT_PHASE: "phase-production-build" })).toBe("owner-refused");
+    expect(await attempt({ LLV_ACCOUNT_CONTROLLER_INVENTORY_WORKER: "1" })).toBe("owner-refused");
+    expect(await attempt({ LLV_STATE_OWNER: "tool" })).toBe("StateStartupMutationRefused");
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete env[name]; else env[name] = value;
+    }
+    closeStateMutationActivationForTests();
+    restorePaths();
+    store.close();
+    fs.rmSync(root, { force: true, recursive: true });
+  }
 });

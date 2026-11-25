@@ -145,6 +145,12 @@ const RUNNING_PATH = `/state/agent-log-viewer/shared/accounts/claude/${ACCOUNT}/
 /* `?seatnoise=<i..v>` (docs/design/seat-panel-noise.md): the running conversation is an orchestrator seat, on a
    structured host, in the state the case names; the driver opens it in the focus view. */
 const SEAT_NOISE = new URLSearchParams(location.search).get("seatnoise");
+/* `?kanban=1&runtime=structured&seathost=<seconds|running>`: the BOARD's orchestrator seat (the kanban scene's own
+   "Orchestrator" conversation, which `seatnoise` never touches) is hosted on a structured host, so its card and sheet
+   resolve a host instead of reading «opening». A number is how long ago its turn ended (idle, the host alive);
+   `running` is a turn in flight. */
+const SEAT_HOST = new URLSearchParams(location.search).get("seathost");
+const SEAT_IDLE = new URLSearchParams(location.search).has("seatidle") ? Number(new URLSearchParams(location.search).get("seatidle")) : null;
 /* Composer context mode (docs/design/composer-context-mode.md, `?context-mode=1`): the running conversation is a
    Codex conversation on a structured host that can inject. `noinject` serves the same session without the
    capability. The driver flips the turn and publishes receipts through `evidence`. */
@@ -155,7 +161,7 @@ const CONTEXT_MODE = new URLSearchParams(location.search).get("context-mode");
 const ROTATION = new URLSearchParams(location.search).has("rotation");
 const FIRST_MESSAGE = new URLSearchParams(location.search).get("firstmessage");
 const RUNTIME_PERF = new URLSearchParams(location.search).get("runtime") === "perf";
-const STRUCTURED = RUNTIME_PERF || new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE !== null || CONTEXT_MODE !== null || FIRST_MESSAGE !== null;
+const STRUCTURED = RUNTIME_PERF || new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_HOST !== null || SEAT_NOISE !== null || CONTEXT_MODE !== null || FIRST_MESSAGE !== null;
 const NEXT_ACCOUNT = new URLSearchParams(location.search).get("next") || "relief";
 
 /* With the deck asked for (#1795 below), the running conversation is the round
@@ -283,6 +289,12 @@ const files: FileEntry[] = [
     ...(queueRecovery ? {
       activity: "idle", lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 20) * 1_000 },
       authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(20), terminalKind: "completed" },
+    } : {}),
+    /* `&seatidle=<seconds>` (with `seatnoise=ii&runtime=structured`): the seat's own turn ended that long ago and its host
+       stays alive, so the seat reads «waiting» with no decision form open. */
+    ...(SEAT_IDLE !== null ? {
+      activity: "idle", mtime: now - SEAT_IDLE, lastTurn: { startedAt: (now - SEAT_IDLE - 400) * 1_000, endedAt: (now - SEAT_IDLE) * 1_000 },
+      authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(SEAT_IDLE), terminalKind: "completed" },
     } : {}),
   }),
   ...Array.from({ length: 30 }, (_, i) => conversation(
@@ -1254,6 +1266,16 @@ if (SEATLESS) {
   if (SEATLESS === "donly") kanbanTasks.push(kanbanTask("t-done-only", "done", "Add a --version flag", { updatedAt: iso(86_400) }));
 }
 const SEAT_PATH = kanbanFiles.find((entry) => entry.title === "Orchestrator")?.path ?? null;
+const SEAT_HOST_IDLE = SEAT_HOST === null || SEAT_HOST === "running" ? null : Number(SEAT_HOST);
+if (SEAT_PATH && SEAT_HOST !== null) {
+  Object.assign(kanbanFiles.find((entry) => entry.path === SEAT_PATH)!, SEAT_HOST_IDLE === null
+    ? { activity: "live", proc: "running", pid: 5_900, mtime: now - 20, lastTurn: { startedAt: (now - 400) * 1_000, endedAt: null } }
+    : {
+      activity: "idle", proc: "running", pid: 5_900, mtime: now - SEAT_HOST_IDLE,
+      lastTurn: { startedAt: (now - SEAT_HOST_IDLE - 400) * 1_000, endedAt: (now - SEAT_HOST_IDLE) * 1_000 },
+      authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(SEAT_HOST_IDLE), terminalKind: "completed" },
+    });
+}
 if (ROTATION && fm.confirmed) {
   fmTarget = conversation(FM_SEAT_PATH, "Successor orchestrator", { conversationId: FM_CONVERSATION_ID, activity: "live", proc: "running", pid: 4_402, mtime: now - 5 });
   kanbanFiles.push(fmTarget); fmApply();
@@ -1550,8 +1572,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       if (RELAY_SCENE === "paired" || RELAY_SCENE === "chats") return json({
         relays: [
           relayRow({ targets: [
-            target({ engine: "claude", model: "opus", effort: "low", concurrency: 2, answered_by: "install", ownerTier: true }),
-            target({ id: "bot-2", name: "Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays", engine: "codex", model: "gpt-6-astra", effort: "high", memberLimitPerHour: null }),
+            target({ engine: "claude", model: "opus", effort: "low", concurrency: 2, answered_by: "install", grantStatus: "active" }),
+            target({ id: "bot-2", name: "Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays", engine: "codex", model: "gpt-6-astra", effort: "high", memberLimitPerHour: null, grantStatus: "suspended" }),
             target({ id: "bot-3", name: "New bot" }),
             target({ id: "bot-4", name: "Пошук по базі знань для нових учасників чату магазину", engine: "claude", model: "sonnet", concurrency: 3, memberLimitPerHour: 25, answered_by: "install" }),
             target({ id: "bot-5", name: "Moderation helper for the returns and warranty chat", engine: "claude", model: "opus", effort: "high", concurrency: 4, answered_by: "install" }),
@@ -1560,6 +1582,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           relayRow({ id: "relay-2", origin: "https://second-relay.example", name: "Second relay", description: "", paused: true, targets: [target({ engine: "claude", model: "sonnet" })] }),
         ],
         pending: [],
+        reviewDestination: { targetName: "Support bot", installationOwner: true },
         status: [
           { id: "relay-1", state: { state: "polling", lastOutcome: "answered", lastOutcomeAt: iso(240), lastProgress: { targetId: "bot-1", label: "Reading the last messages in the thread", at: iso(300) } }, running: { "bot-1": 1, "bot-2": 0, "bot-3": 0, "bot-4": 2, "bot-5": 4, "bot-6": 0 } },
           { id: "relay-2", state: { state: "paused", lastOutcome: "declined:no_capacity", lastOutcomeAt: iso(7_200), lastProgress: null }, running: { "bot-1": 0 } },
@@ -1571,6 +1594,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           relayRow({ id: "relay-2", origin: "https://second-relay.example", name: "Second relay", description: "", targets: [target({ engine: "claude", model: "sonnet", answered_by: "install" })] }),
         ],
         pending: [],
+        reviewDestination: { targetName: "Support bot", installationOwner: false },
         status: [
           { id: "relay-1", state: { state: "credential_rejected", lastOutcome: "failed:agent_error", lastOutcomeAt: iso(3_600), lastProgress: null }, running: { "bot-1": 0 } },
           { id: "relay-2", state: { state: "unreachable", lastOutcome: "answered", lastOutcomeAt: iso(1_800), lastProgress: null }, running: { "bot-1": 0 } },
@@ -1779,14 +1803,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       schemaVersion: 1, snapshotSeq: (snapshotReads += 1), retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
       sessions: [{
         conversationId: SEAT_NOISE !== null ? files[0]!.conversationId : "conversation_running", sessionKey: { engine: SEAT_NOISE !== null || CONTEXT_MODE !== null ? files[0]!.engine : "claude", sessionId: "running-session" }, hostKind: MENU_STATE === "compact" ? "codex-app-server" : (SEAT_NOISE !== null || CONTEXT_MODE !== null) && files[0]!.engine === "codex" ? "codex-app-server" : "claude-broker", host: "hosted",
-        turn: CONTEXT_MODE !== null ? evidence.contextTurn : queueRecovery ? "idle" : "running", provenance: "structured", revision: 1, attentionIds: [],
+        turn: CONTEXT_MODE !== null ? evidence.contextTurn : queueRecovery || SEAT_IDLE !== null ? "idle" : "running", provenance: "structured", revision: 1, attentionIds: [],
         recentReceipts: CONTEXT_MODE !== null ? evidence.contextReceipts : [], accountId: ACCOUNT,
         parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: SEAT_NOISE !== null ? files[0]!.path : RUNNING_PATH,
         capabilities: CONTEXT_MODE !== null
           ? { steer: true, structuredAttention: true, ...(CONTEXT_MODE === "noinject" ? {} : { inject: true }) }
           : { steer: false, structuredAttention: true },
-        activeTurnId: CONTEXT_MODE !== null ? (evidence.contextTurn === "running" ? "turn-1" : null) : queueRecovery ? null : "turn-1", pendingReconfigure: null,
-      }],
+        activeTurnId: CONTEXT_MODE !== null ? (evidence.contextTurn === "running" ? "turn-1" : null) : queueRecovery || SEAT_IDLE !== null ? null : "turn-1", pendingReconfigure: null,
+      }, ...(SEAT_HOST !== null && SEAT_PATH ? [{
+        conversationId: idOf(SEAT_PATH), sessionKey: { engine: "claude", sessionId: "board-seat-session" }, hostKind: "claude-broker", host: "hosted",
+        turn: SEAT_HOST_IDLE === null ? "running" : "idle", provenance: "structured", revision: 1, attentionIds: [],
+        recentReceipts: [], accountId: ACCOUNT, parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: SEAT_PATH,
+        capabilities: { steer: false, structuredAttention: true }, activeTurnId: SEAT_HOST_IDLE === null ? "turn-1" : null, pendingReconfigure: null,
+      }] : [])],
       attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [], deployments: [],
     });
   }

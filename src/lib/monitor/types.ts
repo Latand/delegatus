@@ -222,6 +222,8 @@ export type SeatTickWakeReasonKind =
       check, once per wait and seat; the operator sees it only once the seat
       escalates it. */
   | "worker-ask"
+  /** A Cleaner completion awaits a delivered wake receipt. */
+  | "disk-cleaner"
   /** Free space on a volume Delegatus writes to fell below the warning
       threshold: once per pressure episode, without waiting for the interval. */
   | "disk-pressure";
@@ -243,6 +245,7 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "deploy-settled",
   "permission-request",
   "worker-ask",
+  "disk-cleaner",
   "disk-pressure",
 ];
 
@@ -306,7 +309,7 @@ export interface SeatTickItem {
   manifestLine?: string;
   /** Only on a `deploy` line (#2063): the settled deployment as the ledger
       records it. `id` is its deployment id. */
-  maintenance?: { runId: string };
+  maintenance?: { runId: string; page: number; pages: number };
   deploy?: { deploymentId: string; phase: string; sha: string; error: string | null };
 }
 
@@ -618,6 +621,7 @@ export interface SeatTickOwnLaneInput {
 
 export interface SeatTickAgendaInput {
   asks: readonly SeatTickWorkerAskInput[];
+  pauseWaitingTasks?: Readonly<Record<string, readonly string[]>>;
   forms: { rows: import("@/lib/attention/needsYouRead").NeedsYouRow[]; count: number; routedToSeat?: number };
 }
 export interface SeatTickFormPage {
@@ -1024,6 +1028,8 @@ export interface SeatTickOutstandingWake {
       here: an attempt still unresolved one wake interval later is put on the
       board. It ends nothing — an unresolved attempt keeps its identity. */
   preparedAt?: string;
+  /** Complete host ledger prefix observed before this wake was admitted. */
+  responseStart?: import("./seatWakeResponse").WakeResponseStart;
   /** The attention timestamp was synthesized from first observation. */
   preparationTimeUnknown?: true;
   /** The reservation guard rechecks this token. Expired callers are revoked
@@ -1215,6 +1221,8 @@ export interface SeatTickProjectState {
   checkErrorAlarmVersion?: number;
   catchUpProgress?: Omit<SeatTickCatchUp, "pending"> | null;
   lastWakeAt: string | null;
+  /** Task-page cadence. Legacy rows use lastWakeAt until the next landing. */
+  lastTaskWakeAt?: string;
   lastWakeReasons: SeatTickWakeReasonKind[];
   /** Consecutive wakes carrying this reason that changed nothing. */
   wakesWithoutChange: Partial<Record<SeatTickWakeReasonKind, number>>;
@@ -1410,9 +1418,11 @@ export interface SeatTickSeatOwnedLane {
 export interface SeatTickWorkerAskInput {
   /** The route key: changes whenever the wait does. */
   key: string;
-  /** The conversation id (or transcript path) that asked, or the lane id. */
+  /** The conversation id (or transcript path), lane id or task id. */
   id: string;
   label: string;
+  /** Waiting tasks carried by this task or lane line. */
+  waitingTaskIds?: readonly string[];
   /** Original wait time, used for oldest-first detail selection. */
   sinceMs?: number | null;
   /** The board's seat-owned lane, also carried when its detail was shown. */
@@ -1438,6 +1448,7 @@ export interface SeatTickCheckInput {
       (docs/design/attention-auto-resolve.md), each with the line that says
       what was asked and how to answer it. Absent reads as none. */
   workerAsks?: readonly SeatTickWorkerAskInput[];
+  pauseWaitingTasks?: SeatTickAgendaInput["pauseWaitingTasks"];
   /** False when the source failed or was skipped. Omitted sources read as
       empty; an unreadable source cannot prove a catch-up agenda complete. */
   workerAsksObserved?: boolean;
@@ -1534,6 +1545,8 @@ export interface SeatTickCard {
   ref: string;
   kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "check-errors" | "mcp-unavailable" | "auth-failed" | "auto-rotation" | "host-recovery" | "disk-pressure";
   detail: string;
+  /** Update a disk warning with the cleaner's durable completion report. */
+  cleanupReport?: boolean;
   /**
    * Whether the condition still holds.
    *

@@ -22,8 +22,10 @@ import { currentMcpHttpCaller, runWithMcpCallerResolution } from "./callerContex
 
 export const assertWorkspaceMcpCall = assertWorkspaceExecution;
 
-function denied(): never {
-  throw new McpToolRefusal("workspace access denied", { code: "workspace_forbidden", retryable: false });
+const NATIVE_PREPARATION_MS = 5_000;
+
+function denied(check: string): never {
+  throw new McpToolRefusal(`workspace access denied (${check})`, { code: "workspace_forbidden", retryable: false, check });
 }
 
 // Closed vocabulary: new installation-wide tools cannot accidentally widen a
@@ -38,7 +40,10 @@ const PROJECT_TOOLS = new Set([
 ]);
 // A project's seat keeps the Telegram grant on its record under member reach
 // (`seatHoldsTelegramGrant`), with the chats the agent route serves any caller.
-const SEAT_TELEGRAM_TOOLS = new Set(["telegram_bot_send", "telegram_bot_send_media", "telegram_bot_send_document", "telegram_bot_chats", "telegram_bot_messages"]);
+const SEAT_TELEGRAM_TOOLS = new Set([
+  "telegram_bot_send", "telegram_bot_send_media", "telegram_bot_send_document",
+  "telegram_bot_chats", "telegram_bot_messages", "telegram_bot_reactions", "telegram_bot_set_reaction",
+]);
 // These reach a Viewer route that applies the workspace fence itself to the
 // caller's forwarded capability, so the route judges their arguments.
 const ROUTE_FENCED_TOOLS = new Set(["publish_prototype_review", "read_prototype_review"]);
@@ -58,7 +63,7 @@ export function workspaceGuardedBindings(bindings: McpToolBindings): McpToolBind
 export function withWorkspaceMcpFence(
   service: McpToolService,
   dependencies: ViewerMcpDomainDependencies,
-  prepareNativeCaller?: () => Promise<void>,
+  prepareNativeCaller?: (signal?: AbortSignal) => Promise<void>,
 ): McpToolService {
   return { async callTool(tool, input, context) {
     // The native proof must be in scope before resolving the caller, just as it
@@ -67,18 +72,30 @@ export function withWorkspaceMcpFence(
       const { nativeCallerProof, ...args } = input;
       const caller = currentMcpHttpCaller();
       if (prepareNativeCaller && (!caller || caller.nativePeer)) {
-        try { await prepareNativeCaller(); }
-        catch { /* The verifier will assess whether caller evidence is available. */ }
+        const remaining = context?.deadlineAt === undefined ? Infinity : context.deadlineAt - Date.now();
+        // Leave time for caller verification and a reply before executor expiry.
+        const budget = Math.min(NATIVE_PREPARATION_MS, Math.floor(remaining / 2));
+        if (budget > 0) {
+          const timeout = AbortSignal.timeout(budget);
+          const signal = context?.signal ? AbortSignal.any([context.signal, timeout]) : timeout;
+          try { await prepareNativeCaller(signal); }
+          catch { /* The verifier will assess whether caller evidence is available. */ }
+        }
+        context?.signal?.throwIfAborted();
       }
       return runWithNativeCallProof(nativeCallerProof, tool, args, () => this.callTool(tool, args, context));
     }
-    const refuse = () => ({ ok: false as const, toolName: tool, clientRequestId: typeof input.clientRequestId === "string" ? input.clientRequestId : null,
-      replayed: false, code: "workspace_forbidden", error: "workspace access denied", retryable: false });
+    const refuse = (check: string, retryable = false) => ({ ok: false as const, toolName: tool, clientRequestId: typeof input.clientRequestId === "string" ? input.clientRequestId : null,
+      replayed: false, code: "workspace_forbidden", error: `workspace access denied (${check})`, retryable, details: { check, retryable } });
     const boardRead = tool === "list_tasks" || tool === "list_pipelines";
     try {
+      if (ROUTE_FENCED_TOOLS.has(tool)) {
+        const replay = await service.replayTool?.(tool, input);
+        if (replay) return replay;
+      }
       const store = existingTeamStore();
       const authority = dependencies.attentionAuthority();
-      if (authority.kind === "unidentified" && ["capability-unresolved", "capability-conflict"].includes(authority.admission?.reason ?? "")) denied();
+      if (authority.kind === "unidentified" && ["capability-unresolved", "capability-conflict"].includes(authority.admission?.reason ?? "")) denied("caller");
       const callerId = authority.kind === "root" || authority.kind === "worker" ? authority.conversationId : null;
       const lookup = dependencies.workspaceConversation ?? ((id: string) => {
         const current = dependencies.registrySnapshot();
@@ -101,10 +118,10 @@ export function withWorkspaceMcpFence(
         const currentId = current.kind === "worker" || current.kind === "root" ? current.conversationId : null;
         if (current.kind !== authority.kind || currentId !== callerId
           || conversationProject(callerId ?? "") !== project
-          || JSON.stringify(conversationWorkspacePrincipal(lookup, callerId)) !== principalIdentity) denied();
+          || JSON.stringify(conversationWorkspacePrincipal(lookup, callerId)) !== principalIdentity) denied("board-caller");
         if (principal) {
           const currentAccess = workspacePrincipalAccess(principal);
-          if (!currentAccess(project) || !responseProjects.every(currentAccess)) denied();
+          if (!currentAccess(project) || !responseProjects.every(currentAccess)) denied("board-project");
         }
         boardCaller?.assert();
       });
@@ -120,15 +137,15 @@ export function withWorkspaceMcpFence(
         assertBoardCaller();
         return result;
       }
-      if (!store) denied();
+      if (!store) denied("team-store");
       const seatTelegram = SEAT_TELEGRAM_TOOLS.has(tool);
-      if (!PROJECT_TOOLS.has(tool) && !seatTelegram && !ROUTE_FENCED_TOOLS.has(tool)) denied();
-      if (tool === "leave_lesson" && (input.rewrite || (input.lesson as { scope?: string } | undefined)?.scope === "machine")) denied();
+      if (!PROJECT_TOOLS.has(tool) && !seatTelegram && !ROUTE_FENCED_TOOLS.has(tool)) denied("tool");
+      if (tool === "leave_lesson" && (input.rewrite || (input.lesson as { scope?: string } | undefined)?.scope === "machine")) denied("lesson-scope");
       let allowed = workspacePrincipalAccess(principal);
       // Arguments of these tools name chats and files, never project identities,
       // so the identity pass skips them. The result scan below still runs.
       const delegated = !PROJECT_TOOLS.has(tool);
-      const granted = () => { if (seatTelegram && !seatHoldsTelegramGrant(callerId, store, lookup)) denied(); };
+      const granted = () => { if (seatTelegram && !seatHoldsTelegramGrant(callerId, store, lookup)) denied("telegram-grant"); };
       granted();
       const allowedProjects = workspaceDirectory(store).workspaces.find(workspace => workspace.id === principal.workspaceId)?.projects ?? [];
       const args = { ...input };
@@ -140,12 +157,12 @@ export function withWorkspaceMcpFence(
           && typeof (value as { project?: unknown }).project === "string" && typeof (value as { name?: unknown }).name === "string"
           && allowed((value as { project: string }).project));
         const candidates = Array.isArray(details.candidateNames) ? details.candidateNames : [];
-        if (details.code === "ambiguous_project" && !candidates.every(permitted)) denied();
+        if (details.code === "ambiguous_project" && !candidates.every(permitted)) denied("board-project");
         const names = candidates.filter(permitted);
         const matches = (Array.isArray(details.closeMatches) ? details.closeMatches : []).filter(permitted);
         responseProjects.push(...names.map(row => row.project), ...matches.map(row => row.project));
         // Rebuild both channels, including refusals returned by the inner service.
-        return { ...refuse(), code: String(details.code),
+        return { ...refuse("board-project"), code: String(details.code),
           error: details.code === "ambiguous_project" ? `ambiguous project: ${names.map(row => row.name).join(", ")}`
             : `no such project; ${matches.length ? `close matches: ${matches.map(row => row.name).join(", ")}` : "no close matches"}`,
           details: { code: details.code, retryable: false,
@@ -165,7 +182,8 @@ export function withWorkspaceMcpFence(
       if (boardRead && typeof args.project === "string" && !args.project.trim()) args.project = project;
       if (COLLECTIONS.has(tool) && !args.project) args.project = project;
       const aliasesUnchanged = boardRead ? captureBoardAliasProof(named, typeof args.project === "string" ? args.project : "", aliases, aliasSnapshot.displayNames, dependencies, accepted) : undefined;
-      const checks: (() => string | null | undefined)[] = [() => project];
+      const checks: { name: string; project: () => string | null | undefined }[] = [{ name: "caller-project", project: () => project }];
+      const add = (name: string, project: () => string | null | undefined) => checks.push({ name, project });
       const task = (id: string) => {
         const source = dependencies.taskSelectionSource?.();
         return source ? source.read(id)?.project : (dependencies.listTaskRecords?.() ?? dependencies.loadTasks()).find(row => row.id === id)?.project;
@@ -176,7 +194,7 @@ export function withWorkspaceMcpFence(
         return dependencies.readPipelineRecord ? dependencies.readPipelineRecord(id)?.project
           : (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines).find(row => row.id === id)?.project;
       };
-      if (tool === "stage_report" || tool === "leave_lesson") checks.push(() => {
+      if (tool === "stage_report" || tool === "leave_lesson") add("stage-assignment", () => {
         const held = (dependencies.listPipelineRecords?.() ?? dependencies.getPipelines().pipelines)
           .filter(row => row.runs.some(run => run.attempts.some(attempt => attempt.conversationId === callerId)));
         return held.every(row => allowed(row.project)) ? project : null;
@@ -188,7 +206,7 @@ export function withWorkspaceMcpFence(
             check("conversationId", ref.conversationId);
             for (const task of ref.tasks ?? []) check("taskId", task.id);
           }
-          else denied();
+          else denied("selected-context");
           return;
         }
         const identity = ["project", "expectedProject", "projectId", "cwd", "repoDir", "flowId"].includes(key)
@@ -196,46 +214,47 @@ export function withWorkspaceMcpFence(
           || key === "ids" && ["list_tasks", "list_pipelines"].includes(tool);
         if (identity && value != null && typeof value !== "string") {
           const list = ["paths", "taskIds", "ids", "finishesTask"].includes(key) && Array.isArray(value);
-          if (!list && !(key === "finishesTask" && typeof value === "boolean")) denied();
+          if (!list && !(key === "finishesTask" && typeof value === "boolean")) denied(`argument:${key}`);
         }
         if (Array.isArray(value)) { for (const item of value) check(key, item); return; }
         if (value && typeof value === "object") { for (const [field, item] of Object.entries(value)) check(field, item); return; }
         if (typeof value !== "string" || !value) return;
-        if (key === "project" || key === "expectedProject" || key === "projectId") checks.push(() => canonicalProject(value));
-        if (CONVERSATIONS.has(key)) checks.push(() => conversationProject(value));
-        if (TASKS.has(key) || key === "ids" && tool === "list_tasks") checks.push(() => task(value));
-        if (PIPELINES.has(key) || key === "ids" && tool === "list_pipelines") checks.push(() => pipeline(value));
-        if (key === "flowId") checks.push(() => dependencies.getFlowsWithPresets().flows.find(row => row.id === value)?.project);
+        if (key === "project" || key === "expectedProject" || key === "projectId") add(`argument:${key}`, () => canonicalProject(value));
+        if (CONVERSATIONS.has(key)) add(`argument:${key}`, () => conversationProject(value));
+        if (TASKS.has(key) || key === "ids" && tool === "list_tasks") add(`argument:${key}`, () => task(value));
+        if (PIPELINES.has(key) || key === "ids" && tool === "list_pipelines") add(`argument:${key}`, () => pipeline(value));
+        if (key === "flowId") add("argument:flowId", () => dependencies.getFlowsWithPresets().flows.find(row => row.id === value)?.project);
         if (["cwd", "repoDir"].includes(key)) {
           const lexical = path.resolve(value === "~" || value.startsWith("~/") ? path.join(os.homedir(), value.slice(1)) : value);
-          checks.push(() => projectForCwd(lexical), () => { try { return projectForCwd(fs.realpathSync(lexical)); } catch { return null; } });
+          add(`path:${key}`, () => projectForCwd(lexical));
+          add(`realpath:${key}`, () => { try { return projectForCwd(fs.realpathSync(lexical)); } catch { return null; } });
         }
       };
       if (!delegated) for (const [key, value] of Object.entries(args)) check(key, value);
       // Implicit selection, global operations and unkeyed receipt/report reads
       // cannot acquire project authority from a neighbouring permitted argument.
       if (["get_conversation", "conversation_messages", "conversation_deliverability", "send_message", "conversation_action", "conversation_migration"].includes(tool)
-        && !(tool === "conversation_action" && Array.isArray(args.targets)) && !["conversationId", "transcriptPath", "path", "selectedContext"].some(key => args[key])) denied();
+        && !(tool === "conversation_action" && Array.isArray(args.targets)) && !["conversationId", "transcriptPath", "path", "selectedContext"].some(key => args[key])) denied("conversation-target");
       if (tool === "message_receipt") {
         const operationId = typeof args.operationId === "string" ? args.operationId : "";
         const progress = () => readDeliveryProgress([operationId]).get(operationId);
-        checks.push(() => { const id = progress()?.conversationId; return id ? conversationProject(id) : null; });
+        add("message-receipt-target", () => { const id = progress()?.conversationId; return id ? conversationProject(id) : null; });
       }
-      if (args.machine || ["bridge_report", "bridge_directive"].includes(tool) && (args.seq !== undefined || args.ref !== undefined)) denied();
-      if (tool === "conversation_action" && ["kill-target", "compact-all"].includes(String(args.action))) denied();
+      if (args.machine || ["bridge_report", "bridge_directive"].includes(tool) && (args.seq !== undefined || args.ref !== undefined)) denied("installation-target");
+      if (tool === "conversation_action" && ["kill-target", "compact-all"].includes(String(args.action))) denied("installation-action");
       const assert = () => {
         if (boardRead) {
           assertBoardCaller();
-          if (!aliasesUnchanged?.()) denied();
+          if (!aliasesUnchanged?.()) denied("board-alias");
         }
         allowed = workspacePrincipalAccess(principal);
-        if (!checks.every(check => allowed(check()))) denied();
+        for (const check of checks) if (!allowed(check.project())) denied(check.name);
         const targetEngine = typeof args.conversationId === "string" ? lookup(args.conversationId)?.engine : null;
         const engine = targetEngine ?? args.engine;
         for (const key of ["account", "accountId", "targetAccountId"]) if (typeof args[key] === "string" && (engine === "claude" || engine === "codex")) {
           const targetProject = typeof args.conversationId === "string" ? conversationProject(args.conversationId) : project;
           const pool = allowedAccountIdsForProject(typeof args.project === "string" ? args.project : targetProject, engine);
-          if (!pool || !pool.includes(args[key] as string)) denied();
+          if (!pool || !pool.includes(args[key] as string)) denied(`account:${key}`);
         }
       };
       assert();
@@ -260,7 +279,7 @@ export function withWorkspaceMcpFence(
         return value;
       };
       let boardRefusal: ReturnType<typeof projectRefusal> | undefined;
-      return await runWithWorkspaceExecution(project => { assert(); if (project !== undefined && !allowed(project)) denied(); }, async () => {
+      return await runWithWorkspaceExecution(project => { assert(); if (project !== undefined && !allowed(project)) denied("execution-project"); }, async () => {
         const result = await service.callTool(tool, args, { ...context,
           ...(boardRead ? { resolvedBoardProject: typeof args.project === "string" ? args.project : undefined,
             assertCaller() { context?.assertCaller?.(); assert(); } } : {}),
@@ -278,7 +297,7 @@ export function withWorkspaceMcpFence(
             const scope = answer.projectScope as { resolved?: string } | undefined;
             // The outer fence discards an unscoped search fallback wholesale.
             if (!scope?.resolved) return;
-            if (!allowed(scope.resolved)) denied();
+            if (!allowed(scope.resolved)) denied("response-scope");
           }
           // A shortened foreign key can collide with an allowed key, including
           // an Unassigned project absent from the workspace directory. Judge
@@ -287,7 +306,7 @@ export function withWorkspaceMcpFence(
           const visit = (value: unknown): void => {
             if (!value || typeof value !== "object" || seen.has(value)) return;
             seen.add(value);
-            if (typeof (value as { project?: unknown }).project === "string" && !allowed((value as { project: string }).project)) denied();
+            if (typeof (value as { project?: unknown }).project === "string" && !allowed((value as { project: string }).project)) denied("response-project");
             // A record's agent author names the sender's project as a label. It
             // is no row of that project; the compact answer withholds it below.
             for (const [key, item] of Object.entries(value)) if (key !== "author") visit(item);
@@ -308,17 +327,17 @@ export function withWorkspaceMcpFence(
           return { ...result, stats: undefined, items: (result.items as Record<string, unknown>[]).filter(row => answerProject(String(row.project))).map(row => ({ ...row, alsoIn: undefined, duplicateCount: undefined })) };
         }
         const answer = result.ok ? projectAnswer(result) : result;
-        return answer === undefined ? refuse() : answer as typeof result;
+        return answer === undefined ? refuse("response-project") : answer as typeof result;
       });
     } catch (error) {
-      if (error instanceof McpToolRefusal && error.details.code === "workspace_forbidden") return refuse();
+      if (error instanceof McpToolRefusal && error.details.code === "workspace_forbidden") return refuse(String(error.details.check ?? "binding"));
       if (boardRead && error instanceof McpToolRefusal && ["orchestrator_seat_revoked", "orchestrator_seat_authority_unavailable",
         "caller_unidentified", "project_scope_refused", "cross_project_refused"].includes(String(error.details.code))) {
         const code = String(error.details.code), retryable = error.details.retryable === true;
-        return { ...refuse(), code, retryable, error: "board caller authority refused the read", details: { code, retryable } };
+        return { ...refuse("board-caller"), code, retryable, error: "board caller authority refused the read", details: { code, retryable } };
       }
       // A broken authority store cannot silently restore installation reach.
-      return { ...refuse(), code: "workspace_unavailable", error: "workspace authority is unavailable", retryable: true };
+      return { ...refuse("authority-store", true), code: "workspace_unavailable", error: "workspace authority is unavailable" };
     }
   } };
 }

@@ -2,9 +2,10 @@
 
 For a Linux checkout supervised by a user systemd service, run the committed
 `scripts/deploy-checkout.py`. Python 3, Bun, Git, systemd and `ss` are required.
-The procedure publishes a prepared release, then stops and starts one
-explicitly named service. Capture comes from the target release's read-only
-census; post-switch stage reconciliation uses read-only MCP tools.
+The procedure publishes a prepared release and asks the launcher to relaunch
+in place when the named service already runs in its configured CPU slice.
+Capture comes from the target release's read-only census. Post-switch stage
+reconciliation uses read-only MCP tools.
 
 Build the exact approved target in its release directory first. Create that
 directory as a worktree of the install checkout
@@ -31,7 +32,7 @@ Create a private JSON plan (`chmod 600`) outside the repository. Its fields are:
 | `verificationFile` | Private build and both rehearsal verdicts |
 | `tokenFile` | Existing service environment file with `DELEGATUS_TOKEN` or `LLV_TOKEN` |
 | `bun` | Absolute path of the verified Bun interpreter |
-| `unit` | The single user service approved for the stop and start |
+| `unit` | The single user service approved for the switch |
 
 All filesystem paths in the private plan must be absolute. Set `LLV_STATE_DIR`
 to exactly its `stateDir`; there is no default state lookup. The bootstrap's
@@ -59,6 +60,13 @@ procedure kills and reaps its census child at the remaining deadline and caps
 stdout at 4 MiB. A missing owner, folded live owner, unreadable or projected
 tail, failed store read, or more than 200 live owners refuses publication.
 The census refreshes immediately before the stop under the same bound.
+
+The refresh includes busy standalone mergers with a durable role, current
+native generation and verified host and writer identities. The switch writes
+these observations to the private `checkout-mergers.json` inventory before
+submitting the service stop. Pipeline merger attempts keep their existing
+controller ownership. The post-switch verdict accounts for each captured
+standalone conversation, including one first seen in the final refresh.
 
 The baseline MCP health read remains mandatory and unchanged. A baseline
 readiness refusal prints only the failing check names (`http`,
@@ -126,15 +134,15 @@ still running after three seconds is terminated, then killed, each process by
 its start identity, never the group as a whole. A successor leads its own
 group and records its own helpers, so it is left alone.
 
-Validate without publishing or restarting:
+Validate before publication:
 
 ```sh
 LLV_STATE_DIR="$DEPLOY_STATE" python3 scripts/deploy-checkout.py \
   --config "$DEPLOY_PLAN" --preflight
 ```
 
-After the operator approves publication of that exact target and restart of
-that named unit, start the detached procedure:
+Preflight prints the selected switch mode. After the operator approves
+switching that named unit to the exact target, start the detached procedure:
 
 ```sh
 LLV_STATE_DIR="$DEPLOY_STATE" python3 scripts/deploy-checkout.py \
@@ -146,7 +154,7 @@ the private run directory and starts a separate `delegatus-deploy-<run>.service`
 user unit, outside the installation service. The worker checks its own unit's
 MainPID and holds an installation lock before mutation. The launching agent
 may finish its turn immediately. Scheduling success only acknowledges the
-start; read the durable verdict after the restart.
+start of the worker. Read the durable verdict after the switch.
 
 The start prints the verdict location. Each run writes under
 `$LLV_STATE_DIR/deploy-verdicts/<run>/`:
@@ -174,7 +182,7 @@ The shared serving-health probe reads `/api/tasks?project=`. An empty project
 cannot own tasks, so this loads the task store and answers a bounded
 `tasks` list even when the full board exceeds 4 MiB. A non-200 response,
 invalid JSON or missing task list still refuses health. Every HTTP read keeps
-the 4 MiB body cap. This check applies to deploy and restart preflight,
+the 4 MiB body cap. This check applies to checkout preflight,
 detached-worker health samples, and the serving-health preflight that also
 checks `/api/self-update` for automatic-update conflicts and serving identity.
 
@@ -184,8 +192,10 @@ publication attempt, 21 samples run with a 15 second wait between samples.
 Each sample has one 180 second monotonic budget for read-only evidence.
 It includes worker startup, queued host reads, transport, retries, and teardown.
 Up to four workers reconcile protected hosts, each with its own MCP connection.
-Each lane tries its assigned hosts before retrying unresolved reads, with 10
-seconds between retry rounds. At least the final third of the budget is
+Each sampling pass checks a captured host identity once. Stages from the same
+pipeline share its observed attempts in one lane. A lane reads the host census
+at most once, then checks each replacement PID and start identity independently.
+An unresolved read remains unknown until the next fresh sample. At least the final third of the budget is
 reserved for fresh serving evidence and, on the last sample, the cut inventory.
 Time saved by earlier stage reads is available to the serving checks. Replies
 that miss their cutoff expire and the worker's process group is stopped.
@@ -224,6 +234,24 @@ A terminal host-loss error without a live replacement
 records lost work. A stage's ordinary completed verdict also counts as completed
 work when its host exits.
 
+A surviving standalone merger keeps its original work. The replacement Viewer
+checks the captured host and writer before recording a continuation. It leaves
+live or unverifiable custody in place and checks again with the existing
+one-to-30-second startup backoff. The checkout recovery window is 15 minutes
+from the pre-stop capture. An explicit stop, a settled turn or a finished batch
+ends the recovery without starting a replacement. If the engine closed its
+turn while reporting the interruption, the pre-stop lock on the captured
+unfinished batch still calls for reconciliation, even if the driver removed
+the lock during shutdown.
+
+The existing interruption and delivery journals own the one continuation to
+the original conversation. A recovered switch outcome needs both a live host
+and the matching delivered continuation. Missing proof leaves the outcome
+unknown in the switch verdict. The continuation directs the original merger
+to verify its retained batch and each external operation before acting.
+Missing gate receipts grant no pass. Live, uncertain and terminal operations
+stay with their existing custody and evidence.
+
 Every serving sample also checks placement: the unit must configure
 `Slice=delegatus.slice`, its `ControlGroup` must be that slice's own
 `ControlGroup` followed by the unit name, and the launcher, Viewer and runtime
@@ -238,12 +266,46 @@ records both as `weight` and `effectiveWeight`. The baseline is exempt in
 preflight, because reaching the required slice is what
 the switch does.
 
+## In-place relaunch
+
+A correctly placed service switches through the launcher's relaunch request.
+Preflight requires relaunch support in the serving launcher and target release,
+a healthy idle launcher, the expected request path, a different target, and
+no competing request, trial, active apply or automatic admission.
+
+The worker captures the old Viewer, runtime host and Viewer-group helpers by
+PID and start identity. It publishes the pointer and creates one exclusive
+operator relaunch request with the exact prior pointer text for launcher
+rollback. It holds termination across those two writes. The launcher owns
+the remainder of the transition and its result. The worker leaves an
+unsettled request in the launcher's custody.
+
+During the switch, the worker samples the service's active state, jobs,
+MainPID and start identity, restart count, invocation ID and last inactive
+timestamp. It compares the original host scopes and verifies the captured
+generation has exited after a successful relaunch. The verdict's `relaunch`
+record includes the launcher result, unit polls, scope invocations, generation
+survivors, and per-host identity, helper and exit-writer observations.
+
+Bound scopes keep their existing dependencies. Codex socket hosts can serve
+the same turn after the replacement Viewer reconnects. Viewer-owned stdio
+hosts such as Claude still receive EOF when the old Viewer exits. Their
+original waiter writes the exit receipt and the existing reconciliation
+reports the stage outcome. An older launcher without relaunch support is
+refused in a placed service. A failure or timeout preserves the launcher's
+result and pointer evidence for review. A launcher crash that restarts the
+unit fails the continuity checks.
+
+## CPU slice relocation
+
 A plain restart cannot move the service into another slice. systemd keeps a
 populated cgroup's path, and a start reuses an existing path. One old
 descendant alive while the restart cleans up therefore pins the replacement in
 the old path. On 2026-10-11 the replacement configured `Slice=delegatus.slice`
 and `CPUWeight=1000` and still ran in `app.slice/delegatus.service`, with no
-`cpu.weight` there. The switch therefore runs in this order:
+`cpu.weight` there. Relocation is only for a service outside the expected
+slice. It is refused while a bound unit is active or in transition, both at
+preflight and immediately before stop. An admitted relocation runs in this order:
 
 1. Immediately before the stop, it captures the serving generation's members
    of the service cgroup by PID and start identity. These are the recorded
@@ -265,8 +327,8 @@ and `CPUWeight=1000` and still ran in `app.slice/delegatus.service`, with no
    at the pidfd validation before each signal. A chain that reaches an agent
    host, the user manager, a reused PID or an exited process proves nothing.
    Proven wait owners and drains are excluded from capture and retirement.
-   Bound hosts end before the service stops; their waiters write their own
-   receipts and drains finish at FIFO EOF within the existing release wait.
+   Waiters for hosts that exit independently write their own receipts, and
+   their drains finish at FIFO EOF.
    A lingering custody member remains unproven with reason `protected helper
    custody; host ended` or `protected helper custody; host alive`, keeping the
    `unproven-survivors` outcome and failed placement. Nothing is migrated.
@@ -299,7 +361,7 @@ the old and new cgroup, the survivors with their proof, the signals sent, the
 start attempts, the placement read after the start (`placed` or `failed`) and
 an outcome. The outcomes are `released`,
 `released-after-retirement`, `unproven-survivors`, `not-released`,
-`stop-incomplete` and `start-failed`. The `Verdict:` line names the outcome.
+`stop-refused`, `stop-incomplete` and `start-failed`. The `Verdict:` line names the outcome.
 Survivor arguments appear only in the private run directory; standard error
 never carries them. An unproven survivor leaves the service running in its old
 path: the placement check fails the verdict and the survivors list names what
@@ -310,9 +372,11 @@ processes serving the target, successful HTTP/socket/MCP/service/placement
 checks and protected work preserved or recovered. `fail` names unhealthy or different
 serving processes or confirmed lost work. `needs_decision` names unresolved
 protected work or a preflight refusal. Earlier submission or read errors cannot
-override a healthy recovered final state. The procedure issues one stop and
-one start, retries only a refused start, and performs no automatic rollback; the verdict supplies evidence for the next
-approved action.
+override a healthy recovered final state. Relaunch also requires a matching
+successful launcher receipt and continuous unit and host custody evidence.
+The launcher owns any in-place rollback. Relocation owns start recovery
+after a submitted stop. The verdict supplies evidence for the next approved
+action.
 
 An already-running worker keeps its installation lock and recovery obligation
 until it completes. Its run status, log and verdict can be read while the next
@@ -340,6 +404,21 @@ The tests inject processes, clock, commands and transports. Their registry and
 verdict files use temporary private roots. Transport checks use an HTTP stub
 bound to port 0 and synthetic MCP children owned by the test. They never invoke
 systemd, connect to the installation, or change operator state.
+
+The opt-in systemd rehearsal runs the checkout CLI as a detached worker with
+the real launcher fixture, private user units and scopes, native waiter and
+drain processes, and a socket reconnect. It uses the manager's default scope
+stop timeout of 90 seconds and takes several minutes. Run it through the same
+wrapper from a checkout containing both the baseline and candidate revisions:
+
+```sh
+LLV_CHECKOUT_SYSTEMD_TEST=1 LLV_EVIDENCE_DIR="$evidence_dir" \
+  bash scripts/gate-slot.sh bun test ./scripts/deploy-checkout.systemd.test.ts
+```
+
+The evidence includes the tested script digest, process and writer
+identities, scope invocations, manager journal, and receipts from the
+switch, rollback, old stop path, explicit stop and crash controls.
 
 
 ## Launcher readiness evidence

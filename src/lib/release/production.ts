@@ -12,15 +12,24 @@ import { pipelineDeliveryLookup } from "@/lib/pipelines/store";
 import { indexMergeSuccessors, mergeSuccessor } from "@/lib/pipelines/mergeSuccessor";
 import { isReleasePublishStage } from "@/lib/pipelines/releaseTagPolicy";
 import { createPipelineFromRequest } from "@/lib/pipelines/engine";
+import { releaseCutFromTag } from "../../../scripts/release-verify";
+import { readReleaseProject } from "./store";
 import type { CreatePipelineRequest, Pipeline } from "@/lib/pipelines/types";
 import { MAX_STAGE_PROMPT_LENGTH } from "@/lib/pipelines/limits";
 import { productionReleaseController, releaseRequestDigest, ReleaseValidationRefusal, type ReleasePorts } from "./run";
 import { releaseCut, type ReleaseChange, type ReleaseDeployment } from "./policy";
 import { RELEASE_DEFAULTS } from "./settings";
 import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
+import { proveForgeRelease, type MergedReleasePr } from "./mergeProof";
 
+const commitSha = /^[a-f0-9]{40}$/;
 async function command(file: string, args: string[], cwd?: string): Promise<string> {
   return (await promisify(execFile)(file, args, { cwd, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
+}
+function compareReleaseVersions(a: string, b: string): number {
+  const left = a.slice(1).split(".").map(BigInt), right = b.slice(1).split(".").map(BigInt);
+  for (let index = 0; index < 3; index++) if (left[index] !== right[index]) return left[index]! > right[index]! ? -1 : 1;
+  return 0;
 }
 /** Fetch before selecting: version order is independent of tagger clocks and backfills. */
 export async function latestReleaseTag(repoDir: string, run: typeof command = command) {
@@ -28,11 +37,23 @@ export async function latestReleaseTag(repoDir: string, run: typeof command = co
   return readLatestReleaseTag(repoDir, run);
 }
 async function readLatestReleaseTag(repoDir: string, run: typeof command) {
-  const lines = (await run("git", ["for-each-ref", "--sort=-version:refname", "--format=%(refname:short) %(creatordate:unix)", "refs/tags/v*"], repoDir)).split("\n");
-  const line = lines.find(line => /^v\d+\.\d+\.\d+ \d+$/.test(line));
-  if (!line) throw new Error("release waits for an existing version tag");
-  const [name, timestamp] = line.split(" ");
-  return { name, version: name.slice(1), at: Number(timestamp) * 1000 };
+  const refs = (await run("git", ["ls-remote", "--tags", "--refs", "origin"], repoDir)).split("\n")
+    .map(line => line.trim().split(/\s+/)).filter(parts => parts.length === 2 && /^refs\/tags\/v\d+\.\d+\.\d+$/.test(parts[1]!));
+  refs.sort((a, b) => compareReleaseVersions(a[1]!.slice("refs/tags/".length), b[1]!.slice("refs/tags/".length)));
+  const [object, ref] = refs[0] ?? [];
+  if (!object || !ref) throw new Error("release waits for an existing version tag");
+  const name = ref.slice("refs/tags/".length);
+  const local = await run("git", ["rev-parse", ref], repoDir);
+  if (local !== object) throw new Error("latest remote release tag is missing or differs locally");
+  const annotation = await run("git", ["cat-file", "-p", ref], repoDir);
+  const boundary = releaseCutFromTag(annotation);
+  if (boundary) {
+    try { await run("git", ["merge-base", "--is-ancestor", boundary, `${name}^{commit}`], repoDir); }
+    catch { throw new Error("latest remote release tag has an invalid changelog boundary"); }
+  }
+  const timestamp = await run("git", ["for-each-ref", "--format=%(creatordate:unix)", ref], repoDir);
+  if (!/^\d+$/.test(timestamp)) throw new Error("latest remote release tag date is unreadable");
+  return { name, version: name.slice(1), at: Number(timestamp) * 1000, boundary };
 }
 async function releasePackage(revision: string, git: (...args: string[]) => Promise<string>): Promise<{ name: string; version: string } | null> {
   if (!await git("ls-tree", "--name-only", revision, "--", "package.json")) return null;
@@ -47,13 +68,38 @@ async function registryHasRelease(packageName: string, version: string): Promise
   if (!response.ok && response.status !== 404) throw new Error("release registry status is unreadable");
   return response.ok && (await response.json() as { version?: string }).version === version;
 }
+export async function mergedReleasePullRequests(repo: string, version: string, main: string, git: (...args: string[]) => Promise<string>, run: typeof command = command): Promise<MergedReleasePr[]> {
+  if (!/^\d+\.\d+\.\d+$/.test(version)) return [];
+  try {
+    const rows = JSON.parse(await run("gh", ["pr", "list", "--repo", repo, "--state", "merged", "--base", "main", "--search", `Release ${version}`, "--limit", "100", "--json", "title,number,baseRefName,mergedAt,headRefOid,headRefName,isCrossRepository,mergeCommit,body"])) as {
+      title?: string; number?: number; baseRefName?: string; mergedAt?: string | null; headRefOid?: string;
+      headRefName?: string; isCrossRepository?: boolean; body?: string; mergeCommit?: { oid?: string } | null;
+    }[];
+    const candidates: MergedReleasePr[] = [];
+    for (const row of rows) {
+      const commit = row.mergeCommit?.oid;
+      if (row.title !== `Release ${version}` || row.baseRefName !== "main" || !row.mergedAt
+        || !Number.isSafeInteger(row.number) || row.number! < 1 || !commitSha.test(commit ?? "")) continue;
+      try {
+        await git("merge-base", "--is-ancestor", commit!, main);
+        const pkg = await releasePackage(commit!, git);
+        if (pkg?.version === version) candidates.push({ commit: commit!, pr: row.number!, head: row.headRefOid,
+          branch: row.headRefName, body: row.body, sameRepository: row.isCrossRepository === false });
+      } catch { /* A stale or unreadable PR is not recovery evidence. */ }
+    }
+    return candidates;
+  } catch { return []; }
+}
 /** A tag alone cannot prove publication, and an unrelated cut cannot supersede this run. */
 export async function supersedingReleaseTag(repoDir: string, saved: { cut: string; lastTag: string }, run: typeof command = command,
   published: typeof registryHasRelease = registryHasRelease): Promise<string | null> {
   const old = saved.lastTag.slice(1).split(".").map(BigInt);
   await run("git", ["fetch", "origin", "main", "--tags"], repoDir);
-  const lines = (await run("git", ["for-each-ref", "--sort=-version:refname", "--format=%(refname:short)", "refs/tags/v*"], repoDir)).split("\n");
-  const candidates = lines.filter(name => /^v\d+\.\d+\.\d+$/.test(name)).filter(name => {
+  const lines = (await run("git", ["ls-remote", "--tags", "--refs", "origin"], repoDir)).split("\n")
+    .map(line => line.trim().split(/\s+/)).filter(parts => parts.length === 2 && /^refs\/tags\/v\d+\.\d+\.\d+$/.test(parts[1]!))
+    .map(([object, ref]) => ({ object: object!, name: ref!.slice("refs/tags/".length) }))
+    .sort((a, b) => compareReleaseVersions(a.name, b.name));
+  const candidates = lines.filter(({ name }) => {
     const next = name.slice(1).split(".").map(BigInt);
     for (let index = 0; index < old.length; index++) {
       if (next[index] !== old[index]) return next[index] > old[index];
@@ -63,8 +109,9 @@ export async function supersedingReleaseTag(repoDir: string, saved: { cut: strin
   if (candidates.length === 0) return null;
   const pkg = await releasePackage("origin/main", (...args) => run("git", args, repoDir));
   if (!pkg) return null;
-  for (const name of candidates) {
+  for (const { name, object } of candidates) {
     const version = name.slice(1);
+    if (await run("git", ["rev-parse", `refs/tags/${name}`], repoDir) !== object) continue;
     const revision = await run("git", ["rev-parse", `${name}^{commit}`], repoDir);
     try { await run("git", ["merge-base", "--is-ancestor", saved.cut, revision], repoDir); }
     catch (error) { if ((error as { code?: number }).code === 1) continue; throw error; }
@@ -72,10 +119,10 @@ export async function supersedingReleaseTag(repoDir: string, saved: { cut: strin
   }
   return null;
 }
-export async function changesSinceRelease(repoDir: string, tag: string, cut: string, run: typeof command = command): Promise<ReleaseChange[]> {
+export async function changesSinceRelease(repoDir: string, tag: string, cut: string, run: typeof command = command, boundary?: string | null): Promise<ReleaseChange[]> {
   const git = (...args: string[]) => run("git", args, repoDir);
   const changes: ReleaseChange[] = [];
-  const commits = (await git("log", "--first-parent", "--format=%H %s", `${tag}..${cut}`)).split("\n").filter(Boolean);
+  const commits = (await git("log", "--first-parent", "--format=%H %s", `${boundary || tag}..${cut}`)).split("\n").filter(Boolean);
   for (const line of commits) {
     const space = line.indexOf(" "); const sha = line.slice(0, space); const subject = line.slice(space + 1);
     if (!/(\(#\d+\)|Merge pull request #\d+)/.test(subject)) continue;
@@ -174,16 +221,17 @@ export async function createReleasePipeline(request: CreatePipelineRequest, key:
   throw new Error(result.error ?? "release pipeline refused");
 }
 export function releaseControllerForSources(sources: SeatTickSources) {
-  // Use the merge queue's delivery proof for both handoff and in-flight checks.
   // The original preparation can retain a cancelled merge after ownership moves.
   const lanes = () => {
     const current = sources.pipelines();
     let all: readonly Pipeline[] | undefined;
     let owners: ReturnType<typeof indexMergeSuccessors> | undefined;
+    let deliveryOwners: ReturnType<typeof indexMergeSuccessors> | undefined;
     const retained = () => all ??= [...current, ...sources.archivedPipelines()];
-    const resolve = (lane: Pipeline): Pipeline => {
-      if (lane.state !== "completed" || !lane.delivery || lane.delivery.active) return lane;
-      const successor = mergeSuccessor(lane, owners ??= indexMergeSuccessors(retained()));
+    const resolve = (lane: Pipeline, forForgeProof = false): Pipeline => {
+      if ((lane.state !== "completed" && lane.state !== "closed") || !lane.delivery || lane.delivery.active) return lane;
+      const successor = mergeSuccessor(lane.state === "closed" ? { ...lane, state: "completed" } : lane,
+        forForgeProof ? (deliveryOwners ??= indexMergeSuccessors(retained(), true)) : (owners ??= indexMergeSuccessors(retained())));
       return successor && canonicalOrchestratorProject(successor.project) === canonicalOrchestratorProject(lane.project)
         ? successor : lane;
     };
@@ -215,16 +263,61 @@ export function releaseControllerForSources(sources: SeatTickSources) {
         if (d.phase === "succeeded" && d.terminal && await isAncestor(d.revision, main)) deployments.push({ revision: d.revision, at: Date.parse(d.updatedAt) });
       }
       const cut = frozenCut ? { revision: frozenCut } : await releaseCut(deployments, isAncestor, sources.now());
-      const changes = cut ? await changesSinceRelease(repoDir, name, cut.revision) : [];
+      const changes = cut ? await changesSinceRelease(repoDir, name, cut.revision, command, tag.boundary) : [];
       const registryHasTag = await registryHasRelease(pkg.name, version);
       const repo = await command("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], repoDir);
       const snapshot = lanes();
-      return { repoDir, src, policy: { now: sources.now(), enabled: setting.enabled, requested: false,
+      const releasePrs = pkg.version !== version ? await mergedReleasePullRequests(repo, pkg.version, main, git) : [];
+      let recovery: { commit: string; pr: number; cut: string | null } | null = null;
+      let recoveryForPipeline: string | undefined;
+      if (releasePrs.length) {
+        const { live, history } = readReleaseProject(project);
+        const recorded = [live, ...history];
+        const proven: { commit: string; pr: number; cut: string; preparationId: string }[] = [];
+        for (const runRecord of recorded) {
+          if (!runRecord || runRecord.lastTag !== name || !commitSha.test(runRecord.cut)) continue;
+          const preparationId = runRecord.releasePipelineId ?? runRecord.pipelineId;
+          const preparation = preparationId && snapshot.find(preparationId);
+          if (!preparation || canonicalOrchestratorProject(preparation.project) !== project) continue;
+          const receipt = snapshot.resolve(preparation).merge;
+          for (const releasePr of releasePrs) {
+            const directHandoff = receipt?.state === "merged" && receipt.by === "auto-merge"
+              && receipt.prNumber === releasePr.pr && receipt.mergeCommit === releasePr.commit
+              && receipt.repository?.toLowerCase() === repo.toLowerCase();
+            if (directHandoff) {
+              try { await git("merge-base", "--is-ancestor", runRecord.cut, main); }
+              catch { continue; }
+              proven.push({ ...releasePr, cut: runRecord.cut, preparationId: preparation.id });
+              continue;
+            }
+            // Outside-merge receipts are written by the watcher after GitHub
+            // reports MERGED, so they require the same content proof as a
+            // receipt-free batch landing.
+            const owner = snapshot.resolve(preparation, true);
+            if (await proveForgeRelease(repoDir, repo, main, releasePr, runRecord.cut, project, preparation, owner)) {
+              proven.push({ ...releasePr, cut: runRecord.cut, preparationId: preparation.id });
+            }
+          }
+        }
+        const unique = [...new Map(proven.map(proof => [`${proof.pr}:${proof.cut}:${proof.preparationId}`, proof])).values()];
+        if (unique.length === 1) {
+          const proof = unique[0]!;
+          recovery = { commit: proof.commit, pr: proof.pr, cut: proof.cut };
+          recoveryForPipeline = proof.preparationId;
+        } else if (releasePrs.length === 1) {
+          // Preserve the named missing-cut blocker when GitHub has a candidate
+          // but no recorded preparation proves it.
+          recovery = { commit: releasePrs[0]!.commit, pr: releasePrs[0]!.pr, cut: null };
+        }
+      }
+      return { repoDir, src, recovery, recoveryForPipeline, policy: { now: sources.now(), enabled: setting.enabled, requested: false,
         tickEnabled: effectiveSeatTickSettings(sources.settings(project), sources.now(), SEAT_TICK_WAKE_INTERVAL_MS).enabled,
         mergeEnabled: mergeOnReviewEnabled(project),
         live: snapshot.current.some(p => {
-          if (canonicalOrchestratorProject(p.project) !== project || p.state === "closed"
+          if (canonicalOrchestratorProject(p.project) !== project || p.state === "closed" || p.id === recoveryForPipeline
             || !/^(Release\s+(Delegatus|\d)|Реліз\s)/i.test(p.task)) return false;
+          const releaseLane = p.stages.some(stage => stage.id === "prepare" || isReleasePublishStage(stage));
+          if (!releaseLane) return false;
           const publishOnly = !p.stages.some(stage => stage.id === "prepare")
             && p.stages.some(stage => isReleasePublishStage(stage));
           // A completed publisher is terminal; consulting the merge-successor
@@ -236,9 +329,11 @@ export function releaseControllerForSources(sources: SeatTickSources) {
           const lane = snapshot.resolve(p);
           const published = !lane.stages.some(stage => stage.id === "prepare")
             && lane.stages.some(stage => isReleasePublishStage(stage));
+          if (lane.state === "completed" && !published && !lane.delivery?.active
+            && (lane.merge?.state === "cancelled" || lane.merge?.state === "blocked" && lane.merge.reason === "the PR was closed")) return false;
           return !(lane.state === "completed" && (lane.merge?.state === "merged" || published));
         }),
-        mainVersion: pkg.version, lastTag: { name, version, at }, registryHasTag,
+        mainVersion: pkg.version, lastTag: { name, version, at, boundary: tag.boundary }, registryHasTag,
         checks: await requiredReleaseChecks(repo, [main, ...(cut ? [cut.revision] : [])]), hold: null,
         draining: !!activeDrain(), deploying: ledger?.state === "ok" && !!ledger.value[0] && !ledger.value[0].terminal,
         tools: (await captureTools(repoDir)).missing, minChanges: setting.minChanges, minGapHours: setting.minGapHours, changes, deployments, isAncestor } };
@@ -269,7 +364,10 @@ export function releaseControllerForSources(sources: SeatTickSources) {
       const snapshot = lanes();
       const saved = snapshot.find(id);
       const lane = saved ? snapshot.resolve(saved) : null;
-      return lane ? { state: lane.state, merged: lane.merge?.state === "merged",
+      return lane ? { state: lane.state, merged: lane.merge?.state === "merged", mergeBy: lane.merge?.by,
+        mergeActive: !!lane.delivery?.active || !!lane.merge && (["queued", "checking", "waiting-checks", "updating", "merging", "refreshing"].includes(lane.merge.state)),
+        mergeCancelled: lane.merge?.state === "cancelled",
+        mergeStopReason: lane.merge?.state === "blocked" && lane.merge.reason === "the PR was closed" ? lane.merge.reason : null,
         mergeCommit: lane.merge?.mergeCommit, pr: lane.merge?.prNumber,
         declined: !!lane.decisionAnswers?.some(a => a.stageId === "publish" && /не випускати|decline|do not release/i.test(a.answer)) } : null;
     },

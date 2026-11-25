@@ -11,7 +11,10 @@ import { claudeAccountForSpawn, UnknownClaudeAccountError, type ClaudeAccount } 
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { agentRegistry } from "@/lib/agent/registry";
 import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
+import { activeAntigravityAccountId, listAntigravityAccounts } from "@/lib/accounts/antigravity";
 import { readCopilotTranscriptLimits } from "@/lib/limits/copilotTranscriptLimits";
+import { antigravityObservationEventSec, isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
+import { readAntigravityTranscriptLimits, type AntigravityTranscriptLimitRead } from "@/lib/limits/antigravityTranscriptLimits";
 import type { AppServerRateLimits } from "@/lib/accounts/codexAppServer";
 import { redactAppServerDetail } from "@/lib/accounts/codexAppServerProtocol";
 import { statePath } from "@/lib/configDir";
@@ -437,6 +440,63 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
   const copilotAccountId = activeCopilotAccountId();
   const copilotAccount = listCopilotAccounts().find((account) => account.id === copilotAccountId) ?? null;
   const copilotRead = copilotAccount ? readCopilotTranscriptLimits(copilotAccount.sessionStateDir) : null;
+  const antigravityAccountId = activeAntigravityAccountId();
+  const antigravityAccount = listAntigravityAccounts().find((account) => account.id === antigravityAccountId) ?? null;
+  const antigravityTranscriptRead: AntigravityTranscriptLimitRead | null = (() => {
+    if (!antigravityAccount) return null;
+    try {
+      return readAntigravityTranscriptLimits(antigravityAccount.sessionsDir, now, { tierName: antigravityAccount.tierName });
+    } catch {
+      return { data: null, reason: "antigravity transcript read error", source: "unavailable" };
+    }
+  })();
+  const antigravityRawObs = (() => {
+    if (!antigravityAccount) return null;
+    try {
+      return agentRegistry().quotaObservations("antigravity").find((row) => row.accountId === antigravityAccount.id) ?? null;
+    } catch {
+      return null;
+    }
+  })();
+  const antigravityRead = (() => {
+    const nowSec = Math.floor(now / 1000);
+    const transcriptData = antigravityTranscriptRead?.data ?? null;
+    const transcriptEventSec = typeof antigravityTranscriptRead?.lastQuotaEventAt === "number"
+      && Number.isFinite(antigravityTranscriptRead.lastQuotaEventAt)
+      && antigravityTranscriptRead.lastQuotaEventAt > 0
+      ? Math.floor(antigravityTranscriptRead.lastQuotaEventAt)
+      : transcriptData
+        ? (transcriptData.capturedAt ?? transcriptData.session?.observedAt ?? null)
+        : null;
+    // Compare by the durable quota-event watermark (`lastQuotaEventAt` / `capturedAt`)
+    // BEFORE checking whether either window is still active, independently of
+    // `provenance.reason`, so empty polls never erase a stored active window while
+    // a strictly newer confirmed reset overrides any older stored active window.
+    const obsWatermarkSec = antigravityObservationEventSec(antigravityRawObs);
+    const obsActive = Boolean(
+      antigravityRawObs?.limits
+      && isAntigravitySessionWindowActive(antigravityRawObs.limits.session, nowSec),
+    );
+    const observedData = obsActive ? antigravityRawObs!.limits! : null;
+
+    if (transcriptData) {
+      const transcriptAt = transcriptEventSec ?? 0;
+      if (obsWatermarkSec !== null && obsWatermarkSec > transcriptAt) {
+        if (observedData) {
+          return { data: observedData, source: antigravityRawObs!.provenance.source, reason: antigravityRawObs!.provenance.reason };
+        }
+        return { data: null, source: "unavailable" as const, reason: "antigravity quota reset window elapsed" };
+      }
+      return antigravityTranscriptRead!;
+    }
+    if (transcriptEventSec !== null && (obsWatermarkSec === null || transcriptEventSec > obsWatermarkSec)) {
+      return antigravityTranscriptRead!;
+    }
+    if (observedData) {
+      return { data: observedData, source: antigravityRawObs!.provenance.source, reason: antigravityRawObs!.provenance.reason };
+    }
+    return antigravityTranscriptRead;
+  })();
   const [resolvedClaude, resolvedCodex] = await Promise.all([
     !claudeAccount
       ? Promise.resolve(noAccountRead("Claude"))
@@ -454,12 +514,17 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
     codexAccountId: codexAccount?.id ?? null,
     copilot: copilotRead?.data ?? null,
     copilotAccountId: copilotAccount?.id ?? null,
+    antigravity: antigravityRead?.data ?? null,
+    antigravityAccountId: antigravityAccount?.id ?? null,
     provenance: {
       claude: resolvedClaude.meta,
       codex: resolvedCodex.meta,
       copilot: copilotRead
         ? { source: copilotRead.source, reason: copilotRead.reason, staleSince: null }
         : { source: "unavailable", reason: "no active Copilot account", staleSince: null },
+      antigravity: antigravityRead
+        ? { source: antigravityRead.source, reason: antigravityRead.reason, staleSince: null }
+        : { source: "unavailable", reason: "no active Antigravity account", staleSince: null },
     },
     staleSince: resolvedClaude.meta.staleSince ?? resolvedCodex.meta.staleSince,
   };

@@ -132,11 +132,16 @@
    bar of a leaf without a board (`[data-project-bar]`) draws the same group. */
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > button { border-radius: 0; }
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] :is(button, [data-bar-recent] > button):not(:focus-visible) { box-shadow: none; }
+/* A segment's focus ring is drawn inside it (the `.or-seg .or-jump` rule's way), so the focused segment
+   stays within the group's outline and height; an outer ring would frame one segment as a box of its own. */
+:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] :is(button, [data-bar-recent] > button):focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-accent) 70%, transparent); }
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > * + button,
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > * + [data-bar-recent] > button { border-left-width: 0; }
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > button:first-child { border-top-left-radius: var(--radius-control); border-bottom-left-radius: var(--radius-control); }
 :is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > button:last-child { border-top-right-radius: var(--radius-control); border-bottom-right-radius: var(--radius-control); }
-:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > [data-bar-recent] > button { border-radius: 0 var(--radius-control) var(--radius-control) 0; }
+:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > [data-bar-recent] > button { border-radius: 0; }
+/* The recent agents' clock closes the group only when nothing follows it (a leaf bar has no chart). */
+:is(.kb .bar[data-bar="project"], [data-project-bar]) [data-bar-group="panels"] > [data-bar-recent]:last-child > button { border-top-right-radius: var(--radius-control); border-bottom-right-radius: var(--radius-control); }
 /* A menu opened from the row owns the space under it: the «Needs you» toast hangs at the window's
    right edge 8 px under the row, so while the «+» menu, the Hidden tray, ⋯, the filter or the
    recent agents' list is open the toast is not drawn, and it returns when the menu closes. */
@@ -294,9 +299,11 @@
 /* Keep promoted glyphs paused while their temporary text layers are released. */
 .kb [data-layout-animating="content"].mglyph::before,
 .kb [data-layout-animating="content"] .mglyph::before,
-.kb [data-layout-animating="content"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase),
+.kb [data-layout-animating="content"] .emark-neon::before,
+.kb [data-layout-animating="content"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase, .mg-neon-gas),
 .kb [data-column-text-held] .mglyph::before,
-.kb [data-column-text-held] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase),
+.kb [data-column-text-held] .emark-neon::before,
+.kb [data-column-text-held] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase, .mg-neon-gas),
 .kb :is([data-layout-animating="content"], [data-column-text-held]) :is(.pedge, .pdot, .pmark),
 .kb :is([data-layout-animating="content"], [data-column-text-held]) .pmark::before { animation-play-state: paused !important; }
 .kb .column.wide {
@@ -428,7 +435,8 @@
    `*` or attribute-substring subject, which would restyle every element on the
    page when the attribute is set (a 4000-element recalculation). */
 [data-card-drag] .mglyph[data-live="1"]::before,
-[data-card-drag] .mglyph[data-live="1"] :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase),
+[data-card-drag] .emark-neon[data-live="1"]::before,
+[data-card-drag] :is(.mglyph[data-live="1"], .emark-neon[data-live="1"]) :is(.mg-turn, .mg-breathe, .mg-write, .mg-sway, .mg-tilt, .mg-corona, .mg-core, .mg-spin, .mg-phase, .mg-neon-gas),
 [data-card-drag] .animate-pulse,
 [data-card-drag] .motion-safe\:animate-pulse,
 [data-card-drag] .pedge.live,
@@ -666,6 +674,7 @@
 .pident { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--color-muted); }
 .pident[data-engine="claude"] { color: var(--color-claude-mark); }
 .pident[data-engine="codex"] { color: var(--color-codex-mark); }
+.pident[data-engine="antigravity"] { color: var(--color-antigravity-mark); }
 .pident[data-identity="configured"] { color: var(--color-muted); }
 .pident .imodel { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-secondary); min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iplace { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; font-size: var(--text-caption); font-weight: 500; color: var(--color-secondary); white-space: nowrap; }
@@ -1848,6 +1857,11 @@
 .kb :is(.pane, .stage-detail) .ch-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: var(--text-label); color: var(--color-secondary); min-width: 0; }
 .kb .pane .ch-meta.pane-id { margin-top: -2px; }
 .kb .pane .ch-meta .spacer { flex: 1; }
+/* A conversation's identity row in a pane: the chips share the width and wrap
+   among themselves, the controls keep their own group at the row's end. */
+.kb .pane .ch-meta.pane-id:has(> .ch-controls) { flex-wrap: nowrap; align-items: flex-start; }
+.kb .pane .ch-meta.pane-id > .ch-chips { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.kb .pane .ch-meta.pane-id > .ch-controls { flex: none; display: flex; align-items: center; gap: 4px 6px; }
 
 .kb .pane .ch-model { font: 600 var(--text-caption) ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--color-primary); background: var(--surface-well); border-radius: 999px; padding: 2px 7px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .kb .stage-detail :is(.ch-stage, .ch-ctx) { font-size: var(--text-caption); color: var(--color-muted); white-space: nowrap; }

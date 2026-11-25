@@ -1,4 +1,3 @@
-import { SUPPORTED_CODEX_VERSIONS } from "../src/lib/accounts/codexVersions";
 import { recordGateSandbox, releaseGateSandbox, retainGateSandbox } from "./gateSandboxRecords";
 import { gateTaskDiagnostics } from "./gate-tasks";
 import { AppServerCloudTransport, cloudCheckInputs, cloudRefusalLine, runCloudChecks } from "./cloud-checks";
@@ -6,199 +5,26 @@ import { cloudCheckConfig } from "./cloud-check-config";
 import { checkExecutionSettings } from "./cloud-check-settings";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { procBackend } from "../src/lib/proc";
+import { captureProcessIdentity, processIdentityMayOwn, processIdentityMayRun, type ProcessIdentity } from "../src/lib/processIdentity";
 import { closeSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
-import { ALWAYS_IN_SCOPE, changedSinceBase, executedPaths, platformScope, workflowEntries } from "./ci-platform-scope";
-import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
-import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
+import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget, reportCpuWait } from "../src/lib/runtime/cpuAdmissionBudget";
+import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, shellStartupFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 import { publicationCheckBinding, consumePublicationCheckReceipt, writePublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
-import { publicationDeadlineOnly } from "../src/lib/pipelines/publication";
+import { publicationDeadlineOnly, PUBLICATION_MEMORY_DEFERRAL } from "../src/lib/pipelines/publication";
 import { readSafeRegularFile } from "./privacy-safe-path";
+import { gatePlan, isTest, pinnedBunVersion, proseOnly, type Mode, type Step } from "./gate-plan";
+import { publicationMemoryBytes, samplePublicationRss, waitForPublicationMemory } from "./publication-memory";
 
-export type Mode = "pre-commit" | "pre-push";
-export interface Step {
-  name: string;
-  command: string[];
-  capped?: boolean;
-  isolated?: boolean;
-  pinned?: boolean;
-  codex?: string;
-  /** Passed after the optional Codex fixture path. */
-  selection?: string;
-  /** Consecutive steps with the same group run at once, under one phase marker. */
-  group?: string;
-  /** Steps in one lane run in order; different lanes overlap. */
-  lane?: string;
-  /** A check the hosted job also runs: stopped at a caller's deadline, it is
-      named as left to that job, never failed or dropped. */
-  deferrable?: boolean;
-}
-export interface PlanEnvironment {
-  base: string;
-  lintBase?: string;
-  existing: ReadonlySet<string>;
-  tests: readonly string[];
-  privacySelfTests?: readonly string[];
-  linux: boolean;
-  runtime: boolean;
-  native: boolean;
-  linuxTests: readonly string[];
-  runtimeTests: readonly string[];
-  codexVersions: readonly string[];
-}
-const isTest = (file: string) => /\.test\.[cm]?[jt]sx?$/.test(file) && !file.includes(".browser.test.");
-const lintable = (file: string) => /\.(?:ts|tsx|js|mjs|cjs)$/.test(file);
-/** Prose the compiler never reads. Anything else can change what it checks. */
-const proseOnly = (file: string) => /\.(?:md|mdx|txt)$/i.test(file);
-
-export const NATIVE_GROUP = "native Codex";
+export { discover, pinnedBunVersion, plan, NATIVE_GROUP, type Mode, type PlanEnvironment, type Step } from "./gate-plan";
 
 /** The cold full-project check needs headroom for generated Next validators. */
 export function viewerBuildEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...env, NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_RUNTIME_UI: "1",
     LLV_GATE_MEM: env.LLV_GATE_MEM ?? "14G" };
-}
-
-/** Pure planning: discovery and process execution happen outside this function. */
-export function plan(mode: Mode, changedFiles: readonly string[], env: PlanEnvironment): Step[] {
-  const files = changedFiles.filter(file => env.existing.has(file));
-  const steps: Step[] = [];
-  if (mode === "pre-commit") steps.push({ name: "staged whitespace", command: ["git", "diff", "--cached", "--check"] });
-  if (mode === "pre-push") {
-    steps.push({ name: "privacy", command: ["bun", "scripts/privacy-publication-gate.ts", "--base", env.base,
-      "--require-known-values", "--check-commits", "--added-lines"] });
-  }
-  // A push that changes nothing (a read-only stage, a branch that only trails
-  // main) has nothing a test could judge: whatever fails is already on main.
-  // Privacy still reads every commit the push carries.
-  if (mode === "pre-push" && changedFiles.length === 0) return steps;
-  // Runtime builds generate Next's route/page validators before checking the
-  // full project. Their build owns the single whole-program check.
-  if (mode === "pre-push" && !env.runtime && !changedFiles.every(proseOnly)) steps.push({ name: "types", command: ["bunx", "tsc", "--noEmit"], capped: true });
-  const supplyChainChanged = changedFiles.some(file => ["package.json", "bun.lock", "security/audit-allowlist.json", "scripts/supply-chain-check.ts", "scripts/audit-with-retry.sh", ".github/workflows/supply-chain.yml"].includes(file));
-  if (mode === "pre-push" && supplyChainChanged) {
-    // Install the candidate graph before any later checks execute against
-    // node_modules. The supply-chain script repeats a lockfile-only frozen
-    // check before it audits.
-    steps.splice(1, 0, { name: "frozen install", command: ["bun", "install", "--frozen-lockfile", "--ignore-scripts"], capped: true });
-  }
-  const lintFiles = files.filter(lintable).map(file => `./${file}`);
-  if (lintFiles.length) steps.push({ name: "eslint", command: ["bun", "scripts/eslint-changes.ts", "--base", env.lintBase ?? env.base, ...lintFiles], capped: mode === "pre-push" || lintFiles.length > 40 });
-  if (mode === "pre-commit") return steps;
-  const touched = new Set(env.privacySelfTests);
-  if (changedFiles.some(file => ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"].includes(file))) {
-    for (const test of env.tests) if (/^scripts\/(?:local-gate(?:\.(?:receipts|checkpoints|hooks|publication|transport|git|lint|native|binding|runtime|execution|groups|invalidation)|-tests(?:\.[^.]+)?)?|eslint-changes|gate-cache)\.test\.ts$/.test(test)) touched.add(test);
-  }
-  if (changedFiles.some(file => ["scripts/owned-runner.integration.fixture.ts", "scripts/owned-runner.cleanup.ts"].includes(file))) {
-    for (const test of env.tests) if (/^scripts\/owned-runner(?:\.[^.]+)+\.test\.ts$/.test(test)) touched.add(test);
-  }
-  if (changedFiles.includes("scripts/compiler-admission.fixture.ts")) {
-    for (const test of env.tests) if (/^scripts\/compiler-admission(?:\.[^.]+)?\.test\.ts$/.test(test)) touched.add(test);
-  }
-  if (changedFiles.includes("scripts/local-gate-tests.fixture.ts")) {
-    for (const test of env.tests) if (test.startsWith("scripts/local-gate-tests.") && isTest(test)) touched.add(test);
-  }
-  if (changedFiles.includes("scripts/local-gate-tests.ts") && env.tests.includes("scripts/local-gate.checkpoints.test.ts")) {
-    touched.add("scripts/local-gate.checkpoints.test.ts");
-  }
-  for (const file of files.filter(isTest)) touched.add(file);
-  for (const file of files.filter(lintable)) {
-    const stem = file.replace(/\.[^.]+$/, "");
-    for (const test of env.tests) if (test.startsWith(`${stem}.`) && isTest(test)) touched.add(test);
-  }
-  if (changedFiles.some(file => file.startsWith(".githooks/") || file === "scripts/gate-slot.sh")) {
-    for (const file of env.tests) if (/scripts\/(?:local-gate|gate-slot).*\.test\.ts$/.test(file)) touched.add(file);
-  }
-  // Both selections run the same per-file comparator against the same base.
-  if (env.linux) for (const file of env.linuxTests) touched.delete(file);
-  if (touched.size) steps.push({ name: "touched tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", env.base, ...[...touched].map(file => `./${file}`)], capped: true, isolated: true });
-  if (env.linux) {
-    steps.push({ name: "Linux backend", command: ["bun", "scripts/verify-platform-backend.ts", "--expect", "linux"], capped: true, isolated: true });
-    // The same verdict rules as touched tests: a platform test that already
-    // fails on the merge base is PRE-EXISTING and never blocks this push.
-    steps.push({ name: "Linux tests", command: ["bun", "scripts/local-gate-tests.ts", "--base", env.base, ...env.linuxTests.map(file => `./${file}`)], capped: true, isolated: true });
-  }
-  if (env.runtime) {
-    steps.push(
-      { name: "runtime verdict tests", command: ["bun", "test", ...env.runtimeTests.map(file => `./${file}`)], capped: true, isolated: true, pinned: true },
-      { name: "Viewer build", command: ["bun", "run", "build"], capped: true, isolated: true, pinned: true },
-      { name: "MCP size budgets", command: ["bun", "test", "./src/lib/mcp/answerSizes.test.ts"], capped: true, isolated: true, pinned: true },
-      { name: "Viewer runtime", command: ["bun", "scripts/verify-viewer-runtime.ts"], capped: true, isolated: true, pinned: true },
-      { name: "runtime host", command: ["bun", "scripts/verify-runtime-host.ts"], capped: true, isolated: true, pinned: true },
-      { name: "runtime negative controls", command: ["bun", "scripts/verify-bun-runtime-controls.ts"], capped: true, isolated: true, pinned: true },
-    );
-  }
-  if (env.native && env.codexVersions.length) {
-    // Only the engine files start the Codex executable, so only they run once
-    // per supported version. The shared contracts read no executable: one run
-    // judges them, and it is the long tail the hosted job can take.
-    const native = { command: ["bun", "scripts/verify-native-codex-runtime.ts"], capped: true, isolated: true, pinned: true, group: NATIVE_GROUP };
-    for (const version of env.codexVersions) steps.push({ ...native, name: `native Codex ${version}`, codex: version, selection: "--engine-only" });
-    steps.push({ ...native, name: "native Codex shared contracts", selection: "--shared-only", deferrable: true });
-  }
-  if (supplyChainChanged) {
-    steps.push({ name: "audit retry tests", command: ["bun", "test", "./scripts/audit-with-retry.test.ts", "./scripts/supply-chain-check.test.ts"], capped: true, isolated: true });
-    steps.push({ name: "supply chain", command: ["bun", "scripts/supply-chain-check.ts", "--base", env.base], capped: true });
-  }
-  for (const step of steps) {
-    if (["privacy", "frozen install"].includes(step.name)) continue;
-    step.lane = step.name === "types" || step.name === "eslint" ? "types and lint"
-      : ["touched tests", "Linux backend", "Linux tests"].includes(step.name) ? "tests"
-      : step.group === NATIVE_GROUP ? step.name
-      : ["audit retry tests", "supply chain"].includes(step.name) ? "supply chain" : "runtime";
-    step.group = "push checks";
-  }
-  return steps;
-}
-
-interface Workflow { jobs: Record<string, { steps: Array<{ name?: string; run?: string }>; strategy?: { matrix?: { codex?: string[] } } }> }
-function workflow(root: string, name: string): Workflow {
-  return Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows", name), "utf8")) as Workflow;
-}
-const jobSource = (job: Workflow["jobs"][string]) => job.steps.map(step => step.run ?? "").join("\n");
-function siblingTests(root: string, files: readonly string[]): string[] {
-  const tests = new Set<string>();
-  for (const dir of new Set(files.filter(lintable).map(file => path.dirname(file)))) {
-    if (!existsSync(path.join(root, dir))) continue;
-    for (const file of readdirSync(path.join(root, dir))) if (isTest(file)) tests.add(path.posix.join(dir, file));
-  }
-  return [...tests];
-}
-
-export function discover(root: string, base: string, files: readonly string[], mode: Mode = "pre-push"): PlanEnvironment {
-  const existing = new Set(files.filter(file => existsSync(path.join(root, file))));
-  const tests = siblingTests(root, [...files, "scripts/local-gate.ts"]);
-  const privacyTests = tests.filter(file => /^scripts\/privacy-.*\.test\.ts$/.test(file));
-  let privacySelfTests: string[] = [];
-  if (mode === "pre-push" && files.length && privacyTests.length) {
-    const directlyChanged = files.some(file => file.startsWith("scripts/privacy-") || file.startsWith("scripts/generate-privacy-") ||
-      file.startsWith("src/lib/privacy/") || [".github/workflows/privacy-publication.yml", ".github/workflows/privacy-tracker-audit.yml", ...ALWAYS_IN_SCOPE].includes(file));
-    // The same import and execution closure as the required hosted check.
-    if (directlyChanged) privacySelfTests = privacyTests;
-    else {
-      const inputs = executedPaths(root, [...privacyTests, "test-preload.ts"]);
-      if (files.some(file => inputs.has(file))) privacySelfTests = privacyTests;
-    }
-  }
-  const platformFile = ".github/workflows/platform-tests.yml";
-  const platform = workflow(root, "platform-tests.yml");
-  const bun = workflow(root, "bun-runtime.yml");
-  const runtimeEntries = workflowEntries(jobSource(bun.jobs["bun-runtime"]!));
-  const runtimeChanged = files.some(file => file === "Dockerfile" || file.startsWith("src/runtime-host/") || file.startsWith("bin/"));
-  return {
-    base, existing, tests, privacySelfTests,
-    // An empty diff is "run" to the CI scope, where skipping must be proven.
-    // Here it is proven: nothing changed, so no platform job has a subject.
-    linux: process.platform === "linux" && files.length > 0 && platformScope({ root, workflow: platformFile, prefixes: ["src/lib/proc/"], changed: files }).run,
-    runtime: runtimeChanged,
-    native: runtimeChanged,
-    linuxTests: workflowEntries(platform.jobs["windows-platform"]!.steps.find(step => step.name === "Platform tests")!.run!).filter(isTest),
-    runtimeTests: runtimeEntries.filter(isTest),
-    codexVersions: SUPPORTED_CODEX_VERSIONS,
-  };
 }
 
 /** A pipeline may inherit TMPDIR below live state/scratch. Nested runtime
@@ -228,9 +54,13 @@ export function createGateSandbox(
   }
 }
 
+export const ISOLATED_DIRECTORY_KEYS = ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR",
+  "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"] as const;
+
 /** Everything that might resolve state, including build imports, is sandboxed. */
 export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...inherited };
+  if (inherited.LLV_DOCKER_NSENTER_SHIMS === "1" || process.env.LLV_DOCKER_NSENTER_SHIMS === "1") env.LLV_DOCKER_NSENTER_SHIMS = "1";
   // Git exports these to hooks. Keeping them makes a fixture's `git -C`
   // operate on the pushing repository instead of the fixture repository.
   for (const key of [
@@ -244,7 +74,7 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
   // Preserve explicit slot/queue overrides through isolation. Leave the
   // default unset: gate-slot keeps its shared /var/tmp locks, while the CPU
   // queue remains in the same writable machine cache as the Viewer.
-  for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "LLV_STATE_DIR", "TMPDIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
+  for (const key of ISOLATED_DIRECTORY_KEYS) {
     env[key] = path.join(root, key.toLowerCase());
     mkdirSync(env[key]!, { recursive: true });
   }
@@ -295,27 +125,6 @@ function git(root: string, args: string[]): string {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.trim()}`);
   return result.stdout.trimEnd();
-}
-/** A pending merge includes published main history from its incoming parent.
- * Judge lint against that shared history; incoming feature errors remain new. */
-function preCommitComparisonBase(root: string): string {
-  const base = git(root, ["merge-base", "HEAD", "origin/main"]);
-  const pending = spawnSync("git", ["rev-parse", "--verify", "--quiet", "MERGE_HEAD^{commit}"], { cwd: root, encoding: "utf8" });
-  if (pending.status === 1) return base;
-  if (pending.status !== 0) throw new Error(`git merge parent failed: ${pending.stderr.trim()}`);
-  const parent = pending.stdout.trim();
-  // Ambiguous merge-parent output keeps the existing comparison.
-  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(parent)) return base;
-  const shared = spawnSync("git", ["merge-base", parent, "origin/main"], { cwd: root, encoding: "utf8" });
-  if (shared.status === 1) return base;
-  if (shared.status !== 0) throw new Error(`git incoming comparison failed: ${shared.stderr.trim()}`);
-  return shared.stdout.trim();
-}
-
-export function pinnedBunVersion(dockerfile: string): string {
-  const pins = new Set([...dockerfile.matchAll(/npm install -g bun@(\d+\.\d+\.\d+)/g)].map(match => match[1]!));
-  if (pins.size !== 1) throw new Error("Dockerfile must carry exactly one Bun pin");
-  return [...pins][0]!;
 }
 /** A cold cache installs under machine admission; its queue wait extends
     the execution deadline, while cancellation still stops the installer. */
@@ -417,12 +226,9 @@ function cgroupOf(pid: number | "self"): string | null {
   try { return readFileSync(`/proc/${pid}/cgroup`, "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3) ?? null; }
   catch { return null; }
 }
-/** Only ESRCH proves a process gone. /proc, where there is one, also tells a
-    zombie (exited, waiting to be reaped) from a running process; unreadable
-    metadata proves nothing, so the process counts as running. */
 function live(pid: number): boolean {
   try { process.kill(pid, 0); } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
-  try { return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return true; }
+  return process.platform !== "linux" || !procBackend.processExited(pid);
 }
 function procEntries(): number[] | null {
   try { return readdirSync("/proc").filter(name => /^\d+$/.test(name)).map(Number); } catch { return null; }
@@ -445,17 +251,21 @@ function ps(columns: string[], cleanup: Cleanup, environment = false): string[] 
 /** Every process that inherited this step's token, wherever it was reparented;
     null when no process table could be read. */
 function holders(token: string, cleanup: Cleanup): number[] | null {
+  const holds = (environment: string, separator: string) => {
+    const binding = `${separator}${STEP_TOKEN}=`;
+    const at = environment.indexOf(binding);
+    if (at < 0) return false;
+    const start = at + binding.length;
+    const end = environment.indexOf(separator, start);
+    return environment.slice(start, end < 0 ? undefined : end).split(",").includes(token);
+  };
   const entries = procEntries();
   if (!entries) {
-    const mark = ` ${STEP_TOKEN}=${token}`;
-    return ps(["pid", "command"], cleanup, true)?.flatMap(line => {
-      const at = line.indexOf(mark), end = line.charAt(at + mark.length);
-      return at >= 0 && (end === "" || end === " ") ? [Number(line.trim().split(/\s+/)[0])] : [];
-    }) ?? null;
+    return ps(["pid", "command"], cleanup, true)?.flatMap(line =>
+      holds(line, " ") ? [Number(line.trim().split(/\s+/)[0])] : []) ?? null;
   }
-  const mark = `\0${STEP_TOKEN}=${token}\0`;
   return entries.filter(pid => {
-    try { return `\0${readFileSync(`/proc/${pid}/environ`, "latin1")}`.includes(mark); } catch { return false; }
+    try { return holds(`\0${readFileSync(`/proc/${pid}/environ`, "latin1")}`, "\0"); } catch { return false; }
   });
 }
 function scopeMembers(scope: string): number[] {
@@ -498,7 +308,7 @@ function descendants(root: number, cleanup: Cleanup): number[] | null {
   for (let queue = [root]; queue.length;) for (const child of children.get(queue.shift()!) ?? []) { found.push(child); queue.push(child); }
   return found;
 }
-/** Each started step carries a token of its own in its environment. */
+/** Each started step carries its own token and those of its enclosing checks. */
 const STEP_TOKEN = "LLV_GATE_STEP";
 /** Stops the step this hook started: its process tree, every process that
     inherited its token, and every owned service or transient scope those run
@@ -516,6 +326,9 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
   const remember = (member: number) => {
     if (!signalled.has(member)) signalled.set(member, captureProcessIdentity(member));
   };
+  // Linux can prove that every thread has exited even before the parent reaps
+  // the PID. Keep the identity check elsewhere to avoid a per-PID ps probe.
+  const stillRunning = process.platform === "linux" ? processIdentityMayRun : processIdentityMayOwn;
   remember(pid);
   const cleanup: Cleanup = { ends: Date.now() + CLEANUP_MS, late: false };
   let blind = false;
@@ -542,7 +355,7 @@ async function stopStep(pid: number, token: string): Promise<string | null> {
     const inherited = holders(token, cleanup);
     if (!inherited) blind = true;
     for (const member of [...inherited ?? [], ...[...scopes].flatMap(scopeMembers)]) remember(member);
-    return [...signalled.values()].filter(identity => processIdentityStatus(identity) !== "dead").map(identity => identity.pid);
+    return [...signalled.values()].filter(identity => stillRunning(identity)).map(identity => identity.pid);
   };
   let survivors = left();
   for (let attempt = 1; survivors.length && Date.now() < cleanup.ends; attempt++) {
@@ -577,11 +390,12 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
   const started = Date.now();
   const fd = log ? openSync(log, "w") : undefined;
   const token = `${process.pid}-${started}-${Math.random().toString(36).slice(2)}`;
+  const ancestry = env[STEP_TOKEN] ? `${env[STEP_TOKEN]},${token}` : token;
   let stopping = false, cancelled = false, stopTimer: (() => void) | undefined, onCancel: (() => void) | undefined;
   const budget = cpuWaitBudget(env);
   try {
     const output = fd ?? (log === null ? "ignore" : "inherit");
-    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...budget.env, [STEP_TOKEN]: token,
+    const child = Bun.spawn({ cmd: command, cwd: root, env: { ...budget.env, [STEP_TOKEN]: ancestry,
       ...(Number.isFinite(until) ? { LLV_OWNED_RUN_TIMEOUT_MS: String(supervisorTimeoutMs(until, env)) } : {}),
     }, stdio: [fd === undefined && log !== null ? "inherit" : "ignore", output, output] });
     let stopped!: (leaked: string | null) => void;
@@ -646,6 +460,9 @@ export interface StepPasses { reused(step: Step, until?: number): boolean; passe
 /** The bytes and configuration every local check actually consumes. */
 export function gateInputSnapshot(root: string, base: string, steps: readonly Step[], env: NodeJS.ProcessEnv = process.env) {
   const checkEnv = checkEnvironment(env);
+  // The caller's paths never reach a local step. Its executor allocates them.
+  for (const key of ISOLATED_DIRECTORY_KEYS) delete checkEnv[key];
+  delete checkEnv.LLV_GATE_RUNNER;
   const toolRoot = path.resolve(import.meta.dir, "..");
   const toolFiles = gateToolFiles(toolRoot);
   let unavailableReason = "dirty worktree";
@@ -668,7 +485,7 @@ export function gateInputSnapshot(root: string, base: string, steps: readonly St
         ...["node_modules/.bun/lock", "node_modules/typescript/package.json", "node_modules/eslint/package.json"].map(file => path.join(root, file))];
       // Hash what the checks receive, never store its values. Execution roots,
       // deadlines and CPU tickets belong to a run, rather than its result.
-      const environment = environmentFingerprint(checkEnv);
+      const environment = fingerprint([environmentFingerprint(checkEnv), shellStartupFingerprint(root, env.BASH_ENV)]);
       const toolchain = [...tools.map(file => file ? fileFingerprint(file) : "missing"), ...toolFiles.map(file => fileFingerprint(path.join(toolRoot, file)))];
       const components = {
         head: fingerprint(head), tree: fingerprint(tree), base: fingerprint(base),
@@ -997,6 +814,28 @@ function publicationPrivacyFiles(env: NodeJS.ProcessEnv): Record<string, string>
 
 const independentSteps = ["types", "eslint", "touched tests", "Linux backend", "Linux tests"];
 
+function readGatePlanHandoff(serialized: string | undefined): { planId: string; steps: string[] } | undefined {
+  // Direct --admitted entry (including Cloud) can plan without a local parent.
+  if (serialized === undefined) return;
+  try {
+    const value = JSON.parse(serialized);
+    if (value.version === 1 && typeof value.planId === "string" && /^[a-f0-9]{64}$/.test(value.planId) &&
+      Array.isArray(value.steps) && value.steps.every((step: unknown) => typeof step === "string")) return value;
+  } catch { /* Refuse a damaged launch envelope before any member starts. */ }
+  throw new Error("invalid admitted publication plan envelope");
+}
+
+function publicationWorkerEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const worker: NodeJS.ProcessEnv = { ...env, NODE_OPTIONS: env.NODE_OPTIONS || "--max-old-space-size=11264" };
+  // Fix the worker locale before Python's namespace entry can add LC_CTYPE.
+  // Preserve explicit categories and the caller's effective non-C locale.
+  if (process.platform === "linux" && worker.LC_CTYPE === undefined) {
+    const lang = worker.LANG;
+    worker.LC_CTYPE = worker.LC_ALL || (lang && lang !== "C" && lang !== "POSIX" ? lang : "C.UTF-8");
+  }
+  return worker;
+}
+
 async function main(mode: Mode, admitted = false, publicationPrepare = false, requestedStep?: string): Promise<void> {
   if (requestedStep && (!independentSteps.includes(requestedStep) || publicationPrepare || process.env.LLV_GATE_PUBLICATION_RECEIPT || process.env.LLV_SKIP_HOOKS === "1"))
     throw new Error("check-step requires an independent publication step and cannot authorize transport");
@@ -1017,11 +856,17 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
     }
   };
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
-  if ((publicationPrepare || requestedStep) && process.env.LLV_GATE_SANDBOX_RECORD) {
-    // Git prepends its exec directory before invoking native hooks. Match it
-    // once the cleanup owner is present; the bootstrap re-enters below.
+  let planningEnv = process.env;
+  if (publicationPrepare || requestedStep) {
+    // Git prepends its exec directory even when PATH already starts with it.
+    // Name preparation's eventual environment before the owned runner starts.
     const prefix = git(root, ["--exec-path"]) + path.delimiter;
-    if (publicationPrepare || !process.env.PATH?.startsWith(prefix)) process.env.PATH = prefix + (process.env.PATH ?? "");
+    const effectivePath = prefix + (process.env.PATH ?? "");
+    if (publicationPrepare && !process.env.LLV_GATE_SANDBOX_RECORD) {
+      planningEnv = { ...process.env, PATH: effectivePath };
+    } else if (publicationPrepare || !process.env.PATH?.startsWith(prefix)) {
+      process.env.PATH = effectivePath;
+    }
   }
   let publishedTree: string | undefined;
   if (mode === "pre-push" && process.env.LLV_GATE_PUSH_HEAD && process.env.LLV_GATE_PUSH_HEAD !== git(root, ["rev-parse", "HEAD"])) {
@@ -1033,30 +878,25 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
     if (!sameTree || !onMain) throw new Error("pushed head differs from checkout");
     publishedTree = pushed;
   }
-  let base = mode === "pre-commit" ? preCommitComparisonBase(root) : "HEAD";
   const until = deadline?.at ?? Infinity;
   if (mode === "pre-push" && !admitted && !transport) {
     const fetch = await fetchMain(root, until, deadline ?? undefined);
     if (fetch === "failed") console.warn("pre-push: fetch failed; using the last origin/main (base resolution must still succeed)");
     if (fetch === "stopped") console.warn("pre-push: fetch stopped at the push deadline; using the last origin/main");
-    base = publishedTree ?? git(root, ["merge-base", "HEAD", "origin/main"]);
     const behind = Number(git(root, ["rev-list", "--count", "HEAD..origin/main"]));
     if (behind) console.warn(`pre-push: branch is ${behind} commit(s) behind origin/main; the hosted privacy gate may flag main-only commits. Merge origin/main before pushing.`);
   }
-  if (admitted || transport) base = publishedTree ?? git(root, ["merge-base", "HEAD", "origin/main"]);
-  const files = mode === "pre-commit"
-    ? git(root, ["diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"]).split("\0").filter(Boolean)
-    : [...new Set([
-      ...(publishedTree ? [] : changedSinceBase(root, base) ?? (() => { throw new Error("cannot read push diff"); })()),
-      ...git(root, ["diff", "--name-only", "-z"]).split("\0"),
-      ...git(root, ["diff", "--cached", "--name-only", "-z"]).split("\0"),
-      ...git(root, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"),
-    ].filter(Boolean))];
-  const context = discover(root, base, files, mode);
-  // Pre-commit privacy retains its staged-only base. ESLint compares against
-  // published main history present in the candidate, including a pending merge.
-  const privacyBase = mode === "pre-commit" ? "HEAD" : base;
-  const steps = plan(mode, files, { ...context, base: privacyBase, lintBase: base });
+  const handoff = admitted || process.env.LLV_GATE_SANDBOX_RECORD
+    ? readGatePlanHandoff(process.env.LLV_GATE_PLAN_HANDOFF) : undefined;
+  const workerEnv = mode === "pre-push" ? publicationWorkerEnvironment(planningEnv) : planningEnv;
+  const graph = gatePlan(root, { profile: mode, publishedTree }, workerEnv, process.execPath, handoff?.planId);
+  const { base, changedPaths: files } = graph;
+  const steps = graph.checks.map(check => check.step);
+  const workerSteps = requestedStep ? [requestedStep] : steps.filter(step => step.name !== "privacy").map(step => step.name);
+  if (handoff && (handoff.steps.length !== workerSteps.length || handoff.steps.some((name, index) => name !== workerSteps[index]))) {
+    throw new Error("admitted selection is outside the current publication plan; retry from the parent");
+  }
+  const planHandoff = JSON.stringify({ version: graph.version, planId: graph.planId, steps: workerSteps });
   const binding = publicationPrepare || transport ? publicationCheckBinding(process.env) : undefined;
   if (mode === "pre-push" && !deadline) {
     const startedAt = Date.now();
@@ -1066,7 +906,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
   if (requestedStep && !selected) throw new Error(`the publication plan has no independent "${requestedStep}" step for these changes`);
   if (requestedStep && !admitted) {
     await runAdmittedChecks(["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "check-step", requestedStep, "--admitted"],
-      root, { ...process.env, LLV_GATE_RUNNER: "off" }, deadline);
+      root, { ...workerEnv, LLV_GATE_RUNNER: "off", LLV_GATE_PLAN_HANDOFF: planHandoff }, deadline);
     return;
   }
   if (mode === "pre-push" && !files.length) console.error(`pre-push: nothing changed since ${base.slice(0, 12)}; checking the pushed commits for privacy only`);
@@ -1081,7 +921,18 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
   // The outer hook also allocates logs and Cloud input. Acquire its cleanup
   // owner before allocation; admitted children inherit the same journal.
   if (import.meta.main && !process.env.LLV_GATE_SANDBOX_RECORD) {
-    const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) };
+    const parent = captureProcessIdentity(process.pid);
+    const parentProof = JSON.stringify(parent);
+    // The dispatch marker binds this direct cleanup launch to its live parent.
+    // Admission accepts it only beside that exact parent identity.
+    const env: NodeJS.ProcessEnv = { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: parentProof, LLV_GATE_HOOK_DISPATCH: parentProof, LLV_GATE_PLAN_HANDOFF: planHandoff };
+    const entry = publicationPrepare ? path.join(root, "scripts/local-gate.ts") : import.meta.path;
+    if (publicationPrepare) {
+      // The outer runner owns cleanup while its child queues for checks. Give
+      // admission the live parent evidence it uses to distinguish this runner
+      // from a slotless legacy holder.
+      env.LLV_GATE_UNADMITTED_HOOK_BOOTSTRAP = JSON.stringify({ parent, mode, entry: realpathSync(entry) });
+    }
     if (deadline) {
       const inherited = Number(env.LLV_OWNED_RUN_TIMEOUT_MS);
       const allowance = supervisorTimeoutMs(deadline.at, env);
@@ -1089,28 +940,32 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       env.LLV_GATE_PUSH_DEADLINE = String(deadline.at);
     }
     const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "owned-runner.ts"),
-      ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, ...process.execArgv, import.meta.path, ...process.argv.slice(2)],
+      ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, ...process.execArgv, entry, ...process.argv.slice(2)],
       { cwd: root, env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
     const code = await child.exited;
     if (code !== 0) throw new AdmittedGateFailed(code);
     return;
   }
   const sandbox = createGateSandbox();
+  const imagePreparation = publicationPrepare && process.platform === "linux" && process.env.LLV_DOCKER_NSENTER_SHIMS === "1";
+  const peakRss = imagePreparation ? samplePublicationRss() : undefined;
   let sandboxRetained = false;
   try {
     // Pre-push checks see one canonical environment, so a producer's pass and
     // the publication of the same tree share a key (scripts/gate-cache.ts).
-    const isolated = isolatedEnvironment(sandbox, mode === "pre-push" ? checkEnvironment(process.env) : process.env);
+    const isolated = isolatedEnvironment(sandbox, mode === "pre-push" ? checkEnvironment(workerEnv) : process.env);
     const privacyEnv: NodeJS.ProcessEnv = {
       ...process.env,
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(root, "scripts/privacy-known-value-fingerprints.json"),
     };
     const prepare = async (step: Step, until: number, cancel?: AbortSignal, waitEnv = process.env) => {
       const command = [...step.command];
-      const env: NodeJS.ProcessEnv = { ...(step.isolated || mode === "pre-push" && !["privacy", "frozen install", "supply chain"].includes(step.name) ? isolated : process.env), LLV_CPU_WAIT_ROOTS: waitEnv.LLV_CPU_WAIT_ROOTS };
+      const env: NodeJS.ProcessEnv = { ...(step.isolated || mode === "pre-push" && !["privacy", "frozen install", "supply chain"].includes(step.name)
+        ? isolated : admitted ? workerEnv : process.env), LLV_CPU_WAIT_ROOTS: waitEnv.LLV_CPU_WAIT_ROOTS };
       delete env.LLV_GATE_TYPES_CHECKED;
       delete env.LLV_GATE_FULL_TYPES;
       if (step.name === "privacy") Object.assign(env, privacyEnv);
+      delete env.LLV_GATE_PLAN_HANDOFF;
       if (step.pinned) {
         runtime ??= pinnedRuntime(root, cache, until, cancel, env);
         command[0] = await runtime;
@@ -1209,8 +1064,9 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       }
     }
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
-    const passes = mode === "pre-push" && !transport ? stepPasses(root, base, steps, console.error) : undefined;
+    const passes = mode === "pre-push" && !transport ? stepPasses(root, base, steps, console.error, workerEnv) : undefined;
     const options = { root, deadline, logDir: sandbox, prepare, passes, ...(branch ? { ref: branch } : {}) };
+    const checksStarted = performance.now();
     if (selected) {
       // The normal runner owns cleanup and records exactly this step's pass.
       // A later push still runs privacy and validates every step in the plan.
@@ -1236,9 +1092,11 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
       console.error("pre-push: verified completed checks for this publication; transport admitted");
     } else if (mode === "pre-push" && !admitted) {
       const privacy = (cancel?: AbortSignal) => runSteps(mode, steps.filter(step => step.name === "privacy"), { ...options, cancel });
+      const memoryBytes = imagePreparation && steps.some(step => step.name === "types" || step.name === "Viewer build")
+        ? String(publicationMemoryBytes(process.env.NODE_OPTIONS)) : undefined;
       const localChecks = (cancel: AbortSignal) => runAdmittedChecks(
         ["bash", "scripts/gate-slot.sh", process.execPath, "scripts/local-gate.ts", "pre-push", "--admitted"], root,
-        { ...process.env, LLV_GATE_RUNNER: "off" }, deadline, cancel);
+        { ...workerEnv, LLV_GATE_RUNNER: "off", LLV_GATE_PUBLICATION_MEMORY_BYTES: memoryBytes, LLV_GATE_PLAN_HANDOFF: planHandoff }, deadline, cancel);
       const privacyHead = git(root, ["rev-parse", "HEAD"]);
       const checks = async (cancel: AbortSignal) => {
         if (!config) return localChecks(cancel);
@@ -1277,11 +1135,34 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
         } else await runPushPair(privacy, checks);
       } else await privacy();
     } else {
-      await runSteps(mode, admitted ? steps.filter(step => step.name !== "privacy") : steps, options);
+      let pending = admitted ? steps.filter(step => step.name !== "privacy") : steps;
+      const memoryBudget = process.env.LLV_GATE_PUBLICATION_MEMORY_BYTES;
+      if (admitted && memoryBudget !== undefined) {
+        const memoryBytes = Number(memoryBudget);
+        if (!Number.isSafeInteger(memoryBytes) || memoryBytes <= 0) throw new Error("invalid publication memory admission budget");
+        const admitMemory = async () => {
+          const finishWait = reportCpuWait();
+          try {
+            if (!await waitForPublicationMemory(memoryBytes, console.error)) {
+              throw new AdmittedGateFailed(75, `pre-push: ${PUBLICATION_MEMORY_DEFERRAL}`);
+            }
+          } finally { finishWait(); }
+        };
+        await admitMemory();
+        // The frozen install runs before the parallel group and may change
+        // headroom. Recheck before launching any member of that group.
+        if (pending[0]?.name === "frozen install") {
+          await runSteps(mode, pending.slice(0, 1), options);
+          await admitMemory();
+          pending = pending.slice(1);
+        }
+      }
+      await runSteps(mode, pending, options);
     }
     if (publicationPrepare) {
+      const checksMs = Math.max(0, Math.round(performance.now() - checksStarted));
       assertPublicationInputs("checks");
-      writePublicationCheckReceipt(receiptFile!, binding!, fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)]), checkComponents);
+      writePublicationCheckReceipt(receiptFile!, binding!, fingerprint([publicationInputs!.key, steps, publicationObservationInputs(process.env)]), checkComponents, checksMs, peakRss?.sample());
     }
   } catch (error) {
     if (error instanceof UnconfirmedStepExit) {
@@ -1291,6 +1172,7 @@ async function main(mode: Mode, admitted = false, publicationPrepare = false, re
     }
     throw error;
   } finally {
+    peakRss?.close();
     if (!sandboxRetained) releaseGateSandbox(sandbox);
   }
 }

@@ -3,15 +3,19 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { retainReleases, type RetentionInputs, type RetentionPorts } from "./retention";
+import { readReleasePipelineClaims, retainReleases, type RetentionInputs, type RetentionPorts } from "./retention";
 import { finishTreeTrash, removeTreeViaTrash, scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 import type { LauncherRecord } from "./launcher";
 import { runGit } from "./git";
 import { RetentionWorker } from "./retentionWorker";
 import { retentionProcessScan, retentionScanWithObserver, withSelfObservation } from "./retentionInspection";
 import { observePrivilegedReleases, RELEASE_OBSERVER } from "./releaseObserver.worker";
-import { quarantineTree, sealProcessLinks } from "./gatedTrash";
+import { quarantineTree, sealProcessLinks, settleGatedTrash } from "./gatedTrash";
+import { cleanerJournal, createCleanerJournal, cleanerJournalFile, diskCleanerReportsFile } from "@/lib/cleaner/diskJournal";
+import { diskCleanerSignals, recordDiskCleanerReport } from "@/lib/cleaner/diskReport";
+import { seatTickSignalVersion } from "@/lib/monitor/seatTick";
 import { installStateOwnershipGraph, MODULE_CONSUMER_SOURCE } from "./stateOwnershipGraph.fixture";
+import { buildPipeline, loadPipelinesForList, savePipelines } from "@/lib/pipelines/store";
 
 // Replay fixtures signal started() before interruption so W4 retains quarantine
 // custody. A pre-removal refusal instead restores the original path.
@@ -102,6 +106,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 const EMPTY: ProcessScan = { ownNamespace: "mnt:[fixture]", processes: [] };
+const fixtureCleanerId = (...parts: string[]) => parts.join("-");
 function fixture(count = 8) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "llv-retention-test-"))); roots.push(root);
   const releases = path.join(root, "releases"); fs.mkdirSync(releases);
@@ -176,6 +181,26 @@ test.each([true, false])("a fresh install without a releases directory has nothi
   expect(report.kept).toEqual([]);
   expect(JSON.parse(fs.readFileSync(h.ports.reportFile!, "utf8"))).toEqual(report);
   expect(exists(h.record.releasesDir)).toBeFalse();
+});
+
+test("a directory fsync failure after the report rename remains in the writer verdict", async () => {
+  const h = fixture(0);
+  fs.rmSync(h.record.releasesDir, { recursive: true });
+  h.ports.scan = () => retentionProcessScan(h.record.releasesDir, path.join(h.root, "absent-proc"));
+  h.ports.env = { LLV_RETENTION_RUN_ID: "retention-run-fixture" };
+  const original = fs.fsyncSync;
+  const flush = spyOn(fs, "fsyncSync").mockImplementation((descriptor: number) => {
+    if (fs.fstatSync(descriptor).isDirectory()) throw new Error("fixture directory fsync failure");
+    original(descriptor);
+  });
+  try {
+    const report = await h.run();
+    expect(report.runId).toBe(h.ports.env.LLV_RETENTION_RUN_ID);
+    expect(report.errors).toContain("cannot write retention report: Error: fixture directory fsync failure");
+    const persisted = JSON.parse(fs.readFileSync(h.ports.reportFile!, "utf8"));
+    expect(persisted.runId).toBe(report.runId);
+    expect(persisted.errors).toEqual([]);
+  } finally { flush.mockRestore(); }
 });
 
 test.each(["releases", "journal"])("a missing process inventory still refuses a pass with %s", async state => {
@@ -555,6 +580,289 @@ test("recent and newest-K releases are kept; K follows LLV_SELF_UPDATE_KEEP_RELE
   expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.dirs.at(-1), reason: "newest" }));
   expect(report.removed).toHaveLength(5);
 });
+
+test("the cleaner retains the newest 15, the running release and pinned data", async () => {
+  const h = fixture(20), git = h.ports.git!;
+  h.ports.git = async (args, cwd) => {
+    const result = await git(args, cwd);
+    return args[0] === "worktree" && args[1] === "list" ? { ...result, stdout: `worktree ${h.root}\0HEAD main\0\0${result.stdout}` } : result;
+  };
+  const running = h.dirs[1]!, pinned = h.dirs[2]!;
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: running }));
+  fs.writeFileSync(path.join(pinned, ".delegatus-keep"), "");
+  const journal: Array<{ phase: string; directory: string; bytes: number; proof: string }> = [];
+  h.ports.cleaner = { id: fixtureCleanerId("11111111", "1111", "4111", "8111", "111111111111"), allowed: () => true, dryRun: false,
+    journal: (phase, directory, bytes, proof) => journal.push({ phase, directory, bytes, proof }) };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  const removed = [h.dirs[0]!, h.dirs[3]!, h.dirs[4]!];
+  expect(report.removed.map(row => row.dir)).toEqual(removed);
+  expect(journal).toEqual(removed.flatMap(directory => ["intent", "removed"].map(phase => expect.objectContaining({
+    phase, directory, bytes: expect.any(Number), proof: expect.stringContaining("beyond newest 15"),
+  }))));
+  for (const dir of [running, pinned, ...h.dirs.slice(-15)]) expect(exists(dir)).toBeTrue();
+  expect(exists(path.join(running, ".next/cache/webpack/cache"))).toBeTrue();
+}, 30_000);
+
+test("Cleaner preserves release repositories claimed by a parked pipeline at admission and final owner read", async () => {
+  const h = fixture(20), git = h.ports.git!;
+  h.ports.git = async (args, cwd) => {
+    const result = await git(args, cwd);
+    return args[0] === "worktree" && args[1] === "list" ? { ...result, stdout: `worktree ${h.root}\0HEAD main\0\0${result.stdout}` } : result;
+  };
+  const parkedRepo = h.dirs[3]!;
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(h.root, "pipeline-state");
+  try {
+  const parked = buildPipeline({ id: "parked-release-claim", task: "Retain the paused checkout", project: "fixture", repoDir: parkedRepo,
+    stages: [{ id: "build", kind: "run", prompt: "Build", next: null,
+      role: { roleId: "builder", params: { scope: "fixture" } }, outputs: ["evidence"],
+      effectiveRole: { roleId: "builder", engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-only", promptScaffold: "Build {{scope}}" } }],
+    srcPath: null, srcConversationId: null, now: "2030-01-01T00:00:00.000Z" });
+  parked.state = "paused"; parked.pausedState = "running"; parked.pausedAt = "2030-01-01T00:00:00.000Z";
+  savePipelines([parked]);
+  const claims = await readReleasePipelineClaims();
+  expect(loadPipelinesForList().find(row => row.id === parked.id)?.state).toBe("paused");
+  expect(claims).toContainEqual({ repoDir: parkedRepo, worktreeDir: parked.worktreeDir });
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: h.dirs[1], sha: h.shas[1] }));
+  h.ports.current = () => ({ record: h.record, inputs: h.inputs, fenced: true, pipelineClaims: claims });
+  const journal: Array<{ phase: string; directory: string }> = [];
+  h.ports.cleaner = { id: fixtureCleanerId("22222222", "2222", "4222", "8222", "222222222222"), allowed: () => true, dryRun: false,
+    journal: (phase, directory) => journal.push({ phase, directory }) };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(exists(parkedRepo)).toBeTrue();
+  expect(exists(h.dirs[0]!)).toBeFalse();
+  expect(h.commands.some(args => args[0] === "worktree" && args[1] === "remove" && args.at(-1) === parkedRepo)).toBeFalse();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: parkedRepo, reason: "pipeline-checkout" }));
+  expect(journal.filter(row => row.directory === parkedRepo)).toEqual([]);
+  expect(journal.filter(row => row.directory === h.dirs[0]!).map(row => row.phase)).toEqual(["intent", "removed"]);
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  }
+}, 30_000);
+
+test("a parked repository claim through a symlink preserves the physical release", async () => {
+  const h = fixture(20), target = h.dirs[3]!, alias = path.join(h.root, "parked-repository-alias");
+  fs.symlinkSync(target, alias, "dir");
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: h.dirs[1], sha: h.shas[1] }));
+  h.ports.current = () => ({ record: h.record, inputs: h.inputs, fenced: true,
+    pipelineClaims: [{ repoDir: alias, worktreeDir: null }] });
+  h.ports.cleaner = { id: fixtureCleanerId("66666666", "6666", "4666", "8666", "666666666666"), allowed: () => true, dryRun: false, journal: () => {} };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(fs.existsSync(alias)).toBeTrue();
+  expect(fs.existsSync(target)).toBeTrue();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: target, reason: "pipeline-checkout" }));
+}, 30_000);
+
+test("the final closed-gate owner read restores a release newly claimed by a parked pipeline", async () => {
+  const h = fixture(20), git = h.ports.git!;
+  h.ports.git = async (args, cwd) => {
+    const result = await git(args, cwd);
+    return args[0] === "worktree" && args[1] === "list" ? { ...result, stdout: `worktree ${h.root}\0HEAD main\0\0${result.stdout}` } : result;
+  };
+  const parkedRepo = h.dirs[3]!;
+  const parkedAlias = path.join(h.root, "late-parked-repository-alias");
+  fs.symlinkSync(parkedRepo, parkedAlias, "dir");
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: h.dirs[1], sha: h.shas[1] }));
+  let observationsAfterQuarantine = 0;
+  h.ports.current = () => {
+    const quarantined = !exists(parkedRepo) && fs.readdirSync(path.dirname(parkedRepo)).some(name => name.startsWith(`.delegatus-trash-${path.basename(parkedRepo)}-`));
+    observationsAfterQuarantine += Number(quarantined);
+    return { record: h.record, inputs: h.inputs, fenced: true,
+      pipelineClaims: observationsAfterQuarantine >= 2 ? [{ repoDir: parkedAlias, worktreeDir: null }] : [] };
+  };
+  const journal: Array<{ phase: string; directory: string }> = [];
+  h.ports.cleaner = { id: fixtureCleanerId("55555555", "5555", "4555", "8555", "555555555555"), allowed: () => true, dryRun: false,
+    journal: (phase, directory) => journal.push({ phase, directory }) };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(observationsAfterQuarantine).toBeGreaterThanOrEqual(2);
+  expect(exists(parkedRepo)).toBeTrue();
+  expect(exists(h.dirs[0]!)).toBeFalse();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: parkedRepo, reason: "pipeline-checkout" }));
+  expect(journal.filter(row => row.directory === parkedRepo).map(row => row.phase)).toEqual(["intent", "refused"]);
+  expect(journal.filter(row => row.directory === h.dirs[0]!).map(row => row.phase)).toEqual(["intent", "removed"]);
+}, 30_000);
+
+test("a parked alias retargeted to a quarantined release restores it at the final owner fence", async () => {
+  const h = fixture(20), alias = path.join(h.root, "retargeted-parked-alias");
+  fs.symlinkSync(h.dirs[3]!, alias, "dir");
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: h.dirs[1], sha: h.shas[1] }));
+  let retargeted = false;
+  let candidate: string | undefined;
+  h.ports.current = () => {
+    const missingQuarantine = h.dirs.find(dir => !exists(dir)
+      && fs.readdirSync(path.dirname(dir)).some(name => name.startsWith(`.delegatus-trash-${path.basename(dir)}-`)));
+    if (missingQuarantine && !retargeted) {
+      candidate = missingQuarantine;
+      fs.unlinkSync(alias);
+      fs.symlinkSync(missingQuarantine, alias, "dir");
+      retargeted = true;
+    }
+    return { record: h.record, inputs: h.inputs, fenced: true,
+      pipelineClaims: retargeted ? [{ repoDir: alias, worktreeDir: null }] : [] };
+  };
+  const journal: Array<{ phase: string; directory: string }> = [];
+  h.ports.cleaner = { id: fixtureCleanerId("12121212", "1212", "4212", "8212", "121212121212"), allowed: () => true, dryRun: false,
+    journal: (phase, directory) => journal.push({ phase, directory }) };
+  const report = await h.run();
+  expect(retargeted).toBeTrue();
+  expect(candidate).toBeDefined();
+  expect(exists(candidate!)).toBeTrue();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: candidate, reason: "pipeline-checkout" }));
+  expect(journal.filter(row => row.directory === candidate).map(row => row.phase)).toEqual(["intent", "refused"]);
+}, 30_000);
+
+test("release retention leaves Cleaner quarantine to Cleaner recovery and restores it with an outcome", async () => {
+  const h = fixture(20), originalPass = fixtureCleanerId("33333333", "3333", "4333", "8333", "333333333333");
+  const state = path.dirname(h.ports.reportFile!);
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  let quarantined: ReturnType<typeof quarantineTree> = null;
+  try {
+  fs.mkdirSync(state, { recursive: true });
+  createCleanerJournal(originalPass);
+  const proof = "verified release beyond newest 15 with owner and process checks clear";
+  cleanerJournal(originalPass, "release")("intent", h.dirs[1]!, 4096, proof);
+  const trashJournal = path.join(state, "release-trash-interrupted-cleaner.json");
+  quarantined = quarantineTree(h.dirs[1]!, trashJournal, { sha: h.shas[1]!, age: h.now - 20 * DAY }, { passId: originalPass, proof });
+  expect(quarantined).not.toBeNull();
+  fs.chmodSync(quarantined!.gate, 0o000);
+  const first = await h.run();
+  expect(first.errors).toEqual([]);
+  expect(fs.existsSync(h.dirs[1]!)).toBeFalse();
+  expect(fs.existsSync(quarantined!.trash)).toBeFalse(); // mode 000 hides the intact quarantine before recovery.
+  h.ports.cleaner = { id: fixtureCleanerId("44444444", "4444", "4444", "8444", "444444444444"), allowed: () => true, dryRun: false,
+    journal: () => {} };
+  const recovered = await h.run();
+  expect(recovered.errors).toEqual([]);
+  expect(fs.existsSync(h.dirs[1]!)).toBeTrue();
+  expect(fs.existsSync(trashJournal)).toBeFalse();
+  const audit = fs.readFileSync(cleanerJournalFile(originalPass), "utf8").trim().split("\n").map(line => JSON.parse(line));
+  expect(audit.map(entry => entry.phase)).toEqual(["intent", "refused"]);
+  expect(audit[1]).toMatchObject({ path: h.dirs[1], class: "release", proof });
+  expect(h.commands.some(args => args[0] === "worktree" && args[1] === "remove" && args.at(-1) === h.dirs[1])).toBeFalse();
+  } finally {
+    if (quarantined && fs.existsSync(quarantined.gate)) fs.chmodSync(quarantined.gate, 0o700);
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  }
+}, 30_000);
+
+test("Cleaner leaves an unbound legacy release quarantine to ordinary retention replay", async () => {
+  const h = fixture(20), journal = path.join(path.dirname(h.ports.reportFile!), "release-trash-legacy.json");
+  const row = quarantineTree(h.dirs[1]!, journal, { sha: h.shas[1]!, age: h.now - 20 * DAY });
+  expect(row).not.toBeNull();
+  h.ports.cleaner = { id: fixtureCleanerId("77777777", "7777", "4777", "8777", "777777777777"), allowed: () => true, dryRun: true, journal: () => {} };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(fs.existsSync(row!.trash)).toBeTrue();
+  expect(fs.existsSync(journal)).toBeTrue();
+  expect(report.removed.some(item => item.dir === h.dirs[1])).toBeFalse();
+}, 30_000);
+
+test.each(["clear", "reopened", "dispatch"] as const)("Cleaner checks mounts on partial release replay (%s)", async mount => {
+  const h = fixture(20), pass = fixtureCleanerId("88888888", "8888", "4888", "8888", "888888888888");
+  const state = path.dirname(h.ports.reportFile!);
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  try {
+    fs.mkdirSync(state, { recursive: true }); createCleanerJournal(pass);
+    const proof = "verified old release with owner and process checks clear";
+    cleanerJournal(pass, "release")("intent", h.dirs[1]!, 4096, proof);
+    const journal = path.join(state, "release-trash-partial-cleaner.json");
+    const row = quarantineTree(h.dirs[1]!, journal, { sha: h.shas[1]!, age: h.now - 20 * DAY }, { passId: pass, proof, bytes: 4096 });
+    expect(row).not.toBeNull();
+    let removedFirst = false;
+    await expect(settleGatedTrash(journal, row!, { observe: async () => null,
+      remove: async entry => {
+        if (!removedFirst) { removedFirst = true; await fs.promises.rm(entry, { recursive: true, force: true }); throw new Error("interrupted after first unlink"); }
+        await fs.promises.rm(entry, { recursive: true, force: true });
+      } })).rejects.toThrow("interrupted after first unlink");
+    expect(JSON.parse(fs.readFileSync(journal, "utf8")).deleting).toBeTrue();
+    h.ports.cleaner = { id: fixtureCleanerId("99999999", "9999", "4999", "8999", "999999999999"), allowed: () => true, dryRun: true, journal: () => {} };
+    const dry = await h.run();
+    expect(dry.errors).toEqual([]);
+    expect(fs.existsSync(row!.trash)).toBeTrue();
+    expect(fs.existsSync(journal)).toBeTrue();
+    expect(fs.readFileSync(cleanerJournalFile(pass), "utf8").trim().split("\n").map(line => JSON.parse(line).phase)).toEqual(["intent"]);
+    h.ports.cleaner = { id: fixtureCleanerId("aaaaaaaa", "aaaa", "4aaa", "8aaa", "aaaaaaaaaaaa"), allowed: () => true, dryRun: false, journal: () => {} };
+    let mountReads = 0, removals = 0;
+    h.ports.mountPoints = directory => directory === row!.trash && ++mountReads >= (mount === "dispatch" ? 2 : 1) && mount !== "clear"
+      ? [path.join(row!.trash, "nested", "mount")] : [];
+    h.ports.removeTree = async entry => {
+      if (process.cwd() === row!.trash) removals++;
+      await fs.promises.rm(entry, { recursive: true, force: true });
+    };
+    const report = await h.run();
+    expect(report.errors).toEqual([]);
+    if (mount !== "clear") {
+      expect(removals).toBe(0);
+      expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.dirs[1], reason: "mount-boundary" }));
+      expect(fs.existsSync(row!.trash)).toBeTrue();
+      expect(fs.existsSync(journal)).toBeTrue();
+      expect(fs.readFileSync(cleanerJournalFile(pass), "utf8").trim().split("\n")).toHaveLength(1);
+      return;
+    }
+    expect(removals).toBeGreaterThan(0);
+    expect(fs.existsSync(journal)).toBeFalse();
+    expect(fs.existsSync(h.dirs[1]!)).toBeFalse();
+    const outcomes = fs.readFileSync(cleanerJournalFile(pass), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(outcomes.map((entry: { phase: string }) => entry.phase)).toEqual(["intent", "removed"]);
+    expect(outcomes[1]).toMatchObject({ bytes: 4096 });
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  }
+}, 30_000);
+
+test.each([false, true])("terminal release recovery settles the audit and seat report once (audit already written=%s)", async recorded => {
+  const h = fixture(20), pass = fixtureCleanerId("bbbbbbbb", "bbbb", "4bbb", "8bbb", "bbbbbbbbbbbb");
+  const state = path.dirname(h.ports.reportFile!), prior = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = state;
+  try {
+    const target = h.dirs[1]!, proof = "release audit fixture", project = "release-fixture", bytes = 8192;
+    const journal = path.join(state, "release-trash-terminal-cleaner.json");
+    fs.mkdirSync(state, { recursive: true });
+    createCleanerJournal(pass);
+    const audit = cleanerJournal(pass, "release");
+    audit("intent", target, bytes, proof);
+    await recordDiskCleanerReport({ id: pass, project, episode: null, mode: "on", startedAt: 1, before: [],
+      finished: { at: 2, after: [], removed: { "attempt-temp": 0, release: 0, evidence: 0 }, kept: [], uncertain: 1, errors: 0, incomplete: true } });
+    const seat = { conversationId: "release-seat", seatEpoch: 1 };
+    const original = (await diskCleanerSignals(project))[0]!;
+    await diskCleanerSignals(project, [seatTickSignalVersion(original, seat)], seat);
+    const row = quarantineTree(target, journal, { sha: h.shas[1]! }, { passId: pass, bytes, proof })!;
+    const unlink = fs.unlinkSync;
+    const interrupted = spyOn(fs, "unlinkSync").mockImplementation(file => {
+      if (file === journal) throw new Error("interrupted before native journal settlement");
+      return unlink(file);
+    });
+    try {
+      await expect(settleGatedTrash(journal, row, { observe: async () => null })).rejects.toThrow("interrupted before native journal settlement");
+    } finally { interrupted.mockRestore(); }
+    expect(fs.existsSync(row.trash)).toBeFalse();
+    if (recorded) audit("removed", target, bytes, proof);
+    h.ports.cleaner = { id: pass, allowed: () => true, dryRun: false, journal: () => {} };
+    const recovered = await h.run();
+    expect(recovered.errors).toEqual([]);
+    expect(recovered.removed.filter(entry => entry.dir === target)).toHaveLength(1);
+    expect(fs.existsSync(journal)).toBeFalse();
+    const journalBytes = fs.readFileSync(cleanerJournalFile(pass), "utf8");
+    const reports = fs.readFileSync(diskCleanerReportsFile(), "utf8");
+    expect(journalBytes.trim().split("\n").map(entry => JSON.parse(entry).phase)).toEqual(["intent", "removed"]);
+    expect(JSON.parse(reports)[0].finished).toMatchObject({ uncertain: 0, errors: 0, removed: { release: bytes } });
+    const corrected = await diskCleanerSignals(project);
+    expect(corrected).toHaveLength(1);
+    await diskCleanerSignals(project, [seatTickSignalVersion(corrected[0]!, seat)], seat);
+    expect((await h.run()).removed.some(entry => entry.dir === target)).toBeFalse();
+    expect(await diskCleanerSignals(project)).toEqual([]);
+    expect(fs.readFileSync(cleanerJournalFile(pass), "utf8")).toBe(journalBytes);
+    expect(fs.readFileSync(diskCleanerReportsFile(), "utf8")).toBe(reports);
+  } finally {
+    if (prior === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = prior;
+  }
+}, 30_000);
 
 test.each(["pointer", "listing", "scan", "launcher"])("an unreadable %s removes nothing", async kind => {
   const h = fixture();

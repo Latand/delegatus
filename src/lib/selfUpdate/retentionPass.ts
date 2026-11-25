@@ -5,6 +5,8 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { retentionWorkerLaunch, type RetentionInspection } from "./retentionWorker";
 import type { LauncherRecord } from "./launcher";
 import type { RetentionCurrent, RetentionInputs, RetentionReport } from "./retention";
+import { cleanerJournal } from "@/lib/cleaner/diskJournal";
+import { diskCleanerAllowed, readDiskCleanerPass } from "@/lib/cleaner/diskState";
 
 type Current = RetentionCurrent;
 const validReport = (report: RetentionReport | undefined): report is RetentionReport => !!report
@@ -27,6 +29,7 @@ export async function runRetentionPass(record: LauncherRecord, inputs: Retention
   fence?: (claim: string) => boolean;
   launch?: ReturnType<typeof retentionWorkerLaunch>; timeoutMs?: number; now?: number; signal?: AbortSignal;
   schedule?: typeof scheduleDeadline;
+  cleanerId?: string;
 }): Promise<RetentionReport> {
   return withViewerOperation("self-update.retention", async () => {
     options.signal?.throwIfAborted();
@@ -64,7 +67,8 @@ export async function runRetentionPass(record: LauncherRecord, inputs: Retention
                 let fenced: boolean | undefined;
                 try { fenced = claim === undefined ? undefined : options.fence?.(claim) === true; } catch { fenced = false; }
                 void Promise.resolve().then(options.current).then(current => {
-                  if (!settled) input.write(JSON.stringify({ id: message.id, current: { record: current.record, inputs: current.inputs, fenced } }) + "\n");
+                  if (!settled) input.write(JSON.stringify({ id: message.id, current: { record: current.record, inputs: current.inputs,
+                    ...(current.pipelineClaims ? { pipelineClaims: current.pipelineClaims } : {}), fenced } }) + "\n");
                 }, () => { if (!settled) input.write(JSON.stringify({ id: message.id, error: "retention owner unavailable" }) + "\n"); });
               } else if (message.kind === "report" && validReport(message.report)) {
                 settled = true; resolve(message.report);
@@ -72,8 +76,9 @@ export async function runRetentionPass(record: LauncherRecord, inputs: Retention
             } catch (error) { fail(error instanceof Error ? error : new Error(String(error))); }
           }
         });
-        input.write(JSON.stringify({ kind: "retain", record, inputs, reportFile: options.reportFile, now: options.now,
-          env: { LLV_SELF_UPDATE_KEEP_RELEASES: options.env.LLV_SELF_UPDATE_KEEP_RELEASES } }) + "\n");
+        input.write(JSON.stringify({ kind: "retain", record, inputs, reportFile: options.reportFile, now: options.now, cleanerId: options.cleanerId,
+          env: { LLV_SELF_UPDATE_KEEP_RELEASES: options.env.LLV_SELF_UPDATE_KEEP_RELEASES,
+            LLV_RETENTION_RUN_ID: options.env.LLV_RETENTION_RUN_ID } }) + "\n");
       });
     } finally {
       cancelDeadline?.();
@@ -99,12 +104,22 @@ export async function serveRetentionPass(inspection?: RetentionInspection): Prom
           started = true;
           // Retention's completion log belongs on stderr beside helper logs.
           console.log = console.error;
+          const cleaner = typeof message.cleanerId === "string" ? {
+            id: message.cleanerId,
+            allowed: () => diskCleanerAllowed(message.cleanerId),
+            journal: cleanerJournal(message.cleanerId, "release"),
+            dryRun: readDiskCleanerPass()?.mode !== "on",
+          } : undefined;
           void import("./retention").then(({ retainReleases }) => retainReleases(message.record, message.inputs, {
-            reportFile: message.reportFile, env: message.env, inspection, now: message.now === undefined ? Date.now : () => message.now,
+            reportFile: message.reportFile, env: message.env, inspection, cleaner, now: message.now === undefined ? Date.now : () => message.now,
             current: claim => new Promise<Current>((resolve, reject) => {
               const id = ++sequence; pending.set(id, { resolve, reject }); send({ kind: "current", id, ...(claim === undefined ? {} : { claim }) });
             }),
-          })).then(report => { send({ kind: "report", report }); resolve(); }, reject);
+          })).then(report => {
+            send({ kind: "report", report });
+            if (typeof report.runId === "string") console.error(`[self-update] retention pass ${report.runId} complete; ${report.errors.length} error(s)`);
+            resolve();
+          }, reject);
         } else {
           const request = pending.get(message.id);
           if (!request) throw new Error("unknown retention safety reply");

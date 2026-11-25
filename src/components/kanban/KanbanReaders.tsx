@@ -9,7 +9,6 @@ import type { FileEntry } from "@/lib/types";
 import { SpeakButton } from "@/components/feed/SpeakButton";
 import { BranchPane } from "@/components/BranchPane";
 import { mobileRowState, rowStateWord } from "@/components/mobile/mobileBoardModel";
-import { isSettledLaunchPlaceholder } from "@/components/launchHistoryModel";
 import { latestAttempt, stageAttemptPlace, stageCardLabel, stageCardLabelParts, stageLabelTitle } from "@/components/pipelines/pipelineModel";
 import { EffortScale } from "@/components/EffortPills";
 import { EngineMark } from "@/components/EngineMark";
@@ -196,6 +195,9 @@ export interface ReaderView {
   /** The conversation holds the project's orchestrator seat: it reads as the
       orchestrator, the way the seat names it. */
   seat?: boolean;
+  /** The seat is hosted and idle between turns with no form open, read once on
+      the board from the seat state its head reads: the header says «waiting». */
+  seatWaiting?: boolean;
   /** The reader is the agent window's: the conversation's one composer is
       here, even while the seat shows the same conversation. */
   composerPrimary?: boolean;
@@ -242,16 +244,16 @@ export function readerNames(t: TFunction, view: Pick<ReaderView, "file" | "owner
 /** The prototype's reader anatomy (`renderReader` + `renderConvHead`) over the
     real conversation: the header reads the same authorities `BranchPane`'s
     own header does, and everything under it is `BranchPane`. */
-const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = false, owner, seat = false, composerPrimary = false, composerPlaceholder, now, onClose, onLeave, onMenu, onSpawnRetry, onCloseConversation }: ReaderProps) {
+const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = false, owner, seat = false, seatWaiting = false, composerPrimary = false, composerPlaceholder, now, onClose, onLeave, onMenu, onSpawnRetry, onCloseConversation }: ReaderProps) {
   const { t } = useLocale();
   const { runtime } = useAgentCapabilities(file);
   /* PID and Stop host live in the actions menu, so the header keeps its title. */
   const kill = useProcessKill(file);
-  const row = mobileRowState(file, now);
-  const stateWord = rowStateWord(t, { ...row, settledLaunch: isSettledLaunchPlaceholder(file) });
+  const row = mobileRowState(file, now, { seatWaiting: seat && seatWaiting });
+  const stateWord = rowStateWord(t, row);
   const tone = DOT_TONE[row.dot] ?? "tone-neutral";
   const working = row.key === "working";
-  const engine = file.engine === "claude" || file.engine === "codex" ? file.engine : null;
+  const engine = file.engine === "claude" || file.engine === "codex" || file.engine === "antigravity" ? file.engine : null;
   /* The header names the stage the way the stage list does, with the attempt
      once it ran twice, «Critique · 2», and keeps the role preset for the
      tooltip (#1865). */
@@ -294,7 +296,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
     <>
       {engine ? (
         <span className="ch-engine" data-engine={engine}>
-          <EngineMark engine={engine} size={12} />
+          <EngineMark engine={engine} size={12} working={working} />
           <span>{engineWord(engine)}</span>
         </span>
       ) : null}
@@ -305,7 +307,7 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
           {file.effort ? <span className="ch-effort">{file.effort}</span> : null}
         </span>
       ) : null}
-      {engine ? <ConversationAccountChip file={file} session={runtime?.session ?? null} readerKey={readerKey} name={role ?? title} /> : null}
+      {engine === "claude" || engine === "codex" ? <ConversationAccountChip file={file} session={runtime?.session ?? null} readerKey={readerKey} name={role ?? title} /> : null}
       {file.ctx ? <CtxChip ctx={file.ctx} /> : null}
       {/* Supersedence lineage (#383), as the pane's own header carries it: the retired predecessor's history is one
           click away, and the Viewer opens the `#c=` link in place. */}
@@ -346,14 +348,20 @@ const KanbanReader = memo(function KanbanReader({ readerKey, file, inSheet = fal
         chrome={{
           header: (
             <div className="conv-head">
+              {/* The identity chips wrap among themselves; the controls are one
+                  group that keeps its place at the row's end, so «…» never
+                  drops to a line of its own. */}
               <div className="ch-meta pane-id">
-                <RoleFrameMark role={frameRole} />
-                <RoleAvatar role={frameRole} size={20} />
-                {identity}
-                <span className="spacer" />
-                <SpeakButton scope={file.path} header />
-                {dismissLaunch}
-                {menuButton}
+                <span className="ch-chips">
+                  <RoleFrameMark role={frameRole} />
+                  <RoleAvatar role={frameRole} size={20} />
+                  {identity}
+                </span>
+                <span className="ch-controls">
+                  <SpeakButton scope={file.path} header />
+                  {dismissLaunch}
+                  {menuButton}
+                </span>
               </div>
             </div>
           ),
