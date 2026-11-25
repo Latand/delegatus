@@ -653,7 +653,7 @@ const WORK_TICK = Date.parse("2026-11-24T17:53:00Z");
 const oldestWorkExpiry = WORK_TICK - 624_407_000;
 const emptyScan = () => ({ ownNamespace: null, processes: [] });
 const workPorts = { scan: emptyScan, availableBytes: () => 412e9 };
-const workMode = { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" };
+const workMode: NodeJS.ProcessEnv = { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" };
 
 async function productionFixtureTick(at: number, args: readonly string[] = [], env?: NodeJS.ProcessEnv) {
   const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"),
