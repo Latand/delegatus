@@ -44,6 +44,16 @@ afterAll(async () => {
 afterEach(() => { for (const restore of restores.splice(0)) restore(); });
 const restores: Array<() => void> = [];
 
+// Each restart has its own process ownership and check admission. The
+// enclosing suite already holds CPU admission for the heavy command.
+function spawnRestartWorker(pattern: string, env: Record<string, string>) {
+  const runner = path.resolve("scripts/owned-runner.ts");
+  return Bun.spawn([process.execPath, runner, ...(process.platform === "linux" ? [] : ["--portable"]),
+    process.execPath, "test", import.meta.path, "--test-name-pattern", pattern], {
+    env: { ...process.env, ...env, LLV_HOST_RECONCILE_WORKER: "1" }, stdout: "pipe", stderr: "pipe",
+  });
+}
+
 function writeRegistry(snapshot: ReturnType<typeof registry.readOnlySnapshot>) {
   const temporary = `${registry.filename}.next`;
   fs.writeFileSync(temporary, JSON.stringify(snapshot));
@@ -214,10 +224,8 @@ test.skipIf(worker)("SQLite proof survives peer writes and process restart", asy
   const version = sqlite.livenessConversationIdentity({ conversationId: f.target.conversationId })!.version;
   expect(sqlite.recordStructuredTerminationSurvivors(unrelated.key, { pid: MISSING_PID, startIdentity: "unrelated" }, [])).toBeTrue();
   expect(sqlite.livenessConversationIdentity({ conversationId: f.target.conversationId })!.version).toBe(version);
-  const child = Bun.spawn(["bash", process.env.LLV_TEST_GATE_WRAPPER ?? path.resolve("scripts/gate-slot.sh"), process.execPath,
-    "test", "src/lib/pipelines/unconfirmedHosts.test.ts", "--test-name-pattern", "^restart worker$"], {
-    env: { ...process.env, LLV_STATE_DIR: root, LLV_HOST_RECONCILE_WORKER: "1",
-      LLV_TERMINATION_SQLITE_RESTART: "1", LLV_HOST_RECONCILE_PHASE: "40" }, stdout: "pipe", stderr: "pipe" });
+  const child = spawnRestartWorker("^restart worker$", { LLV_STATE_DIR: root,
+      LLV_TERMINATION_SQLITE_RESTART: "1", LLV_HOST_RECONCILE_PHASE: "40" });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect({ code, stdout: code ? stdout : "", stderr: code ? stderr : "" }).toEqual({ code: 0, stdout: "", stderr: "" });
   expect(loadPipelines()[0]!.unconfirmedHosts).toBeUndefined();
@@ -475,9 +483,7 @@ test.serial("generation preparation and scopes share the tick budget and resume 
   expect(persisted.progress?.generationNext).toBe(2); // The new owner starts the entire traversal again.
   record.hostTerminationProofs = { [proofKey]: persisted.progress! };
   savePipelines([record]);
-  const child = Bun.spawn(["bash", process.env.LLV_TEST_GATE_WRAPPER ?? path.resolve("scripts/gate-slot.sh"), process.execPath,
-    "test", "src/lib/pipelines/unconfirmedHosts.test.ts", "--test-name-pattern", "^restart worker$"], {
-    env: { ...process.env, LLV_HOST_RECONCILE_WORKER: "1", LLV_HOST_RECONCILE_PHASE: "30" }, stdout: "pipe", stderr: "pipe" });
+  const child = spawnRestartWorker("^restart worker$", { LLV_HOST_RECONCILE_PHASE: "30" });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect({ code, stdout: code ? stdout : "", stderr: code ? stderr : "" }).toEqual({ code: 0, stdout: "", stderr: "" });
   expect(loadPipelines()[0]!.unconfirmedHosts).toBeUndefined();
@@ -664,10 +670,7 @@ test.each(["gone", "live"] as const)("startup recovers a missing historical clos
       db.exec("DROP TABLE IF EXISTS pipeline_tick_obligations_v2");
     } finally { db.close(); }
     for (let round = 0; round < 2; round++) {
-      const restarted = Bun.spawn(["bash", process.env.LLV_TEST_GATE_WRAPPER ?? path.resolve("scripts/gate-slot.sh"),
-        process.execPath, "test", "src/lib/pipelines/unconfirmedHosts.test.ts", "--test-name-pattern", "^restart worker$"], {
-        env: { ...process.env, LLV_HOST_RECONCILE_WORKER: "1", LLV_HOST_RECONCILE_PHASE: String(60 + round) },
-        stdout: "pipe", stderr: "pipe" });
+      const restarted = spawnRestartWorker("^restart worker$", { LLV_HOST_RECONCILE_PHASE: String(60 + round) });
       const [code, stdout, stderr] = await Promise.all([restarted.exited,
         new Response(restarted.stdout).text(), new Response(restarted.stderr).text()]);
       expect({ code, stdout: code ? stdout : "", stderr: code ? stderr : "" }).toEqual({ code: 0, stdout: "", stderr: "" });
@@ -693,10 +696,7 @@ test("a held survivor yields its durable retry position to an idle peer across r
     const record = lane(hosts, "closed");
     savePipelines([record]);
     await tickPipelines([], tracedRetirementPorts(() => NOW));
-    const restarted = Bun.spawn(["bash", process.env.LLV_TEST_GATE_WRAPPER ?? path.resolve("scripts/gate-slot.sh"),
-      process.execPath, "test", import.meta.path, "--test-name-pattern", "^restart worker$"], {
-      env: { ...process.env, LLV_HOST_RECONCILE_WORKER: "1", LLV_HOST_RECONCILE_FAIR_WORKER: "1", LLV_HOST_RECONCILE_PHASE: "1" },
-      stdout: "pipe", stderr: "pipe" });
+    const restarted = spawnRestartWorker("^restart worker$", { LLV_HOST_RECONCILE_FAIR_WORKER: "1", LLV_HOST_RECONCILE_PHASE: "1" });
     const [code, stdout, stderr] = await Promise.all([restarted.exited, new Response(restarted.stdout).text(), new Response(restarted.stderr).text()]);
     expect({ code, stdout: code ? stdout : "", stderr: code ? stderr : "" }).toEqual({ code: 0, stdout: "", stderr: "" });
     const trace = fs.existsSync(path.join(root, "retirement-trace.jsonl"))
@@ -857,8 +857,7 @@ test.skipIf(worker)("large retained trees persist bounded proof progress through
   expect(loadPipelines()[0]!.unconfirmedHosts).toHaveLength(1);
   writeRegistry(snapshot);
   await tickPipelinesController([], ports());
-  const child = Bun.spawn(["bash", process.env.LLV_TEST_GATE_WRAPPER ?? path.resolve("scripts/gate-slot.sh"), process.execPath, "test", "src/lib/pipelines/unconfirmedHosts.test.ts", "--test-name-pattern", "^restart worker$"], {
-    env: { ...process.env, LLV_HOST_RECONCILE_WORKER: "1", LLV_HOST_RECONCILE_PHASE: "20" }, stdout: "pipe", stderr: "pipe" });
+  const child = spawnRestartWorker("^restart worker$", { LLV_HOST_RECONCILE_PHASE: "20" });
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect({ code, stdout: code ? stdout : "", stderr: code ? stderr : "" }).toEqual({ code: 0, stdout: "", stderr: "" });
   expect(loadPipelines()[0]!.unconfirmedHosts).toBeUndefined();
@@ -877,8 +876,7 @@ test.skipIf(process.env.LLV_HOST_RECONCILE_WORKER === "1")("bounded windows pass
   expect(probes).toBeLessThanOrEqual(16);
   expect(loadPipelines()[0]!.unconfirmedHosts).toHaveLength(40);
   for (let phase = 0; phase < 8; phase++) {
-    const child = Bun.spawn(["bash", process.env.LLV_TEST_GATE_WRAPPER ?? path.resolve("scripts/gate-slot.sh"), process.execPath, "test", "src/lib/pipelines/unconfirmedHosts.test.ts", "--test-name-pattern", "^restart worker$"], {
-      env: { ...process.env, LLV_HOST_RECONCILE_WORKER: "1", LLV_HOST_RECONCILE_PHASE: String(phase + 1) }, stdout: "pipe", stderr: "pipe" });
+    const child = spawnRestartWorker("^restart worker$", { LLV_HOST_RECONCILE_PHASE: String(phase + 1) });
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     expect({ code, stdout: code ? stdout : "", stderr: code ? stderr : "" }).toEqual({ code: 0, stdout: "", stderr: "" });
   }
@@ -1067,12 +1065,9 @@ test.each(["off", "sqlite"] as const)("alternate owners page through restart and
     const proof = Object.values(loadPipelines()[0]!.hostTerminationProofs!)[0]!;
     expect(proof.generationNext).toBeGreaterThan(9);
     const restart = async () => {
-      const worker = Bun.spawn(["bash", process.env.LLV_TEST_GATE_WRAPPER ?? path.resolve("scripts/gate-slot.sh"), process.execPath,
-        "test", "src/lib/pipelines/unconfirmedHosts.test.ts", "--test-name-pattern", "^restart worker$"], {
-        env: { ...process.env, LLV_STATE_DIR: root, LLV_HOST_RECONCILE_WORKER: "1",
+      const worker = spawnRestartWorker("^restart worker$", { LLV_STATE_DIR: root,
           LLV_TERMINATION_SQLITE_RESTART: backend === "sqlite" ? "1" : "0",
-          LLV_TERMINATION_SQLITE_FILE: "owners-restart-proof.sqlite", LLV_HOST_RECONCILE_PHASE: "50" },
-        stdout: "pipe", stderr: "pipe" });
+          LLV_TERMINATION_SQLITE_FILE: "owners-restart-proof.sqlite", LLV_HOST_RECONCILE_PHASE: "50" });
       const [code, stdout, stderr] = await Promise.all([worker.exited, new Response(worker.stdout).text(), new Response(worker.stderr).text()]);
       expect({ code, stdout: code ? stdout : "", stderr: code ? stderr : "" }).toEqual({ code: 0, stdout: "", stderr: "" });
     };
@@ -1206,12 +1201,8 @@ test.skipIf(worker).each(["unclaimed", "executor", "replacement", "legacy"] as c
     expect(laneFinish(loadPipelines()[0]!).finished).toBeFalse();
     expect(journal.operationResult(operationId)!.receipt.status).toBe("queued");
     journal.close();
-    const restarted = Bun.spawn(["bash", process.env.LLV_TEST_GATE_WRAPPER ?? path.resolve("scripts/gate-slot.sh"),
-      process.execPath, "test", "src/lib/pipelines/unconfirmedHosts.test.ts", "--test-name-pattern", "^queued stop restart worker$"], {
-      env: { ...process.env, LLV_STATE_DIR: root, LLV_HOST_RECONCILE_WORKER: "1", LLV_HOST_RECONCILE_PHASE: mode === "legacy" ? "5" : "1",
-        LLV_QUEUED_STOP_MODE: mode, LLV_QUEUED_STOP_KEY: JSON.stringify(f.key), LLV_QUEUED_STOP_PEER: JSON.stringify(captureProcessIdentity(process.pid)) },
-      stdout: "pipe", stderr: "pipe",
-    });
+    const restarted = spawnRestartWorker("^queued stop restart worker$", { LLV_STATE_DIR: root, LLV_HOST_RECONCILE_PHASE: mode === "legacy" ? "5" : "1",
+        LLV_QUEUED_STOP_MODE: mode, LLV_QUEUED_STOP_KEY: JSON.stringify(f.key), LLV_QUEUED_STOP_PEER: JSON.stringify(captureProcessIdentity(process.pid)) });
     const [code, out, err] = await Promise.all([restarted.exited, new Response(restarted.stdout).text(), new Response(restarted.stderr).text()]);
     expect(code, out + err).toBe(0);
     const saved = loadPipelines()[0]!;

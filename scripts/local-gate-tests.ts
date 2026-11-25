@@ -44,15 +44,19 @@ const FILE_BUDGET_MS = 5 * 60 * 1000;
 // confirmations after a slow full-file baseline. Bound head work to eight owned
 // runners in the shared CPU work slice; baseline and retries retain three.
 const HEAD_FILE_WORKERS = 8;
+const NESTED_FILE_WORKERS = 2;
 
-/** Gate fixtures start their own suites and supervisors. Eight such files in
- * one real publication exhausted the 768-task service limit before any verdict.
- * Source-only selections keep their head parallelism and confirmation budget. */
+// Gate fixtures start their own suites and supervisors. Eight of them once
+// exhausted the publication service's 768-task limit.
+function runsNestedGate(file: string): boolean {
+  return /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|privacy-)/.test(file.split(path.sep).join("/"));
+}
+
 export function comparisonFileWorkers(files: readonly string[], ceiling: number, sharedPortable = false): number {
-  const nested = files.some(file => /^scripts\/(?:local-gate(?:-tests)?(?:\.|$)|gate-slot\.|owned-runner\.|compiler-admission\.|check-worker-broker\.|privacy-)/.test(file.split(path.sep).join("/")));
-  const nestedLimit = sharedPortable ? 1 : 2;
-  const workers = nested ? Math.min(nestedLimit, ceiling) : ceiling;
-  return Math.min(files.length, workers);
+  const nested = files.filter(runsNestedGate).length;
+  if (nested && sharedPortable) return 1;
+  const ordinary = files.length - nested;
+  return Math.min(ceiling, ordinary + Math.min(nested, NESTED_FILE_WORKERS));
 }
 
 export const FLAKY_RERUNS = 3;
@@ -328,12 +332,11 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
   const now = options.now ?? (() => performance.now());
   const budgetStart = now(), budgets = options.budgets ?? DEFAULT_TEST_BUDGETS;
   const results: TestRun[] = new Array(files.length);
-  let next = 0;
+  const pending = files.map((file, index) => ({ file, index, nested: runsNestedGate(file) }));
+  let runningNested = 0;
   const parallelism = comparisonFileWorkers(files, options.workers ?? 3, sharesPortableRunner());
   if (files.length) options.log?.(`touched-tests: ${label} selected ${files.length} files with ${parallelism} file workers`);
-  const workers = await Promise.allSettled(Array.from({ length: parallelism }, async () => {
-  while (next < files.length) {
-    const index = next++, file = files[index]!;
+  async function runFile(file: string, index: number) {
     const fileStarted = performance.now();
     const failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
     const remaining = Math.floor(Math.min(budgets.runMs - (now() - budgetStart), (options.deadline ?? Infinity) - now()));
@@ -415,6 +418,15 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     results[index] = { failures, passed, completed, elapsedMs: 0 };
     options.onFile?.(results[index]!, cleanupConfirmed);
   }
+  const workers = await Promise.allSettled(Array.from({ length: parallelism }, async () => {
+    for (;;) {
+      const available = pending.findIndex(job => !job.nested || runningNested < NESTED_FILE_WORKERS);
+      if (available === -1) return;
+      const job = pending.splice(available, 1)[0]!;
+      if (job.nested) runningNested++;
+      try { await runFile(job.file, job.index); }
+      finally { if (job.nested) runningNested--; }
+    }
   }));
   // All owned runners have settled. Completed file diagnostics and filtered
   // worker rejections must both veto a capacity retry after budget expiry.
@@ -634,8 +646,7 @@ export async function touchedTests(root: string, baseRef: string, selected: read
       }
       return () => { for (const run of freshGreen) headCache.write(headKey(run.completed[0]!), run); };
     };
-    const workers = comparisonFileWorkers(files, HEAD_FILE_WORKERS, sharesPortableRunner());
-    const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers,
+    const freshHead = await runFiles(root, pending, sandbox, inherited, "head", { ...runOptions, workers: HEAD_FILE_WORKERS,
       onFile: headCache ? (run, cleanupConfirmed) => { if (cleanupConfirmed && isGreenHeadFile(run)) freshGreen.push(run); } : undefined });
     const head: TestRun = { failures: freshHead.failures, passed: [...reused.flatMap(run => run.passed), ...freshHead.passed],
       completed: [...reused.flatMap(run => run.completed), ...freshHead.completed], elapsedMs: freshHead.elapsedMs };
