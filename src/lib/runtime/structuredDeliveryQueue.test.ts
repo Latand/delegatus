@@ -223,24 +223,125 @@ test.each([
         if (next === "delivering") {
           if (verdict === 0 && boundary === "journal write") attention = true;
           if (boundary === "attention resolved") attention = false;
-          if (boundary === "new turn") { attention = true; turnId = "turn-two"; }
+          if (verdict === 0 && boundary === "new turn") { attention = true; turnId = "turn-two"; }
         } else verdicts[verdict++]!.resolve({ status: next, reason: details?.reason });
       },
     }, () => adapter);
     await queue.drain();
     expect(await verdicts[0]!.promise).toEqual(boundary === "new turn"
-      ? { status: "failed", reason: "stale-turn" }
+      ? { status: "queued", reason: "stale-turn" }
       : { status: "queued", reason: "attention changed before queued delivery" });
     expect(writes).toBe(0);
-    if (boundary !== "new turn") {
-      attention = boundary === "host preparation";
-      await queue.drain();
-      expect((await verdicts[1]!.promise).status).toBe("delivered");
-      expect(writes).toBe(1);
-    }
+    attention = boundary === "host preparation";
+    await queue.drain();
+    expect((await verdicts[1]!.promise).status).toBe("delivered");
+    expect(writes).toBe(1);
     expect(interrupts).toBe(0);
   },
 );
+
+for (const policy of ["queue", "steer-or-queue", "interrupt-active"] as const) {
+  for (const boundary of ["journal", "host preparation"] as const) {
+    test.each([
+      ["turn end", "turn-one", null],
+      ["turn start", null, "turn-two"],
+      ["turn replacement", "turn-one", "turn-two"],
+    ] as const)(`an operator ${policy} send retries a %s during ${boundary}`, async (_change, initial, next) => {
+      let turnId: string | null = initial;
+      let changed = false;
+      let status: StructuredDeliveryTransition = "queued";
+      const writes: Array<string | null> = [];
+      const changeTurn = () => { if (!changed) { turnId = next; changed = true; } };
+      const health = (): HostState => ({ ...idleState(), status: turnId ? "active" : "idle", activeTurnRef: turnId });
+      const adapter = Object.assign(host(async (entry, _dispatch, authorize) => {
+        if (boundary === "host preparation") {
+          await Promise.resolve();
+          changeTurn();
+        }
+        authorize?.();
+        if (entry.expectedTurnId !== turnId) return { outcome: "rejected", reason: "stale-turn" };
+        writes.push(turnId);
+        return { outcome: "queued-next-turn", turnId: turnId ?? "started-turn" };
+      }), {
+        supportsSteer: false,
+        supportsQueuedSend: true,
+        sendWaitsForRunningTurn: policy === "interrupt-active",
+        acceptsInputDuringTurn: true,
+        health: async () => health(),
+        agentControlState: () => hostControlFactsFromHealth(health()),
+      });
+      const queue = new StructuredDeliveryQueue({
+        effects: async () => [{
+          id: "effect:send", kind: "runtime.send", eventSeq: 1,
+          payload: { operationId: "send", conversationId: "conversation-one", text: "Follow-up", policy, origin: { kind: "operator" } },
+        }],
+        status: async () => ({ status }),
+        transition: async (_id, nextStatus) => {
+          status = nextStatus;
+          if (nextStatus === "delivering" && boundary === "journal") changeTurn();
+        },
+      }, () => adapter);
+      try {
+        await queue.drain();
+        expect(status).toBe("queued");
+        expect(writes).toEqual([]);
+        await queue.drain();
+        expect(status).toBe("delivered");
+        expect(writes).toEqual([next]);
+      } finally { queue.retire(); }
+    });
+  }
+}
+
+for (const kind of ["interrupt", "answer"] as const) {
+  test.each(["retirement", "update handoff"] as const)(
+    `the ${kind} control retries after %s during its delivering write`,
+    async handoff => {
+      let status: StructuredDeliveryTransition | "pending" = "pending";
+      let reason: string | null | undefined;
+      let held = false;
+      let writer = "writer:1";
+      const writes: string[] = [];
+      const health = (): HostState => ({ ...idleState(), status: "active", activeTurnRef: "turn-one" });
+      const adapter = Object.assign(host(async () => { throw new Error("expected a control"); }), {
+        health: async () => health(),
+        interrupt: async (turnId: string) => { writes.push(turnId); },
+        answer: async (attentionId: string) => { writes.push(attentionId); },
+      });
+      const port: StructuredDeliveryQueuePort = {
+        effects: async () => [{
+          id: "effect:control", kind: `runtime.${kind}`, eventSeq: 1,
+          payload: { operationId: "control", conversationId: "conversation-one",
+            ...(kind === "interrupt" ? { turnId: "turn-one" } : { attentionId: "question-one", resolution: { answer: "yes" } }) },
+        }],
+        status: async () => ({ status, reason }),
+        hostClaim: async () => writer,
+        handoffHeld: () => held,
+        transition: async (_id, next, details, options) => {
+          if (options?.fromStatuses) expect(options.fromStatuses).toContain(status);
+          status = next;
+          reason = details?.reason;
+          if (next !== "delivering" || writer !== "writer:1") return;
+          if (handoff === "retirement") queue.retire();
+          else held = true;
+          writer = "writer:2";
+        },
+      };
+      const queue = new StructuredDeliveryQueue(port, () => adapter);
+      const successor = new StructuredDeliveryQueue(port, () => adapter);
+      try {
+        await queue.drain();
+        expect(status).toBe("queued");
+        expect(reason).toBe("automatic-update-handoff");
+        expect(writes).toEqual([]);
+        held = false;
+        await successor.drain();
+        expect(status).toBe(kind === "interrupt" ? "interrupted" : "answered");
+        expect(writes).toEqual([kind === "interrupt" ? "turn-one" : "question-one"]);
+      } finally { queue.retire(); successor.retire(); }
+    },
+  );
+}
 
 test("every regular drain reconciles the native queue before reading even an empty effect batch (#1674)", async () => {
   const order: string[] = [];

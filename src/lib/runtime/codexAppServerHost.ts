@@ -38,7 +38,7 @@ import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "n
 import { createHash, randomUUID, type Hash } from "node:crypto";
 import fs from "node:fs";
 import { recordedOwnerHeld } from "@/lib/recordedChecks/store";
-import { withRecordedHostFence } from "@/lib/recordedChecks/hostFence";
+import { currentRecordedHostFenceExit, outsideRecordedHostFence, withRecordedHostFence } from "@/lib/recordedChecks/hostFence";
 
 import type { ProcessIdentity } from "@/lib/agent/registry";
 import { procBackend } from "@/lib/proc";
@@ -1508,6 +1508,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   private resolveTermination: (() => void) | null = null;
   private failureCleanupTimer: ReturnType<typeof setTimeout> | null = null;
   private releasePromise: Promise<void> | null = null;
+  private releaseFenceExit?: () => Promise<void> | undefined;
   private releaseCleanup: (() => void) | null;
   private openingAuthority: (() => void) | undefined;
   private writerFence: (() => boolean) | null = null;
@@ -3828,10 +3829,14 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
     this.nativeQueue?.queue.dispose();
     if (!this.releasePromise) {
+      this.releaseFenceExit = this.exitProcess ? currentRecordedHostFenceExit() : undefined;
       const attempt = this.releaseAndReap();
       this.releasePromise = attempt;
       void attempt.catch(() => {
-        if (this.releasePromise === attempt) this.releasePromise = null;
+        if (this.releasePromise === attempt) {
+          this.releasePromise = null;
+          this.releaseFenceExit = undefined;
+        }
       });
     }
     return this.releasePromise;
@@ -5371,7 +5376,19 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   }
 
   private startFailureCleanup(): void {
-    void this.release().catch(() => {
+    // Socket failure and child close can arrive outside the active release's
+    // async context. The admitted attempt owns every remaining signal. Keep
+    // the observer's checkpoint on the same side of the outer retirement.
+    const admitted = this.releasePromise;
+    const fenceExit = this.releaseFenceExit;
+    const releaseWithOwnTicket = () => outsideRecordedHostFence(() => this.release());
+    const cleanup = admitted && fenceExit
+      ? admitted.then(async () => {
+        await fenceExit();
+        await this.persistenceFlush?.();
+      }, releaseWithOwnTicket)
+      : releaseWithOwnTicket();
+    void cleanup.catch(() => {
       if (this.released || this.failureCleanupTimer) return;
       this.failureCleanupTimer = setTimeout(() => {
         this.failureCleanupTimer = null;

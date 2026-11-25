@@ -1,4 +1,4 @@
-import { hostControlFactsFromHealth, sameHostControlRoute, type HostControlFacts } from "@/lib/agentState/control";
+import { hostControlFactsFromHealth } from "@/lib/agentState/control";
 import { SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import { nativeQueueInputMatches } from "./nativeQueueContent";
 import type { RuntimeHostClient } from "./client";
@@ -135,16 +135,9 @@ export class NativeQueueExecutor {
       await transition({ phase: "refused", reason: "native queue host or account ownership changed" });
       return;
     }
-    let observed: HostControlFacts | undefined;
-    const assertCurrent = () => {
-      if (!owns()) throw new StructuredSendRefusedError("native queue writer changed before actuation");
-      const current = host.agentControlState?.();
-      if (current && observed && !sameHostControlRoute(observed, current)) throw new StructuredSendRefusedError("stale-turn or blocking-attention");
-    };
     let actuated = false;
     let prepared = false;
     try {
-      observed = host.agentControlState?.();
       const input = entry && version
         ? version.input ?? await step("preparing the message for Codex's queue", () => native.prepare({ ...entry, binding }, version))
         : [];
@@ -156,19 +149,31 @@ export class NativeQueueExecutor {
         note("evidence-unreadable", "the host's health cannot be read");
         return false;
       }
-      assertCurrent();
-      observed = health;
       if (rebinding && owns() && (health.status === "dead" || health.status === "unhosted")) {
         note("awaiting-host", "the account switch's successor has no live host yet");
         return false;
       }
       if (rebinding && owns() && health.status === "attention" && health.turnId === null) return false;
-      if (!owns() || health.status === "dead" || health.status === "unhosted") throw new StructuredSendRefusedError("native queue writer is unavailable");
-      if (command.turnId !== undefined && command.turnId !== health.turnId) throw new StructuredSendRefusedError("stale-turn");
-      if ((command.action === "start" || command.action === "send-now") && health.status === "attention") throw new StructuredSendRefusedError("blocking-attention");
-      if ((command.action === "start" || (command.action === "send-now" && command.turnId === null)) && !health.idle) throw new StructuredSendRefusedError("idle state is unproven");
-      if (command.action === "add" && health.status === "attention" && health.turnId === null) throw new StructuredSendRefusedError("blocking attention prevents native auto-dispatch");
-      if (command.action === "add" && this.port.requiresDispatchGuard?.(command.conversationId) && !health.idle) {
+      const dispatchesTurn = command.action === "start" || command.action === "send-now";
+      const needsIdle = dispatchesTurn && command.turnId === null;
+      const assertCurrent = () => {
+        if (!owns()) throw new StructuredSendRefusedError("native queue writer changed before actuation");
+        const live = host.agentControlState?.();
+        if (live && live.sessionKey !== binding.threadId) {
+          throw new StructuredSendRefusedError("native queue writer changed before actuation");
+        }
+        const current = live ?? health;
+        if (current.status === "dead" || current.status === "unhosted") throw new StructuredSendRefusedError("native queue writer is unavailable");
+        if (command.turnId !== undefined && command.turnId !== current.turnId) throw new StructuredSendRefusedError("stale-turn");
+        if (dispatchesTurn && current.status === "attention") throw new StructuredSendRefusedError("blocking-attention");
+        if (needsIdle && !current.idle) throw new StructuredSendRefusedError("idle state is unproven");
+        if (command.action === "add" && current.status === "attention" && current.turnId === null) {
+          throw new StructuredSendRefusedError("blocking attention prevents native auto-dispatch");
+        }
+        return current;
+      };
+      const currentHealth = assertCurrent();
+      if (command.action === "add" && this.port.requiresDispatchGuard?.(command.conversationId) && !currentHealth.idle) {
         this.port.authorizeDispatch?.(command.conversationId);
         note("awaiting-turn", "waiting for the current turn to finish");
         return false;
@@ -192,19 +197,19 @@ export class NativeQueueExecutor {
       assertCurrent();
       await transition({ phase: "prepared", input, ...(rebinding ? { binding } : {}) });
       prepared = true;
-      assertCurrent();
+      const dispatchHealth = assertCurrent();
       if (command.action !== "delete" && command.action !== "reorder") this.port.authorizeDispatch?.(command.conversationId);
       const guardedAdd = command.action === "add" && this.port.requiresDispatchGuard?.(command.conversationId);
-      if (guardedAdd && !health.idle) {
+      if (guardedAdd && !dispatchHealth.idle) {
         await transition({ phase: "deferred", reason: "waiting for guarded idle dispatch" });
         return false;
       }
       let wireAuthorized = false;
       const authorizeWrite = () => {
         try {
-          assertCurrent();
+          const current = assertCurrent();
           if (command.action !== "delete" && command.action !== "reorder") this.port.authorizeDispatch?.(command.conversationId);
-          if (command.action === "add" && !guardedAdd && this.port.requiresDispatchGuard?.(command.conversationId)) {
+          if (command.action === "add" && (guardedAdd ? !current.idle : this.port.requiresDispatchGuard?.(command.conversationId))) {
             throw new StructuredDispatchDeferredError("native queue requires guarded idle dispatch");
           }
         } catch (error) {

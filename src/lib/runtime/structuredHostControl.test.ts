@@ -678,9 +678,31 @@ test("a refused signal is a failure, not a success, and the registry row stays",
   );
 
   expect(outcome).toMatchObject({ ok: false, status: 500, remaining: [6_000] });
+  expect(outcome).not.toHaveProperty("stoppedVia");
   expect((outcome as { error: string }).error).toContain("EPERM");
   /* The host is still running, so the row that describes it must survive. */
   expect(retired).toEqual([]);
+});
+
+test("a signal that races a natural exit carries no stop attribution", async () => {
+  let alive = true;
+  const outcome = await terminateStructuredHostTree(
+    ref({ pid: 6_009, startIdentity: "6009:start", sessionId: CLAUDE_SESSION }),
+    {
+      processIdentity: () => alive ? "6009:start" : null,
+      pidAlive: () => alive,
+      ppidMap: () => new Map(),
+      processGroupId: () => null,
+      protectedPids: () => new Set(),
+      terminateOwnedHost: async () => false,
+      signal: () => {
+        alive = false;
+        throw Object.assign(new Error("process already exited"), { code: "ESRCH" });
+      },
+      retireRegistryEntry: () => true,
+    },
+  );
+  expect(outcome).toEqual({ ok: true, via: "already-exited", pids: [] });
 });
 
 test("termination refuses to act when the captured tree was not durably recorded", async () => {
@@ -739,13 +761,14 @@ test("a termination refused before its first effect withdraws its capture, and o
 
   // Refused after the runtime released the host: the capture is evidence of a termination that began.
   const begun = await run(2);
-  expect(begun.outcome).toMatchObject({ ok: false, terminationStarted: true });
+  expect(begun.outcome).toMatchObject({ ok: false, terminationStarted: true, stoppedVia: "runtime" });
   expect(begun.effects).toEqual(["capture", "runtime-release", "first-effect"]);
 
   // The runtime held nothing of this host and ended nothing: a refusal after that answer is still before any effect.
   const asked = await run(2, false);
   expect(asked.outcome).toMatchObject({ ok: false, status: 409, error: "authority lost", survivors: [] });
   expect(asked.outcome).not.toHaveProperty("terminationStarted");
+  expect(asked.outcome).not.toHaveProperty("stoppedVia");
   expect(asked.effects).toEqual(["capture", "runtime-release", "withdraw"]);
 
   const completed = await run(0, false);
@@ -755,6 +778,36 @@ test("a termination refused before its first effect withdraws its capture, and o
   const releasedByRuntime = await run(0);
   expect(releasedByRuntime.outcome).toMatchObject({ ok: true, via: "runtime" });
   expect(releasedByRuntime.effects).toEqual(["capture", "runtime-release", "first-effect", "retire"]);
+});
+
+test("runtime release checks synchronous authority after asynchronous refresh", async () => {
+  let runtimeAdmitted = false;
+  let authorized = true;
+  const outcome = await terminateStructuredHostTree(
+    ref({ pid: 6_009, startIdentity: "6009:start", sessionId: CLAUDE_SESSION }),
+    {
+      processIdentity: () => "6009:start",
+      pidAlive: () => true,
+      ppidMap: () => new Map(),
+      processGroupId: () => null,
+      protectedPids: () => new Set(),
+      authorizeAsync: async () => {
+        await Promise.resolve();
+        if (runtimeAdmitted) authorized = false;
+        return null;
+      },
+      authorize: () => authorized ? null : { status: 409, error: "authority lost during refresh" },
+      terminateOwnedHost: async (_key, _expected, authorize) => {
+        runtimeAdmitted = true;
+        expect(await authorize?.()).toMatchObject({ status: 409, error: "authority lost during refresh" });
+        return false;
+      },
+      signal: () => { throw new Error("unexpected signal"); },
+    },
+  );
+  expect(outcome).toMatchObject({ ok: false, status: 409, error: "authority lost during refresh" });
+  expect(outcome).not.toHaveProperty("stoppedVia");
+  expect(runtimeAdmitted).toBe(true);
 });
 
 test("a refused signal reports each survivor with the identity it carried (#1501)", async () => {

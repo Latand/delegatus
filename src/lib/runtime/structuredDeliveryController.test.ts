@@ -11,6 +11,8 @@ import { expect, setSystemTime, spyOn, test } from "bun:test";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
+import { readAgentProjection, subjectId } from "@/lib/agentState/store";
+import { AgentStateService } from "@/lib/agentState/service";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
@@ -28,7 +30,7 @@ import {
   terminateStructuredDeliveryHost,
 } from "./structuredDeliveryController";
 
-test.each(["dead", "silent since launch", "working"] as const)(
+test.each(["dead", "silent since launch", "working", "settled projection"] as const)(
   "the production delivery binding settles hostless controls using transcript liveness (%s)",
   async processState => {
     const f = migrationDeliveryFixture();
@@ -40,7 +42,8 @@ test.each(["dead", "silent since launch", "working"] as const)(
     const pidAlive = procBackend.pidAlive.bind(procBackend);
     const processIdentity = procBackend.processIdentity.bind(procBackend);
     const processCpuMs = procBackend.processCpuMs.bind(procBackend);
-    const alive = spyOn(procBackend, "pidAlive").mockImplementation(p => p === pid ? processState !== "dead" : pidAlive(p));
+    const dead = processState === "dead" || processState === "settled projection";
+    const alive = spyOn(procBackend, "pidAlive").mockImplementation(p => p === pid ? !dead : pidAlive(p));
     const identity = spyOn(procBackend, "processIdentity").mockImplementation(p => p === pid ? startIdentity : processIdentity(p));
     const cpu = spyOn(procBackend, "processCpuMs").mockImplementation(p => p === pid ? 0 : processCpuMs(p));
     setSystemTime(new Date(now));
@@ -51,7 +54,7 @@ test.each(["dead", "silent since launch", "working"] as const)(
         type: "response_item", payload: { type: "function_call", call_id: "call-inherited" },
       }) + "\n");
       f.registry.upsert({ ...existing, status: "live", structuredHost: {
-        ...existing.structuredHost!, process: { pid, startIdentity }, activeTurnRef: turnId, pendingAttention: [attentionId],
+        ...existing.structuredHost!, process: captureProcessIdentity(pid), activeTurnRef: turnId, pendingAttention: [attentionId],
       } });
       expect(f.registry.agentStateRead(file => Object.keys(file.agentStates))).toEqual([]);
       const scope = { type: "session" as const, id: f.conversation.id };
@@ -71,6 +74,25 @@ test.each(["dead", "silent since launch", "working"] as const)(
       expect(answer.receipt.status).toBe("pending");
       expect(interrupt.receipt.status).toBe("pending");
 
+      if (processState === "settled projection") {
+        // A confirmed dead host left durable turn evidence before the transcript became unavailable.
+        fs.writeFileSync(existing.artifactPath, ["task_started", "task_complete"].map((type, index) => JSON.stringify({
+          timestamp: new Date(now - (2 - index) * 60_000).toISOString(), type: "event_msg",
+          payload: { type, turn_id: turnId },
+        })).join("\n") + "\n");
+        const service = new AgentStateService({ registry: f.registry, now: () => now, owns: () => true,
+          process: () => "dead", memory: () => null, release: "fixture", publish: async () => false });
+        try {
+          const entry = f.registry.hostEntry(f.key)!;
+          await service.reconcile(entry);
+          expect(f.registry.hostEntry(f.key)?.structuredHost?.activeTurnRef).toBe(turnId);
+          expect(readAgentProjection(f.registry, subjectId(entry))?.facts).toMatchObject({
+            process: { determined: true, value: { status: "dead" } },
+            turn: { determined: true, value: { state: "closed" } },
+          });
+        } finally { service.stop(); }
+        fs.unlinkSync(existing.artifactPath);
+      }
       await bindStructuredDeliveryQueue([], { registry: f.registry, client: f.client,
         watchdogIntervalMs: 0, settlementSweepMs: 0, hostlessSettleIntervalMs: 0 });
       await kickStructuredDeliveryQueue();
@@ -81,7 +103,8 @@ test.each(["dead", "silent since launch", "working"] as const)(
         expect(answerReceipt?.status).toBe("pending");
         expect(interruptReceipt?.status).toBe("pending");
       } else {
-        const reason = processState === "dead" ? "no longer exists" : "written nothing since its own launch";
+        const reason = processState === "settled projection" ? "the recorded host ended after its turn settled"
+          : processState === "dead" ? "no longer exists" : "written nothing since its own launch";
         expect(answerReceipt).toMatchObject({ status: "failed", reason: expect.stringContaining(reason) });
         expect(interruptReceipt).toMatchObject({ status: "interrupted", reason: expect.stringContaining(reason) });
       }
@@ -191,6 +214,31 @@ test("unqualified termination still retires its captured host row", async () => 
       status: "dead", claimOwner: null, structuredHost: null,
     });
   } finally { await f.cleanup(); }
+});
+
+test("accepted native release evidence survives a registry writer failure", async () => {
+  const f = migrationDeliveryFixture();
+  let accepted = 0;
+  const releaseIfOwned = async (_expected: { pid: number; startIdentity: string }, authorize?: () => Promise<{ status: 403 | 409; error: string } | null>) => {
+    expect(await authorize?.()).toBeNull();
+    return true;
+  };
+  const host = Object.assign(f.host, { releaseIfOwned });
+  const admission = spyOn(f.registry, "deliveryWriteOrBusy").mockImplementation(async (correlation) => {
+    if (correlation.label === "registry.terminateStructuredHost") throw new Error("registry writer admission timed out after release");
+    throw new Error(`unexpected writer: ${correlation.label}`);
+  });
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host }], { registry: f.registry, client: f.client,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    await expect(terminateStructuredDeliveryHost(f.key,
+      { pid: process.pid + 100_000, startIdentity: "expected-old-host" }, async () => null,
+      () => { accepted++; })).rejects.toThrow("registry writer admission timed out after release");
+    expect(accepted).toBe(1);
+  } finally {
+    admission.mockRestore();
+    await f.cleanup();
+  }
 });
 
 test("structured host projection publishes a files revision for connected viewers", async () => {

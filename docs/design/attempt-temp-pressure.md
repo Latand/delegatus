@@ -89,6 +89,42 @@ visit counts, cumulative removed roots/bytes and elapsed time. `lastPass`
 distinguishes completion from pressure clearing early; `lastFullPass` retains
 the latest full-pass duration even after a later partial pressure episode.
 
+Outside pressure, a scheduled tick admits up to 32 roots by recorded expiry
+and directory. The helper has a 60-second request deadline, including
+admission and reply. Root work has a 40-second soft budget inside that
+deadline. Each root gets a size-based window of 5–30 seconds, bounded by what
+remains of the tick. A saved traversal can use up to 30 seconds on the next
+visit. The Viewer awaits the helper asynchronously and schedules the next
+request one minute after the attempt and maintenance requests settle.
+
+Every reported root decision has `outcomes[].reasonCode` and a human-readable
+`reason`. `retryAt`, when present, is the next ledger admission time in epoch
+milliseconds.
+
+| Decision | Reason codes |
+| --- | --- |
+| Deadline or contention | `tick_budget`, `root_budget`, `checkout_budget`, `protection_budget`, `allocation_budget`, `mutation_fence_budget`, `permission_budget`, `namespace_budget`, `ledger_busy`, `admission_busy` |
+| Proof or recovery deferred | `protection_checkpoint`, `protection_marker_limit`, `protection_changed`, `checkout_changed`, `proof_unavailable`, `proof_changed`, `recovery_binding_scan` |
+| Live reference or unavailable inventory | `process_reference`, `unix_socket_reference`, `checkout_link_reference`, `checkout_unknown`, `checkout_unreadable`, `container_mount_reference`, `container_inventory_unknown` |
+| Retained data | `mount_boundary`, `git_boundary`, `keep_marker`, `namespace_tree_hold`, `recorded_evidence_hold`, `recorded_evidence_lifetime`, `linked_evidence_hold`, `declared_evidence_hold`, `operator_permissions` |
+| Ownership or a changed guard | `owner_*`, `expiry_unconfirmed`, `expiry_admission`, `expiry_revoked`, `authority_changed`, `root_identity_changed`, `root_ancestry_changed`, `evidence_changed`, `recovery_owner_unknown`, `recovery_restored_before_expiry`, `dispatch_refused`, `dispatch_reference_or_changed` |
+
+Outside pressure, an expired
+root whose proof must start over normally waits 15 minutes before the next
+visit. A saved checkpoint, journaled removal or tick that ran out of time can
+resume sooner.
+Allocation refresh skips expired roots during their retry interval.
+
+`cleanup.oldestEligibleRootAgeSeconds` reads the oldest expired deadline
+currently due for a visit. A visit still has to prove identity, authority and
+the absence of holds. `adopted` counts root ownership recovered this tick.
+`copies.adopted` counts newly discovered evidence copies.
+`copies.sourceAttributed` counts existing legacy copies matched to a
+registered scratch source. A bounded repair cursor examines existing copies,
+and a retiring root checks for its copy before dropping its ledger entry.
+The legacy copy keeps its owner and retention clock. Its allocation leaves
+the `copies.unattributed` count and bytes.
+
 The root ledger is written by registration, release, bounded retention
 backfill and visited-root measurement. The sweep owns the new pass tables
 under its process-shared sweep lock. Production reads the returned fields into

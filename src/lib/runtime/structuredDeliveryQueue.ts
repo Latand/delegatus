@@ -810,6 +810,11 @@ function isMessageEffect(effect: DeliveryEffect): effect is SendEffect | InjectE
   return effect.kind === "send" || effect.kind === "steer" || effect.kind === "inject";
 }
 
+function mayRetrySendTurn(effect: SendEffect, steerByInterrupt: boolean): boolean {
+  return effect.turnId === undefined && !effect.onlyIfIdle
+    && ((effect.kind === "send" && effect.policy !== "steer-if-active") || steerByInterrupt);
+}
+
 /** A message handed to Codex's own queue: an ordinary queue send the journal
     converted, or a Queue-for-Codex hand-off. Its add operation carries the
     message's progress record (A6). */
@@ -2429,6 +2434,7 @@ export class StructuredDeliveryQueue {
          already ended leaves nothing to interrupt and the message simply starts
          one. It is never delivered as `steered` (docs/design/copilot-engine.md 3.4). */
       const steerByInterrupt = !steerOrQueue && steerRequested && host.steerFallback === "interrupt";
+      const retryTurnChange = mayRetrySendTurn(effect, steerByInterrupt);
       // Only in-turn steering joins the original cohort. Interrupt fallback
       // replaces that turn and must wait along with other fresh turn starts.
       if ((!maySteer || steerByInterrupt) && heldForUpdate()) { updateHeld = true; this.noteWait(effect, "update-drain"); continue; }
@@ -2631,7 +2637,18 @@ export class StructuredDeliveryQueue {
         if (lane?.released) return true;
         try {
           assertOwner();
-          this.assertHostRoute(host, health);
+          this.assertHostRoute(host, health, { retryTurnChange });
+        } catch (error) {
+          const refused = error instanceof StructuredSendRefusedError;
+          const reason = failureReason(error);
+          await this.transitionUnlessSettled(effect.operationId, refused ? "failed" : "queued",
+            { reason, ...clearedRoute }, { fromStatuses: ["delivering"] });
+          if (refused) continue;
+          this.noteWait(effect, "awaiting-turn", { wake: "retry", detail: reason });
+          this.retrySoon();
+          return true;
+        }
+        try {
           this.port.authorizeDispatch?.(effect.operationId, effect.conversationId, effect.origin);
           await host.interrupt(health.turnId!);
           this.interruptAcknowledged.add(effect.operationId);
@@ -2721,7 +2738,7 @@ export class StructuredDeliveryQueue {
         && (effect.policy === "queue" || steerOrQueue || waitsForTurn);
       const assertCurrent = () => {
         assertOwner();
-        this.assertHostRoute(host, health, deferOnAttentionChange);
+        this.assertHostRoute(host, health, { retryTurnChange, deferOnAttentionChange });
       };
       const authorize = () => {
         recoveryGuard?.();
@@ -2858,15 +2875,17 @@ export class StructuredDeliveryQueue {
         this.retrySoon();
         return "stop";
       }
-      if (effect.kind === "send" && effect.policy === "context-or-queue"
-        && error instanceof StructuredSendRefusedError && reason === "stale-turn") {
-        // A turn can start during native metadata publication. Nothing was
-        // written by this attempt; reconsider context versus wake under its key.
+      if (error instanceof StructuredSendRefusedError && reason === "stale-turn"
+        && mayRetrySendTurn(effect, context.steerByInterrupt)) {
+        // A pre-write refusal lets an unfenced send choose its route again.
         const current = await this.readStatus(effect.operationId);
         if (!current.readable || !current.value) { this.retrySoon(); return "stop"; }
         if (context.priorDeliveryUnverified || current.value.deliveryUnverified === true) {
           await this.terminalizeUnverified(effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${reason}`, context.clearedRoute);
           return "next";
+        }
+        if (context.steerOrQueue && context.steersIntoTurn) {
+          this.refusedSteerTurns.set(effect.operationId, context.activeTurnRef);
         }
         await this.transitionUnlessSettled(effect.operationId, "queued", { reason });
         this.noteWait(effect, "awaiting-turn", { wake: "retry", detail: "the turn changed before the hand-over" });
@@ -2874,7 +2893,7 @@ export class StructuredDeliveryQueue {
         return "stop";
       }
       if (error instanceof StructuredSendRefusedError || error instanceof NativeQueueProtocolRefusal) {
-        if (context.steerOrQueue && context.steersIntoTurn) {
+        if (context.steerOrQueue && context.steersIntoTurn && reason !== "stale-turn") {
           this.refusedSteerTurns.set(effect.operationId, context.activeTurnRef);
           await this.transitionUnlessSettled(effect.operationId, "queued", { reason: `steer-refused: ${reason}` });
           this.retrySoon();
@@ -2932,7 +2951,7 @@ export class StructuredDeliveryQueue {
       if (receipt.reason === "stale-turn") {
         /* A send that lost a race with a turn change goes back to the queue.
            An interrupt-and-resend retries its interrupt path as well. */
-        if ((effect.kind === "send" && effect.policy !== "steer-if-active") || context.steerByInterrupt) {
+        if (mayRetrySendTurn(effect, context.steerByInterrupt)) {
           await this.transitionUnlessSettled(effect.operationId, "queued", { reason: refusal });
           this.noteWait(effect, "awaiting-turn", { detail: receipt.refusal ?? "the turn changed before the hand-over" });
           return "stop";
@@ -3303,7 +3322,9 @@ export class StructuredDeliveryQueue {
     };
   }
 
-  private assertHostRoute(host: EngineHost, observed: HostControlFacts, deferOnAttentionChange = false): void {
+  private assertHostRoute(host: EngineHost, observed: HostControlFacts,
+    { retryTurnChange, deferOnAttentionChange = false }: { retryTurnChange: boolean; deferOnAttentionChange?: boolean },
+  ): void {
     const current = host.agentControlState?.();
     if (!current || sameHostControlRoute(observed, current)) return;
     if (deferOnAttentionChange && current.sessionKey === observed.sessionKey && current.turnId && current.turnId === observed.turnId
@@ -3311,6 +3332,7 @@ export class StructuredDeliveryQueue {
         || (observed.status === "attention" && current.status === "active"))) {
       throw new StructuredDispatchDeferredError("attention changed before queued delivery");
     }
+    if (retryTurnChange) throw new StructuredDispatchDeferredError("stale-turn");
     throw new StructuredSendRefusedError("stale-turn");
   }
 
@@ -4086,7 +4108,12 @@ export class StructuredDeliveryQueue {
       this.retrySoon();
       return { blocked: true, terminated: false };
     }
-    if (!ownsLane()) return { blocked: true, terminated: false };
+    if (!ownsLane()) {
+      // This executor committed the fence and has made no host call.
+      await this.transitionUnlessSettled(effect.operationId, "queued", { reason: "automatic-update-handoff" },
+        { fromStatuses: ["delivering"] });
+      return { blocked: true, terminated: false };
+    }
     try {
       assertOwner();
       // Blocking attention can change while the control still targets the same turn.
