@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { requestWorkload } from "./requestWorkload";
 import { createPerformanceSpans } from "./performanceSpans";
 import { startLoopWatchdog } from "./loopWatchdog";
 import { createLoopLogSink, createViewerLoopMonitor } from "./viewerLoopMonitor";
@@ -207,3 +208,25 @@ test("unwrapped CPU work remains an unknown site while the watchdog observes run
     expect(after.runNs).toBeGreaterThan(before.runNs);
   } finally { await watcher.stop(); }
 }, 15_000);
+
+test("a pause groups keyed reads by active operation and gives request labels precedence", () => {
+  let at = 0;
+  const recorder = createPerformanceSpans(() => at);
+  const lines: string[] = [];
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, recorder);
+  const fast = () => { at += 0.25; };
+  recorder.sync("registry.keyed", fast, 0, 0, "agents.reconcile");
+  recorder.sync("registry.keyed", fast, 0, 0, "seat.panel");
+  recorder.sync("registry.keyed", fast, 0, 0, "seat.panel");
+  requestWorkload.withRoute("/api/files", () => recorder.sync("registry.keyed", fast, 0, 0, "seat.panel"));
+  recorder.sync("registry.keyed", () => { at += 1000; }, 0, 0, "registry.read");
+  monitor.tick();
+  const rows = JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length)).attribution.slices;
+  expect(rows).toContainEqual(expect.objectContaining({ registryOperation: "agents.reconcile", count: 1, totalMs: 0.25 }));
+  expect(rows).toContainEqual(expect.objectContaining({ registryOperation: "seat.panel", count: 2, totalMs: 0.5 }));
+  const route = rows.find((row: { requestClass?: string }) => row.requestClass === "http:/api/files");
+  expect(route.totalMs).toBe(0.25);
+  expect(route.registryOperation).toBeUndefined();
+  const bare = rows.find((row: { totalMs: number }) => row.totalMs === 1000);
+  expect(bare.registryOperation).toBeUndefined();
+});
