@@ -147,12 +147,12 @@ export function HtmlPane({
   onFailure: (failure: ArtifactFailure) => void;
 }) {
   const { t } = useLocale();
-  const [mode, setMode] = useState<DocumentMode>(line ? "source" : "rendered");
+  const [mode, setMode] = useState<DocumentMode>(line && !meta.frameOnly ? "source" : "rendered");
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <Toolbar>
+      {!meta.frameOnly ? <Toolbar>
         <ModeToggle mode={mode} onMode={setMode} mobile={mobile} />
-      </Toolbar>
+      </Toolbar> : null}
       {mode === "source" ? (
         <TextPane path={path} meta={meta} mobile={mobile} line={line} onFailure={onFailure} />
       ) : (

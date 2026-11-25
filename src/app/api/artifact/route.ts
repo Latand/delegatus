@@ -6,12 +6,12 @@ import path from "node:path";
 
 import { NextRequest, NextResponse } from "next/server";
 
-import { classifyArtifact } from "@/lib/artifact/classify";
+import { classifyArtifact, isHtmlReport } from "@/lib/artifact/classify";
 import { frameUrl, mintFrameScope } from "@/lib/artifact/frameScope";
 import { requestSession } from "@/lib/team/sessions";
 import { existingTeamStore } from "@/lib/team/store";
 import { artifactEtag, artifactLimits, artifactResponseHeaders, parseByteRange, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
-import { admittedAs, lexicalAllowedRoots, keptPictureProject, openAdmitted, readablePlace, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
+import { admittedAs, evidenceFrameAdmission, lexicalAllowedRoots, keptPictureProject, openAdmitted, readablePlace, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -27,7 +27,8 @@ export const dynamic = "force-dynamic";
  * same-origin/Host gate IS the operator authority on this loopback service
  * (see `page.tsx`), and the allowed-root policy confines reads to the
  * recorded project folders, their checkouts, manual projects and stage scratch.
- * Evidence roots and the report picture store serve raster images only.
+ * Evidence roots also admit HTML metadata for the sandboxed frame. Direct
+ * reads from evidence roots and the report picture store admit raster images.
  * The home directory itself is never an allowed root.
  *
  * Containment is enforced twice (lexical resolve, then realpath) so neither
@@ -78,9 +79,12 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
 
   /* A picture a report named is read from its kept copy once it is gone. */
   const requested = resolveLocal(raw);
-  const abs = readablePlace(requested);
-  const admission = admittedAs(abs, lexicalAllowedRoots());
+  const metadata = req.nextUrl.searchParams.get("mode") === "meta";
+  const roots = lexicalAllowedRoots();
+  const abs = readablePlace(requested, roots);
+  const admission = admittedAs(abs, roots) ?? (metadata && abs === requested && isHtmlReport(abs) ? evidenceFrameAdmission(abs, roots) : null);
   if (!admission) return fail("access-denied", "path is outside the allowed roots");
+  const evidenceHtml = admission === "evidence-html";
 
   const classified = classifyArtifact(abs);
   if (!classified) return fail("unsupported", "not a previewable artifact type");
@@ -128,6 +132,11 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
     const limits = artifactLimits();
     const download = req.nextUrl.searchParams.get("download") === "1";
 
+    if (evidenceHtml && stat.size > limits.maxBytes) {
+      await handle.close();
+      return fail("too-large", "artifact exceeds the configured byte bound");
+    }
+
     /* Before meta as well: a mismatched file must fail at open time with the
        explicit unsupported state, not after a pane mounted around it. */
     const head = Buffer.alloc(Math.min(SNIFF_BYTES, stat.size));
@@ -137,17 +146,20 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
       return fail("mime-mismatch", "file content does not match its extension");
     }
 
-    if (req.nextUrl.searchParams.get("mode") === "meta") {
+    if (metadata) {
       await handle.close();
       /* An HTML report is shown as a browser would show it, in a sandboxed
          frame fed by the frame route; the scope minted here is the only way
          to reach that route, and it covers this report's directory alone. */
       const live = requestSession(req);
-      if (/\.html?$/i.test(real) && existingTeamStore()?.hasActiveOwner() && !live)
+      if (isHtmlReport(real) && existingTeamStore()?.hasActiveOwner() && !live)
         return NextResponse.json({ error: "sign in to open a report frame", code: "member_required" }, { status: 401 });
-      const frame = /\.html?$/i.test(real) ? frameUrl(mintFrameScope(path.dirname(real), Date.now(), live?.session.id ?? null), path.basename(real)) : undefined;
+      const frame = isHtmlReport(real)
+        ? frameUrl(mintFrameScope(path.dirname(real), Date.now(), live?.session.id ?? null, evidenceHtml ? "evidence" : "project"), path.basename(real))
+        : undefined;
       return NextResponse.json(
-        { name, kind, mime, size: stat.size, mtimeMs: Math.round(stat.mtimeMs), etag, ...(frame ? { frame } : {}) },
+        { name, kind, mime, size: stat.size, mtimeMs: Math.round(stat.mtimeMs), etag,
+          ...(frame ? { frame } : {}), ...(evidenceHtml ? { frameOnly: true } : {}) },
         { headers: { "cache-control": "private, no-store" } },
       );
     }

@@ -24,10 +24,8 @@ test("a frame minted before member revocation is refused, including after restor
   const store = teamStore();
   const owner = claimInstall(store, "Owner", device, NOW).member;
   const person = redeemJoin(store, createInvite(store, owner, null, NOW).code, "Member A", device, NOW);
-  // The third argument binds the capability to a session; older versions ignore it.
-  const mint = mintFrameScope as (directory: string, now: number, sessionId: string) => string;
-  const scope = mint("/project/reports", NOW, person.session.id);
-  expect(verifyFrameScope(scope, NOW)).toBe("/project/reports");
+  const scope = mintFrameScope("/project/reports", NOW, person.session.id);
+  expect(verifyFrameScope(scope, NOW)).toEqual({ directory: "/project/reports", kind: "project" });
   revokeMember(store, owner, person.member, NOW + 1);
   expect(verifyFrameScope(scope, NOW + 2)).toBeNull();
   restoreMember(store, owner, store.member(person.member.id)!, NOW + 3);
@@ -41,12 +39,13 @@ test("sign-out revokes only that session's frames", () => {
   const store = teamStore();
   const owner = claimInstall(store, "Owner", device, NOW);
   const second = mintSession(store, owner.member.id, "approval", device, NOW);
-  const mint = mintFrameScope as (directory: string, now: number, sessionId: string) => string;
-  const firstFrame = mint("/project/reports", NOW, owner.session.id);
-  const secondFrame = mint("/project/reports", NOW, second.session.id);
+  const firstFrame = mintFrameScope("/state/evidence", NOW, owner.session.id, "evidence");
+  const secondFrame = mintFrameScope("/project/reports", NOW, second.session.id);
+  expect(verifyFrameScope(firstFrame, NOW)).toEqual({ directory: "/state/evidence", kind: "evidence" });
+  expect(verifyFrameScope(firstFrame.replace(".evidence.", ".project."), NOW)).toBeNull();
   store.revokeSession(owner.session.id, new Date(NOW + 1).toISOString());
   expect(verifyFrameScope(firstFrame, NOW + 2)).toBeNull();
-  expect(verifyFrameScope(secondFrame, NOW + 2)).toBe("/project/reports");
+  expect(verifyFrameScope(secondFrame, NOW + 2)).toEqual({ directory: "/project/reports", kind: "project" });
 });
 
 test("a session's absolute expiry and idle bound are checked even within a new frame's lifetime", () => {
@@ -58,7 +57,7 @@ test("a session's absolute expiry and idle bound are checked even within a new f
   const session = { ...owner.session, id: "expired-session", expiresAt: new Date(NOW + 1).toISOString() };
   store.insertSession(session);
   const expiring = mintFrameScope("/project/reports", NOW, session.id);
-  expect(verifyFrameScope(expiring, NOW)).toBe("/project/reports");
+  expect(verifyFrameScope(expiring, NOW)).toEqual({ directory: "/project/reports", kind: "project" });
   expect(verifyFrameScope(expiring, NOW + 1)).toBeNull();
   const stale = { ...owner.session, id: "idle-session", lastSeenAt: new Date(NOW - SESSION_IDLE_MS).toISOString() };
   store.insertSession(stale);

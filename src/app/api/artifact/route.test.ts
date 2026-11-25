@@ -329,7 +329,7 @@ test("an evidence image under /var/tmp opens by default (#2084)", async () => {
   }
 });
 
-test("an evidence root serves images only, and nothing outside the roots opens", async () => {
+test("direct evidence reads serve raster images only", async () => {
   const evidence = fs.mkdtempSync(path.join(sandbox, "evidence-"));
   const elsewhere = fs.mkdtempSync(path.join(sandbox, "elsewhere-"));
   process.env.LLV_EVIDENCE_ROOTS = evidence;
@@ -350,6 +350,41 @@ test("an evidence root serves images only, and nothing outside the roots opens",
     const res = await GET(request({ path: p }));
     expect(res.status).toBe(403);
     expect(await errorCode(res)).toBe("access-denied");
+  }
+});
+
+test("evidence HTML metadata never exposes a direct body or download", async () => {
+  const content = "<h1>Fixture disk report</h1>";
+  const abs = write("state/evidence/agents/fixture/report.HTM", content);
+  const meta = await GET(request({ path: abs, mode: "meta" }));
+  expect(meta.status).toBe(200);
+  const body = await meta.text();
+  expect(JSON.parse(body)).toMatchObject({ name: "report.HTM", kind: "text", frameOnly: true });
+  expect(body).not.toContain(content);
+  for (const params of [{ path: abs }, { path: abs, download: "1" }]) {
+    const res = await GET(request(params, { range: "bytes=0-9" }));
+    expect(res.status).toBe(403);
+    expect(await errorCode(res)).toBe("access-denied");
+  }
+  process.env.LLV_ARTIFACT_MAX_BYTES = "8";
+  expect((await GET(request({ path: abs, mode: "meta" }))).status).toBe(413);
+});
+
+test("evidence metadata refuses escapes, hidden reports, the picture store and other formats", async () => {
+  const abs = write("state/evidence/agents/fixture/report.html", "<p>Fixture report</p>");
+  const outside = write("state/private/index.html", "<p>Private fixture</p>");
+  const hidden = write("state/evidence/agents/fixture/.local/index.html", "<p>Private fixture</p>");
+  const markdown = write("state/evidence/agents/fixture/notes.md", "# Fixture notes");
+  const alias = path.join(path.dirname(abs), "alias.html");
+  fs.symlinkSync(outside, alias);
+  const pictureStore = path.join(reportMediaRoot(), "index.html");
+  fs.mkdirSync(path.dirname(pictureStore), { recursive: true });
+  fs.writeFileSync(pictureStore, "<p>Private fixture</p>");
+
+  for (const file of [`${home}/state/evidence/../private/index.html`, alias, hidden, markdown, pictureStore]) {
+    const res = await GET(request({ path: file, mode: "meta" }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: "access-denied" });
   }
 });
 

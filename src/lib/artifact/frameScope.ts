@@ -12,7 +12,8 @@ import { existingTeamStore } from "@/lib/team/store";
  * directory — the report's own — and is minted only by the same-origin meta
  * read of /api/artifact, so a page that has not been handed a frame URL
  * cannot build one, and a frame that has been handed one reaches nothing
- * outside its report's directory.
+ * outside its report's directory. The signed kind binds the grant to the
+ * admission policy that allowed the report.
  *
  * The key lives only in this process: a restart invalidates every scope, and
  * the preview simply mints a new one on its next open.
@@ -35,18 +36,24 @@ function sign(payload: string): string {
   return createHmac("sha256", frameKey()).update(payload).digest("base64url");
 }
 
-/** A signed directory, expiry and minting session (or `-` for a solo install). */
-export function mintFrameScope(directory: string, now: number = Date.now(), sessionId: string | null = null): string {
-  const payload = `${Buffer.from(directory, "utf8").toString("base64url")}.${(now + FRAME_SCOPE_TTL_MS).toString(36)}.${sessionId ?? "-"}`;
+interface FrameGrant {
+  directory: string;
+  kind: "project" | "evidence";
+}
+
+/** A signed canonical directory, admission kind, expiry and minting session (or `-` for a solo install). */
+export function mintFrameScope(directory: string, now: number = Date.now(), sessionId: string | null = null, kind: FrameGrant["kind"] = "project"): string {
+  const payload = `${Buffer.from(directory, "utf8").toString("base64url")}.${(now + FRAME_SCOPE_TTL_MS).toString(36)}.${sessionId ?? "-"}.${kind}`;
   return `${payload}.${sign(payload)}`;
 }
 
-/** The directory a scope grants, or null when it is forged, altered or expired. */
-export function verifyFrameScope(scope: string, now: number = Date.now()): string | null {
+/** The verified grant, or null when it is forged, altered or expired. */
+export function verifyFrameScope(scope: string, now: number = Date.now()): FrameGrant | null {
   const parts = scope.split(".");
-  if (parts.length !== 4) return null;
-  const [dir, expiry, sessionId, signature] = parts as [string, string, string, string];
-  const expected = Buffer.from(sign(`${dir}.${expiry}.${sessionId}`));
+  if (parts.length !== 5) return null;
+  const [dir, expiry, sessionId, kind, signature] = parts as [string, string, string, string, string];
+  if (kind !== "project" && kind !== "evidence") return null;
+  const expected = Buffer.from(sign(`${dir}.${expiry}.${sessionId}.${kind}`));
   const given = Buffer.from(signature);
   if (expected.length !== given.length || !timingSafeEqual(expected, given)) return null;
   const expiresAt = parseInt(expiry, 36);
@@ -61,7 +68,7 @@ export function verifyFrameScope(scope: string, now: number = Date.now()): strin
     }
   } catch { return null; } // Unreadable authority grants no file access.
   const directory = Buffer.from(dir, "base64url").toString("utf8");
-  return directory.startsWith("/") ? directory : null;
+  return directory.startsWith("/") ? { directory, kind } : null;
 }
 
 /** The frame URL for `fileName` inside the scoped directory. */

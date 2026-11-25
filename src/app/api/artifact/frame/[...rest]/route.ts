@@ -6,7 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { classifyArtifact } from "@/lib/artifact/classify";
 import { FRAME_CSP, frameMime, verifyFrameScope } from "@/lib/artifact/frameScope";
-import { admittedAs, lexicalAllowedRoots, realpathAdmitted, inFencedStore, openAdmitted, realAllowedRoots, streamWindow, underRoot } from "@/lib/artifact/localFile";
+import { admittedAs, evidenceFrameAdmission, lexicalAllowedRoots, realpathAdmitted, openAdmitted, realAllowedRoots, streamWindow, underRoot } from "@/lib/artifact/localFile";
 import { artifactEtag, artifactLimits, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
 import { rejectForeignHost } from "@/lib/sameOrigin";
 
@@ -27,10 +27,10 @@ export const dynamic = "force-dynamic";
  * Those same cross-origin requests are why this route cannot use that gate
  * itself. It authorizes by the scope in the path instead (see frameScope.ts):
  * a signed, expiring grant for ONE directory, minted only by the same-origin
- * meta read of /api/artifact. What it serves stays inside what /api/artifact
- * already serves — project/scratch roots and previewable types — narrowed to the
- * report's directory tree, checked lexically and again after realpath, and
- * held to the same content check (`sniffAgrees`) on the pinned descriptor.
+ * meta read of /api/artifact. Project and scratch roots serve previewable types.
+ * Restricted evidence roots serve HTML and rasters here. Every read stays
+ * inside the report's directory tree, checked lexically and again after
+ * realpath, with content checked on the pinned descriptor.
  *
  * A successful response admits the frame's opaque origin by CORS
  * (`Access-Control-Allow-Origin: null`, never with credentials), because
@@ -84,26 +84,28 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const segments = segmentsOf(req.nextUrl.pathname);
   if (!segments || segments.length < 2) return refuse(404, "not found");
   const [scope, ...inside] = segments as [string, ...string[]];
-  const directory = verifyFrameScope(scope);
-  if (!directory) return refuse(403, "this report link has expired; reopen the preview");
+  const grant = verifyFrameScope(scope);
+  if (!grant) return refuse(403, "this report link has expired; reopen the preview");
+  const { directory, kind } = grant;
 
   const abs = path.resolve(directory, ...inside);
-  const admission = admittedAs(abs, lexicalAllowedRoots());
+  const roots = lexicalAllowedRoots();
+  const admission = kind === "evidence" ? evidenceFrameAdmission(abs, roots) : admittedAs(abs, roots);
   if (!underRoot(abs, directory) || !admission) return refuse(403, "outside the report directory");
 
   const classified = classifyArtifact(abs);
   if (!classified) return refuse(415, "not a previewable file type");
 
   let real: string;
-  let realDirectory: string;
   try {
-    realDirectory = await fs.realpath(directory);
     real = await fs.realpath(abs);
     if (!realpathAdmitted(admission, real, await realAllowedRoots())) return refuse(403, "outside the allowed roots");
   } catch {
     return refuse(404, "file not found");
   }
-  if (!underRoot(real, realDirectory) || inFencedStore(real, (await realAllowedRoots()).fenced)) return refuse(403, "outside the report directory");
+  // The metadata route signs the canonical directory. A later symlink in
+  // its place cannot move that grant to a different directory.
+  if (!underRoot(real, directory)) return refuse(403, "outside the report directory");
 
   /* Kept only when the open file lies at the resolved path: a directory
      swapped for a link after the checks above reads nothing. */
@@ -133,7 +135,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       await handle.close();
       return refuse(415, "file content does not match its extension");
     }
-    if (verifyFrameScope(scope) !== directory) {
+    if (!verifyFrameScope(scope)) {
       await handle.close();
       return refuse(403, "this report link has expired; reopen the preview");
     }

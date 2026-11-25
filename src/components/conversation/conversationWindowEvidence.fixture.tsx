@@ -2372,9 +2372,11 @@ else if (root && requested === "project-setup") {
 else if (root && requested === "document-links") {
   setRuntimeUiEnabledForTests(false);
   const cwd = params.get("cwd")!;
+  const evidenceReport = params.get("evidenceReport");
   const lines = [JSON.stringify({ type: "response_item", timestamp: "2026-10-20T10:00:00.000Z", payload: {
     type: "message", role: "assistant", content: [{ type: "output_text", text:
-      `[Source report](docs/report.md:102:7) · [Heading](docs/report.md#source-version) · [Invisible](\u200B${cwd}/docs/report.md:102) · [Missing](docs/missing.md) · [Changed](docs/changed.md) · [Denied](${params.get("denied")}) · [External](https://example.com/guide)` }],
+      evidenceReport ? `[${params.get("reportLabel")}](${evidenceReport})`
+        : `[Source report](docs/report.md:102:7) · [Heading](docs/report.md#source-version) · [Invisible](\u200B${cwd}/docs/report.md:102) · [Missing](docs/missing.md) · [Changed](docs/changed.md) · [Denied](${params.get("denied")}) · [External](https://example.com/guide)` }],
   } })];
   setLogFeedDependenciesForTests({ useLogTail: () => ({
     lines, linesStart: 0, size: lines.length, loading: false, error: null, tickTime: null, paused: false,

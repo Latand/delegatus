@@ -7644,6 +7644,107 @@ describe("telegram file confirmation prototype (docs/design/telegram-file-confir
 
 
 describe("message document links", () => {
+  browserTest("evidence HTML opens a sandboxed report only after a message link is activated", async () => {
+    const { NextRequest } = await import("next/server");
+    const { GET: artifact } = await import("@/app/api/artifact/route");
+    const { GET: frame } = await import("@/app/api/artifact/frame/[...rest]/route");
+    const { statePath } = await import("@/lib/configDir");
+    const { proxy } = await import("@/proxy");
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "evidence-report-"));
+    const agents = statePath("evidence", "agents");
+    fs.mkdirSync(agents, { recursive: true });
+    const directory = fs.mkdtempSync(path.join(agents, "preview-"));
+    const report = path.join(directory, "disk-usage.html");
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "evidence-html-preview");
+    const heading = "Disk usage report";
+    fs.writeFileSync(report, `<!doctype html><html lang="en"><meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>${heading}</title>
+      <style>
+        body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #172332; background: #f4f7fa; }
+        main { margin: 24px; padding: 20px; border: 1px solid #d6e0eb; border-radius: 12px; background: white; }
+        h1 { margin: 0; font-size: 24px; }
+        p { margin: 10px 0 18px; }
+        progress { width: 100%; accent-color: #236ca0; }
+      </style>
+      <main><h1>${heading}</h1><p>Root volume · 24 GiB of 40 GiB used</p>
+      <progress aria-label="Root volume used" max="40" value="24">60%</progress></main></html>`);
+    fs.mkdirSync(out, { recursive: true });
+    let metadataReads = 0;
+    let frameReads = 0;
+    const throughProxy = async (request: Request, handler: (req: InstanceType<typeof NextRequest>) => Promise<Response>) => {
+      const req = new NextRequest(request);
+      const admission = proxy(req);
+      return admission.headers.get("x-middleware-next") === "1" ? handler(req) : admission;
+    };
+    const responses: Record<string, (request: Request) => Promise<Response>> = {
+      "/api/artifact": async request => {
+        metadataReads++;
+        const response = await throughProxy(request, artifact);
+        if (response.ok) {
+          const meta = await response.clone().json() as { frame?: string };
+          // The fixture server dispatches by exact pathname.
+          if (meta.frame) responses[meta.frame] = async request => {
+            frameReads++;
+            return throughProxy(request, frame);
+          };
+        }
+        return response;
+      },
+    };
+    const sockets = ownedBrowserSocketEnvironment();
+    let served: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+    let browser: Browser | undefined;
+    try {
+      served = await serveEvidenceFixture(scratch, FIXTURE, responses);
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 1280]) {
+        const phone = width === 390;
+        const reportLabel = lang === "uk" ? "Звіт про використання диска" : "Disk usage report";
+        const query = new URLSearchParams({ case: "document-links", lang, cwd: scratch, parent: scratch, evidenceReport: report, reportLabel });
+        const beforeOpen = metadataReads;
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`,
+          { width, height: phone ? 844 : 900 }, theme, lang, "no-preference", phone);
+        try {
+          const link = page.getByRole("link", { name: reportLabel, exact: true });
+          const pane = page.locator("[data-artifact-preview]");
+          await link.waitFor();
+          expect(await pane.count()).toBe(0);
+          expect(await page.locator("iframe").count()).toBe(0);
+          expect(metadataReads).toBe(beforeOpen);
+          expect(frameReads).toBe(beforeOpen);
+          if (phone) await link.tap();
+          else await link.click();
+
+          await pane.locator("iframe, [role=alert]").waitFor();
+          expect(await pane.getAttribute("data-artifact-state")).toBe("ready");
+          const reportFrame = pane.locator("iframe[data-preview-frame]");
+          const title = reportFrame.contentFrame().getByRole("heading", { name: heading });
+          await title.waitFor();
+          expect(await title.evaluate(() => {
+            try { return { origin: window.origin, cookie: document.cookie }; }
+            catch (error) { return { origin: window.origin, cookie: (error as DOMException).name }; }
+          })).toEqual({ origin: "null", cookie: "SecurityError" });
+          expect(await pane.getByText(translate(lang, "preview.denied")).count()).toBe(0);
+          expect(await pane.getByRole("link", { name: translate(lang, "preview.download") }).count()).toBe(0);
+          expect(await pane.locator('[data-preview-mode="source"]').count()).toBe(0);
+          expect(metadataReads).toBe(beforeOpen + 1);
+          expect(frameReads).toBe(beforeOpen + 1);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${lang}-${theme}-${width}.png`) });
+          await pane.getByRole("button", { name: translate(lang, "preview.close") }).click();
+          await pane.waitFor({ state: "detached" });
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser?.close();
+      served?.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }, 90_000);
+
   browserTest("actual message clicks read exact source-worktree bytes through authenticated artifact routes", async () => {
     const { NextRequest } = await import("next/server");
     const { GET } = await import("@/app/api/artifact/route");

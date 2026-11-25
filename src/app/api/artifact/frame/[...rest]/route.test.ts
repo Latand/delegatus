@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { NextRequest } from "next/server";
-import { legacyReportPictureFixture, localFileKeepFixture } from "@/lib/artifact/localFile.fixture";
+import { KEEP_PNG, legacyReportPictureFixture, localFileKeepFixture } from "@/lib/artifact/localFile.fixture";
 
 import { FRAME_SCOPE_TTL_MS, mintFrameScope } from "@/lib/artifact/frameScope";
 import { FRAME_SANDBOX } from "@/components/preview/DocumentPanes";
@@ -82,6 +82,71 @@ test("the meta read of an HTML report mints a frame URL scoped to its directory"
   expect(page.status).toBe(200);
   expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
   expect(await page.text()).toContain('id="decision-graph"');
+});
+
+test("evidence frame serves HTML and local rasters with the report sandbox", async () => {
+  const folder = "state/evidence/agents/fixture";
+  const html = '<h1>Fixture disk report</h1><img src="chart.png">';
+  const report = write(`${folder}/index.html`, html);
+  const directory = path.dirname(report);
+  fs.writeFileSync(path.join(directory, "chart.png"), KEEP_PNG);
+  write(`${folder}/style.css`, "h1 { color: teal }");
+  write(`${folder}/data.json`, '{"fixture":true}');
+  write(`${folder}/drawing.svg`, '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+
+  const url = new URL("http://127.0.0.1:8898/api/artifact");
+  url.searchParams.set("path", report);
+  url.searchParams.set("mode", "meta");
+  const meta = await GET_ARTIFACT(new NextRequest(url, { headers: { host: "127.0.0.1:8898" } }));
+  expect(meta.status).toBe(200);
+  const { frame } = await meta.json() as { frame: string };
+  expect((await GET(frameRequest(`/api/artifact/frame/${mintFrameScope(directory)}/index.html`))).status).toBe(403);
+  const asset = (name: string) => GET(frameRequest(frame.replace(/index\.html$/, name)));
+  const page = await asset("index.html");
+  expect(page.status).toBe(200);
+  expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
+  expect(page.headers.get("content-security-policy")).toBe(`sandbox ${FRAME_SANDBOX}`);
+  expect(await page.text()).toBe(html);
+  const chart = await asset("chart.png");
+  expect(chart.status).toBe(200);
+  expect(Buffer.from(await chart.arrayBuffer())).toEqual(KEEP_PNG);
+  for (const name of ["style.css", "data.json", "drawing.svg"]) {
+    expect((await asset(name)).status).toBe(403);
+  }
+
+  const sibling = write("state/evidence/agents/sibling/index.html", "<p>Other report</p>");
+  fs.writeFileSync(path.join(path.dirname(sibling), "chart.png"), KEEP_PNG);
+  fs.symlinkSync(sibling, path.join(directory, "linked.html"));
+  fs.symlinkSync(path.join(path.dirname(sibling), "chart.png"), path.join(directory, "linked.png"));
+  for (const name of ["../sibling/index.html", "..%2Fsibling%2Findex.html", "linked.html", "linked.png"]) {
+    const response = await asset(name);
+    expect([403, 404]).toContain(response.status);
+    expect(await response.text()).not.toContain("Other report");
+  }
+
+  fs.renameSync(directory, `${directory}-retained`);
+  fs.symlinkSync(path.dirname(sibling), directory, "dir");
+  expect((await asset("index.html")).status).toBe(403);
+  expect((await asset("chart.png")).status).toBe(403);
+});
+
+test("an evidence grant cannot acquire a project's non-raster asset permissions", async () => {
+  // This configured evidence root contains a recorded project.
+  const root = path.dirname(home);
+  const previous = process.env.LLV_EVIDENCE_ROOTS;
+  process.env.LLV_EVIDENCE_ROOTS = root;
+  try {
+    write("chart.css", "h1 { color: teal }");
+    const asset = `${path.basename(home)}/chart.css`;
+    const project = await GET(frameRequest(`/api/artifact/frame/${mintFrameScope(root)}/${asset}`));
+    expect(project.status).toBe(200);
+    expect(await project.text()).toBe("h1 { color: teal }");
+    const evidence = await GET(frameRequest(`/api/artifact/frame/${mintFrameScope(root, Date.now(), null, "evidence")}/${asset}`));
+    expect(evidence.status).toBe(403);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_EVIDENCE_ROOTS;
+    else process.env.LLV_EVIDENCE_ROOTS = previous;
+  }
 });
 
 test("the real metadata route binds a frame to its browser session, whose sign-out refuses the document and assets", async () => {
