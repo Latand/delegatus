@@ -39,9 +39,16 @@ function temporaryName(record: Writing): string {
   return `.delegatus-secret-${record.write.id}.tmp`;
 }
 
-async function openStagingDirectory(filename: string, expected?: FileIdentity) {
-  await fs.mkdir(filename, { recursive: true, mode: 0o700 });
-  const stats = await fs.lstat(filename, { bigint: true });
+async function openStagingDirectory(filename: string, expected?: FileIdentity): Promise<{ directory: SecretParentDirectory; identity: FileIdentity }>;
+async function openStagingDirectory(filename: string, expected: FileIdentity | undefined, create: false): Promise<{ directory: SecretParentDirectory; identity: FileIdentity } | null>;
+async function openStagingDirectory(filename: string, expected?: FileIdentity, create = true) {
+  if (create) await fs.mkdir(filename, { recursive: true, mode: 0o700 });
+  let stats;
+  try { stats = await fs.lstat(filename, { bigint: true }); }
+  catch (error) {
+    if (!create && fsCode(error) === "ENOENT") return null;
+    throw error;
+  }
   const identity = { device: String(stats.dev), inode: String(stats.ino) };
   if (!stats.isDirectory() || Number(stats.uid) !== process.geteuid?.()
     || (stats.mode & BigInt(0o777)) !== BigInt(0o700)
@@ -91,18 +98,22 @@ async function interrupt(record: Writing, code: SecretRefusal, actor: SecretActo
 async function recoverLocked(record: Writing, now: number, refusal?: SecretRefusal): Promise<SecretRequestRecord> {
   const filename = record.destination.path;
   const dir = await SecretParentDirectory.open(path.dirname(filename), record.write.parent).catch(() => null);
-  const staged = await openStagingDirectory(record.write.stagingPath, record.write.stagingParent);
-  try {
-    const name = path.basename(filename);
-    const found = dir ? await dir.stat(name) : null;
-    const temporary = record.write.temporary;
-    if (found && temporary && sameInode(found, temporary)) {
+  const name = path.basename(filename);
+  const found = dir ? await dir.stat(name) : null;
+  const temporary = record.write.temporary;
+  // The rename is the commit point. Finish it from the pinned destination
+  // inode alone; staging may already have been removed after the rename.
+  if (found && temporary && sameInode(found, temporary)) {
+    try {
       if (!isPrivateFile(found)) throw new SecretRequestError("secret_destination_changed");
       await dir!.handle.sync();
       await dir!.confirm();
       return await finish(record, temporary, "recovery", now);
-    }
-    const leftover = await staged.directory.temporaryStat(temporaryName(record));
+    } finally { await dir?.handle.close(); }
+  }
+  const staged = await openStagingDirectory(record.write.stagingPath, record.write.stagingParent, false);
+  try {
+    const leftover = staged ? await staged.directory.temporaryStat(temporaryName(record)) : null;
     if (leftover) {
       // A crash before the inode checkpoint can leave only an empty file.
       // Never delete a mismatched or linked entry while replaying the journal.
@@ -111,8 +122,8 @@ async function recoverLocked(record: Writing, now: number, refusal?: SecretRefus
           || leftover.size !== BigInt(0))) {
         throw new SecretRequestError("secret_destination_changed");
       }
-      await staged.directory.unlink(temporaryName(record));
-      await staged.directory.handle.sync();
+      await staged!.directory.unlink(temporaryName(record));
+      await staged!.directory.handle.sync();
     }
     if (!dir && !leftover) {
       // The pinned parent moved after a rename. Without that directory
@@ -122,7 +133,7 @@ async function recoverLocked(record: Writing, now: number, refusal?: SecretRefus
       return await interrupt(record, refusal ?? "secret_destination_changed", refusal ? "operator" : "recovery", now);
     }
     return await interrupt(record, refusal ?? "secret_entry_interrupted", refusal ? "operator" : "recovery", now);
-  } finally { await dir?.handle.close(); await staged.directory.handle.close(); }
+  } finally { await dir?.handle.close(); await staged?.directory.handle.close(); }
 }
 
 export async function readSecretRequest(id: string, now = Date.now()): Promise<SecretRequestRecord | null> {

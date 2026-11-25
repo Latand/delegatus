@@ -321,6 +321,22 @@ test("a later writer recovers a committed inode before replacing the same path",
   expect(fs.readFileSync(filename, "utf8")).toBe("later\n");
 });
 
+test("recovers an installed inode when its empty staging directory was removed", async () => {
+  const filename = path.join(project, "entry");
+  const request = await create({ kind: "file", path: filename });
+  await crashAt(request, "renamed");
+  const staging = path.join(project, ".delegatus-secret-staging");
+  expect(fs.readdirSync(staging)).toEqual([]);
+  fs.rmdirSync(staging);
+
+  const recovered = await readSecretRequest(request.id, NOW);
+  expect(recovered).toMatchObject({ state: "entered", length: 11 });
+  expect(fs.readFileSync(filename, "utf8")).toBe("new fixture\n");
+  expect(fs.statSync(filename).mode & 0o777).toBe(0o600);
+  expect(fs.existsSync(staging)).toBe(false);
+  expect(await readSecretRequest(request.id, NOW)).toEqual(recovered);
+});
+
 test("releases a renamed write after its pinned parent moves and lets a later request proceed", async () => {
   const parent = path.join(project, "parent");
   const moved = path.join(project, "moved-parent");

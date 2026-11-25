@@ -112,12 +112,35 @@ export async function gitStatus(parent: string, name: string): Promise<ResolvedS
   }
   if (probe.code !== 0 || probe.stdout.trim() !== "true") throw new SecretRequestError("secret_destination_unavailable");
 
+  // A nested repository can hide an outer index entry. Walk the lexical
+  // ancestors and check each distinct worktree root for the destination.
+  const destination = path.resolve(parent, name);
+  const roots = new Set<string>();
+  for (let ancestor = path.resolve(parent); ; ancestor = path.dirname(ancestor)) {
+    const resolved = await git(["-C", ancestor, "rev-parse", "--show-toplevel"]);
+    if (resolved.code === 0) roots.add(path.resolve(resolved.stdout.trim()));
+    else if (resolved.code !== 128) throw new SecretRequestError("secret_destination_unavailable");
+    const next = path.dirname(ancestor);
+    if (next === ancestor) break;
+  }
+  const topLevel = await git(["rev-parse", "--show-toplevel"]);
+  if (topLevel.code !== 0) throw new SecretRequestError("secret_destination_unavailable");
+  const nearestRoot = path.resolve(topLevel.stdout.trim());
   const ignoreCase = await git(["config", "--type=bool", "--get", "core.ignorecase"]);
   if (ignoreCase.code !== 0 && ignoreCase.code !== 1) throw new SecretRequestError("secret_destination_unavailable");
   const caseInsensitive = process.platform === "darwin" || ignoreCase.stdout.trim() === "true";
-  const tracked = await git(["ls-files", "--error-unmatch", "--", `:(literal${caseInsensitive ? ",icase" : ""})./${name}`]);
-  if (tracked.code === 0) throw new SecretRequestError("secret_destination_tracked");
-  if (tracked.code !== 1) throw new SecretRequestError("secret_destination_unavailable");
+  for (const root of roots) {
+    const relative = path.relative(root, destination).split(path.sep).join("/");
+    if (relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) continue;
+    const outerCase = root === nearestRoot ? null : await git(["-C", root, "config", "--type=bool", "--get", "core.ignorecase"]);
+    if (outerCase && outerCase.code !== 0 && outerCase.code !== 1) {
+      throw new SecretRequestError("secret_destination_unavailable");
+    }
+    const caseSetting = root === nearestRoot ? caseInsensitive : outerCase?.stdout.trim() === "true";
+    const tracked = await git(["-C", root, "ls-files", "--error-unmatch", "--", `:(literal${caseSetting ? ",icase" : ""})${relative}`]);
+    if (tracked.code === 0) throw new SecretRequestError("secret_destination_tracked");
+    if (tracked.code !== 1) throw new SecretRequestError("secret_destination_unavailable");
+  }
 
   // Replacing the file that supplies the ignore rule could drop that rule.
   if (name.toLowerCase() === ".gitignore") throw new SecretRequestError("secret_destination_not_ignored");

@@ -208,3 +208,19 @@ test("allows only ignored untracked files inside a worktree and never runs fsmon
   expect((await file(path.join(folder, "[literal]"))).destination.git).toBe("ignored");
   expect(fs.existsSync(marker)).toBe(false);
 });
+
+test("refuses a path tracked by an enclosing worktree behind a nested repository", async () => {
+  git("init");
+  const inner = path.join(folder, "inner");
+  fs.mkdirSync(inner);
+  const entry = path.join(inner, "entry");
+  fs.writeFileSync(entry, "tracked outside\n");
+  git("add", "--", "inner/entry");
+  const result = Bun.spawnSync(["git", "init"], { cwd: inner, stderr: "pipe" });
+  if (result.exitCode !== 0) throw new Error("nested fixture Git command failed");
+  fs.writeFileSync(path.join(inner, ".gitignore"), "entry\n");
+  git("ls-files", "--error-unmatch", "--", "inner/entry");
+  resetProjectDirectoryCacheForTests();
+  project = projectForCwd(folder)!;
+  await rejects(entry, "secret_destination_tracked", true);
+});
