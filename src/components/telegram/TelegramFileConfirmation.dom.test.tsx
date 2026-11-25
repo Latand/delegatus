@@ -83,7 +83,7 @@ async function mount(locale: "en" | "uk" = "en"): Promise<HTMLDivElement> {
 }
 const click = (element: Element | null) => act(async () => { (element as HTMLElement).click(); await settle(); });
 /** Waits for the page's own timers (a poll, the beat before the cookie is taken). */
-const wait = (ms = 60) => act(async () => { await new Promise(resolve => realSetTimeout(resolve, ms)); await settle(); });
+const wait = (ms = 60) => act(async () => { await new Promise<void>(resolve => realSetTimeout(() => resolve(), ms)); await settle(); });
 const gate = (host: HTMLElement) => host.querySelector("[data-file-confirmation-gap]");
 const heading = (host: HTMLElement) => host.querySelector("[data-file-confirmation-heading]")?.textContent;
 const reads = () => harness.calls.filter(call => call.method === "GET" && call.url.startsWith("/api/telegram/bot/confirmation"));

@@ -7133,8 +7133,9 @@ describe("owner confirmation of one Telegram file send", () => {
           const pendingHeading = typesetFileConfirmation(data === "media"
             ? (lang === "uk" ? "Обидва зображення поза теками, з яких дозволено надсилати (handoff)" : "Both images are outside the folders files may be sent from (handoff)")
             : (lang === "uk" ? "Схоже, у цьому файлі приватний ключ" : "This file looks like it holds a private key"), lang);
+          const gapHeadings = Object.fromEntries(GAPS.map(gap => [`gap-${gap}`, typesetFileConfirmation(words.missing[gap].title, lang)])) as Record<`gap-${(typeof GAPS)[number]}`, string>;
           const heading = { pending: pendingHeading, details: pendingHeading, status: pendingHeading, sending: pendingHeading, sent: typesetFileConfirmation(words.sentTitle(chat), lang), rejected: typesetFileConfirmation(words.rejectedTitle(chat), lang), expired: words.expiredTitle, uncertain: words.uncertainTitle, failed: words.failedTitle, unavailable: words.unavailableTitle, owner: words.ownerTitle,
-            ...Object.fromEntries(GAPS.map(gap => [`gap-${gap}`, typesetFileConfirmation(words.missing[gap].title, lang)])) }[state];
+            ...gapHeadings }[state];
           const asking = ["pending", "details", "status", "sending"].includes(state);
           /* Before any press or scroll: the heading, and while the decision is open both answers and the real file, are whole on the first screen. */
           const firstScreen = await page.evaluate((media) => {
