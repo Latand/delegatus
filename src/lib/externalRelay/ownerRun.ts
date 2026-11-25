@@ -6,6 +6,7 @@ import { projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { ExternalRelayError } from "./client";
 import { answerCapabilities, checkedAnswerV2, formatSection, richAnswerInstructions } from "./answerV2";
+import { relayPlainText } from "./answerText";
 import { sealOwnerAnswer, ownerAnswerDrops } from "./ownerAnswer";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { lastAssistantMessageFromRecords } from "@/lib/scanner/lastAssistantMessage";
@@ -337,32 +338,39 @@ export function ownerInitialCursor(request: ExternalRelayRequest, owner: OwnerIn
 export function ownerAnswer(text: string | null, request: ExternalRelayRequest, owner: OwnerInstruction, credentials: readonly string[] = [], conciseAfterHandoff = false): ExternalRelayDecision | null {
   const parts = sealOwnerAnswer(request.request_id);
   const original = parts?.mentions?.length ? text ?? "" : text?.trim() ?? "";
-  const scrubbed = scrubOwnerOutput(original, credentials);
+  const scrub = (value: string) => scrubOwnerOutput(value, credentials);
+  const scrubbed = scrub(original);
   const caps = answerCapabilities(request, "");
   // A handoff acknowledgment and a guest reply each fit on one short line.
-  let answer = scrubbed;
-  if (conciseAfterHandoff || request.delivery === "guest") {
-    const opening = scrubbed.split(/\r?\n/u).map(line => line.trim()).find(Boolean) ?? "";
-    const points = Array.from(opening);
-    answer = points.length > 240 ? points.slice(0, 239).join("") + "…" : opening;
+  const singleLine = conciseAfterHandoff || request.delivery === "guest";
+  const controlText = singleLine ? scrubbed.split(/\r?\n/u).map(line => line.trim()).find(Boolean) ?? "" : scrubbed;
+  let answer = caps.rich ? controlText : relayPlainText(controlText, scrub);
+  if (singleLine) {
+    const points = Array.from(answer);
+    if (points.length > 240) answer = points.slice(0, 239).join("") + "…";
   }
   if (parts?.mentions?.length && answer !== original && !conciseAfterHandoff) throw new ExternalRelayError("malformed", 400);
   if (parts?.mentions?.length && ["[ignore]", "[handoff]"].includes(answer)) throw new ExternalRelayError("malformed", 400);
   if (!answer && !parts?.attachments.length) return null;
-  if (answer === "[ignore]" && request.delivery === "guest") return null;
-  if (answer === "[ignore]") return { action: "ignore", text: "", reply_to: null };
-  if (answer === "[handoff]") return offersHandoff(request) ? { action: "handoff", text: "", reply_to: null } : null;
+  if (controlText === "[ignore]" && request.delivery === "guest") return null;
+  if (controlText === "[ignore]") return { action: "ignore", text: "", reply_to: null };
+  if (controlText === "[handoff]") return offersHandoff(request) ? { action: "handoff", text: "", reply_to: null } : null;
   if (caps.rich) {
     const raw = { action: "reply", text: answer, reply_to: owner.messageId, format: parts?.format ?? "rich_markdown", ...(!conciseAfterHandoff && parts?.mentions ? { mentions: parts.mentions } : {}), buttons: parts?.buttons ?? [], attachments: parts?.attachments.map(f => ({attachment_id:f.id})) ?? [] };
-    const rich = raw.format === "rich_markdown" ? checkedAnswerV2(raw, request, caps, {handoff:true,ignore:true,stagedAttachments:parts?.attachments.length ?? 0}, ownerAnswerDrops(request.request_id)) : null;
-    if (rich) return rich;
+    const options = { handoff: true, ignore: true, stagedAttachments: parts?.attachments.length ?? 0, scrubPlain: scrub };
+    const drops = ownerAnswerDrops(request.request_id);
+    if (raw.format === "rich_markdown") {
+      const checked = checkedAnswerV2(raw, request, caps, options, drops);
+      if (checked) return checked;
+      answer = relayPlainText(answer, scrub);
+    }
     raw.format = "plain";
-    if (Array.from(answer).length > caps.plainMax) ownerAnswerDrops(request.request_id).push({part:"text",reason:"plain_truncated"});
+    if (Array.from(answer).length > caps.plainMax) drops.push({part:"text",reason:"plain_truncated"});
     raw.text = Array.from(answer).length > caps.plainMax ? Array.from(answer).slice(0, caps.plainMax - 1).join("") + "…" : answer;
-    return checkedAnswerV2(raw, request, caps, {handoff:true,ignore:true,stagedAttachments:parts?.attachments.length ?? 0}, ownerAnswerDrops(request.request_id));
+    return checkedAnswerV2(raw, request, caps, options, drops);
   }
   const points = Array.from(answer);
-  return { action: "reply", text: points.length > request.answer.max_chars ? points.slice(0, request.answer.max_chars - 1).join("") + "…" : answer, reply_to: request.delivery === "guest" ? null : owner.messageId };
+  return { action: "reply", text: points.length > caps.plainMax ? points.slice(0, caps.plainMax - 1).join("") + "…" : answer, reply_to: request.delivery === "guest" ? null : owner.messageId };
 }
 
 function ownerMissingOutcomeAnswer(request: ExternalRelayRequest, owner: OwnerInstruction) {

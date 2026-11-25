@@ -4,7 +4,7 @@ import { checkProviderOpens } from "./providerOpens";
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
 import { actionOutcomeAnswer } from "./actionOutcome";
 import { CloudFailure, CloudLeaseUnsupported, cloudEnvironment, cloudTransport, runCloudRelay, type CloudTransport } from "./cloud";
-import { scrubOwnerReply } from "./ownerOutput";
+import { scrubOwnerOutput, scrubOwnerReply } from "./ownerOutput";
 import { cloudOwnerDirectory, CloudOwnerDirectoryError } from "./ownerRun";
 import { createOwnerRunDirectory, resolveOwnerRunDirectory } from "./runDirectory";
 import { hasInboundMedia, prepareInboundMedia, writeInboundAgentInput } from "./mediaInput";
@@ -1413,7 +1413,7 @@ export async function runClaimedRequest(
           ...(owner ? { decode: (text: string) => {
             let value: unknown;
             try { value = JSON.parse(text); } catch { return ownerAnswer(text, request, owner!, ownerCredentials); }
-            return scrubOwnerReply(value, ownerCredentials);
+            return scrubOwnerReply(value, ownerCredentials, !caps?.rich);
           } } : {}),
           onFallback: () => { cloudFailed = true; console.info("External relay Cloud failure confirmed; trying local execution once"); },
           local: async () => {
@@ -1527,10 +1527,13 @@ export async function runClaimedRequest(
       if (pendingBeat) await pendingBeat;
       cancelStalledRun();
       if (leaseUnavailable && !ownerExecution) return null;
-      if (request.delivery === "guest" && result.status === "done")
-        result = { ...result, answer: scrubOwnerReply(result.answer, ownerCredentials) };
+      const guest = request.delivery === "guest";
+      if (guest && result.status === "done")
+        result = { ...result, answer: scrubOwnerReply(result.answer, ownerCredentials, true) };
+      const renderOptions = owner || guest ? { scrubPlain: (text: string) => scrubOwnerOutput(text, ownerCredentials) }
+        : { renderLegacyPlain: true };
       const decision = result?.status === "done"
-        ? loop && !final ? checkedRoundV2(result.answer, request, caps!, { handoff: !loop.actionSent, ignore: !loop.sawUnknown }, answerDrops) : checkedAnswerV2(result.answer, request, caps!, { handoff: !loop?.actionSent && !ownerTools?.actionSent, ignore: !loop?.sawUnknown && !ownerTools?.sawUnknown, stagedAttachments: owner ? stagedAttachments.length : 0 }, answerDrops)
+        ? loop && !final ? checkedRoundV2(result.answer, request, caps!, { ...renderOptions, handoff: !loop.actionSent, ignore: !loop.sawUnknown }, answerDrops) : checkedAnswerV2(result.answer, request, caps!, { ...renderOptions, handoff: !loop?.actionSent && !ownerTools?.actionSent, ignore: !loop?.sawUnknown && !ownerTools?.sawUnknown, stagedAttachments: owner ? stagedAttachments.length : 0 }, answerDrops)
         : null;
       if (usingCloud && !cloudFailed && (!decision || !("kind" in decision))) {
         ownerParts?.close();
