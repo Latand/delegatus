@@ -76,7 +76,11 @@ function readReceipts(): CleanerReceipts {
 
 export async function diskCleanerSignals(project: string, shown: readonly string[] = [], seat: Pick<SeatTickSeatInput, "conversationId" | "seatEpoch"> | null = null): Promise<SeatTickSignalInput[]> {
   try {
-    return await withFileTransactionAsync(pendingFile(), "disk cleaner pending reports", () => {
+    const pendingPath = pendingFile();
+    // An installation without Cleaner reports only needs an observation.
+    // Existing archives still go through the pending queue's recovery path.
+    if (!fs.existsSync(pendingPath) && !fs.existsSync(diskCleanerReportsFile())) return [];
+    return await withFileTransactionAsync(pendingPath, "disk cleaner pending reports", () => {
       const pending = readPending().filter(pass => canonicalOrchestratorProject(pass.project) === project);
       const acknowledged = pending.filter(pass => {
         const signal = { id: `disk-cleaner:${pass.id}`, actionable: true, label: diskCleanerReport(pass) };

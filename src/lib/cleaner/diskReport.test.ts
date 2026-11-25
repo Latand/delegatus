@@ -17,6 +17,14 @@ afterEach(() => {
   }
 });
 
+test("a seat lookup with no Cleaner reports leaves the queue absent", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "disk-cleaner-unstarted-")); roots.push(root);
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  const archive = diskCleanerReportsFile();
+  expect(await diskCleanerSignals("repo-unstarted-cleaner")).toEqual([]);
+  expect(fs.existsSync(path.dirname(archive))).toBeFalse();
+});
+
 test("Cleaner completions stay pending past 24 later reports until the intended seat receipt appears", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "disk-cleaner-report-receipts-")); roots.push(root);
   const env = isolatedEnvironment(root, process.env);
