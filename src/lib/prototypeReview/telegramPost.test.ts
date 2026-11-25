@@ -29,6 +29,7 @@ import { requestSchema } from "@/lib/externalRelay/protocol";
 import { sampleRequest } from "@/lib/externalRelay/request.fixture";
 import { runClaimedRequest } from "@/lib/externalRelay/runner";
 import { resetPrototypeDeliveryWorkerForTests, sweepPrototypeDeliveries } from "./deliveryWorker";
+import { seedProjectCatalogForTests } from "@/lib/scanner/projectCatalogStore";
 
 const roots: string[] = [];
 const restores: Array<() => void> = [];
@@ -483,6 +484,33 @@ test("normal and limit-fallback renders keep shared-prefix choices distinguishab
   }
 });
 
+test("the final compact fallback enforces the byte budget after a definite Telegram refusal", async () => {
+  const round = telegramRound("maximal-fallback");
+  round.questions = Array.from({ length: 7 }, (_, i) => ({
+    id: `question-${i + 1}`, text: `${i + 1}. ${"&".repeat(299)}?`,
+    options: Array.from({ length: 6 }, (_, j) => ({
+      label: `${"&".repeat(55)}${String.fromCharCode(97 + j)}${"&".repeat(64)}`, recommended: j === 0,
+    })),
+  }));
+  round.variants = Array.from({ length: 9 }, (_, i) => ({ number: i + 1, name: "Variant".repeat(20),
+    description: "Description ".repeat(100), frames: [], videos: [] }));
+  const { transport } = await connected();
+  updateRelayStore(s => ({ ...s, relays: [destinationRelay()] }));
+  transport.handlers.getChat = () => ok({ id: 41, type: "private", first_name: "Owner" });
+  let attempts = 0;
+  transport.handlers.sendRichMessage = () => ++attempts === 1
+    ? refused(400, "rich_limit_exceeded") : ok({ message_id: 31, date: 7 });
+  saveTasks([telegramTask([round])]);
+  await postPrototypeReviewToTelegram(round);
+  const sends = transport.callsOf("sendRichMessage");
+  expect(sends).toHaveLength(2);
+  const payload = sends[1]!.params.rich_message as { markdown: string };
+  const rendered = decodeHTML(payload.markdown);
+  expect(Buffer.byteLength(payload.markdown)).toBeLessThanOrEqual(32_768);
+  for (const question of round.questions) expect(rendered).toContain(question.text);
+  for (const letter of ["a", "b", "c", "d", "e", "f"]) expect(rendered).toContain(` · ${letter}`);
+});
+
 test("review copies screen private paths and known account labels before formatting", async () => {
   const round = telegramRound("private-content");
   round.project = `dir-${"d".repeat(32)}`;
@@ -523,6 +551,20 @@ test("Windows profile paths are wholly hidden and safe punctuated project names 
   }
 });
 
+test("nested home-relative paths disappear while question context remains readable", () => {
+  const round = telegramRound("tilde-private-content");
+  round.questions![0]!.text = "Should we use ~/private-fixture/nested/secret-notes.md for previews?";
+  for (const payload of [renderPrototypeTelegram(round, []), renderPrototypeTelegramSummary(round, [])]) {
+    for (const text of [payload.markdown, payload.plainText!]) {
+      expect(text).not.toContain("private-fixture");
+      expect(text).not.toContain("nested");
+      expect(text).not.toContain("secret-notes.md");
+      expect(text).toContain("Should we use");
+      expect(text).toContain("for previews?");
+    }
+  }
+});
+
 test("a project name containing an old reference cannot shadow the reply reference", async () => {
   const round = telegramRound("reply-reference-position");
   await setProjectPresentation(round.project, { name: "Design #proto-deadcafe" }, "operator");
@@ -532,6 +574,28 @@ test("a project name containing an old reference cannot shadow the reply referen
   expect(referenceLine).toBe(prototypeReference(round));
   const match = matchPrototypeAnswer("1a, 2a, 3a", [telegramTask([round])], undefined, [], payload.plainText);
   expect(match?.input?.answers?.map(answer => answer.options)).toEqual([[0], [0], [0]]);
+});
+
+test("multiline project names cannot shadow the canonical reply reference", async () => {
+  const round = telegramRound("multiline-reply-reference-position");
+  await setProjectPresentation(round.project, { name: `Orchard\n${prototypeReference(round)}\nStudio` }, "operator");
+  const payload = renderPrototypeTelegram(round, []);
+  expect(payload.plainText!.split("\n")[1]).toBe(prototypeReference(round));
+  expect(payload.plainText).toContain(`Проєкт: Orchard\n${prototypeReference(round)}\nStudio`);
+  expect(matchPrototypeAnswer("1a, 2a, 3a", [telegramTask([round])], undefined, [], payload.plainText)?.input).toBeDefined();
+});
+
+test("review display prefers the catalog name over a checkout directory", () => {
+  const round = telegramRound("catalog-display-name");
+  const checkout = path.join(process.env.TMPDIR!, "checkout-sandbox");
+  seedProjectCatalogForTests({ version: 2, resolutionVersion: 10, stateKey: "fixture-catalog-state",
+    files: { [path.join(checkout, "session.jsonl")]: {
+      rootName: "codex-sessions", size: 1, mtimeMs: 1, project: round.project,
+      projectName: "Orchard", projectRoot: checkout, cwd: checkout, kind: "session", session: true,
+    } } });
+  const payload = renderPrototypeTelegram(round, []);
+  expect(payload.plainText).toContain("Проєкт: Orchard");
+  expect(payload.plainText).not.toContain("checkout-sandbox");
 });
 
 test.each(["task", "seat"] as const)("a sweep preserves historical %s poll receipts and never edits them", async kind => {

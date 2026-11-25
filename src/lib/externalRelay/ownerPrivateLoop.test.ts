@@ -8,6 +8,7 @@ import { TelegramBotStore } from "@/lib/telegram/bot/store";
 import { FakeBotTransport, fakeBotToken, ok } from "@/lib/telegram/bot/fakeTransport";
 import { renderPrototypeTelegram } from "@/lib/prototypeReview/telegramPost";
 import { prototypeCopyLine } from "@/lib/prototypeReview/telegramAnswer";
+import { setProjectPresentation } from "@/lib/projects/presentation";
 import { telegramRound, telegramTask } from "@/lib/prototypeReview/telegram.fixture";
 import { loadTasks, saveTasks } from "@/lib/tasks/store";
 import { relayClaimBody } from "./poller";
@@ -25,6 +26,7 @@ import { relayCall } from "./client";
 const captures: Record<string, unknown> = {};
 test.each([true, false])("owner private loop captures real selection, claim, Telegram publish, copied answer and completion (owner tier %s)", async ownerTier => {
   const round = telegramRound("owner-private");
+  await setProjectPresentation(round.project, { name: "Orchard" }, "operator");
   saveTasks([telegramTask([round])]);
   const wire: Record<string, unknown> = { claim: null, publish: null, copied_answer: null, completion: null };
   let claimed: ExternalRelayRequest | undefined;
@@ -86,7 +88,8 @@ test.each([true, false])("owner private loop captures real selection, claim, Tel
     expect((wire.publish as { text: string }).text).not.toContain("<tg-");
     const sentText = rich.plainText!;
     expect(sentText).toContain("Питання 1/3 · Where should this live?");
-    expect(sentText).toMatch(/Review layout\n\n#proto-[a-f0-9]+/);
+    expect(sentText.split("\n")[1]).toBe(`#proto-${round.id.slice(3, 11)}`);
+    expect(sentText).toContain("Проєкт: Orchard");
     expect(sentText).not.toMatch(/Review layout · #proto-/);
     await service.sendOwnerReview({ clientRequestId: round.id, message: rich });
     expect(publishes).toBe(1);

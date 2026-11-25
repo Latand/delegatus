@@ -11,6 +11,7 @@ import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { presentationName, projectPresentation } from "@/lib/projects/presentation";
 import { repositoryReportName } from "@/lib/projects/settings";
 import { projectDirectoryFallbacks } from "@/lib/scanner/projectDirectories";
+import { readProjectCatalog } from "@/lib/scanner/projectCatalogStore";
 import crypto from "node:crypto";
 import sharp from "sharp";
 import { taskFeedSource } from "@/lib/tasks/store";
@@ -96,7 +97,8 @@ function reviewProjectName(project: string, deny: PublicDenyList): string {
   const key = canonicalProject(project);
   const alias = projectAliasSnapshot().displayNames[key];
   const manual = !alias && projectCurationSnapshot().manualProjects.find(row => canonicalProject(row.project) === key);
-  const name = alias || (manual && manual.displayName) || repositoryReportName(key);
+  const catalogName = [...readProjectCatalog().files.values()].find(file => file.project === key)?.projectName;
+  const name = alias || (manual && manual.displayName) || repositoryReportName(key) || catalogName;
   const root = !name && isOpaqueProjectKey(key) ? projectDirectoryFallbacks([key])[key] : undefined;
   const fallback = projectDisplayName(key, name || (root && path.basename(root.replaceAll("\\", "/"))));
   const label = presentationName(projectPresentation(key), fallback).trim();
@@ -136,8 +138,14 @@ function renderCompact(copy: ReviewCopy, shortenOptions: boolean, sample = false
   });
   const withShortOptions = renderReview({ ...condensed, round: { ...condensed.round, questions } }, true, sample);
   if (Buffer.byteLength(withShortOptions.markdown) <= RICH_TEXT_MAX_BYTES) return withShortOptions;
-  return renderReview({ ...copy, slides: [], round: { ...round, questions,
-    variants: variants.map(v => ({ ...v, description: "" })) } }, true, sample);
+  const distinctOptions = round.questions?.map(question => ({ ...question, options: question.options.map((option, index) => ({
+    ...option, label: `${shorten(shortenHashesInText(option.label), 8)} · ${String.fromCharCode(97 + index)}`,
+  })) }));
+  const final = renderReview({ ...copy, slides: [], round: { ...round, questions: distinctOptions,
+    title: shorten(round.title, 80), variants: variants.map(v => ({ ...v, name: shorten(v.name, 32), description: "" })) } }, true, sample);
+  if (Buffer.byteLength(final.markdown) > RICH_TEXT_MAX_BYTES)
+    throw new Error("Telegram review exceeds the rich message byte budget after compact rendering");
+  return final;
 }
 
 /** A definitive Telegram limit refusal uses this smaller rich carousel. */
@@ -199,9 +207,9 @@ function renderBounded(copy: ReviewCopy, sample = false): TelegramRichMessage {
 function renderReview({ round, slides, taskTitle, projectName }: ReviewCopy, compact: boolean, sample = false): TelegramRichMessage {
   const title = `${sample ? "Зразок · " : ""}${round.variants.length ? "Прототип" : "Форма рішення"} · ${round.title}`;
   const reference = prototypeReference(round);
-  const lines = [`# 🧪 ${inline(title)}`, `<p>Проєкт: <b>${escapeText(projectName)}</b></p>`, "",
-    ...(taskTitle ? [`${inline(taskTitle)}`, ""] : []), reference, ""];
-  const plain = [`🧪 ${title}`, `Проєкт: ${projectName}`, ...(taskTitle ? [taskTitle, ""] : []), reference, ""];
+  const lines = [`# 🧪 ${inline(title)}`, reference, `<p>Проєкт: <b>${escapeText(projectName)}</b></p>`, "",
+    ...(taskTitle ? [`${inline(taskTitle)}`, ""] : [])];
+  const plain = [`🧪 ${title}`, reference, `Проєкт: ${projectName}`, "", ...(taskTitle ? [taskTitle, ""] : []), ""];
   if (sample) {
     const notice = "Це зразок нового повідомлення для перегляду на телефоні.";
     lines.push(notice, "");

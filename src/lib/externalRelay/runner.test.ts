@@ -4310,7 +4310,7 @@ test("owner credentials, host paths and key material never reach completion, ans
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   paired.credential = randomBytes(32).toString("base64url");
   updateRelayStore(s => ({ ...s, relays: [paired] }));
-  const paths = ["/srv/review-fixture/private-note.txt", "~/private-note.txt", "file:///srv/private-note.txt", String.raw`C:\fixture\private.txt`, String.raw`\\fixture-host\share\private.txt`];
+  const paths = ["/srv/review-fixture/private-note.txt", "~/private-note.txt", "~/private-fixture/nested/secret-notes.md", "file:///srv/private-note.txt", String.raw`C:\fixture\private.txt`, String.raw`\\fixture-host\share\private.txt`];
   const material = "fixture-private-material";
   const pgpMaterial = "fixture-pgp-private-material";
   const value = ["fixture", "host", "credential", "value"].join("-");
@@ -4330,6 +4330,8 @@ test("owner credentials, host paths and key material never reach completion, ans
     expect(completions).toHaveLength(1);
     expect(record?.answer?.text).toContain("Done");
     for (const surface of [completions, record, diagnostics]) for (const secret of [value, paired.credential, control, spawn, ...paths, material, pgpMaterial]) expect(JSON.stringify(surface)).not.toContain(JSON.stringify(secret).slice(1, -1));
+    for (const surface of [completions, record, diagnostics]) for (const component of ["private-fixture", "nested", "secret-notes.md"])
+      expect(JSON.stringify(surface)).not.toContain(component);
     const encoded = Array.from(paired.credential, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
     const encodedOutcome = await runClaimedRequest(paired, { ...contextRequest, request_id: "owner_encoded",
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
