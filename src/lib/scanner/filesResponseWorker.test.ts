@@ -493,12 +493,12 @@ test("a projection from the snapshot file reports the scan generation that file 
   const snapshotFile = path.join(stateDir, "files-scan-snapshot.json");
   const snapshot = { files: [], projectCatalog: [], complete: true };
   try {
-    fs.writeFileSync(snapshotFile, JSON.stringify({ version: 1, schemaVersion: 12, epoch: "e1", generation: 15, snapshot }));
+    fs.writeFileSync(snapshotFile, JSON.stringify({ version: 1, schemaVersion: 13, epoch: "e1", generation: 15, snapshot }));
     const fromFile = await buildFilesResponseInWorker({ ...request, snapshot: undefined, snapshotFile }, runtimeFor(stateDir));
     expect(fromFile.snapshotRead).toEqual({ epoch: "e1", generation: 15 });
 
     /* A file written before the scan named its generation dates nothing. */
-    fs.writeFileSync(snapshotFile, JSON.stringify({ version: 1, schemaVersion: 12, snapshot }));
+    fs.writeFileSync(snapshotFile, JSON.stringify({ version: 1, schemaVersion: 13, snapshot }));
     const undated = await buildFilesResponseInWorker({ ...request, snapshot: undefined, snapshotFile }, runtimeFor(stateDir));
     expect(undated.snapshotRead).toBeUndefined();
 

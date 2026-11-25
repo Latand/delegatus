@@ -134,7 +134,14 @@ run() {
   fi
   exec "$gate_bun" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --portable "$@"
 }
+# Bind the bypass to the wrapper that took this branch. The marker can
+# cross exec and service handoff, but it cannot identify a descendant.
+unset LLV_GATE_HOOK_WRAPPER_IDENTITY
 if pre_push_parent "$@"; then
+  if [[ -r /proc/$BASHPID/stat ]] && IFS= read -r wrapper_stat < "/proc/$BASHPID/stat"; then
+    read -ra wrapper_fields <<< "${wrapper_stat##*) }"
+    export LLV_GATE_HOOK_WRAPPER_IDENTITY="$BASHPID:${wrapper_fields[19]}"
+  fi
   # Only this dispatch bypasses a slot. A nested or generic heavy dispatch
   # must clear the recorder's phase before it can obtain its own grant.
   export LLV_GATE_RECORD_WAIT_ONLY="${LLV_GATE_RECORD_WAIT_REQUEST:-}"

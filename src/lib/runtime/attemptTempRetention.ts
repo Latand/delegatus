@@ -11,7 +11,7 @@ import { allocatedAttemptBytes, attemptReferencesClear, attemptProcessReferences
   type BlockedSubtree, type RetainedCheckoutReads, type AttemptNamespaceProtection, type AttemptProtection } from "./attemptTempFilesystem";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
 import { preserveAttemptEvidence, type AttemptEvidenceSelection } from "./attemptTempEvidence";
-import { recordedRootHeld, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
+import { recordedRootHeld, readRecorded, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
 import { trackSqliteMemory } from "@/lib/sqliteMemoryDiagnostics";
 import { AttemptRetentionReporting } from "./attemptRetentionReporting";
 import { FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFinish";
@@ -169,16 +169,20 @@ export class AttemptTempStore {
       fs.chmodSync(filename, 0o600);
     } catch (error) { this.db.close(); this.releaseMemoryTracking(); this.releaseMemoryTracking = undefined; throw error; }
   }
-  register(owner: AttemptTempOwner) {
+  register(...owners: AttemptTempOwner[]) {
     const evidence = statePath("evidence");
-    if ([path.resolve(owner.directory), fs.realpathSync(owner.directory)].some(directory => directory === evidence || directory.startsWith(evidence + path.sep)))
-      throw new Error("Evidence is never attempt temp");
-    const stat = fs.lstatSync(owner.directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || !/^llv-(?:read-only-stage|stage|stage-config)-/.test(path.basename(owner.directory)))
-      throw new Error("Attempt temp root is not an owned directory");
-    this.db.query("INSERT INTO roots(directory,pipelineId,launchId,retainUntilClose,createdAt,identity,checkedAt) VALUES(?,?,?,?,?,?,?)")
-      .run(path.resolve(owner.directory), owner.pipelineId, owner.launchId, Number(owner.retainUntilClose), owner.createdAt, `${stat.dev}:${stat.ino}`, owner.createdAt);
-    fs.writeFileSync(path.join(owner.directory, ".delegatus-attempt-owner"), "attempt-temp.sqlite\n", { mode: 0o600, flag: "wx" });
+    this.db.transaction(() => {
+      for (const owner of owners) {
+        if ([path.resolve(owner.directory), fs.realpathSync(owner.directory)].some(directory => directory === evidence || directory.startsWith(evidence + path.sep)))
+          throw new Error("Evidence is never attempt temp");
+        const stat = fs.lstatSync(owner.directory);
+        if (!stat.isDirectory() || stat.isSymbolicLink() || !/^llv-(?:read-only-stage|stage|stage-config)-/.test(path.basename(owner.directory)))
+          throw new Error("Attempt temp root is not an owned directory");
+        this.db.query("INSERT INTO roots(directory,pipelineId,launchId,retainUntilClose,createdAt,identity,checkedAt) VALUES(?,?,?,?,?,?,?)")
+          .run(path.resolve(owner.directory), owner.pipelineId, owner.launchId, Number(owner.retainUntilClose), owner.createdAt, `${stat.dev}:${stat.ino}`, owner.createdAt);
+        fs.writeFileSync(path.join(owner.directory, ".delegatus-attempt-owner"), "attempt-temp.sqlite\n", { mode: 0o600, flag: "wx" });
+      }
+    }).immediate();
   }
   /** Only the private scratch container created by the access builder is a
    * legacy creation record. Shared OS temp roots are never candidates. */
@@ -216,10 +220,47 @@ export class AttemptTempStore {
     return this.db.query("INSERT OR IGNORE INTO roots(directory,pipelineId,launchId,retainUntilClose,createdAt,identity,checkedAt) VALUES(?,NULL,'adopted',0,?,?,?)")
       .run(directory, now, `${stat.dev}:${stat.ino}`, now).changes > 0;
   }
+  /** Scheduled cleanup needs a completion clock. Recover the exact creation
+   * binding from recorded custody, including history, before admitting a
+   * legacy root to that schedule. A directory name or age grants nothing. */
+  private recoverLegacyScratch(scratch: string, name: string, now: number) {
+    if (!/^llv-(?:read-only-stage|stage)-[A-Za-z0-9]{6}$/.test(name)) return false;
+    const directory = path.join(scratch, name), prior = this.owner(directory);
+    if (prior && (prior.pipelineId !== null || prior.launchId !== "adopted") || fs.existsSync(attemptTempJournalPath(directory))) return false;
+    const stat = fs.lstatSync(directory, { throwIfNoEntry: false });
+    if (!stat?.isDirectory() || (stat.mode & 0o777) !== 0o700 || process.getuid && stat.uid !== process.getuid()) return false;
+    const identity = `${stat.dev}:${stat.ino}`, createdAt = Math.trunc(stat.birthtimeMs);
+    if (prior && prior.identity !== identity || !Number.isFinite(createdAt) || createdAt <= 0 || createdAt > now) return false;
+    const proof = () => readRecorded(store => store.rootBindings(directory, identity), { bindings: [], read: 0, overflow: false });
+    const observed = proof(), { bindings, read, overflow } = observed, binding = bindings[0];
+    if (!binding || overflow || read !== bindings.length
+      || !bindings.every(row => row.pipelineId === binding.pipelineId && row.launchId === binding.launchId)) return false;
+    const reader = pipelineRecordReader(binding.pipelineId), version = reader.version(), pipeline = reader.read();
+    if (!pipeline || !pipeline.runs.some(run => run.attempts.some(attempt => attempt.launchId === binding.launchId
+      || attempt.retiredLaunches?.some(launch => launch.launchId === binding.launchId)))) return false;
+    const marker = path.join(directory, ".delegatus-attempt-owner"), markerStat = fs.lstatSync(marker, { throwIfNoEntry: false });
+    if (markerStat && (!markerStat.isFile() || markerStat.nlink !== 1 || markerStat.size !== 20
+      || fs.readFileSync(marker, "utf8") !== "attempt-temp.sqlite\n")) return false;
+    const after = fs.lstatSync(directory);
+    if (after.dev !== stat.dev || after.ino !== stat.ino || after.birthtimeMs !== stat.birthtimeMs || after.mode !== stat.mode
+      || fs.realpathSync(directory) !== directory || reader.version() !== version || JSON.stringify(proof()) !== JSON.stringify(observed)) return false;
+    return this.db.transaction(() => {
+      if (!markerStat) fs.writeFileSync(marker, "attempt-temp.sqlite\n", { mode: 0o600, flag: "wx" });
+      const result = this.db.query(`INSERT INTO roots(directory,pipelineId,launchId,retainUntilClose,createdAt,identity,checkedAt)
+        VALUES(?,?,?,0,?,?,?) ON CONFLICT(directory) DO UPDATE SET pipelineId=excluded.pipelineId,launchId=excluded.launchId,createdAt=excluded.createdAt
+        WHERE roots.pipelineId IS NULL AND roots.launchId='adopted' AND roots.identity=excluded.identity`)
+        .run(directory, binding.pipelineId, binding.launchId, createdAt, identity, now);
+      if (result.changes) this.retainRoot(directory, attemptScratchExpiry(pipeline, { ...binding, createdAt, retainUntilClose: false }));
+      return result.changes > 0;
+    }).immediate();
+  }
   recoverTrash(now: () => number, deadline: number, budgetNow: () => number, scheduledOnly = false) {
     if (!scheduledOnly) return this.recovery.page(now, deadline, budgetNow);
     const discovery = attemptScratchAuditDue(this.schedulePosition().discoveryAfter, now()) && {
-      unknown: (scratch: string, name: string) => this.adoptLegacyName(scratch, name, now()),
+      unknown: (scratch: string, name: string) => {
+        if (this.recoverLegacyScratch(scratch, name, now())) return "recovered attempt owner";
+        if (this.adoptLegacyName(scratch, name, now())) return "owner-unknown";
+      },
       complete: () => this.postponeAudit("discoveryAfter", now() + ATTEMPT_SCRATCH_AUDIT_INTERVAL_MS),
     };
     return this.recovery.page(now, deadline, budgetNow, discovery);
@@ -450,6 +491,10 @@ export class AttemptTempStore {
     return failure !== null && prior !== failure;
   }
   copy(destination: string): EvidenceCopy | null { return this.db.query<EvidenceCopy, [string]>("SELECT * FROM copies WHERE destination=?").get(destination); }
+  copyLedgerPage(after: string, limit: number) {
+    return this.db.query<Pick<EvidenceCopy, "destination" | "kind">, [string, number]>(
+      "SELECT destination,kind FROM copies WHERE destination>? ORDER BY destination LIMIT ?").all(after, limit);
+  }
   registerCopy(row: EvidenceCopy) {
     this.db.query(`INSERT INTO copies VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(destination) DO UPDATE SET
       expiresAt=excluded.expiresAt,checkedAt=excluded.checkedAt,bytes=excluded.bytes`)

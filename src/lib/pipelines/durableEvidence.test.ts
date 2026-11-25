@@ -380,15 +380,21 @@ test("a Claude end-turn verdict with a trailing bookkeeping record stays termina
   expect(evidence).toMatchObject({ turn: "terminal", message: { text: PASS_TEXT } });
 });
 
-test("a Codex verdict whose turn still holds an open tool call is busy, never terminal", async () => {
+test("a Codex verdict stays busy until native completion closes the turn and its missing tool output", async () => {
+  const completedAt = "2026-07-18T13:05:00.000Z";
+  const turnId = "fixture-turn";
   const file = writeTranscript("codex-open-tool-verdict.jsonl", [
-    { timestamp: "2026-07-18T13:00:00.000Z", payload: { type: "task_started" } },
-    { timestamp: "2026-07-18T13:01:00.000Z", payload: { type: "function_call", call_id: "call-9" } },
-    { timestamp: "2026-07-18T13:04:00.000Z", payload: { type: "agent_message", message: PASS_TEXT } },
-    { timestamp: "2026-07-18T13:05:00.000Z", payload: { type: "task_complete", last_agent_message: PASS_TEXT } },
+    { type: "event_msg", timestamp: "2026-07-18T13:00:00.000Z", payload: { type: "task_started", turn_id: turnId } },
+    { type: "response_item", timestamp: "2026-07-18T13:01:00.000Z", payload: { type: "function_call", call_id: "call-9" } },
+    { type: "event_msg", timestamp: "2026-07-18T13:04:00.000Z", payload: { type: "agent_message", message: PASS_TEXT } },
   ]);
-
   expect(await durableStageTurnEvidence("codex", file)).toMatchObject({ turn: "busy" });
+
+  fs.appendFileSync(file, JSON.stringify({ type: "event_msg", timestamp: completedAt,
+    payload: { type: "task_complete", turn_id: turnId, last_agent_message: PASS_TEXT } }) + "\n");
+  expect(await durableStageTurnEvidence("codex", file)).toMatchObject({
+    turn: "terminal", message: { text: PASS_TEXT, ts: Date.parse(completedAt) },
+  });
 });
 
 test("a user record after a terminal Codex verdict reopens the turn as busy", async () => {
