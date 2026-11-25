@@ -30,9 +30,10 @@ test("a backend response is asked once at the fixed Responses endpoint with the 
     expect(url).toBe("https://api.openai.com/v1/responses");
     expect((init!.headers as Record<string, string>).authorization).toBe("Bearer synthetic-credential");
     expect(String(init!.body)).not.toContain("synthetic-credential");
-    expect(JSON.parse(String(init!.body))).toMatchObject({ model: "gpt-6-luna", store: false });
+    expect(JSON.parse(String(init!.body))).toMatchObject({ model: "gpt-6-luna", store: false, stream: true });
     expect(init!.redirect).toBe("error");
-    return Response.json({ id: "resp_fake", output: [], usage: { input_tokens: 1, output_tokens: 1 } });
+    return new Response(`data: ${JSON.stringify({ type: "response.completed", response: { id: "resp_fake", output: [], usage: { input_tokens: 1, output_tokens: 1 } } })}\n\n`,
+      { headers: { "content-type": "text/event-stream" } });
   }) as typeof fetch);
   expect(await provider.respond("synthetic-credential", backendRequest([]), new AbortController().signal)).toMatchObject({ id: "resp_fake" });
   const failing = new OpenAILiveProvider((async () => Response.json({ error: "synthetic-credential" }, { status: 500 })) as unknown as typeof fetch);
