@@ -62,6 +62,10 @@ VOICE_PERSONA_FILE,
 voiceSessionPersona,
 } from "./voicePersona";
 import { installCodexHostFixture, MemoryEventStore, FakeAppServer, fakeSpawn, waitForCondition } from "./codexAppServerHost.fixture";
+import net from "node:net";
+import { adoptStructuredHostsAtStartup } from "./startup";
+import { bindStructuredDeliveryQueue } from "./structuredDeliveryController";
+import { addStructuredRestartConversation, runtimeJournalClient } from "./startupRecipient.fixture";
 
 const COMPACT_SELECTED: SelectedContextRef = { version: 1, state: "selected", conversationId: "conversation_marker_fixture", capturedAt: "2026-09-22T00:00:00.000Z" };
 test.each([false, true])("launch observations reach fresh and adopted Codex requests with clean memory=%s", async cleanMemory => {
@@ -7455,6 +7459,69 @@ test.each([false, true])("Codex child environments preserve the production evide
     expect(captured.options?.env?.TEMP).toBe(access.env.TMPDIR);
   } finally { await host.release(); access.cleanup(); }
 });
+
+/* A Viewer restart finds the host's socket owner dead and re-hosts the row:
+   the relaunched engine gets an attempt scratch again, from the production
+   adoption pass. */
+test.skipIf(process.platform === "win32")("startup re-hosting a Codex row whose socket owner died launches it with its attempt scratch as TMPDIR, TMP and TEMP", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-restart-"));
+  fs.chmodSync(directory, 0o700);
+  const socket = path.join(directory, "rpc.sock");
+  const listener = net.createServer(connection => { connection.on("error", () => {}); connection.end(); });
+  await new Promise<void>((resolve, reject) => { listener.once("error", reject); listener.listen(socket, resolve); });
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sessionId: string = randomUUID();
+  /* A turn the restart cut: the row is owed a new engine. */
+  addStructuredRestartConversation(registry, directory, { sessionId, status: "live", turn: "busy", activeTurnRef: "turn" });
+  /* The recorded owner is a process of this test that has exited. */
+  const owner = spawn(process.execPath, ["-e", "process.stdin.resume()"], { stdio: ["pipe", "ignore", "ignore"] });
+  await new Promise<void>((resolve, reject) => { owner.once("spawn", () => resolve()); owner.once("error", reject); });
+  const identity = captureProcessIdentity(owner.pid!)!;
+  await new Promise<void>(resolve => { owner.once("exit", () => resolve()); owner.stdin!.end(); });
+  const stored = registry.readOnlySnapshot().entries[`codex:${sessionId}`]!;
+  /* No event of it is retained either, so the new host starts its ledger. */
+  registry.upsert({ ...stored, structuredHost: { ...stored.structuredHost!, endpoint: `codex-unix:${socket}`, process: identity, eventCursor: 0, activeTurnRef: null } });
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const server = new FakeAppServer(sessionId);
+  const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+  const hosts: CodexAppServerHost[] = [];
+  const launched: Array<{ reconnected: boolean }> = [];
+  /* The fake engine runs in no memory cell: the row must record none. */
+  const memory = process.env.DELEGATUS_AGENT_MEMORY;
+  process.env.DELEGATUS_AGENT_MEMORY = "off";
+  try {
+    await adoptStructuredHostsAtStartup({ registry, client: runtimeJournalClient(journal),
+      orchestratorSeats: () => [],
+      schedule: () => ({ unref() {} }),
+      resolveCodexOwner: () => null,
+      adoptCodexHost: async (nativeId, options) => {
+        launched.push({ reconnected: !!options.socketOwner });
+        const host = await CodexAppServerHost.adopt(nativeId, { ...options, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured) });
+        hosts.push(host);
+        return host;
+      },
+      adoptClaude: async () => [],
+    });
+    expect(launched).toEqual([{ reconnected: false }]);
+    const environment = captured.options!.env!;
+    const temporary = environment.TMPDIR!;
+    expect(path.basename(temporary)).toBe("tmp");
+    expect(path.dirname(path.dirname(temporary))).toBe(statePath("scratch"));
+    expect(path.basename(path.dirname(temporary))).toMatch(/^llv-(?:read-only-)?stage-/);
+    expect(fs.statSync(temporary).isDirectory()).toBeTrue();
+    expect(environment.TMP).toBe(temporary);
+    expect(environment.TEMP).toBe(temporary);
+    expect(temporary).not.toBe(process.env.TMPDIR);
+  } finally {
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    for (const host of hosts) await host.release();
+    await new Promise<void>(resolve => listener.close(() => resolve()));
+    journal.close();
+    registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+    if (memory === undefined) delete process.env.DELEGATUS_AGENT_MEMORY; else process.env.DELEGATUS_AGENT_MEMORY = memory;
+  }
+}, 60_000);
 
 test("native accounting clocks reach the retained time reader through the real Codex producer", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-timing-"));
