@@ -5,7 +5,7 @@ import { constants, homedir, networkInterfaces } from "node:os";
 import { join, posix, resolve, win32 } from "node:path";
 
 import { appDirIn } from "./appDir.mjs";
-import { probeBind, RUNTIME_HOST_STARTUP_CEILING_MS } from "./launcher-deadline.mjs";
+import { probeBind, RUNTIME_HOST_STARTUP_CEILING_MS, waitForStartupProgress } from "./launcher-deadline.mjs";
 
 export const RUNTIME_HOST_STARTUP_SILENCE_MS = 30_000;
 export { RUNTIME_HOST_STARTUP_CEILING_MS };
@@ -47,81 +47,17 @@ export async function runtimeHostStartupProgress(filename, pid, startIdentity) {
   finally { void file?.close().catch(() => {}); }
 }
 
-/** A live child earns more startup time only by advancing its own markers.
- * The initial silence window also covers module loading before begin(). */
+/** The host polls its own startup file alongside the socket check. */
 export async function waitForRuntimeHostStartup({
-  check, progress, timeout,
-  now = () => performance.now(),
-  sleep = (ms, signal) => new Promise(resolve => {
-    const timer = setTimeout(done, ms);
-    function done() {
-      signal?.removeEventListener("abort", cancel);
-      resolve();
-    }
-    function cancel() {
-      clearTimeout(timer);
-      done();
-    }
-    if (signal?.aborted) cancel();
-    else signal?.addEventListener("abort", cancel, { once: true });
-  }),
+  check, progress, timeout, now = () => performance.now(), sleep,
   silenceMs = RUNTIME_HOST_STARTUP_SILENCE_MS, ceilingMs = RUNTIME_HOST_STARTUP_CEILING_MS, intervalMs = 100,
 }) {
-  const started = now();
-  let lastProgressAt = started;
-  let lastProgress = null;
-  const highWater = new Map();
-  let pendingProgress = null;
-  const checkReady = async () => {
-    const ready = await check();
-    const elapsed = now() - started;
-    if (elapsed >= ceilingMs) {
-      throw new Error(timeout(Math.round(elapsed), lastProgress, Math.round(now() - lastProgressAt), true));
-    }
-    return ready;
-  };
-  while (true) {
-    if (await checkReady()) return;
-    if (!pendingProgress) {
-      pendingProgress = Promise.resolve()
-        .then(progress)
-        .then(observed => ({ observed }), () => ({ observed: [] }));
-    }
-    const elapsedBeforeRead = now() - started;
-    const silentBeforeRead = now() - lastProgressAt;
-    const waitMs = Math.max(1, Math.min(intervalMs, ceilingMs - elapsedBeforeRead, silenceMs - silentBeforeRead));
-    const sleepController = new AbortController();
-    const result = await Promise.race([
-      pendingProgress,
-      sleep(waitMs, sleepController.signal).then(() => null),
-    ]);
-    if (result !== null) sleepController.abort();
-    if (result === null) {
-      const current = now();
-      const elapsed = current - started;
-      const silent = current - lastProgressAt;
-      if (elapsed >= ceilingMs || silent >= silenceMs) {
-        throw new Error(timeout(Math.round(elapsed), lastProgress, Math.round(silent), elapsed >= ceilingMs));
-      }
-      continue;
-    }
-    pendingProgress = null;
-    // A child may exit during either asynchronous read/probe.
-    if (await checkReady()) return;
-    const current = now();
-    for (const [key, value, detail] of result.observed) {
-      if (value <= (highWater.get(key) ?? -1)) continue;
-      highWater.set(key, value);
-      lastProgressAt = current;
-      lastProgress = detail;
-    }
-    const elapsed = current - started;
-    const silent = current - lastProgressAt;
-    if (elapsed >= ceilingMs || silent >= silenceMs) {
-      throw new Error(timeout(Math.round(elapsed), lastProgress, Math.round(silent), elapsed >= ceilingMs));
-    }
-    await sleep(Math.min(intervalMs, ceilingMs - elapsed, silenceMs - silent));
-  }
+  await waitForStartupProgress({
+    check, progress, now, sleep, intervalMs, silenceMs, deadline: now() + ceilingMs,
+    onTimeout: ({ elapsed, lastProgress, silent, ceiling }) => {
+      throw new Error(timeout(elapsed, lastProgress, silent, ceiling));
+    },
+  });
 }
 
 const FORWARDED_API_KEYS = new Set([

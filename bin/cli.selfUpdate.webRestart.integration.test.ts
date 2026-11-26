@@ -581,7 +581,7 @@ for (const output of ["revision-ready", "crashing", "legacy"] as const) {
       .replace("return new Response(process.cwd());", `if (pathname === "/") return new Response(process.cwd() + '<script src="/_next/static/chunks/app.js"></script>');
         return new Response(process.cwd());`));
     const launcher = path.join(next.dir, "bin", "cli.mjs");
-    writeFileSync(launcher, readFileSync(launcher, "utf8").replace("const RESTART_READINESS_TIMEOUT_MS = 90_000", "const RESTART_READINESS_TIMEOUT_MS = 1_000"));
+    writeFileSync(launcher, readFileSync(launcher, "utf8").replace("const VIEWER_READINESS_SILENCE_MS = 90_000", "const VIEWER_READINESS_SILENCE_MS = 1_000"));
     renameSync(path.join(fixture.checkout, ".git"), path.join(fixture.root, "saved-git"));
     const packageFile = path.join(fixture.checkout, "package.json");
     writeFileSync(packageFile, JSON.stringify({ ...JSON.parse(readFileSync(packageFile, "utf8")), gitHead: fixture.first }));

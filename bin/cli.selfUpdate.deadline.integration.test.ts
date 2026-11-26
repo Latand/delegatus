@@ -282,7 +282,9 @@ test.each(["current", "legacy", "guard unavailable"])("a stalled rollback retain
     const arm = source.indexOf("  const arm = () => {");
     if (arm >= 0) {
       const end = source.indexOf("  try {\n    const value = JSON.parse", arm);
-      source = source.slice(0, arm) + "  const arm = () => {};\n" + source.slice(end);
+      // Keep the fixture's startup budget available to the current CLI
+      // while removing the watchdog the legacy image never had.
+      source = source.slice(0, arm) + "  const arm = () => { startupExpiry = Date.now() + SWITCH_TIMEOUT_MS; };\n" + source.slice(end);
       source = source.replace("        previousDeadlineCapable: 1,\n", "");
       const acknowledgement = source.indexOf("  // This acknowledgement follows timer installation.");
       if (acknowledgement >= 0) source = source.slice(0, acknowledgement) + source.slice(source.indexOf("  return controller;", acknowledgement));
@@ -383,6 +385,10 @@ for (const forwarded of [false, true]) {
     expect(isAlive(running.child.pid!)).toBe(true);
     const candidate = release(fixture, "exec-deadline-candidate");
     const marker = path.join(fixture.root, "successor-import-entered");
+    if (transition === "healthy") {
+      const budgets = path.join(candidate.dir, "bin/launcher-deadline.mjs");
+      writeFileSync(budgets, readFileSync(budgets, "utf8").replace("VIEWER_PAGE_CHECK_TIMEOUT_MS = 90_000", "VIEWER_PAGE_CHECK_TIMEOUT_MS = 500"));
+    }
     if (transition === "switch import") stallStartupImport(path.join(candidate.dir, "bin/cli.mjs"), marker);
     if (transition === "rollback import") {
       const prior = forwarded ? JSON.parse(readFileSync(before.releasePointer, "utf8")).dir : fixture.checkout;

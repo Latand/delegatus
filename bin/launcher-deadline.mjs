@@ -3,14 +3,94 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 
 // Covers load preflight, child retirement, host startup (5m), and Viewer
-// readiness (90s + 90s). Build time is outside the switch budget.
+// readiness (startup progress plus a 90-second page/chunk reserve). Build time is outside the switch budget.
 export const SWITCH_TIMEOUT_MS = 10 * 60_000;
 export const ROLLBACK_TIMEOUT_MS = 10 * 60_000;
 export const PROBE_TIMEOUT_MS = 2_000;
 export const STOP_TIMEOUT_MS = 10_000;
 export const RUNTIME_HOST_STARTUP_CEILING_MS = 300_000;
-export const TERMINAL_BOOTSTRAP_TIMEOUT_MS = 2 * (RUNTIME_HOST_STARTUP_CEILING_MS + 90_000 + 90_000) + 30_000;
+export const VIEWER_PAGE_CHECK_TIMEOUT_MS = 90_000;
+export const TERMINAL_BOOTSTRAP_TIMEOUT_MS = SWITCH_TIMEOUT_MS + ROLLBACK_TIMEOUT_MS + 4 * STOP_TIMEOUT_MS + 30_000;
 export const SWITCH_OVERRUN = "The launcher switch exceeded its 10 minute deadline";
+
+function startupSleep(ms, signal) {
+  return new Promise(resolve => {
+    const timer = setTimeout(done, ms);
+    function done() {
+      signal?.removeEventListener("abort", cancel);
+      resolve();
+    }
+    function cancel() {
+      clearTimeout(timer);
+      done();
+    }
+    if (signal?.aborted) cancel();
+    else signal?.addEventListener("abort", cancel, { once: true });
+  });
+}
+
+/** Poll readiness until the child answers, stops advancing or exhausts the
+ * absolute monotonic deadline. File evidence may be slow, so let the host
+ * check for child exit while its evidence read is pending. The Viewer reports
+ * evidence already received on stderr as part of its check. */
+export async function waitForStartupProgress({
+  check, progress, onTimeout, deadline, silenceMs, intervalMs, signal,
+  now = () => performance.now(), sleep = startupSleep,
+}) {
+  const started = now();
+  let lastProgressAt = started;
+  let lastProgress = null;
+  const highWater = new Map();
+  let pendingProgress = null;
+  const remaining = () => Math.min(deadline, lastProgressAt + silenceMs) - now();
+  const record = (key, value, detail, observedAt = now()) => {
+    if (value <= (highWater.get(key) ?? -1)
+      || observedAt >= deadline || observedAt > lastProgressAt + silenceMs) return;
+    highWater.set(key, value);
+    lastProgressAt = Math.max(lastProgressAt, observedAt);
+    lastProgress = detail;
+  };
+  const expired = () => {
+    const current = now();
+    const ceiling = current >= deadline;
+    const silent = current - lastProgressAt;
+    if (!ceiling && silent < silenceMs) return false;
+    onTimeout({ elapsed: Math.round(current - started), lastProgress, silent: Math.round(silent), ceiling });
+    return true;
+  };
+
+  while (true) {
+    const ready = await check(remaining, record);
+    if (now() >= deadline) { expired(); return false; }
+    if (ready && remaining() > 0) return true;
+    if (!progress) {
+      if (expired()) return false;
+      await sleep(Math.min(intervalMs, remaining()), signal);
+      continue;
+    }
+    pendingProgress ??= Promise.resolve()
+      .then(progress)
+      .then(observed => ({ observed }), () => ({ observed: [] }));
+    const sleepController = new AbortController();
+    const result = await Promise.race([
+      pendingProgress,
+      sleep(Math.max(1, Math.min(intervalMs, remaining())), sleepController.signal).then(() => null),
+    ]);
+    if (result === null) {
+      if (expired()) return false;
+      continue;
+    }
+    sleepController.abort();
+    pendingProgress = null;
+    // A child may exit during either asynchronous read/probe.
+    const readyAfterRead = await check(remaining, record);
+    if (now() >= deadline) { expired(); return false; }
+    for (const marker of result.observed) record(...marker);
+    if (expired()) return false;
+    if (readyAfterRead) return true;
+    await sleep(Math.min(intervalMs, remaining()), signal);
+  }
+}
 
 export function startupHandoffSucceeded(childPid, childRunning, forwarded, record) {
   return !forwarded && childRunning && Number.isInteger(childPid) && childPid > 0

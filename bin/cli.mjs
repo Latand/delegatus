@@ -10,7 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 import { agentStartupMessage } from "./agent-binaries.mjs";
-import { boundedWait, startupHandoffSucceeded, STOP_TIMEOUT_MS, switchDeadline, SWITCH_OVERRUN, TERMINAL_BOOTSTRAP_TIMEOUT_MS, writeLauncherRefusal } from "./launcher-deadline.mjs";
+import { boundedWait, startupHandoffSucceeded, STOP_TIMEOUT_MS, switchDeadline, SWITCH_OVERRUN, TERMINAL_BOOTSTRAP_TIMEOUT_MS, VIEWER_PAGE_CHECK_TIMEOUT_MS, writeLauncherRefusal } from "./launcher-deadline.mjs";
 
 /* The checkout may be older than this file. No checkout sibling is linked
    until the release decision has completed. */
@@ -46,12 +46,11 @@ if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "launcher";
 
 const DEFAULT_PORT = 8898;
 const DEFAULT_HOSTNAME = "127.0.0.1";
-const READINESS_TIMEOUT_MS = 90_000;
+const VIEWER_READINESS_SILENCE_MS = 90_000;
+const WEB_RECOVERY_TIMEOUT_MS = 10 * 60_000;
 const RUNTIME_HOST_RESTART_BASE_MS = 500;
 const RUNTIME_HOST_RESTART_MAX_MS = 10_000;
 const RUNTIME_HOST_STABLE_UPTIME_MS = 30_000;
-/* A freshly built release and a reboot both start `next start` cold. */
-const RESTART_READINESS_TIMEOUT_MS = 90_000;
 
 const cliPath = fileURLToPath(import.meta.url);
 const cliDir = dirname(cliPath);
@@ -104,7 +103,9 @@ Commands:
     noServer: () => "No standalone server.js or local next found.",
     portBusy: (port) => `Port ${port} is busy. Try: bunx delegatus-cli --port ${port + 1}`,
     serverStartFail: (detail) => `Couldn't start the server: ${detail}`,
-    serverTimeout: (seconds) => `The server didn't respond within ${seconds} seconds.`,
+    serverStartupSilent: (seconds) => `The server made no startup progress for ${seconds} ${seconds === 1 ? "second" : "seconds"}.`,
+    serverStartupBudget: () => "The server reached its startup deadline.",
+    serverStartupProgress: (phase, progress) => `[${phase ?? "HTTP readiness"}] Last progress: ${progress ?? "none"}.`,
     bannerOpened: (url) => `  Opened:    ${url}`,
     bannerOpening: (url) => `  Opening:   ${url}`,
     bannerOpenUrl: (url) => `  Open ${url} in your browser.`,
@@ -162,7 +163,9 @@ Commands:
     noServer: () => "Не знайдено standalone server.js або локальний next.",
     portBusy: (port) => `Порт ${port} зайнятий. Спробуйте: bunx delegatus-cli --port ${port + 1}`,
     serverStartFail: (detail) => `Не вдалося запустити сервер: ${detail}`,
-    serverTimeout: (seconds) => `Сервер не відповів за ${seconds} секунд.`,
+    serverStartupSilent: (seconds) => `Запуск сервера не просувався протягом ${seconds} с.`,
+    serverStartupBudget: () => "Сервер вичерпав час на запуск.",
+    serverStartupProgress: (phase, progress) => `[${phase ?? "готовність HTTP"}] Останній поступ: ${progress ?? "немає"}.`,
     bannerOpened: (url) => `  Відкрито:  ${url}`,
     bannerOpening: (url) => `  Відкриваю: ${url}`,
     bannerOpenUrl: (url) => `  Відкрийте ${url} у браузері.`,
@@ -1353,20 +1356,32 @@ async function main() {
     record.started("web", handle.child, release);
     return handle;
   };
-  const waitForReadiness = async (timeoutMs, { child, state, readiness }, release) => {
-    const ready = await waitForViewerReadiness(options.port, {
-      revision: release.sha, timeoutMs, allowLegacyFallback: !releaseHasRevisionReadiness(release),
-      probeAccess, onPhase: readiness.observe,
-      assertChildRunning: () => {
-        if (state.spawnError) throw new Error(`could not start (${state.spawnError.message})`);
-        if (child.exitCode !== null || child.signalCode !== null) {
-          throw new Error(`exited before it answered (${child.signalCode ? `signal ${child.signalCode}` : `exit code ${child.exitCode}`})`);
-        }
-      },
-    });
-    if (!ready) {
-      const phase = readiness.pendingStartupPhase() ?? "HTTP readiness";
-      throw new Error(`${m.serverTimeout(timeoutMs / 1000)} [${phase}]`);
+  const waitForReadiness = async (expiry, { child, state, readiness }, release) => {
+    const deadline = performance.now() + (expiry - Date.now());
+    const lifetime = new AbortController();
+    const onChildEnd = () => lifetime.abort();
+    child.once("exit", onChildEnd);
+    child.once("error", onChildEnd);
+    try {
+      const ready = await waitForViewerReadiness(options.port, {
+        revision: release.sha, silenceMs: VIEWER_READINESS_SILENCE_MS, deadline,
+        allowLegacyFallback: !releaseHasRevisionReadiness(release), signal: lifetime.signal,
+        probeAccess, onPhase: readiness.observe, startupProgress: readiness.startupProgress,
+        onTimeout: ({ reason, phase, lastProgress }) => {
+          const message = reason === "ceiling" ? m.serverStartupBudget() : m.serverStartupSilent(VIEWER_READINESS_SILENCE_MS / 1000);
+          throw new Error(`${message} ${m.serverStartupProgress(phase, lastProgress)}`);
+        },
+        assertChildRunning: () => {
+          if (state.spawnError) throw new Error(`could not start (${state.spawnError.message})`);
+          if (child.exitCode !== null || child.signalCode !== null) {
+            throw new Error(`exited before it answered (${child.signalCode ? `signal ${child.signalCode}` : `exit code ${child.exitCode}`})`);
+          }
+        },
+      });
+      if (!ready) throw new Error(m.serverNotReady());
+    } finally {
+      child.off("exit", onChildEnd);
+      child.off("error", onChildEnd);
     }
   };
   const serverProcess = launchWeb(serverRef.release, relaunch.isReplacementStart());
@@ -1380,7 +1395,7 @@ async function main() {
 
   const { readiness } = serverProcess;
   try {
-    await waitForReadiness(relaunch.isReplacementStart() ? RESTART_READINESS_TIMEOUT_MS : READINESS_TIMEOUT_MS, serverProcess, serverRef.release);
+    await waitForReadiness(relaunch.startupExpiry() - VIEWER_PAGE_CHECK_TIMEOUT_MS, serverProcess, serverRef.release);
     if (relaunch.isReplacementStart()) {
       const page = await waitForPageAndChunk(options.port, { headers: probeHeaders(), onPhase: readiness.observe });
       if (page) throw new Error(page);
@@ -1448,6 +1463,7 @@ async function main() {
      packaged installs whose launcher supports relaunch. */
   {
     const attemptWeb = async (release, verifyPage = true, keepWhenRefused = false) => {
+      const expiry = Date.now() + WEB_RECOVERY_TIMEOUT_MS - (verifyPage ? VIEWER_PAGE_CHECK_TIMEOUT_MS : 0);
       if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname, packageRoot)) {
         return "port-in-use";
       }
@@ -1458,7 +1474,7 @@ async function main() {
       const handle = launchWeb(release, true);
       const { readiness } = handle;
       try {
-        await waitForReadiness(RESTART_READINESS_TIMEOUT_MS, handle, release);
+        await waitForReadiness(expiry, handle, release);
         if (verifyPage) {
           const page = await waitForPageAndChunk(options.port, { headers: probeHeaders(), onPhase: readiness.observe });
           if (page && keepWhenRefused && /^GET \/ answered 40[13]$/.test(page)) {

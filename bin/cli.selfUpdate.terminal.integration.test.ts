@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { expect, test } from "bun:test";
 import {
-  ADMISSION_LOG, STUB_NEXT, WORK_STARTED, children, cleanTerminalEnv, git, install, perimeterRemains, pointerFile, protectedInstall, readRecord, recordFile, registerSelfUpdateCleanup, release, request, roots, served, serviceShown, socketAnswers, start, stateText, until, type LauncherRecord,
+  ADMISSION_LOG, STUB_NEXT, WORK_STARTED, availablePort, children, cleanTerminalEnv, git, install, perimeterRemains, pointerFile, protectedInstall, readRecord, recordFile, registerSelfUpdateCleanup, release, request, roots, served, serviceShown, socketAnswers, start, stateText, until, type LauncherRecord,
 } from "./__fixtures__/cli-self-update";
 
 /*
@@ -1092,7 +1092,7 @@ test("the forwarding launcher bounds a replacement that stalls during module loa
     expect(JSON.parse(readFileSync(ledgerFile, "utf8"))[0]).toMatchObject({ phase: "failed", terminal: true, error: expect.any(String) });
     expect(JSON.parse(readFileSync(trialFile, "utf8"))).toMatchObject({ refused: true, detail: expect.any(String) });
     expect(existsSync(drainFile)).toBe(false);
-    expect(readRecord(fixture.state).web.state).toBe("healthy");
+    await until(() => readRecord(fixture.state).web.state === "healthy", 5_000);
   } finally {
     const closed = new Promise(resolve => running.child.once("exit", resolve));
     running.child.kill("SIGTERM");
@@ -1107,20 +1107,86 @@ test("the forwarding launcher bounds a replacement that stalls during module loa
   }
 });
 
-for (const failurePhase of ["none", "readiness", "page", "chunk", "output", "journal"] as const) {
+test("terminal bootstrap lets a rollback finish after the switch expires", async () => {
+  const fixture = install();
+  const candidate = release(fixture, "slow-rollback");
+  writeFileSync(path.join(candidate.dir, "node_modules", ".bin", "next"), STUB_NEXT(true));
+  const candidateBudgets = path.join(candidate.dir, "bin", "launcher-deadline.mjs");
+  writeFileSync(candidateBudgets, readFileSync(candidateBudgets, "utf8").replace("VIEWER_PAGE_CHECK_TIMEOUT_MS = 90_000", "VIEWER_PAGE_CHECK_TIMEOUT_MS = 500"));
+  writeFileSync(path.join(fixture.checkout, "node_modules", ".bin", "next"), `await Bun.sleep(3400);\n${STUB_NEXT(false)}`);
+
+  const pointer = pointerFile(fixture);
+  const directory = path.dirname(pointer);
+  mkdirSync(directory, { recursive: true });
+  const requestFile = pointer.replace("release-", "request-");
+  const trialFile = pointer.replace("release-", "trial-");
+  const resultFile = `${requestFile}.result.json`;
+  const requestId = "slow-rollback";
+  const port = await availablePort();
+  const previousEntry = path.join(fixture.checkout, "bin", "cli.mjs");
+  const candidateEntry = path.join(candidate.dir, "bin", "cli.mjs");
+  const switchDeadlineAt = Date.now() + 2_800;
+  const intent = { requestId, target: candidate.sha, releasePointer: pointer, rollbackPointer: null,
+    state: "switching", switchedAt: new Date().toISOString(), switchDeadlineAt };
+  writeFileSync(pointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
+  writeFileSync(path.join(directory, "apply.json"), JSON.stringify(intent));
+  writeFileSync(trialFile, JSON.stringify({ ...intent, previousEntry, state: "starting", at: intent.switchedAt }));
+
+  const plan = { root: fixture.checkout, requestFile, target: candidate.sha, releasePointer: pointer,
+    rollbackPointer: null, priorRevision: fixture.first.slice(0, 7), priorVersion: "0.0.0", checkout: true };
+  const entry = [path.join(fixture.checkout, "bin", "launcher-relaunch.mjs"), "--terminal",
+    Buffer.from(JSON.stringify(plan)).toString("base64"), candidateEntry];
+  const child = spawn(process.execPath, ["--bun", ...entry, "--no-open", "--port", String(port)], {
+    cwd: fixture.checkout, env: fixture.env, stdio: ["ignore", "ignore", "pipe"],
+  });
+  children.add(child);
+  let stderr = "";
+  child.stderr?.on("data", chunk => { stderr += String(chunk); });
+  const { isAlive, readStartIdentity } = await import("../src/lib/selfUpdate/pid");
+  let rollbackOwner: { pid: number; identity: string } | undefined;
+  try {
+    await until(() => {
+      if (!existsSync(trialFile)) return false;
+      const trial = JSON.parse(readFileSync(trialFile, "utf8"));
+      if (trial.state !== "rolled-back") return false;
+      const record = readRecord(fixture.state);
+      const identity = readStartIdentity(record.launcher.pid);
+      if (!identity || identity !== record.launcher.startIdentity) return false;
+      rollbackOwner = { pid: record.launcher.pid, identity };
+      return true;
+    }, 5_000);
+    const receipt = await until(() => existsSync(resultFile) ? JSON.parse(readFileSync(resultFile, "utf8")) : null, 8_000)
+      .catch(error => { throw new Error(`${error}\n${stderr}`); });
+    expect(receipt).toMatchObject({ state: "rolled-back", requestId, revision: fixture.first });
+    expect(Date.parse(receipt.completedAt)).toBeGreaterThan(switchDeadlineAt);
+    expect(await served(port)).toBe(fixture.checkout);
+    await until(() => child.exitCode === 1, 5_000);
+    expect(stderr).toContain("the verified prior release is serving");
+  } finally {
+    // The detached terminal child transferred itself to the recorded prior launcher.
+    if (rollbackOwner && readStartIdentity(rollbackOwner.pid) === rollbackOwner.identity) {
+      process.kill(rollbackOwner.pid, "SIGTERM");
+      await until(() => !isAlive(rollbackOwner!.pid) || readStartIdentity(rollbackOwner!.pid) !== rollbackOwner!.identity, 5_000);
+    }
+  }
+}, 20_000);
+
+for (const failurePhase of ["none", "readiness", "page", "chunk", "output", "journal", "slow", "stalled"] as const) {
   test(`relaunch readiness persists phases across exec and rollback, failure=${failurePhase}`, async () => {
-    const failed = failurePhase !== "none";
+    const failed = failurePhase !== "none" && failurePhase !== "slow";
+    const readinessFails = failurePhase === "readiness" || failurePhase === "stalled";
     const pageFails = failurePhase === "page" || failurePhase === "output" || failurePhase === "journal";
     const fixture = install();
+    fixture.env.LLV_LANG = failurePhase === "stalled" ? "uk" : "en";
     const running = await start(fixture);
     const before = await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" ? record : null; });
     const next = release(fixture, "readiness-trial");
     const supervisor = path.join(next.dir, "bin", "self-update-supervisor.mjs");
     writeFileSync(supervisor, readFileSync(supervisor, "utf8")
-      .replace("timeoutMs = 90_000, attemptTimeoutMs = 5_000", "timeoutMs = 1_000, attemptTimeoutMs = 200")
+      .replace("timeoutMs = VIEWER_PAGE_CHECK_TIMEOUT_MS, attemptTimeoutMs = 5_000", "timeoutMs = 1_000, attemptTimeoutMs = 200")
       .replace("timeoutMs = 5_000, headers = {}", "timeoutMs = 200, headers = {}"));
     const launcher = path.join(next.dir, "bin", "cli.mjs");
-    writeFileSync(launcher, readFileSync(launcher, "utf8").replace("const RESTART_READINESS_TIMEOUT_MS = 90_000", "const RESTART_READINESS_TIMEOUT_MS = 1_000"));
+    writeFileSync(launcher, readFileSync(launcher, "utf8").replace("const VIEWER_READINESS_SILENCE_MS = 90_000", "const VIEWER_READINESS_SILENCE_MS = 1_000"));
     writeFileSync(path.join(next.dir, "node_modules", ".bin", "next"), `
       console.log("discarded startup prefix " + "x".repeat(70_000));
       console.log("▲ Next.js fixture startup line");
@@ -1129,12 +1195,27 @@ for (const failurePhase of ["none", "readiness", "page", "chunk", "output", "jou
       console.error("[viewer startup phase] access ready 3");
       console.error("[viewer startup phase] state-compatibility running 0");
       if (${failurePhase !== "readiness"}) console.error("[viewer startup phase] state-compatibility ready 7");
+      let progress = 0;
+      let ready = ${failurePhase !== "slow" && failurePhase !== "stalled"};
+      if (!ready) {
+        console.error("[viewer startup phase] registry running 0");
+        const interval = setInterval(() => {
+          console.error("[viewer startup phase] registry progress " + (++progress) + " 10");
+          if (${failurePhase === "stalled"} && progress === 2) clearInterval(interval);
+          if (progress === 10) {
+            clearInterval(interval);
+            ready = true;
+            console.error("[viewer startup phase] registry ready 3000");
+          }
+        }, 300);
+      }
       let pages = 0;
       const server = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.PORT ?? process.argv[process.argv.indexOf("--port") + 1]),
         fetch(request) {
           const { pathname, searchParams } = new URL(request.url);
           if (pathname === "/api/ready") {
             if (${failurePhase === "readiness"}) return new Promise(() => {});
+            if (!ready) return new Response(null, { status: 503 });
             const revision = process.env.LLV_DIAGNOSTIC_REVISION;
             return searchParams.get("revision") === revision
               ? new Response(null, { headers: { "x-delegatus-viewer-revision": revision } })
@@ -1173,24 +1254,35 @@ for (const failurePhase of ["none", "readiness", "page", "chunk", "output", "jou
       const candidate = runs.find((run: { revision: string }) => run.revision === next.sha)!;
       expect(candidate.status).toBe(failed ? "failed" : "ready");
       expect(candidate.phases.files.attempts).toBeGreaterThanOrEqual(1);
-      expect(candidate.phases.files.status).toBe(failurePhase === "readiness" ? "failed" : "ready");
+      expect(candidate.phases.files.status).toBe(readinessFails ? "failed" : "ready");
       expect(candidate.startup.access).toEqual({ status: "ready", elapsedMs: 3 });
       if (failurePhase === "readiness") {
         expect(candidate.elapsedMs).toBeLessThan(5_000);
-        expect(result.detail).toContain("[state-compatibility]");
+        expect(result.detail).toContain("The server made no startup progress for 1 second. [state-compatibility]");
+        expect(candidate).toMatchObject({ detail: "startup-silence" });
         expect(candidate.startup["state-compatibility"]).toMatchObject({ status: "failed" });
         expect(candidate.phases.files.observations.at(-1)).toMatchObject({ endpoint: "/api/ready", error: "deadline" });
         expect(candidate.phases.page.attempts).toBe(0);
         expect(candidate.phases.page.status).toBe("pending");
+      } else if (failurePhase === "stalled") {
+        expect(result.detail).toContain("Запуск сервера не просувався протягом 1 с. [registry] Останній поступ: registry 2/10.");
+        expect(candidate).toMatchObject({ detail: "startup-silence" });
+        expect(candidate.startup.registry).toMatchObject({ status: "failed", done: 2, total: 10 });
+        expect(candidate.phases.page.attempts).toBe(0);
       } else {
+        if (failurePhase === "slow") {
+          expect(candidate.startup.registry).toMatchObject({ status: "ready", done: 10, total: 10 });
+          expect(candidate.phases.files.elapsedMs).toBeGreaterThanOrEqual(3_000);
+          expect(candidate.phases.files.observations).toContainEqual(expect.objectContaining({ httpStatus: 503 }));
+        }
         expect(candidate.startup["state-compatibility"]).toEqual({ status: "ready", elapsedMs: 7 });
         expect(candidate.phases.files.observations.at(-1)).toMatchObject({ endpoint: "/api/ready", httpStatus: 200 });
         expect(candidate.phases.page.attempts).toBeGreaterThanOrEqual(2);
         expect(candidate.phases.page.status).toBe(pageFails ? "failed" : "ready");
         expect(candidate.phases.page.elapsedMs).toBeGreaterThanOrEqual(200);
       }
-      expect(candidate.phases.chunk.status).toBe(failurePhase === "none" ? "ready" : failurePhase === "chunk" ? "failed" : "pending");
-      if (failurePhase === "none") {
+      expect(candidate.phases.chunk.status).toBe(!failed ? "ready" : failurePhase === "chunk" ? "failed" : "pending");
+      if (!failed) {
         expect(candidate.phases.page.observations.at(-1)).toMatchObject({ httpStatus: 200, status: "ready" });
         expect(candidate.phases.chunk.observations.at(-1)).toMatchObject({ httpStatus: 200, status: "ready" });
       }

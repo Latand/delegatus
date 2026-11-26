@@ -37,6 +37,7 @@ import { get as httpGet } from "node:http";
 import { basename, dirname, join } from "node:path";
 
 import { appDirIn } from "./appDir.mjs";
+import { VIEWER_PAGE_CHECK_TIMEOUT_MS, waitForStartupProgress } from "./launcher-deadline.mjs";
 export { RUNTIME_HOST_STARTUP_CEILING_MS, TERMINAL_BOOTSTRAP_TIMEOUT_MS } from "./launcher-deadline.mjs";
 
 export const RECORD_VERSION = 1;
@@ -432,10 +433,18 @@ export function accessKeyCanRoundTrip(value) {
     && value.trim() === value && !/[^\t\x20-\x7e]/.test(value);
 }
 
-function probeViewer(port, endpoint, revision, timeoutMs, headers) {
+/**
+ * @param {number} port
+ * @param {string} endpoint
+ * @param {string | null} revision
+ * @param {number} timeoutMs
+ * @param {Record<string, string>} headers
+ * @param {AbortSignal} [signal]
+ */
+function probeViewer(port, endpoint, revision, timeoutMs, headers, signal) {
   return new Promise(resolve => {
-    const suffix = endpoint === READY_ROUTE ? `?revision=${encodeURIComponent(revision)}` : "";
-    const request = httpGet(`http://127.0.0.1:${port}${endpoint}${suffix}`, { headers }, response => {
+    const suffix = endpoint === READY_ROUTE ? `?revision=${encodeURIComponent(revision ?? "")}` : "";
+    const request = httpGet(`http://127.0.0.1:${port}${endpoint}${suffix}`, { headers, signal }, response => {
       response.resume();
       resolve({ httpStatus: response.statusCode, revision: response.headers["x-delegatus-viewer-revision"] });
     });
@@ -448,54 +457,67 @@ function probeViewer(port, endpoint, revision, timeoutMs, headers) {
   }).catch(error => ({ error: readinessError(error) }));
 }
 
+/** @typedef {{ phase: string | null, lastProgress: string }} StartupProgress */
+/** @typedef {[sequence: number, detail: StartupProgress, observedAt: number]} StartupMarker */
+
 /** The release is fixed for this child's lifetime. A legacy-eligible release
  * may use the fallback probe within the same budget.
  * @param {number} port
- * @param {{ revision: string | null, timeoutMs: number, allowLegacyFallback?: boolean, assertChildRunning?: () => void, probeAccess?: () => { headers: Record<string, string>, accessKeyUnsendable?: boolean }, onPhase?: (event: ReadinessPhase) => void, now?: () => number, sleep?: (ms: number) => Promise<void>, probe?: typeof probeViewer }} options
+ * @param {{ revision: string | null, silenceMs: number, deadline?: number, allowLegacyFallback?: boolean, signal?: AbortSignal, assertChildRunning?: () => void, probeAccess?: () => { headers: Record<string, string>, accessKeyUnsendable?: boolean }, onPhase?: (event: ReadinessPhase) => void, startupProgress?: () => StartupMarker[], onTimeout?: (detail: { reason: "silence" | "ceiling", phase: string | null, lastProgress: string | null }) => void, now?: () => number, sleep?: (ms: number, signal?: AbortSignal) => Promise<void>, probe?: typeof probeViewer }} options
  */
 export async function waitForViewerReadiness(port, {
-  revision, timeoutMs, allowLegacyFallback = !revision, assertChildRunning = () => {},
+  revision, silenceMs, deadline = Infinity, allowLegacyFallback = !revision, signal, assertChildRunning = () => {},
   probeAccess = () => ({ headers: {}, accessKeyUnsendable: false }), onPhase = () => {},
-  now = () => performance.now(), sleep = readinessSleep, probe = probeViewer,
+  startupProgress = () => [], onTimeout = () => {},
+  now = () => performance.now(), sleep, probe = probeViewer,
 }) {
   if (!revision && !allowLegacyFallback) return false;
-  const deadline = now() + timeoutMs;
   let endpoint = revision ? READY_ROUTE : LEGACY_READY_ROUTE;
-  while (now() < deadline) {
-    assertChildRunning();
-    // Legacy candidates still pass through their release's access perimeter.
-    // Keep the launcher's probe credentials on the fallback request too.
-    const { headers, accessKeyUnsendable } = probeAccess();
-    if (now() >= deadline) break;
-    onPhase({ phase: "files", status: "running", endpoint });
-    const started = now();
-    const result = started < deadline
-      ? await probe(port, endpoint, revision, Math.max(1, Math.ceil(Math.min(5_000, deadline - started))), headers)
-      : { error: "deadline" };
-    const elapsedMs = now() - started;
-    const { httpStatus } = result;
-    const error = result.error ?? (started + elapsedMs > deadline ? "deadline"
-      : endpoint === READY_ROUTE && httpStatus === 200 && result.revision !== revision ? "revision-mismatch" : undefined);
-    const accessRefused = httpStatus === 401 || httpStatus === 403;
-    // With an unsendable key, the old Viewer can only prove it is listening.
-    // The separate page probe still refuses the replacement and drives rollback.
-    const ready = !error && (endpoint === READY_ROUTE
-      ? httpStatus === 200
-      : (httpStatus >= 200 && httpStatus < 400) || (accessKeyUnsendable && accessRefused));
-    onPhase({ phase: "files", status: ready ? "ready" : "failed", endpoint, httpStatus, error, elapsedMs,
-      detail: error ?? (ready ? null : "http-status") });
-    assertChildRunning();
-    if (ready) return true;
-    // A known legacy build's perimeter can deny an unknown route before Next
-    // returns 404. Both statuses still require legacy eligibility.
-    if (endpoint === READY_ROUTE && allowLegacyFallback && (httpStatus === 404 || accessRefused)) {
-      endpoint = LEGACY_READY_ROUTE;
-      continue;
-    }
-    const remaining = deadline - now();
-    if (remaining > 0) await sleep(Math.min(200, remaining));
-  }
-  return false;
+  return waitForStartupProgress({
+    deadline, silenceMs, intervalMs: 200, signal, now, sleep,
+    onTimeout: ({ ceiling, lastProgress }) => onTimeout({
+      reason: ceiling ? "ceiling" : "silence",
+      phase: lastProgress?.phase ?? null,
+      lastProgress: lastProgress?.lastProgress ?? null,
+    }),
+    check: async (remaining, record) => {
+      const collectProgress = () => {
+        for (const marker of startupProgress()) record("viewer", ...marker);
+      };
+      while (true) {
+        assertChildRunning();
+        collectProgress();
+        if (remaining() <= 0) return false;
+        // The legacy probe goes through the same release access perimeter.
+        const { headers, accessKeyUnsendable } = probeAccess();
+        if (remaining() <= 0) return false;
+        onPhase({ phase: "files", status: "running", endpoint });
+        const started = now();
+        const budget = remaining();
+        const result = budget > 0
+          ? await probe(port, endpoint, revision, Math.ceil(Math.min(5_000, budget)), headers, signal)
+          : { error: "deadline" };
+        assertChildRunning();
+        collectProgress();
+        const { httpStatus } = result;
+        const error = result.error ?? (remaining() <= 0 ? "deadline"
+          : endpoint === READY_ROUTE && httpStatus === 200 && result.revision !== revision ? "revision-mismatch" : undefined);
+        const accessRefused = httpStatus === 401 || httpStatus === 403;
+        // An unsendable key can prove a legacy listener. The separate page
+        // probe still refuses the replacement and drives rollback.
+        const ready = !error && (endpoint === READY_ROUTE
+          ? httpStatus === 200
+          : (httpStatus >= 200 && httpStatus < 400) || (accessKeyUnsendable && accessRefused));
+        onPhase({ phase: "files", status: ready ? "ready" : "failed", endpoint, httpStatus, error, elapsedMs: now() - started,
+          detail: error ?? (ready ? null : "http-status") });
+        // A legacy build's perimeter can deny the unknown route before Next
+        // returns 404. Both statuses still require legacy eligibility.
+        if (endpoint === READY_ROUTE && allowLegacyFallback && (httpStatus === 404 || accessRefused)) {
+          endpoint = LEGACY_READY_ROUTE;
+        } else return ready;
+      }
+    },
+  });
 }
 
 
@@ -553,7 +575,7 @@ export async function probePageAndChunk(port, timeoutMs = 5_000, headers = {}, o
  * @param {{ timeoutMs?: number, attemptTimeoutMs?: number, intervalMs?: number, headers?: Record<string, string>, onPhase?: (event: ReadinessPhase) => void, now?: () => number, sleep?: (milliseconds: number) => Promise<void>, probe?: (port: number, timeoutMs: number, headers: Record<string, string>, onPhase: (event: ReadinessPhase) => void) => Promise<string | null> }} [options]
  */
 export async function waitForPageAndChunk(port, {
-  timeoutMs = 90_000, attemptTimeoutMs = 5_000, intervalMs = 200,
+  timeoutMs = VIEWER_PAGE_CHECK_TIMEOUT_MS, attemptTimeoutMs = 5_000, intervalMs = 200,
   headers = {}, onPhase = () => {}, now = () => performance.now(),
   sleep = readinessSleep,
   probe = probePageAndChunk,
@@ -572,17 +594,20 @@ export async function waitForPageAndChunk(port, {
 
 function readinessReason(detail) {
   if (detail === null || detail === undefined) return null;
-  if (["http-status", "probe-error", "deadline", "revision-mismatch"].includes(detail)) return detail;
+  if (["http-status", "probe-error", "deadline", "revision-mismatch", "startup-budget", "startup-silence"].includes(detail)) return detail;
   if (detail === "Viewer readiness deadline expired") return "deadline";
   if (/^(?:The server didn't respond within \d+ seconds|Сервер не відповів за \d+ секунд)\. \[[a-z -]+\]$/i.test(detail)) return "deadline";
+  if (/^(?:The server made no startup progress for \d+ seconds?|Запуск сервера не просувався протягом \d+ с)\. \[/.test(detail)) return "startup-silence";
+  if (/^(?:The server reached its startup deadline|Сервер вичерпав час на запуск)\. \[/.test(detail)) return "startup-budget";
   if (/^GET \/ answered [1-5]\d\d$/.test(detail)
     || /^GET \/_next\/static\/[^\s]+\.js answered [1-5]\d\d$/.test(detail)) return "http-status";
   if (/^Viewer readiness probe failed(?: \([A-Za-z][A-Za-z0-9_]{0,39}\))?$/.test(detail)) return "probe-error";
   return "probe-failed";
 }
 
-const startupReceipt = /^\[viewer startup phase\] (http-ingress|access|release-authority|state-compatibility|registry|activation) (running|ready) (\d{1,10})$/;
-const recordLimit = 451; // Immediate answers at 200 ms cadence for 90 s, plus the fallback.
+const startupPhases = ["http-ingress", "access", "release-authority", "state-compatibility", "registry", "activation"];
+const startupReceipt = /^\[viewer startup phase\] ([a-z-]+) (?:(running|ready) (\d{1,10})|progress (\d{1,10}) (\d{1,10}))\r?$/;
+const recordLimit = 451; // Keep roughly the last 90 s of immediate answers at a 200 ms cadence.
 
 /** A bounded record survives launcher exec, including a rollback's own boot.
  * Each start retains four runs. The files phase also covers the new probe,
@@ -610,7 +635,11 @@ export function createReadinessJournal(file, { revision, pid }, clock = () => pe
   const phaseStarts = new Map();
   const attemptStarts = new Map();
   let startupLine = "";
+  let phaseIndex = -1;
   let activeStartup = null;
+  let sequence = 0;
+  /** @type {StartupMarker[]} */
+  const markers = [];
   let finished = false;
   const save = () => {
     run.elapsedMs = Math.max(0, Math.round(clock() - started));
@@ -654,26 +683,49 @@ export function createReadinessJournal(file, { revision, pid }, clock = () => pe
       // A long diagnostic line cannot be a receipt. Retain only a sentinel
       // until its newline so an arbitrary suffix cannot become a receipt.
       startupLine = lines.pop() ?? "";
-      if (startupLine.length > 120) startupLine = "!";
+      if (startupLine.length > 120 || startupLine.startsWith("!")) startupLine = "!";
       for (const line of lines) {
-        const match = startupReceipt.exec(line.trimEnd());
+        const match = line.length <= 120 && startupReceipt.exec(line);
         if (!match) continue;
-        const [, name, status, elapsed] = match;
-        run.startup[name] = { status, elapsedMs: Number(elapsed) };
-        if (status === "running") activeStartup = { name, started: clock() };
-        else if (activeStartup?.name === name) activeStartup = null;
+        const [, name, status, elapsed, doneText, totalText] = match;
+        const index = startupPhases.indexOf(name);
+        if (index < 0 || index < phaseIndex) continue;
+        const previous = run.startup[name];
+        const observedAt = clock();
+        if (status === "running") {
+          if (index === phaseIndex) continue;
+          activeStartup = { name, started: observedAt };
+          run.startup[name] = { status, elapsedMs: Number(elapsed) };
+        } else if (status === "ready") {
+          if (previous?.status === "ready") continue;
+          activeStartup = null;
+          run.startup[name] = { ...previous, status, elapsedMs: Number(elapsed) };
+        } else {
+          if (activeStartup?.name !== name) continue;
+          const done = Number(doneText), total = Number(totalText);
+          if (done <= (previous.done ?? 0) || (total !== 0 && done > total)) continue;
+          Object.assign(previous, { done, total, progressAtMs: Math.max(0, Math.round(observedAt - started)) });
+        }
+        phaseIndex = index;
+        const { done, total } = run.startup[name];
+        // Keep recent receipts in arrival order across one in-flight probe.
+        if (markers.length >= 32) markers.shift();
+        markers.push([++sequence, {
+          phase: activeStartup?.name ?? null,
+          lastProgress: done === undefined ? `${name} ${status}` : `${name} ${done}/${total || "?"}`,
+        }, observedAt]);
         save();
       }
     },
-    pendingStartupPhase() {
-      return activeStartup?.name;
+    startupProgress() {
+      return markers.splice(0);
     },
     /** @param {string | null} [detail] */
     finish(detail = null) {
       finished = true;
       if (activeStartup) {
         const { name, started } = activeStartup;
-        run.startup[name] = { status: detail ? "failed" : "running", elapsedMs: Math.max(0, Math.round(clock() - started)) };
+        run.startup[name] = { ...run.startup[name], status: detail ? "failed" : "running", elapsedMs: Math.max(0, Math.round(clock() - started)) };
       }
       run.status = detail ? "failed" : "ready";
       run.detail = readinessReason(detail);
