@@ -122,6 +122,37 @@ test("concurrent requests use at most four command connections and queued cancel
   expect(fixture.accepts()).toBe(4);
 });
 
+test("a queued command rechecks authority after acquiring its socket and before writing", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let saturated!: () => void;
+  const fourCommands = new Promise<void>(resolve => { saturated = resolve; });
+  let received = 0;
+  const fixture = await serve(async request => {
+    if (++received === 4) saturated();
+    await gate;
+    return { id: request.id, ok: true, result: { receipt: { status: "queued" } } };
+  });
+  const client = new UnixRuntimeHostClient(fixture.endpoint);
+  const command = (id: string) => client.command({ kind: "send", operationId: id, idempotencyKey: id,
+    conversationId: "conversation_socket_authority", text: "prompt", policy: "queue" });
+  const active = ["active-a", "active-b", "active-c", "active-d"].map(command);
+  await fourCommands;
+  let expired = false;
+  let authorizationCalls = 0;
+  const queued = client.command({ kind: "send", operationId: "queued-after-deadline", idempotencyKey: "queued-after-deadline",
+    conversationId: "conversation_socket_authority", text: "prompt", policy: "queue" }, () => {
+    authorizationCalls++;
+    if (expired) throw Object.assign(new Error("publication deadline expired"), { code: "STAGED_LAUNCH_DEADLINE" });
+  });
+  expired = true;
+  release();
+  await expect(queued).rejects.toMatchObject({ code: "STAGED_LAUNCH_DEADLINE" });
+  await Promise.all(active);
+  expect(authorizationCalls).toBe(1);
+  expect(received).toBe(4);
+});
+
 test("process restart discards leases and a successor starts with a fresh bounded pool", async () => {
   const fixture = await serve(async request => ({ id: request.id, ok: true, result: 7 }));
   for (let generation = 0; generation < 2; generation++) {
