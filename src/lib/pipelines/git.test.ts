@@ -2276,7 +2276,7 @@ test.each(["author", "committer", "name", "quoted mailbox", "forge single parent
     const box = await publishSandbox();
     try {
       const personal = ["person", "example.invalid"].join("@");
-      const commit = async (identity: NodeJS.ProcessEnv) => {
+      const commit = async (identity: Partial<NodeJS.ProcessEnv>) => {
         const cwd = box.subject.worktreeDir;
         expect(await realExec("git", ["commit", "--allow-empty", "-m", "new work"], cwd,
           { ...controllerCommitIdentityEnv(), ...identity })).toMatchObject({ code: 0 });
@@ -2289,7 +2289,7 @@ test.each(["author", "committer", "name", "quoted mailbox", "forge single parent
         fs.writeFileSync(path.join(cwd, "scripts/privacy-known-value-fingerprints.json"), "{}");
         await git(cwd, "add", "package.json", "scripts");
       }
-      const identity: NodeJS.ProcessEnv = kind === "name" ? { GIT_AUTHOR_NAME: `Person (${personal})` }
+      const identity: Partial<NodeJS.ProcessEnv> = kind === "name" ? { GIT_AUTHOR_NAME: `Person (${personal})` }
         : kind === "committer" ? { GIT_COMMITTER_EMAIL: personal }
         : kind === "forge single parent" ? { GIT_COMMITTER_EMAIL: ["noreply", "github.com"].join("@") }
         : kind === "quoted mailbox" ? { GIT_AUTHOR_EMAIL: ['"fixture"', "users.noreply.github.com"].join("@") }

@@ -92,16 +92,16 @@ test("the swarm line names the anonymous counts, and the rows hold no native che
 
 test.each(["en", "uk"] as const)("%s: attribution defaults on, persists off, and reads back a refused write", async locale => {
   setLocale(locale);
-  let setting: boolean | null = null;
+  const setting: { value: boolean | null } = { value: null };
   let refused = false;
   globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
     if (url !== "/api/operator/settings") return Response.json({ enabled: false });
     if (init?.method === "PUT") {
       if (refused) return Response.json({}, { status: 403 });
-      setting = JSON.parse(String(init.body)).commitAttribution;
+      setting.value = JSON.parse(String(init.body)).commitAttribution;
     }
     return Response.json({
-      commitAttribution: setting === null ? null : { value: setting, changedAt: "2026-11-26T16:10:00Z" },
+      commitAttribution: setting.value === null ? null : { value: setting.value, changedAt: "2026-11-26T16:10:00Z" },
       commitAccount: { state: "resolved", login: "fixture-lane" },
     });
   }) as unknown as typeof fetch;
@@ -113,11 +113,11 @@ test.each(["en", "uk"] as const)("%s: attribution defaults on, persists off, and
   expect(checked()).toBe("true");
   expect(document.querySelector("[data-commit-account]")?.textContent).toContain("fixture-lane");
   await act(async () => { toggle.click(); });
-  expect(setting).toBe(false);
+  expect(setting.value).toBe(false);
   expect(checked()).toBe("false");
   refused = true;
   await act(async () => { toggle.click(); });
-  expect(setting).toBe(false);
+  expect(setting.value).toBe(false);
   expect(checked()).toBe("false");
   expect(document.querySelector('[data-commit-attribution] [role="alert"]')?.textContent).toBe(translate(locale, "settings.privacy.commitAttributionError"));
 });
