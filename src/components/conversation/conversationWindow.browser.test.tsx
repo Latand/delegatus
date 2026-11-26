@@ -7756,6 +7756,9 @@ describe("message document links", () => {
     let frameReads = 0;
     let lastFramePath = "";
     let offScopeServerRequests = 0;
+    const observedFrameRequests: string[] = [];
+    const conversationOffScopeRequests: string[] = [];
+    const directTabOffScopeRequests: string[] = [];
     const chartResponses: Array<{ status: number; contentType: string | null; length: number | null }> = [];
     const framePolicies: string[] = [];
     const browserMessages: string[] = [];
@@ -7814,6 +7817,11 @@ describe("message document links", () => {
         const frameReadsBeforeOpen = frameReads;
         const { context, page, pageErrors } = await openFixture(browser, `${served.base}?${query}`,
           { width, height: phone ? 844 : 900 }, theme, lang, "no-preference", phone);
+        page.on("request", request => {
+          const url = new URL(request.url());
+          if (url.pathname.includes("/api/artifact/frame/")) observedFrameRequests.push(url.pathname);
+          if (url.hostname === "outside.invalid") conversationOffScopeRequests.push(url.href);
+        });
         page.on("console", message => { if (message.type() === "error") browserMessages.push(message.text()); });
         page.on("request", request => { if (request.url().startsWith("https://outside.invalid/")) offScopeNavigations.push(request.url()); });
         try {
@@ -7857,14 +7865,26 @@ describe("message document links", () => {
           expect(await pane.locator('[data-preview-mode="source"]').count()).toBe(0);
           expect(metadataReads).toBe(beforeOpen + 1);
           expect(frameReads).toBe(frameReadsBeforeOpen + 2);
+          expect(observedFrameRequests.some(request => request.endsWith("/chart.png"))).toBe(true);
+          expect(conversationOffScopeRequests).toEqual([]);
           const directTab = await context.newPage();
+          const directTabRequestStart = observedFrameRequests.length;
+          directTab.on("request", request => {
+            const url = new URL(request.url());
+            if (url.pathname.includes("/api/artifact/frame/")) observedFrameRequests.push(url.pathname);
+            if (url.hostname === "outside.invalid") directTabOffScopeRequests.push(url.href);
+          });
           try {
             await directTab.goto(new URL(lastFramePath, served.base).toString());
             await directTab.getByRole("heading", { name: heading }).waitFor();
+            const directChart = directTab.getByRole("img", { name: "Local usage chart" });
+            await directChart.evaluate(image => (image as HTMLImageElement).decode());
+            expect(observedFrameRequests.slice(directTabRequestStart).some(request => request.endsWith("/chart.png"))).toBe(true);
             expect(await directTab.evaluate(() => window.origin)).toBe("null");
             expect(await directTab.getByText("Template destination", { exact: true }).count()).toBe(0);
             await directTab.getByText("Outside destination", { exact: true }).click();
             expect(offScopeNavigations).toEqual([]);
+            expect(directTabOffScopeRequests).toEqual([]);
             expect(await directTab.getByRole("heading", { name: heading }).count()).toBe(1);
           } finally { await directTab.close(); }
           expect(pageErrors).toEqual([]);

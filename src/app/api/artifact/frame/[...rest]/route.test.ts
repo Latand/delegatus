@@ -212,6 +212,104 @@ test("evidence HTML parsing returns 408 after its response deadline", async () =
   }
 });
 
+test("the route settles across a process boundary while a file read remains held", async () => {
+  const report = write("state/evidence/agents/held-read/index.html", "<h1>Held read fixture</h1>");
+  const script = String.raw`
+    import fs from "node:fs/promises";
+    import { NextRequest } from "next/server";
+    import { mintFrameScope } from "./src/lib/artifact/frameScope.ts";
+    import { GET } from "./src/app/api/artifact/frame/[...rest]/route.ts";
+    const filename = process.env.LLV_HELD_REPORT;
+    const state = process.env.LLV_STATE_DIR;
+    const probe = await fs.open(filename, "r");
+    const prototype = Object.getPrototypeOf(probe);
+    await probe.close();
+    const originalRead = prototype.read;
+    const originalClose = prototype.close;
+    const reads = new WeakMap();
+    let heldHandle;
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    prototype.read = function (...args) {
+      const count = (reads.get(this) ?? 0) + 1;
+      reads.set(this, count);
+      if (count !== 2) return originalRead.apply(this, args);
+      heldHandle = this;
+      process.stdout.write("HELD\n");
+      return held.then(async () => {
+        const result = await originalRead.apply(this, args);
+        process.stdout.write("RELEASED\n");
+        return result;
+      });
+    };
+    prototype.close = async function (...args) {
+      const result = await originalClose.apply(this, args);
+      if (this === heldHandle) process.stdout.write("CLOSED\n");
+      return result;
+    };
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", value => {
+      if (value.includes("RELEASE")) release();
+      if (value.includes("ABORT")) controller.abort();
+    });
+    process.stdin.resume();
+    const root = state + "/evidence";
+    const scope = mintFrameScope(filename.slice(0, filename.lastIndexOf("/")), Date.now(), null, "evidence", null, root, root);
+    const controller = new AbortController();
+    const request = new NextRequest("http://127.0.0.1:8898/api/artifact/frame/" + scope + "/index.html", {
+      headers: { host: "127.0.0.1:8898", "sec-fetch-site": "cross-site", "sec-fetch-dest": "iframe" }, signal: controller.signal,
+    });
+    const response = await GET(request);
+    process.stdout.write("RESULT " + response.status + "\n");
+    await held;
+    await new Promise(resolve => setTimeout(resolve, 10));
+    process.exit(0);
+  `;
+  const run = async (kind: "deadline" | "abort") => {
+    const child = Bun.spawn([process.execPath, "-e", script], {
+      cwd: process.cwd(), stdin: "pipe", stdout: "pipe", stderr: "pipe",
+      env: { ...process.env, LLV_HELD_REPORT: report, LLV_ARTIFACT_TIME_BUDGET_MS: kind === "deadline" ? "350" : "10000" },
+    });
+    const reader = child.stdout.getReader();
+    const decoder = new TextDecoder();
+    let buffered = "";
+    const readLine = async () => {
+      while (true) {
+        const newline = buffered.indexOf("\n");
+        if (newline >= 0) {
+          const line = buffered.slice(0, newline).replace(/\r$/, "");
+          buffered = buffered.slice(newline + 1);
+          return line;
+        }
+        const next = await Promise.race([
+          reader.read(),
+          Bun.sleep(5_000).then(() => { throw new Error("child probe did not respond within five seconds"); }),
+        ]);
+        if (next.done) throw new Error(`child exited before a complete line: ${buffered}`);
+        buffered += decoder.decode(next.value, { stream: true });
+      }
+    };
+    try {
+      expect(await readLine()).toBe("HELD");
+      if (kind === "abort") {
+        child.stdin.write("ABORT\n");
+        await child.stdin.flush();
+      }
+      expect(await readLine()).toBe(`RESULT ${kind === "deadline" ? 408 : 499}`);
+      child.stdin.write("RELEASE\n");
+      await child.stdin.flush();
+      expect(await readLine()).toBe("RELEASED");
+      expect(await readLine()).toBe("CLOSED");
+      expect(await child.exited).toBe(0);
+    } finally {
+      child.kill();
+      reader.releaseLock();
+    }
+  };
+  await run("deadline");
+  await run("abort");
+});
+
 test("an initially oversized evidence report is rejected before HTML parsing", async () => {
   const report = write("state/evidence/agents/oversized/index.html", "0123456789");
   const scope = mintFrameScope(path.dirname(report), Date.now(), null, "evidence", null,

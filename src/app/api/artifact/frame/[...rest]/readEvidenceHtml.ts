@@ -1,14 +1,20 @@
 import type { FileHandle } from "node:fs/promises";
 
 /** Read untrusted HTML only while its actual bytes remain within the request budget. */
-export async function readEvidenceHtml(handle: FileHandle, maxBytes: number, signal: AbortSignal, deadline: number): Promise<Buffer> {
+export async function readEvidenceHtml(
+  handle: FileHandle,
+  maxBytes: number,
+  signal: AbortSignal,
+  deadline: number,
+  read: <T>(operation: Promise<T>) => Promise<T> = operation => operation,
+): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let total = 0;
   while (true) {
     if (signal.aborted) throw new Error("client aborted");
     if (Date.now() >= deadline) throw new Error("artifact time budget exceeded");
     const buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1 - total));
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, total);
+    const { bytesRead } = await read(handle.read(buffer, 0, buffer.length, total));
     if (signal.aborted) throw new Error("client aborted");
     if (Date.now() >= deadline) throw new Error("artifact time budget exceeded");
     if (bytesRead === 0) return Buffer.concat(chunks, total);
