@@ -1643,19 +1643,28 @@ test.each([
   expect([plans.length, pushes.length, h.creates.length, h.merges().length]).toEqual([0, 0, 1, 0]);
 });
 
-for (const landed of [false, true]) {
-  const name = `outdated red uncertain push recovers the same tuple after restart, landed=${landed}`;
+for (const outcome of ["unlanded", "landed", "unresolved account"] as const) {
+  const name = outcome === "unresolved account" ? "outdated red uncertain push blocks when account resolution is lost after restart"
+    : `outdated red uncertain push recovers the same tuple after restart, landed=${outcome === "landed"}`;
   test(name, async () => {
     const fixture = process.env.BASE_UPDATE_QUEUE_FIXTURE;
     if (fixture) {
       const saved = JSON.parse(fs.readFileSync(fixture, "utf8")) as UpdateSnapshot;
-      const { h, plans, pushes } = behindQueue(1, { resume: saved, mergeBase: "0".repeat(40) });
+      const { h, git, plans, pushes } = behindQueue(1, { resume: saved, mergeBase: "0".repeat(40) });
       const expected = h.merge("queued-0")!.updates[0]!.commit!;
       h.advance(MERGE_POLL_MS);
+      if (outcome === "unresolved account") {
+        git.identityResolved = false;
+        await h.run(10 * MERGE_POLL_MS, () => h.merge("queued-0")?.state === "blocked");
+        expect(h.merge("queued-0")).toMatchObject({ state: "blocked", reason: COMMIT_ACCOUNT_REFUSAL, updates: [] });
+        expect(plans.map(plan => plan.at)).toEqual([iso(T0)]);
+        expect([pushes.length, h.creates.length, h.merges().length]).toEqual([0, 0, 0]);
+        return;
+      }
       await h.run(10 * MERGE_POLL_MS, () => h.merges().length === 1);
       expect(h.merge("queued-0")!.updates).toHaveLength(1);
-      expect(plans.map(plan => plan.at)).toEqual(landed ? [] : [iso(T0)]);
-      expect(pushes.map(push => push.commit)).toEqual(landed ? [] : [expected]);
+      expect(plans.map(plan => plan.at)).toEqual(outcome === "landed" ? [] : [iso(T0)]);
+      expect(pushes.map(push => push.commit)).toEqual(outcome === "landed" ? [] : [expected]);
       expect(h.merges().map(args => args.at(-1))).toEqual([expected]);
       expect(h.creates).toEqual([]);
       return;
@@ -1665,7 +1674,7 @@ for (const landed of [false, true]) {
     await h.sweep();
     expect(h.merge("queued-0")).toMatchObject({ state: "updating", readFailures: 1 });
     expect(pushes).toHaveLength(1);
-    if (landed) Object.assign(h.prs.get(11)!, { head: pushes[0]!.commit, checks: [green("ci")], mergeStateStatus: "CLEAN" });
+    if (outcome === "landed") Object.assign(h.prs.get(11)!, { head: pushes[0]!.commit, checks: [green("ci")], mergeStateStatus: "CLEAN" });
     await restartBehindQueue(name, h);
   });
 }

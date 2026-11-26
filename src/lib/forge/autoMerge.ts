@@ -855,8 +855,8 @@ async function updateBehindBase(read: Pipeline, merge: PipelineMerge, view: Pull
 
 /** A recorded update whose commit has not reached the PR: recreate it from
     the same inputs and push it again. A commit that cannot be recreated
-    exactly, or a delivery the lane no longer owns, drops the entry; the next
-    read plans afresh. False when it was dropped. */
+    exactly, or a delivery the lane no longer owns, drops the entry. An
+    identity refusal blocks with a reason. False when the entry was dropped. */
 async function replayBaseUpdate(read: Pipeline, merge: PipelineMerge, update: PipelineMerge["updates"][number], view: PullRequestView, ports: AutoMergePorts, now: number): Promise<boolean> {
   const target = baseUpdateTarget(read);
   const baseBranch = await refreshBaseBranch(read, view.baseRefName, ports);
@@ -870,9 +870,13 @@ async function replayBaseUpdate(read: Pipeline, merge: PipelineMerge, update: Pi
   if (!target || plan?.kind !== "commit" || plan.commit !== update.commit) {
     await commit(ports, read, live => {
       live.updates = live.updates.filter(entry => entry.head !== null || entry.commit !== update.commit);
+      live.headSeenAt = null;
+      if (plan?.kind === "refused") {
+        block(live, plan.reason, now);
+        return;
+      }
       live.state = "checking";
       live.reason = null;
-      live.headSeenAt = null;
       live.nextReadAt = iso(now);
     });
     return false;
