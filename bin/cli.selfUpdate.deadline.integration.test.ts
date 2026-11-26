@@ -13,6 +13,9 @@ import { STOP_TIMEOUT_MS } from "./launcher-deadline.mjs";
 
 registerSelfUpdateCleanup();
 
+/** Long enough for a loaded host to start a handed-off launcher. */
+const HANDOFF_BUDGET_MS = 6000;
+
 test("startup bounds synchronous Git probes before the launcher watchdog exists", async () => {
   const fixture = install();
   const shim = path.join(fixture.root, "slow-git"); mkdirSync(shim, { recursive: true });
@@ -176,10 +179,11 @@ export async function ensureWebPortFree() {
   apply.begin(before as never, candidate.sha, "seat", deploymentId);
   apply.patch({ requestId: "bounded-switch-request" });
   writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
-  const deadline = Date.now() + 3000;
+  // The preflight, child retirement and exec all precede the marker.
+  const deadline = Date.now() + 8000;
   apply.patch({ state: "ready", switchDeadlineAt: deadline });
   apply.send(before as never);
-  await until(() => existsSync(marker), 2500);
+  await until(() => existsSync(marker), 7500);
   const trialFile = before.requestFile.replace("request-", "trial-");
   const savedDeadline = JSON.parse(readFileSync(trialFile, "utf8")).switchDeadlineAt;
   if (coldRestart) {
@@ -196,7 +200,7 @@ export async function ensureWebPortFree() {
     observedRecord = record;
     return record.launcher.state === "healthy" && (coldRestart || record.launcher.requestId === apply.current!.requestId)
       && record.web.state === "healthy" && record.runtimeHost.state === "healthy" ? record : null;
-  }, coldRestart ? 35_000 : 30_000).catch(error => { throw new Error(`${error}\nlast recovery record: ${JSON.stringify(observedRecord)}`); });
+  }, 40_000).catch(error => { throw new Error(`${error}\nlast recovery record: ${JSON.stringify(observedRecord)}`); });
   expect(Date.now()).toBeLessThan(deadline + 2 * STOP_TIMEOUT_MS + 5_000);
   expect(savedDeadline).toBe(deadline);
   expect(after.launcher.revision).toBe(fixture.first);
@@ -224,7 +228,7 @@ export async function ensureWebPortFree() {
   expect(rig.sent[0]!.text).toContain(status.error!);
   await runSeatTickCheck(PROJECT, rig.deps);
   expect(rig.sent).toHaveLength(1);
-}, 35_000);
+}, 55_000);
 
 test.each(["exit", "retirement"])("lost %s completion ends the launcher switch within its stop bound", async lost => {
   const fixture = install();
@@ -371,7 +375,7 @@ for (const forwarded of [false, true]) {
       const pointer = pointerFile(fixture); mkdirSync(path.dirname(pointer), { recursive: true });
       writeFileSync(pointer, JSON.stringify({ ...initial, checkoutHead: fixture.first }));
       const budgets = path.join(fixture.checkout, "bin/launcher-deadline.mjs");
-      writeFileSync(budgets, readFileSync(budgets, "utf8").replace(/TERMINAL_BOOTSTRAP_TIMEOUT_MS = [^;]+;/, "TERMINAL_BOOTSTRAP_TIMEOUT_MS = 1000;"));
+      writeFileSync(budgets, readFileSync(budgets, "utf8").replace(/TERMINAL_BOOTSTRAP_TIMEOUT_MS = [^;]+;/, `TERMINAL_BOOTSTRAP_TIMEOUT_MS = ${HANDOFF_BUDGET_MS};`));
       const entry = path.join(fixture.checkout, "bin/cli.mjs");
       const source = readFileSync(entry, "utf8");
       // Ready IPC and the legacy health observer settle startup before the
@@ -382,7 +386,11 @@ for (const forwarded of [false, true]) {
         `${seam}\n      writeFileSync(${JSON.stringify(parentSettled)}, "settled");`));
     }
     const running = await start(fixture), before = readRecord(fixture.state);
-    if (forwarded) await until(() => existsSync(parentSettled), 4000);
+    if (forwarded) {
+      await until(() => existsSync(parentSettled), HANDOFF_BUDGET_MS);
+      // The apply starts after the handoff's own startup deadline has passed.
+      await Bun.sleep(HANDOFF_BUDGET_MS + 100);
+    }
     expect(isAlive(running.child.pid!)).toBe(true);
     const candidate = release(fixture, "exec-deadline-candidate");
     const marker = path.join(fixture.root, "successor-import-entered");
@@ -398,19 +406,22 @@ for (const forwarded of [false, true]) {
       writeFileSync(adoption, readFileSync(adoption, "utf8").replace("export async function ensureWebPortFree(", "async function originalEnsureWebPortFree(")
         + '\nexport async function ensureWebPortFree() { throw new Error("Candidate startup fault"); }\n');
       const budgets = path.join(candidate.dir, "bin/launcher-deadline.mjs");
-      writeFileSync(budgets, readFileSync(budgets, "utf8").replace("ROLLBACK_TIMEOUT_MS = 10 * 60_000", "ROLLBACK_TIMEOUT_MS = 1500"));
+      writeFileSync(budgets, readFileSync(budgets, "utf8").replace("ROLLBACK_TIMEOUT_MS = 10 * 60_000", "ROLLBACK_TIMEOUT_MS = 6000"));
     }
     const directory = path.dirname(before.requestFile), apply = new ApplyController(directory);
     writeFileSync(path.join(directory, "deployments.json"), JSON.stringify([{
       deploymentId: "exec-deadline-deploy", idempotencyKey: "exec-deadline-key", phase: "building", terminal: false, error: null, revisionNumber: 1,
     }]));
     apply.begin(before as never, candidate.sha, "operator", "exec-deadline-deploy");
-    apply.patch({ requestId: "exec-deadline-request", state: "ready", switchDeadlineAt: Date.now() + 2000 });
+    // The load check, child retirement and exec precede every observation below;
+    // a healthy candidate also has to answer before the page reserve.
+    apply.patch({ requestId: "exec-deadline-request", state: "ready",
+      switchDeadlineAt: Date.now() + (transition === "healthy" ? 10_000 : 8000) });
     writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
     apply.send(before as never);
     if (transition === "healthy") {
       const receiptFile = `${before.requestFile}.result.json`;
-      await until(() => existsSync(receiptFile) && JSON.parse(readFileSync(receiptFile, "utf8")).state === "done", 5000);
+      await until(() => existsSync(receiptFile) && JSON.parse(readFileSync(receiptFile, "utf8")).state === "done", 10_000);
       const receipt = JSON.parse(readFileSync(receiptFile, "utf8"));
       // Cross the original persisted switch deadline, then ask the actual
       // serving generation to answer. No clock reset or second start is used.
@@ -421,10 +432,10 @@ for (const forwarded of [false, true]) {
       expect(new ApplyController(directory).observe(readRecord(fixture.state) as never, true)).toBe("done");
       return;
     }
-    await until(() => existsSync(marker), 5000);
+    await until(() => existsSync(marker), 12_000);
     expect(JSON.parse(readFileSync(marker, "utf8")).pid).toBe(before.launcher.pid);
-    await until(() => new ApplyController(directory).current?.state === "failed", 5000);
-    await until(() => !isAlive(before.launcher.pid) && !isAlive(running.child.pid!), 2000);
+    await until(() => new ApplyController(directory).current?.state === "failed", 15_000);
+    await until(() => !isAlive(before.launcher.pid) && !isAlive(running.child.pid!), 5000);
     const failed = new ApplyController(directory).current!;
     expect(failed.detail).toContain(transition === "switch import" ? "switch exceeded" : "rollback exceeded");
     expect(checkoutDeployments(directory)[0]).toMatchObject({ terminal: true, phase: "failed", error: failed.detail });
@@ -433,8 +444,110 @@ for (const forwarded of [false, true]) {
     expect(isAlive(before.runtimeHost.pid!)).toBe(false);
     const restored = existsSync(before.releasePointer) ? JSON.parse(readFileSync(before.releasePointer, "utf8")).dir : fixture.checkout;
     expect(restored).not.toBe(candidate.dir);
-  }, 20_000);
+  }, 50_000);
 }
+
+// The replacement wrote its launcher record, then ended during startup after the
+// switch expired. The forwarding launcher has no child left to wait for.
+test.each(["switch", "rollback"])("a recorded replacement that ends after the switch expiry hands back to the checkout, during the %s", async phase => {
+  const fixture = install(), candidate = release(fixture, "recorded-exit");
+  const pointer = pointerFile(fixture), directory = path.dirname(pointer);
+  mkdirSync(directory, { recursive: true });
+  const requestFile = pointer.replace("release-", "request-"), trialFile = pointer.replace("release-", "trial-");
+  const recordFile = pointer.replace("release-", "launcher-"), exitedFile = path.join(fixture.root, "replacement-exited");
+  const switchDeadlineAt = Date.now() + 8000;
+  const intent = { requestId: "recorded-exit", target: candidate.sha, releasePointer: pointer, rollbackPointer: null,
+    state: "switching", switchedAt: new Date().toISOString(), switchDeadlineAt, deploymentId: "recorded-deployment" };
+  writeFileSync(path.join(candidate.dir, "bin/cli.mjs"), `
+    import { rmSync, writeFileSync } from "node:fs";
+    const handoffProtocol = "delegatus-checkout-launcher-v2";
+    writeFileSync(${JSON.stringify(recordFile)}, JSON.stringify({ version: 1,
+      launcher: { pid: process.pid, startIdentity: "fixture-replacement", state: "starting" },
+      web: { state: "stopping", pid: null }, runtimeHost: { state: "stopping", pid: null } }));
+    setInterval(() => {
+      if (Date.now() < ${switchDeadlineAt}) return;
+      if (${phase === "rollback"}) {
+        rmSync(${JSON.stringify(pointer)}, { force: true });
+        writeFileSync(${JSON.stringify(trialFile)}, JSON.stringify({ ...${JSON.stringify(intent)},
+          previousEntry: ${JSON.stringify(path.join(fixture.checkout, "bin/cli.mjs"))},
+          state: "rolled-back", detail: "Fixture rollback", rollbackDeadlineAt: Date.now() + 600_000 }));
+      }
+      writeFileSync(${JSON.stringify(exitedFile)}, "exited");
+      process.exit(75);
+    }, 25);
+  `);
+  writeFileSync(pointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
+  writeFileSync(path.join(directory, "apply.json"), JSON.stringify(intent));
+  writeFileSync(trialFile, JSON.stringify({ ...intent, previousEntry: path.join(fixture.checkout, "bin/cli.mjs"),
+    state: "starting", at: intent.switchedAt }));
+  writeFileSync(path.join(directory, "deployments.json"), JSON.stringify([{ deploymentId: intent.deploymentId,
+    idempotencyKey: intent.requestId, phase: "switching", terminal: false, error: null, revisionNumber: 1 }]));
+  writeFileSync(path.join(directory, "auto-drain.json"), JSON.stringify({ id: intent.requestId, target: candidate.sha, persistent: true }));
+
+  const running = await start(fixture, [], 30_000);
+  expect(existsSync(exitedFile)).toBe(true);
+  expect(await served(running.port)).toBe(fixture.checkout);
+  expect(running.child.exitCode).toBeNull();
+  expect(existsSync(pointer)).toBe(false);
+  if (phase === "switch") {
+    expect(new ApplyController(directory).current).toMatchObject({ state: "failed" });
+    expect(checkoutDeployments(directory)[0]).toMatchObject({ terminal: true, phase: "failed",
+      error: "The launcher switch exceeded its 10 minute deadline" });
+    expect(activeDrain(path.join(directory, "auto-drain.json"))).toBeNull();
+  } else {
+    // The checkout launcher completes the rollback the replacement began.
+    const receipt = await until(() => existsSync(`${requestFile}.result.json`)
+      ? JSON.parse(readFileSync(`${requestFile}.result.json`, "utf8")) : null, 5000);
+    expect(receipt).toMatchObject({ requestId: intent.requestId, state: "rolled-back", detail: "Fixture rollback" });
+    expect(existsSync(trialFile)).toBe(false);
+  }
+}, 45_000);
+
+// A replacement that settled is an ordinary long-running child: its later exit
+// is the forwarding launcher's own, however old the startup deadline is.
+test.each([
+  { ending: "crash", status: 3 },
+  { ending: "restart request", status: 75 },
+  { ending: "stop", status: 137 },
+])("a forwarded replacement that outlived its handoff deadline ends the launcher: $ending", async ({ ending, status }) => {
+  const fixture = install(), settledFile = path.join(fixture.root, "handoff-settled");
+  const releaseFile = path.join(fixture.root, "replacement-exit"), pidFile = path.join(fixture.root, "replacement.pid");
+  const replacement = release(fixture, "settled-replacement");
+  writeFileSync(path.join(replacement.dir, "bin/cli.mjs"), `
+    import { existsSync, writeFileSync } from "node:fs";
+    const handoffProtocol = "delegatus-checkout-launcher-v2";
+    process.on("SIGTERM", () => {});
+    writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+    process.send({ kind: "delegatus-launcher-healthy" });
+    setInterval(() => { if (existsSync(${JSON.stringify(releaseFile)})) process.exit(${status}); }, 25);
+  `);
+  const pointer = pointerFile(fixture); mkdirSync(path.dirname(pointer), { recursive: true });
+  writeFileSync(pointer, JSON.stringify({ ...replacement, checkoutHead: fixture.first }));
+  const budgets = path.join(fixture.checkout, "bin/launcher-deadline.mjs");
+  writeFileSync(budgets, readFileSync(budgets, "utf8")
+    .replace(/TERMINAL_BOOTSTRAP_TIMEOUT_MS = [^;]+;/, `TERMINAL_BOOTSTRAP_TIMEOUT_MS = ${HANDOFF_BUDGET_MS};`)
+    .replace("STOP_TIMEOUT_MS = 10_000", "STOP_TIMEOUT_MS = 500"));
+  const entry = path.join(fixture.checkout, "bin/cli.mjs"), source = readFileSync(entry, "utf8");
+  const seam = "const settled = () => {\n      startupSettled = true;";
+  expect(source).toContain(seam);
+  writeFileSync(entry, source.replace(seam, `${seam}\n      writeFileSync(${JSON.stringify(settledFile)}, "settled");`));
+  const parent = spawn(process.execPath, ["--bun", entry, "--no-open"], { cwd: fixture.checkout, env: fixture.env, stdio: "ignore" });
+  children.add(parent);
+  const exited = new Promise<number | null>(resolve => parent.once("exit", code => resolve(code)));
+  try {
+    await until(() => existsSync(settledFile) && existsSync(pidFile), HANDOFF_BUDGET_MS);
+    await Bun.sleep(HANDOFF_BUDGET_MS + 100);
+    expect(parent.exitCode).toBeNull();
+    if (ending === "stop") parent.kill("SIGTERM");
+    else writeFileSync(releaseFile, "exit");
+    expect(await Promise.race([exited, Bun.sleep(5000).then(() => "unresolved")])).toBe(status);
+    expect(isAlive(Number(readFileSync(pidFile, "utf8")))).toBe(false);
+  } finally {
+    // The replacement ignores SIGTERM and leaves on this file.
+    writeFileSync(releaseFile, "exit");
+    if (parent.exitCode === null && parent.signalCode === null) parent.kill("SIGKILL");
+  }
+}, 30_000);
 
 test("an exec guard whose import stays alive without readiness is refused and reaped", async () => {
   const fixture = install(), running = await start(fixture), before = readRecord(fixture.state);
@@ -457,7 +570,8 @@ test("an exec guard whose import stays alive without readiness is refused and re
   writeFileSync(before.releasePointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
   apply.send(before as never);
   await until(() => new ApplyController(directory).current?.state === "failed", 7000);
-  await until(() => !isAlive(before.launcher.pid), 2000);
+  // The kernel reports the process gone before this parent records its status.
+  await until(() => !isAlive(before.launcher.pid) && running.child.exitCode !== null, 2000);
   expect(running.child.exitCode).toBe(75);
   expect(existsSync(entered)).toBe(false);
   expect(checkoutDeployments(directory)[0]!.error).toContain("guard did not become ready");

@@ -1740,19 +1740,21 @@ function handOffLauncher({ checkout, entry, record }) {
       done(started);
     };
     child.once("error", (error) => { spawnError = error; });
+    const exitStatus = (code, signal) => code ?? (signal ? 128 + (constants.signals[signal] ?? 0) : 1);
+    const oneShot = ["team", "stop", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
     child.once("close", (code, signal) => {
-      // The deadline owner performs rollback, bounded cleanup, and the
-      // verified fallback decision. A close event cannot settle it early.
-      if (deadlineHandling || Date.now() >= deadline) {
-        deadlineHandling = true;
-        return;
-      }
-      const status = code ?? (signal ? 128 + (constants.signals[signal] ?? 0) : 1);
+      // While the deadline owner performs rollback, bounded cleanup, and the
+      // verified fallback decision, it alone settles the handoff.
+      if (deadlineHandling) return;
+      // A replacement that ends during startup after its switch expired still
+      // leaves a pointer and services to account for. Decide that now: a
+      // rescheduled timer would hold this launcher with no child to watch.
+      if (!startupSettled && !oneShot && active && Date.now() >= deadline) { onDeadline(); return; }
+      const status = exitStatus(code, signal);
       let recorded = false;
       if (child.pid) {
         try { recorded = JSON.parse(readFileSync(record, "utf8"))?.launcher?.pid === child.pid; } catch { /* no record */ }
       }
-      const oneShot = ["team", "stop", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
       if (!recorded && !startupSettled && !forwarded && !oneShot) {
         console.error(`[self-update] installed launcher could not start (${spawnError?.message || `exit ${status}`}); using the checkout launcher.`);
         finish(false);
@@ -1786,32 +1788,36 @@ function handOffLauncher({ checkout, entry, record }) {
       timer.unref?.();
     };
     const onDeadline = () => { void (async () => {
+      clearTimeout(timer);
       timer = undefined;
+      const running = child.exitCode == null && child.signalCode == null;
       const observed = json(record);
-      const childIsHealthy = startupHandoffSucceeded(child.pid, child.exitCode == null && child.signalCode == null, forwarded, observed);
       // The startup bound ends when this exact child has published a complete
       // healthy generation. Its normal lifetime is then governed by close.
-      if (childIsHealthy) { startupSettled = true; return; }
+      if (startupHandoffSucceeded(child.pid, running, forwarded, observed)) { settled(); return; }
       const currentTrial = json(trialFile);
       const matchingTrial = currentTrial?.requestId === trial?.requestId && currentTrial?.target === trial?.target;
       const decision = launcherStartupDeadline({ active, switchDeadline: persistedDeadline,
         trial: matchingTrial ? currentTrial : null, requestId: trial?.requestId, target: trial?.target,
         bootstrapDeadline, teardownGraceMs: 2 * STOP_TIMEOUT_MS });
-      if (!decision.expired) {
-        deadlineHandling = false;
+      if (!decision.expired && running) {
         scheduleDeadline(decision.deadline);
         return;
       }
       deadlineHandling = true;
+      clearInterval(healthTimer);
       const terminalTrial = matchingTrial ? currentTrial : trial;
-      const rollbackExpired = decision.phase === "rollback";
+      // A replacement that restored the prior selection and ended inside the
+      // rollback window leaves that rollback to the next start.
+      const rollbackPending = !decision.expired && decision.phase === "rollback";
+      const rollbackExpired = decision.expired && decision.phase === "rollback";
       const switchOverrun = decision.phase === "switch";
       const detail = decision.phase === "refused" ? terminalTrial?.detail ?? "The launcher refused startup"
         : switchOverrun
         ? SWITCH_OVERRUN
         : rollbackExpired ? "The launcher rollback exceeded its 10 minute deadline"
           : "The replacement launcher did not become ready before its startup deadline";
-      if (active) {
+      if (active && !rollbackPending) {
         const refusedTrial = switchOverrun ? { ...terminalTrial, switchOverrun: terminalTrial.switchOverrun ?? SWITCH_OVERRUN } : terminalTrial;
         if (switchOverrun) writeFileSync(trialFile, `${JSON.stringify(refusedTrial)}\n`, { mode: 0o600 });
         const pointer = join(directory, `release-${suffix}`);
@@ -1858,7 +1864,10 @@ function handOffLauncher({ checkout, entry, record }) {
       let selected = null;
       try { selected = readFileSync(join(directory, `release-${suffix}`), "utf8"); } catch { /* absent pointer */ }
       const restored = !active || rollbackSelectionMatches(selected, terminalTrial.rollbackPointer);
-      finish(active && switchOverrun && restored && !shutdownRequested ? false : true);
+      const resume = active && (switchOverrun || rollbackPending) && restored && !shutdownRequested;
+      // A service manager restarts on the replacement's own failure status.
+      if (!resume) process.exitCode = exitStatus(child.exitCode, child.signalCode);
+      finish(!resume);
     })(); };
     scheduleDeadline(deadline);
   });

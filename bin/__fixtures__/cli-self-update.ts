@@ -258,7 +258,7 @@ export function version(fixture: ReturnType<typeof install>, extraEnv: Record<st
   });
 }
 
-export type Entry = { state: string; pid: number | null; revision: string | null; requestId: string | null; error: { kind: string; revision?: string; detail?: string; text?: string } | null };
+export type Entry = { state: string; pid: number | null; startIdentity: string | null; revision: string | null; requestId: string | null; error: { kind: string; revision?: string; detail?: string; text?: string } | null };
 export type LauncherRecord = { launcher: { pid: number; startIdentity: string | null; autoAdmission?: number; requestId?: string; state?: string; error?: {kind: string}; revision?: string }; checkout: string | null; releasePointer: string; requestFile: string; socket: string; web: Entry; runtimeHost: Entry };
 
 export async function until<T>(read: () => T | null | undefined | false, timeoutMs = 20_000): Promise<T> {

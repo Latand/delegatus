@@ -10,8 +10,11 @@ import { probeBind, RUNTIME_HOST_STARTUP_CEILING_MS, waitForStartupProgress } fr
 export const RUNTIME_HOST_STARTUP_SILENCE_MS = 30_000;
 export { RUNTIME_HOST_STARTUP_CEILING_MS };
 
+/** @typedef {[key: string, value: number, detail: string, observedAt?: number]} RuntimeHostProgress */
+
 // Read one candidate's existing startup record, never the shared journal or
 // every startup file. Timestamps and repeated output do not prove progress.
+/** @returns {Promise<RuntimeHostProgress[]>} */
 export async function runtimeHostStartupProgress(filename, pid, startIdentity) {
   if (!filename || !startIdentity) return [];
   let file;
@@ -34,6 +37,7 @@ export async function runtimeHostStartupProgress(filename, pid, startIdentity) {
     if (!record.phases.length || record.phases.length > phases.length
       || record.phases.some((phase, index) => phase.phase !== phases[index]
         || phase.pid !== pid || phase.startIdentity !== startIdentity)) return [];
+    /** @type {RuntimeHostProgress[]} */
     const progress = [["phase", record.phases.length, record.phases.at(-1).phase]];
     if (record.stableEntry === "listening") progress.push(["stable-entry", 1, "stable-entry-listening"]);
     const journal = record.journal;
@@ -48,7 +52,7 @@ export async function runtimeHostStartupProgress(filename, pid, startIdentity) {
 }
 
 /** The host polls its own startup file alongside the socket check. */
-/** @param {{ check: () => boolean | Promise<boolean>, progress: () => Array<[string, number, string, number?]> | Promise<Array<[string, number, string, number?]>>, timeout: (elapsed: number, lastProgress: string | null, silent: number, ceiling: boolean) => string, now?: () => number, sleep?: (ms: number, signal?: AbortSignal) => Promise<void>, silenceMs?: number, ceilingMs?: number, intervalMs?: number }} options */
+/** @param {{ check: () => boolean | Promise<boolean>, progress: () => RuntimeHostProgress[] | Promise<RuntimeHostProgress[]>, timeout: (elapsed: number, lastProgress: string | null, silent: number, ceiling: boolean) => string, now?: () => number, sleep?: (ms: number, signal?: AbortSignal) => Promise<void>, silenceMs?: number, ceilingMs?: number, intervalMs?: number }} options */
 export async function waitForRuntimeHostStartup({
   check, progress, timeout, now = () => performance.now(), sleep,
   silenceMs = RUNTIME_HOST_STARTUP_SILENCE_MS, ceilingMs = RUNTIME_HOST_STARTUP_CEILING_MS, intervalMs = 100,
