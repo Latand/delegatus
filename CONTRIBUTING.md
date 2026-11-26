@@ -275,62 +275,21 @@ shims are POSIX shell; on Windows a launched agent keeps the environment it had.
 The shipped Merger lands reviewed pull requests through the batch procedure a
 project's instruction files name. This repository's procedure is
 `scripts/merge-batch.ts`. Install frozen dependencies in the caller checkout,
-then use the script: build with the pairs, gate, then land. The script owns a
-temporary batch worktree and records its run in `$TMPDIR/merge-batch.json`;
-inspect that record and its report. The script runs every gate command one at
-a time; follow the assembled gate guidance for checks you run yourself, using
-the project's own commands. After the batch lands, run `resolve N` for each
-deferred PR, resolve its conflicts in the recorded worktree, stage only those
-resolutions and run `resolve N` again to gate and fast-forward its branch.
+then `build` with the reviewed PR pairs and run `land`. The script owns a
+temporary worktree and records the run in `$TMPDIR/merge-batch.json`.
+Landing requires the reviewed heads, their clean patches on current main and
+all required GitHub checks green on the published tip. The script scans the
+candidate and generated PR body for privacy before publishing.
 
-Full local validation belongs to the ordered PR numbers, exact reviewed heads
-and immutable stable patch-ids. A main-only move rebuilds those same patches,
-preserves the actual validated tuple and records the carried main, tip and time.
-Trusted candidate and PR-body privacy run before each publication; all required
-hosted checks must finish green on the newest tip under strict protection.
-Any membership change voids the validation: restart every gate, native test
-inventory, changed reviewed detector snapshots and fresh native-main baseline;
-carry no corpus, samples, pass list or detector selection into that validation.
-Rebuild the touched-path union from the candidate diff and every input PR's immutable
-reviewed patch base and head, including withheld, moved and deferred PRs. Use
-`touchedTests` to select changed tests and adjacent `.test.ts`/`.test.tsx` files
-from the actual merged candidate. Select reviewed test blobs only for files a
-candidate PR changed in its immutable `reviewBase..head`; all other selected
-files retain their native merged contents. Rediscover restored native files.
-A reviewed detector of a PR outside the candidate is skipped with a note.
-See [the batch procedure](docs/merge-batch.md) for changed-detector contract
-adaptation and corpus selection. Full browser campaigns are opt-in
-(`gate --browser`): each UI PR ran its own browser checks in review. Unrelated repository tests are
-outside this gate. Deduplicate identical file versions only within that
-validation.
+A required check failing on a member's reviewed head as well as the batch tip
+identifies that member. The script removes the culprit, rebuilds, and waits
+for required checks on the replacement tip. An unattributable red stops the
+pass. Use `gate --local` for optional local diagnostics, with `--browser` for
+full browser campaigns. See [the batch procedure](docs/merge-batch.md).
 
-Membership revalidation retains its three-round cap. Main-only refreshes spend
-the finite `land` polling budget, persisted across command restarts. An
-unattributable hosted red on a carried tip gets one full local attribution
-gate within the revalidation cap; a red on a locally validated tip still stops.
-Immediately before merging, the script rechecks paginated human reviews for
-each member and the batch PR. An outstanding member request returns that PR
-to its lane as a review culprit and fully gates the remainder. A human request
-on the batch PR prevents its merge; bot requests alone do not veto it.
-
-Failures, errors and between-test errors that a test file produces on native
-main are pre-existing and never stop the batch; a file main cannot complete is
-compared on the cases both sides completed. Candidate-only files and assertions
-have no baseline evidence. New failures need three subsequent file
-observations, including identities first seen during confirmation, within six
-total rounds. A passing observation permits intermittency; missing or skipped
-assertions provide no passing evidence. Removal probes preserve only the detector
-being judged: the native merged test or a reviewed test its PR actually changed,
-including any clean main-contract adaptation. All other files retain each
-removal subject's native contents, and each probe installs its own dependencies.
-This applies to single omissions, combined removals and the all-removed control.
-Clearing omissions name the culprit or integration: needs both. A case that
-passes on main and breaks on the candidate, a new between-test error included, drops only the PR
-whose removal clears it; the script rebuilds and lands the rest. Record
-attribution in an append-only log with its establishing tuple, failing
-identities, confirmations and removal evidence; retain and print it after every
-main refresh. A PR the batch landed is closed with a "Landed on main as <sha>
-through #B" comment.
+After the batch lands or becomes empty, run `resolve N` for each deferred PR.
+Stage the conflict resolution in the recorded worktree, then run `resolve N`
+again to check and fast-forward the original branch for independent review.
 
 ## Review exports
 
