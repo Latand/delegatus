@@ -175,7 +175,14 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     if (!(argv.length === 3 && (argv[2] === "pre-commit" || argv[2] === "pre-push")) &&
       !(argv.length === 4 && argv[2] === "pre-push" && argv[3] === "--publication-prepare")) return;
     const entry = checkoutEntry(argv[1]!, "scripts", cwd);
-    if (entry) return { mode: argv[3] ?? argv[2], entry: fs.realpathSync(entry) };
+    if (entry) return { mode: argv[3] ?? argv[2], entry: fs.realpathSync(entry), packaged: false };
+    // Canonical gate tools may come from a release image with no Git metadata.
+    // The checkout is still the subject. Only a recorded Viewer launch can
+    // exempt this preparer (see hookClient).
+    if (argv[3] === "--publication-prepare" && path.isAbsolute(argv[1]!) &&
+      path.basename(path.dirname(argv[1]!)) === "scripts" && checkoutEntry("scripts/local-gate.ts", "scripts", cwd)) {
+      return { mode: argv[3], entry: fs.realpathSync(argv[1]!), packaged: true };
+    }
   };
   const hookParentMatches = (proof: ProcessIdentity, parent: string, fields: string[]) => {
     if (!epoch || ["Z", "X", "x"].includes(fields[0]!)) return false;
@@ -230,6 +237,10 @@ function legacyLinuxGateRunning(queue: CpuAdmissionQueue): boolean {
     } else if (original.entry !== hook.entry) return;
     // The dispatcher starts the runner beside its own entry.
     if (fs.realpathSync(path.join(path.dirname(original.entry), "owned-runner.ts")) !== runner) return false;
+    if (hook.packaged || original.packaged) {
+      return hook.entry === original.entry && readEnvironment(parent)("LLV_GATE_CANONICAL_TOOLS") === "1" &&
+        viewerLaunched(parent, parentStat);
+    }
     if (env("LLV_GATE_HOOK_DISPATCH") === binding) return true;
     // The Viewer records each publication preparer it launches by the kernel
     // identity it spawned (src/lib/runtime/publicationLaunch.ts). Every

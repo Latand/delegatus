@@ -11,19 +11,45 @@ import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
 import { provisioningStripe, tryProvisioningLock, type ProvisioningGrant } from "./provisionCheckoutCustody";
 import { readWorktreeProvenance } from "./worktreeProvenance";
-import { commitPipelineStage, currentPipelineRemoteBranchHead, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead, verifyProvisioningCheckoutReceipt, type ProvisionCheckoutCustody } from "./git";
+import { appendGitConfigOverride, commitPipelineStage, currentPipelineRemoteBranchHead, isPublicationPreparationInvocation, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead, verifyProvisioningCheckoutReceipt, type ProvisionCheckoutCustody } from "./git";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import type { Pipeline } from "./types";
 import { createPipelineWithDelivery, findPipelineRecord, savePipelines, takeoverPipelineDelivery, withPipelineMutation } from "./store";
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { shortId } from "@/lib/shortIds";
-import { publicationPushBudgetMs } from "./gateBudget";
+import { PUBLICATION_PACK_MARGIN_MS, PUBLICATION_TRANSPORT_HOOK_MS, publicationPushBudgetMs } from "./gateBudget";
 import { recoverablePublication } from "./publicationHistory";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
-import { publicationCheckBinding, writePublicationCheckReceipt } from "../git/publicationCheckReceipt";
+import { PUBLICATION_TRANSPORT_MS, publicationCheckBinding, writePublicationCheckReceipt } from "../git/publicationCheckReceipt";
 import { gateAdmissionInterpreter } from "../runtime/gateAdmissionLauncher";
 import { PUBLICATION_LAUNCH_PROOF_ENV, publicationLaunchDigest } from "../runtime/cpuAdmission";
+
+test("compiled publication preparation recognizes only the resolved canonical entry invocation", () => {
+  const cwd = "/app";
+  const prepare = ["/app/scripts/local-gate.ts", "pre-push", "--publication-prepare"];
+  expect(isPublicationPreparationInvocation("bun", prepare, cwd)).toBe(true);
+  expect(isPublicationPreparationInvocation("bun-container", prepare, cwd)).toBe(true);
+  expect(isPublicationPreparationInvocation(process.execPath, prepare, cwd)).toBe(true);
+  expect(isPublicationPreparationInvocation("bun", ["scripts/local-gate.ts", "pre-push", "--publication-prepare"], cwd)).toBe(true);
+  expect(isPublicationPreparationInvocation("bun", ["install", "--frozen-lockfile"], cwd)).toBe(false);
+  expect(isPublicationPreparationInvocation("bun", ["/app/scripts/local-gate.ts", "pre-push"], cwd)).toBe(false);
+  expect(isPublicationPreparationInvocation("bun", [...prepare, "unexpected"], cwd)).toBe(false);
+});
+
+test("canonical hook selection appends after scoped App credential configuration", () => {
+  const env: Record<string, string | undefined> = { GIT_CONFIG_COUNT: "3",
+    GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "",
+    GIT_CONFIG_KEY_1: "credential.helper", GIT_CONFIG_VALUE_1: "!fixture-app-credential-helper",
+    GIT_CONFIG_KEY_2: "credential.useHttpPath", GIT_CONFIG_VALUE_2: "true" };
+  expect(appendGitConfigOverride(env, "core.hooksPath", "/app/.githooks")).toBe(true);
+  expect(env).toEqual({ GIT_CONFIG_COUNT: "4",
+    GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "",
+    GIT_CONFIG_KEY_1: "credential.helper", GIT_CONFIG_VALUE_1: "!fixture-app-credential-helper",
+    GIT_CONFIG_KEY_2: "credential.useHttpPath", GIT_CONFIG_VALUE_2: "true",
+    GIT_CONFIG_KEY_3: "core.hooksPath", GIT_CONFIG_VALUE_3: "/app/.githooks" });
+  expect(appendGitConfigOverride({ GIT_CONFIG_COUNT: "65" }, "core.hooksPath", "/app/.githooks")).toBe(false);
+});
 
 test("delivery remote resolution distinguishes absence, read failures and relative push aliases", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-remote-"));
@@ -2332,7 +2358,7 @@ test.each([1, 3] as const)("capability %i uses its own publication path and land
     const scripts = path.join(box.subject.worktreeDir, "scripts");
     fs.mkdirSync(scripts);
     fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// publication gate fixture\n");
-    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: capability }));
+    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: capability, publicationCheckpoints: 1 }));
     fs.writeFileSync(path.join(box.subject.worktreeDir, "package.json"), "{}\n");
     fs.writeFileSync(path.join(box.subject.worktreeDir, "bun.lock"), "{}\n");
     const head = await box.commit("change.txt", "accepted work\n");
@@ -2371,7 +2397,7 @@ test.each([1, 3] as const)("capability %i uses its own publication path and land
     expect(result).toMatchObject({ ok: true, sha: head, remote: "published", phaseTimings: { checksMs: 1, peakRssBytes: 123_456 } });
     expect(findPipelineRecord(box.subject.id)?.delivery?.journal.at(-1)?.reason).toContain("peak RSS=123456B");
     expect(preparations).toEqual([runtime]);
-    expect(pushes).toEqual([240_000]);
+    expect(pushes).toEqual([(capability === 3 ? PUBLICATION_TRANSPORT_HOOK_MS : PUBLICATION_TRANSPORT_MS) + PUBLICATION_PACK_MARGIN_MS]);
     expect(await box.originHead()).toBe(head);
   } finally {
     if (inheritedReceipt === undefined) delete process.env.LLV_GATE_PUBLICATION_RECEIPT;
@@ -2397,7 +2423,7 @@ test.skipIf(process.platform !== "linux")("the Viewer records the publication pr
     const scripts = path.join(box.subject.worktreeDir, "scripts");
     fs.mkdirSync(scripts);
     fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// publication gate fixture\n");
-    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: 1 }));
+    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), JSON.stringify({ publicationPrepare: 1, publicationCheckpoints: 1 }));
     const head = await box.commit("change.txt", "accepted work\n");
     const barrier = path.join(lockDir, "release");
     const observed: { pid?: number; rows?: { identity: string; operation: string; proof: string }[]; operation?: string; proof?: string } = {};
@@ -2559,7 +2585,11 @@ for (const scenario of [
   { name: "runtime gate change", adapter: true, file: "Dockerfile", refused: false, unreadable: null, ms: 1_800_000 },
   { name: "truncated gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: "truncated", ms: 1_800_000 },
   { name: "unreadable gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: 'refused', ms: 1_800_000 },
-]) test("publication hands matching budgets to Git and the real hook: " + scenario.name, async () => {
+  { name: "two deadlines on the accepted head", adapter: true, file: "docs/change.md", refused: false, unreadable: null, ms: 2_700_000, previous: "deadline" },
+  { name: "a deadline on another head", adapter: true, file: "docs/change.md", refused: false, unreadable: null, ms: 900_000, previous: "older head" },
+  { name: "an assertion refusal on the accepted head", adapter: true, file: "docs/change.md", refused: false, unreadable: null, ms: 900_000, previous: "refusal" },
+  { name: "a deadline in a repository without the comparator", adapter: false, file: "docs/change.md", refused: false, unreadable: null, ms: 900_000, previous: "deadline" },
+] as const) test("publication hands matching budgets to Git and the real hook: " + scenario.name, async () => {
   const box = await publishSandbox();
   try {
     if (scenario.adapter) {
@@ -2568,6 +2598,18 @@ for (const scenario of [
     }
     fs.mkdirSync(path.dirname(path.join(box.subject.worktreeDir, scenario.file)), { recursive: true });
     const head = await box.commit(scenario.file, "accepted work\n");
+    const previous = "previous" in scenario ? scenario.previous : undefined;
+    if (previous) {
+      const sha = previous === "older head" ? await git(box.subject.worktreeDir, "rev-parse", "HEAD^") : head;
+      box.subject.publicationRecovery = { [sha]: { sha, failures: 2, totalAttempts: 2,
+        history: [1, 2].map(epoch => ({
+          operationId: `prior-${epoch}`, epoch, at: "2026-01-01T00:00:00.000Z", retryAt: "2026-01-01T00:01:00.000Z",
+          cause: previous === "refusal" ? "check-failure" : "infrastructure-deadline",
+          detail: previous === "refusal" ? "a named assertion failed" : "a check reached its execution deadline without a verdict",
+        })),
+      } };
+      savePipelines([box.subject]);
+    }
     const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
     fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\nprintf "# hook deadline %s\\n" "$LLV_GATE_PUSH_DEADLINE"\nprintf "# check context %s %s %s\\n" "$LLV_GATE_LANE_ID" "$LLV_GATE_STAGE_ID" "$LLV_GATE_PUSH_HEAD"\n'
       + (scenario.refused ? 'echo "fixture gate refusal" >&2\nexit 1\n' : 'exit 0\n'), { mode: 0o700 });
@@ -2586,16 +2628,114 @@ for (const scenario of [
       };
       return result;
     };
+    const started = Date.now();
     const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
     expect(observed?.ms).toBe(scenario.ms);
     expect(observed?.deadline).toMatch(/^\d+$/);
+    expect(Number(observed?.deadline)).toBeGreaterThanOrEqual(started + scenario.ms - PUBLICATION_PACK_MARGIN_MS);
+    expect(Number(observed?.deadline)).toBeLessThanOrEqual(Date.now() + scenario.ms - PUBLICATION_PACK_MARGIN_MS);
     expect(observed?.state).toBe(process.env.LLV_STATE_DIR!);
     expect(observed?.output).toContain("# hook deadline " + observed?.deadline);
     expect(observed?.output).toContain(`# check context ${box.subject.id} ${box.subject.cursor?.stageId ?? ""} ${head}`);
     expect(result.ok).toBe(!scenario.refused);
     expect(await box.originHead()).toBe(scenario.refused ? "" : head);
     if (scenario.refused) expect(JSON.stringify(result)).toContain("fixture gate refusal");
-    if (!scenario.unreadable && scenario.adapter) expect(observed?.ms).toBe(publicationPushBudgetMs([scenario.file]));
+    if (!scenario.unreadable && scenario.adapter) expect(observed?.ms).toBe(publicationPushBudgetMs([scenario.file], previous === "deadline"));
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+}, 60_000);
+
+test.each([false, true])("a historical candidate gate uses the current checkpoint comparator and preserves refusal=%s", async refused => {
+  const box = await publishSandbox();
+  try {
+    const scripts = path.join(box.subject.worktreeDir, "scripts"); fs.mkdirSync(scripts);
+    fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// historical publication gate\n");
+    fs.writeFileSync(path.join(scripts, "local-gate-tests.ts"), "// historical deferred-write comparator\n");
+    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), '{"publicationPrepare":0,"publicationCheckpoints":0}\n');
+    const head = await box.commit("change.txt", "accepted work\n");
+    let prepared = 0, pushed = 0, observed: Partial<NodeJS.ProcessEnv> | undefined;
+    const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
+    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\n[ "$LLV_GATE_CANONICAL_TOOLS" = 1 ] || exit 91\n[ "$LLV_SKIP_HOOKS" != 1 ] || exit 92\n', { mode: 0o700 });
+    await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      if (command === "bun" && args[0]?.endsWith("/scripts/local-gate.ts") && args[1] === "pre-push" && args[2] === "--publication-prepare") {
+        prepared++;
+        expect(args[0]).not.toBe("scripts/local-gate.ts");
+        expect(env?.LLV_GATE_CANONICAL_TOOLS).toBe("1");
+        if (refused) return { code: 1, stdout: "(fail) a.test.ts: named assertion", stderr: "" };
+        const binding = publicationCheckBinding(env ?? {});
+        writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, binding, crypto.createHash("sha256").update("fixture inputs").digest("hex"));
+        return { code: 0, stdout: "canonical gate passed", stderr: "" };
+      }
+      if (command === "git" && args[0] === "push") {
+        pushed++; observed = env;
+        return realExec("git", args, cwd, { ...env, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: hooks }, options);
+      }
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(result.ok).toBe(!refused);
+    expect(prepared).toBe(1);
+    expect(pushed).toBe(refused ? 0 : 1);
+    if (refused) {
+      expect(JSON.stringify(result)).toContain("named assertion");
+      expect(await box.originHead()).toBe("");
+    } else {
+      expect(observed?.LLV_SKIP_HOOKS).toBeUndefined();
+      expect(await box.originHead()).toBe(head);
+    }
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
+test("an unchanged historical candidate retries through the canonical checkpoint gate", async () => {
+  const box = await publishSandbox();
+  try {
+    const scripts = path.join(box.subject.worktreeDir, "scripts"); fs.mkdirSync(scripts);
+    fs.writeFileSync(path.join(scripts, "local-gate.ts"), "// historical publication gate\n");
+    fs.writeFileSync(path.join(scripts, "local-gate-tests.ts"), "// historical deferred-write comparator\n");
+    fs.writeFileSync(path.join(scripts, "local-gate-capabilities.json"), '{"publicationPrepare":0,"publicationCheckpoints":0}\n');
+    const head = await box.commit("change.txt", "accepted work\n");
+    const tree = await git(box.subject.worktreeDir, "rev-parse", "HEAD^{tree}");
+    const checkpoint = path.join(box.root, "completed-file.checkpoint");
+    const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
+    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\n[ "$LLV_GATE_CANONICAL_TOOLS" = 1 ] || exit 91\n[ "$LLV_SKIP_HOOKS" != 1 ] || exit 92\n', { mode: 0o700 });
+    await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
+    let preparations = 0, pushes = 0, reused = false;
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      if (command === "bun" && args[0]?.endsWith("/scripts/local-gate.ts") && args[1] === "pre-push" && args[2] === "--publication-prepare") {
+        preparations++;
+        expect(args[0]).not.toBe("scripts/local-gate.ts");
+        expect(env?.LLV_GATE_CANONICAL_TOOLS).toBe("1");
+        expect(env?.LLV_GATE_PUSH_HEAD).toBe(head);
+        if (preparations === 1) {
+          fs.writeFileSync(checkpoint, JSON.stringify({ head, tree, base: await git(box.subject.worktreeDir, "merge-base", "HEAD", "origin/main"), file: "a.test.ts", passed: true }));
+          return { code: 75, stdout: "touched-tests: no verdict: head comparison budget exhausted\n", stderr: "" };
+        }
+        const record = JSON.parse(fs.readFileSync(checkpoint, "utf8")) as { head: string; tree: string; base: string; file: string; passed: boolean };
+        reused = record.head === head && record.tree === tree && record.base === await git(box.subject.worktreeDir, "merge-base", "HEAD", "origin/main")
+          && record.file === "a.test.ts" && record.passed;
+        expect(reused).toBe(true);
+        const binding = publicationCheckBinding(env ?? {});
+        writePublicationCheckReceipt(env!.LLV_GATE_PUBLICATION_RECEIPT!, binding, crypto.createHash("sha256").update("same canonical checks").digest("hex"));
+        return { code: 0, stdout: "touched-tests: reused complete green head file a.test.ts\n", stderr: "" };
+      }
+      if (command === "git" && args[0] === "push") {
+        pushes++;
+        return realExec("git", args, cwd, { ...env, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: hooks }, options);
+      }
+      return realExec(command, args, cwd, env, options);
+    };
+    const first = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(first).toMatchObject({ ok: false, failure: { retryableDeadline: true } });
+    expect(pushes).toBe(0);
+    box.subject.publicationRecovery = { [head]: { sha: head, failures: 1, totalAttempts: 1, history: [{
+      operationId: "first-deadline", epoch: 1, at: "2026-01-01T00:00:00.000Z", retryAt: "2026-01-01T00:01:00.000Z",
+      cause: "infrastructure-deadline", detail: "a check reached its execution deadline without a verdict",
+    }] } };
+    savePipelines([box.subject]);
+    const retry = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(retry).toMatchObject({ ok: true, sha: head, remote: "published" });
+    expect([preparations, pushes, reused]).toEqual([2, 1, true]);
+    expect(await box.originHead()).toBe(head);
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 }, 60_000);
 

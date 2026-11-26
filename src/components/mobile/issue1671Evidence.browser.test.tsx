@@ -15895,3 +15895,10 @@ describe("account burndown chart on the phone", () => {
     expect(failures).toEqual([]);
   }, 900_000);
 });
+
+describe("ChatGPT plan settings", () => {
+  browserTest("ChatGPT plan settings render the Keys and Voice states in both languages and themes", async () => {
+    const { captureChatGPTPlanFrames } = await import("@/components/kanban/issue1695BrowserHarness");
+    await captureChatGPTPlanFrames(true);
+  }, 300_000);
+});

@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isolatedEnvironment } from "./local-gate";
 import { createHookFixture } from "./local-gate.fixture";
@@ -13,8 +12,8 @@ const serviceTest = test.skipIf(process.platform !== "linux"
 
 serviceTest.each(["declared gate variable", "BASH_ENV bytes"])("native pre-push rejects stale step passes after changing %s", input => {
   const project = path.resolve(import.meta.dir, "..");
-  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-step-")); roots.push(scratch);
-  const f = createHookFixture(project, roots, false, false, path.join(scratch, "repo"));
+  const f = createHookFixture(project, roots, false, false, "repo", true);
+  const scratch = f.tempRoot;
   mkdirSync(path.join(f.dir, "scripts/gate-runner"));
   const origin = path.join(scratch, "origin.git");
   f.git("clone", "--bare", "--shared", ".", origin);
@@ -29,7 +28,6 @@ case "$1" in scripts/privacy-publication-gate.ts|scripts/eslint-changes.ts) exit
 exec "$LLV_GATE_BUN" "$@"
 `);
   writeFileSync(path.join(f.dir, "shims/bunx"), "#!/bin/sh\nexit 0\n");
-  symlinkSync(path.join(import.meta.dir, "local-gate-tests.ts"), path.join(f.dir, "scripts/local-gate-tests.ts"));
   for (const name of ["a", "b"]) writeFileSync(path.join(f.dir, `${name}.test.ts`), `
 import { appendFileSync } from "node:fs";
 import { expect, test } from "bun:test";
@@ -80,8 +78,8 @@ test("fixture contract", () => {
 
 serviceTest("local check-step invalidates warm and cold retries when BASH_ENV bytes change", () => {
   const project = path.resolve(import.meta.dir, "..");
-  const scratch = mkdtempSync(path.join(tmpdir(), "checkpoint-bash-env-")); roots.push(scratch);
-  const f = createHookFixture(project, roots, false, false, path.join(scratch, "repo"));
+  const f = createHookFixture(project, roots, false, false, "repo", true);
+  const scratch = f.tempRoot;
   const origin = path.join(scratch, "origin.git");
   f.git("clone", "--bare", "--shared", ".", origin);
   f.git("remote", "add", "origin", origin);
@@ -98,7 +96,6 @@ serviceTest("local check-step invalidates warm and cold retries when BASH_ENV by
   env.LLV_GATE_CHECK_ENV = "BASH_ENV";
   writeFileSync(startup, "umask 022\n");
   writeFileSync(path.join(f.dir, "shims/bun"), '#!/bin/sh\nexec "$LLV_GATE_BUN" "$@"\n');
-  symlinkSync(path.join(import.meta.dir, "local-gate-tests.ts"), path.join(f.dir, "scripts/local-gate-tests.ts"));
   writeFileSync(path.join(f.dir, "a.test.ts"), `
 import { appendFileSync } from "node:fs";
 import { expect, test } from "bun:test";
