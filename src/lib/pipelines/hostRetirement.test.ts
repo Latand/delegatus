@@ -239,19 +239,23 @@ test("provider recovery retires an unchanged parked quota retry", async () => {
   expect(await f.terminate()).toBe(true);
 });
 
-test.each(["idle", "busy", "tool", "permission", "question", "newer-prompt", "changed-park"] as const)(
+test.each(["idle", "busy", "tool", "permission", "question", "newer-prompt", "changed-park", "legacy-workspace-error", "different-workspace-error"] as const)(
   "the production idle stop requires current authority for a parked provider error (%s)", async state => {
     const f = fixture();
     const condition = { kind: "other", scope: null, resetLabel: null, label: "provider error" } as const;
-    const detail = "stage cut by provider error after 0 tries; last: Provider refused the turn";
+    const workspaceError = state === "legacy-workspace-error" || state === "different-workspace-error";
+    const message = workspaceError ? "Failed to load workspace requirements: fixture rejected" : "Provider refused the turn";
+    const parkedMessage = state === "different-workspace-error" ? "Different provider error" : message;
+    const detail = `stage cut by provider error after 0 tries; last: ${parkedMessage}`;
     const completedAt = new Date(cut + 1).toISOString();
     f.pipeline.state = f.attempt.state = "needs_decision";
     f.pipeline.stateDetail = f.attempt.error = detail;
     f.attempt.completedAt = completedAt;
     f.attempt.providerWait!.condition = condition;
+    f.attempt.providerWait!.text = parkedMessage;
     f.attempt.providerRecoveries = [{ at: completedAt, action: "park", condition, summary: detail }];
     fs.writeFileSync(f.transcript, JSON.stringify({ type: "event_msg", timestamp: new Date(cut).toISOString(),
-      payload: { type: "task_complete", error: { message: "Provider refused the turn", codex_error_info: "cyber_policy" } } }) + "\n");
+      payload: { type: "task_complete", error: { message, codex_error_info: workspaceError ? "other" : "cyber_policy" } } }) + "\n");
     if (state === "busy") f.session.turn = "running";
     if (state === "tool") f.entry.structuredHost.activeFlags.push("executingTool" as never);
     if (state === "permission" || state === "question") f.session.attentionIds.push(state as never);
@@ -263,8 +267,9 @@ test.each(["idle", "busy", "tool", "permission", "question", "newer-prompt", "ch
         return original();
       };
     }
-    expect(await f.terminate()).toBe(state === "idle");
-    expect(f.signals).toEqual(state === "idle" ? [987001, 987002] : []);
+    const shouldStop = state === "idle" || state === "legacy-workspace-error";
+    expect(await f.terminate()).toBe(shouldStop);
+    expect(f.signals).toEqual(shouldStop ? [987001, 987002] : []);
   },
 );
 

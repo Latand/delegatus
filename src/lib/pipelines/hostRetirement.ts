@@ -1,7 +1,8 @@
 import type { RuntimeEngine, RuntimeProviderRecoveryRef } from "@/lib/runtime/contracts";
+import { redactBounded } from "@/lib/monitor/redact";
 import { durableStageTurnEvidence, stageTurnEvidenceCurrent, type StageTurnEvidence } from "./durableEvidence";
 import { liveBackgroundTasks } from "./backgroundTasks";
-import { classifyProviderCondition, CODEX_CYBERSECURITY_REFUSAL } from "./providerConditions";
+import { classifyProviderCondition, CODEX_CYBERSECURITY_REFUSAL, CODEX_WORKSPACE_REQUIREMENTS_FAILURE } from "./providerConditions";
 import { pipelineAttemptMayBeWorking } from "./attemptWorking";
 import type { Pipeline, PipelineStageAttempt, PipelineStageHostRef } from "./types";
 import { recordedHostHeld } from "@/lib/recordedChecks/store";
@@ -141,9 +142,12 @@ export function providerRecoveryAttempt(
 export function providerRecoveryTurnMatches(attempt: PipelineStageAttempt, evidence: StageTurnEvidence | null, now: number): boolean {
   const cut = attempt.providerWait;
   const notice = evidence?.terminalProviderMessage;
-  return evidence?.turn === "terminal" && evidence.promptHistoryComplete === true
-    && !!cut && !!notice && notice.ts === cut.turnTs
-    && classifyProviderCondition(attempt.effectiveRole.engine, notice.errorClass, notice.text).kind === cut.condition.kind
+  if (evidence?.turn !== "terminal" || evidence.promptHistoryComplete !== true || !cut || !notice || notice.ts !== cut.turnTs) return false;
+  const condition = classifyProviderCondition(attempt.effectiveRole.engine, notice.errorClass, notice.text);
+  // Older releases parked this exact Codex failure as a generic provider error.
+  const retainedWorkspaceFailure = cut.condition.kind === "other" && cut.condition.label === "provider error"
+    && condition.label === CODEX_WORKSPACE_REQUIREMENTS_FAILURE && cut.text === redactBounded(notice.text, 300);
+  return (condition.kind === cut.condition.kind || retainedWorkspaceFailure)
     && Array.isArray(evidence.prompts)
     && !(evidence.externalPromptAfterCut ?? evidence.prompts.some(prompt => prompt.origin === "external" && prompt.ts > cut.turnTs))
     && Array.isArray(evidence.backgroundTasks) && liveBackgroundTasks(evidence.backgroundTasks, now).length === 0;

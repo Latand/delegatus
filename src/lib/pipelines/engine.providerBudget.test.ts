@@ -1,9 +1,9 @@
 import { expect, test, fs, tickPipelines, loadPipelines, savePipelines, patchPipeline, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, providerQuotaRecord, stampPipelinePrompt, providerRecoveryHarness, pipelineRevision, engineModule } from "./engine.fixture";
 
 async function parkedProviderErrorFixture(name: string, receiptState: "completed" | "path-pending" = "completed") {
-  const f = await providerRecoveryHarness("codex", "cyber_policy", "Provider refused the turn");
+  const f = await providerRecoveryHarness("codex", "other", "Provider refused the turn");
   const transcript = stageTranscript(`provider-cut-${name}`, [{ type: "event_msg", timestamp: new Date(f.now()).toISOString(),
-    payload: { type: "task_complete", error: { message: "Provider refused the turn", codex_error_info: "cyber_policy" } } }]);
+    payload: { type: "task_complete", error: { message: "Provider refused the turn", codex_error_info: "other" } } }]);
   readFixtures(f.h, { "/codex/stage-1.jsonl": transcript });
   let resident = true;
   let stop: Awaited<ReturnType<typeof f.h.ports.stopStageAgent>> = { outcome: "stopped" };
