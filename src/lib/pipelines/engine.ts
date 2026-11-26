@@ -7870,16 +7870,25 @@ async function continueRestoredClaudeStage(
   if (!current()) return true;
   const active = await ports.conversationAgentActive(conversationId);
   if (!current()) return true;
-  if (durable?.snapshot && stageTurnEvidenceCurrent(durable) !== true) return true;
+  const priorBackgroundWait = attempt.backgroundWait;
+  let host: Awaited<ReturnType<NonNullable<PipelinePorts["conversationHostProcess"]>>> | undefined;
+  if (durable?.snapshot && stageTurnEvidenceCurrent(durable) !== true) {
+    if (!priorBackgroundWait || unixMs(ports.now()) < unixMs(priorBackgroundWait.until)) return true;
+    host = await ports.conversationHostProcess?.(conversationId);
+    if (!current()) return true;
+    if (host?.state !== "gone") {
+      await holdForBackgroundTasks(pipeline, attempt, null, ports, persist, ports.now());
+      return true;
+    }
+  }
   // A real running turn keeps working. Idle/dead runtime evidence also covers
   // the busy transcript Claude leaves after its synthetic no-response record.
   if (!outstanding && active === true && !interrupted && durable?.turn === "busy") return true;
   const now = ports.now();
-  const priorBackgroundWait = attempt.backgroundWait;
   const backgroundMayBeRunning = Boolean(priorBackgroundWait) || Boolean(durable?.backgroundTasks
     && liveBackgroundTasks(durable.backgroundTasks, unixMs(now)).length > 0);
   if (backgroundMayBeRunning) {
-    const host = await ports.conversationHostProcess?.(conversationId);
+    host ??= await ports.conversationHostProcess?.(conversationId);
     if (!current()) return true;
     if (durable?.snapshot && stageTurnEvidenceCurrent(durable) !== true) {
       // The liveness probe can overlap a transcript append. Take one fresh
@@ -7887,10 +7896,13 @@ async function continueRestoredClaudeStage(
       durable = await read();
       if (!current()) return true;
       if (durable?.snapshot && stageTurnEvidenceCurrent(durable) !== true) {
-        if (priorBackgroundWait && unixMs(ports.now()) >= unixMs(priorBackgroundWait.until)) {
+        if (host?.state !== "gone" && priorBackgroundWait && unixMs(ports.now()) >= unixMs(priorBackgroundWait.until)) {
           await holdForBackgroundTasks(pipeline, attempt, null, ports, persist, ports.now());
         }
-        return true;
+        // A confirmed gone host still follows the established re-host path.
+        // Dispatch performs its own fresh transcript validation under the
+        // continuation reservation before it can send anything.
+        if (host?.state !== "gone") return true;
       }
     }
     // An idle Claude can spend this turn waiting for a task notification.
@@ -7898,14 +7910,12 @@ async function continueRestoredClaudeStage(
     // A gone host must still be eligible for the existing re-host and send.
     const holdsBackground = host?.state === "alive"
       || Boolean(priorBackgroundWait && host?.state !== "gone" && interrupted !== "dead");
-    if (holdsBackground && await holdForBackgroundTasks(pipeline, attempt, durable, ports, persist, now) !== "none") return true;
+    if (holdsBackground && await holdForBackgroundTasks(pipeline, attempt, durable, ports, persist, now, false, true) !== "none") return true;
   }
   const reportedBackgroundOwed = durable?.backgroundReportedAt !== null && durable?.backgroundReportedAt !== undefined
     && (durable.lastAgentEventAt ?? 0) <= durable.backgroundReportedAt
     && durable.backgroundReportedAt > unixMs(recovery.cutAt)
-    && (Boolean(priorBackgroundWait) || durable.backgroundReportedAt > unixMs(recovery.deadline)
-      || unixMs(ports.now()) >= unixMs(recovery.deadline)
-        && durable.backgroundReportedAt >= unixMs(recovery.deadline) - RESTORE_CONTINUATION_WAIT_MS / 2);
+    && durable.backgroundReportedAt + RESTORE_CONTINUATION_WAIT_MS > unixMs(ports.now());
   if (reportedBackgroundOwed) {
     // Verified completion gives the same continuation key a bounded handoff
     // window measured from the task notification.
@@ -7919,16 +7929,28 @@ async function continueRestoredClaudeStage(
   if (priorBackgroundWait) {
     // Give the same delivery key time to reach the engine once the wait ends,
     // whether the send is still owed or was already admitted.
-    delete attempt.backgroundWait;
-    if (pipeline.stateDetail?.startsWith(BACKGROUND_TASK_WAIT_DETAIL_PREFIX)) pipeline.stateDetail = null;
-    const handoffBase = reportedBackgroundOwed ? durable!.backgroundReportedAt! : unixMs(ports.now());
-    recovery.deadline = new Date(Math.max(unixMs(recovery.deadline), handoffBase + RESTORE_CONTINUATION_WAIT_MS)).toISOString();
+    const initialDeadline = unixMs(recovery.requestedAt) + RESTORE_CONTINUATION_WAIT_MS;
+    if (!reportedBackgroundOwed) {
+      delete attempt.backgroundWait;
+      if (pipeline.stateDetail?.startsWith(BACKGROUND_TASK_WAIT_DETAIL_PREFIX)) pipeline.stateDetail = null;
+    }
+    const handoffDeadline = reportedBackgroundOwed
+      ? durable!.backgroundReportedAt! + RESTORE_CONTINUATION_WAIT_MS
+      : unixMs(recovery.deadline) <= initialDeadline
+        ? unixMs(ports.now()) + RESTORE_CONTINUATION_WAIT_MS : unixMs(recovery.deadline);
+    recovery.deadline = new Date(Math.max(unixMs(recovery.deadline), handoffDeadline)).toISOString();
     await persist();
     if (!current()) return true;
   }
   if (durable?.turn === "busy" && (durable.lastAgentOutputAt ?? 0) > unixMs(recovery.cutAt) && !idleTurnSilent(durable, ports)) return true;
   if (unixMs(ports.now()) >= unixMs(recovery.deadline)) {
-    if (!recovery.acceptedAt || outstanding || !completed) return parkRestore(deliveryError ?? "continuation delivery did not complete before its deadline");
+    if (!recovery.acceptedAt || outstanding || !completed) {
+      if (priorBackgroundWait) {
+        attempt.backgroundWait = priorBackgroundWait;
+        return parkRestore(BACKGROUND_CONTINUATION_HANDOFF_TIMEOUT);
+      }
+      return parkRestore(deliveryError ?? "continuation delivery did not complete before its deadline");
+    }
     if (recovery.count >= RESTORE_CONTINUATION_LIMIT) return parkRestore("no stage report arrived after the restart");
     recovery.count += 1;
     recovery.clientMessageId = `stage-restore-${pipeline.id}-${stage.id}-${attempt.n}-${unixMs(recovery.cutAt)}-${recovery.count}`;
@@ -8259,7 +8281,22 @@ async function holdForBackgroundTasks(
   persist: () => void | Promise<void>,
   now = ports.now(),
   preserveReportedWait = false,
+  retainReportedWait = false,
 ): Promise<"none" | "waiting" | "parked"> {
+  const reportedCompletion = Boolean(durable?.backgroundReportedAt)
+    && (durable?.lastAgentEventAt ?? 0) <= durable!.backgroundReportedAt!;
+  if (reportedCompletion) {
+    const detail = preserveReportedWait
+      ? "waiting: background work has ended; waiting for the agent's next turn and stage_report"
+      : null;
+    if (attempt.backgroundWait || pipeline.stateDetail?.startsWith(BACKGROUND_TASK_WAIT_DETAIL_PREFIX)
+      || preserveReportedWait && pipeline.stateDetail !== detail) {
+      if (!retainReportedWait) delete attempt.backgroundWait;
+      pipeline.stateDetail = detail;
+      await persist();
+    }
+    return preserveReportedWait ? "waiting" : "none";
+  }
   /* A read that could not see the work cannot say it ended: a wait already
      under way holds, to its own bound, until a read can. */
   if (!durable?.backgroundTasks) {
@@ -8277,16 +8314,6 @@ async function holdForBackgroundTasks(
   }
   const live = liveBackgroundTasks(durable.backgroundTasks ?? [], unixMs(now));
   if (live.length === 0) {
-    if (durable.backgroundReportedAt && (durable.lastAgentEventAt ?? 0) <= durable.backgroundReportedAt) {
-      if (attempt.backgroundWait || pipeline.stateDetail?.startsWith(BACKGROUND_TASK_WAIT_DETAIL_PREFIX)) {
-        delete attempt.backgroundWait;
-        pipeline.stateDetail = preserveReportedWait
-          ? "waiting: background work has ended; waiting for the agent's next turn and stage_report"
-          : null;
-        await persist();
-      }
-      return "none";
-    }
     if (attempt.backgroundWait) {
       delete attempt.backgroundWait;
       if (pipeline.stateDetail?.startsWith(BACKGROUND_TASK_WAIT_DETAIL_PREFIX)) pipeline.stateDetail = null;
@@ -19533,6 +19560,7 @@ export async function setPipelineDismissal(
 const REPORTABLE_ATTEMPT_STATES: ReadonlySet<PipelineStageAttempt["state"]> = new Set(["spawning", "running"]);
 
 const BACKGROUND_REPORT_AFTER_PARK = "; waiting for the agent's stage_report after the background work ends; the same live generation can still report and resume this attempt";
+const BACKGROUND_CONTINUATION_HANDOFF_TIMEOUT = "background work ended but continuation delivery did not complete within its handoff window";
 
 /** Only the wait bound parked this current attempt. Reconstruct the reason
  * from the persisted wait, including parks written before late reports were
@@ -19546,9 +19574,10 @@ function backgroundBoundReportable({ pipeline, stageId, attempt }: StageCompleti
     || currentAttempt(pipeline, stageId) !== attempt || !attempt.conversationId || !attempt.agentPath) return false;
   const step = stepBackgroundWait(wait, wait.tasks.map(task => ({ ...task, startedAt: 0, expiresAt: null })),
     wait.silentSince, wait.until, "");
-  if (!step.expired || ![step.reason, step.reason + BACKGROUND_REPORT_AFTER_PARK,
-    "background work could not be verified at its persisted park-at time" + BACKGROUND_REPORT_AFTER_PARK].includes(attempt.error ?? "")
-    || pipeline.stateDetail !== attempt.error) return false;
+  const handoffTimedOut = attempt.error?.includes(BACKGROUND_CONTINUATION_HANDOFF_TIMEOUT) === true;
+  const expectedBackgroundPark = [step.reason, step.reason + BACKGROUND_REPORT_AFTER_PARK,
+    "background work could not be verified at its persisted park-at time" + BACKGROUND_REPORT_AFTER_PARK].includes(attempt.error ?? "");
+  if ((!step.expired || !expectedBackgroundPark) && !handoffTimedOut || pipeline.stateDetail !== attempt.error) return false;
   const generation = ports.conversationGeneration?.(attempt.conversationId);
   if (!generation || generation.engine !== attempt.effectiveRole.engine
     || generation.sessionId !== attempt.sessionId || generation.agentPath !== attempt.agentPath) return false;
