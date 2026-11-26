@@ -14,6 +14,8 @@ import { resetTeamStoreForTests, teamStore } from "@/lib/team/store";
 import { createWorkspace } from "@/lib/team/workspaces";
 import { conversationCatalogSnapshot, replaceConversationCatalog } from "@/lib/scanner/conversationCatalog";
 
+import { readEvidenceHtml } from "./readEvidenceHtml";
+
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-artifact-frame-"));
 const { GET: serve } = await import("./route");
 const responses: Response[] = [];
@@ -21,7 +23,6 @@ async function GET(...args: Parameters<typeof serve>) {
   const response = await serve(...args); responses.push(response); return response;
 }
 const { GET: GET_ARTIFACT } = await import("../../route");
-const { readEvidenceHtml } = await import("./route");
 
 const savedHome = process.env.HOME;
 const savedState = process.env.LLV_STATE_DIR;

@@ -14,6 +14,8 @@ import { existingTeamStore } from "@/lib/team/store";
 import { workspaceScope } from "@/lib/team/workspaceAccess";
 import { projectForCwd } from "@/lib/scanner/describe";
 
+import { readEvidenceHtml } from "./readEvidenceHtml";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -79,25 +81,6 @@ function segmentsOf(pathname: string): string[] | null {
     segments.push(segment);
   }
   return segments;
-}
-
-/** Read untrusted HTML only while its actual bytes remain within the request budget. */
-export async function readEvidenceHtml(handle: fsp.FileHandle, maxBytes: number, signal: AbortSignal, timeBudgetMs: number): Promise<Buffer> {
-  const deadline = Date.now() + timeBudgetMs;
-  const chunks: Buffer[] = [];
-  let total = 0;
-  while (true) {
-    if (signal.aborted) throw new Error("client aborted");
-    if (Date.now() >= deadline) throw new Error("artifact time budget exceeded");
-    const buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1 - total));
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, total);
-    if (signal.aborted) throw new Error("client aborted");
-    if (Date.now() >= deadline) throw new Error("artifact time budget exceeded");
-    if (bytesRead === 0) return Buffer.concat(chunks, total);
-    total += bytesRead;
-    if (total > maxBytes) throw new Error("artifact exceeds the configured byte bound");
-    chunks.push(buffer.subarray(0, bytesRead));
-  }
 }
 
 async function inlineScopedImages(source: string, base: string, scope: string, maxBytes: number, host: string, signal: AbortSignal, timeBudgetMs: number): Promise<Map<string, string>> {
