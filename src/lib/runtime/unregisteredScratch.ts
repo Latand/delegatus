@@ -381,7 +381,8 @@ async function passOverScratch(store: AttemptTempStore, ledger: UnregisteredScra
       if (await retire(entry, `${stat.dev}:${stat.ino}`, bytes, "interrupted-removal-finished")) {
         report.finishedInterrupted++; report.removedBytes += bytes;
         ledger.clearSkip(entry.name);
-        journal("removed", entry.directory, bytes, "interrupted removal finished", { reason: "interrupted-removal-finished", ageMs, kind: "scratch", scope: "unregistered", trigger: report.trigger, identity: `${stat.dev}:${stat.ino}` });
+        try { journal("removed", entry.directory, bytes, "interrupted removal finished", { reason: "interrupted-removal-finished", ageMs, kind: "scratch", scope: "unregistered", trigger: report.trigger, identity: `${stat.dev}:${stat.ino}` }); }
+        catch { /* The tree is gone; the intent row stays and the ledger counts the removal. */ }
       }
     }
 

@@ -260,6 +260,38 @@ test("a checkout link into a root still keeps that root once the inventory is co
   expect(report.kept.reference_checkout_link_reference).toBe(1);
 });
 
+test("a live checkout whose directory changes on every read does not stop the pass; a link that existed still keeps its root", async () => {
+  const w = world();
+  const { made, scan } = consumers(w);
+  const hot = path.join(made[0]!.checkout, "out");
+  fs.mkdirSync(hot);
+  const roots = [make(w, "llv-stage-HOT001"), make(w, "llv-stage-HOT002")];
+  const linked = make(w, "llv-stage-HOTLNK");
+  fs.symlinkSync(path.join(linked, "cache"), path.join(hot, "kept-link"), "dir");
+  const { containers: _observer, ...real } = ports();
+  const readdirApi = fs.promises as unknown as { readdir: (target: fs.PathLike, options: { withFileTypes: true }) => Promise<fs.Dirent[]> };
+  const readdir = readdirApi.readdir.bind(readdirApi);
+  let reads = 0;
+  // Every listing of the hot directory is followed by a write to it: the version before the read never matches the one after.
+  const observed = spyOn(readdirApi, "readdir").mockImplementation(async (target, options) => {
+    const listing = await readdir(target, options);
+    if (String(target) === hot) { reads++; const at = Date.now() / 1000 - 3_600 + reads; fs.utimesSync(hot, at, at); }
+    return listing;
+  });
+  const checkoutReads = new Map();
+  try {
+    const first = (await runUnregisteredScratchPass(w.store, { ...real, containerMounts: async () => [], scan: () => scan, checkoutReads, now: () => NOW }))!;
+    expect(first).toMatchObject({ removed: 2, errors: 0 });
+    expect(first.deferred ?? null).toBeNull();
+    for (const root of roots) expect(fs.existsSync(root)).toBeFalse();
+    expect(fs.existsSync(linked)).toBeTrue();
+    expect(first.kept.reference_checkout_link_reference).toBe(1);
+    // The hot directory was read again a bounded number of times, then its newest listing stood.
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(reads).toBeLessThanOrEqual(3);
+  } finally { observed.mockRestore(); }
+});
+
 test("a retained checkout read is trusted for ten minutes and read again after, so a later link into a root is seen", async () => {
   const w = world();
   const { made, scan } = consumers(w);
@@ -501,6 +533,23 @@ test("a crash mid-delete leaves a tombstone and the next pass finishes it, journ
   expect(forged.finishedInterrupted).toBe(0);
   expect(forged.kept.path_not_admitted).toBe(1);
   expect(names(w)).toHaveLength(2);
+});
+
+test("a failed outcome write while finishing a tombstone neither stops the pass nor loses the removal", async () => {
+  const w = world();
+  make(w, "llv-stage-CRASH2");
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "unregisteredScratch.fixture.ts"), "--crash-mid-delete", String(NOW)],
+    { stdout: "pipe", stderr: "pipe" });
+  expect(await child.exited).toBe(137);
+  expect(names(w)).toHaveLength(1);
+  const later = make(w, "llv-stage-CRASH3");
+  // The disk is too full for the outcome row; the intent rows were written.
+  const journal = (phase: string) => { if (phase === "removed") throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" }); };
+  const next = (await runUnregisteredScratchPass(w.store, ports({ now: () => NOW + MINUTE, journal })))!;
+  expect(next).toMatchObject({ finishedInterrupted: 1, removed: 1, errors: 0 });
+  expect(next.totals.removedRoots).toBe(2);
+  expect(names(w)).toEqual([]);
+  expect(fs.existsSync(later)).toBeFalse();
 });
 
 test("a tree this user cannot remove is kept and counted, and finished when the block lifts", async () => {

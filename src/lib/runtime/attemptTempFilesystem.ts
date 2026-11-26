@@ -154,7 +154,16 @@ const granuleRemainingMs = (stat: fs.Stats, now: number) => {
 /** Directory reads in flight at once during one checkout walk. */
 const REPOSITORY_WALK_CONCURRENCY = 8;
 
-async function repositoryLinks(directory: string, timeout?: number): Promise<{ links: string[]; directories: RepositoryDirectoryVersion[] }> {
+/** How many times a caller that tolerates a changing directory reads or waits
+ * on one before it accepts the newest listing. */
+const TOLERATED_DIRECTORY_READS = 3;
+
+/** `tolerateChange` is for a caller that already accepts links created after
+ * the read (a root idle for a day cannot gain a legitimate one): a directory
+ * that changes while it is read is read again a bounded number of times and
+ * then its newest listing stands, so one hot directory (a build output, an
+ * atomic-rename writer) cannot void the walk of its whole checkout. */
+async function repositoryLinks(directory: string, timeout?: number, tolerateChange = false): Promise<{ links: string[]; directories: RepositoryDirectoryVersion[] }> {
   const deadline = performance.now() + attemptTempRemaining(timeout ?? 15_000);
   // An unreadable checkout, including an absent one, proves nothing about
   // its links. Let the failed read retain this root until a later sweep.
@@ -178,6 +187,12 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
   };
   /** Reads one directory and returns the subdirectories still to read. */
   const visit = async (current: string): Promise<string[]> => {
+    // A subdirectory removed while the walk was under way has no links left to find.
+    if (!tolerateChange || current === directory) return visitDirectory(current);
+    try { return await visitDirectory(current); }
+    catch (error) { if (vanished(error)) return []; throw error; }
+  };
+  const visitDirectory = async (current: string): Promise<string[]> => {
     let before = fs.lstatSync(current);
     const skipMount = () => {
       if (before.dev === rootDevice) return false;
@@ -191,23 +206,34 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
     // list read inside that granule could pair with timestamps that a later
     // link shares. Such a list is read again once the granule passed; from
     // then on every change moves the timestamps and the validators see it.
+    let waits = 0;
     for (let wait = granuleRemainingMs(before, Date.now()); wait > 0; wait = granuleRemainingMs(before, Date.now())) {
+      // A directory written faster than the granule never leaves it.
+      if (tolerateChange && waits++ >= TOLERATED_DIRECTORY_READS) break;
       checkBudget();
       await new Promise(resolve => setTimeout(resolve, Math.max(1, Math.min(attemptTempRemaining(), Math.max(wait, TIMESTAMP_GRANULE_MS)))));
       before = fs.lstatSync(current);
       if (skipMount()) return [];
     }
-    const entries = await readEntries(current);
+    let entries = await readEntries(current);
     checkBudget();
-    const after = fs.lstatSync(current, { throwIfNoEntry: false });
+    let after = fs.lstatSync(current, { throwIfNoEntry: false });
     // The entry list and its cache validator must describe the same directory
     // version. A link created after readdir but before lstat would otherwise
     // pair a negative list with the new directory timestamps.
-    if (!after?.isDirectory() || after.isSymbolicLink()
-      || `${before.dev}:${before.ino}` !== `${after.dev}:${after.ino}`
-      || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
-      throw new AttemptTempBudgetDeferred("checkout changed during link inventory; retry next tick");
+    const sameVersion = (version: typeof before, now: typeof after) => !!now?.isDirectory() && !now.isSymbolicLink()
+      && `${version.dev}:${version.ino}` === `${now.dev}:${now.ino}` && version.mtimeMs === now.mtimeMs && version.ctimeMs === now.ctimeMs;
+    for (let reads = 1; !sameVersion(before, after); reads++) {
+      if (!tolerateChange) throw new AttemptTempBudgetDeferred("checkout changed during link inventory; retry next tick");
+      // The directory is gone or no longer a directory: it holds no link.
+      if (!after?.isDirectory() || after.isSymbolicLink()) return [];
+      if (reads >= TOLERATED_DIRECTORY_READS) break;
+      before = after;
+      entries = await readEntries(current);
+      checkBudget();
+      after = fs.lstatSync(current, { throwIfNoEntry: false });
     }
+    if (!after?.isDirectory() || after.isSymbolicLink()) return [];
     directories.push({ path: current, identity: `${after.dev}:${after.ino}`, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs });
     // The budget is read once per directory (above), not once per entry: a
     // dependency tree holds millions of plain files, and reading the clock for
@@ -248,9 +274,9 @@ async function repositoryLinks(directory: string, timeout?: number): Promise<{ l
 }
 
 /** Each link's target as written, including dangling links. */
-async function repositoryLinkTargets(repository: string, timeout?: number): Promise<RepositoryLinkSnapshot> {
+async function repositoryLinkTargets(repository: string, timeout?: number, tolerateChange = false): Promise<RepositoryLinkSnapshot> {
   const deadline = performance.now() + attemptTempRemaining(timeout ?? 15_000);
-  const inventory = await repositoryLinks(repository, timeout), lexicalTargets: string[] = [];
+  const inventory = await repositoryLinks(repository, timeout, tolerateChange), lexicalTargets: string[] = [];
   for (const link of inventory.links) {
     checkAttemptTempDeadline();
     let target: string;
@@ -262,7 +288,7 @@ async function repositoryLinkTargets(repository: string, timeout?: number): Prom
   // remainder of this checkout is still being traversed. Revalidate the full
   // inventory at the authority boundary so that such a late link cannot turn
   // an earlier negative into deletion permission.
-  for (const directory of inventory.directories) {
+  for (const directory of tolerateChange ? [] : inventory.directories) {
     if (attemptTempRemaining(deadline - performance.now()) <= 0)
       throw new AttemptTempBudgetDeferred("checkout link inventory exceeded its time budget");
     const current = fs.lstatSync(directory.path, { throwIfNoEntry: false });
@@ -480,7 +506,7 @@ export class RepositoryLinkInventory {
     this.options.retained?.delete(repository);
     const remaining = attemptTempRemaining(this.deadline - now);
     if (remaining <= 0) return Promise.reject(new AttemptTempBudgetDeferred());
-    const snapshot = repositoryLinkTargets(repository, Math.min(this.options.walkMs ?? 15_000, remaining));
+    const snapshot = repositoryLinkTargets(repository, Math.min(this.options.walkMs ?? 15_000, remaining), this.options.trustFreshReads);
     const targets = snapshot.then(result => result.lexicalTargets);
     const observed: Promise<string[]> = targets.catch(error => {
       // A refused read is not a cache entry. The next root can observe a
