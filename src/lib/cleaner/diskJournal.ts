@@ -11,10 +11,7 @@ export const DISK_CLEANER_CLASSES = ["attempt-temp", "release", "evidence"] as c
 export type DiskCleanerClass = typeof DISK_CLEANER_CLASSES[number];
 export type CleanerHold = { path: string; bytes: number; reason: string };
 export type CleanerSlice = { kept: CleanerHold[]; errors: number };
-/** Optional fields an ordinary (non-pass) journal row carries: why the root
- * qualified or was kept, how old it was and what ended the visit. */
-export type CleanerJournalDetail = { reason?: string; ageMs?: number; kind?: string; scope?: string; trigger?: string | null; code?: string; identity?: string };
-export type CleanerJournal = (phase: "intent" | "removed" | "refused", directory: string, bytes: number, proof: string, detail?: CleanerJournalDetail) => void;
+export type CleanerJournal = (phase: "intent" | "removed" | "refused", directory: string, bytes: number, proof: string) => void;
 export type CleanerAuditBinding = { passId: string; proof: string; bytes?: number };
 
 export function isCleanerAuditBinding(value: unknown): value is CleanerAuditBinding {
@@ -37,54 +34,12 @@ export function cleanerJournalFile(id: string) {
  * completion stays visible as uncertain, including after a process exit. */
 export function cleanerJournal(id: string, kind: DiskCleanerClass): CleanerJournal {
   const file = cleanerJournalFile(id);
-  return (phase, directory, bytes, proof, detail) => {
+  return (phase, directory, bytes, proof) => {
     const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_NOFOLLOW);
     try {
-      fs.writeFileSync(fd, JSON.stringify({ phase, path: directory, bytes, class: kind, proof, ...detail, at: new Date().toISOString() }) + "\n");
+      fs.writeFileSync(fd, JSON.stringify({ phase, path: directory, bytes, class: kind, proof, at: new Date().toISOString() }) + "\n");
       fs.fsyncSync(fd);
     } finally { fs.closeSync(fd); }
-  };
-}
-
-/** Deletions made by the ordinary periodic tick, outside any Cleaner pass, go
- * to one file per UTC day beside the pass journals. */
-const ORDINARY_JOURNAL = /^ordinary-(\d{4}-\d{2}-\d{2})\.ndjson$/;
-export const ORDINARY_JOURNAL_RETENTION_MS = 30 * 86_400_000;
-export function ordinaryJournalFile(day: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new Error("invalid ordinary journal day");
-  const file = statePath("disk-cleaner", `ordinary-${day}.ndjson`);
-  assertRetentionTestPath(file);
-  return file;
-}
-/** Phases an ordinary row may carry. `skipped` names a root that was examined
- * and kept; it is written once per root and reason, never once per tick. */
-export type OrdinaryJournalPhase = "intent" | "removed" | "refused" | "skipped";
-export type OrdinaryJournal = (phase: OrdinaryJournalPhase, directory: string, bytes: number, proof: string, detail?: CleanerJournalDetail) => void;
-/** Appends fsynced rows to today's file. The path is written state-relative so
- * the journal names no home directory. A failed write throws, which blocks the
- * mutation an intent row announces. The first row of a new day deletes this
- * writer's own files older than thirty days. */
-export function ordinaryCleanerJournal(kind: DiskCleanerClass, now: () => number = Date.now): OrdinaryJournal {
-  return (phase, directory, bytes, proof, detail) => {
-    const at = now(), day = new Date(at).toISOString().slice(0, 10), file = ordinaryJournalFile(day);
-    const fresh = !fs.existsSync(file);
-    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600);
-    try {
-      const relative = path.relative(statePath(), directory);
-      const shown = relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : directory;
-      fs.writeFileSync(fd, JSON.stringify({ phase, path: shown, bytes, class: kind, proof, ...detail, at: new Date(at).toISOString() }) + "\n");
-      fs.fsyncSync(fd);
-    } finally { fs.closeSync(fd); }
-    if (fresh) {
-      fsyncPath(path.dirname(file));
-      try {
-        for (const name of fs.readdirSync(path.dirname(file))) {
-          const match = ORDINARY_JOURNAL.exec(name);
-          if (match && Date.parse(match[1]! + "T00:00:00Z") < at - ORDINARY_JOURNAL_RETENTION_MS) fs.rmSync(path.join(path.dirname(file), name), { force: true });
-        }
-      } catch { /* Pruning is housekeeping and never blocks a deletion. */ }
-    }
   };
 }
 

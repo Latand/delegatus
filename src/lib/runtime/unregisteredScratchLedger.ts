@@ -10,19 +10,40 @@ export type UnregisteredPassSummary = {
   kept: number; errors: number; deferred: string | null; elapsedMs: number;
 };
 
-/** What the unregistered-scratch pass remembers between ticks, beside the
- * attempt ledger it shares a database with: free-space samples for the rate
- * trigger, a retry time per kept root so a root that cannot be removed never
- * starves the next one, and the last pass with its running totals. Nothing
- * here grants removal authority; every pass repeats every proof. */
+/** What the unregistered-scratch pass remembers between ticks, in tables of the
+ * attempt ledger's database that the ledger itself never reads: free-space
+ * samples for the rate trigger, a retry time per kept root so a root that
+ * cannot be removed never starves the next one, the removals this pass began
+ * (so a crash leaves a tombstone only this pass finishes), and the last pass
+ * with its running totals. Nothing here grants removal authority; every pass
+ * repeats every proof. It uses its own connection, opened for one pass. */
 export class UnregisteredScratchLedger {
-  constructor(private readonly db: Database) {
+  private constructor(private readonly db: Database) {
+    db.exec("PRAGMA busy_timeout=0");
+    db.exec("CREATE TABLE IF NOT EXISTS unregistered_scratch_removals(identity TEXT PRIMARY KEY, name TEXT NOT NULL, at REAL NOT NULL)");
     db.exec("CREATE TABLE IF NOT EXISTS unregistered_scratch_samples(at REAL PRIMARY KEY, freeBytes REAL NOT NULL)");
     db.exec(`CREATE TABLE IF NOT EXISTS unregistered_scratch_skips(name TEXT PRIMARY KEY, reason TEXT NOT NULL, code TEXT NOT NULL,
       retryAt REAL NOT NULL, at REAL NOT NULL, bytes REAL NOT NULL DEFAULT 0)`);
     db.exec(`CREATE TABLE IF NOT EXISTS unregistered_scratch_state(id INTEGER PRIMARY KEY CHECK(id=1),
       removedRoots INTEGER NOT NULL, removedBytes REAL NOT NULL, last TEXT)`);
     db.exec("INSERT OR IGNORE INTO unregistered_scratch_state VALUES(1,0,0,NULL)");
+  }
+  static open(filename: string): UnregisteredScratchLedger {
+    const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
+    if (!sqlite) throw new Error("Unregistered scratch retention requires Bun");
+    const db = new sqlite.Database(filename, { create: true });
+    try { return new UnregisteredScratchLedger(db); }
+    catch (error) { db.close(); throw error; }
+  }
+  close() { this.db.close(); }
+  /** Durable intent, written before the tree is renamed to its tombstone. */
+  beginRemoval(identity: string, name: string, at: number) {
+    this.db.query("INSERT OR REPLACE INTO unregistered_scratch_removals VALUES(?,?,?)").run(identity, name, at);
+  }
+  endRemoval(identity: string) { this.db.query("DELETE FROM unregistered_scratch_removals WHERE identity=?").run(identity); }
+  /** Directory identities (`dev:ino`) of the removals begun and not finished. */
+  removals(): Array<{ identity: string; name: string }> {
+    return this.db.query<{ identity: string; name: string }, []>("SELECT identity,name FROM unregistered_scratch_removals").all();
   }
   samples(): FreeSample[] {
     return this.db.query<FreeSample, []>("SELECT at,freeBytes FROM unregistered_scratch_samples ORDER BY at").all();

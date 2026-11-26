@@ -16,7 +16,6 @@ import { attemptEvidenceKey } from "./attemptEvidenceBinding";
 import { recordedRootHeld, readRecorded, recordRootRetirement, expireRecordedRootHolds, type CheckRow } from "@/lib/recordedChecks/store";
 import { trackSqliteMemory } from "@/lib/sqliteMemoryDiagnostics";
 import { AttemptRetentionReporting } from "./attemptRetentionReporting";
-import { UnregisteredScratchLedger } from "./unregisteredScratchLedger";
 import { FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFinish";
 import { claimAttemptRetirement } from "@/lib/pipelines/store";
 import { hasAttemptRetirementClaim, restoreRefusedAttemptTrash } from "@/lib/pipelines/retirementClaim";
@@ -90,7 +89,7 @@ export const BLOCKED_SUBTREE_RETRY_MS = 60 * 60_000;
  * backups. Under the state directory or the config cache a root's physical
  * path must equal its lexical path below the physical namespace, so a symlink
  * or a moved parent never carries a deletion into another tree. */
-export function attemptTempPathAdmitted(directory: string): boolean {
+function attemptTempPathAdmitted(directory: string): boolean {
   try {
     const lexical = path.resolve(directory), physical = resolvePhysicalPath(directory);
     for (const forbidden of [statePath("evidence"), statePath("backups")].map(resolvePhysicalPath))
@@ -129,8 +128,6 @@ export class AttemptTempStore {
   private releaseMemoryTracking: (() => void) | undefined;
   private recovery!: AttemptTrashRecovery;
   private reporting!: AttemptRetentionReporting;
-  /** Memory of the unregistered-scratch pass, in this same database. */
-  unregistered!: UnregisteredScratchLedger;
   constructor(readonly filename = statePath("attempt-temp.sqlite")) {
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
@@ -193,7 +190,6 @@ export class AttemptTempStore {
       this.db.exec(`CREATE TABLE IF NOT EXISTS pressure_pass_build(id INTEGER PRIMARY KEY CHECK(id=1), startedAt REAL NOT NULL, scheduledOnly INTEGER NOT NULL,
         bytes REAL NOT NULL, createdAt REAL NOT NULL, directory TEXT NOT NULL, started INTEGER NOT NULL, total INTEGER NOT NULL, totalBytes REAL NOT NULL)`);
       this.reporting = new AttemptRetentionReporting(this.db, path.dirname(filename));
-      this.unregistered = new UnregisteredScratchLedger(this.db);
       // Fresh ledgers already use the new writer policy. Existing ledgers are
       // upgraded once by the ordinary owner before selecting its next page.
       if (!this.db.query("SELECT 1 FROM roots LIMIT 1").get() && this.scratchRetentionVersion() === 0)

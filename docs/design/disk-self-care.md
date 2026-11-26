@@ -653,13 +653,15 @@ lock:
   larger bound at once: 128 removals, 256 examined and 35 s, against 16, 48
   and 15 s for an ordinary tick. Oldest roots go first in both. A failed
   free-space reading never starts the larger pass and is reported.
-- **Crash safety.** The root is renamed into a tombstone beside it
-  (`.delegatus-scratch-trash-<dev>-<ino>-<uuid>`, a name no other owner uses) and
-  deleted by the owned remover with its deadline. A pass finishes the tombstones
-  it finds, after checking that the directory is the inode its name records and
-  that no live process references it. A tree this user cannot write gets owner
-  write access inside the tombstone and one more attempt; otherwise it is kept
-  as `unremovable_permissions`.
+- **Crash safety.** The pass records the root's identity in the ledger database
+  (its own tables and connection), then the owned remover renames the root into
+  a claim tombstone beside it (`.delegatus-trash-claim-<dev>-<ino>-<uuid>`) and
+  deletes it with its deadline. A pass finishes only the tombstones whose
+  identity it recorded, after checking that the directory is the inode its name
+  records and that no live process references it; the attempt ledger's own
+  claims are never touched. A tree this user cannot write gets owner write
+  access inside the tombstone and one more attempt; otherwise it is kept as
+  `unremovable_permissions`.
 - **Journal.** `$STATE/disk-cleaner/ordinary-<UTC date>.ndjson`, in the Cleaner's
   row format with `reason`, `ageMs`, `identity`, `trigger` and a state-relative
   `path`. An intent is fsynced before the rename and a failed write leaves the

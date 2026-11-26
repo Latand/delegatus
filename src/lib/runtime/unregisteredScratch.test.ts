@@ -13,7 +13,8 @@ import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { finishedLane, nameInReport } from "./attemptTempRetention.testSupport";
 import { runAttemptTempSweep } from "./attemptTempProduction";
 import { runUnregisteredScratchPass, UNREGISTERED_LOW_FREE_BYTES, UNREGISTERED_ORDINARY_LIMITS, UNREGISTERED_PRESSURE_LIMITS,
-  UNREGISTERED_TRASH_PREFIX, unregisteredScratchTrigger, type UnregisteredScratchPorts } from "./unregisteredScratch";
+  UNREGISTERED_CLAIM_PREFIX, unregisteredScratchTrigger, type UnregisteredScratchPorts } from "./unregisteredScratch";
+import { UnregisteredScratchLedger } from "./unregisteredScratchLedger";
 
 const NOW = Date.parse("2031-03-10T12:00:00Z");
 const MINUTE = 60_000, HOUR = 3_600_000, MIB = 1024 ** 2;
@@ -38,6 +39,11 @@ function world() {
     restart() { held.store.close(); held.store = new AttemptTempStore(); } };
 }
 type World = ReturnType<typeof world>;
+/** Reads what the pass remembered, through its own connection. */
+const remembered = <T>(w: World, read: (ledger: UnregisteredScratchLedger) => T): T => {
+  const ledger = UnregisteredScratchLedger.open(w.store.filename);
+  try { return read(ledger); } finally { ledger.close(); }
+};
 
 /** Gives every entry of a tree one modification time, deepest first. */
 function setTimes(directory: string, at: number) {
@@ -190,7 +196,7 @@ test("activity is the newest entry of the tree: 24 h exactly expires, a nested w
   expect(fs.existsSync(nested)).toBeTrue();
   expect(report.kept.young).toBe(2);
   // Each kept root waits until its own 24 hours end (at least a minute), not a fixed hour.
-  const waiting = w.store.unregistered.waiting(NOW);
+  const waiting = remembered(w, ledger => ledger.waiting(NOW));
   expect(waiting.get("llv-stage-ALMOST")!.retryAt).toBe(NOW + MINUTE);
   expect(waiting.get("llv-stage-NESTED")!.retryAt).toBe(NOW - 2 * HOUR + 24 * HOUR + 1);
   const later = (await runUnregisteredScratchPass(w.store, ports({ now: () => NOW + 2 * MINUTE })))!;
@@ -322,7 +328,7 @@ test("a thousand expired roots are all removed across low-space passes within th
   }
   expect(fs.readdirSync(w.scratch)).toEqual([]);
   expect(passes).toEqual([128, 128, 128, 128, 128, 128, 128, 104]);
-  expect(w.store.unregistered.totals().removedRoots).toBe(1000);
+  expect(remembered(w, ledger => ledger.totals().removedRoots)).toBe(1000);
 }, 120_000);
 
 test("the free-space trigger fires below 50 GB and on a 10 GB loss in 20 minutes, from persisted readings", async () => {
@@ -347,7 +353,7 @@ test("the free-space trigger fires below 50 GB and on a 10 GB loss in 20 minutes
   expect(reports.map(report => report.trigger)).toEqual([null, "loss-rate", null, null]);
   expect(reports[1]).toMatchObject({ lossBytes: 11e9, limits: UNREGISTERED_PRESSURE_LIMITS });
   expect(reports[3]!.limits).toEqual(UNREGISTERED_ORDINARY_LIMITS);
-  expect(w.store.unregistered.samples().length).toBeLessThanOrEqual(41);
+  expect(remembered(w, ledger => ledger.samples().length)).toBeLessThanOrEqual(41);
   // An unreadable free-space observation never starts the larger pass and is reported.
   const failing = (await runUnregisteredScratchPass(w.store, ports({ now: () => NOW + 50 * MINUTE, availableBytes: () => { throw new Error("statfs failed"); } })))!;
   expect(failing).toMatchObject({ trigger: null, limits: UNREGISTERED_ORDINARY_LIMITS });
@@ -363,7 +369,7 @@ test("a crash mid-delete leaves a tombstone and the next pass finishes it, journ
   const left = names(w);
   expect(fs.existsSync(directory)).toBeFalse();
   expect(left).toHaveLength(1);
-  expect(left[0]).toStartWith(`${UNREGISTERED_TRASH_PREFIX}-`);
+  expect(left[0]).toStartWith(`${UNREGISTERED_CLAIM_PREFIX}-`);
   expect(fs.existsSync(path.join(w.scratch, left[0]!, "cache", "data"))).toBeTrue();
   // The crashed pass journaled its intent and never an outcome.
   expect(journalRows().map(row => row.phase)).toEqual(["intent"]);
@@ -378,9 +384,12 @@ test("a crash mid-delete leaves a tombstone and the next pass finishes it, journ
   // Idempotent: a further pass finds nothing to do.
   const again = (await runUnregisteredScratchPass(w.store, ports({ now: () => NOW + 2 * MINUTE })))!;
   expect(again).toMatchObject({ found: 0, finishedInterrupted: 0, removed: 0 });
-  // A name that only looks like a tombstone, and the ledger's own claims, are left alone.
-  fs.mkdirSync(path.join(w.scratch, `${UNREGISTERED_TRASH_PREFIX}-1-2-00000000-0000-0000-0000-000000000000`));
-  fs.mkdirSync(path.join(w.scratch, ".delegatus-trash-claim-1-2-00000000-0000-0000-0000-000000000000"));
+  // A claim tombstone this pass never recorded is the attempt ledger's, and is left alone. One it recorded
+  // that is not the inode its name says is kept, never deleted.
+  const uuid = "00000000-0000-0000-0000-000000000000";
+  fs.mkdirSync(path.join(w.scratch, `${UNREGISTERED_CLAIM_PREFIX}-3-4-${uuid}`));
+  fs.mkdirSync(path.join(w.scratch, `${UNREGISTERED_CLAIM_PREFIX}-1-2-${uuid}`));
+  remembered(w, ledger => ledger.beginRemoval("1:2", "llv-stage-GONE01", NOW));
   const forged = (await runUnregisteredScratchPass(w.store, ports({ now: () => NOW + 3 * MINUTE })))!;
   expect(forged.finishedInterrupted).toBe(0);
   expect(forged.kept.path_not_admitted).toBe(1);
@@ -396,10 +405,10 @@ test("a tree this user cannot remove is kept and counted, and finished when the 
   const lockedStat = fs.lstatSync(blocked), lockedIdentity = `${lockedStat.dev}:${lockedStat.ino}`;
   let refusals = 0;
   // The first two removals of this one tree are refused after it moved to a tombstone.
-  const refusing: UnregisteredScratchPorts["remove"] = async (directory, started, run, identity, cpu, prefix) => {
-    if (identity !== lockedIdentity || refusals >= 2) return removeTreeWithinAttemptBudget(directory, started, run, identity, cpu, prefix);
+  const refusing: UnregisteredScratchPorts["remove"] = async (directory, started, run, identity, cpu) => {
+    if (identity !== lockedIdentity || refusals >= 2) return removeTreeWithinAttemptBudget(directory, started, run, identity, cpu);
     refusals++;
-    const tombstone = path.join(w.scratch, `${UNREGISTERED_TRASH_PREFIX}-${identity.replace(":", "-")}-00000000-0000-0000-0000-00000000000${refusals}`);
+    const tombstone = path.join(w.scratch, `${UNREGISTERED_CLAIM_PREFIX}-${identity.replace(":", "-")}-00000000-0000-0000-0000-00000000000${refusals}`);
     fs.renameSync(directory, tombstone);
     throw Object.assign(new Error("permission denied"), { code: "EACCES", claimedDirectory: tombstone });
   };
@@ -430,7 +439,7 @@ test("a failed intent write leaves the tree in place, and a dry run removes and 
   expect(dry).toMatchObject({ mode: "dry-run", wouldRemove: 1, removed: 0, journal: null });
   expect(fs.existsSync(directory)).toBeTrue();
   expect(journalRows()).toEqual([]);
-  expect(w.store.unregistered.totals()).toEqual({ removedRoots: 0, removedBytes: 0, last: expect.anything() });
+  expect(remembered(w, ledger => ledger.totals())).toEqual({ removedRoots: 0, removedBytes: 0, last: expect.anything() });
 });
 
 test("a new day's journal prunes the writer's own files older than thirty days", async () => {

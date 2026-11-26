@@ -9,13 +9,10 @@ import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
 const execFileAsync = promisify(execFile);
 type RemovalRunner = typeof execFileAsync;
 
-export const ATTEMPT_CLAIM_PREFIX = ".delegatus-trash-claim";
 /** Run recursive deletion in an owned process so an expired tick can stop it.
- * The caller keeps its durable trash journal when this process is interrupted.
- * A caller that owns its own recovery names the tombstone with its own prefix,
- * so nothing else mistakes an interrupted removal for its own. */
+ * The caller keeps its durable trash journal when this process is interrupted. */
 export async function removeTreeWithinAttemptBudget(directory: string, mutationStarted: () => void, run: RemovalRunner = execFileAsync,
-  expectedIdentity?: string, accountCpuSeconds?: (seconds: number) => void, claimPrefix: string = ATTEMPT_CLAIM_PREFIX) {
+  expectedIdentity?: string, accountCpuSeconds?: (seconds: number) => void) {
   checkAttemptTempDeadline();
   const timeout = Math.floor(attemptTempRemaining(30_000));
   if (timeout <= 0) throw new AttemptTempBudgetDeferred("tick deadline exhausted before recursive removal");
@@ -24,7 +21,7 @@ export async function removeTreeWithinAttemptBudget(directory: string, mutationS
   if (!initial.isDirectory() || initial.isSymbolicLink() || expectedIdentity && identity !== expectedIdentity)
     throw new Error("attempt removal identity changed before atomic claim");
   const parent = path.dirname(directory);
-  const tombstone = path.join(parent, `${claimPrefix}-${identity.replace(":", "-")}-${randomUUID()}`);
+  const tombstone = path.join(parent, `.delegatus-trash-claim-${identity.replace(":", "-")}-${randomUUID()}`);
   fs.renameSync(directory, tombstone);
   const restoreChangedClaim = () => {
     try {

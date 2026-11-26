@@ -9,8 +9,8 @@ if (process.argv[2] === "--crash-mid-delete") {
   await sweepUnregisteredScratch(store, {
     mode: "on", now: () => Number(process.argv[3]), scan: () => ({ ownNamespace: null, processes: [] }),
     references: async () => true, availableBytes: () => 400e9, lanes: () => () => false, attributable: () => false,
-    remove: (directory, started, _run, identity, cpu, prefix) => removeTreeWithinAttemptBudget(directory, started,
-      (async () => { process.exit(137); }) as never, identity, cpu, prefix),
+    remove: (directory, started, _run, identity, cpu) => removeTreeWithinAttemptBudget(directory, started,
+      (async () => { process.exit(137); }) as never, identity, cpu),
   });
   process.exit(1);
 }

@@ -4,7 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { statePath } from "@/lib/configDir";
 import { assertRetentionTestPath } from "@/lib/retentionTestSafety";
-import { ordinaryCleanerJournal, ordinaryJournalFile, type OrdinaryJournal } from "@/lib/cleaner/diskJournal";
+import { ordinaryCleanerJournal, ordinaryJournalFile, type OrdinaryJournal } from "@/lib/cleaner/ordinaryJournal";
 import { recordedRootHeld, readRecorded } from "@/lib/recordedChecks/store";
 import { FileTransactionBusyError, withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { stateDatabaseBusy } from "@/lib/state/lockWait";
@@ -14,9 +14,9 @@ import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTe
 import { attemptProcessReferencesClear, attemptReferencesClear, attemptTreeHold, ledgerLinkedEvidence, measureAttemptAllocation,
   RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
-import { attemptTempPathAdmitted, attemptTempRootWindow, type AttemptTempStore } from "./attemptTempRetention";
+import { attemptTempRootWindow, type AttemptTempStore } from "./attemptTempRetention";
 import { openLaneUseCheck } from "./attemptScratchLanes";
-import type { UnregisteredPassSummary } from "./unregisteredScratchLedger";
+import { UnregisteredScratchLedger, type UnregisteredPassSummary } from "./unregisteredScratchLedger";
 
 /** A root nothing has written to for this long is expired: the operator's "older than a day". */
 export const UNREGISTERED_SCRATCH_EXPIRY_MS = 24 * 3_600_000;
@@ -24,10 +24,12 @@ export const UNREGISTERED_SCRATCH_EXPIRY_MS = 24 * 3_600_000;
 export const UNREGISTERED_LOW_FREE_BYTES = 50e9;
 export const UNREGISTERED_LOSS_BYTES = 10e9;
 export const UNREGISTERED_LOSS_WINDOW_MS = 20 * 60_000;
-/** Names an interrupted removal of this pass. No other owner uses it. */
-export const UNREGISTERED_TRASH_PREFIX = ".delegatus-scratch-trash";
+/** The tombstone name `removeTreeWithinAttemptBudget` gives a tree it claims.
+ * The attempt ledger's own claims carry it too, so this pass finishes only
+ * tombstones whose identity it recorded before it began the removal. */
+export const UNREGISTERED_CLAIM_PREFIX = ".delegatus-trash-claim";
 const ROOT_NAME = /^llv-(?:read-only-stage|stage)-[A-Za-z0-9]{6,}$/;
-const TRASH_NAME = new RegExp(`^${UNREGISTERED_TRASH_PREFIX.replaceAll(".", "\\.")}-(\\d+)-(\\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`);
+const TRASH_NAME = /^\.delegatus-trash-claim-(\d+)-(\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** One tree walk stops at this many entries; the root is then kept as unproven. */
 const WALK_ENTRY_LIMIT = 2_000_000;
 
@@ -169,10 +171,24 @@ export function unregisteredScratchSummary(u: UnregisteredScratchReport, mode: "
  * finishes. Every deletion is journaled with the allocation measured during
  * the same visit; every kept root records its reason once. */
 export async function sweepUnregisteredScratch(store: AttemptTempStore, ports: UnregisteredScratchPorts) {
+  const ledger = UnregisteredScratchLedger.open(store.filename);
+  try { return await passOverScratch(store, ledger, ports); }
+  finally { ledger.close(); }
+}
+
+async function passOverScratch(store: AttemptTempStore, ledger: UnregisteredScratchLedger, ports: UnregisteredScratchPorts) {
   const now = ports.now ?? Date.now;
   const started = now(), startedMono = sweepMonotonicNow();
-  const ledger = store.unregistered;
   const scratch = statePath("scratch");
+  const protectedTrees = [statePath("evidence"), statePath("backups")].map(tree => path.resolve(tree));
+  const inProtected = (target: string) => protectedTrees.some(tree => target === tree || target.startsWith(tree + path.sep));
+  /** Canonical-path admission: a directory directly under the scratch root
+   * whose real path is its lexical path, so no link carried it here, and never
+   * inside backups or evidence. */
+  const admitted = (directory: string) => {
+    try { return path.dirname(directory) === scratch && fs.realpathSync(directory) === directory && !inProtected(directory); }
+    catch { return false; }
+  };
   const dry = ports.mode === "dry-run";
   const journal = ports.journal ?? ordinaryCleanerJournal("attempt-temp", now);
   const report = {
@@ -214,7 +230,7 @@ export async function sweepUnregisteredScratch(store: AttemptTempStore, ports: U
   if (!parent) { report.scratch = "absent"; return finish(); }
   try {
     if (!parent.isDirectory() || parent.isSymbolicLink() || fs.realpathSync(scratch) !== path.resolve(scratch)
-      || !attemptTempPathAdmitted(scratch) || process.getuid && parent.uid !== process.getuid()) throw new Error("scratch parent is redirected, protected or not ours");
+      || inProtected(scratch) || process.getuid && parent.uid !== process.getuid()) throw new Error("scratch parent is redirected, protected or not ours");
   } catch (error) {
     report.scratch = "refused"; report.refusal = attemptTempFailureDetail(error); report.errors++;
     return finish();
@@ -238,8 +254,11 @@ export async function sweepUnregisteredScratch(store: AttemptTempStore, ports: U
     // first, so the roots longest idle go before newer ones.
     type Entry = { name: string; directory: string; stat: fs.Stats };
     const roots: Entry[] = [], leftovers: Entry[] = [];
+    const begun = new Set(ledger.removals().map(row => row.identity));
     for (const name of fs.readdirSync(scratch)) {
-      const kind = ROOT_NAME.test(name) ? roots : TRASH_NAME.test(name) ? leftovers : null;
+      // A claim tombstone is this pass's only when it recorded that identity first.
+      const claim = TRASH_NAME.exec(name);
+      const kind = ROOT_NAME.test(name) ? roots : claim && begun.has(`${claim[1]}:${claim[2]}`) ? leftovers : null;
       if (!kind) continue;
       const directory = path.join(scratch, name);
       const stat = fs.lstatSync(directory, { throwIfNoEntry: false });
@@ -247,6 +266,11 @@ export async function sweepUnregisteredScratch(store: AttemptTempStore, ports: U
     }
     const byAge = (a: Entry, b: Entry) => a.stat.mtimeMs - b.stat.mtimeMs || (a.name < b.name ? -1 : 1);
     roots.sort(byAge); leftovers.sort(byAge);
+    // An intent whose tombstone is gone finished, or never began: nothing is left to finish.
+    if (!dry) {
+      const tombstones = new Set(leftovers.map(entry => TRASH_NAME.exec(entry.name)!).map(match => `${match[1]}:${match[2]}`));
+      for (const identity of begun) if (!tombstones.has(identity)) ledger.endRemoval(identity);
+    }
     if (!dry) ledger.retainSkips(new Set([...roots, ...leftovers].map(entry => entry.name)));
     const waiting = ledger.waiting(started);
     const inventory = new RepositoryLinkInventory({ now, budgetMs: Math.min(30_000, Math.max(1, remainingMs())), retained: ports.checkoutReads,
@@ -277,7 +301,7 @@ export async function sweepUnregisteredScratch(store: AttemptTempStore, ports: U
     const retire = async (entry: Entry, identity: string, bytes: number, why: string) => {
       const window = Math.min(attemptTempRootWindow(bytes), Math.max(1, remainingMs()));
       const attempt = (target: string) => withAttemptTempDeadline(sweepMonotonicNow() + window + ATTEMPT_TEMP_REPLY_MARGIN_MS,
-        () => remove(target, () => undefined, undefined, identity, ports.accountCpuSeconds, UNREGISTERED_TRASH_PREFIX));
+        () => remove(target, () => undefined, undefined, identity, ports.accountCpuSeconds));
       let current = entry.directory;
       try {
         try { await attempt(current); }
@@ -289,12 +313,15 @@ export async function sweepUnregisteredScratch(store: AttemptTempStore, ports: U
           await repairOwnerWriteAccess(claimed);
           await attempt(claimed);
         }
+        ledger.endRemoval(identity);
         return true;
       } catch (error) {
         const claimed = (error as { claimedDirectory?: unknown }).claimedDirectory;
         const tombstone = typeof claimed === "string" ? claimed : current !== entry.directory ? current : null;
         const found = tombstone ?? (fs.lstatSync(entry.directory, { throwIfNoEntry: false }) ? entry.directory
-          : fs.readdirSync(scratch).map(name => path.join(scratch, name)).find(name => path.basename(name).startsWith(`${UNREGISTERED_TRASH_PREFIX}-${identity.replace(":", "-")}-`)) ?? null);
+          : fs.readdirSync(scratch).map(name => path.join(scratch, name)).find(name => path.basename(name).startsWith(`${UNREGISTERED_CLAIM_PREFIX}-${identity.replace(":", "-")}-`)) ?? null);
+        // No tombstone means the removal never began, so there is nothing for a later pass to finish.
+        if (!found || found === entry.directory) ledger.endRemoval(identity);
         const deferred = error instanceof AttemptTempBudgetDeferred;
         const code = deferred ? "removal_interrupted" : ["EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "") ? "unremovable_permissions" : "failed";
         if (!deferred) report.errors++;
@@ -325,6 +352,7 @@ export async function sweepUnregisteredScratch(store: AttemptTempStore, ports: U
       let bytes = 0;
       try { bytes = (await measureAttemptAllocation(entry.directory, { budgetMs: Math.min(remainingMs(), limits.rootMs) })).bytes; } catch { bytes = 0; }
       const ageMs = Math.max(0, started - stat.ctimeMs);
+      ledger.beginRemoval(`${stat.dev}:${stat.ino}`, entry.name, started);
       try { journal("intent", entry.directory, bytes, "tombstone of an interrupted removal; identity matches its name", { reason: "interrupted-removal-finished", ageMs, kind: "scratch", scope: "unregistered", trigger: report.trigger, identity: `${stat.dev}:${stat.ino}` }); }
       catch (error) { report.errors++; keep(entry, "journal_unavailable", `${describeHold("journal_unavailable")}: ${attemptTempFailureDetail(error)}`, bytes); continue; }
       if (await retire(entry, `${stat.dev}:${stat.ino}`, bytes, "interrupted-removal-finished")) {
@@ -342,7 +370,7 @@ export async function sweepUnregisteredScratch(store: AttemptTempStore, ports: U
       if (!stat.isDirectory() || stat.isSymbolicLink()) return miss("not_directory");
       if (process.getuid && stat.uid !== process.getuid()) return miss("foreign_owner");
       if (stat.dev !== parent.dev) return miss("mount_boundary");
-      if (!attemptTempPathAdmitted(directory) || fs.realpathSync(directory) !== directory) return miss("path_not_admitted");
+      if (!admitted(directory)) return miss("path_not_admitted");
       if (fs.existsSync(path.join(directory, ".delegatus-keep"))) return miss("keep_marker");
       if (lanes(directory)) return miss("open_lane");
       const identity = `${stat.dev}:${stat.ino}`;
@@ -402,10 +430,11 @@ export async function sweepUnregisteredScratch(store: AttemptTempStore, ports: U
       // The last synchronous proofs before the first mutation: the same inode,
       // the same admission, and a fresh process scan.
       const recheck = fs.lstatSync(entry.directory, { throwIfNoEntry: false });
-      if (!recheck?.isDirectory() || recheck.isSymbolicLink() || `${recheck.dev}:${recheck.ino}` !== verdict.identity || !attemptTempPathAdmitted(entry.directory)
+      if (!recheck?.isDirectory() || recheck.isSymbolicLink() || `${recheck.dev}:${recheck.ino}` !== verdict.identity || !admitted(entry.directory)
         || fs.existsSync(path.join(entry.directory, ".delegatus-keep")) || !attemptProcessReferencesClear(entry.directory, entry.directory, ports.scan([entry.directory]))) {
         keep(entry, "changed_before_removal", describeHold("changed_before_removal"), verdict.bytes); continue;
       }
+      ledger.beginRemoval(verdict.identity, entry.name, started);
       const proof = `unregistered root: real path equals its path under the scratch root, no tree entry modified since ${new Date(verdict.newestMs).toISOString()} (24 h or more), no live process reference, no evidence, keep, Git or mount hold`;
       try { journal("intent", entry.directory, verdict.bytes, proof, { reason: "expired-24h-unreferenced", ageMs: verdict.ageMs, kind: "scratch", scope: "unregistered", trigger: report.trigger, identity: verdict.identity }); }
       catch (error) { report.errors++; keep(entry, "journal_unavailable", `${describeHold("journal_unavailable")}: ${attemptTempFailureDetail(error)}`.slice(0, 512), verdict.bytes); continue; }
@@ -436,7 +465,7 @@ export async function runUnregisteredScratchPass(store: AttemptTempStore, ports:
     return await withFileTransactionAsync(store.filename + ".sweep", "attempt-temp unregistered scratch", () => sweepUnregisteredScratch(store, ports),
       { waitMs: Math.min(2_000, attemptTempRemaining(2_000)) });
   } catch (error) {
-    if (error instanceof FileTransactionBusyError) return null;
+    if (error instanceof FileTransactionBusyError || stateDatabaseBusy(error)) return null;
     throw error;
   }
 }
