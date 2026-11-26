@@ -35,6 +35,27 @@ export function instrumentComposerIsolation(source: string, filename: string): s
   }
   if (components[filenameOnly]) {
     const [name, counter] = components[filenameOnly]!;
+    if (filenameOnly === "KanbanCard.tsx") {
+      // Sample committed props on eight cards to identify shared inputs which defeat memo.
+      insert("memo(function KanbanCard(props: KanbanCardProps) {", `
+        const previousCard = __isolationRef();
+        __isolationLayout(() => {
+          const previous = previousCard.current;
+          previousCard.current = props;
+          const counters = window.isolationCounters;
+          if (!counters || !previous) return;
+          const sample = counters.cardPropSample ??= { ids: [], comparisons: 0, equalProps: 0, changes: {} };
+          if (!sample.ids.includes(props.card.id)) {
+            if (sample.ids.length >= 8) return;
+            sample.ids.push(props.card.id);
+          }
+          sample.comparisons++;
+          const changed = Object.keys(props).filter(key => !Object.is(previous[key], props[key]));
+          if (!changed.length) sample.equalProps++;
+          for (const key of changed) sample.changes[key] = (sample.changes[key] ?? 0) + 1;
+        });`);
+      source = 'import {useRef as __isolationRef, useLayoutEffect as __isolationLayout} from "react";\n' + source;
+    }
     const ast = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     const edits: Array<[number, string]> = [];
     function wrapReturn(node: ts.Node) {
@@ -65,10 +86,18 @@ function __isolationProfile(children) {
   if (filenameOnly === "runtimeFilesStatus.ts") {
     insert("let revision = 0;", "let __isolationLastFiles;");
     const visit = 'if (file.project === "atlas") { ' + count("projectRowVisits") + ' }';
-    insert("for (const file of data.files) {", visit);
-    insert("data.files.map((file) => {", visit);
-    insert("let changed = false;\n    const priorArray = arrays.get(data.files);",
-      'if (priorArray?.revision !== revision) { '+count("mappedArrays")+' }');
+    if (source.includes("for (const position of indices())")) {
+      const marker = "const file = data.files[position]!;";
+      if (source.split(marker).length !== 3) throw Error("the indexed row probes are out of date");
+      source = source.replaceAll(marker, marker + "\n" + visit);
+      source = source.replace("if (files === previous) files = previous.slice();",
+        "if (files === previous) { files = previous.slice(); " + count("mappedArrays") + " }");
+    } else {
+      insert("for (const file of data.files) {", visit);
+      insert("data.files.map((file) => {", visit);
+      insert("let changed = false;\n    const priorArray = arrays.get(data.files);",
+        'if (priorArray?.revision !== revision) { '+count("mappedArrays")+' }');
+    }
     insert("projected.set(data, { revision, value: result });", `
       const previous = __isolationLastFiles;
       __isolationLastFiles = result.files;

@@ -1,5 +1,6 @@
 "use client";
 
+import { GLOBAL_RUNTIME_GATES } from "@/hooks/runtimeSubscriptions";
 import { memo, useEffect, useRef, useState } from "react";
 
 import type { ConnectionState } from "@/components/runtime/runtimeModel";
@@ -107,8 +108,8 @@ export function ConnectionPillBody({ connection, resynced, compact, announce, t 
 export const ConnectionPill = memo(function ConnectionPill({ compact }: ConnectionPillProps) {
   const { t } = useLocale();
   const enabled = useRuntimeEnabled();
-  const connection = useRuntimeSelector(state => state.connection, "offline");
-  const resynced = useRuntimeSelector(state => state.resyncedAt !== null, false);
+  const connection = useRuntimeSelector(state => state.connection, "offline", Object.is, true, GLOBAL_RUNTIME_GATES);
+  const resynced = useRuntimeSelector(state => state.resyncedAt !== null, false, Object.is, true, GLOBAL_RUNTIME_GATES);
   const announce = useThrottledAnnounce(resynced ? t("runtime.announce.resynced") : t(ANNOUNCE_KEY[connection]));
   if (!enabled) return null;
   return <ConnectionPillBody connection={connection} resynced={resynced} compact={compact} announce={announce} t={t} />;

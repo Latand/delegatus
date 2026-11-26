@@ -3,7 +3,7 @@
 import { ChevronRight, Crown, Folders, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 
-import { formatConversationHash, isArchivedPredecessor, parseConversationHash, resolveConversationTarget, withoutArchivedPredecessors, type ConversationHash } from "@/lib/accounts/identity";
+import { catalogPositions, firstFileAtPath, formatConversationHash, isArchivedPredecessor, parseConversationHash, resolveConversationTarget, withoutArchivedPredecessors, type ConversationHash } from "@/lib/accounts/identity";
 import { navigateToFragment, NOTIFICATION_OPEN_MESSAGE, setFragmentNavigator } from "@/lib/navigation/fragmentNavigation";
 import { createTraversalFence, FOCUS_HISTORY_STATE_KEY, focusEntryFor, parseFocusHistoryState, recordFocusNavigation, recordProjectNavigation, releaseFocusNavigation, retargetRecordedProject, setFocusHistoryOwner } from "@/lib/navigation/focusHistory";
 import { onAccountPanelRequest } from "@/lib/accounts/openPanel";
@@ -338,14 +338,14 @@ function ViewerApp() {
      plain catalog held can age out of a later payload; this keeps its row on
      the board for the one fetch that asks for it by name, instead of closing
      the pane under the reader and reopening it. */
-  const openedRow = catalogPin ? allFiles.find((file) => file.path === catalogPin.path) : undefined;
+  const openedRow = catalogPin ? firstFileAtPath(allFiles, catalogPin.path) : undefined;
   const [lastOpenedRow, setLastOpenedRow] = useState<FileEntry | null>(null);
   if (openedRow && openedRow !== lastOpenedRow) setLastOpenedRow(openedRow);
   const files = useMemo(() => {
     const folded = withoutArchivedPredecessors(allFiles);
     const pinnedPath = catalogPin?.path;
     if (!pinnedPath || folded.some((file) => file.path === pinnedPath)) return folded;
-    const pinned = allFiles.find((file) => file.path === pinnedPath);
+    const pinned = firstFileAtPath(allFiles, pinnedPath);
     if (!pinned) {
       return catalogPin?.hydrated && lastOpenedRow?.path === pinnedPath ? [...folded, lastOpenedRow] : folded;
     }
@@ -1477,7 +1477,7 @@ function ViewerApp() {
     const target = notice.target;
     const firstLine = (text: string | undefined) => cleanTitle((text ?? "").split(/\r?\n/, 1)[0] ?? "", 90);
     const title = target.kind === "conversation"
-      ? cleanTitle(allFiles.find((file) => file.path === target.path)?.title ?? "", 90) || t("notices.target.conversation")
+      ? cleanTitle(firstFileAtPath(allFiles, target.path)?.title ?? "", 90) || t("notices.target.conversation")
       : target.kind === "pipeline" || target.kind === "stage"
         ? firstLine(pipelines.find((pipeline) => pipeline.id === target.pipelineId)?.task) || t("notices.target.pipeline")
         : target.kind === "task"
@@ -1646,7 +1646,8 @@ function ViewerApp() {
   /* A caption that names only a conversation takes that conversation's title. */
   const captionConversationTitle = useCallback(
     (conversationId: string): string | null => {
-      const file = allFiles.find((candidate) => candidate.conversationId === conversationId);
+      const first = catalogPositions(allFiles).byConversation.get(conversationId)?.[0];
+      const file = first === undefined ? undefined : allFiles[first];
       return file ? cleanTitle(file.title, 90) || null : null;
     },
     [allFiles],
@@ -1748,7 +1749,7 @@ function ViewerApp() {
       close();
       const target = notice.target;
       if (target.kind === "conversation") {
-        const file = allFiles.find((entry) => entry.path === target.path);
+        const file = firstFileAtPath(allFiles, target.path);
         if (file) {
           if (project === OVERVIEW) openOverOverview(file);
           else openFile(file);

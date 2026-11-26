@@ -1,5 +1,6 @@
 "use client";
 
+import { GLOBAL_RUNTIME_GATES, RUNTIME_DEPLOYMENTS } from "@/hooks/runtimeSubscriptions";
 import { memo, useEffect, useState } from "react";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
@@ -18,8 +19,8 @@ function deployPillEnabled(): boolean {
 export const DeploymentStatusPill = memo(function DeploymentStatusPill() {
   const isMobile = useIsMobile();
   const show = !isMobile && deployPillEnabled();
-  const enabled = useRuntimeSelector(state => state.enabled, false, Object.is, show);
-  const liveDeployments = useRuntimeSelector(state => state.store.deployments, null, Object.is, show && enabled);
+  const enabled = useRuntimeSelector(state => state.enabled, false, Object.is, show, GLOBAL_RUNTIME_GATES);
+  const liveDeployments = useRuntimeSelector(state => state.store.deployments, null, Object.is, show && enabled, RUNTIME_DEPLOYMENTS);
   const [snapshotDeployments, setSnapshotDeployments] = useState<ViewerDeploymentStatus[]>([]);
   useEffect(() => {
     if (enabled || !show) return;

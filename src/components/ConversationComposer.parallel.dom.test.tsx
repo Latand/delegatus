@@ -7,7 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { FileEntry } from "@/lib/types";
 import { setLocale } from "@/lib/i18n";
-import { setRuntimeBusForTests, setRuntimeUiEnabledForTests, type RuntimeBus, type RuntimeBusState } from "@/hooks/runtimeBus";
+import { setRuntimeBusForTests, setRuntimeUiEnabledForTests, type RuntimeBus, type RuntimeBusState, type RuntimeSubscription } from "@/hooks/runtimeBus";
 import { applyEvent, installSnapshot } from "./runtime/runtimeModel";
 
 import { appendComposerDraft, ConversationComposer } from "./ConversationComposer";
@@ -117,7 +117,7 @@ const file = {
 
 
 test("the focused composer keeps its draft without a commit on twelve foreign turn events", async () => {
-  const listeners = new Set<() => void>();
+  const listeners = new Map<() => void, RuntimeSubscription | undefined>();
   const store = installSnapshot({ schemaVersion: 1, snapshotSeq: 0, retentionFloorSeq: 0, filesRevision: 1,
     structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, attentions: [], recentOperations: [],
     flows: [], workflows: [], tasks: [], edges: [],
@@ -131,7 +131,7 @@ test("the focused composer keeps its draft without a commit on twelve foreign tu
   let state: RuntimeBusState = { store, connection: "live", resyncedAt: null, lastEventAt: null, enabled: true, structuredHostsEnabled: true };
   const bus: RuntimeBus = {
     getState: () => state, start() {}, stop() {}, refresh: async () => true,
-    subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    subscribe(listener, interest) { listeners.set(listener,interest); return () => { listeners.delete(listener); }; },
     subscribeFilesRevision: () => () => {},
   };
   setRuntimeUiEnabledForTests(true);
@@ -144,6 +144,13 @@ test("the focused composer keeps its draft without a commit on twelve foreign tu
   try {
     const field = host.querySelector("textarea")!;
     field.focus();
+    expect(listeners.size).toBeGreaterThan(0);
+    for (const interest of listeners.values()) {
+      expect(interest?.activity).not.toBe(true);
+      expect(interest?.keys).toBeDefined();
+      expect([undefined, null, file.conversationId]).toContain(interest?.keys?.conversation);
+      expect([undefined, null, file.path]).toContain(interest?.keys?.artifact);
+    }
     const props = Object.keys(field).find(key => key.startsWith("__reactProps$"))!;
     const text = "type ".repeat(8).slice(0, 37);
     let events = 0;
@@ -161,7 +168,7 @@ test("the focused composer keeps its draft without a commit on twelve foreign tu
           payload: { conversationId: "foreign", turnId: "turn-" + Math.ceil(seq / 2) } });
         if (next.outcome !== "applied") throw Error("foreign event did not apply");
         state = { ...state, store: next.store };
-        for (const notify of listeners) notify();
+        for (const notify of listeners.keys()) notify();
       });
       expect(state.store.sessions.foreign!.turn).toBe(events % 2 ? "running" : "idle");
       expect(commits).toBe(count);
@@ -172,7 +179,7 @@ test("the focused composer keeps its draft without a commit on twelve foreign tu
     const settledCommits = commits;
     await settle(() => {
       state = { ...state, connection: "offline" };
-      for (const notify of listeners) notify();
+      for (const notify of listeners.keys()) notify();
     });
     expect(commits).toBeGreaterThan(settledCommits);
   } finally {

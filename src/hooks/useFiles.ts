@@ -27,7 +27,7 @@ import type { FileEntry, FilesResponse, ProjectCatalogEntry } from "@/lib/types"
 import type { Workflow } from "@/lib/workflows/types";
 
 import { createBoundedPublisher, type BoundedPublisher } from "./boundedTransition";
-import { getRuntimeBus, isRuntimeUiEnabled } from "./runtimeBus";
+import { getRuntimeBus, isRuntimeUiEnabled, type RuntimeFrame } from "./runtimeBus";
 
 /** The universal fallback cadence — also the only source for legacy sessions. */
 const POLL_MS = 10_000;
@@ -1776,7 +1776,29 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
     let alive = true;
     const cache = filesClientCache;
     const bus = isRuntimeUiEnabled() && typeof window !== "undefined" ? getRuntimeBus() : null;
-    const currentStatus = (next: FilesData) => bus ? projectStatus(next, bus.getState()) : next;
+    let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+    let scheduledExpiry = Infinity;
+    function scheduleExpiry() {
+      const due = projectStatus.nextExpiry();
+      if (scheduledExpiry === due) return;
+      if (expiryTimer !== undefined) clearTimeout(expiryTimer);
+      scheduledExpiry = due;
+      if (Number.isFinite(due)) {
+        expiryTimer = setTimeout(() => {
+          scheduledExpiry = Infinity;
+          expiryTimer = undefined;
+          if (!alive) return;
+          if (projectStatus.expire()) publishBackgroundData(cache.readScope(pinnedPath));
+          scheduleExpiry();
+        }, Math.min(2_147_483_647, Math.max(0, due - Date.now())));
+      }
+    }
+    function currentStatus(next: FilesData) {
+      if (!bus) return next;
+      const value = projectStatus(next, bus.getState());
+      scheduleExpiry();
+      return value;
+    }
     /* Scanner generations can change one live row inside a large catalog.
        Keep that reconciliation interruptible so reload, typing and board
        gestures do not wait behind a synchronous whole-Viewer render. A stream
@@ -1956,15 +1978,16 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
       }
     };
     if (bus) {
-      const applyConnection = () => {
+      const applyConnection = (frame?: RuntimeFrame) => {
         const runtime = bus.getState();
         setCadence(filesPollCadence(runtime.connection));
         // Session turn events carry status independently of files.revision and
         // its coalesced inventory scan. Every useFiles surface sees this frame.
-        if (projectStatus.updateRuntime(runtime)) publishBackgroundData(cache.readScope(pinnedPath));
+        if (projectStatus.updateRuntime(runtime, frame)) publishBackgroundData(cache.readScope(pinnedPath));
       };
       applyConnection();
       unsubBus = bus.subscribe(applyConnection);
+      scheduleExpiry();
       unsubFiles = bus.subscribeFilesRevision((revision) => {
         pendingRevision = pendingRevision === null ? revision : Math.max(pendingRevision, revision);
         /* Hidden desktop: a throttle, not a debounce — a busy board must not
@@ -2010,6 +2033,7 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
 
     return () => {
       alive = false;
+      if (expiryTimer !== undefined) clearTimeout(expiryTimer);
       publisher.dispose();
       if (publisherRef.current === publisher) publisherRef.current = null;
       document.removeEventListener("visibilitychange", onVisibility);

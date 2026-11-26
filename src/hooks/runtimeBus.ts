@@ -25,10 +25,15 @@ import {
   type RuntimeEnvelope,
   type RuntimeSnapshot,
   type RuntimeStore,
+  type RuntimeWrites,
 } from "@/components/runtime/runtimeModel";
+import { activeDeliveryConversations, carryActiveDeliveries } from "@/components/runtime/activeDeliveries";
+import type { RuntimeSubscription } from "./runtimeSubscriptions";
 import { hiddenTrafficSuspended } from "@/lib/client/hiddenTraffic";
 import { rolledBack, RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
 import { openEventStream } from "@/lib/streamMux/client";
+
+export type { RuntimeSubscription } from "./runtimeSubscriptions";
 
 export const SNAPSHOT_URL = "/api/runtime/snapshot?view=summary";
 export const STREAM_URL = "/api/runtime/stream";
@@ -110,16 +115,23 @@ export interface RuntimeBusDeps {
   clearInterval: (handle: ReturnType<typeof setInterval>) => void;
 }
 
-export interface RuntimeSubscription {
-  /** Include health observations that only advance the last-event clock. */
-  activity?: boolean;
+interface BufferedFrame {
+  before: RuntimeStore;
+  after: RuntimeStore;
+  conversations: Set<string>;
+  paths: Set<string>;
+  operations: Set<string>;
+  deliveries: Set<string>;
+  flows: Set<string>;
+  deployments: boolean;
 }
-
-export const WITH_RUNTIME_ACTIVITY: RuntimeSubscription = { activity: true };
+export type RuntimeFrame = { readonly [K in keyof BufferedFrame]: BufferedFrame[K] extends Set<string> ? ReadonlySet<string> : BufferedFrame[K] };
+type Listener = (frame?: RuntimeFrame) => void;
+type Subscription = { listener: Listener };
 
 export interface RuntimeBus {
   getState(): RuntimeBusState;
-  subscribe(listener: () => void, interest?: RuntimeSubscription): () => void;
+  subscribe(listener: Listener, interest?: RuntimeSubscription): () => void;
   /** Notified with the new files revision every time a `files.revision` event
    *  is applied — useFiles debounces a pure GET off this. */
   subscribeFilesRevision(listener: (revision: number) => void): () => void;
@@ -142,8 +154,13 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
     structuredHostsEnabled: false,
   };
 
-  const listeners = new Set<() => void>();
-  const activityListeners = new Set<() => void>();
+  const listeners = new Set<Subscription>();
+  const activityListeners = new Set<Subscription>();
+  const keyed = new Set<Subscription>();
+  const byKey = new Map<string, Set<Subscription>>();
+  let deliverySubscribers = 0;
+  let pending: BufferedFrame | undefined;
+  let invalidateAll = false;
   let generalQueued = false;
   const filesListeners = new Set<(revision: number) => void>();
   let emitQueued = false;
@@ -173,18 +190,36 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
   const snapshotReads = new Set<AbortController>();
 
   function emit(general = true): void {
-    if (!activityListeners.size && (!general || !listeners.size)) return;
+    if (!activityListeners.size && (!general || (!listeners.size && !keyed.size))) return;
     generalQueued ||= general;
     if (emitQueued) return;
     emitQueued = true;
     deps.setTimeout(() => {
-      const publishGeneral = generalQueued;
-      generalQueued = false;
-      emitQueued = false;
-      if (publishGeneral) for (const listener of listeners) listener();
-      for (const listener of activityListeners) {
-        if (!publishGeneral || !listeners.has(listener)) listener();
+      const frame = invalidateAll ? undefined : pending;
+      const notify = new Set<Listener>();
+      const collect = (group?: Set<Subscription>) => {
+        if (group) for (const entry of group) notify.add(entry.listener);
+      };
+      collect(activityListeners);
+      if (generalQueued) {
+        collect(listeners);
+        if (!frame) {
+          collect(keyed);
+        } else {
+          const match = (prefix: string, ids: ReadonlySet<string>) => {
+            for (const id of ids) collect(byKey.get(prefix + id));
+          };
+          match("conversation:", frame.conversations);
+          match("artifact:", frame.paths);
+          match("operation:", frame.operations);
+          match("delivery:", frame.deliveries);
+          match("flow:", frame.flows);
+          if (frame.deployments) collect(byKey.get("deployments"));
+        }
       }
+      pending = undefined;
+      generalQueued = invalidateAll = emitQueued = false;
+      for (const listener of notify) listener(frame);
     }, SUBSCRIBER_NOTIFY_MS);
   }
 
@@ -194,7 +229,32 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
     emit(false);
   }
 
-  function setState(patch: Partial<RuntimeBusState>): void {
+  function setState(patch: Partial<RuntimeBusState>, writes?: RuntimeWrites): void {
+    if (writes && patch.store) {
+      const deliveries = carryActiveDeliveries(state.store, patch.store, writes);
+      if (!invalidateAll && (listeners.size || activityListeners.size || keyed.size)) {
+        pending ??= { before: state.store, after: patch.store, conversations: new Set(), paths: new Set(), operations: new Set(), deliveries: new Set(), flows: new Set(), deployments: false };
+        pending.after = patch.store;
+        if (writes.conversationId !== undefined) pending.conversations.add(writes.conversationId);
+        if (writes.previousOwner !== undefined) {
+          pending.conversations.add(writes.previousOwner);
+          const path = state.store.sessions[writes.previousOwner]?.artifactPath;
+          if (path) pending.paths.add(path);
+        }
+        if (writes.artifactPath) pending.paths.add(writes.artifactPath);
+        if (writes.previousPath) pending.paths.add(writes.previousPath);
+        if (writes.operationId !== undefined) pending.operations.add(writes.operationId);
+        if (writes.flowId) pending.flows.add(writes.flowId);
+        if (writes.deployments) pending.deployments = true;
+        for (const id of deliveries) {
+          // Two membership flips in this frame leave the dashboard reading unchanged.
+          if (!pending.deliveries.delete(id)) pending.deliveries.add(id);
+        }
+      }
+    } else if (listeners.size || keyed.size || activityListeners.size) {
+      if (patch.store && deliverySubscribers) activeDeliveryConversations(patch.store);
+      invalidateAll = true;
+    }
     const previousConnection = state.connection;
     state = { ...state, ...patch };
     if (state.connection === "live" && previousConnection !== "live" && typeof window !== "undefined") {
@@ -296,6 +356,8 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
       enabled: false,
       structuredHostsEnabled: false,
     };
+    if (deliverySubscribers) activeDeliveryConversations(state.store);
+    invalidateAll = true;
     emit();
   }
 
@@ -414,7 +476,7 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
     const at = deps.now();
     const result = applyEvent(state.store, env);
     if (result.outcome === "applied") {
-      setState({ store: result.store, lastEventAt: at });
+      setState({ store: result.store, lastEventAt: at }, result.writes);
       confirmHealthy();
       if (result.filesBumped) {
         for (const listener of filesListeners) listener(result.store.filesRevision);
@@ -586,9 +648,41 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
   return {
     getState: () => state,
     subscribe(listener, interest) {
-      const target = interest?.activity ? activityListeners : listeners;
-      target.add(listener);
-      return () => { target.delete(listener); };
+      const registered = { listener };
+      const keys = interest?.keys;
+      if (!keys) {
+        const target = interest?.activity ? activityListeners : listeners;
+        target.add(registered);
+        return () => { target.delete(registered); };
+      }
+      const names: string[] = [];
+      if (keys.conversation) names.push("conversation:" + keys.conversation);
+      if (keys.artifact) names.push("artifact:" + keys.artifact);
+      if (keys.operation) names.push("operation:" + keys.operation);
+      if (keys.flow) names.push("flow:" + keys.flow);
+      if (keys.deployments) names.push("deployments");
+      if (keys.deliveries) {
+        deliverySubscribers++;
+        activeDeliveryConversations(state.store);
+        for (const id of keys.deliveries) names.push("delivery:" + id);
+      }
+      keyed.add(registered);
+      if (interest?.activity) activityListeners.add(registered);
+      for (const name of names) {
+        const bucket = byKey.get(name) ?? new Set<Subscription>();
+        bucket.add(registered);
+        byKey.set(name, bucket);
+      }
+      return () => {
+        if (!keyed.delete(registered)) return;
+        if (keys.deliveries) deliverySubscribers--;
+        activityListeners.delete(registered);
+        for (const name of names) {
+          const bucket = byKey.get(name);
+          bucket?.delete(registered);
+          if (!bucket?.size) byKey.delete(name);
+        }
+      };
     },
     subscribeFilesRevision(listener) {
       filesListeners.add(listener);

@@ -19,6 +19,7 @@ export type IsolationCounters = {
   mobileFocusCommits: number;
   mobileBannerCommits: number;
   cardCommits: number;
+  cardPropSample?: { ids: string[]; comparisons: number; equalProps: number; changes: Record<string, number> };
   editorCommits: number;
   seatMeasures: number;
   fieldGeometry: number;
@@ -151,14 +152,24 @@ export function installIsolationStream(corpus: ReturnType<typeof isolationCorpus
       connection: bus.getState().connection, openId: corpus.openId, projectSessions: corpus.projectSessions, otherSessions: corpus.otherSessions,
       files: files.length, admittedRows, reads: { ...reads }, emitted }),
     counters: emptyIsolationCounters,
+    subagentPath: corpus.subagentPath,
+    rootStatus(host: "dead" | "hosted") {
+      const store = bus.getState().store;
+      const id = corpus.missingId;
+      const seq = store.cursor + 1;
+      emit({ schemaVersion: 1, seq, eventId: "root-"+seq, scope: { type:"session", id },
+        revision:(store.scopeHeads["session:"+id] ?? 0)+1, kind:"session-status", payload:{conversationId:id,host} });
+    },
     ownReceipt() {
       const store = bus.getState().store;
       const seq = store.cursor + 1;
       const operationId = "isolation-receipt-" + seq;
-      emit({ schemaVersion: 1, seq, eventId: operationId, scope: { type: "operation", id: operationId }, revision: 1,
+      const envelope: RuntimeEnvelope = { schemaVersion: 1, seq, eventId: operationId, scope: { type: "operation", id: operationId }, revision: 1,
         kind: "receipt", payload: { conversationId: corpus.openId, operationId, idempotencyKey: operationId,
-          kind: "send", status: "rejected", text: "Isolation receipt", reason: "Fixture refusal", revision: 1, at: new Date().toISOString() } });
+          kind: "send", status: "rejected", text: "Isolation receipt", reason: "Fixture refusal", revision: 1, at: new Date().toISOString() } };
+      emit(envelope);
       if (!bus.getState().store.operations[operationId]) throw Error("own receipt was not applied");
+      return envelope;
     },
     event(mix: Exclude<IsolationMix, "quiet">, index: number, lifecycleOnly = false) {
       const store = bus.getState().store;

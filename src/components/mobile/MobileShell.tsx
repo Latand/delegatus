@@ -1,12 +1,12 @@
 "use client";
 
+import { GLOBAL_RUNTIME_GATES, WITH_RUNTIME_ACTIVITY } from "@/hooks/runtimeSubscriptions";
 import { ChevronDown, ChevronLeft, Ellipsis, Filter, Search, TriangleAlert } from "lucide-react";
 import { memo, createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import type { ConnectionState } from "@/components/runtime/runtimeModel";
 import { reachLineText, useServerReach, type ServerReach } from "@/hooks/serverReach";
 import { useRuntimeSelector } from "@/hooks/useRuntime";
-import { WITH_RUNTIME_ACTIVITY } from "@/hooks/runtimeBus";
 import { useLocale } from "@/lib/i18n";
 
 import { BAR_PRESSED } from "@/components/ProjectBar";
@@ -159,8 +159,8 @@ function formatClock(at: number, locale: string): string {
     the board drops the arrival kind (`bannerKind`). */
 export const MobileBannerSlot = memo(function MobileBannerSlot({ screen, arrival }: { screen: MobileScreenKind; arrival: ReactNode }) {
   const { t, locale } = useLocale();
-  const enabled = useRuntimeSelector(state => state.enabled, false);
-  const connection = useRuntimeSelector(state => state.connection, "offline");
+  const enabled = useRuntimeSelector(state => state.enabled, false, Object.is, true, GLOBAL_RUNTIME_GATES);
+  const connection = useRuntimeSelector(state => state.connection, "offline", Object.is, true, GLOBAL_RUNTIME_GATES);
   const reach = useServerReach();
   const kind = bannerKind(enabled, connection, arrival !== null && arrival !== undefined, screen, reach.kind === "offline");
   const lastEventAt = useRuntimeSelector(state => kind === "offline" ? state.lastEventAt : null,

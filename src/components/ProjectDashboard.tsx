@@ -11,6 +11,8 @@ import { resolveFavoriteRows } from "./favorites/favoriteRows";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { BOARD_CLOCK_MS, useNowSeconds } from "@/hooks/useNowSeconds";
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
+import { GLOBAL_RUNTIME_GATES } from "@/hooks/runtimeSubscriptions";
+import { activeDeliveryConversations } from "./runtime/activeDeliveries";
 import { useRuntimeSelector } from "@/hooks/useRuntime";
 import { DelegatusBadge } from "@/components/brand/BrandMark";
 import { ProjectAccounts } from "@/components/ProjectAccounts";
@@ -116,12 +118,12 @@ import { BAR_MENU_ROW, BarMenuGroup, BarMenuSection, BarMoreMenu, BarPanelToggle
 /** How long an opened node keeps its highlight ring on the scheme. */
 const HIGHLIGHT_MS = 1800;
 
-const ACTIVE_DELIVERY_RECEIPTS = new Set(["pending", "delivering", "applying", "queued", "uncertain"]);
 /* Stable empties for the layout inputs: a fresh `[]` per render re-lays-out
    the board (#1432). */
 const EMPTY_MANUAL: FileEntry[] = [];
 const EMPTY_DRAFTS: string[] = [];
 const EMPTY_TASKS: BoardTask[] = [];
+const EMPTY_ACTIVE_DELIVERIES = new Set<string>();
 const NO_READING_PATHS: readonly string[] = [];
 const EMPTY_LAUNCHED: ReadonlyMap<string, FileEntry> = new Map();
 
@@ -379,7 +381,7 @@ function ProjectDashboardView({
   /* The runtime word for the menu's «Host details» row (README §4.1): a badge
      only while the plane is not connected. One projection, so a bus frame
      never re-renders the board. */
-  const mobileRuntime = useRuntimeSelector((state) => (state.enabled ? state.connection : "live"), "live");
+  const mobileRuntime = useRuntimeSelector((state) => (state.enabled ? state.connection : "live"), "live", Object.is, true, GLOBAL_RUNTIME_GATES);
   /* The phone board's seat (mobile v2 lane 2): the seat conversation is the
      card above the sections, never a row inside them, so the list has to know
      which transcript holds it.
@@ -589,25 +591,19 @@ function ProjectDashboardView({
      its target on the board, then the next files poll carries the new turn. */
   // Collapse protection is queried only for files on this project's board.
   const projectConversationIds = useMemo(() => new Set(files.flatMap(file => file.conversationId ? [file.conversationId] : [])), [files]);
-  const activeDeliverySignature = useRuntimeSelector(
-    (state) => {
-      const active = new Set(Object.values(state.store.operations)
-        /* #1560: an injection being admitted keeps its card marked active
-           between board polls, exactly as a send does. */
-        .filter((receipt) => (receipt.kind === "send" || receipt.kind === "steer" || receipt.kind === "inject")
-          && ACTIVE_DELIVERY_RECEIPTS.has(receipt.status) && projectConversationIds.has(receipt.conversationId))
-        .map((receipt) => receipt.conversationId));
-      for (const id of projectConversationIds) {
-        const turn = state.store.sessions[id]?.turn;
-        if (turn === "running" || turn === "interrupt_requested") active.add(id);
+  const deliveryInterest = useMemo(() => ({ keys: { deliveries: projectConversationIds } }), [projectConversationIds]);
+  const activeDeliveryConversationIds = useRuntimeSelector(
+    state => {
+      const active = new Set<string>();
+      for (const id of activeDeliveryConversations(state.store)) {
+        if (projectConversationIds.has(id)) active.add(id);
       }
-      return [...active].sort().join("\n");
+      return active;
     },
-    "",
-  );
-  const activeDeliveryConversationIds = useMemo(
-    () => new Set(activeDeliverySignature ? activeDeliverySignature.split("\n") : []),
-    [activeDeliverySignature],
+    EMPTY_ACTIVE_DELIVERIES,
+    (a, b) => a.size === b.size && [...a].every(id => b.has(id)),
+    true,
+    deliveryInterest,
   );
   /* Only active execution cursors receive pipeline expansion protection.
      Completed prior stages remain reachable through compact history. */

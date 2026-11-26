@@ -131,11 +131,16 @@ async function ownReceiptDuringForeignTraffic(page: Page, instrumented: boolean)
 
 export async function measureComposerIsolation(browser: Browser, hostSample: () => { load: number[]; groups: Array<{quota:string; memory:string; throttledUsec:number}> }) {
   const mode = process.env.ISOLATION_MODE ?? "timing";
-  if (!["smoke", "structure", "timing"].includes(mode)) throw Error("unknown isolation mode");
+  if (!["smoke", "structure", "timing", "authority"].includes(mode)) throw Error("unknown isolation mode");
   const structure = mode === "structure";
   const out = path.resolve(process.env.ISOLATION_OUT ?? ".artifacts/composer-isolation");
   fs.mkdirSync(out, { recursive: true });
   const assets = await buildEvidenceAssets(out, undefined, { isolationCounters: structure, derivationTiming: structure });
+  if (mode === "authority") {
+    const { verifyIsolationContexts } = await import("./composerIsolation.authority.fixture");
+    await verifyIsolationContexts(browser, assets, ORIGIN, routeAssets);
+    return;
+  }
   const base = process.env.ISOLATION_BASE_BUNDLE;
   if (mode === "timing" && !base) throw Error("paired timings require ISOLATION_BASE_BUNDLE");
   const widths = process.env.ISOLATION_WIDTH ? [Number(process.env.ISOLATION_WIDTH)] : [1440, 915, 390];
@@ -274,6 +279,10 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
           if (seatMutation && (!seatMutation.sameSize || !seatMutation.explicitResize || (side === "after" && seatMutation.decoration))) {
             throw Error("seat layout observation: " + JSON.stringify(seatMutation));
           }
+        }
+        if (structure && side === "after" && (cell.mix === "foreign" || cell.mix === "miss")) {
+          const c = reading.counters!;
+          if (c.projectRowVisits || (cell.mix === "miss" && c.mappedArrays)) throw Error("an unrelated conversation visited project rows: " + JSON.stringify(c));
         }
         if (structure && cell.mix === "foreign") await page.screenshot({ path:path.join(out, name+".png") });
         console.log(name, "p95", p95.toFixed(2), "events", reading.events, "nodes", corpus.nodes);
