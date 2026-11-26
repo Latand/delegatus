@@ -810,8 +810,7 @@ async function failStructuredLaunchAndReap(
         }
       }
     }
-    if (cleanup.releaseRegisteredHost && failure.receipt?.state === "failed"
-      && failure.receipt.error?.startsWith("staged launch publication deadline expired")) {
+    if (cleanup.releaseRegisteredHost && failure.receipt?.state === "failed") {
       const latest = registry.spawnReceipt(launchId);
       if (latest?.state === "failed" && latest.conversationId === failure.receipt.conversationId) {
         await settleHostlessSessionProjections(latest.conversationId, launchId);
@@ -1873,6 +1872,8 @@ export interface StructuredSpawnInput {
   /** Guard durable first-message admission during staged recovery. */
   firstMessageAdmissionGuard?: () => void | Promise<void>;
   firstMessageAdmissionGuardAsync?: () => Promise<void>;
+  /** Synchronous launch fence repeated by the runtime client at socket write. */
+  firstMessageBeforeWrite?: () => void;
   /** Recovery must leave unbound durable work to the next serving owner. */
   admissionActive?: () => void;
   /** Bounded no-write retry budget for setup custody, independent of the
@@ -2884,6 +2885,7 @@ async function defaultDeliverFirst(input: StructuredSpawnInput, artifactPath: st
     ...(input.firstMessageAdmissionGuard ? { admissionGuard: input.firstMessageAdmissionGuard } : {}),
     ...(input.firstMessageAdmissionGuardAsync ? { admissionGuardAsync: input.firstMessageAdmissionGuardAsync } : {}),
     authorizeDispatch: input.authorize,
+    authorizeBeforeWrite: input.firstMessageBeforeWrite,
   });
   if (!delivered?.ok) {
     const message = delivered?.error ?? "structured spawn first-message delivery was unavailable";
@@ -3336,10 +3338,16 @@ export async function recoverStagedStructuredLaunch(
             curatorAuthorize();
             if (!canPublishOrDispatch()) throw stagedLaunchDeadlineError();
           },
+          authorizeBeforeWrite: () => {
+            options.assertActive?.();
+            curatorAuthorize();
+            if (!canPublishOrDispatch()) throw stagedLaunchDeadlineError();
+          },
         });
         if (!result?.ok) {
           const reason = result?.error ?? "original first-message admission failed";
           if (reason === "Role-memory privacy changed; retrying before dispatch") throw new RoleMemoryChanged();
+          if (result?.status === 408) throw stagedLaunchDeadlineError();
           if (result?.transportUncertain) throw new StructuredInitialMessageTimeoutError(reason);
           if (result?.status === 503) throw Object.assign(new Error(reason), { status: 503 });
           throw new Error(reason);
@@ -3842,7 +3850,8 @@ export async function spawnStructuredConversation(
       const authorizeDispatch = authorizeAdmissionAsync;
       return await deliver({ ...deliveryInput, authorize: authorizeDispatch,
         firstMessageAdmissionGuard: authorizeAdmission,
-        firstMessageAdmissionGuardAsync: authorizeAdmissionAsync }, identity.path);
+        firstMessageAdmissionGuardAsync: authorizeAdmissionAsync,
+        firstMessageBeforeWrite: authorizeAdmission }, identity.path);
     };
     const continuation: StagedContinuation = {
       host,

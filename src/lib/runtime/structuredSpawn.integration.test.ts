@@ -28,7 +28,7 @@ import { RuntimeHostUnavailableError, UnixRuntimeHostClient, type RuntimeHostCli
 import { terminalClaudeExitReason } from "./claudeStreamBrokerHost";
 import { CodexAppServerHost, type CodexAppServerHostOptions } from "./codexAppServerHost";
 import { StructuredHostAdoptionCleanupError, type DeliveryReceipt, type HostState, type QueueEntry, type RuntimeEvent } from "./engineHost";
-import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost, settleHostlessSessionProjections } from "./structuredDeliveryController";
+import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost, publishStructuredDeliveryHost, releaseStructuredDeliveryHost } from "./structuredDeliveryController";
 import { recoverStagedStructuredLaunch } from "./structuredSpawn";
 import { dispatchStructuredControl } from "./structuredControls";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
@@ -7863,7 +7863,7 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
   test.each(["lost append reply", "blocked file revision", "revoked during reconciliation", "writer replaced during reconciliation",
     "lost proof before retry", "proof unavailable through expiry", "budget expired during proof",
     "delayed append with successor projection", "late append after absent receipt",
-    "deadline expires during prompt admission"] as const)(
+    "deadline expires during prompt admission", "deadline expires at first prompt socket write"] as const)(
     "settles the original launch after %s", async (fault) => {
       const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ack-"));
       const sessionId = ["00000000", "0000", "4000", "8000", "000000000021"].join("-");
@@ -7902,7 +7902,8 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
       let retrySessionReads = 0;
       let lateAppendHeld = false;
       let loseProof = fault === "lost proof before retry" || fault === "late append after absent receipt" || fault === "proof unavailable through expiry"
-        || fault === "budget expired during proof" || fault === "deadline expires during prompt admission";
+        || fault === "budget expired during proof" || fault === "deadline expires during prompt admission"
+        || fault === "deadline expires at first prompt socket write";
       let recoveryTime = 0;
       let expireOnRead = 0;
       async function loseReply(signal: AbortSignal | undefined) {
@@ -7965,10 +7966,10 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
           server.once("listening", resolve);
           server.once("error", reject);
         });
-        const client = new UnixRuntimeHostClient(socket, 250);
-        await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
+        const activeClient = new UnixRuntimeHostClient(socket, 250);
+        await bindStructuredDeliveryQueue([], { registry, client: activeClient, deferStartupWork: true });
         const spawning = spawnStructuredConversation({
-          engine, receipt: begun.receipt, registry, client,
+          engine, receipt: begun.receipt, registry, client: activeClient,
           spec: { command: engine, cwd, windowName: "fixture", engine, launchProfile },
           account: { engine, accountId: "account-fixture", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
           ["prompt"]: firstMessage,
@@ -8037,14 +8038,14 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
           expect(journal.operationResult(`spawn_message_${launchId}`)).toBeNull();
           const recovery = stagedLaunchRecovery(registry.spawnReceipt(launchId))!;
           recoveryTime = recovery.nextTryAt;
-          await recoverStagedStructuredLaunch(launchId, registry, client, { now: () => recoveryTime });
-          await recoverStagedStructuredLaunch(launchId, registry, client, { now: () => recoveryTime + 60_000 });
+          await recoverStagedStructuredLaunch(launchId, registry, activeClient, { now: () => recoveryTime });
+          await recoverStagedStructuredLaunch(launchId, registry, activeClient, { now: () => recoveryTime + 60_000 });
           expect(committed).toBeTrue();
           expect(initialAppends).toBe(2);
           expect(registry.spawnReceipt(launchId)).toMatchObject({ state: "completed" });
           expect(journal.operationResult(`spawn_message_${launchId}`)?.receipt.status).toBe("delivered");
           expect(host.sent.map((item) => item.id)).toEqual([`spawn_message_${launchId}`]);
-        } else if (loseProof || fault === "deadline expires during prompt admission") {
+        } else if (loseProof || fault === "deadline expires during prompt admission" || fault === "deadline expires at first prompt socket write") {
           await expect(spawning).resolves.toMatchObject({ state: "path-pending", initialMessage: "queued" });
           expect(committed).toBeTrue();
           expect(host.sent).toHaveLength(0);
@@ -8057,13 +8058,34 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
           runtime = new RuntimeHost(journal, undefined, undefined, true);
           expect(journal.readSession({ conversationId })?.host).toBe("hosted");
           loseProof = false;
-          await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
+          await bindStructuredDeliveryQueue([], { registry, client: activeClient, deferStartupWork: true });
           const expiresAt = recovery.startedAt + STAGED_RECOVERY_BUDGET_MS;
           recoveryTime = fault === "proof unavailable through expiry" ? expiresAt : recovery.nextTryAt;
           expireOnRead = fault === "budget expired during proof" ? expiresAt : 0;
+          if (fault === "deadline expires at first prompt socket write") {
+            const originalCommand = activeClient.command.bind(activeClient);
+            activeClient.command = (command, authorizeBeforeWrite) => {
+              if (command.operationId === `spawn_message_${launchId}`) recoveryTime = expiresAt;
+              return originalCommand(command, authorizeBeforeWrite);
+            };
+            const recovering = recoverStagedStructuredLaunch(launchId, registry, activeClient, { now: () => recoveryTime });
+            await recovering;
+            expect(registry.spawnReceipt(launchId)).toMatchObject({
+              state: "failed", error: expect.stringContaining("staged launch publication deadline expired before the first prompt"),
+            });
+            expect(journal.operationResult(launchId)?.receipt).toMatchObject({ status: "failed", reason: expect.stringContaining("publication deadline expired") });
+            expect(journal.operationResult(`spawn_message_${launchId}`)).toBeNull();
+            expect(Object.values(registry.readOnlySnapshot().heldDeliveries).find(delivery =>
+              delivery.command.operationId === `spawn_message_${launchId}`)).toMatchObject({
+              state: "failed", attempts: 1, error: expect.stringContaining("staged launch publication deadline expired"),
+            });
+            expect(host.sent).toHaveLength(0);
+            expect(host.releaseCount).toBe(1);
+            expect(journal.readSession({ conversationId })?.host).not.toBe("hosted");
+          } else
           if (fault === "deadline expires during prompt admission") {
             expireDuringAdmission = true;
-            const recovering = recoverStagedStructuredLaunch(launchId, registry, client, { now: () => recoveryTime });
+            const recovering = recoverStagedStructuredLaunch(launchId, registry, activeClient, { now: () => recoveryTime });
             await deadlineAdmission.promise;
             recoveryTime = expiresAt;
             allowDeadlineAdmission.resolve();
@@ -8074,11 +8096,10 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
             expect(journal.operationResult(launchId)?.receipt).toMatchObject({ status: "failed", reason: expect.stringContaining("publication deadline expired") });
             expect(journal.operationResult(`spawn_message_${launchId}`)).toBeNull();
             expect(host.sent).toHaveLength(0);
-            await settleHostlessSessionProjections(conversationId, launchId);
             expect(journal.readSession({ conversationId })?.host).not.toBe("hosted");
           } else {
-            await recoverStagedStructuredLaunch(launchId, registry, client, { now: () => recoveryTime });
-            await recoverStagedStructuredLaunch(launchId, registry, client, { now: () => recoveryTime + 60_000 });
+            await recoverStagedStructuredLaunch(launchId, registry, activeClient, { now: () => recoveryTime });
+            await recoverStagedStructuredLaunch(launchId, registry, activeClient, { now: () => recoveryTime + 60_000 });
           }
           if (fault !== "deadline expires during prompt admission" && fault === "lost proof before retry") {
             expect(registry.spawnReceipt(launchId)).toMatchObject({ state: "completed" });
@@ -8086,14 +8107,13 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
             expect(host.sent.map((item) => item.id)).toEqual([`spawn_message_${launchId}`]);
             expect(journal.operationResult(`spawn_message_${launchId}`)?.receipt.status).toBe("delivered");
             expect(initialAppends).toBe(2);
-          } else if (fault !== "deadline expires during prompt admission") {
+          } else if (fault !== "deadline expires during prompt admission" && fault !== "deadline expires at first prompt socket write") {
             expect(registry.spawnReceipt(launchId)).toMatchObject({
               state: "failed", error: expect.stringContaining("staged host projection reconciliation timed out"),
             });
             expect(journal.operationResult(launchId)?.receipt.status).toBe("failed");
             expect(journal.operationResult(`spawn_message_${launchId}`)).toBeNull();
             expect(host.sent).toHaveLength(0);
-            await settleHostlessSessionProjections(conversationId, launchId);
             expect(journal.readSession({ conversationId })).toMatchObject({ writerClaim: null });
             expect(journal.readSession({ conversationId })?.host).not.toBe("hosted");
             expect(initialAppends).toBe(fault === "proof unavailable through expiry" ? 1 : 2);
@@ -8107,7 +8127,8 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
         }
         expect(committed).toBeTrue();
         if (fault !== "lost proof before retry" && fault !== "late append after absent receipt" && fault !== "budget expired during proof") {
-          expect(initialAppends).toBe(fault === "deadline expires during prompt admission" ? 2 : 1);
+          expect(initialAppends).toBe(fault === "deadline expires during prompt admission"
+            || fault === "deadline expires at first prompt socket write" ? 2 : 1);
         }
       } finally {
         invalidation.resolve();

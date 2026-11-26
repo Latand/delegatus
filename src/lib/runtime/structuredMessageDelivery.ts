@@ -145,6 +145,8 @@ export type StructuredMessageResult =
 export interface StructuredMessageDependencies {
   /** Trusted caller fence, repeated immediately before first-prompt dispatch. */
   authorizeDispatch?: () => void | Promise<void>;
+  /** Synchronous authority check at the socket write, after connection admission. */
+  authorizeBeforeWrite?: () => void;
   /** Controller-only eligibility, checked after runtime reads and before admission. */
   idleContinuationAllowed?: () => boolean | Promise<boolean>;
   /** The actuation section a caller already holds for this conversation (the migration drain), handed down
@@ -2245,7 +2247,7 @@ export async function enqueueStructuredMessage(
         ...(request.selectedContext ? { selectedContext: request.selectedContext } : {}),
         ...(request.origin ? { origin: request.origin } : {}),
         ...(request.roleMemoryRevision ? { roleMemoryRevision: request.roleMemoryRevision } : {}),
-      });
+      }, dependencies.authorizeBeforeWrite);
       return commandResult;
     }, dependencies.actuationLease ?? null);
     if (admitted === "caller-revoked") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt authorization revoked", status: 403 };
@@ -2335,6 +2337,22 @@ export async function enqueueStructuredMessage(
     const handedOver = commandResult as RuntimeOperationResult | null;
     const claimedOperation = claimedOperationId as string | null;
     if (!handedOver) {
+      if ((error as { code?: string } | null)?.code === "STAGED_LAUNCH_DEADLINE" && claimedOperation) {
+        let journalAbsent = false;
+        try { journalAbsent = await client.operationStatus(claimedOperation) === null; }
+        catch { /* Keep the claim uncertain when the journal cannot prove absence. */ }
+        const reservation = reservationFor(registry, claimedOperation);
+        const ended = await registry.deliveryWrite({ label: "delivery.staged-launch-cutoff", operationId: claimedOperation }, () => {
+          const current = registry.deliverySnapshotForOperation(claimedOperation).heldDeliveries[reservation?.id ?? ""];
+          if (!journalAbsent || !reservation || current?.attempts !== 1
+            || current.generationId !== reservation.generationId || current.state !== "delivery-uncertain") return false;
+          return registry.recordDeliveryOutcome(reservation.id, "failed", failure.error, "lost");
+        });
+        if (ended.acquired && ended.value) {
+          settleRecord(progress, claimedOperation, "failed", failure.error);
+          return { ok: false, structured: true, outcome: "failed", error: failure.error, status: 408, operationId: claimedOperation };
+        }
+      }
       /* Thrown before the runtime answered, after the claim: the command may
          have reached the journal, so the send stays uncertain and keeps the
          operation it was accepted with (P7). Its record says so, counts the
