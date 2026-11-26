@@ -25,12 +25,21 @@ export function instrumentComposerIsolation(source: string, filename: string): s
   }
   const register = () => '\n;(globalThis.__composerIsolationModules ??= new Set()).add(' + JSON.stringify(filenameOnly) + ');\n';
   const count = (name: string) => `if (window.isolationCounters) window.isolationCounters.${name}++;`;
-  if (filenameOnly === "Viewer.tsx") {
+  /* The base revision filters the whole catalog in the Viewer; this one selects by position. */
+  if (filenameOnly === "Viewer.tsx" && source.includes("const selected = selectDashboard(files);")) {
     insert("const selected = selectDashboard(files);", `
       if (globalThis.__isolationShown !== selected) {
         if (globalThis.__isolationShown) { ${count("projectArraysPublished")} }
         globalThis.__isolationShown = selected;
       }`);
+  } else if (filenameOnly === "Viewer.tsx") {
+    insert("const selected = files.filter((file) => projectKey(file) === dashboardProject);", `
+      if (window.isolationCounters) {
+        window.isolationCounters.dashboardFilterVisits += selected.length;
+        window.isolationCounters.dashboardFilterArrays++;
+      }`);
+    insert("dashboardFilesRef.current = { project: dashboardProject, files: stable };",
+      'if (stable !== previous?.files) { ' + count("projectArraysPublished") + ' }');
   }
   /* Every row an array filter reads: all of them on a full read, only the replaced ones otherwise. */
   const filtered = (row: string) => `if (${row}.project === "atlas") { ${count("dashboardFilterVisits")} }`;

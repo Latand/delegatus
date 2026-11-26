@@ -14,6 +14,8 @@ export interface TypingResult {
   text: boolean;
   caret: boolean;
   counters: IsolationCounters | null;
+  /** Layout reads, by method and caller, made while a key was being handled. */
+  inputReads: Record<string, number>;
   derivations: NonNullable<IsolationWindow["__pdRows"]>;
 }
 
@@ -50,8 +52,17 @@ export function installTypingProbe() {
       const envelopes: Array<{ seq: number; at: number }> = [];
       const release: Array<() => void> = [];
       const geometryMethods: Record<string, number> = {};
-      function geometry(method: string) {
-        if (!w.isolationCounters) return;
+      const inputReads: Record<string, number> = {};
+      /* True from a key going down until the task after its input event: its handlers,
+         the commit they cause and that commit's layout effects. */
+      let handlingKey = false;
+      function geometry(method: string, element: unknown) {
+        if (handlingKey) {
+          const caller = (new Error().stack ?? "").split("\n").slice(3, 6).map(line => line.trim().replace(/\(?https?:[^)]*\/app\.js/, "(app.js")).join(" < ");
+          const name = method + " " + caller;
+          inputReads[name] = (inputReads[name] ?? 0) + 1;
+        }
+        if (element !== field || !w.isolationCounters) return;
         w.isolationCounters.fieldGeometry++;
         geometryMethods[method] = (geometryMethods[method] ?? 0) + 1;
       }
@@ -67,22 +78,28 @@ export function installTypingProbe() {
         w.__pdRows = []; w.__pdRecording = true;
         const bounds = Element.prototype.getBoundingClientRect;
         Element.prototype.getBoundingClientRect = function () {
-          if (this === field) geometry("getBoundingClientRect");
+          geometry("getBoundingClientRect", this);
           return bounds.call(this);
         };
         release.push(() => { Element.prototype.getBoundingClientRect = bounds; });
+        const rects = Element.prototype.getClientRects;
+        Element.prototype.getClientRects = function () {
+          geometry("getClientRects", this);
+          return rects.call(this);
+        };
+        release.push(() => { Element.prototype.getClientRects = rects; });
         const style = window.getComputedStyle;
         window.getComputedStyle = (element, pseudo) => {
-          if (element === field) geometry("getComputedStyle");
+          geometry("getComputedStyle", element);
           return style.call(window, element, pseudo);
         };
         release.push(() => { window.getComputedStyle = style; });
-        for (const [prototype, keys] of [[Element.prototype, ["scrollHeight", "clientHeight", "clientWidth"]],
-          [HTMLElement.prototype, ["offsetHeight", "offsetWidth"]]] as const) for (const key of keys) {
+        for (const [prototype, keys] of [[Element.prototype, ["scrollHeight", "scrollWidth", "scrollTop", "clientHeight", "clientWidth"]],
+          [HTMLElement.prototype, ["offsetHeight", "offsetWidth", "offsetTop", "offsetLeft", "innerText"]]] as const) for (const key of keys) {
           const descriptor = Object.getOwnPropertyDescriptor(prototype, key);
           if (!descriptor?.get) throw Error("missing geometry getter " + key);
           Object.defineProperty(prototype, key, { ...descriptor, get: function () {
-            if (this === field) geometry(key);
+            geometry(key, this);
             return descriptor.get!.call(this);
           } });
           release.push(() => Object.defineProperty(prototype, key, descriptor));
@@ -102,11 +119,17 @@ export function installTypingProbe() {
         keyTimes.push(event.timeStamp);
         if (!first) first = event.timeStamp;
       };
+      const onKeyStart = (event: KeyboardEvent) => { if (event.isTrusted && event.target === field) handlingKey = true; };
       const onInput = (event: Event) => {
         if (!event.isTrusted) return;
         inputs++;
         if (!raf) raf = requestAnimationFrame(frame);
+        if (structural) window.setTimeout(() => { handlingKey = false; }, 0);
       };
+      if (structural) {
+        window.addEventListener("keydown", onKeyStart, true);
+        release.push(() => window.removeEventListener("keydown", onKeyStart, true));
+      }
       field.addEventListener("keydown", onKey); field.addEventListener("input", onInput);
       function timings(entries: PerformanceEntry[]) {
         for (const entry of entries) {
@@ -143,7 +166,7 @@ export function installTypingProbe() {
         if (inputs !== total || keyTimes.length !== total || frames.length !== total) throw Error("incomplete trusted input sample");
         return { nativeClock: true, samples: frames.map((time,i) => time-keyTimes[i]!), keyTimes, frameTimes: frames, eventTimings,
           longTasks: longTasks.filter(e => e.startTime < last && e.startTime + e.duration > first).map(e => ({ start:e.startTime, duration:e.duration })),
-          events: emitted, envelopes, geometryMethods, focus: field === document.activeElement && document.hasFocus() && document.visibilityState === "visible", text: field.value === initial + chars,
+          events: emitted, envelopes, geometryMethods, inputReads, focus: field === document.activeElement && document.hasFocus() && document.visibilityState === "visible", text: field.value === initial + chars,
           caret: field.selectionStart === field.value.length && field.selectionEnd === field.value.length, counters, derivations };
       };
     },

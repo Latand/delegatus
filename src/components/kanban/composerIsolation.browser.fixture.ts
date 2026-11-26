@@ -31,8 +31,12 @@ async function routeAssets(page: Page, entry: string, assets: Awaited<ReturnType
 
 const cells: Array<{ label: string; mix: IsolationMix; rate: number; plain?: boolean }> = [
   { label: "quiet", mix: "quiet", rate: 0 }, { label: "plain", mix: "quiet", rate: 0, plain: true },
-  { label: "foreign-6", mix: "foreign", rate: 6 }, { label: "foreign-40", mix: "foreign", rate: 40 },
-  { label: "sibling-6", mix: "sibling", rate: 6 }, { label: "sibling-40", mix: "sibling", rate: 40 },
+  { label: "foreign-6", mix: "foreign", rate: 6 }, { label: "plain-foreign-6", mix: "foreign", rate: 6, plain: true },
+  { label: "foreign-40", mix: "foreign", rate: 40 },
+  { label: "sibling-6", mix: "sibling", rate: 6 },
+  /* The control under the same neighbour traffic: a plain textarea over the loaded screen. */
+  { label: "plain-sibling-6", mix: "sibling", rate: 6, plain: true },
+  { label: "sibling-40", mix: "sibling", rate: 40 },
   { label: "mixed-6", mix: "mixed", rate: 6 },
   { label: "catalog", mix: "catalog", rate: 0.5 },
 ];
@@ -146,11 +150,23 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
   const widths = process.env.ISOLATION_WIDTH ? [Number(process.env.ISOLATION_WIDTH)] : [1440, 915, 390];
   const rounds = process.env.ISOLATION_PAIR ? [Number(process.env.ISOLATION_PAIR)] : mode === "timing" ? [1,2,3,4,5] : [1];
   const selected = process.env.ISOLATION_CELLS ? cells.filter(c => process.env.ISOLATION_CELLS!.split(",").includes(c.label))
-    : structure ? cells.filter(c => ["foreign-6","sibling-6","catalog"].includes(c.label))
+    : structure ? cells.filter(c => ["quiet","foreign-6","sibling-6","catalog"].includes(c.label))
     : mode === "smoke" ? cells.filter(c => c.label === "foreign-6") : cells;
   if (structure && !process.env.ISOLATION_CELLS) selected.push({ label: "missing-6", mix: "miss", rate: 6 });
+  /* The design alternates composer and control between pairs: even pairs time the plain field first. */
+  function ordered(pair: number) {
+    const order = [...selected];
+    for (let i = 0; pair % 2 === 0 && i + 1 < order.length; i++) {
+      const [composer, control] = [order[i]!, order[i + 1]!];
+      if (!composer.plain && control.plain && composer.mix === control.mix && composer.rate === control.rate) {
+        [order[i], order[i + 1]] = [control, composer];
+        i++;
+      }
+    }
+    return order;
+  }
   if (!selected.length || widths.some(w => ![390,915,1440].includes(w)) || rounds.some(n => !Number.isInteger(n) || n<1 || n>5)) throw Error("invalid corpus selection");
-  for (const width of widths) for (const pair of rounds) for (const cell of selected) {
+  for (const width of widths) for (const pair of rounds) for (const cell of ordered(pair)) {
     const sides = base ? pair % 2 ? ["before","after"] : ["after","before"] : ["after"];
     for (const side of sides) {
       const name = `${mode}-${width}-${cell.label}-${pair}-${side}`;
@@ -230,7 +246,11 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
         }
         await page.evaluate(() => (window as typeof window & { __startIsolationDate(): void }).__startIsolationDate());
         await page.evaluate(installTypingProbe);
+        /* Warm up with printable keys, then put the draft and caret back. */
+        const focused = page.locator("textarea:focus");
+        const draft = await focused.inputValue();
         await keys(page, mode === "smoke" ? "key " : "type ".repeat(4));
+        await focused.fill(draft);
         await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
         const text = "type ".repeat(24).slice(0, structure ? 37 : mode === "smoke" ? 12 : 120);
         const readsBefore = await page.evaluate(() => (window as IsolationWindow).composerIsolation.census().reads);
@@ -273,7 +293,7 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
             throw Error("baseline structural guard: " + JSON.stringify(c));
           }
           if (side === "after" && (c.dashboardCommits || c.cardCommits || c.editorCommits || c.mobileFocusCommits
-            || c.mobileBannerCommits || c.connectionCommits || c.deploymentCommits || c.seatMeasures)) {
+            || c.mobileBannerCommits || c.connectionCommits || c.deploymentCommits || c.seatMeasures || c.dashboardFilterVisits)) {
             throw Error("foreign frame committed an unrelated consumer: " + JSON.stringify(c));
           }
           if (seatMutation && (!seatMutation.sameSize || !seatMutation.explicitResize || (side === "after" && seatMutation.decoration))) {
@@ -283,6 +303,13 @@ export async function measureComposerIsolation(browser: Browser, hostSample: () 
         if (structure && side === "after" && (cell.mix === "foreign" || cell.mix === "miss")) {
           const c = reading.counters!;
           if (c.projectRowVisits || (cell.mix === "miss" && c.mappedArrays)) throw Error("an unrelated conversation visited project rows: " + JSON.stringify(c));
+        }
+        if (structure && side === "after" && cell.mix === "sibling") {
+          const c = reading.counters!;
+          if (c.editorCommits || c.cardPropSample?.changes.onAnswerCard) throw Error("a neighbour reached the editor or every card: " + JSON.stringify(c));
+        }
+        if (structure && side === "after" && Object.keys(reading.inputReads).length && cell.mix === "quiet") {
+          throw Error("a layout read ran while a key was being handled: " + JSON.stringify(reading.inputReads));
         }
         if (structure && cell.mix === "foreign") await page.screenshot({ path:path.join(out, name+".png") });
         console.log(name, "p95", p95.toFixed(2), "events", reading.events, "nodes", corpus.nodes);
