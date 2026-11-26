@@ -1860,12 +1860,37 @@ async function readRemotePipelineBranch(
   exec: ExecPort,
   step: string,
   baseRef?: string,
+  baseRemote?: string,
 ): Promise<{ ok: true; sha: string; baseSha?: string } | { ok: false; error: string }> {
   if (pipeline.delivery && !pipeline.delivery.target.remote) return { ok: true, sha: "" };
+  const remote = pipeline.delivery?.target.remote || "origin";
   const branchRef = pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`;
+  if (baseRef && baseRemote && baseRemote !== remote) {
+    const destination = await exec("git", ["ls-remote", "--heads", remote, branchRef], pipeline.worktreeDir, undefined,
+      { timeoutMs: parseInt(REMOTE_READ_TIMEOUT) * 1_000 });
+    if (destination.code !== 0) return killedAtBound(destination)
+      ? { ok: false, error: `${step}: git remote read timed out after ${REMOTE_READ_TIMEOUT}` } : failure(step, destination);
+    const base = await exec("git", ["ls-remote", "--heads", baseRemote, baseRef], pipeline.worktreeDir, undefined,
+      { timeoutMs: parseInt(REMOTE_READ_TIMEOUT) * 1_000 });
+    if (base.code !== 0) return killedAtBound(base)
+      ? { ok: false, error: `${step}: GitHub base repository read timed out after ${REMOTE_READ_TIMEOUT}` } : failure(step, base);
+    const parse = (stdout: string, expectedRef: string): { ok: true; sha: string } | { ok: false; error: string } => {
+      const rows = stdout.trim().split("\n").filter(Boolean);
+      if (!rows.length) return { ok: true, sha: "" };
+      if (rows.length !== 1) return { ok: false, error: `${step}: repository returned ambiguous branch tips` };
+      const [sha, ref, extra] = rows[0]!.trim().split(/\s+/);
+      return /^[0-9a-f]{40}$/i.test(sha) && ref === expectedRef && !extra
+        ? { ok: true, sha } : { ok: false, error: `${step}: repository did not return an exact branch tip` };
+    };
+    const destinationTip = parse(destination.stdout, branchRef);
+    if (!destinationTip.ok) return destinationTip;
+    const baseTip = parse(base.stdout, baseRef);
+    if (!baseTip.ok) return baseTip;
+    return { ok: true, sha: destinationTip.sha, baseSha: baseTip.sha };
+  }
   const result = (await exec(
     "git",
-    ["ls-remote", "--heads", pipeline.delivery?.target.remote || "origin", branchRef, ...(baseRef && baseRef !== branchRef ? [baseRef] : [])],
+    ["ls-remote", "--heads", remote, branchRef, ...(baseRef && baseRef !== branchRef ? [baseRef] : [])],
     pipeline.worktreeDir, undefined, { timeoutMs: parseInt(REMOTE_READ_TIMEOUT) * 1_000 },
   ));
   if (result.code === 0) {
@@ -2441,16 +2466,16 @@ function publicationPhaseDetail(timing: PipelinePublishResult["phaseTimings"]): 
 }
 
 async function checkPublicationMailboxes(pipeline: Pipeline, acceptedSha: string, remoteSha: string,
-  baseSha: string, exec: ExecPort): Promise<string | null> {
+  baseSha: string, baseRemote: string | undefined, exec: ExecPort): Promise<string | null> {
   const cwd = pipeline.worktreeDir;
-  if (!await resolveForgeCommitAccount()) return COMMIT_ACCOUNT_REFUSAL;
+  if (!await resolveForgeCommitAccount({ forceRefresh: true })) return COMMIT_ACCOUNT_REFUSAL;
   const unreadable = "publication refused because new commit identities could not be verified (values withheld)";
   const git = withLiteralGitObjects(exec);
   // The publication probe reports the base alongside the destination. The
   // original lane base is already local. A moved remote base may need fetching.
   if (baseSha && baseSha !== pipeline.baseRef && baseSha !== remoteSha
     && (await git("git", ["cat-file", "-e", `${baseSha}^{commit}`], cwd)).code !== 0) {
-    const remote = pipeline.delivery?.target.remote || "origin";
+    const remote = baseRemote || pipeline.delivery?.target.remote || "origin";
     const fetched = await git("git", ["fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", remote, baseSha], cwd,
       undefined, { timeoutMs: 10_000 });
     if (fetched.code !== 0) return unreadable;
@@ -2502,7 +2527,14 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
 
   const base = pipeline.baseBranch || DEFAULT_PIPELINE_BASE_BRANCH;
   if (!validBaseBranch(base)) return { ok: false, error: INVALID_BASE_BRANCH };
-  const probe = await readRemotePipelineBranch(pipeline, exec, "checking the remote pipeline branch", `refs/heads/${base}`);
+  const target = pipeline.delivery?.target;
+  const baseRepository = target?.prRepository;
+  const isForkPullRequest = !!baseRepository && baseRepository.toLowerCase() !== target?.repository.toLowerCase();
+  if (isForkPullRequest && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(baseRepository!)) {
+    return { ok: false, error: "publication refused because the verified pull request base repository is invalid" };
+  }
+  const baseRemote = isForkPullRequest ? `https://github.com/${baseRepository}.git` : undefined;
+  const probe = await readRemotePipelineBranch(pipeline, exec, "checking the remote pipeline branch", `refs/heads/${base}`, baseRemote);
   if (!probe.ok) return { ok: true, sha: acceptedSha, remote: "unreachable", detail: probe.error };
   const remoteSha = probe.sha;
   if (remoteSha === acceptedSha) return { ok: true, sha: acceptedSha, remote: "published" };
@@ -2535,7 +2567,7 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
     if (remoteIsAncestor.code !== 0) return failure("comparing local and remote pipeline revisions", remoteIsAncestor);
   }
 
-  const mailboxRefusal = await checkPublicationMailboxes(pipeline, acceptedSha, remoteSha, probe.baseSha ?? "", exec);
+  const mailboxRefusal = await checkPublicationMailboxes(pipeline, acceptedSha, remoteSha, probe.baseSha ?? "", baseRemote, exec);
   if (mailboxRefusal) return { ok: false, error: mailboxRefusal };
 
   const imageRuntime = process.execPath === "/usr/local/bin/bun-container" ? process.execPath : undefined;

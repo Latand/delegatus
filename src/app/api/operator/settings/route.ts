@@ -22,7 +22,7 @@ export interface OperatorSettingsResponse extends OperatorSettings {
 }
 
 export async function GET(): Promise<NextResponse> {
-  await resolveForgeCommitAccount();
+  await resolveForgeCommitAccount({ forceRefresh: true });
   return NextResponse.json({ ok: true, ...readOperatorSettings(), commitAccount: forgeCommitAccountStatus() } satisfies OperatorSettingsResponse, { headers });
 }
 

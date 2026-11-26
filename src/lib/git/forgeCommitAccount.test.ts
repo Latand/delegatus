@@ -67,20 +67,22 @@ test("no owner can read a cached account and cannot run gh for a missing account
   expect(invoked).toBe(false);
 });
 
-test("an expired account stays usable while one background refresh replaces it", async () => {
+test("an expired account is not returned as current owner evidence", async () => {
   seedForgeCommitAccount(sandbox, now - 86_400_000);
   const next = { id: user.id + 1, login: "fixture-next" };
   let finish!: (result: string) => void;
   const lookup = new Promise<string>(resolve => { finish = resolve; });
   let calls = 0;
-  const options = { now: () => now, run: () => { calls++; return lookup; } };
-  expect(await resolveForgeCommitAccount(options)).toMatchObject(fixtureForgeAccount);
-  expect(await resolveForgeCommitAccount(options)).toMatchObject(fixtureForgeAccount);
+  const options = { now: () => now, forceRefresh: true, run: () => { calls++; return lookup; } };
+  const first = resolveForgeCommitAccount(options);
+  expect(calls).toBe(1);
+  const second = resolveForgeCommitAccount(options);
   expect(calls).toBe(1);
   finish(JSON.stringify({ ...next, type: "User" }));
-  await lookup;
+  expect(await first).toMatchObject(next);
+  expect(await second).toMatchObject(next);
   expect(forgeCommitAccountStatus()).toEqual({ state: "resolved", login: next.login });
-  expect(await resolveForgeCommitAccount(options)).toMatchObject({ ...next, checkedAt: now, resolvedAt: now });
+  expect(await resolveForgeCommitAccount({ now: () => now, run: options.run })).toMatchObject({ ...next, checkedAt: now, resolvedAt: now });
   expect(calls).toBe(1);
 });
 
@@ -91,6 +93,22 @@ test("failed refresh retains the last account and backs off", async () => {
   expect(await resolveForgeCommitAccount(options)).toMatchObject(fixtureForgeAccount);
   expect(await resolveForgeCommitAccount(options)).toMatchObject(fixtureForgeAccount);
   expect(calls).toBe(1);
+});
+
+test("authentication loss invalidates the stored owner instead of returning a stale account", async () => {
+  seedForgeCommitAccount(sandbox);
+  const run = async () => { throw Object.assign(new Error("request failed"), { stderr: "HTTP 401 Bad credentials" }); };
+  expect(await resolveForgeCommitAccount({ forceRefresh: true, now: () => now, run })).toBeNull();
+  expect(forgeCommitAccountStatus()).toMatchObject({ state: "unresolved" });
+  expect(JSON.parse(fs.readFileSync(path.join(sandbox, "forge-commit-account.json"), "utf8"))).toBeNull();
+});
+
+test("a forced owner lookup observes an account switch before returning identity evidence", async () => {
+  seedForgeCommitAccount(sandbox);
+  const changed = { id: user.id + 1, login: "fixture-switched" };
+  expect(await resolveForgeCommitAccount({ forceRefresh: true, now: () => now + 10, run: async () => JSON.stringify({ ...changed, type: "User" }) }))
+    .toMatchObject(changed);
+  expect(forgeCommitAccountStatus()).toEqual({ state: "resolved", login: changed.login });
 });
 
 test("an earlier lookup cannot replace an account written during its GitHub request", async () => {

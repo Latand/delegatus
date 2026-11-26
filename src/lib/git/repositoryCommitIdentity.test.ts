@@ -249,17 +249,28 @@ test("headless publication rebinds identity without losing existing engine restr
   } finally { f.close(); }
 });
 
-test("opt-out keeps the owner's author and committer and removes Delegatus attribution on amend", async () => {
+test("a running stage applies both attribution toggle directions and preserves body text and other trailers", async () => {
   const f = await fixture();
   try {
-    const environment = async () => ({ ...f.source, ...agentPublicationIdentityEnv(await repositoryPublicationSource(f.repo, f.source)) });
-    await f.run(["commit", "--allow-empty", "-qm", "initial work"], await environment());
+    const env = { ...f.source, ...agentPublicationIdentityEnv(await repositoryPublicationSource(f.repo, f.source)) };
+    const message = path.join(f.root, "commit-message.txt");
+    fs.writeFileSync(message, `initial work\n\nBody example:\n${DELEGATUS_COAUTHOR}\nKeep this literal line.\n\nCo-Authored-By: Other <noreply@example.invalid>\nCo-Authored-By:  Delegatus <noreply@delegatus.invalid>\n`);
+    await f.run(["commit", "--allow-empty", "-F", message], env);
     expect(await f.run(["log", "-1", "--format=%B"])).toContain(DELEGATUS_COAUTHOR);
     updateOperatorSettings({ commitAttribution: false }, "2026-11-26T16:10:00Z");
-    const env = await environment();
+    const settingsFile = path.join(f.source.LLV_STATE_DIR!, "operator-settings.json");
+    expect(JSON.parse(fs.readFileSync(settingsFile, "utf8")).commitAttribution.value).toBe(false);
+    expect(fs.readFileSync(path.join(env.LLV_AGENT_GIT_GUARD_DIR!, "prepare-commit-msg"), "utf8")).toContain(settingsFile);
     await f.run(["commit", "--amend", "--allow-empty", "--no-edit"], env);
     expect(await f.run(["log", "-1", "--format=%ae%n%ce"])).toBe([fixtureNoreply, fixtureNoreply].join("\n"));
-    expect(await f.run(["log", "-1", "--format=%B"])).toBe("initial work");
+    let body = await f.run(["log", "-1", "--format=%B"]);
+    expect(body).toContain(`Body example:\n${DELEGATUS_COAUTHOR}\nKeep this literal line.`);
+    expect(body).toContain("Co-Authored-By: Other <noreply@example.invalid>");
+    expect(await f.run(["log", "-1", "--format=%(trailers:only)"])).toBe("Co-Authored-By: Other <noreply@example.invalid>");
+    updateOperatorSettings({ commitAttribution: true }, "2026-11-26T16:11:00Z");
+    await f.run(["commit", "--amend", "--allow-empty", "--no-edit"], env);
+    body = await f.run(["log", "-1", "--format=%B"]);
+    expect((await f.run(["log", "-1", "--format=%(trailers:only)"])).split("\n").filter(line => line === DELEGATUS_COAUTHOR)).toHaveLength(1);
     for (const key of ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"]) {
       const rejected = await realExec("git", ["commit", "--allow-empty", "--no-verify", "-m", "overridden"], f.repo, { ...env, [key]: email });
       expect(rejected.code).not.toBe(0);

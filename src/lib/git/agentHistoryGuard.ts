@@ -47,7 +47,7 @@ function verifiedHook(target: string, body: Buffer, digest: string): boolean {
  * This is a cooperative agent guard, not a sandbox against hostile shell code.
  */
 export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, email: string, coauthor?: string,
-  policy: { refusal?: string; omitCoauthor?: string; verifyCommitter?: boolean } = {}): Record<string, string | undefined> {
+  policy: { refusal?: string; omitCoauthor?: string; verifyCommitter?: boolean; settingFile?: string } = {}): Record<string, string | undefined> {
   let count = Number(source.GIT_CONFIG_COUNT ?? 0);
   if (!Number.isSafeInteger(count) || count < 0 || count > 1024) throw new Error("Invalid agent Git environment");
   if (count > 0 && source.GIT_CONFIG_KEY_0 === undefined) throw new Error("Invalid agent Git environment");
@@ -67,10 +67,20 @@ export function agentHistoryGuardEnv(source: AgentEnvironment, name: string, ema
   [ "\${identity%>*}>" = ${ident} ] || refuse` : "";
   const stripCoauthor = policy.omitCoauthor ? `temporary=$(mktemp "$1.delegatus-XXXXXX") || exit 1
   trap 'rm -f "$temporary"' EXIT
-  awk -v trailer=${quote(policy.omitCoauthor)} 'tolower($0) != tolower(trailer)' "$1" > "$temporary" || exit 1
+  awk ' { line[NR]=$0; if ($0 == "") last_blank=NR } END {
+    first=last_blank+1; trailer_block=0
+    for (i=first; i<=NR; i++) if (tolower(line[i]) ~ /^[[:space:]]*co-authored-by[[:space:]]*:/) trailer_block=1
+    for (i=1; i<=NR; i++) {
+      value=tolower(line[i]); gsub(/[[:space:]]+/, " ", value)
+      if (!(trailer_block && i>=first && value ~ /^[[:space:]]*co-authored-by:[[:space:]]*delegatus[[:space:]]*<noreply@delegatus[.]invalid>[[:space:]]*$/)) print line[i]
+    }
+  }' "$1" > "$temporary" || exit 1
   cat "$temporary" > "$1" || exit 1
   rm -f "$temporary"
   trap - EXIT` : "";
+  const trailerAction = policy.settingFile
+    ? `if attribution_enabled; then git interpret-trailers --in-place --if-exists addIfDifferent --trailer ${quote(coauthor ?? policy.omitCoauthor ?? "Co-Authored-By: Delegatus <noreply@delegatus.invalid>")} "$1" || exit 1; else ${stripCoauthor}; fi`
+    : coauthor ? `git interpret-trailers --in-place --if-exists addIfDifferent --trailer ${quote(coauthor)} "$1" || exit 1` : stripCoauthor;
   const script = `#!/bin/sh
 set -eu
 refuse() {
@@ -82,12 +92,16 @@ check_author() {
   [ "$author" = ${quote(name + "\n" + email)} ] || refuse
 }
 ${coauthor ? `check_coauthor() {
-  count=$(git show -s --no-show-signature --no-color --no-notes --format=%B "$1" | git interpret-trailers --parse | grep -Fxc -- ${quote(coauthor)} || true)
-  [ "$count" = 1 ] || refuse
+  count=$(git show -s --no-show-signature --no-color --no-notes --format=%B "$1" | git interpret-trailers --parse | grep -Eic '^[[:space:]]*Co-Authored-By:[[:space:]]*Delegatus[[:space:]]*<noreply@delegatus[.]invalid>[[:space:]]*$' || true)
+  if attribution_enabled; then [ "$count" = 1 ] || refuse; else [ "$count" = 0 ] || refuse; fi
 }` : ""}
 hook=\${0##*/}
 if [ "$hook" = post-rewrite ] || [ "$hook" = reference-transaction ]; then input=$(cat); fi
 ${stageAttemptGuardScript()}
+attribution_enabled() {
+  if [ -f ${quote(policy.settingFile ?? "")} ] && awk '/"commitAttribution"[[:space:]]*:/ { in_setting=1 } in_setting && /"value"[[:space:]]*:[[:space:]]*false/ { disabled=1 } in_setting && /}/ { in_setting=0 } END { exit !disabled }' ${quote(policy.settingFile ?? "")}; then return 1; fi
+  return 0
+}
 stage_final_check() {
   stage_owner_check "$@"
   stage_release_binding_check "$@"
@@ -100,7 +114,7 @@ if [ "$hook" = prepare-commit-msg ]; then
   [ "\${identity%>*}>" = ${ident} ] || refuse
   ${committerCheck}
   if picked=$(git rev-parse --verify -q CHERRY_PICK_HEAD); then check_author "$picked"; fi
-  ${coauthor ? `git interpret-trailers --in-place --if-exists addIfDifferent --trailer ${quote(coauthor)} "$1" || exit 1` : stripCoauthor}
+  ${trailerAction}
 fi
 if [ "$hook" = applypatch-msg ]; then
   # git am owns this message hook; amend the mailbox message before commit
@@ -108,7 +122,7 @@ if [ "$hook" = applypatch-msg ]; then
   # independently refuses an unattributed commit.
   :
   ${refusal}
-  ${coauthor ? `count=$(git interpret-trailers --parse "$1" | grep -Fxc -- ${quote(coauthor)} || true)
+  ${policy.settingFile ? trailerAction : coauthor ? `count=$(git interpret-trailers --parse "$1" | grep -Fxc -- ${quote(coauthor)} || true)
   [ "$count" -le 1 ] || refuse
   if [ "$count" = 0 ]; then git interpret-trailers --in-place --trailer ${quote(coauthor)} "$1" || exit 1; fi` : stripCoauthor}
 fi

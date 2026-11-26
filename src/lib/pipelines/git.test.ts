@@ -2323,6 +2323,38 @@ test("publication excludes the remote base and lane tips and admits a forge comm
   } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
 });
 
+test.each(["stale fork base", "missing fork base"] as const)("fork publication proves inherited identity history from the verified PR base (%s)", async forkState => {
+  const box = await publishSandbox();
+  try {
+    const personal = ["person", "example.invalid"].join("@");
+    const upstreamCommit = await realExec("git", ["commit", "--allow-empty", "-m", "upstream history"], box.repo, {
+      GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: personal, GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: personal,
+    });
+    expect(upstreamCommit.code, upstreamCommit.stderr).toBe(0);
+    const upstreamBase = await git(box.repo, "rev-parse", "HEAD");
+    await git(box.subject.worktreeDir, "merge", "--ff-only", upstreamBase);
+    box.subject.baseRef = upstreamBase;
+    box.subject.delivery!.target.repository = "verified-owner/fork";
+    box.subject.delivery!.target.prRepository = "verified-owner/upstream";
+    savePipelines([box.subject]);
+    if (forkState === "missing fork base") await git(box.origin, "update-ref", "-d", "refs/heads/main");
+    const accepted = await box.commit("lane.txt", "safe lane content\n");
+    const upstreamUrl = "https://github.com/verified-owner/upstream.git";
+    let readVerifiedBase = false;
+    const routed: ExecPort = async (command, args, cwd, env, options) => {
+      if (command === "git" && args[0] === "ls-remote" && args[2] === upstreamUrl) {
+        readVerifiedBase = true;
+        return { code: 0, stdout: `${upstreamBase}\trefs/heads/main\n`, stderr: "" };
+      }
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await publishPipelineBranch(box.subject, routed, { acceptedSha: accepted });
+    expect(readVerifiedBase).toBe(true);
+    expect(result).toMatchObject({ ok: true, remote: "published", sha: accepted });
+    expect(await box.originHead()).toBe(accepted);
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+});
+
 test.each([false, true])("publication without a GitHub account refuses even a safe commit (privacy policy: %s)", async privacy => {
   const box = await publishSandbox();
   try {

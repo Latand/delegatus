@@ -80,29 +80,37 @@ async function refresh(file: string, held: Account | null, checkedAt: number,
     retry = { file, after: now() + RETRY_MS };
     const diagnostic = githubReadDiagnostic(error);
     console.warn(`[git commit account] GitHub account refresh failed (${diagnostic.cause})`);
-    return cache.read(file);
+    if (diagnostic.cause === "unauthenticated") {
+      try {
+        withFileTransactionAttempt(file, "GitHub commit account cache is busy", () => {
+          writeJsonDurably(file, null);
+        });
+      } catch { /* Authentication failure still refuses current owner evidence. */ }
+      return null;
+    }
+    return held;
   }
 }
 
 /** First use waits for one bounded lookup. A persisted answer is available
  * immediately while the owner refreshes it in the background. */
 export async function resolveForgeCommitAccount({
-  run = runGithubCliRead, now = Date.now,
-}: { run?: typeof runGithubCliRead; now?: () => number } = {}): Promise<Account | null> {
+  run = runGithubCliRead, now = Date.now, forceRefresh = false,
+}: { run?: typeof runGithubCliRead; now?: () => number; forceRefresh?: boolean } = {}): Promise<Account | null> {
   const file = accountFile();
   const account = cache.read(file);
   const owner = stateOwner();
   // An injected runner lets tests exercise the resolver without using gh.
   if (!owner || owner === "deploy-adapter" || (guardedContext() && run === runGithubCliRead)) return account;
   const time = now();
-  if (account && time >= account.checkedAt && time - account.checkedAt < REFRESH_MS) return account;
-  if (retry?.file === file && time < retry.after) return account;
+  if (!forceRefresh && account && time >= account.checkedAt && time - account.checkedAt < REFRESH_MS) return account;
+  if (!forceRefresh && retry?.file === file && time < retry.after) return account;
   if (pending && pending.file !== file) return account;
   if (!pending) {
     const result = refresh(file, account, time, run, now).finally(() => { pending = null; });
     pending = { file, result };
   }
-  return account ?? pending.result;
+  return forceRefresh ? pending.result : account ?? pending.result;
 }
 
 export type CommitAccountStatus = { state: "resolved"; login: string } | { state: "unresolved"; reason: string };

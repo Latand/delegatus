@@ -6,7 +6,8 @@ import path from "node:path";
 
 import { pidAlive } from "@/lib/scanner/process";
 import { CpuContainmentUnavailable, wrapWorkCommand, type CpuPorts } from "@/lib/runtime/cpuPlacement";
-import { repositoryCommitIdentity } from "@/lib/git/repositoryCommitIdentity";
+import { repositoryCommitIdentity, verifyRepositoryCommitRange } from "@/lib/git/repositoryCommitIdentity";
+import { COMMIT_ACCOUNT_REFUSAL, ownerNoreplyAddress, resolveForgeCommitAccount } from "@/lib/git/forgeCommitAccount";
 import { engineForgeWriteEnv } from "@/lib/git/agentForgeCredentials";
 import { cpuBudgetTimer, cpuWaitBudget } from "@/lib/runtime/cpuAdmissionBudget";
 
@@ -238,7 +239,17 @@ export async function finishPr(wf: Workflow, body: string, exec: ExecPort): Prom
   /* In a declared App repository both writes go out as the Delegatus GitHub
      App or are refused; anywhere else this adds nothing. */
   const forge = engineForgeWriteEnv();
-  const push = (await exec("git", ["push", "-u", "origin", wf.branch], wf.worktreeDir, forge));
+  const account = await resolveForgeCommitAccount({ forceRefresh: true });
+  if (!account) return { ok: false, error: COMMIT_ACCOUNT_REFUSAL };
+  const identity = await repositoryCommitIdentity(wf.worktreeDir, exec, undefined, "lane");
+  if (identity.refusal) return { ok: false, error: identity.refusal };
+  const email = ownerNoreplyAddress(account);
+  const unsafe = await verifyRepositoryCommitRange(wf.worktreeDir, `${wf.baseBranch}..${wf.branch}`, email, exec);
+  if (unsafe) return { ok: false, error: unsafe };
+  const authorName = identity.policy === "repository" ? identity.env.GIT_AUTHOR_NAME : account.login;
+  const push = (await exec("git", ["push", "-u", "origin", wf.branch], wf.worktreeDir, {
+    ...forge, GIT_AUTHOR_NAME: authorName, GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_NAME: authorName, GIT_COMMITTER_EMAIL: email,
+  }));
   if (push.code !== 0) return failure("git push", push);
   const create = (await exec(
     "gh",

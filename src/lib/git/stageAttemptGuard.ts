@@ -340,6 +340,26 @@ if [ "$hook" = pre-push ]; then
     fi
     case "$remote_ref" in refs/tags/*) stage_tag_refuse 'tag publication requires a release-mode deployer stage' ;; esac
     case "$new" in *[!0]*) ;; *) continue ;; esac
+    # Direct stage pushes do not pass through the controller publication
+    # comparator. Bind every commit introduced by this ref update to the
+    # owner identity selected for this running stage, including a pre-upgrade
+    # HEAD that has no creation receipt from the current attempt.
+    if [ -n "\${LLV_REPOSITORY_PUBLICATION_IDENTITY:-}" ]; then
+      expected_author_email=\${GIT_AUTHOR_EMAIL:-}
+      expected_committer_email=\${GIT_COMMITTER_EMAIL:-}
+      case "$LLV_REPOSITORY_PUBLICATION_IDENTITY" in *'"refusal"'*) stage_refuse 'installation owner identity is unavailable' ;; esac
+      active_owner_account=$(gh api user --hostname github.com --jq '"\\(.id)+\\(.login)"') || stage_refuse 'installation owner authentication is unavailable'
+      active_owner_domain='users.noreply.github.com'
+      active_owner_email="\${active_owner_account}@\${active_owner_domain}"
+      [ "$active_owner_email" = "$expected_author_email" ] || stage_refuse 'installation owner account changed after stage launch'
+      [ "$expected_committer_email" = "$active_owner_email" ] || stage_refuse 'installation owner committer identity changed after stage launch'
+      case "$old" in *[!0]*) introduced=$(git rev-list "$new" --not "$old") || stage_refuse ;;
+        *) introduced=$(git rev-list "$new" --not "$base") || stage_refuse ;; esac
+      for made in $introduced; do
+        [ "$(git show -s --no-use-mailmap --format=%ae%n%ce "$made")" = "$expected_author_email
+$expected_committer_email" ] || stage_refuse "$made"
+      done
+    fi
     if [ "$new" != "$lane_head" ]; then
       git merge-base --is-ancestor "$base" "$new" || stage_refuse
       commits=$(git rev-list "$base..$new") || stage_refuse

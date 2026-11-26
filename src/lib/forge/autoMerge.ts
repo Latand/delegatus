@@ -1,6 +1,7 @@
 import { proactiveResultReview } from "@/lib/tasks/proactiveLane";
 import { assertProactivePipelineExecution, proactivePipelineExecutionError, proactiveConversationTaskIds } from "@/lib/tasks/proactiveExecution";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
+import { COMMIT_ACCOUNT_REFUSAL, ownerNoreplyAddress, resolveForgeCommitAccount } from "@/lib/git/forgeCommitAccount";
 import { indexMergeSuccessors, mergeWithdrawalReason, mergeWithdrawalNeeded, withdrawPipelineMerge } from "@/lib/pipelines/mergeSuccessor";
 import { openRevertPr, readPostMergeChecks, sweepPostMerge } from "./postMerge";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -1292,6 +1293,13 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
     return;
   }
   const method = await mergeMethod(merge.repository, ports).catch(() => "squash" as const);
+  const commitAccount = await resolveForgeCommitAccount({ forceRefresh: true });
+  if (!commitAccount || method === "rebase") {
+    const reason = !commitAccount ? COMMIT_ACCOUNT_REFUSAL
+      : "GitHub rebase merges replace the committer identity; automatic merge is refused for this repository";
+    await commit(ports, read, live => { bookkeeping(live); block(live, reason, now); });
+    return;
+  }
   let reserved = false;
   const recorded = await commitReviewed(ports, read, (live) => {
     bookkeeping(live);
@@ -1345,7 +1353,7 @@ async function stepLane(read: Pipeline, ports: AutoMergePorts, mayMerge = true, 
       }
     };
     beforeDispatch();
-    await ports.write(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--match-head-commit", view.headRefOid], merge.repository,
+    await ports.write(["pr", "merge", String(merge.prNumber), "--repo", merge.repository, `--${method}`, "--author-email", ownerNoreplyAddress(commitAccount), "--match-head-commit", view.headRefOid], merge.repository,
       () => { beforeDispatch(); dispatched = true; });
   } catch (error) {
     /* No App credential: the refusal is the whole reason, in its own words. */

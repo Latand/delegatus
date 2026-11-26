@@ -39,6 +39,23 @@ export function validRepositoryAuthorName(name: string): boolean {
   return !decoded.error && !mailboxPattern(true).test(decoded.text.normalize("NFKC"));
 }
 
+/** Verify the literal author and committer mailboxes of every commit a direct
+ * workflow push would introduce. Git's mailmap and display names are ignored. */
+export async function verifyRepositoryCommitRange(cwd: string, range: string, email: string, exec: ExecPort = realExec): Promise<string | null> {
+  const list = await exec("git", ["rev-list", range], cwd, { GIT_NO_REPLACE_OBJECTS: "1" }, { timeoutMs: 10_000 });
+  if (list.code !== 0 || list.stdout && !list.stdout.trim().split(/\r?\n/).every(sha => /^[0-9a-f]{40}$/i.test(sha))) {
+    return "publication refused because new commit identities could not be verified (values withheld)";
+  }
+  for (const sha of list.stdout.trim().split(/\r?\n/).filter(Boolean)) {
+    const identity = await exec("git", ["show", "-s", "--no-use-mailmap", "--format=%ae%n%ce", sha], cwd,
+      { GIT_NO_REPLACE_OBJECTS: "1" }, { timeoutMs: 5_000 });
+    if (identity.code !== 0 || identity.stdout.replace(/\r?\n$/, "") !== `${email}\n${email}`) {
+      return `publication refused for ${sha.slice(0, 12)} identity; new commits require the installation owner's noreply mailbox (values withheld)`;
+    }
+  }
+  return null;
+}
+
 /** Git supplies the display name, including worktree and global config.
  * The email comes exclusively from the installation's GitHub account. */
 export async function repositoryCommitIdentity(cwd: string, exec: ExecPort = realExec,
@@ -60,7 +77,7 @@ export async function repositoryCommitIdentity(cwd: string, exec: ExecPort = rea
   // Standalone tools such as the batch merger can retain the repository's
   // machine policy. A pipeline stage always binds the installation's owner.
   if (purpose === "launch" && !source?.LLV_STAGE_GIT_RECEIPT && await repositoryHasPrivacyPolicy(directory)) return machineIdentity();
-  const account = await resolveForgeCommitAccount();
+  const account = await resolveForgeCommitAccount({ forceRefresh: purpose === "lane" });
   if (!account) return { policy: "repository", env: controllerCommitIdentityEnv(), refusal: COMMIT_ACCOUNT_REFUSAL };
   const configured = await exec("git", ["config", "--null", "--get", "user.name"], cwd, readEnv,
     { timeoutMs: 5_000, maxOutputBytes: 16_384 });
@@ -79,8 +96,8 @@ export async function repositoryCommitIdentity(cwd: string, exec: ExecPort = rea
 /** Bind once before child filtering; both engine settings and the shell's
  * history guard consume the same selection. Rebind at each launch/resume. */
 export async function repositoryPublicationSource(cwd: string, source: NodeJS.ProcessEnv,
-  exec: ExecPort = realExec): Promise<NodeJS.ProcessEnv> {
-  const identity = await repositoryCommitIdentity(cwd, exec, source);
+  exec: ExecPort = realExec, purpose: "launch" | "lane" = "launch"): Promise<NodeJS.ProcessEnv> {
+  const identity = await repositoryCommitIdentity(cwd, exec, source, purpose);
   const bound = { ...source };
   if (identity.policy === "repository") bound[REPOSITORY_IDENTITY] = JSON.stringify(identity);
   else delete bound[REPOSITORY_IDENTITY];
