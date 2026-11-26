@@ -895,7 +895,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     if (!owner && conversationHolds(trash, root.via)) return true;
     const observed = readScan();
     const current = root.via && trash.startsWith(root.via) ? trash.slice(root.via.length) : trash;
-    let hold = owner ? detachedHold(owner, root, original, trash, observed, removalBegan)
+    let hold: ReferenceHold | null = owner ? detachedHold(owner, root, original, trash, observed, removalBegan)
       : processNames(observed, pathHolds(root, ...(options.onlyDirectories ? [current] : [original, current]))) ? "process_reference" : null;
     if (!hold && !options.onlyDirectories && processHoldsFile(observed, trash)) hold = "process_reference";
     if (hold) report.held!.push({ path: original, via: root.via, reason: hold, bytes });
@@ -1087,7 +1087,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       try {
         const bytes = await measure(reachable, seenAllocations, includeRoot, excluded);
         const freshScan = readScan();
-        let hold = owner ? detachedHold(owner, root, candidate, reachable, freshScan)
+        let hold: ReferenceHold | null = owner ? detachedHold(owner, root, candidate, reachable, freshScan)
           : processNames(freshScan, once(entry => processHolds(path.resolve(entry)))) ? "process_reference"
           : conversationHolds(reachable, root.via) ? "conversation_reference" : null;
         if (!hold && !options.onlyDirectories && processHoldsFile(freshScan, reachable)) hold = "process_reference";
