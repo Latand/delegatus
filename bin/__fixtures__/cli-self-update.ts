@@ -258,7 +258,7 @@ export function version(fixture: ReturnType<typeof install>, extraEnv: Record<st
   });
 }
 
-export type Entry = { state: string; pid: number | null; revision: string | null; requestId: string | null; error: { kind: string; revision?: string; detail?: string; text?: string } | null };
+export type Entry = { state: string; pid: number | null; startIdentity: string | null; revision: string | null; requestId: string | null; error: { kind: string; revision?: string; detail?: string; text?: string } | null };
 export type LauncherRecord = { launcher: { pid: number; startIdentity: string | null; autoAdmission?: number; requestId?: string; state?: string; error?: {kind: string}; revision?: string }; checkout: string | null; releasePointer: string; requestFile: string; socket: string; web: Entry; runtimeHost: Entry };
 
 export async function until<T>(read: () => T | null | undefined | false, timeoutMs = 20_000): Promise<T> {
@@ -289,7 +289,7 @@ export async function served(port: number): Promise<string> {
   return (await fetch(`http://127.0.0.1:${port}/`)).text();
 }
 
-export async function start(fixture: ReturnType<typeof install>, args: string[] = []) {
+export async function start(fixture: ReturnType<typeof install>, args: string[] = [], startupTimeoutMs = 20_000) {
   const port = await availablePort();
   const child = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(port), ...args], {
     cwd: fixture.checkout,
@@ -308,7 +308,7 @@ export async function start(fixture: ReturnType<typeof install>, args: string[] 
     if (!output.includes(`:${port}/`)) return false;
     const record = readRecord(fixture.state);
     return record.web.state === "healthy" && record.runtimeHost.state === "healthy";
-  }, 20_000).catch((error) => { throw new Error(`${String(error)}\n${output}`); });
+  }, startupTimeoutMs).catch((error) => { throw new Error(`${String(error)}\n${output}`); });
   return { port, child, output: () => output };
 }
 

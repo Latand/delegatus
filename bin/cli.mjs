@@ -3,14 +3,14 @@
 import "./launcher-inherited-children.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { constants, homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 import { agentStartupMessage } from "./agent-binaries.mjs";
-import { boundedWait, startupHandoffSucceeded, STOP_TIMEOUT_MS, switchDeadline, SWITCH_OVERRUN, TERMINAL_BOOTSTRAP_TIMEOUT_MS, writeLauncherRefusal } from "./launcher-deadline.mjs";
+import { boundedWait, launcherStartupDeadline, rollbackSelectionMatches, startupHandoffSucceeded, STOP_TIMEOUT_MS, switchDeadline, SWITCH_OVERRUN, TERMINAL_BOOTSTRAP_TIMEOUT_MS, VIEWER_PAGE_CHECK_TIMEOUT_MS, writeLauncherRefusal } from "./launcher-deadline.mjs";
 
 /* The checkout may be older than this file. No checkout sibling is linked
    until the release decision has completed. */
@@ -46,12 +46,11 @@ if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "launcher";
 
 const DEFAULT_PORT = 8898;
 const DEFAULT_HOSTNAME = "127.0.0.1";
-const READINESS_TIMEOUT_MS = 90_000;
+const VIEWER_READINESS_SILENCE_MS = 90_000;
+const WEB_RECOVERY_TIMEOUT_MS = 10 * 60_000;
 const RUNTIME_HOST_RESTART_BASE_MS = 500;
 const RUNTIME_HOST_RESTART_MAX_MS = 10_000;
 const RUNTIME_HOST_STABLE_UPTIME_MS = 30_000;
-/* A freshly built release and a reboot both start `next start` cold. */
-const RESTART_READINESS_TIMEOUT_MS = 90_000;
 
 const cliPath = fileURLToPath(import.meta.url);
 const cliDir = dirname(cliPath);
@@ -104,7 +103,9 @@ Commands:
     noServer: () => "No standalone server.js or local next found.",
     portBusy: (port) => `Port ${port} is busy. Try: bunx delegatus-cli --port ${port + 1}`,
     serverStartFail: (detail) => `Couldn't start the server: ${detail}`,
-    serverTimeout: (seconds) => `The server didn't respond within ${seconds} seconds.`,
+    serverStartupSilent: (seconds) => `The server made no startup progress for ${seconds} ${seconds === 1 ? "second" : "seconds"}.`,
+    serverStartupBudget: () => "The server reached its startup deadline.",
+    serverStartupProgress: (phase, progress) => `[${phase ?? "HTTP readiness"}] Last progress: ${progress ?? "none"}.`,
     bannerOpened: (url) => `  Opened:    ${url}`,
     bannerOpening: (url) => `  Opening:   ${url}`,
     bannerOpenUrl: (url) => `  Open ${url} in your browser.`,
@@ -162,7 +163,9 @@ Commands:
     noServer: () => "Не знайдено standalone server.js або локальний next.",
     portBusy: (port) => `Порт ${port} зайнятий. Спробуйте: bunx delegatus-cli --port ${port + 1}`,
     serverStartFail: (detail) => `Не вдалося запустити сервер: ${detail}`,
-    serverTimeout: (seconds) => `Сервер не відповів за ${seconds} секунд.`,
+    serverStartupSilent: (seconds) => `Запуск сервера не просувався протягом ${seconds} с.`,
+    serverStartupBudget: () => "Сервер вичерпав час на запуск.",
+    serverStartupProgress: (phase, progress) => `[${phase ?? "готовність HTTP"}] Останній поступ: ${progress ?? "немає"}.`,
     bannerOpened: (url) => `  Відкрито:  ${url}`,
     bannerOpening: (url) => `  Відкриваю: ${url}`,
     bannerOpenUrl: (url) => `  Відкрийте ${url} у браузері.`,
@@ -1353,20 +1356,32 @@ async function main() {
     record.started("web", handle.child, release);
     return handle;
   };
-  const waitForReadiness = async (timeoutMs, { child, state, readiness }, release) => {
-    const ready = await waitForViewerReadiness(options.port, {
-      revision: release.sha, timeoutMs, allowLegacyFallback: !releaseHasRevisionReadiness(release),
-      probeAccess, onPhase: readiness.observe,
-      assertChildRunning: () => {
-        if (state.spawnError) throw new Error(`could not start (${state.spawnError.message})`);
-        if (child.exitCode !== null || child.signalCode !== null) {
-          throw new Error(`exited before it answered (${child.signalCode ? `signal ${child.signalCode}` : `exit code ${child.exitCode}`})`);
-        }
-      },
-    });
-    if (!ready) {
-      const phase = readiness.pendingStartupPhase() ?? "HTTP readiness";
-      throw new Error(`${m.serverTimeout(timeoutMs / 1000)} [${phase}]`);
+  const waitForReadiness = async (expiry, { child, state, readiness }, release) => {
+    const deadline = performance.now() + (expiry - Date.now());
+    const lifetime = new AbortController();
+    const onChildEnd = () => lifetime.abort();
+    child.once("exit", onChildEnd);
+    child.once("error", onChildEnd);
+    try {
+      const ready = await waitForViewerReadiness(options.port, {
+        revision: release.sha, silenceMs: VIEWER_READINESS_SILENCE_MS, deadline,
+        allowLegacyFallback: !releaseHasRevisionReadiness(release), signal: lifetime.signal,
+        probeAccess, onPhase: readiness.observe, startupProgress: readiness.startupProgress,
+        onTimeout: ({ reason, phase, lastProgress }) => {
+          const message = reason === "ceiling" ? m.serverStartupBudget() : m.serverStartupSilent(VIEWER_READINESS_SILENCE_MS / 1000);
+          throw new Error(`${message} ${m.serverStartupProgress(phase, lastProgress)}`);
+        },
+        assertChildRunning: () => {
+          if (state.spawnError) throw new Error(`could not start (${state.spawnError.message})`);
+          if (child.exitCode !== null || child.signalCode !== null) {
+            throw new Error(`exited before it answered (${child.signalCode ? `signal ${child.signalCode}` : `exit code ${child.exitCode}`})`);
+          }
+        },
+      });
+      if (!ready) throw new Error(m.serverNotReady());
+    } finally {
+      child.off("exit", onChildEnd);
+      child.off("error", onChildEnd);
     }
   };
   const serverProcess = launchWeb(serverRef.release, relaunch.isReplacementStart());
@@ -1380,7 +1395,7 @@ async function main() {
 
   const { readiness } = serverProcess;
   try {
-    await waitForReadiness(relaunch.isReplacementStart() ? RESTART_READINESS_TIMEOUT_MS : READINESS_TIMEOUT_MS, serverProcess, serverRef.release);
+    await waitForReadiness(relaunch.startupExpiry() - VIEWER_PAGE_CHECK_TIMEOUT_MS, serverProcess, serverRef.release);
     if (relaunch.isReplacementStart()) {
       const page = await waitForPageAndChunk(options.port, { headers: probeHeaders(), onPhase: readiness.observe });
       if (page) throw new Error(page);
@@ -1448,6 +1463,7 @@ async function main() {
      packaged installs whose launcher supports relaunch. */
   {
     const attemptWeb = async (release, verifyPage = true, keepWhenRefused = false) => {
+      const expiry = Date.now() + WEB_RECOVERY_TIMEOUT_MS - (verifyPage ? VIEWER_PAGE_CHECK_TIMEOUT_MS : 0);
       if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname, packageRoot)) {
         return "port-in-use";
       }
@@ -1458,7 +1474,7 @@ async function main() {
       const handle = launchWeb(release, true);
       const { readiness } = handle;
       try {
-        await waitForReadiness(RESTART_READINESS_TIMEOUT_MS, handle, release);
+        await waitForReadiness(expiry, handle, release);
         if (verifyPage) {
           const page = await waitForPageAndChunk(options.port, { headers: probeHeaders(), onPhase: readiness.observe });
           if (page && keepWhenRefused && /^GET \/ answered 40[13]$/.test(page)) {
@@ -1673,12 +1689,15 @@ function handOffLauncher({ checkout, entry, record }) {
       cwd: checkout, env, stdio: ["inherit", "inherit", "inherit", "ipc"],
     });
     let forwarded = false;
+    let shutdownRequested = false;
     let startupSettled = false;
+    let deadlineHandling = false;
     let signalStopTimer;
     let signalKillTimer;
     const forward = (signal) => {
       if (forwarded) return;
       forwarded = true;
+      shutdownRequested = true;
       if (child.exitCode === null && child.signalCode === null) {
         child.kill(signal);
         if (startupSettled) {
@@ -1721,13 +1740,21 @@ function handOffLauncher({ checkout, entry, record }) {
       done(started);
     };
     child.once("error", (error) => { spawnError = error; });
+    const exitStatus = (code, signal) => code ?? (signal ? 128 + (constants.signals[signal] ?? 0) : 1);
+    const oneShot = ["team", "stop", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
     child.once("close", (code, signal) => {
-      const status = code ?? (signal ? 128 + (constants.signals[signal] ?? 0) : 1);
+      // While the deadline owner performs rollback, bounded cleanup, and the
+      // verified fallback decision, it alone settles the handoff.
+      if (deadlineHandling) return;
+      // A replacement that ends during startup after its switch expired still
+      // leaves a pointer and services to account for. Decide that now: a
+      // rescheduled timer would hold this launcher with no child to watch.
+      if (!startupSettled && !oneShot && active && Date.now() >= deadline) { onDeadline(); return; }
+      const status = exitStatus(code, signal);
       let recorded = false;
       if (child.pid) {
         try { recorded = JSON.parse(readFileSync(record, "utf8"))?.launcher?.pid === child.pid; } catch { /* no record */ }
       }
-      const oneShot = ["team", "stop", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
       if (!recorded && !startupSettled && !forwarded && !oneShot) {
         console.error(`[self-update] installed launcher could not start (${spawnError?.message || `exit ${status}`}); using the checkout launcher.`);
         finish(false);
@@ -1753,29 +1780,53 @@ function handOffLauncher({ checkout, entry, record }) {
     const persistedDeadline = active
       ? Math.min(switchDeadline(apply), Number.isFinite(trial.switchDeadlineAt) ? trial.switchDeadlineAt : Infinity)
       : Infinity;
-    const deadline = Math.min(Date.now() + TERMINAL_BOOTSTRAP_TIMEOUT_MS,
+    const bootstrapDeadline = Date.now() + TERMINAL_BOOTSTRAP_TIMEOUT_MS;
+    const deadline = Math.min(bootstrapDeadline,
       Number.isFinite(persistedDeadline) ? persistedDeadline : Infinity);
-    timer = setTimeout(() => { void (async () => {
+    const scheduleDeadline = at => {
+      timer = setTimeout(onDeadline, Math.max(1, at - Date.now()));
+      timer.unref?.();
+    };
+    const onDeadline = () => { void (async () => {
+      clearTimeout(timer);
       timer = undefined;
+      const running = child.exitCode == null && child.signalCode == null;
       const observed = json(record);
-      const childIsHealthy = startupHandoffSucceeded(child.pid, child.exitCode == null && child.signalCode == null, forwarded, observed);
       // The startup bound ends when this exact child has published a complete
       // healthy generation. Its normal lifetime is then governed by close.
-      if (childIsHealthy) { startupSettled = true; return; }
-      const switchOverrun = active && Date.now() >= persistedDeadline;
-      const detail = switchOverrun
+      if (startupHandoffSucceeded(child.pid, running, forwarded, observed)) { settled(); return; }
+      const currentTrial = json(trialFile);
+      const matchingTrial = currentTrial?.requestId === trial?.requestId && currentTrial?.target === trial?.target;
+      const decision = launcherStartupDeadline({ active, switchDeadline: persistedDeadline,
+        trial: matchingTrial ? currentTrial : null, requestId: trial?.requestId, target: trial?.target,
+        bootstrapDeadline, teardownGraceMs: 2 * STOP_TIMEOUT_MS });
+      if (!decision.expired && running) {
+        scheduleDeadline(decision.deadline);
+        return;
+      }
+      deadlineHandling = true;
+      clearInterval(healthTimer);
+      const terminalTrial = matchingTrial ? currentTrial : trial;
+      // A replacement that restored the prior selection and ended inside the
+      // rollback window leaves that rollback to the next start.
+      const rollbackPending = !decision.expired && decision.phase === "rollback";
+      const rollbackExpired = decision.expired && decision.phase === "rollback";
+      const switchOverrun = decision.phase === "switch";
+      const detail = decision.phase === "refused" ? terminalTrial?.detail ?? "The launcher refused startup"
+        : switchOverrun
         ? SWITCH_OVERRUN
-        : "The replacement launcher did not become ready before its startup deadline";
-      if (active) {
-        const refusedTrial = switchOverrun ? { ...trial, switchOverrun: trial.switchOverrun ?? SWITCH_OVERRUN } : trial;
+        : rollbackExpired ? "The launcher rollback exceeded its 10 minute deadline"
+          : "The replacement launcher did not become ready before its startup deadline";
+      if (active && !rollbackPending) {
+        const refusedTrial = switchOverrun ? { ...terminalTrial, switchOverrun: terminalTrial.switchOverrun ?? SWITCH_OVERRUN } : terminalTrial;
         if (switchOverrun) writeFileSync(trialFile, `${JSON.stringify(refusedTrial)}\n`, { mode: 0o600 });
         const pointer = join(directory, `release-${suffix}`);
-        if (json(pointer)?.sha === trial.target) {
-          if (trial.rollbackPointer === null) {
+        if (json(pointer)?.sha === terminalTrial.target) {
+          if (terminalTrial.rollbackPointer === null) {
             try { rmSync(pointer, { force: true }); } catch { /* refusal remains durable */ }
-          } else if (typeof trial.rollbackPointer === "string") {
+          } else if (typeof terminalTrial.rollbackPointer === "string") {
             const temporary = `${pointer}.${process.pid}.rollback`;
-            try { writeFileSync(temporary, trial.rollbackPointer, { mode: 0o600 }); renameSync(temporary, pointer); }
+            try { writeFileSync(temporary, terminalTrial.rollbackPointer, { mode: 0o600 }); renameSync(temporary, pointer); }
             catch { try { rmSync(temporary, { force: true }); } catch { /* refusal remains durable */ } }
           }
         }
@@ -1808,9 +1859,17 @@ function handOffLauncher({ checkout, entry, record }) {
         try { await boundedWait(closed, STOP_TIMEOUT_MS, "The replacement launcher did not exit after SIGKILL"); }
         catch (error) { console.error(`[self-update] replacement launcher cleanup exceeded its deadline: ${error.message}`); }
       }
-      finish(true);
-    })(); }, Math.max(1, deadline - Date.now()));
-    timer.unref?.();
+      // Only resume the checkout path after proving that the failed candidate
+      // is no longer selected. Shutdown owns the handoff when requested.
+      let selected = null;
+      try { selected = readFileSync(join(directory, `release-${suffix}`), "utf8"); } catch { /* absent pointer */ }
+      const restored = !active || rollbackSelectionMatches(selected, terminalTrial.rollbackPointer);
+      const resume = active && (switchOverrun || rollbackPending) && restored && !shutdownRequested;
+      // A service manager restarts on the replacement's own failure status.
+      if (!resume) process.exitCode = exitStatus(child.exitCode, child.signalCode);
+      finish(!resume);
+    })(); };
+    scheduleDeadline(deadline);
   });
 }
 
