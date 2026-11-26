@@ -5535,3 +5535,37 @@ test.each(["declared", "mismatch", "oversize", "unavailable", "marker", "documen
     expect(completions).toBe(1);
   } finally { await server.close(); }
 });
+
+test("an unreadable history photo does not suppress a sticker-only trigger", async () => {
+  const request = richRequest();
+  request.request_id = "unreadable-history-photo-sticker-trigger";
+  request.features!.push("requester_context", "relay_media_in", "relay_history_media");
+  request.input.request_text = null;
+  const sample = request.input.conversation[0]!;
+  const trigger = { ...sample, text: "", kind: "sticker" as const, sticker_emoji: "⭐️", sticker_format: "tgs" as const,
+    media_description: "A star spins slowly." };
+  const historyPhoto = { ...sample, id: "older-photo", text: "", media: [{ ref: "missing-history-photo", kind: "photo" as const,
+    availability: "missing" as const, mime_type: "image/jpeg", byte_size: 12, expires_at: "2099-01-01T00:00:00Z" }] };
+  request.input.respond_to = trigger.id;
+  request.input.conversation = [historyPhoto, trigger];
+  const completions: unknown[] = [];
+  const server = await startTestRelay(req => {
+    if (req.url?.endsWith("/complete")) completions.push(req);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  const marker = path.join(root, "sticker-trigger-prompt");
+  const fake = stub(`const a=process.argv.slice(2), prompt=await Bun.stdin.text();
+    await Bun.write(${JSON.stringify(marker)},prompt);
+    await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Seen',reply_to:null}));`);
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: fake });
+    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Seen" } });
+    expect(completions).toHaveLength(1);
+    const prompt = fs.readFileSync(marker, "utf8");
+    expect(prompt).toContain("sticker ⭐️: A star spins slowly.");
+    expect(prompt).toContain('"sticker_format":"tgs"');
+    expect(prompt).not.toContain("Media could not be read");
+  } finally { await server.close(); }
+});

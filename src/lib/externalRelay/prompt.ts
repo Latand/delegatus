@@ -96,8 +96,11 @@ export function conversationTurnPrompt(request: ExternalRelayRequest, record: Re
   const sections = `${formatSection(request)}<service_instructions>\n${input.instructions}\n</service_instructions>\n<owner_instructions>\n${input.owner_instructions ?? ""}\n</owner_instructions>\n<documents>\n${json(input.documents)}\n</documents>\n<short_term_memory>\n${json(input.short_term_memory ?? null)}\n</short_term_memory>\n<tools>\n${json(visibleRelayTools(request))}\n</tools>\n<tool_guidance>\n${json(input.tool_guidance ?? null)}\n</tool_guidance>\n`;
   const digest = createHash("sha256").update(sections).digest("hex");
   const seen = new Set(record.seen);
-  const messages = input.conversation.filter((message) => {
-    if (seen.has(message.id)) return false;
+  const unseen = input.conversation.filter(message => !seen.has(message.id));
+  const linkedStickerIds = new Set(unseen.flatMap(message => message.reply_to ? [message.reply_to] : []));
+  const messages = input.conversation.filter(message => {
+    const isUpdatedLinkedSticker = message.kind === "sticker" && !!message.media_description && linkedStickerIds.has(message.id);
+    if (seen.has(message.id) && !isUpdatedLinkedSticker) return false;
     seen.add(message.id);
     return true;
   });

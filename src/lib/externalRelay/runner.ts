@@ -1208,8 +1208,10 @@ export async function runClaimedRequest(
         }
         request.input.documents = request.input.documents.filter(document => !document.media_ref || !refused.has(document.media_ref));
         const trigger = request.input.conversation.find(message => message.id === request.input.respond_to);
-        const triggerText = (trigger?.text ?? "").trim().replace(/^\[(?:Media attached; description unavailable|Document attached; filename=[^\r\n]+; mime_type=[^\r\n]+; byte_size=\d+)\]\s*$/gm, "").trim();
-        if (inbound.skipped.length && !inbound.files.length && !request.input.request_text?.trim() && !triggerText) {
+        const triggerContext = trigger ? promptConversationMessage(trigger) : undefined;
+        const triggerText = (triggerContext?.text ?? "").trim().replace(/^\[(?:Media attached; description unavailable|Document attached; filename=[^\r\n]+; mime_type=[^\r\n]+; byte_size=\d+)\]\s*$/gm, "").trim();
+        if (inbound.skipped.length && !inbound.files.length && !request.input.request_text?.trim()
+          && !triggerText && !triggerContext?.media_description?.trim()) {
           const labels: Record<string, string> = { unsupported_media_type: "unsupported media type", too_large: "media too large",
             protected: "protected media", missing: "media unavailable", media_unavailable: "media unavailable" };
           const reasons = [...new Set(inbound.skipped.map(item => labels[item.reason] ?? "media unavailable"))];

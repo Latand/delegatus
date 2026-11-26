@@ -264,6 +264,31 @@ test("a resumed turn delivers a missing message once and never credits an absent
   expect(section(third.prompt, "conversation")).toEqual([]);
 });
 
+test("a linked sticker refreshes its newly available description after its ID was seen", () => {
+  const request = requestSchema.parse(sampleRequest);
+  const trigger = request.input.conversation[0]!;
+  const sticker = { ...trigger, id: "linked-sticker", text: "", kind: "sticker", sticker_emoji: "⭐️", sticker_format: "tgs" };
+  const firstRequest = { ...request, input: { ...request.input, respond_to: sticker.id, conversation: [sticker] } };
+  const record = { seen: [], staticDigest: null } as unknown as RelayConversation;
+  const first = conversationTurnPrompt(firstRequest, record, "[round]");
+  expect(section(first.prompt, "conversation")).toHaveLength(1);
+  expect(first.seen).toEqual([sticker.id]);
+
+  const updated = { ...sticker, media_description: "A small star spins." };
+  const followup = { ...request, input: { ...request.input, respond_to: "linked-followup",
+    conversation: [updated, { ...trigger, id: "linked-followup", reply_to: updated.id, text: "What is shown?" }] } };
+  const continued = conversationTurnPrompt(followup, { ...record, seen: first.seen, staticDigest: first.digest }, "[round]");
+  expect(section(continued.prompt, "conversation")).toEqual([
+    expect.objectContaining({ id: updated.id, media_description: "sticker ⭐️: A small star spins." }),
+    expect.objectContaining({ id: "linked-followup", text: "What is shown?" }),
+  ]);
+  expect(continued.seen).toEqual(first.seen.concat("linked-followup"));
+
+  const legacy = { ...followup, input: { ...followup.input, conversation: [trigger, { ...trigger, id: "legacy-followup", reply_to: trigger.id }] } };
+  expect(section(conversationTurnPrompt(legacy, { ...record, seen: [trigger.id], staticDigest: first.digest }, "[round]").prompt, "conversation"))
+    .toEqual([expect.objectContaining({ id: "legacy-followup" })]);
+});
+
 test("negotiated conversation turns trust only the formatting section alongside the answer frame", () => {
   const request = richRequest();
   const record = { seen: [], staticDigest: null } as unknown as RelayConversation;
