@@ -192,9 +192,10 @@ function githubConfigDirectory(sourceEnv: NodeJS.ProcessEnv): string {
     the read-only declared-output fence. A legacy boolean preserves the old
     read-only host profile for non-pipeline callers and stored sessions.
 
-    Every pipeline stage (an explicit profile, either sandbox) runs with
-    `TMPDIR` in its own scratch directory under `statePath("scratch")`, on the
-    disk the state lives on. Attempt settlement queues its retirement; live
+    Every structured launch (pipeline stages, spawned agents, seats, and the
+    same launches re-hosted after a restart) runs with `TMPDIR`, `TMP` and
+    `TEMP` in its own scratch directory under `statePath("scratch")`, on the
+    disk the state lives on, never on a tmpfs `/tmp`. Attempt settlement queues its retirement; live
     process references and declared evidence hold it (#1957). A
     reviewer's export of the head it reviews, about a gigabyte with its
     dependencies, used to land in the shared temp filesystem and stay there
@@ -262,7 +263,7 @@ export function materializeStructuredHostAccess(
       return {
         env: {
           ...baseEnv,
-          TMPDIR: temporaryDirectory,
+          TMPDIR: temporaryDirectory, TMP: temporaryDirectory, TEMP: temporaryDirectory,
           CLAUDE_CODE_TMPDIR: sourceEnv.CLAUDE_CODE_TMPDIR || sourceEnv.TMPDIR || os.tmpdir(),
         },
         codex: { sandbox: "danger-full-access" },
@@ -287,7 +288,7 @@ export function materializeStructuredHostAccess(
     return {
       env: {
         ...baseEnv,
-        TMPDIR: temporaryDirectory,
+        TMPDIR: temporaryDirectory, TMP: temporaryDirectory, TEMP: temporaryDirectory,
         ...(!ownerRelayHandoffOnly ? { GH_CONFIG_DIR: githubConfigDirectory(sourceEnv) } : {}),
       },
       codex,

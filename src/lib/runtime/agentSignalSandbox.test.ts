@@ -602,6 +602,35 @@ function bridgeShim(root: string, python = "/usr/bin/python3", engine = "/bin/sh
 
 const signalRuns = path.join(os.homedir(), ".cache/delegatus/signal-runs");
 
+/* The image's nsenter is setuid, so glibc starts it in secure-execution mode
+ * and removes TMPDIR from its environment (glibc's unsecure variables). This
+ * enter step does what that loader does, then runs the host side. */
+function secureExecEnter(root: string): string {
+  const enter = path.join(root, "secure-enter");
+  fs.writeFileSync(enter, `#!/bin/sh\nexec env -u TMPDIR "$@"\n`, { mode: 0o700 });
+  return enter;
+}
+
+test.skipIf(process.platform !== "linux")("the host shim carries a stage TMPDIR across the setuid nsenter to the engine", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-bridge-tmpdir-"));
+  try {
+    const shim = bridgeShim(root);
+    const stage = path.join(root, "state", "scratch", "llv-stage-fixture", "tmp");
+    fs.mkdirSync(stage, { recursive: true });
+    const probe = ["-c", 'printf "%s|%s|%s" "${TMPDIR-unset}" "${TMP-unset}" "${LLV_SHIM_TMPDIR-unset}"'];
+    const run = (env: NodeJS.ProcessEnv) => spawnSync(shim, probe, { cwd: root, env, encoding: "utf8", timeout: 5_000 });
+    const carried = run(fallbackEnv(root, { FIXTURE_ENTER: secureExecEnter(root), TMPDIR: stage, TMP: stage }));
+    expect(carried.status, carried.stderr).toBe(0);
+    expect(carried.stdout).toBe(`${stage}|${stage}|unset`);
+    // An unset TMPDIR stays unset: a stale carrier from an outer launch never becomes one.
+    const unsetEnv = fallbackEnv(root, { FIXTURE_ENTER: secureExecEnter(root), LLV_SHIM_TMPDIR: path.join(root, "stale") });
+    delete unsetEnv.TMPDIR; delete unsetEnv.TMP;
+    const unset = run(unsetEnv);
+    expect(unset.status, unset.stderr).toBe(0);
+    expect(unset.stdout).toBe("unset|unset|unset");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test.skipIf(process.platform !== "linux")("the host shim warns on a refused score before hiding native stdio and still execs", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-bridge-score-refused-"));
   try {

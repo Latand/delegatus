@@ -20,6 +20,7 @@ import { Database } from "bun:sqlite";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { procBackend } from "@/lib/proc";
+import { statePath } from "@/lib/configDir";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { STRUCTURED_HOST_STAMP_ENV, structuredHostStamp } from "@/lib/scanner/process";
 import { clearTelegramConnection, saveTelegramSession, writeTelegramConnection, TELEGRAM_CONNECTOR_TOKEN_ENV } from "@/lib/telegram/sessionStore";
@@ -7446,6 +7447,12 @@ test.each([false, true])("Codex child environments preserve the production evide
   try {
     expect(captured.options?.env?.LLV_EVIDENCE_DIR).toBe(access.env.LLV_EVIDENCE_DIR);
     expect(captured.options?.env?.TMPDIR).toBe(access.env.TMPDIR);
+    /* The launched Codex process gets the attempt scratch under the state
+       root as TMPDIR, TMP and TEMP, fresh and adopted alike. */
+    expect(access.env.TMPDIR).toBe(path.join(access.scratchDirectory!, "tmp"));
+    expect(path.dirname(access.scratchDirectory!)).toBe(statePath("scratch"));
+    expect(captured.options?.env?.TMP).toBe(access.env.TMPDIR);
+    expect(captured.options?.env?.TEMP).toBe(access.env.TMPDIR);
   } finally { await host.release(); access.cleanup(); }
 });
 
