@@ -27,6 +27,7 @@ import { ProjectStep, type GuideProject } from "./ProjectStep";
 import { RelayStep } from "./RelayStep";
 import { TelegramReportsStep } from "./TelegramReportsStep";
 import type { MemorySourceState } from "@/components/memory/MemorySourceRow";
+import { TelemetryNoticeSlot } from "@/components/telemetry/TelemetrySettings";
 import { putOnboarding, unfinishedFirstRun, useOnboarding, type OnboardingMarkerStatus, type OnboardingMode } from "./useOnboarding";
 import { VoiceStep } from "./VoiceStep";
 
@@ -595,6 +596,7 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
           {heading}
           <div className={heading ? "mt-4" : ""}>{content}</div>
         </div>
+        <TelemetryNoticeSlot />
         {footerButtons ? (
           <footer className="flex shrink-0 flex-wrap gap-2 border-t border-border bg-raised px-4 pb-[calc(10px+env(safe-area-inset-bottom))] pt-2.5">
             {footerButtons}
@@ -639,6 +641,8 @@ export function OnboardingDialog({ mode, initialStep, marker, markerStatus = "pe
             <div className={heading ? "mt-4" : ""}>{content}</div>
           </div>
         </div>
+        {/* The install notice, while it is undismissed: drawn here, it leaves the footer's buttons whole. */}
+        <TelemetryNoticeSlot />
         {footerButtons ? (
           <footer className="flex h-[60px] shrink-0 items-center justify-end gap-2 border-t border-border bg-raised px-4">
             {/* Between 640 and 860 px the orchestrator step needs the row for its buttons. */}
