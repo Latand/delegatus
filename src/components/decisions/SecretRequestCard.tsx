@@ -159,12 +159,12 @@ export function SecretRequestCard({ request, narrow, onCollapse, onUpdate }: {
             </div>
             {request.task ? <div className="[overflow-wrap:anywhere]"><dt className="inline font-semibold">{t("secretRequest.task")} </dt>
               <dd className="m-0 inline"><bdi>{request.task.title}</bdi></dd></div> : null}
-            <div className="min-w-0">
-              <dt className="font-semibold">{t("secretRequest.destination")}</dt>
-              <dd className="m-0 flex min-w-0 flex-col gap-0.5 [overflow-wrap:anywhere]">
+            <div className="min-w-0 [overflow-wrap:anywhere]">
+              <dt className={`font-semibold ${narrow ? "" : "mr-2 inline"}`}>{t("secretRequest.destination")}</dt>
+              <dd className={`m-0 min-w-0 ${narrow ? "flex flex-col gap-0.5" : "inline"}`}>
                 <code className="font-mono text-label" dir="ltr" data-secret-destination="">{destination.path}</code>
-                <span>{effect} · {t(`secretRequest.git.${destination.git}`)}</span>
-                {request.lastSet ? <span className="text-secondary">{t("secretRequest.lastSet", { at: date(request.lastSet.at), reference: `#secret-${request.lastSet.id.slice(3, 11)}` })}</span> : null}
+                <span className="block">{effect} · {t(`secretRequest.git.${destination.git}`)}</span>
+                {request.lastSet ? <span className="block text-secondary">{t("secretRequest.lastSet", { at: date(request.lastSet.at), reference: `#secret-${request.lastSet.id.slice(3, 11)}` })}</span> : null}
               </dd>
             </div>
           </dl>
