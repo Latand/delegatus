@@ -21,7 +21,7 @@ import { noteRelayOutcome, relayActivity, relayOutcomeLabel } from "./activity";
 import { pruneAnswerRecords, recordAnswerCompletionRefusal, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
 import { recordCompletionRefusal } from "./completionRefusal";
 import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
-import { requestSchema, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND, type ExternalRelayCompletion } from "./protocol";
+import { requestSchema, RELAY_DM_TASK_CHOICES, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND, type ExternalRelayCompletion } from "./protocol";
 import { RELAY_HISTORY_MEDIA, RELAY_MEDIA_ANY_DOCUMENT } from "./mediaInputValidation";
 import {
   advertisedSlots,
@@ -475,6 +475,7 @@ export function relayClaimCapabilities(relay?: Pick<PairedRelay, "features">) {
   const switches = readRelaySwitches();
   const rich = switches.rich_media && relay?.features?.includes("relay_rich_messages");
   const features = [...CLAIM_FEATURES,
+    ...(relay?.features?.includes(RELAY_DM_TASK_CHOICES) ? [RELAY_DM_TASK_CHOICES] : []),
     ...(relay?.features?.includes(RELAY_TOOLS_ON_DEMAND) ? [RELAY_TOOLS_ON_DEMAND] : []),
     ...(relay?.features?.includes("relay_media_in") ? ["relay_media_in"] : []),
     ...(relay?.features?.includes("relay_media_in") && relay.features.includes(RELAY_HISTORY_MEDIA) ? [RELAY_HISTORY_MEDIA] : []),

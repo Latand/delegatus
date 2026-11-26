@@ -212,6 +212,34 @@ export const inputSchema = z.object({
   }
 });
 const chatKey = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/);
+export const RELAY_DM_TASK_CHOICES = "relay_dm_task_choices";
+const chatType = z.enum(["private", "group", "supergroup", "channel"]);
+const choiceValue = z.string().regex(/^[A-Za-z0-9_-]{22,64}$/);
+// The service gets chat.type from Telegram's chat on the trigger or callback.
+// It uses the same target-scoped sender key and stable chat/message references
+// on redelivery. The legacy chat object still tolerates malformed metadata.
+const requestChat = z.object({ key: chatKey, title: boundedString(200).optional().catch(undefined), type: chatType.optional() });
+// A button_choice claim carries the original DM as input.respond_to and the
+// authenticated clicker as input.requester. The service verifies the click
+// against the exact Telegram message it sent using choice_buttons.message_id,
+// and echoes that opaque reference, the clicked value and the original expiry.
+const buttonChoice = z.strictObject({
+  sender_key: id, chat_key: chatKey, message_id: id, value: choiceValue, expires_at: time,
+});
+// Only a peer negotiating relay_dm_task_choices receives this answer field.
+// Each choice button is { text, value }. The service binds message_id and expiry
+// to that exact sent keyboard and uses stable, idempotent completion delivery.
+// Ordinary URL buttons keep their existing answer.buttons { text, url } shape.
+export const relayChoiceButtonsSchema = z.strictObject({
+  message_id: id,
+  expires_at: time,
+  rows: z.array(z.array(z.strictObject({
+    text: label.refine(text => text.trim().length > 0 && [...text].length <= 64), value: choiceValue,
+  })).min(1).max(3)).min(1).max(100),
+}).refine(({ rows }) => {
+  const values = rows.flat().map(button => button.value);
+  return values.length <= 100 && new Set(values).size === values.length;
+});
 /** Supplied only by the service for its verified pairing owner. Opaque message
  * references elsewhere in a claim cannot be converted into this destination. */
 export const ownerDeliverySchema = z.object({
@@ -232,7 +260,8 @@ const answerRequestSchema = z.object({
   liveness: livenessSchema,
   // The chat key of §A.8, kept for the member limit and the records. A
   // malformed one is dropped, as an unknown field would be.
-  chat: z.object({ key: chatKey, title: boundedString(200).optional().catch(undefined) }).optional().catch(undefined),
+  chat: requestChat.optional().catch(undefined),
+  button_choice: buttonChoice.optional(),
   input: inputSchema,
   answer: z.object({
     attachments: relayAttachmentLimitsSchema.optional().catch(undefined),
@@ -244,6 +273,8 @@ const answerRequestSchema = z.object({
 export const requestSchema = z.preprocess((raw, context) => {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
   let value = raw as Record<string, unknown>;
+  if (value.chat && typeof value.chat === "object" && Object.hasOwn(value.chat, "type") && !requestChat.safeParse(value.chat).success)
+    context.addIssue({ code: "custom", path: ["chat"], message: "invalid verified chat" });
   const mediaPolicy = {
     delivery: value.delivery === "guest" ? "guest" as const : undefined,
     features: Array.isArray(value.features) ? value.features : undefined,
@@ -314,6 +345,11 @@ export const requestSchema = z.preprocess((raw, context) => {
 }, answerRequestSchema.superRefine((request, context) => {
   const { input } = request;
   const { requester } = input;
+  const choice = request.button_choice;
+  if (choice && (request.delivery === "guest" || !request.features?.includes(RELAY_DM_TASK_CHOICES)
+    || request.chat?.type !== "private" || request.chat.key !== choice.chat_key
+    || requester?.key !== choice.sender_key || requester.is_anonymous_admin || !requesterTrigger(input)))
+    context.addIssue({ code: "custom", path: ["button_choice"], message: "invalid private-chat button choice" });
   const invalidRequester = request.delivery === "guest"
     ? !requester || !requesterTrigger(input) || requester.is_anonymous_admin
       || !requester.is_owner && (requester.is_admin || requester.can_restrict_members || requester.can_delete_messages)
@@ -449,6 +485,7 @@ export type RelayAttachment = { attachment_id: string; kind: RelayMediaKind; cap
 export type ExternalRelayAnswer = {
   format?: "plain" | "rich_markdown";
   buttons?: RelayUrlButton[][];
+  choice_buttons?: z.infer<typeof relayChoiceButtonsSchema>;
   mentions?: RelayMention[];
   attachments?: RelayAttachment[];
   action: "reply" | "ignore";
