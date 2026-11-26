@@ -618,6 +618,65 @@ other processes.
 
 Starts after #4471 lands with its P1 fix.
 
+**Corrected scope (2026-11-26).** #4471 shipped and a work install still removed
+nothing: its ledger sat under its cap while about a thousand
+`state/scratch/llv-stage-*` directories, hundreds of GB, were not in the ledger
+at all, and the stage server's ledger was far over its cap with the same effect.
+The cap was the only trigger and the ledger the only inventory. Slice 1 therefore
+also deletes the directories the ledger holds no owner for and starts on free
+space, not on the cap alone. `src/lib/runtime/unregisteredScratch.ts` does this
+in the minute tick, before the ledger page, under the ledger sweep's admission
+lock:
+
+- **Candidates.** Direct children of `$STATE/scratch` named like stage scratch
+  (`llv-stage-*`, `llv-read-only-stage-*`) that have no ledger row, or only the
+  ownerless `adopted` row legacy adoption wrote. A root that recorded custody
+  names, or that a live ledger row owns, stays with the ledger.
+- **A root qualifies** when nothing in its tree was modified for 24 hours (the
+  newest `mtime` of the root and every entry, a bounded walk that stops at the
+  first newer entry), no live process references it (the ledger's reference
+  observer: cwd with the procfs rule, open files, `root`, mappings, arguments,
+  environment, sockets, checkout links, container mounts), it passes
+  canonical-path admission (a real directory directly under the real scratch
+  root, never reached through a link, never under backups or evidence), and no
+  `.delegatus-keep` marker, nested Git checkout, linked report picture, recorded
+  custody, mount or open lane holds it. The last proofs are repeated
+  synchronously before the rename.
+- **Kept and counted, with the reason and a time to look again:** every other
+  case, including an unreadable or unproven tree. A kept root waits for its own
+  deadline (`young` waits until its 24 hours end, a live reference ten minutes,
+  a hold on the tree six hours), so roots that cannot go never fill a pass. The
+  wait is stored in the ledger database and survives a restart.
+- **Trigger.** Each minute tick reads free bytes on the state volume and keeps
+  the readings of the last 20 minutes in the ledger. Below 50 GB, or more than
+  10 GB lost since the highest reading in the window, the pass runs with the
+  larger bound at once: 128 removals, 256 examined and 35 s, against 16, 48
+  and 15 s for an ordinary tick. Oldest roots go first in both. A failed
+  free-space reading never starts the larger pass and is reported.
+- **Crash safety.** The root is renamed into a tombstone beside it
+  (`.delegatus-scratch-trash-<dev>-<ino>-<uuid>`, a name no other owner uses) and
+  deleted by the owned remover with its deadline. A pass finishes the tombstones
+  it finds, after checking that the directory is the inode its name records and
+  that no live process references it. A tree this user cannot write gets owner
+  write access inside the tombstone and one more attempt; otherwise it is kept
+  as `unremovable_permissions`.
+- **Journal.** `$STATE/disk-cleaner/ordinary-<UTC date>.ndjson`, in the Cleaner's
+  row format with `reason`, `ageMs`, `identity`, `trigger` and a state-relative
+  `path`. An intent is fsynced before the rename and a failed write leaves the
+  tree in place. `bytes` is the allocation counted in the same walk that proved
+  the age (blocks, each hardlinked inode once), never the ledger value. A kept
+  root is written once per reason. Files older than 30 days go when a new day
+  opens.
+- **Report.** `attempt-temp-report.json` carries an `unregistered` block (roots
+  found, owned by the ledger, examined, removed, observed free-space gain, kept
+  by reason with their bytes, totals since the ledger began and the last working
+  pass) and the same facts in its summary.
+
+Not in this slice: worktrees (slice 2), the low-space state, operator warning
+and lane pause (slice 3), linked installs (slice 4). The 50 GB line here is the
+absolute one the requirement names; slice 3 adds the proportional floor for
+small disks.
+
 - The procfs and deleted-cwd rule in `RepositoryLinkInventory`, and the
   `checkout_unreadable` disposition change.
 - The shared allowlist predicate, used by the minute tick, the Cleaner and the
