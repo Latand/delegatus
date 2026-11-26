@@ -6,7 +6,7 @@ test("the retry bound stays small and incomplete samples cannot become FLAKY", a
   const run = (failures: TestSite[], passed: TestSite[]): TestRun => ({ failures, passed, completed: [site.file], elapsedMs: 0 });
   const base = run([], [site]), head = run([site], []);
   await expect(confirmFailures(base, head, side => side === "base" ? base : run([], []))).rejects.toThrow("missing or skipped test");
-  await expect(confirmFailures(base, head, () => run([{ ...site, kind: "error" }], []))).rejects.toThrow("incomplete runner");
+  await expect(confirmFailures(base, head, () => run([{ ...site, kind: "error" }], []))).rejects.toThrow("missing or skipped test");
   await expect(confirmFailures(base, head, () => { throw new Error("flaky rerun budget exhausted"); })).rejects.toThrow("budget exhausted");
   // A passing duplicate cannot certify recovery of another stable failing copy.
   const first = { ...site, occurrence: 0 }, second = { ...site, occurrence: 1 };
@@ -169,6 +169,22 @@ test("an unconfirmed between-tests diagnostic alone retains the deadline policy"
     throw new BudgetExhausted("diagnostic retry deadline");
   }).catch(error => error);
   expect(comparatorEnding(error).code).toBe(75);
+});
+
+test.each([true, false] as const)("a later deadline respects whether the same-selection diagnostic was already matched: %s", async matched => {
+  const site: TestSite = { file: "example.test.ts", suite: "", name: "target", kind: "test", occurrence: 0 };
+  const diagnostic: TestSite = { file: site.file, suite: "", name: "<hook error> shared tail", kind: "error", selection: "filtered", provenance: "at sourceFault (<checkout>/example.test.ts:8:2)" };
+  const otherOrigin = { ...diagnostic, provenance: "at unrelatedFault (<checkout>/example.test.ts:18:2)" };
+  const base: TestRun = { failures: [], passed: [site], completed: [site.file], elapsedMs: 0 };
+  const head: TestRun = { ...base, failures: [site], passed: [] };
+  let rounds = 0;
+  const error = await confirmFailures(base, head, side => {
+    if (side === "base") return { ...base, failures: [matched ? diagnostic : otherOrigin] };
+    rounds++;
+    if (rounds === 1) return { ...head, failures: [site, diagnostic], passed: [] };
+    throw new BudgetExhausted("confirmation deadline");
+  }).catch(error => error);
+  expect(comparatorEnding(error).code).toBe(matched ? 75 : 1);
 });
 
 test.each(["deadline", "completed", "no retry refusal", "pre-existing retry refusal"] as const)("diagnostic retry assertions keep their verdict across comparator processes: %s", mode => {

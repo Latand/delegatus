@@ -256,9 +256,27 @@ test("report errors are retained; incomplete reports and unidentifiable errors a
   const parsed = parseReport(xml, output, "f.test.ts", "/checkout");
   expect(parsed.passed[0]!.name).toBe('Ω & "quoted"\nnext'); expect(parsed.passed[0]!.suite).toBe("outer > inner");
   expect(parsed.failures[0]!.name).toContain("<checkout>/file.ts");
+  expect(parsed.failures[0]!.selection).toBe("full");
+  const filtered = parseReport(xml, `${output.trimEnd()}\n    at origin (/checkout/file.ts:9:3)\n----------------\n 1 error\n`, "f.test.ts", "/checkout", true);
+  expect(filtered.failures[0]!.selection).toBe("filtered");
   expect(() => parseReport(xml.slice(0, -12), "", "f.test.ts", "/checkout")).toThrow();
   expect(() => parseReport(xml.replace('tests="1"', 'tests="2"'), "", "f.test.ts", "/checkout")).toThrow();
   expect(() => parseReport(xml, " 1 error\n", "f.test.ts", "/checkout")).toThrow();
+});
+
+test("diagnostic identity includes normalized throw-site provenance and file selection", () => {
+  const report = (checkout: string, throwSite: string, filtered = false) => parseReport(
+    '<testsuites tests="1" failures="0"><testcase file="f.test.ts" name="passing" /></testsuites>',
+    `# Unhandled error between tests\n----------------\nTypeError: shared diagnostic\n    at ${throwSite} (${checkout}/f.test.ts:12:4)\n----------------\n 1 error\n`,
+    "f.test.ts", checkout, filtered).failures[0]!;
+  const candidate = report("/head/sandbox", "candidateFault");
+  const sameBase = report("/base/sandbox", "candidateFault");
+  const otherBase = report("/base/sandbox", "baseFault");
+  const filteredBase = report("/base/sandbox", "candidateFault", true);
+  const run = (site: TestSite): TestRun => ({ failures: [site], passed: [], completed: [site.file], elapsedMs: 0 });
+  expect(compareTests(run(sameBase), run(candidate)).preexisting).toHaveLength(1);
+  expect(compareTests(run(otherBase), run(candidate)).introduced).toHaveLength(1);
+  expect(compareTests(run(filteredBase), run(candidate)).introduced).toHaveLength(1);
 });
 
 test("an unnamed teardown failure remains a named blocking diagnostic without a filtered retry", async () => {

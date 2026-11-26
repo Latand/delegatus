@@ -143,6 +143,22 @@ test("a between-tests error present on both sides is PRE-EXISTING from the CLI a
   expect(accepted.stdout).not.toContain("gate error"); expect(accepted.stderr).not.toContain("gate error");
 });
 
+test("same diagnostic text from different throw sites remains NEW in the CLI", () => {
+  const f = fixture(`import { describe, test } from "bun:test";
+function baseFault() { throw new TypeError("shared diagnostic"); }
+test("anchor", () => {});
+describe("source", () => baseFault());`);
+  const base = f.base;
+  writeFileSync(path.join(f.dir, "example.test.ts"), `import { describe, test } from "bun:test";
+function candidateFault() { throw new TypeError("shared diagnostic"); }
+test("anchor", () => {});
+describe("source", () => candidateFault());`);
+  const refused = cliAt(f, base);
+  expect(refused.status, refused.stdout + refused.stderr).toBe(1);
+  expect(refused.stderr).not.toContain("gate error");
+  expect(refused.stdout).toContain("NEW example.test.ts: <between-tests error> TypeError: shared diagnostic");
+});
+
 test("a retry in a file whose base is broken the same way still confirms its candidates", async () => {
   const f = fixture(source(true));
   const counter = path.join(f.dir, "between-schedule");
@@ -160,7 +176,8 @@ test("stays red", () => expect(side === "base").toBe(true));`;
   expect(refused.stdout).toContain("FLAKY example.test.ts: recovers (base 2 pass/0 fail; head 1 pass/1 fail)");
   expect(refused.stdout).toContain("NEW example.test.ts: stays red");
   expect(refused.stdout).toContain(`PRE-EXISTING example.test.ts: <between-tests error> error: describe boom ${SAME_WAY}`);
-  expect(refused.stdout).toContain("1 new failures, 2 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
+  expect(refused.stdout).toContain("1 new failures, 3 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
+  expect(refused.stdout.match(/PRE-EXISTING example\.test\.ts: <between-tests error> error: describe boom/g)).toHaveLength(2);
   expect(refused.status).toBe(1);
 });
 

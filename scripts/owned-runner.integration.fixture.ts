@@ -69,18 +69,19 @@ for (const mode of ["complete", "exit", "deadline", "TERM", "INT", "KILL", "test
     const { root, env, repo } = portableFixture("unreachable");
     const record = path.join(root, "ready.json"), release = path.join(root, "release"), received = path.join(root, "signal");
     const portableOwner = path.join(root, "portable-runner-pid");
-    const shutdownTail = path.join(root, "shutdown-tail-entered");
+    const shutdownTail = path.join(root, "shutdown-tail-entered"), shutdownRelease = path.join(root, "shutdown-tail-release");
     const heldShutdown = entry === "direct" && mode === "KILL";
     if (heldShutdown) {
       // The dispatcher is killed while its portable runner holds stderr.
-      // Keep that runner in its final exit handler after the test body and
-      // sleeper have stopped, beyond the preload's two-second scope check.
+      // Hold that runner in its final exit handler until the parent proves the
+      // dispatcher exited while the inherited diagnostic pipe remains open.
       fs.writeFileSync(path.join(root, "shutdown-tail.ts"), `import fs from "node:fs";
 if (process.argv[1] === ${JSON.stringify(path.join(repo, "scripts/owned-runner.ts"))}) {
   fs.writeFileSync(${JSON.stringify(portableOwner)}, String(process.pid));
   process.once("exit", () => {
     fs.writeFileSync(${JSON.stringify(shutdownTail)}, String(process.pid));
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3500);
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    while (!fs.existsSync(${JSON.stringify(shutdownRelease)})) Atomics.wait(wait, 0, 0, 20);
   });
 }`);
       env.BUN_OPTIONS = "--preload=./shutdown-tail.ts";
@@ -113,7 +114,9 @@ test("portable lifetime", async () => {
     const runner = spawn(argv[0]!, argv.slice(1), { cwd: root, env, stdio: ["ignore", "ignore", "pipe"] });
     let diagnostic = ""; runner.stderr!.on("data", chunk => { diagnostic += String(chunk); });
     let closed = false;
+    let dispatcherExited = false;
     runner.once("close", () => { closed = true; });
+    runner.once("exit", () => { dispatcherExited = true; });
     runner.on("error", error => { diagnostic += String(error); });
     let owned: ProcessIdentity[] = [];
     let portableRunner: ProcessIdentity | undefined;
@@ -133,18 +136,26 @@ test("portable lifetime", async () => {
         const ended = new Promise(resolve => supervisor.once("exit", resolve));
         supervisor.kill("SIGKILL"); await ended;
       }
+      if (heldShutdown) {
+        await until(() => dispatcherExited, 5_000);
+        expect(closed).toBe(false);
+        await until(() => fs.existsSync(shutdownTail), 5_000);
+        expect(fs.readFileSync(shutdownTail, "utf8")).toBe(String(portableRunner!.pid));
+        expect(closed).toBe(false);
+        fs.writeFileSync(shutdownRelease, "release");
+      }
       // On SIGKILL, exit only accounts for the dispatcher. Close also waits
       // for the runner and guardians that inherited its diagnostic pipe.
       await until(() => closed, 12_000);
       await until(() => owned.every(identity => !processIdentityMayRun(identity)));
       if (portableRunner) {
-        expect(fs.readFileSync(shutdownTail, "utf8")).toBe(String(portableRunner.pid));
         expect(processIdentityMayRun(portableRunner)).toBe(false);
       }
       expect(processIdentityStatus(other)).toBe("alive");
       if (mode === "TERM" || mode === "INT") expect(fs.readFileSync(received, "utf8")).toBe(mode === "INT" ? "SIGINT" : "SIGTERM");
       expect(runner.exitCode).toBe(mode === "complete" ? 0 : mode === "exit" ? 1 : mode === "deadline" ? 124 : mode === "TERM" ? 143 : mode === "INT" ? 130 : mode === "KILL" ? null : 137);
     } finally {
+      if (heldShutdown) fs.writeFileSync(shutdownRelease, "release");
       const stopped = await Promise.allSettled([runner, bystander, ...(supervisor ? [supervisor] : [])].map(child => stopFixtureProcess(child)));
       if (!owned.length && fs.existsSync(record)) owned = JSON.parse(fs.readFileSync(record, "utf8"));
       for (const identity of owned) signalFixtureIdentity(identity, "SIGKILL");

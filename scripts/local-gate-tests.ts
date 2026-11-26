@@ -10,7 +10,7 @@ import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFing
 import { decisiveRefusal } from "../src/lib/pipelines/publication";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
-export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number }
+export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number; selection?: "full" | "filtered"; provenance?: string }
 export interface TestRun { failures: TestSite[]; passed: TestSite[]; elapsedMs: number; completed: string[] }
 const escapedTemporaryRoot = path.join(gateTemporaryRoot(), "delegatus-test-comparison-").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const privateTestRoot = new RegExp(`${escapedTemporaryRoot}[a-zA-Z0-9]{6}[/\\\\]test-[a-zA-Z0-9]{6}`, "g");
@@ -23,7 +23,7 @@ const key = (site: TestSite) => JSON.stringify([site.file, site.suite,
     .replace(/(owned runner: surviving owned processes: ).*$/, "$1<run-owned identities>")
     .replace(/(owned test children survived teardown: )[\d, ]*(; guardian=)/, "$1<run-owned identities>$2")
     .replace(/(owned test scope children survived teardown: )\d+ \((?:\d+:\d+|null)\)(?:, \d+ \((?:\d+:\d+|null)\))*$/, "$1<run-owned identities>")
-    : diagnosticName(site), site.kind]);
+    : diagnosticName(site), site.kind, site.selection ?? "full", site.provenance ?? ""]);
 const occurrenceKey = (site: TestSite) => JSON.stringify([key(site), site.occurrence ?? 0]);
 const comparisonKey = (site: TestSite) => site.kind === "test" && site.occurrence !== undefined ? occurrenceKey(site) : key(site);
 const mergeObservedSites = (first: readonly TestSite[], retry: readonly TestSite[]) => {
@@ -92,6 +92,10 @@ interface FlakySite extends TestSite { base: Counts; head: Counts }
 const occurrenceCount = (sites: readonly TestSite[], site: TestSite) => sites.filter(other => occurrenceKey(other) === occurrenceKey(site)).length;
 const fileDiagnostics = (run: TestRun) => run.failures.filter(site => site.kind === "error");
 const describeDiagnostics = (sites: readonly TestSite[]) => sites.map(site => `${site.file}: ${diagnosticName(site)}`).join("; ");
+const matchedDiagnosticKeys = (base: readonly TestSite[], head: readonly TestSite[]) => {
+  const remaining = new Set(base.map(key));
+  return new Set(head.flatMap(site => { const identity = key(site); if (!remaining.delete(identity)) return []; return [identity]; }));
+};
 
 /** Confirm new assertion failures and collect file diagnostics from the same
  * samples. A first-sample match is already PRE-EXISTING. Mixed assertion
@@ -102,6 +106,7 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
   const comparison = compareTests(base, head);
   const baseAssertions = base.failures.filter(site => site.kind === "test");
   let baseDiagnostics = fileDiagnostics(base);
+  const establishedDiagnosticMatches = matchedDiagnosticKeys(baseDiagnostics, fileDiagnostics(head));
   const initialAssertions = new Set(head.failures.filter(site => site.kind === "test").map(comparisonKey));
   const needsConfirmation = (site: TestSite) => site.kind === "test" && initialAssertions.has(comparisonKey(site));
   const flaky: FlakySite[] = [];
@@ -124,6 +129,7 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       assertWorkersSucceeded(samples);
       const baseRetry = samples[0]!.value, retry = samples[1]!.value;
       baseDiagnostics = mergeObservedSites(baseDiagnostics, fileDiagnostics(baseRetry));
+      for (const identity of matchedDiagnosticKeys(fileDiagnostics(baseRetry), fileDiagnostics(retry))) establishedDiagnosticMatches.add(identity);
       const observedBase = { ...base, failures: [...baseAssertions, ...baseDiagnostics] };
       const initial = compareTests(observedBase, head);
       const recovered = new Set<string>();
@@ -179,15 +185,18 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       // A complete paired sample can compare hook and between-tests errors
       // alongside the filtered assertions. If either sample is unusable, a
       // newly observed diagnostic still prevents a capacity-only verdict.
+      const currentDiagnosticMatches = matchedDiagnosticKeys(
+        fileDiagnostics(observed.base ?? { failures: [], passed: [], completed: [], elapsedMs: 0 }),
+        fileDiagnostics(observed.head ?? { failures: [], passed: [], completed: [], elapsedMs: 0 }));
       const unpaired = sides.flatMap(side => {
         const run = observed[side];
-        const known = new Set(fileDiagnostics(side === "base" ? base : head).map(key));
-        const errors = run && fileDiagnostics(run).filter(site => !known.has(key(site)));
+        const errors = run && fileDiagnostics(run).filter(site => !establishedDiagnosticMatches.has(key(site)) && !currentDiagnosticMatches.has(key(site)));
         return errors?.length ? [`${side} rerun: incomplete runner or between-tests error: ${describeDiagnostics(errors)}`] : [];
       });
       assertWorkersSucceeded(samples, unpaired);
       const baseRetry = samples[0]!.value, headRetry = samples[1]!.value;
       baseDiagnostics = mergeObservedSites(baseDiagnostics, fileDiagnostics(baseRetry));
+      for (const identity of matchedDiagnosticKeys(fileDiagnostics(baseRetry), fileDiagnostics(headRetry))) establishedDiagnosticMatches.add(identity);
       // Keep the established report order while rejudging diagnostics. The
       // filtered assertion results still go through the occurrence counts.
       const observedHead = mergeObservedSites([...comparison.introduced, ...comparison.preexisting], fileDiagnostics(headRetry));
@@ -258,6 +267,10 @@ export function compareTests(base: TestRun, head: TestRun) {
  */
 export function parseReport(xml: string, output: string, file: string, root: string, filtered = false): Omit<TestRun, "elapsedMs" | "completed"> {
   const attributes = (tag: string) => Object.fromEntries([...tag.matchAll(/([\w-]+)="([^"]*)"/g)].map(m => [m[1]!, decodeXML(m[2]!)]));
+  const provenance = (text: string) => text.split("\n").map(line => line.trim())
+    .filter(line => /^(?:at\s|[-*]\s+at\s)/.test(line))
+    .map(line => line.split(root).join("<checkout>").replace(/\x1b\[[0-9;]*m/g, ""))
+    .slice(0, 6).join("\n");
   const opening = xml.match(/<testsuites\b[^>]*>/)?.[0];
   if (!opening || !xml.trimEnd().endsWith("</testsuites>")) throw new Error("missing or incomplete JUnit report");
   const totals = attributes(opening);
@@ -280,7 +293,9 @@ export function parseReport(xml: string, output: string, file: string, root: str
         const tag = match[2]!.match(/<(?:failure|error)\b[^>]*>/)?.[0];
         const message = tag ? attributes(tag).message : undefined;
         if (!message) throw new Error("unidentified JUnit hook failure");
-        failures.push({ file, suite: site.suite, name: `<hook error> ${message.split(root).join("<checkout>")}`, kind: "error" });
+        const body = decodeXML((match[2] ?? "").replace(/<[^>]*>/g, " "));
+        failures.push({ file, suite: site.suite, name: `<hook error> ${message.split(root).join("<checkout>")}`, kind: "error",
+          selection: filtered ? "filtered" : "full", provenance: provenance(body) });
       } else failures.push(site);
       namedFailures++;
     }
@@ -294,7 +309,8 @@ export function parseReport(xml: string, output: string, file: string, root: str
     const message = match[1]!.match(/^(?:[\w.]*Error|error): (.*)$/m)?.[0];
     if (!message) throw new Error("unidentified error between tests");
     errors++;
-    failures.push({ file, suite: "", name: `<between-tests error> ${message.split(root).join("<checkout>")}`, kind: "error" });
+    failures.push({ file, suite: "", name: `<between-tests error> ${message.split(root).join("<checkout>")}`, kind: "error",
+      selection: filtered ? "filtered" : "full", provenance: provenance(match[1]!) });
   }
   const reportedErrors = Number(output.match(/^\s*(\d+) errors?\s*$/m)?.[1] ?? 0);
   if (errors !== reportedErrors) throw new Error("incomplete between-tests error diagnostics");
