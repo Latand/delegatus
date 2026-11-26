@@ -1167,6 +1167,10 @@ test.skipIf(!binary).each(["legacy", "contained", "contained-seat", "native", "n
         expect.objectContaining({ turnId: incumbent.operationId, status: "completed" }),
         ...(quick && !enabled ? [expect.objectContaining({ turnId: quick.operationId, status: "completed" })] : []),
       ]);
+    if (admission === "legacy") {
+      expect(ledger.load(host.identity.sessionId).map(row => [row.entry.id, row.delivered]))
+        .toEqual([[incumbent.operationId, true], [extra.operationId, true]]);
+    }
     if (enabled) {
       // Another held tool proves progress beyond the first delivery credit.
       const previousWrites = wireInputs.filter(frame => frame.type === "user").length;

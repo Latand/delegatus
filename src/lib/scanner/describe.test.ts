@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { Database } from "bun:sqlite";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import { z } from "zod";
 
@@ -111,6 +112,10 @@ test("symlinked and physical sibling worktrees keep one project after deletion",
 afterAll(() => {
   resetLegacyDocumentStoresForTests();
   resetStateReadonlyReaderForTests();
+  if (REAL_STATE !== undefined) process.env.LLV_STATE_DIR = REAL_STATE;
+  else delete process.env.LLV_STATE_DIR;
+  if (REAL_HOME !== undefined) process.env.HOME = REAL_HOME;
+  else delete process.env.HOME;
   // Linux permits unlinking open SQLite files; Windows requires them closed.
   if (process.platform === "linux" && fs.existsSync("/proc/self/fd")) {
     const held = fs.readdirSync("/proc/self/fd").flatMap(fd => {
@@ -118,10 +123,13 @@ afterAll(() => {
     }).filter(filename => filename.startsWith(SANDBOX + path.sep) && filename.includes("state.sqlite"));
     expect(held).toEqual([]);
   }
-  if (REAL_STATE !== undefined) process.env.LLV_STATE_DIR = REAL_STATE;
-  else delete process.env.LLV_STATE_DIR;
-  if (REAL_HOME !== undefined) process.env.HOME = REAL_HOME;
-  else delete process.env.HOME;
+  // Leaving WAL mode needs an exclusive lock, even where unlinking succeeds.
+  for (const file of new Bun.Glob("**/state.sqlite").scanSync({ cwd: SANDBOX })) {
+    using db = new Database(path.join(SANDBOX, file), { readwrite: true });
+    db.exec("PRAGMA busy_timeout = 0");
+    const mode = db.query<{ journal_mode: string }, []>("PRAGMA journal_mode = DELETE").get();
+    expect(mode?.journal_mode, file).toBe("delete");
+  }
   fs.rmSync(SANDBOX, { recursive: true, force: true });
 });
 
@@ -473,6 +481,48 @@ test("a Copilot session from a deleted worktree still groups under its parent re
     project: identity.project,
     worktree: "copilot-lane",
     title: "Fix the flaky test",
+  });
+  expect(projectForCwd(repo)).toBe(described.project);
+});
+
+test("an Antigravity session from a deleted worktree still groups under its parent repo", () => {
+  /* docs/design/antigravity-engine.md 3.5: an Antigravity transcript's cwd is
+     `session.start.data.cwd`, routed through `projectInfoFromCwd` so live and
+     deleted checkouts resolve to the exact same parent repository project. */
+  useStateDirectory("deleted-antigravity-state");
+  const repo = path.join(SANDBOX, "deleted-antigravity-main");
+  const identity = createRepository(repo);
+  const deadWorktree = path.join(repo, ".worktrees", "antigravity-lane");
+  expect(fs.existsSync(deadWorktree)).toBe(false);
+  const root = path.join(SANDBOX, "antigravity-home", "sessions");
+  const sessionId = crypto.randomUUID();
+  const transcript = path.join(root, sessionId, "events.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, [
+    {
+      type: "session.start",
+      data: {
+        sessionId,
+        cwd: deadWorktree,
+        model: "gemini-4-neon",
+        baseModel: "gemini-4-neon",
+        effort: "xhigh",
+        agyVersion: "1.5.13",
+      },
+      timestamp: "2026-11-23T20:00:00.000Z",
+    },
+    { type: "user.message", data: { content: "Investigate worktree grouping" }, timestamp: "2026-11-23T20:00:01.000Z" },
+  ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+
+  const described = describe("antigravity-sessions", root, transcript, fs.statSync(transcript));
+  expect(described).toMatchObject({
+    engine: "antigravity",
+    fmt: "antigravity",
+    kind: "session",
+    cwd: deadWorktree,
+    project: identity.project,
+    worktree: "antigravity-lane",
+    title: "Investigate worktree grouping",
   });
   expect(projectForCwd(repo)).toBe(described.project);
 });
@@ -1499,6 +1549,45 @@ test("deleted worktree still groups under its parent repo after SQLite import", 
   expect(projectInfoFromCwd(path.join(cwd, "src"))).toMatchObject({ project: identity.project, repo, worktree: "slice6-lane" });
 });
 
+
+test("deleted Codex worktree keeps its parent repository project via recorded worktree memory", () => {
+  useStateDirectory("deleted-codex-worktree-parent");
+  const base = path.join(SANDBOX, "codex-deleted-parent");
+  const repo = path.join(base, "main-repo");
+  const sessions = path.join(base, "sessions");
+  fs.mkdirSync(repo, { recursive: true });
+  const git = (args: string[]) => {
+    const res = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "-C", repo, ...args], { encoding: "utf8" });
+    if (res.status !== 0) throw new Error(res.stderr);
+  };
+  git(["init", "-q", "-b", "main"]);
+  git(["commit", "--allow-empty", "-qm", "initial"]);
+  git(["remote", "add", "origin", "https://example.invalid/team/native-fixture.git"]);
+  const codexCheckout = path.join(base, ".codex", "worktrees", "f1a2", "main-repo");
+  fs.mkdirSync(path.dirname(codexCheckout), { recursive: true });
+  git(["worktree", "add", "-q", "-b", "fixture-codex", codexCheckout, "main"]);
+
+  const parent = projectInfoFromCwd(repo)!;
+  const transcript = path.join(sessions, "ag-codex-wt-1", "events.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, `${JSON.stringify({ type: "session.start", data: { cwd: codexCheckout } })}\n${JSON.stringify({ type: "user.message", data: { content: "hi" } })}\n`);
+
+  const liveEntry = describe("antigravity-sessions", sessions, transcript, fs.statSync(transcript));
+  expect(liveEntry.project).toBe(parent.project);
+  expect(liveEntry.projectName).toBe(parent.displayName);
+  persistWorktreeMap();
+
+  git(["worktree", "remove", "--force", codexCheckout]);
+  expect(fs.existsSync(codexCheckout)).toBe(false);
+  globalCache("project-info-cwd-v2").clear();
+  globalCache("worktree-git").clear();
+  globalCache("project-overlay-v1").clear();
+
+  const deletedEntry = describe("antigravity-sessions", sessions, transcript, fs.statSync(transcript));
+  expect(deletedEntry.project).toBe(parent.project);
+  expect(deletedEntry.projectName).toBe(parent.displayName);
+  expect(projectRootForCwd(codexCheckout)).toBe(repo);
+});
 
 test("relay media refs are excluded from catalog titles and search prompts", async () => {
   const { conversationSearchText } = await import("./describe");

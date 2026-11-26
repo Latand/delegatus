@@ -239,7 +239,7 @@ Each claim and the code behind it:
 | What shows | File |
 |---|---|
 | The way in: «Learned rules · N rules» on the board's ⋯ menu; a row in the phone's project rules sheet | `src/components/roleMemory/LearnedRules.tsx` (`LearnedRulesRow`), mounted at `src/components/ProjectDashboard.tsx:2062` and `:2134-2136` |
-| The window: Profile and All rules pages, the curator history at the top, three columns Role / Project / Machine, a role picker with counts, rule rows (why, provenance, earlier texts), «Left the rules» with «Return», × with Undo | `LearnedRules.tsx` (`RulesWindow` :341, `RuleSection` :295, `RuleRow` :200, `LeftRow`, `UndoRow`), host `LearnedRulesWindowHost` in `src/components/Viewer.tsx:1991` |
+| The window (since 2026-11-20): the curator history at the top, the profile and its levels on the left, the chosen level's rules on the right, rule rows (why, provenance, earlier texts), «Left the rules» with «Return», × with Undo | `LearnedRules.tsx` (`RulesWindow` :341, `RuleSection` :295, `RuleRow` :200, `LeftRow`, `UndoRow`), host `LearnedRulesWindowHost` in `src/components/Viewer.tsx:1991` |
 | Profile page | `src/components/roleMemory/MemoryProfile.tsx`, `useMemoryProfile.ts` |
 | The line under a stage report («Left 1 rule → Reviewer») | `StageLessonLine` in `LearnedRules.tsx`, mounted in `src/components/kanban/PipelineSection.tsx` |
 | Data shape | `src/lib/memory/roleTypes.ts` (`RoleMemoryProjectView`, `ScopeView`, `RuleView`, `CuratorPassView`, `StageLessonView`), scope ids in `src/lib/memory/roleScopes.ts` (`role:<project>:<role>`, `role:*:<role>`, `project:<project>`, `machine`), `src/lib/memory/profileTypes.ts` |
@@ -247,17 +247,18 @@ Each claim and the code behind it:
 ### 4.2 Views
 
 - `rules`: open the board's ⋯ menu, press the «Learned rules» row
-  (`roleMemory.row`), then «All rules» (`memoryProfile.allRules`), then the
-  Orchestrator chip in the role picker (`[data-rules-role="orchestrator"]`).
-  Expand O1 so the frame shows its «Why:» line and its provenance. The
-  builder's merged rule (B1) is one chip away. Desktop draws three columns. The phone draws the window
-  full screen as one column, scrolled to the top.
+  (`roleMemory.row`), then the Orchestrator's every-project row in the level
+  list (`[data-profile-level="role:*:orchestrator"]`). Expand O1 so the frame
+  shows its «Why:» line and its provenance. The builder's merged rule (B1) is
+  one row away. Desktop draws the list on the left and the level's rules on the
+  right. The phone draws the window full screen: the list first, and the level
+  behind «← Profile».
 - `curator`: the same window. Open `details[data-curation-history]` (passes,
-  counts, «Undo pass») and the Project column's «Left the rules» toggle, which
-  shows the archived one-task rule with its reason «about one task» and
-  «Return».
+  counts, «Undo pass») and press the project row in the list, then its «Left the rules»
+  toggle, which shows the archived one-task rule with its reason «about one
+  task» and «Return».
 - The window opens over the board (`fixed inset-0` overlay, `md:max-w-[1120px]`,
-  `max-h-[min(689px,90dvh)]` on the rules page), so a 1180×760 frame shows it
+  `md:h-[min(820px,90dvh)]`), so a 1180×760 frame shows it
   whole with the board dimmed behind it.
 
 ### 4.3 What the invented world needs

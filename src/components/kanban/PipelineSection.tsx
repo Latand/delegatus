@@ -6,7 +6,7 @@ import { roleNameById } from "@/components/builderCopy";
 import { useLocale, type TFunction } from "@/lib/i18n";
 import { ordinal, parseCpuQueueDetail } from "@/lib/runtime/cpuQueueText";
 import { edgeRoundsUsed, failEdgeExhaustion, failEdgeMaxRounds } from "@/lib/pipelines/failEdgeBudget";
-import type { Pipeline, PipelineGraphEdit, PipelineStage, PipelineStageReportEntry, StageFinding } from "@/lib/pipelines/types";
+import { PIPELINE_CONTROLLER_ROLE, PIPELINE_GRAPH_EDIT_CAUSES, type Pipeline, type PipelineGraphEdit, type PipelineStage, type PipelineStageReportEntry, type StageFinding } from "@/lib/pipelines/types";
 import { attemptStateLabel, latestAttempt, pipelineReviewHeads, pipelineStateLabel, type StageChipState } from "@/components/pipelines/pipelineModel";
 
 /* The stage-name rule lives beside `stageChipLabel` so the phone reads it
@@ -18,7 +18,7 @@ import { pipelineReason } from "@/components/pipelines/pipelineBlockModel";
 import { fmtAge } from "@/components/utils";
 
 import type { KanbanPipeline, KanbanRecordedConversation } from "./kanbanModel";
-import { attemptArrivals, graphOrder, layoutGraph, routeEdge, STAGE_TONE, wireFired, type GraphEdge, type PastAttempt, type ReviewRound } from "./pipelineGraph";
+import { attemptArrivals, fixRoundMarks, graphOrder, layoutGraph, routeEdge, STAGE_TONE, wireFired, type GraphEdge, type PastAttempt, type ReviewRound, type RoundMark } from "./pipelineGraph";
 import { stageIdentity, type EdgeCount } from "./stageIdentity";
 import { CountCircle, engineWord, identityTitle, StageIdentity } from "./identityMarks";
 import { ChevronRight, svgProps } from "./kanbanGlyphs";
@@ -63,6 +63,7 @@ const SHOWN_STAGE_FINDINGS = 3;
     conversation itself is one click away on the stage's own pill. */
 function actorName(t: TFunction, actor: PipelineGraphEdit["actor"]): string {
   if (actor.kind === "operator") return t("kanban.graph.editedByOperator");
+  if (actor.role === PIPELINE_CONTROLLER_ROLE) return t("kanban.graph.editedByController");
   return actor.role ? roleNameById(t, actor.role) : t("kanban.actor.agent");
 }
 
@@ -132,11 +133,12 @@ export function GraphEditLine({ edit }: { edit: PipelineGraphEdit }) {
   const who = actorName(t, edit.actor);
   const change = [
     t(`kanban.graph.edit.${edit.action}`, { stage: edit.stageId ?? "" }),
+    edit.cause && PIPELINE_GRAPH_EDIT_CAUSES.includes(edit.cause) ? t(`kanban.graph.edit.cause.${edit.cause}`) : null,
     edit.runtimeSwitch ? t("kanban.graph.edit.appliedNow", { n: edit.runtimeSwitch.attempt }) : edit.effect === "pending-next-attempt" && edit.appliesFromAttempt ? t("kanban.graph.edit.nextAttempt", { n: edit.appliesFromAttempt }) : null,
   ].filter(Boolean).join(" · ");
   const at = Date.parse(edit.at);
   return (
-    <p className="graph-edit" data-graph-edit={edit.seq} data-graph-edit-actor={edit.actor.kind} title={edit.summary}>
+    <p className="graph-edit" data-graph-edit={edit.seq} data-graph-edit-actor={edit.actor.kind} data-graph-edit-cause={edit.cause} title={edit.summary}>
       {t("kanban.graph.edited", { who, age: Number.isFinite(at) ? fmtAge(at / 1000) : "", change })}
     </p>
   );
@@ -259,36 +261,6 @@ export function ReturnSuffix({ arc, title }: { arc: LoopArc; title: string }) {
   );
 }
 
-/** The Stages sheet's loop chip (#1743): the leading glyph becomes the same
-    circled number the arrow draws once the edge has fired, and a spent budget
-    inverts the chip so "no return left" reads without colour.
-
-    The sheet's nav is the one surface this still belongs on — it lists what the
-    graph holds, where a fail edge IS one of the things listed. The card's lane
-    row carries the same edge as a suffix on the failing pill instead, because
-    a chip there sits in the row of steps and reads as one (#1798).
-
-    The chip is one line, so its parts are separate: the stage names truncate,
-    and the budget — the fact the chip exists for — never does. */
-export function LoopChip({ loop, from, to }: { loop: KanbanPipeline["loops"][number]; from: string; to: string }) {
-  const { t } = useLocale();
-  const exhausted = loop.fired >= loop.max;
-  const title = [
-    t("kanban.loopTitle", { from, to, fired: loop.fired, max: loop.max }),
-    exhausted ? t("kanban.graph.noneLeft") : null,
-  ].filter(Boolean).join(" · ");
-  return (
-    <span className={`ploop fail${loop.fired ? " taken" : ""}${exhausted ? " spent" : ""}`} title={title}>
-      {loop.fired
-        ? <CountCircle n={loop.fired} tone="fail" filled={!exhausted} label={t("kanban.graph.firedTitle", { count: loop.fired })} />
-        : <span className="lglyph" aria-hidden="true">↺</span>}
-      <span className="lnames">{t("kanban.loopNames", { from, to })}</span>
-      <span className="lbudget">{t("kanban.loopUsed", { fired: loop.fired, max: loop.max })}</span>
-      {exhausted ? <span className="lnone">{t("kanban.graph.noneLeft")}</span> : null}
-    </span>
-  );
-}
-
 /** How long an edge an attempt just travelled stays marked. */
 const LIVE_EDGE_MS = 2_400;
 
@@ -312,24 +284,19 @@ export function useCoarsePointer(): boolean {
 const MAX_DOTS = 6;
 
 /**
- * The rounds of a loop, one position per round of its budget: a filled danger
- * dot for each round it fired, a success dot once the source passed, an
- * accent ring on the round under way, and a hollow dot for each round left.
- * No hollow dot left is a spent budget.
+ * The rounds of a fail edge's budget, one mark per round (`fixRoundMarks`): a ✓
+ * for a round whose fix passed, a ✕ for one whose fix failed, a filled dot on the
+ * fix at work, and a hollow dot for each round left. The marks differ in shape,
+ * so a round reads without its colour, and a tab and a graph row draw the same
+ * marks for the same edge. No hollow dot left is a spent budget.
  */
-export function RoundDots({ fired, max, passed, running }: { fired: number; max: number; passed: boolean; running: boolean }) {
-  if (max > MAX_DOTS) return <span className="sdots text" data-dots={`${fired}/${max}`}>{`${fired}/${max}`}</span>;
-  /* The ring marks a round of the budget under way; past a spent budget there is none. */
-  const ring = running && !passed && fired < max;
-  const dots: Array<"bad" | "ok" | "next" | "left"> = [
-    ...Array.from({ length: fired }, () => "bad" as const),
-    ...(passed ? ["ok" as const] : []),
-    ...(ring ? ["next" as const] : []),
-    ...Array.from({ length: Math.max(0, max - fired - (ring ? 1 : 0)) }, () => "left" as const),
-  ];
+export function RoundDots({ marks, count = false }: { marks: readonly RoundMark[]; /** The count in digits after the marks: a tab, which has no strip title, says how many rounds ran of how many. */ count?: boolean }) {
+  const used = marks.filter((kind) => kind !== "left").length;
+  if (marks.length > MAX_DOTS) return <span className="sdots text" data-dots={`${used}/${marks.length}`}>{`${used}/${marks.length}`}</span>;
   return (
-    <span className="sdots" data-dots={dots.join(" ")} aria-hidden="true">
-      {dots.map((kind, index) => <i key={index} className={`sdot ${kind}`} />)}
+    <span className="sdots" data-dots={marks.join(" ")} aria-hidden="true">
+      {marks.map((kind, index) => <i key={index} className={`sdot ${kind}`} />)}
+      {count ? <span className="sdots-n" data-dots-count="">{`${used}/${marks.length}`}</span> : null}
     </span>
   );
 }
@@ -354,7 +321,7 @@ export function RoundDots({ fired, max, passed, running }: { fired: number; max:
 const CAPTION_PX = 10;
 const MIN_LEGIBLE_PX = 9;
 
-export function PipelineGraph({ summary, names, available, selected, onOpenStage, force, navigate = false, inView, scale = 1 }: {
+export function PipelineGraph({ summary, names, available, selected, onOpenStage, force, navigate = false, inView, scale = 1, optional }: {
   summary: KanbanPipeline;
   names: ReadonlyMap<string, string>;
   available: number;
@@ -368,6 +335,8 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
   /** The transform the host draws this graph under, so the node can tell how
       big its text actually lands. */
   scale?: number;
+  /** The word a stage that has not run carries in place of «waiting»: the Stages window's tab says «if needed» for a fix, and its node says the same. */
+  optional?: ReadonlyMap<string, string>;
 }) {
   const { t } = useLocale();
   const { pipeline, views } = summary;
@@ -450,10 +419,6 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
     const draftable = !attempt && stageDraftable(pipeline, stage.id);
     return { conversation, draftable, openable: navigate || conversation || draftable };
   };
-  const trueState = (id: string): StageChipState => {
-    const view = views.get(id);
-    return view?.again ? view.previous ?? "pending" : view?.state ?? "pending";
-  };
   /* The name a node or strip carries: the stage, and from its second own
      attempt which attempt it stands on, as a muted suffix that survives the
      name's truncation (#1865). */
@@ -474,33 +439,35 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
     const arc = arcs.get(edge.id);
     const fired = edgeRoundsUsed(pipeline, edge);
     const max = failEdgeMaxRounds(pipeline, source);
+    const marks = fixRoundMarks(pipeline, edge, max);
     const targetView = views.get(target.id);
     const sourceLive = LIVE_CHIP_STATES.has(views.get(sourceId)?.state ?? "pending");
-    const fixLive = shape === "dock" && LIVE_CHIP_STATES.has(targetView?.state ?? "pending");
+    /* A fix the lane goes on to (a docked one, or a stage outside the pass chain) is named and drawn as a stage; a return to an earlier stage says «back to». */
+    const fixLike = shape === "dock" || (shape === "return" && strip.loop.forward);
+    const fixLive = fixLike && LIVE_CHIP_STATES.has(targetView?.state ?? "pending");
     const running = sourceLive || fixLive || Boolean(arc?.live);
-    const passed = trueState(sourceId) === "passed";
     const title = arc ? arcTitle(t, arc, nameOf(sourceId), nameOf(target.id)) : "";
     const opens = shape === "self" ? null : target;
     const open = opens ? openableStage(opens) : null;
-    const rework = shape === "dock" && Boolean(targetView?.rework);
-    const fixState = shape === "dock" ? targetView?.state ?? "pending" : null;
-    const text = shape === "dock" ? `${longLabel(target.id)}: ${graphStateWord(t, fixState!)}` : shape === "return" ? t("kanban.loop.backTo", { stage: nameOf(target.id) }) : t("kanban.loop.retry");
+    const rework = fixLike && Boolean(targetView?.rework);
+    const fixState = fixLike ? targetView?.state ?? "pending" : null;
+    const text = fixLike ? `${longLabel(target.id)}: ${graphStateWord(t, fixState!)}` : shape === "return" ? t("kanban.loop.backTo", { stage: nameOf(target.id) }) : t("kanban.loop.retry");
     const aria = [text, rework ? t("kanban.graph.workingAgain") : null, title].filter(Boolean).join(". ");
     /* The strip is the bottom of its source's card: its frame takes the
        source's tone, and a fix stage at work takes the active one. */
     const unitTone = fixLive || rework ? "active" : STAGE_TONE[views.get(sourceId)?.state ?? "pending"];
-    const fixIdle = shape === "dock" && (fixState === "pending" || fixState === "skipped");
+    const fixIdle = fixLike && (fixState === "pending" || fixState === "skipped");
     const className = `pstrip shape-${shape} utone-${unitTone}${fixIdle ? " fix-idle" : ""}${fired ? " fired" : ""}${fired >= max && fired ? " spent" : ""}${live.has(edge.id) ? " live" : ""}${fixLive || rework || (running && shape !== "dock") ? " pulse" : ""}${opens && selected.has(opens.id) ? " selected" : ""}${open?.openable ? "" : " no-conv"}`;
     const body = (
       <>
         <span className="sglyph" aria-hidden="true">↺</span>
-        {shape === "dock" ? <StageGlyph state={fixState!} model={stageIdentity(pipeline, target)} live={rework} motion={targetView?.motion} fallback="mark" /> : null}
+        {fixLike ? <StageGlyph state={fixState!} model={stageIdentity(pipeline, target)} live={rework} motion={targetView?.motion} fallback="mark" /> : null}
         <span className="sname">
-          {shape === "dock" ? nameOf(target.id) : text}
+          {fixLike ? nameOf(target.id) : text}
         </span>
-        {shape === "dock" ? attemptSuffix(target.id) : null}
+        {fixLike ? attemptSuffix(target.id) : null}
         {rework ? <span className="srework">{t("kanban.graph.workingAgain")}</span> : null}
-        <RoundDots fired={fired} max={max} passed={passed} running={running} />
+        <RoundDots marks={marks} />
         {layout.dir === "TB" ? <span className="pport out" aria-hidden="true" /> : null}
       </>
     );
@@ -540,7 +507,8 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
           const box = layout.nodes.get(stage.id)!;
           const view = views.get(stage.id);
           const state = view?.state ?? "pending";
-          const word = graphStateWord(t, state);
+          const unreached = optional?.get(stage.id) ?? null;
+          const word = unreached ?? graphStateWord(t, state);
           const attempt = view?.attempt ?? null;
           const { conversation, draftable, openable } = openableStage(stage);
           const roleId = stageRoleId(stage);
@@ -558,17 +526,18 @@ export function PipelineGraph({ summary, names, available, selected, onOpenStage
             : view?.again ? <span className="pdetail">{t("kanban.graph.lastWas", { state: graphStateWord(t, view.previous ?? "pending") })}</span>
               : rounds.length ? <RoundsMark rounds={rounds} />
                 : via ? <span className="pdetail" title={t("kanban.graph.becauseTitle", { stage: longLabel(via) })}>{t("kanban.graph.because", { stage: nameOf(via) })}</span>
-                  : !attempts ? <span className="pdetail">{stage.kind === "review-loop" ? t("kanban.graph.reviewsRun") : t("kanban.graph.notStarted")}</span>
-                    : null;
+                  : unreached ? null
+                    : !attempts ? <span className="pdetail">{stage.kind === "review-loop" ? t("kanban.graph.reviewsRun") : t("kanban.graph.notStarted")}</span>
+                      : null;
           const hasStrip = layout.strips.has(stage.id);
           const aria = [
             t("kanban.graph.nodeAria", { stage: longLabel(stage.id), engine: engineWord(identity.engine), state: word }),
             identityTitle(t, identity),
             rework ? t("kanban.graph.workingAgain") : "",
             rounds.length ? rounds.map((round) => t("kanban.graph.roundTitle", { n: round.n, verdict: t(`kanban.graph.verdict.${round.verdict}`) })).join(", ") : "",
-            /* In the stages view a node reaches its pane and opens what its stage has in the agent window. */
+            /* In the stages view a press only selects the stage's tab, so the label says that and nothing about a window. */
             navigate
-              ? conversation ? t("kanban.graph.openConversation") : draftable ? t("kanban.graph.openDraft") : isSelected ? t("kanban.stages.paneShown") : t("kanban.stages.showPane")
+              ? isSelected ? t("kanban.stages.paneShown") : t("kanban.stages.showPane")
               : conversation ? (isSelected ? t("kanban.graph.conversationOpen") : t("kanban.graph.openConversation"))
                 : draftable ? (isSelected ? t("kanban.graph.draftOpen") : t("kanban.graph.openDraft")) : t("kanban.graph.noConversation"),
           ].filter(Boolean).join(". ");

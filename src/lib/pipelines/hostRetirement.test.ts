@@ -3,11 +3,12 @@ import path from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { pipelineHostHasLiveWork } from "./hostRetirement";
 import * as retirement from "./hostRetirement";
-import { buildPipeline, savePipelines } from "./store";
+import { buildPipeline, isStoredPipeline, pipelineIdentity, savePipelines } from "./store";
 import { pipelineRetirementReader } from "./retirementEvidence";
 import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
+import { recordedAgentScope, recordedScopeProcess, sameAgentScope } from "@/lib/runtime/agentScope";
 import { blockingHostActivityFlags } from "@/lib/runtime/hostActivityFlags";
 import { terminateStructuredHostTree } from "@/lib/runtime/structuredHostControl";
 import type { Pipeline, PipelineStageAttempt } from "./types";
@@ -78,9 +79,10 @@ function fixture(engine: "codex" | "claude" = "codex") {
   let pipelineReads = 0;
   const deps = {
     ...retirement, runtimeIdleKillMatches, sameRecordedProcessIdentity, blockingHostActivityFlags, registryRowsMatching,
+    recordedAgentScope, recordedScopeProcess, sameAgentScope,
     stopped: false, state, queue, CONTROLLER_STOP_SOURCE: "controller-stop",
     client: { readSession: async () => session, operationStatus: async () => ({ receipt: { status: "delivering", retirementClaim: claim } }) },
-    registry: { readOnlySnapshot: () => snapshot, conversation: () => conversation,
+    registry: { readOnlySnapshot: () => snapshot, conversation: () => conversation, hostEntry: () => entry,
       deliveryWriteOrBusy: async (_context: unknown, write: () => unknown) => write(),
       terminateInactiveStructuredHost: () => false,
       recordStructuredTerminationSurvivors: (_key: unknown, _ref: unknown, identities: unknown[]) => { entry.structuredTerminationSurvivors = identities; return true; },
@@ -145,6 +147,21 @@ test("a superseded operational attempt retires ahead of adopted historical work"
   expect(await f.retire()).toBe(true);
   expect(f.signals).toEqual([987001, 987002]);
   for (const attempt of [current, helper]) expect(pipelineHostHasLiveWork([f.pipeline], attempt)).toBe(true);
+});
+
+test("the production idle callback releases a passed review before its lane completes", async () => {
+  const f = fixture();
+  f.attempt.state = "passed";
+  f.attempt.verdict = { status: "pass", findings: [] };
+  f.attempt.completedAt = new Date(cut).toISOString();
+  delete f.attempt.providerWait;
+  const id = "successor-review";
+  const successor: Pipeline = { ...f.pipeline, id, ...pipelineIdentity(id, f.pipeline.task, f.pipeline.repoDir), state: "paused",
+    runs: f.pipeline.runs.map(run => ({ ...run, attempts: [] })), srcConversationId: f.attempt.conversationId, srcPath: f.transcript };
+  f.pipelines.push(successor);
+  expect(f.pipelines.every(isStoredPipeline)).toBe(true);
+  expect(await f.retire()).toBe(true);
+  expect(f.signals).toEqual([987001, 987002]);
 });
 
 test.each([false, true])("terminal adopted work requires an idle turn at production actuation: %s", async resumed => {
@@ -221,6 +238,40 @@ test("provider recovery retires an unchanged parked quota retry", async () => {
   f.attempt.providerWait!.stageRetry = { controlGeneration: ref.controlGeneration, detail: "quota park" };
   expect(await f.terminate()).toBe(true);
 });
+
+test.each(["idle", "busy", "tool", "permission", "question", "newer-prompt", "changed-park", "legacy-workspace-error", "different-workspace-error"] as const)(
+  "the production idle stop requires current authority for a parked provider error (%s)", async state => {
+    const f = fixture();
+    const condition = { kind: "other", scope: null, resetLabel: null, label: "provider error" } as const;
+    const workspaceError = state === "legacy-workspace-error" || state === "different-workspace-error";
+    const message = workspaceError ? "Failed to load workspace requirements: fixture rejected" : "Provider refused the turn";
+    const parkedMessage = state === "different-workspace-error" ? "Different provider error" : message;
+    const detail = `stage cut by provider error after 0 tries; last: ${parkedMessage}`;
+    const completedAt = new Date(cut + 1).toISOString();
+    f.pipeline.state = f.attempt.state = "needs_decision";
+    f.pipeline.stateDetail = f.attempt.error = detail;
+    f.attempt.completedAt = completedAt;
+    f.attempt.providerWait!.condition = condition;
+    f.attempt.providerWait!.text = parkedMessage;
+    f.attempt.providerRecoveries = [{ at: completedAt, action: "park", condition, summary: detail }];
+    fs.writeFileSync(f.transcript, JSON.stringify({ type: "event_msg", timestamp: new Date(cut).toISOString(),
+      payload: { type: "task_complete", error: { message, codex_error_info: workspaceError ? "other" : "cyber_policy" } } }) + "\n");
+    if (state === "busy") f.session.turn = "running";
+    if (state === "tool") f.entry.structuredHost.activeFlags.push("executingTool" as never);
+    if (state === "permission" || state === "question") f.session.attentionIds.push(state as never);
+    if (state === "changed-park") f.pipeline.stateDetail = f.attempt.error = "paused by operator";
+    if (state === "newer-prompt") {
+      const original = f.deps.client.operationStatus;
+      f.deps.client.operationStatus = async () => {
+        f.append({ type: "user_message", message: "Continue this attempt" });
+        return original();
+      };
+    }
+    const shouldStop = state === "idle" || state === "legacy-workspace-error";
+    expect(await f.terminate()).toBe(shouldStop);
+    expect(f.signals).toEqual(shouldStop ? [987001, 987002] : []);
+  },
+);
 
 test.each(["human", "human-before-new-cut", "control", "report", "verdict", "new-cut", "retry-cancelled", "other-attempt", "other-owner", "publication", "source-owner", "cursor", "session", "transcript", "writer", "seat", "delivery", "attention", "unknown", "incomplete", "reference-cut", "different-class", "prose", "pipeline-read", "claim", "generation", "rebind"] as const)("provider recovery refuses %s", async change => {
   const f = fixture();

@@ -1,13 +1,13 @@
 {
   "command": "LLV_KANBAN_BROWSER_TEST=1 bun test --timeout=60000 src/components/kanban/kanbanBoard.browser.test.tsx -t 'swarm release rules' (gate-remote, isolated roots)",
-  "recordedAt": "2026-10-23T09:38:19.045Z",
+  "recordedAt": "2026-11-20T23:53:08.177Z",
   "sources": {
-    "src/components/telemetry/TelemetrySettings.tsx": "1d78fbbe7c577ca09f0a5391cb1d2bd6745345421a1cd2baf0b8920e15144e67",
-    "src/components/roleMemory/LearnedRules.tsx": "fb9d39f102aa136cec04b48862ff49c152642a0dcc8397b6607a920bd511a126",
-    "src/components/roleMemory/MemoryProfile.tsx": "61f611ac3249c06227e8bfb98fbf570a53f9a26c45728e76e714aad89ccc0a01",
-    "src/lib/i18n/en.ts": "54f0524be5bfbd11f2bd6d9ba0869c25444aadbb311fbe560c4d2decf08966b8",
-    "src/lib/i18n/uk.ts": "26492306153320e7b2e87e463c073d0aae5a54f0487d0ca20ce062415e6256e8",
-    "src/components/kanban/kanbanBoard.browser.test.tsx": "6cdc3010cff34a4860b13df6940a2f5791aea5428d0bd2dad90335a477e41ffe"
+    "src/components/telemetry/TelemetrySettings.tsx": "d1e6bc8b775c76783201a903f48db71c7be2984dfe1bb235d439410256ae4047",
+    "src/components/roleMemory/LearnedRules.tsx": "4c916bc6cd2c3e0c10be973b70f15ec51e30ac3de0e4650188addf77e139d17a",
+    "src/components/roleMemory/MemoryProfile.tsx": "8325e178b6568ed938cfb06bd6af0cd27bd130ce541852fb4decddf611930414",
+    "src/lib/i18n/en.ts": "a60be8cfe7a26a230ee3047b8be9f8e3234124f51bda93e1faefca134f2fa04f",
+    "src/lib/i18n/uk.ts": "604e716fdb3f5076186f6613e4f864c728dcbefd9384367b06835cb01e513dd3",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "c445044253ae19967b216f3d6d7ab5575058d42b79238aae20ac0cffebdbe658"
   },
   "readings": [
     {
@@ -17,12 +17,12 @@
       "visible": true,
       "textVisible": true,
       "overflow": false,
-      "focused": "BUTTON",
+      "focused": "DIV",
       "refusedVisible": true,
       "order": true,
       "readOnly": true,
       "openingScroll": "dialog starts at top; swarm setting scrolled into view",
-      "rulesScroll": "All rules; swarm section scrolled into view"
+      "rulesScroll": "swarm level selected; its pane at the top"
     },
     {
       "lang": "en",
@@ -31,12 +31,12 @@
       "visible": true,
       "textVisible": true,
       "overflow": false,
-      "focused": "BUTTON",
+      "focused": "DIV",
       "refusedVisible": true,
       "order": true,
       "readOnly": true,
       "openingScroll": "dialog starts at top; swarm setting scrolled into view",
-      "rulesScroll": "All rules; swarm section scrolled into view"
+      "rulesScroll": "swarm level selected; its pane at the top"
     },
     {
       "lang": "en",
@@ -45,12 +45,12 @@
       "visible": true,
       "textVisible": true,
       "overflow": false,
-      "focused": "BUTTON",
+      "focused": "DIV",
       "refusedVisible": true,
       "order": true,
       "readOnly": true,
       "openingScroll": "dialog starts at top; swarm setting scrolled into view",
-      "rulesScroll": "All rules; swarm section scrolled into view"
+      "rulesScroll": "swarm level selected; its pane at the top"
     },
     {
       "lang": "en",
@@ -59,12 +59,12 @@
       "visible": true,
       "textVisible": true,
       "overflow": false,
-      "focused": "BUTTON",
+      "focused": "DIV",
       "refusedVisible": true,
       "order": true,
       "readOnly": true,
       "openingScroll": "dialog starts at top; swarm setting scrolled into view",
-      "rulesScroll": "All rules; swarm section scrolled into view"
+      "rulesScroll": "swarm level selected; its pane at the top"
     },
     {
       "lang": "uk",
@@ -73,12 +73,12 @@
       "visible": true,
       "textVisible": true,
       "overflow": false,
-      "focused": "BUTTON",
+      "focused": "DIV",
       "refusedVisible": true,
       "order": true,
       "readOnly": true,
       "openingScroll": "dialog starts at top; swarm setting scrolled into view",
-      "rulesScroll": "All rules; swarm section scrolled into view"
+      "rulesScroll": "swarm level selected; its pane at the top"
     },
     {
       "lang": "uk",
@@ -87,12 +87,12 @@
       "visible": true,
       "textVisible": true,
       "overflow": false,
-      "focused": "BUTTON",
+      "focused": "DIV",
       "refusedVisible": true,
       "order": true,
       "readOnly": true,
       "openingScroll": "dialog starts at top; swarm setting scrolled into view",
-      "rulesScroll": "All rules; swarm section scrolled into view"
+      "rulesScroll": "swarm level selected; its pane at the top"
     },
     {
       "lang": "uk",
@@ -101,12 +101,12 @@
       "visible": true,
       "textVisible": true,
       "overflow": false,
-      "focused": "BUTTON",
+      "focused": "DIV",
       "refusedVisible": true,
       "order": true,
       "readOnly": true,
       "openingScroll": "dialog starts at top; swarm setting scrolled into view",
-      "rulesScroll": "All rules; swarm section scrolled into view"
+      "rulesScroll": "swarm level selected; its pane at the top"
     },
     {
       "lang": "uk",
@@ -115,12 +115,12 @@
       "visible": true,
       "textVisible": true,
       "overflow": false,
-      "focused": "BUTTON",
+      "focused": "DIV",
       "refusedVisible": true,
       "order": true,
       "readOnly": true,
       "openingScroll": "dialog starts at top; swarm setting scrolled into view",
-      "rulesScroll": "All rules; swarm section scrolled into view"
+      "rulesScroll": "swarm level selected; its pane at the top"
     }
   ]
 }

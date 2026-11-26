@@ -6,6 +6,13 @@ const sentence = (value: unknown): string => typeof value === "string" ? value.r
 export const TASK_HOLD_NOTE_LIMIT = 200;
 export const TASK_HOLD_REF_LIMIT = 500;
 
+/** The Waiting column records a next step reserved for the operator. */
+export const holdParks = (hold: TaskHold): boolean => hold.kind === "operator" && !!sentence(hold.note);
+
+export function normalizeHoldKind(kind: unknown): unknown {
+  return typeof kind === "string" ? kind.trim().toLowerCase() : kind;
+}
+
 /** New authoritative input is refused before any task or step is persisted. */
 export function validateTaskHoldInput(value: unknown, field = "hold"): { ok: false; error: string; status: 400; code: "TASK_INVALID_FIELD"; field: string } | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -23,7 +30,7 @@ export function validateTaskHoldInput(value: unknown, field = "hold"): { ok: fal
 export function readTaskHold(value: unknown, now: string, by: TaskHold["by"], previous?: TaskHold, conversationId?: string, notes?: string[]): TaskHold | undefined {
   if (value === null || value === undefined) return undefined;
   const raw = typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  const normalized = typeof raw.kind === "string" ? raw.kind.trim().toLowerCase() : raw.kind;
+  const normalized = normalizeHoldKind(raw.kind);
   const known = (TASK_HOLD_KINDS as readonly unknown[]).includes(normalized);
   const kind: TaskHoldKind = known ? normalized as TaskHoldKind : "unstated";
   if (!known && raw.kind !== undefined) notes?.push(`Unknown hold kind ${JSON.stringify(raw.kind)} normalized to unstated.`);
@@ -33,7 +40,7 @@ export function readTaskHold(value: unknown, now: string, by: TaskHold["by"], pr
     notes?.push(`hold.until ignored for hold kind "${kind}"; only limit and postponed store until. Use dueAt for the task deadline.`);
   }
   return { kind, note: sentence(raw.note), since: previous?.since ?? now, by,
-    ...(["task", "pr", "issue", "external"].includes(kind) && ref ? { ref } : {}),
+    ...(["operator", "task", "pr", "issue", "external"].includes(kind) && ref ? { ref } : {}),
     ...(until ? { until } : {}), ...(by === "agent" && conversationId ? { conversationId } : {}) };
 }
 
@@ -44,4 +51,21 @@ export function storedTaskHold(value: unknown, notes?: string[]): TaskHold | und
   const since = iso(raw.since);
   if (!since || !["operator", "agent", "migration"].includes(raw.by)) return undefined;
   return readTaskHold(raw, since, raw.by, undefined, sentence(raw.conversationId) || undefined, notes);
+}
+
+const HOLD_REF_KINDS: readonly TaskHoldKind[] = ["operator", "task", "pr", "issue", "external"];
+const HOLD_UNTIL_KINDS: readonly TaskHoldKind[] = ["limit", "postponed"];
+
+/** The ref and date a hold editor shows for a kind: the stored hold's own while
+    its kind is unchanged, nothing once the kind moves, so a PR number never
+    outlives a switch to another kind. */
+export function holdEditorDraft(original: TaskHold | undefined, kind: TaskHoldKind): { ref: string; until: string } {
+  return original?.kind === kind ? { ref: original.ref ?? "", until: original.until ?? "" } : { ref: "", until: "" };
+}
+
+/** What the editor submits: a ref only for kinds that store one (an operator
+    hold keeps its form or step ref unseen), a date only for kinds that carry one. */
+export function holdEditorPatch(draft: { kind: TaskHoldKind; note: string; ref: string; until: string }): Partial<TaskHold> {
+  const { kind, note, ref, until } = draft;
+  return { kind, note, ...(ref && HOLD_REF_KINDS.includes(kind) ? { ref } : {}), ...(until && HOLD_UNTIL_KINDS.includes(kind) ? { until } : {}) };
 }

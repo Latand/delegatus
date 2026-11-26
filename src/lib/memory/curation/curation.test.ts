@@ -411,9 +411,9 @@ test.each([
   const before = loadRoleOverrides();
   fixture();
   const f = hostingFixture(); f.seat();
-  const ports = { ...f.ports, engineReadiness: (engine: "claude" | "codex", project: string | null) => {
+  const ports = { ...f.ports, engineReadiness: (engine: "claude" | "codex" | "antigravity", project: string | null) => {
     expect(project).toBe(PROJECT);
-    return scenario[engine];
+    return engine === "antigravity" ? "signed-out" as const : scenario[engine];
   } };
   expect(await productionCurationController(f.sources, ports).launchIfDue(f.tick)).toContain("launched");
   expect(f.bodies).toHaveLength(1);
@@ -431,7 +431,7 @@ test.each(["ENGINE_NOT_CONNECTED", "project_account_refused"])("curator selected
   fixture();
   const f = hostingFixture(); f.seat();
   const ports = { ...f.ports,
-    engineReadiness: (engine: "claude" | "codex") => engine === "claude" ? "connected" as const : "signed-out" as const,
+    engineReadiness: (engine: "claude" | "codex" | "antigravity") => engine === "claude" ? "connected" as const : "signed-out" as const,
     launch: async (body: Record<string, unknown>) => {
       f.bodies.push(body);
       // Credentials or account admission can change after runtime selection.
@@ -449,7 +449,7 @@ test("curator recovery replays its persisted engine after connection changes", a
   fixture();
   const f = hostingFixture(); f.seat();
   const firstPorts = { ...f.ports,
-    engineReadiness: (engine: "claude" | "codex") => engine === "claude" ? "connected" as const : "signed-out" as const,
+    engineReadiness: (engine: "claude" | "codex" | "antigravity") => engine === "claude" ? "connected" as const : "signed-out" as const,
     launch: async (body: Record<string, unknown>) => { f.bodies.push(body); return { status: 503, body: { code: "AUTO_UPDATE_DRAIN" } }; },
   };
   expect(await productionCurationController(f.sources, firstPorts).launchIfDue(f.tick)).toContain("held for the automatic update");
@@ -845,6 +845,30 @@ test("scheduled custody survives a process restart and retains the original fini
     expect(expired).toMatchObject({ refused: expect.stringContaining("timed-out"), launches: 0, machine: null, pass: { state: "failed", failure: "timed-out" } });
   } finally { f.registry.close(); }
 }, 20_000);
+
+test("a curator permission check sees a receipt revoked by a second registry connection", async () => {
+  const { scheduledCustodyFixture, CUSTODY_PROJECT } = await import("./custody.fixture");
+  const { curatorRecoveryGuard } = await import("./admission");
+  const previousBackend = process.env.LLV_AGENT_REGISTRY_SQLITE;
+  process.env.LLV_AGENT_REGISTRY_SQLITE = "sqlite";
+  let peer: AgentRegistry | undefined, registry: AgentRegistry | undefined;
+  try {
+    fixture(roleScope(CUSTODY_PROJECT, "builder"));
+    const f = scheduledCustodyFixture(dir);
+    registry = f.registry;
+    const { pass } = await f.start();
+    const check = await curatorRecoveryGuard(pass.conversationId!, f.sources);
+    expect(check().id).toBe(pass.id);
+    peer = new AgentRegistry(path.join(dir, "custody-registry.json"));
+    peer.agentStateWrite(file => { file.receipts[pass.launchId!]!.state = "failed"; });
+    expect(check).toThrow();
+  } finally {
+    peer?.close();
+    registry?.close();
+    if (previousBackend === undefined) delete process.env.LLV_AGENT_REGISTRY_SQLITE;
+    else process.env.LLV_AGENT_REGISTRY_SQLITE = previousBackend;
+  }
+});
 
 test.each(["seat-epoch", "seat-conversation", "designation", "host-gone", "wakes-off", "curator-off", "deployment", "memory-off", "receipt-failed", "wrong-conversation", "machine-claim-lost"] as const)("scheduled custody still refuses %s after wake expiry", async kind => {
   const { scheduledCustodyFixture, CUSTODY_PROJECT, CUSTODY_NOW } = await import("./custody.fixture");

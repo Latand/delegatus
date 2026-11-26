@@ -1,54 +1,15 @@
 import { expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { redactBounded } from "../src/lib/monitor/redact";
-import { cpuAdmissionFile, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS, CpuAdmissionQueue, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
+import { installedGateAdmissionEnv } from "../src/lib/runtime/agentSignalSandbox";
+import { CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS, CpuAdmissionQueue, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
 import { cpuOwnerIdentity, cpuOwnerStatus } from "../src/lib/runtime/signalSandboxContext";
 import { realExec } from "../src/lib/workflows/provision";
 import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
+import { fixture, legacyGateTree, pathWithoutFlock, queuedTickets, until } from "./gate-slot.queue.fixture";
 import { runSteps } from "./local-gate";
-import { createPublicationFixtures } from "./publicationHook.fixture";
 import { fixtureGitEnv } from "./local-gate.fixture";
-import { publicationCheckBinding, readPublicationCheckReceipt } from "../src/lib/git/publicationCheckReceipt";
-
-// This release predates bounded gate waits and cap locks. Use its actual
-// shell, helper and queue, including the legacy SQL used on final claim.
-const legacyRevision = "2c7e437a553f56d81afa39e71878f60a1e6d73a3";
-
-function legacyGateTree(directory: string) {
-  const tree = path.join(directory, "legacy");
-  fs.mkdirSync(tree);
-  execFileSync("bash", ["-o", "pipefail", "-c", 'git archive "$1" | tar -xf - -C "$2"', "archive-legacy-gate", legacyRevision, tree]);
-  fs.symlinkSync(path.resolve("node_modules"), path.join(tree, "node_modules"), "dir");
-  return tree;
-}
-
-async function until(check: () => boolean, timeoutMs = 5_000, failure = () => new Error("queue fixture did not reach its barrier")) {
-  const ends = Date.now() + timeoutMs;
-  while (!check()) { if (Date.now() > ends) throw failure(); await Bun.sleep(10); }
-}
-const queuedTickets = "FROM tickets WHERE key NOT GLOB 'command:gate-active:*'";
-function fixture() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gate-queue-"));
-  const env = { ...process.env, LLV_GATE_LOCK_DIR: dir, LLV_GATE_PSI_FILE: path.join(dir, "pressure"), LLV_GATE_POLL_SECONDS: "0.02", DELEGATUS_AGENT_CPU: "off", DELEGATUS_CPU_PRESSURE: "on", LLV_GATE_PSI_RELEASE_SECONDS: "0" };
-  // The fixture's gates queue for slots of their own, never the run's gate. A
-  // signal-sandboxed stage keeps its marker: these gates use the real user
-  // manager and really start in the stage's namespaces.
-  withoutInheritedGate(env, { keepSandbox: true });
-  fs.writeFileSync(env.LLV_GATE_PSI_FILE, "some avg10=90.00 avg60=90.00 avg300=90.00 total=1\n");
-  const file = path.join(dir, path.basename(cpuAdmissionFile()));
-  new CpuAdmissionQueue(file).close();
-  const db = new Database(file);
-  db.exec("PRAGMA busy_timeout=5000");
-  const command = (word: string) => ["bash", "scripts/gate-slot.sh", "bash", "-c", `echo ${word} >> "$CPU_QUEUE_OUTPUT"`];
-  return { dir, env: { ...env, CPU_QUEUE_OUTPUT: path.join(dir, "output") }, db, command,
-    count: () => db.query<{ n: number }, []>(`SELECT COUNT(*) AS n ${queuedTickets}`).get()!.n,
-    age: () => db.query("UPDATE tickets SET since = ? WHERE key NOT GLOB 'command:gate-active:*'").run(Date.now() - CPU_QUEUE_MAX_WAIT_MS),
-    close: () => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
-}
 
 for (const exitCode of [0, 23]) test.skipIf(process.platform === "win32")(`macOS identity workflow admits a loaded runner and preserves command exit ${exitCode}`, async () => {
   const workflow = Bun.YAML.parse(fs.readFileSync(path.join(import.meta.dir, "../.github/workflows/macos-identity.yml"), "utf8")) as {
@@ -240,6 +201,51 @@ test.skipIf(process.platform !== "linux")("an older pressure-only head yields to
   } finally { control.abort(); await Promise.allSettled(pending); f.close(); }
 }, 45_000);
 
+// Wrappers from #3353 up to #4174 wait with `--wait key pid <queue start>`.
+// Managed callers route that call to the installed helper, which must accept
+// it and still judge the cap and the FIFO for both protocols.
+for (const revision of ["e504afa92c18033d689aeb24fb5bed0cb0719a2f", "2c7e437a553f56d81afa39e71878f60a1e6d73a3"]) test.skipIf(process.platform !== "linux")(
+  `a routed ${revision.slice(0, 10)} wrapper runs its command and keeps the cap-one FIFO`, async () => {
+    const f = fixture(), control = new AbortController();
+    const pending: ReturnType<typeof realExec>[] = [];
+    const release = path.join(f.dir, "release");
+    const output = () => fs.existsSync(f.env.CPU_QUEUE_OUTPUT) ? fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8") : "";
+    const stderr = (word: string) => path.join(f.dir, `${word}.stderr`);
+    const diagnostics = () => new Error(["holder", "current", "legacy-entrant"].map(word =>
+      `${word}: ${fs.existsSync(stderr(word)) ? fs.readFileSync(stderr(word), "utf8") : ""}`).join("\n"));
+    try {
+      const legacy = legacyGateTree(f.dir, revision);
+      expect(fs.readFileSync(path.join(legacy, "scripts/gate-slot.sh"), "utf8")).toContain('--wait "$queue_key" "$owner_pid" "$queued_at"');
+      fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
+      const base: NodeJS.ProcessEnv = { ...f.env, LLV_GATE_BUN: process.execPath, LLV_GATE_RUNNER: "off", LLV_GATE_SLOTS: "1", CPU_SLOT_RELEASE: release };
+      const env = { ...base, ...installedGateAdmissionEnv(base) };
+      expect(env.LLV_GATE_BUN).not.toBe(process.execPath);
+      const gate = (word: string, cwd: string, script: string) => realExec("/bin/bash", ["-c", 'exec "$@" 2>"$GATE_STDERR"', word,
+        "scripts/gate-slot.sh", "bash", "-c", script], cwd, { ...env, GATE_STDERR: stderr(word) }, { timeoutMs: 30_000, signal: control.signal });
+      pending.push(gate("holder", legacy,
+        'echo holder >> "$CPU_QUEUE_OUTPUT"; while [[ ! -f "$CPU_SLOT_RELEASE" ]]; do sleep 0.02; done; echo released >> "$CPU_QUEUE_OUTPUT"'));
+      await until(() => output() === "holder\n", 10_000, diagnostics);
+      pending.push(gate("current", process.cwd(), 'echo current >> "$CPU_QUEUE_OUTPUT"'));
+      await until(() => f.count() === 1, 10_000, diagnostics);
+      pending.push(gate("legacy-entrant", legacy, 'echo legacy-entrant >> "$CPU_QUEUE_OUTPUT"'));
+      await until(() => f.count() === 2, 10_000, diagnostics);
+      // Both entrants poll past the shared spacing while the cap-one holder runs.
+      const polledAfter = Date.now() + CPU_QUEUE_SPACING_MS + 250;
+      await until(() => f.db.query<{ polled: number }, []>(`SELECT MIN(polled) AS polled ${queuedTickets}`).get()!.polled > polledAfter, 10_000, diagnostics);
+      expect(output(), diagnostics().message).toBe("holder\n");
+      expect(f.count()).toBe(2);
+      fs.writeFileSync(release, "release");
+      await until(() => output().includes("legacy-entrant\n"), 20_000, diagnostics);
+      const results = await Promise.all(pending);
+      expect(results.map(result => result.code), diagnostics().message).toEqual([0, 0, 0]);
+      expect(output()).toBe("holder\nreleased\ncurrent\nlegacy-entrant\n");
+      expect(fs.readFileSync(stderr("holder"), "utf8")).not.toContain("invalid heavy command slot");
+      expect(f.count()).toBe(0);
+    } finally {
+      fs.writeFileSync(release, "release"); control.abort(); await Promise.allSettled(pending); f.close();
+    }
+  }, 60_000);
+
 for (const legacyHolds of [true, false]) test.skipIf(process.platform !== "linux")(`mixed wrappers wait for a cap-one holder (legacy holds: ${legacyHolds})`, async () => {
   const f = fixture(), control = new AbortController();
   const pending: ReturnType<typeof realExec>[] = [];
@@ -308,30 +314,31 @@ for (const [kind, title] of [
   ["shell", "a portable legacy holder drains before a current cap-two entrant starts"],
   ["other", "a non-checkout publication lookalike still counts as a legacy holder"],
   ["scripts", "a legacy wrapper running preparation argv without a preparer parent still holds admission"],
+  ["admitted", "a legacy wrapper running the admitted pre-push command still holds admission"],
 ] as const) test.skipIf(process.platform !== "linux")(title, async () => {
   const f = fixture(), control = new AbortController();
   const pending: ReturnType<typeof realExec>[] = [];
   const release = path.join(f.dir, "release"), holderPid = path.join(f.dir, "holder-pid"), stderr = path.join(f.dir, "entrant-stderr");
   const holderStderr = path.join(f.dir, "holder-stderr");
-  const bin = path.join(f.dir, "portable-bin");
-  fs.mkdirSync(bin);
-  for (const command of ["bash", "date", "dirname", "getconf", "mkdir", "mktemp", "realpath", "rm", "sleep", "systemctl", "systemd-notify", "systemd-run", "touch", "uname", "which"]) {
-    const executable = Bun.which(command);
-    if (executable) fs.symlinkSync(executable, path.join(bin, command));
-  }
-  fs.symlinkSync(process.execPath, path.join(bin, "bun"));
+  const bin = pathWithoutFlock(f.dir);
   const env = { ...f.env, PATH: bin, LLV_GATE_BUN: process.execPath, LLV_GATE_RUNNER: "off", DELEGATUS_CPU_PRESSURE: "off",
     CPU_SLOT_RELEASE: release, CPU_SLOT_HOLDER_PID: holderPid };
+  if (kind === "shell") {
+    withoutInheritedGate(env);
+    fs.rmSync(path.join(bin, "systemctl"), { force: true });
+  }
   const output = () => fs.existsSync(f.env.CPU_QUEUE_OUTPUT) ? fs.readFileSync(f.env.CPU_QUEUE_OUTPUT, "utf8") : "";
   const log = () => fs.existsSync(stderr) ? fs.readFileSync(stderr, "utf8") : "";
   const last = () => f.db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last;
   try {
     const legacy = legacyGateTree(f.dir);
     const hold = 'echo holder >> "$CPU_QUEUE_OUTPUT"; while [[ ! -f "$CPU_SLOT_RELEASE" ]]; do sleep 0.02; done; echo released >> "$CPU_QUEUE_OUTPUT"';
-    const command = kind === "shell" ? ["bash", "-c", hold] : ["bun", `${kind}/local-gate.ts`, "pre-push", "--publication-prepare"];
+    const directory = kind === "other" ? "other" : "scripts";
+    const command = kind === "shell" ? ["bash", "-c", hold] : ["bun", `${directory}/local-gate.ts`, "pre-push",
+      kind === "admitted" ? "--admitted" : "--publication-prepare"];
     if (kind !== "shell") {
       execFileSync("git", ["init", "--quiet", legacy], { env: fixtureGitEnv() });
-      fs.mkdirSync(path.join(legacy, kind), { recursive: true });
+      fs.mkdirSync(path.join(legacy, directory), { recursive: true });
       fs.writeFileSync(path.join(legacy, command[1]!), `const child = Bun.spawn(["bash", "-c", ${JSON.stringify(hold)}]); process.exit(await child.exited);`);
     }
     pending.push(realExec("/bin/bash", ["-c", 'printf "%s\n" "$$" > "$CPU_SLOT_HOLDER_PID"; exec /bin/bash "$@" 2>"$CPU_SLOT_STDERR"',
@@ -342,6 +349,10 @@ for (const [kind, title] of [
     });
     expect(f.count()).toBe(0);
     expect(fs.existsSync(path.join(f.dir, "llv-heavy-gate.slot1.lock"))).toBe(false);
+    if (kind === "shell") {
+      const pid = fs.readFileSync(holderPid, "utf8").trim();
+      expect(fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0")).toContain("--portable");
+    }
     const holderAdmission = last()!;
     expect(holderAdmission).not.toBeNull();
     pending.push(realExec("/bin/bash", ["-c", 'exec "$@" 2>"$CPU_SLOT_STDERR"', "mixed-portable", "bash", "scripts/gate-slot.sh", "bash", "-c",
@@ -368,96 +379,6 @@ for (const [kind, title] of [
     f.close();
   }
 }, 40_000);
-
-const systemctl = process.platform === "linux" ? Bun.which("systemctl") : null;
-const hasUserManager = systemctl !== null && Bun.spawnSync([systemctl, "--user", "show-environment"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
-for (const useService of [false, true]) test.skipIf(process.platform !== "linux" || useService && !hasUserManager)(
-  `ordinary publication admits with its own and a peer preparer alive (${useService ? "systemd" : "portable"})`, async () => {
-    const f = fixture(), control = new AbortController(), roots: string[] = [];
-    const pending: ReturnType<typeof realExec>[] = [];
-    const { fixture: publicationFixture, commitFixtureInputs } = createPublicationFixtures(process.cwd(), roots);
-    const release = path.join(f.dir, "release"), started = path.join(f.dir, "started");
-    const last = () => f.db.query<{ last: number | null }, []>("SELECT last FROM admission").get()!.last;
-    const log = (name: string) => path.join(f.dir, `${name}.stderr`);
-    const stderr = (name: string) => fs.existsSync(log(name)) ? fs.readFileSync(log(name), "utf8") : "";
-    const launch = (publication: ReturnType<typeof publicationFixture>, name: string) => {
-      // realExec merges process.env back in. Explicitly mask the enclosing
-      // publication deadline so this private publication gets its own budget.
-      const env = { ...publication.env, LLV_GATE_LOCK_DIR: f.dir, LLV_GATE_SLOTS: "1", LLV_GATE_RUNNER: "off",
-        LLV_GATE_PSI_FILE: f.env.LLV_GATE_PSI_FILE, LLV_GATE_POLL_SECONDS: f.env.LLV_GATE_POLL_SECONDS,
-        LLV_GATE_PSI_RELEASE_SECONDS: "0", DELEGATUS_CPU_PRESSURE: "on", DELEGATUS_AGENT_CPU: "off", CPU_SLOT_STDERR: log(name),
-        LLV_GATE_PUBLICATION_ID: name, LLV_OWNED_RUN_TIMEOUT_MS: "25000", LLV_GATE_SANDBOX_RECORD: undefined, LLV_GATE_PUSH_DEADLINE: undefined };
-      withoutInheritedGate(env, { keepSandbox: useService });
-      let outcome: Awaited<ReturnType<typeof realExec>> | undefined;
-      // Reproduce an exhausted comparator's enclosing deadline on every run.
-      // realExec snapshots the environment synchronously when spawning.
-      const enclosingDeadline = process.env.LLV_GATE_PUSH_DEADLINE;
-      process.env.LLV_GATE_PUSH_DEADLINE = "1";
-      try {
-        pending.push(Promise.resolve(realExec("bash", ["-c", 'exec "$@" 2>"$CPU_SLOT_STDERR"', "publication-fixture",
-          "bun", "scripts/local-gate.ts", "pre-push", "--publication-prepare"], publication.dir, env, { timeoutMs: 30_000, signal: control.signal }))
-          .then(result => { outcome = result; return result; }));
-      } finally {
-        if (enclosingDeadline === undefined) delete process.env.LLV_GATE_PUSH_DEADLINE;
-        else process.env.LLV_GATE_PUSH_DEADLINE = enclosingDeadline;
-      }
-      const waitFor = (barrier: string, reached: () => boolean) => {
-        const failure = () => {
-          const status = outcome ? `exited (code=${outcome.code}, signal=${outcome.signal ?? "none"})` : "still running";
-          return new Error(`${name} ${status} at ${barrier}\n${redactBounded([stderr(name), outcome?.stderr].filter(Boolean).join("\n"), 2_000)}`);
-        };
-        return until(() => {
-          if (outcome) throw failure();
-          return reached();
-        }, 10_000, failure);
-      };
-      return { env, waitFor };
-    };
-    try {
-      const first = publicationFixture(), peer = publicationFixture();
-      for (const publication of [first, peer]) {
-        if (!useService) fs.writeFileSync(path.join(publication.dir, "shims/systemctl"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
-        fs.mkdirSync(path.join(publication.dir, "scripts/gate-runner"));
-      }
-      fs.appendFileSync(path.join(first.dir, "record.ts"), `\nif (process.argv[2] === "tsc") {
-        const fs = require("node:fs");
-        fs.writeFileSync(${JSON.stringify(started)}, "started");
-        while (!fs.existsSync(${JSON.stringify(release)})) await Bun.sleep(20);
-      }\n`);
-      commitFixtureInputs(first);
-      if (!useService) commitFixtureInputs(peer);
-      const previous = Date.now() - CPU_QUEUE_SPACING_MS;
-      f.db.query("UPDATE admission SET last = ?").run(previous);
-      const firstRun = launch(first, "first-prepare");
-      await firstRun.waitFor("its first private ticket", () => f.count() === 1);
-      const peerRun = launch(peer, "peer-prepare");
-      await peerRun.waitFor("its private ticket behind the first preparer", () => f.count() === 2);
-      expect(last()).toBe(previous);
-      fs.writeFileSync(f.env.LLV_GATE_PSI_FILE, "some avg10=0.00 total=1\n");
-      await firstRun.waitFor("the admitted check starting", () => fs.existsSync(started));
-      const admitted = last()!;
-      expect(admitted).toBeGreaterThan(previous);
-      expect(f.count()).toBe(1);
-      expect(f.db.query("SELECT slot, cap FROM gate_slots").all()).toEqual([{ slot: 1, cap: 1 }]);
-      expect(Bun.spawnSync(["flock", "-n", path.join(f.dir, "llv-heavy-gate.slot1.lock"), "true"]).exitCode).toBe(1);
-      expect(fs.existsSync(peer.receipt)).toBe(false);
-      fs.writeFileSync(release, "release");
-      const results = await Promise.all(pending);
-      expect(results.map(result => result.code), redactBounded(stderr("first-prepare") + stderr("peer-prepare"), 4_000)).toEqual([0, 0]);
-      if (useService) expect(stderr("first-prepare")).toMatch(/gate-slot: delegatus-gate-[\da-f-]+\.service:/);
-      else expect(stderr("first-prepare")).toContain("using the documented portable cleanup fallback");
-      expect(last()).toBeGreaterThan(admitted);
-      for (const [publication, { env }] of [[first, firstRun], [peer, peerRun]] as const) {
-        expect(readPublicationCheckReceipt(publication.receipt, publicationCheckBinding(env)).completedAt).toBeGreaterThanOrEqual(admitted);
-      }
-      expect(f.count()).toBe(0);
-    } finally {
-      fs.writeFileSync(release, "release"); control.abort();
-      await Promise.allSettled(pending);
-      for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
-      f.close();
-    }
-  }, 60_000);
 
 test.skipIf(process.platform !== "linux")("an aged gate respects the strictest active cap under sustained pressure", async () => {
   const f = fixture(), control = new AbortController();

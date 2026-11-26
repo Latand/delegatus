@@ -1,3 +1,4 @@
+import { publicProvisioningPipeline } from "@/lib/pipelines/provisioningRecord";
 import { finishedWorkIndex } from "@/lib/attention/finishedWork";
 import { withFinishedAttention } from "@/lib/attention/finishedAttention";
 import { stateWriteHealth } from "@/lib/state/diskFull";
@@ -392,7 +393,8 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     const placeholder = {
       path: parentPath,
       root: parentConversation.engine === "codex" ? "codex-sessions" as const
-        : parentConversation.engine === "copilot" ? "copilot-sessions" as const : "claude-projects" as const,
+        : parentConversation.engine === "copilot" ? "copilot-sessions" as const
+          : parentConversation.engine === "antigravity" ? "antigravity-sessions" as const : "claude-projects" as const,
       name: rootPath ? path.relative(rootPath, parentPath) : path.basename(parentPath),
       /* Cross-project lineage stub: the foreign parent groups under ITS owning
          project (ownership → canonical cwd → profile hint), falling back to
@@ -487,7 +489,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     });
   }
   for (const file of files) {
-    if (file.engine !== "claude" && file.engine !== "codex" && file.engine !== "copilot") continue;
+    if (file.engine !== "claude" && file.engine !== "codex" && file.engine !== "copilot" && file.engine !== "antigravity") continue;
     if (file.spawn) continue;
     const conversation = conversationForPath(file.path);
     if (!conversation || conversation.engine !== file.engine) continue;
@@ -1048,8 +1050,9 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
   const crownedProjects = [...new Set(
     curation.crowned.map((project) => remapProject(resolveCatalogAlias(project, projectAliases.aliases))),
   )];
+  const publicPipelines = pipelines.map(publicProvisioningPipeline);
   const summary = new URL(request.url).searchParams.get("view") === "summary"
-    ? filesReadSummary(projected.flows, pipelines) : null;
+    ? filesReadSummary(projected.flows, publicPipelines) : null;
   const agentRead = request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER);
   const data = {
     files: projected.files,
@@ -1061,7 +1064,7 @@ export async function buildFilesResponse(request: Request, dependencies: FilesRo
     ...(crownedProjects.length ? { crownedProjects } : {}),
     ...(Object.keys(projectCwds).length ? { projectCwds } : {}),
     flows: summary?.flows ?? projected.flows,
-    pipelines: summary?.pipelines ?? pipelines,
+    pipelines: summary?.pipelines ?? publicPipelines,
     ...(summary ? { readProjection: "board-summary" as const } : {}),
     workflows,
     /* A review's choice and comment belong to its project. This read has no

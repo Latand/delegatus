@@ -70,6 +70,20 @@ test("free text without an Answers segment covers every unanswered question", ()
   expect(input.answers).toEqual(round.questions!.map(q => ({ questionId: q.id, options: [], other: true })));
 });
 
+test.each([
+  "Show 2 GIF previews in the first video.",
+  "Show 2  GIF previews.\nKeep  the original captions.",
+  "2: Add a caption.",
+  "Use 2 examples, then 3 GIF previews.",
+])("numbered prose remains full custom text: %s", comment => {
+  const round = telegramRound();
+  const text = `${prototypeReference(round)} · ${comment}`;
+  expect(parsePrototypeAnswer(round, text).input).toMatchObject({
+    originalReply: text, comment,
+    answers: round.questions!.map(q => ({ questionId: q.id, options: [], other: true })),
+  });
+});
+
 test("mixed shorthand and words keep selected options and the addressed custom answer", () => {
   const round = telegramRound();
   const input = parsePrototypeAnswer(round, `${prototypeReference(round)} · Відповіді 1a 2 — свій варіант поверхонь\n3b`).input!;
@@ -230,6 +244,18 @@ test("seat and task short references share collision checks while only waiting r
   expect(matchPrototypeAnswer(text, [], round.id, [decided])).toHaveProperty("input");
 });
 
+test("owner reply identity uses the current header and rejects ambiguous legacy parents", () => {
+  const round = telegramRound();
+  const parent = `🧪 Форма рішення · Review\n${prototypeReference(round)}\nПроєкт: Orchard\nОписание варианта\n#proto-deadcafe`;
+  expect(matchPrototypeAnswer("1b, 2a, 3b", [telegramTask([round])], undefined, [], parent)).toMatchObject({ input: {
+    answers: [{ options: [1] }, { options: [0] }, { options: [1] }],
+  } });
+  const legacy = `Прототип · Review\nПроєкт: Orchard\n\n${prototypeReference(round)}\nОписание варианта\n#proto-deadcafe`;
+  expect(matchPrototypeAnswer("1b", [telegramTask([round])], undefined, [], legacy)).toBeNull();
+  const legacyUnique = `Прототип · Review\nПроєкт: Orchard\n\n${prototypeReference(round)}\nОписание варианта`;
+  expect(matchPrototypeAnswer("1b", [telegramTask([round])], undefined, [], legacyUnique)).toHaveProperty("input");
+});
+
 test("owner free text is explicit while ordinary web answer validation keeps its published constraints", () => {
   const round = telegramRound();
   const custom = parsePrototypeAnswer(round, `${prototypeReference(round)} · 1: Моє місце.\n2: Мої поверхні.\n3: Мій час.`).input!;
@@ -260,13 +286,31 @@ test("contextual answers preserve recommendations, custom comments, authority bo
   expect(matchPrototypeAnswer("1b", [telegramTask([round])], undefined, [], `${prototypeReference(round)} #proto-aaaaaaaa`)).toBeNull();
 });
 
+test("explicit Answers lists parse colon bundles and reject an invalid single-choice bundle", () => {
+  const round = telegramRound();
+  expect(parsePrototypeAnswer(round, `${prototypeReference(round)} · Відповіді 1b, 2: ab, 3b`)).toMatchObject({
+    input: { chosen: [], answers: [
+      { questionId: "place", options: [1] },
+      { questionId: "scope", options: [0, 1] },
+      { questionId: "timing", options: [1] },
+    ] },
+  });
+  expect(parsePrototypeAnswer(round, `${prototypeReference(round)} · Відповіді 1: ab, 2a, 3b`)).toHaveProperty("error");
+});
+
 test.each(["1b, 2", "1b 2", "1b; 2:", "1b\n2", "1b, 2m", "1b, 2: m", "1b, 2mn", "1b, 12a"])("mixed shorthand refuses incomplete or invalid fragments: %s", text => {
   expect(parsePrototypeAnswer(telegramRound(), text, true)).toHaveProperty("error");
 });
 
-test.each(["1b, 2a", "1b, wait 2 days", "1b, 2 days should be enough", "1b · 2: Почнемо завтра."])("mixed shorthand preserves choices and ordinary comments: %s", text => {
+test.each(["1b, 2a", "1b, wait 2 days", "1b, 2 days should be enough", "1b, 2 GIF previews are enough", "1b · 2: Почнемо завтра."])("mixed shorthand preserves choices and ordinary comments: %s", text => {
   const input = parsePrototypeAnswer(telegramRound(), text, true).input!;
   expect(input.answers?.[0]).toMatchObject({ questionId: "place", options: [1] });
   if (text === "1b, 2a") expect(input.answers?.[1]).toMatchObject({ questionId: "scope", options: [0] });
   else expect(input.comment).toContain(text.slice(4).trim());
+});
+
+test.each(["Hold 2 s between clips.", "Run 2 A/B tests on the landing page.", "Use 2 mm+ of padding.", "Maybe 2b is best."])("numeric prose remains an unselected custom reply: %s", text => {
+  const input = parsePrototypeAnswer(telegramRound(), text, true).input!;
+  expect(input.comment).toBe(text);
+  expect(input.answers).toEqual(telegramRound().questions!.map(q => ({ questionId: q.id, options: [], other: true })));
 });

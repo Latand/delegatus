@@ -3098,6 +3098,59 @@ test("Unix socket host isolates a singleton writer and serves a fake Viewer clie
   fence.release();
 });
 
+test.each(["new send", "existing receipt"] as const)("staged first-prompt deadline is enforced after the socket frame arrives (%s)", async scenario => {
+  const dir = sandbox("staged-admission-deadline");
+  const filename = path.join(dir, "runtime.sqlite");
+  let clock = 1_000;
+  const journal = new RuntimeJournal(filename, { structuredHosts: true, now: () => clock });
+  const runtime = new RuntimeHost(journal, undefined, undefined, true);
+  const socketPath = path.join(dir, "runtime.sock");
+  let received!: () => void;
+  let continueHandler!: () => void;
+  const frameReceived = new Promise<void>(resolve => { received = resolve; });
+  const handlerGate = new Promise<void>(resolve => { continueHandler = resolve; });
+  const server = serveRuntimeHost(socketPath, { handle: async (request, options) => {
+    if (request.method === "staged-launch-command") {
+      received();
+      await handlerGate;
+    }
+    return runtime.handle(request, options);
+  } });
+  const conversationId = "staged-admission-deadline";
+  const command = () => ({ kind: "send" as const, operationId: "spawn_message_staged-launch-deadline",
+    idempotencyKey: "spawn_message_staged-launch-deadline", conversationId, text: "first prompt", policy: "queue" as const });
+  let admittedBefore = false;
+  try {
+    await new Promise<void>(resolve => server.once("listening", resolve));
+    const outgoing = command();
+    const client = new UnixRuntimeHostClient(socketPath, 2_000);
+    let beforeCount = 0;
+    if (scenario === "existing receipt") {
+      journal.executeOperation(outgoing);
+      beforeCount = journal.effectBatch(100, ["runtime.send"]).length;
+    }
+    const deadline = 1_010;
+    const sent = client.command(outgoing, () => { admittedBefore = clock < deadline; }, deadline);
+    await frameReceived;
+    expect(admittedBefore).toBeTrue();
+    clock = deadline;
+    continueHandler();
+    if (scenario === "new send") {
+      await expect(sent).rejects.toMatchObject({ code: "STAGED_LAUNCH_DEADLINE" });
+      expect(journal.operationResult("spawn_message_staged-launch-deadline")).toBeNull();
+      expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(0);
+    } else {
+      expect(await sent).toMatchObject({ operationId: "spawn_message_staged-launch-deadline", replayed: true });
+      expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(beforeCount);
+    }
+  } finally {
+    continueHandler();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("runtime socket keeps command capacity beyond 64 concurrent SSE waits", async () => {
   const dir = sandbox("socket-command-capacity");
   const socketPath = path.join(dir, "runtime.sock");
@@ -4444,6 +4497,9 @@ test.each(["live", "unverified", "dead"])("automatic retirement claim protects t
       child.kill(9);
       await child.exited;
       expect(journal.transitionOperation("exclusive-retire", "queued", {}, { retirementClaim: contender }).receipt.retirementClaim).toBeNull();
+      expect(journal.executeOperation({ kind: "send", operationId: "owner-held-send", idempotencyKey: "owner-held-send",
+        conversationId, policy: "queue", text: "after actuation" }).receipt.status).toBe("queued");
+      journal.transitionOperation("exclusive-retire", "failed", { reason: "fixture-released" }, { fromStatuses: ["queued"] });
     } else {
       // The executor releases only after its own actuation has returned.
       expect(journal.transitionOperation("exclusive-retire", "failed", {}, { retirementClaim: owner }).receipt.retirementClaim).toBeNull();
@@ -4687,4 +4743,35 @@ test.each([false, true])("idle continuation pre-execution proof survives journal
   expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(0);
   journal.close();
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+
+test("a kill receipt retains its first send cohort across transitions and a process restart", () => {
+  const dir = sandbox("kill-cohort-restart");
+  const filename = path.join(dir, "events.sqlite");
+  const journal = new RuntimeJournal(filename, { structuredHosts: true });
+  try {
+    const command = { kind: "kill" as const, conversationId: "conversation_cohort", operationId: "cohort-stop", idempotencyKey: "cohort-stop",
+      sessionKey: { engine: "codex" as const, sessionId: "cohort-generation" }, pendingSendIds: ["send-before"] };
+    expect(journal.executeOperation(command).receipt.pendingSendIds).toEqual(["send-before"]);
+    journal.transitionOperation(command.operationId, "failed", { reason: "target unavailable" });
+    journal.close();
+    const child = Bun.spawnSync({ cmd: [process.execPath, "-e", `
+      import { RuntimeJournal } from "./src/runtime-host/journal.ts";
+      const journal = new RuntimeJournal(process.env.LLV_TEST_JOURNAL, { structuredHosts: true });
+      try {
+        const command = ${JSON.stringify(command)};
+        command.pendingSendIds = ["send-later"];
+        const replay = journal.executeOperation(command);
+        console.log(JSON.stringify({ replay, status: journal.operationResult(command.operationId) }));
+      } finally { journal.close(); }
+    `], cwd: process.cwd(), env: { ...process.env, LLV_TEST_JOURNAL: filename }, stdout: "pipe", stderr: "pipe" });
+    expect(child.exitCode).toBe(0);
+    const result = JSON.parse(new TextDecoder().decode(child.stdout));
+    expect(result.replay).toMatchObject({ replayed: true, receipt: { status: "failed", pendingSendIds: ["send-before"] } });
+    expect(result.status.receipt.pendingSendIds).toEqual(["send-before"]);
+  } finally {
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

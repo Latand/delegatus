@@ -215,6 +215,15 @@ test("accounts GET is secret-free and leaves login reconciliation to the control
   expect(listCodexAccounts().find((item) => item.id === account.id)?.loginPane).not.toBeNull();
 });
 
+test("accounts GET carries Antigravity's recorded sign-in beside Claude and Codex, and never reads a model", async () => {
+  const body = await (await GET()).json() as { antigravity: { cli: string; active: string; accounts: { id: string; auth: string; plan: string | null; authPresent: boolean }[] } };
+  expect(["found", "missing"]).toContain(body.antigravity.cli);
+  expect(body.antigravity.active).toBe("default");
+  expect(body.antigravity.accounts).toHaveLength(1);
+  /* Nothing recorded in this sandbox: unknown, which the setup guide does not count as connected. */
+  expect(body.antigravity.accounts[0]).toMatchObject({ id: "default", auth: "unknown", plan: null, authPresent: false });
+});
+
 test("retrying failed migrations requests one immediate reconciliation cycle", async () => {
   const registry = new AgentRegistry(path.join(SANDBOX, "retry-action-registry.json"));
   const conversation = registry.ensureConversation("codex", "/retry-now.jsonl", "source");

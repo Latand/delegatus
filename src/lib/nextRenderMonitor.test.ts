@@ -1,3 +1,4 @@
+import { requestWorkload } from "./requestWorkload";
 import { expect, test } from "bun:test";
 import { getTracer } from "next/dist/server/lib/trace/tracer";
 import { BaseServerSpan, RenderSpan } from "next/dist/server/lib/trace/constants";
@@ -75,4 +76,28 @@ test("a response still being sent after the bound is counted as a stream", async
     await Bun.sleep(0);
     expect(operations().filter(operation => !operation.completed)).toEqual([]);
   } finally { restore(); monitor.stop(); }
+});
+
+test("serving renders and their synchronous work share the catalogued route template", async () => {
+  const tracer = getTracer();
+  let at = 0;
+  const spans = createPerformanceSpans(() => at);
+  const monitor = createViewerLoopMonitor(() => {}, () => at, spans);
+  const restore = await installServingNextRenderMonitor(monitor, spans);
+  const minute = Math.floor(process.uptime() / 60);
+  const route = "/api/tasks/[id]/prototypes";
+  const count = () => requestWorkload.snapshot(minute, minute + 1).minutes.reduce((n, b) => n + (b.renders[route] ?? 0), 0);
+  const before = count();
+  try {
+    await tracer.trace(BaseServerSpan.renderToResponse, { attributes: { "next.route": "/api/tasks/private-fixture/prototypes" } }, () =>
+      tracer.trace(BaseServerSpan.renderToResponseWithComponents, async () => {
+        await Promise.resolve();
+        spans.sync("state.copy", () => { at++; });
+      }));
+    await Bun.sleep(0);
+    expect(count()).toBe(before + 1);
+    const result = spans.snapshot();
+    expect(result.records.find(row => performanceSites[row.site] === "state.copy")?.requestClass).toBe("http:" + route);
+    expect(JSON.stringify(result)).not.toContain("private-fixture");
+  } finally { restore(); }
 });

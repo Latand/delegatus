@@ -8,7 +8,7 @@ const idleStopBinding = z.object({
   kind: z.literal("idle-stop"),
   operationId: z.string().min(1),
   conversationId: z.string().min(1),
-  sessionKey: z.object({ engine: z.enum(["claude", "codex", "copilot"]), sessionId: z.string().min(1) }),
+  sessionKey: z.object({ engine: z.enum(["claude", "codex", "copilot", "antigravity"]), sessionId: z.string().min(1) }),
   transcriptPath: z.string().min(1),
   revision: z.number().int().nonnegative(),
   writerClaim: z.string().min(1),
@@ -35,13 +35,17 @@ export async function readIdleStop(key: string): Promise<IdleStopBinding | null>
 
 /** Commit an immutable authority binding before the attempt can acquire
  * dispatch rights. Recovery can read the same operation across a restart. */
-export async function claimIdleStop(key: string, identity: IdleStopIdentity, replaces?: IdleStopBinding) {
+export async function claimIdleStop(key: string, identity: IdleStopIdentity, replaces?: IdleStopBinding, retryAfter?: string) {
   const authority = digest([identity.conversationId, identity.sessionKey.engine, identity.sessionKey.sessionId,
     identity.transcriptPath, identity.revision, identity.writerClaim]);
-  const binding = idleStopBinding.parse({ kind: "idle-stop", operationId: "pipeline-stop-" + authority, ...identity });
+  // A receipt that proves a previous idle stop had no effect permits a fresh
+  // operation after the caller has observed idle state and the current writer.
+  // Chain the new key to that exact receipt so replay remains idempotent.
+  const operationId = "pipeline-stop-" + digest([authority, retryAfter ?? null]);
+  const binding = idleStopBinding.parse({ kind: "idle-stop", operationId, ...identity });
   // Separate attempts can point at the same observed host. Claim the fence
   // once and store its binding under each attempt key for later readback.
-  const record = await claimPipelineControlOwnership(key, JSON.stringify(binding), "pipeline-idle-fence-" + authority,
+  const record = await claimPipelineControlOwnership(key, JSON.stringify(binding), "pipeline-idle-fence-" + operationId,
     replaces && JSON.stringify(replaces));
   return { acquired: record.acquired, binding: idleStopBinding.parse(JSON.parse(record.binding)) };
 }

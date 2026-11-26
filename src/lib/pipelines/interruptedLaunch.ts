@@ -32,6 +32,7 @@ function unstartedStageProcessRefusal(receipt: SpawnReceipt, cut: "before-admiss
   if (!receipt.hostSetupStartedAt || !setup || setup.adoptionClaimEpoch !== undefined) {
     return "native setup custody is unavailable";
   }
+  if (setup.execPermitGranted) return "the original setup granted the engine permission to start";
   if (setup.processes.some(identity => processIdentityStatus(identity) !== "dead")
     || setup.phase === "executing" && (!setup.processes.length
       || !setup.cleanupConfirmed && !(reconcileCleanup && receipt.admissionOwner))) {
@@ -78,10 +79,12 @@ export async function prepublicationStageJournalProof(
   const id = receipt.launchId;
   const messageId = `spawn_message_${id}`;
   const cut = interruptedStageLaunch(failure);
-  const [launch, message, session] = await Promise.all([
+  if (!cut) return false;
+  const readTarget = () => Promise.all([
     client.operationStatus(id), client.operationStatus(messageId),
-    cut ? readRuntimeSession(client, { conversationId: receipt.conversationId }) : null,
+    readRuntimeSession(client, { conversationId: receipt.conversationId }),
   ]);
+  const [launch, message, session] = await readTarget();
   if (signal.aborted || message !== null) return false;
   if (cut === "before-admission") {
     if (launch !== null || session !== null) return false;
@@ -117,9 +120,9 @@ export async function prepublicationStageJournalProof(
         event.producer.kind === "runtime-host" && event.producer.eventKey === `operation:${id}:session-placeholder`
         || event.producer.kind === "runtime-effect" && event.producer.eventKey === `operation:${id}:spawn-${launch.receipt.status}-session-dead`);
       const sessionEvent = event.scope.type === "session" && event.scope.id === receipt.conversationId;
-      if (cut && sessionEvent && !placeholder) return false;
-      if ((cut || admitted) && (event.kind === "turn-started" && (sessionEvent || event.payload.conversationId === receipt.conversationId)
-        || event.scope.type === "operation" && event.scope.id === messageId)) return false;
+      if (sessionEvent && !placeholder
+        || (event.kind === "turn-started" || event.kind === "turn-ended") && event.payload.conversationId === receipt.conversationId
+        || event.scope.type === "operation" && event.scope.id === messageId) return false;
       if (event.scope.type === "operation" && event.scope.id === id) {
         if (!launch) return false;
         if (event.producer.kind === "viewer-command"
@@ -128,5 +131,11 @@ export async function prepublicationStageJournalProof(
     }
     if (cursor === previous) return false;
   }
-  return !signal.aborted && cursor === snapshot.snapshotSeq && (launch ? admitted : beforeAdmission);
+  if (signal.aborted || cursor !== snapshot.snapshotSeq || !(launch ? admitted : beforeAdmission)) return false;
+  // Replay may yield while a first message or native session is recorded past
+  // its watermark. Recheck the original identities before returning proof.
+  const [currentLaunch, currentMessage, currentSession] = await readTarget();
+  return !signal.aborted && currentMessage === null
+    && JSON.stringify(currentLaunch?.receipt) === JSON.stringify(launch?.receipt)
+    && JSON.stringify(currentSession) === JSON.stringify(session);
 }

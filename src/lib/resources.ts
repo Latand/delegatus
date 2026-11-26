@@ -1,9 +1,9 @@
-import { validAgentStateDisplay, agentStateActivity } from "@/lib/agentState/model";
-import { validAgentStateMetrics } from "@/lib/agentState/store";
+import { agentStateMetricsForStorage, validAgentStateDisplay, agentStateActivity } from "@/lib/agentState/model";
+import { normalizeAgentStateMetrics } from "@/lib/agentState/store";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { procBackend } from "@/lib/proc";
 import type { ProcBackend } from "@/lib/proc";
-import { systemBootEpoch } from "@/lib/processIdentity";
+import { systemBootEpoch, systemBootEpochAsync } from "@/lib/processIdentity";
 import crypto from "node:crypto";
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
@@ -23,16 +23,17 @@ import {
 import { descendantPids } from "@/lib/proc/memory";
 import {
   accountMigrationHostArgv,
-  agentProcesses,
+  resourceAgentProcesses,
   readStructuredHostStamp,
   structuredHostEngine,
   structuredHostStamp,
   type AgentProcess,
 } from "@/lib/scanner/process";
 import { resourceWorkerRequestProblem } from "@/lib/resourceWorkerRequest";
-import { readViewerTree } from "@/lib/resourceViewerTree";
+import { readViewerTree, readViewerTreeAsync, type ViewerTreeRead } from "@/lib/resourceViewerTree";
 import { overlayResourceSessionTitles } from "@/lib/session/titleProjection";
 import { statePath } from "@/lib/configDir";
+import { stateOwner } from "@/lib/stateOwnership";
 import { recordHelperGroup } from "@/lib/helperLease";
 import { fsyncPath } from "@/lib/state/durableJson";
 
@@ -47,8 +48,8 @@ import { RESOURCE_STRUCTURED_HOST_LIMIT, type FileEntry, type ResourceSession, t
  */
 
 /** Per-session process attribution is expensive on large transcript inventories.
- * System memory is still captured for every API read, and explicit post-kill
- * refreshes still bypass this cache. */
+ * System memory is refreshed independently, and explicit post-kill refreshes
+ * bypass this cache. */
 const CACHE_MS = 600_000;
 
 type ResourceBuildPhase = "systemMemory" | "readFiles" | "readHosts" | "ppidMap" | "processMemory" | "attach" | "serialization";
@@ -185,9 +186,38 @@ function validResourceViewer(value: unknown): value is ResourcesViewer {
     && Number.isSafeInteger(item.procCount));
 }
 
-function captureSystemMemory(proc: Pick<ProcBackend, "systemMemory"> = procBackend): ResourcesPayload["system"] {
-  const system = proc.systemMemory();
+function timestampSystemMemory(system: ReturnType<ProcBackend["systemMemory"]>): ResourcesPayload["system"] {
   return system ? { ...system, capturedAt: new Date().toISOString() } : null;
+}
+
+type CaptureResourceSystem = (previous?: ResourcesPayload["system"]) => ResourcesPayload["system"];
+
+/** Keep the latest completed Darwin probe available to bounded and cached
+    responses while a new sample is in flight. Collection joins that flight. */
+function portableSystemSampler(readMemory: NonNullable<ProcBackend["resourceSystemMemory"]>) {
+  let latest: ResourcesPayload["system"] | undefined;
+  let sampledAt = -Infinity;
+  let flight: Promise<ResourcesPayload["system"]> | null = null;
+  const sample = () => {
+    flight ??= readMemory().then((system) => {
+      latest = timestampSystemMemory(system);
+      sampledAt = performance.now();
+      return latest;
+    }).finally(() => { flight = null; });
+    return flight;
+  };
+  const read: CaptureResourceSystem = (previous) => {
+    if (performance.now() - sampledAt >= 1_000) {
+      void sample().catch((error: unknown) => console.error("[resources] system memory sample failed", error));
+    }
+    return latest === undefined ? previous ?? null : latest;
+  };
+  const readLive = async (previous: ResourcesPayload["system"]) => {
+    // read() already started the refresh. Unbounded reads can join it.
+    if (flight) await flight.catch(() => {});
+    return latest === undefined ? previous : latest;
+  };
+  return { sample, read, readLive };
 }
 
 /** The reference an observation persisted before pane hosts were retired
@@ -215,7 +245,7 @@ export interface StructuredHostRecord {
   agentState?: import("./agentState/model").AgentStateDisplay;
   /** Session key id (`<engine>:<sessionId>`), the row's stable target suffix. */
   id: string;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   sessionId: string | null;
   pid: number;
   /** Kernel start-time token captured with the pid; a recycled pid fails it. */
@@ -253,7 +283,7 @@ export interface StructuredHostKillRef {
   pid: number;
   startIdentity: string;
   bootEpoch: string | null;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   sessionId: string | null;
   conversationId: string | null;
   seat: boolean | null;
@@ -352,13 +382,14 @@ function isoFromUnix(seconds: number): string {
 
 export interface ResourceSnapshotDependencies {
   readFiles(fresh: boolean): Promise<ResourceFileObservation[]>;
-  proc: Pick<ProcBackend, "systemMemory" | "ppidMap" | "processMemory">;
-  bootEpoch?(): string | null;
+  proc: Pick<ProcBackend, "systemMemory" | "ppidMap" | "processMemory" | "resourceSystemMemory" | "resourcePpidMap" | "resourceProcessMemory">;
+  sampleSystem?(): Promise<ResourcesPayload["system"]>;
+  bootEpoch?(): string | null | Promise<string | null>;
   /** Structured-host records the registry holds. The viewer reads them and
       hands them to the collector; nothing here ever opens the registry. */
   readStructuredHosts?(fresh: boolean): Promise<StructuredHostRecord[]>;
   /** Live claude/codex processes, for the host shapes no record covers. */
-  listAgentProcesses?(fresh: boolean): AgentProcess[];
+  listAgentProcesses?(fresh: boolean): AgentProcess[] | Promise<AgentProcess[]>;
   /** Whether a host's working directory still exists — a deleted worktree is
       what makes an otherwise healthy record an orphan. */
   directoryExists?(directory: string): boolean;
@@ -380,7 +411,7 @@ const resourceSnapshotDependencies: ResourceSnapshotDependencies = {
   readFiles: readResourceFileSnapshot,
   proc: procBackend,
   readStructuredHosts: readStructuredHostRecordsForCollection,
-  listAgentProcesses: agentProcesses,
+  listAgentProcesses: resourceAgentProcesses,
   directoryExists: (directory) => existsSync(directory),
   processIdentity: (pid) => procBackend.processIdentity(pid),
   hostStamp: readStructuredHostStamp,
@@ -476,7 +507,7 @@ async function structuredHostTrees(
 ): Promise<Array<{ record: StructuredHostRecord & { startIdentity: string }; tree: number[] }>> {
   const records = (await dependencies.readStructuredHosts?.(fresh)) ?? [];
   const identity = dependencies.processIdentity ?? ((pid: number) => procBackend.processIdentity(pid));
-  const currentBootEpoch = (dependencies.bootEpoch ?? systemBootEpoch)();
+  const currentBootEpoch = await (dependencies.bootEpoch ?? systemBootEpochAsync)();
   const stampOf = dependencies.hostStamp ?? readStructuredHostStamp;
   const ourStamp = structuredHostStamp();
   const live: Array<StructuredHostRecord & { startIdentity: string }> = [];
@@ -495,7 +526,7 @@ async function structuredHostTrees(
     live.push({ ...record, startIdentity: observed });
     if (live.length >= RESOURCE_STRUCTURED_HOST_LIMIT) break;
   }
-  for (const candidate of dependencies.listAgentProcesses?.(fresh) ?? []) {
+  for (const candidate of (await dependencies.listAgentProcesses?.(fresh)) ?? []) {
     if (live.length >= RESOURCE_STRUCTURED_HOST_LIMIT) break;
     if (claimed.has(candidate.pid) || accountMigrationHostArgv(candidate.argv)) continue;
     const engine = structuredHostEngine(candidate.argv);
@@ -542,9 +573,15 @@ export async function buildResourceSnapshot(
   const startedAt = performance.now();
   const phases = emptyResourceBuildPhases();
   try {
-    const system = measureResourcePhase(phases, "systemMemory", () => captureSystemMemory(dependencies.proc));
+    const system = await measureResourcePhaseAsync(phases, "systemMemory", async () => {
+      if (dependencies.sampleSystem) return dependencies.sampleSystem();
+      const captured = dependencies.proc.resourceSystemMemory
+        ? await dependencies.proc.resourceSystemMemory()
+        : dependencies.proc.systemMemory();
+      return timestampSystemMemory(captured);
+    });
     const files = await measureResourcePhaseAsync(phases, "readFiles", () => dependencies.readFiles(fresh));
-    const ppids = measureResourcePhase(phases, "ppidMap", () => dependencies.proc.ppidMap());
+    const ppids = await measureResourcePhaseAsync(phases, "ppidMap", () => dependencies.proc.resourcePpidMap?.(fresh) ?? Promise.resolve(dependencies.proc.ppidMap()));
     const structured = await measureResourcePhaseAsync(phases, "readHosts", () => structuredHostTrees(fresh, ppids, dependencies));
     const sessions: ResourceSession[] = [];
     const byPath = new Map(files.map((entry) => [entry.path, entry]));
@@ -562,7 +599,7 @@ export async function buildResourceSnapshot(
       structuredTrees.push(item);
       for (const pid of item.tree) treePids.add(pid);
     }
-    const memory = measureResourcePhase(phases, "processMemory", () => dependencies.proc.processMemory(treePids));
+    const memory = await measureResourcePhaseAsync(phases, "processMemory", () => dependencies.proc.resourceProcessMemory?.(treePids) ?? Promise.resolve(dependencies.proc.processMemory(treePids)));
     const treeMemory = (tree: number[]) => {
       let rssBytes = 0;
       let swapBytes = 0;
@@ -642,10 +679,30 @@ export async function buildResourceSnapshot(
 
 export interface ResourcesReadOptions {
   /** The longest an ordinary read waits for a first collection. Past it the
-      read answers `pending` with the system block and no session rows, and the
-      collection carries on for the next read. A fresh read ignores it: its
+      read answers `pending` with any available system sample and no session
+      rows, and collection carries on. A fresh read ignores it: its
       caller asked for the completed observation. */
   waitMs?: number;
+}
+
+export function resourcePlatformUsesBoundedPressure(platform: string): boolean {
+  return platform === "darwin" || platform === "win32";
+}
+
+export async function readPressureWithDeadline<T>(
+  platform: string,
+  deadline: number | undefined,
+  read: () => Promise<T>,
+  readFallback: () => Promise<T>,
+): Promise<T> {
+  if (deadline === undefined || !resourcePlatformUsesBoundedPressure(platform)) return read();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      read(),
+      new Promise<T>(resolve => { timer = setTimeout(() => { void readFallback().then(resolve); }, Math.max(0, deadline - performance.now())); }),
+    ]);
+  } finally { clearTimeout(timer); }
 }
 
 export interface ResourcesReader {
@@ -711,7 +768,7 @@ exec "$@"
 `;
 const RESOURCE_OBSERVATION_MAX_SESSIONS = 10_000;
 const RESOURCE_OBSERVATION_MAX_TARGETS = 10_000;
-const RESOURCE_READER_VERSION = 3;
+const RESOURCE_READER_VERSION = 4;
 
 function resourceWorkerExecutableCanBeSupervised(executable: string): boolean {
   try {
@@ -1086,7 +1143,7 @@ function validResourceSession(value: unknown): boolean {
   return typeof value.target === "string" && value.target.length > 0
     && Number.isSafeInteger(value.panePid) && (value.panePid as number) > 0
     && nullableString(value.path)
-    && (value.engine === "claude" || value.engine === "codex" || value.engine === "copilot" || value.engine === null)
+    && (value.engine === "claude" || value.engine === "codex" || value.engine === "copilot" || value.engine === "antigravity" || value.engine === null)
     && nullableString(value.title)
     && nullableString(value.project)
     && (value.activity === "live" || value.activity === "recent" || value.activity === "stalled" || value.activity === "idle" || value.activity === null)
@@ -1099,10 +1156,13 @@ function validResourceSession(value: unknown): boolean {
     && (value.hostConflict === undefined || typeof value.hostConflict === "boolean");
 }
 
-function validResourcesPayload(value: unknown): value is ResourcesPayload {
-  if (!record(value) || !exactKeys(value, ["system", "sessions"], ["agentState"]) || !validResourceSystem(value.system) || !Array.isArray(value.sessions)) return false;
-  if (value.agentState !== undefined && !validAgentStateMetrics(value.agentState)) return false;
-  return value.sessions.length <= RESOURCE_OBSERVATION_MAX_SESSIONS && value.sessions.every(validResourceSession);
+function normalizeResourcesPayload(value: unknown): ResourcesPayload | null {
+  if (!record(value) || !exactKeys(value, ["system", "sessions"], ["agentState"]) || !validResourceSystem(value.system) || !Array.isArray(value.sessions)
+    || value.sessions.length > RESOURCE_OBSERVATION_MAX_SESSIONS || !value.sessions.every(validResourceSession)) return null;
+  const payload = { system: value.system as ResourcesPayload["system"], sessions: value.sessions };
+  if (value.agentState === undefined) return payload;
+  const agentState = normalizeAgentStateMetrics(value.agentState);
+  return agentState ? { ...payload, agentState } : null;
 }
 
 function validResourceDiagnostic(value: unknown): value is ResourceBuildDiagnostic {
@@ -1148,7 +1208,7 @@ function validStructuredHostKillRef(value: unknown): value is StructuredHostKill
        recycled since (#1199). */
     && typeof value.startIdentity === "string" && value.startIdentity.length > 0
     && nullableString(value.bootEpoch)
-    && (value.engine === "claude" || value.engine === "codex" || value.engine === "copilot")
+    && (value.engine === "claude" || value.engine === "codex" || value.engine === "copilot" || value.engine === "antigravity")
     && nullableString(value.sessionId)
     && nullableString(value.conversationId)
     && nullableBoolean(value.seat)
@@ -1181,20 +1241,21 @@ function resourceTargetsMatchPayload(
   });
 }
 
-function validCollectedResources(value: unknown): value is CollectedResources {
+function normalizeCollectedResources(value: unknown): CollectedResources | null {
   if (!record(value) || !exactKeys(value, ["payload", "diagnostic", "hostCount", "treeCount", "targets"], ["targetEpoch"])
-    || !validResourcesPayload(value.payload)
     || !validResourceDiagnostic(value.diagnostic)
     || !Number.isSafeInteger(value.hostCount) || (value.hostCount as number) < 0
     || !Number.isSafeInteger(value.treeCount) || (value.treeCount as number) < 0
     || (value.targetEpoch !== undefined && (!Number.isSafeInteger(value.targetEpoch) || (value.targetEpoch as number) < 0))
     || !Array.isArray(value.targets)
     || value.targets.length > RESOURCE_OBSERVATION_MAX_TARGETS
-    || !value.targets.every(validResourceTarget)) return false;
-  return value.diagnostic.status === "complete"
-    && resourceTargetsMatchPayload(value.payload, value.targets)
-    && value.hostCount === value.payload.sessions.length
-    && value.treeCount === value.payload.sessions.reduce((total, session) => total + session.procCount, 0);
+    || !value.targets.every(validResourceTarget)) return null;
+  const payload = normalizeResourcesPayload(value.payload);
+  if (!payload || value.diagnostic.status !== "complete"
+    || !resourceTargetsMatchPayload(payload, value.targets)
+    || value.hostCount !== payload.sessions.length
+    || value.treeCount !== payload.sessions.reduce((total, session) => total + session.procCount, 0)) return null;
+  return { ...value, payload } as CollectedResources;
 }
 
 function resourceWorkerMessage(value: unknown): ResourceWorkerMessage | null {
@@ -1208,13 +1269,13 @@ function resourceWorkerMessage(value: unknown): ResourceWorkerMessage | null {
       : null;
   }
   if (candidate.type !== "observation" || !exactKeys(candidate, ["type", "payload", "diagnostic", "targets"])
-    || !validResourcesPayload(candidate.payload)
     || !validResourceDiagnostic(candidate.diagnostic)
     || !Array.isArray(candidate.targets)
     || candidate.targets.length > RESOURCE_OBSERVATION_MAX_TARGETS
     || !candidate.targets.every(validResourceTarget)) return null;
-  if (candidate.diagnostic.status !== "complete" || !resourceTargetsMatchPayload(candidate.payload, candidate.targets)) return null;
-  return candidate as ResourceWorkerMessage;
+  const payload = normalizeResourcesPayload(candidate.payload);
+  if (!payload || candidate.diagnostic.status !== "complete" || !resourceTargetsMatchPayload(payload, candidate.targets)) return null;
+  return { type: "observation", payload, diagnostic: candidate.diagnostic, targets: candidate.targets };
 }
 
 export function parsePersistedResourceObservation(raw: string): ResourceObservation<CollectedResources> | null {
@@ -1233,9 +1294,9 @@ export function parsePersistedResourceObservation(raw: string): ResourceObservat
       || (observation.degradedReason !== undefined
         && observation.degradedReason !== "collector-busy"
         && observation.degradedReason !== "timeout"
-        && observation.degradedReason !== "collector-crash")
-      || !validCollectedResources(observation.value)) return null;
-    return observation as ResourceObservation<CollectedResources>;
+        && observation.degradedReason !== "collector-crash")) return null;
+    const value = normalizeCollectedResources(observation.value);
+    return value ? { ...observation, value } as ResourceObservation<CollectedResources> : null;
   } catch {
     return null;
   }
@@ -1261,13 +1322,21 @@ export function readCachedResourceSessions(): { sessions: ResourceSession[]; sta
       || observation.value.payload.sessionsStale === true || observation.degradedReason !== undefined };
 }
 
+export function serializeResourceObservationForStorage(observation: ResourceObservation<CollectedResources>): string {
+  const payload = observation.value.payload;
+  const storedObservation = payload.agentState
+    ? { ...observation, value: { ...observation.value, payload: { ...payload, agentState: agentStateMetricsForStorage(payload.agentState) } } }
+    : observation;
+  return JSON.stringify({ version: RESOURCE_OBSERVATION_SCHEMA_VERSION, observation: storedObservation }) + "\n";
+}
+
 function persistObservation(observation: ResourceObservation<CollectedResources>): boolean {
   const filename = statePath(RESOURCE_OBSERVATION_FILE);
   let temporary: string | undefined;
   try {
     mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     temporary = path.join(path.dirname(filename), `.${path.basename(filename)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-    const serialized = JSON.stringify({ version: RESOURCE_OBSERVATION_SCHEMA_VERSION, observation }) + "\n";
+    const serialized = serializeResourceObservationForStorage(observation);
     if (Buffer.byteLength(serialized) > RESOURCE_OBSERVATION_MAX_BYTES) throw new Error("resource observation exceeded durable size limit");
     writeFileSync(temporary, serialized, { mode: 0o600 });
     fsyncPath(temporary);
@@ -1285,7 +1354,7 @@ function persistObservation(observation: ResourceObservation<CollectedResources>
 }
 
 function validateDurableResourceObservation(observation: ResourceObservation<CollectedResources>): void {
-  const serialized = JSON.stringify({ version: RESOURCE_OBSERVATION_SCHEMA_VERSION, observation }) + "\n";
+  const serialized = serializeResourceObservationForStorage(observation);
   if (Buffer.byteLength(serialized) > RESOURCE_OBSERVATION_MAX_BYTES) {
     throw new ResourceCollectorFailureError(
       "collector-crash",
@@ -2337,7 +2406,7 @@ function sessionTableStamp(
 /** The answer to a read whose wait ended before the first collection did. */
 function pendingResourceRead(
   result: ResourceCollectorResult<CollectedResources>,
-  captureSystem: () => ResourcesPayload["system"],
+  captureSystem: CaptureResourceSystem,
 ): ResourcesRead {
   return {
     payload: { system: captureSystem(), sessions: [], sessionsCapturedAt: null, sessionsStale: true },
@@ -2357,7 +2426,7 @@ function pendingResourceRead(
 
 function resourceReadFromResult(
   result: ResourceCollectorResult<CollectedResources>,
-  captureSystem: () => ResourcesPayload["system"],
+  captureSystem: CaptureResourceSystem,
   fresh: boolean,
   servedFromCache = false,
   now = Date.now(),
@@ -2390,7 +2459,7 @@ function resourceReadFromResult(
   }
   if (failure) {
     return {
-      payload: { ...payload, ...(fresh ? {} : { system: captureSystem() }), ...stamp },
+      payload: { ...payload, ...(fresh ? {} : { system: captureSystem(payload.system) }), ...stamp },
       diagnostic: {
         fresh,
         status: "failed",
@@ -2407,7 +2476,7 @@ function resourceReadFromResult(
     };
   }
   return {
-    payload: { ...payload, ...(fresh ? {} : { system: captureSystem() }), ...stamp },
+    payload: { ...payload, ...(fresh ? {} : { system: captureSystem(payload.system) }), ...stamp },
     diagnostic: {
       ...diagnostic,
       fresh,
@@ -2422,7 +2491,7 @@ function resourceReadFromResult(
 
 export function createResourcesReader(
   build: (fresh: boolean) => Promise<ResourcesPayload>,
-  captureSystem: () => ResourcesPayload["system"],
+  captureSystem: CaptureResourceSystem,
   now: () => number = Date.now,
   diagnosticForBuild: () => ResourceBuildDiagnostic | null = lastResourceBuildDiagnostic,
   options: {
@@ -2430,13 +2499,15 @@ export function createResourcesReader(
     collectorId?: string;
     initial?: ResourceObservation<CollectedResources> | null;
     persist?: (observation: ResourceObservation<CollectedResources>) => boolean;
+    readLiveSystem?: (previous: ResourcesPayload["system"]) => Promise<ResourcesPayload["system"]>;
     readFiles?: (fresh: boolean) => Promise<ResourceWorkerFileObservation[]>;
     readHostRecords?: () => Promise<StructuredHostRecord[]>;
     workerLimits?: ResourceWorkerLimits;
     workerProcessRuntime?: ResourceWorkerProcessRuntime;
   } = {},
 ): ResourcesReader {
-  const inProcess = options.inProcess ?? process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS === "1";
+  // The worker requires Linux kernel containment. Other platforms collect in the Viewer.
+  const inProcess = options.inProcess ?? (process.env.LLV_RESOURCE_COLLECTOR_IN_PROCESS === "1" || process.platform !== "linux");
   const collectorId = options.collectorId ?? (inProcess
     ? `in-process:${process.pid}:${crypto.randomUUID()}`
     : `worker:${process.pid}:${crypto.randomUUID()}`);
@@ -2482,6 +2553,7 @@ export function createResourcesReader(
   let backgroundFlight: Promise<void> | null = null;
   let latestBackgroundFailure: ResourceCollectorResult<CollectedResources> | null = null;
   const observeTimeoutMs = options.workerLimits?.observeTimeoutMs ?? RESOURCE_OBSERVE_TIMEOUT_MS;
+  const { readLiveSystem } = options;
 
   const clearBackgroundFailure = (observation: ResourceObservation<CollectedResources>) => {
     if (latestBackgroundFailure && observation.generation >= latestBackgroundFailure.generation) {
@@ -2553,7 +2625,11 @@ export function createResourcesReader(
 
   return {
     async read(fresh = false, options: ResourcesReadOptions = {}): Promise<ResourcesRead> {
-      if (!fresh) return readOnce(false, options.waitMs);
+      if (!fresh) {
+        const read = await readOnce(false, options.waitMs);
+        if (options.waitMs !== undefined || read.diagnostic.status !== "complete" || !readLiveSystem) return read;
+        return { ...read, payload: { ...read.payload, system: await readLiveSystem(read.payload.system) } };
+      }
       if (freshFlight) return freshFlight;
       const task = readOnce(true);
       freshFlight = task;
@@ -2570,12 +2646,18 @@ function resourcesReader(): ResourcesReader {
   let reader = globalStore.__llvResourcesReader;
   if (globalStore.__llvResourcesReaderVersion !== RESOURCE_READER_VERSION || !reader) {
     globalStore.__llvResourcesReaderVersion = RESOURCE_READER_VERSION;
+    const portableMemory = procBackend.name === "portable" && procBackend.resourceSystemMemory
+      ? portableSystemSampler(procBackend.resourceSystemMemory)
+      : null;
+    const build = portableMemory
+      ? (fresh: boolean) => buildResourceSnapshot(fresh, { ...resourceSnapshotDependencies, sampleSystem: portableMemory.sample })
+      : buildResourceSnapshot;
     reader = createResourcesReader(
-      buildResourceSnapshot,
-      () => captureSystemMemory(),
+      build,
+      portableMemory?.read ?? (() => timestampSystemMemory(procBackend.systemMemory())),
       Date.now,
       lastResourceBuildDiagnostic,
-      { initial: persistedObservation(), persist: persistObservation },
+      { initial: persistedObservation(), persist: persistObservation, readLiveSystem: portableMemory?.readLive },
     );
     globalStore.__llvResourcesReader = reader;
   }
@@ -2599,14 +2681,34 @@ export async function readResources(fresh = false): Promise<ResourcesPayload> {
   return (await readResourcesWithDiagnostic(fresh)).payload;
 }
 
-/** The Viewer's own tree is measured on every read, beside the system block,
-    so it is as current as the RAM bars and never inherits the session table's
-    age. A current table's session roots are handed in so agent trees stay out
+/** The Viewer's own tree is measured separately from the cached session table.
+    A current table's session roots are handed in so agent trees stay out
     of it; a stale table's pids may since belong to anything, so the tree then
     relies on the host stamp and the command line alone. */
-function withViewerSection(read: ResourcesRead): ResourcesRead {
+async function withViewerSection(read: ResourcesRead, deadline?: number): Promise<ResourcesRead> {
   const agentRoots = read.payload.sessionsStale ? [] : read.payload.sessions.map((session) => session.panePid);
-  const { viewer, unavailable } = readViewerTree(agentRoots);
+  let tree: ViewerTreeRead;
+  if (procBackend.name === "linux" || stateOwner() !== "viewer") {
+    tree = readViewerTree(agentRoots);
+  } else if (read.diagnostic.status === "pending") {
+    tree = { viewer: null, unavailable: null };
+  } else if (deadline === undefined) {
+    tree = await readViewerTreeAsync(agentRoots);
+  } else {
+    // The optional tree uses only the time left over from collection.
+    const timeLeft = deadline - performance.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unavailable = { viewer: null, unavailable: null };
+    try {
+      tree = timeLeft <= 0 ? unavailable : await Promise.race([
+        readViewerTreeAsync(agentRoots),
+        new Promise<ViewerTreeRead>((resolve) => { timer = setTimeout(resolve, timeLeft, unavailable); }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  const { viewer, unavailable } = tree;
   return { ...read, payload: { ...read.payload, viewer, viewerUnavailable: unavailable } };
 }
 
@@ -2616,12 +2718,45 @@ export async function readResourcesWithDiagnostic(fresh = false, options: Resour
     noteSessionTargets([]);
     return fixtureRead(parseResourcesFixture(readFileSync(fixturePath, "utf8")), fresh);
   }
-  const read = withViewerSection(await resourcesReader().read(fresh, options));
+  const deadline = !fresh && options.waitMs !== undefined ? performance.now() + options.waitMs : undefined;
+  const read = await withViewerSection(await resourcesReader().read(fresh, options), deadline);
   /* Loaded here, never by the collector worker that imports this module. */
-  const [{ readDiskPressure }, { worktreeSweepStatus }, { tempSweepStatus }, { releaseRetentionStatus }, { filesResponseSweepStatus }] = await Promise.all([import("@/lib/state/diskPressure"), import("@/lib/pipelines/worktreeSweep"), import("@/lib/tempSweep"), import("@/lib/selfUpdate/retention"), import("@/lib/scanner/filesResponseResults")]);
+  const [
+    { readDiskPressure, readDiskPressureInHelper },
+    { worktreeSweepStatus },
+    { tempSweepStatus },
+    { releaseRetentionStatus },
+    { filesResponseSweepStatus },
+  ] = await Promise.all([
+    import("@/lib/state/diskPressure"),
+    import("@/lib/pipelines/worktreeSweep"),
+    import("@/lib/tempSweep"),
+    import("@/lib/selfUpdate/retention"),
+    import("@/lib/scanner/filesResponseResults"),
+  ]);
   const { readAgentStateMetrics } = await import("@/lib/agentState/store");
   const { agentRegistry } = await import("@/lib/agent/registry");
   const { servingAgentStateService } = await import("@/lib/agentState/service");
   servingAgentStateService()?.observeResourceSample(read.payload.sessions, Date.parse(read.payload.sessionsCapturedAt ?? ""));
-  return { ...read, payload: { ...read.payload, agentState: readAgentStateMetrics(agentRegistry()), diskPressure: await readDiskPressure(), worktreeSweep: worktreeSweepStatus(), tempSweep: tempSweepStatus(), releaseRetention: releaseRetentionStatus(), filesResponseSweep: filesResponseSweepStatus() } };
+  const pressure = await readPressureWithDeadline(
+    process.platform,
+    deadline,
+    readDiskPressure,
+    () => readDiskPressureInHelper({ readOnly: true }),
+  );
+  const { currentMemoryPressure } = await import("@/lib/state/memoryPressure");
+  const memoryPressure = currentMemoryPressure();
+  return {
+    ...read,
+    payload: {
+      ...read.payload,
+      agentState: readAgentStateMetrics(agentRegistry()),
+      diskPressure: pressure,
+      ...(memoryPressure ? { memoryPressure } : {}),
+      worktreeSweep: worktreeSweepStatus(),
+      tempSweep: tempSweepStatus(),
+      releaseRetention: releaseRetentionStatus(),
+      filesResponseSweep: filesResponseSweepStatus(),
+    },
+  };
 }

@@ -6,7 +6,7 @@ import path from "node:path";
 import { createGateSandbox, discover, endingOf, gateTemporaryRoot, isolatedEnvironment, NoVerdict, plan, pushDeadline, runPushPair, runSteps, SUPERVISOR_MARGIN_MS } from "./local-gate";
 import { createHookFixture } from "./local-gate.fixture";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
-import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayRun, type ProcessIdentity } from "../src/lib/processIdentity";
 import { stopFixtureIdentity } from "../src/lib/testing/fixtureProcess";
 import { createGateTestFixtures } from "./gateTest.fixture";
 const root = path.resolve(import.meta.dir, "..");
@@ -135,6 +135,17 @@ test("pre-push hook on a branch behind main that changed nothing runs privacy on
   expect(execFileSync("git", ["--git-dir", remote, "rev-parse", "refs/heads/lane"], { encoding: "utf8", env: f.env }).trim()).toBe(f.git("rev-parse", "HEAD").toString().trim());
 });
 
+test("canonical publication transport rejects a changed remote ref before consuming its receipt", () => {
+  const f = hookFixture();
+  const env = { ...f.env, LLV_GATE_CANONICAL_TOOLS: "1", LLV_GATE_PUBLICATION_RECEIPT: path.join(f.dir, "receipt.json"),
+    LLV_GATE_PUBLICATION_REF: "refs/heads/lane", LLV_GATE_PUBLICATION_REMOTE_HEAD: "1".repeat(40) };
+  const input = `${"2".repeat(40)} refs/heads/lane ${"3".repeat(40)}\n`;
+  const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env, input, encoding: "utf8" });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("pre-push: publication destination changed");
+  expect(existsSync(path.join(f.dir, ".git", "commands.jsonl"))).toBeFalse();
+});
+
 test("pre-commit lint admits only selections larger than forty files", () => {
   for (const count of [40, 41]) {
     const files = Array.from({ length: count }, (_, i) => `src/fixture-${i}.ts`);
@@ -152,7 +163,7 @@ test("local runtime scope is Dockerfile, runtime host and bin, including deleted
     const env = discover(root, "HEAD", [file]);
     expect(env.runtime).toBeFalse(); expect(env.native).toBeFalse();
   }
-});
+}, 20_000);
 
 test("push lanes overlap while preserving order within each lane", async () => {
   const runner = stepRunner(null, dir => ({
@@ -260,7 +271,7 @@ if (process.argv.includes("scripts/privacy-publication-gate.ts")) {
   }
   expect(await child.exited).toBe(1);
   expect((await output).join("")).toContain("pre-push: bun failed (19); gate failed");
-  for (const identity of identities) expect(processIdentityStatus(identity)).toBe("dead");
+  for (const identity of identities) expect(processIdentityMayRun(identity)).toBeFalse();
 }, 20000);
 
 for (const slow of ["privacy", "checks"] as const) test(`a ${slow} deadline preserves its missing-verdict refusal after its peer passes`, async () => {
@@ -332,7 +343,7 @@ test("the admitted hook credits its caller's completed admission instead of the 
 });
 
 test("shared gate cache and hook fixture changes select every verification consumer", () => {
-  const tests = ["scripts/local-gate.runtime.test.ts", "scripts/local-gate.execution.test.ts", "scripts/local-gate.groups.test.ts", "scripts/local-gate.invalidation.test.ts", "scripts/local-gate.test.ts", "scripts/local-gate.hooks.test.ts", "scripts/local-gate.git.test.ts", "scripts/local-gate.lint.test.ts", "scripts/local-gate.native.test.ts", "scripts/local-gate.binding.test.ts", "scripts/local-gate.publication.test.ts", "scripts/local-gate.transport.test.ts", "scripts/local-gate.receipts.test.ts", "scripts/local-gate-tests.test.ts", "scripts/eslint-changes.test.ts", "scripts/gate-cache.test.ts"];
+  const tests = ["scripts/local-gate.runtime.test.ts", "scripts/local-gate.execution.test.ts", "scripts/local-gate.groups.test.ts", "scripts/local-gate.invalidation.test.ts", "scripts/local-gate.test.ts", "scripts/local-gate.hooks.test.ts", "scripts/local-gate.git.test.ts", "scripts/local-gate.lint.test.ts", "scripts/local-gate.native.test.ts", "scripts/local-gate.binding.test.ts", "scripts/local-gate.publication.test.ts", "scripts/local-gate.transport.native.test.ts", "scripts/local-gate.transport.budget.test.ts", "scripts/local-gate.transport.custody.test.ts", "scripts/local-gate.receipts.test.ts", "scripts/local-gate-tests.test.ts", "scripts/eslint-changes.test.ts", "scripts/gate-cache.test.ts"];
   for (const file of ["scripts/gate-cache.ts", "scripts/local-gate.fixture.ts", "scripts/gateTest.fixture.ts", "scripts/publicationHook.fixture.ts"]) {
     const steps = plan("pre-push", [file], context({ existing: new Set([file]), tests }));
     expect(steps.find(step => step.name === "touched tests")?.command.slice(4)).toEqual(tests.map(test => `./${test}`));

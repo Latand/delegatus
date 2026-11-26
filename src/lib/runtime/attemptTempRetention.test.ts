@@ -201,7 +201,7 @@ test("reporting reads remain bounded with a large copy and root backlog", () => 
     db.transaction(() => {
       for (let n = 0; n < 10000; n++) {
         db.query("INSERT INTO copies VALUES(?,NULL,'legacy','unattributed',1,NULL,0,4096)").run(`copy-${n}`);
-        db.query("INSERT INTO roots VALUES(?,'lane','launch',1,1,'1:1',0,0,4096)").run(`root-${n}`);
+        db.query("INSERT INTO roots(directory,pipelineId,launchId,retainUntilClose,createdAt,identity,checkedAt,released,bytes) VALUES(?,'lane','launch',1,1,'1:1',0,0,4096)").run(`root-${n}`);
         db.query("INSERT INTO root_retention(directory,expiresAt) VALUES(?,1)").run(`root-${n}`);
       }
     })();
@@ -241,6 +241,62 @@ test("reporting reads remain bounded with a large copy and root backlog", () => 
     expect(f.store.retention(NOW).dueBytes).toBe(10000 * 4096);
     expect(f.store.unattributedCopies()).toEqual({ count: 10000, bytes: 10000 * 4096 });
   } finally { db.close(); f.store.close(); }
+});
+
+test("an unreadable production allocation keeps recorded bytes and rotates to another due root", async () => {
+  const { runAttemptTempSweep } = await import("./attemptTempProduction");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-allocation-refresh-")); roots.push(root);
+  const previousStateDir = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+  const clock = spyOn(Date, "now").mockReturnValue(NOW);
+  const first = statePath("scratch", "llv-stage-allocation-first"), second = statePath("scratch", "llv-stage-allocation-second");
+  fs.mkdirSync(first, { recursive: true }); fs.mkdirSync(second, { recursive: true });
+  const store = new AttemptTempStore();
+  store.register({ directory: first, pipelineId: null, launchId: "allocation-first", retainUntilClose: false, createdAt: NOW - 120_000 });
+  store.register({ directory: second, pipelineId: null, launchId: "allocation-second", retainUntilClose: false, createdAt: NOW - 120_000 });
+  store.measure(first, 8 * 1024 ** 3, NOW - 120_000);
+  store.measure(second, 2 * 1024 ** 3, NOW);
+  const measured: string[] = [];
+  const allocation = spyOn(filesystem, "measureAttemptAllocation").mockImplementation(async directory => {
+    measured.push(directory);
+    return directory === first ? { bytes: 0, unreadable: true } : { bytes: 3 * 1024 ** 3, unreadable: false };
+  });
+  try {
+    const ports = { scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true };
+    expect(await runAttemptTempSweep(ports, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" })).not.toBeNull();
+    expect(store.owner(first)?.bytes).toBe(8 * 1024 ** 3);
+    expect(measured).toEqual([first]);
+    store.measure(second, 2 * 1024 ** 3, NOW - 120_000);
+    expect(await runAttemptTempSweep(ports, { NODE_ENV: "test", LLV_TEMP_SWEEP: "on" })).not.toBeNull();
+    expect(measured).toEqual([first, second]);
+    expect(store.owner(first)?.bytes).toBe(8 * 1024 ** 3);
+    expect(store.owner(second)?.bytes).toBe(3 * 1024 ** 3);
+  } finally {
+    allocation.mockRestore(); store.close(); clock.mockRestore();
+    if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousStateDir;
+  }
+});
+
+test("trash recovery adds owner-binding provenance to an existing ledger in place", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "retention-trash-ledger-upgrade-")); roots.push(root);
+  const filename = path.join(root, "owners.sqlite"), directory = path.join(root, "llv-stage-prior");
+  const prior = new Database(filename);
+  prior.exec(`CREATE TABLE trash_recovery (
+    directory TEXT PRIMARY KEY, identity TEXT NOT NULL, cursor TEXT NOT NULL DEFAULT '', binding TEXT,
+    conflict INTEGER NOT NULL DEFAULT 0, matches TEXT NOT NULL DEFAULT '[]', restored INTEGER NOT NULL DEFAULT 0,
+    checkedAt REAL NOT NULL DEFAULT 0, turn INTEGER NOT NULL DEFAULT 0)`);
+  prior.query("INSERT INTO trash_recovery(directory,identity) VALUES(?,?)").run(directory, "1:2");
+  prior.close();
+  const store = new AttemptTempStore(filename);
+  try {
+    expect(store.trashRecoveryOwnerWasBound(directory)).toBeFalse();
+    const migrated = new Database(filename);
+    try {
+      expect(migrated.query<{ ownerBound: number }, [string]>("SELECT ownerBound FROM trash_recovery WHERE directory=?").get(directory))
+        .toEqual({ ownerBound: 0 });
+      expect(migrated.query<{ name: string }, []>("PRAGMA table_info(trash_recovery)").all()).toContainEqual(expect.objectContaining({ name: "ownerBound" }));
+    } finally { migrated.close(); }
+  } finally { store.close(); }
 });
 
 test("legacy reporting advances bounded pages across real helper restarts and skips an exhausted deadline", async () => {
@@ -732,7 +788,7 @@ test("legacy adoption resumes its cursor in another process without losing the i
   } finally { process.env.LLV_STATE_DIR = priorState; }
 });
 
-test("legacy adoption attributes a real producer manifest through its still-recorded owner", async () => {
+test("legacy adoption attributes a real producer manifest and retains the copy", async () => {
   const f = fixture(), directory = f.make("legacy-owner"), priorState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(f.root, "copy-state");
   try {
@@ -741,8 +797,8 @@ test("legacy adoption attributes a real producer manifest through its still-reco
     expect(evidence.destination).toBeDefined();
     const report = await sweepEvidenceCopies(f.store, { now: () => NOW, state: async () => "expired",
       scan: () => ({ ownNamespace: null, processes: [] }), references: async () => true });
-    expect(report.adopted).toBe(1); expect(report.removed).toBe(1); expect(report.unattributed.count).toBe(0);
-    expect(fs.existsSync(evidence.destination!)).toBeFalse(); expect(fs.existsSync(directory)).toBeTrue();
+    expect(report).toMatchObject({ adopted: 1, sourceAttributed: 1, removed: 0, unattributed: { count: 0, bytes: 0 } });
+    expect(fs.existsSync(evidence.destination!)).toBeTrue(); expect(fs.existsSync(directory)).toBeTrue();
   } finally { process.env.LLV_STATE_DIR = priorState; f.store.close(); }
 });
 
@@ -850,8 +906,10 @@ if (script.includes("-delete")) {
 }
 `, { mode: 0o700 });
   const previousPath = process.env.PATH, previousImage = process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE;
+  const previousRmCode = process.env.DELEGATUS_RM_CODE;
   process.env.PATH = bin + path.delimiter + (previousPath ?? "");
   process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
+  if (kind === "permission-fallback") process.env.DELEGATUS_RM_CODE = "EACCES";
   const nativeOpendir = fs.promises.opendir.bind(fs.promises);
   const opendir = spyOn(fs.promises, "opendir").mockImplementation(async (target, options) => {
     if (kind === "namespace-only" && String(target).startsWith(f.root + path.sep) && path.basename(String(target)) === "private")
@@ -861,7 +919,10 @@ if (script.includes("-delete")) {
   const nativeRm = removal.removeTreeWithinAttemptBudget;
   const rm = spyOn(removal, "removeTreeWithinAttemptBudget").mockImplementation(async (target, started) => {
     if (kind === "permission-fallback" && String(target).startsWith(f.root + path.sep) && path.basename(String(target)).startsWith(".delegatus-trash-"))
-      throw Object.assign(new Error("fixture denied"), { code: "EACCES" });
+      return nativeRm(target, started, (async () => {
+        const error = Object.assign(new Error("fixture denied"), { stderr: `DELEGATUS_RM_CODE:${process.env.DELEGATUS_RM_CODE ?? "unknown"}` });
+        throw error;
+      }) as unknown as Parameters<typeof removal.removeTreeWithinAttemptBudget>[2]);
     return nativeRm(target, started);
   });
   try {
@@ -913,6 +974,7 @@ if (script.includes("-delete")) {
     try { fs.chmodSync(locked, 0o700); } catch { /* Removed or never made. */ }
     if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
     if (previousImage === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
+    if (previousRmCode === undefined) delete process.env.DELEGATUS_RM_CODE; else process.env.DELEGATUS_RM_CODE = previousRmCode;
   }
 }
 
@@ -1695,12 +1757,13 @@ test("dry run records the decision without removing or spending the ledger", asy
   } finally { f.store.close(); }
 });
 
-test("disposable test repositories retire but linked worktrees remain for their owner", async () => {
+test("unknown checkouts and linked worktrees remain protected", async () => {
   const f = fixture(); const disposable = f.make("fixture"); const linked = f.make("linked");
   fs.mkdirSync(path.join(disposable, ".git")); fs.writeFileSync(path.join(disposable, ".git/HEAD"), "fixture");
   fs.writeFileSync(path.join(linked, ".git"), "gitdir: retained-metadata");
   try {
-    expect((await f.sweep()).removed).toBe(1); expect(fs.existsSync(disposable)).toBeFalse();
+    expect((await f.sweep()).removed).toBe(0); expect(fs.existsSync(disposable)).toBeTrue();
+    expect(fs.readFileSync(path.join(disposable, ".git/HEAD"), "utf8")).toBe("fixture");
     expect(fs.readFileSync(path.join(linked, "data")).length).toBe(4096);
   } finally { f.store.close(); }
 });
@@ -1950,7 +2013,7 @@ test("legacy adoption advances its bounded cursor across store restarts", () => 
 function legacyEvidence(f: ReturnType<typeof fixture>) {
   const directory = path.join(f.root, "scratch/llv-stage-AbC123");
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  fs.mkdirSync(path.join(directory, ".git")); fs.mkdirSync(path.join(directory, ".artifacts"));
+  fs.mkdirSync(path.join(directory, ".artifacts"));
   fs.writeFileSync(path.join(directory, ".artifacts/prototype.png"), "prototype bytes");
   fs.writeFileSync(path.join(directory, "report.webp"), "report bytes");
   fs.writeFileSync(path.join(directory, "scratch.bin"), "disposable");
@@ -2341,9 +2404,16 @@ test.each(["journal-link", "trash-link", "acquired-original", "identity", "uid",
 test("lost trash recovery defers before enumeration when its tick deadline is exhausted", async () => {
   const f = await lostTrashFixture("manifest");
   try {
-    // Admit the sweep, then exhaust its budget before trash recovery starts.
-    let reads = 0;
-    const report = await f.tick({ runBudgetMs: 40_000, now: () => NOW + (reads++ === 0 ? 0 : 40_000) });
+    let elapsed = 0;
+    const report = await f.tick({
+      runBudgetMs: 40_000,
+      budgetNow: () => elapsed,
+      availableBytes: () => {
+        // This observation runs after admission and before trash recovery.
+        elapsed = 40_000;
+        return 1e12;
+      },
+    });
     expect(report.removed).toBe(0); expect(report.recovery).toEqual({ entries: 0, manifestEntries: 0, checks: 0, restored: 0 });
     expect(f.store.has(f.directory)).toBeFalse(); f.retained();
   } finally { f.close(); }

@@ -50,6 +50,7 @@ import { VoiceConversationPanel } from "@/components/VoiceConversation";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
 import { sampleCallHistory, sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
 import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
+import { buildStageShapes } from "./stageShapes.fixture";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { attachVoiceOutput, openVoiceMicrophone, type VoiceMicrophone } from "@/lib/audio/voiceDevices";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
@@ -353,7 +354,10 @@ const FEED_RECOVERY = SCENARIO === "feed-recovery";
 let feedRecoveryEcho = false;
 const delayedLaunchText = L("Keep this message until its transcript arrives.", "Збережи повідомлення до появи запису в розмові.");
 const FM_CASE = new URLSearchParams(location.search).get("case") ?? "p";
-const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE || STREAMING || FIRST_MESSAGE || FEED_CONTINUITY;
+/* `&seathost=<seconds|running>`: the orchestrator seat is hosted. A number is how long its last turn has been over, so the
+   seat is idle between turns (its head says «waiting»); `running` keeps its turn open. */
+const SEAT_HOST = new URLSearchParams(location.search).get("seathost");
+const STRUCTURED = new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_HOST !== null || SEAT_NOISE || STREAMING || FIRST_MESSAGE || FEED_CONTINUITY;
 /* Review round 2 of #1712: a conversation no card holds, whose reader takes the window. */
 const LOOSE = SCENARIO === "loose";
 /* A pasted `#c=` link to a conversation the plain catalog does not carry. Its own scope is a cold projection the server
@@ -382,6 +386,11 @@ const MARKS = SCENARIO === "issue1743";
    model, a draft of the same nine waiting, and the settled states on a few;
    the ninth model is uncatalogued and keeps the dot. */
 const GLYPHS = SCENARIO === "model-glyphs";
+/* The same, for Antigravity's catalogue: one running lane per model (the Gemini
+   4 elements, Flash, GPT-OSS, both orchestrators, and the two Claude models it
+   serves), a draft of all nine waiting, two lanes that settle every model, and
+   a tenth stage on an uncatalogued model that keeps its dot. */
+const GLYPHS_AGY = SCENARIO === "model-glyphs-agy";
 /* #1865: the header lane the operator read — design → build → critique, where
    design and critique share the architect preset and critique ran twice — so
    each stage's conversation can be read for which stage it is. */
@@ -752,11 +761,11 @@ function structuredSnapshot() {
       } } : {}),
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: searchVer2.path,
       capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
-    }, ...(SEAT_NOISE || FIRST_MESSAGE ? [{
+    }, ...(SEAT_NOISE || FIRST_MESSAGE || SEAT_HOST !== null ? [{
       conversationId: orchestrator.conversationId, sessionKey: { engine: orchestrator.engine, sessionId: `${orchestrator.name}-session` }, hostKind: orchestrator.engine === "codex" ? "codex-app-server" : "claude-broker", host: "hosted",
-      turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: seatUndelivered(), accountId: "default",
+      turn: SEAT_HOST_IDLE === null ? "running" : "idle", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: seatUndelivered(), accountId: "default",
       parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: orchestrator.path,
-      capabilities: { steer: false, structuredAttention: true }, activeTurnId: "turn-1", pendingReconfigure: null,
+      capabilities: { steer: false, structuredAttention: true }, activeTurnId: SEAT_HOST_IDLE === null ? "turn-1" : null, pendingReconfigure: null,
     }] : []), ...(STREAMING || SEAT_UNDELIVERED ? files.filter((file) => file.activity === "live" && file.path !== searchVer2.path && (STREAMING || file === exportImpl)).map((file) => ({
       conversationId: file.conversationId, sessionKey: { engine: file.engine, sessionId: `${file.name}-session` }, hostKind: "claude-broker", host: "hosted",
       turn: "running", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: "default",
@@ -771,6 +780,16 @@ const uploadPlan = add(conversation("upload-plan", "Plan: 8 MB chunks, resume to
 const uploadApi = add(conversation("upload-api", "Endpoint and resume token in place", { mtime: now - 6 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
 const uploadRevApi = add(conversation("upload-rev-api", "Round 2 approved", { mtime: now - 4 * 60 * MIN, engine: "codex", model: "gpt-5.6" }));
 const uploadUi = add(conversation("upload-ui", "Wiring the resume banner", working({ plan: { current: "Wiring the resume banner" } })));
+/* `?paneid=ctx`: the lane's started stage conversations carry what real ones carry on their identity row, an effort
+   tier and the context-window chip, so the Stages sheet's pane head has its longest ordinary row to hold. */
+if (new URLSearchParams(location.search).get("paneid") === "ctx") {
+  for (const file of [uploadPlan, uploadApi, uploadRevApi, uploadUi]) {
+    Object.assign(file, { effort: "high", ctx: { usedTokens: 520_825, windowTokens: 1_000_000, pct: 52, confidence: "exact" } });
+  }
+  Object.assign(uploadPlan, { model: "claude-opus-5-5" });
+  /* A round chip as well: the longest ordinary row, which wraps among its chips. */
+  Object.assign(uploadApi, { continues: { conversationId: "conversation_upload-api-previous", path: null, round: 3 } });
+}
 /* t-export: two plain conversations. */
 const exportImpl = add(conversation("export-impl", "Implementer: simplify the export settings", working({ plan: { current: "Writing the preset model" } })));
 const exportExplore = add(conversation("export-explore", "Explorer: list every export toggle", { mtime: now - 120 * MIN, engine: "codex", model: "gpt-5.6" }));
@@ -807,6 +826,14 @@ const orchestrator = add(conversation("orchestrator", "Orchestrator for atlas", 
   plan: { current: "Watching the search fix" },
   ...(SEAT_HEAD ? { model: "claude-opus-4-5-1m", ctx: { usedTokens: 520_825, windowTokens: 1_000_000, pct: 52, confidence: "exact" } } : {}),
 })));
+const SEAT_HOST_IDLE = SEAT_HOST === null || SEAT_HOST === "running" ? null : Number(SEAT_HOST);
+if (SEAT_HOST_IDLE !== null) {
+  Object.assign(orchestrator, {
+    activity: "idle", proc: "running", pid: 5_900, mtime: now - SEAT_HOST_IDLE,
+    lastTurn: { startedAt: (now - SEAT_HOST_IDLE - 400) * 1_000, endedAt: (now - SEAT_HOST_IDLE) * 1_000 },
+    authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(SEAT_HOST_IDLE), terminalKind: "completed" },
+  });
+}
 
 /* `&undelivered=N` (2026-10-11): the seat's composer holds N sends the host refused, the newest one
    with its arrival unconfirmed, so the undelivered chip and its list can be measured in the seat; and
@@ -1148,6 +1175,52 @@ const glyphPipelines: Pipeline[] = GLYPHS ? (() => {
       ran("docs", "passed", 100, done(100), add(conversation("glyphs-rework-docs", "Reworking the export guide", { model: "sonnet", ...working() }))),
       ran("critique", "running", 60, {}, agentAt("critique", "glyphs-rework-critique", "Critiquing the export guide")),
     ], { stageId: "critique", state: "running", input: null, activatedBy: null }, { createdAt: iso(130 * MIN) }),
+  ];
+})() : [];
+
+/* [stage id = glyph kind, role, model, lane title]. */
+const GLYPH_AGY_MODELS = [
+  ["neon", "architect", "gemini-4-neon", L("Lay out the import dialog", "Спроєктувати діалог імпорту")],
+  ["argon", "builder", "gemini-4-argon", L("Build the import dialog", "Зібрати діалог імпорту")],
+  ["hydrogen", "reviewer", "gemini-4-hydrogen", L("Review the import dialog", "Переглянути діалог імпорту")],
+  ["flash", "cleaner", "gemini-3.8-flash", L("Tidy the import module", "Прибрати модуль імпорту")],
+  ["opus", "architect", "claude-opus-5-5", L("Critique the import flow", "Покритикувати процес імпорту")],
+  ["sonnet", "builder", "claude-sonnet-5-5", L("Write the import guide", "Написати посібник з імпорту")],
+  ["oss", "verifier", "gpt-oss-120b-medium", L("Verify the import on a large file", "Перевірити імпорт на великому файлі")],
+  ["orch-neon", "orchestrator", "gemini-pro-orchestrator-neon", L("Plan the import release", "Спланувати випуск імпорту")],
+  ["orch-argon", "orchestrator", "gemini-pro-orchestrator-g1-pro", L("Coordinate the import fixes", "Скоординувати виправлення імпорту")],
+  ["fix", "builder", "gemini-9-krypton", L("Fix the import's file name", "Виправити назву файлу імпорту")],
+] as const;
+const glyphAgyPipelines: Pipeline[] = GLYPHS_AGY ? (() => {
+  type Entry = (typeof GLYPH_AGY_MODELS)[number];
+  const entry = (id: string) => GLYPH_AGY_MODELS.find(([stageId]) => stageId === id)!;
+  const chain = (models: ReadonlyArray<Entry>) => models.map(([id, roleId, model], index) =>
+    marksStage(id, roleId, models[index + 1]?.[0] ?? null, "antigravity", model, "high"));
+  const ran = (id: string, state: string, ago: number, over: Record<string, unknown> = {}, file: FileEntry | null = null) => {
+    const [, roleId, model] = entry(id);
+    return { stageId: id, attempts: [attempt(1, state, file, { effectiveRole: runRole(roleId, "antigravity", model, "high"), startedAt: iso(ago * MIN), ...over })] };
+  };
+  const done = (ago: number) => ({ completedAt: iso((ago - 6) * MIN) });
+  const lane = (ids: string[]) => chain(ids.map(entry));
+  const agentAt = (id: string, name: string, title: string) => {
+    const [, , model] = entry(id);
+    return add(conversation(name, title, { model, engine: "antigravity", root: "antigravity-sessions", fmt: "antigravity", ...working() }));
+  };
+  return [
+    ...GLYPH_AGY_MODELS.filter(([id]) => id !== "fix").map((model, index) => {
+      const [id, , , title] = model;
+      return pipeline(`p-glyph-agy-${id}`, title, "t-glyphs-agy-run", "running", chain([model]),
+        [ran(id, "running", 30 - index, {}, agentAt(id, `glyphs-agy-run-${id}`, title))], { stageId: id, state: "running", input: null, activatedBy: null }, { createdAt: iso((40 - index) * MIN) });
+    }),
+    pipeline("p-glyphs-agy-wait", L("Plan the import release", "Спланувати випуск імпорту"), "t-glyphs-agy", "draft", chain(GLYPH_AGY_MODELS.filter(([id]) => id !== "fix")),
+      [], { stageId: "neon", state: "pending", input: null, activatedBy: null }, { createdAt: iso(20 * MIN) }),
+    /* Passed, passed, failed, waiting on the operator, not yet run. */
+    pipeline("p-glyphs-agy-settled", L("Ship the import dialog", "Випустити діалог імпорту"), "t-glyphs-agy", "needs_decision", lane(["neon", "argon", "hydrogen", "flash", "oss"]),
+      [ran("neon", "passed", 90, done(90)), ran("argon", "passed", 70, done(70)), ran("hydrogen", "failed", 50, done(50)), ran("flash", "needs_decision", 30)],
+      { stageId: "flash", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(100 * MIN) }),
+    pipeline("p-glyphs-agy-settled-more", L("Ship the import guide", "Випустити посібник з імпорту"), "t-glyphs-agy", "needs_decision", lane(["opus", "sonnet", "orch-neon", "orch-argon", "fix"]),
+      [ran("opus", "passed", 120, done(120)), ran("sonnet", "passed", 100, done(100)), ran("orch-neon", "failed", 80, done(80)), ran("orch-argon", "needs_decision", 60)],
+      { stageId: "orch-argon", state: "needs_decision", input: null, activatedBy: null }, { createdAt: iso(130 * MIN) }),
   ];
 })() : [];
 
@@ -1837,8 +1910,44 @@ const stagePlacePipelines: Pipeline[] = STAGE_PLACE ? [pipeline("lane-stage-plac
     { stageId: "review", attempts: [attempt(1, "running", null, { definition: { runtime: "claude-cloud" }, cloud: { phase: "failed", fallback: { at: iso(5 * MIN), reason: "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)" } } })] },
   ],
   { stageId: "review", state: "running", input: null, activatedBy: null })] : [];
+/* `?scenario=codex-refusal-move`: Codex refused the review stage twice as a cybersecurity risk, so the
+   controller moved the stage to Claude Opus; its third attempt runs there and the card says why. */
+const CODEX_REFUSAL_MOVE = SCENARIO === "codex-refusal-move";
+const codexRefusalPipelines: Pipeline[] = CODEX_REFUSAL_MOVE ? [pipeline("lane-codex-refusal", L("Harden the upload token check", "Посилити перевірку токена завантаження"), "t-codex-refusal", "running",
+  [stage("implement", "builder", "review"), stage("review", "builder", null)],
+  [
+    { stageId: "implement", attempts: [attempt(1, "passed", null, { completedAt: iso(40 * MIN) })] },
+    { stageId: "review", attempts: [
+      attempt(1, "failed", null, { effectiveRole: role("builder", "codex"), completedAt: iso(30 * MIN), error: "stage cut by Codex cybersecurity refusal" }),
+      attempt(2, "failed", null, { effectiveRole: role("builder", "codex"), completedAt: iso(20 * MIN), error: "stage cut by Codex cybersecurity refusal" }),
+      attempt(3, "running", null, { startedAt: iso(19 * MIN) }),
+    ] },
+  ],
+  { stageId: "review", state: "running", input: null, activatedBy: null },
+  { graphEdits: [{ seq: 1, at: iso(20 * MIN), actor: { kind: "agent", role: "pipeline-controller", conversationId: null }, action: "override-stage",
+    stageId: "review", pipelineState: "running", effect: "pending-next-attempt", appliesFromAttempt: 3, cause: "codex-cybersecurity-refusal",
+    summary: "moved stage review to Claude opus high after Codex refused it twice as a cybersecurity risk; applies from attempt 3" }] })] : [];
+/* `?scenario=stageshapes` (redesign S2): one lane per graph shape the Stages window must draw, each on a task of
+   its own, with invented stage ids and text (`stageShapes.fixture.ts`, which the phone's fixture reads too). */
+const STAGE_SHAPES = SCENARIO === "stageshapes";
+const stageShapeLanes = STAGE_SHAPES ? buildStageShapes({
+  project: PROJECT, iso, L,
+  file: (id, title, state) => {
+    const made = add(conversation(`shape-${id}`, title, state === "working" ? working({ plan: { current: "Reading the findings" } }) : state === "asking" ? {
+      mtime: now - 9 * MIN, lastTurn: { startedAt: (now - 14 * MIN) * 1_000, endedAt: (now - 10 * MIN) * 1_000 },
+      pendingQuestion: { kind: "question", toolUseId: `tool-shape-${id}`, transcriptPath: `/repo/shape-${id}.jsonl`, pid: 1, askedAt: iso(9 * MIN), questions: [{ question: L("Should the report keep the header row when it is exported as CSV?", "Чи лишати рядок заголовків у звіті, коли його експортують у CSV?"), header: "Export", multiSelect: false, options: [] }] },
+    } : { mtime: now - 300 * MIN }));
+    return { path: made.path, conversationId: made.conversationId! };
+  },
+}) : [];
+const shapePipelines: Pipeline[] = stageShapeLanes.map((entry) => entry.pipeline);
+const shapeTasks = (): BoardTask[] => stageShapeLanes.map((entry, index) => task(`t-shape-${entry.slug}`, "assigned", entry.pipeline.task, "", (index + 1) * MIN));
+
+
 const pipelines: Pipeline[] = [
+  ...shapePipelines,
   ...stagePlacePipelines,
+  ...codexRefusalPipelines,
   ...cloudChecksPipelines,
   ...wallPipelines,
   ...unstartedPipelines,
@@ -1854,6 +1963,7 @@ const pipelines: Pipeline[] = [
   ...labelPipelines,
   ...marksPipelines,
   ...glyphPipelines,
+  ...glyphAgyPipelines,
   ...loopsPipelines,
   ...manyPipelines,
   pipeline("p-search", "Restore search results after the index rebuild", "t-search", "running",
@@ -2121,6 +2231,7 @@ const tasks: BoardTask[] = [
     task("t-rem-old", "assigned", L("A task from a peer that predates lane rows", "Задача від вузла, що ще не знає про рядки етапів"), "", 31 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
     task("t-rem-done", "done", L("Publish the linked boards guide", "Опублікувати посібник зі зв’язаних дошок"), "", 3 * 60 * MIN, [], { machine: STAGE_INSTALL } as Partial<BoardTask>),
   ] : []),
+  ...(STAGE_SHAPES ? shapeTasks() : []),
   ...(SOUND_CAPTIONS ? [task("t-captions", "assigned", L("Sound captions: say what each sound means", "Підписи до звуків: що означає кожен"), "", 3 * MIN)] : []),
   ...(MANY ? [task("t-many", "assigned", "Kanban: say what each pipeline of a task does", "Five pipelines on one card: two running, three finished.", 5 * MIN)] : []),
   ...(MARKS ? [task("t-marks", "assigned", "Say who runs each stage, and how often an edge fired", "Two pipelines: one fail edge fired twice of three, one with its budget spent.", 4 * MIN)] : []),
@@ -2128,6 +2239,10 @@ const tasks: BoardTask[] = [
     task("t-glyphs-run", "assigned", L("Every model at work", "Кожна модель у роботі"), L("Nine lanes, each running one model; the ninth has no glyph.", "Дев’ять конвеєрів, кожен запускає одну модель; дев’ята без гліфа."), 1 * MIN),
     task("t-glyphs", "assigned", L("Every model waiting, and the settled states", "Кожна модель чекає, і завершені стани"), L("A draft of nine stages, and two lanes that settled every model.", "Чернетка з дев’яти етапів і два конвеєри, де завершилася кожна модель."), 2 * MIN),
     task("t-glyphs-live", "assigned", L("Reviewing, committing, and working again", "Рев’ю, коміт і знову в роботі"), L("A review at work, a commit landing, and a passed stage whose conversation works again.", "Рев’ю в роботі, коміт, що завершується, і пройдений етап, чия розмова знову працює."), 3 * MIN),
+  ] : []),
+  ...(GLYPHS_AGY ? [
+    task("t-glyphs-agy-run", "assigned", L("Every Antigravity model at work", "Кожна модель Antigravity у роботі"), L("Nine lanes, each running one model.", "Дев’ять конвеєрів, кожен запускає одну модель."), 3 * MIN),
+    task("t-glyphs-agy", "assigned", L("Every Antigravity model waiting, and the settled states", "Кожна модель Antigravity чекає, і завершені стани"), L("A draft of nine stages, and two lanes that settled them.", "Чернетка з дев’яти етапів і два конвеєри, що їх завершили."), 2 * MIN),
   ] : []),
   ...(LOOPS ? [
     task("t-loops-done", "assigned", L("Show a spent review budget on the lane", "Показати вичерпаний бюджет рев’ю на лінії"), "", 4 * 60 * MIN),
@@ -2215,6 +2330,7 @@ const tasks: BoardTask[] = [
     task("t-finish-hold", "assigned", L("Merge when the review passes", "Мердж, коли ревʼю пройдено"), L("The setting, the runner, and its docs.", "Налаштування, мердж і документація."), 50 * MIN),
     task("t-finish-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 75 * MIN),
   ] : []),
+  ...(CODEX_REFUSAL_MOVE ? [task("t-codex-refusal", "assigned", L("Harden the upload token check", "Посилити перевірку токена завантаження"), "", 5 * MIN)] : []),
   ...(STAGE_PLACE ? [task("t-stage-place", "assigned", L("Run a stage in Claude Code cloud", "Запустити етап у хмарі Claude Code"), "", 5 * MIN)] : []),
   ...(CLOUD_CHECKS ? [task("t-cloud-checks", "assigned", L("Run heavy checks in Codex Cloud", "Важкі перевірки в Codex Cloud"), "", 5 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
@@ -2280,6 +2396,7 @@ if (SCENARIO === "hold-kinds") {
     task("hold-slot-note", "blocked", L("Start the docs lane", "Запустити лінію документації"), "", 20 * MIN, [], { hold: { kind: "worker", note: L("Three of three workers busy", "Зайняті всі три агенти"), since: iso(20 * MIN), by: "agent" } }),
     task("hold-resource-note", "blocked", L("Run the full build", "Запустити повну збірку"), "", 15 * MIN, [], { hold: { kind: "resource", note: L("4 GB of memory available, 8 GB needed", "Доступно 4 ГБ памʼяті, потрібно 8 ГБ"), since: iso(15 * MIN), by: "agent" } }),
     task("hold-resource", "blocked", L("Older resource hold", "Давніша причина про ресурси"), "", 60 * MIN, [], { hold: { kind: "resource", note: "", since: iso(60 * MIN), by: "agent" } }),
+    task("hold-editor-entry", "assigned", L("Set the release access", "Налаштувати доступ до випуску"), "", 5 * MIN),
   );
 }
 
@@ -3167,6 +3284,7 @@ const evidence = {
   publishDelayedLaunch() { feedRecoveryEcho = true; },
   delayedLaunchRetired() { return Boolean(readOutbox(searchVer2.conversationId!).find(entry => entry.id === "delayed-launch")?.retiredEchoId); },
   taskPatches: [] as Array<{ id: string; body: Record<string, unknown> }>,
+  taskPatchGate: null as Promise<void> | null,
   /* #2187: what the board's merge-setting row wrote. */
   settingWrites: [] as Array<Record<string, unknown>>,
   pipelineStageRuntime: "local" as "local" | "codex-cloud",
@@ -4217,15 +4335,20 @@ if (COLD_LINK) (window as unknown as { __coldLink: typeof coldLink }).__coldLink
    a minute after Create). It answers only the routes each state reads, with invented data: the accounts and the tools of each
    engine state, the factory role catalog, the bot (`&bot=`), the memory source with or without an orchestrator, and for the
    form states the seat's transcript, its decision with one question that cannot be skipped, and its "Needs you" notice.
-   States: engines-both|claude-only|codex-only|signed-out|no-cli, orchestrator-one-press|claude-only|codex-only,
+   States: engines-both|claude-only|codex-only|signed-out|no-cli, orchestrator-one-press|claude-only|codex-only|no-engine,
    later-memory-before|memory-after|telegram-later, telegram-numbered, form-greeting|decisions|needs-you,
-   settings-memory-before|memory-after. */
+   settings-memory-before|memory-after, first-visit*.
+   `first-visit*` is a first visit (docs/design/onboarding-v2.md §12.2): no agent tool, and the install notice not yet
+   dismissed. `orchestrator-no-engine` has both tools installed and signed out. */
 const FIRST_RUN = params.get("firstrun") ?? "";
 const FIRST_RUN_FORM = FIRST_RUN.startsWith("form-");
+const FIRST_VISIT = FIRST_RUN.startsWith("first-visit");
+/* What `/api/telemetry` answers on a first visit; a write is kept. */
+const firstVisitTelemetry = { enabled: true, locked: false, noticeDismissed: false, swarmRules: false };
 const FIRST_RUN_ENGINES: "both" | "claude-only" | "codex-only" | "signed-out" | "no-cli" =
   FIRST_RUN === "engines-claude-only" || FIRST_RUN === "orchestrator-claude-only" ? "claude-only"
   : FIRST_RUN === "engines-codex-only" || FIRST_RUN === "orchestrator-codex-only" ? "codex-only"
-  : FIRST_RUN === "engines-signed-out" ? "signed-out" : FIRST_RUN === "engines-no-cli" ? "no-cli" : "both";
+  : FIRST_RUN === "engines-signed-out" || FIRST_RUN === "orchestrator-no-engine" ? "signed-out" : FIRST_RUN === "engines-no-cli" || FIRST_VISIT ? "no-cli" : "both";
 /* An orchestrator exists for the memory import once the guide was reopened after Create, and on the seat's own board.
    The driver draws those states over `scenario=orchestrator-first-walk`, so the board behind the dialog carries the seat too. */
 const FIRST_RUN_SEATED = FIRST_RUN_FORM || FIRST_RUN === "later-memory-after" || FIRST_RUN === "settings-memory-after";
@@ -4289,13 +4412,19 @@ function firstRunSeatTranscript(): string {
 if (FIRST_RUN_FORM) seatRounds.push({ id: FIRST_RUN_REVIEW_ID, taskId: null, project: PROJECT, title: FIRST_RUN_TITLE, createdAt: iso(68), source: { conversationId: orchestrator.conversationId ?? null }, variants: [],
   questions: FIRST_RUN_QUESTIONS, telegramPost: { key: "first-run", state: "failed", reason: "no_relay", at: iso(68) } });
 /* What the routes behind the guide answer for a first-run state; null falls through to the board fixture. */
-function firstRunAnswer(url: URL, method: string): Response | null {
+function firstRunAnswer(url: URL, method: string, init?: RequestInit): Response | null {
   const path = url.pathname;
   if (path === "/api/onboarding" && !FIRST_RUN_FORM) {
     /* Once an orchestrator exists, the guide's first three steps are settled: the numbers turn into ticks. */
     const steps = FIRST_RUN_SEATED ? { engines: "done", project: "done", orchestrator: "done" } : {};
     const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps, lastHealth: null, walk: "done" };
     return json(method === "PUT" ? { marker } : { marker, legacyState: false, seatTickCheckMinutes: 5 });
+  }
+  /* Antigravity as the slice 1 states have it: not installed on a first visit, installed and signed out beside the other two. */
+  if (path === "/api/accounts/antigravity" && (FIRST_VISIT || FIRST_RUN === "orchestrator-no-engine")) return json(FIRST_VISIT ? { cli: "missing", accounts: [] } : { cli: "found", accounts: [{ auth: "signed_out", plan: null }] });
+  if (path === "/api/telemetry" && FIRST_VISIT) {
+    if (method === "PUT") Object.assign(firstVisitTelemetry, JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return json(firstVisitTelemetry);
   }
   if (path === "/api/accounts" && method === "GET") return json(FIRST_RUN_ACCOUNTS);
   if (path === "/api/accounts/cli") return json({ claude: FIRST_RUN_ACCOUNTS.claude.cli, codex: FIRST_RUN_ACCOUNTS.codex.cli });
@@ -4321,13 +4450,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     || ["/api/files", "/api/team", "/api/tasks", "/api/tasks/accepted-control-task"].includes(url.pathname))) return serverFetch(input, init);
   // The driver supplies the real server projection for the liveness case, and the task summary case's records.
   if (["stale-working", "finished-work", "task-summary", "board-timeline"].includes(new URLSearchParams(location.search).get("scenario") ?? "")
-    && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
+    && ["/api/files", "/api/tasks", "/api/board/work-time"].includes(url.pathname)) return serverFetch(input, init);
 
   if (SCENARIO === "spend-credits" && url.pathname.startsWith("/api/accounts")) return serverFetch(input, init);
-  if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings)/.test(url.pathname)) return serverFetch(input, init);
+  if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings|limits\/history)/.test(url.pathname)) return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
   if (FIRST_RUN) {
-    const answered = firstRunAnswer(url, method);
+    const answered = firstRunAnswer(url, method, init);
     if (answered) return answered;
   }
   /* The lane review case answers these from the driver's own server, through
@@ -4387,7 +4516,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (SCENARIO === "role-defaults" && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => {
     const variants = ROLE_VARIANT_DEFAULTS[role.id as keyof typeof ROLE_VARIANT_DEFAULTS];
-    return { ...role, variants, promptPreview: role.promptScaffold, shipped: { config: role.config, variants } };
+    /* `agy=1`: the builder row is mapped to Antigravity on its longest listed model, so the table measures that engine's own labels. */
+    const config = role.id === "builder" && new URLSearchParams(location.search).has("agy") ? { engine: "antigravity", model: "gpt-oss-120b-medium", effort: "high" } : role.config;
+    return { ...role, config, variants, promptPreview: role.promptScaffold, shipped: { config: role.config, variants } };
   }) });
   /* A draft's stage configuration names the stage's own role in its select. */
   if (FROM_CONVERSATION && url.pathname === "/api/roles") return json({ roles: ROLE_DEFAULTS.map(role => ({ ...role, promptPreview: role.promptScaffold, shipped: { config: role.config } })) });
@@ -4835,6 +4966,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     evidence.taskPatches.push({ id, body });
     const write = { id, startedAt: performance.now(), answeredAt: 0 };
     evidence.taskWrites.push(write);
+    if (evidence.taskPatchGate) await evidence.taskPatchGate;
     await new Promise((resolve) => setTimeout(resolve, evidence.taskAnswerDelayMs));
     write.answeredAt = performance.now();
     if (evidence.refuseNextTaskPatch) {
@@ -4851,6 +4983,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (Object.hasOwn(body, "hold")) {
       next.hold = readTaskHold(body.hold, new Date().toISOString(), "operator", current.hold);
       if (next.hold) next.status = "blocked";
+      if (SCENARIO === "hold-kinds" && next.hold?.kind === "resource") next.status = "inbox";
     }
     if (Object.hasOwn(body, "restoreHold")) next.hold = storedTaskHold(body.restoreHold);
     if (body.board) next.board = body.board as BoardTask["board"];
@@ -5378,6 +5511,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/resources") {
     const diskRole = new URLSearchParams(location.search).get("disk-role");
     const diskWarning = new URLSearchParams(location.search).get("disk-level") === "warning";
+    /* `memory=calm|swap|tmp`: RAM, swap and a tmpfs /tmp, quiet or over one warning line. */
+    const memory = new URLSearchParams(location.search).get("memory");
+    const swapUsed = (memory === "swap" ? 6 : 1) * 1024 ** 3;
     const host = (target: string, title: string, over: Record<string, unknown>) => ({
       target, panePid: 4_100, kind: "structured", path: null, engine: "claude", title, project: LEDGER, activity: "idle", lastActiveAt: iso(6 * 60 * MIN), cwd: "/repo/ledger",
       rssBytes: 600 * 1024 ** 2, swapBytes: 0, procCount: 3, model: "opus", role: "builder", conversationId: null, stage: "implement", ownership: "owned", seat: false, turnBusy: false, ...over,
@@ -5397,7 +5533,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           ? [{ kind: "state", bytes: 2.1 * 1024 ** 3, measuredAt: iso(0) }, { kind: "worktrees", bytes: 187 * 1024 ** 3, measuredAt: iso(0) }, { kind: "temp", bytes: 15 * 1024 ** 3, measuredAt: iso(0) }]
           : [{ kind: "worktrees", bytes: 90 * 1024 ** 3, measuredAt: iso(0) }],
       } } : {}),
-      system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed: 1024 ** 3, capturedAt: iso(30) },
+      system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed, capturedAt: iso(30) },
+      ...(memory ? { memoryPressure: {
+        at: iso(0), swapWarnPercent: 50, tmpWarnBytes: 4e9,
+        episode: memory === "calm" ? null : iso(MIN), reasons: memory === "calm" ? [] : [memory],
+        ram: { usedBytes: 23 * 1024 ** 3, totalBytes: 32 * 1024 ** 3 }, swap: { usedBytes: swapUsed, totalBytes: 8 * 1024 ** 3 },
+        tmp: { usedBytes: (memory === "tmp" ? 5.5 : 1.2) * 1024 ** 3, totalBytes: 16 * 1024 ** 3, tmpfs: true, view: "host" },
+      } } : {}),
       sessions: RAIL ? [
         host("host-ledger-build", "Reconciling the ledger export", { activity: "live", lastActiveAt: iso(20), rssBytes: 1_400 * 1024 ** 2, turnBusy: true }),
         host("host-harbor-index", "Indexed the handbook", { project: "harbor-docs", cwd: "/repo/harbor", engine: "codex", model: "gpt-5.6", role: "reviewer", stage: "review" }),
@@ -5413,7 +5555,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const windowStart = now - Math.round(windowSeconds * spentShare);
       return { windowStart, resetsAt: windowStart + windowSeconds, windowSeconds, samples: Array.from({ length: 12 }, (_, index) => ({ t: windowStart + Math.round(((now - windowStart) * index) / 11), remaining: Math.round(100 - ((100 - left) * index) / 11) })) };
     };
-    return json({ claude: { session: series(18_000, 0.6, 88), weekly: series(604_800, 0.45, 70) }, codex: { session: series(18_000, 0.8, 60), weekly: series(604_800, 0.7, 90) }, claudeAccountId: "default", codexAccountId: null, historySince: iso(3 * 24 * 60 * MIN) });
+    /* A request for one account is answered stamped with that account, as the route does. */
+    const requested = url.searchParams.get("account");
+    const forEngine = url.searchParams.get("engine");
+    return json({ claude: { session: series(18_000, 0.6, 88), weekly: series(604_800, 0.45, 70) }, codex: { session: series(18_000, 0.8, 60), weekly: series(604_800, 0.7, 90) }, claudeAccountId: forEngine === "claude" && requested ? requested : forEngine === "codex" ? null : "default", codexAccountId: forEngine === "codex" && requested ? requested : null, historySince: iso(3 * 24 * 60 * MIN) });
   }
   if (RAIL_STATE === "stale" && url.pathname === "/api/limits") {
     return json({
@@ -5781,7 +5926,7 @@ createRoot(document.getElementById("root")!).render(SCENARIO === "account-row" ?
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>
   </div>
-) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? (new URLSearchParams(location.search).get("via") === "row" ? <><LearnedRulesRow project="garden" size="menu" /><LearnedRulesWindowHost /></> : <RulesWindow project="garden" onClose={() => {}} />) : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
+) : SCENARIO === "codex-callbacks" ? <CodexCallbacksScene /> : SCENARIO === "memory-profile" ? (new URLSearchParams(location.search).get("via") === "row" ? <><LearnedRulesRow project="garden" size="menu" /><LearnedRulesWindowHost /></> : <RulesWindow project="garden" focusRule={new URLSearchParams(location.search).get("focus") ?? undefined} onClose={() => {}} />) : SCENARIO === "voice-panel" ? <VoicePanelScene /> : VOICE ? voiceCompanionScene() : diskDensity ? (
   <div className="bg-panel" style={{ width: diskDensity === "full" ? "100%" : 248, marginTop: "auto" }}>
     <ResourcesFooter density={diskDensity === "full" ? "full" : diskDensity === "detail" ? "detail" : "line"} />
   </div>

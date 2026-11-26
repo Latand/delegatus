@@ -1,3 +1,4 @@
+import { publicProvisioningPipeline } from "@/lib/pipelines/provisioningRecord";
 import { NextRequest, NextResponse } from "next/server";
 
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
@@ -26,7 +27,7 @@ async function handle(req: NextRequest): Promise<NextResponse> {
     const result = await createConversationDraft(req, input);
     if (!result.pipeline) return NextResponse.json({ ...result, code: result.code ?? "PIPELINE_REFUSED" }, { status: result.status });
     recordOperatorRequest(req, { kind: "pipeline", idempotencyKey: `pipeline-create:${result.pipeline.id}`, project: result.pipeline.project });
-    return NextResponse.json({ ok: true, pipeline: result.pipeline }, { status: result.status });
+    return NextResponse.json({ ok: true, pipeline: publicProvisioningPipeline(result.pipeline) }, { status: result.status });
   } catch (error) {
     if (error instanceof ConversationDraftRefusal || error instanceof ViewValidationError) return NextResponse.json({
       error: error.message, code: error.code, ...(error instanceof ConversationDraftRefusal && error.retryable ? { retryable: true } : {}),

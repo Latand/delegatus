@@ -135,6 +135,7 @@
      identity tints, which already clear 5.6:1 there. */
   --color-claude-mark: #c96442;
   --color-codex-mark: var(--color-codex);
+  --color-antigravity-mark: #006482;
   /* The ink a mark takes INSIDE a filled engine avatar (#1743). White on the
      dark theme's engine tints measures 2.6:1 — under the 3:1 floor a graphical
      object has — because those tints are light by design there. */
@@ -160,6 +161,16 @@
   --glyph-terra-rim: #1d5aa3;
   --glyph-luna: #66728f;
   --glyph-luna-glow: #9fb3d9;
+  --glyph-neon: #006482;
+  --glyph-neon-glow: #00c4e8;
+  --glyph-argon: #6d3fd1;
+  --glyph-argon-glow: #8d63f2;
+  --glyph-hydrogen: #c0265f;
+  --glyph-hydrogen-glow: #ee4f89;
+  --glyph-flash: #1f8a4c;
+  --glyph-flash-glow: #2fc46b;
+  --glyph-oss: #8c5a2e;
+  --glyph-oss-glow: #c98a4d;
   /* The running halo: how far past the glyph it reaches and how strong it is
      at its heart. Astra, the brightest sun, takes the strong peak. */
   --glyph-halo-reach: 3px;
@@ -299,6 +310,7 @@
     --color-openclaw-soft: #2e1622;
     --color-claude-mark: var(--color-claude);
     --color-codex-mark: var(--color-codex);
+    --color-antigravity-mark: #2ce5ff;
     --engine-fill-ink: #121620;
     --effort-empty: #64646f;
     --glyph-sol: #ffcd38;
@@ -310,6 +322,16 @@
     --glyph-terra-rim: #8cc2f7;
     --glyph-luna: #d3daea;
     --glyph-luna-glow: #c9d6f2;
+    --glyph-neon: #2ce5ff;
+    --glyph-neon-glow: #2ce5ff;
+    --glyph-argon: #b49cff;
+    --glyph-argon-glow: #b49cff;
+    --glyph-hydrogen: #ff7aa8;
+    --glyph-hydrogen-glow: #ff7aa8;
+    --glyph-flash: #4fe08c;
+    --glyph-flash-glow: #4fe08c;
+    --glyph-oss: #e0a468;
+    --glyph-oss-glow: #e0a468;
     --glyph-halo-reach: 5px;
     --glyph-halo-peak: 45%;
     --glyph-halo-peak-strong: 55%;
@@ -399,6 +421,7 @@
   --color-openclaw-soft: #2e1622;
   --color-claude-mark: var(--color-claude);
   --color-codex-mark: var(--color-codex);
+  --color-antigravity-mark: #2ce5ff;
   --engine-fill-ink: #121620;
   --effort-empty: #64646f;
   --glyph-sol: #ffcd38;
@@ -410,6 +433,16 @@
   --glyph-terra-rim: #8cc2f7;
   --glyph-luna: #d3daea;
   --glyph-luna-glow: #c9d6f2;
+  --glyph-neon: #2ce5ff;
+  --glyph-neon-glow: #2ce5ff;
+  --glyph-argon: #b49cff;
+  --glyph-argon-glow: #b49cff;
+  --glyph-hydrogen: #ff7aa8;
+  --glyph-hydrogen-glow: #ff7aa8;
+  --glyph-flash: #4fe08c;
+  --glyph-flash-glow: #4fe08c;
+  --glyph-oss: #e0a468;
+  --glyph-oss-glow: #e0a468;
   --glyph-halo-reach: 5px;
   --glyph-halo-peak: 45%;
   --glyph-halo-peak-strong: 55%;

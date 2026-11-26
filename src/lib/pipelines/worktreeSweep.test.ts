@@ -1234,6 +1234,7 @@ test("the Viewer's listing keeps a removed lane's conversations under the parent
     "claude-tasks": path.join(caseDir, "claude-tasks"),
     "openclaw-sessions": path.join(caseDir, "openclaw"),
     "copilot-sessions": path.join(caseDir, "copilot-sessions"),
+    "antigravity-sessions": path.join(caseDir, "antigravity-sessions"),
   };
   for (const directory of Object.values(roots)) fs.mkdirSync(directory, { recursive: true });
   /* A stage conversation that ran in the lane, and one in a subdirectory of it. */
@@ -3300,6 +3301,15 @@ test("a mount point under a merged checkout keeps it as mount-boundary", async (
   const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(302, "topic/mount-floor", tip)], mountPoints: target => [path.join(target, "node_modules")] }));
   expect(report.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "mount-boundary" }));
   expect(fs.existsSync(path.join(dir, "node_modules"))).toBeTrue();
+});
+
+test("an inspection that reports a socket keeps a merged checkout as in use", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "socket-held"), "topic/socket-held");
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(305, "topic/socket-held", tip)],
+    inspect: () => ({ newestMs: 0, entries: 1, hold: "socket" }) }));
+  expect(report.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "in-use" }));
+  expect(fs.existsSync(dir)).toBeTrue();
 });
 
 

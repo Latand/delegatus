@@ -11,10 +11,14 @@ conversation-id indexes. The existing retention reducer runs over that small
 snapshot. Its cycle handling, receipt precedence and alias fallback rules stay
 shared with the full-map reference.
 
-The lookup memo lasts one tick. A subsequent tick sees peer changes. Settlement
-continues to require a continuous absence horizon and agreement with journal
-host state. A failed registry read leaves the effect pending and preserves its
-absence timestamp. Sends and interrupts keep their existing settlement rules.
+The lookup memo lasts one tick. A subsequent tick sees peer changes. A current
+registry record always keeps the effect pending and resets the absence horizon.
+Dead or superseded registry evidence lets the effect settle after the continuous
+horizon, even when the journal session still shows hosted or recovering. With
+no registry record, a hosted or recovering journal session also keeps the effect
+pending and resets the horizon. A failed registry read leaves the effect pending
+and preserves its absence timestamp. Sends and interrupts keep their existing
+settlement rules.
 
 ## Shared surfaces
 

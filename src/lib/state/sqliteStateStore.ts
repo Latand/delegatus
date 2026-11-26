@@ -1,4 +1,5 @@
 import { installTaskTimes, prepareTaskTimes, taskTimePendingCursor, taskTimesReady } from "./taskTimes";
+import { taskListIndex, taskListIndexCurrent, taskListIndexes } from "./taskListIndexes";
 import { observeRegistryWriter } from "@/lib/agent/registryWriter";
 import { assertOperationLease, awaitLeasedOperation } from "@/lib/operationLease";
 import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
@@ -23,9 +24,9 @@ import { DEFERRED_TEXT_ACCESSOR_BYTES, deferLongText } from "./deferredText";
 import { cacheCounter } from "../cacheTelemetry";
 import { readAttribution } from "../readAttribution";
 import { installPipelineControllerSchedule, pipelineControllerScheduleIndexes, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
-import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
+import { installPipelineControllerIndex, installProvisioningSlotIndex, installProvisioningWaitIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
 import { installPipelineControllerReferences, pipelineControllerReferenceIndexesCurrent, pipelineControllerReferencesCurrent, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
-import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady, pipelineEvidenceSchemaReady } from "./pipelineEvidenceIndex";
+import { installPipelineEvidenceIndex, installPipelineTaskMembership, pipelineEvidenceIndexReady, pipelineEvidenceSchemaReady, pipelineTaskMembershipReady } from "./pipelineEvidenceIndex";
 import { databaseFileIdentity, databaseSwapMarker, databaseSwapInProgress, DatabaseReplacedError, openCurrentDatabase } from "./currentDatabase";
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
 import { FileTransactionBusyError } from "./fileTransaction";
@@ -289,6 +290,7 @@ export interface CompanionPatch<C> {
 
 export interface StateBoundedTransaction<T> {
   get(key: string): T | null;
+  provisioningWaitHead(resource: string): string | undefined;
   /** Read linked-task watermark through this transaction's admitted writer. */
   maxTaskProjectStamp(projects: readonly string[], prefix: string): string | null;
   /** Indexed pipeline lookup by id across the active and archive collections. */
@@ -708,6 +710,7 @@ const stateSchema = [
   `CREATE INDEX IF NOT EXISTS state_rows_task_project
     ON state_rows(json_extract(value_json,'$.project'), row_key)
     WHERE collection='tasks' AND json_valid(value_json)`,
+  ...taskListIndexes,
   `CREATE INDEX IF NOT EXISTS state_rows_task_finding
     ON state_rows(json_extract(value_json,'$.project'), json_extract(value_json,'$.findingKey'), row_order, row_key)
     WHERE collection='tasks' AND json_valid(value_json)
@@ -871,12 +874,14 @@ function backfillPipelineRequestReceipts(db: Database): void {
 function openRawDatabase(filename: string): Database {
   const db = connectRawDatabase(filename);
   try {
-    return stateLockAttempt("state.schema", () => {
+    stateLockAttempt("state.schema", () => {
       try {
         // Existing collections are read without acquiring SQLite's writer lock.
         // Missing schema still follows the fenced initialization path below.
         const objects = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type IN ('table','index','trigger')").all();
         const names = new Set(objects.map(row => row.name));
+        const indexDefinition = db.query<{ sql: string }, [string]>("SELECT sql FROM sqlite_master WHERE type='index' AND name=?");
+        const outdatedTaskList = Object.values(taskListIndex).filter(name => !taskListIndexCurrent(name, indexDefinition.get(name)?.sql));
         if (names.has("state_collections") && !names.has("pipeline_request_receipts")
           && db.query("SELECT 1 FROM state_collections WHERE collection IN ('pipelines','pipelines_archive') AND schema_version = 6 LIMIT 1").get()) {
           throw new Error("pipeline format six receipt index is missing; repair required");
@@ -885,14 +890,18 @@ function openRawDatabase(filename: string): Database {
           "pipeline_controller_work", "pipeline_controller_work_order", "pipeline_controller_work_insert",
           "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete", "pipeline_tick_priority_cursor"].every(name => names.has(name))
           && pipelineControllerScheduleIndexes.ready(names)
+          && (names.has("pipeline_provision_wait_update") || !mayRunStateStartupMutation(path.dirname(filename)))
+          && (names.has("pipeline_provision_slot_update") || !mayRunStateStartupMutation(path.dirname(filename)))
           && pipelineControllerReferencesReady(db, names)
           && pipelineControllerReferenceIndexesCurrent(db)
           && (pipelineControllerReferencesCurrent(db) || !mayRunStateStartupMutation(path.dirname(filename)))
           && pipelineEvidenceIndexReady(db)
+          && (pipelineTaskMembershipReady(names) || !mayRunStateStartupMutation(path.dirname(filename)))
+          && !outdatedTaskList.length
           && taskDueIndexCurrent(db)
           && db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal"
           && db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all().some(row => row.name === "change_floor")
-          && db.query<{ name: string }, []>("PRAGMA table_info(state_imports)").all().some(row => row.name === "reconciled_sha256")) return db;
+          && db.query<{ name: string }, []>("PRAGMA table_info(state_imports)").all().some(row => row.name === "reconciled_sha256")) return;
         // The readiness check above is read-only. Any path below can mutate
         // the shared database, so an older or partial schema may only be
         // repaired by the release that currently owns SQLite writes.
@@ -905,6 +914,7 @@ function openRawDatabase(filename: string): Database {
         if (names.has("state_rows")) installTaskTimes(db);
         if (!taskDueIndexCurrent(db)) db.exec("DROP INDEX IF EXISTS state_rows_task_due");
         if (!names.has("task_time_pending")) db.exec("DROP INDEX IF EXISTS state_rows_task_legacy_stamp");
+        for (const index of outdatedTaskList) db.exec(`DROP INDEX IF EXISTS ${index}`);
         for (const sql of stateSchema) db.exec(sql);
         installTaskTimes(db);
         if (!names.has("pipeline_request_receipts")) backfillPipelineRequestReceipts(db);
@@ -917,21 +927,29 @@ function openRawDatabase(filename: string): Database {
           db.exec("ALTER TABLE state_imports ADD COLUMN reconciled_sha256 TEXT");
         }
         installPipelineControllerIndex(db, path.dirname(filename));
+        const provisioningUpgrade = installProvisioningWaitIndex(db, path.dirname(filename));
+        installProvisioningSlotIndex(db, path.dirname(filename));
         // Only a policy upgrade resets the scheduler. Missing indexes repair
         // in place without changing existing queue clocks or cursors.
-        installPipelineControllerSchedule(db, path.dirname(filename), !pipelineControllerReferencesCurrent(db));
+        installPipelineControllerSchedule(db, path.dirname(filename), provisioningUpgrade || !pipelineControllerReferencesCurrent(db));
         installPipelineControllerReferences(db, path.dirname(filename));
         installPipelineEvidenceIndex(db, path.dirname(filename));
+        installPipelineTaskMembership(db, names);
         assertSqliteInitializationAuthority(filename);
         assertStateStartupMutation(path.dirname(filename), "state database schema publication");
         db.exec("COMMIT");
         secureDatabaseFiles(filename);
-        return db;
       } catch (error) {
         rollbackQuietly(db);
         throw classifyStateError(error, "state schema");
       }
     });
+    // Leave Bun's bounded query cache available for the caller's statements.
+    // When it fills, query() creates uncached statements that can keep the
+    // native connection open after close(), including during a legacy import.
+    const clearQueryCache = Reflect.get(db, "clearQueryCache");
+    if (typeof clearQueryCache === "function") Reflect.apply(clearQueryCache, db, []);
+    return db;
   } catch (error) {
     db.close();
     throw error;
@@ -1422,6 +1440,35 @@ export function pipelineEvidenceRevision(filename: string): string | null {
 }
 
 type TaskPipelineKey = { collection: string; row_key: string };
+
+/** Batch lookup for the seat agenda worker. Select each matching row once,
+ * including prerequisites that directly reference a lane by id. */
+export function readPipelineRowsForTasks(filename: string, taskIds: readonly string[], laneIds: readonly string[] = []): unknown[] {
+  if ((!taskIds.length && !laneIds.length) || !fs.existsSync(filename)) return [];
+  const db = sharedStateReadonlyDatabase(filename);
+  const names = new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE name LIKE 'pipeline_task_membership%'").all().map(row => row.name));
+  // A projection worker may still serve an installation before its fenced
+  // schema upgrade. Read the old layout once per batch while it is current.
+  const membership = pipelineTaskMembershipReady(names) ? `
+    SELECT m.collection,m.row_key FROM json_each(?) requested
+    CROSS JOIN pipeline_task_membership m INDEXED BY pipeline_task_membership_lookup
+    WHERE m.task_id=requested.value` : `
+    SELECT collection,row_key FROM state_rows r
+    WHERE collection IN ('pipelines','pipelines_archive') AND EXISTS (
+      SELECT 1 FROM json_each(CASE WHEN json_valid(r.value_json) THEN r.value_json ELSE '{}' END,'$.taskIds')
+      WHERE typeof(key)='integer' AND type='text' AND value IN (SELECT value FROM json_each(?)))`;
+  const rows = db.query<{ value_json: string }, [string, string]>(`
+    WITH matches AS MATERIALIZED (
+      ${membership}
+      UNION SELECT r.collection,r.row_key FROM state_rows r
+      WHERE r.collection IN ('pipelines','pipelines_archive') AND r.row_key IN (SELECT value FROM json_each(?))
+    )
+    SELECT r.value_json FROM matches m CROSS JOIN state_rows r
+    WHERE r.collection=m.collection AND r.row_key=m.row_key ORDER BY r.collection,r.row_order,r.row_key
+  `).all(JSON.stringify(taskIds), JSON.stringify(laneIds));
+  return rows.map(row => parseSqliteJson(row.value_json, db));
+}
+
 type TaskPipelineMembership = TaskPipelineKey & { row_order: number; taskIds: string[] };
 /** `clock` names the evidence index the membership rows were read under: its
     file and schema, the clock revision they are complete through, and the two
@@ -1701,17 +1748,23 @@ export function readStateCollectionRows(filename: string, collection: string): u
 }
 
 /** Return project membership without decoding or materializing persisted rows. */
-export function readStateProjectKeys(filename: string): string[] {
+export function readStateProjectKeys(
+  filename: string,
+  collections: readonly string[] = ["tasks", "pipelines", "pipelines_archive", "flows"],
+): string[] {
   if (!fs.existsSync(filename)) return [];
+  if (collections.length === 0) return [];
   const db = connectReadonlyDatabase(filename);
   try {
-    return db.query<{ project: string | null }, []>(`
+    const placeholders = collections.map(() => "?").join(", ");
+    const bindings = [...collections] as [string, ...string[]];
+    return db.query<{ project: string | null }, [string, ...string[]]>(`
       SELECT DISTINCT json_extract(value_json, '$.project') AS project
       FROM state_rows
-      WHERE collection IN ('tasks', 'pipelines', 'flows')
+      WHERE collection IN (${placeholders})
         AND json_valid(value_json)
         AND json_type(value_json, '$.project') = 'text'
-    `).all().flatMap(row => row.project ? [row.project] : []);
+    `).all(...bindings).flatMap(row => row.project ? [row.project] : []);
   } catch (error) {
     if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return [];
     throw error;
@@ -2061,7 +2114,7 @@ export function stateRowsContaining(filename: string, collections: readonly stri
   return rows;
 }
 
-function sharedStateReadonlyDatabase(filename: string): Database {
+export function sharedStateReadonlyDatabase(filename: string): Database {
   const current = stateReadonlyReaderOwner.__llvStateReadonlyReader;
   if (current?.filename === filename) return current.db;
   current?.db.close();
@@ -2367,6 +2420,30 @@ export class SqliteStateCollection<T> {
     return selectPipelineTickWork(sharedStateReadonlyDatabase(this.filename), now, excluded, limit);
   }
 
+  dueExcludedProvisioning(now: number, excluded: readonly string[]): PipelineTickWork | null {
+    if (!excluded.length) return null;
+    return sharedStateReadonlyDatabase(this.filename).query<PipelineTickWork, [number, string]>(`
+      SELECT w.* FROM pipeline_provision_slot s
+      JOIN pipeline_tick_work w USING(row_key)
+      WHERE s.due_at<=? AND s.row_key IN (SELECT value FROM json_each(?))
+      ORDER BY s.due_at,s.row_key LIMIT 1
+    `).get(now, JSON.stringify(excluded));
+  }
+
+  async acknowledgeExcludedProvisioning(work: PipelineTickWork, retryAt: number): Promise<void> {
+    await stateTransactionAsync(this.filename, "pipelines.controller-schedule", db => {
+      db.query(`UPDATE pipeline_provision_slot SET due_at=MAX(due_at,?)
+        WHERE row_key=? AND EXISTS (SELECT 1 FROM pipeline_tick_work WHERE row_key=? AND generation=?)`)
+        .run(retryAt, work.row_key, work.row_key, work.generation);
+    });
+  }
+
+  provisioningCacheOwnerKeys(identity: string): string[] {
+    return sharedStateReadonlyDatabase(this.filename).query<{ row_key: string }, [string]>(`
+      SELECT row_key FROM pipeline_provision_slot WHERE cache_identity=? ORDER BY row_key LIMIT 2
+    `).all(identity).map(row => row.row_key);
+  }
+
   pipelineAttemptWindow(key: string, after: number, limit: number): PipelineAttemptReference[] {
     if (!Number.isInteger(limit) || limit < 1 || limit > 16) throw new Error("invalid controller attempt budget");
     const tail = sharedStateReadonlyDatabase(this.filename).query<PipelineAttemptReference, [string, number, number]>(`SELECT * FROM pipeline_attempt_refs
@@ -2514,13 +2591,39 @@ export class SqliteStateCollection<T> {
       hosts/running selectors share immutable candidates; other selectors keep
       detached copies, limited to the controller's attempt window when scoped.
       Actuation still belongs to the caller's existing admission fences. */
-  async pipelineControllerSelection(kind: PipelineControllerSelection, throughOrder = Number.MAX_SAFE_INTEGER, keys?: readonly string[]): Promise<T[]> {
+  async pipelineControllerSelection(kind: PipelineControllerSelection, throughOrder = Number.MAX_SAFE_INTEGER, keys?: readonly string[],
+    due?: { now: number; limit: number }): Promise<T[]> {
     if (this.options.collection !== "pipelines") throw new Error("pipeline selection requires the pipeline collection");
     const identity = databaseFileIdentity(this.filename), authority = this.options.decodeAuthority?.();
     const db = keys ? sharedStateReadonlyDatabase(this.filename) : connectReadonlyDatabase(this.filename);
     try {
       if (!keys) db.exec("BEGIN");
       const records: T[] = [];
+      if (due) {
+        const cursor = db.query<{ row_order: number; row_key: string }, []>("SELECT row_order,row_key FROM pipeline_tick_cursor WHERE id=1").get();
+        for (const wrap of [false, true]) {
+          if (records.length === due.limit) break;
+          const rows = db.query<Pick<CollectionRow, "row_key" | "row_revision">, SQLQueryBindings[]>(`
+            SELECT w.row_key,r.row_revision FROM pipeline_controller_work w
+            JOIN state_rows r ON r.collection='pipelines' AND r.row_key=w.row_key
+            WHERE w.kind=? AND w.row_order<=?
+            AND (w.row_order,w.row_key) ${wrap ? "<=" : ">"} (?,?)
+            ${keys ? "AND w.row_key IN (SELECT value FROM json_each(?))" : ""}
+            AND COALESCE(json_extract(r.value_json,'$.provisioningJob.retryAt'),
+              CASE WHEN json_extract(r.value_json,'$.provisioningJob.admittedAdd') IS NULL
+              THEN (julianday(json_extract(r.value_json,'$.provisioningWait.retryAfter')) - 2440587.5) * 86400000 END, 0) <= ?
+            ORDER BY w.row_order,w.row_key LIMIT ?
+          `).all(kind, throughOrder, cursor?.row_order ?? -1, cursor?.row_key ?? "", ...(keys ? [JSON.stringify(keys)] : []),
+            due.now, due.limit - records.length);
+          for (const row of rows) {
+            const decoded = this.controllerRow(row.row_key, row.row_revision, db, identity, authority);
+            if (decoded) records.push((this.options.cloneController ?? this.options.clone)(decoded));
+          }
+        }
+        if (!keys) db.exec("COMMIT");
+        if (databaseFileIdentity(this.filename) !== identity || this.options.decodeAuthority?.() !== authority) throw new StateSnapshotChangedError();
+        return records;
+      }
       let order = -1, key = "";
       for (;;) {
         const rows = withViewerOperation("pipelines.controller-select", () => (keys ? sharedStateReadonlyDatabase(this.filename) : db).query<
@@ -2910,6 +3013,13 @@ export class SqliteStateCollection<T> {
           const consume = () => { if (--remaining < 0) throw new Error("state patch row budget exceeded"); };
           const changed = new Map<string, "upsert" | "delete">();
           const result = operation({
+            provisioningWaitHead: resource => {
+              if (this.options.collection !== "pipelines") throw new Error("provisioning waits require pipelines");
+              consume();
+              return db.query<{ row_key: string }, [string]>(`
+                SELECT row_key FROM pipeline_provision_wait WHERE resource=?
+                ORDER BY sequence,row_order,row_key LIMIT 1`).get(resource)?.row_key;
+            },
             maxTaskProjectStamp: (projects, prefix) => {
               if (this.options.collection !== "tasks") throw new Error("task watermark lookup requires tasks");
               return this.maxTaskProjectStamp(projects, prefix, db);

@@ -1,4 +1,4 @@
-import { observeSeatWakeResponse, type SeatWakeResponse, type WakeResponseEvidence } from "./seatWakeResponse";
+import { captureSeatWakeResponseStart, observeSeatWakeResponse, type SeatWakeResponse, type WakeResponseEvidence, type WakeResponseStart } from "./seatWakeResponse";
 import { seatTickInstructionLines, seatTickInstructionReview } from "./seatTickInstructions";
 import { issueDeliverySeatSignals } from "@/lib/forge/issueDelivery";
 import { sendFailureSignals } from "@/lib/runtime/sendFailureNotice";
@@ -15,7 +15,7 @@ import { deepFreeze } from "@/lib/deepFreeze";
 import { projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { shortId } from "@/lib/shortIds";
-import { seatTickCatchUp } from "./seatTick";
+import { seatTickCatchUp, seatTickSignalVersion } from "./seatTick";
 import { pendingAutonomyReports } from "./autonomy";
 import { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 import { defaultSeatTickAdmissionSources } from "./seatTickAdmissionSources";
@@ -28,13 +28,18 @@ import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { contextReading, readOrchestratorTranscriptFacts } from "@/lib/orchestrator/health";
 import type { SeatContextUsage } from "./seatAutoRotation";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
+import { currentMemoryPressure, memoryPressureLine, memoryPressureSignals, type MemoryPressure } from "@/lib/state/memoryPressure";
+import { tempSweepStatus } from "@/lib/tempSweep";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { memoryProblemSignals, prepareMemoryProblemRead } from "@/lib/memory/roleProblems";
+import { acknowledgeCurationNoAccountWarning, curationNoAccountWarning } from "@/lib/memory/curation/store";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { liveFreshObservation } from "@/lib/accounts/accountProjection";
+import { pauseReminderDue } from "@/lib/pipelines/pauseReminder";
+import type { SeatAgendaPauses } from "@/lib/attention/seatAgenda";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import fs from "node:fs";
 import path from "node:path";
@@ -61,9 +66,10 @@ import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
 import { scopedReportId } from "@/lib/bridge/store";
 import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
-import type { SeatTickReportRow } from "./seatTickReports";
+import type { SeatTickReportLog } from "./seatTickReports";
 import { operatorLocale } from "@/lib/operator/settings";
 import { bridgeReportsEnabled } from "@/lib/projects/settings";
+import { diskCleanerSignals } from "@/lib/cleaner/diskReport";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
 import viewerPackageManifest from "../../../package.json";
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
@@ -538,6 +544,7 @@ function overdueTaskInputs(sources: SeatTickSources, project: string, now: numbe
 
 export interface SeatTickSources {
   wakeResponse?: (row: SeatWakeResponse, project?: string) => Promise<WakeResponseEvidence>;
+  wakeResponseStart?: (conversationId: string) => Promise<WakeResponseStart | undefined>;
   prepareRead?: () => Promise<void>;
   /** Warm problem credit without preparing general history for a deploy wake. */
   prepareMemoryProblems?: () => Promise<void>;
@@ -546,7 +553,7 @@ export interface SeatTickSources {
   /** The waits «Waiting for you» routes to this project's seat
       (docs/design/attention-auto-resolve.md), read from the board projection
       the panel itself reads. Absent: none. Null: read skipped or unavailable. */
-  workerAsks?: (project: string, seatConversationId?: string) => Promise<readonly SeatTickWorkerAskInput[] | import("./types").SeatTickAgendaInput | null>;
+  workerAsks?: (project: string, seatConversationId?: string, pauses?: SeatAgendaPauses) => Promise<readonly SeatTickWorkerAskInput[] | import("./types").SeatTickAgendaInput | null>;
   seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
   recoverQuota?: (project: string) => Promise<boolean>;
   /** Start a fresh host for a designated seat whose host is gone, without a
@@ -554,6 +561,10 @@ export interface SeatTickSources {
   reviveSeatHost?: import("./seatHostRecovery").SeatHostRevival;
   seatContextUsage?: (conversationId: string) => SeatContextUsage | null;
   diskPressure?: () => Promise<DiskPressure>;
+  /** RAM, swap and the tmpfs /tmp; absent reads as no machine line. */
+  memoryPressure?: () => MemoryPressure | null;
+  /** The last temp sweep's stray counts, for the machine line. */
+  tempSweep?: () => ReturnType<typeof tempSweepStatus>;
   maintenanceRuns?: (project: string) => readonly MaintenanceRun[];
   seatFor: typeof orchestratorSeatFor;
   /** Whether an orchestrator ever held the project (#2170). Absent: assumed,
@@ -627,7 +638,7 @@ export interface SeatTickSources {
       language (§5.1). Absent: the check keeps no report ledger, as with bridge
       reports off. */
   reports?: {
-    log: (project: string) => readonly SeatTickReportRow[] | Promise<readonly SeatTickReportRow[]>;
+    log: (project: string) => SeatTickReportLog | Promise<SeatTickReportLog>;
     enabled: (project: string) => boolean;
     operatorLocale: () => "en" | "uk" | null;
   };
@@ -784,9 +795,16 @@ export async function settleRecordFromJournal(
   return sendReceiptFor(registry.readOnlySnapshot(), target.operationId);
 }
 
-function seatProjectResolver(): (project: string) => string {
-  const resolve = projectAliasResolver();
-  return project => resolve(project.trim());
+type SeatProjectResolver = ((project: string) => string) & { keys(project: string): string[] };
+function seatProjectResolver(): SeatProjectResolver {
+  const snapshot = projectAliasSnapshot();
+  const resolve = projectAliasResolver(snapshot);
+  const resolver = ((project: string) => resolve(project.trim())) as SeatProjectResolver;
+  resolver.keys = (project: string) => {
+    const canonical = resolve(project.trim());
+    return [canonical, ...Object.keys(snapshot.aliases).filter(key => key !== canonical && resolve(key) === canonical)];
+  };
+  return resolver;
 }
 
 export function defaultSeatTickSources(): SeatTickSources {
@@ -835,6 +853,7 @@ export function defaultSeatTickSources(): SeatTickSources {
       return readSeatTurnOutcome(conversation.engine, generation.path);
     },
     wakeResponse: observeSeatWakeResponse,
+    wakeResponseStart: captureSeatWakeResponseStart,
     recoverQuota: recoverSeatQuota,
     reviveSeatHost: async (request, dependencies) =>
       (await import("@/lib/runtime/structuredRecovery")).recoverDeadStructuredConversation(request, dependencies),
@@ -854,14 +873,16 @@ export function defaultSeatTickSources(): SeatTickSources {
     deploymentByKey: findSeatDeploymentByKey,
     deployment: (deploymentId) => ledgerDeployment(deploymentId),
     diskPressure: () => readDiskPressure(),
+    memoryPressure: () => currentMemoryPressure(),
+    tempSweep: () => tempSweepStatus(),
     retirementReport: () => {
       const report = readJsonCache(statePath("host-retirement-report.json"));
       return report && typeof report === "object" ? report as StructuredHostRetirementReport : null;
     },
     retirementJournal: (sinceMs) => readRetirementJournalWindow(statePath("host-retirement-journal.ndjson"), sinceMs),
-    workerAsks: (project, seatConversationId) => withViewerOperation("seat-tick.worker-asks", () => performanceSpans.wait("seat-tick.worker-asks", async () => {
+    workerAsks: (project, seatConversationId, pauses) => withViewerOperation("seat-tick.worker-asks", () => performanceSpans.wait("seat-tick.worker-asks", async () => {
       const { operatorSeatAgenda } = await import("@/app/api/files/operatorProjection");
-      return operatorSeatAgenda(project, seatConversationId);
+      return operatorSeatAgenda(project, seatConversationId, pauses);
     })),
     openPullRequests: (options) => openPullRequestsForRepo(options),
     /* One rule for both halves: ask, and act on, the layer that is actually
@@ -895,7 +916,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     reports: {
       log: (project) => withViewerOperation("seat-tick.reports", () => performanceSpans.wait("seat-tick.reports", async () => {
         const { runSeatSourceInWorker } = await import("@/lib/scanner/filesResponseWorker");
-        return JSON.parse((await runSeatSourceInWorker({ type: "seat-reports", project })).body) as SeatTickReportRow[];
+        return JSON.parse((await runSeatSourceInWorker({ type: "seat-reports", project })).body) as SeatTickReportLog;
       })),
       enabled: (project) => bridgeReportsEnabled(project),
       operatorLocale: () => operatorLocale(),
@@ -954,15 +975,18 @@ async function reportsInput(project: string, sources: SeatTickSources): Promise<
     /* A row is the project's when its key folds to the project: a seat recorded
        before its folder changed key filed under the old one, and those rows
        still discharge what they covered. */
-    const manager = (await port.log(project)).filter((report) => !!report.project && report.origin?.kind === "manager"
+    const log = await port.log(project);
+    const applicable = log.reports.filter((report) => !!report.project
       && (report.project === project || canonicalOrchestratorProject(report.project) === project));
+    const manager = applicable.filter(report => report.origin?.kind === "manager");
     const filedUnder = [...new Set([project, ...manager.map((report) => report.project!)])];
     const reportedIds = new Set<string>();
+    const coveredIds = new Set<string>();
     let lastReportAt: string | null = null;
     let latestCoversOwedAt: string | null = null;
     for (const report of manager) {
       reportedIds.add(report.id);
-      for (const id of report.covers ?? []) reportedIds.add(id);
+      for (const id of report.covers ?? []) coveredIds.add(id);
       if (!lastReportAt || Date.parse(report.at) > Date.parse(lastReportAt)) lastReportAt = report.at;
       if (report.coversOwedAt && (!latestCoversOwedAt || Date.parse(report.coversOwedAt) > Date.parse(latestCoversOwedAt))) latestCoversOwedAt = report.coversOwedAt;
     }
@@ -971,6 +995,9 @@ async function reportsInput(project: string, sources: SeatTickSources): Promise<
       operatorLocale: port.operatorLocale(),
       lastReportAt,
       reportedIds: [...reportedIds],
+      coveredIds: [...coveredIds],
+      reservedIds: log.reservedIds,
+      occupiedIds: [...new Set([...(log.occupiedIds ?? []), ...applicable.map(report => report.id)])],
       reportIdsFor: (key) => filedUnder.map((filed) => scopedReportId(filed, key)),
       latestCoversOwedAt,
     };
@@ -1319,6 +1346,19 @@ function pauseInputs(pipelines: readonly Pipeline[], seat: SeatTickSeatInput | n
   });
 }
 
+function agendaPauses(pauses: ReturnType<typeof pauseInputs>, now: number, deployThrough: number): SeatAgendaPauses {
+  const quotaReadyLaneIds: string[] = [];
+  const deployLaneIds: string[] = [];
+  for (const [id, lane] of pauses) {
+    if (lane.pauseConditionMet) quotaReadyLaneIds.push(id);
+    if (deployThrough > 0 && lane.pausedBy === "seat" && Date.parse(lane.pausedAt) <= deployThrough
+      && (!lane.pause?.resumeCondition || pauseReminderDue(lane.pause, lane.pausedAt, now, lane.pauseConditionMet))) {
+      deployLaneIds.push(id);
+    }
+  }
+  return { quotaReadyLaneIds, deployLaneIds };
+}
+
 function taskSummary(task: BoardTask & { pipelineIds: string[] }): TaskSummary {
   return {
     id: task.id,
@@ -1602,8 +1642,21 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
   return { covered: false, sweeps };
 }
 
-function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
+function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources, shown: readonly string[] = [], projectKeys: readonly string[] = [project]): SeatTickSignalInput[] {
   const found: SeatTickSignalInput[] = [...sendFailureSignals(seat?.conversationId), ...telegramPostSignals(project, sources.tasks(), loadSeatRounds(project)), ...postMergeSeatSignals(sources.pipelines(), project, seatProjectResolver()), ...issueDeliverySeatSignals(sources.pipelines(), project, seatProjectResolver())];
+  if (seat) {
+    try {
+      const warning = curationNoAccountWarning(projectKeys);
+      if (warning) {
+        const signal = {
+          id: "curator-no-account", episode: warning.episode, actionable: true,
+          label: "The role memory curator could not run because no account was available for this project (no-account).",
+        };
+        if (shown.includes(seatTickSignalVersion(signal, seat))) acknowledgeCurationNoAccountWarning(warning.project, warning.episode);
+        else found.push(signal);
+      }
+    } catch { /* An unreadable curation store leaves other wake evidence available. */ }
+  }
   for (const lane of projectRows(sources.pipelines(), project)) {
     const names = lane.merge?.optionalFailedChecks;
     if (lane.hiddenAt || !names?.length) continue;
@@ -1679,6 +1732,21 @@ function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatT
     found.push({ id: "seat-host", label: `the seat's own turn is ${seatActivity.lifecycle} in ${project} (${seatActivity.reason})` });
   }
   return found;
+}
+
+/** Read once per check; a failed read leaves the machine line and its item out. */
+function memoryPressureOf(sources: SeatTickSources): MemoryPressure | null {
+  try { return sources.memoryPressure?.() ?? null; } catch { return null; }
+}
+
+/** The wake's machine line: memory, swap, the tmpfs /tmp, and what the last
+    temp sweep removed from /tmp and /var/tmp. */
+export function seatTickMachineLine(pressure: MemoryPressure | null, sweep: ReturnType<typeof tempSweepStatus> | null | undefined): string | null {
+  if (!pressure) return null;
+  const stray = sweep?.stray;
+  return memoryPressureLine(pressure) + (stray && sweep
+    ? ` Last temp sweep at ${sweep.at}: removed ${stray.removed} stray director${stray.removed === 1 ? "y" : "ies"} older than ${stray.maxAgeHours} h from /tmp and /var/tmp (${(stray.removedBytes / 1e9).toFixed(2)} GB), ${stray.deferred} deferred.`
+    : "");
 }
 
 async function diskPressureSignals(sources: SeatTickSources): Promise<SeatTickSignalInput[]> {
@@ -2458,6 +2526,7 @@ interface ChildEvidence {
   children: SeatTickChildInput[];
   unavailable: SeatTickChildrenGap | null;
   catchUpPending: boolean;
+  ledgerWarnings: SeatTickSignalInput[];
 }
 
 /** The one token a check carries when several conditions stand: the first in
@@ -2512,8 +2581,8 @@ async function childWork(
   policy: SeatTickPolicy,
   sources: SeatTickSources,
 ): Promise<ChildEvidence> {
-  if (!seat) return { children: [], unavailable: null, catchUpPending: false };
-  if (!state.accounting) return { children: [], unavailable: "registry-unreadable", catchUpPending: false };
+  if (!seat) return { children: [], unavailable: null, catchUpPending: false, ledgerWarnings: [] };
+  if (!state.accounting) return { children: [], unavailable: "registry-unreadable", catchUpPending: false, ledgerWarnings: [] };
   assertSeatTickWork();
   const accounting = guardedSeatTickPort(new SeatTickAccounting(state.accounting.filename, project), "accounting.children");
   const registry = sources.registry();
@@ -2523,6 +2592,7 @@ async function childWork(
   const migration = accountingGap(state.accounting.gap);
   if (migration) gaps.add(migration);
   const children: SeatTickChildInput[] = [];
+  const ledgerWarnings = new Map<string, SeatTickSignalInput>();
   /* Enumerated once per check and handed to every projection (#1783): the
      roots decide whether a child's transcript is one this Viewer can read. */
   const roots = transcriptRoots();
@@ -2648,13 +2718,25 @@ async function childWork(
     } else if (retainedLatestSettlement) {
       child.input = { ...child.input, status: "terminal", outcome: previousInput.outcome, terminalAt: previousInput.terminalAt };
     }
-    unplaced();
     bytesLeft -= read.bytes;
     // A vanished host and both records gone have a named failure receipt.
     // Keep the cursor and every earlier outcome for a later recovery.
-    if (source.cursor.gap !== null && !lost) gaps.add("ledger-gap");
+    const ledgerGap = source.cursor.gap !== null && !lost;
+    if (ledgerGap && !read.cursor.atEnd && read.outcomes.length >= OUTCOME_LIMIT) readablePageLimited = true;
+    if (ledgerGap) {
+      if (child.input.status === "unknown") children.push(child.input);
+      const id = `child-ledger:${child.input.conversationId}:${generation.id}`;
+      ledgerWarnings.set(id, {
+        id, episode: JSON.stringify([source.cursor.identity, source.cursor.gap]), actionable: true,
+        label: `${child.input.title} — spawned child's event ledger has incomplete evidence (${source.cursor.gap})`,
+      });
+    } else unplaced();
     child.generationIndex = (child.generationIndex + 1) % generations.length;
-    /* A read the budget stopped short of the end resumes first next check. */
+    /* Resume budget-limited healthy reads first. A damaged ledger keeps its
+       cursor and rotates so it cannot repeatedly hold up healthy children. */
+    // A readable page of a damaged ledger still owes a bounded continuation.
+    // Keep that ticket ahead of the frozen catch-up cutoff until the readable
+    // prefix is exhausted; healthy children retain their independent tickets.
     const cut = !read.cursor.atEnd && (read.bytes >= budget || read.outcomes.length >= OUTCOME_LIMIT);
     if (child.input.status === "terminal" && read.bytes === 0 && read.outcomes.length === 0 && read.cursor.atEnd
       && child.generationIndex === previousGeneration && JSON.stringify(previousCursor) === JSON.stringify(read.cursor)
@@ -2664,6 +2746,7 @@ async function childWork(
   };
 
   let catchUpPending = false;
+  let readablePageLimited = false;
   try {
     const active = await seatTickMutation("owner", () => accounting.owner(seat.conversationId, seat.seatEpoch));
     if (await seatTickMutation("discoverRevokedOwners", () => accounting.discoverRevokedOwners(orchestratorSeatRevocationSource(), (ownerProject) => canonicalOrchestratorProject(ownerProject) === project))) {
@@ -2754,8 +2837,8 @@ async function childWork(
       const next = accounting.page("poll", 1)[0];
       const pending = next?.kind === "poll" && (next.key.startsWith(`poll/${encodeURIComponent(project)}/!`)
         || Number(next.key.slice(next.key.lastIndexOf("/") + 1)) <= catchUpPollThrough);
-      catchUpPending = !!pending;
-      if (pending) gaps.add("ledger-pending");
+      catchUpPending = !!pending || readablePageLimited;
+      if (catchUpPending) gaps.add("ledger-pending");
       else await seatTickMutation("endCatchUpPoll", () => accounting.endCatchUpPoll());
     }
     // Page the persisted ready queue, yielding between pages. The cutoff is
@@ -2819,7 +2902,7 @@ async function childWork(
       });
     }
   } catch { gaps.add("registry-unreadable"); }
-  return { children, unavailable: worstChildrenGap(gaps), catchUpPending };
+  return { children, unavailable: worstChildrenGap(gaps), catchUpPending, ledgerWarnings: [...ledgerWarnings.values()] };
 }
 
 function stageAttempt(lane: Pipeline) {
@@ -3344,13 +3427,19 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   const current = sources.seatFor(project).active;
   if (current?.conversationId !== seat.conversationId || current?.seatEpoch !== seat.seatEpoch) return null;
   const settings = effectiveSeatTickSettings(sources.settings(project), sources.now(), SEAT_TICK_WAKE_INTERVAL_MS);
+  const paused = projectRows(sources.pipelines(), project).filter(lane => isOpen(lane) && lane.state === "paused");
+  const pauses = pauseInputs(paused, seat, sources, sources.now());
+  const deployThrough = Math.max(...settledDeploys.map(deploy => Date.parse(deploy.settledAt ?? "") || 0));
+  const pauseSelection = agendaPauses(pauses, now, deployThrough);
   let workerAsksObserved = true;
+  let workerAsks: SeatTickCheckInput["workerAsks"];
   let decisionForms: SeatTickCheckInput["decisionForms"];
+  let pauseWaitingTasks: SeatTickCheckInput["pauseWaitingTasks"];
   if (sources.workerAsks) {
     try {
-      const read = await sources.workerAsks(project, seat.conversationId ?? undefined);
+      const read = await sources.workerAsks(project, seat.conversationId ?? undefined, pauseSelection);
       workerAsksObserved = read !== null;
-      if (read && "asks" in read) decisionForms = read.forms;
+      if (read && "asks" in read) { workerAsks = read.asks; decisionForms = read.forms; pauseWaitingTasks = read.pauseWaitingTasks; }
     } catch (error) {
       workerAsksObserved = false;
       console.error("[seat tick] routed asks unavailable", error instanceof Error ? error.name : "unknown");
@@ -3359,8 +3448,6 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
     const currentSeat = sources.seatFor(project).active;
     if (currentSeat?.conversationId !== seat.conversationId || currentSeat?.seatEpoch !== seat.seatEpoch) return null;
   }
-  const paused = projectRows(sources.pipelines(), project).filter(lane => isOpen(lane) && lane.state === "paused");
-  const pauses = pauseInputs(paused, seat, sources, sources.now());
   const pipelines: SeatTickPipelineInput[] = [];
   await forEachCooperatively(paused, lane => {
     const evidence = evidenceFromPipelines([{ id: lane.id, task: lane.task, project: lane.project,
@@ -3370,7 +3457,8 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   }, { batchSize: 4, timeBudgetMs: 8 });
   return { project, now: sources.now(), seat, state, policy, settings,
     pipelines, tasks: [], events: [], children: [], childrenUnavailable: null,
-    workerAsksObserved, ...(decisionForms ? { decisionForms } : {}),
+    workerAsksObserved, ...(workerAsks ? { workerAsks } : {}),
+    ...(pauseWaitingTasks ? { pauseWaitingTasks } : {}), ...(decisionForms ? { decisionForms } : {}),
     instructionReview: instructionReviewFor(project, sources.now(), settings, sources.pipelines(), sources.tasks(), seat),
     ownLanes: [], pullRequests: [], pullRequestsUnavailable: null, pullRequestsObserved: false,
     signals: [], settledDeploys, deploySettlementWakeDue: true, ...(observedReports ? { reports: observedReports } : {}),
@@ -3462,7 +3550,7 @@ async function gatherSeatTickInputWork(
   try {
     const release = readReleaseProject(canonical);
     for (const run of release.history) if (now - run.at <= policy.backlogAfterMs) releaseAlerts.push({ kind: "release-settled", id: `release-settled:${run.key}:${run.at}`, label: `Release ${run.outcome}; task ${run.taskId}, lane ${run.pipelineId}. Read its stage summaries for any product defect seen in the README pictures.` });
-    if (release.blocked && now - release.blocked.since >= 24 * 3_600_000) releaseAlerts.push({ kind: "release-blocked", id: `release-blocked:${release.blocked.episode}`, label: `A due release has waited 24 hours: ${release.observation?.reason ?? "unreadable blocker"}. Read seat_tick_settings release status.` });
+    if (settings.release?.enabled && release.blocked && now - release.blocked.since >= 24 * 3_600_000) releaseAlerts.push({ kind: "release-blocked", id: `release-blocked:${release.blocked.episode}`, label: `A due release has waited 24 hours: ${release.observation?.reason ?? "unreadable blocker"}. Read seat_tick_settings release status.` });
   } catch { /* The release controller journals store failures; other seat work still wakes. */ }
 
 
@@ -3480,17 +3568,25 @@ async function gatherSeatTickInputWork(
   }
   const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, hotLanes, sources, catchUp);
   await yieldToRuntime();
-  const { children, unavailable: childrenUnavailable, catchUpPending: childrenCatchUpPending } = await withViewerOperation("seat-tick.children", () => childWork(canonical, seat, state, policy, sources));
+  const { children, unavailable: childrenUnavailable, catchUpPending: childrenCatchUpPending, ledgerWarnings } = await withViewerOperation("seat-tick.children", () => childWork(canonical, seat, state, policy, sources));
   /* An unreadable board costs this check its routed asks, never the check:
      the waits stay routed and the next check reads them again. */
   let workerAsks: readonly SeatTickWorkerAskInput[] = [];
   let workerAsksObserved = true;
   let decisionForms: SeatTickCheckInput["decisionForms"];
+  let pauseWaitingTasks: SeatTickCheckInput["pauseWaitingTasks"];
   if (seat && (settings.enabled || pendingAutonomyReports(settings, now).length > 0) && sources.workerAsks) {
     try {
-      const read = await sources.workerAsks(canonical, seat.conversationId ?? undefined);
+      const through = Math.max(Date.parse(state.deployResumeThrough ?? "") || 0,
+        ...settledDeploys.map(deploy => Date.parse(deploy.settledAt ?? "") || 0));
+      const read = await sources.workerAsks(canonical, seat.conversationId ?? undefined, agendaPauses(pauses, now, through));
       workerAsksObserved = read !== null;
-      if (read && "asks" in read) { workerAsks = read.asks; decisionForms = read.forms; }
+      if (read && "asks" in read) {
+        const remoteTasks = new Set(tasks.filter(task => task.runsOn).map(task => task.id));
+        workerAsks = read.asks.filter(ask => ask.seatOwnedLane || !ask.waitingTaskIds || !remoteTasks.has(ask.id));
+        decisionForms = read.forms;
+        pauseWaitingTasks = read.pauseWaitingTasks;
+      }
       else workerAsks = read ?? [];
     } catch (error) {
       workerAsksObserved = false;
@@ -3524,10 +3620,15 @@ async function gatherSeatTickInputWork(
   });
 
   await yieldToRuntime();
+  const memory = memoryPressureOf(sources);
+  let sweep: ReturnType<typeof tempSweepStatus> = null;
+  try { sweep = sources.tempSweep?.() ?? null; } catch { /* The line goes without the sweep. */ }
+  const machine = seatTickMachineLine(memory, sweep);
   const gathered: SeatTickCheckInput = {
     project: canonical,
     now,
     seat,
+    ...(machine ? { machine } : {}),
     workers: { ...(() => {
       const limit = effectiveWorkerLimit(canonical);
       return { limit: limit.value, source: limit.source, machine: limit.machine };
@@ -3539,13 +3640,14 @@ async function gatherSeatTickInputWork(
     instructionReview: instructionReviewFor(canonical, now, settings, hotLanes, hotTasks, seat),
     workerAsksObserved,
     ...(decisionForms ? { decisionForms } : {}),
+    ...(pauseWaitingTasks ? { pauseWaitingTasks } : {}),
     ...(workerAsks.length ? { workerAsks } : {}),
     events,
     pullRequests,
     pullRequestsUnavailable,
     pullRequestsObserved,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: [...signals(canonical, seat, sources), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
+    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? [], canonicalProject.keys(canonical)), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources), ...await diskCleanerSignals(canonical, state.itemsShown ?? [], seat), ...memoryPressureSignals(memory)],
     ownLanes,
     settledDeploys,
     settledMaintenance,

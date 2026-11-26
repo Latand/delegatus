@@ -39,6 +39,28 @@ test.skipIf(process.platform !== "linux")("a missing namespace marker never prov
   expect(cpuOwnerExited(foreign, { NODE_ENV: "test" })).toBeFalse();
 });
 
+test.skipIf(process.platform !== "linux")("headless launches route explicit versioned Bun admission through the installed helper", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-gate-routing-"));
+  const nativeBun = path.join(root, "bun-1.4.0"), output = path.join(root, "routed-bun");
+  fs.symlinkSync(process.execPath, nativeBun);
+  const env = fallbackEnv(root, { LLV_GATE_BUN: nativeBun, LLV_GATE_LOCK_DIR: root, LLV_GATE_SLOTS: "1",
+    LLV_GATE_SLOT_LEASE: "fixture-lease", PATH: process.env.PATH ?? "" });
+  let child: ChildProcess | undefined;
+  try {
+    child = spawnHeadlessSignalSandbox("/bin/sh", ["-c", 'printf "%s" "$LLV_GATE_BUN" > "$FIXTURE_ROUTED_BUN"'],
+      { env: { ...env, FIXTURE_ROUTED_BUN: output }, stdio: "ignore" });
+    expect(await exited(child)).toBe(0);
+    const routed = fs.readFileSync(output, "utf8");
+    expect(routed).not.toBe(nativeBun);
+    const result = spawnSync(routed, ["--version"], { env: { ...process.env, ...env } });
+    expect(result.status, result.stderr.toString()).toBe(0);
+    expect(result.stdout.toString()).toMatch(/^\d+\.\d+/);
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function domain(): AgentSignalDomain {
   const identity = (pid: number) => ({ pid, startIdentity: `${pid}:100`, bootEpoch: systemBootEpoch() });
   return { policyVersion: 1, monitor: identity(51001), bubblewrap: identity(51004), init: identity(51002), native: identity(51003),
@@ -338,6 +360,8 @@ test.each([
   const marker = path.join(root, "engine");
   const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
   const warn = spyOn(console, "warn").mockImplementation(() => {});
+  const info = spyOn(console, "info").mockImplementation(() => {});
+  const quiet = process.env.LLV_QUIET_DIAGNOSTICS; delete process.env.LLV_QUIET_DIAGNOSTICS;
   const getuid = uid === null ? null : spyOn(process, "getuid").mockReturnValue(uid);
   if (platform) Object.defineProperty(process, "platform", { ...descriptor, value: platform });
   try {
@@ -354,10 +378,15 @@ test.each([
     const pane = terminalSignalSandboxCommand("exec claude", fallbackEnv(root, extra));
     if ("LLV_GATE_SLOT_LEASE" in extra) expect(pane).toMatch(/^\/bin\/sh -c '.+' sh '.+' 'exec claude'$/);
     else expect(pane).toBe("exec claude");
-    expect(warn.mock.calls.filter(call => String(call[0]).includes("without the agent signal boundary"))).toHaveLength("LLV_GATE_SLOT_LEASE" in extra ? 3 : 4);
+    // The platform's own limit is information; every other cause stays a warning.
+    const lines = (spy: typeof warn) => spy.mock.calls.filter(call => String(call[0]).includes("without the agent signal boundary"));
+    const total = "LLV_GATE_SLOT_LEASE" in extra ? 3 : 4;
+    expect(lines(warn)).toHaveLength(platform === "darwin" ? 0 : total);
+    expect(lines(info)).toHaveLength(platform === "darwin" ? total : 0);
   } finally {
     Object.defineProperty(process, "platform", descriptor);
-    getuid?.mockRestore(); warn.mockRestore();
+    if (quiet === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS; else process.env.LLV_QUIET_DIAGNOSTICS = quiet;
+    getuid?.mockRestore(); warn.mockRestore(); info.mockRestore();
     fs.rmSync(root, { recursive: true, force: true });
   }
 }, 20_000);
@@ -370,6 +399,8 @@ test.each([
   const errors = path.join(root, "stderr.log");
   const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
   const warn = spyOn(console, "warn").mockImplementation(() => {});
+  const info = spyOn(console, "info").mockImplementation(() => {});
+  const quiet = process.env.LLV_QUIET_DIAGNOSTICS; delete process.env.LLV_QUIET_DIAGNOSTICS;
   if (platform) Object.defineProperty(process, "platform", { ...descriptor, value: platform });
   const fd = fs.openSync(errors, "w");
   try {
@@ -380,11 +411,15 @@ test.each([
     expect(child.spawnargs[0]).toBe("/bin/sh");
     expect(fs.readFileSync(errors, "utf8")).toBe(`agent signal sandbox: boundary off, running unprotected: ${reason}\nengine\n`);
     expect(signalBoundaryOff(child)?.reason).toBe(reason);
-    expect(warn.mock.calls.map(call => String(call[0]))).toEqual([`[signal-sandbox] headless launch runs without the agent signal boundary: ${reason}`]);
+    const line = `[signal-sandbox] headless launch runs without the agent signal boundary: ${reason}`;
+    // Namespaces missing on darwin is information; a missing dependency stays a warning.
+    expect(warn.mock.calls.map(call => String(call[0]))).toEqual(platform === "darwin" ? [] : [line]);
+    expect(info.mock.calls.map(call => String(call[0]))).toEqual(platform === "darwin" ? [line] : []);
   } finally {
     Object.defineProperty(process, "platform", descriptor);
+    if (quiet === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS; else process.env.LLV_QUIET_DIAGNOSTICS = quiet;
     try { fs.closeSync(fd); } catch { /* Closed after the launch. */ }
-    warn.mockRestore(); fs.rmSync(root, { recursive: true, force: true });
+    warn.mockRestore(); info.mockRestore(); fs.rmSync(root, { recursive: true, force: true });
   }
 }, 20_000);
 
@@ -567,6 +602,35 @@ function bridgeShim(root: string, python = "/usr/bin/python3", engine = "/bin/sh
 
 const signalRuns = path.join(os.homedir(), ".cache/delegatus/signal-runs");
 
+/* The image's nsenter is setuid, so glibc starts it in secure-execution mode
+ * and removes TMPDIR from its environment (glibc's unsecure variables). This
+ * enter step does what that loader does, then runs the host side. */
+function secureExecEnter(root: string): string {
+  const enter = path.join(root, "secure-enter");
+  fs.writeFileSync(enter, `#!/bin/sh\nexec env -u TMPDIR "$@"\n`, { mode: 0o700 });
+  return enter;
+}
+
+test.skipIf(process.platform !== "linux")("the host shim carries a stage TMPDIR across the setuid nsenter to the engine", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-bridge-tmpdir-"));
+  try {
+    const shim = bridgeShim(root);
+    const stage = path.join(root, "state", "scratch", "llv-stage-fixture", "tmp");
+    fs.mkdirSync(stage, { recursive: true });
+    const probe = ["-c", 'printf "%s|%s|%s" "${TMPDIR-unset}" "${TMP-unset}" "${LLV_SHIM_TMPDIR-unset}"'];
+    const run = (env: NodeJS.ProcessEnv) => spawnSync(shim, probe, { cwd: root, env, encoding: "utf8", timeout: 5_000 });
+    const carried = run(fallbackEnv(root, { FIXTURE_ENTER: secureExecEnter(root), TMPDIR: stage, TMP: stage }));
+    expect(carried.status, carried.stderr).toBe(0);
+    expect(carried.stdout).toBe(`${stage}|${stage}|unset`);
+    // An unset TMPDIR stays unset: a stale carrier from an outer launch never becomes one.
+    const unsetEnv = fallbackEnv(root, { FIXTURE_ENTER: secureExecEnter(root), LLV_SHIM_TMPDIR: path.join(root, "stale") });
+    delete unsetEnv.TMPDIR; delete unsetEnv.TMP;
+    const unset = run(unsetEnv);
+    expect(unset.status, unset.stderr).toBe(0);
+    expect(unset.stdout).toBe("unset|unset|unset");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test.skipIf(process.platform !== "linux")("the host shim warns on a refused score before hiding native stdio and still execs", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-bridge-score-refused-"));
   try {
@@ -745,7 +809,7 @@ test.skipIf(process.platform !== "linux")("a structured host records the boundar
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-host-off-"));
   const bin = path.join(root, "bin"); fs.mkdirSync(bin);
   fs.symlinkSync(Bun.which("python3")!, path.join(bin, "python3"));
-  fs.symlinkSync(Bun.which("git")!, path.join(bin, "git"));
+  fs.symlinkSync("/usr/bin/git", path.join(bin, "git"));
   const binary = path.join(root, "copilot-fixture");
   fs.writeFileSync(binary, `#!${Bun.which("python3")}\nimport json,sys\n` + String.raw`
 for line in sys.stdin:

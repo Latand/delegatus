@@ -766,6 +766,62 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     } finally { pending = false; h.releaseBuild?.(); h.service.stop(); }
   });
 
+  test.each(["optional-red", "empty-required-optional-red", "required-red", "unreadable-protection", "ruleset-required-red", "ruleset-required-green", "malformed-protection", "set-less-protection", "null-protection", "unreadable-rules"] as const)("manual checkout Update uses required CI on the equal-tree PR head: %s", async scenario => {
+    const h = harness({ relaunch: true, remote: "https://github.com/example/project.git" });
+    const head = "a".repeat(40), tree = "b".repeat(40);
+    const target = { sha: tipSha, short: tipSha.slice(0, 7), version: "1.0.1", date: "" };
+    const checkReads: string[] = [];
+    let builds = 0;
+    h.deps.check = async () => ({ ok: true, installed: { ...target, sha: firstSha, short: firstSha.slice(0, 7) }, available: target,
+      relation: "behind", ahead: 0, behind: 1, delta: null });
+    h.deps.createRunner = () => ({ state: idleUpdate(["fetch", "install", "build", "ready"]), restore() {}, logPath: () => "",
+      async start() { builds++; }, async retry() { throw new Error("unexpected retry"); } });
+    h.deps.green = new GreenReader({ now: () => 1000, treeOf: async () => tree, fetch: (async input => {
+      const url = String(input);
+      if (url.includes("/pulls")) return Response.json([{ merged_at: "2026-01-01", merge_commit_sha: tipSha, base: { ref: "main" }, head: { sha: head } }]);
+      // The ruleset-only branch confirms its requirement through the active
+      // rules; classic protection is protected and requires nothing.
+      if (url.includes("/rules/branches/")) return scenario === "unreadable-rules" ? new Response(null, { status: 403 })
+        : Response.json(scenario.startsWith("ruleset-required") ? [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "typecheck", integration_id: 15368 }] } }] : []);
+      if (url.includes("/branches/")) return scenario === "unreadable-protection" ? new Response(null, { status: 403 })
+        : scenario === "empty-required-optional-red" ? Response.json({ protected: false })
+        : scenario === "malformed-protection" ? Response.json({ protected: true, protection: { required_status_checks: "unreadable" } })
+        : scenario === "set-less-protection" ? Response.json({ protected: true, protection: { required_status_checks: { enforcement_level: "everyone" } } })
+        : scenario === "null-protection" ? Response.json({ protected: false, protection: null })
+        : scenario.startsWith("ruleset-required") ? Response.json({ protected: true, protection: { required_status_checks: { contexts: [], checks: [] } } })
+        : Response.json({ protected: true, protection: { required_status_checks: { checks: [{ context: "typecheck", app_id: 15368 }] } } });
+      if (url.includes("/statuses")) return Response.json([]);
+      if (url.includes("/check-runs")) {
+        checkReads.push(url);
+        return Response.json({ check_runs: [
+          { name: "Windows (native)", status: "completed", conclusion: "failure", app: { id: 15368 } },
+          { name: "typecheck", status: "completed", conclusion: ["required-red", "ruleset-required-red", "malformed-protection"].includes(scenario) ? "failure" : "success", app: { id: 15368 } },
+          { name: "Minimum macOS SQLite", status: "completed", conclusion: "failure", app: { id: 15368 } },
+        ] });
+      }
+      return Response.json({ commit: { tree: { sha: tree } } });
+    }) as typeof fetch });
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    try {
+      await h.service.check();
+      const response = await postUpdate(post("/update", { key: "manual-required-ci" }));
+      const body = await response.json();
+      expect(checkReads).toEqual([`https://api.github.com/repos/example/project/commits/${head}/check-runs?per_page=100`]);
+      if (["optional-red", "empty-required-optional-red", "ruleset-required-green"].includes(scenario)) {
+        expect(response.status).toBe(202);
+        expect(body.optionalCheckFailures).toEqual(["Minimum macOS SQLite", "Windows (native)"]);
+        expect(builds).toBe(1);
+      } else {
+        expect(response.status).toBe(409);
+        expect(body).toMatchObject(["required-red", "ruleset-required-red"].includes(scenario)
+          ? { code: "deployment-refused", detail: "red", green: { state: "red", checks: ["typecheck"] } }
+          : { code: "deployment-refused", detail: "unknown", green: { state: "unknown" } });
+        expect(builds).toBe(0);
+        expect(existsSync(join(h.deps.dir, "apply.json"))).toBe(false);
+      }
+    } finally { h.service.stop(); }
+  });
+
   test("exact admission reports target CI pending and retries while the equal-tree PR head remains red", async () => {
     const h = harness({ relaunch: true, holdBuild: true });
     const head = "a".repeat(40), tree = "b".repeat(40);
@@ -777,7 +833,8 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
           { id: 12, name: "runtime-gate", status: green ? "completed" : "in_progress", conclusion: green ? "success" : null, app: { id: 15368 } },
           { id: 13, name: "build", status: "in_progress", conclusion: null, app: { id: 15368 } },
         ] : [{ name: "Minimum macOS SQLite", status: "completed", conclusion: "failure", app: { id: 15368 } }] }
-        : url.includes("/statuses") ? [] : url.includes("/branches/") ? { protected: true, protection: { required_status_checks: { checks: [{ context: "runtime-gate", app_id: 15368 }] } } }
+        : url.includes("/statuses") ? [] : url.includes("/rules/branches/") ? []
+        : url.includes("/branches/") ? { protected: true, protection: { required_status_checks: { checks: [{ context: "runtime-gate", app_id: 15368 }] } } }
         : { commit: { tree: { sha: tree } } };
       return Response.json(body);
     }) as typeof fetch });
@@ -2029,7 +2086,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     expect(existsSync(record.releasePointer)).toBe(false);
     const result = await h.service.startUpdate("legacy-prerequisite-build");
     expect(result).toMatchObject(verdict === "green" ? { ok: true } : { ok: false, code: "deployment-refused", detail: verdict });
-    expect(reads).toEqual([[h.deps.remote, h.deps.branch, target.sha, checkout]]);
+    expect(reads).toEqual([[h.deps.remote, h.deps.branch, target.sha, checkout, undefined, true, "manual-update"]]);
     expect(builds).toBe(verdict === "green" ? 1 : 0);
     await Bun.sleep(10);
   });
@@ -2050,7 +2107,7 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     expect((await h.service.snapshot()).auto?.availability).toBe(legacyToken ? "launcher-upgrade" : "hand-managed");
     const result = await h.service.startUpdate("manual-rebuild");
     expect(result).toMatchObject(verdict === "green" ? { ok: true } : { ok: false, status: 409, code: "deployment-refused", detail: "red" });
-    expect(reads).toEqual([[h.deps.remote, h.deps.branch, target.sha, checkout]]);
+    expect(reads).toEqual([[h.deps.remote, h.deps.branch, target.sha, checkout, undefined, true, "manual-update"]]);
     expect(builds).toBe(verdict === "green" ? 1 : 0);
     await Bun.sleep(10);
   });
@@ -2327,6 +2384,8 @@ for (const operation of ["update", "retry", "deploy", "rebuild"] as const) test.
   const update = operation === "retry" ? { ...idleUpdate(["fetch", "install", "ready"]), state: "failed", target: tipSha, targetVersion: target.version } : null;
   writeFileSync(join(dir, "state.json"), JSON.stringify({ slice: { ...initialCheck(), installed: operation === "rebuild" ? target : null, available: operation === "rebuild" ? null : target, check: { ...initialCheck().check, state: operation === "rebuild" ? "up-to-date" : "update-available", relation: operation === "rebuild" ? "equal" : "behind" } }, update }));
   const tree = await git(work, "rev-parse", `${targetSha}^{tree}`);
+  // The branch requires `test`, so a red `test` refuses the manual operations and the exact deploy alike.
+  const requiredTest = { protected: true, protection: { required_status_checks: { checks: [{ context: "test", app_id: null }] } } };
   const reader = new GreenReader({ now: Date.now, treeOf: async (directory, sha) => {
     const result = await runGit(["rev-parse", "--verify", `${sha}^{tree}`], directory);
     if (result.code !== 0) throw new Error("target tree is unreadable"); return result.stdout.trim();
@@ -2334,7 +2393,7 @@ for (const operation of ["update", "retry", "deploy", "rebuild"] as const) test.
     const url = String(input);
     return Response.json(url.includes("/pulls") ? [{ merged_at: "2026-01-01", merge_commit_sha: targetSha, base: { ref: "main" }, head: { sha: targetSha } }]
       : url.includes("/check-runs") ? { check_runs: [{ name: "test", status: "completed", conclusion: verdict === "green" ? "success" : "failure" }] }
-      : url.includes("/statuses") ? [] : url.includes("/branches/") ? { protected: false } : { commit: { tree: { sha: tree } } });
+      : url.includes("/statuses") ? [] : url.includes("/rules/branches/") ? [] : url.includes("/branches/") ? requiredTest : { commit: { tree: { sha: tree } } });
   }) as typeof fetch });
   const service = new SelfUpdateService(baseDeps(dir, { remote: forge, mode: async () => ({ mode: "package", reason: null, record }), prepareCheckRepo: async () => repo, green: reader }));
   let deliveryReads = 0;
@@ -2380,7 +2439,7 @@ for (const operation of ["update", "retry"] as const) {
     try {
       const result = operation === "update" ? await service.startUpdate("package-update") : await service.retry("package-retry");
       expect(result).toMatchObject(verdict === "green" ? { ok: true } : { ok: false, status: 409, code: "deployment-refused", detail: verdict });
-      expect(reads).toEqual([[deps.remote, deps.branch, target.sha, checkout]]);
+      expect(reads).toEqual([[deps.remote, deps.branch, target.sha, checkout, undefined, true, "manual-update"]]);
       expect(registry.mock.calls.length).toBe(verdict === "green" ? 1 : 0);
       await Bun.sleep(10);
       expect(existsSync(record.releasePointer)).toBe(false);

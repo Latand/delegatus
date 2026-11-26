@@ -202,7 +202,7 @@ export function nameList(names: readonly string[], t: TFunction): string {
   return t("activity.list.andMore", { a: names[0]!, b: names[1]!, count: names.length - 2 });
 }
 
-export const ENGINE_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", copilot: "Copilot" };
+export const ENGINE_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", copilot: "Copilot", antigravity: "Antigravity" };
 
 export function roleName(role: string, t: TFunction): string {
   if (role === "unregistered") return t("activity.role.unregistered");

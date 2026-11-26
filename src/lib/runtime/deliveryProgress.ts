@@ -75,8 +75,8 @@ export interface DeliveryProgressRecord {
   waitReason: DeliveryWaitReason;
   /** A short machine detail; message content stays out of it. */
   detail: string | null;
-  /** Dispatch attempts this delivery has made: each `delivering` write and each
-      reconciliation counts one. */
+  /** Attempts this delivery has made: host recovery, each `delivering` write
+      and each reconciliation count one. Recovery flushes before its effect. */
   attempt: number;
   admittedAt: string | null;
   /** When the current wait reason began. */
@@ -85,7 +85,7 @@ export interface DeliveryProgressRecord {
   lastProgressAt: string;
   /** When the background settlement will end it if nothing else does. */
   deadlineAt: string | null;
-  deadlinePolicy: "settlement-window" | "in-turn-ceiling" | "turn-boundary" | null;
+  deadlinePolicy: "settlement-window" | "in-turn-ceiling" | "turn-boundary" | "failed-switch" | null;
   /** When the queue looks at it next; the watchdog runs a pass once this is overdue. */
   nextWakeAt: string | null;
   /** Set when an active phase ran past the stall bound. */
@@ -130,6 +130,8 @@ export interface DeliveryProgressNote {
 
 /** The queue's view of the store; tests pass their own. */
 export interface DeliveryProgressSink {
+  flush?(): boolean;
+  releaseRecoveryAttempt?(operationId: string, attempt: number, executorId: string | null): boolean;
   mark?(operationId: string, mark: DeliveryTimingMark, at?: string): void;
   timing?(operationId: string, times: { ingressAt?: string; engineEchoAt?: string }): void;
   note(operationId: string, conversationId: string, note: DeliveryProgressNote): void;
@@ -313,6 +315,16 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
     });
   }
 
+  /** A typed admission wait proved that recovery made no successor. Only
+      its unchanged, current executor record may return the reserved attempt. */
+  releaseRecoveryAttempt(operationId: string, attempt: number, executorId: string | null): boolean {
+    const current = this.record(operationId);
+    if (!current || current.terminal || current.attempt !== attempt || attempt < 1
+      || current.executorId !== executorId) return false;
+    this.put({ ...current, attempt: attempt - 1, updatedAt: new Date(this.now()).toISOString() });
+    return this.flush();
+  }
+
   /**
    * Reopens the record of an operation the operator explicitly retried under
    * the same identity, once the journal re-armed it (docs/design/
@@ -358,9 +370,10 @@ export class DeliveryProgressStore implements DeliveryProgressSink {
   deadline(operationId: string, deadlineAt: string | null, policy: DeliveryProgressRecord["deadlinePolicy"]): void {
     const current = this.record(operationId);
     if (!current || current.terminal || (current.deadlineAt === deadlineAt && current.deadlinePolicy === policy)) return;
-    // A delayed admission/checkpoint cannot erase a later live-turn observation.
-    // Explicit workflow cutoffs are enforced independently by settlement.
-    if (current.deadlinePolicy === "turn-boundary" && current.deadlineAt && deadlineAt
+    // A live turn can extend an ordinary wait. A failed switch has its own
+    // fixed bound from admission and remains authoritative across retries.
+    if (current.deadlinePolicy === "failed-switch" && policy !== "failed-switch") return;
+    if (policy !== "failed-switch" && current.deadlinePolicy === "turn-boundary" && current.deadlineAt && deadlineAt
       && Date.parse(current.deadlineAt) > Date.parse(deadlineAt)) return;
     this.put({ ...current, deadlineAt, deadlinePolicy: policy, updatedAt: new Date(this.now()).toISOString() });
   }

@@ -10,7 +10,7 @@ const pauseDateSchema = z.union([
 
 export const pipelineResumeConditionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("date"), at: pauseDateSchema }).strict(),
-  z.object({ kind: z.literal("account-usage"), engine: z.enum(["claude", "codex", "copilot"]),
+  z.object({ kind: z.literal("account-usage"), engine: z.enum(["claude", "codex", "copilot", "antigravity"]),
     accountId: z.string().trim().min(1).max(200).refine(value => value.length <= 200), window: z.enum(["session", "weekly"]),
     belowPercent: z.number().min(0).max(100) }).strict(),
 ]);

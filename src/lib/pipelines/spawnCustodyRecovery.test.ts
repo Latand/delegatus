@@ -14,11 +14,24 @@ import { expect, test, spyOn, crypto, path, harness, create, frozenWallClock, RE
 
 const FAILURE = `${REGISTRY_WRITER_BUSY} (spawn.setup-custody)`;
 const KILLED_SETUP = `${FAILURE}; exit: signal SIGKILL; bwrap: setting up uid map`;
+const EARLY_FAILURE = `${REGISTRY_WRITER_BUSY} (registry.setReceiptViewerMcpTransport); holder=migration.stop.sweep`;
 const NOW = "2026-11-12T12:00:00.000Z";
 beforeEach(() => setSystemTime(new Date(NOW)));
 afterEach(() => setSystemTime());
 
-async function fixture(trigger: "resume" | "takeover" = "resume") {
+function retainFirstMessage(journal: RuntimeJournal, launchId: string, conversationId: string, text: string) {
+  journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+    conversationId, sessionKey: { engine: "codex", sessionId: "uncertain-stage" },
+    hostKind: "codex-app-server", host: "hosted", turn: "idle", provenance: "structured",
+    capabilities: { steer: true, structuredAttention: true },
+  } });
+  const operationId = `spawn_message_${launchId}`;
+  journal.executeOperation({ kind: "send", operationId, idempotencyKey: `spawn_${launchId}`,
+    conversationId, text, policy: "queue" });
+  journal.transitionOperation(operationId, "uncertain");
+}
+
+async function fixture(trigger: "resume" | "takeover" | "retry-stage" = "resume", outcome?: "first-message" | "second-refusal" | "native-turn") {
   let sequence = 0;
   const ids = spyOn(crypto, "randomUUID").mockImplementation(() =>
     `00007000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
@@ -28,7 +41,7 @@ async function fixture(trigger: "resume" | "takeover" = "resume") {
   const storage = sqliteRegistryFixture("spawn-custody");
   const registry = storage.registry;
   setAgentRegistryForTests(registry);
-  const holder = registryLockHolder(storage.sqliteFilename);
+  const holder = registryLockHolder(storage.sqliteFilename, "migration.stop.sweep");
   const journal = new RuntimeJournal(path.join(storage.root, "runtime.sqlite"),
     { structuredHosts: true, now: () => Date.parse(h.ports.now()) });
   const client = {
@@ -51,12 +64,58 @@ async function fixture(trigger: "resume" | "takeover" = "resume") {
     const lane = await create(h.ports, [{ id: "plan", kind: "run", role: { roleId: "architect" },
       engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-only", prompt: "Review", next: null,
     }] as never, REMOTE_BRANCH);
+    // Provisioning can make a stage runnable in the same pass. Hold its
+    // first admission until the failure seam and control action are in place.
+    if (trigger !== "retry-stage") h.ports.drainHold = () => ({ id: "fixture-drain", target: "a".repeat(40),
+      since: NOW, until: Date.parse(NOW) + 60_000 });
     await tickPipelines([], h.ports);
+    if (trigger !== "retry-stage") {
+      expect(loadPipelines()[0]).toMatchObject({ state: "running", cursor: { state: "pending" } });
+      expect(h.spawnInputs).toHaveLength(0);
+      delete h.ports.drainHold;
+    }
+    if (trigger === "retry-stage") {
+      await tickPipelines([], h.ports);
+      await engineModule.drainStageActivations(h.ports);
+      const parked = loadPipelines()[0]!;
+      const prior = parked.runs[0]!.attempts[0]!;
+      expect(prior.state).toBe("running");
+      prior.state = "failed";
+      prior.paneId = null;
+      prior.completedAt = NOW;
+      prior.verdict = { status: "fail", findings: [] };
+      prior.error = "previous attempt failed";
+      parked.state = "needs_decision";
+      savePipelines([parked]);
+      const host = Bun.spawn([process.execPath, "-e", 'console.log("ready"); setInterval(() => {}, 1000)'],
+        { stdout: "pipe", stderr: "ignore" });
+      const reader = host.stdout.getReader();
+      try {
+        const line = await reader.read();
+        expect(new TextDecoder().decode(line.value)).toBe("ready\n");
+        const hostProcess = h.ports.conversationHostProcess;
+        h.ports.conversationHostProcess = async conversationId => {
+          return conversationId === prior.conversationId
+            ? { state: host.exitCode === null && host.signalCode === null ? "alive" : "gone", pid: host.pid }
+            : await hostProcess?.(conversationId) ?? { state: "unknown", pid: null };
+        };
+        expect(await patchPipeline(parked.id, { action: "retry-stage" }, h.ports))
+          .toMatchObject({ error: expect.stringContaining("live stage host") });
+        host.kill();
+        await host.exited;
+        expect(await patchPipeline(parked.id, { action: "retry-stage" }, h.ports)).not.toHaveProperty("error");
+        advance(9 * 60_000);
+      } finally {
+        await reader.cancel();
+        if (host.exitCode === null && host.signalCode === null) host.kill();
+        await host.exited;
+      }
+    }
     let tries = 0;
     const spawn = h.ports.spawnAgent;
     let failedLaunch = "";
     h.ports.spawnAgent = async (input, reserved, ...rest) => {
-      if (++tries > 1) return spawn(input, reserved, ...rest);
+      if (++tries > (outcome === "second-refusal" ? 2 : 1)) return spawn(input, reserved, ...rest);
       const begun = beginLegacySpawnFixture(registry, {
         engine: input.role.engine, cwd: input.cwd, transport: "structured", clientAttemptId: input.clientAttemptId,
         memberships: [input.membership],
@@ -76,15 +135,27 @@ async function fixture(trigger: "resume" | "takeover" = "resume") {
       expect(failure).toBeInstanceOf(Error);
       expect((failure as Error).message).toBe(FAILURE);
       registry.confirmStructuredHostSetupCleanup(receipt.launchId, receipt.admissionOwner!);
-      journal.transitionOperation(receipt.launchId, "failed", { reason: FAILURE });
-      await registry.failStructuredSpawnOffLoop(receipt.launchId, FAILURE);
+      const reason = trigger === "retry-stage" ? `${FAILURE}; holder=migration.stop.sweep`
+        : outcome === "native-turn" ? `${FAILURE}; stderr: setup diagnostic` : FAILURE;
+      journal.transitionOperation(receipt.launchId, "failed", { reason });
+      if (outcome === "first-message") retainFirstMessage(journal, receipt.launchId, receipt.conversationId, input.prompt);
+      if (outcome === "native-turn") {
+        journal.append({ scope: { type: "session", id: receipt.conversationId }, kind: "turn-started",
+          payload: { conversationId: receipt.conversationId, turnId: "retained-auto-turn" } });
+        journal.append({ scope: { type: "session", id: receipt.conversationId }, kind: "turn-ended",
+          payload: { conversationId: receipt.conversationId, turnId: "retained-auto-turn" } });
+      }
+      await registry.failStructuredSpawnOffLoop(receipt.launchId, reason);
       registry.releaseStructuredSpawnAdmissionOwner(receipt.launchId, receipt.admissionOwner!);
-      throw failure;
+      // The production adapter invalidates its pass projection when launch
+      // returns. This fixture writes the receipt without running that adapter.
+      h.ports.spawnReceipt = defaultPipelinePorts({ spawnRecoveryClient: () => client }).spawnReceipt;
+      throw reason === FAILURE ? failure : new Error(reason);
     };
     if (trigger === "resume") {
       expect(await patchPipeline(lane.id, { action: "pause" }, h.ports)).not.toHaveProperty("error");
       expect(await patchPipeline(lane.id, { action: "resume" }, h.ports)).not.toHaveProperty("error");
-    } else {
+    } else if (trigger === "takeover") {
       const target = loadPipelines()[0]!.delivery!;
       expect(await patchPipeline(lane.id, { action: "takeover", expectedOwner: target.ownerId!,
         expectedEpoch: target.epoch, reason: "Recover delivery ownership" }, h.ports)).not.toHaveProperty("error");
@@ -96,21 +167,21 @@ async function fixture(trigger: "resume" | "takeover" = "resume") {
       async launchOnce() {
         await tickPipelines([], h.ports);
         await engineModule.drainStageActivations(h.ports);
-        expect(tries).toBe(1);
+        expect(tries, JSON.stringify({ state: row().state, detail: row().stateDetail, cursor: row().cursor?.state })).toBe(1);
       },
       close,
     };
   } catch (error) { await close(); throw error; }
 }
 
-test.each(["resume", "takeover"] as const)("setup write lock after %s retries without a decision", async trigger => {
+test.each(["resume", "takeover", "retry-stage"] as const)("setup write lock after %s retries without a decision", async trigger => {
   const f = await fixture(trigger);
   try {
     await f.launchOnce();
-    const attempt = f.row().runs[0]!.attempts[0]!;
-    expect(f.row().state).toBe("running");
+    const attempt = f.row().runs[0]!.attempts.at(-1)!;
+    expect(f.row().state, f.row().stateDetail ?? "").toBe("running");
     expect(attempt.state).toBe("pending");
-    expect(attempt.retiredLaunches).toMatchObject([{ launchId: f.launch(), error: FAILURE }]);
+    expect(attempt.retiredLaunches).toMatchObject([{ launchId: f.launch(), error: expect.stringContaining(FAILURE) }]);
     expect(f.registry.conversation(f.registry.spawnReceipt(f.launch())!.conversationId)).toBeNull();
     expect(f.journal.operationResult(`spawn_message_${f.launch()}`)).toBeNull();
     const delay = Date.parse(attempt.controllerWait!.retryAfter) - Date.parse(f.h.ports.now());
@@ -123,7 +194,59 @@ test.each(["resume", "takeover"] as const)("setup write lock after %s retries wi
     await tickPipelines([], f.h.ports);
     expect(f.tries()).toBe(2);
     expect(f.row()).toMatchObject({ state: "running", cursor: { state: "running" } });
-    expect(f.row().runs[0]!.attempts).toHaveLength(1);
+    expect(f.row().runs[0]!.attempts).toHaveLength(trigger === "retry-stage" ? 2 : 1);
+  } finally { await f.close(); }
+});
+
+test("a setup writer refusal with a journaled first message retains the original launch", async () => {
+  const f = await fixture("resume", "first-message");
+  try {
+    await f.launchOnce();
+    const launchId = f.launch();
+    expect(f.journal.operationResult(`spawn_message_${launchId}`)?.receipt.status).toBe("uncertain");
+    expect(f.row().state).toBe("needs_decision");
+    expect(f.row().stateDetail).toContain("retry-stage with the original launch ID");
+    f.advance(30_000);
+    await tickPipelines([], f.h.ports);
+    expect(f.tries()).toBe(1);
+    expect(f.row().runs[0]!.attempts.at(-1)?.launchId).toBe(launchId);
+    expect(f.registry.spawnReceipt(launchId)?.retryClaim).toBeUndefined();
+  } finally { await f.close(); }
+});
+
+test("automatic setup retry retains a launch with native turn evidence", async () => {
+  const f = await fixture("resume", "native-turn");
+  try {
+    await f.launchOnce();
+    const launchId = f.launch();
+    expect(f.row().state).toBe("needs_decision");
+    expect(f.row().stateDetail).toContain("retry-stage with the original launch ID");
+    expect(f.registry.spawnReceipt(launchId)?.retryClaim).toBeUndefined();
+    f.advance(60_000);
+    await tickPipelines([], f.h.ports);
+    expect(f.tries()).toBe(1);
+    expect(f.row().runs[0]!.attempts.at(-1)?.launchId).toBe(launchId);
+  } finally { await f.close(); }
+});
+
+test("a second setup writer refusal keeps the replacement and spends no further launch", async () => {
+  const f = await fixture("resume", "second-refusal");
+  try {
+    await f.launchOnce();
+    const first = f.launch();
+    const attempt = f.row().runs[0]!.attempts.at(-1)!;
+    expect(attempt.spawnWriterRetried).toBe(true);
+    f.advance(Date.parse(attempt.controllerWait!.retryAfter) - Date.parse(f.h.ports.now()));
+    await tickPipelines([], f.h.ports);
+    await engineModule.drainStageActivations(f.h.ports);
+    expect(f.tries()).toBe(2);
+    expect(f.launch()).not.toBe(first);
+    f.advance(30_000);
+    await tickPipelines([], f.h.ports);
+    expect(f.tries()).toBe(2);
+    expect(f.row()).toMatchObject({ state: "needs_decision",
+      stateDetail: expect.stringContaining("one automatic writer retry") });
+    expect(f.registry.spawnReceipt(f.launch())?.retryClaim).toBeUndefined();
   } finally { await f.close(); }
 });
 
@@ -187,7 +310,7 @@ async function interruptSetupOwner(f: Awaited<ReturnType<typeof fixture>>, recei
     expect(identity.pid).toBe(owner.pid);
     f.registry.beginStructuredHostSetup(launchId, identity, Date.parse(f.h.ports.now()));
     helper = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"]);
-    f.registry.recordStructuredHostSetup(launchId, identity, captureProcessIdentity(helper.pid));
+    f.registry.recordStructuredHostSetupWaiter(launchId, identity, captureProcessIdentity(helper.pid));
     await f.holder.hold();
     try {
       expect(() => f.registry.recordStructuredHostSetup(launchId, identity)).toThrow(FAILURE);
@@ -214,7 +337,8 @@ async function interruptSetupOwner(f: Awaited<ReturnType<typeof fixture>>, recei
 }
 
 test.each([
-  ...[false, true].flatMap(explicit => ["absent", "uncertain", "journal-down", "owner-change"].map(delivery => ({ explicit, delivery, cut: "setup" }))),
+  ...[false, true].flatMap(explicit => ["absent", "uncertain", "journal-down", "owner-change",
+    "pre-host-writer", "waiter-refused", "waiter-permitted", "waiter-unconfirmed", "native-turn", "compacted-prehost"].map(delivery => ({ explicit, delivery, cut: "setup" }))),
   { explicit: true, delivery: "absent", cut: "before-admission" },
   { explicit: true, delivery: "absent", cut: "killed-setup" },
   { explicit: true, delivery: "uncertain", cut: "before-admission" },
@@ -223,6 +347,7 @@ test.each([
   { explicit: true, delivery: "compacted", cut: "before-admission" },
   { explicit: true, delivery: "native-session", cut: "killed-setup" },
   { explicit: true, delivery: "pending-reservation", cut: "before-admission" },
+  { explicit: false, delivery: "unbound-reservation", cut: "before-admission" },
   { explicit: true, delivery: "killed-owner", cut: "killed-setup" },
   { explicit: true, delivery: "killed-owner-starting", cut: "killed-setup" },
   { explicit: true, delivery: "retirement-interrupted", cut: "killed-setup" },
@@ -230,6 +355,8 @@ test.each([
   { explicit: true, delivery: "live-setup-process", cut: "killed-setup" },
   { explicit: true, delivery: "setup-owner-change", cut: "killed-setup" },
   { explicit: true, delivery: "different-journal-failure", cut: "killed-setup" },
+  { explicit: true, delivery: "waiter-permitted", cut: "killed-setup" },
+  { explicit: true, delivery: "late-first-message", cut: "killed-setup" },
 ])
 ("MCP retry-stage reconciles a stuck replacement: %j", async ({ explicit, delivery, cut }) => {
   const f = await fixture();
@@ -259,32 +386,37 @@ test.each([
     const interruptedOwner = interruptedRetirement
       || ["killed-owner", "killed-owner-starting", "live-setup-process", "setup-owner-change"].includes(delivery);
     const ownerIdentity = active.admissionOwner!;
+    const preHost = ["pre-host-writer", "compacted-prehost", "native-turn"].includes(delivery);
     const failure = cut === "before-admission" ? `structured spawn interrupted before runtime admission: ${active.launchId}`
-      : cut === "killed-setup" ? KILLED_SETUP : FAILURE;
+      : cut === "killed-setup" ? KILLED_SETUP : preHost ? EARLY_FAILURE : FAILURE;
     if (cut !== "before-admission") {
       f.journal.executeOperation({ kind: "spawn", operationId: active.launchId, idempotencyKey: active.launchId,
         conversationId: active.conversationId, engine: "codex", cwd: lane.worktreeDir!, prompt: "Review" });
       if (interruptedOwner) {
         liveSetup = await interruptSetupOwner(f, active, delivery === "live-setup-process");
-      } else {
+      } else if (!preHost) {
         f.registry.beginStructuredHostSetup(active.launchId, ownerIdentity, Date.parse(f.h.ports.now()));
       }
-      if (cut === "killed-setup" && !interruptedOwner) {
+      if (cut === "killed-setup" && !interruptedOwner || delivery.startsWith("waiter-")) {
         // The setup helper has no engine exec permit.
         const helper = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"]);
-        try { f.registry.recordStructuredHostSetup(active.launchId, active.admissionOwner!, captureProcessIdentity(helper.pid)); }
+        try {
+          f.registry.recordStructuredHostSetupWaiter(active.launchId, ownerIdentity, captureProcessIdentity(helper.pid));
+          if (delivery === "waiter-permitted") f.registry.recordStructuredHostSetup(active.launchId, ownerIdentity);
+        }
         finally { helper.kill("SIGKILL"); await helper.exited; }
         expect(helper.signalCode).toBe("SIGKILL");
       }
       f.journal.transitionOperation(active.launchId, "failed", {
         reason: delivery === "different-journal-failure" ? "native session setup failed" : failure,
       });
-      if (delivery !== "cleanup-unproven" && !interruptedOwner) f.registry.confirmStructuredHostSetupCleanup(active.launchId, ownerIdentity);
+      if (!preHost && !["cleanup-unproven", "waiter-unconfirmed"].includes(delivery) && !interruptedOwner) f.registry.confirmStructuredHostSetupCleanup(active.launchId, ownerIdentity);
     }
-    const starting = interruptedRetirement || delivery === "pending-reservation" || delivery === "killed-owner-starting";
+    const starting = interruptedRetirement || ["pending-reservation", "unbound-reservation", "killed-owner-starting"].includes(delivery);
     if (!starting) await f.registry.failStructuredSpawnOffLoop(active.launchId, failure);
-    if (!interruptedOwner) f.registry.releaseStructuredSpawnAdmissionOwner(active.launchId, ownerIdentity);
+    if (!interruptedOwner && delivery !== "cleanup-unproven") f.registry.releaseStructuredSpawnAdmissionOwner(active.launchId, ownerIdentity);
     Object.assign(attempt, { launchId: active.launchId, conversationId: active.conversationId, spawnCalls: 1, error: failure });
+    if (delivery === "unbound-reservation") Object.assign(attempt, { launchId: null, conversationId: null });
     lane.runs[0]!.attempts.push(attempt);
     lane.state = "needs_decision"; lane.stateDetail = failure; lane.cursor!.state = "spawning";
     savePipelines([lane]);
@@ -301,24 +433,38 @@ test.each([
       f.journal.compact(1);
       expect(f.journal.snapshot().retentionFloorSeq).toBeGreaterThan(0);
     }
-    if (delivery === "uncertain" || delivery === "native-session") {
+    if (delivery === "uncertain") {
+      retainFirstMessage(f.journal, active.launchId, active.conversationId, "Review");
+      expect(f.journal.operationResult(`spawn_message_${active.launchId}`)?.receipt.status).toBe("uncertain");
+    }
+    if (delivery === "compacted-prehost") f.client.operationStatus = async () => null;
+    if (delivery === "native-turn") {
+      f.journal.append({ scope: { type: "session", id: active.conversationId }, kind: "turn-started",
+        payload: { conversationId: active.conversationId, turnId: "retained-turn" } });
+      f.journal.append({ scope: { type: "session", id: active.conversationId }, kind: "turn-ended",
+        payload: { conversationId: active.conversationId, turnId: "retained-turn" } });
+    }
+
+    if (delivery === "native-session") {
       f.journal.append({ scope: { type: "session", id: active.conversationId }, kind: "session-status", payload: {
         conversationId: active.conversationId, sessionKey: { engine: "codex", sessionId: "uncertain-stage" },
         hostKind: "codex-app-server", host: "hosted", turn: "idle", provenance: "structured",
         capabilities: { steer: true, structuredAttention: true },
       } });
-      if (delivery === "uncertain") {
-        f.journal.executeOperation({ kind: "send", operationId: `spawn_message_${active.launchId}`,
-          idempotencyKey: `spawn_${active.launchId}`, conversationId: active.conversationId, text: "Review", policy: "queue" });
-        f.journal.transitionOperation(`spawn_message_${active.launchId}`, "uncertain");
-        expect(f.journal.operationResult(`spawn_message_${active.launchId}`)?.receipt.status).toBe("uncertain");
-      }
     }
     if (delivery === "owner-change" || delivery === "setup-owner-change") {
       const events = f.client.events;
       f.client.events = async (...args) => {
         const replay = await events(...args);
         f.registry.claimFailedSpawnForRetry(active.launchId, "replacement-owner");
+        return replay;
+      };
+    }
+    if (delivery === "late-first-message") {
+      const events = f.client.events;
+      f.client.events = async (...args) => {
+        const replay = await events(...args);
+        retainFirstMessage(f.journal, active.launchId, active.conversationId, "Review");
         return replay;
       };
     }
@@ -329,7 +475,13 @@ test.each([
     // The SDK uses the current launch, including its explicit receipt selector.
     expect(f.h.ports.spawnReceipt(active.launchId)).toMatchObject(starting
       ? { state: "starting", error: null } : { state: "failed", error: failure });
+    if (cut === "killed-setup" && delivery === "waiter-permitted") {
+      expect(f.registry.spawnReceipt(active.launchId)?.hostSetup?.execPermitGranted).toBe(true);
+    }
     if (delivery !== "uncertain") expect(f.journal.operationResult(`spawn_message_${active.launchId}`)).toBeNull();
+    if (["waiter-permitted", "waiter-unconfirmed"].includes(delivery)) {
+      expect(await f.h.ports.unpublishedLaunchRetrySafe!(active.launchId)).toBe(false);
+    }
     const current = { ...f, launch: () => active.launchId };
     sdk = await connect(current);
     if (interruptedRetirement) {
@@ -339,7 +491,7 @@ test.each([
       try {
         expect((await sdk.retry(explicit)).isError).toBe(true);
         expect(f.registry.spawnReceipt(active.launchId)).toMatchObject({
-          state: "failed", error: failure, hostSetup: { phase: "executing" },
+          state: "failed", error: failure, hostSetup: { phase: "preparing" },
         });
         expect(f.registry.spawnReceipt(active.launchId)?.hostSetup?.cleanupConfirmed)
           .toBe(delivery === "release-interrupted" ? true : undefined);
@@ -352,7 +504,8 @@ test.each([
     const retryCalls = interruptedRetirement ? 2 : 1;
     const answer = await sdk.retry(explicit, requestId);
     expect(sdk.calls()).toBe(retryCalls);
-    if (interruptedRetirement || ["absent", "pending-reservation", "killed-owner", "killed-owner-starting"].includes(delivery)) {
+    if (interruptedRetirement || ["absent", "pending-reservation", "unbound-reservation", "killed-owner", "killed-owner-starting",
+      "pre-host-writer", "compacted-prehost", "waiter-refused"].includes(delivery)) {
       expect(answer.isError, JSON.stringify(answer)).not.toBe(true);
       expect(f.row().cursor!.state).toBe("pending");
       expect(f.row().runs[0]!.attempts[1]).toMatchObject({ n: 2, state: "failed", launchId: active.launchId });
@@ -390,6 +543,10 @@ test.each([
         expect(f.row().runs[0]!.attempts.at(-1)).toMatchObject({ n: 3, state: "pending", launchId: null });
       }
       if (delivery === "different-journal-failure") expect(JSON.stringify(answer)).toContain("first-message journal");
+      if (delivery === "late-first-message") {
+        expect(f.journal.operationResult(`spawn_message_${active.launchId}`)?.receipt.status).toBe("uncertain");
+        expect(JSON.stringify(answer)).toContain("first-message journal");
+      }
       if (delivery === "journal-down") {
         const restored = defaultPipelinePorts({ spawnRecoveryClient: () => f.client });
         f.h.ports.spawnReceipt = restored.spawnReceipt;

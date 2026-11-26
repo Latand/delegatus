@@ -6,17 +6,20 @@ import { claudeTierDisplayName, normalizeClaudeLaunchModel } from "@/lib/agent/m
 import fs from "node:fs";
 import path from "node:path";
 
-import { accountForSpawn, UnknownAccountError, type CodexAccount } from "@/lib/accounts/codex";
-import { claudeAccountForSpawn, UnknownClaudeAccountError, type ClaudeAccount } from "@/lib/accounts/claude";
+import { accountForSpawn, activeCodexAccountId, UnknownAccountError, type CodexAccount } from "@/lib/accounts/codex";
+import { activeClaudeAccountId, claudeAccountForSpawn, listClaudeAccounts, UnknownClaudeAccountError, type ClaudeAccount } from "@/lib/accounts/claude";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
 import { agentRegistry } from "@/lib/agent/registry";
 import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
+import { activeAntigravityAccountId, listAntigravityAccounts } from "@/lib/accounts/antigravity";
 import { readCopilotTranscriptLimits } from "@/lib/limits/copilotTranscriptLimits";
+import { antigravityObservationEventSec, isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
+import { readAntigravityTranscriptLimits, type AntigravityTranscriptLimitRead } from "@/lib/limits/antigravityTranscriptLimits";
 import type { AppServerRateLimits } from "@/lib/accounts/codexAppServer";
 import { redactAppServerDetail } from "@/lib/accounts/codexAppServerProtocol";
 import { statePath } from "@/lib/configDir";
 import { readJsonCache, writeJsonDurably } from "@/lib/state/durableJson";
-import { WINDOW_SECONDS, clampPercent, mergeSamples, type WindowKey } from "@/lib/burndown";
+import { WINDOW_SECONDS, buildSeries, clampPercent, mergeSamples, type WindowKey } from "@/lib/burndown";
 import { relabelCachedWindows, routeWindowsByHorizon, SESSION_WINDOW_MINUTES, WEEKLY_WINDOW_MINUTES } from "@/lib/limitWindows";
 import { historySamples, historySince, recordLimitSample, RETENTION_S } from "@/lib/limitsHistoryStore";
 import { startupDiagnostic } from "@/lib/startupDiagnostics";
@@ -437,6 +440,63 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
   const copilotAccountId = activeCopilotAccountId();
   const copilotAccount = listCopilotAccounts().find((account) => account.id === copilotAccountId) ?? null;
   const copilotRead = copilotAccount ? readCopilotTranscriptLimits(copilotAccount.sessionStateDir) : null;
+  const antigravityAccountId = activeAntigravityAccountId();
+  const antigravityAccount = listAntigravityAccounts().find((account) => account.id === antigravityAccountId) ?? null;
+  const antigravityTranscriptRead: AntigravityTranscriptLimitRead | null = (() => {
+    if (!antigravityAccount) return null;
+    try {
+      return readAntigravityTranscriptLimits(antigravityAccount.sessionsDir, now, { tierName: antigravityAccount.tierName });
+    } catch {
+      return { data: null, reason: "antigravity transcript read error", source: "unavailable" };
+    }
+  })();
+  const antigravityRawObs = (() => {
+    if (!antigravityAccount) return null;
+    try {
+      return agentRegistry().quotaObservations("antigravity").find((row) => row.accountId === antigravityAccount.id) ?? null;
+    } catch {
+      return null;
+    }
+  })();
+  const antigravityRead = (() => {
+    const nowSec = Math.floor(now / 1000);
+    const transcriptData = antigravityTranscriptRead?.data ?? null;
+    const transcriptEventSec = typeof antigravityTranscriptRead?.lastQuotaEventAt === "number"
+      && Number.isFinite(antigravityTranscriptRead.lastQuotaEventAt)
+      && antigravityTranscriptRead.lastQuotaEventAt > 0
+      ? Math.floor(antigravityTranscriptRead.lastQuotaEventAt)
+      : transcriptData
+        ? (transcriptData.capturedAt ?? transcriptData.session?.observedAt ?? null)
+        : null;
+    // Compare by the durable quota-event watermark (`lastQuotaEventAt` / `capturedAt`)
+    // BEFORE checking whether either window is still active, independently of
+    // `provenance.reason`, so empty polls never erase a stored active window while
+    // a strictly newer confirmed reset overrides any older stored active window.
+    const obsWatermarkSec = antigravityObservationEventSec(antigravityRawObs);
+    const obsActive = Boolean(
+      antigravityRawObs?.limits
+      && isAntigravitySessionWindowActive(antigravityRawObs.limits.session, nowSec),
+    );
+    const observedData = obsActive ? antigravityRawObs!.limits! : null;
+
+    if (transcriptData) {
+      const transcriptAt = transcriptEventSec ?? 0;
+      if (obsWatermarkSec !== null && obsWatermarkSec > transcriptAt) {
+        if (observedData) {
+          return { data: observedData, source: antigravityRawObs!.provenance.source, reason: antigravityRawObs!.provenance.reason };
+        }
+        return { data: null, source: "unavailable" as const, reason: "antigravity quota reset window elapsed" };
+      }
+      return antigravityTranscriptRead!;
+    }
+    if (transcriptEventSec !== null && (obsWatermarkSec === null || transcriptEventSec > obsWatermarkSec)) {
+      return antigravityTranscriptRead!;
+    }
+    if (observedData) {
+      return { data: observedData, source: antigravityRawObs!.provenance.source, reason: antigravityRawObs!.provenance.reason };
+    }
+    return antigravityTranscriptRead;
+  })();
   const [resolvedClaude, resolvedCodex] = await Promise.all([
     !claudeAccount
       ? Promise.resolve(noAccountRead("Claude"))
@@ -454,12 +514,17 @@ export async function readLimits(options: { codexLiveReader?: CodexLiveLimitsRea
     codexAccountId: codexAccount?.id ?? null,
     copilot: copilotRead?.data ?? null,
     copilotAccountId: copilotAccount?.id ?? null,
+    antigravity: antigravityRead?.data ?? null,
+    antigravityAccountId: antigravityAccount?.id ?? null,
     provenance: {
       claude: resolvedClaude.meta,
       codex: resolvedCodex.meta,
       copilot: copilotRead
         ? { source: copilotRead.source, reason: copilotRead.reason, staleSince: null }
         : { source: "unavailable", reason: "no active Copilot account", staleSince: null },
+      antigravity: antigravityRead
+        ? { source: antigravityRead.source, reason: antigravityRead.reason, staleSince: null }
+        : { source: "unavailable", reason: "no active Antigravity account", staleSince: null },
     },
     staleSince: resolvedClaude.meta.staleSince ?? resolvedCodex.meta.staleSince,
   };
@@ -1321,37 +1386,16 @@ export function collectCodexRateLimitSeries(sessionsDir: string, sinceUnix: numb
   return { session, weekly, sessionWindowSeconds, weeklyWindowSeconds, sessionResetsAt, weeklyResetsAt };
 }
 
-/** Assemble one window's burndown from forward poll samples, an optional
-    transcript backfill and the current live value, scoped to the current window.
-    Exported for the window-scoping regression test. */
-export function buildSeries(
-  forward: LimitSample[],
-  backfill: LimitSample[],
-  live: LimitWindow | null,
-  now: number,
-  windowSeconds: number,
-  backfillResetsAt: number | null,
-): BurndownSeries {
-  const resetsAt = live?.resetsAt ?? backfillResetsAt ?? null;
-  const windowStart = resetsAt !== null ? resetsAt - windowSeconds : null;
-  const livePoint: LimitSample[] = live && typeof live.usedPercent === "number" ? [{ t: now, remaining: clampPercent(100 - live.usedPercent) }] : [];
-  const merged = mergeSamples(forward, backfill, livePoint);
-  // Strictly scope to the current window: a sample from before windowStart
-  // belongs to the previous window, and after a rollover it would sit in the
-  // series as a low pre-reset value ahead of the ~100% post-reset point. That
-  // boundary rise reads as a refill and would suppress the pace projection for
-  // the whole new window, so those pre-window samples are dropped here.
-  const samples = windowStart !== null ? merged.filter((s) => s.t >= windowStart) : merged;
-  return { windowStart, resetsAt, windowSeconds, samples };
-}
+export { buildSeries };
 
-function buildEngineBurndown(
+export function buildEngineBurndown(
   engine: EngineName,
   accountId: string,
   limits: EngineLimits | null,
   now: number,
   backfill: CodexTranscriptSeries | null,
 ): EngineBurndown {
+  const liveAt = limits?.capturedAt ?? null;
   const forward = (window: WindowKey) => historySamples(engine, accountId, window, now);
   // Only a snapshot that reports some window is evidence about horizons: it
   // shows what the plan has, so a horizon missing from it is one the plan does
@@ -1374,7 +1418,7 @@ function buildEngineBurndown(
     if (snapshotNamesAWindow && !live && backfillSamples.length === 0) {
       return { windowStart: null, resetsAt: null, windowSeconds, samples: [], windowUnreported: true };
     }
-    return buildSeries(forward(key), backfillSamples, live, now, windowSeconds, backfillResetsAt);
+    return buildSeries(forward(key), backfillSamples, live, now, windowSeconds, backfillResetsAt, liveAt);
   };
   return {
     session: seriesFor("session", backfill?.session ?? [], backfill?.sessionWindowSeconds ?? null, backfill?.sessionResetsAt ?? null),
@@ -1403,6 +1447,37 @@ export async function readBurndown(options: { codexLiveReader?: CodexLiveLimitsR
     codex,
     claudeAccountId: payload.claudeAccountId,
     codexAccountId: payload.codexAccountId,
+    historySince: historySince(),
+  };
+}
+
+/** Burndown history for one named account of an engine, or null when the engine
+    lists no such account. The engine's active account answers through
+    {@link readBurndown}, with its live read. Any other account makes no provider
+    read: its chart is the stored history plus the registry's latest observation,
+    the reading its footer line shows, and a Codex account adds its transcript
+    backfill. The id is only a lookup key, never part of a path. */
+export async function readAccountBurndown(engine: "claude" | "codex", accountId: string): Promise<BurndownPayload | null> {
+  const codexAccount = engine === "codex" ? listedAccount(() => accountForSpawn(accountId)) : null;
+  if (engine === "codex" ? !codexAccount || codexAccount.id !== accountId : !listClaudeAccounts().some((account) => account.id === accountId)) return null;
+  const activeId = engine === "claude" ? activeClaudeAccountId() : activeCodexAccountId();
+  if (activeId === accountId) {
+    const payload = await readBurndown();
+    return (engine === "claude" ? payload.claudeAccountId : payload.codexAccountId) === accountId ? payload : null;
+  }
+  const now = Math.round(Date.now() / 1000);
+  const observation = agentRegistry().quotaObservations(engine).find((row) => row.accountId === accountId) ?? null;
+  const observedAt = observation ? Date.parse(observation.observedAt) / 1000 : NaN;
+  const live: EngineLimits | null = observation?.limits
+    ? { ...observation.limits, capturedAt: observation.limits.capturedAt ?? (Number.isFinite(observedAt) ? Math.round(observedAt) : null) }
+    : null;
+  const backfill = codexAccount ? collectCodexRateLimitSeries(codexAccount.sessionsDir, now - RETENTION_S, codexAccount.id) : null;
+  const series = buildEngineBurndown(engine, accountId, live, now, backfill);
+  return {
+    claude: engine === "claude" ? series : null,
+    codex: engine === "codex" ? series : null,
+    claudeAccountId: engine === "claude" ? accountId : null,
+    codexAccountId: engine === "codex" ? accountId : null,
     historySince: historySince(),
   };
 }

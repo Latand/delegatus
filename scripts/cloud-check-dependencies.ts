@@ -1,4 +1,4 @@
-import { cpSync, existsSync, readlinkSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, readlinkSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 
@@ -15,7 +15,7 @@ export function reuseCloudDependencies(source: string, target = process.cwd()): 
   try {
     source = path.resolve(source);
     target = path.resolve(target);
-    if (source === target || existsSync(path.join(target, "node_modules"))) throw new Error();
+    if (source === target) throw new Error();
     const lock = Bun.JSON5.parse(readFileSync(path.join(target, "bun.lock"), "utf8")) as Lock;
     const manifest = JSON.parse(readFileSync(path.join(target, "package.json"), "utf8"));
     // The current project has one workspace and a hoisted Bun installation.
@@ -151,6 +151,12 @@ export function reuseCloudDependencies(source: string, target = process.cwd()): 
       if (check.error || check.status !== 0 || /Skipped patch/.test(`${check.stdout ?? ""}${check.stderr ?? ""}`)) throw new Error();
     }
     const destination = path.join(target, "node_modules");
+    // Cloud retries retain their detached clone. Revalidate the locked setup
+    // above, then replace only that clone's ignored dependency directory.
+    if (existsSync(destination)) {
+      if (!lstatSync(destination).isDirectory() || lstatSync(destination).isSymbolicLink()) throw new Error();
+      rmSync(destination, { recursive: true, force: true });
+    }
     copiedModules = destination;
     copyStarted = true;
     cpSync(modules, destination, { recursive: true, dereference: true });

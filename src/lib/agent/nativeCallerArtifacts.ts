@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 
-type Directory = { names: Map<string, Set<string>> };
+type Directory = { parent: string; descriptor: number; names: Map<string, Set<string>> };
 type Artifact = { canonical: string | null; names: [Directory, string][] };
 
 const MAX_PATHS = 65_536;
@@ -44,6 +44,7 @@ export class NativeCallerArtifacts {
     this.library = ffi.dlopen("libc.so.6", {
       inotify_init1: { args: ["i32"], returns: "i32" },
       inotify_add_watch: { args: ["i32", "cstring", "u32"], returns: "i32" },
+      inotify_rm_watch: { args: ["i32", "i32"], returns: "i32" },
       poll: { args: ["ptr", "u64", "i32"], returns: "i32" },
     });
     this.fd = this.library.symbols.inotify_init1(0x800 | 0x80000); // NONBLOCK | CLOEXEC
@@ -76,7 +77,7 @@ export class NativeCallerArtifacts {
       // ONLYDIR and DONT_FOLLOW ensure the final directory is physical.
       const descriptor = this.library.symbols.inotify_add_watch(this.fd, Buffer.from(parent + "\0"), 0xfc4 | 0x1000000 | 0x2000000);
       if (descriptor < 0) throw new Error("native caller artifact directory unavailable");
-      directory = { names: new Map() };
+      directory = { parent, descriptor, names: new Map() };
       this.directories.set(parent, directory);
       const watchers = this.watches.get(descriptor) ?? new Set();
       watchers.add(directory);
@@ -149,7 +150,16 @@ export class NativeCallerArtifacts {
     for (const [directory, name] of artifact.names) {
       const spellings = directory.names.get(name)!;
       spellings.delete(spelling);
-      if (!spellings.size) directory.names.delete(name);
+      if (spellings.size) continue;
+      directory.names.delete(name);
+      if (directory.names.size) continue;
+      this.directories.delete(directory.parent);
+      const watchers = this.watches.get(directory.descriptor)!;
+      watchers.delete(directory);
+      if (watchers.size) continue;
+      this.watches.delete(directory.descriptor);
+      // The kernel may already have removed the watch if the directory vanished.
+      this.library.symbols.inotify_rm_watch(this.fd, directory.descriptor);
     }
     if (artifact.canonical === null) return;
     const aliases = this.byCanonical.get(artifact.canonical)!;
@@ -169,16 +179,19 @@ export class NativeCallerArtifacts {
     for (let offset = 0; offset < count;) {
       const wd = this.events.readInt32LE(offset);
       const length = this.events.readUInt32LE(offset + 12);
+      const nameOffset = offset + 16;
+      offset = nameOffset + length;
       const watched = this.watches.get(wd);
-      if (!watched || !length) throw new Error("native caller artifact watch lost");
-      const name = this.events.toString("utf8", offset + 16, offset + 16 + length).replace(/\0.*$/, "");
+      if (wd < 0 || (watched && !length)) throw new Error("native caller artifact watch lost");
+      // Retired descriptors can have queued events, including IN_IGNORED.
+      if (!watched) continue;
+      const name = this.events.toString("utf8", nameOffset, offset).replace(/\0.*$/, "");
       for (const directory of watched) {
         for (const spelling of directory.names.get(name) ?? []) {
           this.dirty.add(spelling);
           if (this.dirty.size > limit) throw new Error("native caller artifact paths changed together");
         }
       }
-      offset += 16 + length;
     }
     // Rebinding may register new watches. Read again after any rebind before
     // using the map, so changes during the rebind are also observed.

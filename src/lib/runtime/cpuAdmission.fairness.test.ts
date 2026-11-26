@@ -170,13 +170,21 @@ test("V2 and current connections preserve legacy rows and spacing while each cla
   let clock = 0;
   const old = new V2CpuAdmissionQueue(f.file, () => clock, GAP, T, Infinity);
   cleanup.push(() => old.close());
-  const schema = () => f.db.query("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type != 'table' ORDER BY type, name").all();
+  const schema = () => f.db.query<{ type: string; name: string; tbl_name: string; sql: string }, []>("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type != 'table' ORDER BY type, name").all();
   const original = schema();
   const columns = f.db.query("PRAGMA table_info(tickets)").all();
-  f.open(); expect(schema()).toEqual(original); // additive column leaves legacy triggers/indexes unchanged
+  f.open();
+  const installed = schema();
+  const addedTriggers = ["legacy_gate_retired", "tickets_linux_poll_reset"];
+  expect(installed.filter(row => !addedTriggers.includes(row.name))).toEqual(original);
+  expect(installed.filter(row => addedTriggers.includes(row.name))).toMatchObject(
+    addedTriggers.map(name => ({ name, type: "trigger", tbl_name: "tickets" })));
   const upgraded = f.db.query("PRAGMA table_info(tickets)").all();
-  expect(upgraded.slice(0, -1)).toEqual(columns);
-  expect(upgraded.at(-1)).toMatchObject({ name: "aging", type: "INTEGER", notnull: 1, dflt_value: "0" });
+  expect(upgraded.slice(0, columns.length)).toEqual(columns);
+  expect(upgraded.slice(columns.length)).toMatchObject([
+    { name: "linux_poll", type: "TEXT", notnull: 0, dflt_value: null },
+    { name: "aging", type: "INTEGER", notnull: 1, dflt_value: "0" },
+  ]);
   const reopened = new V2CpuAdmissionQueue(f.file, () => clock, GAP, T, Infinity);
   cleanup.push(() => reopened.close());
   f.priority("normal", "normal"); old.check("normal", true, f.owner, false, f.source("normal"), true);
@@ -192,7 +200,7 @@ test("V2 and current connections preserve legacy rows and spacing while each cla
   expect(old.check("normal", true, f.owner, true)).toMatchObject({ position: 1 });
   f.at(T + 2 * GAP); clock = T + 2 * GAP;
   expect(old.check("normal", true, f.owner, true)).toBeNull();
-  expect(schema()).toEqual(original);
+  expect(schema()).toEqual(installed);
 });
 
 test.each([

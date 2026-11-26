@@ -1,4 +1,6 @@
-import { registerDiskPressureSweep } from "@/lib/state/diskPressureSweeps";
+import { registerCleanerReleaseSweep, registerDiskPressureSweep } from "@/lib/state/diskPressureSweeps";
+import type { CleanerSlice } from "@/lib/cleaner/diskJournal";
+import { diskCleanerAllowed } from "@/lib/cleaner/diskState";
 import { checkoutAdmission } from "./deploymentAdmission";
 import { resolveTrackedRevision } from "./git";
 import { prepareLauncherCredentials, releaseLauncherCredentials } from "../../../bin/launcher-credentials.mjs";
@@ -23,7 +25,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { realExec } from "@/lib/workflows/provision";
 
 import { cancelUntakenRequest, DIALOG_WRITER, readAuto, requestAutoRestart, restorePointer, writeAuto, type AutoState, type AutoView, type AutoWriter } from "./auto";
-import { type RetentionInputs } from "./retention";
+import { type RetentionInputs, type RetentionReport } from "./retention";
 import { runRetentionPass } from "./retentionPass";
 import { activeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS, DRAIN_START_WINDOW_MS, releaseDrain, writeDrain } from "./drain";
 import { GreenReader, type GreenVerdict } from "./green";
@@ -140,10 +142,11 @@ export interface ServiceDeps {
   prune?(record: LauncherRecord, rollbackPointer: string | null): Promise<void>;
 }
 
-/** A refusal carries a code the client words; `error` is the same in
-    English for API readers and logs, and `detail` is machine output (the
-    runtime host's own refusal). */
-export type ActionResult = { ok: true; replaySnapshot?: Snapshot } | { ok: false; status: number; code: RefusalCode | "auto-persistence-failed" | "auto-switch-superseded"; error: string; detail?: string };
+/** The client localizes the refusal code and can show the underlying CI verdict.
+    The English error and machine detail are also available to API readers. */
+export type ActionResult =
+  | { ok: true; replaySnapshot?: Snapshot; optionalCheckFailures?: string[] }
+  | { ok: false; status: number; code: RefusalCode | "auto-persistence-failed" | "auto-switch-superseded"; error: string; detail?: string; green?: GreenVerdict };
 type DeploymentResult = ActionResult & { deliveryUncertain?: boolean };
 
 export function refuse(status: number, code: RefusalCode | "auto-persistence-failed" | "auto-switch-superseded", error: string, detail?: string): ActionResult {
@@ -152,6 +155,10 @@ export function refuse(status: number, code: RefusalCode | "auto-persistence-fai
 
 function busy(state: Exclude<Busy, null>): ActionResult {
   return refuse(409, `busy-${state}`, `Busy: ${state}`);
+}
+
+function revisionRefusal(green: GreenVerdict): ActionResult {
+  return { ok: false, status: 409, code: "deployment-refused", error: "The selected revision is not green", detail: green.state, green };
 }
 
 function restoreFile(file: string, bytes: Buffer | null): void {
@@ -209,6 +216,7 @@ export class SelfUpdateService {
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private retaining = false;
   private stopPressureSweep?: () => void;
+  private stopCleanerSweep?: () => void;
   private retentionChecking = false;
   private retentionAbort: AbortController | null = null;
   private runner: RunnerPort | null = null;
@@ -307,6 +315,7 @@ export class SelfUpdateService {
   /** Called only by the release-owning web process after its fence is active. */
   startAuto(): void {
     this.stopPressureSweep ??= registerDiskPressureSweep("releases", () => { void this.retentionTick(); });
+    this.stopCleanerSweep ??= registerCleanerReleaseSweep(id => this.retainForCleaner(id));
     if (this.autoTimer) return;
     // Restore durable custody before startup hands pending stages or seats to
     // their controllers, even when future automatic updates are switched off.
@@ -856,15 +865,23 @@ export class SelfUpdateService {
     await this.retain(record, rollback);
   }
 
-  private async retain(record: LauncherRecord, rollback: string | null = null): Promise<void> {
+  private async retainForCleaner(id: string): Promise<CleanerSlice> {
+    const decision = await this.deps.mode();
+    if (this.stopped || !diskCleanerAllowed(id) || decision.mode !== "checkout" || !decision.record) return { kept: [], errors: 0 };
+    const report = await this.retain(decision.record, null, id);
+    if (!report) return { kept: [{ path: decision.record.releasesDir, bytes: 0, reason: "release owner is busy" }], errors: 0 };
+    return { kept: report.kept.map(row => ({ path: row.dir, bytes: row.bytes, reason: row.reason })), errors: report.errors.length };
+  }
+
+  private async retain(record: LauncherRecord, rollback: string | null = null, cleanerId?: string): Promise<RetentionReport | null> {
     if (this.retaining || this.runner?.state.state === "running" || this.pendingRestart || this.auto.pending || this.auto.managedPending
       || this.deploying || managedActive(this.managed)
-      || ["building", "ready", "switching"].includes(this.apply.current?.state ?? "")) return;
-    if (existsSync(record.requestFile)) return;
+      || ["building", "ready", "switching"].includes(this.apply.current?.state ?? "")) return null;
+    if (existsSync(record.requestFile)) return null;
     this.retaining = true;
     const abort = this.retentionAbort = new AbortController();
-    const current = () => {
-      if (this.stopped) throw new Error("retention owner stopped");
+    const current = async () => {
+      if (this.stopped || cleanerId && !diskCleanerAllowed(cleanerId)) throw new Error("retention owner stopped");
       const file = this.deps.env[LAUNCHER_RECORD_ENV]?.trim() || launcherControlFile(record.requestFile, "launcher");
       const owner = readLauncherRecord(file);
       if (!owner) throw new Error("cannot read launcher record for retention");
@@ -877,22 +894,26 @@ export class SelfUpdateService {
           ...(intent && ["building", "ready", "switching", "failed"].includes(intent.state) ? [releaseDirFor(record.releasesDir, intent.target)] : []),
         ],
       };
-      return { record: owner ?? record, inputs };
+      const { readReleasePipelineClaims } = await import("./retention");
+      const pipelineClaims = await readReleasePipelineClaims();
+      return { record: owner ?? record, inputs, pipelineClaims };
     };
     try {
       if (this.deps.prune) await this.deps.prune(record, rollback);
       // The owner's hold fence: while `retaining` is set, reserve() refuses
       // every build, apply, restart and pointer change, and the automatic
       // rollback capture waits on active(), so no hold lands during the pass.
-      else await runRetentionPass(record, current().inputs, { env: this.deps.env, signal: abort.signal,
+      else return await runRetentionPass(record, (await current()).inputs, { env: this.deps.env, signal: abort.signal, cleanerId,
         reportFile: join(this.deps.dir, "retention.json"), current,
         fence: () => this.retaining && this.retentionAbort === abort && !abort.signal.aborted && !this.stopped });
     } catch (error) {
+      if (cleanerId) throw error;
       const message = error instanceof Error ? error.message : String(error);
       try { writeJsonDurably(join(this.deps.dir, "retention.json"), { at: new Date(this.deps.now()).toISOString(), removed: [], reclaimedCacheBytes: 0, kept: [], errors: [message] }); }
       catch (error) { console.error("[self-update] cannot write retention report", error instanceof Error ? error.message : String(error)); }
       console.error("[self-update] release cleanup failed", message);
     } finally { this.retaining = false; this.retentionAbort = null; }
+    return null;
   }
 
   private finishManagedAuto(snapshot?: Snapshot): void {
@@ -1553,11 +1574,12 @@ export class SelfUpdateService {
     if ((!rebuild && this.slice.check.state !== "update-available") || !available) return refuse(409, "no-update", "No update is available; run a check first");
     if (!/^[a-f0-9]{40}$/.test(available.sha)) return refuse(409, "cannot-update", "The published package names no revision; update it with the package manager it came from");
     if ((decision.mode === "checkout" || decision.mode === "package") && decision.record) {
-      const refusal = await this.operatorRevisionAdmission(decision.record, available.sha);
-      if (refusal) return refusal;
+      const admission = await this.operatorRevisionAdmission(decision.record, available.sha);
+      if (!admission.ok) return admission;
       const fresh = await this.snapshot();
       if (fresh.busy) return busy(fresh.busy);
-      return this.startCheckout(decision.record, available);
+      const started = this.startCheckout(decision.record, available);
+      return started.ok ? admission : started;
     }
     if (decision.mode === "managed") return this.deploy(available, clientKey);
     return refuse(409, "cannot-update", "This install cannot update itself");
@@ -1571,15 +1593,15 @@ export class SelfUpdateService {
       const snapshot = await this.snapshot();
       if (snapshot.busy) return busy(snapshot.busy);
       if (runner.state.state !== "failed" && this.apply.current?.state !== "failed") return refuse(409, "not-failed", "Only a failed update can be retried");
-      const refusal = await this.operatorRevisionAdmission(decision.record, runner.state.target!);
-      if (refusal) return refusal;
+      const admission = await this.operatorRevisionAdmission(decision.record, runner.state.target!);
+      if (!admission.ok) return admission;
       const fresh = await this.snapshot();
       if (fresh.busy) return busy(fresh.busy);
       const occupied = this.reserve(decision.record, () => this.apply.begin(decision.record!, runner.state.target!, "operator"));
       if (occupied) return occupied;
       const attempt = runner.state.state === "failed" ? runner.retry() : runner.start(runner.state.target!, { short: runner.state.targetShort ?? undefined, version: runner.state.targetVersion ?? undefined, trigger: "operator" });
       void attempt.then(() => this.applyBuilt()).catch(error => this.failApply(error)).finally(() => this.afterUpdate());
-      return { ok: true };
+      return admission;
     }
     if (decision.mode === "managed") {
       await this.refreshManaged(true);
@@ -1608,21 +1630,20 @@ export class SelfUpdateService {
     return refuse(409, "cannot-update", "This install cannot update itself");
   }
 
-  private async operatorRevisionAdmission(record: LauncherRecord, target: string): Promise<ActionResult | null> {
-    if (!githubRepositoryOfRemote(this.deps.remote)) return record.checkout ? null
-      : refuse(409, "deployment-refused", "The selected revision is not green", "unknown");
-    const green = await this.installRevisionGreen(record, target);
-    return green.state === "green" ? null : refuse(409, "deployment-refused", "The selected revision is not green", green.state);
+  private async operatorRevisionAdmission(record: LauncherRecord, target: string): Promise<ActionResult> {
+    if (!githubRepositoryOfRemote(this.deps.remote)) return record.checkout ? { ok: true } : revisionRefusal({ state: "unknown" });
+    const green = await this.installRevisionGreen(record, target, "manual-update");
+    if (green.state !== "green") return revisionRefusal(green);
+    return { ok: true, ...(green.optionalCheckFailures?.length ? { optionalCheckFailures: green.optionalCheckFailures } : {}) };
   }
 
-  private async installRevisionGreen(record: LauncherRecord, target: string, fresh = false): Promise<GreenVerdict> {
+  private async installRevisionGreen(record: LauncherRecord, target: string, policy: "manual-update" | "exact-deploy"): Promise<GreenVerdict> {
     const repo = record.checkout ?? await this.deps.prepareCheckRepo();
     if (!record.checkout) {
       try { await ensureCommit(repo, this.deps.remote, this.deps.branch, target); }
       catch (error) { return { state: "unknown", detail: error instanceof Error ? error.message : String(error) }; }
     }
-    return fresh ? this.greenReader.read(this.deps.remote, this.deps.branch, target, repo, undefined, true, "exact-deploy")
-      : this.greenReader.read(this.deps.remote, this.deps.branch, target, repo);
+    return this.greenReader.read(this.deps.remote, this.deps.branch, target, repo, undefined, true, policy);
   }
 
   private startCheckout(record: LauncherRecord, target: Revision, trigger: "operator" | "seat" = "operator", deploymentId?: string): ActionResult {
@@ -1745,14 +1766,15 @@ export class SelfUpdateService {
     const action = await this.actionFor(decision);
     if (!action || !action.button || action.id === "update-first") return refuse(409, "cannot-restart", "The install action must be performed from its terminal");
     const record = decision.record;
+    let admission: ActionResult = { ok: true };
     if (record && action.id === "restart-service") {
       let intent = this.apply.current;
       if (!intent || ["done", "failed"].includes(intent.state)) {
         const release = await new ReleasePointer(record.releasePointer, record.checkout ?? packageRoot(record)).current();
         if (!/^[a-f0-9]{40}$/.test(release.sha)) return refuse(409, "cannot-restart", "Build the launcher upgrade first");
         if (githubRepositoryOfRemote(this.deps.remote)) {
-          const green = await this.installRevisionGreen(record, release.sha);
-          if (green.state !== "green") return refuse(409, "deployment-refused", "The selected revision is not green", green.state);
+          admission = await this.operatorRevisionAdmission(record, release.sha);
+          if (!admission.ok) return admission;
         }
         if (this.active() || this.apply.current && ["building", "ready", "switching"].includes(this.apply.current.state)) return busy("update");
         // Old code may have published the candidate and switched only web.
@@ -1889,7 +1911,7 @@ export class SelfUpdateService {
       }
       return refuse(503, "cannot-restart", "The user service manager did not accept the action");
     }
-    return { ok: true };
+    return admission;
   }
 
   /** This observes custody, never a completed apply's display identity. */
@@ -2026,7 +2048,7 @@ export class SelfUpdateService {
         revision = await registryRevision();
         if (revision.sha !== target) throw new Error("The requested revision has no published package; deploy its published revision");
       }
-      const observedGreen = await this.installRevisionGreen(record, target, true);
+      const observedGreen = await this.installRevisionGreen(record, target, "exact-deploy");
       // Running CI remains pending after the automatic check-wait budget expires.
       const green: GreenVerdict = observedGreen.state === "checks-timeout" ? { ...observedGreen, state: "pending" } : observedGreen;
       if (green.state !== "green") return checkoutAdmission(this.deps.dir, request, authorize, () => ({ state: "refused" as const, revision: target, code: "deploy_not_green" as const,
@@ -2555,6 +2577,7 @@ export class SelfUpdateService {
 
   stop(): void {
     this.stopPressureSweep?.(); this.stopPressureSweep = undefined;
+    this.stopCleanerSweep?.(); this.stopCleanerSweep = undefined;
     this.stopped = true;
     this.retentionAbort?.abort();
     if (this.comparisonRefreshTimer) clearTimeout(this.comparisonRefreshTimer);

@@ -59,12 +59,13 @@ import type { ProposalIssue } from "./githubEvidence";
 import { forgeCacheView } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { recordedProjectRemote, projectAliasSnapshot, withProjectAliasSnapshot } from "@/lib/projects/aliases";
-import { appendSeatTickRecord, appendSeatTickRecordAsync, readSeatTickAlarmRecords, readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
+import { appendSeatTickRecord, readSeatTickAlarmRecords, readSeatTickRecords, SEAT_TICK_RUN_HISTORY } from "./journalStore";
+import { SeatTickPendingJournal } from "./seatTickPendingJournal";
 import { redactBounded, redactMonitorText } from "./redact";
 import { seatMcpHealth, type SeatMcpHealth } from "./seatMcpHealth";
 import { withChildFinalMessages } from "./childFinalMessage";
 import { seatTickNoteRevision, seatTickProposalMessage, seatTickWakePayload } from "./report";
-import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickCatchUpItemCursor, seatTickDecision, seatTickPolicy, seatTickWakeCommit, seatTickWakeCommitPlan, seatTurnProgressing } from "./seatTick";
+import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickCatchUpItemCursor, seatTickDecision, seatTickPolicy, seatTickReportRequest, seatTickWakeCommit, seatTickWakeCommitPlan, seatTurnProgressing } from "./seatTick";
 import { seatTickFenceBoundMs, seatTickFenceLapsesAt, seatTickFenceRetirableOnAge, seatTickFenceSentence, seatTickReportedFence, seatTickWakeFence } from "./seatTickFence";
 import { effectiveSeatTickSettings, readSeatTickSettingsFile, readTurboSettings, seatTickSettingsAfterLapse, writeSeatTickSettings } from "./seatTickSettings";
 import { readSeatTickState, readSeatTickStateFile, seatTickStateForEpoch, writeSeatTickState } from "./seatTickState";
@@ -285,7 +286,7 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
     ].join("\n"), CARD_TEXT_LIMIT - marker.length - 2)}\n\n${marker}`;
   }
   if (card.kind === "auto-rotation" || card.kind === "host-recovery") return redactBounded(card.detail, CARD_TEXT_LIMIT);
-  if (card.kind === "auth-failed" || card.kind === "disk-pressure") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
+  if (card.kind === "auth-failed" || card.kind === "disk-pressure" || card.kind === "memory-pressure") return redactBounded(`${card.detail}\n\n${MONITOR_REF_PREFIX} ${card.ref}`, CARD_TEXT_LIMIT);
   if (card.kind === "no-seat") return orchestratorAlertCardText(card.detail, at);
   if (card.kind === "mcp-unavailable") return redactBounded([
     "Orchestrator seat cannot use its Viewer MCP",
@@ -324,12 +325,14 @@ function cardText(project: string, card: SeatTickCard, at: string, existing?: Bo
     host-recovery keep their monitor ref here as well. */
 function cardDetails(card: SeatTickCard): string {
   const fact = `${CARD_FACT_PREFIX} ${cardFact(card)}`;
+  if (card.kind === "disk-pressure" && card.cleanupReport) return `${fact}\n${DISK_CLEANER_CARD_MARKER}`;
   if (card.kind !== "auto-rotation" && card.kind !== "host-recovery") return fact;
   const marker = `${MONITOR_REF_PREFIX} ${card.ref}`;
   return [fact, card.record ? redactBounded(card.record, CARD_TEXT_LIMIT) : "", marker].filter(Boolean).join("\n\n");
 }
 
 const CARD_FACT_PREFIX = "monitor-fact:";
+const DISK_CLEANER_CARD_MARKER = "monitor-cleaner-report";
 
 /** Stable across checks and restarts, including after the create receipt expires.
     Recovery notices also distinguish an intermediate outcome from its terminal one. */
@@ -403,7 +406,7 @@ function completedSeatTickCard(tasks: readonly BoardTask[], project: string, car
 export function ensureSeatTickCard(project: string, card: SeatTickCard, at: string): boolean {
   // Authentication and automatic rotation notices are separate occurrences. An older owed card can
   // finish beside a newer incident without rewriting or closing its notice.
-  if ((card.kind === "auth-failed" || card.kind === "auto-rotation" || card.kind === "host-recovery" || card.kind === "disk-pressure") && card.instance) card = { ...card, ref: `${card.ref}-${crypto.createHash("sha256").update(card.instance).digest("hex").slice(0, 32)}` };
+  if ((card.kind === "auth-failed" || card.kind === "auto-rotation" || card.kind === "host-recovery" || card.kind === "disk-pressure" || card.kind === "memory-pressure") && card.instance) card = { ...card, ref: `${card.ref}-${crypto.createHash("sha256").update(card.instance).digest("hex").slice(0, 32)}` };
   /* The board file is resolved HERE, per call, rather than taken from the
      module-load default `mutateTasksFile` would otherwise use. That default is
      frozen the first time `@/lib/tasks/store` is imported anywhere in the
@@ -429,6 +432,21 @@ export function ensureSeatTickCard(project: string, card: SeatTickCard, at: stri
        whatever the card itself turns out to need. */
     const unchanged = absorbed ? { state, result: true } : { state: undefined, result: true };
     const existing = standingSeatTickCard(state.tasks, project, card);
+    if (card.kind === "disk-pressure" && card.cleanupReport) {
+      const previous = existing ?? state.tasks.findLast(task => canonicalOrchestratorProject(task.project) === project && taskMonitorRef(task) === card.ref);
+      const text = cardText(project, card, at, previous);
+      const details = cardDetails(card);
+      if (previous?.text === text && previous.details === details && (card.state !== "resolved" || previous.status === "done")) return unchanged;
+      const created = previous ? null : createTask(state.tasks, { project, text, details, placement: "unplaced",
+        clientRequestId: monitorClientRequestId(`${card.ref}:${project}`) }, state.recentCreates, { allowBoardOverflow: true });
+      if (created && !created.ok) return { state: undefined, result: false };
+      const id = previous?.id ?? (created?.ok ? created.task.id : null);
+      if (!id) return { state: undefined, result: false };
+      const patched = patchTask(created?.ok ? created.tasks : state.tasks, id,
+        { text, details, ...(card.state === "resolved" ? { status: "done" } : {}) }, at, { allowBoardOverflow: true });
+      return patched.ok ? { state: { ...state, tasks: patched.tasks, recentCreates: created?.ok ? created.recentCreates : state.recentCreates }, result: true }
+        : { state: undefined, result: false };
+    }
     if (card.state === "resolved") {
       if (!existing) return unchanged;
       const resolvedAt = new Date().toISOString();
@@ -449,6 +467,7 @@ export function ensureSeatTickCard(project: string, card: SeatTickCard, at: stri
          card that tracks a standing state — the one kind that declares its
          `state` — is kept in step with what it describes. */
       if (card.state !== "open") return unchanged;
+      if (card.kind === "disk-pressure" && existing.details?.split("\n").includes(DISK_CLEANER_CARD_MARKER)) return unchanged;
       if (card.kind === "check-errors" && existing.details?.split("\n").includes(details)) return unchanged;
       if (existing.text === text && existing.details === details) return unchanged;
       const updated = patchTask(state.tasks, existing.id, { text, details });
@@ -500,12 +519,14 @@ function standingSeatTickCard(tasks: readonly BoardTask[], project: string, card
 /** Whether the board already holds exactly what {@link ensureSeatTickCard}
     would leave there, so the check has nothing to write. */
 function seatTickCardIsCurrent(project: string, card: SeatTickCard, at: string, tasks: readonly BoardTask[]): boolean {
+  if (card.kind === "disk-pressure" && card.cleanupReport) return false;
   if (card.kind === "wake-unresolved" && tasks.some((task) => isAttemptCard(task, project))) return false;
   const existing = standingSeatTickCard(tasks, project, card);
   if (card.state === "resolved") return !existing;
   if (completedSeatTickCard(tasks, project, card, at)) return true;
   if (!existing) return false;
   if (card.state !== "open") return true;
+  if (card.kind === "disk-pressure" && existing.details?.split("\n").includes(DISK_CLEANER_CARD_MARKER)) return true;
   const details = cardDetails(card);
   // Check-error cards retain the opening snapshot of their durable episode.
   if (card.kind === "check-errors") return existing.details?.split("\n").includes(details) ?? false;
@@ -1473,11 +1494,26 @@ const dispatchCall = new AsyncLocalStorage<{ clientMessageId: string; token: str
 export async function runSeatTickCheck(project: string, dependencies: SeatTickControllerDependencies = {}): Promise<SeatTickRunRecord | null> {
   const policy = dependencies.policy === undefined ? seatTickPolicy() : dependencies.policy;
   if (!policy) return null;
+  const journal = dependencies.appendRecord ? null : new SeatTickPendingJournal();
+  if (journal) await journal.ready();
+  return runSeatTickCheckWithJournal(project, { ...dependencies, policy }, journal);
+}
+
+async function runSeatTickCheckWithJournal(
+  project: string,
+  dependencies: SeatTickControllerDependencies,
+  journal: SeatTickPendingJournal | null,
+): Promise<SeatTickRunRecord | null> {
+  const policy = dependencies.policy === undefined ? seatTickPolicy() : dependencies.policy;
+  if (!policy) return null;
   project = canonicalOrchestratorProject(project);
   const work = new SeatTickWork(project, Math.min(dependencies.workBudgetMs ?? policy.checkIntervalMs / 4, policy.checkIntervalMs / 4),
     dependencies.workClock, dependencies.workScheduler);
   dependencies.workStarted?.(work);
-  const writeRecord = dependencies.appendRecord ?? appendSeatTickRecordAsync;
+  let journaled = true;
+  const writeRecord = dependencies.appendRecord ?? (async (row: SeatTickRunRecord) => {
+    if (!await journal!.append(row)) journaled = false;
+  });
   let journalWrites = Promise.resolve();
   let pendingRecord: SeatTickRunRecord | undefined;
   const flushRecord = () => {
@@ -1558,7 +1594,9 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
     console.error(`[seat tick] ${record.detail}`);
     append(record);
   } finally { work.close(); flushRecord(); await journalWrites; }
-  if (record) {
+  // An alarm needs the check's complete journal history, which may still be
+  // queued. The check result itself is already in the pending journal.
+  if (record && journaled) {
     // This notice must survive the deadline that ended the failed check. It
     // gets one separate, bounded admission and carries no delivery authority.
     try {
@@ -1602,11 +1640,9 @@ export async function runSeatTickCheck(project: string, dependencies: SeatTickCo
 /**
  * One check of one project: read, decide, maybe wake, journal.
  *
- * Returns the journal line it wrote, so a caller — a test, or a future status
- * surface — reads exactly what was recorded rather than a parallel summary. It
- * throws only if the journal append itself fails; every other failure becomes
- * an `error` line, because a check that vanished silently is the ambiguity this
- * journal exists to remove.
+ * Returns the journal line it produced, including an `error` line for a
+ * failed check. The caller owns writing that line and any earlier settlement
+ * lines.
  */
 async function runSeatTickAttempt(
   project: string,
@@ -1693,6 +1729,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
       now: input.now,
       project: input.project,
       workers: input.workers,
+      ...(input.machine ? { machine: input.machine } : {}),
       snapshotAt,
       reasons: verdict.reasons,
       ...(verdict.catchUp ? { catchUp: verdict.catchUp } : {}),
@@ -1760,6 +1797,10 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
     ...(turboShown ? { turboShown } : {}),
     ...(verdict.kind === "wake" && verdict.reasons.some(reason => reason.kind === "autonomy-ended") ? { autonomySummaryFor: pendingAutonomyReports(input.settings, input.now)[0]?.startedAt } : {}),
     bridgeReports: input.reports?.bridgeReports === true,
+    reportCoverage: input.reports ? { ...input.reports, acknowledgedOutcomeKeys: input.state.reportsAcknowledged } : undefined,
+    reportRequest: renderedVerdict.kind === "wake" && !renderedVerdict.catchUp
+      ? seatTickReportRequest(input, input.state, renderedVerdict.items) : undefined,
+    priorReportKeys: input.state.reportsOwed?.map(entry => entry.key),
     frozenText: text,
   });
   return { text, commit: commit!, renderedVerdict };
@@ -2184,6 +2225,7 @@ async function check(
   // and before ordinary busy-seat suppression; receipt accounting is separate.
   let responseRecovery: (() => Promise<void>) | undefined;
   let responseHeld = false;
+  let responseDetail: string | undefined;
   const responseGuard = () => {
     if (sources.wakeResponse && readState(canonical).wakeResponse) throw new DeliveryAdmissionRefusedError("wake-response-pending");
   };
@@ -2220,7 +2262,7 @@ async function check(
     }
     if (!same()) return;
     const observe = async () => {
-      const evidence = await sources.wakeResponse!(row, canonical);
+      const evidence = await sources.wakeResponse!(readState(canonical).wakeResponse ?? row, canonical);
       if (!same()) return evidence;
       if (evidence.providerFailure) {
         const outcome = await sources.seatTurnOutcome?.(row.conversationId);
@@ -2237,16 +2279,21 @@ async function check(
       const fresh = readState(canonical);
       await seatTickMutation("writeState", () => writeState(canonical, { ...fresh, wakeResponse: response }));
     };
-    const card = (detail: string, resolved = false) => ensureCard(canonical, { ref: "seat-wake-response", kind: "host-recovery",
-      instance: row.clientMessageId, state: resolved ? "resolved" : "open", detail }, new Date(sources.now()).toISOString());
+    const card = (detail: string, resolved = false) => {
+      responseDetail = resolved ? undefined : detail;
+      return ensureCard(canonical, { ref: "seat-wake-response", kind: "host-recovery",
+        instance: row.clientMessageId, state: resolved ? "resolved" : "open", detail }, new Date(sources.now()).toISOString());
+    };
     if (evidence.answered) { card("The delivered wake received a model response.", true); await persist(undefined); return; }
     // Serialize agenda delivery until this obligation is reconciled. Its recent
     // progress cannot authorize a second input whose response would be lost.
     responseHeld = true;
     const progress = evidence.progressAt && Date.parse(evidence.progressAt) <= sources.now()
       && Date.parse(evidence.progressAt) > Date.parse(row.progressAt) ? evidence.progressAt : row.progressAt;
-    if (progress !== row.progressAt || evidence.turnId && evidence.turnId !== row.turnId || evidence.generationId && evidence.generationId !== row.generationId)
-      await persist({ ...row, progressAt: progress, ...(evidence.turnId ? { turnId: evidence.turnId } : {}), ...(evidence.generationId ? { generationId: evidence.generationId } : {}) });
+    if (progress !== row.progressAt || evidence.turnId && evidence.turnId !== row.turnId || evidence.generationId && evidence.generationId !== row.generationId
+      || evidence.scan && JSON.stringify(evidence.scan) !== JSON.stringify(row.scan))
+      await persist({ ...row, progressAt: progress, ...(evidence.turnId ? { turnId: evidence.turnId } : {}), ...(evidence.generationId ? { generationId: evidence.generationId } : {}),
+        ...(evidence.scan ? { scan: evidence.scan } : {}) });
     if (!same() || sources.now() - Date.parse(progress) < row.boundMs) return;
     responseHeld = true;
     let detail = evidence.wait;
@@ -2513,7 +2560,7 @@ async function check(
     const record: SeatTickRunRecord = { schemaVersion: 1, at: new Date(sources.now()).toISOString(), project: canonical,
       seatEpoch: sources.seatFor(canonical).active?.seatEpoch ?? null, verdict: "refused", reasons: [], items: 0,
       deferred: 0, eventsThrough: fresh.eventsThrough ?? 0, delivery: null,
-      detail: ["Delivered wake remains unanswered; recovery or its ownership hold is recorded on the board. Ordinary agenda sends remain fenced.", authDetail, autoRotateDetail].filter(Boolean).join("; ") };
+      detail: [responseDetail ?? "Delivered wake remains unanswered. Ordinary agenda sends remain fenced.", authDetail, autoRotateDetail].filter(Boolean).join("; ") };
     appendRecord(record); return record;
   }
   let proposalIssues: readonly ProposalIssue[] = [];
@@ -2629,7 +2676,7 @@ async function check(
     });
     state = { ...state, wakeDecidedSince: state.wakeDecidedSince ?? state.outstandingWake?.preparedAt ?? at };
     const payloadVerdict = verdict;
-    const { text, commit, renderedVerdict } = withViewerOperation("seat-tick.payload", () => alarmPayload(input, payloadVerdict, proposalIssues, new Date(gathered.now).toISOString()));
+    const { text, commit, renderedVerdict } = withViewerOperation("seat-tick.payload", () => alarmPayload({ ...input, state }, payloadVerdict, proposalIssues, new Date(gathered.now).toISOString()));
     verdict = renderedVerdict;
 
     /* The prompt above came off the settings row this check read, not out of
@@ -2693,9 +2740,10 @@ async function check(
       delivery = { clientMessageId, outcome: "refusal-circuit" };
       fenceDetail = seatTickRefusalCircuitSentence(refusals!);
     } else if (commit) {
+      const responseStart = await sources.wakeResponseStart?.(input.seat.conversationId);
       const wake = {
         clientMessageId, conversationId: input.seat.conversationId, seatEpoch: input.seat.seatEpoch,
-        operationId: null, commit, text, preparedAt: at,
+        operationId: null, commit, text, preparedAt: at, ...(responseStart ? { responseStart } : {}),
       };
       const accounting = state.accounting ? tickAccounting(state.accounting.filename, input.project) : null;
       /* One prepared attempt per project, whichever store holds the row. The
@@ -2773,7 +2821,11 @@ async function check(
           }
           const ownsDispatch = !accounting || (state.outstandingWake?.clientMessageId === clientMessageId && state.outstandingWake.dispatch?.token === token);
           if (ownsDispatch && outcome && wakeReached(outcome)) {
-            const landed = seatTickWakeCommit(state, commit, input.now);
+            // Task-page cadence starts when delivery is confirmed, not when
+            // this check assembled its snapshot. The transport has no arrival
+            // timestamp here, so sample the clock only after its success.
+            const reachedAt = sources.now();
+            const landed = seatTickWakeCommit(state, commit, reachedAt, new Date(reachedAt).toISOString());
             if (accounting) {
               await seatTickMutation("settle", () => accounting.settle(clientMessageId, landed, "landed", null, state.outstandingWake ?? undefined));
               state = accounting.readState();
@@ -3067,6 +3119,11 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
   }
   // A foreground resume uses the same handoff/drain fence as the clock.
   if (requestedProjects && (activeRestartGate(statePath("self-update", "auto-admission.json")) || activeDrain())) return [];
+  // The audit backlog can outlive the last seat in the roster. Give it the
+  // first attempt before the sweep opens other stores or starts new checks.
+  const journal = dependencies.appendRecord ? null : new SeatTickPendingJournal();
+  if (journal) await journal.ready();
+  if (generation !== tickHost.__llvSeatTickGeneration) return [];
   followProjectSuccessions(dependencies.recordSuccessions);
   const records: SeatTickRunRecord[] = [];
   const projects = new Set(requestedProjects?.map(canonicalOrchestratorProject) ?? seatTickProjects(sources));
@@ -3075,7 +3132,8 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
   if (incumbent && !requestedProjects) projects.add(canonicalOrchestratorProject(incumbent.project));
   const curator = dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation;
   let curationAllowed = true;
-  const curation = curator ? curationForSweep(curator, [...projects].sort(), () => curationAllowed && generation === tickHost.__llvSeatTickGeneration, true) : null;
+  const curation = curator ? curationForSweep(curator, [...projects].sort(),
+    () => curationAllowed && generation === tickHost.__llvSeatTickGeneration, true) : null;
   // Enqueue the whole roster before any owed callbacks. A waiting project has
   // no SeatTickWork and spends no budget; every project gets a turn this pass.
   const checked = await Promise.all([...projects].sort().map(project => checkSeatTickProject(project, {
@@ -3083,7 +3141,7 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
     release: dependencies.release === undefined ? releaseControllerForSources(sources) : dependencies.release,
     curation,
     maintenance: dependencies.maintenance === undefined ? productionBoardMaintenanceController(sources) : dependencies.maintenance,
-  })));
+  }, journal)));
   records.push(...checked.filter((record): record is SeatTickRunRecord => record !== null));
   // Curation chooses from refreshed wake stamps after the roster. Waiting for
   // that barrier inside a queued check would expire every earlier project.
@@ -3111,7 +3169,11 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
 export const SEAT_TICK_CHECK_CONCURRENCY = 1;
 
 type ActiveProjectCheck = { promise: Promise<SeatTickRunRecord | null>; work?: SeatTickWork; owed: boolean };
-function checkSeatTickProject(project: string, dependencies: SeatTickControllerDependencies): Promise<SeatTickRunRecord | null> {
+function checkSeatTickProject(
+  project: string,
+  dependencies: SeatTickControllerDependencies,
+  journal: SeatTickPendingJournal | null,
+): Promise<SeatTickRunRecord | null> {
   const checks = tickHost.__llvSeatTickProjects ??= new Map();
   const active = checks.get(project);
   if (active) {
@@ -3138,10 +3200,10 @@ function checkSeatTickProject(project: string, dependencies: SeatTickControllerD
       await yieldToRuntime();
       if (generation !== tickHost.__llvSeatTickGeneration) return null;
       kickTurboWork(project, dependencies.turbo);
-      return await runSeatTickCheck(project, { ...dependencies, workStarted: work => {
+      return await runSeatTickCheckWithJournal(project, { ...dependencies, workStarted: work => {
         entry.work = work;
         dependencies.workStarted?.(work);
-      } });
+      } }, journal);
     } catch (error) {
       console.error("[seat tick] check could not be journaled", error instanceof Error ? error.name : "unknown");
       return null;
@@ -3152,7 +3214,7 @@ function checkSeatTickProject(project: string, dependencies: SeatTickControllerD
         // A callback which arrived during this check is a fresh obligation.
         // Coalesce it once; the new check re-reads all durable state.
         const fresh = dependencies.curation?.fresh?.(project);
-        void checkSeatTickProject(project, fresh ? { ...dependencies, curation: fresh } : dependencies);
+        void checkSeatTickProject(project, fresh ? { ...dependencies, curation: fresh } : dependencies, journal);
       }
     }
   });

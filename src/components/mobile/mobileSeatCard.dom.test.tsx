@@ -731,6 +731,30 @@ test("the sheet's badge speaks the phrase the card speaks, not a second word for
   expect(inSheet.getAttribute("data-mobile2-seat-badge")).toBe("success");
 });
 
+test("a hosted seat whose turn is over reads «waiting» with its age in the quiet tone on the card and in the sheet, never «done»", async () => {
+  seatAnswer = { seat: seat(), pending: null, exists: true };
+  const idle = {
+    ...orchestrator,
+    activity: "idle",
+    mtime: NOW - 1_044,
+    lastTurn: { startedAt: NOW * 1000 - 1_444_000, endedAt: NOW * 1000 - 1_044_000 },
+  } as unknown as FileEntry;
+  const files = [conversation({}), idle];
+  const { host, root } = await mount(files);
+
+  expect(badge(host)!.textContent).toBe("waiting · 17m ago");
+  expect(badge(host)!.getAttribute("data-mobile2-seat-badge")).toBe("neutral");
+  expect(host.textContent).not.toContain("done ·");
+
+  flushSync(() => (host.querySelector("[data-mobile2-seat-controls]") as HTMLButtonElement).click());
+  await settle(root, view(files), 3);
+
+  const identity = sheet(host)!.querySelector("[data-orchestrator-incumbent]") as HTMLElement;
+  const inSheet = identity.querySelector("[data-mobile2-seat-badge]") as HTMLElement;
+  expect(inSheet.textContent).toBe("waiting · 17m ago");
+  expect(inSheet.getAttribute("data-mobile2-seat-badge")).toBe("neutral");
+});
+
 test("the seat's own state moves the row with no reload: rotation advisory, then a retired conversation", async () => {
   seatAnswer = { seat: seat(), pending: null, exists: true };
   const files = [conversation({}), orchestrator];

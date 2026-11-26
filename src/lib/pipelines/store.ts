@@ -29,7 +29,7 @@ import { canonicalProject, projectAliasSnapshot, projectAliasResolver } from "@/
 import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/projectKeyIndex";
 import { FileTransactionBusyError, refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
-import { initializeStateCollections, stateCollectionsInitialized, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readPipelineRowsForTask, readRecipientPipelineEvidence, type PipelineRecipientSelection, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, StateSnapshotChangedError, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
+import { initializeStateCollections, stateCollectionsInitialized, pipelineHasIntegrationMetadata, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readPipelineRowsForTask, readPipelineRowsForTasks, readRecipientPipelineEvidence, type PipelineRecipientSelection, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, StateSnapshotChangedError, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
 import { pipelineActivitySettled } from "./types";
 import type { Pipeline, PipelineCreationIntent, PipelineDeliveryTarget, PipelinePublication, PipelineStage } from "./types";
@@ -181,6 +181,10 @@ export async function selectControllerPipelines(kind: import("@/lib/state/pipeli
   return pipelineStore().pipelineControllerSelection(kind, throughOrder, controllerPipelineKeys());
 }
 
+export async function selectProvisioningSlice(throughOrder: number, now: number): Promise<Pipeline[]> {
+  return pipelineStore().pipelineControllerSelection("provisioning", throughOrder, controllerPipelineKeys(), { now, limit: 4 });
+}
+
 /** Indexed row + scheduling generation, including writers that bypass the
  * collection revision. This read never decodes history or waits on a lease. */
 export function controllerPipelineVersionNow(id: string): string {
@@ -226,8 +230,19 @@ export async function pipelineRecoveryWindow(after: { row_order: number; row_key
   return waitForStateLock("pipelines.provider-recovery-schedule", () => stateLockAttempt("pipelines.provider-recovery-schedule", () => pipelineStore().pipelineRecoveryWindow(after, limit)));
 }
 
-export async function selectPipelineControllerWork(now: number, excluded: readonly string[]) {
-  return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickWork(now, excluded)));
+export async function selectPipelineControllerWork(now: number, excluded: readonly string[], limit = 4) {
+  return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () => pipelineStore().pipelineTickWork(now, excluded, limit)));
+}
+export async function selectExcludedProvisioning(now: number, excluded: readonly string[]) {
+  return waitForStateLock("pipelines.controller-schedule", () => stateLockAttempt("pipelines.controller-schedule", () =>
+    pipelineStore().dueExcludedProvisioning(now, excluded)));
+}
+export async function acknowledgeExcludedProvisioning(work: import("@/lib/state/pipelineControllerSchedule").PipelineTickWork, retryAt: number) {
+  return (await waitForStateLock("pipelines.controller-schedule", pipelineStore)).acknowledgeExcludedProvisioning(work, retryAt);
+}
+export async function provisioningCacheOwnerKeys(identity: string): Promise<string[]> {
+  return waitForStateLock("pipelines.controller-candidate", () => stateLockAttempt("pipelines.controller-candidate", () =>
+    pipelineStore().provisioningCacheOwnerKeys(identity)));
 }
 export async function pipelineControlOwnership(key: string) {
   return waitForStateLock("pipelines.control-ownership", () => stateLockAttempt("pipelines.control-ownership", () =>
@@ -1153,6 +1168,10 @@ export async function withDeliveryMutationAsync<R>(operation: (tx: StateBoundedT
   }, remaining()));
 }
 
+export function withProvisioningCheckpoint<R>(operation: (tx: StateBoundedTransaction<Pipeline>) => R, waitMs: number): Promise<R> {
+  return withDeliveryMutationAsync(operation, 4, performance.now() + Math.max(0, Math.min(500, waitMs)));
+}
+
 /** A short state admission publishes the durable fence. The sweep owns its
  * lifetime outside this lease and re-reads authority before removing data. */
 export async function claimAttemptRetirement(pipelineId: string, directory: string, waitMs?: number) {
@@ -1394,6 +1413,7 @@ export function archivedPipelinesRevision(): number {
 }
 
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
+  if (pipeline.provisioningJob) return false;
   const taskLinks = loadTasksByIds(new Set(pipeline.taskIds)).flatMap(task => task.workLinks ?? []);
   if (issueDeliveryHoldsArchive(pipeline, nowMs, taskLinks)) return false;
   // The receipt sweep reads the hot collection, even after closure or hiding.
@@ -1455,10 +1475,10 @@ export async function checkpointPipelineRollbackMirrorsForDemotionAsync(): Promi
   return { pipelines, pipelinesArchive };
 }
 
-/** Active collection source for the bounded MCP selection projection. */
-export function pipelineSelectionSource() {
-  const collection = pipelineStore();
-  return { filename: stateDatabaseFile(), read: (id: string) => collection.get(id) };
+/** By-id materialization for the bounded MCP selection projection. */
+export function pipelineSelectionSource(includeArchived = false) {
+  const { active, archive } = stores();
+  return { filename: stateDatabaseFile(), read: (id: string) => active.get(id) ?? (includeArchived ? archive.get(id) : null) };
 }
 
 /** Bind one in-flight operation to its store, avoiding state-path resolution
@@ -1492,20 +1512,31 @@ export function loadPipelinesForTask(taskId: string): Pipeline[] {
   });
 }
 
+export function loadPipelinesForSeatAgenda(taskIds: readonly string[], laneIds: readonly string[]): Pipeline[] {
+  const lanes = new Map<string, Pipeline>();
+  for (const row of readPipelineRowsForTasks(stateDatabaseFile(), taskIds, laneIds)) {
+    const lane = decodePipeline(row);
+    if (lane && !lanes.has(lane.id)) lanes.set(lane.id, lane);
+  }
+  return [...lanes.values()];
+}
+
 /** Bounded feed for consumers that need task membership changes without loading
  * the full pipeline registry. The cursor follows the active collection log. */
-export function pipelineTaskBindingSource() {
+export function pipelineChangeSource() {
   const collection = pipelineStore();
   return {
     revision: () => collection.revision(),
     changesAfter: (revision: number, key: string, limit: number) => collection.changesAfter(revision, key, limit),
     parse: (valueJson: string) => {
       const pipeline = decodePipeline(JSON.parse(valueJson));
-      if (!pipeline) throw new PipelineStoreError("invalid pipeline row in task-binding feed");
+      if (!pipeline) throw new PipelineStoreError("invalid pipeline row in change feed");
       return pipeline;
     },
   };
 }
+
+export const pipelineTaskBindingSource = pipelineChangeSource;
 
 /** Validates durable task membership at the pipeline store seam. */
 export function pipelineTaskLinkError(
@@ -1514,6 +1545,8 @@ export function pipelineTaskLinkError(
   tasks: readonly BoardTask[],
   options: { allowMissing?: boolean } = {},
 ): string | null {
+  const resolveProject = projectAliasResolver();
+  const project = resolveProject(pipeline.project);
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
   for (const taskId of taskIds) {
     const task = tasksById.get(taskId);
@@ -1521,7 +1554,7 @@ export function pipelineTaskLinkError(
       if (options.allowMissing) continue;
       return `task not found: ${taskId}`;
     }
-    if (task.project !== pipeline.project) return `task project does not match pipeline project: ${taskId}`;
+    if (resolveProject(task.project) !== project) return `task project does not match pipeline project: ${taskId}`;
   }
   return null;
 }

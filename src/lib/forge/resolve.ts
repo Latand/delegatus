@@ -39,6 +39,18 @@ export function taskRepository(
   return githubRepositoryOfRemote(recorded(task.project));
 }
 
+/** A task's repository: its project's remote, else the first repository a
+    pipeline carrying it names. Demand, routing and display share this one rule. */
+export function taskRepositoryOrCarrier(
+  task: Pick<BoardTask, "project">,
+  carriers: readonly Pick<Pipeline, "delivery" | "project">[],
+  recorded: (project: string) => string | null = recordedProjectRemote,
+): string | null {
+  return taskRepository(task, recorded)
+    ?? carriers.map((pipeline) => pipelineRepository(pipeline, recorded)).find(Boolean)
+    ?? null;
+}
+
 /** What the cache says a number is, for normalizing a bare attach. */
 export function cachedKindOf(cache: ForgeCacheView = forgeCacheView()) {
   return (repository: string, number: number): WorkLinkKind | null => {
@@ -83,11 +95,10 @@ export function lanePullRequest(pipeline: Pipeline): { repository: string; numbe
   return prs.length === 1 ? { repository: prs[0]!.repository, number: prs[0]!.number } : null;
 }
 
-export function taskWorkLinks(task: BoardTask, pipelines: readonly Pipeline[], cache: ForgeCacheView = forgeCacheView()): ResolvedWorkLinks {
+export function taskWorkLinks(task: Pick<BoardTask, "id" | "project" | "workLinks">, pipelines: readonly Pipeline[], cache: ForgeCacheView = forgeCacheView()): ResolvedWorkLinks {
   const linked = pipelines.filter((pipeline) => pipeline.taskIds?.includes(task.id));
   const carried = linked.map((pipeline) => pipelineWorkLinks(pipeline, cache));
-  const repository = taskRepository(task) ?? linked.map((pipeline) => pipelineRepository(pipeline)).find(Boolean) ?? null;
-  return resolveTaskLinks(task, carried, cache, repository);
+  return resolveTaskLinks(task, carried, cache, taskRepositoryOrCarrier(task, linked));
 }
 
 /** The cards that aggregate a pipeline's links, keyed by task id, so an edit on
@@ -144,9 +155,7 @@ export function workLinksForBoard(
     const carried = byTask.get(task.id) ?? [];
     const numberedHold = (task.hold?.kind === "pr" || task.hold?.kind === "issue") && /^\d+$/.test(task.hold.ref ?? "");
     if (!carried.length && !task.workLinks?.length && !numberedHold) continue;
-    const repository = taskRepository(task, recorded)
-      ?? pipelines.filter((pipeline) => pipeline.taskIds?.includes(task.id)).map((pipeline) => pipelineRepository(pipeline, recorded)).find(Boolean)
-      ?? null;
+    const repository = taskRepositoryOrCarrier(task, pipelines.filter((pipeline) => pipeline.taskIds?.includes(task.id)), recorded);
     const resolved = resolveTaskLinks(task, carried, cache, repository);
     if (resolved.links.length || (numberedHold && resolved.repository)) out.tasks[task.id] = resolved;
   }
@@ -163,7 +172,7 @@ export function taskWorkLinkContext(loadPipelines: () => readonly Pipeline[]): (
     const pipelines = () => (carried ??= loadPipelines().filter((pipeline) => pipeline.taskIds?.includes(task.id)));
     const canonical = canonicalRepository(cache);
     return {
-      repository: taskRepository(task) ?? pipelines().map((pipeline) => pipelineRepository(pipeline)).find(Boolean) ?? null,
+      repository: taskRepositoryOrCarrier(task, pipelines()),
       kindOf: cachedKindOf(cache),
       canonical,
       autoVia: (link) => taskWorkLinks({ ...task, workLinks: [] }, pipelines(), cache).links

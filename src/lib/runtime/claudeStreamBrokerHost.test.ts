@@ -381,6 +381,9 @@ test.each([
         const expected = path.join(access.scratchDirectory!, "tmp");
         expect(path.dirname(access.scratchDirectory!)).toBe(directory);
         expect(captured.options?.env?.TMPDIR).toBe(expected);
+        /* Tools that read TMP or TEMP instead of TMPDIR land in the same scratch. */
+        expect(captured.options?.env?.TMP).toBe(expected);
+        expect(captured.options?.env?.TEMP).toBe(expected);
         expect(captured.options?.env?.LLV_EVIDENCE_DIR).toBe(access.env.LLV_EVIDENCE_DIR);
         expect(expected).not.toBe(sourceEnv.TMPDIR);
         const child = Bun.spawnSync([process.execPath, "-e",
@@ -653,6 +656,15 @@ test.each([
       const denied = args[args.indexOf("--disallowedTools") + 1];
       expect(denied.includes("Edit,Write,NotebookEdit")).toBe(sandbox === null);
       expect(captured.options?.env).toMatchObject({ LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource });
+      /* A host re-hosted at startup gets its own on-disk attempt scratch as
+         TMPDIR, TMP and TEMP, like the launch it replaces. */
+      const temporary = captured.options?.env?.TMPDIR ?? "";
+      expect(path.basename(temporary)).toBe("tmp");
+      expect(path.dirname(path.dirname(temporary))).toBe(path.join(directory, "state", "scratch"));
+      expect(path.basename(path.dirname(temporary))).toMatch(sandbox === "restricted" || sandbox === null ? /^llv-read-only-stage-/ : /^llv-stage-/);
+      expect(fs.statSync(temporary).isDirectory()).toBeTrue();
+      expect(captured.options?.env?.TMP).toBe(temporary);
+      expect(captured.options?.env?.TEMP).toBe(temporary);
       expect(captured.options?.env?.LLV_STATE_DIR).toBe(path.join(
         captured.options?.env?.XDG_CONFIG_HOME ?? "", "agent-log-viewer", "state",
       ));
@@ -4017,7 +4029,7 @@ describe("ClaudeStreamBrokerHost", () => {
     await expect(host.release()).resolves.toBeUndefined();
   });
 
-  for (const outcome of ["accepted", "refused", "replaced", "new descendant"] as const) {
+  for (const outcome of ["accepted", "refused", "replaced", "new descendant", "authority changed"] as const) {
     test(`a promise-based termination capture is awaited and revalidated (${outcome})`, async () => {
       const ledger = new RecordingDeliveryLedger();
       const child = new FakeClaude(ledger);
@@ -4035,7 +4047,13 @@ describe("ClaudeStreamBrokerHost", () => {
       const entered = new Promise<void>(resolve => { enter = resolve; });
       const admitted = new Promise<boolean>(resolve => { finish = resolve; });
       host.setTerminationCapture(() => { enter(); return admitted; });
-      const stopped = host.releaseIfOwned(root);
+      let authorityChecks = 0;
+      const stopped = host.releaseIfOwned(root, async () => {
+        authorityChecks++;
+        return outcome === "authority changed" && authorityChecks > 0
+          ? { status: 409, error: "scope retirement target changed: verdict turn-settled: conversation turn changed" }
+          : null;
+      });
       try {
         await entered;
         expect(child.signals).toEqual([]);
@@ -4046,6 +4064,11 @@ describe("ClaudeStreamBrokerHost", () => {
         if (outcome === "accepted") expect(await stopped).toBe(true);
         else await expect(stopped).rejects.toThrow();
         expect(child.signals.length > 0).toBe(outcome === "accepted");
+        if (outcome === "authority changed") {
+          expect(authorityChecks).toBe(1);
+          expect(child.stdin.writableEnded).toBe(false);
+          expect(child.signals).toEqual([]);
+        }
       } finally {
         identity = "5150:owned";
         host.setTerminationCapture(null);

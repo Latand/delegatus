@@ -1,9 +1,12 @@
 import { expect, test } from "bun:test";
 
 import type { Pipeline } from "@/lib/pipelines/types";
+import type { BoardTask } from "@/lib/tasks/types";
+import { patchTask } from "@/lib/tasks/commands";
 import type { FileEntry } from "@/lib/types";
 
 import { seatAgendaAsks } from "./seatAgenda";
+import { laneRouteKey } from "@/lib/attention/routeTypes";
 
 /*
  * docs/design/attention-auto-resolve.md, acceptance 3: the seat is told what
@@ -52,16 +55,22 @@ test("a routed lane names the stage's own question, the decision answer path and
   expect(line!.label).toContain("pipeline_action resolve-decision");
 });
 
-test.each([null, "the clicked launch is still starting"])("an interrupted stage launch wake carries its original receipt (%j)", attemptError => {
+test.each([
+  { launchId: "interrupted-launch", attemptError: null },
+  { launchId: "interrupted-launch", attemptError: "the clicked launch is still starting" },
+  { launchId: null, attemptError: null },
+])("an interrupted stage launch wake gives the seat a retry action (%j)", ({ launchId, attemptError }) => {
   const detail = "structured spawn interrupted before runtime admission: interrupted-launch";
   const lane = {
     id: "lane", task: "Review changes", project: "project-a", state: "needs_decision", createdAt: at, stateDetail: detail,
     stages: [{ id: "review", kind: "run" }], cursor: { stageId: "review", state: "spawning" },
-    runs: [{ stageId: "review", attempts: [{ n: 1, state: "needs_decision", launchId: "interrupted-launch", error: attemptError ?? detail }] }],
+    runs: [{ stageId: "review", attempts: [{ n: 1, state: "needs_decision", launchId, error: attemptError ?? detail }] }],
     attentionRoute: { key: "lane:lane:lane-decision:none", owner: "seat", seat: "conversation_seat" },
   } as unknown as Pipeline;
   const [line] = seatAgendaAsks({ files: [], pipelines: [lane] }, now, "project-a");
-  expect(line!.label).toContain('pipeline_action retry-stage with stageId "review" and launchId "interrupted-launch"');
+  expect(line!.label).toContain(launchId
+    ? 'pipeline_action retry-stage with stageId "review" and launchId "interrupted-launch"'
+    : "pipeline_action retry-stage checks the original launch");
 });
 
 test.each(["fail-edge budget exhausted after 2 round(s)", "round limit reached"])("a failed visual gate with %s gets review advice", (detail) => {
@@ -119,7 +128,7 @@ test("a parked lane's line names its stop class before the stage's words", () =>
     attentionRoute: { key: "lane:commit:lane-decision:none", owner: "seat", seat: "conversation_seat" },
   } as unknown as Pipeline;
   const [line] = seatAgendaAsks({ files: [], pipelines: [lane] }, now, "project-a");
-  expect(line!.label).toStartWith("[commit] Ship the panel — stage build stopped: stage failed");
+  expect(line!.label).toStartWith("[commit] Ship the panel — stage build pipeline_action retry-stage;");
   expect(line!.label).toContain("pipeline_action retry-stage");
   expect(line!.label).not.toContain("resolve-decision");
 });
@@ -140,4 +149,117 @@ test("only the successor delivery owner asks for a shared PR merge", () => {
   owner.merge!.blockedAt = later;
   owner.attentionRoute!.key = `lane:owner:merge:${later}`;
   expect(seatAgendaAsks({ files: [], pipelines: [old, olderWithoutMerge, owner] }, now + 180, "project-a").map(ask => ask.id)).toEqual([owner.id]);
+});
+
+test("Waiting tasks travel by their task ask, lane ask or pause reminder", () => {
+  const held = (id: string, kind: "external" | "operator" | "postponed", project = "project-a"): BoardTask => ({
+    id, project, status: "blocked", text: `Check ${id}`, placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
+    hold: { kind, since: at, by: "agent", note: "Fixture wait" },
+  });
+  const includes = [
+    held("unowned", "external"), held("operator", "operator"), held("dated", "postponed"),
+    held("with-merge", "external"), held("with-pause", "external"), held("elsewhere", "external", "project-b"),
+  ];
+  const merge = { ...mergeLane("merge", "checks did not finish in 90 min"), taskIds: ["with-merge"], closedAt: at };
+  const pause = { ...mergeLane("pause", ""), taskIds: ["with-pause"], attentionRoute: undefined, merge: undefined,
+    state: "paused" as const, pausedAt: new Date(now * 1000 - 86_400_000).toISOString() };
+  const waits = new Map<string, string[]>();
+  const asks = seatAgendaAsks({ files: [], pipelines: [merge, pause], tasks: includes }, now, "project-a", waits);
+  expect(asks.map(ask => ask.id).sort()).toEqual(["merge", "unowned"]);
+  expect(asks.find(ask => ask.id === "unowned")).toMatchObject({
+    key: expect.stringMatching(/^task:unowned:unowned:/), waitingTaskIds: ["unowned"],
+    label: expect.stringContaining("«Check unowned» (task unowned)"),
+  });
+  const mergeAsk = asks.find(ask => ask.id === "merge")!;
+  expect(mergeAsk.label).toContain("with-merge");
+  expect(mergeAsk.label).toContain("pipeline_action retry-merge");
+  expect(mergeAsk.key).not.toBe(seatAgendaAsks({ files: [], pipelines: [merge] }, now, "project-a")[0]!.key);
+  expect([...waits]).toEqual([["pause", ["with-pause"]]]);
+});
+
+test("lane handoffs page every linked task and retain a task moved to Inbox", () => {
+  const tasks: BoardTask[] = Array.from({ length: 5 }, (_, i) => ({
+    id: `waiting-${i + 1}`, project: "project-a", text: `Resume ${i + 1}`,
+    status: i === 4 ? "inbox" : "blocked", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
+    hold: { kind: "external", by: "agent", since: at, note: "Parked publication" },
+  }));
+  const lane = { ...mergeLane("publication", "a publication reason"), taskIds: tasks.map(task => task.id) };
+  const asks = seatAgendaAsks({ files: [], pipelines: [lane], tasks }, now, "project-a");
+  expect(asks).toHaveLength(2);
+  expect(asks.map(ask => ask.waitingTaskIds).flat()).toEqual(tasks.map(task => task.id));
+  expect(asks.map(ask => ask.label).join(" ")).toContain("waiting-5");
+  expect(asks.every(ask => ask.label.includes("pipeline_action retry-merge"))).toBe(true);
+});
+
+test("a completed closed merge keeps the task and retry action together on its wake", () => {
+  const task: BoardTask = { id: "task-merge", project: "project-a", text: "Publish the change", status: "blocked",
+    placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
+    hold: { kind: "external", by: "agent", since: at, note: "Waiting for merge" } };
+  const lane = { ...mergeLane("engine-completed", "checks did not finish"), taskIds: [task.id], closedAt: at };
+  const [ask] = seatAgendaAsks({ files: [], pipelines: [lane], tasks: [task] }, now, "project-a");
+  expect(ask).toMatchObject({ id: lane.id, waitingTaskIds: [task.id] });
+  expect(ask!.label).toContain(task.id);
+  expect(ask!.label).toContain("pipeline_action retry-merge");
+});
+
+test("a long returned-round lane wake keeps retry-stage and every task id before explanatory text", () => {
+  const ids = [1, 2, 3, 4].map(number => `waiting-task-fixture-with-long-id-0${number}`);
+  const tasks = ids.map(id => ({ id, project: "project-a", text: "Retry publication", status: "blocked" as const, placement: "unplaced" as const,
+    assignments: [], createdAt: at, updatedAt: at, hold: { kind: "external" as const, note: "Publication parked", since: at, by: "agent" as const } }));
+  const effectiveRole = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const attentionRoute = { key: "", owner: "seat" as const, seat: "conversation_seat", returnedFrom: "round-returned-12345678901234567890" };
+  const long: Pipeline = { ...mergeLane("publication", "stage failed"), state: "needs_decision", taskIds: ids,
+    stages: [{ id: "publish", kind: "run", prompt: "Publish", next: null, effectiveRole }],
+    cursor: { stageId: "publish", state: "running", input: null, activatedBy: null },
+    runs: [{ stageId: "publish", attempts: [{ n: 1, state: "failed", error: "stage failed", effectiveRole,
+      launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+      startedAt: at, completedAt: at, input: null, activatedBy: null, output: null, verdict: null }] }],
+    attentionRoute };
+  attentionRoute.key = laneRouteKey(long, "lane-decision");
+  const ask = seatAgendaAsks({ files: [], pipelines: [long], tasks }, now, "project-a").find(item => item.id === "publication")!;
+  expect(ask.waitingTaskIds).toEqual(ids);
+  expect(ask.label).toContain("pipeline_action retry-stage");
+  for (const id of ids) expect(ask.label).toContain(id);
+});
+
+test("a long returned merge wake retains every task id and retry action before the long reason", () => {
+  const ids = [1, 2, 3, 4].map(number => `waiting-task-fixture-with-long-id-0${number}`);
+  const tasks = ids.map(id => ({ id, project: "project-a", text: "Retry publication", status: "blocked" as const, placement: "unplaced" as const,
+    assignments: [], createdAt: at, updatedAt: at, hold: { kind: "external" as const, note: "Publication parked", since: at, by: "agent" as const } }));
+  const lane = mergeLane("returned-merge", "long merge reason ".repeat(14));
+  lane.taskIds = ids;
+  lane.attentionRoute = { ...lane.attentionRoute!, returnedFrom: "round-returned-12345678901234567890" };
+  const ask = seatAgendaAsks({ files: [], pipelines: [lane], tasks }, now, "project-a").find(item => item.id === lane.id)!;
+  expect(ask.waitingTaskIds).toEqual(ids);
+  expect(ask.label).toContain("pipeline_action retry-merge");
+  expect(ask.label).toContain(lane.attentionRoute.returnedFrom!);
+  expect(ask.label).toContain("read_prototype_review");
+  expect(ask.label.length).toBeLessThanOrEqual(700);
+  for (const id of ids) expect(ask.label).toContain(id);
+});
+
+test("the maintenance hold resend write leaves a named task action on the next seat agenda", () => {
+  const task: BoardTask = { id: "moved-task", project: "project-a", text: "Resume publication", status: "blocked",
+    placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
+    hold: { kind: "external", by: "agent", since: at, note: "Parked publication" } };
+  const moved = patchTask([task], task.id, { hold: task.hold }, at, { actor: "agent" });
+  if (!moved.ok) throw new Error(moved.error);
+  const lane = { ...mergeLane("publication", "checks did not finish"), taskIds: [task.id] };
+  const [ask] = seatAgendaAsks({ files: [], pipelines: [lane], tasks: [moved.task] }, now, "project-a");
+  expect(moved.task.status).toBe("inbox");
+  expect(ask).toMatchObject({ id: lane.id, waitingTaskIds: [task.id] });
+  expect(ask!.label).toContain(`Waiting task(s) ${task.id}`);
+  expect(ask!.label).toContain("pipeline_action retry-merge");
+});
+
+test("an archived merged lane still routes its task to build acceptance", () => {
+  const task: BoardTask = { id: "archived-task", project: "project-a", text: "Verify deployment", status: "blocked",
+    placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
+    hold: { kind: "external", by: "agent", since: at, note: "Check the build" } };
+  const lane = { ...mergeLane("archived-lane", ""), state: "completed" as const,
+    merge: { state: "merged", updatedAt: at } as Pipeline["merge"], hiddenAt: at, taskIds: [task.id] };
+  const [ask] = seatAgendaAsks({ files: [], pipelines: [lane], tasks: [task] }, now, "project-a");
+  expect(ask).toMatchObject({ id: task.id, waitingTaskIds: [task.id] });
+  expect(ask!.label).toContain("deployment_status");
+  expect(ask!.label).toContain(task.id);
 });

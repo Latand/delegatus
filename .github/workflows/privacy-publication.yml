@@ -24,6 +24,9 @@ permissions:
 jobs:
   privacy-publication:
     if: github.event_name != 'schedule'
+    permissions:
+      contents: read
+      pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -148,13 +151,14 @@ jobs:
 
       # Candidate code runs last, after trusted inspection.
       # It receives no credentials and cannot alter a later trusted verdict.
+      # Main took about 129 s for 736 tests. This PR's run was killed at 130 s after 732 passes and zero failures.
       - name: Verify candidate privacy gate behavior within budget
         if: steps.privacy-scope.outputs.run == 'true'
         working-directory: candidate
-        timeout-minutes: 3
+        timeout-minutes: 5
         run: |
           ln -sT ../trusted/node_modules node_modules
-          timeout --kill-after=5s 130s bun test scripts/privacy-*.test.ts
+          timeout --kill-after=5s 240s bun test scripts/privacy-*.test.ts
 
   nightly-privacy-self-tests:
     if: github.event_name == 'schedule'

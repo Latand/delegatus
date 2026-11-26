@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { callBody, callableReads, callableTools, canonical, createToolLoop, mayQuote } from "./toolLoop";
+import { callBody, callableReads, callableTools, canonical, createToolLoop } from "./toolLoop";
+import { relayToolAudience } from "./protocol";
 import { ownerRequest, x1Bodies, x1Errors, x1Request, x1Results } from "./toolLoop.fixture";
 import { setRelaySwitch } from "./switches";
 import { startTestRelay } from "./testRelay";
@@ -149,13 +150,15 @@ test("canonical call identity survives argument ordering and a new lease", () =>
   expect(canonical(JSON.parse('{"__proto__":{"z":1,"a":2}}'))).toBe('{"__proto__":{"a":2,"z":1}}');
 });
 test("X1 audience gates pending, timeout and replay alike, including anonymous admin", () => {
-  for (const role of ["member", "admin", "anonymous_admin", "owner"])
-    for (const name of ["admin", "admin_pending", "admin_timeout", "owner", "owner_pending", "owner_timeout"]) {
-      const requester = x1Request(role).input.requester;
-      expect(mayQuote(x1Results[name]!.audience, requester)).toBe(name.startsWith("owner") ? role === "owner" : role !== "member");
-    }
-  expect(mayQuote(undefined, null)).toBe(true);
-  expect(mayQuote("unknown", x1Request("owner").input.requester)).toBe(false);
+  for (const role of ["member", "admin", "anonymous_admin", "owner"]) {
+    const mayQuote = relayToolAudience(x1Request(role));
+    for (const name of ["admin", "admin_pending", "admin_timeout", "owner", "owner_pending", "owner_timeout"])
+      expect(mayQuote(x1Results[name]!.audience)).toBe(name.startsWith("owner") ? role === "owner" : role !== "member");
+  }
+  const request = x1Request("owner");
+  expect(relayToolAudience(request)("unknown")).toBe(false);
+  request.input.requester = null;
+  expect(relayToolAudience(request)(undefined)).toBe(true);
 });
 
 for (const rejection of ["unauthorized", "unsupported_version"])
@@ -207,7 +210,10 @@ test("2b callable indexes require requester and the index audience", () => {
   request.input.requester = null;
   expect(callableTools(request).every((tool) => tool.effect === "read")).toBe(true);
   for (const role of ["admin", "anonymous_admin", "owner"]) {
-    request.input.requester = x1Request(role).input.requester;
+    const { input } = x1Request(role);
+    request.input.requester = input.requester;
+    request.input.conversation = input.conversation;
+    request.input.respond_to = input.respond_to;
     request.input.tools = [{ name: "synthetic_owner_action", summary: "Synthetic action", mode: "direct", effect: "action", audience: "owner", parameters: { type: "object" } }];
     expect(callableTools(request)).toHaveLength(role === "owner" ? 1 : 0);
   }
@@ -298,6 +304,25 @@ for (const status of ["ok", "denied", "confirmation_pending", "outcome_unknown"]
       expect(loop.records[0]).toMatchObject({ withheld: true, effect: "action", status });
     } finally { await server.close(); }
   });
+
+test("service text never carries a pending enrolment code into a read output or a confirmation summary", async () => {
+  const code = "DLG-0A1B2C3D4E5F";
+  const { loop, server } = await actionLoopCase((_req, body) => {
+    const call = body as ReturnType<typeof callBody>;
+    const action = "tool" in call && call.tool === "react_to_message";
+    return { body: action
+      ? { ...x1Results.action_ok, call_id: call.call_id, status: "confirmation_pending", output: `queued ${code.toLowerCase()}`,
+        summary: `React to "@clone ${code}"`, expires_at: "2026-10-07T12:10:00Z" }
+      : { ...x1Results.ok, call_id: call.call_id, tool: "search_docs", output: `[1] @clone ${code}\n[2] my code is${code}ok` } };
+  }, undefined, { now: () => Date.parse("2026-10-07T12:00:00Z") });
+  try {
+    await loop.runCalls([actionCall("search_docs", { query: "clone" })], 1);
+    await loop.runCalls([actionCall()], 2);
+    expect(loop.results[0]).toMatchObject({ status: "ok", output: "[1] @clone [enrolment code]\n[2] my code is[enrolment code]ok" });
+    expect(loop.results[1]).toMatchObject({ status: "confirmation_pending", output: "queued [enrolment code]", summary: 'React to "@clone [enrolment code]"' });
+    expect(JSON.stringify([loop.results, loop.records])).not.toMatch(/DLG-/i);
+  } finally { await server.close(); }
+});
 
 test("an action over the cumulative output budget keeps status and code", async () => {
   const { loop, server } = await actionLoopCase((_req, body) => {

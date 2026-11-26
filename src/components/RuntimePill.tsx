@@ -137,11 +137,11 @@ export function speedPatch(tier: SpeedTier): Pick<RuntimeDraft, "fast" | "servic
   return { fast: tier !== "default", serviceTier: tier === ULTRA_TIER ? ULTRA_TIER : null };
 }
 
-function modelShortLabel(engine: "claude" | "codex" | "copilot", modelId: string): string {
+function modelShortLabel(engine: "claude" | "codex" | "copilot" | "antigravity", modelId: string): string {
   return ENGINE_MODELS[engine].find((m) => m.id === modelId)?.shortLabel ?? modelId;
 }
 
-function modelLabel(engine: "claude" | "codex" | "copilot", modelId: string): string {
+function modelLabel(engine: "claude" | "codex" | "copilot" | "antigravity", modelId: string): string {
   return ENGINE_MODELS[engine].find((m) => m.id === modelId)?.label ?? modelId;
 }
 
@@ -171,7 +171,7 @@ export function RuntimePill({
 }) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
-  const engine = file.engine === "claude" || file.engine === "codex" || file.engine === "copilot" ? file.engine : null;
+  const engine = file.engine === "claude" || file.engine === "codex" || file.engine === "copilot" || file.engine === "antigravity" ? file.engine : null;
   /* Any pipeline's conversation changes speed through its stage, never the conversation's own speed action. */
   const stageBound = Boolean(file.durableLineage?.memberships.some((item) => item.kind === "pipeline"));
   const pillSurface: PillSurface | null =
@@ -808,7 +808,7 @@ export function RuntimePill({
     pillRef.current?.focus();
   }, []);
 
-  const accountChoice: AccountChoice | null = pillSurface === "structured" && engine !== "copilot"
+  const accountChoice: AccountChoice | null = pillSurface === "structured" && engine !== "copilot" && engine !== "antigravity"
     ? {
         runsOn: runsOnAccount,
         next: nextAccount,
@@ -1181,7 +1181,7 @@ function accountLine(t: TFunction, account: string, choice: AccountChoice | null
 interface PanelProps {
   accessibleLabel?: string;
   t: TFunction;
-  engine: "claude" | "codex" | "copilot";
+  engine: "claude" | "codex" | "copilot" | "antigravity";
   modelOptions: readonly AgentModelOption[];
   /** The account this conversation runs on, which both surfaces name (#1795). */
   account: string;
@@ -1336,7 +1336,7 @@ export function RuntimePopover({
           {/* Which account the conversation runs on (#1795). The desktop card
               carries the badge in its header; the popover is where the runtime
               is chosen, so it says it here too. */}
-          {(engine !== "copilot" || accountStart) && (error ?? accountStart ?? accountLine(t, account, accountChoice, nameOf)) ? (
+          {(engine !== "copilot" && engine !== "antigravity" || accountStart) && (error ?? accountStart ?? accountLine(t, account, accountChoice, nameOf)) ? (
             <div className={`px-2 pb-1 pt-1.5 text-label ${error ? "break-words text-danger" : "text-muted"}`} data-runtime-popover-account>
               {error ?? accountStart ?? accountLine(t, account, accountChoice, nameOf)}
             </div>
@@ -1354,7 +1354,7 @@ export function RuntimePopover({
         </>
       ) : (
         <div role="group" aria-label={panel === "model" ? t("composer.modelGroup") : panel === "account" ? t("mobile2.composer.accountGroup") : t("composer.speedGroup")}>
-          {panel === "account" && accountChoice && engine !== "copilot" && !ownAccounts ? <EngineAccountsFeed engine={engine} onAccounts={setAccountOptions} /> : null}
+          {panel === "account" && accountChoice && engine !== "copilot" && engine !== "antigravity" && !ownAccounts ? <EngineAccountsFeed engine={engine} onAccounts={setAccountOptions} /> : null}
           {rows.map((row, index) => (
             <MenuRow key={row.key} row={row} active={index === activeIndex} refFor={(el) => { rowRefs.current[index] = el; }} />
           ))}
@@ -1469,7 +1469,7 @@ function buildRows({
       ? options
       : [{ id: accountChoice.runsOn, label: nameOf(accountChoice.runsOn) }, ...options];
     const tint = engineTintOf(engine).color;
-    const weeklies = listed.map((option) => engine === "copilot" ? null : accountWeeklyLeft(option.limits, now, tint));
+    const weeklies = listed.map((option) => engine === "copilot" || engine === "antigravity" ? null : accountWeeklyLeft(option.limits, now, tint));
     const weeklyColumn = weeklies.some(Boolean);
     return [
       back(t("mobile2.composer.accountGroup")),
@@ -1727,7 +1727,7 @@ export function RuntimeSheet({
           </div>
         </div>
 
-        {engine !== "copilot" ? (
+        {engine !== "copilot" && engine !== "antigravity" ? (
           <AccountSection t={t} engine={engine} account={account} nameOf={nameOf} limit={limit} choice={accountChoice ?? null} start={accountStart} error={error ?? null} listed={ownAccounts} />
         ) : ownAccounts && accountChoice ? (
           <div data-runtime-sheet-accounts>

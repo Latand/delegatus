@@ -232,6 +232,22 @@ export function readAttentionDismissals(filePath = attentionDismissalsFile(), no
   return file.updatedAt ? file : { ...file, updatedAt: now.toISOString() };
 }
 
+/** A task patch can resolve its decision form while holding the task writer. */
+export function readExistingAttentionDismissals(filePath = attentionDismissalsFile()): AttentionDismissalsFileV1 {
+  return dismissalsStore.readExisting(filePath);
+}
+
+const prototypeIndex = dismissalsStore.existingIndex(file => {
+  const index = attentionDismissalIndex(file);
+  for (const key of index.keys()) if (!key.startsWith("prototype:")) index.delete(key);
+  return index;
+});
+
+/** Decisions look up prototype keys, including aliases contributed by other subjects. */
+export function readExistingPrototypeDismissals(filePath = attentionDismissalsFile()): Map<string, AttentionDismissalV1> {
+  return prototypeIndex(filePath);
+}
+
 /** Each conversation's dismissal, by durable id and by transcript path, for
     the `/api/files` projection. */
 export function attentionDismissalIndex(file: AttentionDismissalsFileV1 = readAttentionDismissals(), includeRestored = false): Map<string, AttentionDismissalV1> {

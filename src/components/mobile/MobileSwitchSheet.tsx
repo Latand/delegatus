@@ -124,8 +124,11 @@ const SECTION_LABEL: Record<SwitchSection, MessageKey> = {
   drafts: "mobile2.chat.sectionDrafts",
 };
 
-function SwitchRow({ t, entry, current, nowMs, onPick }: { t: TFunction; entry: SwitchEntry; current: boolean; nowMs: number; onPick: () => void }) {
-  const bits = entry.file ? chatStateBits(t, entry.file, { nowMs }) : null;
+function SwitchRow({ t, entry, current, nowMs, seatWaiting, decisionWaiting, onPick }: { t: TFunction; entry: SwitchEntry; current: boolean; nowMs: number; seatWaiting: boolean; decisionWaiting: boolean; onPick: () => void }) {
+  /* Only the seat's own row speaks its waiting reading: the same words the bar
+     and the conversation menu carry for it. */
+  const isSeat = entry.section === "orchestrator";
+  const bits = entry.file ? chatStateBits(t, entry.file, { nowMs, seatWaiting: isSeat && seatWaiting, decisionWaiting: isSeat && decisionWaiting }) : null;
   const badge = entry.file ? engineBadge(entry.file) : null;
   return (
     <button
@@ -143,9 +146,9 @@ function SwitchRow({ t, entry, current, nowMs, onPick }: { t: TFunction; entry: 
         <span className="flex min-w-0 items-center gap-1 text-label font-medium text-secondary">
           {bits ? (
             <>
-              <span className={`shrink-0 ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
+              <span data-mobile2-state-phrase={bits.tone} className={`shrink-0 ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
               <span aria-hidden className="text-muted">·</span>
-              {entry.file ? <ChatEngineMark file={entry.file} /> : null}
+              {entry.file ? <ChatEngineMark file={entry.file} working={bits.key === "working"} /> : null}
               <span className="min-w-0 truncate">{(entry.file ? fileModelLabel(entry.file) : null) ?? badge?.label}</span>
             </>
           ) : (
@@ -163,6 +166,8 @@ export function MobileSwitchSheet({
   entries,
   currentKey,
   nowMs = Date.now(),
+  seatWaiting = false,
+  decisionWaiting = false,
   onPick,
   onBoard,
   onProjects,
@@ -173,6 +178,10 @@ export function MobileSwitchSheet({
   entries: readonly SwitchEntry[];
   currentKey: string | null;
   nowMs?: number;
+  /** The seat is hosted with its turn idle: its row reads «waiting», as its bar does. */
+  seatWaiting?: boolean;
+  /** A decision form of the seat's project is open: the seat's row reads «waiting». */
+  decisionWaiting?: boolean;
   onPick: (entry: SwitchEntry) => void;
   /** «Board ›» in the header; absent when there is no board to go back to. */
   onBoard?: () => void;
@@ -223,6 +232,8 @@ export function MobileSwitchSheet({
                   entry={entry}
                   current={entry.key === currentKey}
                   nowMs={nowMs}
+                  seatWaiting={seatWaiting}
+                  decisionWaiting={decisionWaiting}
                   onPick={() => onPick(entry)}
                 />
               ))}

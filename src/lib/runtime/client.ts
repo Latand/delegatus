@@ -7,7 +7,7 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import { isNamedPipePath } from "./localEndpoint";
 import { parseViewerDeploymentListCursor, viewerDeploymentListLimit, viewerDeploymentPage,
-  type ViewerDeploymentList, type ViewerDeploymentListOptions } from "./contracts";
+  type ViewerDeploymentList, type ViewerDeploymentListOptions, type RuntimeStartupSessionEvidence, type RuntimeStartupOperationCursor } from "./contracts";
 
 
 import type { RuntimeDeliveryAction, RuntimeDeliveryActionClaim, RuntimeEventInput, RuntimeOperationCommand, RuntimeOperationResult, RuntimePendingEffect, RuntimeReceiptStatus, RuntimeReplay, RuntimeRetryOptions, RuntimeSession, RuntimeSessionRead, RuntimeSnapshot, RuntimeSocketRequest, RuntimeSocketResponse, RuntimeTransitionDetails, RuntimeTransitionOptions, ViewerDeploymentReceipt, ViewerDeploymentRequest, ViewerDeploymentStatus } from "./contracts";
@@ -135,6 +135,10 @@ export function withRuntimeRecoveryReads(client: RuntimeHostClient, signal: Abor
         target.snapshot(signal, options);
       if (property === "readSession" && target.readSession) return (identity: RuntimeSessionRead, options?: RuntimeReadOptions) =>
         target.readSession!(identity, { ...options, signal });
+      if (property === "startupSessionEvidence" && target.startupSessionEvidence) {
+        return (ids: readonly string[], options?: RuntimeReadOptions & { includeEvidence?: boolean; pendingOperationsAfter?: RuntimeStartupOperationCursor }) =>
+          target.startupSessionEvidence!(ids, { ...options, signal });
+      }
       if (property === "operationStatus") return (id: string, options?: { currentRetryLeaf?: boolean }) =>
         target.operationStatus(id, { ...options, signal });
       if (property === "effectPage" && target.effectPage) return (kinds: readonly string[] | undefined, after: number, knownVersion?: string) => target.effectPage!(kinds, after, knownVersion, { signal });
@@ -150,12 +154,15 @@ export interface RuntimeHostClient {
   readSnapshot?<K extends RuntimeSnapshotReadKind>(kind: K, conversationIds?: readonly string[], signal?: AbortSignal): Promise<RuntimeSnapshotReads[K]>;
   /** Stable listener identity; reconnecting to the same socket preserves it. */
   startupGeneration?(): Promise<string | null>;
+  /** Recheck the listener at a synchronous registry writer boundary. */
+  startupListenerIdentity?(): string | null;
   nativeQueueRead?(conversationId: string): Promise<NativeQueueRecord[]>;
   nativeQueueTransition?(operationId: string, transition: NativeQueueTransition): Promise<RuntimeOperationResult>;
   /** Canonical proof for an entry whose add operation was compacted (#1664).
       Answers the settled entry; there is no operation receipt to answer. */
   nativeQueueSettleCompacted?(request: NativeQueueCompactedProof): Promise<NativeQueueCompactedSettlement>;
   readSession?(identity: RuntimeSessionRead, options?: RuntimeReadOptions): Promise<RuntimeSession | null>;
+  startupSessionEvidence?(ids: readonly string[], options?: RuntimeReadOptions & { includeEvidence?: boolean; pendingOperationsAfter?: RuntimeStartupOperationCursor }): Promise<RuntimeStartupSessionEvidence | null>;
   filesRevision?(): Promise<number>;
   snapshot(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<RuntimeSnapshot>;
   /** The same snapshot as the UTF-8 JSON the host encoded, for a caller that
@@ -163,12 +170,13 @@ export interface RuntimeHostClient {
   snapshotBytes?(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<Uint8Array>;
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   waitEvents(after: number, timeoutMs?: number, signal?: AbortSignal): Promise<RuntimeReplay>;
+  append(event: RuntimeEventInput, authorize: () => void): Promise<unknown>;
   append(event: RuntimeEventInput): Promise<unknown>;
   /** The RPC itself requires the host's transactional session revision fence.
       An incumbent without that method refuses it; callers never retry append. */
-  appendSessionFenced?(event: RuntimeEventInput & { expectedSessionRevision: number }, options?: RuntimeReadOptions): Promise<unknown>;
+  appendSessionFenced?(event: RuntimeEventInput & { expectedSessionRevision: number | null }, options?: RuntimeReadOptions): Promise<unknown>;
   operation(event: RuntimeEventInput): Promise<unknown>;
-  command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult>;
+  command(command: RuntimeOperationCommand, authorizeBeforeWrite?: () => void, admissionDeadline?: number): Promise<RuntimeOperationResult>;
   operationStatus(operationId: string, options?: RuntimeReadOptions & { currentRetryLeaf?: boolean }): Promise<RuntimeOperationResult | null>;
   claimDeliveryAction(operationId: string, action: RuntimeDeliveryAction): Promise<RuntimeDeliveryActionClaim>;
   retryOperation(operationId: string, nextIdempotencyKey?: string, options?: RuntimeRetryOptions): Promise<RuntimeOperationResult>;
@@ -231,6 +239,34 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     // or sending the caller's transport policy over the wire.
     return this.call("session-read", { ...identity }, options?.timeoutMs ?? this.timeoutMs, options?.signal) as Promise<RuntimeSession | null>;
   }
+  async startupSessionEvidence(conversationIds: readonly string[], options: RuntimeReadOptions & { includeEvidence?: boolean; pendingOperationsAfter?: RuntimeStartupOperationCursor } = {}): Promise<RuntimeStartupSessionEvidence | null> {
+    let result: Partial<RuntimeStartupSessionEvidence> | null;
+    try {
+      result = await this.call("startup-session-evidence", { conversationIds, includeEvidence: options.includeEvidence, pendingOperationsAfter: options.pendingOperationsAfter }, options.timeoutMs ?? this.timeoutMs,
+        options.signal) as Partial<RuntimeStartupSessionEvidence> | null;
+    } catch (error) {
+      if (!(error instanceof RuntimeHostUnavailableError) || error.message !== "runtime request method is unsupported") throw error;
+      return null;
+    }
+    if (!result || typeof result.generation !== "string" || !result.generation || typeof result.version !== "string"
+      || !result.version || typeof result.effectsVersion !== "string" || !result.effectsVersion || !Array.isArray(result.sessions) || result.sessions.length !== conversationIds.length
+      || result.sessions.some(seq => seq !== null && (!Number.isSafeInteger(seq) || seq < 0))
+      || (result.pendingOperations !== undefined && (!Array.isArray(result.pendingOperations)
+        || result.pendingOperations.length > 100
+        || result.pendingOperations.some(receipt => !receipt || typeof receipt.operationId !== "string"
+          || typeof receipt.conversationId !== "string")))
+      || (result.pendingOperationsNext !== undefined && (!result.pendingOperationsNext
+        || !Number.isSafeInteger(result.pendingOperationsNext.eventSeq) || result.pendingOperationsNext.eventSeq < 0
+        || !Number.isSafeInteger(result.pendingOperationsNext.rowId) || result.pendingOperationsNext.rowId < 1))
+      || (options.includeEvidence && (result.sessions[0] === null ? result.evidence !== null
+        : !result.evidence || result.evidence.conversationId !== conversationIds[0] || !Array.isArray(result.evidence.recentReceipts)))) {
+      throw new RuntimeHostUnavailableError("runtime host returned invalid startup session evidence");
+    }
+    return { generation: result.generation, version: result.version, effectsVersion: result.effectsVersion,
+      sessions: result.sessions, evidence: result.evidence,
+      pendingOperations: result.pendingOperations, pendingOperationsNext: result.pendingOperationsNext };
+  }
+
   async filesRevision(): Promise<number> {
     try {
       const revision = await this.call("files-revision");
@@ -257,17 +293,26 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   }
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("events", { after }, this.timeoutMs, signal) as Promise<RuntimeReplay>; }
   waitEvents(after: number, timeoutMs = 15_000, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("wait", { after, timeoutMs }, timeoutMs + 1_000, signal) as Promise<RuntimeReplay>; }
-  append(event: RuntimeEventInput): Promise<unknown> { return this.call("append", { event }); }
-  appendSessionFenced(event: RuntimeEventInput & { expectedSessionRevision: number }, options: RuntimeReadOptions = {}): Promise<unknown> {
+  append(event: RuntimeEventInput, authorize?: () => void): Promise<unknown> {
+    return this.call("append", { event }, this.timeoutMs, undefined, false, authorize);
+  }
+  appendSessionFenced(event: RuntimeEventInput & { expectedSessionRevision: number | null }, options: RuntimeReadOptions = {}): Promise<unknown> {
     return this.call("append-session-fenced", { event }, options.timeoutMs ?? this.timeoutMs, options.signal);
   }
   operation(event: RuntimeEventInput): Promise<unknown> { return this.call("operation", { event }); }
-  command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult> {
+  command(command: RuntimeOperationCommand, authorizeBeforeWrite?: () => void, admissionDeadline?: number): Promise<RuntimeOperationResult> {
     // Older hosts silently discard new command fields. A separate wire method
-    // makes them refuse recovery before admitting an unfenced operation.
+    // makes them refuse staged publication if they cannot enforce its cutoff.
     const guarded = command.kind === "send" && command.onlyIfIdle
       || command.kind === "kill" && command.providerRecovery;
-    return this.call(guarded ? "guarded-command" : "command", { command }) as Promise<RuntimeOperationResult>;
+    if (admissionDeadline !== undefined) {
+      if (command.kind !== "send" || !command.operationId?.startsWith("spawn_message_")
+        || !Number.isSafeInteger(admissionDeadline) || admissionDeadline < 0) {
+        throw new Error("staged launch command requires a first-message send and a valid admission deadline");
+      }
+      return this.call("staged-launch-command", { command, admissionDeadline }, this.timeoutMs, undefined, false, authorizeBeforeWrite) as Promise<RuntimeOperationResult>;
+    }
+    return this.call(guarded ? "guarded-command" : "command", { command }, this.timeoutMs, undefined, false, authorizeBeforeWrite) as Promise<RuntimeOperationResult>;
   }
   operationStatus(operationId: string, options: RuntimeReadOptions & { currentRetryLeaf?: boolean } = {}): Promise<RuntimeOperationResult | null> {
     return this.call("operation-status", {
@@ -343,16 +388,18 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     return projectSnapshotRead(result, kind, conversationIds);
   }
   startupGeneration(): Promise<string | null> { return this.deploymentListGeneration(); }
-  private async deploymentListGeneration(): Promise<string | null> {
+  startupListenerIdentity(): string | null {
     try {
       const stat = fs.statSync(this.socketPath, { bigint: true });
       return `${stat.dev}:${stat.ino}:${stat.ctimeNs}`;
-    } catch {
-      // Named pipes have no filesystem inode. Use the existing host identity RPC.
-      if (!isNamedPipePath(this.socketPath)) return null;
-      const health = await this.call("runtime-host-health") as { pid: number; startIdentity: string; hostEpoch: number };
-      return JSON.stringify([health.pid, health.startIdentity, health.hostEpoch]);
-    }
+    } catch { return null; }
+  }
+  private async deploymentListGeneration(): Promise<string | null> {
+    const listener = this.startupListenerIdentity();
+    if (listener || !isNamedPipePath(this.socketPath)) return listener;
+    // Named pipes have no filesystem inode. Use the existing host identity RPC.
+    const health = await this.call("runtime-host-health") as { pid: number; startIdentity: string; hostEpoch: number };
+    return JSON.stringify([health.pid, health.startIdentity, health.hostEpoch]);
   }
 
   async listViewerDeployments(options: ViewerDeploymentListOptions = {}): Promise<ViewerDeploymentList> {

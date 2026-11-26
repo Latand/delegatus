@@ -58,3 +58,19 @@ test("v7 skipped answers round trip and withhold the replica from v6 peers", () 
   Object.assign(invalid.rounds[0]!.decision!.answers![1]!, { skipped: false });
   expect(isPrototypeReplica(invalid, task.id, task.project)).toBe(false);
 });
+
+test("a replacement round that was answered still crosses the wire as a full row for current and existing peers", () => {
+  const variants = [{ number: 1, name: "Compact", description: "Compact", frames: [], videos: [] }];
+  const first = { id: `pr_${"d".repeat(32)}`, taskId: task.id, project: task.project, title: "First", createdAt: "2026-10-09T00:00:00Z", source: { conversationId: null }, publicationKey: "first", inputDigest: "one", variants };
+  const second = { ...first, id: `pr_${"e".repeat(32)}`, title: "Replacement", createdAt: "2026-10-09T01:00:00Z", publicationKey: "second", inputDigest: "two",
+    decision: { chosen: [1], comment: "Go", at: "2026-10-09T02:00:00Z", delivery: { state: "sent" as const, clientMessageId: "second", conversationId: null, text: "answer" } } };
+  const answered = { ...task, prototypeReviews: [first, second] };
+  const replica = prototypeReviewReplica(answered)!;
+  expect(replica.summary).not.toHaveProperty("settledReviewIds");
+  expect(isPrototypeReplica(replica, task.id, task.project)).toBe(true);
+  for (const peerTaskWireVersion of [6, 7]) {
+    const wire = decodeWireRow(encodeTask(answered, self, { peerTaskWireVersion }).row);
+    expect(wire).toMatchObject({ id: task.id, text: task.text });
+    expect(wire && "prototypeReviewReplica" in wire && wire.prototypeReviewReplica?.rounds.map(round => round.id)).toEqual([first.id, second.id]);
+  }
+});

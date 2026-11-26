@@ -69,6 +69,11 @@ was captured from the original Delegatus revision `39f654248666faa6e5deb01d59eea
 through the existing runner test, under isolated state. It pins each role's
 prompts, schemas and calls, plus the OFF claim capabilities.
 
+The guest requester schema changes keep those historical captures intact.
+`actions-off-x2-2a-guest-schema-hashes.json` and
+`owner-tools-off-runner-guest-schema-hashes.json` pin the corresponding current
+runner schemas while guest answer negotiation is present.
+
 `evidence/external-relay/install_tool_loop_owner.json` extends the existing
 X2 runner capture format: its root is the reads run; `actions` contains
 writes, retry_ceiling, inner_404, lease_lost and confirmation. Every run drives
@@ -150,7 +155,7 @@ distinct request identities and advisory poll publications.
 
 | File | Bytes | SHA-256 |
 |---|---:|---|
-| `install_owner_private_loop.json` | 7146 | `495e43237f086390d2e64caf4ac21e1bc3ba7241af8f4107065fdaecf4fe41b5` |
+| `install_owner_private_loop.json` | 5008 | `02195c28f0f323a6233ddf544d07d540297e29c75400ff109da838f747676a29` |
 
 The ordinary test compares each complete captured payload to its stored case. Set
 `LLV_RELAY_PRIVATE_LOOP_OUTPUT` to a scratch file to export it through the

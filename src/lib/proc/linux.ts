@@ -96,6 +96,10 @@ function processExited(pid: number): boolean {
   return true;
 }
 
+async function resourceProcessExited(pid: number): Promise<boolean> {
+  return processExited(pid);
+}
+
 /** utime + stime from /proc/<pid>/stat, in milliseconds. USER_HZ is 100 on
     every Linux this runs on, which is what makes the ticks convertible. */
 function processCpuMs(pid: number): number | null {
@@ -134,6 +138,10 @@ function systemMemory(): SystemMemory | null {
   }
 }
 
+async function resourceSystemMemory(): Promise<SystemMemory | null> {
+  return systemMemory();
+}
+
 /** VmRSS + VmSwap per pid from /proc/<pid>/status. A smaps read would be
     orders of magnitude slower, and status granularity is enough for a
     cleanup UI. */
@@ -148,6 +156,10 @@ function processMemory(pids: Iterable<number>): Map<number, ProcessMemory> {
     }
   }
   return map;
+}
+
+async function resourceProcessMemory(pids: Iterable<number>): Promise<Map<number, ProcessMemory>> {
+  return processMemory(pids);
 }
 
 function ppidMap(): Map<number, number> {
@@ -168,6 +180,10 @@ function ppidMap(): Map<number, number> {
   return map;
 }
 
+async function resourcePpidMap(): Promise<Map<number, number>> {
+  return ppidMap();
+}
+
 function listProcesses(): ProcSnapshotEntry[] {
   const list: ProcSnapshotEntry[] = [];
   let procEntries: fs.Dirent[];
@@ -182,6 +198,10 @@ function listProcesses(): ProcSnapshotEntry[] {
     list.push({ pid, argv: readArgv(pid), cwd: readCwd(pid), tty: readTty(pid) });
   }
   return list;
+}
+
+async function resourceListProcesses(): Promise<ProcSnapshotEntry[]> {
+  return listProcesses();
 }
 
 /** The permission bits of a /proc fd symlink encode the open mode
@@ -233,10 +253,18 @@ function scanFdTargetsUnder(_underDir: string, visit: (target: string, pid: numb
   scanAllFdTargets(visit);
 }
 
+async function resourceScanFdTargetsUnder(underDir: string, visit: (target: string, pid: number, writable: () => boolean) => void): Promise<void> {
+  scanFdTargetsUnder(underDir, visit);
+}
+
 /** paths is unused for the same reason as scanFdTargetsUnder: the whole-/proc
     walk is already as cheap as a scoped one, so callers filter by target. */
 function scanFdTargetsFor(_paths: string[], visit: (target: string, pid: number, writable: () => boolean) => void): void {
   scanAllFdTargets(visit);
+}
+
+async function resourceScanFdTargetsFor(paths: string[], visit: (target: string, pid: number, writable: () => boolean) => void): Promise<void> {
+  scanFdTargetsFor(paths, visit);
 }
 
 function pidWritesPath(pid: number, pathname: string): boolean {
@@ -294,11 +322,18 @@ export const linuxBackend: ProcBackend = {
   processCpuMs,
   readEnvVar,
   listProcesses,
+  resourceListProcesses,
   systemMemory,
+  resourceSystemMemory,
   processMemory,
+  resourceProcessMemory,
   ppidMap,
+  resourcePpidMap,
+  resourceProcessExited,
   scanFdTargetsUnder,
+  resourceScanFdTargetsUnder,
   scanFdTargetsFor,
+  resourceScanFdTargetsFor,
   pidWritesPath,
   pidHoldsPath,
 };

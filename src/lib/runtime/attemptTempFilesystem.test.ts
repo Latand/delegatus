@@ -8,7 +8,7 @@ import { statePath } from "@/lib/configDir";
 import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { execFile } from "node:child_process";
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { attemptReferencesClear, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
+import { attemptReferencesClear, containerMountHold, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
   RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { withAttemptTempDeadline } from "./attemptTempDeadline";
 import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
@@ -16,14 +16,34 @@ import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 import { KEEP_MARKER, plantKeepMarker, removeKeepMarkers } from "./keepMarker.testSupport";
 import { nameInReport } from "./attemptTempRetention.testSupport";
-import type { ProcessScan } from "@/lib/tempSweep";
+import { scanProcesses, type ProcessScan } from "@/lib/tempSweep";
 const exec = promisify(execFile);
 const roots: string[] = [];
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { removeKeepMarkers(); for (const cleanup of cleanups.splice(0)) await cleanup(); for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(reportMediaRoot(), { recursive: true, force: true }); });
 const root = () => { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-filesystem-")); roots.push(directory); return directory; };
 
+test.skipIf(process.platform !== "linux")("a long process command line holds only the attempt it references", async () => {
+  const parent = root(), proc = path.join(parent, "proc"), pid = path.join(proc, "41");
+  const held = path.join(parent, "llv-stage-held"), ended = path.join(parent, "llv-stage-ended");
+  fs.mkdirSync(path.join(pid, "ns"), { recursive: true });
+  fs.symlinkSync("mnt:[41]", path.join(pid, "ns/mnt"));
+  fs.symlinkSync(parent, path.join(pid, "cwd"));
+  fs.mkdirSync(held); fs.mkdirSync(ended);
+  const alias = path.join(parent, "profile alias");
+  fs.symlinkSync(held, alias);
+  const flags = Array.from({ length: 80 }, (_, index) => `--fixture-flag-${index}=off`).join(" ");
+  fs.writeFileSync(path.join(pid, "cmdline"), `${path.join(parent, "chrome")} ${flags} --profile="${alias}"\0`);
+  const scan = () => scanProcesses(proc);
+  expect(await attemptReferencesClear(ended, ended, scan(), async () => true)).toBeTrue();
+  expect(await attemptReferencesClear(held, held, scan(), async () => true)).toBeFalse();
+  fs.writeFileSync(path.join(pid, "cmdline"), `/opt/chrome\0${alias}\0`);
+  expect(await attemptReferencesClear(held, held, scan(), async () => true)).toBeFalse();
+});
+
 test("native recursive removal is awaited, killed at the shared cutoff, and reported as a deferral", async () => {
+  const directory = root(); fs.writeFileSync(path.join(directory, "payload"), "owned");
+  const stat = fs.lstatSync(directory);
   let now = 3000, started!: () => void, release!: () => void;
   const running = new Promise<void>(resolve => { started = resolve; });
   const barrier = new Promise<void>(resolve => { release = resolve; });
@@ -35,7 +55,8 @@ test("native recursive removal is awaited, killed at the shared cutoff, and repo
     throw Object.assign(new Error("owned removal child was killed"), { killed: true });
   };
   try {
-    const removal = withAttemptTempDeadline(6000, () => removeTreeWithinAttemptBudget("fixture-root", () => { mutation = true; }, runner as never));
+    const removal = withAttemptTempDeadline(6000, () => removeTreeWithinAttemptBudget(directory, () => { mutation = true; }, runner as never,
+      `${stat.dev}:${stat.ino}`));
     await running;
     expect(mutation).toBeTrue();
     now = 5000;
@@ -43,6 +64,15 @@ test("native recursive removal is awaited, killed at the shared cutoff, and repo
     await expect(removal).rejects.toBeInstanceOf(AttemptTempBudgetDeferred);
     expect(signaled).toBeTrue();
   } finally { clock.mockRestore(); }
+});
+
+test("native cleanup reports CPU measured by its owned subprocess", async () => {
+  const directory = root();
+  for (let index = 0; index < 512; index++) fs.writeFileSync(path.join(directory, `entry-${index}`), "payload");
+  const stat = fs.lstatSync(directory); let childCpu = 0;
+  await removeTreeWithinAttemptBudget(directory, () => {}, undefined, `${stat.dev}:${stat.ino}`, seconds => { childCpu += seconds; });
+  expect(childCpu).toBeGreaterThan(0);
+  expect(fs.existsSync(directory)).toBeFalse();
 });
 
 /** A directory left by a container that ran as another user: this user can
@@ -77,7 +107,7 @@ test.skipIf(listsAsOwner)("a tree with a subtree this user cannot list is measur
   } finally { if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath; }
 });
 
-test.skipIf(process.platform !== "linux")("a consumer cwd removed after its process exited no longer holds the root; a live one still does", async () => {
+test.skipIf(process.platform !== "linux")("a consumer cwd that no longer exists names no checkout, whether its process lives or has exited", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-consumed"); fs.mkdirSync(directory);
   const exited = Bun.spawnSync(["true"]).pid;
   expect(fs.existsSync(`/proc/${exited}`)).toBeFalse();
@@ -91,7 +121,7 @@ test.skipIf(process.platform !== "linux")("a consumer cwd removed after its proc
   // Read from /proc: the namespace is what proves the process was there.
   const scan = (pid: number, cwd: string): ProcessScan => ({ ownNamespace: null, processes: [{ pid, namespace: "mnt:[fixture]", stamped: false, paths: [cwd] }] });
   expect(await attemptReferencesClear(directory, directory, scan(exited, gone), containers)).toBeTrue();
-  await expect(attemptReferencesClear(directory, directory, scan(process.pid, gone), containers)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await attemptReferencesClear(directory, directory, scan(process.pid, gone), containers)).toBeTrue();
   // A cwd removed between the observation and the dispatch fence.
   for (const [pid, unchanged] of [[exited, true], [process.pid, false]] as const) {
     const later = consumer(`later-${pid}`), inventory = new RepositoryLinkInventory();
@@ -100,9 +130,9 @@ test.skipIf(process.platform !== "linux")("a consumer cwd removed after its proc
     fs.rmSync(path.join(parent, `later-${pid}`), { recursive: true });
     expect(inventory.unchangedAll()).toBe(unchanged);
   }
-  // A process the scan did not read from /proc cannot be proven gone.
+  // Without proof of exit the vanished cwd still names no checkout to read.
   const synthetic: ProcessScan = { ownNamespace: null, processes: [{ pid: exited, namespace: null, stamped: false, paths: [gone] }] };
-  await expect(attemptReferencesClear(directory, directory, synthetic, containers)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await attemptReferencesClear(directory, directory, synthetic, containers)).toBeTrue();
 });
 
 test.skipIf(process.platform !== "linux")("a bound Unix socket keeps its attempt root", async () => {
@@ -157,15 +187,16 @@ test("a settled root retires beside more than 32 unrelated checkouts; a linking 
   expect(await attemptReferencesClear(directory, directory, scan(), async () => true)).toBeFalse();
 });
 
-test("a missing process cwd cannot become a cached no-checkout result", async () => {
+test("a missing process cwd names no checkout and leaves no cached discovery", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-unproven-cwd"); fs.mkdirSync(directory);
   const repository = path.join(parent, "checkout"), cwd = path.join(repository, "work");
   fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(cwd);
   const inventory = new RepositoryLinkInventory();
   const scan = { ownNamespace: null, processes: [{ pid: 41, namespace: null, stamped: false, paths: [cwd] }] };
   fs.rmSync(cwd, { recursive: true });
-  await expect(attemptReferencesClear(directory, directory, scan, async () => true, inventory)).rejects.toThrow();
+  expect(await attemptReferencesClear(directory, directory, scan, async () => true, inventory)).toBeTrue();
   expect(inventory.walks).toHaveLength(0);
+  expect(inventory.unchangedAll()).toBeTrue();
 });
 
 test("an unreadable process cwd cannot become a cached no-checkout result", async () => {
@@ -258,6 +289,7 @@ test.each([
   fs.writeFileSync(docker, `#!/bin/sh
 case "$1" in
   ps|rm) exit 0 ;;
+  image) printf 'fixture-image\\n' ;;
   run)
     for arg do
       case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac
@@ -265,6 +297,7 @@ case "$1" in
     test -n "$source" || exit 2
     printf started > "$DOCKER_DISPATCH_MARKER"
     find "$source" -depth -mindepth 1 -delete
+    printf 'DELEGATUS_RM_CPU:0.25\\n'
     ;;
   *) exit 2 ;;
 esac
@@ -279,6 +312,7 @@ esac
     if (removalPath === "permission-fallback") throw Object.assign(new Error("permission denied"), { code: "EACCES" });
     started();
   };
+  let childCpu = 0;
   let producerState = "closed", checkoutReadable = true;
   const guard = async () => {
     await Promise.resolve();
@@ -291,12 +325,13 @@ esac
   try {
     let error: unknown;
     try { await removeAttemptTree(directory, directory, guard, removalPath === "namespace-only", dispatchGuard,
-      dispatchGuard, false, undefined, { nativeRemove }); }
+      dispatchGuard, false, undefined, { nativeRemove, accountCpuSeconds: seconds => { childCpu += seconds; } }); }
     catch (caught) { error = caught; }
     if (change === "control") {
       expect(error).toBeUndefined();
       expect(fs.existsSync(dispatched)).toBeTrue();
       expect(fs.existsSync(directory)).toBeFalse();
+      if (removalPath === "namespace-only") expect(childCpu).toBe(0.25);
     } else {
       expect(String(error)).toContain("authority changed before namespace removal");
       expect(fs.existsSync(dispatched)).toBeFalse();
@@ -308,6 +343,46 @@ esac
     else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previousImage;
     if (previousMarker === undefined) delete process.env.DOCKER_DISPATCH_MARKER;
     else process.env.DOCKER_DISPATCH_MARKER = previousMarker;
+  }
+});
+
+test.skipIf(process.platform !== "linux" || process.getuid?.() === 0)("native permission failure restores the inode claim before namespace fallback", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-native-fallback"), bin = path.join(parent, "bin");
+  fs.mkdirSync(directory); fs.mkdirSync(bin);
+  const locked = path.join(directory, "locked"); fs.mkdirSync(locked); fs.writeFileSync(path.join(locked, "payload"), "remove me"); fs.chmodSync(locked, 0o500);
+  const sourceFile = path.join(parent, "docker-source");
+  fs.writeFileSync(path.join(bin, "docker"), `#!/bin/sh
+case "$1" in
+  ps|rm) exit 0 ;;
+  run)
+    for arg do
+      case "$arg" in type=bind,source=*,target=/attempt) source=\${arg#type=bind,source=}; source=\${source%,target=/attempt} ;; esac
+    done
+    test -n "$source" || exit 2
+    printf '%s\\n' "$source" >> "$DOCKER_SOURCE_LOG"
+    find "$source" -type d -exec chmod u+rwx {} +
+    find "$source" -depth -mindepth 1 -delete || exit
+    printf 'DELEGATUS_RM_CPU:0.125\\n'
+    ;;
+  *) exit 2 ;;
+esac
+`, { mode: 0o700 });
+  const previous = { PATH: process.env.PATH, image: process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE,
+    source: process.env.DOCKER_SOURCE_LOG, state: process.env.LLV_STATE_DIR };
+  process.env.PATH = `${bin}${path.delimiter}${previous.PATH ?? ""}`;
+  process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = "fixture-image";
+  process.env.DOCKER_SOURCE_LOG = sourceFile;
+  process.env.LLV_STATE_DIR = path.join(parent, "state");
+  try {
+    await removeAttemptTree(directory, directory, async () => true, false, () => true, () => true);
+    expect(fs.existsSync(directory)).toBeFalse();
+    expect(fs.readFileSync(sourceFile, "utf8").trim()).toBe(directory);
+    expect(fs.readdirSync(parent).filter(name => name.startsWith(".delegatus-trash-claim-"))).toEqual([]);
+  } finally {
+    if (previous.PATH === undefined) delete process.env.PATH; else process.env.PATH = previous.PATH;
+    if (previous.image === undefined) delete process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE; else process.env.LLV_ATTEMPT_TEMP_CLEANUP_IMAGE = previous.image;
+    if (previous.source === undefined) delete process.env.DOCKER_SOURCE_LOG; else process.env.DOCKER_SOURCE_LOG = previous.source;
+    if (previous.state === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous.state;
   }
 });
 
@@ -929,7 +1004,12 @@ test.skipIf(process.platform !== "linux")("an incomplete container inventory can
   fs.writeFileSync(docker, '#!/bin/sh\nif [ "$1" = ps ]; then printf "111111111111\\n"; else printf "[]\\n"; fi\n', { mode: 0o700 });
   const previous = process.env.PATH;
   process.env.PATH = bin + path.delimiter + previous;
-  try { expect(await attemptReferencesClear(directory, directory, { ownNamespace: null, processes: [] })).toBeFalse(); }
+  const reasons: string[] = [];
+  try {
+    expect(await attemptReferencesClear(directory, directory, { ownNamespace: null, processes: [] },
+      undefined, undefined, reason => reasons.push(reason))).toBeFalse();
+    expect(reasons).toEqual(["container_inventory_unknown"]);
+  }
   finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
 });
 
@@ -950,6 +1030,19 @@ fi
   finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
 });
 
+test("the shared container rule: an ancestor mounted at its own path holds nothing, a mounted root, a subtree, an alias or an unknown destination holds", () => {
+  const home = "/srv/fixture-home", root = `${home}/state/scratch/llv-stage-abcdef`;
+  const hold = (...mounts: Array<{ source: string; destination: string | null }>) => containerMountHold([root], mounts);
+  expect(hold()).toBeNull();
+  expect(hold({ source: home, destination: home }, { source: "/", destination: "/" })).toBeNull();
+  expect(hold({ source: root, destination: "/data" })).toBe("container_mount_reference");
+  expect(hold({ source: `${root}/cache`, destination: `${root}/cache` })).toBe("container_mount_reference");
+  expect(hold({ source: home, destination: "/workspace" })).toBe("container_mount_reference");
+  expect(hold({ source: home, destination: null })).toBe("container_mount_reference");
+  expect(hold({ source: "/srv/other", destination: "/srv/other" })).toBeNull();
+  expect(containerMountHold([root], null)).toBe("container_inventory_unknown");
+});
+
 test.skipIf(process.platform !== "linux")("a container bind through a physical parent alias retains scratch", async () => {
   const parent = root(), directory = path.join(parent, "actual/llv-stage-mounted");
   fs.mkdirSync(directory, { recursive: true });
@@ -958,7 +1051,12 @@ test.skipIf(process.platform !== "linux")("a container bind through a physical p
   const bin = path.join(parent, "bin"); fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}\nif (process.argv[2] === "ps") console.log("111111111111"); else console.log(${JSON.stringify(JSON.stringify({ Id: "111111111111", Mounts: [{ Type: "bind", Source: directory }] }))});\n`, { mode: 0o700 });
   const previous = process.env.PATH; process.env.PATH = bin + path.delimiter + (previous ?? "");
-  try { expect(await attemptReferencesClear(alias, alias, { ownNamespace: null, processes: [] })).toBeFalse(); }
+  const reasons: string[] = [];
+  try {
+    expect(await attemptReferencesClear(alias, alias, { ownNamespace: null, processes: [] },
+      undefined, undefined, reason => reasons.push(reason))).toBeFalse();
+    expect(reasons).toEqual(["container_mount_reference"]);
+  }
   finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
 });
 
@@ -971,13 +1069,13 @@ test.each(["cache/uv/sdists-v9", "uv-cache/sdists-v9", "uvcache/sdists-v9/nested
   expect(await inspectAttemptTree(directory)).toBeFalse();
 });
 
-test("fixture Git worktrees contained in the attempt can retire", async () => {
+test("fixture Git checkouts contained in the attempt remain protected", async () => {
   const directory = root(), repo = path.join(directory, "repo"), wt = path.join(directory, "wt");
   fs.mkdirSync(repo);
   await exec("git", ["init", "-q", repo]);
   await exec("git", ["-C", repo, "-c", "user.name=Fixture", "-c", `user.email=${["noreply", "example.invalid"].join("@")}`, "commit", "--allow-empty", "-qm", "fixture"]);
   await exec("git", ["-C", repo, "worktree", "add", "--detach", wt]);
-  expect(await inspectAttemptTree(directory)).toBeTrue();
+  expect(await inspectAttemptTree(directory)).toBeFalse();
   const external = root();
   await exec("git", ["-C", repo, "worktree", "add", "--detach", path.join(external, "outside")]);
   expect(await inspectAttemptTree(directory)).toBeFalse();
@@ -988,7 +1086,10 @@ test.each([".git", "project/.git", ".delegatus-keep"])("unknown marker %s is ret
   const directory = root(), file = path.join(directory, marker);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   if (path.basename(file) === KEEP_MARKER) plantKeepMarker(file, "");
-  else fs.writeFileSync(file, "");
+  else if (path.basename(file) === ".git") {
+    fs.mkdirSync(file);
+    fs.writeFileSync(path.join(file, "config"), "unknown checkout");
+  } else fs.writeFileSync(file, "");
   expect(await inspectAttemptTree(directory)).toBeFalse();
 });
 
@@ -1118,7 +1219,7 @@ test("an entry made in a checkout directory above a process cwd fells the fence"
   expect(inventory.unchangedAll()).toBeFalse();
 });
 
-test("the vanished cwd of an exited process stops counting; that of a live process still refuses", async () => {
+test("the vanished cwd of any process, exited or live, names no checkout", async () => {
   const parent = root(), first = path.join(parent, "llv-stage-first"), later = path.join(parent, "llv-stage-later");
   fs.mkdirSync(first); fs.mkdirSync(later);
   const gone = path.join(parent, "short-lived"), stays = path.join(parent, "stays"); fs.mkdirSync(gone); fs.mkdirSync(stays);
@@ -1129,6 +1230,6 @@ test("the vanished cwd of an exited process stops counting; that of a live proce
   // The next root's scan no longer lists the process that held the cwd.
   expect(await attemptReferencesClear(later, later, holder(57, stays), async () => true, inventory)).toBeTrue();
   expect(inventory.unchangedAll()).toBeTrue();
-  // A process the scan still lists, with a cwd that cannot be read, proves nothing.
-  await expect(attemptReferencesClear(later, later, holder(56, gone), async () => true, inventory)).rejects.toThrow();
+  // A process the scan still lists, whose cwd no longer exists, names no checkout either.
+  expect(await attemptReferencesClear(later, later, holder(56, gone), async () => true, inventory)).toBeTrue();
 });

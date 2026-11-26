@@ -32,6 +32,9 @@ test.each([
   ["fractions and ratios", "1/2 3/4 16:9 1 / 2 /3"],
   ["ordinary prose", "Hello! Так, працюю. input/output and/or"],
   ["web links", "https://example.test/docs/work http://example.test/help"],
+  ["query links", "[Post](https://example.blog/?p=12345), [Index](https://example.test/?id=a%20b&page=2#results)."],
+  ["balanced link parentheses", "[Read](https://example.test/(appendix)?page=2)."],
+  ["link in structured text", JSON.stringify({ detail: "[Post](https://example.blog/?p=12345)" })],
   ["URL root names", "https://example.test/tmp/file https://example.test/home/file"],
   ["command beside a URL", "/ai https://example.test/docs/work @SomeBot"],
   ["marker-like prose", "\uE000relay0\uE000relay /homework /ai"],
@@ -103,6 +106,41 @@ test("owner output still scrubs structured and encoded credentials", () => {
   const encoded = Array.from(secret, char => `%${char.charCodeAt(0).toString(16)}`).join("");
   expect(scrubOwnerOutput(`/ai ${encoded}`, [secret])).toBe("[redacted]");
   expect(scrubOwnerOutput("Command /homework", ["/homework"])).toBe("Command [redacted]");
+});
+
+test("owner output withholds URL credentials while keeping an adjacent public link intact", () => {
+  const value = ["fixture", "url", "credential", "value"].join("-");
+  const providerKey = "sk-" + "z".repeat(48);
+  const publicLink = "[Post](https://example.blog/?p=12345)";
+  const userInfo = new URL("https://example.test/?id=4");
+  userInfo.username = "fixture";
+  userInfo.password = value;
+  for (const [url, credentials, secret] of [
+    [`https://example.test/?id=${value}`, [value], value],
+    [`https://example.test/?id=${providerKey}`, [], providerKey],
+    [`https://example.test/?password=${value}`, [], value],
+    [`https://example.test/?x-amz-signature=${value}`, [], value],
+    [`https://example.test/#access_token=${value}`, [], value],
+    [userInfo.href, [], value],
+    [`https://example.test/?details=${encodeURIComponent(JSON.stringify({ password: value }))}`, [], value],
+  ] as const) {
+    const output = scrubOwnerOutput(`[Fixture](${url}) · ${publicLink}`, credentials);
+    expect(output).not.toContain(secret);
+    expect(output).toContain("[redacted");
+    expect(output).toEndWith(publicLink);
+  }
+  // Raw and decoded credential passes disagree on these encodings, so the
+  // egress boundary withholds the entire answer.
+  for (const url of [`https://example.test/?api%5Fkey=${value}`,
+    `https://example.test/?next=${encodeURIComponent(`https://example.test/?password=${value}`)}`]) {
+    expect(scrubOwnerOutput(`[Fixture](${url}) · ${publicLink}`)).toBe("[redacted]");
+  }
+});
+
+test("plain owner projection scrubs a credential formed when Markdown emphasis is removed", () => {
+  const credential = ["fixture", "joined", "value"].join("-");
+  const answer = { action: "reply", text: "fixture-**joined**-value", reply_to: null };
+  expect(scrubOwnerReply(answer, [credential], true)).toMatchObject({ text: "[redacted]" });
 });
 
 test.each(["/home_password", "/UsersSecret", "/rootAccessToken", String.raw`/home_\u0070assword`])(

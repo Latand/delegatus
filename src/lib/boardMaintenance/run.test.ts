@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { drainFile, writeDrain, releaseDrain } from "@/lib/selfUpdate/drain";
 import { statePath } from "@/lib/configDir";
-import { loadTasks } from "@/lib/tasks/store";
+import { loadTasks, saveTasks } from "@/lib/tasks/store";
+import type { BoardTask, TaskHoldKind } from "@/lib/tasks/types";
+import { buildPipeline } from "@/lib/pipelines/store";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { defaultSeatTickSources, type SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { productionBoardMaintenanceController, type BoardMaintenancePorts, type MaintenanceObservation } from "./run";
@@ -63,6 +65,55 @@ for (const enabled of [true, false]) test(`launch brief reads this project's mer
   expect(setMergeOnReview("other-project", !enabled, "fixture", new Date(NOW).toISOString())).not.toBeNull();
   await h.controller.launchIfDue(input());
   expect(String(h.bodies[0].prompt)).toContain(`Project mergeOnReview: ${enabled ? "on" : "off"}`);
+});
+test("the launch classifies this project's Waiting cards and the settled run carries the seat handoff", async () => {
+  const h = harness();
+  const at = new Date(NOW).toISOString();
+  const blocked = (id: string, kind: TaskHoldKind, project = PROJECT): BoardTask => ({
+    id, project, text: "Review fixture status", status: "blocked", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
+    hold: { kind, since: at, note: "Fixture wait", by: "agent" },
+  });
+  saveTasks([blocked("aabbccdd", "external"), blocked("aabbccee", "operator"), blocked("aabbccff", "external"),
+    blocked("bbccddee", "external", "other-project")], statePath("tasks.json"));
+  const running = buildPipeline({ id: "fixture-running", project: PROJECT, task: "Continue work", taskIds: ["aabbccff"], repoDir: "/fixtures/repository",
+    stages: [], srcPath: null, srcConversationId: null, now: at });
+  h.sources.pipelines = () => [{ ...running, state: "running" }];
+  await h.controller.launchIfDue(input());
+  const runId = h.run().runId;
+  const brief = String(h.bodies[0]!.prompt);
+  expect(brief).toContain("1 need the operator, 2 routed to the seat or agents");
+  expect(brief).toContain("aabbccdd | seat/unowned | Verify the wait");
+  expect(brief).toContain("aabbccff | agents/running | Let the current work continue.");
+  expect(brief).not.toContain("bbccddee");
+  h.observe({ state: "ended", finalText: "seat: aabbccdd | lane settled | check the running build\nVerdict: pass" });
+  await h.controller.reconcile(PROJECT);
+  expect(readMaintenanceRun(runId)).toMatchObject({ state: "succeeded", log: { seat: [
+    { taskId: "aabbccdd", reason: "lane settled", action: "check the running build" },
+  ] } });
+});
+for (const pullRequest of ["open", "merged"] as const) test(`the launch brief classifies waits with the prerequisite evidence the seat tick reads: PR ${pullRequest}`, async () => {
+  const { updateForgeCache, emptyRepositoryEntry } = await import("@/lib/forge/cache");
+  const { insertSeatRound, clearSeatRoundsForTests } = await import("@/lib/prototypeReview/seatRounds");
+  const h = harness();
+  const at = new Date(NOW).toISOString();
+  const roundId = `pr_${"a".repeat(32)}`;
+  const pr = { number: 41, url: "https://github.com/fixture/repo/pull/41", headRefName: "fixture-change", createdAt: at, checkedAt: at, closes: [] };
+  updateForgeCache(cache => { cache.repositories["fixture/repo"] = { ...emptyRepositoryEntry(), prs: { 41: { ...pr, state: pullRequest } } }; });
+  const blocked = (id: string, hold: Partial<NonNullable<BoardTask["hold"]>>): BoardTask => ({
+    id, project: PROJECT, text: "Review fixture status", status: "blocked", placement: "unplaced", assignments: [], createdAt: at, updatedAt: at,
+    hold: { kind: "operator", since: at, note: "Fixture wait", by: "agent", ...hold },
+  });
+  clearSeatRoundsForTests();
+  try {
+    insertSeatRound({ id: roundId, taskId: null, project: PROJECT, title: "Choose", createdAt: at, publicationKey: "maintenance-form", inputDigest: "fixture", source: { conversationId: null }, variants: [] });
+    saveTasks([blocked("aabbcc01", { ref: roundId }), blocked("aabbcc02", { kind: "pr", ref: pr.url }), blocked("aabbcc03", { ref: "no-such-round" })], statePath("tasks.json"));
+    await h.controller.launchIfDue(input());
+    const brief = String(h.bodies[0]!.prompt);
+    expect(brief).toContain("1 need the operator, 2 routed to the seat or agents");
+    expect(brief).toContain(pullRequest === "open" ? "aabbcc02 | agents/dependency" : "aabbcc02 | seat/wait-cleared");
+    expect(brief).toContain("aabbcc03 | seat/unowned");
+    expect(brief).not.toContain("aabbcc01 |");
+  } finally { clearSeatRoundsForTests(); }
 });
 test("card exists before spawn, with icon, colour, description and task binding in body", async () => {
   const h = harness(); await h.controller.launchIfDue(input());
@@ -146,11 +197,11 @@ for (const [name, observation] of [
   ["turn-error", { state: "ended", turnError: "engine error", finalText: "Starting the inventory" }],
   ["agent-fail", { state: "ended", finalText: "forge unavailable\nVerdict: fail" }],
   ["timed-out", { state: "running" }],
-] as const) test(`${name} settles blocked and visible`, async () => {
+] as const) test(`${name} settles resumable maintenance failure in Inbox`, async () => {
   const h = harness(); await h.controller.launchIfDue(input()); const run = h.run(); h.observe(observation as MaintenanceObservation);
   if (name === "timed-out") h.now(NOW + 91 * 60000);
   await h.controller.reconcile(PROJECT); const ended = readMaintenanceRun(run.runId)!;
-  expect(ended.failure?.kind).toBe(name); expect(tasks().find(t => t.id === run.taskId)).toMatchObject({ status: "blocked", board: "shown" });
+  expect(ended.failure?.kind).toBe(name); expect(tasks().find(t => t.id === run.taskId)).toMatchObject({ status: "inbox", board: "shown" });
 });
 
 
@@ -199,8 +250,21 @@ test("needs_decision remains blocked and visible with its operator reason", asyn
   const ended = readMaintenanceRun(run.runId)!;
   expect(ended).toMatchObject({ state: "failed", failure: { kind: "needs-decision" }, log: { verdict: "needs_decision" } });
   expect(ended.failure?.detail).toContain("operator access");
-  expect(tasks().find(t => t.id === run.taskId)).toMatchObject({ status: "blocked", board: "shown" });
+  expect(tasks().find(t => t.id === run.taskId)).toMatchObject({ status: "blocked", board: "shown", hold: { kind: "operator" } });
   expect(h.archived).toHaveLength(0);
+});
+
+test("a long operator result settles maintenance and leaves the next schedule available", async () => {
+  const h = harness(); await h.controller.launchIfDue(input()); const run = h.run();
+  const result = `${"operator result ".repeat(17)}\nVerdict: needs_decision`;
+  h.observe({ state: "ended", finalText: result });
+  await h.controller.reconcile(PROJECT);
+  expect(readMaintenanceRun(run.runId)).toMatchObject({ state: "failed", failure: { kind: "needs-decision", detail: result.replace(/\s+/g, " ") } });
+  const held = tasks().find(task => task.id === run.taskId)!;
+  expect(held).toMatchObject({ status: "blocked", hold: { kind: "operator", note: "Review the maintenance failure and choose the next action." } });
+  expect(held.hold!.note.length).toBeLessThanOrEqual(200);
+  h.now(NOW + 3 * 3600000); await h.controller.launchIfDue(input());
+  expect(h.bodies).toHaveLength(2);
 });
 
 test("a later successful turn is not failed by an earlier recovered turn", async () => {
@@ -248,7 +312,7 @@ test("superseding a failed run archives its linked worker and removes its hidden
   expect(boardFor(PROJECT).prefs.hidden).toContain(transcriptPath);
   const cardAfter = tasks().find(t => t.id === oldTaskId)!;
   expect(taskShowsOnBoard(cardAfter, false)).toBe(false);
-  expect(tasks().find(t => t.id === latest.taskId)).toMatchObject({ status: "blocked", board: "shown" });
+  expect(tasks().find(t => t.id === latest.taskId)).toMatchObject({ status: "inbox", board: "shown" });
 });
 
 

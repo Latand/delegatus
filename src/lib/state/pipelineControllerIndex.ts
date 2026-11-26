@@ -38,6 +38,7 @@ export function pipelineControllerObligationSql(value: string): string {
   return `CASE WHEN NOT json_valid(${value}) THEN 1 ELSE (
     json_extract(${value},'$.state') NOT IN ('closed','completed')
     OR json_array_length(${value},'$.unconfirmedHosts')>0
+    OR json_extract(${value},'$.provisioningJob') IS NOT NULL
     OR (json_extract(${value},'$.state') IN ('completed','closed') AND json_extract(${value},'$.closeTeardown') IS NULL
       AND json_extract(${value},'$.terminalReap.settledAt') IS NULL
       AND (json_extract(${value},'$.state')='completed' OR ${hasHost}))
@@ -45,6 +46,72 @@ export function pipelineControllerObligationSql(value: string): string {
   ) END`;
 }
 export type PipelineControllerSelection = keyof ReturnType<typeof predicates>;
+
+/** The slot projection can be read while the ordinary lane walk is excluded.
+ * Old writers maintain it through the same row triggers. */
+export function installProvisioningSlotIndex(db: Database, directory: string): void {
+  if (db.query("SELECT 1 FROM sqlite_master WHERE name='pipeline_provision_slot_update'").get()) return;
+  if (!mayRunStateStartupMutation(directory)) return;
+  db.exec(`CREATE TABLE IF NOT EXISTS pipeline_provision_slot (
+    row_key TEXT PRIMARY KEY, due_at INTEGER, cache_identity TEXT
+  );
+  CREATE INDEX IF NOT EXISTS pipeline_provision_slot_due ON pipeline_provision_slot(due_at,row_key) WHERE due_at IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS pipeline_provision_slot_cache ON pipeline_provision_slot(cache_identity,row_key) WHERE cache_identity IS NOT NULL`);
+  const select = (row: string, from = "") => {
+    const at = (field: string) => `json_extract(${row}.value_json,'$.${field}')`;
+    return `SELECT ${row}.row_key,
+      CASE
+        WHEN ${at("state")} IN ('closed','completed','running') OR ${at("hiddenAt")} IS NOT NULL THEN 0
+        WHEN ${at("state")}='provisioning' AND ${at("provisioningJob.status")} IN ('running','awaitingApply','waiting')
+        THEN COALESCE(${at("provisioningJob.retryAt")},${at("provisioningJob.deadlineAt")})
+      END,
+      CASE WHEN ${at("provisioningJob.status")}='running' THEN ${at("provisioningJob.cacheOwner.identity")} END
+      ${from} WHERE ${row}.collection='pipelines' AND CASE WHEN json_valid(${row}.value_json)
+        THEN ${at("provisioningJob.version")}=1 AND ${at("provisioningJob.kind")}='provision' ELSE 0 END`;
+  };
+  const put = `INSERT INTO pipeline_provision_slot(row_key,due_at,cache_identity) ${select("NEW")};`;
+  const remove = "DELETE FROM pipeline_provision_slot WHERE row_key=OLD.row_key AND OLD.collection='pipelines';";
+  db.exec(`CREATE TRIGGER pipeline_provision_slot_insert AFTER INSERT ON state_rows WHEN NEW.collection='pipelines'
+      BEGIN ${put} END;
+    CREATE TRIGGER pipeline_provision_slot_update AFTER UPDATE OF collection,row_key,value_json ON state_rows
+      WHEN OLD.collection='pipelines' OR NEW.collection='pipelines' BEGIN ${remove} ${put} END;
+    CREATE TRIGGER pipeline_provision_slot_delete AFTER DELETE ON state_rows WHEN OLD.collection='pipelines'
+      BEGIN ${remove} END`);
+  db.exec(`INSERT OR IGNORE INTO pipeline_provision_slot(row_key,due_at,cache_identity) ${select("r", "FROM state_rows r")}`);
+}
+
+/** Provisioning resources are ordered by their first durable enqueue. */
+export function installProvisioningWaitIndex(db: Database, directory: string): boolean {
+  if (db.query("SELECT 1 FROM sqlite_master WHERE name='pipeline_provision_wait_update'").get()) return false;
+  if (!mayRunStateStartupMutation(directory)) return false;
+  db.exec(`CREATE TABLE IF NOT EXISTS pipeline_provision_wait (
+    row_key TEXT PRIMARY KEY, resource TEXT NOT NULL, sequence INTEGER NOT NULL, row_order INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS pipeline_provision_wait_head ON pipeline_provision_wait(resource,sequence,row_order,row_key)`);
+  const eligibleResource = (row: string) => `CASE WHEN json_valid(${row}) THEN CASE
+    WHEN json_extract(${row},'$.state')='provisioning' AND json_extract(${row},'$.hiddenAt') IS NULL
+      AND json_extract(${row},'$.closedAt') IS NULL THEN json_extract(${row},'$.provisioningJob.resource') END END`;
+  const resource = eligibleResource("NEW.value_json");
+  const put = `INSERT INTO pipeline_provision_wait(row_key,resource,sequence,row_order)
+    SELECT NEW.row_key,${resource},NEW.row_revision,NEW.row_order
+    WHERE NEW.collection='pipelines' AND json_valid(NEW.value_json) AND ${resource} IS NOT NULL
+    ON CONFLICT(row_key) DO UPDATE SET sequence=CASE WHEN resource=excluded.resource THEN sequence ELSE excluded.sequence END,
+      resource=excluded.resource,row_order=excluded.row_order;`;
+  db.exec(`CREATE TRIGGER pipeline_provision_wait_insert AFTER INSERT ON state_rows WHEN NEW.collection='pipelines'
+      BEGIN ${put} END;
+    CREATE TRIGGER pipeline_provision_wait_update AFTER UPDATE ON state_rows WHEN OLD.collection='pipelines' OR NEW.collection='pipelines'
+      BEGIN
+        DELETE FROM pipeline_provision_wait WHERE row_key=OLD.row_key AND OLD.collection='pipelines'
+          AND (NEW.collection!='pipelines' OR NEW.row_key!=OLD.row_key OR CASE WHEN json_valid(NEW.value_json) THEN ${resource} IS NULL ELSE 1 END);
+        ${put}
+      END;
+    CREATE TRIGGER pipeline_provision_wait_delete AFTER DELETE ON state_rows WHEN OLD.collection='pipelines'
+      BEGIN DELETE FROM pipeline_provision_wait WHERE row_key=OLD.row_key; END`);
+  db.exec(`INSERT OR IGNORE INTO pipeline_provision_wait(row_key,resource,sequence,row_order)
+    SELECT row_key,${eligibleResource("value_json")},row_revision,row_order FROM state_rows
+    WHERE collection='pipelines' AND ${eligibleResource("value_json")} IS NOT NULL`);
+  return true;
+}
 
 /** Install and backfill under the caller's initialization transaction. Row
     triggers also cover older peers, keyed patches, moves and replacements;

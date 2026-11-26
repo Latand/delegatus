@@ -589,6 +589,11 @@ export function stageAgentRowModel(pipeline: Pipeline, stageId: string) {
   };
 }
 
+/** Whether the lane stands on a stage whose agent asked the operator a question: its conversation's composer is where the answer goes. */
+export function stageAsksOperator(pipeline: Pipeline, stageId: string): boolean {
+  return pipeline.state === "needs_decision" && Boolean(stageAgentRowModel(pipeline, stageId).question);
+}
+
 /** The cloud task a stage's latest attempt ran in, for the card's open control.
     A cloud attempt has no transcript of its own, so `attemptNavTarget` is null
     for it and the card showed no way in. Only an attempt that really ran in the

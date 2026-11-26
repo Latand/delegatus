@@ -135,6 +135,10 @@ for (const engine of ["codex", "claude"] as const) {
       const row = captions.map((caption) => caption.closest("[data-tool-row]")).find((found) => found && /\d(?:ms|s)/.test(found.textContent ?? ""));
       expect(row).toBeTruthy();
       expect(row!.textContent).toMatch(/\d(?:ms|s)·?~\d/);
+      /* Duration and counter are one unit inside the row, so the row's gap does not separate them. */
+      const unit = row!.querySelector("[data-context-tokens]")!.parentElement!;
+      expect(unit).not.toBe(row);
+      expect(unit.textContent).toMatch(/\d(?:ms|s)·?~\d/);
     });
 
     test(`${engine} rows on the ${width}: a failure is a quiet accent and a single verdict`, () => {
