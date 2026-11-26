@@ -116,7 +116,8 @@ test("a head crash is named and blocks without hiding results from other files",
   const f = fixture(source(true)); writeFileSync(path.join(f.dir, "example.test.ts"), "process.exit(0);");
   writeFileSync(path.join(f.dir, "z.test.ts"), source(false));
   const result = await f.run(["./example.test.ts", "./z.test.ts"]);
-  expect(result.introduced).toHaveLength(2); expect(result.introduced[0]!.name).toStartWith("<runner error>");
+  expect(result.introduced).toHaveLength(2);
+  expect(result.introduced.some(site => site.name.startsWith("<runner error>"))).toBe(true);
   expect(f.logs.at(-1)).toContain("2 new failures, 0 pre-existing failures");
 });
 const taskControl = process.platform === "linux" && Bun.which("python3") && Bun.which("systemd-run")
@@ -204,6 +205,9 @@ test("scope and service guards report an identical surviving tree once across th
   expect(result.introduced).toEqual([]);
   expect(result.preexisting).toHaveLength(1);
   expect(result.preexisting[0]!.name).toContain("21 (21:1), 22 (22:2)");
+  const selected: TestSite[] = [];
+  appendOwnershipFailure(selected, file, "owned runner: surviving owned processes: 41 (41:1)", "[selected case]");
+  expect(selected[0]!.selection).toBe("[selected case]");
 });
 test.each([
   ["owned test children survived teardown: 21, 22; guardian=0", "owned test children survived teardown: 31; guardian=0"],
@@ -259,6 +263,9 @@ test("report errors are retained; incomplete reports and unidentifiable errors a
   expect(parsed.failures[0]!.selection).toBe("full");
   const filtered = parseReport(xml, `${output.trimEnd()}\n    at origin (/checkout/file.ts:9:3)\n----------------\n 1 error\n`, "f.test.ts", "/checkout", true);
   expect(filtered.failures[0]!.selection).toBe("filtered");
+  const hook = parseReport('<testsuites tests="1" failures="1"><testsuite><testcase file="f.test.ts" name="(unnamed)" classname="outer"><error type="RangeError" message="same hook"/></testcase></testsuite></testsuites>',
+    "", "f.test.ts", "/checkout");
+  expect(hook.failures[0]!.name).toContain("RangeError: same hook");
   expect(() => parseReport(xml.slice(0, -12), "", "f.test.ts", "/checkout")).toThrow();
   expect(() => parseReport(xml.replace('tests="1"', 'tests="2"'), "", "f.test.ts", "/checkout")).toThrow();
   expect(() => parseReport(xml, " 1 error\n", "f.test.ts", "/checkout")).toThrow();
@@ -272,11 +279,36 @@ test("diagnostic identity includes normalized throw-site provenance and file sel
   const candidate = report("/head/sandbox", "candidateFault");
   const sameBase = report("/base/sandbox", "candidateFault");
   const otherBase = report("/base/sandbox", "baseFault");
+  const differentTail = parseReport('<testsuites tests="1" failures="0"><testcase file="f.test.ts" name="passing" /></testsuites>',
+    "# Unhandled error between tests\n----------------\nTypeError: shared diagnostic\nsecond detail changed\n    at candidateFault (/base/sandbox/f.test.ts:12:4)\n----------------\n 1 error\n", "f.test.ts", "/base/sandbox").failures[0]!;
   const filteredBase = report("/base/sandbox", "candidateFault", true);
   const run = (site: TestSite): TestRun => ({ failures: [site], passed: [], completed: [site.file], elapsedMs: 0 });
   expect(compareTests(run(sameBase), run(candidate)).preexisting).toHaveLength(1);
   expect(compareTests(run(otherBase), run(candidate)).introduced).toHaveLength(1);
+  expect(compareTests(run(differentTail), run(sameBase)).introduced).toHaveLength(1);
   expect(compareTests(run(filteredBase), run(candidate)).introduced).toHaveLength(1);
+});
+
+test("diagnostic classification requires the same per-file selector and complete exception provenance", () => {
+  const target: TestSite = { file: "f.test.ts", suite: "", name: "alpha", kind: "test" };
+  const diagnostic = (selection: string, provenance: string): TestSite => ({ file: target.file, suite: "",
+    name: "<hook error> TypeError: shared failure", kind: "error", selection, provenance });
+  const run = (failures: TestSite[], passed: TestSite[] = []): TestRun => ({ failures, passed, completed: [target.file], elapsedMs: 0 });
+  const alphaBeta = diagnostic("[alpha,beta]", "TypeError: shared failure\nat atHook (<checkout>/hook.ts:8:2)\nsecond detail");
+  const betaOnly = diagnostic("[beta]", alphaBeta.provenance!);
+  const sameSelector = compareTests(run([betaOnly]), run([alphaBeta]));
+  expect(sameSelector.preexisting).toHaveLength(0);
+  expect(sameSelector.introduced).toEqual([alphaBeta]);
+  const same = compareTests(run([alphaBeta]), run([alphaBeta]));
+  expect(same.preexisting).toEqual([alphaBeta]);
+  expect(same.fixed).toHaveLength(0);
+  const fullBase = diagnostic("full", "TypeError: shared failure\nat atHook (<checkout>/hook.ts:8:2)");
+  const unlikeSelection = compareTests(run([fullBase]), { failures: [], passed: [], completed: [target.file], elapsedMs: 0,
+    selections: { [target.file]: "[beta]" } });
+  expect(unlikeSelection.fixed).toHaveLength(0);
+  expect(unlikeSelection.absent).toHaveLength(0);
+  expect(compareTests(run([fullBase]), run([])).fixed).toEqual([fullBase]);
+  expect(compareTests(run([alphaBeta]), run([diagnostic(alphaBeta.selection!, alphaBeta.provenance!.replace("second detail", "different second detail"))])).introduced).toHaveLength(1);
 });
 
 test("an unnamed teardown failure remains a named blocking diagnostic without a filtered retry", async () => {

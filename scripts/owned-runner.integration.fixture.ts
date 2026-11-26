@@ -70,6 +70,7 @@ for (const mode of ["complete", "exit", "deadline", "TERM", "INT", "KILL", "test
     const record = path.join(root, "ready.json"), release = path.join(root, "release"), received = path.join(root, "signal");
     const portableOwner = path.join(root, "portable-runner-pid");
     const shutdownTail = path.join(root, "shutdown-tail-entered"), shutdownRelease = path.join(root, "shutdown-tail-release");
+    const shutdownTailTemp = shutdownTail + ".tmp", shutdownTailPublishing = path.join(root, "shutdown-tail-publishing");
     const heldShutdown = entry === "direct" && mode === "KILL";
     if (heldShutdown) {
       // The dispatcher is killed while its portable runner holds stderr.
@@ -79,9 +80,14 @@ for (const mode of ["complete", "exit", "deadline", "TERM", "INT", "KILL", "test
 if (process.argv[1] === ${JSON.stringify(path.join(repo, "scripts/owned-runner.ts"))}) {
   fs.writeFileSync(${JSON.stringify(portableOwner)}, String(process.pid));
   process.once("exit", () => {
-    fs.writeFileSync(${JSON.stringify(shutdownTail)}, String(process.pid));
+    const marker = ${JSON.stringify(shutdownTail)};
+    const temporary = marker + ".tmp";
+    fs.writeFileSync(temporary, "");
+    fs.writeFileSync(${JSON.stringify(shutdownTailPublishing)}, "publishing");
     const wait = new Int32Array(new SharedArrayBuffer(4));
     while (!fs.existsSync(${JSON.stringify(shutdownRelease)})) Atomics.wait(wait, 0, 0, 20);
+    fs.writeFileSync(temporary, String(process.pid));
+    fs.renameSync(temporary, marker);
   });
 }`);
       env.BUN_OPTIONS = "--preload=./shutdown-tail.ts";
@@ -139,10 +145,13 @@ test("portable lifetime", async () => {
       if (heldShutdown) {
         await until(() => dispatcherExited, 5_000);
         expect(closed).toBe(false);
+        await until(() => fs.existsSync(shutdownTailPublishing), 5_000);
+        expect(fs.existsSync(shutdownTailTemp)).toBe(true);
+        expect(fs.existsSync(shutdownTail)).toBe(false);
+        expect(closed).toBe(false);
+        fs.writeFileSync(shutdownRelease, "publish");
         await until(() => fs.existsSync(shutdownTail), 5_000);
         expect(fs.readFileSync(shutdownTail, "utf8")).toBe(String(portableRunner!.pid));
-        expect(closed).toBe(false);
-        fs.writeFileSync(shutdownRelease, "release");
       }
       // On SIGKILL, exit only accounts for the dispatcher. Close also waits
       // for the runner and guardians that inherited its diagnostic pipe.

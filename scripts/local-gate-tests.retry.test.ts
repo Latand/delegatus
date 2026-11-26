@@ -177,11 +177,11 @@ test.each([true, false] as const)("a later deadline respects whether the same-se
   const otherOrigin = { ...diagnostic, provenance: "at unrelatedFault (<checkout>/example.test.ts:18:2)" };
   const base: TestRun = { failures: [], passed: [site], completed: [site.file], elapsedMs: 0 };
   const head: TestRun = { ...base, failures: [site], passed: [] };
-  let rounds = 0;
+  let headRounds = 0;
   const error = await confirmFailures(base, head, side => {
     if (side === "base") return { ...base, failures: [matched ? diagnostic : otherOrigin] };
-    rounds++;
-    if (rounds === 1) return { ...head, failures: [site, diagnostic], passed: [] };
+    headRounds++;
+    if (headRounds === 1) return { ...head, failures: [site, diagnostic], passed: [] };
     throw new BudgetExhausted("confirmation deadline");
   }).catch(error => error);
   expect(comparatorEnding(error).code).toBe(matched ? 75 : 1);

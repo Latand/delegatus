@@ -10,11 +10,15 @@ import { cacheDirectory, checkInputEnvironment, environmentFingerprint, fileFing
 import { decisiveRefusal } from "../src/lib/pipelines/publication";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
-export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number; selection?: "full" | "filtered"; provenance?: string }
-export interface TestRun { failures: TestSite[]; passed: TestSite[]; elapsedMs: number; completed: string[] }
+export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number; selection?: string; provenance?: string }
+export interface TestRun { failures: TestSite[]; passed: TestSite[]; elapsedMs: number; completed: string[]; selections?: Record<string, string> }
 const escapedTemporaryRoot = path.join(gateTemporaryRoot(), "delegatus-test-comparison-").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const privateTestRoot = new RegExp(`${escapedTemporaryRoot}[a-zA-Z0-9]{6}[/\\\\]test-[a-zA-Z0-9]{6}`, "g");
 const diagnosticName = (site: TestSite) => site.kind === "error" ? site.name.replace(privateTestRoot, "<sandbox>") : site.name;
+const diagnosticProvenance = (site: TestSite) => (site.provenance ?? "")
+  .replace(/(owned runner: surviving owned processes: ).*$/gm, "$1<run-owned identities>")
+  .replace(/(owned test children survived teardown: )[^\n]*(; guardian=)/g, "$1<run-owned identities>$2")
+  .replace(/(owned test scope children survived teardown: )\d+ \((?:\d+:\d+|null)\)(?:, \d+ \((?:\d+:\d+|null)\))*/g, "$1<run-owned identities>");
 // Keep the concrete identities in displayed evidence. A head/base comparison
 // of the same survivor failure must not depend on the different PIDs allocated
 // to those two isolated runs.
@@ -23,7 +27,7 @@ const key = (site: TestSite) => JSON.stringify([site.file, site.suite,
     .replace(/(owned runner: surviving owned processes: ).*$/, "$1<run-owned identities>")
     .replace(/(owned test children survived teardown: )[\d, ]*(; guardian=)/, "$1<run-owned identities>$2")
     .replace(/(owned test scope children survived teardown: )\d+ \((?:\d+:\d+|null)\)(?:, \d+ \((?:\d+:\d+|null)\))*$/, "$1<run-owned identities>")
-    : diagnosticName(site), site.kind, site.selection ?? "full", site.provenance ?? ""]);
+    : diagnosticName(site), site.kind, site.selection ?? "full", diagnosticProvenance(site)]);
 const occurrenceKey = (site: TestSite) => JSON.stringify([key(site), site.occurrence ?? 0]);
 const comparisonKey = (site: TestSite) => site.kind === "test" && site.occurrence !== undefined ? occurrenceKey(site) : key(site);
 const mergeObservedSites = (first: readonly TestSite[], retry: readonly TestSite[]) => {
@@ -86,6 +90,11 @@ function assertWorkersSucceeded<T>(workers: readonly PromiseSettledResult<T>[], 
   }
   throw rejected[0]!.reason;
 }
+const selectionFor = (sites: readonly TestSite[] | undefined) => {
+  const tests = sites?.filter(site => site.kind !== "error");
+  if (!tests?.length) return "full";
+  return JSON.stringify([...new Set(testNameFilter(tests))].sort());
+};
 const RUNNER_ERROR = "<runner error> ";
 interface Counts { pass: number; fail: number }
 interface FlakySite extends TestSite { base: Counts; head: Counts }
@@ -199,10 +208,16 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
       for (const identity of matchedDiagnosticKeys(fileDiagnostics(baseRetry), fileDiagnostics(headRetry))) establishedDiagnosticMatches.add(identity);
       // Keep the established report order while rejudging diagnostics. The
       // filtered assertion results still go through the occurrence counts.
-      const observedHead = mergeObservedSites([...comparison.introduced, ...comparison.preexisting], fileDiagnostics(headRetry));
-      const retried = compareTests({ ...base, failures: [...baseAssertions, ...baseDiagnostics] }, { ...head, failures: observedHead });
+      const observedHead = mergeObservedSites(head.failures.filter(site => site.kind === "error"), fileDiagnostics(headRetry));
+      const retried = compareTests({ ...base, failures: [...baseAssertions, ...baseDiagnostics] }, {
+        ...head, failures: [...head.failures.filter(site => site.kind === "test"),
+          ...comparison.introduced.filter(site => site.kind === "test" && !needsConfirmation(site)), ...observedHead],
+        selections: { ...head.selections, ...headRetry.selections },
+      });
       comparison.introduced = retried.introduced;
       comparison.preexisting = retried.preexisting;
+      comparison.fixed = retried.fixed;
+      comparison.absent = retried.absent;
       for (const [index, side] of sides.entries()) {
         const run = samples[index]!.value;
         for (const item of pending) {
@@ -230,7 +245,8 @@ export async function confirmFailures(base: TestRun, head: TestRun, rerun: (side
     // confirmations; an ordinary runner deadline alone remains retryable.
     const retained = comparison.introduced.filter(site => site.kind === "test"
       ? !needsConfirmation(site)
-      : site.name !== `${RUNNER_ERROR}runner did not finish (124)`
+      : !establishedDiagnosticMatches.has(key(site))
+        && site.name !== `${RUNNER_ERROR}runner did not finish (124)`
         && (diagnosticRetryCompleted || !site.name.startsWith("<between-tests error> ")));
     if (!retained.length) throw error;
     throw new Error([error instanceof Error ? error.message : String(error),
@@ -256,6 +272,8 @@ export function compareTests(base: TestRun, head: TestRun) {
     if (!count) continue;
     remaining.set(identity, count - 1);
     const passed = passes.get(identity) ?? 0;
+    const sameSelection = site.kind !== "error" || (head.selections?.[site.file] ?? "full") === (site.selection ?? "full");
+    if (site.kind === "error" && head.completed.includes(site.file) && !sameSelection) continue;
     if (passed || (site.kind === "error" && head.completed.includes(site.file))) { fixed.push(site); passes.set(identity, passed - 1); }
     else absent.push(site);
   }
@@ -265,12 +283,19 @@ export function compareTests(base: TestRun, head: TestRun) {
 /** Bun's JUnit format retains describe ancestry and handles multiline/escaped names.
  * Validate totals; a truncated report must never certify a baseline.
  */
-export function parseReport(xml: string, output: string, file: string, root: string, filtered = false): Omit<TestRun, "elapsedMs" | "completed"> {
+export function parseReport(xml: string, output: string, file: string, root: string, filtered: boolean | string = false): Omit<TestRun, "elapsedMs" | "completed"> {
   const attributes = (tag: string) => Object.fromEntries([...tag.matchAll(/([\w-]+)="([^"]*)"/g)].map(m => [m[1]!, decodeXML(m[2]!)]));
-  const provenance = (text: string) => text.split("\n").map(line => line.trim())
-    .filter(line => /^(?:at\s|[-*]\s+at\s)/.test(line))
-    .map(line => line.split(root).join("<checkout>").replace(/\x1b\[[0-9;]*m/g, ""))
-    .slice(0, 6).join("\n");
+  const provenance = (text: string) => {
+    const lines = text.split("\n").map(line => line.trim()).filter(Boolean);
+    const start = lines.findIndex(line => /^(?:[\w.]*Error|error):/.test(line));
+    const diagnostic = start < 0 ? lines : lines.slice(start);
+    const firstFrame = diagnostic.findIndex(line => /^(?:[-*]\s+)?at\s/.test(line));
+    const message = firstFrame < 0 ? diagnostic : diagnostic.slice(0, firstFrame);
+    const frames = diagnostic.filter(line => /^(?:[-*]\s+)?at\s/.test(line));
+    return [...message, ...frames].map(line => line.split(root).join("<checkout>")
+      .replace(privateTestRoot, "<sandbox>").replace(/\x1b\[[0-9;]*m/g, "")).join("\n");
+  };
+  const selection = typeof filtered === "string" ? filtered : filtered ? "filtered" : "full";
   const opening = xml.match(/<testsuites\b[^>]*>/)?.[0];
   if (!opening || !xml.trimEnd().endsWith("</testsuites>")) throw new Error("missing or incomplete JUnit report");
   const totals = attributes(opening);
@@ -294,8 +319,9 @@ export function parseReport(xml: string, output: string, file: string, root: str
         const message = tag ? attributes(tag).message : undefined;
         if (!message) throw new Error("unidentified JUnit hook failure");
         const body = decodeXML((match[2] ?? "").replace(/<[^>]*>/g, " "));
-        failures.push({ file, suite: site.suite, name: `<hook error> ${message.split(root).join("<checkout>")}`, kind: "error",
-          selection: filtered ? "filtered" : "full", provenance: provenance(body) });
+        const type = tag ? attributes(tag).type : undefined;
+        failures.push({ file, suite: site.suite, name: `<hook error> ${type ? `${type}: ` : ""}${message.split(root).join("<checkout>")}`, kind: "error",
+          selection, provenance: provenance(`${type ? `${type}\n` : ""}${body}`) });
       } else failures.push(site);
       namedFailures++;
     }
@@ -310,7 +336,7 @@ export function parseReport(xml: string, output: string, file: string, root: str
     if (!message) throw new Error("unidentified error between tests");
     errors++;
     failures.push({ file, suite: "", name: `<between-tests error> ${message.split(root).join("<checkout>")}`, kind: "error",
-      selection: filtered ? "filtered" : "full", provenance: provenance(match[1]!) });
+      selection, provenance: provenance(match[1]!) });
   }
   const reportedErrors = Number(output.match(/^\s*(\d+) errors?\s*$/m)?.[1] ?? 0);
   if (errors !== reportedErrors) throw new Error("incomplete between-tests error diagnostics");
@@ -327,7 +353,7 @@ function command(command: string[], cwd: string, env: NodeJS.ProcessEnv, timeout
 /** The preload and service can report the same surviving tree. Keep one
  * ownership failure for that exact identity set; other hook errors still block.
  */
-export function appendOwnershipFailure(failures: TestSite[], file: string, diagnostic: string): void {
+export function appendOwnershipFailure(failures: TestSite[], file: string, diagnostic: string, selection = "full"): void {
   const runnerPrefix = "owned runner: surviving owned processes: ";
   const hookPrefix = "<hook error> owned test scope children survived teardown: ";
   const identities = (value: string) => value.split(", ").sort().join(", ");
@@ -335,7 +361,7 @@ export function appendOwnershipFailure(failures: TestSite[], file: string, diagn
   const duplicate = failures.findIndex(site => site.file === file && site.kind === "error"
     && site.name.startsWith(hookPrefix) && identities(site.name.slice(hookPrefix.length)) === members);
   if (duplicate >= 0) failures.splice(duplicate, 1);
-  failures.push({ file, suite: "", name: `<ownership error> ${diagnostic}`, kind: "error" });
+  failures.push({ file, suite: "", name: `<ownership error> ${diagnostic}`, kind: "error", selection });
 }
 
 /** Bun arguments that run only the named cases of one file. */
@@ -392,6 +418,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
   const deadline = Math.min(now() + budgets.runMs, options.comparisonDeadline, options.confirmationDeadline ?? Infinity);
   const budgetLabel = deadline === options.comparisonDeadline ? "comparison" : options.confirmationDeadline === undefined ? "phase" : "flaky rerun";
   const results: TestRun[] = new Array(files.length);
+  const selections: Record<string, string> = {};
   const runFile = async (index: number) => {
     const file = files[index]!;
     const fileStarted = performance.now();
@@ -404,6 +431,8 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const sites = options.sites?.filter(site => site.file === file);
     const filtered = !!sites && !sites.some(site => site.kind === "error");
     const filter = filtered ? testNameFilter(sites) : [];
+    const selection = filtered ? selectionFor(sites) : "full";
+    selections[file] = selection;
     const privateRoot = mkdtempSync(path.join(sandbox, "test-"));
     const env = isolatedEnvironment(privateRoot, inherited);
     // HOME is private before this Bun process starts. The preload verifies it
@@ -453,11 +482,11 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
         throw new BudgetExhausted(`${label}: ${file}: runner did not finish (124); ${budgetLabel} budget exhausted`);
       }
       if (result.signalCode || ![0, 1].includes(exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? exitCode})`);
-      const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, filtered);
+      const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, selection);
       // A complete report still needs the service's ownership verdict.
       // Retain it so cleanup fixed on head can recover a broken baseline.
       if (survivors && exitCode !== 0) {
-        appendOwnershipFailure(parsed.failures, file, survivors);
+        appendOwnershipFailure(parsed.failures, file, survivors, selection);
       }
       if ((exitCode === 0) !== (parsed.failures.length === 0)) {
         throw new Error(`runner exit disagrees with its report${survivors ? `; ${survivors}` : ""}`);
@@ -483,7 +512,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       }
       // A caller's TMPDIR may sit inside its checkout. Normalize the report
       // sandbox before replacing that checkout prefix on only the head side.
-      failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.replace(privateTestRoot, "<sandbox>").split(root).join("<checkout>")}`, kind: "error" });
+      failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.replace(privateTestRoot, "<sandbox>").split(root).join("<checkout>")}`, kind: "error", selection });
     } finally { rmSync(privateRoot, { recursive: true, force: true }); }
     const elapsedMs = performance.now() - fileStarted;
     const hint = label === "head" && elapsedMs > budgets.fileMs / 2
@@ -515,7 +544,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     && site.name !== `${RUNNER_ERROR}runner did not finish (124)`) ?? []);
   assertWorkersSucceeded(workers, diagnostics.map(site => `${label}: ${site.file}: ${diagnosticName(site)}`));
   for (const run of results) { failures.push(...run.failures); passed.push(...run.passed); completed.push(...run.completed); }
-  return { failures, passed, completed, elapsedMs: performance.now() - started };
+  return { failures, passed, completed, elapsedMs: performance.now() - started, selections };
 }
 
 function dependencyGraph(root: string) {

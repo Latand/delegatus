@@ -52,8 +52,9 @@ if (run === 2 && (mode === "shared" || (mode === "head-only" && side === "head")
   expect(readFileSync(counter + "-head", "utf8")).toBe("2");
   expect(outcome.stdout).toContain("FLAKY example.test.ts: contract (base 2 pass/0 fail; head 1 pass/1 fail)");
   if (mode === "no diagnostic") return;
-  const expected = kind === "hook" ? "<hook error> owned test scope children survived teardown: 31 (31:1)" : "<between-tests error> TypeError: confirmation tail";
+  const expected = kind === "hook" ? "<hook error> Error: owned test scope children survived teardown: 31 (31:1)" : "<between-tests error> TypeError: confirmation tail";
   expect(outcome.stdout).toContain(`${mode === "shared" ? "PRE-EXISTING" : "NEW"} example.test.ts: ${expected}`);
+  if (mode === "shared") expect(outcome.stdout).not.toContain("FIXED example.test.ts: " + expected);
   if (mode === "shared") expect(outcome.stdout).toContain(`Base diagnostic example.test.ts: ${expected.replace("31 (31:1)", "21 (21:1)")}`);
 });
 
@@ -157,6 +158,22 @@ describe("source", () => candidateFault());`);
   expect(refused.status, refused.stdout + refused.stderr).toBe(1);
   expect(refused.stderr).not.toContain("gate error");
   expect(refused.stdout).toContain("NEW example.test.ts: <between-tests error> TypeError: shared diagnostic");
+});
+
+test.each([
+  ["TypeError", "RangeError", "shared diagnostic", "shared diagnostic"],
+  ["TypeError", "TypeError", "shared diagnostic\nbase detail", "shared diagnostic\nhead detail"],
+] as const)("exception type and complete multiline details distinguish CLI diagnostics", (baseType, headType, baseMessage, headMessage) => {
+  const sourceFor = (type: string, message: string) => [
+    'import { describe, test } from "bun:test";',
+    'test("anchor", () => {});',
+    'describe("source", () => { throw new ' + type + '(' + JSON.stringify(message) + '); });',
+  ].join("\n");
+  const f = fixture(sourceFor(baseType, baseMessage));
+  writeFileSync(path.join(f.dir, "example.test.ts"), sourceFor(headType, headMessage));
+  const refused = cliAt(f, f.base);
+  expect(refused.status, refused.stdout + refused.stderr).toBe(1);
+  expect(refused.stdout).toContain("NEW example.test.ts: <between-tests error>");
 });
 
 test("a retry in a file whose base is broken the same way still confirms its candidates", async () => {
