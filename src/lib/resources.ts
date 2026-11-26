@@ -2641,5 +2641,7 @@ export async function readResourcesWithDiagnostic(fresh = false, options: Resour
   const { agentRegistry } = await import("@/lib/agent/registry");
   const { servingAgentStateService } = await import("@/lib/agentState/service");
   servingAgentStateService()?.observeResourceSample(read.payload.sessions, Date.parse(read.payload.sessionsCapturedAt ?? ""));
-  return { ...read, payload: { ...read.payload, agentState: readAgentStateMetrics(agentRegistry()), diskPressure: await readDiskPressure(), worktreeSweep: worktreeSweepStatus(), tempSweep: tempSweepStatus(), releaseRetention: releaseRetentionStatus(), filesResponseSweep: filesResponseSweepStatus() } };
+  const { currentMemoryPressure } = await import("@/lib/state/memoryPressure");
+  const memoryPressure = currentMemoryPressure();
+  return { ...read, payload: { ...read.payload, agentState: readAgentStateMetrics(agentRegistry()), diskPressure: await readDiskPressure(), ...(memoryPressure ? { memoryPressure } : {}), worktreeSweep: worktreeSweepStatus(), tempSweep: tempSweepStatus(), releaseRetention: releaseRetentionStatus(), filesResponseSweep: filesResponseSweepStatus() } };
 }

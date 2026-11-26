@@ -8,6 +8,11 @@ export function registerDiskPressureSweep(kind: SweepKind, request: () => void) 
   return () => { if (hooks().get(kind) === request) hooks().delete(kind); };
 }
 
+/** One sweep now, if its timer is idle: the memory watch asks for temp alone. */
+export function requestDiskPressureSweep(kind: SweepKind): void {
+  hooks().get(kind)?.();
+}
+
 export function requestDiskPressureSweeps(): void {
   for (const request of hooks().values()) request();
 }

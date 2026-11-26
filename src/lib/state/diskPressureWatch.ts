@@ -3,7 +3,8 @@ import type { CleanerController } from "@/lib/cleaner/run";
 import { statePath } from "@/lib/configDir";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { readDiskPressure } from "./diskPressure";
-import { productionDiskPressureActions, reconcileDiskPressure, type DiskPressureActions } from "./diskPressureActions";
+import { productionDiskPressureActions, productionMemoryPressureActions, reconcileDiskPressure, type DiskPressureActions } from "./diskPressureActions";
+import { observeMemoryPressureReport, readMemoryReading, reconcileMemoryPressure, type MemoryPressureActions } from "./memoryPressure";
 
 const host = globalThis as typeof globalThis & { __delegatusDiskPressureTimer?: ReturnType<typeof setTimeout> };
 
@@ -34,6 +35,7 @@ export function startDiskPressureWatch(ports: {
   actions?: DiskPressureActions;
   cleaner?: CleanerController;
   now?: () => number;
+  memoryActions?: MemoryPressureActions;
 } = {}): void {
   if (host.__delegatusDiskPressureTimer || (!ports.observe && process.env.LLV_STATE_OWNER !== "viewer")) return;
   const cleaner = ports.cleaner;
@@ -43,7 +45,19 @@ export function startDiskPressureWatch(ports: {
   let trafficSince = cleaner && actions.active()
     ? releaseTrafficSince(watchStartedAt) ?? watchStartedAt
     : null;
+  const memoryActions = ports.memoryActions ?? productionMemoryPressureActions(actions);
+  /* Memory is read on the same 30 s beat. Its own failure is logged and never
+     delays the disk observation. */
+  const observeMemory = async () => {
+    try {
+      const reading = readMemoryReading();
+      if (reading) await reconcileMemoryPressure(observeMemoryPressureReport(reading, new Date(now()).toISOString()), memoryActions);
+    } catch (error) {
+      console.error("[memory pressure] observation failed", error instanceof Error ? error.message : String(error));
+    }
+  };
   const observe = ports.observe ?? (async () => {
+    await observeMemory();
     if (cleaner) {
       if (!actions.active()) trafficSince = null;
       else if (process.env.PORT?.trim()) trafficSince = releaseTrafficSince(now()) ?? trafficSince ?? now();

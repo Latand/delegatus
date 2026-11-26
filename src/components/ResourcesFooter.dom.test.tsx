@@ -5,7 +5,10 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { ResourceSession, ResourcesViewer } from "@/lib/types";
 
-import { CleanupPanel, DiskPressureNotice, ResourcesFooter, stickySnap } from "./ResourcesFooter";
+import { setLocale } from "@/lib/i18n";
+import type { MemoryPressure } from "@/lib/state/memoryPressure";
+
+import { CleanupPanel, DiskPressureNotice, MemoryPressureLines, ResourcesFooter, stickySnap } from "./ResourcesFooter";
 
 const dom = new Window();
 Object.assign(globalThis, {
@@ -503,5 +506,53 @@ for (const density of ["line", "detail"] as const) {
       globalThis.setTimeout = realTimeout;
       globalThis.fetch = realFetch;
     }
+  });
+}
+
+/* RAM, swap and /tmp are always one line of totals; a pressure episode adds the
+   crossed thresholds and the cleanup it started, in both languages. */
+for (const density of ["full", "line"] as const) {
+  test(`the ${density} System block shows RAM, swap and the tmpfs /tmp, and warns during memory pressure`, () => {
+    const GiB = 1024 ** 3;
+    const element = document.createElement("div");
+    document.body.append(element);
+    const root: Root = createRoot(element);
+    mounted.push(() => {
+      flushSync(() => { root.unmount(); });
+      setLocale("en");
+      element.remove();
+    });
+    const calm: MemoryPressure = {
+      at: "2026-11-26T10:00:00.000Z", episode: null, reasons: [], swapWarnPercent: 50, tmpWarnBytes: 4e9,
+      ram: { usedBytes: 20 * GiB, totalBytes: 64 * GiB }, swap: { usedBytes: 4 * GiB, totalBytes: 32 * GiB },
+      tmp: { usedBytes: GiB, totalBytes: 32 * GiB, tmpfs: true, view: "host" },
+    };
+    flushSync(() => { root.render(<MemoryPressureLines pressure={calm} density={density} />); });
+    let block = element.querySelector<HTMLElement>("[data-memory-pressure]")!;
+    expect(block.dataset.memoryPressure).toBe("ok");
+    expect(block.getAttribute("role")).toBeNull();
+    expect(block.textContent).toBe("RAM 20 GiB of 64 GiB · swap 4.0 GiB of 32 GiB · /tmp 1.0 GiB in memory (tmpfs)");
+
+    const hot: MemoryPressure = { ...calm, episode: calm.at, reasons: ["swap", "tmp"],
+      swap: { usedBytes: 29 * GiB, totalBytes: 32 * GiB }, tmp: { ...calm.tmp!, usedBytes: 8 * GiB } };
+    flushSync(() => { root.render(<MemoryPressureLines pressure={hot} density={density} />); });
+    block = element.querySelector<HTMLElement>("[data-memory-pressure]")!;
+    expect(block.dataset.memoryPressure).toBe("warning");
+    expect(block.getAttribute("role")).toBe("status");
+    for (const part of ["Memory pressure", "Swap is over 50% used", "/tmp holds over 4 GB in memory", "swap 29 GiB of 32 GiB", "/tmp 8.0 GiB in memory (tmpfs)"]) expect(block.textContent).toContain(part);
+    if (density === "full") expect(block.textContent).toContain("Temp cleanup of /tmp and /var/tmp runs now, at most every 15 minutes.");
+    else expect(block.querySelector<HTMLElement>(".text-warning")!.title).toBe("Temp cleanup of /tmp and /var/tmp runs now, at most every 15 minutes.");
+
+    flushSync(() => { setLocale("uk"); root.render(<MemoryPressureLines pressure={hot} density={density} />); });
+    block = element.querySelector<HTMLElement>("[data-memory-pressure]")!;
+    for (const part of ["Тиск на пам'ять", "Swap зайнятий більше ніж на 50%", "/tmp займає в пам'яті понад 4 GB", "ОЗП 20 GiB з 64 GiB", "8.0 GiB у пам'яті (tmpfs)"]) expect(block.textContent).toContain(part);
+
+    /* Only the crossed threshold is named; a disk-backed or unreadable /tmp says so. */
+    flushSync(() => { setLocale("en"); root.render(<MemoryPressureLines pressure={{ ...hot, reasons: ["swap"], tmp: { ...hot.tmp!, tmpfs: false } }} density={density} />); });
+    block = element.querySelector<HTMLElement>("[data-memory-pressure]")!;
+    expect(block.textContent).toContain("/tmp 8.0 GiB on disk");
+    expect(block.textContent).not.toContain("/tmp holds over");
+    flushSync(() => { root.render(<MemoryPressureLines pressure={{ ...calm, tmp: null }} density={density} />); });
+    expect(element.textContent).toContain("/tmp unreadable");
   });
 }

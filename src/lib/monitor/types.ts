@@ -1432,6 +1432,8 @@ export interface SeatTickCheckInput {
   releaseAlerts?: { kind: "release-settled" | "release-blocked"; id: string; label: string }[];
   project: string;
   workers?: { limit: number; source: string; machine: number; running: number };
+  /** RAM, swap and the tmpfs /tmp, with the last stray temp sweep: one line, every wake. */
+  machine?: string;
   now: number;
   seat: SeatTickSeatInput | null;
   /** Read only while {@link seat} is null: whether an orchestrator ever held
@@ -1540,7 +1542,7 @@ export interface SeatTickCheckInput {
     second check re-finds it instead of minting a twin. */
 export interface SeatTickCard {
   ref: string;
-  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "check-errors" | "mcp-unavailable" | "auth-failed" | "auto-rotation" | "host-recovery" | "disk-pressure";
+  kind: "no-seat" | "retry-guard" | "tick-settings" | "source-unreadable" | "wake-unresolved" | "check-errors" | "mcp-unavailable" | "auth-failed" | "auto-rotation" | "host-recovery" | "disk-pressure" | "memory-pressure";
   detail: string;
   /**
    * Whether the condition still holds.

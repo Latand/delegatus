@@ -6,6 +6,7 @@ import { modelDisplayName } from "@/lib/agent/models";
 import { createFreshAwareCoalescer } from "@/lib/asyncCoalescer";
 import { useLocale, type MessageKey } from "@/lib/i18n";
 import type { DiskPressure } from "@/lib/state/diskPressure";
+import type { MemoryPressure } from "@/lib/state/memoryPressure";
 import type { ResourceSession, ResourcesPayload, ResourcesViewer } from "@/lib/types";
 
 import { X } from "./icons";
@@ -247,6 +248,7 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
           )}
         </button>
         {snap.data.diskPressure ? <DiskPressureNotice pressure={snap.data.diskPressure} density={density} /> : null}
+        {snap.data.memoryPressure ? <MemoryPressureLines pressure={snap.data.memoryPressure} density={density} /> : null}
         {cleanup}
         {worktreesOpen ? <WorktreeDrilldown onClose={closeWorktrees} /> : null}
       </div>
@@ -308,6 +310,7 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
         )}
       </button>
       {snap.data.diskPressure ? <DiskPressureNotice pressure={snap.data.diskPressure} /> : null}
+      {snap.data.memoryPressure ? <MemoryPressureLines pressure={snap.data.memoryPressure} /> : null}
       {open ? (
         <CleanupPanel
           sessions={sessions}
@@ -367,6 +370,41 @@ async function killSession(
   } catch (error) {
     return { outcome: "refused", reason: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/** RAM and swap used of their totals and what `/tmp` holds, on every
+    reading; during a memory pressure episode the line turns into a warning
+    naming the crossed threshold and the temp cleanup it started. */
+export function MemoryPressureLines({ pressure, density = "full" }: { pressure: MemoryPressure; density?: RailFooterDensity }) {
+  const { t } = useLocale();
+  const usedOf = (usage: { usedBytes: number; totalBytes: number }) => t("resources.usedOfTotal", { used: fmtBytes(usage.usedBytes), total: fmtBytes(usage.totalBytes) });
+  const tmp = !pressure.tmp ? t("resources.tmpUnknown")
+    : pressure.tmp.tmpfs ? t("resources.tmpTmpfs", { amount: fmtBytes(pressure.tmp.usedBytes) }) : t("resources.tmpOnDisk", { amount: fmtBytes(pressure.tmp.usedBytes) });
+  const totals = t("resources.memoryTotals", { ram: usedOf(pressure.ram), swap: usedOf(pressure.swap), tmp });
+  const warnings = pressure.episode ? [
+    ...(pressure.reasons.includes("swap") ? [t("resources.memorySwapHigh", { percent: String(pressure.swapWarnPercent) })] : []),
+    ...(pressure.reasons.includes("tmp") ? [t("resources.memoryTmpHigh", { amount: `${(pressure.tmpWarnBytes / 1e9).toFixed(0)} GB` })] : []),
+  ] : [];
+  if (density !== "full") {
+    const NOTE = "block break-words text-[10px] leading-[13px]";
+    return (
+      <div role={warnings.length ? "status" : undefined} data-memory-pressure={pressure.episode ? "warning" : "ok"}
+        aria-label={[...(warnings.length ? [t("resources.memoryHigh"), ...warnings] : []), totals].join(" · ")}
+        className={`${LINE_EDGE} -mt-1 pb-1`}>
+        {warnings.length ? <span className={`${NOTE} text-warning`} title={t("resources.memorySweep")}>{t("resources.memoryHigh")}: {warnings.join(" · ")}</span> : null}
+        <span data-meter-note="" className={`${NOTE} tabular-nums text-muted`} title={totals}>{totals}</span>
+      </div>
+    );
+  }
+  return (
+    <div role={warnings.length ? "status" : undefined} data-memory-pressure={pressure.episode ? "warning" : "ok"}
+      className={`px-3.5 pb-2 text-xs leading-relaxed ${warnings.length ? "text-warning" : "text-muted"}`}>
+      {warnings.length ? <strong className="block">{t("resources.memoryHigh")}</strong> : null}
+      {warnings.map(warning => <div key={warning}>{warning}</div>)}
+      <div className="tabular-nums">{totals}</div>
+      {warnings.length ? <div>{t("resources.memorySweep")}</div> : null}
+    </div>
+  );
 }
 
 /** Low free space on a volume Delegatus writes to, while its episode lasts
