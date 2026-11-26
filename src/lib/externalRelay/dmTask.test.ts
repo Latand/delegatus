@@ -16,9 +16,9 @@ const { selfFile } = await import("@/lib/links/self");
 const { persistProjectAliases } = await import("@/lib/projects/aliases");
 const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("@/lib/orchestrator/seats");
 const structured = await import("@/lib/runtime/structuredMessageDelivery");
-const { loadTasks, saveTasksFile } = await import("@/lib/tasks/store");
+const { loadTasks, loadTasksFile, saveTasksFile } = await import("@/lib/tasks/store");
 const { runClaimedRequest } = await import("./runner");
-const { dmTaskTrigger } = await import("./dmTask");
+const { dmTaskTrigger, recoverPendingDmTaskDeliveries } = await import("./dmTask");
 const { relayClaimCapabilities } = await import("./poller");
 const { RELAY_DM_TASK_CHOICES, requestSchema, relayChoiceButtonsSchema } = await import("./protocol");
 const { updateRelayStore, writeRelayFile } = await import("./store");
@@ -246,6 +246,22 @@ test("pending owner delivery recovers after restart without Telegram replay and 
   expect(newTasks()).toHaveLength(1);
   expect(directives).toEqual([]);
 
+  // Model interruption after the board commit and receipt write, while the
+  // outbox still contains the pre-commit creating phase.
+  const receiptDirectory = path.join(process.env.LLV_STATE_DIR!, "external-relay", "dm-tasks");
+  const receiptFile = fs.readdirSync(receiptDirectory).map(name => path.join(receiptDirectory, name))
+    .find(file => JSON.parse(fs.readFileSync(file, "utf8")).phase === "created");
+  if (!receiptFile) throw new Error("Expected a durable task receipt");
+  const receipt = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+  fs.writeFileSync(receiptFile, JSON.stringify({ ...receipt, phase: "creating" }));
+  const pendingFile = path.join(process.env.LLV_STATE_DIR!, "external-relay", "dm-task-pending", path.basename(receiptFile));
+  const pending = JSON.parse(fs.readFileSync(pendingFile, "utf8"));
+  fs.writeFileSync(pendingFile, JSON.stringify({ ...pending, receipt: { ...pending.receipt, phase: "creating" } }));
+  // This test module captured the shared task-store path before beforeEach
+  // selects its per-case relay state; mirror the persisted snapshot into the
+  // child process's isolated state root for restart recovery.
+  saveTasksFile(loadTasksFile(), path.join(process.env.LLV_STATE_DIR!, "tasks.json"));
+
   updateRelayStore(store => ({ ...store, relays: [{ ...paired,
     targets: [{ ...paired.targets[0]!, requesters: { revision: 2, entries: [] } }],
   }] }));
@@ -378,6 +394,51 @@ test("an expired or revoked choice leaves the board and seat untouched", async (
   expect(directives).toEqual([]);
 });
 
+test("a foreign callback has no pending-delivery recovery effects; independent recovery still delivers", async () => {
+  send.mockImplementationOnce(async () => ({ ok: false, structured: true, status: 503, outcome: "failed", error: "Fixture refusal" }))
+    .mockImplementationOnce(async () => ({ ok: false, structured: true, status: 503, outcome: "failed", error: "Fixture refusal" }));
+  const original = claim(owner, "Fix Atlas build output", "callback-pending-delivery");
+  expect((await reply(original)).text).toContain("unconfirmed");
+  expect(newTasks()).toHaveLength(1);
+  expect(directives).toEqual([]);
+
+  const invalid = { sender_key: owner.key, chat_key: chatKey, message_id: "foreign-keyboard",
+    value: "v".repeat(32), expires_at: new Date(now + 60_000).toISOString() };
+  expect((await reply({ ...original, request_id: "foreign-press", button_choice: invalid })).buttons).toEqual([]);
+  expect(directives).toEqual([]);
+
+  await recoverPendingDmTaskDeliveries();
+  expect(directives).toHaveLength(1);
+  expect(directives[0]?.text).toContain(newTasks()[0]!.id);
+});
+
+test("a held unrelated recovery send starts only after the next claim heartbeat", async () => {
+  send.mockImplementationOnce(async () => ({ ok: false, structured: true, status: 503, outcome: "failed", error: "Fixture refusal" }))
+    .mockImplementationOnce(async () => ({ ok: false, structured: true, status: 503, outcome: "failed", error: "Fixture refusal" }));
+  expect((await reply(claim(owner, "Fix Atlas build output", "held-recovery-seed"))).text).toContain("unconfirmed");
+  let heartbeatSeen = false;
+  heartbeat = () => { heartbeatSeen = true; };
+  let entered!: () => void;
+  let release!: () => void;
+  const recoveryStarted = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  send.mockImplementationOnce(async message => {
+    expect(heartbeatSeen).toBe(true);
+    entered();
+    await gate;
+    return { ok: false, structured: true, status: 503, outcome: "failed", error: "Still pending" };
+  });
+  const nextClaim = reply(claim(owner, "Fix Beacon build output", "while-recovery-held"));
+  try {
+    await recoveryStarted;
+    expect(heartbeatSeen).toBe(true);
+  } finally {
+    release();
+  }
+  await nextClaim;
+  expect(newTasks()).toHaveLength(2);
+});
+
 test("an explicit Ukrainian task directive creates one project card and owner directive", async () => {
   const explicit = claim(owner, "Постав задачу для Atlas: онови документацію", "uk-task");
   expect(dmTaskTrigger(requestSchema.parse(explicit))?.text).toBe("Постав задачу для Atlas: онови документацію");
@@ -390,12 +451,21 @@ test("an explicit Ukrainian task directive creates one project card and owner di
 test("polite explicit task wording enters the claim handler while status requests remain ordinary relay input", async () => {
   const status = claim(owner, "Update us on Atlas", "status-question");
   const explicit = claim(owner, "Could you create a task for Atlas to fix the build?", "polite-task");
+  const investigate = claim(owner, "Investigate the failing Atlas build", "investigate");
   expect(dmTaskTrigger(requestSchema.parse(status))).toBeNull();
+  expect(dmTaskTrigger(requestSchema.parse(claim(owner, "Перевір статус задачі в Atlas", "uk-status")))).toBeNull();
+  expect(dmTaskTrigger(requestSchema.parse(claim(owner, "Проверь статус задачи в Atlas", "ru-status")))).toBeNull();
+  expect(dmTaskTrigger(requestSchema.parse(investigate))?.text)
+    .toBe("Investigate the failing Atlas build");
   expect(dmTaskTrigger(requestSchema.parse(explicit))?.text).toBe("Could you create a task for Atlas to fix the build?");
   const result = await reply(explicit);
   expect(result.buttons?.[0]?.[0]?.url).toContain("#task=");
   expect(newTasks()).toMatchObject([{ project: atlas, status: "assigned" }]);
   expect(directives).toHaveLength(1);
+  const investigation = await reply(investigate);
+  expect(investigation.buttons?.[0]?.[0]?.url).toContain("#task=");
+  expect(newTasks()).toHaveLength(2);
+  expect(directives).toHaveLength(2);
 });
 
 for (const refusal of [null, 415, 422] as const) test(`the card URL survives tight limits${refusal ? ` after HTTP ${refusal}` : " without URL buttons"}`, async () => {
@@ -410,6 +480,19 @@ for (const refusal of [null, 415, 422] as const) test(`the card URL survives tig
   expect(answer.text).toContain("board.example.invalid/#task=");
   expect(answer.buttons).toEqual([]);
   expect(newTasks()).toHaveLength(1);
+});
+
+for (const rich of [false, true]) test(`no card is created when a complete link cannot fit the plain fallback${rich ? " after rich downgrade" : " in plain-only mode"}`, async () => {
+  const request = claim(owner, "Fix Atlas build output", `unusable-link-${rich}`);
+  request.answer.max_chars = 24;
+  request.input.format = { ...request.input.format!, formats: { ...request.input.format!.formats, plain: 24 },
+    buttons: { ...request.input.format!.buttons, allowed: rich } };
+  if (rich) completionRefusal = 415;
+  const answer = await reply(request);
+  expect(answer.text.length).toBeLessThanOrEqual(24);
+  expect(answer.text).not.toContain("#task=");
+  expect(newTasks()).toEqual([]);
+  expect(directives).toEqual([]);
 });
 
 for (const refusal of [415, 422] as const) test(`project clarification keeps resend guidance after HTTP ${refusal} keyboard downgrade`, async () => {

@@ -292,9 +292,6 @@ export async function runClaimedRequest(
   if (requestClaim.kind === "duplicate") return null;
   if (requestClaim.kind === "terminal")
     return requestClaim.completion ? { ...requestClaim.completion, lease_id: leaseId } : null;
-  // Pending task directives are an outbox concern, independent of replaying
-  // the Telegram message that originally created each board card.
-  await recoverPendingDmTaskDeliveries().catch(error => console.warn("Relay DM task delivery recovery deferred", error));
   if (recovery) await changeRunAsync(requestId, row => ({ ...row,
     ownerPid: claimOwnerPid, ownerIdentity: claimOwnerIdentity }), ownerRelayStoreDeadline());
   const terminal: { completion: ExternalRelayCompletion | null } = { completion: null };
@@ -812,6 +809,10 @@ export async function runClaimedRequest(
       acked = true;
       heartbeatAt = Date.now();
     }
+    // Recovery is independent of this claim. Start only after its first
+    // heartbeat, and leave callback validation/handling free of side effects.
+    if (!recovery && !request?.button_choice)
+      void recoverPendingDmTaskDeliveries().catch(error => console.warn("Relay DM task delivery recovery deferred", error));
     notifyInitialLease();
     pendingBeat = Promise.resolve();
     heartbeatTimer = setInterval(() => {

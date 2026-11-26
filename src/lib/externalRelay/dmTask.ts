@@ -60,7 +60,7 @@ function readReceipt(file: string): Receipt | null {
 
 // Require a task command or an imperative request for project work. Ordinary
 // conversation goes through the existing relay path.
-const taskRequest = /^(?:\/task(?:\s|$)|(?:(?:please|could you|can you|would you|будь ласка|пожалуйста)[,\s]+)?(?:create (?:a |the )?task|add (?:a |the )?task|file (?:a |an )?(?:task|issue|bug)|fix|implement|investigate|refactor|update (?:the |a )?(?:task|build|docs?|documentation|feature|project)|обнови|онови|створи|створіть|додай|додайте|виправ|виправте|реалізуй|перевір|закинь|постав\s+задачу|створи\s+задачу|создай|добавь|исправь|реализуй|проверь|заведи)(?=$|[^\p{L}\p{N}_]))/iu;
+const taskRequest = /^(?:\/task(?:\s|$)|(?:(?:please|could you|can you|would you|будь ласка|пожалуйста)[,\s]+)?(?:create (?:a |the )?task|add (?:a |the )?task|file (?:a |an )?(?:task|issue|bug)|fix|implement|investigate|refactor|update (?:the |a )?(?:task|build|docs?|documentation|feature|project)|обнови|онови|створи|створіть|додай|додайте|виправ|виправте|реалізуй|закинь|постав\s+задачу|створи\s+задачу|создай|добавь|исправь|реализуй|заведи)(?=$|[^\p{L}\p{N}_]))/iu;
 
 export function dmTaskTrigger(request: ExternalRelayRequest) {
   if (request.delivery === "guest" || request.chat?.type !== "private") return null;
@@ -137,12 +137,13 @@ function removePendingDelivery(identity: string) {
  * current pairing and requester grants before admission. */
 export async function recoverPendingDmTaskDeliveries(
   deliver: typeof submitDirective = submitDirective,
+  maxEntries = 4,
 ): Promise<void> {
   let names: string[];
   try { names = fs.readdirSync(pendingDirectory()).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort(); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
   const { relays } = readRelayStore();
-  for (const name of names) {
+  for (const name of names.slice(0, Math.max(0, Math.min(16, maxEntries)))) {
     const file = path.join(pendingDirectory(), name);
     let pending: { identity: string; relayId: string; receipt: Receipt };
     try {
@@ -165,6 +166,13 @@ export async function recoverPendingDmTaskDeliveries(
           author: { key: requestContext.trigger.authorKey, self: false } }] },
       ...(requestContext.ownerChatId ? { owner_delivery: { chat_id: requestContext.ownerChatId } } : {}),
     } as ExternalRelayRequest;
+    const boardTask = readMutationTask(loadTasks(), taskIdFor(pending.identity));
+    if (!boardTask || boardTask.project !== receipt.project) continue;
+    if (receipt.phase === "creating") {
+      const created = { ...receipt, phase: "created" as const };
+      writeRelayFile(statePath(`external-relay/dm-tasks/${pending.identity}.json`), created);
+      pending = { ...pending, receipt: created };
+    }
     const scope = liveScope(relay, request);
     if (!scope || scope.project !== null && scope.project !== receipt.project) continue;
     const instruction = bridgeDirectiveBody(`Owner request via the Telegram relay. Work on the existing board task ${taskIdFor(pending.identity)}.\n\nRequest: ${JSON.stringify(requestContext.trigger.text)}`);
@@ -296,6 +304,9 @@ export async function answerDmTask(
     const url = new URL(new URL(publicUrl).origin);
     url.hash = `task=${encodeURIComponent(taskId)}`;
     if (!safeRelayUrl(url.href)) return answer(copy.noUrl);
+    // A richer answer can be downgraded after a refused completion. Keep a
+    // complete link in the plain channel so the card is always reachable.
+    if ([...url.href].length > caps.plainMax) return answer(copy.tooLong);
     const body = taskWords(text, copy.title);
     if (!body) return answer(copy.tooLong);
     const triggerAuthor = trigger.author.key;
@@ -309,6 +320,9 @@ export async function answerDmTask(
     if (!prior || prior.phase === "choice") {
       prior = { ...next, phase: "creating" };
       writeRelayFile(file, prior);
+      // Persist recoverable intent before the board transaction. A restart
+      // can dispatch it only after confirming the task really committed.
+      writePendingDelivery(identity, relay.id, prior);
     }
     const alreadyCreated = prior.phase !== "creating";
     type CreateResult = "created" | "denied" | "expired" | "missing" | "noSeat" | "blocked";
