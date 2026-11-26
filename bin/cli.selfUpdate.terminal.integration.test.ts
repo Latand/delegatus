@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import path from "node:path";
 import { expect, test } from "bun:test";
 import {
-  ADMISSION_LOG, STUB_NEXT, WORK_STARTED, children, cleanTerminalEnv, git, install, perimeterRemains, pointerFile, protectedInstall, readRecord, recordFile, registerSelfUpdateCleanup, release, request, roots, served, serviceShown, socketAnswers, start, stateText, until, type LauncherRecord,
+  ADMISSION_LOG, STUB_NEXT, WORK_STARTED, availablePort, children, cleanTerminalEnv, git, install, perimeterRemains, pointerFile, protectedInstall, readRecord, recordFile, registerSelfUpdateCleanup, release, request, roots, served, serviceShown, socketAnswers, start, stateText, until, type LauncherRecord,
 } from "./__fixtures__/cli-self-update";
 
 /*
@@ -929,7 +929,7 @@ test("terminal bootstrap records refusal and reaps a candidate that misses the p
   let terminalOutput = "";
   child.stderr?.on("data", chunk => { terminalOutput += String(chunk); });
   const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-    const watchdog = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("terminal bootstrap exceeded its independent test deadline")); }, 10_000);
+    const watchdog = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("terminal bootstrap exceeded its independent test deadline")); }, 30_000);
     child.once("error", error => { clearTimeout(watchdog); reject(error); });
     child.once("close", (code, signal) => { clearTimeout(watchdog); children.delete(child); resolve({ code, signal }); });
   });
@@ -941,7 +941,7 @@ test("terminal bootstrap records refusal and reaps a candidate that misses the p
   expect(JSON.parse(readFileSync(ledgerFile, "utf8"))[0]).toMatchObject({ phase: "failed", terminal: true, error: expect.any(String) });
   expect(JSON.parse(readFileSync(trialFile, "utf8"))).toMatchObject({ refused: true, detail: expect.any(String) });
   expect(existsSync(drainFile)).toBe(false);
-});
+}, 35_000);
 
 test("terminal bootstrap refuses a candidate whose recorded runtime host never answers health", async () => {
   const fixture = install();
@@ -1000,7 +1000,7 @@ test("terminal bootstrap refuses a candidate whose recorded runtime host never a
     Buffer.from(JSON.stringify(plan)).toString("base64"), candidateEntry, "--no-open"], { cwd: fixture.checkout, env: fixture.env, stdio: "ignore" });
   children.add(child);
   const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-    const watchdog = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("terminal bootstrap exceeded its independent test deadline")); }, 10_000);
+    const watchdog = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("terminal bootstrap exceeded its independent test deadline")); }, 30_000);
     child.once("error", error => { clearTimeout(watchdog); reject(error); });
     child.once("close", (code, signal) => { clearTimeout(watchdog); children.delete(child); resolve({ code, signal }); });
   });
@@ -1012,7 +1012,7 @@ test("terminal bootstrap refuses a candidate whose recorded runtime host never a
   expect(JSON.parse(readFileSync(ledgerFile, "utf8"))[0]).toMatchObject({ phase: "failed", terminal: true, error: expect.any(String) });
   expect(JSON.parse(readFileSync(trialFile, "utf8"))).toMatchObject({ refused: true, detail: expect.any(String) });
   expect(existsSync(drainFile)).toBe(false);
-});
+}, 35_000);
 
 test("an early prior-launcher exit settles the deployment as a durable refusal", async () => {
   const fixture = install();
@@ -1050,7 +1050,7 @@ test("an early prior-launcher exit settles the deployment as a durable refusal",
   expect(existsSync(drainFile)).toBe(false);
 });
 
-test("the forwarding launcher bounds a replacement that stalls during module loading", async () => {
+test("the forwarding launcher starts the restored checkout after a switch timeout", async () => {
   const fixture = install();
   const candidate = release(fixture, "handoff-import-stall");
   const directory = path.join(fixture.state, "self-update");
@@ -1079,20 +1079,23 @@ test("the forwarding launcher bounds a replacement that stalls during module loa
   writeFileSync(ledgerFile, JSON.stringify([{ deploymentId: intent.deploymentId, phase: "switching", terminal: false, error: null, revisionNumber: 1 }]));
   writeFileSync(drainFile, JSON.stringify({ id: intent.requestId, target: candidate.sha, persistent: true }));
 
-  const running = await start(fixture);
+  const running = await start(fixture, [], 35_000);
   try {
     const { isAlive } = await import("../src/lib/selfUpdate/pid");
     await until(() => existsSync(pidFile) ? true : null, 5_000).catch(error => { throw new Error(`${String(error)}\n${running.output()}`); });
-    running.child.kill("SIGTERM");
-    // A signal-resistant replacement must remain supervised until the
-    // persisted startup deadline, then receive the bounded stop escalation.
-    await until(() => JSON.parse(readFileSync(path.join(directory, "apply.json"), "utf8")).state === "failed" ? true : null, 5_000);
+    // The wedged replacement remains under the forwarding launcher's startup
+    // deadline; after rollback, the checkout release must serve again.
+    await until(() => JSON.parse(readFileSync(path.join(directory, "apply.json"), "utf8")).state === "failed" ? true : null, 25_000);
     expect(isAlive(Number(readFileSync(pidFile, "utf8")))).toBe(false);
     expect(JSON.parse(readFileSync(path.join(directory, "apply.json"), "utf8"))).toMatchObject({ state: "failed", detail: expect.any(String) });
     expect(JSON.parse(readFileSync(ledgerFile, "utf8"))[0]).toMatchObject({ phase: "failed", terminal: true, error: expect.any(String) });
     expect(JSON.parse(readFileSync(trialFile, "utf8"))).toMatchObject({ refused: true, detail: expect.any(String) });
     expect(existsSync(drainFile)).toBe(false);
-    expect(readRecord(fixture.state).web.state).toBe("healthy");
+    await until(() => {
+      const record = readRecord(fixture.state);
+      return record.web.state === "healthy" && record.web.revision === fixture.first.slice(0, 7) ? record : null;
+    }, 10_000);
+    expect(existsSync(pointer)).toBe(false);
   } finally {
     const closed = new Promise(resolve => running.child.once("exit", resolve));
     running.child.kill("SIGTERM");
@@ -1105,22 +1108,155 @@ test("the forwarding launcher bounds a replacement that stalls during module loa
     }
     children.delete(running.child);
   }
-});
+}, 35_000);
 
-for (const failurePhase of ["none", "readiness", "page", "chunk", "output", "journal"] as const) {
+test("SIGTERM while a forwarded replacement is wedged remains bounded", async () => {
+  const fixture = install();
+  const priorRun = await start(fixture, [], 20_000);
+  const priorRecord = readRecord(fixture.state);
+  const candidate = release(fixture, "handoff-signal-stall");
+  const directory = path.join(fixture.state, "self-update");
+  mkdirSync(directory, { recursive: true });
+  const pointer = pointerFile(fixture);
+  const requestFile = pointer.replace("release-", "request-");
+  const trialFile = requestFile.replace("request-", "trial-");
+  const ledgerFile = path.join(directory, "deployments.json");
+  const drainFile = path.join(directory, "auto-drain.json");
+  const pidFile = path.join(fixture.root, "signal-candidate.pid");
+  writeFileSync(path.join(candidate.dir, "bin", "cli.mjs"), `
+    import { writeFileSync } from "node:fs";
+    const handoffProtocol = "delegatus-checkout-launcher-v2";
+    if (process.argv.includes("--version")) process.exit(0);
+    writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+    process.on("SIGTERM", () => {});
+    await new Promise(() => {});
+    console.log(handoffProtocol);
+  `);
+  writeFileSync(pointer, JSON.stringify({ sha: candidate.sha, dir: candidate.dir, checkoutHead: fixture.first }));
+  const intent = { requestId: "handoff-signal-stall", target: candidate.sha, releasePointer: pointer, rollbackPointer: null,
+    state: "switching", switchedAt: new Date().toISOString(), switchDeadlineAt: Date.now() + 5000, deploymentId: "signal-deployment",
+    launcherPid: priorRecord.launcher.pid, launcherIdentity: priorRecord.launcher.startIdentity };
+  writeFileSync(path.join(directory, "apply.json"), JSON.stringify(intent));
+  writeFileSync(trialFile, JSON.stringify({ ...intent, state: "starting", at: new Date().toISOString() }));
+  writeFileSync(ledgerFile, JSON.stringify([{ deploymentId: intent.deploymentId, phase: "switching", terminal: false, error: null, revisionNumber: 1 }]));
+  writeFileSync(drainFile, JSON.stringify({ id: intent.requestId, target: intent.target, persistent: true }));
+  const priorExited = new Promise(resolve => priorRun.child.once("exit", resolve));
+  priorRun.child.kill("SIGTERM");
+  await priorExited;
+  const { isAlive, readStartIdentity } = await import("../src/lib/selfUpdate/pid");
+  const ownedServices = [priorRecord.web, priorRecord.runtimeHost].filter(entry => entry.pid && entry.startIdentity);
+  for (const entry of ownedServices) {
+    if (isAlive(entry.pid!) && readStartIdentity(entry.pid!) === entry.startIdentity) process.kill(entry.pid!, "SIGTERM");
+  }
+  await until(() => ownedServices.every(entry => !isAlive(entry.pid!) || readStartIdentity(entry.pid!) !== entry.startIdentity) ? true : null, 5_000);
+
+  const port = await availablePort();
+  const forwarding = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(port)], {
+    cwd: fixture.checkout, env: fixture.env, stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(forwarding);
+  let output = "";
+  forwarding.stdout?.on("data", chunk => { output = (output + String(chunk)).slice(-4096); });
+  forwarding.stderr?.on("data", chunk => { output = (output + String(chunk)).slice(-4096); });
+  try {
+    await until(() => existsSync(pidFile) ? true : null, 20_000).catch(error => { throw new Error(`${String(error)}\n${output}`); });
+    const candidatePid = Number(readFileSync(pidFile, "utf8"));
+    const exited = new Promise(resolve => forwarding.once("exit", resolve));
+    forwarding.kill("SIGTERM");
+    await Promise.race([exited, Bun.sleep(25_000)]);
+    expect(forwarding.exitCode !== null || forwarding.signalCode !== null).toBe(true);
+    const { isAlive } = await import("../src/lib/selfUpdate/pid");
+    expect(isAlive(candidatePid)).toBe(false);
+  } finally {
+    if (forwarding.exitCode === null && forwarding.signalCode === null) {
+      const exited = new Promise(resolve => forwarding.once("exit", resolve));
+      forwarding.kill("SIGKILL");
+      await exited;
+    }
+    children.delete(forwarding);
+  }
+}, 70_000);
+
+test("terminal bootstrap lets a rollback finish after the switch expires", async () => {
+  const fixture = install();
+  const candidate = release(fixture, "slow-rollback");
+  writeFileSync(path.join(candidate.dir, "node_modules", ".bin", "next"), STUB_NEXT(true));
+  const candidateBudgets = path.join(candidate.dir, "bin", "launcher-deadline.mjs");
+  writeFileSync(candidateBudgets, readFileSync(candidateBudgets, "utf8").replace("VIEWER_PAGE_CHECK_TIMEOUT_MS = 90_000", "VIEWER_PAGE_CHECK_TIMEOUT_MS = 500"));
+  writeFileSync(path.join(fixture.checkout, "node_modules", ".bin", "next"), `await Bun.sleep(3400);\n${STUB_NEXT(false)}`);
+
+  const pointer = pointerFile(fixture);
+  const directory = path.dirname(pointer);
+  mkdirSync(directory, { recursive: true });
+  const requestFile = pointer.replace("release-", "request-");
+  const trialFile = pointer.replace("release-", "trial-");
+  const resultFile = `${requestFile}.result.json`;
+  const requestId = "slow-rollback";
+  const port = await availablePort();
+  const previousEntry = path.join(fixture.checkout, "bin", "cli.mjs");
+  const candidateEntry = path.join(candidate.dir, "bin", "cli.mjs");
+  const switchDeadlineAt = Date.now() + 2_800;
+  const intent = { requestId, target: candidate.sha, releasePointer: pointer, rollbackPointer: null,
+    state: "switching", switchedAt: new Date().toISOString(), switchDeadlineAt };
+  writeFileSync(pointer, JSON.stringify({ ...candidate, checkoutHead: fixture.first }));
+  writeFileSync(path.join(directory, "apply.json"), JSON.stringify(intent));
+  writeFileSync(trialFile, JSON.stringify({ ...intent, previousEntry, state: "starting", at: intent.switchedAt }));
+
+  const plan = { root: fixture.checkout, requestFile, target: candidate.sha, releasePointer: pointer,
+    rollbackPointer: null, priorRevision: fixture.first.slice(0, 7), priorVersion: "0.0.0", checkout: true };
+  const entry = [path.join(fixture.checkout, "bin", "launcher-relaunch.mjs"), "--terminal",
+    Buffer.from(JSON.stringify(plan)).toString("base64"), candidateEntry];
+  const child = spawn(process.execPath, ["--bun", ...entry, "--no-open", "--port", String(port)], {
+    cwd: fixture.checkout, env: fixture.env, stdio: ["ignore", "ignore", "pipe"],
+  });
+  children.add(child);
+  let stderr = "";
+  child.stderr?.on("data", chunk => { stderr += String(chunk); });
+  const { isAlive, readStartIdentity } = await import("../src/lib/selfUpdate/pid");
+  let rollbackOwner: { pid: number; identity: string } | undefined;
+  try {
+    await until(() => {
+      if (!existsSync(trialFile)) return false;
+      const trial = JSON.parse(readFileSync(trialFile, "utf8"));
+      if (trial.state !== "rolled-back") return false;
+      const record = readRecord(fixture.state);
+      const identity = readStartIdentity(record.launcher.pid);
+      if (!identity || identity !== record.launcher.startIdentity) return false;
+      rollbackOwner = { pid: record.launcher.pid, identity };
+      return true;
+    }, 5_000);
+    const receipt = await until(() => existsSync(resultFile) ? JSON.parse(readFileSync(resultFile, "utf8")) : null, 8_000)
+      .catch(error => { throw new Error(`${error}\n${stderr}`); });
+    expect(receipt).toMatchObject({ state: "rolled-back", requestId, revision: fixture.first });
+    expect(Date.parse(receipt.completedAt)).toBeGreaterThan(switchDeadlineAt);
+    expect(await served(port)).toBe(fixture.checkout);
+    await until(() => child.exitCode === 1, 5_000);
+    expect(stderr).toContain("the verified prior release is serving");
+  } finally {
+    // The detached terminal child transferred itself to the recorded prior launcher.
+    if (rollbackOwner && readStartIdentity(rollbackOwner.pid) === rollbackOwner.identity) {
+      process.kill(rollbackOwner.pid, "SIGTERM");
+      await until(() => !isAlive(rollbackOwner!.pid) || readStartIdentity(rollbackOwner!.pid) !== rollbackOwner!.identity, 5_000);
+    }
+  }
+}, 20_000);
+
+for (const failurePhase of ["none", "readiness", "page", "chunk", "output", "journal", "slow", "stalled"] as const) {
   test(`relaunch readiness persists phases across exec and rollback, failure=${failurePhase}`, async () => {
-    const failed = failurePhase !== "none";
+    const failed = failurePhase !== "none" && failurePhase !== "slow";
+    const readinessFails = failurePhase === "readiness" || failurePhase === "stalled";
     const pageFails = failurePhase === "page" || failurePhase === "output" || failurePhase === "journal";
     const fixture = install();
+    fixture.env.LLV_LANG = failurePhase === "stalled" ? "uk" : "en";
     const running = await start(fixture);
     const before = await until(() => { const record = readRecord(fixture.state); return record.web.state === "healthy" ? record : null; });
     const next = release(fixture, "readiness-trial");
     const supervisor = path.join(next.dir, "bin", "self-update-supervisor.mjs");
     writeFileSync(supervisor, readFileSync(supervisor, "utf8")
-      .replace("timeoutMs = 90_000, attemptTimeoutMs = 5_000", "timeoutMs = 1_000, attemptTimeoutMs = 200")
+      .replace("timeoutMs = VIEWER_PAGE_CHECK_TIMEOUT_MS, attemptTimeoutMs = 5_000", "timeoutMs = 1_000, attemptTimeoutMs = 200")
       .replace("timeoutMs = 5_000, headers = {}", "timeoutMs = 200, headers = {}"));
     const launcher = path.join(next.dir, "bin", "cli.mjs");
-    writeFileSync(launcher, readFileSync(launcher, "utf8").replace("const RESTART_READINESS_TIMEOUT_MS = 90_000", "const RESTART_READINESS_TIMEOUT_MS = 1_000"));
+    writeFileSync(launcher, readFileSync(launcher, "utf8").replace("const VIEWER_READINESS_SILENCE_MS = 90_000", "const VIEWER_READINESS_SILENCE_MS = 1_000"));
     writeFileSync(path.join(next.dir, "node_modules", ".bin", "next"), `
       console.log("discarded startup prefix " + "x".repeat(70_000));
       console.log("▲ Next.js fixture startup line");
@@ -1129,12 +1265,27 @@ for (const failurePhase of ["none", "readiness", "page", "chunk", "output", "jou
       console.error("[viewer startup phase] access ready 3");
       console.error("[viewer startup phase] state-compatibility running 0");
       if (${failurePhase !== "readiness"}) console.error("[viewer startup phase] state-compatibility ready 7");
+      let progress = 0;
+      let ready = ${failurePhase !== "slow" && failurePhase !== "stalled"};
+      if (!ready) {
+        console.error("[viewer startup phase] registry running 0");
+        const interval = setInterval(() => {
+          console.error("[viewer startup phase] registry progress " + (++progress) + " 10");
+          if (${failurePhase === "stalled"} && progress === 2) clearInterval(interval);
+          if (progress === 10) {
+            clearInterval(interval);
+            ready = true;
+            console.error("[viewer startup phase] registry ready 3000");
+          }
+        }, 300);
+      }
       let pages = 0;
       const server = Bun.serve({ hostname: "127.0.0.1", port: Number(process.env.PORT ?? process.argv[process.argv.indexOf("--port") + 1]),
         fetch(request) {
           const { pathname, searchParams } = new URL(request.url);
           if (pathname === "/api/ready") {
             if (${failurePhase === "readiness"}) return new Promise(() => {});
+            if (!ready) return new Response(null, { status: 503 });
             const revision = process.env.LLV_DIAGNOSTIC_REVISION;
             return searchParams.get("revision") === revision
               ? new Response(null, { headers: { "x-delegatus-viewer-revision": revision } })
@@ -1173,24 +1324,35 @@ for (const failurePhase of ["none", "readiness", "page", "chunk", "output", "jou
       const candidate = runs.find((run: { revision: string }) => run.revision === next.sha)!;
       expect(candidate.status).toBe(failed ? "failed" : "ready");
       expect(candidate.phases.files.attempts).toBeGreaterThanOrEqual(1);
-      expect(candidate.phases.files.status).toBe(failurePhase === "readiness" ? "failed" : "ready");
+      expect(candidate.phases.files.status).toBe(readinessFails ? "failed" : "ready");
       expect(candidate.startup.access).toEqual({ status: "ready", elapsedMs: 3 });
       if (failurePhase === "readiness") {
         expect(candidate.elapsedMs).toBeLessThan(5_000);
-        expect(result.detail).toContain("[state-compatibility]");
+        expect(result.detail).toContain("The server made no startup progress for 1 second. [state-compatibility]");
+        expect(candidate).toMatchObject({ detail: "startup-silence" });
         expect(candidate.startup["state-compatibility"]).toMatchObject({ status: "failed" });
         expect(candidate.phases.files.observations.at(-1)).toMatchObject({ endpoint: "/api/ready", error: "deadline" });
         expect(candidate.phases.page.attempts).toBe(0);
         expect(candidate.phases.page.status).toBe("pending");
+      } else if (failurePhase === "stalled") {
+        expect(result.detail).toContain("Запуск сервера не просувався протягом 1 с. [registry] Останній поступ: registry 2/10.");
+        expect(candidate).toMatchObject({ detail: "startup-silence" });
+        expect(candidate.startup.registry).toMatchObject({ status: "failed", done: 2, total: 10 });
+        expect(candidate.phases.page.attempts).toBe(0);
       } else {
+        if (failurePhase === "slow") {
+          expect(candidate.startup.registry).toMatchObject({ status: "ready", done: 10, total: 10 });
+          expect(candidate.phases.files.elapsedMs).toBeGreaterThanOrEqual(3_000);
+          expect(candidate.phases.files.observations).toContainEqual(expect.objectContaining({ httpStatus: 503 }));
+        }
         expect(candidate.startup["state-compatibility"]).toEqual({ status: "ready", elapsedMs: 7 });
         expect(candidate.phases.files.observations.at(-1)).toMatchObject({ endpoint: "/api/ready", httpStatus: 200 });
         expect(candidate.phases.page.attempts).toBeGreaterThanOrEqual(2);
         expect(candidate.phases.page.status).toBe(pageFails ? "failed" : "ready");
         expect(candidate.phases.page.elapsedMs).toBeGreaterThanOrEqual(200);
       }
-      expect(candidate.phases.chunk.status).toBe(failurePhase === "none" ? "ready" : failurePhase === "chunk" ? "failed" : "pending");
-      if (failurePhase === "none") {
+      expect(candidate.phases.chunk.status).toBe(!failed ? "ready" : failurePhase === "chunk" ? "failed" : "pending");
+      if (!failed) {
         expect(candidate.phases.page.observations.at(-1)).toMatchObject({ httpStatus: 200, status: "ready" });
         expect(candidate.phases.chunk.observations.at(-1)).toMatchObject({ httpStatus: 200, status: "ready" });
       }

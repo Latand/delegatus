@@ -1699,6 +1699,16 @@ function trackMutableJson<T>(
   return proxy as T;
 }
 
+export interface RegistrySnapshotPreparationOptions {
+  recoveryIndexes?: boolean;
+  onSlice?: () => void;
+}
+
+export interface NativeCallerArtifactPreparationOptions {
+  waitUntilReady?: boolean;
+  onSlice?: () => void;
+}
+
 export class SqliteAgentRegistryStore {
   private readonly db: BunDatabase;
   private nativeArtifactRead: NativeArtifactRead | null = null;
@@ -1708,7 +1718,12 @@ export class SqliteAgentRegistryStore {
   /** The one shared preparation. Each caller waits under its own signal; the
       work itself stops only after every caller waiting on it has stopped, so
       an expired background reader cannot cancel startup's unexpired one. */
-  private preparingReader: { run: Promise<SqliteRegistrySnapshot>; abort: AbortController; waiters: number } | null = null;
+  private preparingReader: {
+    run: Promise<SqliteRegistrySnapshot>;
+    abort: AbortController;
+    waiters: number;
+    progressListeners: Set<() => void>;
+  } | null = null;
   private closed = false;
   /** Used while the wrapper retires a replaced inode, letting issued cold
       snapshots finish against their still-open reader connection. */
@@ -2328,7 +2343,9 @@ export class SqliteAgentRegistryStore {
 
   /** Preparation is shared by native calls and yields between fixed-size
       batches. The synchronous selector always checks new changes itself. */
-  async prepareNativeCallerArtifacts(signal?: AbortSignal, { waitUntilReady = false } = {}): Promise<void> {
+  async prepareNativeCallerArtifacts(signal?: AbortSignal, {
+    waitUntilReady = false, onSlice,
+  }: NativeCallerArtifactPreparationOptions = {}): Promise<void> {
     if (process.platform !== "linux" || this.closed) return;
     const deadline = waitUntilReady ? Infinity : performance.now() + 5_000;
     let restarted = false;
@@ -2336,8 +2353,9 @@ export class SqliteAgentRegistryStore {
     // caller keeps its own deadline and can withdraw without ending other work.
     while (!this.closed && performance.now() < deadline) {
       signal?.throwIfAborted();
+      let ready: boolean | undefined;
       try {
-        if (performanceSpans.sync("registry.prepare.slice", () => this.withCallerRead(() => this.advanceNativeArtifacts()))) return;
+        ready = performanceSpans.sync("registry.prepare.slice", () => this.withCallerRead(() => this.advanceNativeArtifacts()));
       } catch {
         this.resetNativeArtifacts();
         if (restarted) {
@@ -2346,6 +2364,9 @@ export class SqliteAgentRegistryStore {
         }
         restarted = true;
       }
+      // An unsuccessful slice may reset the index. Only completed work counts.
+      if (ready !== undefined) onSlice?.();
+      if (ready) return;
       await yieldToRuntime(signal);
     }
     signal?.throwIfAborted();
@@ -2724,14 +2745,14 @@ export class SqliteAgentRegistryStore {
   /** Prepare an immutable view without holding the writer connection across
       a yield. One read transaction pins rows, grants and revision together;
       the complete view becomes visible only after validation. */
-  prepareReadOnlySnapshot(signal?: AbortSignal, options: { recoveryIndexes?: boolean } = {}): Promise<SqliteRegistrySnapshot> {
+  prepareReadOnlySnapshot(signal?: AbortSignal, options: RegistrySnapshotPreparationOptions = {}): Promise<SqliteRegistrySnapshot> {
     return withViewerOperation("registry.prepare", async () => {
-      if (options.recoveryIndexes !== false) await this.prepareRecoveryIndexes(signal);
-      return this.prepareReadOnlySnapshotWork(signal);
+      if (options.recoveryIndexes !== false) await this.prepareRecoveryIndexes(signal, options.onSlice);
+      return this.prepareReadOnlySnapshotWork(signal, options.onSlice);
     });
   }
 
-  private prepareReadOnlySnapshotWork(signal?: AbortSignal): Promise<SqliteRegistrySnapshot> {
+  private prepareReadOnlySnapshotWork(signal?: AbortSignal, onSlice?: () => void): Promise<SqliteRegistrySnapshot> {
     if (signal?.aborted) return Promise.reject(signal.reason);
     const reader = this.preparedReader;
     if (reader?.readOnlyCache) {
@@ -2762,7 +2783,12 @@ export class SqliteAgentRegistryStore {
       }
     }
     const shared = this.preparingReader ?? this.startReaderPreparation();
-    return this.awaitReaderPreparation(shared, signal);
+    if (!onSlice) return this.awaitReaderPreparation(shared, signal);
+    // Preparation can have started for another caller. Subscribe until this
+    // caller completes or aborts, without changing ownership of the reader.
+    const listener = () => { if (!signal?.aborted) onSlice(); };
+    shared.progressListeners.add(listener);
+    return this.awaitReaderPreparation(shared, signal).finally(() => shared.progressListeners.delete(listener));
   }
 
   /** The view brought up to date from the journal when it names a few row
@@ -2837,6 +2863,10 @@ export class SqliteAgentRegistryStore {
   private startReaderPreparation(): NonNullable<SqliteAgentRegistryStore["preparingReader"]> {
     const abort = new AbortController();
     const signal = abort.signal;
+    const progressListeners = new Set<() => void>();
+    const onSlice = () => {
+      for (const notify of progressListeners) notify();
+    };
     const run = (async () => {
       // Let the tick after constructor/schema work run before opening and
       // materializing the read connection in the next bounded slice.
@@ -2908,6 +2938,7 @@ export class SqliteAgentRegistryStore {
                 do { next = steps.next(); stepsInSlice++; }
                 while (!next.done && stepsInSlice < 128 && performance.now() - started < 8);
               });
+              onSlice();
               if (!next.done) await yieldToRuntime();
             }
             prepared = next.value as StampedSnapshot;
@@ -2925,7 +2956,7 @@ export class SqliteAgentRegistryStore {
             // Do not call readOnlySnapshot here: after a peer archive it can
             // synchronously replay the journal and rebuild every cold header
             // before this async preparation returns.
-            const current = await reader.refreshSnapshotForPreparation(signal) ?? prepared;
+            const current = await reader.refreshSnapshotForPreparation(signal, onSlice) ?? prepared;
             signal?.throwIfAborted();
             if (identity !== databaseFileIdentity(this.filename)) {
               reader.onDatabaseReopened(reader.db);
@@ -2975,7 +3006,7 @@ export class SqliteAgentRegistryStore {
         throw new Error("registry database replaced during three preparation attempts");
       } catch (error) { reader.close(); throw error; }
     })().finally(() => { if (this.preparingReader === shared) this.preparingReader = null; });
-    const shared = { run, abort, waiters: 0 };
+    const shared = { run, abort, waiters: 0, progressListeners };
     // Every caller may have left before the work settles.
     run.catch(() => {});
     this.preparingReader = shared;
@@ -2984,7 +3015,7 @@ export class SqliteAgentRegistryStore {
 
   private recoveryIndexesSignature: string | null = null;
 
-  async prepareRecoveryIndexes(signal?: AbortSignal): Promise<void> {
+  async prepareRecoveryIndexes(signal?: AbortSignal, onSlice?: () => void): Promise<void> {
     signal?.throwIfAborted();
     if (this.options.readOnly || this.options.allowArchiveMigration === false) return;
     const indexSignature = () => `${databaseFileIdentity(this.filename)}:${this.db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version}`;
@@ -3007,6 +3038,7 @@ export class SqliteAgentRegistryStore {
         this.writerHeld = false;
       }, { deadlineMs: Math.max(0, endingDeadline - performance.now()) });
       if (!result.acquired) throw new Error("registry ending preparation could not acquire its writer");
+      onSlice?.();
     }
 
     let indexSliceStarted = performance.now(), indexSliceRows = 0;
@@ -3050,6 +3082,7 @@ export class SqliteAgentRegistryStore {
         this.writerHeld = false;
       });
       if (!result.acquired) throw new Error("registry recovery index preparation could not acquire its writer");
+      onSlice?.();
     }
     const before = indexSignature();
     const names = recoveryIndexes.map(([name]) => name);
@@ -3472,7 +3505,7 @@ export class SqliteAgentRegistryStore {
     return finishSteps(this.refreshSnapshotSteps());
   }
 
-  private async refreshSnapshotForPreparation(signal?: AbortSignal): Promise<StampedSnapshot> {
+  private async refreshSnapshotForPreparation(signal?: AbortSignal, onSlice?: () => void): Promise<StampedSnapshot> {
     const refresh = this.refreshSnapshotSteps();
     let next = refresh.next();
     try {
@@ -3482,6 +3515,7 @@ export class SqliteAgentRegistryStore {
         performanceSpans.sync("registry.prepare.slice", () => {
           do { next = refresh.next(); } while (!next.done && performance.now() - started < 8);
         });
+        onSlice?.();
         if (!next.done) await yieldToRuntime();
       }
     } catch (error) {
@@ -3509,6 +3543,7 @@ export class SqliteAgentRegistryStore {
         performanceSpans.sync("registry.prepare.slice", () => {
           do { next = reload.next(); } while (!next.done && performance.now() - started < 8);
         });
+        onSlice?.();
         if (!next.done) await yieldToRuntime();
       }
       if (ownsTransaction) this.db.exec("COMMIT");
