@@ -72,6 +72,9 @@ export interface StateDatabase {
   name: string;
   filename: string;
   check: "integrity_check" | "quick_check";
+  /** A bounded activation check may be sufficient before stores open. Full
+      integrity checks still validate backups and other recovery candidates. */
+  activationCheck?: "integrity_check" | "quick_check";
   backup: { intervalMs: number; retention: BackupRetention } | null;
   /** A content revision, so an unchanged database is not copied again. When it
       is null or fails, the file signature stands in. */
@@ -96,6 +99,11 @@ export function stateDatabases(stateDirectory: string): StateDatabase[] {
       name: "agent-registry.sqlite",
       filename: at("agent-registry.sqlite"),
       check: "integrity_check",
+      // Verifying every index against every row is O(N log N) and made a
+      // multi-gigabyte registry consume the entire 90-second deploy window.
+      // quick_check still validates B-tree structure and page integrity; any
+      // recovery candidate continues to require the full integrity_check.
+      activationCheck: "quick_check",
       backup: { intervalMs: LARGE_STORE_BACKUP_INTERVAL_MS, retention: { kind: "tiered" } },
       revisionSql: "SELECT value AS revision FROM registry_meta WHERE key = 'revision'",
       rebuiltTriggers: [],
@@ -357,7 +365,7 @@ export function checkDatabaseAtActivation(
   fs.rmSync(databaseSwapMarker(database.filename), { force: true });
   if (!exists(database.filename)) return { state: "absent" };
   const now = options.now ?? new Date();
-  let verdict = inspect(database.filename, database.check, true);
+  let verdict = inspect(database.filename, database.activationCheck ?? database.check, true);
   let repaired: StorageIncident | null = null;
   if (verdict.verdict === "incompatible") {
     const first = verdict;
@@ -379,7 +387,7 @@ export function checkDatabaseAtActivation(
       console.error(`[state durability] ${database.name}: dropping the triggers its store rebuilds failed: ${errorText(error)}`);
       return incompatible(first);
     }
-    verdict = inspect(database.filename, database.check, true);
+    verdict = inspect(database.filename, database.activationCheck ?? database.check, true);
     if (verdict.verdict === "incompatible") return incompatible(verdict, kept);
     repaired = {
       kind: "database-schema-repaired", database: database.name, at: now.toISOString(), detail: first.detail,
