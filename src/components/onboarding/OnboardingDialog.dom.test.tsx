@@ -767,32 +767,85 @@ test("the orchestrator step with no engine claims no runtime: the Runs on row na
   answerAccounts({ claude: { active: "", accounts: [] }, codex: { active: "", accounts: [] } });
 });
 
-/* While the engines' sign-in states are still being read the step claims neither: no missing engine yet. */
+/* While the engines' sign-in states are still being read the step claims neither: no missing engine yet. Each read
+   is held and released by the case, and the case knows when the step has taken an answer in, so no state below
+   depends on how long a read takes. */
 test("the orchestrator step does not call an engine missing before the accounts read has answered", async () => {
+  const { act } = await import("react");
   const real = globalThis.fetch;
-  let release: () => void = () => {};
-  const held = new Promise<void>((resolve) => { release = resolve; });
+  type Read = "roles" | "accounts";
+  const gate = () => {
+    let open: () => void = () => {};
+    const opened = new Promise<void>((resolve) => { open = resolve; });
+    return { opened, open };
+  };
+  let held = { roles: gate(), accounts: gate() };
+  let rolesTaken = gate();
+  let state: Record<Read, "unasked" | "held" | "answered"> = { roles: "unasked", accounts: "unasked" };
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
-    if (url.endsWith("/api/accounts") || url.includes("/api/accounts?")) await held;
-    return real(input, init);
+    const read: Read | null = url.endsWith("/api/accounts") || url.includes("/api/accounts?") ? "accounts" : url.includes("/api/roles") ? "roles" : null;
+    if (read === null) return real(input, init);
+    const asked = { state, held: held[read], taken: rolesTaken };
+    asked.state[read] = "held";
+    await asked.held.opened;
+    const response = await real(input, init);
+    /* A read has answered once its caller holds the body. */
+    const body = response.json.bind(response);
+    response.json = async () => {
+      const value = await body();
+      asked.state[read] = "answered";
+      if (read === "roles") asked.taken.open();
+      return value;
+    };
+    return response;
   }) as typeof fetch;
-  answerAccounts({ claude: { active: "", cli: "missing", accounts: [] }, codex: { active: "", cli: "missing", accounts: [] } });
+  const none = { claude: { active: "", cli: "missing", accounts: [] }, codex: { active: "", cli: "missing", accounts: [] } };
   const host = document.createElement("div");
   document.body.appendChild(host);
-  const root = createRoot(host);
+  const named = () => host.querySelector("[data-onboarding-orchestrator-no-engine]");
+  const guide = <OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} projects={[]} onClose={() => {}} />;
+  const actEnvironment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+  const actBefore = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+  let root = createRoot(host);
   try {
-    flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} projects={[]} onClose={() => {}} />));
-    /* The roles read has answered; the accounts read has not. */
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    /* The roles read has answered; the accounts read has not. `act` returns after the render the roles' answer
+       caused, so the step below is the one that holds the roles and still waits for the engines. */
+    answerAccounts(none);
+    held.roles.open();
+    flushSync(() => root.render(guide));
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    try {
+      await act(async () => { await rolesTaken.opened; });
+    } finally {
+      actEnvironment.IS_REACT_ACT_ENVIRONMENT = actBefore;
+    }
+    expect(state).toEqual({ roles: "answered", accounts: "held" });
     expect(host.querySelector("[data-onboarding-orchestrator]")).not.toBeNull();
-    expect(host.querySelector("[data-onboarding-orchestrator-no-engine]")).toBeNull();
-    release();
-    await until(() => Boolean(host.querySelector("[data-onboarding-orchestrator-no-engine]")));
-    expect(host.querySelector("[data-onboarding-orchestrator-no-engine]")?.textContent).toBe("Connect Claude or Codex first.");
+    expect(named()).toBeNull();
+    held.accounts.open();
+    await until(() => Boolean(named()));
+    expect(state.accounts).toBe("answered");
+    expect(named()?.textContent).toBe("Connect Claude or Codex first.");
+    expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")).toBeNull();
+    flushSync(() => root.unmount());
+
+    /* The other order: the accounts read has answered with no engine and the roles read has not. The row names the
+       missing engine without waiting for the roles. */
+    held = { roles: gate(), accounts: gate() };
+    rolesTaken = gate();
+    state = { roles: "unasked", accounts: "unasked" };
+    answerAccounts(none);
+    held.accounts.open();
+    root = createRoot(host);
+    flushSync(() => root.render(guide));
+    await until(() => Boolean(named()));
+    expect(state).toEqual({ roles: "held", accounts: "answered" });
+    expect(named()?.textContent).toBe("Connect Claude or Codex first.");
     expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")).toBeNull();
   } finally {
-    release();
+    held.roles.open();
+    held.accounts.open();
     flushSync(() => root.unmount());
     host.remove();
     globalThis.fetch = real;
