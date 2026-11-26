@@ -786,17 +786,22 @@ export function recoverSchemaSetAside(
   return null;
 }
 
+type DatabaseCheckProgress = (done: number, total: number) => void;
+
 /** Check every state database before any store opens one. Returns the
     fallbacks taken; each is already recorded durably. */
 export function checkStateDatabasesAtActivation(
   stateDirectory: string,
-  options: { now?: Date; backupDirectory?: string; beforeSwapStep?: SwapStepHook } = {},
+  { onDatabaseChecked, ...options }: {
+    now?: Date; backupDirectory?: string; beforeSwapStep?: SwapStepHook; onDatabaseChecked?: DatabaseCheckProgress;
+  } = {},
 ): StorageIncident[] {
   /* Swapping a damaged database aside is a startup mutation: against the
      operator's own directory it belongs to the activating Viewer (#1905). */
   assertStateStartupMutation(stateDirectory, "state database activation check");
   const incidents: StorageIncident[] = [];
-  for (const database of stateDatabases(stateDirectory)) {
+  const databases = stateDatabases(stateDirectory);
+  for (const [index, database] of databases.entries()) {
     try {
       const outcome = checkDatabaseAtActivation(database, { stateDirectory, ...options });
       if ("incident" in outcome) incidents.push(outcome.incident);
@@ -808,6 +813,7 @@ export function checkStateDatabasesAtActivation(
       if (error instanceof SchemaRecoveryError) throw error;
       console.error(`[state durability] ${database.name} check failed: ${errorText(error)}`);
     }
+    onDatabaseChecked?.(index + 1, databases.length);
   }
   return incidents;
 }
@@ -1138,10 +1144,10 @@ export interface BackupWorkerResponse {
 }
 
 /** The worker's side: one pass over the request, answered as one JSON line. */
-export function answerBackupWorkerRequest(request: BackupWorkerRequest): BackupWorkerResponse {
+export function answerBackupWorkerRequest(request: BackupWorkerRequest, onDatabaseChecked?: DatabaseCheckProgress): BackupWorkerResponse {
   if (request.operation === "activation") {
     try {
-      return { outcomes: [], incidents: checkStateDatabasesAtActivation(request.stateDirectory) };
+      return { outcomes: [], incidents: checkStateDatabasesAtActivation(request.stateDirectory, { onDatabaseChecked }) };
     } catch (error) {
       if (error instanceof SchemaRecoveryError) return { outcomes: [], recoveryFailure: error.message };
       throw error;
@@ -1185,9 +1191,9 @@ export async function runBackupPassInWorker(
 }
 
 /** Activation awaits the same recovery decisions, with SQLite work off-thread. */
-export async function checkStateDatabasesInWorker(stateDirectory: string): Promise<StorageIncident[]> {
+export async function checkStateDatabasesInWorker(stateDirectory: string, onDatabaseChecked?: DatabaseCheckProgress): Promise<StorageIncident[]> {
   assertStateStartupMutation(stateDirectory, "state database activation check");
-  const response = await runDurabilityWorker({ stateDirectory, lastRevisions: [], operation: "activation" }).catch(error => {
+  const response = await runDurabilityWorker({ stateDirectory, lastRevisions: [], operation: "activation" }, { onDatabaseChecked }).catch(error => {
     // A missing verdict can follow a partial recovery. Even a launch refusal
     // leaves any eligible set-aside state unchecked, so stores must not open.
     throw new SchemaRecoveryError(`The activation worker returned no recovery verdict: ${errorText(error)}. Startup stopped before initializing stores.`, { cause: error });
@@ -1221,7 +1227,12 @@ export async function recoverWorktreesInWorker(stateDirectory: string, signal: A
 
 async function runDurabilityWorker(
   request: BackupWorkerRequest,
-  options: { launch?: { executable: string; workerPath: string }; timeoutMs?: number; signal?: AbortSignal } = {},
+  options: {
+    launch?: { executable: string; workerPath: string };
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    onDatabaseChecked?: DatabaseCheckProgress;
+  } = {},
 ): Promise<BackupWorkerResponse> {
   const { stateDirectory } = request;
   const launch = options.launch ?? stateBackupWorkerLaunch();
@@ -1254,7 +1265,22 @@ async function runDurabilityWorker(
       options.signal?.removeEventListener("abort", abort);
     };
     child.stdout!.setEncoding("utf8");
-    child.stdout!.on("data", (chunk: string) => { output += chunk; });
+    let nextLine = 0;
+    let checked = 0;
+    const databaseCount = options.onDatabaseChecked ? stateDatabases(stateDirectory).length : 0;
+    child.stdout!.on("data", (chunk: string) => {
+      output += chunk;
+      if (!options.onDatabaseChecked) return;
+      for (let end = output.indexOf("\n", nextLine); end !== -1; end = output.indexOf("\n", nextLine)) {
+        const match = /^\{"activationProgress":\[(\d+),(\d+)\]\}$/.exec(output.slice(nextLine, end));
+        nextLine = end + 1;
+        if (!match) continue;
+        const done = Number(match[1]), total = Number(match[2]);
+        if (done !== checked + 1 || done > total || total !== databaseCount) continue;
+        checked = done;
+        options.onDatabaseChecked(done, total);
+      }
+    });
     input.on("error", () => { /* the exit below reports it */ });
     child.once("error", (error) => {
       cleanup();

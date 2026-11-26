@@ -8,22 +8,42 @@ export function markViewerHttpReady(buildRevision: string | null =
   if (revision && /^[a-f0-9]{40}$/.test(revision)) viewer.__llvReadyRevision = revision;
 }
 
+type StartupPhase = "http-ingress" | "access" | "release-authority" | "state-compatibility" | "registry" | "activation";
+
 /** These receipts are read from this Viewer's stderr by its own launcher. */
 export function viewerStartupPhases() {
-  let phase: string | undefined;
+  let phase: StartupPhase | undefined;
   let started = 0;
-  const record = (status: "running" | "ready", elapsedMs: number) => {
+  let highWater = 0;
+  let lastEmittedAt = -Infinity;
+  const record = (value: string) => {
     if (phase && process.env.LLV_VIEWER_STARTUP_PHASES === "1") {
-      console.error(`[viewer startup phase] ${phase} ${status} ${elapsedMs}`);
+      console.error(`[viewer startup phase] ${phase} ${value}`);
     }
   };
-  const finish = () => record("ready", Math.round(performance.now() - started));
+  const finish = () => {
+    record(`ready ${Math.round(performance.now() - started)}`);
+    phase = undefined;
+  };
   return {
-    begin(next: string) {
+    begin(next: StartupPhase) {
       finish();
       phase = next;
       started = performance.now();
-      record("running", 0);
+      highWater = 0;
+      lastEmittedAt = -Infinity;
+      record("running 0");
+    },
+    progress(done: number, total: number) {
+      // Zero total describes work whose number of slices is discovered as it runs.
+      if (!phase || !Number.isSafeInteger(done) || done <= highWater || done > 9_999_999_999
+        || !Number.isSafeInteger(total) || total < 0 || total > 9_999_999_999 || (total !== 0 && done > total)) return;
+      highWater = done;
+      if (process.env.LLV_VIEWER_STARTUP_PHASES !== "1") return;
+      const now = performance.now();
+      if (now - lastEmittedAt < 1_000) return;
+      lastEmittedAt = now;
+      record(`progress ${done} ${total}`);
     },
     finish,
   };
