@@ -2450,14 +2450,17 @@ export function KanbanBoard(props: KanbanBoardProps) {
       { hold: heldAnswer(answer) },
     );
   }, [startPipelineAction, t]);
+  /* Every card holds these, and the dashboard hands the board a new
+     `onConversationOpened` on each of its renders. */
+  const cardOpenMember = useStableCallback(openReaderFor);
   /* «Answer» on a closed card (§4.3) goes where the answer is given: the
      decision form, the asking conversation, or the lane's menu. */
   const answerCard = useCallback((card: KanbanCardModel, state: CardState, anchor: HTMLElement) => {
     const subject = state.subject;
     if (subject.kind === "form") openPrototypeReview(formAnswerTarget(subject, card.project));
-    else if (subject.kind === "conversation") openReaderFor(subject.need.file);
+    else if (subject.kind === "conversation") cardOpenMember(subject.need.file);
     else if (subject.kind === "lane") menu.setOpen({ anchor, value: { kind: "pipeline", cardId: card.id, pipelineId: subject.lane.pipeline.id } });
-  }, [menu, openReaderFor]);
+  }, [menu, cardOpenMember]);
   /* The timeline names the seat's answers the orchestrator's. */
   const seatConversationIds = useMemo(() => [...(seatRefs?.conversationIds ?? []), ...(seatRefs?.previous?.conversationIds ?? [])], [seatRefs]);
   const openWorkLinks = useCallback((target: WorkLinkTarget, anchor: HTMLElement) => {
@@ -3007,7 +3010,6 @@ export function KanbanBoard(props: KanbanBoardProps) {
 
   /* The handlers a card's memo reads. Their closures follow the catalog; the
      cards must not (#2218). */
-  const cardOpenMember = useStableCallback(openReaderFor);
   const cardOpenStage = useStableCallback(openStage);
   const cardFocus = useStableCallback(focusCard);
   const cardOpenAttempt = useStableCallback(openRecorded);
