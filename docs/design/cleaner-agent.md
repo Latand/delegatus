@@ -163,6 +163,19 @@ shared with a running process does not pin the tree. Processes of another user,
 container root included, stay unreadable. Registered attempt roots keep their own
 reference proof.
 
+A named path includes every absolute piece of a `:`-joined value, so a tree named
+only inside `PATH`, `LD_LIBRARY_PATH` or a volume argument such as `/tree:/data` is
+referenced.
+
+For the stray, agent and gate classes Docker's mount inventory covers the container
+processes that stay unreadable. Before quarantine and again on the quarantined tree,
+the attempt sweeps' rule (`containerMountHold`) holds a tree as `container_reference`
+when a running container mounts it or anything inside it, or mounts an ancestor at
+another destination; an ancestor the container sees at its own path holds nothing by
+itself. An inventory that cannot be read holds these classes as
+`container_inventory_unknown`, and the pass reports the cause once. A host without a
+`docker` command has nothing to ask. `llv-*` names get no container check here.
+
 A process of this user that refuses inspection (non-dumpable: `ssh-agent`, `gpg-agent`,
 `scdaemon`, or any program that clears its dumpable flag) shows only its command line.
 The scan keeps it with the paths that line names, so a tree named there is held for every

@@ -15,6 +15,7 @@ import { STRUCTURED_HOST_STAMP_ENV } from "@/lib/scanner/process";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { OWNED_TEMP_PREFIX } from "@/lib/tempDirs";
 import { attemptTempFailureDetail } from "@/lib/runtime/attemptTempDiagnostics";
+import type { ContainerMount } from "@/lib/runtime/attemptTempFilesystem";
 import { GATE_ALLOCATION_FILE, gateSandboxOwnerEnded, LOCAL_GATE_SANDBOX_NAME } from "@/lib/gateSandboxProof";
 import { identitiesInUse, mappedFileIdentity, treeHoldsIdentity } from "@/lib/processFileIdentity";
 
@@ -40,7 +41,8 @@ import { identitiesInUse, mappedFileIdentity, treeHoldsIdentity } from "@/lib/pr
  *   direct child of those two roots of any name: owned by this service's uid,
  *   private mode, every write in its tree older than 12 h
  *   (`LLV_TEMP_STRAY_MAX_AGE_HOURS`), no reference from any process in any
- *   mount namespace, including through a bind mount, no process of this user
+ *   mount namespace, including through a bind mount, no running container that
+ *   mounts it, no process of this user
  *   that refuses inspection outside {@link UNINSPECTABLE_DAEMONS} or that
  *   names a path under either root, no socket inside, and not on the
  *   keep-list of system, session and harness entries
@@ -64,7 +66,11 @@ import { identitiesInUse, mappedFileIdentity, treeHoldsIdentity } from "@/lib/pr
  *   behind a bind mount that spells the path differently. A process of this
  *   user that refuses inspection (non-dumpable) shows its command line alone:
  *   a tree it names there is held, and one it uses only as its working
- *   directory or through an open file cannot be seen.
+ *   directory or through an open file cannot be seen. A container process of
+ *   another user shows nothing at all, so a stray or detached agent or gate
+ *   tree also stays while Docker reports a running container that mounts it
+ *   (the attempt sweep's {@link containerMountHold} rule), and while that
+ *   inventory cannot be read.
  * - **Never a pipeline worktree**, or a directory holding one, or holding any
  *   git checkout: registered linked merger, review and attribution checkouts
  *   are freed by the worktree sweep after its commit preservation proof,
@@ -460,10 +466,19 @@ function inside(candidate: string, directory: string): boolean {
 }
 
 type OwnerHold = "agent-owner-unverified" | "gate-owner-unverified" | "conversation_reference";
-type ReferenceHold = OwnerHold | "process_reference" | "process-scan-unverified" | "container_reference";
+type ReferenceHold = OwnerHold | "process_reference" | "process-scan-unverified" | "container_reference"
+  | "container_inventory_unknown";
+
+/** The absolute pieces of a ':'-joined value: a search path (`PATH`,
+ * `PYTHONPATH`) or a volume argument (`/host:/inside`). */
+function* joinedPaths(text: string): Generator<string> {
+  if (!text.includes(":")) return;
+  for (const piece of text.split(":")) if (path.isAbsolute(piece) && processPathWithinLimits(piece)) yield piece;
+}
 
 /** The paths a process names: those the scan collected, then flag values and
- * path arguments inside its command line and environment. */
+ * path arguments inside its command line and environment. A value that holds
+ * ':' is read both whole, as a file may be named that way, and piece by piece. */
 function* namedPaths(proc: ScannedProcess): Generator<string> {
   yield* proc.paths;
   const absolute = (argument: string) => {
@@ -474,9 +489,13 @@ function* namedPaths(proc: ScannedProcess): Generator<string> {
     const argument = /^--?[^=\s]+=([\s\S]*)$/.exec(value)?.[1] ?? value;
     const whole = argument && !argument.startsWith("-") ? absolute(argument) : null;
     if (whole) yield whole;
+    // Split before the embedded matches: a piece may hold spaces they stop at.
+    yield* joinedPaths(argument);
     for (const match of value.matchAll(/["']((?:\/|\.\.?\/)[^"']+)["']|(?:\/|\.\.?\/)[^\s\x00'"\x60=;|&<>]+/g)) {
-      const embedded = absolute(match[1] ?? match[0]);
+      const text = match[1] ?? match[0];
+      const embedded = absolute(text);
       if (embedded) yield embedded;
+      yield* joinedPaths(text);
     }
   }
 }
@@ -680,6 +699,9 @@ export type TempSweepOptions = {
   inspect?: typeof inspectTree;
   mountPoints?: (directory: string, via: string) => string[];
   currentScan?: () => ProcessScan;
+  /** The mounts of every running container; null when the inventory could not
+   * be read whole. Production asks Docker ({@link readContainerMounts}). */
+  containerMounts?: () => Promise<ContainerMount[] | null>;
   conversationCwds?: () => readonly string[];
   /** Current registry proof for detached agent temp trees. */
   conversationProtection?: () => { held: readonly string[]; ended: ReadonlyMap<string, number> };
@@ -1277,6 +1299,38 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       || processUsesTemp(proc, file => !strayRoots.includes(path.resolve(file)) && underStrayRoot(file))))
       ? "process-scan-unverified" : null;
   };
+  let inventoryFailed = false;
+  /** Whether a running container holds a stray or detached tree. The process
+   * scan answers nothing for a container process of another user, so Docker's
+   * mounts are asked by the rule the attempt sweeps use, before quarantine and
+   * again on the quarantined tree. A mount keeps naming the original path after
+   * the tree moved, so every name the tree has is passed, as the host spells it.
+   * A failed read is remembered: every later tree of this pass stays, and a
+   * daemon that hangs costs one timeout. */
+  const containerHold = async (...names: string[]): Promise<ReferenceHold | null> => {
+    const { containerMountHold, readContainerMounts } = await import("@/lib/runtime/attemptTempFilesystem");
+    let mounts: ContainerMount[] | null = null;
+    if (!inventoryFailed) {
+      let cause = "the reply was incomplete";
+      try { mounts = await (options.containerMounts ?? readContainerMounts)(); }
+      catch (error) { cause = attemptTempFailureDetail(error); }
+      if (!mounts) {
+        inventoryFailed = true;
+        report.errors.push(`container inventory unreadable (${cause}); stray and detached temp trees stay`);
+      }
+    }
+    const hold = containerMountHold(names, mounts);
+    return hold === "container_mount_reference" ? "container_reference" : hold;
+  };
+  /** Asked after the rename and ahead of the synchronous fences, which stay the
+   * last thing before removal. */
+  const trashMounted = async (root: TempSweepRoot, trash: string, original: string, bytes = 0) => {
+    const name = path.basename(original);
+    if (!strayCandidate(root, name) && !detachedOwner(root, name)) return false;
+    const hold = await containerHold(original, root.via && trash.startsWith(root.via) ? trash.slice(root.via.length) : trash);
+    if (hold) report.held!.push({ path: original, via: root.via, reason: hold, bytes });
+    return !!hold;
+  };
   const trashHolds = (root: TempSweepRoot, trash: string, original: string, bytes = 0, removalBegan = false) => {
     if (!namespaceStill(root.anchor, procRoot)) return true;
     const stray = strayCandidate(root, path.basename(original));
@@ -1361,7 +1415,8 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         const bytes = left && !options.onlyDirectories && path.dirname(quarantine) === path.dirname(row.directory)
           && fs.lstatSync(quarantine).isDirectory() ? await measure(quarantine, new Set()) : 0;
         const finished = await finishTreeTrash(journal,
-          async trash => (options.eligible && !await options.eligible(trash)) || (!owner && trashHolds(root, trash, candidate)),
+          async trash => (options.eligible && !await options.eligible(trash)) || await trashMounted(root, trash, candidate)
+            || (!owner && trashHolds(root, trash, candidate)),
           options.remove, trash => !trashPolicyHolds(root, trash, owner ? candidate : original) && (!options.dispatchGuard || options.dispatchGuard(trash)),
           options.disposable, owner ? trash => !trashHolds(root, trash, candidate, 0, removalBegan) : undefined, options.keepRefusedTrash);
         if (finished) report.trashFinished!++;
@@ -1534,8 +1589,10 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       }
       try {
         const bytes = await measure(reachable, seenAllocations, includeRoot, excluded);
+        const mounted = stray || owner ? await containerHold(candidate) : null;
         const freshScan = readScan();
-        const hold: ReferenceHold | null = stray ? strayHold(root, candidate, reachable, freshScan)
+        const hold: ReferenceHold | null = mounted ? mounted
+          : stray ? strayHold(root, candidate, reachable, freshScan)
           : owner ? detachedHold(owner, root, candidate, reachable, freshScan)
           : processNames(freshScan, once(entry => processHolds(path.resolve(entry)))) ? "process_reference"
           : conversationHolds(reachable, root.via) ? "conversation_reference"
@@ -1578,7 +1635,8 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         if (options.mode !== "dry-run" && !await removeTreeViaTrash(reachable, {
           journal: trashJournal(root, candidate), remove: options.remove, disposable: options.disposable,
           ...(stray ? { stray: true } : {}),
-          held: async trash => (options.eligible && !await options.eligible(trash)) || (!owner && trashHolds(root, trash, candidate, bytes)),
+          held: async trash => (options.eligible && !await options.eligible(trash)) || await trashMounted(root, trash, candidate, bytes)
+            || (!owner && trashHolds(root, trash, candidate, bytes)),
           validate: trash => !trashPolicyHolds(root, trash, path.resolve(candidate)) && (!options.dispatchGuard || options.dispatchGuard(trash)),
           ...(owner ? { dispatch: (trash: string) => !trashHolds(root, trash, candidate, bytes) } : {}),
         })) { await keep("inUse", bytes); continue; }
@@ -1651,7 +1709,8 @@ export function tempSweepStatus(report: TempSweepReport | null = readTempSweepRe
     heldCounts[hold.reason] = (heldCounts[hold.reason] ?? 0) + 1;
     heldBytes[hold.reason] = (heldBytes[hold.reason] ?? 0) + hold.bytes;
   }
-  const heldFor = ["agent-owner-unverified", "gate-owner-unverified", "conversation_reference", "process-scan-unverified", "process_reference", "container_reference", "shared-access"]
+  const heldFor = ["agent-owner-unverified", "gate-owner-unverified", "conversation_reference", "process-scan-unverified", "process_reference", "container_reference",
+    "container_inventory_unknown", "shared-access"]
     .some(reason => heldCounts[reason]) ? "by safety checks" : "for Git preservation or tree inspection";
   return {
     at: report.at, ...(report.failed ? { failed: true } : {}), mode: report.mode ?? "on", trashFinished: report.trashFinished ?? 0, removed: report.removed.length, removedBytes: report.removedBytes,
@@ -1712,8 +1771,10 @@ async function sweepFilesResponseResultFiles(mode: "on" | "dry-run", now?: () =>
   }
 }
 
+type TempSweepPorts = Pick<TempSweepOptions, "roots" | "scan" | "now" | "inspect" | "mountPoints" | "containerMounts">;
+
 /** The production sweep: threshold from the environment, worktrees from the pipelines store. */
-export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env, ports: Pick<TempSweepOptions, "roots" | "scan" | "now" | "inspect" | "mountPoints"> = {}): Promise<TempSweepReport | null> {
+export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env, ports: TempSweepPorts = {}): Promise<TempSweepReport | null> {
   const maxAgeMs = tempSweepMaxAgeMs(env);
   const mode = tempSweepMode(env);
   const strayPolicy = strayTempPolicy(env);
@@ -1767,7 +1828,7 @@ export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env,
 
 /** Production calls share the leased sweep helper. Explicit inspection ports
  * keep the policy tests local without changing any removal decision. */
-export async function runTempSweep(env: NodeJS.ProcessEnv = process.env, ports: Pick<TempSweepOptions, "roots" | "scan" | "now" | "inspect" | "mountPoints"> = {}): Promise<TempSweepReport | null> {
+export async function runTempSweep(env: NodeJS.ProcessEnv = process.env, ports: TempSweepPorts = {}): Promise<TempSweepReport | null> {
   if (Object.keys(ports).length) return runTempSweepInHelper(env, ports);
   const { runTempSweepOffThread } = await import("@/lib/pipelines/worktreeSweepWorker");
   return runTempSweepOffThread(env);

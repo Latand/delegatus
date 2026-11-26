@@ -22,7 +22,7 @@ import {
   startTempSweep,
   stopTempSweep,
   sweepRoots,
-  sweepStaleTempDirs as realSweep,
+  sweepStaleTempDirs as productionSweep,
   inspectTree,
   mountPointsUnder,
   type TempSweepOptions,
@@ -116,6 +116,11 @@ function aged(root: string, name: string, ageMs: number): string {
   return directory;
 }
 
+/** No running container, unless a case names its own inventory: no result here
+ * depends on what this machine's Docker is running. */
+const noContainers = async () => [];
+const realSweep = (options: TempSweepOptions) => productionSweep({ containerMounts: noContainers, ...options });
+
 // Legacy fixtures use utimes; the stat port dates their ctimes equally.
 // New freshness cases below call realSweep with actual kernel timestamps.
 const sweepStaleTempDirs = (options: TempSweepOptions) => realSweep({
@@ -169,7 +174,7 @@ test.skipIf(process.platform !== "linux")("production sweep removes a proven end
     children.push(child);
     await once(child, "spawn");
     const report = (await runTempSweepInHelper({ NODE_ENV: "test", LLV_TEMP_SWEEP: "on" }, {
-      roots: [{ path: root, via: "" }], now: () => now, scan: scanProcesses(fixtureProcRoot([child])),
+      roots: [{ path: root, via: "" }], now: () => now, scan: scanProcesses(fixtureProcRoot([child])), containerMounts: noContainers,
     }))!;
     expect(report.errors).toEqual([]);
     expect(report.removed.map(row => row.path)).toEqual([ended]);
@@ -1872,13 +1877,22 @@ test.each(["owned", "stray"] as const)("a replayed %s removal does not spend thi
 
 test("a replayed attempt removal stays with the attempt ledger and adds no sweep row", async () => {
   const scratch = tempRoot(), attempt = aged(scratch, "llv-stage-replayed", 2 * DAY);
-  const options: TempSweepOptions = { roots: [{ path: scratch, via: "" }], onlyDirectories: [attempt], scan: noProcesses, maxAgeMs: 0, disposable: true };
-  await realSweep({ ...options, remove: async (_trash, mutationStarted) => { mutationStarted(); throw new Error("lost"); } });
+  // The clock and both removers are the test's own. On the wall clock, a zero age
+  // floor reads a tree written within the same millisecond as young, and then
+  // nothing is interrupted and there is nothing to replay.
+  const now = Date.now() + DAY;
+  const options: TempSweepOptions = { roots: [{ path: scratch, via: "" }], onlyDirectories: [attempt], scan: noProcesses, now: () => now, maxAgeMs: 0, disposable: true };
+  const interrupted = await realSweep({ ...options, remove: async (_trash, mutationStarted) => { mutationStarted(); throw new Error("lost"); } });
+  expect(interrupted.errors).toEqual([expect.stringContaining("lost")]);
+  expect(fs.existsSync(attemptTempJournalPath(attempt))).toBeTrue();
   const walked: string[] = [];
-  const replayed = await realSweep({ ...options, measure: async target => { walked.push(target); return 1; } });
+  const replayed = await realSweep({ ...options, measure: async target => { walked.push(target); return 1; },
+    remove: async (trash, mutationStarted) => { mutationStarted(); fs.rmSync(trash, { recursive: true }); } });
+  expect(replayed.errors).toEqual([]);
   expect(replayed.trashFinished).toBe(1);
   expect(replayed.removed).toEqual([]);
   expect(walked).toEqual([]);
+  expect(fs.readdirSync(scratch)).toEqual([]);
 });
 
 test.each(["outside the directory", "behind a link beside it"])("a replay walks no quarantine a journal places %s", async where => {
@@ -2075,3 +2089,161 @@ test("a stray removal is journaled with its bytes and proof", async () => {
   expect(lines.at(-1)).toMatchObject({ path: path.join(root, "verify-journaled"), kind: "stray", provenance: "age-liveness",
     bytes: report.removed[0]!.bytes, proof: expect.objectContaining({ mode: "700" }) });
 });
+
+/* Running containers. Docker's inventory is the port: a container process of
+ * another user shows the process scan nothing, so its mounts are the proof. */
+const mountOf = (source: string, destination = "/data") => async () => [{ source, destination }];
+/** A sweep two days on, with the registry proof a detached agent tree needs. */
+const containerSweep = (root: string, directory: string, extra: Partial<TempSweepOptions>) => {
+  const now = Date.now() + 2 * DAY;
+  return realSweep({ ...strayOptions(root), now: () => now,
+    conversationProtection: () => ({ held: [], ended: new Map([[directory, now - DAY]]) }), ...extra });
+};
+const CONTAINER_INVENTORIES = {
+  "names the tree": { mounts: (directory: string) => mountOf(directory), reason: "container_reference" },
+  "names a subdirectory": { mounts: (directory: string) => mountOf(path.join(directory, "data")), reason: "container_reference" },
+  "is incomplete": { mounts: () => async () => null, reason: "container_inventory_unknown" },
+  "cannot be read": { mounts: () => async () => { throw new Error("daemon unreachable"); }, reason: "container_inventory_unknown" },
+} as const;
+
+test.skipIf(process.platform !== "linux").each((["stray", "agent", "gate"] as const).flatMap(kind =>
+  (Object.keys(CONTAINER_INVENTORIES) as (keyof typeof CONTAINER_INVENTORIES)[]).map(inventory => [kind, inventory] as const)),
+)("a %s tree stays while the container inventory %s", async (kind, inventory) => {
+  const root = tempRoot(), directory = classFixture(root, kind), { mounts, reason } = CONTAINER_INVENTORIES[inventory];
+  fs.mkdirSync(path.join(directory, "data"));
+  const renames = spyOn(fs, "renameSync");
+  try {
+    const held = await containerSweep(root, directory, { containerMounts: mounts(directory) });
+    // Held ahead of quarantine: the tree was never moved.
+    expect(renames.mock.calls.filter(call => String(call[0]) === directory)).toEqual([]);
+    expect(held.removed).toEqual([]);
+    expect(held.held?.map(row => [row.path, row.reason])).toEqual([[directory, reason]]);
+    expect(held.errors).toEqual(reason === "container_reference" ? [] : [expect.stringContaining("container inventory unreadable")]);
+    expect(tempSweepStatus(held)?.summary).toContain("held 1 by safety checks");
+  } finally { renames.mockRestore(); }
+  expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("kept");
+  // Only the inventory kept it.
+  expect((await containerSweep(root, directory, {})).removed.map(row => row.path)).toEqual([directory]);
+});
+
+test.skipIf(process.platform !== "linux").each((["stray", "agent", "gate"] as const).flatMap(kind =>
+  (["the original name", "the quarantine name", "nothing readable"] as const).map(answer => [kind, answer] as const)),
+)("a %s tree is restored when the inventory read after quarantine answers with %s", async (kind, answer) => {
+  const root = tempRoot(), directory = classFixture(root, kind);
+  let reads = 0;
+  const report = await containerSweep(root, directory, { containerMounts: async () => {
+    if (++reads === 1) return [];
+    const trash = fs.readdirSync(root).find(name => name.startsWith(".delegatus-trash-"))!;
+    expect(fs.existsSync(directory)).toBeFalse();
+    if (answer === "nothing readable") throw new Error("daemon unreachable");
+    return [{ source: answer === "the original name" ? directory : path.join(root, trash), destination: "/data" }];
+  } });
+  expect(reads).toBe(2);
+  expect(report.removed).toEqual([]);
+  expect(report.held?.map(row => [row.path, row.reason])).toEqual([[directory, answer === "nothing readable" ? "container_inventory_unknown" : "container_reference"]]);
+  expect(fs.readFileSync(path.join(directory, "payload"), "utf8")).toBe("kept");
+  expect(fs.readdirSync(root).filter(name => name.startsWith(".delegatus-trash-") || name.startsWith(".delegatus-sweep-"))).toEqual([]);
+});
+
+test.skipIf(process.platform !== "linux").each(["stray", "agent", "gate"] as const)(
+  "an interrupted %s removal waits while a container mounts the tree", async kind => {
+    const root = tempRoot(), directory = classFixture(root, kind);
+    const interrupted = await containerSweep(root, directory, { remove: async (_trash, mutationStarted) => { mutationStarted(); throw new Error("lost"); } });
+    expect(interrupted.errors).toEqual([expect.stringContaining("lost")]);
+    const trash = path.join(root, fs.readdirSync(root).find(name => name.startsWith(".delegatus-trash-"))!);
+    // The mount still names the path the container was started with.
+    const held = await containerSweep(root, directory, { containerMounts: mountOf(directory) });
+    expect(held.trashFinished).toBe(0);
+    expect(held.held?.map(row => [row.path, row.reason])).toEqual([[directory, "container_reference"]]);
+    expect(fs.readFileSync(path.join(trash, "payload"), "utf8")).toBe("kept");
+    expect((await containerSweep(root, directory, {})).trashFinished).toBe(1);
+    expect(fs.existsSync(trash)).toBeFalse();
+  },
+);
+
+test.each([
+  { layout: "the filesystem root at its own path", source: () => "/", destination: () => "/", held: false },
+  { layout: "an ancestor at its own path", source: (root: string) => path.dirname(root), destination: (root: string) => path.dirname(root), held: false },
+  { layout: "the temp root at its own path", source: (root: string) => root, destination: (root: string) => root, held: false },
+  { layout: "a neighbour of the tree", source: (root: string) => path.join(root, "rev-other"), destination: () => "/data", held: false },
+  { layout: "the temp root at another path", source: (root: string) => root, destination: () => "/host-tmp", held: true },
+])("a container that mounts $layout holds a stray: $held", async ({ source, destination, held }) => {
+  const root = tempRoot(), directory = strayFixture(root, "rev-ancestor");
+  const report = await sweepStaleTempDirs(strayOptions(root, { containerMounts: mountOf(source(root), destination(root)) }));
+  expect(report.removed.map(row => row.path)).toEqual(held ? [] : [directory]);
+  expect(report.held?.map(row => row.reason)).toEqual(held ? ["container_reference"] : []);
+  expect(fs.existsSync(directory)).toBe(held);
+});
+
+test("an unreadable inventory is asked once in a pass, and again by the next", async () => {
+  const root = tempRoot(), trees = ["rev-first", "rev-second"].map(name => strayFixture(root, name));
+  let reads = 0;
+  const options = strayOptions(root, { containerMounts: async () => { if (++reads === 1) throw new Error("daemon hung"); return []; } });
+  const held = await sweepStaleTempDirs(options);
+  expect(reads).toBe(1);
+  expect(held.held?.map(row => row.reason)).toEqual(["container_inventory_unknown", "container_inventory_unknown"]);
+  expect(held.errors).toEqual([expect.stringContaining("daemon hung")]);
+  expect((await sweepStaleTempDirs(options)).removed.map(row => row.path).sort()).toEqual(trees);
+});
+
+test("a stray in another namespace is matched by the path the host gives it", async () => {
+  const view = tempRoot(), proc = tempRoot();
+  fs.mkdirSync(path.join(view, "tmp"));
+  const directory = strayFixture(path.join(view, "tmp"), "rev-host-path");
+  fs.mkdirSync(path.join(proc, "7", "ns"), { recursive: true });
+  fs.symlinkSync("mnt:[7]", path.join(proc, "7", "ns", "mnt"));
+  const sweep = (containerMounts: TempSweepOptions["containerMounts"]) => sweepStaleTempDirs({
+    roots: [{ path: "/tmp", via: view, anchor: { pid: 7, namespace: "mnt:[7]" } }], procRoot: proc, mountPoints: () => [],
+    maxAgeMs: DAY, stray: { maxAgeMs: 12 * HOUR, keep: [] }, scan: noProcesses, containerMounts });
+  const held = await sweep(mountOf("/tmp/rev-host-path/file.txt"));
+  expect(held.held?.map(row => [row.path, row.reason])).toEqual([["/tmp/rev-host-path", "container_reference"]]);
+  expect(fs.existsSync(directory)).toBeTrue();
+  expect((await sweep(noContainers)).removed.map(row => row.path)).toEqual(["/tmp/rev-host-path"]);
+});
+
+test.skipIf(process.platform !== "linux").each(["reports a mount of the stray", "fails"] as const)(
+  "the production sweep asks Docker itself and keeps the stray when it %s", async answer => {
+    const root = tempRoot(), directory = strayFixture(root, "rev-docker-asked"), bin = tempRoot();
+    const row = JSON.stringify({ Id: "111111111111", Mounts: [{ Type: "bind", Source: directory, Destination: "/data" }] });
+    fs.writeFileSync(path.join(bin, "docker"), answer === "fails" ? "#!/bin/sh\nexit 1\n"
+      : `#!/bin/sh\nif [ "$1" = ps ]; then echo 111111111111; else echo '${row}'; fi\n`, { mode: 0o700 });
+    const previous = process.env.PATH;
+    process.env.PATH = bin + path.delimiter + (previous ?? "");
+    try {
+      const report = await productionSweep(strayOptions(root, { now: () => Date.now() + 2 * DAY }));
+      expect(report.removed).toEqual([]);
+      expect(report.held?.map(held => held.reason)).toEqual([answer === "fails" ? "container_inventory_unknown" : "container_reference"]);
+      expect(fs.existsSync(path.join(directory, "file.txt"))).toBeTrue();
+    } finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
+  },
+);
+
+/* A path inside a ':'-joined value. Real processes, read by the production scan:
+ * each one's only reference to the stray is the value under test. */
+const JOINED_REFERENCES = [
+  { form: "PATH, first", name: "rev-joined", env: (tree: string) => `${tree}:/usr/bin:/bin` },
+  { form: "PATH, in the middle", name: "rev-joined", env: (tree: string) => `/usr/bin:${tree}:/bin` },
+  { form: "PATH, last", name: "rev-joined", env: (tree: string) => `/usr/bin:/bin:${tree}` },
+  { form: "PATH, a name with a space", name: "rev joined", env: (tree: string) => `/usr/bin:${tree}:/bin` },
+  { form: "a volume argument", name: "rev-joined", argument: (tree: string) => `${tree}:/data` },
+  { form: "a volume flag", name: "rev-joined", argument: (tree: string) => `--volume=${tree}:/data:ro` },
+  { form: "a shell command", name: "rev-joined", argument: (tree: string) => `docker run -v ${tree}:/data image` },
+];
+
+test.skipIf(process.platform !== "linux").each(JOINED_REFERENCES)(
+  "a process whose only reference is $form keeps the stray", async ({ name, env, argument }) => {
+    const root = tempRoot(), directory = strayFixture(root, name);
+    const holder = spawn("python3", ["-I", "-c", "import time; time.sleep(60)", ...(argument ? [argument(directory)] : [])],
+      { cwd: tempRoot(), stdio: "ignore", env: { NODE_ENV: "test", PATH: env ? env(directory) : "/usr/bin" } });
+    children.push(holder);
+    await once(holder, "spawn");
+    const options = (procRoot: string) => ({ ...strayOptions(root), scan: undefined, procRoot });
+    const held = await sweepStaleTempDirs(options(fixtureProcRoot([holder])!));
+    expect(held.errors).toEqual([]);
+    expect(held.removed).toEqual([]);
+    expect(held.held?.map(row => [row.path, row.reason])).toEqual([[directory, "process_reference"]]);
+    expect(fs.readFileSync(path.join(directory, "file.txt"), "utf8")).toBe("export");
+    await exited(holder);
+    expect((await sweepStaleTempDirs(options(fixtureProcRoot([])!))).removed.map(row => row.path)).toEqual([directory]);
+  },
+);
