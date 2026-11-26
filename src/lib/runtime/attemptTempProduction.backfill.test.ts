@@ -158,6 +158,10 @@ test("a fresh helper audits the old ledger after a crash before release, then re
     for (const target of [directory, unknown]) {
       fs.mkdirSync(target, { recursive: true, mode: 0o700 }); fs.writeFileSync(path.join(target, "data"), "payload");
     }
+    // Something wrote to the sibling within the last day, which keeps it ambiguous: an ownerless
+    // root idle for 24 hours with no live reference is removed by the unregistered-scratch pass.
+    const recent = new Date(NOW - 3_600_000);
+    fs.utimesSync(path.join(unknown, "data"), recent, recent); fs.utimesSync(unknown, recent, recent);
     const store = new AttemptTempStore(); filename = store.filename;
     store.register({ directory, launchId: "legacy-launch", pipelineId: pipeline.id, retainUntilClose: true, createdAt: Date.parse(closedAt) - 1 });
     store.retainRoot(directory, Date.parse(closedAt) + 8 * 86400000);

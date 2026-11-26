@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 
 import { procBackend } from "@/lib/proc";
@@ -24,6 +24,28 @@ export interface ProcessIdentityProbe {
 export type ProcessIdentityStatus = "alive" | "dead" | "unverified";
 
 let cachedBootEpoch: string | null | undefined;
+let darwinBootEpochFlight: Promise<string | null> | undefined;
+
+function parseDarwinBootEpoch(stdout: string): string | null {
+  const match = /sec\s*=\s*(\d+)\s*,\s*usec\s*=\s*(\d+)/.exec(stdout);
+  return match ? `darwin:${match[1]}:${match[2]}` : null;
+}
+
+export function cachedSystemBootEpoch(): string | null {
+  return cachedBootEpoch ?? null;
+}
+
+/** Resource discovery can join a cold Darwin identity read from its collector. */
+export async function systemBootEpochAsync(): Promise<string | null> {
+  if (process.platform !== "darwin" || cachedBootEpoch !== undefined) return systemBootEpoch();
+  darwinBootEpochFlight ??= new Promise<string | null>((resolve) => {
+    execFile("sysctl", ["-n", "kern.boottime"], { timeout: 2_000 }, (error, stdout) => {
+      if (cachedBootEpoch === undefined) cachedBootEpoch = error ? null : parseDarwinBootEpoch(stdout);
+      resolve(cachedBootEpoch);
+    });
+  }).finally(() => { darwinBootEpochFlight = undefined; });
+  return darwinBootEpochFlight;
+}
 
 /** Stable boot identity, or an equivalent process-token domain, for the Viewer
     and its engine children. Unsupported probes remain unverified. */
@@ -44,10 +66,7 @@ export function systemBootEpoch(): string | null {
   if (process.platform === "darwin") {
     // eslint-disable-next-line no-restricted-syntax -- Legacy macOS boot-epoch probe on first identity read while serving; cached thereafter.
     const result = spawnSync("sysctl", ["-n", "kern.boottime"], { encoding: "utf8", timeout: 2_000 });
-    const match = typeof result.stdout === "string"
-      ? /sec\s*=\s*(\d+)\s*,\s*usec\s*=\s*(\d+)/.exec(result.stdout)
-      : null;
-    cachedBootEpoch = match ? `darwin:${match[1]}:${match[2]}` : null;
+    cachedBootEpoch = parseDarwinBootEpoch(result.stdout ?? "");
     return cachedBootEpoch;
   }
   if (process.platform === "win32") {

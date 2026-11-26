@@ -13,7 +13,7 @@ const questions = { ...identity, isBlocking: true, questions: [
   { id: "second", header: "Second", question: "Why?", isOther: true, isSecret: false, options: null },
 ] };
 
-test.each(["0.168.0", "0.169.0", "0.170.0"])("%s human command approvals retain the offered decisions across decoding and answering", version => {
+test.each(["0.168.0", "0.169.0", "0.170.0", "0.171.0", "0.172.0"])("%s human command approvals retain the offered decisions across decoding and answering", version => {
   const protocol = new CodexPinnedProtocol(version);
   const params = { ...approval, kind: "humanCommand", availableDecisions: ["decline", "cancel"] };
   const decoded = decodeCodexServerRequest(protocol, "human-approval", command, params);
@@ -26,7 +26,29 @@ test.each(["0.168.0", "0.169.0", "0.170.0"])("%s human command approvals retain 
   expect(() => decodeCodexServerRequest(protocol, 1, command, { ...params, kind: "unknownCommand" })).toThrow("server-params.kind");
 });
 
-describe.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.170.0"])("Codex %s request boundary", version => {
+test.each(["0.170.0", "0.171.0", "0.172.0"])("%s MCP elicitations decode with the registration scope its CLI sends", version => {
+  const protocol = new CodexPinnedProtocol(version);
+  const elicitation = "mcpServer/elicitation/request";
+  const params = { serverName: "docs", threadId: "thread", turnId: "turn", mode: "url", message: "Open the page", url: "https://example.invalid", elicitationId: "elicitation" };
+  expect(decodeCodexServerRequest(protocol, 1, elicitation, params)).toMatchObject({ params });
+  const form = { serverName: "docs", threadId: "thread", turnId: null, mode: "form", message: "Pick one", requestedSchema: { type: "object", properties: {} } };
+  expect(decodeCodexServerRequest(protocol, 4, elicitation, form)).toMatchObject({ params: form });
+  // Fields stay closed: an unknown field, a field from another mode, or a
+  // missing shared field is still refused.
+  expect(() => decodeCodexServerRequest(protocol, 5, elicitation, { ...params, invented: true })).toThrow("server-params");
+  expect(() => decodeCodexServerRequest(protocol, 6, elicitation, { ...form, url: "https://example.invalid" })).toThrow("server-params");
+  const unnamed: Record<string, unknown> = { ...params };
+  delete unnamed.serverName;
+  expect(() => decodeCodexServerRequest(protocol, 7, elicitation, unnamed)).toThrow("server-params");
+  const scoped = () => decodeCodexServerRequest(protocol, 2, elicitation, { ...params, environmentId: "remote" });
+  if (version === "0.170.0") expect(scoped).toThrow("server-params");
+  else expect(scoped()).toMatchObject({ params: { environmentId: "remote" } });
+  // The CLI stopped asking for the client's clock in 0.171.0.
+  expect(protocol.hasMethod("ServerRequest", "currentTime/read")).toBe(version === "0.170.0");
+  if (version !== "0.170.0") expect(() => decodeCodexServerRequest(protocol, 3, "currentTime/read", { threadId: "thread" })).toThrow("absent");
+});
+
+describe.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.170.0", "0.171.0", "0.172.0"])("Codex %s request boundary", version => {
   const protocol = new CodexPinnedProtocol(version);
   test("decodes the complete request and refuses missing identity or malformed ingress", () => {
     expect(decodeCodexServerRequest(protocol, 7, command, approval)).toMatchObject({ id: 7, params: identity });
