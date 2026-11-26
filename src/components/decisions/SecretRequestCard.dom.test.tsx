@@ -165,7 +165,7 @@ test("a request that closed meanwhile is named in the status line", async () => 
 
 test("the card shows one line of reason and folds the rest; a format hint appears only for an invalid value", async () => {
   const long = { ...request, purpose: "First line of the reason.\nSecond line with more detail." };
-  globalThis.fetch = (async () => answer([long])) as typeof fetch;
+  globalThis.fetch = Object.assign(async () => answer([long]), { preconnect: realFetch.preconnect });
   const host = await render();
   const card = host.querySelector("[data-secret-request]")!;
   expect(card.querySelector("[data-secret-title]")?.textContent).toBe("Secret · FIXTURE\u00a0→\u00a0.env");
@@ -192,7 +192,7 @@ test("the card shows one line of reason and folds the rest; a format hint appear
 
 test("the request shows its requester and role without internal identifiers", async () => {
   const stage: SecretRequestView = { ...request, requester: { title: "Configure integration", engine: "codex", model: "model-x", role: "agent", stage: { id: "configure", pipelineId: "lane-1" }, seatTitle: "Project seat" } };
-  globalThis.fetch = (async () => answer([stage])) as typeof fetch;
+  globalThis.fetch = Object.assign(async () => answer([stage]), { preconnect: realFetch.preconnect });
   const host = await render();
   const who = host.querySelector("[data-secret-request] dd")!.textContent;
   expect(who).toBe("Configure integration · Pipeline stage · via Project seat");
