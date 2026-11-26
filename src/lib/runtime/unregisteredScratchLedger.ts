@@ -4,6 +4,22 @@ import type { Database } from "bun:sqlite";
 export const UNREGISTERED_SAMPLE_LIMIT = 41;
 export type FreeSample = { at: number; freeBytes: number };
 export type UnregisteredSkip = { name: string; reason: string; code: string; retryAt: number; at: number; bytes: number };
+/** Where an unfinished tree walk stands: what it saw so far and what it still has to read. */
+export type WalkCursor = {
+  identity: string; startedAt: number; newestMs: number; bytes: number; entries: number;
+  /** Directories still to read, last first. */
+  pending: string[];
+  /** The directory being read, and how many of its sorted names are done. */
+  current: { directory: string; skip: number; mtimeMs: number } | null;
+};
+const validCursor = (value: unknown): value is WalkCursor => {
+  const cursor = value as WalkCursor | null;
+  const finite = (n: unknown) => typeof n === "number" && Number.isFinite(n);
+  return !!cursor && typeof cursor === "object" && typeof cursor.identity === "string" && finite(cursor.startedAt) && finite(cursor.newestMs)
+    && finite(cursor.bytes) && finite(cursor.entries) && Array.isArray(cursor.pending) && cursor.pending.every(item => typeof item === "string")
+    && (cursor.current === null || typeof cursor.current === "object" && typeof cursor.current.directory === "string"
+      && finite(cursor.current.skip) && finite(cursor.current.mtimeMs));
+};
 export type UnregisteredPassSummary = {
   at: number; trigger: "free-space" | "loss-rate" | null; mode: "on" | "dry-run"; freeBytes: number | null; lossBytes: number;
   found: number; examined: number; removed: number; removedBytes: number; observedFreedBytes: number; finishedInterrupted: number;
@@ -24,6 +40,7 @@ export class UnregisteredScratchLedger {
     db.exec("CREATE TABLE IF NOT EXISTS unregistered_scratch_samples(at REAL PRIMARY KEY, freeBytes REAL NOT NULL)");
     db.exec(`CREATE TABLE IF NOT EXISTS unregistered_scratch_skips(name TEXT PRIMARY KEY, reason TEXT NOT NULL, code TEXT NOT NULL,
       retryAt REAL NOT NULL, at REAL NOT NULL, bytes REAL NOT NULL DEFAULT 0)`);
+    db.exec("CREATE TABLE IF NOT EXISTS unregistered_scratch_walks(name TEXT PRIMARY KEY, cursor TEXT NOT NULL, at REAL NOT NULL)");
     db.exec(`CREATE TABLE IF NOT EXISTS unregistered_scratch_state(id INTEGER PRIMARY KEY CHECK(id=1),
       removedRoots INTEGER NOT NULL, removedBytes REAL NOT NULL, last TEXT)`);
     db.exec("INSERT OR IGNORE INTO unregistered_scratch_state VALUES(1,0,0,NULL)");
@@ -78,6 +95,20 @@ export class UnregisteredScratchLedger {
   retainSkips(present: ReadonlySet<string>) {
     for (const { name } of this.db.query<{ name: string }, []>("SELECT name FROM unregistered_scratch_skips").all())
       if (!present.has(name)) this.clearSkip(name);
+  }
+  /** The unfinished tree walk of a root, so a tree larger than one pass's window is proven across passes. */
+  walk(name: string): WalkCursor | null {
+    const row = this.db.query<{ cursor: string }, [string]>("SELECT cursor FROM unregistered_scratch_walks WHERE name=?").get(name);
+    if (!row) return null;
+    try { const parsed = JSON.parse(row.cursor) as unknown; return validCursor(parsed) ? parsed : null; } catch { return null; }
+  }
+  saveWalk(name: string, cursor: WalkCursor, at: number) {
+    this.db.query("INSERT OR REPLACE INTO unregistered_scratch_walks VALUES(?,?,?)").run(name, JSON.stringify(cursor), at);
+  }
+  clearWalk(name: string) { this.db.query("DELETE FROM unregistered_scratch_walks WHERE name=?").run(name); }
+  retainWalks(present: ReadonlySet<string>) {
+    for (const { name } of this.db.query<{ name: string }, []>("SELECT name FROM unregistered_scratch_walks").all())
+      if (!present.has(name)) this.clearWalk(name);
   }
   skipSummary(): Array<{ code: string; count: number; bytes: number }> {
     return this.db.query<{ code: string; count: number; bytes: number }, []>(

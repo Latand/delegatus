@@ -11,12 +11,12 @@ import { stateDatabaseBusy } from "@/lib/state/lockWait";
 import { mountPointsUnder, type ProcessScan } from "@/lib/tempSweep";
 import { attemptTempRemaining, checkAttemptTempDeadline, sweepMonotonicNow, withAttemptTempDeadline, ATTEMPT_TEMP_REPLY_MARGIN_MS } from "./attemptTempDeadline";
 import { AttemptTempBudgetDeferred, attemptTempFailureDetail } from "./attemptTempDiagnostics";
-import { attemptProcessReferencesClear, attemptReferencesClear, attemptTreeHold, containerSubtreeClear, ledgerLinkedEvidence, measureAttemptAllocation,
-  readContainerMountSources, RepositoryLinkInventory, warmCheckoutInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+import { attemptProcessReferencesClear, attemptReferencesClear, attemptTreeHold, containerMountHold, ledgerLinkedEvidence, measureAttemptAllocation,
+  readContainerMounts, RepositoryLinkInventory, warmCheckoutInventory, type ContainerMount, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { removeTreeWithinAttemptBudget } from "./attemptTempRemoval";
 import { attemptTempRootWindow, type AttemptTempStore } from "./attemptTempRetention";
 import { openLaneUseCheck } from "./attemptScratchLanes";
-import { UnregisteredScratchLedger, type UnregisteredPassSummary } from "./unregisteredScratchLedger";
+import { UnregisteredScratchLedger, type UnregisteredPassSummary, type WalkCursor } from "./unregisteredScratchLedger";
 
 /** A root nothing has written to for this long is expired: the operator's "older than a day". */
 export const UNREGISTERED_SCRATCH_EXPIRY_MS = 24 * 3_600_000;
@@ -30,8 +30,12 @@ export const UNREGISTERED_LOSS_WINDOW_MS = 20 * 60_000;
 export const UNREGISTERED_CLAIM_PREFIX = ".delegatus-trash-claim";
 const ROOT_NAME = /^llv-(?:read-only-stage|stage)-[A-Za-z0-9]{6,}$/;
 const TRASH_NAME = /^\.delegatus-trash-claim-(\d+)-(\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-/** One tree walk stops at this many entries; the root is then kept as unproven. */
+/** One pass's walk of one tree stops at this many entries and resumes on the next pass. */
 const WALK_ENTRY_LIMIT = 2_000_000;
+/** An unfinished walk is resumed for at most this long, then starts over. */
+const WALK_SPAN_MS = 12 * 3_600_000;
+/** An unfinished walk is saved only while it has at most this many directories left to read. */
+const WALK_PENDING_LIMIT = 20_000;
 
 export type UnregisteredLimits = { examine: number; remove: number; budgetMs: number; rootMs: number };
 /** The ordinary tick: a bounded rate, a small share of the helper's minute. */
@@ -56,13 +60,15 @@ export type UnregisteredScratchPorts = {
   /** The same reference observer the ledger sweep uses. */
   references?: (original: string, current: string, scan: ProcessScan) => Promise<boolean>;
   containers?: (roots: readonly string[]) => Promise<boolean>;
-  /** Mount sources of the running containers, `null` when unreadable; read once per pass. */
-  containerMounts?: () => Promise<string[] | null>;
+  /** Mounts of the running containers, `null` when unreadable; read once per pass. */
+  containerMounts?: () => Promise<ContainerMount[] | null>;
   availableBytes?: (scratch: string) => number;
   now?: () => number;
   /** Milliseconds on a monotonic clock, for the pass's time budget. */
   monotonic?: () => number;
   checkoutReads?: RetainedCheckoutReads;
+  /** Entries one pass reads of one tree before it saves its place; tests lower it. */
+  walkEntryLimit?: number;
   journal?: OrdinaryJournal;
   /** Directories an open lane or live conversation uses; read once per pass. */
   lanes?: () => (directory: string) => boolean;
@@ -94,37 +100,68 @@ function describeHold(code: string): string {
     linked_evidence: "a report picture links into the root", evidence_unreadable: "the report picture index could not be read",
     mount_boundary: "a mount lies inside the root or the root is on another device", path_not_admitted: "the real path differs from the path under the scratch root",
     not_directory: "the entry is not a real directory", foreign_owner: "another user owns the root",
-    activity_unproven: "the tree walk reached its bound before proving 24 h of inactivity", unreadable_subtree: "part of the tree cannot be read",
+    activity_unproven: "the tree walk reached its bound before proving 24 h of inactivity and cannot be saved to resume",
+    walk_in_progress: "a tree larger than one pass's window is being walked across passes; the walk resumes where it stopped", unreadable_subtree: "part of the tree cannot be read",
     unremovable_permissions: "part of the tree cannot be removed by this user", journal_unavailable: "the intent could not be journaled",
     changed_before_removal: "the root changed between proof and removal", failed: "removal failed",
   } as Record<string, string>)[code] ?? code.replaceAll("_", " ");
 }
 
+type Walk =
+  | { state: "young" | "mount" | "unreadable" | "idle" | "reset"; newestMs: number; bytes: number; entries: number }
+  | { state: "unproven"; newestMs: number; bytes: number; entries: number; cursor: WalkCursor | null };
+
 /** Newest modification time and allocated blocks of one tree, in one bounded,
  * symlink-safe walk that stops as soon as anything is newer than `cutoff`.
- * Hardlinked files count once. It reads timestamps; it grants nothing. */
-async function walkTree(root: string, stat: fs.Stats, cutoff: number, deadline: number, clock: () => number) {
+ * When the pass's window or entry limit ends first, the walk returns a cursor
+ * (the directories left and the position inside the one being read) and a later
+ * pass continues from it, so a tree of any size is proven across passes.
+ * Directories are read in sorted order so a position means the same entries
+ * after a pause; a directory whose own modification time changed since the
+ * cursor was taken has changed names, and the cursor is dropped (`reset`).
+ * Hardlinked files count once within a pass; across a pause they can count
+ * twice, which only overstates the bytes reported. It reads timestamps; it
+ * grants nothing. */
+async function walkTree(root: string, stat: fs.Stats, cutoff: number, deadline: number, clock: () => number, startedAt: number, resume: WalkCursor | null = null, entryLimit = WALK_ENTRY_LIMIT): Promise<Walk> {
   const seen = new Set<string>();
-  let newestMs = stat.mtimeMs, bytes = stat.blocks * 512, entries = 0, unreadable = false;
-  if (newestMs > cutoff) return { state: "young" as const, newestMs, bytes, entries };
-  const pending = [root];
-  while (pending.length) {
-    const directory = pending.pop()!;
+  let newestMs = Math.max(stat.mtimeMs, resume?.newestMs ?? 0), bytes = resume?.bytes ?? stat.blocks * 512, entries = resume?.entries ?? 0, unreadable = false, passEntries = 0;
+  if (newestMs > cutoff) return { state: "young", newestMs, bytes, entries };
+  const pending = resume ? [...resume.pending] : [root];
+  let resumed = resume?.current ?? null;
+  const identity = `${stat.dev}:${stat.ino}`;
+  const stop = (current: WalkCursor["current"]): Walk => {
+    const saved = pending.length <= WALK_PENDING_LIMIT;
+    return { state: "unproven", newestMs, bytes, entries,
+      cursor: saved ? { identity, startedAt: resume?.startedAt ?? startedAt, newestMs, bytes, entries, pending: [...pending], current } : null };
+  };
+  while (pending.length || resumed) {
+    const directory = resumed?.directory ?? pending.pop()!;
+    const skip = resumed?.skip ?? 0;
+    let directoryMtime: number;
+    try {
+      const own = fs.lstatSync(directory);
+      if (!own.isDirectory() || own.dev !== stat.dev) return { state: "reset", newestMs, bytes, entries };
+      // A directory whose names changed since the pause cannot be resumed by position.
+      if (resumed && own.mtimeMs !== resumed.mtimeMs) return { state: "reset", newestMs, bytes, entries };
+      directoryMtime = own.mtimeMs;
+    } catch { if (resumed) return { state: "reset", newestMs, bytes, entries }; unreadable = true; continue; }
+    resumed = null;
     let names: string[];
-    try { names = fs.readdirSync(directory); } catch { unreadable = true; continue; }
-    for (const name of names) {
-      if (++entries > WALK_ENTRY_LIMIT) return { state: "unproven" as const, newestMs, bytes, entries };
-      if (entries % 2048 === 0) {
+    try { names = fs.readdirSync(directory).sort(); } catch { unreadable = true; continue; }
+    for (let index = skip; index < names.length; index++) {
+      if (++passEntries > entryLimit) return stop({ directory, skip: index, mtimeMs: directoryMtime });
+      if (passEntries % 2048 === 0) {
         await new Promise<void>(resolve => setImmediate(resolve));
         checkAttemptTempDeadline();
-        if (clock() >= deadline) return { state: "unproven" as const, newestMs, bytes, entries };
+        if (clock() >= deadline) return stop({ directory, skip: index, mtimeMs: directoryMtime });
       }
-      const file = path.join(directory, name);
+      entries++;
+      const file = path.join(directory, names[index]!);
       let entry: fs.Stats;
       try { entry = fs.lstatSync(file); } catch { continue; }
-      if (entry.dev !== stat.dev) return { state: "mount" as const, newestMs, bytes, entries };
+      if (entry.dev !== stat.dev) return { state: "mount", newestMs, bytes, entries };
       newestMs = Math.max(newestMs, entry.mtimeMs);
-      if (newestMs > cutoff) return { state: "young" as const, newestMs, bytes, entries };
+      if (newestMs > cutoff) return { state: "young", newestMs, bytes, entries };
       if (entry.isDirectory()) pending.push(file);
       else if (entry.nlink > 1) {
         const key = `${entry.dev}:${entry.ino}`;
@@ -134,7 +171,17 @@ async function walkTree(root: string, stat: fs.Stats, cutoff: number, deadline: 
       bytes += entry.blocks * 512;
     }
   }
-  return { state: unreadable ? "unreadable" as const : "idle" as const, newestMs, bytes, entries };
+  return { state: unreadable ? "unreadable" : "idle", newestMs, bytes, entries };
+}
+
+/** The newest modification time among the root's own entries, read fresh. A
+ * proof assembled across passes ends with this look at the top of the tree. */
+function newestTopLevel(root: string, stat: fs.Stats): number {
+  let newest = stat.mtimeMs;
+  for (const name of fs.readdirSync(root)) {
+    try { newest = Math.max(newest, fs.lstatSync(path.join(root, name)).mtimeMs); } catch { /* Gone since the listing. */ }
+  }
+  return newest;
 }
 
 const execFileAsync = promisify(execFile);
@@ -277,7 +324,7 @@ async function passOverScratch(store: AttemptTempStore, ledger: UnregisteredScra
       const tombstones = new Set(leftovers.map(entry => TRASH_NAME.exec(entry.name)!).map(match => `${match[1]}:${match[2]}`));
       for (const identity of begun) if (!tombstones.has(identity)) ledger.endRemoval(identity);
     }
-    if (!dry) ledger.retainSkips(new Set([...roots, ...leftovers].map(entry => entry.name)));
+    if (!dry) { const present = new Set([...roots, ...leftovers].map(entry => entry.name)); ledger.retainSkips(present); ledger.retainWalks(present); }
     const waiting = ledger.waiting(started);
     const inventory = new RepositoryLinkInventory({ now, budgetMs: Math.min(30_000, Math.max(1, remainingMs())), retained: ports.checkoutReads,
       validationReuseMs: ports.checkoutReads ? 5_000 : 0, trustFreshReads: true });
@@ -305,11 +352,12 @@ async function passOverScratch(store: AttemptTempStore, ledger: UnregisteredScra
       if (!scanned || monotonic() - scanned.at > maxAgeMs) scanned = { at: monotonic(), scan: ports.scan([scratch]) };
       return scanned.scan;
     };
-    // The container inventory is read once per pass. Only a container that
-    // mounts a root or a subtree of it holds the root; a mount of an ancestor
-    // such as the whole home directory does not.
-    let mounts: Promise<string[] | null> | undefined;
-    const containers = ports.containers ?? (async (roots: readonly string[]) => containerSubtreeClear(roots, await (mounts ??= (ports.containerMounts ?? readContainerMountSources)())));
+    // The container inventory is read once per pass and judged by the rule the
+    // ledger sweep uses: a container that mounts a root or a subtree of it, or an
+    // ancestor at another destination, holds the root; an ancestor it sees at the
+    // same path (the whole home directory onto itself) does not.
+    let mounts: Promise<ContainerMount[] | null> | undefined;
+    const containers = ports.containers ?? (async (roots: readonly string[]) => containerMountHold(roots, await (mounts ??= (ports.containerMounts ?? readContainerMounts)())) === null);
     // Every live checkout's link inventory is read before the first root, so a
     // checkout that needs more than one tick is finished across ticks.
     let warmed: Promise<{ checkouts: number; incomplete: number }> | undefined;
@@ -403,12 +451,36 @@ async function passOverScratch(store: AttemptTempStore, ledger: UnregisteredScra
       if (recordedRootHeld(directory)) return miss("recorded_check_hold");
       const window = Math.min(limits.rootMs, Math.max(1, remainingMs()));
       const cutoff = started - UNREGISTERED_SCRATCH_EXPIRY_MS;
-      const walk = await withAttemptTempDeadline(sweepMonotonicNow() + window + ATTEMPT_TEMP_REPLY_MARGIN_MS,
-        () => walkTree(directory, stat, cutoff, monotonic() + window, monotonic));
+      // A walk begun on an earlier pass continues while it is the same directory
+      // and recent enough. A process that references the root meanwhile ends it:
+      // the tree is in use, and what the walk already passed may have changed.
+      const dropWalk = () => { if (!dry) ledger.clearWalk(entry.name); };
+      let cursor = ledger.walk(entry.name);
+      if (cursor && (cursor.identity !== identity || started - cursor.startedAt > WALK_SPAN_MS || started < cursor.startedAt)) { dropWalk(); cursor = null; }
+      if (cursor && !attemptProcessReferencesClear(directory, directory, scanWithin(10_000))) {
+        dropWalk();
+        return miss("live_reference", cursor.bytes);
+      }
+      const walkOnce = (from: WalkCursor | null) => withAttemptTempDeadline(sweepMonotonicNow() + window + ATTEMPT_TEMP_REPLY_MARGIN_MS,
+        () => walkTree(directory, stat, cutoff, monotonic() + window, monotonic, started, from, ports.walkEntryLimit));
+      let walk = await walkOnce(cursor);
+      if (walk.state === "reset") { dropWalk(); cursor = null; walk = await walkOnce(null); }
+      if (walk.state !== "unproven") dropWalk();
       if (walk.state === "young") return miss("young", 0, `modified ${new Date(walk.newestMs).toISOString()}, inside the 24 h window`, walk.newestMs + UNREGISTERED_SCRATCH_EXPIRY_MS + 1);
       if (walk.state === "mount") return miss("mount_boundary", walk.bytes);
-      if (walk.state === "unproven") return miss("activity_unproven", walk.bytes);
+      if (walk.state === "unproven") {
+        if (!walk.cursor) { dropWalk(); return miss("activity_unproven", walk.bytes); }
+        if (!dry) ledger.saveWalk(entry.name, walk.cursor, started);
+        return miss("walk_in_progress", walk.bytes, `${describeHold("walk_in_progress")} (${walk.entries} entries read so far)`, started + MINUTE);
+      }
       if (walk.state === "unreadable") return miss("unreadable_subtree", walk.bytes);
+      if (walk.state === "reset") return miss("walk_in_progress", walk.bytes, describeHold("walk_in_progress"), started + MINUTE);
+      // A tree proven across passes ends with a fresh look at the top of the tree.
+      if (cursor) {
+        let newest: number;
+        try { newest = newestTopLevel(directory, stat); } catch { return miss("unreadable_subtree", walk.bytes); }
+        if (newest > cutoff) return miss("young", 0, `modified ${new Date(newest).toISOString()}, inside the 24 h window`, newest + UNREGISTERED_SCRATCH_EXPIRY_MS + 1);
+      }
       const treeHold = await attemptTreeHold(directory, directory, { budgetMs: window, bytes: walk.bytes });
       if (treeHold) return miss(`tree_${treeHold}`, walk.bytes, `tree evidence: ${treeHold.replaceAll("_", " ")}`);
       if (mountPointsUnder(directory).length) return miss("mount_boundary", walk.bytes);
@@ -476,7 +548,7 @@ async function passOverScratch(store: AttemptTempStore, ledger: UnregisteredScra
         report.removed++; report.removedBytes += verdict.bytes;
         try { journal("removed", entry.directory, verdict.bytes, proof, { reason: report.trigger ? `expired-24h-unreferenced; low free space (${report.trigger})` : "expired-24h-unreferenced", ageMs: verdict.ageMs, kind: "scratch", scope: "unregistered", trigger: report.trigger, identity: verdict.identity }); }
         catch { /* The tree is gone; the intent row stays and the ledger counts the removal. */ }
-        ledger.clearSkip(entry.name);
+        ledger.clearSkip(entry.name); ledger.clearWalk(entry.name);
         try { if (store.owner(entry.directory)) store.forget(entry.directory); }
         catch (error) { if (!stateDatabaseBusy(error)) throw error; /* The ledger forgets a missing path on its own. */ }
       }

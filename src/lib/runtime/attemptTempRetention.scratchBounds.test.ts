@@ -157,3 +157,50 @@ test.skipIf(process.platform !== "linux")("a live process whose cwd is a vanishe
     expect(report.outcomes.some(row => row.reasonCode === "checkout_unreadable")).toBeFalse();
   } finally { f.store.close(); }
 });
+
+/** A `docker` on PATH that reports one running container with the given mounts. */
+function dockerWithMounts(f: ReturnType<typeof fixture>, mounts: Array<{ Type: string; Source: string; Destination: string }>) {
+  const bin = path.join(f.root, "bin"); fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}
+if (process.argv[2] === "ps") console.log("111111111111");
+else console.log(${JSON.stringify(JSON.stringify({ Id: "111111111111", Mounts: mounts }))});
+`, { mode: 0o700 });
+  process.env.PATH = bin + path.delimiter + (environment.PATH ?? "");
+}
+
+test.skipIf(process.platform !== "linux")("over its cap with ample free space, the scheduled sweep removes an expired root while a container mounts the whole home onto itself; closed, live and directly mounted roots stay", async () => {
+  const f = fixture();
+  try {
+    const scratch = path.join(f.state, "scratch");
+    const expired = f.make(scratch, "llv-stage-aaaaaa", 150 * 1024 * MiB), closed = f.make(scratch, "llv-stage-bbbbbb", 60 * 1024 * MiB);
+    const busy = f.make(scratch, "llv-stage-cccccc", 60 * 1024 * MiB), mounted = f.make(scratch, "llv-stage-dddddd", 60 * 1024 * MiB);
+    dockerWithMounts(f, [{ Type: "bind", Source: f.root, Destination: f.root }, { Type: "bind", Source: mounted, Destination: "/data" }]);
+    const worker = { pid: process.pid, namespace: "mnt:[fixture]", stamped: false, paths: [busy] };
+    const { references: _unused, ...ordinary } = f.options;
+    const options = { ...ordinary, capBytes: 100 * 1024 * MiB, availableBytes: () => 300e9, scheduledOnly: true as const, requireExpired: true as const,
+      scan: () => ({ ownNamespace: null, processes: [worker] }),
+      state: async (owner: { directory: string }) => owner.directory === closed ? "closed" as const : "expired" as const };
+    expect(f.store.bytes()).toBeGreaterThan(options.capBytes);
+    const report = await sweepAttemptTemps(f.store, options);
+    expect(report).toMatchObject({ pressure: false, lowSpace: false });
+    expect(report.removed).toBeGreaterThan(0);
+    expect(fs.existsSync(expired)).toBeFalse();
+    for (const kept of [closed, busy, mounted]) expect(fs.existsSync(kept)).toBeTrue();
+    expect(report.outcomes.find(row => row.directory === closed)).toMatchObject({ reasonCode: "owner_closed" });
+    expect(report.outcomes.find(row => row.directory === busy)).toMatchObject({ disposition: "live" });
+    expect(report.outcomes.find(row => row.directory === mounted)).toMatchObject({ disposition: "live", reasonCode: "container_mount_reference" });
+  } finally { f.store.close(); }
+});
+
+test.skipIf(process.platform !== "linux")("a container mounting an ancestor at another path still holds the registered root", async () => {
+  const f = fixture();
+  try {
+    const root = f.make(path.join(f.state, "scratch"), "llv-stage-eeeeee");
+    dockerWithMounts(f, [{ Type: "bind", Source: f.root, Destination: "/workspace" }]);
+    const { references: _unused, ...ordinary } = f.options;
+    const report = await sweepAttemptTemps(f.store, { ...ordinary, scheduledOnly: true, requireExpired: true });
+    expect(report.removed).toBe(0);
+    expect(fs.existsSync(root)).toBeTrue();
+    expect(report.outcomes.find(row => row.directory === root)).toMatchObject({ disposition: "live", reasonCode: "container_mount_reference" });
+  } finally { f.store.close(); }
+});

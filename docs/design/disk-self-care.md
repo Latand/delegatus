@@ -634,7 +634,8 @@ lock:
   names, or that a live ledger row owns, stays with the ledger.
 - **A root qualifies** when nothing in its tree was modified for 24 hours (the
   newest `mtime` of the root and every entry, a bounded walk that stops at the
-  first newer entry), no live process references it (the ledger's reference
+  first newer entry; a tree one pass's window cannot finish is walked across
+  passes from a saved position, see below), no live process references it (the ledger's reference
   observer: cwd with the procfs rule, open files, `root`, mappings, arguments,
   environment, sockets, checkout links, container mounts), it passes
   canonical-path admission (a real directory directly under the real scratch
@@ -645,14 +646,30 @@ lock:
 - **On a busy host the proof stays within the tick.** The pass takes one
   process scan, renewed after a second before a removal, rather than two per
   root. It reads the container inventory once; a container whose mount is an
-  ancestor of the root (the Viewer's own container, a whole home directory)
-  holds nothing by itself, while a mount of the root or of a subtree holds it
-  and an unreadable inventory holds every root. Before the first root it reads
+  ancestor of the root and that the container sees at the same path (the
+  Viewer's own container, a whole home directory onto itself) holds nothing by
+  itself, because a process of that container reports its paths as the scan
+  matches them. A mount of the root or of a subtree holds it, an ancestor
+  mounted at another path holds it (a process there reports a path the scan
+  cannot match), and an unreadable inventory holds every root. The ledger sweep
+  of registered roots uses the same rule. Before the first root it reads
   the link inventory of every checkout a live process works in, several
   directories at once, and keeps each finished read for the next tick. If a
   checkout is still unread when the budget ends, no root can be proven: the
   pass touches nothing and reports how many checkouts remain, and the next
   tick continues from the reads that finished.
+- **A large tree is proven across passes.** When the per-root window or the
+  per-pass entry limit ends a walk, the pass saves its place in the ledger
+  database (directories left, position inside the directory being read, newest
+  `mtime` and allocation so far). The root waits one minute, shows as `walk in
+  progress` in the report, and the next pass continues from the cursor. A
+  cursor is dropped when the directory's identity changed, when it is older than
+  twelve hours, when a directory under way changed its own `mtime`, or when a
+  live process references the root; a walk that finished over several passes ends
+  with a fresh look at the root's entries. A write to a file already passed,
+  which changes no directory, is not seen until the next full proof; the
+  process check each pass and the final look bound that window. A tree with more
+  than 20,000 directories waiting cannot be saved and stays `activity_unproven`.
 - **Kept and counted, with the reason and a time to look again:** every other
   case, including an unreadable or unproven tree. A kept root waits for its own
   deadline (`young` waits until its 24 hours end, a live reference ten minutes,

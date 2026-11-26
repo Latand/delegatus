@@ -703,15 +703,20 @@ async function containerMountsClear(roots: readonly string[], remaining?: () => 
   return await containerReferenceHold(roots, remaining) === null;
 }
 
-/** The bind-mount and volume sources of every running container, with each
- * source's physical path. `null` means the inventory could not be read whole,
- * which proves nothing. Without a container runtime there is nothing to hold. */
-export async function readContainerMountSources(remaining?: () => number): Promise<string[] | null> {
+/** One mount of a running container: where it comes from on the host and
+ * where the container sees it. `destination` is `null` when the runtime did
+ * not report it, which proves nothing about the path the container uses. */
+export type ContainerMount = { source: string; destination: string | null };
+
+/** The bind-mount and volume mounts of every running container. `null` means
+ * the inventory could not be read whole, which proves nothing. Without a
+ * container runtime there is nothing to hold. */
+export async function readContainerMounts(remaining?: () => number): Promise<ContainerMount[] | null> {
   let active: string[];
   try { active = (await run("docker", ["ps", "-q"], remaining?.())).stdout.trim().split(/\s+/).filter(Boolean); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
   if (active.length > 1024 || new Set(active).size !== active.length) return null;
-  const sources: string[] = [];
+  const mounts: ContainerMount[] = [];
   for (let offset = 0; offset < active.length; offset += 32) {
     const ids = active.slice(offset, offset + 32);
     // Read only ownership metadata, in bounded replies. Whole inspect output
@@ -722,34 +727,45 @@ export async function readContainerMountSources(remaining?: () => number): Promi
     for (const id of ids) {
       const matches = containers.filter(container => typeof container?.Id === "string" && container.Id.startsWith(id));
       if (matches.length !== 1 || !Array.isArray(matches[0].Mounts)) return null;
-      for (const mount of matches[0].Mounts as { Type?: string; Source?: string }[]) {
+      for (const mount of matches[0].Mounts as { Type?: string; Source?: string; Destination?: string }[]) {
         if (mount.Type === "tmpfs") continue;
         if (typeof mount.Source !== "string" || !path.isAbsolute(mount.Source)) return null;
-        sources.push(mount.Source, resolvePhysicalPath(mount.Source));
+        mounts.push({ source: mount.Source, destination: typeof mount.Destination === "string" && path.isAbsolute(mount.Destination) ? mount.Destination : null });
       }
     }
   }
-  return sources;
+  return mounts;
 }
 
 const physicalRootsOf = (roots: readonly string[]) => [...new Set(roots.flatMap(root => [root, resolvePhysicalPath(root)]))];
 
-async function containerReferenceHold(roots: readonly string[], remaining?: () => number) {
+/** Whether running containers hold any of the roots. One rule for the ledger
+ * sweep, the unregistered pass and the namespace cleanup:
+ *
+ * - a mount of a root or of anything inside it holds exactly that data;
+ * - a mount of an ancestor that the container sees at the same path (Delegatus's
+ *   own containers mount the whole home directory onto itself) holds nothing by
+ *   itself, because a process of that container reports its paths the way this
+ *   process scan matches them, so one working inside a root shows in the scan;
+ * - a mount of an ancestor at another destination holds: a process there
+ *   reports the root under a path this scan cannot match;
+ * - an inventory that could not be read whole, or a mount of an ancestor whose
+ *   destination is unknown, holds. */
+export function containerMountHold(roots: readonly string[], mounts: readonly ContainerMount[] | null): "container_inventory_unknown" | "container_mount_reference" | null {
+  if (!mounts) return "container_inventory_unknown";
   const physicalRoots = physicalRootsOf(roots);
-  const sources = await readContainerMountSources(remaining);
-  if (!sources) return "container_inventory_unknown";
-  return sources.some(source => physicalRoots.some(root => inside(source, root) || inside(root, source))) ? "container_mount_reference" : null;
+  for (const mount of mounts) {
+    const sources = [mount.source, resolvePhysicalPath(mount.source)];
+    if (sources.some(source => physicalRoots.some(root => inside(source, root)))) return "container_mount_reference";
+    if (!sources.some(source => physicalRoots.some(root => inside(root, source)))) continue;
+    const samePath = mount.destination !== null && sources.includes(mount.destination);
+    if (!samePath) return "container_mount_reference";
+  }
+  return null;
 }
 
-/** Whether no container mounts one of the roots or anything inside it. A
- * container that mounts an ancestor (the Viewer's own container, a whole home
- * directory) holds nothing by itself: the processes in it that work inside a
- * root show in the process scan. A mount of the root or of a subtree is a
- * holder of exactly that data. An unreadable inventory is not clear. */
-export function containerSubtreeClear(roots: readonly string[], sources: readonly string[] | null): boolean {
-  if (!sources) return false;
-  const physicalRoots = physicalRootsOf(roots);
-  return !sources.some(source => physicalRoots.some(root => inside(source, root)));
+async function containerReferenceHold(roots: readonly string[], remaining?: () => number) {
+  return containerMountHold(roots, await readContainerMounts(remaining));
 }
 
 const markers = ["(", "-name", ".delegatus-keep", "-o", "-path", "*/worktrees/*/gitdir",

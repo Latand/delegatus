@@ -180,18 +180,21 @@ test("a spent time budget stops a pass part-way and the next pass resumes", asyn
   expect(fs.readdirSync(w.scratch)).toEqual([]);
 });
 
-test("a container that mounts an ancestor of the state directory holds nothing; a mount of a root or of a subtree keeps that root", async () => {
+/** A bind mount as the runtime reports it; the container sees it at `destination`, by default the same path. */
+const bind = (source: string, destination: string | null = source) => ({ source, destination });
+
+test("a container that mounts an ancestor at the same path holds nothing; a mount of a root or of a subtree keeps that root", async () => {
   const w = world();
   const { containers: _observer, ...real } = ports();
-  const mounted = (...sources: string[]) => ({ ...real, containerMounts: async () => sources });
-  const ancestors = [w.root, path.dirname(w.root), "/"];
+  const mounted = (...mounts: ReturnType<typeof bind>[]) => ({ ...real, containerMounts: async () => mounts });
+  const ancestors = [w.root, path.dirname(w.root), "/"].map(source => bind(source));
   const first = make(w, "llv-stage-ANCEST");
-  const viaAncestor = (await runUnregisteredScratchPass(w.store, mounted(...ancestors, w.scratch)))!;
+  const viaAncestor = (await runUnregisteredScratchPass(w.store, mounted(...ancestors, bind(w.scratch))))!;
   expect(viaAncestor).toMatchObject({ removed: 1, errors: 0 });
   expect(fs.existsSync(first)).toBeFalse();
 
   const whole = make(w, "llv-stage-MOUNTD"), sub = make(w, "llv-stage-SUBMNT"), sibling = make(w, "llv-stage-ALONE1");
-  const kept = (await runUnregisteredScratchPass(w.store, { ...mounted(whole, path.join(sub, "cache")), now: () => NOW + MINUTE }))!;
+  const kept = (await runUnregisteredScratchPass(w.store, { ...mounted(bind(whole), bind(path.join(sub, "cache"))), now: () => NOW + MINUTE }))!;
   expect(kept).toMatchObject({ removed: 1, examined: 3 });
   expect(fs.existsSync(whole)).toBeTrue();
   expect(fs.existsSync(sub)).toBeTrue();
@@ -201,6 +204,29 @@ test("a container that mounts an ancestor of the state directory holds nothing; 
   const unknown = (await runUnregisteredScratchPass(w.store, { ...real, containerMounts: async () => null, now: () => NOW + 12 * MINUTE }))!;
   expect(unknown).toMatchObject({ removed: 0, examined: 2 });
   expect(names(w)).toEqual(["llv-stage-MOUNTD", "llv-stage-SUBMNT"]);
+});
+
+test("a container that mounts an ancestor at another path holds the roots: a process in it works under the alias the scan cannot match", async () => {
+  const w = world();
+  const { containers: _observer, ...real } = ports();
+  const aliased = [bind(w.root, "/workspace")];
+  const used = make(w, "llv-stage-ALIASD"), idle = make(w, "llv-stage-ALIAS2");
+  // The process reports its cwd in its own mount namespace, /workspace for this home.
+  const inside: ProcessScan = { ownNamespace: "host-ns", processes: [{ pid: process.pid, namespace: "container-ns", stamped: false, paths: ["/workspace/state/scratch/llv-stage-ALIASD"], references: [] }] };
+  const report = (await runUnregisteredScratchPass(w.store, { ...real, containerMounts: async () => aliased, scan: () => inside }))!;
+  expect(report).toMatchObject({ removed: 0, examined: 2 });
+  expect(report.kept.reference_container_reference_observer_hold).toBe(2);
+  expect(names(w)).toEqual(["llv-stage-ALIAS2", "llv-stage-ALIASD"]);
+  // An ancestor mount whose destination the runtime did not report holds as well.
+  const unknown = (await runUnregisteredScratchPass(w.store, { ...real, containerMounts: async () => [bind(w.root, null)], now: () => NOW + 12 * MINUTE }))!;
+  expect(unknown).toMatchObject({ removed: 0, examined: 2 });
+  expect(fs.existsSync(used) && fs.existsSync(idle)).toBeTrue();
+  // The same mount at the same path holds nothing, and the idle root goes while the used one stays through the scan.
+  const samePath = { ...real, containerMounts: async () => [bind(w.root)] };
+  const live: ProcessScan = { ownNamespace: "host-ns", processes: [{ pid: process.pid, namespace: "container-ns", stamped: false, paths: [used], references: [] }] };
+  const same = (await runUnregisteredScratchPass(w.store, { ...samePath, scan: () => live, now: () => NOW + 24 * MINUTE }))!;
+  expect(same).toMatchObject({ removed: 1, examined: 2 });
+  expect(names(w)).toEqual(["llv-stage-ALIASD"]);
 });
 
 /** Two checkouts with a live process in each, and a reader that fails the second one's directory listing on request. */
@@ -339,6 +365,75 @@ test("activity is the newest entry of the tree: 24 h exactly expires, a nested w
   const later = (await runUnregisteredScratchPass(w.store, ports({ now: () => NOW + 2 * MINUTE })))!;
   expect(later.removed).toBe(1);
   expect(fs.existsSync(almost)).toBeFalse();
+});
+
+/** A stage-shaped root whose `cache` directory holds `count` files, every entry last written `age` ago. */
+function makeBig(w: World, name: string, count: number, age = 72 * HOUR) {
+  const directory = make(w, name, { age });
+  for (let n = 0; n < count; n++) fs.writeFileSync(path.join(directory, "cache", `f${String(n).padStart(5, "0")}`), "x");
+  setTimes(directory, NOW - age);
+  return directory;
+}
+
+test("a tree larger than one pass's walk is proven across passes, across a restart, and removed", async () => {
+  const w = world();
+  const big = makeBig(w, "llv-stage-BIGTRE", 2100);
+  const run = (at: number) => runUnregisteredScratchPass(w.store, ports({ now: () => NOW + at, walkEntryLimit: 1000 })).then(report => report!);
+  const first = await run(0);
+  expect(first).toMatchObject({ removed: 0, examined: 1 });
+  expect(first.kept.walk_in_progress).toBe(1);
+  expect(first.keptByReason.map(row => row.code)).toEqual(["walk_in_progress"]);
+  expect(remembered(w, ledger => ledger.walk("llv-stage-BIGTRE"))).toMatchObject({ entries: 1000 });
+  w.restart();
+  // The in-progress root is looked at again a minute later, not an hour.
+  expect(await run(MINUTE / 2)).toMatchObject({ examined: 0, waiting: 1 });
+  const second = await run(MINUTE);
+  expect(second).toMatchObject({ removed: 0, examined: 1 });
+  expect(remembered(w, ledger => ledger.walk("llv-stage-BIGTRE"))!.entries).toBeGreaterThan(1000);
+  const third = await run(2 * MINUTE);
+  expect(third).toMatchObject({ removed: 1, examined: 1, errors: 0 });
+  expect(fs.existsSync(big)).toBeFalse();
+  expect(remembered(w, ledger => ledger.walk("llv-stage-BIGTRE"))).toBeNull();
+  expect(journalRows().filter(row => row.phase === "removed")).toHaveLength(1);
+  expect(third.keptByReason).toEqual([]);
+});
+
+test("a recent write deep inside a tree that needs several passes keeps it, whether the write lands in a part not yet read or changes a directory already being read", async () => {
+  const w = world();
+  const later = makeBig(w, "llv-stage-LATERW", 2100), midway = makeBig(w, "llv-stage-MIDWAY", 2100);
+  const run = (at: number) => runUnregisteredScratchPass(w.store, ports({ now: () => NOW + at, walkEntryLimit: 1000 })).then(report => report!);
+  await run(0);
+  expect(remembered(w, ledger => [ledger.walk("llv-stage-LATERW"), ledger.walk("llv-stage-MIDWAY")]).every(Boolean)).toBeTrue();
+  // A file in the part the walk has not reached is modified, and another root gains a new entry in the directory under way.
+  fs.utimesSync(path.join(later, "cache", "f02090"), (NOW - HOUR) / 1000, (NOW - HOUR) / 1000);
+  fs.writeFileSync(path.join(midway, "cache", "newcomer"), "x"); fs.utimesSync(path.join(midway, "cache"), (NOW - 2 * HOUR) / 1000, (NOW - 2 * HOUR) / 1000);
+  let report = await run(MINUTE);
+  report = await run(2 * MINUTE);
+  report = await run(3 * MINUTE);
+  expect(fs.existsSync(later) && fs.existsSync(midway)).toBeTrue();
+  expect(report.removed).toBe(0);
+  expect(remembered(w, ledger => ledger.waiting(NOW + 3 * MINUTE).get("llv-stage-LATERW"))!.code).toBe("young");
+  expect(remembered(w, ledger => ledger.waiting(NOW + 3 * MINUTE).get("llv-stage-MIDWAY"))!.code).toBe("young");
+  expect(remembered(w, ledger => ledger.walk("llv-stage-LATERW"))).toBeNull();
+});
+
+test("a process that references a root while its walk is under way keeps it and ends the walk; a walk older than its span starts over", async () => {
+  const w = world();
+  const used = makeBig(w, "llv-stage-USEDBG", 2100), slow = makeBig(w, "llv-stage-SLOWBG", 2100);
+  const run = (at: number, scan: ProcessScan = empty) => runUnregisteredScratchPass(w.store, ports({ now: () => NOW + at, walkEntryLimit: 1000, scan: () => scan })).then(report => report!);
+  await run(0);
+  const first = remembered(w, ledger => ledger.walk("llv-stage-SLOWBG"))!;
+  const live = (await run(MINUTE, { ownNamespace: "fixture", processes: [holder([path.join(used, "cache")])] }));
+  expect(live.kept.live_reference).toBe(1);
+  expect(remembered(w, ledger => ledger.walk("llv-stage-USEDBG"))).toBeNull();
+  expect(fs.existsSync(used)).toBeTrue();
+  // Thirteen hours later the walk of the other root is older than its span: it starts over.
+  await run(13 * HOUR);
+  const again = remembered(w, ledger => ledger.walk("llv-stage-SLOWBG"))!;
+  expect(again.startedAt).toBe(NOW + 13 * HOUR);
+  expect(again.startedAt).toBeGreaterThan(first.startedAt);
+  expect(again.entries).toBe(1000);
+  expect(fs.existsSync(slow)).toBeTrue();
 });
 
 test("a redirected scratch parent or a linked root never reaches backups, and a valid sibling is still removed", async () => {
