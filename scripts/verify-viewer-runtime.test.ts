@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ChildProcess, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { procBackend } from "../src/lib/proc";
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
@@ -17,6 +18,7 @@ import {
   sandboxEnvironment,
   verifyViewerRuntime,
   hasBuiltPipelineRoute,
+  collector,
 } from "./verify-viewer-runtime";
 import { isOperatorOwnedDirectory, setStateOwnershipPathsForTests } from "../src/lib/stateOwnership";
 import { recordProvisionFixtureEvent, waitForProvisionFixtureReply } from "../src/lib/pipelines/provisionFixtureSupervisor";
@@ -146,6 +148,22 @@ test("runtime probes preserve their signal namespace boundary without inheriting
     if (previous === undefined) delete process.env.LLV_SIGNAL_SANDBOX;
     else process.env.LLV_SIGNAL_SANDBOX = previous;
   }
+});
+
+test("the output collector keeps a short failure tail yet still finds a frame printed before the tail", () => {
+  const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter() }) as unknown as ChildProcess;
+  const log = collector(child, "server");
+  child.stdout!.emit("data", '{"pipelineId":"baseline","phase":"toolchain-ready"}\n');
+  // Two later lanes print far more than the 40-line tail holds.
+  for (let lane = 0; lane < 2; lane++) {
+    child.stdout!.emit("data", Array.from({ length: 60 }, (_, index) => `lane ${lane} flow ${index}`).join("\n") + "\n");
+  }
+  expect(log().length).toBe(40);
+  expect(log().some(line => line.includes("baseline"))).toBe(false);
+  expect(log.search().some(line => line.includes('"pipelineId":"baseline"') && line.includes('"phase":"toolchain-ready"'))).toBe(true);
+  // The searched window is byte-bounded, so a flood cannot grow it without limit.
+  child.stdout!.emit("data", "x".repeat(300_000));
+  expect(log.search().join("\n").length).toBeLessThanOrEqual(128_000);
 });
 
 test("provisioning release tracing runs only for a completed App Router build", () => {

@@ -62,6 +62,8 @@ const START_BUDGET_MS = 120_000;
 const START_POLL_MS = 250;
 /** Bounded tail of a child's own output, kept with a failure. */
 const LOG_LINES = 40;
+/** Byte bound of the unbroken output a check may search, whatever the line count. */
+const SEARCH_BYTES = 128_000;
 
 /** A synthetic lifecycle shim may contain route.js without a completed build. */
 export function hasBuiltPipelineRoute(root: string): boolean {
@@ -189,9 +191,14 @@ export function sandboxEnvironment(sandbox: string): NodeJS.ProcessEnv {
   };
 }
 
-function collector(child: ChildProcess, label: string): () => string[] {
+/** The tail kept with a failure, plus `search()` over a byte-bounded window of everything printed. */
+type OutputLog = (() => string[]) & { search: () => string[] };
+
+export function collector(child: ChildProcess, label: string): OutputLog {
   const lines: string[] = [];
+  let raw = "";
   const collect = (chunk: unknown) => {
+    raw = (raw + String(chunk)).slice(-SEARCH_BYTES);
     for (const line of String(chunk).split("\n")) {
       if (!line.trim()) continue;
       lines.push(`${label}: ${line}`);
@@ -201,7 +208,7 @@ function collector(child: ChildProcess, label: string): () => string[] {
   child.stdout?.on("data", collect);
   child.stderr?.on("data", collect);
   child.on("error", (error) => collect(`failed to start: ${error.message}`));
-  return () => [...lines];
+  return Object.assign(() => [...lines], { search: () => raw.split("\n") });
 }
 
 /**
@@ -468,7 +475,9 @@ async function serveOnce(root: string, sandbox: string): Promise<{ status: numbe
       if (response.status === 200 && body.length > 0 && hasBuiltPipelineRoute(root)) {
         await verifyProvisioningTrace(root);
         const evidence = await verifyProvisioningRelease(origin, sandbox, fixtureEnvironment);
-        if (!log().some(line => line.includes(`"pipelineId":"${evidence.lane}"`) && line.includes('"phase":"toolchain-ready"'))) {
+        // The baseline lane's frame precedes two held-reply lanes whose own
+        // output would push it out of the 40-line failure tail.
+        if (!log.search().some(line => line.includes(`"pipelineId":"${evidence.lane}"`) && line.includes('"phase":"toolchain-ready"'))) {
           throw new Error("provisioning fixture did not report a ready frame");
         }
       }
