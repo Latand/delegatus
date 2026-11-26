@@ -3950,9 +3950,10 @@ function codexRefusalsOfStage(pipeline: Pipeline, stage: PipelineStage, attempt:
 function moveRefusedStageToClaudeOpus(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt, ports: PipelinePorts): string | null {
   const from = attempt.effectiveRole;
   const row = stage.role ? { roleId: stage.role.roleId } : undefined;
-  const equivalent = equivalentConfig({ engine: from.engine, model: from.model, effort: from.effort }, "claude", row);
+  // A role that leaves model or effort to its default maps by the role row alone.
+  const equivalent = equivalentConfig({ engine: from.engine, model: from.model ?? "", effort: from.effort ?? "high" }, "claude", row);
   const effort = (equivalent.engine === "claude" ? clampEffortToScale("claude", "opus", equivalent.effort) : null)
-    ?? clampEffortToScale("claude", "opus", from.effort) ?? "high";
+    ?? clampEffortToScale("claude", "opus", from.effort ?? "high") ?? "high";
   const resolved = resolvePipelineRole({ role: stage.role, engine: "claude", model: "opus", effort,
     access: isReadOnlyLockedRole(stage.role?.roleId) ? undefined : stage.access }, stage.kind, ports.roleLookup, pipeline.project);
   if (!resolved.role) return resolved.error ?? "the role has no Claude configuration";
