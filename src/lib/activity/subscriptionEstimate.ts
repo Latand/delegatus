@@ -1,5 +1,5 @@
 import estimates from "./usageEstimates.json";
-import { modelKey, priceTier, tokenCost as apiCost, tokenRate } from "./tokenPrices";
+import { modelKey, priceTier, pricingDateAt, tokenCost as apiCost, tokenRate } from "./tokenPrices";
 import type { TokenCounts } from "./tokenUsage";
 import type { SpendBasis, SpendBudget, SpendEngine } from "./taskLimitSpendTypes";
 
@@ -13,14 +13,20 @@ export function estimateVersionAt(date: string): string {
   return `${estimates.version}:${createHash("sha256").update(JSON.stringify(applicable)).digest("hex").slice(0,16)}`;
 }
 export const ESTIMATE_VERSION = estimateVersionAt(new Date().toISOString().slice(0,10));
+export const estimateVersionAtTime = (now: number) => estimateVersionAt(pricingDateAt(now));
+export function meterVersion(): string {
+  return `meter:${createHash("sha256").update(JSON.stringify(estimates.meter)).digest("hex").slice(0,16)}`;
+}
 
 const METERS = new Map(estimates.meter.map(row => [`${row.engine}:${row.model}:${row.tier}`, row.times]));
+const METER_PRICE_DATE = estimates.meter.reduce((latest, row) => row.date > latest ? row.date : latest, "");
 
-export function meterCost(model: string, tier: string, engine: string, counts: TokenCounts, priced?: number | null): number | null {
+export function meterCost(model: string, tier: string, engine: string, counts: TokenCounts, priced?: number | null, pricingDate?: string): number | null {
   const multiplier = METERS.get(`${engine}:${modelKey(model)}:${priceTier(tier)}`);
-  if (engine !== "codex") return priced === undefined ? apiCost(model, tier, counts) : priced;
-  const standard = tokenRate(model, "standard"), service = tokenRate(model,tier);
-  if (!standard) return priced === undefined ? apiCost(model,tier,counts) : priced;
+  if (engine !== "codex") return priced === undefined ? apiCost(model, tier, counts, pricingDate) : priced;
+  const meterDate = pricingDate ?? METER_PRICE_DATE;
+  const standard = tokenRate(model, "standard", meterDate), service = tokenRate(model,tier,meterDate);
+  if (!standard) return priced === undefined ? apiCost(model,tier,counts,meterDate) : priced;
   // Subscription calibration predates the provider's separate cache-write
   // tariff. Preserve that meter unit: cache writes use ordinary input weight.
   const rate = multiplier === undefined ? service ?? standard : standard;

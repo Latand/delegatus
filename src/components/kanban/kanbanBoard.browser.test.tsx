@@ -19683,12 +19683,12 @@ describe("the orchestrator's parallel self in the seat's feed", () => {
 
 describe("task limit spend: a scale on the card's state line, the numbers in its popover", () => {
   const CASES = {
-    "t-upload": { state: "one provider", marks: [["codex", "num", 1]], pop: [/Codex ≈1%/, /650.*1.200/, /(published sources|відкритими джерелами)/] },
-    "t-search": { state: "two providers", marks: [["claude", "num", 1], ["codex", "num", 1]], pop: [/Claude ≈3%/, /Codex ≈2%/, /(account usage and the plan budget|темпом акаунта й бюджетом плану)/, /900.*2.300/, /226/] },
-    "t-export": { state: "several accounts", marks: [["claude", "tiny", 0], ["codex", "num", 2]], pop: [/Claude ≈/, /Codex ≈7%/] },
-    "t-links": { state: "tiny", marks: [["claude", "tiny", 0]], pop: [/Claude ≈0[.,]3%/] },
-    "t-interrupt": { state: "large, estimate with incomplete history", marks: [["claude", "floor", 2], ["codex", "num", 4]], pop: [/Claude ≈12%/, /Codex ≈34%/] },
-    "t-disk": { state: "plan unreported", marks: [["claude", "tokens", null], ["codex", "num", 1]], pop: [/Claude 41/, /(reported account plan is needed|потрібен план акаунта)/, /Codex ≈1%/] },
+    "t-upload": { state: "one provider", marks: [["codex", "num", 1]], pop: [/23m tokens|23\sмлн токенів/, /≈1.1%/, /account week 47%|акаунт за тиждень 47%/, /7-day usage rate|темпом акаунта за 7 днів/] },
+    "t-search": { state: "two providers", marks: [["claude", "num", 1], ["codex", "num", 1]], pop: [/193m tokens|193\sмлн токенів/, /≈2.1%/, /≈1%/, /≈1.2%/, /≈0.4%/, /7-day usage rate|темпом акаунта за 7 днів/, /account week 53%|акаунт за тиждень 53%/, /226/] },
+    "t-export": { state: "several accounts", marks: [["claude", "tiny", 0], ["codex", "num", 2]], pop: [/≈0.4%/, /≈4.2%/, /≈2.1%/, /≈1%/] },
+    "t-links": { state: "tiny", marks: [["claude", "tiny", 0]], pop: [/≈0[.,]3%/] },
+    "t-interrupt": { state: "large, estimate with incomplete history", marks: [["claude", "floor", 2], ["codex", "num", 4]], pop: [/≈12.4%/, /≈21.3%/, /≈12.9%/] },
+    "t-disk": { state: "plan unreported", marks: [["claude", "tokens", null], ["codex", "num", 1]], pop: [/Claude 41/, /(reported account plan is needed|потрібен план акаунта)/, /≈1%/] },
   } as const;
   const COUNTING = "t-merge-a";
   const WIDTHS = [1440, 1280, 820, 390, 320, 360, 440] as const;
@@ -19697,7 +19697,8 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
     const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"],
+      env: { ...process.env, TMPDIR: "/dev/shm" } });
     const failures: string[] = [];
     const readings: unknown[] = [];
     /* The marks of one card: each provider's engine, kind and filled cells, and how the line fits. */
@@ -19739,8 +19740,11 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
         const range = document.createRange(); range.selectNodeContents(row); return [...range.getClientRects()];
       });
       const overlapsTimeline = timelineRects.some((b) => b.left < r.right - 0.5 && r.left < b.right - 0.5 && b.top < r.bottom - 0.5 && r.top < b.bottom - 0.5);
+      const title = host?.querySelector<HTMLElement>("h3.title .title-trigger .clamp");
+      const titleRects = title ? (() => { const range = document.createRange(); range.selectNodeContents(title); return [...range.getClientRects()]; })() : [];
+      const overlapsTitle = titleRects.some((b) => b.left < r.right - 0.5 && r.left < b.right - 0.5 && b.top < r.bottom - 0.5 && r.top < b.bottom - 0.5);
       const numX: number[] = [];
-      return { box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, viewport: { width: innerWidth, height: innerHeight }, lines, clipped, labels, outside, overlapsTimeline, numX, bg: getComputedStyle(pop).backgroundColor };
+      return { box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, viewport: { width: innerWidth, height: innerHeight }, lines, clipped, labels, outside, overlapsTimeline, overlapsTitle, numX, bg: getComputedStyle(pop).backgroundColor };
     }, id);
     try {
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of WIDTHS) {
@@ -19790,8 +19794,9 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               if (pop.clipped) failures.push(`${label} ${id}: ${pop.clipped} popover lines are cut`);
               if (pop.outside) failures.push(`${label} ${id}: ${pop.outside} account lines or bars leave the bubble`);
               if (pop.overlapsTimeline) failures.push(`${label} ${id}: the popover covers task timeline text`);
+              if (pop.overlapsTitle) failures.push(`${label} ${id}: the popover covers card title text`);
               /* The fixture's 80-character label cannot share a line with its figure: it is printed whole, on lines of its own. */
-              if (pop.lines.length > 6) failures.push(`${label} ${id}: the compact popover renders ${pop.lines.length} rows`);
+              if (pop.lines.length > 12) failures.push(`${label} ${id}: the compact popover renders ${pop.lines.length} rows`);
               if (new Set(pop.numX).size > 1) failures.push(`${label} ${id}: account figures start at ${pop.numX.join(", ")}`);
               if (pop.box.left < 0 || pop.box.top < 0 || pop.box.right > pop.viewport.width || pop.box.bottom > pop.viewport.height) failures.push(`${label} ${id}: the popover leaves the window ${JSON.stringify(pop.box)}`);
               const cardBox = (await host.boundingBox())!;

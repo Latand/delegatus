@@ -13,8 +13,8 @@ import { ActivityStore, activityStorePath, conversationDigest } from "./store";
 import { countsFromRow, DAY, HOUR, usageMeta } from "./tokenStore";
 import { tokenTotal } from "./tokenUsage";
 import { invalidateUnattributedCodexRates, LIMIT_RATE_SCHEMA, nearestRate, refreshLimitRates, utcDay, type LimitRate, type SpendObservations } from "./limitRates";
-import { apiCost, ESTIMATE_VERSION, estimateShare, meterCost, planBudget, planWithoutFixedLimit, reportedPlan, shareBasis } from "./subscriptionEstimate";
-import { priceTier } from "./tokenPrices";
+import { apiCost, estimateVersionAtTime, estimateShare, meterCost, meterVersion, planBudget, planWithoutFixedLimit, reportedPlan, shareBasis } from "./subscriptionEstimate";
+import { priceTier, pricingDateAt } from "./tokenPrices";
 import { activityOperation } from "./operation";
 import type { TaskSpendAccount, TaskSpendProvider, TaskSpendResponse, SpendEngine } from "./taskLimitSpendTypes";
 
@@ -44,6 +44,7 @@ export interface SpendRow {
   weekly_pp: number | null; window_start: number | null; window_pp: number | null; session_start: number | null; session_pp: number | null;
   first_hour: number; last_hour: number; floor: "before-counting" | "uncounted" | null; computed_at: number;
   api_usd: number | null; api_priced_tokens: number; unpriced_models: string;
+  api_expired_usd: number | null; api_expired_priced_tokens: number; api_history_missing: number;
 }
 export type SpendHour = Parameters<typeof countsFromRow>[0] & { hour: number; conversation: string; model: string; tier: string;
   account: string; engine: string; pipeline: string | null; role: string };
@@ -84,13 +85,13 @@ export function windowStart(observation: EngineLimits,
 
 /** Pure page reducer. Previously persisted partials let a large task cross pass and process boundaries. */
 export function computeTaskRows(task: BoardTask, hours: readonly SpendHour[], rates: readonly LimitRate[], observations: SpendObservations,
-  countedFrom: number | null, now: number, previous: SpendRow[] = []): SpendRow[] {
+  countedFrom: number | null, now: number, previous: SpendRow[] = [], pricingDate = pricingDateAt(now)): SpendRow[] {
   const result = new Map(previous.map(r => [r.account,r]));
-  const meterVersion = ESTIMATE_VERSION;
+  const currentMeterVersion = meterVersion();
   const weeklyRates = new Map<string, LimitRate>();
   const sessionRates = new Map<string, LimitRate[]>();
   for (const rate of rates) {
-    if (rate.meter_version && rate.meter_version !== meterVersion) continue;
+    if (rate.meter_version && rate.meter_version !== currentMeterVersion) continue;
     if (rate.window === "weekly") {
       if (rate.source === "own" && rate.rate !== null) weeklyRates.set(`${rate.account}|${rate.day}`, rate);
     } else {
@@ -112,12 +113,12 @@ export function computeTaskRows(task: BoardTask, hours: readonly SpendHour[], ra
         weekly_pp: null, window_start: week, window_pp: null, session_start: session, session_pp: null,
         first_hour: h.hour, last_hour: h.hour, floor: countedFrom !== null && Date.parse(task.createdAt) < countedFrom
           ? "before-counting" : null, computed_at: now,
-        api_usd: null, api_priced_tokens: 0, unpriced_models: "[]" };
+        api_usd: null, api_priced_tokens: 0, unpriced_models: "[]", api_expired_usd: 0, api_expired_priced_tokens: 0, api_history_missing: 0 };
       result.set(account,row);
     }
     const counts = countsFromRow(h), tokens = tokenTotal(counts);
-    const cost = apiCost(h.model, h.tier, counts);
-    const weight = meterCost(h.model, h.tier, h.engine, counts, cost);
+    const cost = apiCost(h.model, h.tier, counts, pricingDate);
+    const weight = meterCost(h.model, h.tier, h.engine, counts);
     row.tokens += tokens; row.first_hour = Math.min(row.first_hour,h.hour); row.last_hour = Math.max(row.last_hour,h.hour);
     if (cost !== null) {
       row.api_usd = (row.api_usd ?? 0) + cost;
@@ -137,7 +138,7 @@ export function computeTaskRows(task: BoardTask, hours: readonly SpendHour[], ra
       // Older Codex rates were calibrated in API dollars, with Ultrafast
       // weighted at Fast. Keep their measured contribution in that unit.
       const calibratedWeight = h.engine === "codex" && weekly.meter_version === null
-        ? apiCost(h.model, priceTier(h.tier) === "ultrafast" ? "fast" : h.tier, counts) : weight;
+        ? meterCost(h.model, priceTier(h.tier) === "ultrafast" ? "fast" : h.tier, h.engine, counts) : weight;
       if (calibratedWeight !== null) {
         const points = calibratedWeight * weekly.rate;
         row.rated_weight += weight;
@@ -155,17 +156,24 @@ function sumOptional(a: number | null | undefined, b: number | null | undefined)
   return a == null && b == null ? null : (a ?? 0) + (b ?? 0);
 }
 
-export function retainExpiredContributions(current: SpendRow[], expired: readonly SpendRow[], cutoffHour: number): SpendRow[] {
+export function retainExpiredContributions(current: SpendRow[], expired: readonly SpendRow[], cutoffHour: number, repricing = false): SpendRow[] {
   const merged = new Map(current.map(row => [row.account,row]));
   for (const prior of expired) {
     const next = merged.get(prior.account);
-    if (!next) { merged.set(prior.account,prior); continue; }
+    if (!next) {
+      merged.set(prior.account,{ ...prior, api_expired_usd: prior.api_usd,
+        api_expired_priced_tokens: prior.api_priced_tokens, api_history_missing: prior.api_history_missing ?? 1 });
+      continue;
+    }
     if (prior.last_hour < cutoffHour) {
       merged.set(prior.account,{
         ...next, tokens: prior.tokens + next.tokens, unpriced_tokens: prior.unpriced_tokens + next.unpriced_tokens,
         weight: prior.weight + next.weight, rated_weight: prior.rated_weight + next.rated_weight,
         weekly_pp: sumOptional(prior.weekly_pp,next.weekly_pp), api_usd: sumOptional(prior.api_usd,next.api_usd),
         api_priced_tokens: prior.api_priced_tokens + next.api_priced_tokens,
+        api_expired_usd: sumOptional(prior.api_usd,next.api_expired_usd),
+        api_expired_priced_tokens: prior.api_priced_tokens + next.api_expired_priced_tokens,
+        api_history_missing: prior.api_history_missing || next.api_history_missing ? 1 : 0,
         unpriced_models: JSON.stringify([...new Set<string>([...JSON.parse(prior.unpriced_models),...JSON.parse(next.unpriced_models)])].slice(0,4)),
         first_hour: Math.min(prior.first_hour,next.first_hour), last_hour: Math.max(prior.last_hour,next.last_hour),
         floor: prior.floor === "before-counting" || next.floor === "before-counting" ? "before-counting" : null,
@@ -178,13 +186,23 @@ export function retainExpiredContributions(current: SpendRow[], expired: readonl
     const expiredUnpriced = Math.max(0,prior.unpriced_tokens-next.unpriced_tokens);
     const expiredWeight = Math.max(0,prior.weight-next.weight);
     const expiredRated = Math.max(0,prior.rated_weight-next.rated_weight);
-    const expiredApi = prior.api_usd === null ? null : Math.max(0,prior.api_usd-(next.api_usd ?? 0));
+    const priorExpiredApi = prior.api_expired_usd ?? 0;
+    const priorExpiredPriced = prior.api_expired_priced_tokens ?? 0;
+    const historicalMissing = (prior.api_history_missing ?? 1) === 1;
+    const expiredApi = repricing || historicalMissing || prior.api_usd === null
+      ? priorExpiredApi : priorExpiredApi + Math.max(0,prior.api_usd-priorExpiredApi-(next.api_usd ?? 0));
+    const expiredPriced = repricing || historicalMissing
+      ? priorExpiredPriced : priorExpiredPriced + Math.max(0,prior.api_priced_tokens-priorExpiredPriced-next.api_priced_tokens);
     merged.set(prior.account,{
       ...next, tokens: next.tokens + expiredTokens, unpriced_tokens: next.unpriced_tokens + expiredUnpriced,
       weight: next.weight + expiredWeight, rated_weight: next.rated_weight + expiredRated,
       weekly_pp: sumOptional(Math.max(0,(prior.weekly_pp ?? 0)-(next.weekly_pp ?? 0)),next.weekly_pp),
       api_usd: sumOptional(expiredApi,next.api_usd),
-      api_priced_tokens: next.api_priced_tokens + Math.max(0,prior.api_priced_tokens-next.api_priced_tokens),
+      api_priced_tokens: next.api_priced_tokens + expiredPriced,
+      api_expired_usd: expiredApi,
+      api_expired_priced_tokens: expiredPriced,
+      api_history_missing: expiredTokens > 0 && (historicalMissing
+        || prior.api_priced_tokens > priorExpiredPriced + next.api_priced_tokens) ? 1 : 0,
       unpriced_models: JSON.stringify([...new Set<string>([...JSON.parse(prior.unpriced_models), ...JSON.parse(next.unpriced_models)])].slice(0, 4)),
       first_hour: Math.min(prior.first_hour,next.first_hour), last_hour: Math.max(prior.last_hour,next.last_hour),
       floor: prior.floor === "before-counting" || next.floor === "before-counting" ? "before-counting" : null,
@@ -209,7 +227,7 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
   return activityOperation("activity.limit-spend", async () => {
     const deps = { ...production,...overrides }, db = store.db, now = deps.now(), source = deps.source(), pipelineSource = deps.pipelineSource?.() ?? null;
     let meta = metaRead(db);
-    const hour = Math.floor(now/HOUR), estimateVersion = ESTIMATE_VERSION;
+    const hour = Math.floor(now/HOUR), estimateVersion = estimateVersionAtTime(now);
     const versionChanged = meta.estimate_version !== estimateVersion;
     if (meta.seed === "done" && !db.query("SELECT 1 FROM limit_spend_dirty LIMIT 1").get()
       && (!source || (source.revision() === meta.task_revision && !meta.task_key))
@@ -416,14 +434,15 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
           }
           const retained = db.query<SpendRow,[string,number]>("SELECT * FROM task_limit_spend WHERE task=? AND first_hour < ?")
             .all(id,Math.floor((now-92*DAY)/HOUR));
-          const finalRows = retainExpiredContributions(result,retained,Math.floor((now-92*DAY)/HOUR));
+          const finalRows = retainExpiredContributions(result,retained,Math.floor((now-92*DAY)/HOUR),versionChanged || meta.estimate_cursor !== null);
           db.query("DELETE FROM task_limit_spend WHERE task=?").run(id);
           const put = db.query(`INSERT INTO task_limit_spend
             (task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,window_start,window_pp,session_start,session_pp,
-             first_hour,last_hour,floor,computed_at,api_usd,api_priced_tokens,unpriced_models) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+             first_hour,last_hour,floor,computed_at,api_usd,api_priced_tokens,unpriced_models,api_expired_usd,api_expired_priced_tokens,api_history_missing)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
           for (const r of finalRows) put.run(r.task,r.account,r.engine,r.tokens,r.unpriced_tokens,r.weight,r.rated_weight,r.weekly_pp,
             r.window_start,r.window_pp,r.session_start,r.session_pp,r.first_hour,r.last_hour,r.floor === "before-counting" ? r.floor : null,
-            now,r.api_usd,r.api_priced_tokens,r.unpriced_models);
+            now,r.api_usd,r.api_priced_tokens,r.unpriced_models,r.api_expired_usd,r.api_expired_priced_tokens,r.api_history_missing);
           db.query("DELETE FROM task_spend_progress WHERE task=?").run(id); clearDirty(db,item); completed++;
         });
       });
@@ -448,31 +467,25 @@ export function readTaskLimitSpend(db: Database | null, ids: readonly string[], 
   for (const task of known) body.tasks[task.id] = { providers: [] };
   const rows = db.query<SpendRow,SQLQueryBindings[]>(`SELECT * FROM task_limit_spend WHERE task IN (${unique.map(()=>"?").join(",")})`).all(...unique);
   const planByAccount = new Map<string, { plan: string | null; tier: string | null }>();
-  // One bounded history scan supplies every account's latest plan and the
-  // newest known tier for that plan. Card reads stay flat as accounts grow.
   const accounts = [...new Set(rows.map(row => row.account))];
-  const planHistory = metaColumns.has("estimate_version") && accounts.length
-    ? db.query<{account:string;plan:string;plan_tier:string|null},SQLQueryBindings[]>(`SELECT account,plan,plan_tier FROM usage_limit_rates
-      WHERE account IN (${accounts.map(()=>"?").join(",")}) AND plan IS NOT NULL AND lower(trim(plan)) NOT IN ('', 'unknown')
-      ORDER BY account,day DESC,computed_at DESC`).all(...accounts) : [];
-  const lastPlan = new Map<string,{plan:string;plan_tier:string|null}>();
-  const lastTier = new Map<string,{plan:string;tier:string}>();
-  for (const item of planHistory) {
-    if (!lastPlan.has(item.account)) lastPlan.set(item.account,item);
-    if (item.plan_tier && !lastTier.has(item.account)) lastTier.set(item.account,{plan:item.plan,tier:item.plan_tier});
-  }
+  const historyPlan = (account: string) => metaColumns.has("estimate_version")
+    ? db.query<{plan:string;plan_tier:string|null},[string]>(`SELECT plan,plan_tier FROM usage_limit_rates INDEXED BY usage_limit_rates_latest_plan
+      WHERE account=? AND plan IS NOT NULL AND lower(trim(plan)) NOT IN ('', 'unknown')
+      ORDER BY day DESC,computed_at DESC LIMIT 1`).get(account) ?? null : null;
+  const historyTier = (account: string, plan: string) => metaColumns.has("estimate_version")
+    ? db.query<{plan:string;plan_tier:string|null},[string,string]>(`SELECT plan,plan_tier FROM usage_limit_rates INDEXED BY usage_limit_rates_plan_tier
+      WHERE account=? AND plan=? AND plan_tier IS NOT NULL ORDER BY day DESC,computed_at DESC LIMIT 1`).get(account,plan) ?? null : null;
   const accountPlan = (account: string) => {
     let info = planByAccount.get(account);
     if (info) return info;
     const observation = observations.get(account);
     const observedPlan = reportedPlan(observation?.plan);
     const observedTier = observedPlan ? observation?.planTier : null;
-    const prior = lastPlan.get(account);
+    const prior = observedPlan ? null : historyPlan(account);
     const priorPlan = reportedPlan(prior?.plan);
     const plan = observedPlan ?? priorPlan;
-    const priorTier = lastTier.get(account);
-    info = { plan, tier: observedTier ?? (priorPlan === plan ? prior?.plan_tier ?? null : null)
-      ?? (priorTier?.plan === plan ? priorTier.tier : null) };
+    const priorTier = plan && !observedTier ? historyTier(account,plan) : null;
+    info = { plan, tier: observedTier ?? (priorPlan === plan ? prior?.plan_tier ?? null : null) ?? priorTier?.plan_tier ?? null };
     planByAccount.set(account, info);
     return info;
   };
@@ -490,11 +503,11 @@ export function readTaskLimitSpend(db: Database | null, ids: readonly string[], 
     }
     const { plan, tier } = accountPlan(row.account);
     const observation = observations.get(row.account);
-    const budget = planBudget(row.engine, plan, tier);
     const finiteWindow = Number.isFinite(observation?.weekly?.usedPercent)
       && observation!.weekly!.usedPercent >= 0 && observation!.weekly!.usedPercent <= 100
       && Number.isFinite(observation?.weekly?.resetsAt);
     const fixed = !planWithoutFixedLimit(plan, finiteWindow || row.rated_weight > 0);
+    const budget = fixed ? planBudget(row.engine, plan, tier) : null;
     const share = estimateShare(row.weight, fixed ? row.rated_weight : 0, fixed ? row.weekly_pp : null, budget);
     const weights = contributions.get(provider)!;
     weights.measured += share.measured;
@@ -510,6 +523,7 @@ export function readTaskLimitSpend(db: Database | null, ids: readonly string[], 
       const issue = !fixed ? "noFixedLimit" : plan ? "noPlanBudget" : "planMissing";
       if (!provider.issues.includes(issue)) provider.issues.push(issue);
     }
+    if (row.api_history_missing && !provider.issues.includes("historicalPriceCoverage")) provider.issues.push("historicalPriceCoverage");
     provider.outsideBudget ||= share.outsideBudget;
     provider.tokens += row.tokens;
     provider.apiUsd = sumOptional(provider.apiUsd, row.api_usd);
@@ -527,7 +541,8 @@ export function readTaskLimitSpend(db: Database | null, ids: readonly string[], 
     const account: TaskSpendAccount = {
       key: row.account.endsWith(":unknown") ? "unknown" : row.account,
       label: labels.get(row.account) ?? row.account.slice(row.account.indexOf(":")+1),
-      plan, planTier: tier, weeklyPp: share.weeklyPp, basis: share.basis, range: share.range, budget, apiUsd: row.api_usd ?? null, tokens: row.tokens,
+      plan, planTier: tier, weeklyPp: share.weeklyPp, basis: share.basis, range: share.range, budget, apiUsd: row.api_usd ?? null,
+      apiPricedTokens: row.api_priced_tokens ?? 0, tokens: row.tokens,
       week: observation?.weekly ? { usedPercent: observation.weekly.usedPercent,
         taskPp: start === null ? null : same(start,row.window_start) ? row.window_pp : (row.last_hour+1)*3600 <= start ? 0 : null } : null,
       sessionPp: row.engine === "claude" && same(session,row.session_start) ? row.session_pp : null,

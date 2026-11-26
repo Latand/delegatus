@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { costByKind, costByModel, estimateCost, priceTier, PRICE_TABLE_DATE, tokenCost, tokenRate } from "./tokenPrices";
+import { costByKind, costByModel, estimateCost, priceTier, PRICE_TABLE_DATE, pricingDateAt, tokenCost, tokenRate } from "./tokenPrices";
 import { CLAUDE_ALIAS_RELEASES } from "@/lib/agent/models";
 import type { TokenCounts } from "./tokenUsage";
 
@@ -57,6 +57,17 @@ test("tiers map recorded speeds and service tiers; an unknown tier has no price"
   // A tier the provider does not publish for that model is unpriced, never priced as standard.
   expect(tokenCost("gpt-6-luna", "ultrafast", million({ input: 1e6 }))).toBeNull();
   expect(tokenCost("claude-sonnet-5-5", "fast", million({ input: 1e6 }))).toBeNull();
+});
+
+test("pricing cutovers use Pacific dates and indexed timelines retain all published cache rates", () => {
+  const before = Date.parse("2027-03-01T07:59:00Z");
+  const after = Date.parse("2027-03-01T08:01:00Z");
+  expect(pricingDateAt(before)).toBe("2027-02-28");
+  expect(pricingDateAt(after)).toBe("2027-03-01");
+  expect(tokenRate("gpt-6.2-astra", "ultrafast", pricingDateAt(before))?.input).toBe(24);
+  expect(tokenRate("gpt-6.2-astra", "ultrafast", pricingDateAt(after))?.input).toBe(48);
+  expect(tokenRate("gpt-6.2-astra", "standard", "2027-02-28")?.cacheWrite).toBe(10);
+  expect(tokenRate("gpt-6.1-sol", "standard", "2026-11-26")?.cacheWrite1h).toBe(5);
 });
 
 test("dated snapshot ids price as their model; unknown and synthetic models read as unpriced", () => {

@@ -29,6 +29,11 @@ const RATES = new Map(usageEstimates.prices.map(row => {
   }];
 }));
 
+/** Provider price dates follow the Pacific calendar used for published cutovers. */
+export function pricingDateAt(now: number): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+}
+
 /** The tier a recorded speed or service tier is billed at; null when the
     table cannot tell. Claude records `standard` or `fast`; Codex records its
     service tier, where `default` is standard and Priority was renamed Fast. */
@@ -45,12 +50,24 @@ export function priceTier(tier: string | null | undefined): PriceTier | null {
 /** A dated snapshot id (`claude-haiku-4-5-20251001`) prices as its model. */
 export const modelKey = (model: string) => model.trim().toLowerCase().replace(/-\d{8}$/, "");
 
-export function tokenRate(model: string, tier: string | null | undefined, pricingDate = new Date().toISOString().slice(0, 10)): TokenRate | null {
+const TIMELINES = new Map<string, Array<(typeof usageEstimates.prices)[number]>>();
+for (const row of usageEstimates.prices) {
+  const key = `${modelKey(row.model)}:${row.tier}`;
+  const timeline = TIMELINES.get(key) ?? [];
+  timeline.push(row);
+  TIMELINES.set(key, timeline);
+}
+for (const timeline of TIMELINES.values()) timeline.sort((a,b) => (a.effectiveFrom ?? a.date).localeCompare(b.effectiveFrom ?? b.date));
+
+export function tokenRate(model: string, tier: string | null | undefined, pricingDate = pricingDateAt(Date.now())): TokenRate | null {
   const priced = priceTier(tier);
   if (!priced) return null;
-  const row = usageEstimates.prices.filter(item => modelKey(item.model) === modelKey(model) && item.tier === priced
-    && (item.effectiveFrom ?? item.date) <= pricingDate && (!item.until || pricingDate <= item.until))
-    .sort((a,b) => (b.effectiveFrom ?? b.date).localeCompare(a.effectiveFrom ?? a.date))[0];
+  const timeline = TIMELINES.get(`${modelKey(model)}:${priced}`);
+  let row: (typeof usageEstimates.prices)[number] | undefined;
+  for (const item of timeline ?? []) {
+    if ((item.effectiveFrom ?? item.date) > pricingDate) break;
+    if (!item.until || pricingDate <= item.until) row = item;
+  }
   return row ? RATES.get(`${row.model}:${row.tier}:${row.effectiveFrom ?? row.date}`) ?? null : null;
 }
 

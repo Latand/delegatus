@@ -60,6 +60,7 @@ export function migrateUsage(db: Database): void {
       weekly_pp REAL, window_start INTEGER, window_pp REAL, session_start INTEGER, session_pp REAL,
       first_hour INTEGER NOT NULL, last_hour INTEGER NOT NULL, floor TEXT, computed_at INTEGER NOT NULL,
       api_usd REAL, api_priced_tokens INTEGER NOT NULL DEFAULT 0, unpriced_models TEXT NOT NULL DEFAULT '[]',
+      api_expired_usd REAL, api_expired_priced_tokens INTEGER NOT NULL DEFAULT 0, api_history_missing INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY(task, account)) WITHOUT ROWID`,
     "CREATE INDEX IF NOT EXISTS task_limit_spend_account ON task_limit_spend(account, task)",
     `CREATE TABLE IF NOT EXISTS limit_spend_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), schema INTEGER NOT NULL,
@@ -99,10 +100,14 @@ export function migrateUsage(db: Database): void {
   if (!taskSpendCols.has("api_usd")) db.exec("ALTER TABLE task_limit_spend ADD COLUMN api_usd REAL");
   if (!taskSpendCols.has("api_priced_tokens")) db.exec("ALTER TABLE task_limit_spend ADD COLUMN api_priced_tokens INTEGER NOT NULL DEFAULT 0");
   if (!taskSpendCols.has("unpriced_models")) db.exec("ALTER TABLE task_limit_spend ADD COLUMN unpriced_models TEXT NOT NULL DEFAULT '[]'");
+  if (!taskSpendCols.has("api_expired_usd")) db.exec("ALTER TABLE task_limit_spend ADD COLUMN api_expired_usd REAL");
+  if (!taskSpendCols.has("api_expired_priced_tokens")) db.exec("ALTER TABLE task_limit_spend ADD COLUMN api_expired_priced_tokens INTEGER NOT NULL DEFAULT 0");
+  if (!taskSpendCols.has("api_history_missing")) db.exec("ALTER TABLE task_limit_spend ADD COLUMN api_history_missing INTEGER NOT NULL DEFAULT 1");
   const rateCols = new Set(db.query<{ name: string }, []>("PRAGMA table_info(usage_limit_rates)").all().map(r => r.name));
   if (!rateCols.has("plan_tier")) db.exec("ALTER TABLE usage_limit_rates ADD COLUMN plan_tier TEXT");
   if (!rateCols.has("meter_version")) db.exec("ALTER TABLE usage_limit_rates ADD COLUMN meter_version TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS usage_limit_rates_latest_plan ON usage_limit_rates(account, day DESC, computed_at DESC) WHERE plan IS NOT NULL");
+  db.exec("CREATE INDEX IF NOT EXISTS usage_limit_rates_plan_tier ON usage_limit_rates(account, plan, day DESC, computed_at DESC) WHERE plan_tier IS NOT NULL");
   const cols = new Set(db.query<{ name: string }, []>("PRAGMA table_info(activity_files)").all().map(r => r.name));
   if (!cols.has("usage_offset")) db.exec("ALTER TABLE activity_files ADD COLUMN usage_offset INTEGER NOT NULL DEFAULT 0");
   if (!cols.has("usage_facts")) db.exec("ALTER TABLE activity_files ADD COLUMN usage_facts TEXT");

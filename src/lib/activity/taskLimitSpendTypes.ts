@@ -2,7 +2,7 @@ export type SpendEngine = "claude" | "codex";
 export type SpendBasis = "measured" | "plan" | "mixed";
 export interface SpendBudget { low: number; mid: number; high: number; grade: "measured" | "measured-thin" | "inferred" | "published" }
 export interface SpendRange { low: number; high: number }
-export type SpendIssue = "planMissing" | "noFixedLimit" | "noPlanBudget";
+export type SpendIssue = "planMissing" | "noFixedLimit" | "noPlanBudget" | "historicalPriceCoverage";
 export interface TaskSpendAccount {
   /** Engine-qualified account key, or unknown when attribution is unavailable. */
   key: string;
@@ -15,6 +15,7 @@ export interface TaskSpendAccount {
   range: SpendRange | null;
   budget: SpendBudget | null;
   apiUsd: number | null;
+  apiPricedTokens: number;
   tokens: number;
   week: { usedPercent: number; taskPp: number | null } | null;
   sessionPp: number | null;

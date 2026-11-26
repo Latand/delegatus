@@ -192,10 +192,10 @@ shows no date, the retrieval date is the only date.
 
 | Key | URL | HTTP, bytes | Page date |
 |---|---|---|---|
-| anthropic-api | https://platform.claude.com/docs/en/about-claude/pricing | 200, 809 700 | none shown |
-| openai-api | https://developers.openai.com/api/docs/pricing | 200, 639 780 | none shown; dated promotions inside |
-| codex-pricing | https://learn.chatgpt.com/docs/pricing (`developers.openai.com/codex/pricing` answers 308 to it) | 200, 754 209 | none shown; dated promotions inside |
-| claude-plans | https://claude.com/pricing | 200, 1 448 601 | none shown |
+| anthropic-api | https://platform.claude.com/docs/en/about-claude/pricing | fetched 2026-11-26 | none shown |
+| openai-api | https://developers.openai.com/api/docs/pricing | fetched 2026-11-26 | none shown; dated promotions inside |
+| codex-pricing | https://learn.chatgpt.com/docs/pricing (`developers.openai.com/codex/pricing` answers 308 to it) | fetched 2026-11-26 | none shown; dated promotions inside |
+| claude-plans | https://claude.com/pricing | fetched 2026-11-26 | none shown |
 | claude-max | https://support.claude.com/en/articles/11049741 ("What is the Max plan?") | 200, 218 829 | "Updated over 3 weeks ago" |
 | claude-code-plans | https://support.claude.com/en/articles/11145838 ("Use Claude Code with your Pro, Max, or Ultra plan") | 200, 240 358 | "Updated over 3 weeks ago" |
 | chatgpt-pro | https://help.openai.com/en/articles/9793128-what-is-chatgpt-pro | 200, 81 293 | "Updated: 21 hours ago" (about 2026-11-23) |
@@ -203,12 +203,12 @@ shows no date, the retrieval date is the only date.
 | nerftrack-2026-08 | https://xenospectrum.com/en/codex-weekly-limit-nerftrack/ | 403 to the scripted fetch; read through the fetch tool | published 2026-08-20 |
 | venturebeat-2026-04 | https://venturebeat.com/orchestration/openai-introduces-chatgpt-pro-usd100-tier-with-5x-usage-limits-for-codex | 429 to the scripted fetch; read through the fetch tool | published 2026-04-09, updated 04-10 |
 
-All retrieved 2026-11-24. Two URLs answered 404: the Claude Pro usage article
+Pricing and plan pages were rechecked 2026-11-26. Two URLs answered 404: the Claude Pro usage article
 `support.claude.com/en/articles/8324991` and `.../11014257`. Community forum
 figures that appeared only in search summaries were not fetched and are not
 used.
 
-### 2.2 API prices, USD per million tokens (anthropic-api, openai-api; 2026-11-24)
+### 2.2 API prices, USD per million tokens (anthropic-api, openai-api; checked 2026-11-26)
 
 Models in the role table are marked ★. Short-context rates (Haiku 5.5 up to
 100 000 prompt tokens, OpenAI up to 272 000 input tokens).
@@ -221,11 +221,12 @@ Models in the role table are marked ★. Short-context rates (Haiku 5.5 up to
 | Claude Fable 5.2 | standard | 8 | 0.20 (0.025×) | 10 / 16 | 40 |
 | Claude Fable 5.2 | fast | 16 | 0.40 | 20 / 32 | 80 |
 | Claude Haiku 5.5 | standard | 0.10 | 0.01 | 0.125 / 0.20 | 0.50 |
-| ★ GPT-6.2 Sol | standard | 2 | 0.10 | none published | 10 |
-| GPT-6.2 Sol | fast | 4 | 0.20 | — | 20 |
-| GPT-6.2 Sol | ultrafast (promotion to 2027-02-28; list 12 / 0.60 / 60) | 6 | 0.30 | — | 30 |
-| GPT-6.2 Astra | standard | 8 | 0.40 | — | 40 |
-| GPT-6.1 Sol | standard / fast / ultrafast | 2 / 4 / 12 | 0.10 / 0.20 / 0.60 | — | 10 / 20 / 60 |
+| ★ GPT-6.2 Sol | standard | 2 | 0.10 | 2.50 / 5 | 10 |
+| GPT-6.2 Sol | fast | 4 | 0.20 | 5 / 10 | 20 |
+| GPT-6.2 Sol | ultrafast through 2027-02-28 / from 2027-03-01 | 6 / 12 | 0.30 / 0.60 | 7.50 / 15; 15 / 30 | 30 / 60 |
+| GPT-6.2 Astra | standard / fast | 8 / 16 | 0.40 / 0.80 | 10 / 20; 20 / 40 | 40 / 80 |
+| GPT-6.2 Astra | ultrafast through 2027-02-28 / from 2027-03-01 | 24 / 48 | 1.20 / 2.40 | 30 / 60; 60 / 120 | 120 / 240 |
+| GPT-6.1 Sol | standard / fast / ultrafast | 2 / 4 / 12 | 0.10 / 0.20 / 0.60 | 2.50 / 5; 5 / 10; 15 / 30 | 10 / 20 / 60 |
 | GPT-6.1 Terra | standard | 1 | 0.05 | — | 5 |
 | ★ GPT-6 Luna | standard / fast | 0.10 / 0.20 | 0.01 / 0.02 | — | 0.50 / 1 |
 
@@ -344,11 +345,15 @@ one outside point, about ×2.
 | Claude | `max` with the tier not known (an older observation) | weekly | 300 – 1 000 – 2 300 | inferred | spans the two rows above |
 | Claude | `ultra` | weekly | 900 – 1 600 – 2 300 | inferred | Max × 2 (published); agrees with the measured legacy 20× tier |
 | Claude | `max`, `ultra`: Fable tokens | weekly (Fable) | half of the plan's weekly row | published ratio | "up to half your weekly limit"; on Pro, Fable is paid with usage credits |
-| Claude | `pro`, `max` (5×) | 5 hours | weekly ÷ 6.6 | inferred | October measurement on the 20× tier: weekly / 5-hour ratio 6.5–6.8 (`task-limit-spend.md` §3.1) |
+| Claude | `pro`, `team` standard | 5 hours | 9 – 18 – 38 | inferred | October 20× tier's measured weekly / session ratio 6.5–6.8; Team standard is treated as Pro-equivalent |
+| Claude | `team-premium` | 5 hours | 45 – 83 – 167 | inferred | published 5× standard-seat usage, applied to the Pro estimate |
 | Codex | `plus` (and Business standard seats) | weekly | 25 – 45 – 90 | inferred | Pro 200 ÷ 20 (venturebeat-2026-04: Pro 200 was sold as "Pro 20x") |
+| Codex | `plus`, Business standard seats | 5 hours | 3 – 25 – 90 | inferred, very uncertain | official model-specific message ranges times a broad $0.5–1.8 API-equivalent per message allowance; no provider token budget is published |
+| Codex | Enterprise/Edu with a finite weekly window | weekly | 25 – 45 – 90 | inferred | OpenAI documents Plus-equivalent limits for Enterprise/Edu seats without flexible pricing; flexible pricing keeps no fixed budget |
 | Codex | `prolite` (Pro 100) | weekly | 180 – 360 – 700 | inferred | October $178 on one account, × 2 for the published doubling. Cross-check: October's $178 against Pro 200's $676–769 is 1 : 4, the launch ratio of 5× and 20× Plus (venturebeat-2026-04) |
 | Codex | `pro` (Pro 200) | weekly | 650 – 900 – 1 200 | measured | §2.5, two accounts, October and November |
 | Codex | `promax` (Pro 500) | weekly | 1 800 – 2 700 – 3 600 | measured, thin | §2.5, one account, after the doubling |
+| Claude | `team` standard / premium | weekly | 60 – 120 – 250 / 300 – 550 – 1 100 | inferred | Pro-equivalent standard seat; premium seat published at 5× standard usage |
 | Codex | Enterprise/Edu with flexible pricing; Claude Enterprise | — | no budget | published | no fixed limit, or usage at API rates |
 
 **The same budgets as tokens.** Token ranges only mean something for a stated
@@ -366,6 +371,15 @@ cache does: the same Opus budget if nothing were cached (90 % fresh input,
 | Codex Pro 100, $180–360–700 | — | — | 1.2–2.5–4.8 B | 15–31–59 B | — |
 | Codex Pro 200, $650–900–1 200 | — | — | 4.4–6.1–8.2 B | 55–76–102 B | — |
 | Codex Pro 500, $1 800–2 700–3 600 | — | — | 12–18–25 B | 153–229–306 B | — |
+
+Finite-window ranges use the same mix multipliers: Claude Pro's five-hour
+range is approximately 23–45–94 M Opus 5.5 mix tokens; Team premium is
+113–207–413 M. Codex Plus and standard Business five-hour ranges are
+approximately 20–170–610 M GPT-6.2 Sol mix tokens. These are derived ranges,
+not published token caps. Their uncertainty is at least ×2 because both the
+message mix and the dollars represented by a local message vary. Enterprise
+and Edu use the Plus-equivalent weekly range only when the provider reports a
+finite window; flexible-pricing seats remain without a fixed share estimate.
 
 What is uncertain, and why:
 

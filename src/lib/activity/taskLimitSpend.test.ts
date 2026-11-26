@@ -71,7 +71,7 @@ test("rated, partial, unpriced and unattributed rows retain their bound and wind
     rise: 10,weight: 5,source: "own" as const,plan: "max",frozen: 0,computed_at: now }));
   const h = { hour,conversation: "d",model: "claude-sonnet-5",tier: "standard",account: "claude:a",engine: "claude",pipeline: null,role: "builder",
     requests: 1,input: 1000000,cache_read: 0,cache_write: 0,cache_write_1h: 0,output: 0,reasoning: 0 };
-  const rows = computeTaskRows(task("a"),[h,{ ...h,model: "unpriced" },{ ...h,account: "unknown" }],rates,observations,now-3*DAY,now);
+  const rows = computeTaskRows(task("a"),[h,{ ...h,model: "unpriced" },{ ...h,account: "unknown" }],rates,observations,now-3*DAY,now,[],"2026-11-26");
   const a = rows.find(r=>r.account==="claude:a")!;
   expect(a).toMatchObject({ tokens: 2000000,weekly_pp: 4,window_pp: 4,session_pp: 10,unpriced_tokens: 1000000,floor: null });
   const put = store.db.query("INSERT INTO task_limit_spend(task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,window_start,window_pp,session_start,session_pp,first_hour,last_hour,floor,computed_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
@@ -328,7 +328,7 @@ test("corrected Codex history invalidates frozen rates in bounded pages across r
   expect(store.db.query<{rate_schema:number},[]>("SELECT rate_schema FROM limit_spend_meta").get()!.rate_schema).toBe(3);
   store.close(); store = ActivityStore.open(path.join(root, "records.sqlite"));
   for (let i = 0; i < 4; i++) await refreshTaskLimitSpend(store, deps);
-  expect(store.db.query<{rate_schema:number},[]>("SELECT rate_schema FROM limit_spend_meta").get()!.rate_schema).toBe(4);
+  expect(store.db.query<{rate_schema:number},[]>("SELECT rate_schema FROM limit_spend_meta").get()!.rate_schema).toBe(LIMIT_RATE_SCHEMA);
   const row = store.db.query<{rise:number;rate:number;frozen:number},[]>("SELECT rise,rate,frozen FROM usage_limit_rates WHERE account='codex:a' AND window='weekly' AND day='2026-10-17'").get()!;
   expect(row.rise).toBe(20); expect(row.rate).toBeGreaterThan(0); expect(row.rate).not.toBe(99); expect(row.frozen).toBe(1);
   expect(store.db.query("SELECT * FROM usage_limit_rates WHERE account='codex:retired'").all()).toEqual([]);
@@ -467,7 +467,7 @@ test("an indexed plan fallback prices the unrated days and keeps account metadat
   };
   const rows = computeTaskRows(task("a"), [metered, { ...metered, hour: hour - 24 }], [{
     account, day, window: "weekly", rate: 0.125, weight: 80, rise: 10, source: "own", plan: "max", frozen: 0, computed_at: now,
-  }], new Map(), now - 3 * DAY, now);
+  }], new Map(), now - 3 * DAY, now, [], "2026-11-26");
   const row = rows[0]!;
   expect(row).toMatchObject({ tokens: 40_000_000, weekly_pp: 10, weight: 160, rated_weight: 80, api_usd: 160 });
   store.db.query(`INSERT INTO task_limit_spend
@@ -496,7 +496,7 @@ test("an indexed plan fallback prices the unrated days and keeps account metadat
   expect(JSON.stringify(queryPlan)).toContain("usage_limit_rates_latest_plan");
 });
 
-test("plan-history lookup keeps read statement count flat as matching accounts grow", () => {
+test("plan-history fallback uses indexed top rows as retained history grows", () => {
   const accounts = Array.from({ length: 12 }, (_, index) => `claude:account-${index}`);
   const put = store.db.query(`INSERT INTO task_limit_spend
     (task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,first_hour,last_hour,computed_at,api_usd,api_priced_tokens)
@@ -504,6 +504,10 @@ test("plan-history lookup keeps read statement count flat as matching accounts g
   for (let index = 0; index < accounts.length; index++) {
     const id = `account-task-${index}`;
     put.run(id, accounts[index]!, USAGE_NOW);
+    for (let day = 0; day < 80; day++) {
+      store.db.query(`INSERT INTO usage_limit_rates(account,window,day,rate,rise,weight,source,plan,frozen,computed_at,plan_tier)
+        VALUES(?,'weekly',?,NULL,0,0,'none','pro',0,?,'standard')`).run(accounts[index]!,new Date(Date.parse("2026-06-01")+day*DAY).toISOString().slice(0,10),USAGE_NOW+day);
+    }
   }
   const deps = world(accounts.map((_, index) => task(`account-task-${index}`)));
   const statements = (ids: string[]) => {
@@ -523,20 +527,80 @@ test("plan-history lookup keeps read statement count flat as matching accounts g
     return count;
   };
   const one = statements(["account-task-0"]);
-  expect(statements(accounts.map((_, index) => `account-task-${index}`))).toBe(one);
+  expect(statements(accounts.map((_, index) => `account-task-${index}`))).toBe(one + 2 * (accounts.length - 1));
+  const latest = JSON.stringify(store.db.query(`EXPLAIN QUERY PLAN SELECT plan,plan_tier FROM usage_limit_rates INDEXED BY usage_limit_rates_latest_plan
+    WHERE account=? AND plan IS NOT NULL AND lower(trim(plan)) NOT IN ('','unknown') ORDER BY day DESC,computed_at DESC LIMIT 1`).all(accounts[0]));
+  expect(latest).toContain("usage_limit_rates_latest_plan");
+});
+
+test("a newer different plan does not hide the selected plan's last known tier", () => {
+  const now = USAGE_NOW, hour = Math.floor(now / HOUR);
+  store.db.query(`INSERT INTO task_limit_spend
+    (task,account,engine,tokens,unpriced_tokens,weight,rated_weight,weekly_pp,first_hour,last_hour,computed_at,api_usd,api_priced_tokens)
+    VALUES('tier-history','claude:a','claude',1000000,0,55,0,NULL,?,?,?,0,1000000)`).run(hour,hour,now);
+  const put = store.db.query(`INSERT INTO usage_limit_rates
+    (account,window,day,rate,rise,weight,source,plan,frozen,computed_at,plan_tier)
+    VALUES('claude:a','weekly',?,NULL,0,0,'none',?,0,?,?)`);
+  put.run("2026-11-20", "max", now, "default_claude_max_5x");
+  put.run("2026-11-21", "pro", now, "default");
+  put.run("2026-11-22", "max", now, null);
+  const deps = { ...world([task("tier-history")]), observations: () => new Map() };
+  const row = readTaskLimitSpend(store.db,["tier-history"],{canChoose:true},deps).tasks["tier-history"]!.providers[0]!;
+  expect(row.accounts?.[0]).toMatchObject({ plan:"max", planTier:"default_claude_max_5x", budget:{low:300,mid:550,high:1100} });
+  expect(row.weeklyPp).toBeCloseTo(55 / 550 * 100);
+  const plan = JSON.stringify(store.db.query(`EXPLAIN QUERY PLAN SELECT plan,plan_tier FROM usage_limit_rates INDEXED BY usage_limit_rates_plan_tier
+    WHERE account=? AND plan=? AND plan_tier IS NOT NULL ORDER BY day DESC,computed_at DESC LIMIT 1`).all("claude:a","max"));
+  expect(plan).toContain("usage_limit_rates_plan_tier");
+});
+
+test("an API-only price promotion does not invalidate meter calibration and legacy cache writes use the legacy meter unit", async () => {
+  const { computeTaskRows } = await import("./taskLimitSpend");
+  const { meterCost, meterVersion, estimateVersionAtTime } = await import("./subscriptionEstimate");
+  const { pricingDateAt } = await import("./tokenPrices");
+  const before = Date.parse("2027-03-01T07:59:00Z"), after = Date.parse("2027-03-01T08:01:00Z");
+  expect(pricingDateAt(before)).not.toBe(pricingDateAt(after));
+  expect(estimateVersionAtTime(before)).not.toBe(estimateVersionAtTime(after));
+  const version = meterVersion();
+  expect(meterVersion()).toBe(version);
+  expect(meterCost("gpt-6.2-sol","standard","codex",{input:0,cacheRead:0,cacheWrite:1_000_000,cacheWrite1h:0,output:0,reasoning:0})).toBe(2);
+  const hour = Math.floor(USAGE_NOW/HOUR), day = new Date(hour*HOUR).toISOString().slice(0,10);
+  const h = {hour,conversation:"fixture",model:"gpt-6.2-sol",tier:"ultrafast",account:"codex:a",engine:"codex",pipeline:null,role:"builder",
+    requests:1,input:1_000_000,cache_read:0,cache_write:0,cache_write_1h:0,output:0,reasoning:0};
+  const oldRate = {account:"codex:a",window:"weekly" as const,day,rate:0.01,rise:12,weight:12,source:"own" as const,plan:"pro",plan_tier:null,meter_version:version,frozen:0,computed_at:USAGE_NOW};
+  const [row] = computeTaskRows(task("meter-promotion"),[h],[oldRate],new Map(),USAGE_NOW-3*DAY,USAGE_NOW);
+  expect(row).toMatchObject({weight:12,rated_weight:12,weekly_pp:0.12});
+});
+
+test("a legacy API aggregate with no separable expired-price history is explicitly partial", () => {
+  const hour = Math.floor(USAGE_NOW/HOUR);
+  store.db.query(`INSERT INTO task_limit_spend
+    (task,account,engine,tokens,unpriced_tokens,weight,rated_weight,first_hour,last_hour,computed_at,api_usd,api_priced_tokens,api_history_missing)
+    VALUES('legacy-price','claude:a','claude',2000000,0,10,0,?,?,?,5,1000000,1)`).run(hour-100,hour,USAGE_NOW);
+  const deps = { ...world([task("legacy-price")]), observations: () => new Map([["claude:a",{plan:"pro",session:null,weekly:null,capturedAt:null}]]) };
+  const provider = readTaskLimitSpend(store.db,["legacy-price"],{canChoose:true},deps).tasks["legacy-price"]!.providers[0]!;
+  expect(provider).toMatchObject({tokens:2_000_000,apiUsd:5,apiPricedTokens:1_000_000,issues:["historicalPriceCoverage"]});
 });
 
 test("repricing preserves the expired part of an aggregate that straddles retention on later refreshes", () => {
   const common: SpendRow = { task:"a", account:"claude:a", engine:"claude", tokens:0, unpriced_tokens:0, weight:0,
     rated_weight:0, weekly_pp:null, window_start:null, window_pp:null, session_start:null, session_pp:null,
-    first_hour:10, last_hour:10, floor:null, computed_at:1, api_usd:0, api_priced_tokens:0, unpriced_models:"[]" };
+    first_hour:10, last_hour:10, floor:null, computed_at:1, api_usd:0, api_priced_tokens:0, unpriced_models:"[]",
+    api_expired_usd:0, api_expired_priced_tokens:0, api_history_missing:0 };
   const old = { ...common, tokens:2_000_000, weight:20, rated_weight:20, weekly_pp:2, first_hour:10, last_hour:150,
-    api_usd:8, api_priced_tokens:2_000_000 };
+    api_usd:6, api_priced_tokens:2_000_000, api_expired_usd:5, api_expired_priced_tokens:1_000_000 };
   const rebuilt = { ...common, tokens:1_000_000, weight:10, rated_weight:10, weekly_pp:1, first_hour:120, last_hour:130,
     api_usd:4, api_priced_tokens:1_000_000 };
-  const upgraded = retainExpiredContributions([rebuilt],[old],100);
-  expect(upgraded[0]).toMatchObject({ tokens:2_000_000, weight:20, rated_weight:20, weekly_pp:2, api_usd:8, api_priced_tokens:2_000_000 });
-  expect(retainExpiredContributions([rebuilt],upgraded,100)[0]).toMatchObject({ tokens:2_000_000, api_usd:8 });
+  const upgraded = retainExpiredContributions([{...rebuilt,api_usd:5}],[old],100,true);
+  expect(upgraded[0]).toMatchObject({ tokens:2_000_000, weight:20, rated_weight:20, weekly_pp:2, api_usd:10, api_priced_tokens:2_000_000,
+    api_expired_usd:5, api_history_missing:0 });
+  expect(retainExpiredContributions([{...rebuilt,api_usd:5}],upgraded,100)[0]).toMatchObject({ tokens:2_000_000, api_usd:10 });
+  const legacy = retainExpiredContributions([{...rebuilt,api_usd:5}],[{...old,api_expired_usd:null,api_expired_priced_tokens:0,api_history_missing:1}],100,true)[0]!;
+  expect(legacy).toMatchObject({ api_usd:5, api_priced_tokens:1_000_000, api_history_missing:1 });
+  const decreased = retainExpiredContributions([{...rebuilt,api_usd:0.5}],[old],100,true)[0]!;
+  expect(decreased).toMatchObject({ api_usd:5.5, api_history_missing:0 });
+  const fullyRetainedLegacy = retainExpiredContributions([{...rebuilt,api_usd:5,api_priced_tokens:1_000_000}],
+    [{...old,tokens:1_000_000,api_usd:5,api_priced_tokens:1_000_000,api_expired_usd:null,api_expired_priced_tokens:0,api_history_missing:1}],100,true)[0]!;
+  expect(fullyRetainedLegacy).toMatchObject({ api_usd:5, api_priced_tokens:1_000_000, api_history_missing:0 });
 });
 
 test("Enterprise and Edu keep measured fixed-window shares, while unmeasured flexible plans stay explicitly unknown", () => {
@@ -558,15 +622,17 @@ test("Enterprise and Edu keep measured fixed-window shares, while unmeasured fle
 });
 
 test("a price version change queues at most 200 stored tasks at a time and reprices retained hours after reopening", async () => {
-  const { ESTIMATE_VERSION } = await import("./subscriptionEstimate");
-  const estimateVersion = ESTIMATE_VERSION;
+  const { estimateVersionAtTime } = await import("./subscriptionEstimate");
+  const priceNow = Date.parse("2026-11-26T12:00:00Z");
+  const estimateVersion = estimateVersionAtTime(priceNow);
   const tasks = Array.from({ length: 201 }, (_, i) => task(`priced-${String(i).padStart(3, "0")}`, ["work"]));
   const deps = world(tasks);
+  deps.now = () => priceNow;
   const ownerKey = `c:${conversationDigest("work")}`;
-  const hour = Math.floor(USAGE_NOW / HOUR);
+  const hour = Math.floor(USAGE_NOW / HOUR), currentHour = Math.floor(priceNow/HOUR);
   store.transaction(() => {
     store.db.query(`UPDATE limit_spend_meta SET seed='done',task_revision=1,pipeline_revision=1,pipeline_seed='done',
-      aggregate_schema=2,rate_schema=?,rates_hour=?,estimate_version='previous'`).run(LIMIT_RATE_SCHEMA, hour);
+      aggregate_schema=2,rate_schema=?,rates_hour=?,estimate_version='previous'`).run(LIMIT_RATE_SCHEMA, currentHour);
     const put = store.db.query(`INSERT INTO task_limit_spend
       (task,account,engine,tokens,unpriced_tokens,weight,rated_weight,first_hour,last_hour,floor,computed_at,api_usd,api_priced_tokens)
       VALUES(?,'claude:a','claude',1000000,0,2,0,?,?,'uncounted',?,99,1000000)`);

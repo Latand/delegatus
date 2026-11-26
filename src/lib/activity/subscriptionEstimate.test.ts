@@ -13,9 +13,9 @@ test("mixed Claude models use the rates for cache reads, both cache write durati
 
 test("Codex metering uses published speed multipliers while API prices use the recorded service tier", () => {
   const counts = { ...emptyTokens(), input: 50_000, cacheRead: 4_930_000, cacheWrite: 100_000, cacheWrite1h: 20_000, output: 20_000 };
-  expect(apiCost("gpt-6.1-sol", "priority", counts)).toBeCloseTo(1.986);
+  expect(apiCost("gpt-6.1-sol", "priority", counts)).toBeCloseTo(2.186);
   expect(meterCost("gpt-6.1-sol", "priority", "codex", counts)).toBeCloseTo(2.4825);
-  expect(apiCost("gpt-6.1-sol", "ultrafast", counts)).toBeCloseTo(5.958);
+  expect(apiCost("gpt-6.1-sol", "ultrafast", counts)).toBeCloseTo(6.558);
   expect(meterCost("gpt-6.1-sol", "ultrafast", "codex", counts)).toBeCloseTo(7.944);
   expect(apiCost("gpt-6.2-sol", "ultrafast", counts)).toBeCloseTo(3.279);
   expect(meterCost("gpt-6.2-sol", "ultrafast", "codex", counts)).toBeCloseTo(5.958);
@@ -44,10 +44,14 @@ test("weekly share combines measured rates and budget fallback with the full est
   expect(planWithoutFixedLimit("enterprise", true)).toBe(false);
   expect(planWithoutFixedLimit("fixture-plan")).toBe(false);
   expect(planBudget("claude", "enterprise", null)).toBeNull();
+  expect(planBudget("codex", "enterprise", null)).toMatchObject({low:25,mid:45,high:90});
+  expect(planBudget("codex", "edu", null)).toMatchObject({low:25,mid:45,high:90});
+  expect(planBudget("codex", "plus", null, "session")).toMatchObject({low:3,mid:25,high:90});
+  expect(planBudget("claude", "team-premium", null, "session")).toMatchObject({mid:83.33});
 });
 
 test("the versioned data has distinct, sourced, dated rows and current promotions", () => {
-  const today = "2026-11-24";
+  const today = "2026-11-26";
   expect(estimates.version).toMatch(/^\d{4}-\d{2}-\d{2}\.\d+$/);
   const groups = [
     { rows: estimates.prices, keys: estimates.prices.map(row => [row.model, row.tier, row.effectiveFrom ?? row.date]) },

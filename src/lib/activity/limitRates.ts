@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { setImmediate as yieldLoop } from "node:timers/promises";
 import type { EngineLimits, LimitSample } from "@/lib/types";
-import { ESTIMATE_VERSION, meterCost, reportedPlan } from "./subscriptionEstimate";
+import { meterVersion, meterCost, reportedPlan } from "./subscriptionEstimate";
 import { countsFromRow, DAY, HOUR, SUM_TOKENS } from "./tokenStore";
 
 export type RateWindow = "weekly" | "session";
@@ -12,7 +12,7 @@ export interface RateDependencies { history(): { series: Record<string, LimitSam
   coverageComplete?: boolean; revalidateFrozen?: boolean; reprice?: boolean }
 export interface RateChange { account: string; day: string }
 export const utcDay = (at: number) => new Date(at).toISOString().slice(0, 10);
-export const LIMIT_RATE_SCHEMA = 4;
+export const LIMIT_RATE_SCHEMA = 5;
 const SAMPLE_TOLERANCE = 5 * 60_000;
 const covers = (samples: readonly LimitSample[], from: number, through: number) =>
   samples.length > 0 && samples[0]!.t * 1000 <= from && samples.at(-1)!.t * 1000 >= through - SAMPLE_TOLERANCE;
@@ -90,13 +90,13 @@ export async function refreshLimitRates(db: Database, now: number, deps: RateDep
     samplesByAccountWindow.set(accountWindow, ordered);
   }
   const today = utcDay(now), changed = new Map<string, RateChange>();
-  const meterVersion = ESTIMATE_VERSION;
+  const currentMeterVersion = meterVersion();
   const latestPlan = new Map<string,string>();
-  const latestTier = new Map<string, { plan: string; tier: string }>();
+  const latestTier = new Map<string, string>();
   for (const row of db.query<{account:string;plan:string;plan_tier:string|null},[]>(`SELECT account,plan,plan_tier FROM usage_limit_rates
     WHERE plan IS NOT NULL AND trim(plan)!='' AND lower(trim(plan))!='unknown' ORDER BY day DESC,computed_at DESC`).all()) {
     if (!latestPlan.has(row.account)) latestPlan.set(row.account,row.plan);
-    if (row.plan_tier && !latestTier.has(row.account)) latestTier.set(row.account,{plan:row.plan,tier:row.plan_tier});
+    if (row.plan_tier && !latestTier.has(`${row.account}|${row.plan}`)) latestTier.set(`${row.account}|${row.plan}`,row.plan_tier);
   }
   const coverageComplete = deps.coverageComplete ?? true;
   const revalidateFrozen = deps.revalidateFrozen ?? false;
@@ -121,8 +121,8 @@ export async function refreshLimitRates(db: Database, now: number, deps: RateDep
     for (const account of accounts) for (const window of ["weekly", "session"] as const) {
       const prior = previous.get(`${account}|${window}`);
       const historyCovered = covers(samplesByAccountWindow.get(`${account}|${window}`) ?? [], from, end);
-      if (prior && prior.meter_version !== null && prior.meter_version !== meterVersion && prior.rate !== null) {
-        pending.push({ ...prior, rate: null, rise: 0, weight: 0, source: "none", meter_version: meterVersion, frozen: 0, computed_at: now });
+      if (prior && prior.meter_version !== null && prior.meter_version !== currentMeterVersion && prior.rate !== null) {
+        pending.push({ ...prior, rate: null, rise: 0, weight: 0, source: "none", meter_version: currentMeterVersion, frozen: 0, computed_at: now });
         continue;
       }
       if (prior && ((prior.frozen && coverageComplete && !revalidateFrozen && !reprice)
@@ -138,12 +138,11 @@ export async function refreshLimitRates(db: Database, now: number, deps: RateDep
       const observedPlan = reportedPlan(observation?.plan);
       const priorPlan = reportedPlan(prior?.plan);
       const plan = observedPlan ?? priorPlan ?? latestPlan.get(account) ?? null;
-      const historicalTier = latestTier.get(account);
       const planTier = (observedPlan ? observation?.planTier : null)
         ?? (plan === priorPlan ? prior?.plan_tier ?? null : null)
-        ?? (historicalTier?.plan === plan ? historicalTier.tier : null);
+        ?? latestTier.get(`${account}|${plan}`) ?? null;
       pending.push({ account, window, day, rate, rise, weight, source: rate === null ? "none" : "own",
-        plan, plan_tier: planTier, meter_version: meterVersion,
+        plan, plan_tier: planTier, meter_version: currentMeterVersion,
         frozen: coverageComplete && historyCovered && day < today ? 1 : 0, computed_at: now });
     }
     for (const row of pending) {
@@ -164,8 +163,15 @@ export async function refreshLimitRates(db: Database, now: number, deps: RateDep
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(account,window,day) DO UPDATE SET
         rate=excluded.rate, rise=excluded.rise, weight=excluded.weight, source=excluded.source, plan=excluded.plan,
         frozen=excluded.frozen, computed_at=excluded.computed_at, plan_tier=excluded.plan_tier, meter_version=excluded.meter_version`);
-      for (const r of pending) if (!retained.has(r))
-        put.run(r.account,r.window,r.day,r.rate,r.rise,r.weight,r.source,r.plan,r.frozen,r.computed_at,r.plan_tier ?? null,r.meter_version ?? null);
+      const fields = ["account","window","day","rate","rise","weight","source","plan","frozen","computed_at","plan_tier","meter_version"];
+      for (const r of pending) if (!retained.has(r)) {
+        const values = [r.account,r.window,r.day,r.rate ?? null,r.rise,r.weight,r.source,r.plan ?? null,r.frozen,r.computed_at,
+          r.plan_tier ?? null,r.meter_version ?? currentMeterVersion];
+        const invalid = values.flatMap((value,index) => value === undefined || !(value === null || ["string","number","boolean","bigint"].includes(typeof value))
+          ? [fields[index]!] : []);
+        if (invalid.length) throw new TypeError(`Invalid rate-row bindings: ${invalid.join(",")}`);
+        put.run(...values);
+      }
       const enqueue = db.query(`INSERT INTO limit_spend_rate_changes(account,day,task_cursor) VALUES(?,?,'')
         ON CONFLICT(account,day) DO UPDATE SET task_cursor=''`);
       for (const item of changed.values()) if (item.day === day) enqueue.run(item.account,item.day);

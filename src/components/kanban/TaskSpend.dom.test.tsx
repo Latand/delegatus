@@ -18,7 +18,7 @@ Object.assign(globalThis, {
 
 const account = (key: string, label: string, plan: string | null, weeklyPp: number | null, tokens: number, used: number | null, sessionPp: number | null = null): TaskSpendAccount =>
   ({ key, label, plan, planTier: null, weeklyPp, tokens, basis: weeklyPp === null ? null : "measured", range: null, budget: null,
-    apiUsd: tokens / 10e6, week: used === null ? null : { usedPercent: used, taskPp: weeklyPp }, sessionPp });
+    apiUsd: tokens / 10e6, apiPricedTokens: tokens, week: used === null ? null : { usedPercent: used, taskPp: weeklyPp }, sessionPp });
 const provider = (engine: "claude" | "codex", accounts: TaskSpendAccount[], bound: TaskSpendProvider["bound"] = "approx", floor: TaskSpendProvider["floor"] = null): TaskSpendProvider => {
   const weeklyPp = accounts.reduce((sum, a) => sum + (a.weeklyPp ?? 0), 0);
   const tokens = accounts.reduce((sum, a) => sum + a.tokens, 0);
@@ -48,9 +48,12 @@ const TASKS: Record<string, TaskSpendSummary> = {
     { ...provider("claude", [], "tokens"), tokens: 100e6, apiUsd: null, unpricedTokens: 100e6, unpricedModels: ["fixture-model"] },
   ] },
   partial: { providers: [
-    { ...provider("claude", [], "approx"), tokens: 200e6, apiUsd: 10, apiPricedTokens: 100e6, weeklyPp: 1.2,
+    { ...provider("claude", [{ ...account("claude:history", "History", "max", 1.2, 200e6, null),
+      apiUsd: 10, apiPricedTokens: 100e6, basis: "plan", range: { low: 0.8, high: 2 },
+      budget: { low: 900, mid: 1600, high: 2300, grade: "measured" } }], "approx"),
+      tokens: 200e6, apiUsd: 10, apiPricedTokens: 100e6, weeklyPp: 1.2,
       basis: "plan", range: { low: 0.8, high: 2 }, budgets: [{ low: 900, mid: 1600, high: 2300, grade: "measured" }],
-      unpricedTokens: 100e6, unpricedModels: ["fixture-model"] },
+      unpricedTokens: 100e6, unpricedModels: ["fixture-model"], issues: ["historicalPriceCoverage"] },
   ] },
   /* Lower bounds just under a band's edge: the scale fills by the floored figure. */
   floor46: { providers: [provider("claude", [account("claude:a", "A", "max", 4.6, 200e6, 50)], "floor", "before-counting")] },
@@ -159,7 +162,7 @@ test("the board's cards ask once for every task, and each provider draws its mar
   for (const id of ["two", "large"]) expect(/\d/.test(host.querySelector(`[data-spend='${id}']`)!.textContent!)).toBe(false);
   expect(host.querySelector("[data-spend='large'] .scale-floor")).toBeNull();
   expect(host.querySelector("[data-spend='norate'] .spend-n")!.textContent).toBe("41m");
-  expect(host.querySelector("[data-spend='large']")!.getAttribute("aria-label")).toBe("Task usage: Claude about 12% (estimate) of the week, Codex about 34% of the week");
+  expect(host.querySelector("[data-spend='large']")!.getAttribute("aria-label")).toBe("Task usage: Claude 610m tokens, Codex 652m tokens");
   expect(host.querySelector("[data-spend='two']")!.getAttribute("role")).toBe("button");
 });
 
@@ -184,20 +187,20 @@ test("a card that mounts while a read is out is asked for after the settle delay
   expect(pendingTaskSpendRefresh()).toBe(45_000);
 });
 
-test("a lower bound's scale fills by its printed, floored figure", async () => {
+test("a lower bound's scale fills from the displayed estimate", async () => {
   const host = await mount(<><TaskSpendMarks taskId="floor46" interactive /><TaskSpendMarks taskId="floor146" interactive /></>);
   expect(marks(host, "floor46")).toEqual([["claude", "floor", 1]]);
   expect(marks(host, "floor146")).toEqual([["claude", "floor", 2]]);
-  expect((await open("floor46")).textContent).toContain("Claude ≈4%");
-  expect((await open("floor146")).textContent).toContain("Claude ≈14%");
+  expect((await open("floor46")).textContent).toContain("≈4.6% estimated share of this subscription's weekly allowance");
+  expect((await open("floor146")).textContent).toContain("≈14.6% estimated share of this subscription's weekly allowance");
 });
 
-test("the compact card popover omits repeated account detail and keeps each provider estimate", async () => {
+test("the compact card popover shows a separate estimate for each subscription", async () => {
   await mount(<><TaskSpendMarks taskId="long" interactive /><PhoneTaskSpend taskId="long" headingClass="h" /></>);
   const pop = await open("long");
-  expect(pop.textContent).toContain("Claude ≈2%");
+  expect(pop.textContent).toContain("Research workstation");
+  expect(pop.textContent).toContain("estimated share of this subscription's weekly allowance");
   expect(pop.querySelectorAll(".pop-row")).toHaveLength(1);
-  expect(pop.textContent).not.toContain("Research workstation");
 });
 
 test("a screen reader reaches the popover's lines: the open marks are described by the bubble", async () => {
@@ -208,7 +211,7 @@ test("a screen reader reaches the popover's lines: the open marks are described 
   const described = document.getElementById(trigger.getAttribute("aria-describedby")!)!;
   expect(described.getAttribute("role")).toBe("tooltip");
   const text = described.textContent!;
-  for (const line of ["Claude ≈3%", "Codex ≈2%", "±30%"] ) expect(text).toContain(line);
+  for (const line of ["193m tokens", "33m tokens", "±30%"] ) expect(text).toContain(line);
   await act(async () => trigger.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
   expect(trigger.hasAttribute("aria-describedby")).toBe(false);
 });
@@ -237,8 +240,9 @@ test("the compact popover marks estimates and shows one total token line", async
   const pop = await open("two");
   expect(pop).not.toBeNull();
   const text = pop.textContent!;
-  expect(text).toContain("Claude ≈3%");
-  expect(text).toContain("Codex ≈2%");
+  expect(text).toContain("≈2.1% estimated share of this subscription's weekly allowance");
+  expect(text).toContain("≈1% estimated share of this subscription's weekly allowance");
+  expect(text).toContain("≈1.2% estimated share of this subscription's weekly allowance");
   expect(pop.querySelectorAll(".pop-row")).toHaveLength(2);
   expect(pop.querySelector(".pop-note")!.textContent).toBe("226m tokens");
   expect(pop.textContent).not.toContain("Now 12%");
@@ -250,27 +254,30 @@ test("the compact popover marks estimates and shows one total token line", async
 test("small weekly and five-hour shares retain estimate precision on desktop and phone", async () => {
   await mount(<><TaskSpendMarks taskId="tiny" interactive /><PhoneTaskSpend taskId="tiny" headingClass="h" /></>);
   const pop = await open("tiny");
-  expect(pop.textContent).toContain("Claude ≈0.3% of the week");
+  expect(pop.textContent).toContain("≈0.3% estimated share of this subscription's weekly allowance");
   let phone = document.querySelector("[data-phone-task-spend='tiny']")!.textContent!;
-  expect(phone).toContain("task estimate ≈0.3% of week");
+  expect(phone).toContain("≈0.3% estimated share of this subscription's weekly allowance");
   expect(phone).toContain("5-hour estimate ≈0.3%");
   setLocale("uk");
   await mount(<><TaskSpendMarks taskId="tiny" interactive /><PhoneTaskSpend taskId="tiny" headingClass="h" /></>);
-  expect((await open("tiny")).textContent).toContain("Claude ≈0,3% тижня");
+  expect((await open("tiny")).textContent).toContain("≈0,3% орієнтовної частки тижневого ліміту цієї підписки");
   phone = document.querySelector("[data-phone-task-spend='tiny']")!.textContent!;
   expect(phone).toContain("оцінка за 5 годин ≈0,3%");
 });
 
 test("a lower bound and an unreported plan have distinct explanations in Ukrainian", async () => {
+  await mount(<PhoneTaskSpend taskId="norate" headingClass="h" />);
+  const englishPhone = document.querySelector('[data-phone-task-spend="norate"] [data-spend-provider="claude"]')!.textContent!;
+  expect(englishPhone).toContain("Unattributed account · 41m tokens");
+  expect(englishPhone).not.toMatch(/of week|%/);
   setLocale("uk");
   await mount(<><TaskSpendMarks taskId="large" interactive /><PhoneTaskSpend taskId="large" headingClass="h" />
     <TaskSpendMarks taskId="norate" interactive /><PhoneTaskSpend taskId="norate" headingClass="h" /></>);
   const large = await open("large");
-  expect(large.textContent).toContain("Claude ≈12%");
-  expect(large.querySelector("[data-spend-provider='claude'] .meter-sign")).toBeNull();
+  expect(large.textContent).toContain("≈12,4% орієнтовної частки тижневого ліміту цієї підписки");
   expect(large.querySelector(".pop-warn")!.textContent).toContain("Нижня межа: роботу до початку обліку не пораховано");
   const phone = document.querySelector("[data-phone-task-spend='large']")!.textContent!;
-  expect(phone).toContain("оцінка задачі ≈12% за тиждень");
+  expect(phone).toContain("≈12,4% орієнтовної частки тижневого ліміту цієї підписки");
   expect(phone).toContain("оцінка за 5 годин ≈12%");
   const norate = await open("norate");
   const claude = norate.querySelector("[data-spend-provider='claude']")!;
@@ -279,6 +286,9 @@ test("a lower bound and an unreported plan have distinct explanations in Ukraini
   expect(claude.textContent).not.toMatch(/невідом|unknown/);
   expect(/%/.test(claude.textContent!)).toBe(false);
   expect(claude.querySelector(".pop-row")!.textContent).toContain("за цінами API");
+  const ukrainianPhone = document.querySelector('[data-phone-task-spend="norate"] [data-spend-provider="claude"]')!.textContent!;
+  expect(ukrainianPhone).toMatch(/Акаунт не визначено · 41\sмлн токенів/);
+  expect(ukrainianPhone).not.toMatch(/тижнев|%/);
 });
 
 test("a member who is not the owner sees each provider's figure and no account", async () => {
@@ -286,8 +296,10 @@ test("a member who is not the owner sees each provider's figure and no account",
   await mount(<TaskSpendMarks taskId="two" interactive />);
   const pop = await open("two");
   expect(pop.querySelectorAll(".pop-row").length).toBe(2);
-  expect(pop.textContent).toContain("Claude ≈3%");
-  expect(pop.textContent).toContain("Codex ≈2%");
+  expect(pop.textContent).not.toContain("estimated share of this subscription");
+  expect(pop.textContent).not.toContain("account week");
+  expect(pop.textContent).toContain("Claude 193m tokens");
+  expect(pop.textContent).toContain("Codex 33m tokens");
   expect(pop.querySelector(".pop-note")!.textContent).toBe("226m tokens");
 });
 
@@ -316,10 +328,11 @@ test("unpriced models and plans without a fixed limit keep the tokens and explai
   expect(unpriced).toContain("No API price for 100m tokens (fixture-model)");
   expect(unpriced).toContain("API price unavailable");
   const partial = (await open("partial")).textContent!;
-  expect(partial).toContain("Claude ≈1%");
+  expect(partial).toContain("≈1.2% estimated share of this subscription's weekly allowance");
   expect(partial).toContain("(0.8–2%)");
   expect(partial).toContain("$900–$2,300 (measured)");
   expect(partial).toContain("≈ $10 at API prices for priced tokens");
+  expect(partial).toContain("Some expired tokens lack a separable API price history");
   for (const text of [noLimit, unpriced, partial]) {
     expect(text).not.toMatch(/unknown|≥/);
   }

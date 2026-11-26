@@ -3531,7 +3531,7 @@ const SPEND = params.get("spend");
 function spendAccount(key: string, label: string, plan: string | null, weeklyPp: number | null, tokens: number, used: number | null, taskPp: number | null, sessionPp: number | null = null): TaskSpendAccount {
   return { key, label, plan, planTier: key === "claude:a" ? "default_claude_max_20x" : null,
     weeklyPp, tokens, basis: weeklyPp === null ? null : "measured", range: null, budget: null,
-    apiUsd: tokens / 10e6, week: used === null ? null : { usedPercent: used, taskPp }, sessionPp };
+    apiUsd: tokens / 10e6, apiPricedTokens: tokens, week: used === null ? null : { usedPercent: used, taskPp }, sessionPp };
 }
 function spendProvider(engine: "claude" | "codex", accounts: TaskSpendAccount[], bound: TaskSpendProvider["bound"] = "approx", floor: TaskSpendProvider["floor"] = null): TaskSpendProvider {
   const weeklyPp = accounts.reduce((sum, a) => sum + (a.weeklyPp ?? 0), 0);

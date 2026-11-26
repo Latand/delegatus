@@ -6,7 +6,7 @@ import { intlLocale } from "@/components/activity/format";
 import { compact, money } from "@/components/activity/tokenParts";
 import { EngineMark } from "@/components/EngineMark";
 import { TooltipBubble } from "@/components/TooltipBubble";
-import type { SpendBudget, SpendRange, TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
+import type { SpendBudget, TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
 import { useLocale, type Locale, type TFunction } from "@/lib/i18n";
 
 import { useTaskSpend } from "./taskSpendSummaries";
@@ -33,22 +33,9 @@ const providerCells = (provider: TaskSpendProvider) => spendCells(provider.bound
 
 const decimal = (value: number, locale: Locale) => new Intl.NumberFormat(intlLocale(locale), { maximumFractionDigits: 1 }).format(value);
 
-/** A lower bound never rounds up. */
-function floorText(pp: number, locale: Locale): string {
-  return pp >= 1 ? `${Math.floor(pp)}%` : `${decimal(Math.floor(pp * 10) / 10, locale)}%`;
-}
-
 function estimatePercent(pp: number, locale: Locale): string {
   if (pp < 0.1) return "<0.1%";
-  return pp < 1 ? `${decimal(Math.round(pp * 10) / 10, locale)}%` : `${Math.round(pp)}%`;
-}
-
-/** The provider's headline figure: «≈3%», «<1%», «≥12%». */
-function headline(provider: TaskSpendProvider, locale: Locale): string {
-  const kind = providerKind(provider);
-  if (kind === "floor") return `≈${floorText(provider.weeklyPp, locale)}`;
-  if (kind === "tiny") return `≈${estimatePercent(provider.weeklyPp, locale)}`;
-  return `≈${Math.round(provider.weeklyPp)}%`;
+  return `${decimal(Math.round(pp * 10) / 10, locale)}%`;
 }
 
 function accountPlan(account: TaskSpendAccount): string | null {
@@ -71,14 +58,9 @@ function budgetText(budget: SpendBudget, locale: Locale, t: TFunction): string {
 
 /** What a screen reader hears for the marks: one clause per provider. */
 export function taskSpendAria(t: TFunction, summary: TaskSpendSummary, locale: Locale): string {
-  const parts = summary.providers.map((provider) => {
-    const engine = ENGINE_NAME[provider.engine];
-    const kind = providerKind(provider);
-    if (kind === "tokens") return t("taskSpend.aria.tokens", { engine, tokens: compact(provider.tokens, locale) });
-    if (kind === "tiny") return t("taskSpend.aria.approx", { engine, value: estimatePercent(provider.weeklyPp, locale) });
-    if (kind === "floor") return t("taskSpend.aria.approx", { engine, value: `${floorText(provider.weeklyPp, locale)} (estimate)` });
-    return t("taskSpend.aria.approx", { engine, value: `${Math.round(provider.weeklyPp)}%` });
-  });
+  const parts = summary.providers.map(provider => t("taskSpend.aria.tokens", {
+    engine: ENGINE_NAME[provider.engine], tokens: compact(provider.tokens, locale),
+  }));
   return t("taskSpend.aria", { parts: parts.join(", ") });
 }
 
@@ -118,9 +100,9 @@ function usd(value: number, locale: Locale): string {
 const decimalCents = (value: number, locale: Locale) =>
   new Intl.NumberFormat(intlLocale(locale), { maximumFractionDigits: 2 }).format(value);
 
-function rangeText(range: SpendRange, locale: Locale): string {
-  if (range.high > 0 && range.high < 0.01) return `(<${decimalCents(0.01, locale)}%)`;
-  return `(${decimalCents(range.low, locale)}–${decimalCents(range.high, locale)}%)`;
+function accountRange(account: TaskSpendAccount, locale: Locale): string | null {
+  if (!account.range) return null;
+  return `${decimalCents(account.range.low, locale)}–${decimalCents(account.range.high, locale)}%`;
 }
 
 /** The card popover and the phone task screen share the same estimates. */
@@ -133,34 +115,37 @@ function SpendLines({ summary, accountDetails = false }: { summary: TaskSpendSum
         const engine = ENGINE_NAME[provider.engine];
         const kind = providerKind(provider);
         const api = provider.apiUsd === null ? t("taskSpend.noApi")
-          : t(provider.unpricedTokens > 0 ? "taskSpend.partialApi" : "taskSpend.api", { value: usd(provider.apiUsd, locale) });
-        const range = provider.range;
+          : t(provider.apiPricedTokens < provider.tokens ? "taskSpend.partialApi" : "taskSpend.api", { value: usd(provider.apiUsd, locale) });
         return (
           <span key={engine} className="pop-block" data-spend-provider={provider.engine} data-kind={kind}>
             <span className="pop-row">
               <EngineMark engine={provider.engine} size={12} />
               <span className="pop-main">
-                <b>{engine}{kind === "tokens" ? "" : ` ${headline(provider, locale)}`}</b>
-                {" "}{kind === "tokens" ? t("taskSpend.tokens", { tokens: compact(provider.tokens, locale) }) : t("taskSpend.ofWeek")}
-                {range ? <> <span className="spend-unit">{rangeText(range, locale)}</span></> : null}
-                {provider.budgets.map(budget => <span key={`${budget.low}:${budget.high}:${budget.grade}`} className="spend-unit"> · {budgetText(budget,locale,t)}</span>)}
+                <b>{engine}</b>
+                {" "}{t("taskSpend.tokens", { tokens: compact(provider.tokens, locale) })}
                 {api ? <> · <span className="spend-unit">{api}</span></> : null}
                 {provider.engine === "codex" ? <> · <span className="spend-unit">{t("taskSpend.cacheWriteAssumption")}</span></> : null}
               </span>
             </span>
-            {provider.basis || provider.floor ? <span className={`pop-sub meter-note${provider.floor ? " pop-warn" : ""}`}>
-              {provider.basis ? t(`taskSpend.basis.${provider.basis}`) : null}
-              {provider.basis && provider.floor ? " · " : null}
+            {provider.floor || (provider.basis && !accountDetails) ? <span className={`pop-sub meter-note${provider.floor ? " pop-warn" : ""}`}>
+              {provider.basis && !accountDetails ? t(`taskSpend.basis.${provider.basis}`) : null}
+              {provider.basis && !accountDetails && provider.floor ? " · " : null}
               {provider.floor ? t("taskSpend.floor.before-counting") : null}
             </span> : null}
-            {provider.issues.map(issue => <span key={issue} className="pop-sub meter-note">{t(`taskSpend.issue.${issue}`)}</span>)}
+            {[...new Set(provider.issues)].map(issue => <span key={issue} className="pop-sub meter-note">{t(`taskSpend.issue.${issue}`)}</span>)}
             {accountDetails ? provider.accounts?.map(account => {
               const label = account.key === "unknown" ? t("taskSpend.unattributed") : account.label;
               const plan = accountPlan(account);
-              const share = account.weeklyPp === null ? t("taskSpend.tokens", { tokens: compact(account.tokens, locale) }) : `≈${estimatePercent(account.weeklyPp, locale)}`;
+              const share = account.weeklyPp === null ? null : `≈${estimatePercent(account.weeklyPp, locale)}`;
+              const range = accountRange(account,locale);
               return <span key={account.key} className="pop-sub meter-note" data-spend-account={account.key}>
-                {label}{plan ? ` · ${plan}` : ""} · {t("taskSpend.accountShare", { value: share })}
+                {label}{plan ? ` · ${plan}` : ""} · {share
+                  ? t("taskSpend.accountShare", { value: share })
+                  : t("taskSpend.tokens", { tokens: compact(account.tokens, locale) })}
+                {range ? ` (${range})` : ""}
+                {account.basis ? ` · ${t(`taskSpend.basis.${account.basis}`)}` : ""}
                 {accountBudget(account,locale,t) ? ` · ${accountBudget(account,locale,t)}` : ""}
+                {account.apiUsd === null ? "" : ` · ${t(account.apiPricedTokens < account.tokens ? "taskSpend.partialApi" : "taskSpend.api", { value: usd(account.apiUsd,locale) })}`}
                 {account.week ? ` · ${t("taskSpend.week", { value: `${Math.round(account.week.usedPercent)}%` })}` : ""}
                 {account.sessionPp !== null && account.sessionPp > 0 ? ` · ${t("taskSpend.sessionEstimate", { value: `≈${estimatePercent(account.sessionPp, locale)}` })}` : ""}
               </span>;
@@ -225,10 +210,29 @@ export function TaskSpendMarks({ taskId, interactive }: { taskId: string; intera
     >
       <Marks summary={summary} />
       {open ? (
-        <TooltipBubble id={bubbleId} anchorRef={ref} side="top" align="right" className="card-state-pop spend-pop">
+        <TooltipBubble id={bubbleId} anchorRef={ref} side="top" align="right" className="card-state-pop spend-pop"
+          place={bubble => {
+            const card = ref.current?.closest<HTMLElement>("[data-kanban-card]");
+            if (!card) return null;
+            const bounds = card.getBoundingClientRect();
+            const right = Math.max(0, window.innerWidth - bounds.right - 16);
+            const left = Math.max(0, bounds.left - 16);
+            const onRight = right >= left;
+            const room = onRight ? right : left;
+            if (room < 220) return null;
+            const width = Math.min(320, room);
+            bubble.style.maxWidth = `${width}px`;
+            const anchor = ref.current!.getBoundingClientRect();
+            const height = bubble.getBoundingClientRect().height;
+            return {
+              left: onRight ? bounds.right + 8 : bounds.left - width - 8,
+              top: Math.max(8, Math.min(anchor.top, window.innerHeight - height - 8)),
+              maxWidth: width,
+            };
+          }}>
           <span data-spend-pop={taskId}>
             <span className="pop-title">{t("taskSpend.title")}</span>
-            <SpendLines summary={summary} />
+            <SpendLines summary={summary} accountDetails />
           </span>
         </TooltipBubble>
       ) : null}
