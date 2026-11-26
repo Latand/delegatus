@@ -1,5 +1,5 @@
 import { requesterCodeMatch, redactRequesterCodes } from "./requesterEnrolment";
-import { answerDmTask, dmTaskTrigger } from "./dmTask";
+import { answerDmTask, dmTaskTrigger, recoverPendingDmTaskDeliveries } from "./dmTask";
 import { safeRelayHttpReason } from "./httpDiagnostics";
 import { checkProviderOpens } from "./providerOpens";
 import { deliverOwnerLateAnswer } from "./ownerLateDelivery";
@@ -292,6 +292,9 @@ export async function runClaimedRequest(
   if (requestClaim.kind === "duplicate") return null;
   if (requestClaim.kind === "terminal")
     return requestClaim.completion ? { ...requestClaim.completion, lease_id: leaseId } : null;
+  // Pending task directives are an outbox concern, independent of replaying
+  // the Telegram message that originally created each board card.
+  await recoverPendingDmTaskDeliveries().catch(error => console.warn("Relay DM task delivery recovery deferred", error));
   if (recovery) await changeRunAsync(requestId, row => ({ ...row,
     ownerPid: claimOwnerPid, ownerIdentity: claimOwnerIdentity }), ownerRelayStoreDeadline());
   const terminal: { completion: ExternalRelayCompletion | null } = { completion: null };

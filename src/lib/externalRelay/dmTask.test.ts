@@ -44,6 +44,7 @@ let claims: number;
 let directives: StructuredMessageRequest[];
 let completions: ExternalRelayCompletion[];
 let heartbeat: () => void;
+let completionRefusal: 415 | 422 | null;
 let service: Awaited<ReturnType<typeof startTestRelay>>;
 let paired: PairedRelay;
 let startingTasks: BoardTask[];
@@ -82,6 +83,7 @@ beforeEach(async () => {
   directives = [];
   completions = [];
   heartbeat = () => {};
+  completionRefusal = null;
   send = spyOn(structured, "enqueueStructuredMessage").mockImplementation(async message => {
     message.admissionGuard?.();
     directives.push(message);
@@ -94,6 +96,11 @@ beforeEach(async () => {
     }
     if (req.url?.endsWith("/complete")) {
       completions.push(body as ExternalRelayCompletion);
+      if (completionRefusal !== null) {
+        const status = completionRefusal;
+        completionRefusal = null;
+        return { status, body: { error: { code: status === 422 ? "invalid_format" : "unsupported_media_type" } } };
+      }
       return { body: { status: "accepted" } };
     }
     return { status: 404 };
@@ -221,6 +228,57 @@ test("seat delivery retries a temporary refusal with one durable directive ident
   expect(directives[0]?.text).toBe(initial.text);
 });
 
+test("pending owner delivery recovers after restart without Telegram replay and rechecks live authorization", async () => {
+  let first: StructuredMessageRequest | undefined;
+  send.mockImplementation(async message => {
+    first ??= message;
+    return { ok: false, structured: true, status: 503, outcome: "failed", error: "Fixture refusal" };
+  });
+  send.mockImplementationOnce(async message => {
+    first = message;
+    return { ok: false, structured: true, status: 503, outcome: "failed", error: "Fixture refusal" };
+  }).mockImplementationOnce(async message => {
+    first = message;
+    return { ok: false, structured: true, status: 503, outcome: "failed", error: "Fixture refusal" };
+  });
+  const incoming = claim(trusted, "Fix Atlas build output", "durable-pending");
+  expect((await reply(incoming)).text).toContain("unconfirmed");
+  expect(newTasks()).toHaveLength(1);
+  expect(directives).toEqual([]);
+
+  updateRelayStore(store => ({ ...store, relays: [{ ...paired,
+    targets: [{ ...paired.targets[0]!, requesters: { revision: 2, entries: [] } }],
+  }] }));
+  const recoveryOutput = path.join(root, `recovery-${index}.jsonl`);
+  const recoverInNewProcess = async () => {
+    const child = Bun.spawn([process.execPath, "-e", `
+      const { state, output } = await Bun.stdin.json();
+      process.env.LLV_STATE_DIR = state;
+      const { AgentRegistry, setAgentRegistryForTests } = await import("./src/lib/agent/registry");
+      setAgentRegistryForTests(new AgentRegistry(state + "/registry.json"));
+      const { recoverPendingDmTaskDeliveries } = await import("./src/lib/externalRelay/dmTask");
+      await recoverPendingDmTaskDeliveries(async (project, key, text, allowed) => {
+        allowed();
+        await Bun.write(output, JSON.stringify({ project, key, text }) + "\\n");
+        return true;
+      });
+    `], { stdin: new Blob([JSON.stringify({ state: process.env.LLV_STATE_DIR, output: recoveryOutput })]), stdout: "pipe", stderr: "pipe" });
+    const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    if (exit !== 0) throw new Error(`Recovery process exited with ${exit}\n${stdout}\n${stderr}`);
+  };
+  await recoverInNewProcess();
+  expect(fs.existsSync(recoveryOutput)).toBe(false);
+
+  updateRelayStore(store => ({ ...store, relays: [paired] }));
+  await recoverInNewProcess();
+  const recovered = fs.readFileSync(recoveryOutput, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  expect(recovered).toHaveLength(1);
+  expect(recovered[0]).toMatchObject({ project: atlas, key: first?.clientMessageId, text: first?.text });
+  expect(newTasks()).toHaveLength(1);
+  await recoverInNewProcess();
+  expect(fs.readFileSync(recoveryOutput, "utf8").trim().split("\n")).toHaveLength(1);
+});
+
 test("committed delivery resumes after choice expiry with its original directive identity", async () => {
   let originalDirective: StructuredMessageRequest | undefined;
   send.mockImplementationOnce(async message => {
@@ -242,6 +300,33 @@ test("committed delivery resumes after choice expiry with its original directive
   expect(directives).toHaveLength(1);
   expect(directives[0]?.clientMessageId).toBe(originalDirective.clientMessageId);
   expect(directives[0]?.text).toBe(originalDirective.text);
+});
+
+test("an expired callback reconciles an existing board card before expiry and rejects foreign keyboard references", async () => {
+  send.mockImplementationOnce(async () => ({ ok: false, structured: true, status: 503, outcome: "failed", error: "Fixture refusal" }))
+    .mockImplementationOnce(async () => ({ ok: false, structured: true, status: 503, outcome: "failed", error: "Fixture refusal" }));
+  const original = claim(owner, "Fix the build output", "commit-before-receipt");
+  const offered = await reply(original);
+  const selection = button(offered, "Atlas");
+  const chosen = { ...original, request_id: "create-then-interrupt", button_choice: selection };
+  expect((await reply(chosen)).text).toContain("unconfirmed");
+  expect(newTasks()).toHaveLength(1);
+
+  const receipts = path.join(process.env.LLV_STATE_DIR!, "external-relay", "dm-tasks");
+  const receiptFile = fs.readdirSync(receipts).map(name => path.join(receipts, name)).find(file => {
+    try { return JSON.parse(fs.readFileSync(file, "utf8")).phase === "created"; } catch { return false; }
+  });
+  if (!receiptFile) throw new Error("Expected the committed task receipt");
+  const receipt = JSON.parse(fs.readFileSync(receiptFile, "utf8"));
+  fs.writeFileSync(receiptFile, JSON.stringify({ ...receipt, phase: "creating" }));
+  fs.unlinkSync(path.join(process.env.LLV_STATE_DIR!, "external-relay", "dm-task-pending", path.basename(receiptFile)));
+  now = Date.parse(selection.expires_at);
+  const recovered = await reply({ ...chosen, request_id: "expired-replay" });
+  expect(recovered.text).toContain("https://board.example.invalid/#task=");
+  expect(newTasks()).toHaveLength(1);
+  expect(directives).toHaveLength(1);
+  expect((await reply({ ...chosen, request_id: "foreign-keyboard", button_choice: { ...selection, message_id: "foreign" } })).buttons).toEqual([]);
+  expect(directives).toHaveLength(1);
 });
 
 test("a claimed private task consumes live authorization after the heartbeat, with no access for a guest or anonymous author", async () => {
@@ -300,6 +385,41 @@ test("an explicit Ukrainian task directive creates one project card and owner di
   expect(explicitAnswer.buttons?.[0]?.[0]?.url).toContain("#task=");
   expect(newTasks()).toMatchObject([{ project: atlas }]);
   expect(directives).toHaveLength(1);
+});
+
+test("polite explicit task wording enters the claim handler while status requests remain ordinary relay input", async () => {
+  const status = claim(owner, "Update us on Atlas", "status-question");
+  const explicit = claim(owner, "Could you create a task for Atlas to fix the build?", "polite-task");
+  expect(dmTaskTrigger(requestSchema.parse(status))).toBeNull();
+  expect(dmTaskTrigger(requestSchema.parse(explicit))?.text).toBe("Could you create a task for Atlas to fix the build?");
+  const result = await reply(explicit);
+  expect(result.buttons?.[0]?.[0]?.url).toContain("#task=");
+  expect(newTasks()).toMatchObject([{ project: atlas, status: "assigned" }]);
+  expect(directives).toHaveLength(1);
+});
+
+for (const refusal of [null, 415, 422] as const) test(`the card URL survives tight limits${refusal ? ` after HTTP ${refusal}` : " without URL buttons"}`, async () => {
+  const request = claim(owner, "Fix Atlas build output", `tight-url-${refusal}`);
+  request.answer.max_chars = 75;
+  request.input.format = { ...request.input.format!, formats: { ...request.input.format!.formats, plain: 75 },
+    buttons: { ...request.input.format!.buttons, allowed: refusal !== null } };
+  if (refusal !== null) completionRefusal = refusal;
+  const answer = await reply(request);
+  const link = `${publicAddress}/#task=${newTasks()[0]!.id}`;
+  expect(answer.text).toBe(link);
+  expect(answer.text).toContain("board.example.invalid/#task=");
+  expect(answer.buttons).toEqual([]);
+  expect(newTasks()).toHaveLength(1);
+});
+
+for (const refusal of [415, 422] as const) test(`project clarification keeps resend guidance after HTTP ${refusal} keyboard downgrade`, async () => {
+  completionRefusal = refusal;
+  const answer = await reply(claim(owner, "Fix the build output", `choice-downgrade-${refusal}`));
+  expect(answer.text).toContain("Which project should receive this task?");
+  expect(answer.text).toContain("Please resend the full request with the project name.");
+  expect(answer.choice_buttons).toBeUndefined();
+  expect(newTasks()).toEqual([]);
+  expect(directives).toEqual([]);
 });
 
 test("legacy, group, guest and ordinary chat claims keep the existing path, and unnegotiated ambiguity asks in plain text", async () => {
