@@ -32,7 +32,18 @@ import { gateSandboxOwnerEnded, LOCAL_GATE_SANDBOX_NAME } from "../../scripts/ga
  *   `llv-spawn-sandbox` (every agent's config root, kept
  *   on purpose so a resumed agent finds its own), `llv-tmux-cwd` and the
  *   `llv-gate` admission slots are never
- *   candidates. A name Delegatus did not choose is never touched, however old.
+ *   candidates. A name Delegatus did not choose is never touched under these
+ *   rules, however old.
+ * - **Strays, on proof.** Agents' own tools name their `/tmp` and `/var/tmp`
+ *   trees themselves (a reviewer's `mktemp -d`), so a separate class covers a
+ *   direct child of those two roots of any name: owned by this service's uid,
+ *   private mode, every write in its tree older than 12 h
+ *   (`LLV_TEMP_STRAY_MAX_AGE_HOURS`), no reference from any process in any
+ *   mount namespace, including through a bind mount, no socket inside, and not
+ *   on the keep-list of system, session and harness entries
+ *   (`isStrayTempName`). A tree a Delegatus agent was seen using is recorded by
+ *   inode in `temp-provenance.json` and goes first. Removals use the same
+ *   journaled trash, and each journal line carries its proof.
  * - **Only direct children of the temp roots it uses**: `/tmp`, `/var/tmp`,
  *   this process's temp dir and the Viewer's `scratch` directory. Never a root
  *   itself, never a symlink, never a directory another user owns.
@@ -97,6 +108,65 @@ export function isOwnedTempName(name: string): boolean {
 /** Shared agent state consumes owned space while remaining protected from cleanup. */
 export function isOwnedTempConsumerName(name: string): boolean {
   return KEPT_OWNED_NAMES.has(name) || isOwnedTempName(name);
+}
+
+/** Stray candidates: a direct child of `/tmp` or `/var/tmp` that no
+ * Delegatus name claims. Agents' own tools (`mktemp -d` from a reviewer, a
+ * verifier, a fixer) pick their own names, so ownership cannot come from the
+ * name. A stray is removed on proof instead: this service's uid owns it, its
+ * mode admits no other user, nothing in its tree was written for
+ * {@link DEFAULT_STRAY_SWEEP_MAX_AGE_HOURS} hours, no process in any mount
+ * namespace references it (cwd, open file, mapped file, argument, or a path
+ * that reaches it through a bind mount), it holds no socket, no Git checkout
+ * and no pin, and its name is not on the keep-list of system and harness
+ * entries below. */
+export const DEFAULT_STRAY_SWEEP_MAX_AGE_HOURS = 12;
+/** Stray directories one sweep may remove; the rest wait for the next pass. */
+export const MAX_STRAY_REMOVALS_PER_SWEEP = 200;
+/** Entries that are never strays, whatever their age: system and session
+ * runtime directories, the Claude Code harness root, and every hidden entry
+ * (X sockets, this sweep's own trash and journals). */
+const STRAY_KEEP_PATTERNS: readonly RegExp[] = [
+  /^systemd-private-/, /^\./, /^tmux-/, /^ssh-/, /^claude-\d+$/, /^snap-private-tmp$/,
+];
+
+export type StrayTempPolicy = { maxAgeMs: number; keep: readonly string[];
+  /** Test seam: the roots treated as `/tmp` and `/var/tmp`. */
+  roots?: readonly string[] };
+
+/** The stray policy, or null when the operator turned it off with
+ * `LLV_TEMP_STRAY_MAX_AGE_HOURS=0`. `LLV_TEMP_STRAY_KEEP` adds comma-separated
+ * name prefixes to the keep-list. */
+export function strayTempPolicy(env: Readonly<Record<string, string | undefined>> = process.env): StrayTempPolicy | null {
+  const raw = env.LLV_TEMP_STRAY_MAX_AGE_HOURS;
+  let hours = DEFAULT_STRAY_SWEEP_MAX_AGE_HOURS;
+  if (raw !== undefined && raw.trim() !== "") {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 0) console.warn(`[temp sweep] LLV_TEMP_STRAY_MAX_AGE_HOURS is not a duration; using ${DEFAULT_STRAY_SWEEP_MAX_AGE_HOURS}h`);
+    else if (parsed === 0) return null;
+    else {
+      if (parsed < 1) console.warn("[temp sweep] minimum stray age is 1h; using 1h");
+      hours = Math.max(1, parsed);
+    }
+  }
+  const keep = (env.LLV_TEMP_STRAY_KEEP ?? "").split(",").map(prefix => prefix.trim()).filter(Boolean);
+  return { maxAgeMs: hours * HOUR_MS, keep };
+}
+
+/** Whether a direct child of a stray root may be considered at all. Owned
+ * names keep their own rules and their own 24 h floor. */
+export function isStrayTempName(name: string, keep: readonly string[] = []): boolean {
+  if (!name || isOwnedTempConsumerName(name) || detachedTempOwner(name)) return false;
+  if (STRAY_KEEP_PATTERNS.some(pattern => pattern.test(name))) return false;
+  return !keep.some(prefix => name.startsWith(prefix));
+}
+
+/** `/tmp` and `/var/tmp` as the namespace that owns them names them. Tests
+    name their own isolated roots instead; production passes none. */
+function isStrayRoot(root: TempSweepRoot, strayRoots?: readonly string[]): boolean {
+  if (strayRoots) return strayRoots.includes(root.path);
+  if (root.path === "/tmp" || root.path === "/var/tmp") return true;
+  return !root.via && [realDirectory("/tmp"), realDirectory("/var/tmp")].includes(root.path);
 }
 
 /** The staleness threshold, or null when the operator turned the sweep off
@@ -326,7 +396,7 @@ function inside(candidate: string, directory: string): boolean {
 }
 
 type OwnerHold = "agent-owner-unverified" | "gate-owner-unverified" | "conversation_reference";
-type ReferenceHold = OwnerHold | "process_reference" | "process-scan-unverified";
+type ReferenceHold = OwnerHold | "process_reference" | "process-scan-unverified" | "container_reference";
 
 /** Include flag values and path arguments inside a shell command, alongside
  * the paths the existing process scan collects from cwd and open descriptors. */
@@ -344,7 +414,163 @@ function processUsesTemp(proc: ScannedProcess, holds: (file: string) => boolean)
   }) ?? false;
 }
 
-export type TempSweepRemoval = { path: string; via: string; bytes: number; ageHours: number };
+type MountRow = { device: string; root: string; point: string };
+
+function unescapeMountField(field: string): string {
+  return field.replace(/\\([0-7]{3})/g, (_, octal: string) => String.fromCharCode(parseInt(octal, 8)));
+}
+
+function readMountRows(file: string, read: (file: string) => string): MountRow[] | null {
+  let text: string;
+  try { text = read(file); } catch { return null; }
+  return text.split("\n").flatMap(line => {
+    const fields = line.split(" ");
+    return fields.length > 4 ? [{ device: fields[2]!, root: unescapeMountField(fields[3]!), point: unescapeMountField(fields[4]!) }] : [];
+  });
+}
+
+/** The places a directory is visible in each mount namespace a scanned
+ * process lives in, and whether such a process references one of them.
+ *
+ * A container that bind-mounts `/tmp/x` (or a subdirectory of it) at `/work`
+ * reaches the tree through a path that names nothing under `/tmp`, so a
+ * string comparison with the process's cwd, open files and arguments misses
+ * it. Mountinfo names each mount's device and the path of its root inside that
+ * filesystem, which turns the candidate into one filesystem-relative path:
+ *
+ * - a mount whose root lies inside the candidate exposes part of it at the
+ *   mount point, so a reference under that point holds the candidate;
+ * - a mount whose root encloses the candidate (a container that mounts all of
+ *   `$HOME` or `/tmp`) exposes it at the translated path, and only a reference
+ *   under that translated path holds it. The ancestor mount alone holds
+ *   nothing, or every root under a mounted home would stay forever.
+ *
+ * A namespace whose mountinfo cannot be read adds nothing beyond the direct
+ * path checks every caller already runs. Shared by owned, detached-agent and
+ * stray candidates, at inspection and again on the quarantined tree. */
+export function aliasedReferenceHold(candidate: string, via: string, scan: ProcessScan, procRoot = "/proc",
+  read: (file: string) => string = file => fs.readFileSync(file, "utf8")): boolean {
+  const own = readMountRows(via ? path.join(via, "..", "mountinfo") : path.join(procRoot, "self", "mountinfo"), read);
+  if (!own) return false;
+  // `inside` cannot see that every absolute path lies under "/".
+  const under = (candidate: string, directory: string) => directory === "/" ? candidate.startsWith("/") : inside(candidate, directory);
+  let mount: MountRow | undefined;
+  for (const row of own) if (under(candidate, row.point) && (!mount || row.point.length >= mount.point.length)) mount = row;
+  if (!mount) return false;
+  const physical = path.join(mount.root, path.relative(mount.point, candidate));
+  const byNamespace = new Map<string, ScannedProcess[]>();
+  for (const proc of scan.processes) {
+    if (!proc.namespace || (!proc.paths.length && !proc.references?.length)) continue;
+    const list = byNamespace.get(proc.namespace) ?? [];
+    list.push(proc);
+    byNamespace.set(proc.namespace, list);
+  }
+  for (const processes of byNamespace.values()) {
+    let rows: MountRow[] | null = null;
+    for (const proc of processes) if ((rows = readMountRows(path.join(procRoot, String(proc.pid), "mountinfo"), read))) break;
+    if (!rows) continue;
+    const destinations: string[] = [];
+    for (const row of rows) {
+      if (row.device !== mount.device) continue;
+      if (under(row.root, physical)) destinations.push(row.point);
+      else if (under(physical, row.root)) destinations.push(path.join(row.point, path.relative(row.root, physical)));
+    }
+    if (!destinations.length) continue;
+    const reaches = (file: string) => {
+      const resolved = path.resolve(file.replace(/ \(deleted\)$/, ""));
+      return destinations.some(destination => under(resolved, destination));
+    };
+    if (processes.some(proc => processUsesTemp(proc, reaches))) return true;
+  }
+  return false;
+}
+
+/** A directory's identity for the provenance ledger. Inode numbers are reused
+ * as soon as a tree is removed, so the birth time joins them where the
+ * filesystem records one. */
+export function provenanceIdentity(stat: fs.Stats): string {
+  return `${stat.dev}:${stat.ino}${stat.birthtimeMs > 0 ? `:${Math.floor(stat.birthtimeMs * 1000)}` : ""}`;
+}
+
+/** One agent process seen using a stray candidate: the record that lets a
+ * later pass name the tree an agent's, by identity, after the agent is gone. */
+export type TempProvenanceRow = {
+  root: string; namespace: string | null; name: string; identity: string;
+  firstSeenAt: string; lastSeenAt: string; evidence: "cwd" | "reference";
+};
+const PROVENANCE_ROW_LIMIT = 4000;
+
+/** Rows for the direct children of stray roots that stamped (Delegatus
+ * launched) processes use right now. Pure apart from the `lstat` that pins
+ * each row to the inode it saw. */
+export function observeTempProvenance(scan: ProcessScan, roots: readonly TempSweepRoot[], at: string,
+  options: { uid?: number | null; keep?: readonly string[]; strayRoots?: readonly string[] } = {}): TempProvenanceRow[] {
+  const rows = new Map<string, TempProvenanceRow>();
+  for (const root of roots) {
+    if (!isStrayRoot(root, options.strayRoots)) continue;
+    const namespace = root.anchor?.namespace ?? scan.ownNamespace;
+    for (const proc of scan.processes) {
+      if (!proc.stamped || (proc.namespace ?? null) !== (namespace ?? null)) continue;
+      const names = new Map<string, TempProvenanceRow["evidence"]>();
+      processUsesTemp(proc, file => {
+        const resolved = path.resolve(file.replace(/ \(deleted\)$/, ""));
+        if (!resolved.startsWith(root.path + path.sep)) return false;
+        const name = resolved.slice(root.path.length + 1).split(path.sep)[0]!;
+        if (isStrayTempName(name, options.keep)) {
+          const evidence = proc.cwd && inside(path.resolve(proc.cwd), path.join(root.path, name)) ? "cwd" : "reference";
+          if (names.get(name) !== "cwd") names.set(name, evidence);
+        }
+        return false;
+      });
+      for (const [name, evidence] of names) {
+        let stat: fs.Stats;
+        try { stat = fs.lstatSync(path.join(root.via + root.path, name)); } catch { continue; }
+        if (!stat.isDirectory() || (options.uid != null && stat.uid !== options.uid)) continue;
+        const identity = provenanceIdentity(stat);
+        const key = `${namespace}|${root.path}|${name}|${identity}`;
+        const prior = rows.get(key);
+        rows.set(key, { root: root.path, namespace: namespace ?? null, name, identity, firstSeenAt: at, lastSeenAt: at,
+          evidence: prior?.evidence === "cwd" ? "cwd" : evidence });
+      }
+    }
+  }
+  return [...rows.values()];
+}
+
+/** Merge observations into the durable ledger: newest last-seen first, bounded. */
+export function mergeTempProvenance(prior: readonly TempProvenanceRow[], observed: readonly TempProvenanceRow[]): TempProvenanceRow[] {
+  const key = (row: TempProvenanceRow) => `${row.namespace}|${row.root}|${row.name}|${row.identity}`;
+  const merged = new Map(prior.map(row => [key(row), row]));
+  for (const row of observed) {
+    const existing = merged.get(key(row));
+    merged.set(key(row), existing ? { ...existing, lastSeenAt: row.lastSeenAt, evidence: existing.evidence === "cwd" ? "cwd" : row.evidence } : row);
+  }
+  return [...merged.values()].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt)).slice(0, PROVENANCE_ROW_LIMIT);
+}
+
+export function readTempProvenance(file: string): TempProvenanceRow[] {
+  try {
+    const rows = JSON.parse(fs.readFileSync(file, "utf8"));
+    return Array.isArray(rows) ? rows.filter((row): row is TempProvenanceRow => !!row && typeof row.root === "string"
+      && typeof row.name === "string" && typeof row.identity === "string" && typeof row.lastSeenAt === "string"
+      && typeof row.firstSeenAt === "string" && (row.evidence === "cwd" || row.evidence === "reference")) : [];
+  } catch { return []; }
+}
+
+/** What made a removed directory removable, written with every removal. */
+export type TempSweepProof = {
+  newestWriteAt: string; entries: number; uid: number | null; mode: string; identity: string;
+  processes: number; namespaces: number;
+  ledger?: Pick<TempProvenanceRow, "firstSeenAt" | "lastSeenAt" | "evidence">;
+};
+
+export type TempSweepRemoval = { path: string; via: string; bytes: number; ageHours: number;
+  /** Absent for owned names. */
+  kind?: "stray";
+  /** `agent-ledger` when a recorded agent process used this exact inode;
+      otherwise the age, liveness, uid and keep-list proof stood alone. */
+  provenance?: "agent-ledger" | "age-liveness";
+  proof?: TempSweepProof };
 
 export type TempSweepReport = {
   failed?: boolean;
@@ -362,7 +588,9 @@ export type TempSweepReport = {
   /** Allocations retained under each guard; absent in older report versions. */
   keptBytes?: TempSweepReport["kept"];
   /** The reason specific directories remain protected. */
-  held?: { path: string; via: string; reason: TreeHold | ReferenceHold | "pinned" | "attempt-owner-unlisted"; bytes: number }[];
+  held?: { path: string; via: string; reason: TreeHold | ReferenceHold | "pinned" | "attempt-owner-unlisted" | "shared-access"; bytes: number }[];
+  /** The prefix-independent pass over `/tmp` and `/var/tmp`; absent when it is off. */
+  stray?: { maxAgeHours: number; removed: number; removedBytes: number; agentLedger: number; deferred: number };
   errors: string[];
 };
 
@@ -405,9 +633,13 @@ export type TempSweepOptions = {
   /** Recovered roots keep their original journal until expired authority admits replay. */
   keepRefusedTrash?: boolean;
   measure?: (directory: string) => Promise<number>;
+  /** Consider directories of any name in `/tmp` and `/var/tmp` on the stray
+      proof. `provenance` is the durable agent ledger; a row whose inode
+      matches orders that tree first and names it in the removal journal. */
+  stray?: StrayTempPolicy & { maxRemovals?: number; provenance?: readonly TempProvenanceRow[] };
 };
 
-export type TreeHold = "git-checkout" | "unreadable-tree" | "entry-limit" | "mount-boundary" | "changed-during-inspection" | "evidence";
+export type TreeHold = "git-checkout" | "unreadable-tree" | "entry-limit" | "mount-boundary" | "changed-during-inspection" | "evidence" | "socket";
 export type TreeInspection = { newestMs: number; entries: number; hold: TreeHold | null };
 
 /** Read mount boundaries in the namespace that owns the path. Failure holds the candidate. */
@@ -430,6 +662,9 @@ export function inspectTree(directory: string, options: {
   preserveEvidence?: boolean;
   /** A quarantine rename may refresh only this directory's ctime. */
   ignoreRootCtime?: boolean;
+  /** Hold a tree holding a Unix socket: a listener keeps its socket open as a
+      descriptor that names no path, and its file's times never move. */
+  sockets?: boolean;
   stat?: (file: string) => fs.Stats;
 } = {}): TreeInspection {
   const result: TreeInspection = { newestMs: 0, entries: 0, hold: null };
@@ -444,6 +679,7 @@ export function inspectTree(directory: string, options: {
       const own = stat(current);
       if (++result.entries > (options.limit ?? TREE_INSPECTION_ENTRY_LIMIT)) return { ...result, hold: "entry-limit" };
       if (own.dev !== root.dev) return { ...result, hold: "mount-boundary" };
+      if (options.sockets && own.isSocket()) return { ...result, hold: "socket" };
       result.newestMs = Math.max(result.newestMs, own.mtimeMs,
         !(options.ignoreRootCtime && current === directory) && (own.isDirectory() || own.isFile() && own.nlink === 1) ? own.ctimeMs : 0);
       if (result.newestMs > (options.threshold ?? Infinity)) return result;
@@ -482,6 +718,9 @@ export async function removeTreeViaTrash(directory: string, options: {
   validate?: (trash: string) => boolean;
   dispatch?: (trash: string) => boolean;
   disposable?: boolean;
+  /** Marks the intent as a stray's, so an interrupted removal is replayed
+      under the stray proof rather than refused for its unowned name. */
+  stray?: boolean;
 }): Promise<boolean> {
   const trash = path.join(path.dirname(directory), `.delegatus-trash-${path.basename(directory)}-${randomUUID()}`);
   const original = fs.lstatSync(directory);
@@ -490,7 +729,7 @@ export async function removeTreeViaTrash(directory: string, options: {
   const uid = original.uid;
   const identity = `${original.dev}:${original.ino}`;
   const snapshot = options.disposable ? null : snapshotTree(directory);
-  writeJsonDurably(options.journal, { directory, trash, uid, identity, snapshot, ...(options.disposable ? { disposable: true } : {}), ...(options.context ? { context: options.context } : {}) });
+  writeJsonDurably(options.journal, { directory, trash, uid, identity, snapshot, ...(options.disposable ? { disposable: true } : {}), ...(options.stray ? { stray: true } : {}), ...(options.context ? { context: options.context } : {}) });
   fs.renameSync(directory, trash);
   const moved = fs.lstatSync(trash);
   let holdError: unknown;
@@ -789,21 +1028,53 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     held: [],
     errors: [],
   };
+  const strayRootSafety = new Map<TempSweepRoot, boolean>();
+  /** A stray root must be the directory itself: never a link, so a removal
+      can never land behind a redirected parent. */
+  const strayCandidate = (root: TempSweepRoot, name: string) => {
+    if (!options.stray || options.onlyDirectories || root.path === options.scratchRoot || !isStrayRoot(root, options.stray.roots)
+      || !isStrayTempName(name, options.stray.keep)) return false;
+    let safe = strayRootSafety.get(root);
+    if (safe === undefined) {
+      try { const stat = fs.lstatSync(root.via + root.path); safe = stat.isDirectory() && !stat.isSymbolicLink(); }
+      catch { safe = false; }
+      strayRootSafety.set(root, safe);
+    }
+    return safe;
+  };
+  const maxAgeFor = (root: TempSweepRoot, candidate: string) => strayCandidate(root, path.basename(candidate))
+    ? options.stray!.maxAgeMs : options.maxAgeMs;
   const inspect = (reachable: string, root: TempSweepRoot, candidate: string, afterQuarantine = false) => {
-    try { return (options.inspect ?? inspectTree)(reachable, { threshold: (options.now?.() ?? Date.now()) - options.maxAgeMs,
+    const stray = strayCandidate(root, path.basename(candidate));
+    // Agents keep evidence under their evidence directory; a stray tree's
+    // media files (a dependency's icons, a scratch screenshot) are not that.
+    try { return (options.inspect ?? inspectTree)(reachable, { threshold: (options.now?.() ?? Date.now()) - maxAgeFor(root, candidate),
       mounts: (options.mountPoints ?? mountPointsUnder)(candidate, root.via), ignoreRootCtime: afterQuarantine,
-      preserveEvidence: !options.disposable }); }
+      preserveEvidence: !options.disposable && !stray, ...(stray ? { sockets: true } : {}) }); }
     catch (error) {
       report.errors.push(`${candidate}: inspection failed: ${String(error)}`);
       return { newestMs: 0, entries: 0, hold: "unreadable-tree" as const };
     }
+  };
+  /* Every reference check resolves each scanned path's links, and a process
+     table holds tens of thousands of them (mapped libraries, environment
+     paths). Outside the swept roots a path's resolution is memoized for this
+     sweep; inside them it is always read again, because that is where a tree
+     is renamed, replaced or linked while the sweep runs. */
+  const physicalCache = new Map<string, string>();
+  const sweptPrefixes = roots.map(root => root.via + root.path);
+  const physicalOf = (file: string) => {
+    if (sweptPrefixes.some(prefix => inside(file, prefix))) return resolvePhysicalPath(file);
+    let resolved = physicalCache.get(file);
+    if (resolved === undefined) { resolved = resolvePhysicalPath(file); if (physicalCache.size < 200_000) physicalCache.set(file, resolved); }
+    return resolved;
   };
   const pathHolds = (root: TempSweepRoot, ...directories: string[]) => {
     const physical = directories.map(directory => resolvePhysicalPath(root.via + directory));
     return (file: string) => {
       const resolved = path.resolve(file.replace(/ \(deleted\)$/, ""));
       return directories.some(directory => inside(resolved, directory))
-        || physical.some(directory => inside(resolvePhysicalPath(root.via + resolved), directory));
+        || physical.some(directory => inside(physicalOf(root.via + resolved), directory));
     };
   };
   const conversationHolds = (candidate: string, via = "") => (options.conversationCwds?.() ?? options.conversationProtection?.().held ?? []).some(entry =>
@@ -819,6 +1090,8 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     if (observed.unverified) return "process-scan-unverified";
     const protection = options.conversationProtection?.();
     if ((protection?.held ?? options.conversationCwds?.() ?? []).some(holds)) return "conversation_reference";
+    if (aliasedReferenceHold(original, root.via, observed, procRoot)
+      || (current !== original && aliasedReferenceHold(current, root.via, observed, procRoot))) return "container_reference";
     if (kind === "agent") {
       const originalHolds = pathHolds(root, original);
       const stat = fs.lstatSync(reachable);
@@ -839,8 +1112,27 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     return gateSandboxOwnerEnded(reachable, original, root.via, journal => processHolds(pathHolds(root, journal)))
       ? null : "gate-owner-unverified";
   };
+  /** The stray liveness proof: every process in every scanned namespace, its
+      cwd, open and mapped files, environment paths and arguments, directly
+      or through a bind mount; then the registry's live conversations. */
+  const strayHold = (root: TempSweepRoot, original: string, reachable: string, observed: ProcessScan): ReferenceHold | null => {
+    const current = root.via ? reachable.slice(root.via.length) : reachable;
+    const holds = pathHolds(root, original, current);
+    if (observed.processes.some(proc => processUsesTemp(proc, holds))) return "process_reference";
+    if (observed.unverified) return "process-scan-unverified";
+    const protection = options.conversationProtection?.();
+    if ((protection?.held ?? options.conversationCwds?.() ?? []).some(holds)) return "conversation_reference";
+    if (aliasedReferenceHold(original, root.via, observed, procRoot)
+      || (current !== original && aliasedReferenceHold(current, root.via, observed, procRoot))) return "container_reference";
+    return null;
+  };
   const trashHolds = (root: TempSweepRoot, trash: string, original: string, bytes = 0) => {
     if (!namespaceStill(root.anchor, procRoot)) return true;
+    if (strayCandidate(root, path.basename(original))) {
+      const hold = strayHold(root, original, trash, readScan());
+      if (hold) report.held!.push({ path: original, via: root.via, reason: hold, bytes });
+      return !!hold;
+    }
     const owner = detachedOwner(root, path.basename(original));
     if (owner) {
       const hold = detachedHold(owner, root, original, trash, readScan());
@@ -850,9 +1142,14 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     if (conversationHolds(trash, root.via)) return true;
     const physical = resolvePhysicalPath(trash);
     const canonical = root.via && trash.startsWith(root.via) ? trash.slice(root.via.length) : trash;
-    const processReferenced = readScan().processes.some(proc => proc.paths.some(entry => inside(path.resolve(entry), canonical)
+    const observed = readScan();
+    const processReferenced = observed.processes.some(proc => proc.paths.some(entry => inside(path.resolve(entry), canonical)
       || inside(resolvePhysicalPath(root.via + entry), physical)));
     if (processReferenced) report.held!.push({ path: original, via: root.via, reason: "process_reference", bytes });
+    else if (aliasedReferenceHold(original, root.via, observed, procRoot) || aliasedReferenceHold(canonical, root.via, observed, procRoot)) {
+      report.held!.push({ path: original, via: root.via, reason: "container_reference", bytes });
+      return true;
+    }
     return processReferenced;
   };
   const pinned = (directory: string) => {
@@ -866,7 +1163,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     if (detachedOwner(root, path.basename(original)) && (fs.lstatSync(trash).mode & 0o077) !== 0) return true;
     const inspection = inspect(trash, root, original, true);
     const protectedTrees = [...readWorktrees(), ...accounted].map(entry => path.resolve(entry));
-    return !!pinned(trash) || !!inspection.hold || (options.now?.() ?? Date.now()) - inspection.newestMs < options.maxAgeMs
+    return !!pinned(trash) || !!inspection.hold || (options.now?.() ?? Date.now()) - inspection.newestMs < maxAgeFor(root, original)
       || protectedTrees.some(entry => inside(entry, original) || inside(original, entry));
   };
   const trashJournal = (root: TempSweepRoot, candidate: string) => options.onlyDirectories
@@ -881,7 +1178,12 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       return 0;
     }
   };
-  const candidates: { root: TempSweepRoot; candidate: string; modified: number }[] = [];
+  const candidates: { root: TempSweepRoot; candidate: string; modified: number; stray: boolean; ledger?: TempProvenanceRow }[] = [];
+  if (options.stray) report.stray = { maxAgeHours: options.stray.maxAgeMs / HOUR_MS, removed: 0, removedBytes: 0, agentLedger: 0, deferred: 0 };
+  const strayMaxRemovals = options.stray?.maxRemovals ?? MAX_STRAY_REMOVALS_PER_SWEEP;
+  const ledgerRow = (root: TempSweepRoot, name: string, identity: string) => options.stray?.provenance?.find(row =>
+    row.root === root.path && row.name === name && row.identity === identity
+    && (row.namespace ?? null) === (root.anchor?.namespace ?? scan.ownNamespace ?? null));
   for (const root of roots) {
     if (!namespaceStill(root.anchor, procRoot)) {
       report.errors.push(`${root.path} (via ${root.via}): namespace is unavailable; skipped`);
@@ -906,7 +1208,8 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         if (options.onlyDirectories && !options.onlyDirectories.includes(row.directory)) continue;
         if (options.eligible && !await options.eligible(row.trash)) continue;
         if (path.dirname(row.directory) !== root.via + root.path
-          || !(isOwnedTempName(path.basename(row.directory)) || detachedOwner(root, path.basename(row.directory)))) continue;
+          || !(isOwnedTempName(path.basename(row.directory)) || detachedOwner(root, path.basename(row.directory))
+            || (row.stray === true && strayCandidate(root, path.basename(row.directory))))) continue;
         const original = path.resolve(row.directory);
         const candidate = path.join(root.path, path.basename(original));
         const owner = detachedOwner(root, path.basename(candidate));
@@ -917,12 +1220,17 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
       } catch (error) { report.errors.push(String(error)); }
     }
     for (const name of names.sort()) {
-      if (!isOwnedTempName(name) && !detachedOwner(root, name)) continue;
+      const stray = !isOwnedTempName(name) && !detachedOwner(root, name) && strayCandidate(root, name);
+      if (!isOwnedTempName(name) && !detachedOwner(root, name) && !stray) continue;
       if (options.onlyDirectories && !options.onlyDirectories.includes(path.join(root.path, name))) continue;
       const candidate = path.join(root.path, name);
-      let modified: number;
-      try { modified = fs.lstatSync(root.via + candidate).mtimeMs; } catch { continue; }
-      candidates.push({ root, candidate, modified });
+      let modified: number, ledger: TempProvenanceRow | undefined;
+      try {
+        const stat = fs.lstatSync(root.via + candidate);
+        modified = stat.mtimeMs;
+        if (stray) ledger = ledgerRow(root, name, provenanceIdentity(stat));
+      } catch { continue; }
+      candidates.push({ root, candidate, modified, stray, ...(ledger ? { ledger } : {}) });
     }
   }
   // Retained checkouts own their shared file allocations. Seed only hard-link
@@ -938,7 +1246,10 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     }
   }
   // Nested owned roots receive their own allocations before a parent walk.
-  for (const { root, candidate } of candidates.sort((a, b) => b.candidate.split(path.sep).length - a.candidate.split(path.sep).length
+  // Strays come after owned names; among strays, trees an agent was recorded
+  // using come first, then the oldest.
+  for (const { root, candidate, stray, ledger } of candidates.sort((a, b) => b.candidate.split(path.sep).length - a.candidate.split(path.sep).length
+    || Number(a.stray) - Number(b.stray) || Number(!a.ledger) - Number(!b.ledger)
     || a.modified - b.modified || a.candidate.localeCompare(b.candidate))) {
     try {
       if (!namespaceStill(root.anchor, procRoot)) {
@@ -955,6 +1266,9 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         continue;
       }
       if (!stat.isDirectory() || (uid !== null && stat.uid !== uid)) continue;
+      // A stray needs this service's uid by number: without one there is no
+      // ownership proof, so nothing of an unknown owner is ever a stray.
+      if (stray && uid === null) continue;
       const owner = detachedOwner(root, path.basename(candidate));
       if (owner && (uid === null || (stat.mode & 0o077) !== 0)) continue;
       const identity = `${stat.dev}:${stat.ino}`;
@@ -995,6 +1309,13 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
           continue;
         }
       }
+      // A process of another user is invisible to this scan, and a mode that
+      // admits other users lets one work inside. Only a private tree is a stray.
+      if (stray && (stat.mode & 0o077) !== 0) {
+        if (await keep("inUse", 0)) report.held!.push({ path: candidate, via: root.via, reason: "shared-access", bytes: 0 });
+        continue;
+      }
+      const maxAgeMs = stray ? options.stray!.maxAgeMs : options.maxAgeMs;
       const inspection = inspect(reachable, root, candidate);
       const newest = inspection.newestMs;
       const pinned = fs.existsSync(path.join(reachable, ".delegatus-keep")) || (() => { try { fs.lstatSync(path.join(reachable, ".delegatus-keep")); return true; } catch { return false; } })();
@@ -1003,15 +1324,21 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         if (await keep("worktree", bytes)) report.held!.push({ path: candidate, via: root.via, reason: pinned ? "pinned" : inspection.hold!, bytes });
         continue;
       }
-      if (now - newest < options.maxAgeMs) {
+      if (now - newest < maxAgeMs) {
         await keep("young");
         continue;
       }
       const processHolds = (entry: string) => inside(entry, candidate)
         || inside(resolvePhysicalPath(root.via + entry), originalPath);
-      if (!owner && (inUse.some(processHolds) || conversationHolds(reachable, root.via))) {
+      if (stray) {
+        const hold = strayHold(root, candidate, reachable, scan);
+        if (hold) { await keepReference(hold, 0); continue; }
+      } else if (!owner && (inUse.some(processHolds) || conversationHolds(reachable, root.via))) {
         await keep("inUse");
         if (inUse.some(processHolds)) report.held!.push({ path: candidate, via: root.via, reason: "process_reference", bytes: 0 });
+        continue;
+      } else if (!owner && aliasedReferenceHold(candidate, root.via, scan, procRoot)) {
+        await keepReference("container_reference", 0);
         continue;
       }
       const physicallyOverlaps = (entries: readonly string[]) => entries.some(entry => (root.via ? [entry, root.via + entry] : [entry]).some(accessible => {
@@ -1029,7 +1356,8 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         if (await keep("worktree", bytes)) report.held!.push({ path: candidate, via: root.via, reason: hold, bytes });
         continue;
       }
-      if (report.removed.length >= maxRemovals) {
+      if (stray ? report.stray!.removed >= strayMaxRemovals : report.removed.length - (report.stray?.removed ?? 0) >= maxRemovals) {
+        if (stray) report.stray!.deferred++;
         await keep("deferred");
         continue;
       }
@@ -1041,10 +1369,12 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         const bytes = await measure(reachable, seenAllocations, includeRoot, excluded);
         const freshScan = readScan();
         const hold = owner ? detachedHold(owner, root, candidate, reachable, freshScan)
+          : stray ? strayHold(root, candidate, reachable, freshScan)
           : freshScan.processes.some(process => process.paths.some(entry => processHolds(path.resolve(entry)))) ? "process_reference"
-          : conversationHolds(reachable, root.via) ? "conversation_reference" : null;
+          : conversationHolds(reachable, root.via) ? "conversation_reference"
+          : aliasedReferenceHold(candidate, root.via, freshScan, procRoot) ? "container_reference" : null;
         if (hold) {
-          if (owner || hold === "process_reference") await keepReference(hold, bytes);
+          if (owner || stray || hold === "process_reference" || hold === "container_reference") await keepReference(hold, bytes);
           else await keep("inUse", bytes);
           continue;
         }
@@ -1063,7 +1393,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
           if (await keep("worktree", bytes)) report.held!.push({ path: candidate, via: root.via, reason: finalPin ? "pinned" : finalInspection.hold!, bytes });
           continue;
         }
-        if ((options.now?.() ?? Date.now()) - finalInspection.newestMs < options.maxAgeMs) {
+        if ((options.now?.() ?? Date.now()) - finalInspection.newestMs < maxAgeMs) {
           await keep("young", bytes);
           continue;
         }
@@ -1080,11 +1410,24 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
         if (options.eligible && !await options.eligible(reachable)) { await keep("inUse", bytes); continue; }
         if (options.mode !== "dry-run" && !await removeTreeViaTrash(reachable, {
           journal: trashJournal(root, candidate), remove: options.remove, disposable: options.disposable,
+          ...(stray ? { stray: true } : {}),
           held: async trash => (options.eligible && !await options.eligible(trash)) || (!owner && trashHolds(root, trash, candidate, bytes)),
           validate: trash => !trashPolicyHolds(root, trash, path.resolve(candidate)) && (!options.dispatchGuard || options.dispatchGuard(trash)),
           ...(owner ? { dispatch: (trash: string) => !trashHolds(root, trash, candidate, bytes) } : {}),
         })) { await keep("inUse", bytes); continue; }
-        report.removed.push({ path: candidate, via: root.via, bytes, ageHours: Math.round((now - newest) / HOUR_MS) });
+        const removal: TempSweepRemoval = { path: candidate, via: root.via, bytes, ageHours: Math.round((now - newest) / HOUR_MS) };
+        if (stray) {
+          removal.kind = "stray";
+          removal.provenance = ledger ? "agent-ledger" : "age-liveness";
+          removal.proof = { newestWriteAt: new Date(finalInspection.newestMs).toISOString(), entries: finalInspection.entries,
+            uid, mode: (current.mode & 0o7777).toString(8), identity, processes: freshScan.processes.length,
+            namespaces: new Set(freshScan.processes.map(proc => proc.namespace)).size,
+            ...(ledger ? { ledger: { firstSeenAt: ledger.firstSeenAt, lastSeenAt: ledger.lastSeenAt, evidence: ledger.evidence } } : {}) };
+          report.stray!.removed++;
+          report.stray!.removedBytes += bytes;
+          if (ledger) report.stray!.agentLedger++;
+        }
+        report.removed.push(removal);
         report.removedBytes += bytes;
       } catch (error) {
         report.errors.push(`${reachable}: ${(error as Error).message}`);
@@ -1097,6 +1440,31 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
 }
 
 const REPORT_FILE = () => statePath("temp-sweep-report.json");
+const PROVENANCE_FILE = () => statePath("temp-provenance.json");
+
+/** Drop ledger rows whose tree is gone or whose name now holds another inode,
+    for the roots this pass can see; rows of other namespaces stay. */
+export function pruneTempProvenance(rows: readonly TempProvenanceRow[], roots: readonly TempSweepRoot[], ownNamespace: string | null): TempProvenanceRow[] {
+  return rows.filter(row => {
+    const root = roots.find(candidate => candidate.path === row.root
+      && (candidate.anchor?.namespace ?? ownNamespace ?? null) === (row.namespace ?? null));
+    if (!root) return true;
+    try {
+      const stat = fs.lstatSync(path.join(root.via + root.path, row.name));
+      return stat.isDirectory() && provenanceIdentity(stat) === row.identity;
+    } catch (error) { return (error as NodeJS.ErrnoException).code !== "ENOENT"; }
+  });
+}
+
+/** Record which stray trees Delegatus agents are using now. */
+function updateTempProvenance(roots: readonly TempSweepRoot[], policy: StrayTempPolicy, at: string, scan: ProcessScan): TempProvenanceRow[] {
+  const file = PROVENANCE_FILE();
+  const rows = mergeTempProvenance(pruneTempProvenance(readTempProvenance(file), roots, scan.ownNamespace),
+    observeTempProvenance(scan, roots, at, { uid: process.getuid?.() ?? null, keep: policy.keep }));
+  try { writeJsonDurably(file, rows); }
+  catch (error) { console.warn("[temp sweep] provenance ledger not written", error instanceof Error ? error.message : String(error)); }
+  return rows;
+}
 const JOURNAL_FILE = () => statePath("temp-sweep-journal.ndjson");
 
 function readTempSweepReport(): TempSweepReport | null {
@@ -1114,12 +1482,14 @@ export function tempSweepStatus(report: TempSweepReport | null = readTempSweepRe
     heldCounts[hold.reason] = (heldCounts[hold.reason] ?? 0) + 1;
     heldBytes[hold.reason] = (heldBytes[hold.reason] ?? 0) + hold.bytes;
   }
-  const heldFor = ["agent-owner-unverified", "gate-owner-unverified", "conversation_reference", "process-scan-unverified", "process_reference"]
+  const heldFor = ["agent-owner-unverified", "gate-owner-unverified", "conversation_reference", "process-scan-unverified", "process_reference", "container_reference", "shared-access"]
     .some(reason => heldCounts[reason]) ? "by safety checks" : "for Git preservation or tree inspection";
   return {
     at: report.at, ...(report.failed ? { failed: true } : {}), mode: report.mode ?? "on", trashFinished: report.trashFinished ?? 0, removed: report.removed.length, removedBytes: report.removedBytes,
     kept: { ...report.kept }, keptBytes: report.keptBytes ? { ...report.keptBytes } : null, heldCounts, heldBytes, errors: report.errors.length,
-    summary: `[temp sweep] ${report.mode === "dry-run" ? "would remove" : "removed"} ${report.removed.length} directories (${megabytes(report.removedBytes)}); held ${(report.held ?? []).length} ${heldFor}; ${report.errors.length} error(s)`,
+    ...(report.stray ? { stray: { ...report.stray } } : {}),
+    summary: `[temp sweep] ${report.mode === "dry-run" ? "would remove" : "removed"} ${report.removed.length} directories (${megabytes(report.removedBytes)}); held ${(report.held ?? []).length} ${heldFor}; ${report.errors.length} error(s)`
+      + (report.stray ? `; strays older than ${report.stray.maxAgeHours} h in /tmp and /var/tmp: ${report.stray.removed} removed (${megabytes(report.stray.removedBytes)}), ${report.stray.deferred} deferred` : ""),
   };
 }
 
@@ -1177,6 +1547,7 @@ async function sweepFilesResponseResultFiles(mode: "on" | "dry-run", now?: () =>
 export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env, ports: Pick<TempSweepOptions, "roots" | "scan" | "now" | "inspect" | "mountPoints"> = {}): Promise<TempSweepReport | null> {
   const maxAgeMs = tempSweepMaxAgeMs(env);
   const mode = tempSweepMode(env);
+  const strayPolicy = strayTempPolicy(env);
   if (maxAgeMs === null || mode === null) return null;
   await sweepFilesResponseResultFiles(mode, ports.now);
   let checkouts: Awaited<ReturnType<typeof cleanupWorktrees>>;
@@ -1200,7 +1571,12 @@ export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env,
     try { ledger = new (await import("@/lib/runtime/attemptTempRetention")).AttemptTempStore(); }
     catch (error) { console.error("[temp sweep] attempt ledger unavailable", error instanceof Error ? error.message : String(error)); }
     const opened = ledger;
-    try { report = await sweepStaleTempDirs({ maxAgeMs, mode, ...(opened ? { attemptLedger: (directory: string) => opened.has(directory) } : {}), ...ports, roots, scratchRoot: scratch, ...checkouts }); }
+    try {
+      const stray = strayPolicy ? { ...strayPolicy, provenance: updateTempProvenance(roots, strayPolicy,
+        new Date(ports.now?.() ?? Date.now()).toISOString(), ports.scan ?? scanProcesses("/proc", roots.map(root => root.path))) } : undefined;
+      report = await sweepStaleTempDirs({ maxAgeMs, mode, ...(opened ? { attemptLedger: (directory: string) => opened.has(directory) } : {}), ...ports, roots, scratchRoot: scratch, ...checkouts,
+        ...(stray ? { stray } : {}) });
+    }
     finally { opened?.close(); await view.close(); }
   } catch (error) {
     report = { at: new Date(ports.now?.() ?? Date.now()).toISOString(), failed: true, mode,
@@ -1214,7 +1590,8 @@ export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env,
   console.log(
     `[temp sweep] removed ${report.removed.length} stale director${report.removed.length === 1 ? "y" : "ies"} (${megabytes(report.removedBytes)});`
     + ` kept ${young} young, ${inUse} in use, ${worktree} worktree, ${deferred} deferred, ${ledger} owned by the attempt ledger;`
-    + ` ${(report.held ?? []).filter(hold => hold.reason === "attempt-owner-unlisted").length} attempt root(s) outside the ledger; ${report.errors.length} error(s)`,
+    + ` ${(report.held ?? []).filter(hold => hold.reason === "attempt-owner-unlisted").length} attempt root(s) outside the ledger; ${report.errors.length} error(s)`
+    + (report.stray ? `; strays: removed ${report.stray.removed} (${megabytes(report.stray.removedBytes)}, ${report.stray.agentLedger} recorded agent trees), ${report.stray.deferred} deferred` : ""),
   );
   return report;
 }

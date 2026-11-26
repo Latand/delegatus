@@ -51,7 +51,8 @@ for await (const line of lines) {
     }
     if (request.kind === "temp") {
       const report = await runTempSweepInHelper({ ...process.env, LLV_TEMP_SWEEP: request.env?.LLV_TEMP_SWEEP,
-        LLV_TEMP_SWEEP_MAX_AGE_HOURS: request.env?.LLV_TEMP_SWEEP_MAX_AGE_HOURS });
+        LLV_TEMP_SWEEP_MAX_AGE_HOURS: request.env?.LLV_TEMP_SWEEP_MAX_AGE_HOURS,
+        LLV_TEMP_STRAY_MAX_AGE_HOURS: request.env?.LLV_TEMP_STRAY_MAX_AGE_HOURS, LLV_TEMP_STRAY_KEEP: request.env?.LLV_TEMP_STRAY_KEEP });
       process.stdout.write(JSON.stringify({ report }) + "\n");
       continue;
     }

@@ -28,7 +28,7 @@ export function worktreeSweepWorkerLaunch(cwd = process.cwd()): SweepWorkerLaunc
 }
 
 type SweepRequest = { kind: "worktrees"; mode: WorktreeSweepMode }
-  | { kind: "temp"; env: Pick<NodeJS.ProcessEnv, "LLV_TEMP_SWEEP" | "LLV_TEMP_SWEEP_MAX_AGE_HOURS"> }
+  | { kind: "temp"; env: Pick<NodeJS.ProcessEnv, "LLV_TEMP_SWEEP" | "LLV_TEMP_SWEEP_MAX_AGE_HOURS" | "LLV_TEMP_STRAY_MAX_AGE_HOURS" | "LLV_TEMP_STRAY_KEEP"> }
   | { kind: "attempt-temp" }
   | { kind: "attempt-temp-approved"; approval: ApprovedAttemptTempRequest }
   | { kind: "maintenance" }
@@ -185,7 +185,8 @@ export class WorktreeSweepWorker {
     return this.request({ kind: "worktrees", mode }) as Promise<WorktreeSweepReport>;
   }
   temp(env: NodeJS.ProcessEnv = process.env): Promise<TempSweepReport | null> {
-    return this.request({ kind: "temp", env: { LLV_TEMP_SWEEP: env.LLV_TEMP_SWEEP, LLV_TEMP_SWEEP_MAX_AGE_HOURS: env.LLV_TEMP_SWEEP_MAX_AGE_HOURS } }) as Promise<TempSweepReport | null>;
+    return this.request({ kind: "temp", env: { LLV_TEMP_SWEEP: env.LLV_TEMP_SWEEP, LLV_TEMP_SWEEP_MAX_AGE_HOURS: env.LLV_TEMP_SWEEP_MAX_AGE_HOURS,
+      LLV_TEMP_STRAY_MAX_AGE_HOURS: env.LLV_TEMP_STRAY_MAX_AGE_HOURS, LLV_TEMP_STRAY_KEEP: env.LLV_TEMP_STRAY_KEEP } }) as Promise<TempSweepReport | null>;
   }
   attemptTemp(): Promise<SweepResult> {
     if (!this.attemptOnly) {
