@@ -2,7 +2,7 @@ import { readBackgroundTaskLedger, pendingBackgroundTasks } from "@/lib/pipeline
 import fs from "node:fs";
 import path from "node:path";
 import { activityFactsFromRecords } from "@/lib/lifecycle/agentActivityEvidence";
-import { activityProcessReader } from "@/lib/lifecycle/agentActivityProcesses";
+import { activityProcessReader, resourceActivityProcessReader } from "@/lib/lifecycle/agentActivityProcesses";
 import { tailRecordsResult } from "./activity";
 import type { FileEntry, ProjectCatalogEntry } from "../types";
 import { agentRegistry, RegistryReadError, resolveConversationAlias } from "../agent/registry";
@@ -30,7 +30,7 @@ import { agentProcesses, outputHolders, resourceAgentProcesses, resourceOutputHo
 import { goalFor, planFor } from "./plan";
 import { pendingQuestionFor } from "./questions";
 import { pendingWakeupFor } from "./wakeup";
-import { assignTranscriptPids } from "./transcripts";
+import { assignTranscriptPids, assignTranscriptPidsAsync } from "./transcripts";
 import { scanRootEntries } from "./roots";
 import { createTranscriptPathCanonicalizer } from "./transcriptIdentity";
 import { observeCodexSubagentTranscripts } from "../runtime/codexSubagentDetection";
@@ -414,12 +414,13 @@ async function listFilesInternal(
   await forEachEntryYielding(entries, (entry) => {
     applyProcessState(entry, holders);
   });
-  assignTranscriptPids(entries);
-  const activityProcesses = activityProcessReader();
+  if (stagedResourceScope) await assignTranscriptPidsAsync(entries);
+  else assignTranscriptPids(entries);
+  const activityProcesses = stagedResourceScope ? resourceActivityProcessReader() : activityProcessReader();
   // After pid assignment: the claude effort source is the live process argv.
   await forEachEntryBatchYielding(entries, async (entry) => {
     if (entry.agentActivity && entry.proc === "running" && entry.pid !== null) {
-      entry.agentActivity.workProcesses = activityProcesses(entry.pid);
+      entry.agentActivity.workProcesses = await activityProcesses(entry.pid);
       entry.agentActivity.turnStartedAt = entry.lastTurn?.endedAt === null ? entry.lastTurn.startedAt : entry.agentActivity.turnStartedAt;
     }
     entry.effort = entryEffort(entry);

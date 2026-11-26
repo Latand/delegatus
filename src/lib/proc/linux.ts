@@ -96,6 +96,10 @@ function processExited(pid: number): boolean {
   return true;
 }
 
+async function resourceProcessExited(pid: number): Promise<boolean> {
+  return processExited(pid);
+}
+
 /** utime + stime from /proc/<pid>/stat, in milliseconds. USER_HZ is 100 on
     every Linux this runs on, which is what makes the ticks convertible. */
 function processCpuMs(pid: number): number | null {
@@ -196,6 +200,10 @@ function listProcesses(): ProcSnapshotEntry[] {
   return list;
 }
 
+async function resourceListProcesses(): Promise<ProcSnapshotEntry[]> {
+  return listProcesses();
+}
+
 /** The permission bits of a /proc fd symlink encode the open mode
     ("l-wx…" for a writer, "lr-x…" for a reader). */
 function fdWritable(fdPath: string): boolean {
@@ -255,6 +263,10 @@ function scanFdTargetsFor(_paths: string[], visit: (target: string, pid: number,
   scanAllFdTargets(visit);
 }
 
+async function resourceScanFdTargetsFor(paths: string[], visit: (target: string, pid: number, writable: () => boolean) => void): Promise<void> {
+  scanFdTargetsFor(paths, visit);
+}
+
 function pidWritesPath(pid: number, pathname: string): boolean {
   let real: string | null;
   try {
@@ -310,15 +322,18 @@ export const linuxBackend: ProcBackend = {
   processCpuMs,
   readEnvVar,
   listProcesses,
+  resourceListProcesses,
   systemMemory,
   resourceSystemMemory,
   processMemory,
   resourceProcessMemory,
   ppidMap,
   resourcePpidMap,
+  resourceProcessExited,
   scanFdTargetsUnder,
   resourceScanFdTargetsUnder,
   scanFdTargetsFor,
+  resourceScanFdTargetsFor,
   pidWritesPath,
   pidHoldsPath,
 };

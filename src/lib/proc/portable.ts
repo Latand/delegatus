@@ -246,6 +246,11 @@ function processExited(pid: number): boolean {
   return runCapture("ps", ["-o", "stat=", "-p", String(pid)]).trim().startsWith("Z");
 }
 
+async function resourceProcessExited(pid: number): Promise<boolean> {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  return (await runCaptureAsync("ps", ["-o", "stat=", "-p", String(pid)])).trim().startsWith("Z");
+}
+
 /**
  * No per-pid CPU accounting without /proc that does not cost a `ps`
  * subprocess, and this is read per structured host on a controller tick. The
@@ -373,6 +378,12 @@ function scanFdTargetsFor(paths: string[], visit: (target: string, pid: number, 
   parseFdEntries(runCapture("lsof", ["-w", "-Fpfan", "--", ...unique]), visit);
 }
 
+async function resourceScanFdTargetsFor(paths: string[], visit: (target: string, pid: number, writable: () => boolean) => void): Promise<void> {
+  const unique = [...new Set(paths.filter(Boolean))];
+  if (unique.length === 0) return;
+  parseFdEntries(await runCaptureAsync("lsof", ["-w", "-Fpfan", "--", ...unique]), visit);
+}
+
 function pidWritesPath(pid: number, pathname: string): boolean {
   let writes = false;
   parseFdEntries(runCapture("lsof", ["-w", "-a", "-p", String(pid), "-Fpfan", "--", pathname]), (_t, _p, writable) => {
@@ -403,6 +414,7 @@ export const portableBackend: ProcBackend = {
   systemMemory,
   resourceSystemMemory,
   resourceListProcesses,
+  resourceProcessExited,
   resourcePpidMap,
   resourceProcessMemory,
   processMemory,
@@ -410,6 +422,7 @@ export const portableBackend: ProcBackend = {
   scanFdTargetsUnder,
   resourceScanFdTargetsUnder,
   scanFdTargetsFor,
+  resourceScanFdTargetsFor,
   pidWritesPath,
   pidHoldsPath,
 };

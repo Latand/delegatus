@@ -216,6 +216,7 @@ function processIdentity(pid: number): string | null {
 function processExited(): boolean {
   return false;
 }
+async function resourceProcessExited(): Promise<boolean> { return false; }
 
 /**
  * `Win32_Process` already counts user and kernel time per process, so the CPU
@@ -319,6 +320,7 @@ async function resourceProcessMemory(pids: Iterable<number>): Promise<Map<number
 function scanFdTargetsUnder(): void {}
 function scanFdTargetsFor(): void {}
 async function resourceScanFdTargetsUnder(): Promise<void> {}
+async function resourceScanFdTargetsFor(): Promise<void> {}
 function pidWritesPath(): boolean {
   return false;
 }
@@ -340,6 +342,7 @@ export const windowsBackend: ProcBackend = {
   systemMemory,
   resourceSystemMemory,
   resourceListProcesses,
+  resourceProcessExited,
   resourcePpidMap,
   resourceProcessMemory,
   processMemory,
@@ -347,6 +350,7 @@ export const windowsBackend: ProcBackend = {
   scanFdTargetsUnder,
   resourceScanFdTargetsUnder,
   scanFdTargetsFor,
+  resourceScanFdTargetsFor,
   pidWritesPath,
   pidHoldsPath,
 };

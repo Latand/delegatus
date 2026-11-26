@@ -17,6 +17,8 @@ async function command(name: string, args: string[]): Promise<void> {
   let probe = name;
   if (name === "ps" && args.includes("pid=,rss=")) probe = "rss";
   if (name === "sysctl") probe = args.at(-1)!;
+  if (name === "lsof" && args.includes("+D")) probe = "lsof-scoped";
+  if (name === "lsof" && args.includes(process.env.LLV_TEST_HELD_TRANSCRIPT_PATH ?? "\0")) probe = "lsof-transcript";
   if (probe === heldProbe && !existsSync(path.join(directory, "collection-complete"))) {
     const started = path.join(directory, `started-${process.pid}`);
     const release = path.join(directory, `release-${process.pid}`);
@@ -74,8 +76,8 @@ async function exerciseProductionRead(): Promise<void> {
   const { procBackend } = await import("./proc");
   const { statePath } = await import("./configDir");
   const { AgentRegistry, agentRegistry, setAgentRegistryForTests } = await import("./agent/registry");
-  const { setFileCatalogMembershipProbeForTests, setFileScanRunnerForTests } = await import("./scanner/scanCache");
-  const { readResourcesWithDiagnostic } = await import("./resources");
+  const { resetFilesRouteCacheForTests, setFileCatalogMembershipProbeForTests, setFileScanRunnerForTests } = await import("./scanner/scanCache");
+  const { readResourcesWithDiagnostic, resetResourcesForTests } = await import("./resources");
   await import("./state/diskPressure");
   const { stopWorktreeSweepWorker } = await import("./pipelines/worktreeSweepWorker");
   await Promise.all([
@@ -104,6 +106,9 @@ async function exerciseProductionRead(): Promise<void> {
     releaseRevision: "a".repeat(40),
     updatedAt: new Date(0).toISOString(),
   }));
+  resetResourcesForTests();
+  resetFilesRouteCacheForTests();
+  (await import("node:fs")).rmSync(statePath("resources-observation.json"), { force: true });
   Object.defineProperty(process, "platform", { value: procBackend.name === "portable" ? "darwin" : "win32" });
   procBackend.processIdentity = (pid) => pid === HOST_PID ? "fixture-start" : null;
   procBackend.readEnvVar = (pid, name) => pid === HOST_PID && name === "LLV_STRUCTURED_HOST" ? statePath() : null;
@@ -123,13 +128,17 @@ async function exerciseProductionRead(): Promise<void> {
       readResourcesWithDiagnostic(false, { waitMs: WAIT_MS }).then((read) => ({ read, at: performance.now() - start })),
       Bun.sleep(HEARTBEAT_MS).then(() => performance.now() - start),
     ]);
-    assert.equal(pending.read.diagnostic.status, "pending");
+    if (heldProbe.startsWith("lsof-")) {
+      assert.ok(["pending", "complete"].includes(pending.read.diagnostic.status), `production response did not settle during held ${heldProbe}`);
+    } else assert.equal(pending.read.diagnostic.status, "pending");
     if (process.env.LLV_TEST_SERVING_RELEASE === "1") {
       assert.deepEqual(markers("release-"), [], "serving Viewer returned pending after the held probe was released");
     }
     assert.match(pending.read.diagnostic.collectorId, /^in-process:/);
-    assert.equal(pending.read.payload.sessionsStale, true);
-    assert.deepEqual(pending.read.payload.sessions, []);
+    if (pending.read.diagnostic.status === "pending") {
+      assert.equal(pending.read.payload.sessionsStale, true);
+      assert.deepEqual(pending.read.payload.sessions, []);
+    }
     if (heldProbe === "vm_stat" || heldProbe === "vm.swapusage") assert.equal(pending.read.payload.system, null);
     assert.ok(heartbeatAt < WAIT_MS, `25 ms heartbeat fired after ${heartbeatAt.toFixed(1)} ms`);
     assert.ok(pending.at < WAIT_MS * 2, `75 ms read returned after ${pending.at.toFixed(1)} ms`);
@@ -165,7 +174,7 @@ async function exerciseProductionRead(): Promise<void> {
     const next = await readResourcesWithDiagnostic(false, { waitMs: WAIT_MS });
     assert.equal(next.diagnostic.status, "complete");
     assert.equal(next.diagnostic.generation, completed.diagnostic.generation);
-    console.log(`${heldProbe}: heartbeat ${heartbeatAt.toFixed(1)} ms, pending ${pending.at.toFixed(1)} ms, complete after a ${HOLD_MS} ms hold`);
+    console.log(`${heldProbe}: heartbeat ${heartbeatAt.toFixed(1)} ms, response ${pending.at.toFixed(1)} ms, complete after a ${HOLD_MS} ms hold`);
   } finally {
     // Let every command we started settle, including one entered on failure.
     for (const started of markers("started-")) {

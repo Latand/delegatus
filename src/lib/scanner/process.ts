@@ -105,6 +105,29 @@ export function writingHolders(paths: Iterable<string>, fresh = false): Map<stri
   return holders;
 }
 
+export async function resourceWritingHolders(paths: Iterable<string>): Promise<Map<string, number>> {
+  const aliasToPath = new Map<string, string>();
+  for (const pathname of paths) {
+    if (aliasToPath.size >= MAX_PATH_HOLDER_CANDIDATES * 2) break;
+    if (!pathname) continue;
+    aliasToPath.set(pathname, pathname);
+    const real = realpathSafe(pathname);
+    if (real) aliasToPath.set(real, pathname);
+  }
+  const key = [...aliasToPath.keys()].sort().join("\0");
+  const now = Date.now();
+  if (pathMemo && pathMemo.key === key && now - pathMemo.at < HOLDERS_TTL_MS) return pathMemo.map;
+  const holders = new Map<string, number>();
+  const visit = (target: string, pid: number, writable: () => boolean) => {
+    const pathname = aliasToPath.get(target);
+    if (pathname && !holders.has(pathname) && writable()) holders.set(pathname, pid);
+  };
+  if (procBackend.resourceScanFdTargetsFor) await procBackend.resourceScanFdTargetsFor([...aliasToPath.keys()], visit);
+  else procBackend.scanFdTargetsFor([...aliasToPath.keys()], visit);
+  pathMemo = { at: Date.now(), key, map: holders };
+  return holders;
+}
+
 /** True when `pid` currently keeps `pathname` open for writing. */
 export function pidWritesPath(pid: number, pathname: string): boolean {
   return procBackend.pidWritesPath(pid, pathname);

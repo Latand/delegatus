@@ -90,6 +90,7 @@ export interface ProcBackend {
       block the Viewer event loop on cold OS probes. */
   resourceSystemMemory?(): Promise<SystemMemory | null>;
   resourceListProcesses?(): Promise<ProcSnapshotEntry[]>;
+  resourceProcessExited?(pid: number): Promise<boolean>;
   resourcePpidMap?(fresh?: boolean): Promise<Map<number, number>>;
   resourceProcessMemory?(pids: Iterable<number>): Promise<Map<number, ProcessMemory>>;
 
@@ -132,6 +133,9 @@ export interface ProcBackend {
    * `lsof` as filename arguments. `writable` is lazy, as above.
    */
   scanFdTargetsFor(paths: string[], visit: (target: string, pid: number, writable: () => boolean) => void): void;
+  /** Async counterpart for bounded resource scans that must not run lsof on
+      the Viewer event loop. Backends without subprocess probes may omit it. */
+  resourceScanFdTargetsFor?(paths: string[], visit: (target: string, pid: number, writable: () => boolean) => void): Promise<void>;
 
   /** True when `pid` currently holds `pathname` open for writing. */
   pidWritesPath(pid: number, pathname: string): boolean;

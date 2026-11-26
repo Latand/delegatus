@@ -39,7 +39,7 @@ test("an unrecognised override falls back to the platform default", () => {
 test("every backend answers the whole contract", () => {
   /* Resources use async process and file-holder discovery on every backend;
      Linux retains its direct /proc implementation. */
-  const methods = [...Object.keys(linuxBackend), "resourceListProcesses"].sort();
+  const methods = Object.keys(linuxBackend).sort();
   expect(Object.keys(windowsBackend).sort()).toEqual(methods);
   expect(Object.keys(portableBackend).sort()).toEqual(methods);
 });

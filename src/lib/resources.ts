@@ -685,6 +685,26 @@ export interface ResourcesReadOptions {
   waitMs?: number;
 }
 
+export function resourcePlatformUsesBoundedPressure(platform: string): boolean {
+  return platform === "darwin" || platform === "win32";
+}
+
+export async function readPressureWithDeadline<T>(
+  platform: string,
+  deadline: number | undefined,
+  read: () => Promise<T>,
+  readFallback: () => Promise<T>,
+): Promise<T> {
+  if (deadline === undefined || !resourcePlatformUsesBoundedPressure(platform)) return read();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      read(),
+      new Promise<T>(resolve => { timer = setTimeout(() => { void readFallback().then(resolve); }, Math.max(0, deadline - performance.now())); }),
+    ]);
+  } finally { clearTimeout(timer); }
+}
+
 export interface ResourcesReader {
   read(fresh?: boolean, options?: ResourcesReadOptions): Promise<ResourcesRead>;
 }
@@ -2718,20 +2738,12 @@ export async function readResourcesWithDiagnostic(fresh = false, options: Resour
   const { agentRegistry } = await import("@/lib/agent/registry");
   const { servingAgentStateService } = await import("@/lib/agentState/service");
   servingAgentStateService()?.observeResourceSample(read.payload.sessions, Date.parse(read.payload.sessionsCapturedAt ?? ""));
-  let pressure: Awaited<ReturnType<typeof readDiskPressure>>;
-  if (deadline === undefined) pressure = await readDiskPressure();
-  else {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const refresh = readDiskPressure();
-    try {
-      pressure = await Promise.race([
-        refresh,
-        new Promise<Awaited<ReturnType<typeof readDiskPressure>>>(resolve => {
-          timer = setTimeout(() => { void readDiskPressureInHelper({ readOnly: true }).then(resolve); }, Math.max(0, deadline - performance.now()));
-        }),
-      ]);
-    } finally { clearTimeout(timer); }
-  }
+  const pressure = await readPressureWithDeadline(
+    process.platform,
+    deadline,
+    readDiskPressure,
+    () => readDiskPressureInHelper({ readOnly: true }),
+  );
   return {
     ...read,
     payload: {
