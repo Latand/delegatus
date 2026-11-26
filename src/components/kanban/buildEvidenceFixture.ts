@@ -15,6 +15,7 @@
  */
 import fs from "node:fs";
 import ts from "typescript";
+import { instrumentComposerIsolation } from "./composerIsolationCounters.fixture";
 
 const [entry, outdir] = process.argv.slice(2);
 if (!entry || !outdir) throw new Error("usage: buildEvidenceFixture.ts <entry> <outdir>");
@@ -73,6 +74,7 @@ function __pdFactory(name, factory, deps, labels) {
 // Historical scheduling control for the native send-paint experiment. Only
 // fixture bundles can select it; a changed source shape refuses the control.
 const serialComposer = process.argv.includes("--serial-composer-prerequisites");
+const isolationCounters = process.argv.includes("--isolation-counters");
 function serialPrerequisites(source: string): string {
   for (const [manager, bridge] of [
     ["        const managerRead = withComposerAdmissionDeadline(", "        const bridge = await drainBridgeTurnStart();"],
@@ -94,8 +96,10 @@ const result = await Bun.build({
   plugins: [{
     name: "server-action-stubs",
     setup(build) {
+      if (isolationCounters) build.onResolve({ filter: /^react-dom\/client$/ }, () => ({ path: Bun.resolveSync("react-dom/profiling", import.meta.dir) }));
       build.onLoad({ filter: /\/src\/.*\.tsx?$/ }, (args) => {
         let source = fs.readFileSync(args.path, "utf8");
+        if (isolationCounters) source = instrumentComposerIsolation(source, args.path);
         if (serialComposer && args.path.replaceAll("\\", "/").endsWith("/src/components/ConversationComposer.tsx")) source = serialPrerequisites(source);
         const loader = args.path.endsWith(".tsx") ? "tsx" : "ts";
         if (!SERVER_DIRECTIVE.test(source)) return {

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
-import { act } from "react";
+import { act, Profiler } from "react";
 import { installComposerStorageForTests } from "@/test-helpers/composerStorage";
 import { installActEnv } from "@/test-helpers/actEnv";
 import { Window } from "happy-dom";
@@ -7,7 +7,8 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { FileEntry } from "@/lib/types";
 import { setLocale } from "@/lib/i18n";
-import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
+import { setRuntimeBusForTests, setRuntimeUiEnabledForTests, type RuntimeBus, type RuntimeBusState } from "@/hooks/runtimeBus";
+import { applyEvent, installSnapshot } from "./runtime/runtimeModel";
 
 import { appendComposerDraft, ConversationComposer } from "./ConversationComposer";
 import { publishSeatProject, seatDeputiesFor, resetSeatDeputiesForTests } from "./orchestrator/seatDeputies";
@@ -114,6 +115,71 @@ const file = {
   waitingInput: null,
 } as FileEntry;
 
+
+test("the focused composer keeps its draft without a commit on twelve foreign turn events", async () => {
+  const listeners = new Set<() => void>();
+  const store = installSnapshot({ schemaVersion: 1, snapshotSeq: 0, retentionFloorSeq: 0, filesRevision: 1,
+    structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, attentions: [], recentOperations: [],
+    flows: [], workflows: [], tasks: [], edges: [],
+    sessions: [file.conversationId!, "foreign"].map(id => ({
+      conversationId: id, sessionKey: { engine: "claude", sessionId: id }, hostKind: "claude-broker", host: "hosted",
+      turn: "idle", provenance: "structured", revision: 1, attentionIds: [], recentReceipts: [], accountId: null,
+      parentConversationId: null, flowId: null, workflowId: null, cwd: null, artifactPath: id === "foreign" ? "/foreign.jsonl" : file.path,
+      capabilities: { steer: false, structuredAttention: true }, activeTurnId: null,
+    })),
+  });
+  let state: RuntimeBusState = { store, connection: "live", resyncedAt: null, lastEventAt: null, enabled: true, structuredHostsEnabled: true };
+  const bus: RuntimeBus = {
+    getState: () => state, start() {}, stop() {}, refresh: async () => true,
+    subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    subscribeFilesRevision: () => () => {},
+  };
+  setRuntimeUiEnabledForTests(true);
+  setRuntimeBusForTests(bus);
+  globalThis.fetch = Object.assign(async () => Response.json({ targets: {}, operations: [], receipts: [] }), { preconnect() {} });
+  let commits = 0;
+  const { host, root } = await renderInto(<Profiler id="composer" onRender={() => { commits++; }}>
+    <ConversationComposer file={file} />
+  </Profiler>);
+  try {
+    const field = host.querySelector("textarea")!;
+    field.focus();
+    const props = Object.keys(field).find(key => key.startsWith("__reactProps$"))!;
+    const text = "type ".repeat(8).slice(0, 37);
+    let events = 0;
+    for (const [i, char] of [...text].entries()) {
+      await settle(() => {
+        field.value += char;
+        (field as unknown as Record<string, { onChange(e: { target: HTMLTextAreaElement }): void }>)[props]!.onChange({ target: field });
+      });
+      if ((i + 1) % 3 !== 0) continue;
+      const count = commits;
+      await settle(() => {
+        const seq = ++events;
+        const next = applyEvent(state.store, { schemaVersion: 1, seq, eventId: "foreign-" + seq,
+          scope: { type: "session", id: "foreign" }, revision: seq + 1, kind: seq % 2 ? "turn-started" : "turn-ended",
+          payload: { conversationId: "foreign", turnId: "turn-" + Math.ceil(seq / 2) } });
+        if (next.outcome !== "applied") throw Error("foreign event did not apply");
+        state = { ...state, store: next.store };
+        for (const notify of listeners) notify();
+      });
+      expect(state.store.sessions.foreign!.turn).toBe(events % 2 ? "running" : "idle");
+      expect(commits).toBe(count);
+    }
+    expect(events).toBe(12);
+    expect(field.value).toBe(text);
+    expect(document.activeElement).toBe(field);
+    const settledCommits = commits;
+    await settle(() => {
+      state = { ...state, connection: "offline" };
+      for (const notify of listeners) notify();
+    });
+    expect(commits).toBeGreaterThan(settledCommits);
+  } finally {
+    await act(async () => root.unmount());
+    setRuntimeBusForTests(null);
+  }
+});
 
 function parallel(host: HTMLElement) {
   const textarea = host.querySelector("textarea")!;
