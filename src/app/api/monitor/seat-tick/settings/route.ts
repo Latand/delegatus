@@ -6,6 +6,7 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { callerConversationId, operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
 import {
   changeSeatTickSettings,
+  legatusSettingsActor,
   type SeatTickSettingsActor,
   type SeatTickSettingsChange,
 } from "@/lib/monitor/seatTickSettings";
@@ -83,6 +84,8 @@ function callerOwnProject(conversationId: string): string | null {
 function settingsActor(req: NextRequest, project: string): SeatTickSettingsActor {
   const conversationId = callerConversationId(req);
   if (!conversationId) return { kind: "gateway", conversationId: null, project: null, seatEpoch: null };
+  const legatus = legatusSettingsActor(conversationId);
+  if (legatus) return legatus;
   const active = orchestratorSeatFor(project).active ?? null;
   if (active && active.conversationId === conversationId) {
     return { kind: "manager", conversationId, project, seatEpoch: active.seatEpoch };

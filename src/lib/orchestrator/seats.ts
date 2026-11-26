@@ -1,3 +1,4 @@
+import { isLegatusProject } from "@/lib/projects/serviceProject";
 import { workspacePrincipalAllows } from "@/lib/team/workspacePrincipal";
 import { TeamError } from "@/lib/team/members";
 import { MeasuredCache } from "@/lib/cacheTelemetry";
@@ -219,6 +220,7 @@ function recordTerminalization(
     subsequent canonical reads see one active seat and the former one in the
     ordinary previous-seat history. */
 export function reconcileOrchestratorSeatSuccession(sourceInput: string, targetInput: string, revokedAt: string): boolean {
+  if (isLegatusProject(sourceInput.trim()) || isLegatusProject(targetInput.trim())) return false;
   return withAccountMutationLock(() => {
     /* Validate every strict migration field first, then retain fields such as
        provisional rollback custody that the strict retirement projection does

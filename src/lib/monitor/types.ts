@@ -226,7 +226,10 @@ export type SeatTickWakeReasonKind =
   | "disk-cleaner"
   /** Free space on a volume Delegatus writes to fell below the warning
       threshold: once per pressure episode, without waiting for the interval. */
-  | "disk-pressure";
+  | "disk-pressure"
+  | "legatus-question"
+  | "operator-launch"
+  | "legatus-message";
 
 export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "lane-event",
@@ -247,6 +250,9 @@ export const SEAT_TICK_WAKE_REASON_KINDS: readonly SeatTickWakeReasonKind[] = [
   "worker-ask",
   "disk-cleaner",
   "disk-pressure",
+  "legatus-question",
+  "operator-launch",
+  "legatus-message",
 ];
 
 export interface SeatTickWakeReason {
@@ -293,7 +299,7 @@ export interface SeatTickItem {
       after the unstarted tasks while the record has not moved. */
   stallToken?: string;
   /** `provisioning` is the outcome of the seat's own create call (#1799). */
-  kind: "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning" | "deploy" | "permission" | "maintenance" | "ask";
+  kind: "agenda" | "pipeline" | "task" | "event" | "signal" | "pull-request" | "child" | "provisioning" | "deploy" | "permission" | "maintenance" | "ask";
   /** Only on an `ask` line: the exact wait it names, so a newer ask on the
       same conversation or a lane that parked again is offered afresh. */
   askKey?: string;
@@ -360,6 +366,7 @@ export type SeatTickVerdict =
   | { kind: "quiet"; detail: string }
   | {
     kind: "wake";
+    urgentLegatus?: { project: string; conversationId: string };
     catchUp?: SeatTickCatchUp;
     reasons: SeatTickWakeReason[];
     items: SeatTickItem[];
@@ -923,6 +930,7 @@ export interface SeatTickPolicy {
  * from anything else would credit the seat with a different message.
  */
 export interface SeatTickWakeCommit {
+  urgentLegatus?: { project: string; conversationId: string };
   responseBoundMs?: number;
   formPage?: SeatTickFormPage;
   /** Interval at preparation, used to preserve an outage across a delayed landing. */
@@ -1430,6 +1438,7 @@ export interface SeatTickWorkerAskInput {
 }
 
 export interface SeatTickCheckInput {
+  seatAgenda?: readonly import("./seatAgenda").SeatAgendaEntry[];
   /** Process-local fence attached by the owning seat sweep. */
   sweepIsCurrent?: () => boolean;
   releaseAlerts?: { kind: "release-settled" | "release-blocked"; id: string; label: string }[];

@@ -1,3 +1,4 @@
+import { seatAgendaSchema } from "@/lib/monitor/seatAgendaSchema";
 import { installTaskTimes, prepareTaskTimes, taskTimePendingCursor, taskTimesReady } from "./taskTimes";
 import { taskListIndex, taskListIndexCurrent, taskListIndexes } from "./taskListIndexes";
 import { observeRegistryWriter } from "@/lib/agent/registryWriter";
@@ -793,6 +794,8 @@ const stateSchema = [
     reconciled_sha256 TEXT
   )`,
 ];
+stateSchema.push(...seatAgendaSchema);
+
 const stateSchemaNames = ["task_time_pending", "task_time_insert", "task_time_update", "task_time_delete", ...stateSchema.map(sql => /^CREATE (?:UNIQUE )?(?:TABLE|INDEX|TRIGGER) IF NOT EXISTS (\w+)/.exec(sql)![1]!)];
 
 function taskDueIndexCurrent(db: Database): boolean {
@@ -1007,7 +1010,7 @@ function withImmediateTransaction<T>(db: Database, busyMessage: string, operatio
   }
 }
 
-async function stateTransactionAsync<T>(filename: string, collection: string, operation: (db: Database) => T, afterCommit?: (result: T) => void): Promise<T> {
+export async function stateTransactionAsync<T>(filename: string, collection: string, operation: (db: Database) => T, afterCommit?: (result: T) => void): Promise<T> {
   return waitForStateLock(`state.transaction.${collection}`, () => withStateWriter(filename, (db) => {
     const result = withImmediateTransaction(db, "state transaction is busy", () => operation(db), collection);
     // Apply the committed baseline before yielding to queued edits. Keep

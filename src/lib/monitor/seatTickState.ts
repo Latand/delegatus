@@ -1,3 +1,4 @@
+import { SEAT_AGENDA_VERSION_PREFIX } from "./seatAgendaSchema";
 import { normalizeSeatWakeResponse, normalizeWakeResponseStart } from "./seatWakeResponse";
 import { validFormPage } from "./seatTickForms";
 import { normalizeSeatAutoRotation } from "./seatAutoRotationState";
@@ -63,6 +64,10 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
   if (typeof raw.fingerprint !== "string" || !raw.fingerprint) return null;
   if (typeof raw.eventsThrough !== "number" || !Number.isInteger(raw.eventsThrough) || raw.eventsThrough < 0) return null;
   return {
+    ...(raw.urgentLegatus && typeof raw.urgentLegatus === "object"
+      && "project" in raw.urgentLegatus && typeof raw.urgentLegatus.project === "string"
+      && "conversationId" in raw.urgentLegatus && typeof raw.urgentLegatus.conversationId === "string"
+      ? { urgentLegatus: { project: raw.urgentLegatus.project, conversationId: raw.urgentLegatus.conversationId } } : {}),
     ...(raw.diskPressure && typeof raw.diskPressure === "object" && "episode" in raw.diskPressure && "version" in raw.diskPressure && typeof raw.diskPressure.episode === "string" && typeof raw.diskPressure.version === "string" ? { diskPressure: { episode: raw.diskPressure.episode, version: raw.diskPressure.version } } : {}),
     ...(isoOrNull(raw.deployResumeThrough) ? { deployResumeThrough: isoOrNull(raw.deployResumeThrough)! } : {}),
     ...(raw.catchUp && typeof raw.catchUp === "object" && typeof (raw.catchUp as Record<string, unknown>).key === "string"
@@ -440,6 +445,7 @@ function readFile(filePath: string): SeatTickStateFile {
 // own clock when work is decided, while the uncredited backlog stays owed.
 export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: number | null): SeatTickProjectState {
   if (row.seatEpoch === seatEpoch) return row;
+  const itemsShown = row.itemsShown?.filter(version => isReminderVersion(version) || version.startsWith(SEAT_AGENDA_VERSION_PREFIX));
   return {
     ...emptySeatTickState(),
     seatEpoch,
@@ -463,7 +469,7 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     ...(row.lastTaskWakeAt ? { lastTaskWakeAt: row.lastTaskWakeAt } : {}),
     ...(row.formPageAfter ? { formPageAfter: row.formPageAfter } : {}),
     ...(row.deployResumeThrough ? { deployResumeThrough: row.deployResumeThrough } : {}),
-    ...(row.itemsShown?.some(isReminderVersion) ? { itemsShown: row.itemsShown.filter(isReminderVersion) } : {}),
+    ...(itemsShown?.length ? { itemsShown } : {}),
     lastProposalAt: row.lastProposalAt,
     outstandingWake: row.outstandingWake,
     retiredWakes: row.retiredWakes ?? [],

@@ -76,7 +76,7 @@ const NEUTRAL_COSTUME: Costume = {
     + `<path fill="${INK}" d="M25.2 44.2 31 47.2 25.2 50.4Z"/><path fill="${INK}" d="M38.8 44.2 33 47.2 38.8 50.4Z"/><rect x="29.6" y="45.2" width="4.8" height="4.2" rx="1.2" fill="${INK}"/>`,
 };
 
-const APPROVED_COSTUMES: Record<Exclude<FrameRole, "curator">, Costume> = {
+const APPROVED_COSTUMES: Record<Exclude<FrameRole, "curator" | "legatus">, Costume> = {
   neutral: NEUTRAL_COSTUME,
   /* A dispatcher's headset: a lighter indigo band holding the hair, cups that
      hold on the dark accent card, a boom ending in a capsule at the mouth corner. */
@@ -170,6 +170,7 @@ const APPROVED_COSTUMES: Record<Exclude<FrameRole, "curator">, Costume> = {
 const CURATOR_CAP = "#84CC16";
 const COSTUMES: Record<FrameRole, Costume> = {
   ...APPROVED_COSTUMES,
+  legatus: NEUTRAL_COSTUME,
   curator: {
     ...APPROVED_COSTUMES.cleaner,
     front: APPROVED_COSTUMES.cleaner.front?.replaceAll(/fill="#(?:F472B6|DB2777)"/g, `fill="${CURATOR_CAP}"`),

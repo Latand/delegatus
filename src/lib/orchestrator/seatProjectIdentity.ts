@@ -1,3 +1,5 @@
+import { isLegatusProject } from "@/lib/projects/serviceProject";
+import { localLegatusProject } from "./legatusSeat";
 import fs from "node:fs";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { isCanonicalProjectId } from "@/lib/projects/identity";
@@ -29,7 +31,7 @@ export function seatLaunchCwd(conversationId: string): string | null {
 export type SeatCwdOf = (conversationId: string) => string | null;
 
 function successionForSeat(seat: OrchestratorSeat, cwdOf: SeatCwdOf): ProjectSuccession | null {
-  if (!seat.conversationId) return null;
+  if (isLegatusProject(seat.project) || !seat.conversationId) return null;
   let cwd: string | null = null;
   try { cwd = cwdOf(seat.conversationId); } catch { cwd = null; }
   return projectSuccessionFor(seat.project, cwd);
@@ -50,7 +52,7 @@ export function recordSeatProjectSuccessions(cwdOf: SeatCwdOf = seatLaunchCwd, l
   const record = (candidates: Iterable<ProjectSuccession | null>) => recordProjectSuccessions(candidates,
     (move) => reconcileOrchestratorSeatSuccession(move.source, move.target, now()));
   const pathMoves = legacyOnly ? [] : record(Object.values(file?.seats ?? {}).map((seat) => successionForSeat(seat, cwdOf)));
-  const legacy = seats.filter(seat => !isCanonicalProjectId(canonicalProject(seat.project)));
+  const legacy = seats.filter(seat => !isLegatusProject(seat.project) && !isCanonicalProjectId(canonicalProject(seat.project)));
   if (!legacy.length) return pathMoves;
   const sources = seatProjectSources();
   const last = sources.lastCompletedCatalog?.();
@@ -128,6 +130,10 @@ export function resolveSeatProject(
   sources: NamedProjectSources = seatProjectSources(),
   options: { reconcileExistingSeats?: boolean; includeActiveSeats?: boolean } = {},
 ): { project: string; displayName: string } {
+  if (isLegatusProject(named)) {
+    if (named !== localLegatusProject()) throw new ProjectNameRefusal("unknown service project", { code: "project_not_found" });
+    return { project: named, displayName: "Legatus" };
+  }
   const reconcileExistingSeats = options.reconcileExistingSeats !== false;
   if (reconcileExistingSeats) recordSeatProjectSuccessions(seatLaunchCwd, true);
   const info = cwd ? projectInfoFromCwd(cwd) : null;

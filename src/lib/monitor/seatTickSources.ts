@@ -1,3 +1,5 @@
+import { acknowledgeSeatAgenda, pendingSeatAgenda } from "./seatAgenda";
+import { isLegatusProject } from "@/lib/projects/serviceProject";
 import { captureSeatWakeResponseStart, observeSeatWakeResponse, type SeatWakeResponse, type WakeResponseEvidence, type WakeResponseStart } from "./seatWakeResponse";
 import { seatTickInstructionLines, seatTickInstructionReview } from "./seatTickInstructions";
 import { issueDeliverySeatSignals } from "@/lib/forge/issueDelivery";
@@ -603,6 +605,8 @@ export interface SeatTickSources {
       an agent just recorded takes effect at the very next check rather than at
       the next deploy. A project nobody configured reads the defaults. */
   settings: (project: string) => SeatTickSettings;
+  seatAgenda?: typeof pendingSeatAgenda;
+  acknowledgeAgenda?: typeof acknowledgeSeatAgenda;
   /** Open pull requests in the project's repository (#1289), through the same
       `gh` seam as the proposal source. Read at most once per wake interval, and
       only for a project that has a finished lane to attribute one to: a
@@ -808,6 +812,8 @@ export function defaultSeatTickSources(): SeatTickSources {
   const prepareMemoryProblems = () => preparingMemoryProblems ??= prepareMemoryProblemRead().finally(() => { preparingMemoryProblems = undefined; });
   return {
     ...admission,
+    seatAgenda: pendingSeatAgenda,
+    acknowledgeAgenda: acknowledgeSeatAgenda,
     prepareMemoryProblems,
     prepareRead: () => preparing ??= withViewerOperation("seat-tick.prepare", () => performanceSpans.wait("seat-tick.prepare", async () => {
       await loadPipelinesForListAsync();
@@ -3326,6 +3332,7 @@ async function pullRequestEvidenceKey(input: Pick<SeatTickCheckInput, "project" 
  * again; delivery credits only the outcomes its frozen payload actually names.
  */
 export async function refreshSeatTickEvidence(input: SeatTickCheckInput, sources: SeatTickSources): Promise<SeatTickCheckInput> {
+  if (isLegatusProject(input.project)) return gatherLegatusInput(input.project, input.state, input.policy, sources);
   let fresh = await refreshSeatTickInputCooperatively(input, sources);
   const key = await pullRequestEvidenceKey(fresh, sources);
   fresh = await refreshSeatTickInputCooperatively(fresh, sources);
@@ -3386,6 +3393,7 @@ export async function seatTickDeployPending(project: string, state: SeatTickProj
  * Keep its delivery on the normal authority, admission and accounting path. */
 export async function gatherSeatTickDeployInput(project: string, state: SeatTickProjectState,
   policy: SeatTickPolicy, sources: SeatTickSources, reports?: SeatTickReportsInput | null): Promise<SeatTickCheckInput | null> {
+  if (isLegatusProject(project)) return null;
   const active = sources.seatFor(project).active;
   if (!active?.conversationId) return null;
   const now = sources.now();
@@ -3451,9 +3459,18 @@ export async function gatherSeatTickInput(
   sources: SeatTickSources,
 ): Promise<SeatTickCheckInput> {
   return withViewerOperation("seat-tick.check", () => performanceSpans.wait("seat-tick.check", async () => {
+    if (isLegatusProject(project)) return gatherLegatusInput(project, state, policy, sources);
     await sources.prepareRead?.();
     return gatherSeatTickInputWork(project, state, policy, sources);
   }));
+}
+
+async function gatherLegatusInput(project: string, state: SeatTickProjectState, policy: SeatTickPolicy, sources: SeatTickSources): Promise<SeatTickCheckInput> {
+  const seat = await seatInput(project, policy, sources);
+  const now = sources.now();
+  return { project, state, policy, seat, now, settings: effectiveSeatTickSettings(sources.settings(project), now, SEAT_TICK_WAKE_INTERVAL_MS),
+    pipelines: [], tasks: [], events: [], ownLanes: [], pullRequests: [], pullRequestsUnavailable: null,
+    children: [], childrenUnavailable: null, signals: [], changeFingerprint: "legatus.none" };
 }
 
 async function gatherSeatTickInputWork(

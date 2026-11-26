@@ -1,3 +1,4 @@
+import { isLegatusProject } from "@/lib/projects/serviceProject";
 import { stateDatabaseBusy as isBusyError, stateLockAttempt, StateLockDeferredError } from "@/lib/state/lockWait";
 import fs from "node:fs";
 
@@ -426,6 +427,7 @@ function writeBoardState<R, C = never>(
 }
 
 export function boardFor(project: string, filePath = boardFileForTests ?? BOARD_FILE): BoardProjectStateV1 {
+  if (isLegatusProject(project)) return emptyBoard();
   return asBoardStoreError(() => {
     const canonical = canonicalProject(project);
     const collection = boardCollection(filePath, "read");
@@ -462,6 +464,7 @@ function sameReduced(left: BoardProjectStateV1, right: BoardProjectStateV1): boo
 }
 
 function writeReduced(project: string, baseRevision: number, reduce: (current: BoardProjectStateV1) => BoardProjectStateV1, filePath: string): BoardWriteResult {
+  if (isLegatusProject(project)) return { ok: false, board: emptyBoard() };
   return writeBoardState<BoardWriteResult>(filePath, (value) => {
     const current = value.projects[project] ?? emptyBoard();
     const reduced = reduce(current);
@@ -473,6 +476,7 @@ function writeReduced(project: string, baseRevision: number, reduce: (current: B
 }
 
 function writeLatest(project: string, reduce: (current: BoardProjectStateV1) => BoardProjectStateV1, filePath: string): BoardProjectStateV1 {
+  if (isLegatusProject(project)) return emptyBoard();
   return writeBoardState(filePath, (value) => {
     const current = value.projects[project] ?? emptyBoard();
     const reduced = reduce(current);
@@ -711,6 +715,7 @@ export function migrateBoardProjects<C = never>(
   companion?: { collection: SqliteStateCollection<C>; records: readonly C[]; validate?: () => void },
 ): boolean {
   if (migrations.size === 0) return true;
+  if ([...migrations].some(([source, target]) => isLegatusProject(source) || isLegatusProject(target))) return false;
   const plan = resolvedMigrations(migrations);
   return writeBoardState(filePath, (value) => {
     const changed: Record<string, BoardProjectStateV1> = {};

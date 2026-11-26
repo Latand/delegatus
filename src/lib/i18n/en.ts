@@ -1828,6 +1828,8 @@ export const en = {
 
   // Role catalog display copy (issue #221 §1). The registry stays English —
   // these are UI labels only; prompts sent to agents are untouched.
+  "roleCopy.legatus.name": "Legatus",
+  "roleCopy.legatus.description": "Coordinates project seats across the installation.",
   "roleCopy.orchestrator.name": "Orchestrator",
   "roleCopy.orchestrator.description": "Coordinates fresh agents through the Delegatus control plane.",
   "roleCopy.orchestrator.param.mode.label": "Mode",
@@ -6355,6 +6357,9 @@ export const en = {
   "seatTick.reason.deploySettled": "your deploy settled",
   "seatTick.reason.permissionRequest": "a permission request waits",
   "seatTick.reason.workerAsk": "a worker's question waits on the orchestrator",
+  "seatTick.reason.legatusQuestion": "a form is waiting",
+  "seatTick.reason.operatorLaunch": "the operator launched an agent",
+  "seatTick.reason.legatusMessage": "Legatus sent a message",
   "seatTick.reason.diskPressure": "disk space is low",
   "seatTick.reason.diskCleaner": "disk cleanup finished",
   "seatTick.outcome.landed": "landed",
@@ -6375,6 +6380,7 @@ export const en = {
   "seatTick.setBy": "Set by {who} · {at} · {conversation}",
   "seatTick.setByNobody": "Set by nobody the record names.",
   "seatTick.actor.gateway": "the operator's own session",
+  "seatTick.actor.legatus": "Legatus",
   "seatTick.actor.manager": "the designated seat",
   "seatTick.actor.agent": "an agent session",
   "seatTick.actor.unidentified": "a caller nothing identified",
@@ -6706,6 +6712,7 @@ export const en = {
   "onboarding.agents.role.reviewerTrivial": "Reviewer, small changes",
   "onboarding.agents.role.verifier": "Verifier",
   "onboarding.agents.role.architect": "Architect",
+  "onboarding.agents.role.legatus": "Legatus",
   "onboarding.agents.role.orchestrator": "Orchestrator",
   "onboarding.agents.role.cleaner": "Cleaner",
   "onboarding.agents.role.prodAuditor": "Prod-auditor",

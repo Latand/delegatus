@@ -90,6 +90,7 @@ function rowLabel(row: RowKey, t: TFunction): string {
     verifier: "onboarding.agents.role.verifier",
     architect: "onboarding.agents.role.architect",
     orchestrator: "onboarding.agents.role.orchestrator",
+    legatus: "onboarding.agents.role.legatus",
     curator: "onboarding.agents.role.curator",
     maintainer: "onboarding.agents.role.maintainer",
     cleaner: "onboarding.agents.role.cleaner",

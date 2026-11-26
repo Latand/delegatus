@@ -1,3 +1,5 @@
+import { isLegatusProject } from "@/lib/projects/serviceProject";
+import { currentLegatusSeat } from "@/lib/orchestrator/legatusSeat";
 import { canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { textLengthError } from "@/lib/textLimits";
 import { normalizeMaintenanceWindow, type MaintenanceWindow } from "@/lib/boardMaintenance/window";
@@ -74,14 +76,28 @@ export const SEAT_TICK_PROMPT_LIMIT = 16_000;
  * the indefinite off switch and nothing bounds it. It is what keeps a stored
  * number a number, so a typo cannot write an interval no clock can express.
  */
+const LEGATUS_DEFAULT_WAKE_INTERVAL_MS = 30 * 60_000;
+const LEGATUS_MIN_WAKE_INTERVAL_MINUTES = 5;
+const LEGATUS_SCHEDULE_HISTORY_LIMIT = 50;
+
 export const SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES = 365 * 24 * 60;
 
 /** Who changed a project's tick. Server-derived; never a caller's claim. */
+export function legatusSettingsActor(conversationId: string | null): SeatTickSettingsActor | null {
+  const seat = currentLegatusSeat(conversationId);
+  return seat ? { kind: "legatus", conversationId, project: seat.project, seatEpoch: seat.seatEpoch } : null;
+}
+
+function currentLegatusActor(actor: SeatTickSettingsActor): boolean {
+  const seat = currentLegatusSeat(actor.conversationId);
+  return !!seat && seat.project === actor.project && seat.seatEpoch === actor.seatEpoch;
+}
+
 export interface SeatTickSettingsActor {
   /** `manager` is a designated seat, `gateway` the operator's own session,
       `agent` any other identified session, `unidentified` a caller no evidence
       named. */
-  kind: "manager" | "agent" | "gateway" | "unidentified";
+  kind: "manager" | "legatus" | "agent" | "gateway" | "unidentified";
   conversationId: string | null;
   /** The actor's own canonical project, when one is known — so a change made
       to another project's tick reads as exactly that. */
@@ -107,7 +123,16 @@ export interface AutoRotateSetting {
   setBy: SeatTickSettingsActor;
   why: string | null;
 }
+interface LegatusScheduleChange {
+  at: string;
+  by: SeatTickSettingsActor;
+  enabled: boolean;
+  wakeIntervalMinutes: number | null;
+  why: string | null;
+}
+
 export interface SeatTickSettings {
+  legatusScheduleHistory?: LegatusScheduleChange[];
   autonomy?: AutonomySetting | null;
   autonomyHistory?: AutonomySetting[];
   /** Turbo mode (docs/design/turbo-mode.md), independent of autonomy and of the wakes. */
@@ -184,6 +209,7 @@ export interface EffectiveSeatTickSettings {
       controller persists the reversion when it sees it. */
   lapsed: boolean;
   setBy: SeatTickSettingsActor | null;
+  legatusScheduleHistory?: LegatusScheduleChange[];
 }
 
 export interface SeatTickSettingsChange {
@@ -244,7 +270,7 @@ function normalizeActor(value: unknown): SeatTickSettingsActor | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
   const kind = raw.kind;
-  if (kind !== "manager" && kind !== "agent" && kind !== "gateway" && kind !== "unidentified") return null;
+  if (kind !== "manager" && kind !== "legatus" && kind !== "agent" && kind !== "gateway" && kind !== "unidentified") return null;
   return {
     kind,
     conversationId: typeof raw.conversationId === "string" && raw.conversationId ? raw.conversationId.slice(0, 200) : null,
@@ -280,6 +306,13 @@ function normalizeRow(project: string, value: unknown): SeatTickSettings {
   const raw = value as Record<string, unknown>;
   return withInstructionLines({
     project,
+    ...(Array.isArray(raw.legatusScheduleHistory) ? { legatusScheduleHistory: raw.legatusScheduleHistory.slice(-LEGATUS_SCHEDULE_HISTORY_LIMIT).flatMap(entry => {
+      const by = normalizeActor(entry?.by);
+      const at = isoOrNull(entry?.at);
+      return at && by?.kind === "legatus" && typeof entry.enabled === "boolean"
+        ? [{ at, by, enabled: entry.enabled, wakeIntervalMinutes: normalizeInterval(entry.wakeIntervalMinutes),
+          why: typeof entry.why === "string" ? entry.why.slice(0, REASON_LIMIT) : null }] : [];
+    }) } : {}),
     ...(normalizeAutonomy(raw.autonomy) ? { autonomy: normalizeAutonomy(raw.autonomy) } : {}),
     ...(Array.isArray(raw.autonomyHistory) ? { autonomyHistory: raw.autonomyHistory.map(normalizeAutonomy).filter((entry): entry is AutonomySetting => entry !== null) } : {}),
     ...(normalizeTurbo(raw.turbo) ? { turbo: normalizeTurbo(raw.turbo) } : {}),
@@ -464,12 +497,18 @@ export function effectiveCurationSetting(settings: Pick<SeatTickSettings, "curat
  * was not running when it passed still reads the default afterwards, and a
  * setting with no expiry is simply one this function never rewrites.
  */
+export function seatTickDefaultInterval(project: string, ordinaryIntervalMs: number): number {
+  return isLegatusProject(project) ? LEGATUS_DEFAULT_WAKE_INTERVAL_MS : ordinaryIntervalMs;
+}
+
 export function effectiveSeatTickSettings(
   settings: SeatTickSettings,
   nowMs: number,
   defaultWakeIntervalMs: number,
 ): EffectiveSeatTickSettings {
   settings = withValidatedMaintenanceWindow(settings);
+  const legatus = isLegatusProject(settings.project);
+  defaultWakeIntervalMs = seatTickDefaultInterval(settings.project, defaultWakeIntervalMs);
   const intervalHours = settings.maintenance?.intervalHours ?? 3;
   const maintenance = { enabled: settings.maintenance?.enabled ?? false, intervalHours, intervalMs: intervalHours * 3_600_000, window: settings.maintenance?.window ?? null };
   const expiry = settings.until ? Date.parse(settings.until) : Number.NaN;
@@ -494,6 +533,7 @@ export function effectiveSeatTickSettings(
       configured,
       lapsed,
       setBy: lapsed ? settings.setBy : null,
+      legatusScheduleHistory: settings.legatusScheduleHistory,
     };
   }
   return {
@@ -503,7 +543,7 @@ export function effectiveSeatTickSettings(
     enabled: settings.enabled,
     wakeIntervalMs: settings.wakeIntervalMinutes === null
       ? defaultWakeIntervalMs
-      : Math.round(settings.wakeIntervalMinutes * 60_000),
+      : Math.round(Math.max(legatus ? LEGATUS_MIN_WAKE_INTERVAL_MINUTES : 0, settings.wakeIntervalMinutes) * 60_000),
     reason: settings.reason,
     instructionLines: seatTickInstructionLines(settings),
     instructionsReviewedAt: settings.instructionsReviewedAt,
@@ -514,6 +554,7 @@ export function effectiveSeatTickSettings(
     configured,
     lapsed: false,
     setBy: settings.setBy,
+    legatusScheduleHistory: settings.legatusScheduleHistory,
   };
 }
 
@@ -531,9 +572,9 @@ export function effectiveSeatTickSettings(
  */
 export function seatTickSettingsAfterLapse(
   project: string,
-  lapsed: Pick<EffectiveSeatTickSettings, "reason" | "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "instructionsReviewedAt" | "instructionLines" | "maintenanceSetting" | "curationSetting" | "autoRotate" | "release" | "autonomy" | "autonomyHistory" | "turbo" | "turboHistory">>,
+  lapsed: Pick<EffectiveSeatTickSettings, "reason" | "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "instructionsReviewedAt" | "instructionLines" | "maintenanceSetting" | "curationSetting" | "autoRotate" | "release" | "autonomy" | "autonomyHistory" | "turbo" | "turboHistory" | "legatusScheduleHistory">>,
 ): SeatTickSettings {
-  const restored = defaultSeatTickSettings(project);
+  const restored = { ...defaultSeatTickSettings(project), ...(lapsed.legatusScheduleHistory ? { legatusScheduleHistory: lapsed.legatusScheduleHistory } : {}) };
   if (!lapsed.instructionsReviewedAt && !lapsed.reason && !lapsed.monitorPrompt && !lapsed.maintenanceSetting && !lapsed.curationSetting && !lapsed.autoRotate && !lapsed.release && !lapsed.autonomy && !lapsed.autonomyHistory?.length && !lapsed.turbo && !lapsed.turboHistory?.length) return restored;
   return { ...restored, ...(lapsed.curationSetting ? { curation: lapsed.curationSetting } : {}), ...(lapsed.autonomy ? { autonomy: lapsed.autonomy } : {}), ...(lapsed.autonomyHistory ? { autonomyHistory: lapsed.autonomyHistory } : {}), ...(lapsed.turbo ? { turbo: lapsed.turbo } : {}), ...(lapsed.turboHistory ? { turboHistory: lapsed.turboHistory } : {}), ...(lapsed.release ? { release: lapsed.release } : {}), ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), ...(lapsed.autoRotate ? { autoRotate: lapsed.autoRotate } : {}), instructionsReviewedAt: lapsed.instructionsReviewedAt, reason: lapsed.reason, ...(lapsed.instructionLines ? { instructionLines: lapsed.instructionLines } : {}), monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
 }
@@ -552,16 +593,28 @@ export type SeatTickSettingsChangeResult =
  * distinguishable from a broken one. Restoring the default needs no reason:
  * the record it clears already said why the tick was quiet.
  */
+type SeatTickChangeContext = {
+  at: string; actor: SeatTickSettingsActor; instructionActor?: SeatTickSettingsActor;
+  activeSeat?: { conversationId: string | null; seatEpoch: number } | null; turbo?: TurboChangeContext;
+  authorize?: () => boolean;
+};
+
 export function applySeatTickSettingsChange(
   current: SeatTickSettings,
   change: SeatTickSettingsChange,
-  context: { at: string; actor: SeatTickSettingsActor; instructionActor?: SeatTickSettingsActor; activeSeat?: { conversationId: string | null; seatEpoch: number } | null; turbo?: TurboChangeContext },
+  context: SeatTickChangeContext,
 ): SeatTickSettingsChangeResult {
+  if (context.authorize && !context.authorize()) return { ok: false, error: "Legatus seat changed before the settings write" };
   if (change.autonomy !== undefined || change.autonomyDecision !== undefined || change.turbo !== undefined) {
     const effective = effectiveSeatTickSettings(current, Date.parse(context.at), 60 * 60_000);
     if (effective.lapsed) current = seatTickSettingsAfterLapse(current.project, effective);
   }
   const touched = ["enabled", "wakeIntervalMinutes", "reason", "clearUnknownInstructions", "replaceOtherInstructions", "removeSeatNotes", "monitorPrompt", "until", "maintenance", "curation", "autoRotate", "release", "autonomy", "autonomyDecision", "turbo"].filter((key) => Object.hasOwn(change, key));
+  const foreignLegatus = context.actor.kind === "legatus" && context.actor.project !== current.project;
+  if (foreignLegatus && (touched.some(key => !["enabled", "wakeIntervalMinutes", "reason"].includes(key))
+    || !touched.some(key => key === "enabled" || key === "wakeIntervalMinutes"))) {
+    return { ok: false, error: "Legatus can change another seat’s wake interval and on/off setting" };
+  }
   if (touched.length === 0) return { ok: false, error: "a tick settings change needs at least one field" };
 
   if (Object.hasOwn(change, "clearUnknownInstructions")) {
@@ -602,11 +655,28 @@ export function applySeatTickSettingsChange(
     if (raw === null) wakeIntervalMinutes = null;
     else if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
       return { ok: false, error: "wakeIntervalMinutes must be a positive number of minutes, or null for the default" };
+    } else if (isLegatusProject(current.project) && raw < LEGATUS_MIN_WAKE_INTERVAL_MINUTES) {
+      return { ok: false, error: `Legatus wakes require at least ${LEGATUS_MIN_WAKE_INTERVAL_MINUTES} minutes` };
     } else if (raw > SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES) {
       return { ok: false, error: `wakeIntervalMinutes must be at most ${SEAT_TICK_MAX_WAKE_INTERVAL_MINUTES}; disable the tick instead of setting a longer interval` };
     } else {
       wakeIntervalMinutes = raw;
     }
+  }
+
+  let legatusScheduleHistory = current.legatusScheduleHistory;
+  if (context.actor.kind === "legatus") {
+    if (change.reason != null && (typeof change.reason !== "string" || change.reason.length > REASON_LIMIT)) {
+      return { ok: false, error: `reason must be at most ${REASON_LIMIT} characters` };
+    }
+    const why = typeof change.reason === "string" ? redactMonitorText(change.reason).trim().slice(0, REASON_LIMIT) || null : null;
+    legatusScheduleHistory = [...(legatusScheduleHistory ?? []), {
+      at: context.at, by: context.actor, enabled, wakeIntervalMinutes, why,
+    }].slice(-LEGATUS_SCHEDULE_HISTORY_LIMIT);
+    // A foreign schedule edit keeps the destination's instructions and other controls.
+    if (foreignLegatus) return { ok: true, settings: {
+      ...current, enabled, wakeIntervalMinutes, setBy: context.actor, updatedAt: context.at, legatusScheduleHistory,
+    } };
   }
 
   let until = current.until;
@@ -802,6 +872,7 @@ export function applySeatTickSettingsChange(
     ...(turboHistory.length ? { turboHistory: turboHistory.slice(-TURBO_HISTORY_LIMIT) } : {}),
     ...(release ? { release } : {}),
     project: current.project,
+    ...(legatusScheduleHistory ? { legatusScheduleHistory } : {}),
     ...(maintenance ? { maintenance } : {}),
     ...(curation ? { curation } : {}),
     ...(autoRotate ? { autoRotate } : {}),
@@ -865,7 +936,11 @@ export function markAutonomyReported(project: string, startedAt: string, at: str
 }
 
 /** Apply against the locked row so an extension cannot overwrite a decision or an end report. */
-export function changeSeatTickSettings(project: string, change: SeatTickSettingsChange, context: { at: string; actor: SeatTickSettingsActor; instructionActor?: SeatTickSettingsActor; activeSeat?: { conversationId: string | null; seatEpoch: number } | null; turbo?: TurboChangeContext }, filePath = seatTickSettingsPath()): SeatTickSettingsChangeResult {
+export function changeSeatTickSettings(project: string, change: SeatTickSettingsChange, context: SeatTickChangeContext, filePath = seatTickSettingsPath()): SeatTickSettingsChangeResult {
+  if (context.actor.kind === "legatus") {
+    const actor = context.actor;
+    context = { ...context, authorize: () => currentLegatusActor(actor) };
+  }
   return settingsStore().mutate(filePath, file => {
     const result = applySeatTickSettingsChange(file.projects[project] ?? defaultSeatTickSettings(project), change, { ...context, activeSeat: orchestratorSeatFor(project).active });
     return { next: result.ok ? { ...file, projects: { ...file.projects, [project]: result.settings } } : file, result };

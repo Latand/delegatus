@@ -1,3 +1,4 @@
+import { isLegatusProject } from "@/lib/projects/serviceProject";
 import { seatTickInstructionSections, type SeatTickInstructionLine } from "./seatTickInstructions";
 import { autonomyMandate, type AutonomySetting } from "./autonomy";
 import { turboMandate, type TurboSetting } from "./turbo";
@@ -409,7 +410,7 @@ export function seatTickWakeMessage(input: {
       (compactRoster && input.workers
       ? ["", `Worker limit ${input.workers.limit} (${input.workers.source}; machine ${input.workers.machine}), running ${input.workers.running}; overrides mandate/launch.`]
       : autonomy.length && input.workers ? ["", `Worker limit ${input.workers.limit} (${input.workers.source}; machine ${input.workers.machine}); running ${input.workers.running}. Overrides mandate/launch limits.`] : workerSection(input.workers)),
-      seatTickContractLines(input.mandateCarriesContract === true, compactRules),
+      isLegatusProject(input.project) ? ["", "Handle the agenda and use the Delegatus tick for your next check."] : seatTickContractLines(input.mandateCarriesContract === true, compactRules),
     ];
     return sections.flatMap(section => compactRoster && section[0] === "" ? section.slice(1) : section);
   };
@@ -418,7 +419,7 @@ export function seatTickWakeMessage(input: {
   // marked preview when that tail would exceed the payload bound.
   if (!autonomyNote && input.reportLines?.length && redactMonitorText(reserved.join("\n")).length > SEAT_TICK_MESSAGE_LIMIT + extra - 700) {
     const note = seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, noteLimit, !!input.workers);
-    reserved.splice(reserved.length - seatTickContractLines(input.mandateCarriesContract === true).length - (input.workers ? 2 : 0) - note.length, note.length,
+    reserved.splice(reserved.length - (isLegatusProject(input.project) ? 2 : seatTickContractLines(input.mandateCarriesContract === true).length) - (input.workers ? 2 : 0) - note.length, note.length,
       ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, 100, !!input.workers));
   }
   // A recovery snapshot carries every compact outcome once. Cutting this
@@ -531,7 +532,7 @@ export function seatTickWakePayload(input: Parameters<typeof seatTickWakeMessage
   }
   const text = seatTickWakeMessage(input);
   const first = input.items[0];
-  if (!first || (input.monitorPrompt && !input.monitorPromptUnchanged && !input.seatOwnedLanes?.length)
+  if (!first || first.kind === "agenda" || (input.monitorPrompt && !input.monitorPromptUnchanged && !input.seatOwnedLanes?.length)
     || `\n${text}\n`.includes(`\n${redactMonitorText(seatTickBullet(first))}\n`)) return { text, items: input.items };
   // Fit against the real redacted renderer, including headings, all owed
   // keys, instructions and the mandate's contract. Later items remain owed.

@@ -1288,6 +1288,7 @@ function openMaintenanceCard(taskId: string): void {
 const ACTORS = {
   gateway: "seatTick.actor.gateway",
   manager: "seatTick.actor.manager",
+  legatus: "seatTick.actor.legatus",
   agent: "seatTick.actor.agent",
   unidentified: "seatTick.actor.unidentified",
 } as const;

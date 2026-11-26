@@ -1,3 +1,4 @@
+import { isLegatusProject } from "./serviceProject";
 import { projectAliasStore, projectRemoteStore, worktreeMapStore, readProjectDocument } from "./persistence";
 import fs from "node:fs";
 
@@ -63,11 +64,14 @@ function withRecoveredAliases(legacy: ProjectAliasSnapshot): ProjectAliasSnapsho
 }
 
 function resolveAlias(project: string, aliases: Readonly<Record<string, string>>): string {
+  if (isLegatusProject(project)) return project;
   let current = project;
   const seen = new Set<string>();
   while (Object.hasOwn(aliases, current) && aliases[current] && !seen.has(current)) {
+    const target = aliases[current]!;
+    if (isLegatusProject(target)) break;
     seen.add(current);
-    current = aliases[current]!;
+    current = target;
   }
   return seen.has(current) ? project : current;
 }
@@ -85,11 +89,13 @@ export function withProjectAliasSnapshot<R>(snapshot: ProjectAliasSnapshot, oper
 }
 
 export function canonicalProject(project: string): string {
+  if (isLegatusProject(project)) return project;
   return resolveAlias(project, (aliasScope.__delegatusSynchronousAliasSnapshotV1 ?? readSnapshot()).aliases);
 }
 
 /** Canonical key and its predecessors, resolved against one durable snapshot. */
 export function projectAliasKeys(project: string): string[] {
+  if (isLegatusProject(project)) return [project];
   const { aliases } = readSnapshot();
   const current = resolveAlias(project, aliases);
   return [current, ...Object.keys(aliases).filter(key => key !== current && resolveAlias(key, aliases) === current)];
@@ -289,7 +295,7 @@ function mergeRegistrations(
     const source = registration.source.trim();
     const target = resolveAlias(registration.target.trim(), aliases);
     const displayName = registration.displayName.trim();
-    if (!source || !target || !displayName) return null;
+    if (!source || !target || !displayName || isLegatusProject(source) || isLegatusProject(target)) return null;
     const held = aliases[source] ? resolveAlias(aliases[source]!, aliases) : null;
     if (held && held !== target) return null;
     if (source !== target) aliases[source] = target;

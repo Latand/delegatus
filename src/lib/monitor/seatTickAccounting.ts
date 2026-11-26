@@ -146,6 +146,8 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
             && (!Array.isArray(wake.commit.acknowledgmentLines) || !wake.commit.acknowledgmentLines.every(item => item && string(item.key) && string(item.line))))
           || (wake.commit.itemLines !== undefined
             && (!Array.isArray(wake.commit.itemLines) || !wake.commit.itemLines.every(item => item && string(item.version) && string(item.line))))
+          || (wake.commit.urgentLegatus !== undefined
+            && (!string(wake.commit.urgentLegatus?.project) || !string(wake.commit.urgentLegatus?.conversationId)))
           || (wake.commit.formPage !== undefined && !validFormPage(wake.commit.formPage))
           || (wake.commit.itemsShown !== undefined
             && (!Array.isArray(wake.commit.itemsShown) || !wake.commit.itemsShown.every(string)))

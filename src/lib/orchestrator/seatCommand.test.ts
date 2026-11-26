@@ -46,11 +46,16 @@ import {
 import {
   executeOrchestratorRotation,
   executeOrchestratorSeatRequest,
+  executeLegatusSeatRequest,
   productionSeatCommandDependencies,
   reconcileOrchestratorSeatLaunch,
   SEAT_STORE_BUSY_REASON,
   type SeatCommandDependencies,
 } from "./seatCommand";
+import { localLegatusProject } from "./legatusSeat";
+import { readSelf } from "@/lib/links/self";
+import { boardFor, mutateBoard } from "@/lib/board/store";
+import { canonicalProject, persistProjectAliases, projectAliasKeys } from "@/lib/projects/aliases";
 import { activeOrchestratorSeats, beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, failOrchestratorSeatIntent, orchestratorRevocations, orchestratorSeatFor, readOrchestratorSeatFile, type OrchestratorSeat } from "./seats";
 import { clearStoredSeatRecord, damageStoredSeatRecord, writeStoredSeatRecord } from "./seatStoreFixture";
 
@@ -72,6 +77,27 @@ afterEach(() => {
 const AT = "2026-07-29T00:00:00.000Z";
 const NEW_ID = "conversation_33333333-3333-4333-8333-333333333333";
 const OLD_ID = "conversation_44444444-4444-4444-8444-444444444444";
+
+test("Legatus uses a local service key and replays the designation without launching again", async () => {
+  const { deps, recorded } = dependencies({ resolveProject: undefined });
+  expect(localLegatusProject()).toBeNull();
+  expect(activeOrchestratorSeats()).toEqual([]);
+  const request = { cwd: sandbox, clientRequestId: "legatus-designation" };
+  const first = await executeLegatusSeatRequest(request, deps);
+  const project = `legatus:${readSelf()?.installId}`;
+  expect(first.status, JSON.stringify(first.body)).toBe(200);
+  expect(first.body).toMatchObject({ project, seat: { project, path: "/tmp/new.jsonl" } });
+  expect(recorded.spawns).toHaveLength(1);
+  expect(recorded.spawns[0]).toMatchObject({ project, role: "legatus", engine: "codex" });
+  expect((await executeLegatusSeatRequest(request, deps)).body).toMatchObject({ project, replayed: true });
+  expect(recorded.spawns).toHaveLength(1);
+  expect(persistProjectAliases([{ source: project, target: "other-project", displayName: "Other project" }])).toBe(false);
+  expect(persistProjectAliases([{ source: "other-project", target: project, displayName: "Legatus" }])).toBe(false);
+  expect(canonicalProject(project)).toBe(project);
+  expect(projectAliasKeys(project)).toEqual([project]);
+  expect(mutateBoard(project, 0, []).ok).toBe(false);
+  expect(boardFor(project).revision).toBe(0);
+});
 
 for (const shared of [false, true]) test(`completed seat replay awaits registry identity publication without blocking the Viewer (shared=${shared})`, async () => {
   const { registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");

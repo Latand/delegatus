@@ -266,6 +266,16 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     capabilities: ["spawn"],
   },
   {
+    id: "legatus",
+    name: "Legatus",
+    description: "Coordinates project seats across the installation.",
+    config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
+    parameters: [],
+    promptScaffold: "You are Legatus. Read project schedules with seat_tick_settings and coordinate through send_message_to_orchestrator. Handle the subjects placed on your wake agenda.",
+    safetyFences: [],
+    capabilities: ["seat-tick-settings", "seat-messages"],
+  },
+  {
     id: "reviewer",
     name: "Reviewer",
     description: "Reviews a code diff and returns severity-ranked evidence-backed findings. High per lane for risky backend diffs.",
