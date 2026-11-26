@@ -126,7 +126,8 @@ try {
   else if (args[0] === "prepare") await prepare();
   else if (args[0] === "probe-install-binding") process.exitCode = restrictInstallWrites([3]) ? 0 : 1;
   else if (args[0] === "install-bound") {
-    if (!restrictInstallWrites([3, 4])) process.exitCode = 77;
+    const members = args.slice(1).map(Number);
+    if (!members.every((fd, index) => fd === index + 5) || !restrictInstallWrites([3, 4, ...members])) process.exitCode = 77;
     else {
       const child = spawn(process.execPath, ["--no-env-file", "install", "--frozen-lockfile", "--ignore-scripts", "--backend=copyfile"],
         { cwd: process.cwd(), stdio: ["ignore", "inherit", "inherit"] });
