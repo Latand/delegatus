@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
-import { procBackend } from "@/lib/proc";
+import { procBackend, type ProcSnapshotEntry } from "@/lib/proc";
 import { ROOTS } from "./roots";
 
 /* Outlives the client's 10 s /api/files poll so these memos survive a full
@@ -52,6 +52,22 @@ export function outputHolders(fresh = false): Map<string, number> {
   return holders;
 }
 
+export async function resourceOutputHolders(fresh = false): Promise<Map<string, number>> {
+  const now = Date.now();
+  if (!fresh && outputMemo && now - outputMemo.at < HOLDERS_TTL_MS) return outputMemo.map;
+  const holders = new Map<string, number>();
+  const visit = (target: string, pid: number) => {
+    if (target.endsWith(".output") && !holders.has(target)) holders.set(target, pid);
+  };
+  if (procBackend.resourceScanFdTargetsUnder) {
+    await procBackend.resourceScanFdTargetsUnder(ROOTS["claude-tasks"], (target, pid) => visit(target, pid));
+  } else {
+    procBackend.scanFdTargetsUnder(ROOTS["claude-tasks"], (target, pid) => visit(target, pid));
+  }
+  outputMemo = { at: Date.now(), map: holders };
+  return holders;
+}
+
 function realpathSafe(pathname: string): string | null {
   try {
     return fs.realpathSync(pathname);
@@ -86,6 +102,29 @@ export function writingHolders(paths: Iterable<string>, fresh = false): Map<stri
   }
 
   pathMemo = { at: now, key, map: holders };
+  return holders;
+}
+
+export async function resourceWritingHolders(paths: Iterable<string>): Promise<Map<string, number>> {
+  const aliasToPath = new Map<string, string>();
+  for (const pathname of paths) {
+    if (aliasToPath.size >= MAX_PATH_HOLDER_CANDIDATES * 2) break;
+    if (!pathname) continue;
+    aliasToPath.set(pathname, pathname);
+    const real = realpathSafe(pathname);
+    if (real) aliasToPath.set(real, pathname);
+  }
+  const key = [...aliasToPath.keys()].sort().join("\0");
+  const now = Date.now();
+  if (pathMemo && pathMemo.key === key && now - pathMemo.at < HOLDERS_TTL_MS) return pathMemo.map;
+  const holders = new Map<string, number>();
+  const visit = (target: string, pid: number, writable: () => boolean) => {
+    const pathname = aliasToPath.get(target);
+    if (pathname && !holders.has(pathname) && writable()) holders.set(pathname, pid);
+  };
+  if (procBackend.resourceScanFdTargetsFor) await procBackend.resourceScanFdTargetsFor([...aliasToPath.keys()], visit);
+  else procBackend.scanFdTargetsFor([...aliasToPath.keys()], visit);
+  pathMemo = { at: Date.now(), key, map: holders };
   return holders;
 }
 
@@ -204,18 +243,28 @@ export function readEnvVar(pid: number, name: string): string | null {
   return procBackend.readEnvVar(pid, name);
 }
 
-/** All non-helper claude/codex processes currently alive, memoised briefly. */
-export function agentProcesses(fresh = false): AgentProcess[] {
-  const now = Date.now();
-  if (!fresh && agentMemo && now - agentMemo.at < HOLDERS_TTL_MS) return agentMemo.list;
-
+function selectAgentProcesses(processes: ProcSnapshotEntry[]): AgentProcess[] {
   const list: AgentProcess[] = [];
-  for (const proc of procBackend.listProcesses()) {
+  for (const proc of processes) {
     const engine = argvEngine(proc.argv);
     if (engine === null || isHelperArgv(proc.argv)) continue;
     if (proc.cwd === null) continue;
     list.push({ pid: proc.pid, engine, argv: proc.argv, cwd: proc.cwd, tty: proc.tty });
   }
+  return list;
+}
+
+/** All non-helper claude/codex processes currently alive, memoised briefly. */
+export function agentProcesses(fresh = false): AgentProcess[] {
+  const now = Date.now();
+  if (!fresh && agentMemo && now - agentMemo.at < HOLDERS_TTL_MS) return agentMemo.list;
+  const list = selectAgentProcesses(procBackend.listProcesses());
   agentMemo = { at: now, list };
   return list;
+}
+
+export async function resourceAgentProcesses(fresh: boolean): Promise<AgentProcess[]> {
+  return procBackend.resourceListProcesses
+    ? selectAgentProcesses(await procBackend.resourceListProcesses())
+    : agentProcesses(fresh);
 }

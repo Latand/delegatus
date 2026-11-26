@@ -9,9 +9,9 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
-import { withProvisioningTurn } from "./provisioningTurn";
+import { provisioningStripe, tryProvisioningLock, type ProvisioningGrant } from "./provisionCheckoutCustody";
 import { readWorktreeProvenance } from "./worktreeProvenance";
-import { appendGitConfigOverride, commitPipelineStage, currentPipelineRemoteBranchHead, isPublicationPreparationInvocation, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
+import { appendGitConfigOverride, commitPipelineStage, currentPipelineRemoteBranchHead, isPublicationPreparationInvocation, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead, verifyProvisioningCheckoutReceipt, type ProvisionCheckoutCustody } from "./git";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import type { Pipeline } from "./types";
 import { createPipelineWithDelivery, findPipelineRecord, savePipelines, takeoverPipelineDelivery, withPipelineMutation } from "./store";
@@ -243,11 +243,15 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   return result.stdout.trim();
 }
 
+async function interruptedCheckoutCustody(repo: string): Promise<ProvisionCheckoutCustody> {
+  return { commonDir: await git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"), addAdmitted: true,
+    checkpointAlternative: async () => {}, prepareInterruptedIndexRepair: async () => {}, verify: async () => {} };
+}
+
 test("another lane checks out the same repository while the first prepares its hook dependencies", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provision-peer-"));
   const repo = path.join(root, "repo");
   const entered = Promise.withResolvers<void>(), finish = Promise.withResolvers<void>();
-  const waited = Promise.withResolvers<void>();
   const runs: Promise<unknown>[] = [];
   try {
     fs.mkdirSync(repo);
@@ -256,24 +260,28 @@ test("another lane checks out the same repository while the first prepares its h
     await git(repo, "add", "package.json");
     expect((await realExec("git", ["commit", "-m", "Seed fixture"], repo, controllerCommitIdentityEnv())).code).toBe(0);
     const baseRef = await git(repo, "rev-parse", "HEAD");
-    const run = (id: string, stall: boolean) => {
+    const run = async (id: string, stall: boolean) => {
       const lane = { ...pipeline(), id, delivery: undefined, publication: "internal" as const,
         repoDir: repo, worktreeDir: path.join(root, id), baseBranch: "main", branch: "pipeline/" + id, baseRef };
-      return withProvisioningTurn(repo, lane.worktreeDir, previous => {
-        if (!stall) waited.resolve();
-        return previous;
-      }, ready => provisionPipelineWorktreeAsync(lane, async (command, args, cwd, signal, options) => {
-        if (stall && command === "git" && args[0] === "check-ignore" && cwd === lane.worktreeDir) {
-          entered.resolve();
-          await finish.promise;
-        }
-        return realProvisionExec(command, args, cwd, signal, options);
-      }, undefined, ready));
+      const grants: ProvisioningGrant[] = [];
+      const signal = new AbortController().signal;
+      try {
+        const checkout = await tryProvisioningLock(root, "checkout", provisioningStripe(lane.worktreeDir), false, signal, grant => grants.push(grant));
+        const repository = await tryProvisioningLock(root, "repo", provisioningStripe(repo), false, signal, grant => grants.push(grant));
+        if (!checkout || !repository) throw new Error("second checkout could not take its turns");
+        return await provisionPipelineWorktreeAsync(lane, async (command, args, cwd, signal, options) => {
+          if (stall && command === "git" && args[0] === "check-ignore" && cwd === lane.worktreeDir) {
+            entered.resolve();
+            await finish.promise;
+          }
+          return realProvisionExec(command, args, cwd, signal, options);
+        }, signal, repository.close);
+      } finally { for (const grant of grants) grant.close(); }
     };
     const first = run("aabbcc01", true); runs.push(first);
     await Promise.race([entered.promise, first.then(() => { throw new Error("first lane missed dependency setup"); })]);
     const second = run("aabbcc02", false); runs.push(second);
-    const outcome = await Promise.race([second, waited.promise.then(() => "waiting for the first toolchain")]);
+    const outcome = await second;
     expect(outcome).toMatchObject({ ok: true, sha: baseRef });
     expect(await git(path.join(root, "aabbcc02"), "rev-parse", "HEAD")).toBe(baseRef);
     finish.resolve();
@@ -1019,7 +1027,7 @@ for (const interruption of ["timeout", "cancellation"] as const) {
       // No Git process is left on the checkout: the retry does what the killed add had left to do.
       (await git(source, "config", "filter.slow.smudge", "cat"));
       (await git(source, "config", "filter.slow.clean", "cat"));
-      const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+      const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec, undefined, undefined, await interruptedCheckoutCustody(source));
       expect(retry).toEqual({ ok: true, sha: subject.baseRef, baseBranch: "main" });
       expect(fs.readFileSync(path.join(subject.worktreeDir, "tracked.txt"), "utf8")).toBe("complete file\n");
       expect(fs.readFileSync(path.join(subject.worktreeDir, "keep.txt"), "utf8")).toBe("preserve partial checkout\n");
@@ -1063,7 +1071,7 @@ test("interrupted checkout recovery preserves whitespace paths and symlinks acro
     (await git(source, "config", "filter.slow.smudge", "cat"));
     (await git(source, "config", "filter.slow.clean", "cat"));
 
-    const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+    const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec, undefined, undefined, await interruptedCheckoutCustody(source));
 
     expect(retry).toEqual({ ok: true, sha: subject.baseRef, baseBranch: "main" });
     expect(fs.readFileSync(path.join(subject.worktreeDir, "my file.txt"), "utf8")).toBe("space path content\n");
@@ -1101,7 +1109,7 @@ test("interrupted checkout recovery rejects and preserves a changed tracked syml
     (await git(source, "config", "filter.slow.smudge", "cat"));
     (await git(source, "config", "filter.slow.clean", "cat"));
 
-    const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+    const retry = await provisionPipelineWorktreeAsync(subject, realProvisionExec, undefined, undefined, await interruptedCheckoutCustody(source));
 
     expect(retry).toMatchObject({ ok: false, error: "the interrupted pipeline checkout contains a modified tracked path (link); preserve it, move it aside, then retry-stage" });
     expect(fs.readlinkSync(path.join(subject.worktreeDir, "link"))).toBe("changed-target");
@@ -1117,10 +1125,10 @@ test("async adoption preserves untracked files and edits made after its safety s
   (await git(source, "add", "."));
   (await git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "-m", "base"));
   const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(publicationState, "lane"), baseBranch: "main", baseRef: (await git(source, "rev-parse", "HEAD")) };
-  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec, undefined, undefined, await interruptedCheckoutCustody(source))).ok).toBe(true);
   fs.writeFileSync(path.join(subject.worktreeDir, "keep.txt"), "preserve\n");
   (await git(source, "worktree", "lock", "--reason", "initializing", subject.worktreeDir));
-  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec, undefined, undefined, await interruptedCheckoutCustody(source))).ok).toBe(true);
   expect((await git(source, "worktree", "list", "--porcelain"))).not.toContain("locked");
   (await git(source, "worktree", "lock", "--reason", "initializing", subject.worktreeDir));
   const tracked = path.join(subject.worktreeDir, "tracked.txt");
@@ -1134,7 +1142,7 @@ test("async adoption preserves untracked files and edits made after its safety s
     }
     return result;
   };
-  const recovered = await provisionPipelineWorktreeAsync(subject, racingExec);
+  const recovered = await provisionPipelineWorktreeAsync(subject, racingExec, undefined, undefined, await interruptedCheckoutCustody(source));
   expect(injected).toBe(true);
   expect(recovered.ok).toBe(false);
   expect(fs.readFileSync(tracked, "utf8")).toBe(changedAfterScan);
@@ -1142,10 +1150,44 @@ test("async adoption preserves untracked files and edits made after its safety s
   fs.writeFileSync(tracked, "complete file\n");
   (await git(source, "worktree", "unlock", subject.worktreeDir));
   (await git(source, "worktree", "lock", "--reason", "preserve checkout", subject.worktreeDir));
-  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec, undefined, undefined, await interruptedCheckoutCustody(source))).ok).toBe(true);
   fs.unlinkSync(path.join(subject.worktreeDir, "tracked.txt"));
   expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(false);
   expect(fs.readFileSync(path.join(subject.worktreeDir, "keep.txt"), "utf8")).toBe("preserve\n");
+});
+
+test("checkout receipt refuses staged changes even when the tracked worktree matches HEAD", async () => {
+  const origin = path.join(publicationState, "staged-index-origin.git");
+  const source = path.join(publicationState, "staged-index-source");
+  await git(publicationState, "init", "--bare", "--initial-branch=main", origin);
+  await git(publicationState, "clone", origin, source);
+  await git(source, "config", "user.name", "Fixture");
+  await git(source, "config", "user.email", "noreply@example.invalid");
+  fs.writeFileSync(path.join(source, "tracked.txt"), "base bytes\n");
+  await git(source, "add", ".");
+  await git(source, "commit", "-m", "base");
+  await git(source, "push", "origin", "main");
+  const head = await git(source, "rev-parse", "HEAD");
+  const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(publicationState, "staged-index-lane"), baseBranch: "main", baseRef: head };
+  subject.delivery!.target.remote = origin;
+  await provisionPipelineWorktreeAsync(subject, realProvisionExec);
+  await git(subject.worktreeDir, "config", "user.name", "Fixture");
+  await git(subject.worktreeDir, "config", "user.email", "noreply@example.invalid");
+  fs.writeFileSync(path.join(subject.worktreeDir, "tracked.txt"), "staged bytes\n");
+  await git(subject.worktreeDir, "add", "tracked.txt");
+  fs.writeFileSync(path.join(subject.worktreeDir, "tracked.txt"), "base bytes\n");
+  const commonDir = await git(source, "rev-parse", "--path-format=absolute", "--git-common-dir");
+  let adds = 0;
+  const exec: import("./git").ProvisionExecPort = async (command, args, cwd, signal, options) => {
+    if (args[0] === "worktree" && args[1] === "add") adds++;
+    return realProvisionExec(command, args, cwd, signal, options);
+  };
+  expect(await verifyProvisioningCheckoutReceipt(subject, {
+    branch: subject.branch, deliveryBranch: subject.branch, start: head, expectedHead: head, reuseBranch: true,
+  }, commonDir, exec, new AbortController().signal)).toBe(false);
+  expect(fs.readFileSync(path.join(subject.worktreeDir, "tracked.txt"), "utf8")).toBe("base bytes\n");
+  expect(await git(subject.worktreeDir, "show", ":tracked.txt")).toBe("staged bytes");
+  expect(adds).toBe(0);
 });
 
 test.skipIf(process.platform === "win32")("an initialization a live Git process still holds is left alone and reported as held (#2176)", async () => {
@@ -1156,7 +1198,7 @@ test.skipIf(process.platform === "win32")("an initialization a live Git process 
   (await git(source, "add", "."));
   (await git(source, "-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "-c", "commit.gpgSign=false", "commit", "-m", "base"));
   const subject = { ...pipeline(), repoDir: source, worktreeDir: path.join(publicationState, "lane"), baseBranch: "main", baseRef: (await git(source, "rev-parse", "HEAD")) };
-  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec, undefined, undefined, await interruptedCheckoutCustody(source))).ok).toBe(true);
   (await git(source, "worktree", "lock", "--reason", "initializing", subject.worktreeDir));
   fs.unlinkSync(path.join(subject.worktreeDir, "tracked.txt"));
   // A Git process still working inside the checkout, as a slow add's checkout would be.
@@ -1168,7 +1210,7 @@ test.skipIf(process.platform === "win32")("an initialization a live Git process 
     expect((await git(source, "worktree", "list", "--porcelain"))).toContain("locked initializing");
     expect(fs.existsSync(path.join(subject.worktreeDir, "tracked.txt"))).toBe(false);
   } finally { owner.kill("SIGKILL"); await owner.exited; }
-  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec)).ok).toBe(true);
+  expect((await provisionPipelineWorktreeAsync(subject, realProvisionExec, undefined, undefined, await interruptedCheckoutCustody(source))).ok).toBe(true);
   expect(fs.readFileSync(path.join(subject.worktreeDir, "tracked.txt"), "utf8")).toBe("complete file\n");
 });
 

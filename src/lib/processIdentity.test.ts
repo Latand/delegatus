@@ -8,6 +8,7 @@ import { startLeaderExitedChild, startUnreapedChild } from "@/lib/testing/unreap
 
 import {
   captureProcessIdentity,
+  bootEpochProvesExit,
   sameRecordedProcessIdentity,
   processIdentityMayRun,
   processIdentityProvenDead,
@@ -32,6 +33,14 @@ test("a matching pid and start token from an earlier boot is provably dead", () 
     startIdentity: "42:start",
     bootEpoch: "boot-earlier",
   }, probe())).toBe("dead");
+});
+
+test("a PID namespace change on the same Linux boot keeps a live process unverified", () => {
+  const previous = "linux:boot-a:pidns:pid:[4026531836]";
+  const current = "linux:boot-a:pidns:pid:[4026532999]";
+  expect(bootEpochProvesExit(previous, current)).toBeFalse();
+  expect(processIdentityStatus({ pid: 42, startIdentity: "42:start", bootEpoch: previous }, probe({ bootEpoch: () => current }))).toBe("unverified");
+  expect(bootEpochProvesExit(previous, "linux:boot-b:pidns:pid:[4026531836]")).toBeTrue();
 });
 
 test("a recycled pid with a different start token is provably dead", () => {

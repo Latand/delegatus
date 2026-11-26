@@ -1,7 +1,8 @@
 # Pinned Codex app-server boundary
 
 Delegatus pins the generated app-server schemas for Codex 0.154.0, 0.159.0,
-0.162.1, 0.163.0, 0.164.0, 0.165.0, 0.166.0, 0.167.0, 0.168.0, 0.169.0 and 0.170.0.
+0.162.1, 0.163.0, 0.164.0, 0.165.0, 0.166.0, 0.167.0, 0.168.0, 0.169.0, 0.170.0,
+0.171.0 and 0.172.0.
 Each version has the CLI's stable and experimental bundles and their SHA-256 digests under `src/lib/accounts/protocol/`. Each
 schema is read and checked against its digest when a protocol check first
 needs it, then cached for the process. Production server bundles retain the
@@ -26,18 +27,18 @@ contract.
 
 ## CI coverage
 
-Installed CLI pin: `0.166.0`.
+Installed CLI pin: `0.172.0`.
 
-The installed pin was verified with `codex --version` on 2026-11-14 (UTC).
-The supported CLI window is the latest three reviewed pins: **0.168.0,
-0.169.0 and 0.170.0**, with a minimum tested version of **0.168.0**.
+The installed pin was verified with `codex --version` on 2026-11-26 (UTC).
+The supported CLI window is the latest three reviewed pins: **0.170.0,
+0.171.0 and 0.172.0**, with a minimum tested version of **0.170.0**.
 `src/lib/accounts/codexVersions.ts` selects them numerically from the retained
 protocol manifests. Adding a reviewed pin automatically rotates the oldest
 version out of the window. Historical schemas remain available for exact-version
 admission. `resolveCodexProtocol` admits every retained exact pin before
-considering fallback. Regression tests prove that **0.165.0, 0.166.0 and
-0.167.0** retain their own schemas and skip generation. Structured-host tests
-take all three through `thread/start` and `turn/start` with their original
+considering fallback. Regression tests prove that **0.165.0 through
+0.169.0** retain their own schemas and skip generation. Structured-host tests
+take each of them through `thread/start` and `turn/start` with their original
 protocol receipts.
 
 The `codex-versions` job in `.github/workflows/bun-runtime.yml` resolves that
@@ -220,8 +221,71 @@ The experimental bundle adds optional, nullable `biometricType` to
 generated server-request type files are unchanged. The runtime keeps the same
 router and treats moderation metadata as part of the item payload. Exact
 admission selects the new schema without changing fallback rules. The native CI
+matrix, local pre-push native phase and supported-version message resolved
+0.168.0–0.170.0 when this pin landed.
+
+## 0.171.0 and 0.172.0 compatibility review
+
+Both versions were installed into scratch prefixes; 0.172.0 is also the
+installed CLI. Each schema pair was generated from the native executable with
+`bun scripts/generate-codex-protocol.ts --codex <binary>`. The generator output
+layout is unchanged from 0.170.0: `generate-json-schema --out <dir>` still
+writes `codex_app_server_protocol.schemas.json`, now beside a v2-only bundle
+and per-message files that Delegatus does not read. Regenerating 0.170.0 by the
+same procedure reproduced its retained bundles byte for byte.
+
+0.171.0 is not an additive extension of 0.170.0, and 0.172.0 is not an additive
+extension of 0.171.0, so each needs its own exact pin:
+
+- **`mcpServer/elicitation/request` gains optional `environmentId`** (0.171.0,
+  both bundles). Server-request params are validated closed, so a 0.171.0 CLI
+  under the 0.170.0 pin would have its elicitations refused. The exact pins
+  accept the field. Verifying this exposed an older defect: the closed-object
+  transform closed the shared fields (`serverName`, `threadId`, `turnId`) and
+  each mode branch separately, so no elicitation could validate under any pin.
+  Each branch is now closed over both field sets; unknown fields, fields from
+  another mode and missing shared fields are still refused.
+- **`currentTime/read` is removed** (0.171.0, experimental). The CLI no longer
+  asks the client for its clock. Its route stays for the 0.170.0 pin, and newer
+  pins refuse it at ingress as an absent server request.
+- **`v2.Project.position` is removed** (0.171.0, both bundles). Delegatus calls
+  no `project/*` method and reads no project notification.
+- **`v2.ThreadRealtimeItem`'s `sessionEndInputSaved` becomes
+  `sessionInputSaved` with a `reason`** (`chunk` or `sessionEnd`) (0.172.0, both
+  bundles). Delegatus reads only `transcriptSegment` items from
+  `thread/realtime/item/*`; that variant is unchanged and other item types are
+  ignored.
+
+Additive changes include `thread/search/stream`, `thread/search/cancel`,
+`thread/search/stream/cancel`, `thread/realtime/list`,
+`modelProvider/default/set` and the `thread/search/partial` notification
+(0.171.0), optional `environmentId` on MCP status, resource, tool-call and
+OAuth params, `ThreadListParams.includedThreadIds`,
+`AccountUpdatedNotification.reason`, realtime frame and handoff items,
+`ThreadStartParams.daybreakProgramPropagationEnrolled`,
+`ThreadSampleParams.model` and an optional Bedrock `providerId` (0.172.0).
+`CodexErrorInfo` adds `bioPolicy` (0.171.0) and `apiKeySpendLimitExceeded`,
+`projectSpendLimitExceeded` and `organizationSpendLimitExceeded` (0.172.0).
+The spend limits belong to API-key billing, which Delegatus's Codex accounts do
+not use, so the existing usage-limit classifiers are unchanged. Of the 80
+retained server-request type files, `ServerRequest.ts`,
+`McpServerElicitationRequestParams.ts` and the two `CurrentTimeRead*` files
+differ. The router keeps the 0.167.0 closure because it still covers the
+0.170.0 pin's `currentTime/read`. No new Codex feature is enabled. The native CI
 matrix, local pre-push native phase and supported-version message resolve
-0.168.0–0.170.0 from the manifest inventory.
+0.170.0–0.172.0 from the manifest inventory.
+
+## Fallback generation in the Docker install
+
+In the Docker install `codex` is an nsenter shim, so `generate-json-schema`
+runs in the host's mount namespace. Until this review the fallback wrote to a
+scratch directory under the container's `/tmp`; the CLI wrote the bundle into
+the host's `/tmp` at the same path, the Viewer could not find it (`ENOENT`), and
+the directory was never removed. Every CLI above the newest pin failed to launch
+this way, starting with 0.169.0 and again with 0.172.0. With
+`LLV_DOCKER_NSENTER_SHIMS=1` the scratch directory is created under the cache
+root in the home directory, which is mounted at the same path on both sides,
+and removed after reading. Other installs keep the process temp directory.
 
 ## Requested CLI checks
 

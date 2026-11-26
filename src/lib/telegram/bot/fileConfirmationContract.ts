@@ -1,3 +1,4 @@
+import type { OwnerTelegramGap } from "@/lib/team/contract";
 import type { DocumentWarning } from "./documents";
 
 export interface FileSendOptions {
@@ -86,6 +87,16 @@ export const fileConfirmationText = {
     ownerTitle: "Sign in to review this send",
     ownerBody: "Sign in with Telegram as the paired installation owner.",
     signIn: "Sign in",
+    /* What the owner is missing before this page can show the request: the title says it, the body says why. `action` is a plain link; the Telegram steps run on the page. */
+    missing: {
+      team: { title: "This Delegatus has no owner yet.", body: "Confirming a file send needs an owner who signs in with Telegram. Set up the team and link Telegram first.", action: "Set up the team" },
+      owner: { title: "Only the owner can confirm this send.", body: "This browser is signed in as another member.", action: "Sign in as the owner" },
+      pairing: { title: "Owner reviews in Telegram are not set up.", body: "No Telegram account is paired to receive owner reviews here, so this send cannot be confirmed. Pair the owner's Telegram in the relay settings, then ask the agent to send again." },
+      telegram_link: { title: "Link your Telegram to confirm this send.", body: "This browser is signed in as the owner, and the owner has no Telegram account linked. Confirming a file send needs the owner's Telegram: the account paired for owner reviews." },
+      telegram_account: { title: "Link the Telegram account paired for owner reviews.", body: "The owner's linked Telegram is a different account. Linking the paired one replaces the current link." },
+      telegram_session: { title: "Sign in with Telegram to confirm this send.", body: "This browser signed in without Telegram. Confirming a file send needs the owner's Telegram sign-in on this browser." },
+    } satisfies Record<OwnerTelegramGap, { title: string; body: string; action?: string }>,
+    notLinked: "That Telegram account is not linked to the owner. Sign in with the account paired for owner reviews.",
   },
   uk: {
     refuse: "Не надсилати", approve: "Усе одно надіслати один раз", sending: "Надсилання…", declining: "Скасування…",
@@ -114,6 +125,15 @@ export const fileConfirmationText = {
     ownerTitle: "Увійдіть, щоб переглянути це надсилання",
     ownerBody: "Увійдіть через Telegram як власник, прив’язаний до цієї інсталяції.",
     signIn: "Увійти",
+    missing: {
+      team: { title: "У цього Delegatus ще немає власника.", body: "Щоб підтвердити надсилання файлу, потрібен власник, який входить через Telegram. Спершу налаштуйте команду й прив’яжіть Telegram.", action: "Налаштувати команду" },
+      owner: { title: "Підтвердити це надсилання може лише власник.", body: "Цей браузер увійшов як інший учасник.", action: "Увійти як власник" },
+      pairing: { title: "Огляди власника в Telegram не налаштовано.", body: "Тут жоден акаунт Telegram не підключено для оглядів власника, тож це надсилання не можна підтвердити. Підключіть Telegram власника в налаштуваннях ретранслятора й попросіть агента надіслати знову." },
+      telegram_link: { title: "Прив’яжіть Telegram, щоб підтвердити це надсилання.", body: "Цей браузер увійшов як власник, а до власника не прив’язано акаунт Telegram. Для підтвердження потрібен Telegram власника — акаунт, підключений для оглядів власника." },
+      telegram_account: { title: "Прив’яжіть акаунт Telegram, підключений для оглядів власника.", body: "До власника зараз прив’язано інший акаунт. Нова прив’язка замінить поточну." },
+      telegram_session: { title: "Увійдіть через Telegram, щоб підтвердити це надсилання.", body: "Цей браузер увійшов не через Telegram. Для підтвердження власник має увійти через Telegram у цьому браузері." },
+    } satisfies Record<OwnerTelegramGap, { title: string; body: string; action?: string }>,
+    notLinked: "Цей акаунт Telegram не прив’язано до власника. Увійдіть через акаунт, підключений для оглядів власника.",
   },
 } as const;
 
