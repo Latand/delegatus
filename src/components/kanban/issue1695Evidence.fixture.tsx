@@ -3575,11 +3575,63 @@ const SPEND_TASKS: Record<string, TaskSpendSummary> = {
     spendProvider("codex", [spendAccount("codex:a", "A", "pro", 21.3, 402_000_000, 74, 21.3), spendAccount("codex:d", "D", "pro", 12.9, 250_000_000, 40, 12.9)]),
   ] },
 };
+/* `&spend=critic` (and `&spend=criticguest` for a member who is not the owner):
+   the states the estimate meets with realistic figures: a plan share with the
+   full API price, two models and two bases across two providers, a model with
+   no API price, an account with no reported plan, a task whose tokens are not
+   known yet (nothing is drawn), and a large lower bound. */
+const PLAN_BUDGET = { low: 900, mid: 1600, high: 2300, grade: "inferred" } as const;
+function criticAccount(key: string, label: string, plan: string | null, tier: string | null, share: [number, number, number] | null, basis: "plan" | "measured" | null,
+  tokens: number, apiUsd: number | null, week: number | null, priced = tokens): TaskSpendAccount {
+  return { key, label, plan, planTier: tier, weeklyPp: share?.[0] ?? null, basis, range: share ? { low: share[1], high: share[2] } : null,
+    budget: basis === "plan" ? PLAN_BUDGET : null, apiUsd, apiPricedTokens: apiUsd === null ? 0 : priced, tokens,
+    week: week === null ? null : { usedPercent: week, taskPp: share?.[0] ?? null }, sessionPp: null };
+}
+function criticProvider(engine: "claude" | "codex", accounts: TaskSpendAccount[], extra: Partial<TaskSpendProvider> = {}): TaskSpendProvider {
+  const shared = accounts.filter(a => a.weeklyPp !== null);
+  const bases = new Set(shared.map(a => a.basis));
+  const api = accounts.some(a => a.apiUsd !== null) ? accounts.reduce((sum, a) => sum + (a.apiUsd ?? 0), 0) : null;
+  return { engine, bound: shared.length ? "approx" : "tokens", floor: null, accounts,
+    weeklyPp: shared.reduce((sum, a) => sum + a.weeklyPp!, 0), tokens: accounts.reduce((sum, a) => sum + a.tokens, 0),
+    basis: !shared.length ? null : bases.size > 1 ? "mixed" : shared[0]!.basis,
+    range: shared.length ? { low: shared.reduce((sum, a) => sum + a.range!.low, 0), high: shared.reduce((sum, a) => sum + a.range!.high, 0) } : null,
+    budgets: shared.some(a => a.budget) ? [PLAN_BUDGET] : [], outsideBudget: false, apiUsd: api,
+    apiPricedTokens: accounts.reduce((sum, a) => sum + a.apiPricedTokens, 0), unpricedModels: [], unpricedTokens: 0, issues: [], ...extra };
+}
+const MAX20 = "default_claude_max_20x";
+const SPEND_CRITIC: Record<string, TaskSpendSummary> = {
+  "t-upload": { providers: [criticProvider("codex", [criticAccount("codex:a", "Workstation", "pro", null, [1, 0.65, 1.75], "plan", 45_000_000, 8.52, 47)])] },
+  "t-search": { providers: [
+    criticProvider("claude", [
+      criticAccount("claude:a", "Workstation", "max", MAX20, [1.5, 0.98, 2.63], "plan", 70_000_000, 23, 53),
+      criticAccount("claude:b", "Laptop", "max", "default_claude_max_5x", [2.1, 1.37, 3.68], "measured", 45_000_000, 15, 31),
+    ]),
+    criticProvider("codex", [criticAccount("codex:a", "Workstation", "pro", null, [1.4, 0.91, 2.45], "measured", 45_000_000, 8.52, 61)]),
+  ] },
+  "t-export": { providers: [
+    criticProvider("claude", [criticAccount("claude:a", "Workstation", "max", MAX20, null, null, 18_000_000, null, 53)],
+      { unpricedTokens: 18_000_000, unpricedModels: ["claude-preview-x"] }),
+    criticProvider("codex", [criticAccount("codex:a", "Workstation", "pro", null, [2.4, 1.56, 4.2], "plan", 62_000_000, 9.87, 61, 50_000_000)],
+      { unpricedTokens: 12_000_000, unpricedModels: ["gpt-6.3-sol-preview"] }),
+  ] },
+  "t-disk": { providers: [
+    criticProvider("claude", [criticAccount("claude:a", "Server", null, null, null, null, 41_000_000, 12, null)], { issues: ["planMissing"] }),
+  ] },
+  /* The task's tokens are not known: the card draws nothing. */
+  "t-links": { providers: [] },
+  "t-interrupt": { providers: [
+    criticProvider("claude", [criticAccount("claude:a", "Workstation", "max", MAX20, [12.4, 8.06, 21.7], "measured", 610_000_000, 196, 66)], { floor: "before-counting", bound: "floor" }),
+    criticProvider("codex", [
+      criticAccount("codex:a", "Workstation", "pro", null, [21.3, 13.85, 37.28], "measured", 402_000_000, 75, 74),
+      criticAccount("codex:b", "Laptop", "plus", null, [12.9, 8.39, 22.58], "measured", 250_000_000, 47, 40),
+    ]),
+  ] },
+};
 function spendAnswer(ids: readonly string[]): { generatedAt: number; tasks: Record<string, TaskSpendSummary> } {
   const tasks: Record<string, TaskSpendSummary> = {};
   for (const id of ids) {
-    const summary = SPEND_TASKS[id];
-    if (summary) tasks[id] = SPEND === "guest" ? { providers: summary.providers.map((provider) => ({ ...provider, accounts: null })) } : summary;
+    const summary = (SPEND === "critic" || SPEND === "criticguest" ? SPEND_CRITIC : SPEND_TASKS)[id];
+    if (summary) tasks[id] = SPEND === "guest" || SPEND === "criticguest" ? { providers: summary.providers.map((provider) => ({ ...provider, accounts: null })) } : summary;
   }
   return { generatedAt: Date.now(), tasks };
 }

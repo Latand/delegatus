@@ -6,9 +6,10 @@ import { intlLocale } from "@/components/activity/format";
 import { compact, money } from "@/components/activity/tokenParts";
 import { EngineMark } from "@/components/EngineMark";
 import { TooltipBubble } from "@/components/TooltipBubble";
-import type { SpendBudget, TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
+import type { SpendBudget, SpendRange, TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
 import { useLocale, type Locale, type TFunction } from "@/lib/i18n";
 
+import { chooseSpendPlacement, spendCandidates, windowTextBoxes, type SpendKind } from "./spendPopoverPlacement";
 import { useTaskSpend } from "./taskSpendSummaries";
 
 const ENGINE_NAME = { claude: "Claude", codex: "Codex" } as const;
@@ -45,15 +46,16 @@ function accountPlan(account: TaskSpendAccount): string | null {
   return plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : null;
 }
 
-function accountBudget(account: TaskSpendAccount, locale: Locale, t: TFunction): string | null {
-  if (!account.budget) return null;
-  const number = new Intl.NumberFormat(intlLocale(locale), { maximumFractionDigits: 0 });
-  return t("taskSpend.budget", { low: number.format(account.budget.low), high: number.format(account.budget.high), grade: t(`taskSpend.grade.${account.budget.grade}`) });
-}
+const GRADE_ORDER: SpendBudget["grade"][] = ["measured", "measured-thin", "published", "inferred"];
 
-function budgetText(budget: SpendBudget, locale: Locale, t: TFunction): string {
+/** One budget line per provider: the widest range its accounts' plans give, at the weakest grade among them. */
+function budgetText(budgets: SpendBudget[], locale: Locale, t: TFunction): string | null {
+  if (!budgets.length) return null;
   const number = new Intl.NumberFormat(intlLocale(locale), { maximumFractionDigits: 0 });
-  return t("taskSpend.budget", { low: number.format(budget.low), high: number.format(budget.high), grade: t(`taskSpend.grade.${budget.grade}`) });
+  const grade = budgets.reduce((worst, b) => (GRADE_ORDER.indexOf(b.grade) > GRADE_ORDER.indexOf(worst) ? b.grade : worst), budgets[0].grade);
+  return t("taskSpend.budget", {
+    low: number.format(Math.min(...budgets.map(b => b.low))), high: number.format(Math.max(...budgets.map(b => b.high))), grade: t(`taskSpend.grade.${grade}`),
+  });
 }
 
 /** What a screen reader hears for the marks: one clause per provider. */
@@ -100,64 +102,69 @@ function usd(value: number, locale: Locale): string {
 const decimalCents = (value: number, locale: Locale) =>
   new Intl.NumberFormat(intlLocale(locale), { maximumFractionDigits: 2 }).format(value);
 
-function accountRange(account: TaskSpendAccount, locale: Locale): string | null {
-  if (!account.range) return null;
-  return `${decimalCents(account.range.low, locale)}–${decimalCents(account.range.high, locale)}%`;
+/** The share as the headline prints it, with its range at the same precision: «≈1.5% of week (1–2.6%)». */
+function shareText(pp: number, range: SpendRange | null, locale: Locale, t: TFunction): string {
+  const bound = (value: number) => decimal(Math.round(value * 10) / 10, locale);
+  const span = range ? ` (${bound(range.low)}–${bound(range.high)}%)` : "";
+  return `${t("taskSpend.share", { value: pp < 0.1 ? "<0.1%" : `≈${estimatePercent(pp, locale)}` })}${span}`;
 }
 
-/** The card popover and the phone task screen share the same estimates. */
-function SpendLines({ summary, accountDetails = false }: { summary: TaskSpendSummary; accountDetails?: boolean }) {
+function SpendProvider({ provider }: { provider: TaskSpendProvider }) {
   const { t, locale } = useLocale();
-  const tokens = summary.providers.reduce((total, p) => total + p.tokens, 0);
+  const engine = ENGINE_NAME[provider.engine];
+  const kind = providerKind(provider);
+  const partial = provider.apiUsd !== null && provider.unpricedTokens > 0;
+  const api = provider.apiUsd === null
+    ? (provider.unpricedModels.length ? t("taskSpend.noApiModels", { models: provider.unpricedModels.join(", ") }) : t("taskSpend.noApi"))
+    : t(provider.apiPricedTokens < provider.tokens ? "taskSpend.partialApi" : "taskSpend.api", { value: usd(provider.apiUsd, locale) });
+  const accounts = provider.accounts ?? [];
+  const several = accounts.length > 1;
+  const budget = provider.basis && provider.basis !== "measured" ? budgetText(provider.budgets, locale, t) : null;
+  /* A guest has no account lines, so the provider's own share leads its basis line. */
+  const guestShare = provider.accounts === null ? (kind === "tokens" ? null : shareText(provider.weeklyPp, provider.range, locale, t)) : null;
+  const basis = provider.basis ? [guestShare, t(`taskSpend.basis.${provider.basis}`), budget].filter(Boolean).join(" · ") : null;
+  return (
+    <span className="pop-block" data-spend-provider={provider.engine} data-kind={kind}>
+      <span className="pop-row">
+        <EngineMark engine={provider.engine} size={12} />
+        <span className="pop-main">
+          <b>{engine}</b>
+          {" "}{t("taskSpend.tokens", { tokens: compact(provider.tokens, locale) })} · <span className="spend-unit">{api}</span>
+        </span>
+      </span>
+      {provider.floor ? <span className="pop-sub meter-note pop-warn">{t("taskSpend.floor.before-counting")}</span> : null}
+      {accounts.map((account) => {
+        const hasShare = account.weeklyPp !== null;
+        /* One account with no share has nothing to add to its provider's line. */
+        if (!several && !hasShare) return null;
+        const label = account.key === "unknown" ? t("taskSpend.unattributed") : account.label;
+        const plan = accountPlan(account);
+        const parts = [
+          label,
+          plan,
+          hasShare ? shareText(account.weeklyPp!, account.range, locale, t) : t("taskSpend.tokens", { tokens: compact(account.tokens, locale) }),
+          several && account.apiUsd !== null ? usd(account.apiUsd, locale) : null,
+        ].filter(Boolean);
+        return <span key={account.key} className="pop-sub meter-note" data-spend-account={account.key}>{parts.join(" · ")}</span>;
+      })}
+      {basis ? <span className="pop-sub meter-note pop-basis">{basis}</span> : null}
+      {[...new Set(provider.issues)].map(issue => <span key={issue} className="pop-sub meter-note">{t(`taskSpend.issue.${issue}`)}</span>)}
+      {partial ? <span className="pop-sub meter-note">
+        {t("taskSpend.unpriced", { tokens: compact(provider.unpricedTokens, locale) })}
+        {provider.unpricedModels.length > 0 ? <> ({provider.unpricedModels.join(", ")})</> : null}
+      </span> : null}
+    </span>
+  );
+}
+
+/** The card popover and the phone task screen share the same estimates: each figure once per provider. */
+function SpendLines({ summary, total = false }: { summary: TaskSpendSummary; total?: boolean }) {
+  const { t, locale } = useLocale();
+  const tokens = summary.providers.reduce((sum, p) => sum + p.tokens, 0);
   return (
     <>
-      {summary.providers.map((provider) => {
-        const engine = ENGINE_NAME[provider.engine];
-        const kind = providerKind(provider);
-        const api = provider.apiUsd === null ? t("taskSpend.noApi")
-          : t(provider.apiPricedTokens < provider.tokens ? "taskSpend.partialApi" : "taskSpend.api", { value: usd(provider.apiUsd, locale) });
-        return (
-          <span key={engine} className="pop-block" data-spend-provider={provider.engine} data-kind={kind}>
-            <span className="pop-row">
-              <EngineMark engine={provider.engine} size={12} />
-              <span className="pop-main">
-                <b>{engine}</b>
-                {" "}{t("taskSpend.tokens", { tokens: compact(provider.tokens, locale) })}
-                {api ? <> · <span className="spend-unit">{api}</span></> : null}
-                {provider.engine === "codex" ? <> · <span className="spend-unit">{t("taskSpend.cacheWriteAssumption")}</span></> : null}
-              </span>
-            </span>
-            {provider.floor || (provider.basis && !accountDetails) ? <span className={`pop-sub meter-note${provider.floor ? " pop-warn" : ""}`}>
-              {provider.basis && !accountDetails ? t(`taskSpend.basis.${provider.basis}`) : null}
-              {provider.basis && !accountDetails && provider.floor ? " · " : null}
-              {provider.floor ? t("taskSpend.floor.before-counting") : null}
-            </span> : null}
-            {[...new Set(provider.issues)].map(issue => <span key={issue} className="pop-sub meter-note">{t(`taskSpend.issue.${issue}`)}</span>)}
-            {accountDetails ? provider.accounts?.map(account => {
-              const label = account.key === "unknown" ? t("taskSpend.unattributed") : account.label;
-              const plan = accountPlan(account);
-              const share = account.weeklyPp === null ? null : `≈${estimatePercent(account.weeklyPp, locale)}`;
-              const range = accountRange(account,locale);
-              return <span key={account.key} className="pop-sub meter-note" data-spend-account={account.key}>
-                {label}{plan ? ` · ${plan}` : ""} · {share
-                  ? t("taskSpend.accountShare", { value: share })
-                  : t("taskSpend.tokens", { tokens: compact(account.tokens, locale) })}
-                {range ? ` (${range})` : ""}
-                {account.basis ? ` · ${t(`taskSpend.basis.${account.basis}`)}` : ""}
-                {accountBudget(account,locale,t) ? ` · ${accountBudget(account,locale,t)}` : ""}
-                {account.apiUsd === null ? "" : ` · ${t(account.apiPricedTokens < account.tokens ? "taskSpend.partialApi" : "taskSpend.api", { value: usd(account.apiUsd,locale) })}`}
-                {account.week ? ` · ${t("taskSpend.week", { value: `${Math.round(account.week.usedPercent)}%` })}` : ""}
-                {account.sessionPp !== null && account.sessionPp > 0 ? ` · ${t("taskSpend.sessionEstimate", { value: `≈${estimatePercent(account.sessionPp, locale)}` })}` : ""}
-              </span>;
-            }) : null}
-            {provider.unpricedTokens > 0 ? <span className="pop-sub meter-note">
-              {t("taskSpend.unpriced", { tokens: compact(provider.unpricedTokens, locale) })}
-              {provider.unpricedModels.length > 0 ? <> ({provider.unpricedModels.join(", ")})</> : null}
-            </span> : null}
-          </span>
-        );
-      })}
-      <span className="pop-note">{t("taskSpend.tokens", { tokens: compact(tokens, locale) })}</span>
+      {summary.providers.map(provider => <SpendProvider key={provider.engine} provider={provider}/>)}
+      {total && summary.providers.length > 1 ? <span className="pop-note">{t("taskSpend.tokens", { tokens: compact(tokens, locale) })}</span> : null}
     </>
   );
 }
@@ -173,10 +180,11 @@ export function TaskSpendMarks({ taskId, interactive }: { taskId: string; intera
   const summary = useTaskSpend(taskId);
   const ref = useRef<HTMLSpanElement>(null);
   const pressed = useRef(false);
+  const kind = useRef<SpendKind | null>(null);
   const bubbleId = useId();
   const [open, setOpen] = useState(false);
   useEffect(() => {
-    if (!open) return;
+    if (!open) { kind.current = null; return; }
     const away = (event: PointerEvent) => {
       if (!ref.current?.contains(event.target as Node)) setOpen(false);
     };
@@ -214,25 +222,23 @@ export function TaskSpendMarks({ taskId, interactive }: { taskId: string; intera
           place={bubble => {
             const card = ref.current?.closest<HTMLElement>("[data-kanban-card]");
             if (!card) return null;
-            const bounds = card.getBoundingClientRect();
-            const right = Math.max(0, window.innerWidth - bounds.right - 16);
-            const left = Math.max(0, bounds.left - 16);
-            const onRight = right >= left;
-            const room = onRight ? right : left;
-            if (room < 220) return null;
-            const width = Math.min(320, room);
-            bubble.style.maxWidth = `${width}px`;
             const anchor = ref.current!.getBoundingClientRect();
-            const height = bubble.getBoundingClientRect().height;
-            return {
-              left: onRight ? bounds.right + 8 : bounds.left - width - 8,
-              top: Math.max(8, Math.min(anchor.top, window.innerHeight - height - 8)),
-              maxWidth: width,
-            };
+            const input = { viewport: { width: window.innerWidth, height: window.innerHeight }, card: card.getBoundingClientRect(), anchor };
+            const sizeAt = (maxWidth: number) => { bubble.style.maxWidth = `${maxWidth}px`; const box = bubble.getBoundingClientRect(); return { width: box.width, height: box.height }; };
+            const candidates = spendCandidates(input, sizeAt);
+            /* The covered text is measured once per opening; a scroll or resize keeps that choice. */
+            kind.current ??= chooseSpendPlacement(candidates, windowTextBoxes(card, bubble))?.kind ?? "over";
+            const chosen = candidates.find(c => c.kind === kind.current) ?? candidates[0];
+            if (!chosen) return null;
+            bubble.style.maxWidth = `${chosen.maxWidth}px`;
+            return { left: chosen.left, top: chosen.top, maxWidth: chosen.maxWidth };
           }}>
           <span data-spend-pop={taskId}>
-            <span className="pop-title">{t("taskSpend.title")}</span>
-            <SpendLines summary={summary} accountDetails />
+            <span className="pop-title">
+              {t("taskSpend.title")}
+              {summary.providers.length > 1 ? <span className="pop-total"> · {t("taskSpend.tokens", { tokens: compact(summary.providers.reduce((sum, p) => sum + p.tokens, 0), locale) })}</span> : null}
+            </span>
+            <SpendLines summary={summary} />
           </span>
         </TooltipBubble>
       ) : null}
@@ -255,7 +261,7 @@ export function PhoneTaskSpend({ taskId, headingClass }: { taskId: string; headi
   return (
     <section data-phone-task-spend={taskId} className="flex shrink-0 flex-col gap-2">
       <h2 className={`${headingClass} m-0`}>{t("taskSpend.section")}</h2>
-      <div className="phone-spend"><SpendLines summary={summary} accountDetails /></div>
+      <div className="phone-spend"><SpendLines summary={summary} total /></div>
     </section>
   );
 }

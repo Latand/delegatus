@@ -157,11 +157,11 @@ line and popover) and the phone task screen.
 | 2 | Card state line, face | `TaskSpend.tsx:110`, `:41-42` | «≥» before the scale | `bound = floor` (D2) | Only for work before counting began |
 | 3 | Card state line, face | `TaskSpend.tsx:34-39`, `:111` | 0–4 filled cells: <1 %, 1–4 %, 5–14 %, 15–29 %, ≥30 % of the week | `weeklyPp` summed per provider (`taskLimitSpend.ts:381`) | Kept; fed by the new share |
 | 4 | Popover headline | `TaskSpend.tsx:51-57`, `:183` | «Claude ≈3% тижня», «<1%», «≥12%» | same | Kept, with the plan range and the API price |
-| 5 | Popover account line (owner only) | `TaskSpend.tsx:121-154` | «задача 2% · тиждень 53%» and a bar | task share and the account's whole week used (`week.usedPercent`, the provider's reading) | Kept; the second figure is renamed so it does not read as the task's |
+| 5 | Popover account line (owner only) | `TaskSpend.tsx:121-154` | «задача 2% · тиждень 53%» and a bar | task share and the account's whole week used (`week.usedPercent`, the provider's reading) | Kept as one short line per account («label · plan · ≈1.5% of week (1–2.6%)»); the account's whole-week figure is no longer printed, so it cannot read as the task's (slice 10) |
 | 6 | Popover, no-rate provider or account | `TaskSpend.tsx:124-130`, `:165-176` | «ліміт акаунта невідомий», «N токенів, показано лише токени», «ліміт невідомий · N токенів» | D1 | Removed except when no share is possible, with the real reason |
 | 7 | Popover note | `TaskSpend.tsx:195` | «Оцінка, ±30%», «Для X ще немає показів ліміту» | D3 | Replaced by a basis line |
 | 8 | Popover lower-bound note | `TaskSpend.tsx:186` | «Нижня межа: частину роботи ще не пораховано» | D2 | Removed; the before-counting note stays |
-| 9 | Popover 5-hour line | `TaskSpend.tsx:187-191` | «Зараз N% 5-годинного вікна …» | `session_pp`; no Claude account here has had a 5-hour rise since 2026-10-30, and none reports a session window now | Unchanged (slice 3, §6) |
+| 9 | Popover 5-hour line | `TaskSpend.tsx:187-191` | «Зараз N% 5-годинного вікна …» | `session_pp`; no Claude account here has had a 5-hour rise since 2026-10-30, and none reports a session window now | Not printed in the compact popover (slice 10); the data stays stored for slice 3, §6 |
 | 10 | Card and phone labels for screen readers | `TaskSpend.tsx:79-88`, `:264-268`; `src/components/mobile/MobileKanban.tsx:551` | «Claude ліміт невідомий» | D1 | Follows #1 |
 | 11 | Phone task screen «Ліміти» | `src/components/mobile/MobileTaskScreen.tsx:1384` → `TaskSpend.tsx:271-281` | the popover's lines | same as 4–9 | Same lines as the popover |
 | 12 | Card from a linked Viewer | `src/components/kanban/KanbanCard.tsx:722` (`!remote`) | nothing | linked machines send no token rows | Unchanged (deferred) |
@@ -432,8 +432,9 @@ the separate published cache-write rates where the stored counts support them.
 
 - **Cached input** counts at its own published cached price. Codex cache writes
   have published 30-minute and 12-hour rates, but the collected Codex counters
-  do not retain cache age. The API equivalent states its 30-minute assumption
-  on Codex task rows; use the 12-hour published rate as the high side when
+  do not retain cache age. The API equivalent uses the 30-minute rate; the card
+  does not print the assumption (a «30m» beside token counts reads as 30
+  million). Use the 12-hour published rate as the high side when
   comparing a retained cache write.
 - **Reasoning tokens** are inside output on both providers and are not added
   twice: `reasoning` is stored as a part of `output`, and a record where it is
@@ -598,7 +599,7 @@ and never «невідомо».
 | 7 | The Claude observation carries `planTier` from `claudeAiOauth.rateLimitTier`, read where `subscriptionType` is read now | `src/lib/limits.ts:556`, `:574`; optional field on `EngineLimits`, `src/lib/types.ts:707-721` | D4; no new read, the credential document is already loaded. Check that the registry's normaliser keeps the field (`src/lib/agent/registry.ts:5200`) |
 | 8 | `usage_limit_rates` gains `plan_tier`, written beside `plan` from the observation | `limitRates.ts:123` | D6: the last known plan and tier survive a lost observation |
 | 9 | `readTaskLimitSpend` computes per account and provider `share`, `range`, `basis`, `apiUsd`, `budget`, and states `tokens` for the no-share cases of §3.5. Plan fallback history is fetched in one indexed batch for accounts present in the requested task rows | `taskLimitSpend.ts`; types in `taskLimitSpendTypes.ts` | one bounded account query, independent of the number of accounts; the worker owns rate refresh and historical tier retention |
-| 10 | Card: all share figures use an estimate marker; compact popovers show one line per provider and total tokens, while the phone task view includes per-account details and bases in en and uk | `TaskSpend.tsx`, `src/lib/i18n/en.ts`, `src/lib/i18n/uk.ts` | acceptance 3; avoids repeating account rows and a duplicate API total in the card popover |
+| 10 | Card and phone: the popover and the Limits section share one compact layout. Per provider: tokens and the API price once (or the one «no API price» line with the model). Per account, only where it adds a fact: label, plan, «≈1.5% of week (1–2.6%)», and the account's dollars when the provider has several accounts. The basis and the plan budget print once per provider as a muted line. A member who is not the owner has no account lines, so the provider's own share and range lead that muted line. Range bounds use the headline's one decimal. The total token count sits in the popover title when there are two providers. The 30-minute cache-write assumption stays here and in the data file and is not printed on the card. The popover opens over the card it belongs to, or beside, below or above it, wherever it covers the least text, the card's own text counting for a quarter of any other text | `TaskSpend.tsx`, `spendPopoverPlacement.ts`, `src/lib/i18n/en.ts`, `src/lib/i18n/uk.ts` | acceptance 3; a visual critic found the popover tall, repetitive, silent for a guest and covering neighbouring cards |
 
 Tests (acceptance 4), each by path with isolated `HOME`, `XDG_CONFIG_HOME`,
 `TMPDIR` and `LLV_STATE_DIR`:
