@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { launcherStartupDeadline, ROLLBACK_TIMEOUT_MS, STOP_TIMEOUT_MS, SWITCH_TIMEOUT_MS, TERMINAL_BOOTSTRAP_TIMEOUT_MS, startupHandoffSucceeded } from "./launcher-deadline.mjs";
+import { launcherStartupDeadline, ROLLBACK_TIMEOUT_MS, rollbackSelectionMatches, STOP_TIMEOUT_MS, SWITCH_TIMEOUT_MS, TERMINAL_BOOTSTRAP_TIMEOUT_MS, startupHandoffSucceeded, terminalHealthPublishedBefore } from "./launcher-deadline.mjs";
 import { waitForRuntimeHostStartup } from "./server-runtime.mjs";
 
 const healthyRecord = {
@@ -23,6 +23,22 @@ test("the terminal bootstrap covers the switch, rollback, both combined shutdown
   expect(TERMINAL_BOOTSTRAP_TIMEOUT_MS).toBe(SWITCH_TIMEOUT_MS + ROLLBACK_TIMEOUT_MS + 4 * STOP_TIMEOUT_MS + 30_000);
 });
 
+test("terminal readiness is judged by the durable publication timestamp", () => {
+  const expiry = Date.parse("2026-11-26T12:00:00.000Z");
+  expect(terminalHealthPublishedBefore({ updatedAt: "2026-11-26T11:59:59.999Z" }, expiry)).toBe(true);
+  expect(terminalHealthPublishedBefore({ updatedAt: "2026-11-26T12:00:00.450Z" }, expiry)).toBe(false);
+  expect(terminalHealthPublishedBefore({}, expiry)).toBe(false);
+});
+
+test("checkout fallback requires the selected pointer to match the prior release", () => {
+  const prior = JSON.stringify({ sha: "a".repeat(40), dir: "/prior" }) + "\n";
+  const candidate = JSON.stringify({ sha: "b".repeat(40), dir: "/candidate" }) + "\n";
+  expect(rollbackSelectionMatches(null, null)).toBe(true);
+  expect(rollbackSelectionMatches(candidate, null)).toBe(false);
+  expect(rollbackSelectionMatches(prior, prior)).toBe(true);
+  expect(rollbackSelectionMatches(candidate, prior)).toBe(false);
+});
+
 test("runtime-host readiness accepts a socket probe already in flight at the silence boundary", async () => {
   let now = 0;
   await waitForRuntimeHostStartup({
@@ -32,6 +48,37 @@ test("runtime-host readiness accepts a socket probe already in flight at the sil
     progress: async () => [], sleep: async milliseconds => { now += milliseconds; },
   });
   expect(now).toBe(30_001);
+});
+
+test("runtime-host readiness applies its in-flight file snapshot before the pending socket result", async () => {
+  let now = 0;
+  let checks = 0;
+  await waitForRuntimeHostStartup({
+    now: () => now, silenceMs: 30_000, ceilingMs: 300_000,
+    timeout: () => "timed out",
+    check: async () => {
+      checks++;
+      if (checks === 1) { now = 29_500; return false; }
+      now = 30_600;
+      return true;
+    },
+    progress: async () => { now = 30_500; return [["phase", 2, "fence-acquired"]]; },
+    sleep: async milliseconds => { now += milliseconds; },
+  });
+  expect(checks).toBe(2);
+  expect(now).toBe(30_600);
+});
+
+test("runtime-host readiness adapts synchronous evidence and sleep callbacks", async () => {
+  let checks = 0;
+  await waitForRuntimeHostStartup({
+    now: () => checks * 100,
+    check: () => ++checks > 1,
+    progress: () => [["phase", 1, "fence-acquired"]],
+    timeout: () => "timed out",
+    sleep: async () => {},
+  });
+  expect(checks).toBe(2);
 });
 
 test("checkout startup follows the durable rollback expiry after the switch window", () => {

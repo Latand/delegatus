@@ -501,7 +501,7 @@ export async function waitForViewerReadiness(port, {
         assertChildRunning();
         collectProgress();
         const { httpStatus } = result;
-        const error = result.error ?? (remaining() <= 0 ? "deadline"
+        const error = result.error ?? (observedAt >= deadline || remaining(observedAt) < 0 ? "deadline"
           : endpoint === READY_ROUTE && httpStatus === 200 && result.revision !== revision ? "revision-mismatch" : undefined);
         const accessRefused = httpStatus === 401 || httpStatus === 403;
         // An unsendable key can prove a legacy listener. The separate page

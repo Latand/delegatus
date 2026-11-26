@@ -13,6 +13,16 @@ export const VIEWER_PAGE_CHECK_TIMEOUT_MS = 90_000;
 export const TERMINAL_BOOTSTRAP_TIMEOUT_MS = SWITCH_TIMEOUT_MS + ROLLBACK_TIMEOUT_MS + 4 * STOP_TIMEOUT_MS + 30_000;
 export const SWITCH_OVERRUN = "The launcher switch exceeded its 10 minute deadline";
 
+export function terminalHealthPublishedBefore(record, switchExpiry) {
+  const publishedAt = Date.parse(record?.updatedAt ?? "");
+  return Number.isFinite(publishedAt) && publishedAt < switchExpiry;
+}
+
+export function rollbackSelectionMatches(selected, rollbackPointer) {
+  return rollbackPointer === null ? selected === null
+    : typeof rollbackPointer === "string" && selected === rollbackPointer;
+}
+
 export function launcherStartupDeadline({ active, switchDeadline, trial, requestId, target, bootstrapDeadline,
   teardownGraceMs, now = Date.now() }) {
   const matches = active && trial?.requestId === requestId && trial.target === target;
@@ -46,7 +56,7 @@ function startupSleep(ms, signal) {
  * absolute monotonic deadline. File evidence may be slow, so let the host
  * check for child exit while its evidence read is pending. The Viewer reports
  * evidence already received on stderr as part of its check. */
-/** @param {{ check: (remaining: () => number, record: (key: string, value: number, detail: unknown, observedAt?: number) => void) => Promise<boolean | { ready: boolean, observedAt: number }>, progress?: () => Promise<Array<[string, number, unknown, number?]>>, onTimeout: (detail: { elapsed: number, lastProgress: unknown, silent: number, ceiling: boolean }) => void, deadline: number, silenceMs: number, intervalMs: number, signal?: AbortSignal, now?: () => number, sleep?: StartupSleep, readyMayFinishAfterSilence?: boolean }} options */
+/** @param {{ check: (remaining: (at?: number) => number, record: (key: string, value: number, detail: unknown, observedAt?: number) => void) => boolean | { ready: boolean, observedAt: number } | Promise<boolean | { ready: boolean, observedAt: number }>, progress?: () => Array<[string, number, unknown, number?]> | Promise<Array<[string, number, unknown, number?]>>, onTimeout: (detail: { elapsed: number, lastProgress: unknown, silent: number, ceiling: boolean }) => void, deadline: number, silenceMs: number, intervalMs: number, signal?: AbortSignal, now?: () => number, sleep?: StartupSleep, readyMayFinishAfterSilence?: boolean }} options */
 export async function waitForStartupProgress({
   check, progress, onTimeout, deadline, silenceMs, intervalMs, signal, readyMayFinishAfterSilence = false,
   now = () => performance.now(), sleep = startupSleep,
@@ -56,7 +66,7 @@ export async function waitForStartupProgress({
   let lastProgress = null;
   const highWater = new Map();
   let pendingProgress = null;
-  const remaining = () => Math.min(deadline, lastProgressAt + silenceMs) - now();
+  const remaining = (at = now()) => Math.min(deadline, lastProgressAt + silenceMs) - at;
   const record = (key, value, detail, observedAt = now()) => {
     if (value <= (highWater.get(key) ?? -1)
       || observedAt >= deadline || observedAt > lastProgressAt + silenceMs) return;
@@ -91,16 +101,33 @@ export async function waitForStartupProgress({
       .then(observed => ({ observed, progressRequestedAt }), () => ({ observed: [], progressRequestedAt }));
     const sleepController = new AbortController();
     const sleepMs = Math.max(0, Math.min(intervalMs, remaining()));
-    const result = await Promise.race([
+    let result = await Promise.race([
       pendingProgress,
       sleep(sleepMs, sleepController.signal).then(() => null),
     ]);
     if (result === null) {
-      if (expired()) return false;
-      continue;
+      const current = now();
+      // A file snapshot requested before the silence edge can finish just
+      // after the socket probe's poll timer. Give that owned read one bounded
+      // polling interval to report; the absolute ceiling remains strict.
+      if (current < deadline && current >= lastProgressAt + silenceMs && pendingProgress) {
+        result = await Promise.race([
+          pendingProgress,
+          sleep(intervalMs, signal).then(() => null),
+        ]);
+      }
+      if (result === null) {
+        if (expired()) return false;
+        continue;
+      }
     }
     sleepController.abort();
     pendingProgress = null;
+    // File evidence that completed while the socket check was pending must
+    // extend the window before that socket is checked again.
+    for (const [key, value, detail, observedAt] of await result.observed) {
+      record(key, value, detail, observedAt ?? result.progressRequestedAt);
+    }
     // A child may exit during either asynchronous read/probe.
     const readyAfterRead = await check(remaining, record);
     const readyAfterReadAt = typeof readyAfterRead === "boolean" ? now() : readyAfterRead.observedAt;
@@ -108,9 +135,6 @@ export async function waitForStartupProgress({
     if (readyAfterReadValue && readyAfterReadAt < deadline
       && (readyMayFinishAfterSilence || readyAfterReadAt <= lastProgressAt + silenceMs)) return true;
     if (now() >= deadline) { expired(); return false; }
-    for (const [key, value, detail, observedAt] of result.observed) {
-      record(key, value, detail, observedAt ?? result.progressRequestedAt);
-    }
     if (expired()) return false;
     await sleep(Math.min(intervalMs, remaining()), signal);
   }

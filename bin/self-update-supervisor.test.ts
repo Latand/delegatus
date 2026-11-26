@@ -675,6 +675,18 @@ describe("progress-bound Viewer readiness", () => {
     expect(now).toBe(90_004);
   });
 
+  test("a ready answer observed exactly at the inclusive silence boundary succeeds", async () => {
+    let now = 0;
+    const ready = await waitForViewerReadiness(43123, {
+      revision, silenceMs: 90_000, now: () => now,
+      onPhase: event => { if (event.status === "ready") now += 2; },
+      probe: async () => { now = 90_000; return { httpStatus: 200, revision }; },
+      sleep: async milliseconds => { now += milliseconds; },
+    });
+    expect(ready).toBeTrue();
+    expect(now).toBe(90_002);
+  });
+
   test("silence at registry expires 90 seconds after its last counter", async () => {
     expect(await start("stalled", [
       [10_000, receipt("registry running 0")],

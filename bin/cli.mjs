@@ -3,14 +3,14 @@
 import "./launcher-inherited-children.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { constants, homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
 import { agentStartupMessage } from "./agent-binaries.mjs";
-import { boundedWait, launcherStartupDeadline, startupHandoffSucceeded, STOP_TIMEOUT_MS, switchDeadline, SWITCH_OVERRUN, TERMINAL_BOOTSTRAP_TIMEOUT_MS, VIEWER_PAGE_CHECK_TIMEOUT_MS, writeLauncherRefusal } from "./launcher-deadline.mjs";
+import { boundedWait, launcherStartupDeadline, rollbackSelectionMatches, startupHandoffSucceeded, STOP_TIMEOUT_MS, switchDeadline, SWITCH_OVERRUN, TERMINAL_BOOTSTRAP_TIMEOUT_MS, VIEWER_PAGE_CHECK_TIMEOUT_MS, writeLauncherRefusal } from "./launcher-deadline.mjs";
 
 /* The checkout may be older than this file. No checkout sibling is linked
    until the release decision has completed. */
@@ -1689,12 +1689,15 @@ function handOffLauncher({ checkout, entry, record }) {
       cwd: checkout, env, stdio: ["inherit", "inherit", "inherit", "ipc"],
     });
     let forwarded = false;
+    let shutdownRequested = false;
     let startupSettled = false;
+    let deadlineHandling = false;
     let signalStopTimer;
     let signalKillTimer;
     const forward = (signal) => {
       if (forwarded) return;
       forwarded = true;
+      shutdownRequested = true;
       if (child.exitCode === null && child.signalCode === null) {
         child.kill(signal);
         if (startupSettled) {
@@ -1738,6 +1741,12 @@ function handOffLauncher({ checkout, entry, record }) {
     };
     child.once("error", (error) => { spawnError = error; });
     child.once("close", (code, signal) => {
+      // The deadline owner performs rollback, bounded cleanup, and the
+      // verified fallback decision. A close event cannot settle it early.
+      if (deadlineHandling || Date.now() >= deadline) {
+        deadlineHandling = true;
+        return;
+      }
       const status = code ?? (signal ? 128 + (constants.signals[signal] ?? 0) : 1);
       let recorded = false;
       if (child.pid) {
@@ -1789,9 +1798,11 @@ function handOffLauncher({ checkout, entry, record }) {
         trial: matchingTrial ? currentTrial : null, requestId: trial?.requestId, target: trial?.target,
         bootstrapDeadline, teardownGraceMs: 2 * STOP_TIMEOUT_MS });
       if (!decision.expired) {
+        deadlineHandling = false;
         scheduleDeadline(decision.deadline);
         return;
       }
+      deadlineHandling = true;
       const terminalTrial = matchingTrial ? currentTrial : trial;
       const rollbackExpired = decision.phase === "rollback";
       const switchOverrun = decision.phase === "switch";
@@ -1842,10 +1853,12 @@ function handOffLauncher({ checkout, entry, record }) {
         try { await boundedWait(closed, STOP_TIMEOUT_MS, "The replacement launcher did not exit after SIGKILL"); }
         catch (error) { console.error(`[self-update] replacement launcher cleanup exceeded its deadline: ${error.message}`); }
       }
-      // A switch overrun has now been fenced, the candidate was reaped, and
-      // its prior pointer restored. Resume the checkout path to boot that
-      // verified prior release instead of leaving the port vacant.
-      finish(active && switchOverrun ? false : true);
+      // Only resume the checkout path after proving that the failed candidate
+      // is no longer selected. Shutdown owns the handoff when requested.
+      let selected = null;
+      try { selected = readFileSync(join(directory, `release-${suffix}`), "utf8"); } catch { /* absent pointer */ }
+      const restored = !active || rollbackSelectionMatches(selected, terminalTrial.rollbackPointer);
+      finish(active && switchOverrun && restored && !shutdownRequested ? false : true);
     })(); };
     scheduleDeadline(deadline);
   });

@@ -1050,7 +1050,7 @@ test("an early prior-launcher exit settles the deployment as a durable refusal",
   expect(existsSync(drainFile)).toBe(false);
 });
 
-test("the forwarding launcher bounds a replacement that stalls during module loading", async () => {
+test("the forwarding launcher starts the restored checkout after a switch timeout", async () => {
   const fixture = install();
   const candidate = release(fixture, "handoff-import-stall");
   const directory = path.join(fixture.state, "self-update");
@@ -1083,16 +1083,19 @@ test("the forwarding launcher bounds a replacement that stalls during module loa
   try {
     const { isAlive } = await import("../src/lib/selfUpdate/pid");
     await until(() => existsSync(pidFile) ? true : null, 5_000).catch(error => { throw new Error(`${String(error)}\n${running.output()}`); });
-    running.child.kill("SIGTERM");
-    // A signal-resistant replacement must remain supervised until the
-    // persisted startup deadline, then receive the bounded stop escalation.
+    // The wedged replacement remains under the forwarding launcher's startup
+    // deadline; after rollback, the checkout release must serve again.
     await until(() => JSON.parse(readFileSync(path.join(directory, "apply.json"), "utf8")).state === "failed" ? true : null, 25_000);
     expect(isAlive(Number(readFileSync(pidFile, "utf8")))).toBe(false);
     expect(JSON.parse(readFileSync(path.join(directory, "apply.json"), "utf8"))).toMatchObject({ state: "failed", detail: expect.any(String) });
     expect(JSON.parse(readFileSync(ledgerFile, "utf8"))[0]).toMatchObject({ phase: "failed", terminal: true, error: expect.any(String) });
     expect(JSON.parse(readFileSync(trialFile, "utf8"))).toMatchObject({ refused: true, detail: expect.any(String) });
     expect(existsSync(drainFile)).toBe(false);
-    await until(() => readRecord(fixture.state).web.state === "healthy", 5_000);
+    await until(() => {
+      const record = readRecord(fixture.state);
+      return record.web.state === "healthy" && record.web.revision === fixture.first.slice(0, 7) ? record : null;
+    }, 10_000);
+    expect(existsSync(pointer)).toBe(false);
   } finally {
     const closed = new Promise(resolve => running.child.once("exit", resolve));
     running.child.kill("SIGTERM");
@@ -1106,6 +1109,73 @@ test("the forwarding launcher bounds a replacement that stalls during module loa
     children.delete(running.child);
   }
 }, 35_000);
+
+test("SIGTERM while a forwarded replacement is wedged remains bounded", async () => {
+  const fixture = install();
+  const priorRun = await start(fixture, [], 20_000);
+  const priorRecord = readRecord(fixture.state);
+  const candidate = release(fixture, "handoff-signal-stall");
+  const directory = path.join(fixture.state, "self-update");
+  mkdirSync(directory, { recursive: true });
+  const pointer = pointerFile(fixture);
+  const requestFile = pointer.replace("release-", "request-");
+  const trialFile = requestFile.replace("request-", "trial-");
+  const ledgerFile = path.join(directory, "deployments.json");
+  const drainFile = path.join(directory, "auto-drain.json");
+  const pidFile = path.join(fixture.root, "signal-candidate.pid");
+  writeFileSync(path.join(candidate.dir, "bin", "cli.mjs"), `
+    import { writeFileSync } from "node:fs";
+    const handoffProtocol = "delegatus-checkout-launcher-v2";
+    if (process.argv.includes("--version")) process.exit(0);
+    writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+    process.on("SIGTERM", () => {});
+    await new Promise(() => {});
+    console.log(handoffProtocol);
+  `);
+  writeFileSync(pointer, JSON.stringify({ sha: candidate.sha, dir: candidate.dir, checkoutHead: fixture.first }));
+  const intent = { requestId: "handoff-signal-stall", target: candidate.sha, releasePointer: pointer, rollbackPointer: null,
+    state: "switching", switchedAt: new Date().toISOString(), switchDeadlineAt: Date.now() + 5000, deploymentId: "signal-deployment",
+    launcherPid: priorRecord.launcher.pid, launcherIdentity: priorRecord.launcher.startIdentity };
+  writeFileSync(path.join(directory, "apply.json"), JSON.stringify(intent));
+  writeFileSync(trialFile, JSON.stringify({ ...intent, state: "starting", at: new Date().toISOString() }));
+  writeFileSync(ledgerFile, JSON.stringify([{ deploymentId: intent.deploymentId, phase: "switching", terminal: false, error: null, revisionNumber: 1 }]));
+  writeFileSync(drainFile, JSON.stringify({ id: intent.requestId, target: intent.target, persistent: true }));
+  const priorExited = new Promise(resolve => priorRun.child.once("exit", resolve));
+  priorRun.child.kill("SIGTERM");
+  await priorExited;
+  const { isAlive, readStartIdentity } = await import("../src/lib/selfUpdate/pid");
+  const ownedServices = [priorRecord.web, priorRecord.runtimeHost].filter(entry => entry.pid && entry.startIdentity);
+  for (const entry of ownedServices) {
+    if (isAlive(entry.pid!) && readStartIdentity(entry.pid!) === entry.startIdentity) process.kill(entry.pid!, "SIGTERM");
+  }
+  await until(() => ownedServices.every(entry => !isAlive(entry.pid!) || readStartIdentity(entry.pid!) !== entry.startIdentity) ? true : null, 5_000);
+
+  const port = await availablePort();
+  const forwarding = spawn(process.execPath, ["--bun", path.join(fixture.checkout, "bin", "cli.mjs"), "--no-open", "--port", String(port)], {
+    cwd: fixture.checkout, env: fixture.env, stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.add(forwarding);
+  let output = "";
+  forwarding.stdout?.on("data", chunk => { output = (output + String(chunk)).slice(-4096); });
+  forwarding.stderr?.on("data", chunk => { output = (output + String(chunk)).slice(-4096); });
+  try {
+    await until(() => existsSync(pidFile) ? true : null, 20_000).catch(error => { throw new Error(`${String(error)}\n${output}`); });
+    const candidatePid = Number(readFileSync(pidFile, "utf8"));
+    const exited = new Promise(resolve => forwarding.once("exit", resolve));
+    forwarding.kill("SIGTERM");
+    await Promise.race([exited, Bun.sleep(25_000)]);
+    expect(forwarding.exitCode !== null || forwarding.signalCode !== null).toBe(true);
+    const { isAlive } = await import("../src/lib/selfUpdate/pid");
+    expect(isAlive(candidatePid)).toBe(false);
+  } finally {
+    if (forwarding.exitCode === null && forwarding.signalCode === null) {
+      const exited = new Promise(resolve => forwarding.once("exit", resolve));
+      forwarding.kill("SIGKILL");
+      await exited;
+    }
+    children.delete(forwarding);
+  }
+}, 70_000);
 
 test("terminal bootstrap lets a rollback finish after the switch expires", async () => {
   const fixture = install();

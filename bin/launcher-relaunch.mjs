@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
 import { headRevision, probePageAndChunk, readStartIdentity, runtimeHostStartIdentity, TERMINAL_BOOTSTRAP_TIMEOUT_MS } from "./self-update-supervisor.mjs";
+import { terminalHealthPublishedBefore } from "./launcher-deadline.mjs";
 import { probeHeadersFrom } from "./internalService.mjs";
 import { viewerBootGateKey } from "./viewerGateKey.mjs";
 import { assertLauncherAvailable } from "./launcher-adoption.mjs";
@@ -217,6 +218,7 @@ async function terminalBootstrap(encoded, nextEntry, args) {
       && record.web.startIdentity === readStartIdentity(record.web.pid) && record.runtimeHost.startIdentity === readStartIdentity(record.runtimeHost.pid)
       && record.web.revision === record.runtimeHost.revision
       && record.web.revision === (failed ? plan.priorRevision : plan.target.slice(0, 7))
+      && (failed || terminalHealthPublishedBefore(record, switchExpiry))
       && (failed || record.launcher.requestId === intent.requestId)) {
       const socketHealthy = await terminalHostHealthy(record);
       if (socketHealthy && await probePageAndChunk(record.port, 5000, headers) === null) {
