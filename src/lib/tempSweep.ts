@@ -1104,15 +1104,18 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
     errors: [],
   };
   const strayRootSafety = new Map<TempSweepRoot, boolean>();
-  /** A stray root must be the directory itself: never a link, so a removal
-      can never land behind a redirected parent. */
+  /** A stray root must be the directory itself, with no link at it or at any
+      parent, so a removal can never land behind a redirected parent. */
   const strayCandidate = (root: TempSweepRoot, name: string) => {
     if (!options.stray || options.onlyDirectories || root.path === options.scratchRoot || !isStrayRoot(root, options.stray.roots)
       || !isStrayTempName(name, options.stray.keep)) return false;
     let safe = strayRootSafety.get(root);
     if (safe === undefined) {
-      try { const stat = fs.lstatSync(root.via + root.path); safe = stat.isDirectory() && !stat.isSymbolicLink(); }
-      catch { safe = false; }
+      try {
+        let current = "";
+        // `lstat` answers for a link itself, so a linked step is no directory.
+        safe = root.path.split(path.sep).filter(Boolean).every(step => fs.lstatSync(root.via + (current += path.sep + step)).isDirectory());
+      } catch { safe = false; }
       strayRootSafety.set(root, safe);
     }
     return safe;

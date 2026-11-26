@@ -1648,14 +1648,19 @@ test("keep-list entries, configured prefixes, foreign owners, shared modes, link
   expect((await sweepStaleTempDirs(strayOptions(root, { uid: null }))).removed).toEqual([]);
 });
 
-test("a stray read through a linked root is never swept", async () => {
+test.each(["the root", "a parent of the root"])("a stray read through a link at %s is never swept", async linkedAt => {
   const real = tempRoot();
-  const directory = strayFixture(real, "rev-behind-link");
-  const linked = path.join(tempRoot(), "tmp-link");
-  fs.symlinkSync(real, linked);
-  const report = await sweepStaleTempDirs(strayOptions(linked));
+  const nested = path.join(real, "var", "tmp");
+  fs.mkdirSync(nested, { recursive: true });
+  const directory = strayFixture(nested, "rev-behind-link");
+  const link = path.join(tempRoot(), "link");
+  fs.symlinkSync(linkedAt === "the root" ? nested : real, link);
+  const root = linkedAt === "the root" ? link : path.join(link, "var", "tmp");
+  const report = await sweepStaleTempDirs(strayOptions(root));
   expect(report.removed).toEqual([]);
   expect(fs.existsSync(directory)).toBeTrue();
+  // The same tree goes when its root is named without the link.
+  expect((await sweepStaleTempDirs(strayOptions(nested))).removed.map(row => row.path)).toEqual([directory]);
 });
 
 test("a stale stray with one young write deep in its tree is young", async () => {
