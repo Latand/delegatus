@@ -571,3 +571,20 @@ test("an agent rewrite version shows its current wording author without the orig
   expect(html).toContain("rewritten by Legatus");
   expect(html).not.toContain(translate("en", "roleMemory.decision.typed"));
 });
+
+test("the archived row shows the Legatus rewrite author alongside the prior typed version", async () => {
+  const left: RuleView = { ...rule("r_archived_rewrite", "Keep the revised choice visible."),
+    state: "archived", reason: "stale", stageId: "decision",
+    revisedBy: { by: "agent", at: "2026-10-09T00:00:00.000Z", roleId: "legatus" },
+    versions: [{ id: "v_before_archive", rule: "Remember the original choice.", why: "The operator wrote this.", hints: [],
+      createdAt: "2026-10-08T00:00:00.000Z", decisionAuthor: "typed" }] };
+  const view: RoleMemoryProjectView = { project: "atlas", enabled: true, scopes: [levelScope("project:atlas", "project", null, [], [left])] };
+  await withWindow({ view, focusRule: left.id }, async ({ dom }) => {
+    const row = dom.document.querySelector(`[data-left-rule="${left.id}"]`)!;
+    const history = row.querySelector("details")!;
+    expect(row.textContent).toContain(translate("en", "roleMemory.left.stale"));
+    expect(row.textContent).toContain("rewritten by Legatus");
+    expect(history.textContent).toContain(translate("en", "roleMemory.decision.typed"));
+    expect(history.textContent).not.toContain("rewritten by Legatus");
+  });
+});

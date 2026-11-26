@@ -2136,9 +2136,9 @@ test.each(["unapplied", "applied"])("emergency retention credits application mar
   pass();
   const incomingSource = { ...source, pipelineId: "application-append" };
   recordLessonRequest({ ...incomingSource, at: at(2000) });
-  await recordMemoryDelivery({ engine: "codex", conversationId: incomingSource.conversationId, attempt: incomingSource, cwd: dir, nativeMemoryEnabled: false }, false,
+  const { receipt } = await recordMemoryDelivery({ engine: "codex", conversationId: incomingSource.conversationId, attempt: incomingSource, cwd: dir, nativeMemoryEnabled: false }, false,
     () => learnedRulesSnapshot(PROJECT, "builder"));
-  await confirmMemoryDelivery(incomingSource.conversationId, incomingSource);
+  await confirmMemoryDelivery(receipt);
   const incoming = leaveLessons({ source: incomingSource, request: incomingSource, lessons: [{ scope: "role", rule: "Preserve new conditions until the curator can integrate them with existing guidance.", why }], none: null, applied: applied ? [ids[0]] : [], now: at(2000) }).left[0];
   expect(incoming.archived).toEqual([ids[applied ? 1 : 0]]);
   expect(row(ids[applied ? 0 : 1]).state).toBe("active");

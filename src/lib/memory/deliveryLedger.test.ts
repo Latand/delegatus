@@ -7,7 +7,7 @@ import path from "node:path";
 import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
 import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 import { learnedRulesForLaunchProfile } from "./roleLaunch";
-import { confirmMemoryDelivery, deliveredRuleToConversation, DELIVERY_LEDGER_STARTS, engineMemoryVersion, memoryDeliveries, prepareDeliveryLedgerIndexes, type MemoryEngineStart } from "./deliveryLedger";
+import { confirmMemoryDelivery, deliveredRuleIds, deliveredRuleToConversation, DELIVERY_LEDGER_STARTS, engineMemoryVersion, memoryDeliveries, prepareDeliveryLedgerIndexes, type MemoryDeliveryReceipt, type MemoryEngineStart } from "./deliveryLedger";
 import { learnedRulesSnapshot, leaveLessons, recordLessonRequest, roleMemoryCollection } from "./roleStore";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-delivery-test-"));
 let draw = 0;
@@ -106,13 +106,32 @@ test("each start records ordered ids, exact bytes and scope revisions without ru
 test("prepared selections cannot prove delivery until the successful host start confirms them", async () => {
   lesson("Verify durable acknowledgement ownership before replaying stored receipts.");
   const input = start();
-  await learnedRulesForLaunchProfile(profile, input);
+  let receipt: MemoryDeliveryReceipt | undefined;
+  await learnedRulesForLaunchProfile(profile, input, value => { receipt = value; });
   const selected = memoryDeliveries()[0]!.delivery.rules[0]!;
   expect(memoryDeliveries()[0]!.delivery.confirmed).toBe(false);
   expect(deliveredRuleToConversation(input.conversationId, selected.id, selected.hash)).toBe(false);
-  await confirmMemoryDelivery(input.conversationId, input.attempt);
+  await confirmMemoryDelivery(receipt!);
   expect(memoryDeliveries()[0]!.delivery.confirmed).toBe(true);
   expect(deliveredRuleToConversation(input.conversationId, selected.id, selected.hash)).toBe(true);
+});
+
+test("replaying the clean host receipt leaves an earlier undelivered rule ineligible", async () => {
+  const id = lesson("Verify durable acknowledgement ownership before replaying stored receipts.").id;
+  const input = start();
+  await learnedRulesForLaunchProfile(profile, input);
+  let receipt: MemoryDeliveryReceipt | undefined;
+  await learnedRulesForLaunchProfile({ ...profile, cleanMemory: true }, input, value => { receipt = value; });
+  const [failed, clean] = memoryDeliveries();
+  expect(failed!.delivery.rules[0]?.id).toBe(id);
+  expect(clean!.delivery.rules).toEqual([]);
+  expect(receipt?.sequence).toBe(clean!.sequence);
+  await confirmMemoryDelivery({ ...receipt!, sequence: failed!.sequence });
+  await confirmMemoryDelivery(receipt);
+  await confirmMemoryDelivery(receipt);
+  expect(memoryDeliveries().map(row => row.delivery.confirmed)).toEqual([false, true]);
+  expect(deliveredRuleIds(input.attempt!, input.conversationId)).toEqual(new Set());
+  expect(deliveredRuleToConversation(input.conversationId, id, failed!.delivery.rules[0]!.hash)).toBe(false);
 });
 
 test("same-instant rewrites remain reconstructable from permanent rule versions", async () => {

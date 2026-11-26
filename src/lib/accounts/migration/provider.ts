@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline";
 import { learnedRulesForLaunchProfile, memoryStartIdentity, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
+import { confirmMemoryDelivery, type MemoryDeliveryReceipt } from "@/lib/memory/deliveryLedger";
 import { stageGitEnvironment } from "@/lib/runtime/stageGitEnvironment";
 import { storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import crypto from "node:crypto";
@@ -529,7 +530,8 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
     // source profile, so its memories feature follows that denied policy.
     assertAdoptionCurrent();
     const nativeMemoryEnabled = await codexNativeMemoryEnabled(input.target.home, false, input.profile.cleanMemory === true);
-    const developerInstructions = await learnedRulesForLaunchProfile(input.profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env, nativeMemoryEnabled });
+    let memoryDelivery: MemoryDeliveryReceipt | undefined;
+    const developerInstructions = await learnedRulesForLaunchProfile(input.profile, { engine: "codex", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env, nativeMemoryEnabled }, receipt => { memoryDelivery = receipt; });
     if (input.ownsOperation && !await input.ownsOperation()
       || !input.registry.ownsStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)) throw Error("successor ownership changed during memory preparation");
     assertAdoptionCurrent();
@@ -571,6 +573,8 @@ async function publishCodexSuccessorHost(input: StructuredHostPublicationInput):
       claimed.claimOwner,
       claimed.claimEpoch,
     );
+    assertAdoptionCurrent();
+    await confirmMemoryDelivery(memoryDelivery);
     assertAdoptionCurrent();
     unregister = await publishStructuredDeliveryHost({ key, host }, input.ownsOperation);
     assertAdoptionCurrent();
@@ -702,7 +706,8 @@ async function publishClaudeSuccessorHost(
       () => tempOwnerForConversation(input.registry, input.conversationId, input.receipt.nativeId, guard.LLV_STAGE_GIT_RECEIPT),
     );
     const launchPaths = claudeHostLaunchPaths(input.target);
-    const appendSystemPrompt = await learnedRulesForLaunchProfile(input.profile, { engine: "claude", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath, providerAccount: Boolean(input.target.claudeProvider) });
+    let memoryDelivery: MemoryDeliveryReceipt | undefined;
+    const appendSystemPrompt = await learnedRulesForLaunchProfile(input.profile, { engine: "claude", ...memoryStartIdentity(input.registry, input.conversationId, input.receipt.path), cwd: input.profile.cwd, home: input.target.home, env: access.env, claudeSettingsPath: launchPaths.spawnPolicyBaseSettingsPath, providerAccount: Boolean(input.target.claudeProvider) }, receipt => { memoryDelivery = receipt; });
     if (input.ownsOperation && !await input.ownsOperation()
       || !input.registry.ownsStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)) throw Error("successor ownership changed during memory preparation");
     host = await ClaudeStreamBrokerHost.adopt(input.receipt.nativeId, {
@@ -741,6 +746,9 @@ async function publishClaudeSuccessorHost(
       claimed.claimOwner,
       claimed.claimEpoch,
     );
+    if (input.ownsOperation && !await input.ownsOperation()
+      || !input.registry.ownsStructuredHostClaim(key, claimed.claimOwner, claimed.claimEpoch)) throw Error("successor ownership changed during host adoption");
+    await confirmMemoryDelivery(memoryDelivery);
     unregister = await publishStructuredDeliveryHost({ key, host }, input.ownsOperation);
   } catch (error) {
     if (!host && error instanceof StructuredHostAdoptionCleanupError

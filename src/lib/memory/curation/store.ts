@@ -7,7 +7,7 @@ import { statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { ROLE_IDS } from "@/lib/roles/types";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
-import { canonicalScope, projectScope, roleMemoryCollection, roleScope } from "../roleStore";
+import { canonicalScope, projectScope, roleMemoryCollection, RoleMemoryRefusal, roleScope } from "../roleStore";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeProject } from "../roleScopes";
 import { budgetArchiveCandidates, curationReadVersion, curationScopeInputs, curationScopeInputSteps, curationRuleInputs, roleRowWithHistory, roleScopeRowKeys, curationRowRevisionSteps } from "../roleViewSource";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -36,6 +36,7 @@ export interface CuratorPass extends CuratorPassView {
   importBatch?: ImportBatch;
   decisionEvidence?: DecisionEvidenceRef[];
   decisionEvidenceHasMore?: boolean;
+  decisionReadIds?: string[];
   budgetSweepCandidates?: Record<string, string[]>;
   budgetSweep?: { scope: string; candidates: number; restored: number; integrated: number; remaining: number }[];
 }
@@ -596,6 +597,7 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
   const machine = curationCollection()?.get("machine");
   const claimedAt = new Date(input.now).toISOString();
   const decisionsThrough = machine?.kind === "machine" ? machine.decisionsThrough : undefined;
+  const reviewedAtClaim = JSON.stringify(machine?.kind === "machine" ? machine.decisionReviewedIds : undefined);
   // The machine cursor moves only after a complete successful scan. Falling
   // back to a project timestamp or rolling interval can skip evidence after a
   // failed first pass. Freeze the initial interval floor on the first claim.
@@ -625,7 +627,8 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
     const last = held?.passes.at(-1);
     const completed = last ? passMetadata(last) : null;
     if (held && !status.urgent && !(importBatch && completed?.state === "succeeded") && input.now < Math.max(Date.parse(held.lastClaimAt), held.lastAt ? Date.parse(held.lastAt) : 0) + setting.intervalMs) return null;
-    if ((machine?.kind === "machine" ? machine.decisionsThrough : undefined) !== decisionsThrough) return null;
+    if ((machine?.kind === "machine" ? machine.decisionsThrough : undefined) !== decisionsThrough
+      || JSON.stringify(machine?.kind === "machine" ? machine.decisionReviewedIds : undefined) !== reviewedAtClaim) return null;
     const id = `curate_${createHash("sha256").update(`${project}:${claimedAt}`).digest("hex").slice(0, 24)}`;
     if (tx.get(`r:${id}`)) return null;
     const pass: CuratorPass = { kind: "pass", id, project, repoDir: input.repoDir, scopes, clientAttemptId: id, claimedAt, state: "claimed", endedAt: null, failure: null, conversationId: null, launchId: null, transcriptPath: null, launchedAt: null,
@@ -641,6 +644,20 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
       ...(sweepCandidates ? { budgetSweepAttemptedAt: claimedAt } : {}) });
     tx.put({ kind: "project", project, current: id, lastClaimAt: claimedAt, claimRevisions, lastAt: held?.kind === "project" ? held.lastAt : null, passes: [...(held?.kind === "project" ? held.passes : []), id] });
     return pass;
+  });
+}
+export function recordDecisionEvidenceRead(id: string, ids: readonly string[]): void {
+  if (!ids.length) return;
+  curationCollection(true)!.boundedPatch(3, tx => {
+    const pass = tx.get(`r:${id}`);
+    const machine = tx.get("machine");
+    if (pass?.kind !== "pass" || !passIsLive(pass) || machine?.kind !== "machine" || machine.current !== id) {
+      throw new RoleMemoryRefusal("CURATE_STALE", "the decision evidence pass is no longer live");
+    }
+    const allowed = new Set(pass.decisionEvidence?.map(ref => ref.id));
+    const seen = new Set(pass.decisionReadIds);
+    for (const evidenceId of ids) if (allowed.has(evidenceId)) seen.add(evidenceId);
+    if (seen.size !== (pass.decisionReadIds?.length ?? 0)) tx.put({ ...pass, decisionReadIds: [...seen] });
   });
 }
 export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass | null {
@@ -674,10 +691,15 @@ export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass 
       });
     }
     if (!passIsLive(next)) {
-      const machine = tx.get("machine"); if (machine?.kind === "machine" && machine.current === id) tx.put({ ...machine, current: null,
-        ...(next.state === "succeeded" && held.decisionEvidence ? held.decisionEvidenceHasMore
-          ? { decisionReviewedIds: [...new Set([...(machine.decisionReviewedIds ?? []), ...held.decisionEvidence.map(ref => ref.id)])] }
-          : { decisionsThrough: held.claimedAt, decisionReviewedIds: [] } : {}),
+      const machine = tx.get("machine");
+      const reviewed = new Set(held.decisionReadIds);
+      const memory = next.state === "succeeded" && held.decisionEvidence && reviewed.size < held.decisionEvidence.length
+        ? roleMemoryCollection() : null;
+      const completed = next.state === "succeeded" && held.decisionEvidence?.every(ref => reviewed.has(ref.id) || memory?.get(`r:${ref.id}`));
+      if (machine?.kind === "machine" && machine.current === id) tx.put({ ...machine, current: null,
+        ...(completed && !held.decisionEvidenceHasMore ? { decisionsThrough: held.claimedAt, decisionReviewedIds: [] }
+          : next.state === "succeeded" && reviewed.size
+            ? { decisionReviewedIds: [...new Set([...(machine.decisionReviewedIds ?? []), ...reviewed])] } : {}),
         ...(held.budgetSweepCandidates ? { budgetSweepEndedAt: next.endedAt ?? held.claimedAt } : {}),
         ...(next.state === "succeeded" && held.budgetSweepCandidates ? { budgetSweepCompletedAt: next.endedAt ?? held.claimedAt } : {}) });
       const projectKey = canonicalProject(held.project), stored = tx.get(`p:${projectKey}`);

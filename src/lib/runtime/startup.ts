@@ -19,6 +19,7 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { learnedRulesForLaunchProfile, memoryStartIdentity, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
+import type { MemoryDeliveryReceipt } from "@/lib/memory/deliveryLedger";
 import { storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import fs from "node:fs";
@@ -3002,6 +3003,7 @@ export async function claudeStartupHostOptions(
   /* No owner means no account answered for this transcript, so there is no
      home to read a server definition out of and none is invented here. */
   const launchPaths = owner ? claudeHostLaunchPaths(owner) : null;
+  let memoryDelivery: MemoryDeliveryReceipt | undefined;
   return {
     cwd: entry.cwd,
     claudeConfigDir: launchPaths?.claudeConfigDir,
@@ -3011,7 +3013,8 @@ export async function claudeStartupHostOptions(
     allowSubagents: entry.launchProfile?.allowSubagents ?? false,
     operatorDecisionForms: operatorDecisionFormsRequired(agentRole, entry.artifactPath),
     cleanMemory: entry.launchProfile?.cleanMemory === true,
-    appendSystemPrompt: await learnedRulesForLaunchProfile(entry.launchProfile, identity ? { engine: "claude", ...identity, cwd: entry.cwd, home: owner?.home, env: access.env, claudeSettingsPath: launchPaths?.spawnPolicyBaseSettingsPath, providerAccount: Boolean(owner?.claudeProvider) } : undefined),
+    appendSystemPrompt: await learnedRulesForLaunchProfile(entry.launchProfile, identity ? { engine: "claude", ...identity, cwd: entry.cwd, home: owner?.home, env: access.env, claudeSettingsPath: launchPaths?.spawnPolicyBaseSettingsPath, providerAccount: Boolean(owner?.claudeProvider) } : undefined, receipt => { memoryDelivery = receipt; }),
+    memoryDelivery,
     mcpServers: entry.launchProfile?.mcpServers ?? ["viewer"],
     mcpStatePath: launchPaths?.mcpStatePath,
     ...(entry.launchProfile?.ownerRelayHandoffOnly ? { tools: ["Read"] } : {}),
@@ -3941,6 +3944,7 @@ async function adoptStructuredHostsPass(
           () => tempOwnerForConversation(registry, conversation.id, sessionKeyId(entry.key), stageEnvironment.LLV_STAGE_GIT_RECEIPT),
         );
         const nativeMemoryEnabled = await codexNativeMemoryEnabled(owner?.home, launchProfile?.allowSubagents ?? false, launchProfile?.cleanMemory === true);
+        let memoryDelivery: MemoryDeliveryReceipt | undefined;
         const options = {
           cwd: entry.cwd,
           codexHome: owner?.home,
@@ -3955,7 +3959,8 @@ async function adoptStructuredHostsPass(
           omitSkillsInstructions,
           nativeMemoryEnabled,
           ...(launchProfile?.ownerRelayHandoffOnly ? { ownerRelayHandoffOnly: true } : {}),
-          developerInstructions: await learnedRulesForLaunchProfile(launchProfile, { engine: "codex", ...memoryStartIdentity(registry, conversation.id), cwd: entry.cwd, home: owner?.home, env: access.env, nativeMemoryEnabled }),
+          developerInstructions: await learnedRulesForLaunchProfile(launchProfile, { engine: "codex", ...memoryStartIdentity(registry, conversation.id), cwd: entry.cwd, home: owner?.home, env: access.env, nativeMemoryEnabled }, receipt => { memoryDelivery = receipt; }),
+          memoryDelivery,
           mcpServers: launchProfile?.mcpServers ?? ["viewer"],
           validateTelegramGrant: startupTelegramGrantCheck(registry, entry),
           /* Re-adoption replays the durable grant (issue #687) — a session never

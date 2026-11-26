@@ -9421,9 +9421,9 @@ export function viewerMcpBindings(
           assertCurrent();
           return curationOperationResult(readCurationOperation(operation)!);
         }
-        const result = await readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined);
-        context?.assertCaller?.();
-        authority.assertCurrent();
+        const assertReadCurrent = () => { context?.assertCaller?.(); authority.assertCurrent(); };
+        const result = await readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined, undefined, assertReadCurrent);
+        assertReadCurrent();
         return result;
       } catch (error) {
         if (error instanceof RoleMemoryRefusal) throw new McpToolRefusal(error.message, { code: error.code, status: 409 });

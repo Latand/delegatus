@@ -2,6 +2,8 @@ import { afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
+import { NextRequest } from "next/server";
 import { agentRegistry, closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { selfFile } from "@/lib/links/self";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
@@ -14,14 +16,14 @@ import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAutho
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { GET as searchMemory, POST as openMemory } from "@/app/api/search/memory/route";
 import { legatusDecisionRule } from "../legatusCitation";
-import { confirmMemoryDelivery } from "../deliveryLedger";
+import { confirmMemoryDelivery, type MemoryDeliveryReceipt } from "../deliveryLedger";
 import { learnedRulesForLaunchProfile, roleMemoryProfileForIdentity } from "../roleLaunch";
 import { alwaysOn } from "../roleSelect";
 import { leaveLessonForSeat } from "../roleStage";
 import { deleteRule, projectScope, projectView, roleMemoryCollection, roleScope } from "../roleStore";
 import { CURATION_INTERVAL_MS, type RoleMemoryRule } from "../roleTypes";
 import { applyCuration, type CurationApply } from "./apply";
-import { LEGATUS_SCOPE, decisionRuleSource } from "./decisionEvidence";
+import { LEGATUS_SCOPE, decisionRuleSource, selectDecisionEvidence } from "./decisionEvidence";
 import { readCuration } from "./read";
 import { claimPass, patchPass } from "./store";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
@@ -203,6 +205,57 @@ test("a failed first curator pass retries from the original decision scan bounda
   expect(retry.decisionEvidence?.map(ref => "reviewId" in ref && ref.reviewId)).toEqual([round.id]);
 });
 
+test("a changed split child credits the curator while the original keeps typed priority", () => {
+  startSeat();
+  const round = form(310);
+  answer(round, 0, words, 1);
+  const pass = claimPass({ project: serviceProject, now: START + 2, repoDir: null })!;
+  const ref = pass.decisionEvidence![0]!;
+  applyCuration(pass, { scopes: order(LEGATUS_SCOPE, `decision:${ref.id}`), adoptDecision: [
+    { evidence: ref.id, quote: words, to: LEGATUS_SCOPE, rule, why, note: why },
+  ] }, at(3));
+  const replacement = "Check the latest form answer before retaining an earlier preference.";
+  const result = applyCuration(pass, {
+    scopes: order(LEGATUS_SCOPE, `split:${ref.id}:1`),
+    split: [{ id: ref.id, note: why, parts: [{ to: LEGATUS_SCOPE, rule }, { to: LEGATUS_SCOPE, rule: replacement }] }],
+  }, at(4));
+  const original = activeRule(ref.id);
+  const child = activeRule(result.placeholders[`split:${ref.id}:1`]!);
+  expect(original).toMatchObject({ rule, source: { author: "typed", reviewId: round.id } });
+  expect(child).toMatchObject({ rule: replacement, wordingRevision: { by: "curator" }, splitFrom: ref.id });
+  expect([...alwaysOn([child, original])]).toEqual([original.id]);
+  const view = projectView(formProject).scopes.find(scope => scope.scope === LEGATUS_SCOPE)?.active.find(row => row.id === child.id);
+  expect(view).toMatchObject({ revisedBy: { by: "curator" } });
+  expect(view).not.toHaveProperty("decisionAuthor");
+});
+
+test("adoption and merge in one apply save final wording, provenance and the merged source", () => {
+  startSeat();
+  const first = form(311), second = form(312);
+  answer(first, 0, words, 1);
+  answer(second, 0, "Read the most recent answer before acting.", 2);
+  const pass = claimPass({ project: serviceProject, now: START + 3, repoDir: null })!;
+  const [newer, older] = pass.decisionEvidence!;
+  expect(newer).toMatchObject({ reviewId: second.id });
+  expect(older).toMatchObject({ reviewId: first.id });
+  applyCuration(pass, { scopes: order(LEGATUS_SCOPE, `decision:${older!.id}`), adoptDecision: [
+    { evidence: older!.id, quote: words, to: LEGATUS_SCOPE, rule, why, note: why },
+  ] }, at(4));
+  const adopted = "Read the most recent operator answer before acting on a form.";
+  const merged = "Keep the existing review surface and check the latest answer before acting.";
+  const [{ revision }] = order(LEGATUS_SCOPE);
+  applyCuration(pass, {
+    scopes: [{ scope: LEGATUS_SCOPE, revision, order: [`decision:${newer!.id}`] }],
+    adoptDecision: [{ evidence: newer!.id, quote: "most recent answer", to: LEGATUS_SCOPE, rule: adopted, why, note: why }],
+    merge: [{ into: newer!.id, from: [older!.id], rule: merged, note: why }],
+  }, at(5));
+  const target = activeRule(newer!.id);
+  expect(target).toMatchObject({ state: "active", rule: merged, mergedFrom: [older!.id], wordingRevision: { by: "curator" } });
+  expect(activeRule(older!.id)).toMatchObject({ state: "merged", mergedInto: newer!.id });
+  expect(activeRule(target.versions![0]!)).toMatchObject({ rule: adopted, source: { author: "typed" }, versionOf: target.id });
+  expect(alwaysOn([target])).not.toContain(target.id);
+});
+
 test("a successful 50-item curator batch leaves overflow eligible and deduplicates adopted evidence", () => {
   startSeat();
   const rounds = Array.from({ length: 52 }, (_, i) => form(100 + i));
@@ -225,17 +278,109 @@ test("a successful 50-item curator batch leaves overflow eligible and deduplicat
   expect(next.decisionEvidenceHasMore).toBe(false);
 });
 
-test("successful discarded batches advance through reviewed forms without starving overflow", () => {
+test("successful discarded batches advance through reviewed forms without starving overflow", async () => {
   startSeat();
   const rounds = Array.from({ length: 51 }, (_, i) => form(200 + i));
   rounds.forEach((round, i) => answer(round, 0, `typed discarded choice ${i}`, i + 1));
   const first = claimPass({ project: serviceProject, now: START + 60, repoDir: null })!;
   expect(first.decisionEvidence).toHaveLength(50);
+  const page = await readCuration(first, "decisions");
+  expect(page.decisions).toHaveLength(50);
+  expect(page.cursor).toBeNull();
   patchPass(first.id, { state: "succeeded", endedAt: at(61) });
   const next = claimPass({ project: serviceProject, now: START + CURATION_INTERVAL_MS + 100, repoDir: null })!;
   expect(next.decisionEvidence).toHaveLength(1);
   expect(next.decisionEvidence?.[0]).toMatchObject({ reviewId: rounds[0]!.id });
   expect(next.decisionEvidenceHasMore).toBe(false);
+});
+
+test("a clean pass that skips decisions leaves them eligible", async () => {
+  startSeat();
+  const round = form(313);
+  answer(round, 0, words, 1);
+  const first = claimPass({ project: serviceProject, now: START + 2, repoDir: null })!;
+  expect(first.decisionEvidence).toEqual([expect.objectContaining({ reviewId: round.id })]);
+  expect((await readCuration(first)).decisions?.count).toBe(1);
+  patchPass(first.id, { state: "succeeded", endedAt: at(3) });
+  const next = claimPass({ project: serviceProject, now: START + CURATION_INTERVAL_MS + 4, repoDir: null })!;
+  expect(next.decisionEvidence).toEqual(first.decisionEvidence!);
+});
+
+test("settlement retires exactly the decision evidence returned on the first page", async () => {
+  startSeat();
+  const rounds = Array.from({ length: 40 }, (_, i) => form(400 + i));
+  rounds.forEach((round, i) => answer(round, 0, `Recorded choice ${i}: ${"retain the existing review surface. ".repeat(24)}`, i + 1));
+  const first = claimPass({ project: serviceProject, now: START + 60, repoDir: null })!;
+  const page = await readCuration(first, "decisions");
+  expect(page.decisions.length).toBeGreaterThan(0);
+  expect(page.cursor).toBeTruthy();
+  const unread = first.decisionEvidence!.slice(page.decisions.length);
+  expect(unread.length).toBeGreaterThan(0);
+  expect((await readCuration(first, "decisions")).decisions).toEqual(page.decisions);
+  patchPass(first.id, { state: "succeeded", endedAt: at(61) });
+  const next = claimPass({ project: serviceProject, now: START + CURATION_INTERVAL_MS + 100, repoDir: null })!;
+  expect(next.decisionEvidence).toEqual(unread);
+});
+
+test("a later answer to an adopted form appears once with a distinct evidence ID", async () => {
+  startSeat();
+  const round = form(314);
+  answer(round, 0, words, 1);
+  const first = claimPass({ project: serviceProject, now: START + 2, repoDir: null })!;
+  const original = first.decisionEvidence![0]!;
+  applyCuration(first, { scopes: order(LEGATUS_SCOPE, `decision:${original.id}`), adoptDecision: [
+    { evidence: original.id, quote: words, to: LEGATUS_SCOPE, rule, why, note: why },
+  ] }, at(3));
+  patchPass(first.id, { state: "succeeded", endedAt: at(4) });
+  const amended = "Use the separate review surface for this form.";
+  setSystemTime(START + 5);
+  expect(decidePrototype(new NextRequest("http://localhost/api/projects/decisions"), null,
+    { reviewId: round.id, chosen: [], answers: [{ questionId: "place", options: [1] }], comment: amended },
+    { ...prototypeWorld, orchestrator: () => null })).toBe(true);
+  expect(findSeatRound(round.id)?.decision?.revision).toBe(2);
+  const next = claimPass({ project: serviceProject, now: START + CURATION_INTERVAL_MS + 10, repoDir: null })!;
+  expect(next.decisionEvidence).toEqual([expect.objectContaining({ reviewId: round.id })]);
+  expect(next.decisionEvidence![0]!.id).not.toBe(original.id);
+  expect((await readCuration(next, "decisions")).decisions[0]?.text).toEqual([amended]);
+  expect(activeRule(original.id)).toMatchObject({ rule, source: { reviewId: round.id } });
+  patchPass(next.id, { state: "succeeded", endedAt: at(CURATION_INTERVAL_MS + 11) });
+  const later = claimPass({ project: serviceProject, now: START + 2 * CURATION_INTERVAL_MS + 20, repoDir: null })!;
+  expect(later.decisionEvidence).toEqual([]);
+});
+
+test("retained decision rules do not multiply the cost of selecting 50 forms", () => {
+  const round = form(315);
+  answer(round, 0, words, 1);
+  const saved = findSeatRound(round.id)!;
+  const baseRule = activeRule(lesson().id);
+  const db = new Database(path.join(sandbox, "state.sqlite"));
+  try {
+    const insert = db.query(`INSERT INTO state_rows
+      (collection,row_key,value_json,row_order,row_revision,controller_active) VALUES (?,?,?,?,1,0)`);
+    const seed = db.transaction((from: number, until: number) => {
+      for (let i = from; i < until; i++) {
+        const reviewId = `pr_${(1000 + i).toString(16).padStart(32, "0")}`;
+        const ruleId = `r_${(2000 + i).toString(16).padStart(16, "0")}`;
+        insert.run("seat-decisions", `r:${reviewId}`, JSON.stringify({ ...saved, id: reviewId }), i);
+        insert.run("role_memory", `r:${ruleId}`, JSON.stringify({ ...baseRule, id: ruleId, state: "archived",
+          source: { origin: "decision", author: "typed", project: formProject, reviewId: `retained-${i}` } }), i);
+      }
+    });
+    seed(0, 99);
+    const measure = () => Array.from({ length: 3 }, () => {
+      const start = performance.now();
+      const selection = selectDecisionEvidence(at(), at(2));
+      const elapsed = performance.now() - start;
+      expect(selection.refs).toHaveLength(50);
+      expect(selection.hasMore).toBe(true);
+      return elapsed;
+    }).sort((a, b) => a - b);
+    const small = measure();
+    seed(99, 999);
+    const large = measure();
+    console.info(`Decision evidence at 100 and 1,000 rows per collection (ms): ${small.map(n => n.toFixed(1)).join(", ")} / ${large.map(n => n.toFixed(1)).join(", ")}`);
+    expect(large[1]!).toBeLessThan(350);
+  } finally { db.close(); }
 });
 
 test("a saved task answer uses the current task project and the operator's custom text", () => {
@@ -343,10 +488,11 @@ test("Legatus lessons use their own scope and a decision cites one delivered or 
   expect(findSeatRound(nextForm.id)?.decision?.decidedBy).toEqual({ kind: "legatus", conversationId: conversation, ruleId: ref.id });
 
   const profile = roleMemoryProfileForIdentity(emptyLaunchProfile({ cwd: sandbox }), "legatus", serviceProject, true)!;
-  const output = await learnedRulesForLaunchProfile(profile, { engine: "codex", conversationId: "conversation_rotated", cwd: sandbox, home: sandbox });
+  let receipt: MemoryDeliveryReceipt | undefined;
+  const output = await learnedRulesForLaunchProfile(profile, { engine: "codex", conversationId: "conversation_rotated", cwd: sandbox, home: sandbox }, value => { receipt = value; });
   expect(output).toContain(`[${own.id}]`);
   expect(output).toContain(`[${ref.id}]`);
-  await confirmMemoryDelivery("conversation_rotated");
+  await confirmMemoryDelivery(receipt);
   expect(legatusDecisionRule(formProject, "conversation_rotated", ref.id)).toBe(ref.id);
   deleteRule(ref.id, at(4));
   expect(() => legatusDecisionRule(formProject, conversation, ref.id)).toThrow("active rule readable");

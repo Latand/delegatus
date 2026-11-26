@@ -8,7 +8,7 @@ import { roleIsClean } from "./eligibility";
 import { learnedRulesSnapshot } from "./roleStore";
 import type { AgentRegistry } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { recordMemoryDelivery, type MemoryEngineStart } from "./deliveryLedger";
+import { recordMemoryDelivery, type MemoryDeliveryReceipt, type MemoryEngineStart } from "./deliveryLedger";
 import { roleMemoryEnabled } from "./settings";
 import { applyOperatorMemorySelector, operatorMemoryEnabled } from "./operatorMemory";
 import { memorySelection, prepareRoleSelection, selectionCandidate, frozenSelection, selectedSnapshot, legacySelectionBypass } from "./roleSelection";
@@ -56,14 +56,14 @@ export function memoryStartIdentity(registry: AgentRegistry, conversationId: str
 
 /** The selector survives in receipts; only engine options carry its text.
  * A ledger refusal stops a start: a successfully started attempt must have evidence. */
-export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, "cleanMemory" | "learnedRules"> & Partial<Pick<LaunchProfile, "title" | "goal">> | null | undefined, start?: MemoryEngineStart): Promise<string | undefined> {
-  const block = await launchMemory(profile, start);
+export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, "cleanMemory" | "learnedRules"> & Partial<Pick<LaunchProfile, "title" | "goal">> | null | undefined, start?: MemoryEngineStart, onPrepared?: (receipt: MemoryDeliveryReceipt) => void): Promise<string | undefined> {
+  const block = await launchMemory(profile, start, onPrepared);
   if (profile?.learnedRules?.roleId !== "legatus" || profile.cleanMemory || !roleMemoryEnabled()) return block;
   const guidance = "For each form, search_memory with the form's project and subject. Decide each form using your judgment. If a remembered rule guided the choice, cite at most one active rule you received or opened and keep the reason to one line.";
   return [block, guidance].filter(Boolean).join("\n\n");
 }
 
-async function launchMemory(profile: Parameters<typeof learnedRulesForLaunchProfile>[0], start?: MemoryEngineStart): Promise<string | undefined> {
+async function launchMemory(profile: Parameters<typeof learnedRulesForLaunchProfile>[0], start?: MemoryEngineStart, onPrepared?: (receipt: MemoryDeliveryReceipt) => void): Promise<string | undefined> {
   const marker = profile?.learnedRules;
   const clean = profile?.cleanMemory === true;
   const select = () => {
@@ -78,10 +78,15 @@ async function launchMemory(profile: Parameters<typeof learnedRulesForLaunchProf
       return undefined;
     }
   };
-  if (!marker || clean || roleIsClean(marker.roleId) || !roleMemoryEnabled()) return start ? recordMemoryDelivery(start, clean, select) : select()?.block;
+  const record = async (selection: Parameters<typeof recordMemoryDelivery>[2]) => {
+    const { block, receipt } = await recordMemoryDelivery(start!, clean, selection);
+    onPrepared?.(receipt);
+    return block;
+  };
+  if (!marker || clean || roleIsClean(marker.roleId) || !roleMemoryEnabled()) return start ? record(select) : select()?.block;
   if (!start?.attempt) {
     const snapshot = await waitForStateLock("memory.selection-snapshot", select);
-    if (!snapshot) return start ? recordMemoryDelivery(start, clean, select) : undefined;
+    if (!snapshot) return start ? record(select) : undefined;
     const selection = await selectRoleMemory(snapshot.candidates, [marker.roleId, profile?.title, profile?.goal?.objective].filter(Boolean).join("\n"));
     const projected = selectedSnapshot(snapshot, selection, marker.reader);
     const delivery = () => {
@@ -95,13 +100,13 @@ async function launchMemory(profile: Parameters<typeof learnedRulesForLaunchProf
       const validated = selectedSnapshot(current, { ...selection, shadowIds: selection.shadowIds.filter(id => survivingIds.has(id)) }, marker.reader);
       return { ...validated, reason: selection.reason, shadowIds: selection.shadowIds.filter(id => survivingIds.has(id)), evidence: selection.evidence };
     };
-    return start ? recordMemoryDelivery(start, clean, delivery) : delivery()?.block;
+    return start ? record(delivery) : delivery()?.block;
   }
   await prepareRoleSelection();
   const saved = await waitForStateLock("memory.selection-read", () => memorySelection(start.attempt!));
   const existing = saved && !legacySelectionBypass(saved) ? saved : null;
   const snapshot = existing ? undefined : await waitForStateLock("memory.selection-snapshot", select);
-  if (!existing && !snapshot) return recordMemoryDelivery(start, clean, select);
+  if (!existing && !snapshot) return record(select);
   const candidate = existing ?? selectionCandidate(start.attempt, snapshot!);
   if (!existing && snapshot) {
     const started = performance.now();
@@ -129,7 +134,7 @@ async function launchMemory(profile: Parameters<typeof learnedRulesForLaunchProf
         reason: `${elapsed >= MEMORY_SELECTION_DEADLINE_MS ? "brief-timeout" : "brief-error"},${fallback.reason}`, evidence });
     }
   }
-  return recordMemoryDelivery(start, clean, () => {
+  return record(() => {
     if (!roleMemoryEnabled()) return undefined;
     return frozenSelection(candidate, snapshot);
   });

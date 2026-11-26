@@ -81,11 +81,10 @@ function messageEvidence(owner: DeliveryOperationOwner, project: string): Eviden
 
 /** Read current local review rows in bounded SQL pages. Replicas have no
  * server-attributed actor and cannot enter this query. */
-function recentForms(after: string, through: string, reviewed: ReadonlySet<string>): Evidence[] {
-  const filename = statePath("state.sqlite");
-  if (!databaseFileIdentity(filename)) return [];
-  const db = sharedStateReadonlyDatabase(filename);
-  const query = db.query<{ body: string }, [string, string, number, number]>(`
+function recentForms(db: ReturnType<typeof sharedStateReadonlyDatabase>, after: string, through: string, excluded: (id: string) => boolean): Evidence[] {
+  // This cursor may stop early. Finalize it instead of reusing a cached
+  // statement whose iterator has not reached SQLite's DONE state.
+  const query = db.prepare<{ body: string }, [string, string]>(`
     WITH rounds(body) AS (
       SELECT value_json FROM state_rows WHERE collection='seat-decisions'
       UNION ALL
@@ -114,31 +113,22 @@ function recentForms(after: string, through: string, reviewed: ReadonlySet<strin
         END AS priority
       FROM rounds
       WHERE json_extract(body, '$.decision.decidedBy.kind') IN ('operator', 'member')
-        AND NOT EXISTS (SELECT 1 FROM state_rows adopted WHERE adopted.collection='role_memory'
-          AND json_extract(adopted.value_json, '$.kind')='rule'
-          AND json_extract(adopted.value_json, '$.source.origin')='decision'
-          AND json_extract(adopted.value_json, '$.source.reviewId')=json_extract(body, '$.id'))
+        AND json_extract(body, '$.decision.at') > ? AND json_extract(body, '$.decision.at') <= ?
     )
-    SELECT body FROM answered WHERE at > ? AND at <= ?
-      ORDER BY priority, at DESC, json_extract(body, '$.id') LIMIT ? OFFSET ?
+    SELECT body FROM answered ORDER BY priority, at DESC, json_extract(body, '$.id')
     `);
   const evidence: Evidence[] = [];
-  let offset = 0;
-  while (evidence.length <= DECISION_BATCH_LIMIT) {
-    const rows = query.all(after, through, DECISION_BATCH_LIMIT, offset);
-    if (!rows.length) break;
-    offset += rows.length;
-    for (const { body } of rows) {
+  try {
+    for (const { body } of query.iterate(after, through)) {
       const item = formEvidence(JSON.parse(body) as PrototypeReviewRound);
-      if (item && !reviewed.has(item.ref.id)) evidence.push(item);
+      if (item && !excluded(item.ref.id)) evidence.push(item);
       if (evidence.length > DECISION_BATCH_LIMIT) break;
     }
-    if (rows.length < DECISION_BATCH_LIMIT) break;
-  }
+  } finally { query.finalize(); }
   return evidence;
 }
 
-function recentMessages(project: string, after: string, through: string, reviewed: ReadonlySet<string>): Evidence[] {
+function recentMessages(project: string, after: string, through: string, excluded: (id: string) => boolean): Evidence[] {
   const seat = orchestratorSeatFor(project).active;
   const former = previousOrchestratorSeats(project).filter(item => item.heldTo > after);
   const recipients = [
@@ -149,8 +139,8 @@ function recentMessages(project: string, after: string, through: string, reviewe
   return recipients.flatMap(({ conversationId, heldFrom, heldTo }) =>
     agentRegistry().recentTerminalDeliveryOwners(conversationId as ViewerConversationId).flatMap(owner => {
       const evidence = messageEvidence(owner, project);
-      if (!evidence || reviewed.has(evidence.ref.id) || evidence.ref.at <= after || evidence.ref.at > through
-        || (heldFrom && owner.createdAt < heldFrom) || (heldTo && owner.createdAt > heldTo)) return [];
+      if (!evidence || evidence.ref.at <= after || evidence.ref.at > through
+        || (heldFrom && owner.createdAt < heldFrom) || (heldTo && owner.createdAt > heldTo) || excluded(evidence.ref.id)) return [];
       const key = owner.deliveryId;
       if (seen.has(key)) return [];
       seen.add(key);
@@ -161,7 +151,15 @@ function recentMessages(project: string, after: string, through: string, reviewe
 export function selectDecisionEvidence(after: string, through: string, reviewedIds: readonly string[] = []): { refs: DecisionEvidenceRef[]; hasMore: boolean } {
   const project = legatusProject();
   const reviewed = new Set(reviewedIds);
-  const selected = [...recentForms(after, through, reviewed), ...(project ? recentMessages(project, after, through, reviewed) : [])]
+  // Adoption uses the exact evidence ID as the rule's primary key. A later
+  // answer to the same form has a different ID, and lookup never scans rules.
+  const filename = statePath("state.sqlite");
+  const db = databaseFileIdentity(filename) ? sharedStateReadonlyDatabase(filename) : null;
+  const adopted = db?.query<unknown, [string]>(
+    "SELECT 1 FROM state_rows WHERE collection='role_memory' AND row_key=?",
+  );
+  const excluded = (id: string) => reviewed.has(id) || !!adopted?.get(`r:${id}`);
+  const selected = [...(db ? recentForms(db, after, through, excluded) : []), ...(project ? recentMessages(project, after, through, excluded) : [])]
     .sort((a, b) => a.rank - b.rank || b.ref.at.localeCompare(a.ref.at) || a.ref.id.localeCompare(b.ref.id))
     .slice(0, DECISION_BATCH_LIMIT + 1);
   return { refs: selected.slice(0, DECISION_BATCH_LIMIT).map(({ ref }) => ref), hasMore: selected.length > DECISION_BATCH_LIMIT };

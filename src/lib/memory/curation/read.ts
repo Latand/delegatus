@@ -13,8 +13,9 @@ import { leftRuleCount, otherProjectRoleRules, roleScopeReadMetadata, ruleUsageC
 import { swarmRulesForRole } from "../swarmPack";
 import { roleMemoryEnabled, swarmRulesEnabled } from "../settings";
 import { readDecisionEvidence } from "./decisionEvidence";
-import type { CuratorPass } from "./store";
+import { recordDecisionEvidenceRead, type CuratorPass } from "./store";
 import { readabilityHint } from "./readability";
+import { waitForStateLock } from "@/lib/state/lockWait";
 
 const PAGE_BYTES = 24_000;
 function isPendingCorrection(rule: RuleView): boolean {
@@ -47,10 +48,15 @@ function decisionPage(pass: CuratorPass, cursor?: string) {
 export function readCuration(pass: CuratorPass, scope?: undefined, cursor?: string, now?: number): Promise<Extract<Awaited<ReturnType<typeof readRuleCuration>>, { scopes: unknown }>>;
 export function readCuration(pass: CuratorPass, scope: "imports", cursor?: string, now?: number): Promise<{ pass: string; candidates: Awaited<ReturnType<typeof readImportBatch>> }>;
 export function readCuration(pass: CuratorPass, scope: "decisions", cursor?: string, now?: number): Promise<ReturnType<typeof decisionPage>>;
-export function readCuration(pass: CuratorPass, scope?: string, cursor?: string, now?: number): ReturnType<typeof readRuleCuration>;
-export async function readCuration(pass: CuratorPass, scope?: string, cursor?: string, now = Date.now()) {
+export function readCuration(pass: CuratorPass, scope?: string, cursor?: string, now?: number, assertCurrent?: () => void): ReturnType<typeof readRuleCuration>;
+export async function readCuration(pass: CuratorPass, scope?: string, cursor?: string, now = Date.now(), assertCurrent?: () => void) {
   if (scope === "imports") return { pass: pass.id, candidates: await withViewerOperation("memory.import.curation", () => readImportBatch(pass)) };
-  if (scope === "decisions") return decisionPage(pass, cursor);
+  if (scope === "decisions") return waitForStateLock("memory.curation-decision-page", () => {
+    assertCurrent?.();
+    const page = decisionPage(pass, cursor);
+    recordDecisionEvidenceRead(pass.id, page.decisions.map(item => item.id));
+    return page;
+  });
   return readRuleCuration(pass, scope, cursor, now);
 }
 async function readRuleCuration(pass: CuratorPass, scope?: string, cursor?: string, now = Date.now()) {

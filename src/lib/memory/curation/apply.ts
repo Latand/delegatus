@@ -218,6 +218,9 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
         else {
           const id = newRuleId({ get: key => created.has(key.slice(2)) ? created.get(key.slice(2))! : tx.get(key) });
           const row: RoleMemoryRule = { ...rule, ...fields, id, scope: part.to, createdAt: now, changedAt: now, versions: [], splitFrom: rule.id, splitAt: now, note: item.note };
+          if (row.rule !== rule.rule || row.why !== rule.why) {
+            row.revisedBy = row.wordingRevision = { by: "curator", at: now };
+          }
           // A new part has left nothing yet: the source's departures stay the source's.
           delete row.keptByOperatorAt; delete row.versionOf; delete row.departures;
           created.set(id, row); work.set(id, row); placeholders[`split:${item.id}:${index}`] = id;
@@ -315,7 +318,14 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
         changedAt: now, curatedAt: now });
       prior.set(id, { id, version: saved?.version ?? null, fields });
     }
-    for (const row of created.values()) tx.put({ ...row, curatedAt: now, changedAt: now });
+    for (const [id, original] of created) {
+      const next = work.get(id)!;
+      const edited = next.rule !== original.rule || next.why !== original.why;
+      const revision = edited ? { by: "curator" as const, at: now } : undefined;
+      const saved = revision ? versionedRule(tx, original, next, revision) : undefined;
+      tx.put({ ...next, ...(saved ? { versions: saved.updated.versions, revisedBy: revision, wordingRevision: revision } : {}),
+        curatedAt: now, changedAt: now });
+    }
     const counts = { calls: 1, changed: touched.size + created.size, rewritten: input.rewrite?.length ?? 0, merged: input.merge?.reduce((n, m) => n + m.from.length, 0) ?? 0, moved: input.move?.length ?? 0, split: input.split?.length ?? 0, archived: (input.archive?.length ?? 0) + (input.problem?.length ?? 0), restored: input.restore?.length ?? 0 };
     for (const [scope, row] of scopes) {
       const revision = row.revision + 1;

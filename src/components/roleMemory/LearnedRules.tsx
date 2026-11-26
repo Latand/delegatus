@@ -285,13 +285,18 @@ function EarlierTexts({ rule, onRevert }: { rule: RuleView; onRevert?: (id: stri
 function LeftRow({ rule, kind, onRestore, counterpart, onFocus, onRevert, focused }: { rule: RuleView; kind: ScopeKind; onRestore: (rule: RuleView) => void; counterpart?: RuleView; onFocus?: (id: string) => void; onRevert?: (id: string) => void; focused?: boolean }) {
   const { t } = useLocale();
   const reason: `roleMemory.left.${NonNullable<RuleView["reason"]> | "merged"}` = rule.state === "merged" ? "roleMemory.left.merged" : `roleMemory.left.${rule.reason ?? "budget"}`;
+  const revision = rule.stageId === "decision" && !rule.decisionAuthor ? rule.revisedBy : undefined;
   const row = useRef<HTMLLIElement>(null);
   useEffect(() => { if (focused) row.current?.scrollIntoView({ block: "nearest" }); }, [focused]);
   return (
     <li ref={row} title={rule.note} data-left-rule={rule.id} data-focused={focused ? "" : undefined} className={`flex items-start gap-2 rounded-[8px] px-2 py-1 ${focused ? KIND_TONE[kind].soft : ""}`}>
       <span className="min-w-0 flex-1">
         <span className="text-[11.5px] leading-4 text-muted line-through line-clamp-2 [overflow-wrap:anywhere]">{rule.rule}</span>
-        <span className="block text-[10.5px] leading-4 text-muted [overflow-wrap:anywhere]">{rule.decisionAuthor ? `${t(`roleMemory.decision.${rule.decisionAuthor}`)} · ` : ""}{t(reason)}{rule.where ? ` · ${rule.where}` : ""}</span>
+        <span data-rule-provenance="" className="block text-[10.5px] leading-4 text-muted [overflow-wrap:anywhere]">
+          {rule.decisionAuthor ? `${t(`roleMemory.decision.${rule.decisionAuthor}`)} · ` : null}
+          {revision ? <><RoleMark role={revisionRole(revision)} size={12} />{t(`roleMemory.revised.${revision.by}`, { role: roleNameById(t, revision.roleId ?? "") })} · </> : null}
+          {t(reason)}{rule.where ? ` · ${rule.where}` : ""}
+        </span>
         {counterpart ? <button type="button" data-rule-counterpart={counterpart.id} onClick={() => onFocus?.(counterpart.id)} className="text-left text-[11px] leading-4 text-accent [overflow-wrap:anywhere]">{counterpart.rule.slice(0, 70)}…</button> : null}
         <EarlierTexts rule={rule} onRevert={onRevert} />
       </span>
