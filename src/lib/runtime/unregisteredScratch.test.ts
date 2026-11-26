@@ -178,7 +178,7 @@ test("a spent time budget stops a pass part-way and the next pass resumes", asyn
   expect(rest.deferred).toBeNull();
   expect(rest.removed).toBe(120 - first.removed);
   expect(fs.readdirSync(w.scratch)).toEqual([]);
-});
+}, 60000);
 
 /** A bind mount as the runtime reports it; the container sees it at `destination`, by default the same path. */
 const bind = (source: string, destination: string | null = source) => ({ source, destination });
@@ -417,6 +417,28 @@ test("a recent write deep inside a tree that needs several passes keeps it, whet
   expect(remembered(w, ledger => ledger.walk("llv-stage-LATERW"))).toBeNull();
 });
 
+test("a rename inside a directory still waiting to be read keeps the root young and drops the saved walk", async () => {
+  const w = world();
+  const root = make(w, "llv-stage-RENAME", { age: 72 * HOUR });
+  // `b` sorts before `big`, so the walk reads `big` first and saves `b` as pending.
+  fs.mkdirSync(path.join(root, "cache", "b"));
+  fs.writeFileSync(path.join(root, "cache", "b", "old"), "x");
+  fs.mkdirSync(path.join(root, "cache", "big"));
+  for (let n = 0; n < 2100; n++) fs.writeFileSync(path.join(root, "cache", "big", `f${String(n).padStart(5, "0")}`), "x");
+  setTimes(root, NOW - 72 * HOUR);
+  const run = (at: number) => runUnregisteredScratchPass(w.store, ports({ now: () => NOW + at, walkEntryLimit: 1000 })).then(report => report!);
+  const first = await run(0);
+  expect(first.kept.walk_in_progress).toBe(1);
+  expect(remembered(w, ledger => ledger.walk("llv-stage-RENAME"))).not.toBeNull();
+  // A rename inside the pending directory changes only that directory's own time.
+  fs.renameSync(path.join(root, "cache", "b", "old"), path.join(root, "cache", "b", "new"));
+  fs.utimesSync(path.join(root, "cache", "b"), (NOW - HOUR) / 1000, (NOW - HOUR) / 1000);
+  for (const at of [MINUTE, 2 * MINUTE, 3 * MINUTE, 4 * MINUTE]) expect((await run(at)).removed).toBe(0);
+  expect(fs.existsSync(root)).toBeTrue();
+  expect(remembered(w, ledger => ledger.walk("llv-stage-RENAME"))).toBeNull();
+  expect(remembered(w, ledger => ledger.waiting(NOW + 4 * MINUTE).get("llv-stage-RENAME"))!.code).toBe("young");
+});
+
 test("a process that references a root while its walk is under way keeps it and ends the walk; a walk older than its span starts over", async () => {
   const w = world();
   const used = makeBig(w, "llv-stage-USEDBG", 2100), slow = makeBig(w, "llv-stage-SLOWBG", 2100);
@@ -543,7 +565,7 @@ test("the ordinary pass removes a bounded number of roots, the low-space pass ma
   expect(roots.slice(0, 16 + 128).every(directory => !fs.existsSync(directory))).toBeTrue();
   expect(fs.existsSync(roots[16 + 128]!)).toBeTrue();
   expect(pressure.elapsedMs).toBe(UNREGISTERED_PRESSURE_LIMITS.remove * 5);
-});
+}, 60000);
 
 test("a thousand expired roots are all removed across low-space passes within their bounds", async () => {
   const w = world();

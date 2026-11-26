@@ -141,6 +141,9 @@ async function walkTree(root: string, stat: fs.Stats, cutoff: number, deadline: 
     try {
       const own = fs.lstatSync(directory);
       if (!own.isDirectory() || own.dev !== stat.dev) return { state: "reset", newestMs, bytes, entries };
+      // A rename or delete inside a directory read before the pause changes only its own time.
+      newestMs = Math.max(newestMs, own.mtimeMs);
+      if (newestMs > cutoff) return { state: "young", newestMs, bytes, entries };
       // A directory whose names changed since the pause cannot be resumed by position.
       if (resumed && own.mtimeMs !== resumed.mtimeMs) return { state: "reset", newestMs, bytes, entries };
       directoryMtime = own.mtimeMs;

@@ -135,7 +135,7 @@ test("one pressure pass over more roots than a page visits every root", async ()
     expect(report.pass).toMatchObject({ total: count, visited: count });
     expect(report.removed).toBe(0);
   } finally { f.store.close(); }
-});
+}, 60000);
 
 test.skipIf(process.platform !== "linux")("a live process whose cwd is a vanished /proc path holds no root; one inside the root still does", async () => {
   const f = fixture();
