@@ -106,7 +106,19 @@ roots in temporary storage. Agent trees need a registry cwd with ended ownership
 recorded after the directory was created. Gate trees need the allocation journal, a matching
 directory identity and proof that the gate process and its supervisor ended. Both use
 the existing freshness, tree-preservation and live-process checks, including argv.
-Missing owner evidence and explicit gate retention keep the directory held.
+Missing owner evidence and explicit gate retention keep the directory held. A gate trash
+whose interrupted removal already took the allocation record is finished from the
+journal, whose snapshot lists that record.
+
+Every candidate this sweep names (all of the above and `llv-*`) is also compared by
+device and inode before quarantine and again at removal (`src/lib/processFileIdentity.ts`).
+The identities come from each readable process's cwd, root, executable, descriptors,
+mappings and named paths, resolved under that process's own root. This finds a holder in
+another mount namespace or behind a bind mount that spells the path differently. A file
+with a second hard link counts only through a directory of the tree, so a package cache
+shared with a running process does not pin the tree. Processes of another user,
+container root included, stay unreadable. Registered attempt roots keep their own
+reference proof.
 
 Cannot prove, and holds or skips instead:
 
