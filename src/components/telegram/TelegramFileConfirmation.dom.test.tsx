@@ -48,11 +48,13 @@ type Gap = keyof typeof fileConfirmationText.en.missing;
 const refused = (missing?: Gap, status = 401) => () => jsonResponse(missing ? { code: "OPERATOR_REQUIRED", missing } : { code: "MEMBER_REQUIRED" }, status);
 const pending = () => jsonResponse(VIEW);
 
+const startAnswer = (): Response => jsonResponse({ id: "tg-1", proof: "proof-1", url: "https://t.me/fixture_bot?start=one-time", expiresAt: "2030-01-01T00:10:00.000Z" });
+
 /* What the server says next, one answer per ask, and the bot's side of one Telegram request. */
 const server = {
   reads: [] as Array<() => Response>,
   decide: (() => jsonResponse({}, 500)) as () => Response,
-  start: (() => jsonResponse({ id: "tg-1", proof: "proof-1", url: "https://t.me/fixture_bot?start=one-time", expiresAt: new Date(Date.now() + 600_000).toISOString() })) as () => Response,
+  start: startAnswer,
   poll: [] as Array<() => Response>,
   confirm: (() => jsonResponse({ state: "linked", name: "Owner" })) as () => Response,
 };
@@ -63,6 +65,7 @@ beforeEach(() => {
   server.reads = []; server.poll = []; opened.length = 0;
   clock.now = 0; clock.queue = [];
   server.decide = () => jsonResponse({}, 500);
+  server.start = startAnswer;
   server.confirm = () => jsonResponse({ state: "linked", name: "Owner" });
   (harness.dom as unknown as { open: unknown }).open = (url: string, target?: string) => { opened.push({ url, target }); return null; };
   harness.setRoute((url, init) => {
