@@ -169,6 +169,8 @@
 .pblock .stage-lesson .rule { min-width: 0; color: var(--color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pblock p.stage-lesson[data-stage-lesson="none"] { padding: 0 8px; border-left-color: var(--color-border); background: none; color: var(--color-muted); cursor: default; }
 .pblock .graph-edit { margin: 0; font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A controller edit states its cause, which must stay readable: that line wraps. */
+.pblock .graph-edit[data-graph-edit-cause] { white-space: normal; overflow-wrap: anywhere; }
 .pblock .review-heads { margin: 2px 0 0; font-size: var(--text-label); font-weight: 600; color: var(--color-warning); overflow-wrap: anywhere; }
 
 /* The answer in place: what stopped the lane, and the two ways on. */

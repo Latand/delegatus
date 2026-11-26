@@ -578,6 +578,8 @@ function isGraphEdit(value: unknown): boolean {
     && (edit.effect === "applied" || edit.effect === "pending-next-attempt")
     && (edit.appliesFromAttempt === null || (Number.isSafeInteger(edit.appliesFromAttempt) && (edit.appliesFromAttempt as number) >= 1))
     && (edit.accountOverride === undefined || isNullableString(edit.accountOverride))
+    // A cause a later release adds still reads; the board names only causes it knows.
+    && (edit.cause === undefined || typeof edit.cause === "string")
     && typeof edit.summary === "string";
 }
 
