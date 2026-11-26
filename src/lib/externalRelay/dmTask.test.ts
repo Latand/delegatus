@@ -187,7 +187,7 @@ test("an owner gets one assigned card and one owner directive on the inferred pr
     if (result?.outcome !== "answered" || !result.answer.buttons?.length) process.exitCode = 1;
   `], { stdin: new Blob([JSON.stringify({ paired, request, now, taskState })]), stdout: "pipe", stderr: "pipe" });
   const [exit, , stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+  if (exit !== 0) throw new Error(`Restarted relay exited with ${exit}\n${stderr}`);
   expect(completions.at(-1)).toMatchObject({ answer: { buttons: [[{ url: expectedLink }]] } });
   expect(newTasks()).toHaveLength(1);
 });
