@@ -46,7 +46,8 @@ test("delivery liveness reads only its conversation and agrees with the complete
   const states = ["held", "assigned", "delivery-uncertain", "delivered", "failed"] as const;
   states.forEach((state, n) => {
     const id = `selected-${n}`;
-    initial.heldDeliveries[id] = { ...template, id, state, createdAt: new Date(NOW - (n + 1) * MINUTE).toISOString() };
+    initial.heldDeliveries[id] = { ...template, id, clientMessageId: `selected-key-${n}`, state,
+      createdAt: new Date(NOW - (n + 1) * MINUTE).toISOString() };
   });
   initial.heldDeliveries["invalid-clock"] = { ...template, id: "invalid-clock", createdAt: "invalid" };
   let reads = 0;
@@ -59,6 +60,7 @@ test("delivery liveness reads only its conversation and agrees with the complete
     const snapshot = store.readOnlySnapshot().file;
     reads = 0;
     expect(outstandingDeliverySince(snapshot, conversation.id)).toBe(NOW - 3 * MINUTE);
+    expect(outstandingDeliverySince(snapshot, conversation.id, "selected-key-2")).toBe(NOW - 2 * MINUTE);
     expect(reads).toBeLessThanOrEqual(10);
     const oracle = (id: string) => {
       const clocks = Object.values(initial.heldDeliveries).filter(row => row.conversationId === id

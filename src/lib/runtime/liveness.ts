@@ -887,11 +887,13 @@ export async function readTurnLivenessEvidence(
 export function outstandingDeliverySince(
   snapshot: RegistryFile,
   conversationId: string,
+  exceptClientMessageId?: string,
 ): number | null {
   return withViewerOperation("pipelines.delivery-liveness", () => {
     let earliest: number | null = null;
     for (const delivery of registryRowsMatching(snapshot, "heldDeliveries", "conversationId", conversationId)) {
       if (delivery.conversationId !== conversationId) continue;
+      if (exceptClientMessageId && delivery.clientMessageId === exceptClientMessageId) continue;
       if (delivery.state !== "held" && delivery.state !== "assigned" && delivery.state !== "delivery-uncertain") continue;
       const at = Date.parse(delivery.createdAt);
       if (!Number.isFinite(at)) continue;
