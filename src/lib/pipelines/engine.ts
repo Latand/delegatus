@@ -7805,7 +7805,7 @@ async function continueRestoredClaudeStage(
     return matches ? owner : null;
   };
   const read = () => ports.durableTurnEvidence("claude", transcriptPath, undefined, attempt.startedAt, undefined, 0);
-  const durable = await read();
+  let durable = await read();
   if (attempt.report || attempt.verdict) return false;
   if (!liveOwner()) return true;
   // Positive final evidence keeps ordinary settlement, including stale live ledgers.
@@ -7876,12 +7876,23 @@ async function continueRestoredClaudeStage(
   if (!outstanding && active === true && !interrupted && durable?.turn === "busy") return true;
   const now = ports.now();
   const priorBackgroundWait = attempt.backgroundWait;
-  const backgroundMayBeRunning = durable?.backgroundTasks
-    ? liveBackgroundTasks(durable.backgroundTasks, unixMs(now)).length > 0
-    : Boolean(priorBackgroundWait);
+  const backgroundMayBeRunning = Boolean(priorBackgroundWait) || Boolean(durable?.backgroundTasks
+    && liveBackgroundTasks(durable.backgroundTasks, unixMs(now)).length > 0);
   if (backgroundMayBeRunning) {
     const host = await ports.conversationHostProcess?.(conversationId);
-    if (!current() || durable?.snapshot && stageTurnEvidenceCurrent(durable) !== true) return true;
+    if (!current()) return true;
+    if (durable?.snapshot && stageTurnEvidenceCurrent(durable) !== true) {
+      // The liveness probe can overlap a transcript append. Take one fresh
+      // bounded sample so a completion at park-at is not hidden by that race.
+      durable = await read();
+      if (!current()) return true;
+      if (durable?.snapshot && stageTurnEvidenceCurrent(durable) !== true) {
+        if (priorBackgroundWait && unixMs(ports.now()) >= unixMs(priorBackgroundWait.until)) {
+          await holdForBackgroundTasks(pipeline, attempt, null, ports, persist, ports.now());
+        }
+        return true;
+      }
+    }
     // An idle Claude can spend this turn waiting for a task notification.
     // Use the task's persisted park-at time before spending the delivery budget.
     // A gone host must still be eligible for the existing re-host and send.
@@ -7891,7 +7902,10 @@ async function continueRestoredClaudeStage(
   }
   const reportedBackgroundOwed = durable?.backgroundReportedAt !== null && durable?.backgroundReportedAt !== undefined
     && (durable.lastAgentEventAt ?? 0) <= durable.backgroundReportedAt
-    && (Boolean(priorBackgroundWait) || durable.backgroundReportedAt > unixMs(recovery.deadline));
+    && durable.backgroundReportedAt > unixMs(recovery.cutAt)
+    && (Boolean(priorBackgroundWait) || durable.backgroundReportedAt > unixMs(recovery.deadline)
+      || unixMs(ports.now()) >= unixMs(recovery.deadline)
+        && durable.backgroundReportedAt >= unixMs(recovery.deadline) - RESTORE_CONTINUATION_WAIT_MS / 2);
   if (reportedBackgroundOwed) {
     // Verified completion gives the same continuation key a bounded handoff
     // window measured from the task notification.
@@ -8244,6 +8258,7 @@ async function holdForBackgroundTasks(
   ports: PipelinePorts,
   persist: () => void | Promise<void>,
   now = ports.now(),
+  preserveReportedWait = false,
 ): Promise<"none" | "waiting" | "parked"> {
   /* A read that could not see the work cannot say it ended: a wait already
      under way holds, to its own bound, until a read can. */
@@ -8265,7 +8280,9 @@ async function holdForBackgroundTasks(
     if (durable.backgroundReportedAt && (durable.lastAgentEventAt ?? 0) <= durable.backgroundReportedAt) {
       if (attempt.backgroundWait || pipeline.stateDetail?.startsWith(BACKGROUND_TASK_WAIT_DETAIL_PREFIX)) {
         delete attempt.backgroundWait;
-        pipeline.stateDetail = null;
+        pipeline.stateDetail = preserveReportedWait
+          ? "waiting: background work has ended; waiting for the agent's next turn and stage_report"
+          : null;
         await persist();
       }
       return "none";
@@ -11469,7 +11486,7 @@ async function tickRunStage(
     && (durable.lastAgentEventAt ?? 0) <= durable.backgroundReportedAt
     && structuredActive !== true && paneActive !== true;
   if (!hostUnavailablePastGrace && !restartCut && (durable?.turn !== "busy" || backgroundTurnOwed)
-    && await holdForBackgroundTasks(pipeline, attempt, durable, ports, persist) !== "none") return;
+    && await holdForBackgroundTasks(pipeline, attempt, durable, ports, persist, ports.now(), true) !== "none") return;
   const durableTerminal = durable?.turn === "terminal" && durable.message !== null && durable.message.ts > unixMs(attemptEvidenceFloor(attempt));
   if (durable && durableTerminal) {
     const fenced = parsePipelineStageVerdict(durable.message!.text);
@@ -19529,7 +19546,8 @@ function backgroundBoundReportable({ pipeline, stageId, attempt }: StageCompleti
     || currentAttempt(pipeline, stageId) !== attempt || !attempt.conversationId || !attempt.agentPath) return false;
   const step = stepBackgroundWait(wait, wait.tasks.map(task => ({ ...task, startedAt: 0, expiresAt: null })),
     wait.silentSince, wait.until, "");
-  if (!step.expired || ![step.reason, step.reason + BACKGROUND_REPORT_AFTER_PARK].includes(attempt.error ?? "")
+  if (!step.expired || ![step.reason, step.reason + BACKGROUND_REPORT_AFTER_PARK,
+    "background work could not be verified at its persisted park-at time" + BACKGROUND_REPORT_AFTER_PARK].includes(attempt.error ?? "")
     || pipeline.stateDetail !== attempt.error) return false;
   const generation = ports.conversationGeneration?.(attempt.conversationId);
   if (!generation || generation.engine !== attempt.effectiveRole.engine

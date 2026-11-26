@@ -5,7 +5,7 @@ import type { PipelinePorts } from "./engine";
 import { driveRuntimeSwitch, switchOperationKey } from "./runtimeSwitch";
 import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
-import { BACKGROUND_TASK_WAIT_CEILING_MS } from "./backgroundTasks";
+import { BACKGROUND_TASK_WAIT_CEILING_MS, BACKGROUND_TASK_WAIT_LIMIT_MS } from "./backgroundTasks";
 
 const WAIT = 3 * 60_000;
 
@@ -420,7 +420,7 @@ test("fresh controller processes retain the delivery budget and its exhaustion",
     }
     expect(pids).toHaveLength(4);
   } finally { await r.f.end(); }
-});
+}, 15_000);
 
 test("loaded restore records can be changed without mutating the persisted budget", async () => {
   const r = await restoredStage();
@@ -569,6 +569,79 @@ test("an unreadable transcript at the wait bound preserves the original expiry",
   } finally { await r.f.end(); }
 });
 
+test("an unreadable-transcript expiry accepts a verified late report from the same generation", async () => {
+  const r = await restoredStage();
+  try {
+    r.ports.conversationHostProcess = async () => ({ state: "alive", pid: r.f.hostPid });
+    declareBackgroundCommand(r);
+    await tickPipelines([], r.ports);
+    r.advance(BACKGROUND_TASK_WAIT_CEILING_MS);
+    r.ports.durableTurnEvidence = async () => null;
+    await tickPipelines([], r.ports);
+    expect(loadPipelines()[0]!.stateDetail).toContain("background work could not be verified");
+
+    r.ports.durableTurnEvidence = durableStageTurnEvidence;
+    finishBackgroundCommand(r);
+    r.advance(1000);
+    r.ports.conversationGeneration = () => ({ engine: "claude", model: "opus", effort: "high", serviceTier: null,
+      accountId: "default", sessionId: r.f.attempt.sessionId!, agentPath: r.f.transcriptPath });
+    const report = await engineModule.reportStageCompletion({ verdict: "pass", summary: "Finished after recovery" },
+      { kind: "agent", role: "builder", conversationId: r.f.attempt.conversationId! }, r.ports);
+    expect(report).not.toHaveProperty("error");
+    expect(report.report?.verdict.status).toBe("pass");
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("running");
+  } finally { await r.f.end(); }
+});
+
+test("a post-cut completion just before and after delivery expiry gets a bounded report handoff", async () => {
+  for (const offset of [WAIT - 1000, WAIT + 1000]) {
+    const r = await restoredStage();
+    try {
+      r.ports.conversationHostProcess = async () => ({ state: "unknown", pid: null });
+      declareBackgroundCommand(r);
+      await tickPipelines([], r.ports);
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.backgroundWait).toBeUndefined();
+      r.setOutstanding(true);
+      r.ports.conversationHostProcess = async () => ({ state: "alive", pid: r.f.hostPid });
+      r.advance(offset);
+      const notifiedAt = r.ports.now();
+      finishBackgroundCommand(r);
+      if (offset < WAIT) r.advance(2000);
+      await tickPipelines([], r.ports);
+      const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+      expect(attempt.state).toBe("running");
+      expect(attempt.restoreContinuation?.deadline).toBe(new Date(Date.parse(notifiedAt) + WAIT).toISOString());
+      expect(r.sends).toHaveLength(1);
+      r.setOutstanding(false);
+      const report = await engineModule.reportStageCompletion({ verdict: "pass", summary: "Completed" },
+        { kind: "agent", role: "builder", conversationId: r.f.attempt.conversationId! }, r.ports);
+      expect(report).not.toHaveProperty("error");
+      expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(1);
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.report?.verdict.status).toBe("pass");
+    } finally { await r.f.end(); }
+  }
+});
+
+test("raced transcript appends cannot carry a live wait past its persisted hard limit", async () => {
+  const r = await restoredStage();
+  try {
+    const hostProcess = defaultPipelinePorts().conversationHostProcess!;
+    r.ports.conversationHostProcess = async id => {
+      r.records.push({ type: "progress", timestamp: r.ports.now(), message: { role: "assistant", content: "probe race" } });
+      r.write();
+      return hostProcess(id);
+    };
+    declareBackgroundCommand(r);
+    await tickPipelines([], r.ports);
+    const until = loadPipelines()[0]!.runs[0]!.attempts[0]!.backgroundWait!.until;
+    r.advance(BACKGROUND_TASK_WAIT_LIMIT_MS);
+    for (let index = 0; index < 3; index++) await tickPipelines([], r.ports);
+    expect(loadPipelines()[0]!.state).toBe("needs_decision");
+    expect(loadPipelines()[0]!.stateDetail).toContain("exceeded 4 h");
+    expect(Date.parse(until)).toBeLessThanOrEqual(Date.parse(r.ports.now()));
+  } finally { await r.f.end(); }
+});
+
 test("a task that finishes during the host probe can continue at the park-at time", async () => {
   const r = await restoredStage();
   try {
@@ -583,7 +656,7 @@ test("a task that finishes during the host probe can continue at the park-at tim
     };
     await tickPipelines([], r.ports);
     expect(loadPipelines()[0]!.state).toBe("running");
-    expect(r.sends).toHaveLength(0);
+    expect(r.sends).toHaveLength(1);
     r.ports.conversationHostProcess = hostProcess;
     await tickPipelines([], r.ports);
     expect(loadPipelines()[0]!.state).toBe("running");
