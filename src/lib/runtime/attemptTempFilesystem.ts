@@ -591,7 +591,8 @@ export function attemptProcessReferencesClear(original: string, current: string,
         ...[...value.matchAll(/["'](\/[^"']+)["']|\/(?:[^\s\x00'"`=;|&<>])+/g)].map(match => match[1] ?? match[0])];
       return candidates.some(candidate => {
         if (path.isAbsolute(candidate)) return processPathWithinLimits(candidate) && referenced(candidate);
-        const cwd = process.paths[0];
+        // A process that refuses inspection has no working directory to read.
+        const cwd = process.uninspectable === undefined ? process.paths[0] : undefined;
         return !!cwd && candidate.length > 0 && !candidate.startsWith("-")
           && (!/\s/.test(candidate) || candidate === assignment)
           && processPathWithinLimits(cwd + path.sep + candidate)
@@ -606,7 +607,7 @@ function processWorkingDirectories(scan: ProcessScan) {
   const holders = new Map<string, (number | null)[]>();
   for (const process of scan.processes) {
     checkAttemptTempDeadline();
-    const cwd = process.paths[0];
+    const cwd = process.uninspectable === undefined ? process.paths[0] : undefined;
     if (!cwd?.startsWith(path.sep)) continue;
     cwds.push(cwd);
     holders.set(cwd, [...holders.get(cwd) ?? [], process.namespace ? process.pid : null]);

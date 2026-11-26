@@ -328,6 +328,8 @@ export function seatTickWakeMessage(input: {
       (docs/design/orchestrator-reports.md §5.1). They ride the reserved tail,
       so the length bound never cuts them. */
   reportLines?: readonly string[];
+  /** The machine's RAM, swap and tmpfs /tmp line; reserved like the worker limit. */
+  machine?: string;
 }): string {
   const added = [...(input.taskPage?.lines.length ? ["", ...input.taskPage.lines] : []), ...(input.formPage?.lines.length ? ["", ...input.formPage.lines] : [])];
   const extra = (added.length ? redactMonitorText(added.join("\n")).length + 1 : 0) + (input.instructionReview ? input.instructionReview.length + 2 : 0);
@@ -409,6 +411,7 @@ export function seatTickWakeMessage(input: {
       (compactRoster && input.workers
       ? ["", `Worker limit ${input.workers.limit} (${input.workers.source}; machine ${input.workers.machine}), running ${input.workers.running}; overrides mandate/launch.`]
       : autonomy.length && input.workers ? ["", `Worker limit ${input.workers.limit} (${input.workers.source}; machine ${input.workers.machine}); running ${input.workers.running}. Overrides mandate/launch limits.`] : workerSection(input.workers)),
+      (input.machine ? ["", input.machine] : []),
       seatTickContractLines(input.mandateCarriesContract === true, compactRules),
     ];
     return sections.flatMap(section => compactRoster && section[0] === "" ? section.slice(1) : section);
@@ -418,7 +421,7 @@ export function seatTickWakeMessage(input: {
   // marked preview when that tail would exceed the payload bound.
   if (!autonomyNote && input.reportLines?.length && redactMonitorText(reserved.join("\n")).length > SEAT_TICK_MESSAGE_LIMIT + extra - 700) {
     const note = seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, noteLimit, !!input.workers);
-    reserved.splice(reserved.length - seatTickContractLines(input.mandateCarriesContract === true).length - (input.workers ? 2 : 0) - note.length, note.length,
+    reserved.splice(reserved.length - seatTickContractLines(input.mandateCarriesContract === true).length - (input.workers ? 2 : 0) - (input.machine ? 2 : 0) - note.length, note.length,
       ...seatTickPromptSection(input.monitorPrompt, input.monitorPromptUnchanged === true, 100, !!input.workers));
   }
   // A recovery snapshot carries every compact outcome once. Cutting this

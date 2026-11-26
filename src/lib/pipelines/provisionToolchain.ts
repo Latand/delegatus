@@ -13,7 +13,8 @@ type ToolchainStep = DependencyPreparationStep | "installingPrivateDependencies"
 type ToolchainEffect = DependencyPreparationEffect | PrivateInstallEffect;
 const steps = new Set<unknown>(["checkingDependencies", "validatingSealedGraph", "preparingToolchain", "installingPrivateDependencies"]);
 const effects = new Set<unknown>(["open-cache", "prune-cache", "prepare-cache", "install-cache", "publish-cache", "link-cache",
-  "private-scratch", "private-copy", "private-install", "private-marker", "private-publish", "private-cleanup", "create-modules-directory", "install-in-place"]);
+  "private-scratch", "private-copy", "private-install", "private-marker", "private-publish", "private-cleanup", "create-modules-directory",
+  "install-in-place"]);
 
 export class ProvisionToolchainFailure extends Error {
   constructor(readonly reason: "toolchain-start-failed" | "toolchain-reply-lost" | "private-install-unverified") {

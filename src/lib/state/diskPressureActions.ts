@@ -4,6 +4,8 @@ import { withFileTransactionAsync } from "./fileTransaction";
 import { STATE_LOCK_WAIT_MS } from "./lockWait";
 import { writeJsonDurably } from "./durableJson";
 import { diskPressureWakeReady, formatDiskBytes, type DiskPressure } from "./diskPressure";
+import { requestDiskPressureSweep } from "./diskPressureSweeps";
+import type { MemoryPressureActions } from "./memoryPressure";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import type { SeatTickCard } from "@/lib/monitor/types";
 import type { CleanerController } from "@/lib/cleaner/run";
@@ -35,16 +37,30 @@ export function productionDiskPressureActions(): DiskPressureActions {
       const { ensureSeatTickCard } = await import("@/lib/monitor/seatTickController");
       return viewerReleaseOwnsTraffic() && ensureSeatTickCard(project, card, at);
     },
-    report: async (project, episode, body, at) => {
-      if (!(await import("@/lib/projects/settings")).bridgeReportsEnabled(project)) return true;
-      const { recordManagerReport } = await import("@/lib/bridge/service");
-      const { findBridgeReport, scopedReportId } = await import("@/lib/bridge/store");
-      const key = `disk-pressure:${episode}`;
-      if (!viewerReleaseOwnsTraffic()) return false;
-      return !!(recordManagerReport({ key, project, at, class: "status",
-        origin: { kind: "agent", role: "seat-tick", conversationId: null }, targetSeatConversationId: null, body })
-        ?? findBridgeReport(scopedReportId(project, key)));
-    },
+    report: (project, episode, body, at) => recordSeatStatusReport(project, `disk-pressure:${episode}`, body, at),
+  };
+}
+
+/** One status report for the project's manager, deduplicated by its key. */
+async function recordSeatStatusReport(project: string, key: string, body: string, at: string): Promise<boolean> {
+  if (!(await import("@/lib/projects/settings")).bridgeReportsEnabled(project)) return true;
+  const { recordManagerReport } = await import("@/lib/bridge/service");
+  const { findBridgeReport, scopedReportId } = await import("@/lib/bridge/store");
+  if (!viewerReleaseOwnsTraffic()) return false;
+  return !!(recordManagerReport({ key, project, at, class: "status",
+    origin: { kind: "agent", role: "seat-tick", conversationId: null }, targetSeatConversationId: null, body })
+    ?? findBridgeReport(scopedReportId(project, key)));
+}
+
+/** Memory pressure warns through the same seat card, manager report and
+    project as low disk space, and asks for the temp sweep alone. */
+export function productionMemoryPressureActions(disk: DiskPressureActions = productionDiskPressureActions()): MemoryPressureActions {
+  return {
+    active: disk.active,
+    project: disk.project,
+    card: disk.card,
+    report: recordSeatStatusReport,
+    sweep: () => requestDiskPressureSweep("temp"),
   };
 }
 
