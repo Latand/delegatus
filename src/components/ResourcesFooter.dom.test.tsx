@@ -492,11 +492,12 @@ for (const density of ["line", "detail"] as const) {
       const dot = element.querySelector<HTMLElement>('[data-testid="resources-stale-dot"]')!;
       expect(dot.title).toContain("resource data is stale");
       expect(element.querySelector("button")!.title).toContain("resource data is stale");
-      /* What is left, in words: the bar beside it draws the same share. */
-      expect(element.querySelector("button")!.title).toContain("RAM 9.0 GiB free");
-      expect(element.querySelector("button")!.title).toContain("Swap 7.0 GiB free");
-      expect([...element.querySelectorAll("[data-meter-bar]")].map((bar) => bar.getAttribute("data-meter-bar"))).toEqual(["28", "88"]);
-      expect(element.textContent).toContain("9.0 GiB free");
+      /* Used of the total, once per resource: the bar beside it draws the same share. */
+      expect(element.querySelector("button")!.title).toContain("RAM 23 GiB of 32 GiB used");
+      expect(element.querySelector("button")!.title).toContain("Swap 1.0 GiB of 8.0 GiB used");
+      expect([...element.querySelectorAll("[data-meter-bar]")].map((bar) => bar.getAttribute("data-meter-bar"))).toEqual(["72", "13"]);
+      expect([...element.querySelectorAll("[data-meter-value]")].map((value) => value.textContent)).toEqual(["23 GiB / 32 GiB", "1.0 GiB / 8.0 GiB"]);
+      expect(element.textContent).not.toContain("9.0 GiB");
       /* How old the reading is stands on the screen only behind "All windows". */
       expect(element.querySelector("[data-meter-note]")?.textContent ?? "").toContain(density === "detail" ? "captured" : "");
       expect(Boolean(element.querySelector("[data-meter-note]"))).toBe(density === "detail");
@@ -509,10 +510,10 @@ for (const density of ["line", "detail"] as const) {
   });
 }
 
-/* RAM, swap and /tmp are always one line of totals; a pressure episode adds the
-   crossed thresholds and the cleanup it started, in both languages. */
+/* The memory meters state RAM and swap; this block adds /tmp and, during a
+   pressure episode, the crossed thresholds and the cleanup it started. */
 for (const density of ["full", "line"] as const) {
-  test(`the ${density} System block shows RAM, swap and the tmpfs /tmp, and warns during memory pressure`, () => {
+  test(`the ${density} System block adds only the tmpfs /tmp and the memory pressure warning`, () => {
     const GiB = 1024 ** 3;
     const element = document.createElement("div");
     document.body.append(element);
@@ -531,7 +532,7 @@ for (const density of ["full", "line"] as const) {
     let block = element.querySelector<HTMLElement>("[data-memory-pressure]")!;
     expect(block.dataset.memoryPressure).toBe("ok");
     expect(block.getAttribute("role")).toBeNull();
-    expect(block.textContent).toBe("RAM 20 GiB of 64 GiB · swap 4.0 GiB of 32 GiB · /tmp 1.0 GiB in memory (tmpfs)");
+    expect(block.textContent).toBe("/tmp1.0 GiB / 32 GiB");
 
     const hot: MemoryPressure = { ...calm, episode: calm.at, reasons: ["swap", "tmp"],
       swap: { usedBytes: 29 * GiB, totalBytes: 32 * GiB }, tmp: { ...calm.tmp!, usedBytes: 8 * GiB } };
@@ -539,20 +540,25 @@ for (const density of ["full", "line"] as const) {
     block = element.querySelector<HTMLElement>("[data-memory-pressure]")!;
     expect(block.dataset.memoryPressure).toBe("warning");
     expect(block.getAttribute("role")).toBe("status");
-    for (const part of ["Memory pressure", "Swap is over 50% used", "/tmp holds over 4 GB in memory", "swap 29 GiB of 32 GiB", "/tmp 8.0 GiB in memory (tmpfs)"]) expect(block.textContent).toContain(part);
-    if (density === "full") expect(block.textContent).toContain("Temp cleanup of /tmp and /var/tmp runs now, at most every 15 minutes.");
-    else expect(block.querySelector<HTMLElement>(".text-warning")!.title).toBe("Temp cleanup of /tmp and /var/tmp runs now, at most every 15 minutes.");
+    for (const part of ["Memory pressure", "Swap is over 50% used", "/tmp holds over 4 GB in memory", "8.0 GiB / 32 GiB"]) expect(block.textContent).toContain(part);
+    /* The meters above hold RAM and swap: neither is repeated here. */
+    expect(block.textContent).not.toContain("29 GiB");
+    expect(block.textContent).not.toContain("RAM");
+    const cleanup = "Temp cleanup of /tmp and /var/tmp runs now, at most every 15 minutes.";
+    if (density === "full") expect(block.textContent).toContain(cleanup);
+    else expect(block.querySelector<HTMLElement>("[data-meter-note]")!.title).toBe(cleanup);
 
     flushSync(() => { setLocale("uk"); root.render(<MemoryPressureLines pressure={hot} density={density} />); });
     block = element.querySelector<HTMLElement>("[data-memory-pressure]")!;
-    for (const part of ["Тиск на пам'ять", "Swap зайнятий більше ніж на 50%", "/tmp займає в пам'яті понад 4 GB", "ОЗП 20 GiB з 64 GiB", "8.0 GiB у пам'яті (tmpfs)"]) expect(block.textContent).toContain(part);
+    for (const part of ["Тиск на пам'ять", "Swap зайнятий більше ніж на 50%", "/tmp займає в пам'яті понад 4 GB", "8.0 GiB / 32 GiB"]) expect(block.textContent).toContain(part);
 
-    /* Only the crossed threshold is named; a disk-backed or unreadable /tmp says so. */
+    /* Only the crossed threshold is named; a disk-backed or unreadable /tmp says so and draws no bar. */
     flushSync(() => { setLocale("en"); root.render(<MemoryPressureLines pressure={{ ...hot, reasons: ["swap"], tmp: { ...hot.tmp!, tmpfs: false } }} density={density} />); });
     block = element.querySelector<HTMLElement>("[data-memory-pressure]")!;
-    expect(block.textContent).toContain("/tmp 8.0 GiB on disk");
+    expect(block.textContent).toContain("8.0 GiB on disk");
     expect(block.textContent).not.toContain("/tmp holds over");
+    expect(block.querySelector("[data-meter-bar]")).toBeNull();
     flushSync(() => { root.render(<MemoryPressureLines pressure={{ ...calm, tmp: null }} density={density} />); });
-    expect(element.textContent).toContain("/tmp unreadable");
+    expect(element.textContent).toContain("unreadable");
   });
 }

@@ -188,9 +188,13 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
   /* No probe ever succeeded and no sessions either: nothing to show. */
   if (!snap || (!system && sessions.length === 0)) return null;
 
-  const ramUsedPct = system ? (100 * (system.ramTotal - system.ramAvailable)) / system.ramTotal : 0;
+  const ramUsed = system ? system.ramTotal - system.ramAvailable : 0;
+  const ramUsedPct = system ? (100 * ramUsed) / system.ramTotal : 0;
   const ramAvailPct = system ? (100 * system.ramAvailable) / system.ramTotal : 100;
   const swapUsedPct = system && system.swapTotal > 0 ? (100 * system.swapUsed) / system.swapTotal : 0;
+  /* RAM and swap are each stated once, here: used of the total, with a bar of that share. */
+  const usedOf = (used: number, total: number) => t("resources.usedOfTotal", { used: fmtBytes(used), total: fmtBytes(total) });
+  const usedOfInWords = (used: number, total: number) => t("resources.usedOfTotalInWords", { used: fmtBytes(used), total: fmtBytes(total) });
 
   /* Why the amber dot is lit: the readings are old, or the session list is. */
   const staleReason = snap.staleSince
@@ -200,11 +204,9 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
         ? t("resources.sessionsStaleDot", { age: fmtAge(Date.parse(sessionsCapturedAt) / 1000) })
         : t("resources.sessionsUnavailable")
       : null;
-  /* A compact line names what is left and draws that same share, so the number and the bar agree. */
-  const swapFree = system ? system.swapTotal - system.swapUsed : 0;
   const reading = [
-    system ? `${t("resources.ram")} ${t("resources.free", { amount: fmtBytes(system.ramAvailable) })}` : t("resources.title"),
-    system && system.swapTotal > 0 ? `${t("resources.swap")} ${t("resources.free", { amount: fmtBytes(swapFree) })}` : null,
+    system ? `${t("resources.ram")} ${usedOfInWords(ramUsed, system.ramTotal)}` : t("resources.title"),
+    system && system.swapTotal > 0 ? `${t("resources.swap")} ${usedOfInWords(system.swapUsed, system.swapTotal)}` : null,
     system && viewer ? `${t("resources.viewer")} ${viewerAmount(viewer, t)}` : null,
     system ? t("resources.captured", { age: fmtAge(Date.parse(system.capturedAt) / 1000) }) : null,
     staleReason,
@@ -237,8 +239,8 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
         >
           {system ? (
             <>
-              <MeterLine label={<>{t("resources.ram")}{staleDot}</>} value={t("resources.free", { amount: fmtBytes(system.ramAvailable) })} percent={ramAvailPct} color={ramColor(ramAvailPct)} />
-              {system.swapTotal > 0 ? <MeterLine label={t("resources.swap")} value={t("resources.free", { amount: fmtBytes(swapFree) })} percent={100 - swapUsedPct} color={swapColor(swapUsedPct)} /> : null}
+              <MeterLine label={<>{t("resources.ram")}{staleDot}</>} value={usedOf(ramUsed, system.ramTotal)} percent={ramUsedPct} color={ramColor(ramAvailPct)} />
+              {system.swapTotal > 0 ? <MeterLine label={t("resources.swap")} value={usedOf(system.swapUsed, system.swapTotal)} percent={swapUsedPct} color={swapColor(swapUsedPct)} /> : null}
               {/* Behind "All windows": what Delegatus itself holds, and how old the reading is. */}
               {density === "detail" && viewer ? <span className="block" data-testid="resources-viewer-line" title={t("resources.viewerHint")}><MeterLine label={t("resources.viewer")} value={viewerAmount(viewer, t)} percent={null} color="var(--color-muted)" bar={false} /></span> : null}
               {density === "detail" ? <span data-meter-note="" className="block break-words pb-0.5 text-[10px] leading-[13px] text-muted">{t("resources.captured", { age: fmtAge(Date.parse(system.capturedAt) / 1000) })}</span> : null}
@@ -247,8 +249,8 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
             <MeterLine label={<>{t("resources.title")}{staleDot}</>} value={sessions.length} percent={null} color="var(--color-muted)" />
           )}
         </button>
-        {snap.data.diskPressure ? <DiskPressureNotice pressure={snap.data.diskPressure} density={density} /> : null}
         {snap.data.memoryPressure ? <MemoryPressureLines pressure={snap.data.memoryPressure} density={density} /> : null}
+        {snap.data.diskPressure ? <DiskPressureNotice pressure={snap.data.diskPressure} density={density} /> : null}
         {cleanup}
         {worktreesOpen ? <WorktreeDrilldown onClose={closeWorktrees} /> : null}
       </div>
@@ -281,14 +283,14 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
               label={t("resources.ram")}
               usedPercent={ramUsedPct}
               color={ramColor(ramAvailPct)}
-              note={t("resources.free", { amount: fmtBytes(system.ramAvailable) })}
+              note={usedOfInWords(ramUsed, system.ramTotal)}
             />
             {system.swapTotal > 0 ? (
               <MemoryRow
                 label={t("resources.swap")}
                 usedPercent={swapUsedPct}
                 color={swapColor(swapUsedPct)}
-                note={t("resources.used", { amount: fmtBytes(system.swapUsed) })}
+                note={usedOfInWords(system.swapUsed, system.swapTotal)}
               />
             ) : null}
             {viewer ? (
@@ -309,8 +311,8 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
           <span className="text-[11px] font-semibold text-primary">{t("resources.title")}</span>
         )}
       </button>
-      {snap.data.diskPressure ? <DiskPressureNotice pressure={snap.data.diskPressure} /> : null}
       {snap.data.memoryPressure ? <MemoryPressureLines pressure={snap.data.memoryPressure} /> : null}
+      {snap.data.diskPressure ? <DiskPressureNotice pressure={snap.data.diskPressure} /> : null}
       {open ? (
         <CleanupPanel
           sessions={sessions}
@@ -372,37 +374,52 @@ async function killSession(
   }
 }
 
-/** RAM and swap used of their totals and what `/tmp` holds, on every
-    reading; during a memory pressure episode the line turns into a warning
-    naming the crossed threshold and the temp cleanup it started. */
+/** What the memory meters above do not say: how much `/tmp` holds, and,
+    during a memory pressure episode, the crossed thresholds and the temp
+    cleanup that started. */
 export function MemoryPressureLines({ pressure, density = "full" }: { pressure: MemoryPressure; density?: RailFooterDensity }) {
   const { t } = useLocale();
-  const usedOf = (usage: { usedBytes: number; totalBytes: number }) => t("resources.usedOfTotal", { used: fmtBytes(usage.usedBytes), total: fmtBytes(usage.totalBytes) });
-  const tmp = !pressure.tmp ? t("resources.tmpUnknown")
-    : pressure.tmp.tmpfs ? t("resources.tmpTmpfs", { amount: fmtBytes(pressure.tmp.usedBytes) }) : t("resources.tmpOnDisk", { amount: fmtBytes(pressure.tmp.usedBytes) });
-  const totals = t("resources.memoryTotals", { ram: usedOf(pressure.ram), swap: usedOf(pressure.swap), tmp });
+  const tmp = pressure.tmp;
+  /* A tmpfs `/tmp` is memory: it is read against its size, with a bar. */
+  const inMemory = !!tmp?.tmpfs && tmp.totalBytes > 0;
+  const value = !tmp ? t("resources.tmpUnknown")
+    : inMemory ? t("resources.usedOfTotal", { used: fmtBytes(tmp.usedBytes), total: fmtBytes(tmp.totalBytes) })
+      : t("resources.tmpOnDisk", { amount: fmtBytes(tmp.usedBytes) });
+  const hint = !tmp ? t("resources.tmpUnknownHint") : tmp.tmpfs ? t("resources.tmpTmpfsHint") : t("resources.tmpOnDiskHint");
+  const share = inMemory ? (100 * tmp.usedBytes) / tmp.totalBytes : 0;
   const warnings = pressure.episode ? [
     ...(pressure.reasons.includes("swap") ? [t("resources.memorySwapHigh", { percent: String(pressure.swapWarnPercent) })] : []),
     ...(pressure.reasons.includes("tmp") ? [t("resources.memoryTmpHigh", { amount: `${(pressure.tmpWarnBytes / 1e9).toFixed(0)} GB` })] : []),
   ] : [];
+  const color = pressure.episode && pressure.reasons.includes("tmp") ? "var(--color-warning)" : "var(--color-muted)";
+  const state = pressure.episode ? "warning" : "ok";
   if (density !== "full") {
-    const NOTE = "block break-words text-[10px] leading-[13px]";
+    const NOTE = "block break-words text-[10px] leading-[13px] text-warning";
     return (
-      <div role={warnings.length ? "status" : undefined} data-memory-pressure={pressure.episode ? "warning" : "ok"}
-        aria-label={[...(warnings.length ? [t("resources.memoryHigh"), ...warnings] : []), totals].join(" · ")}
-        className={`${LINE_EDGE} -mt-1 pb-1`}>
-        {warnings.length ? <span className={`${NOTE} text-warning`} title={t("resources.memorySweep")}>{t("resources.memoryHigh")}: {warnings.join(" · ")}</span> : null}
-        <span data-meter-note="" className={`${NOTE} tabular-nums text-muted`} title={totals}>{totals}</span>
+      <div role={warnings.length ? "status" : undefined} data-memory-pressure={state} className={`${LINE_EDGE} -mt-1 pb-1`}>
+        <span className="block" title={hint}>
+          <MeterLine label="/tmp" value={value} percent={inMemory ? share : null} color={color} bar={inMemory} />
+        </span>
+        {warnings.length ? (
+          <span data-meter-note="" className={NOTE} title={t("resources.memorySweep")}>{t("resources.memoryHigh")}: {warnings.join(" · ")}</span>
+        ) : null}
       </div>
     );
   }
   return (
-    <div role={warnings.length ? "status" : undefined} data-memory-pressure={pressure.episode ? "warning" : "ok"}
-      className={`px-3.5 pb-2 text-xs leading-relaxed ${warnings.length ? "text-warning" : "text-muted"}`}>
-      {warnings.length ? <strong className="block">{t("resources.memoryHigh")}</strong> : null}
-      {warnings.map(warning => <div key={warning}>{warning}</div>)}
-      <div className="tabular-nums">{totals}</div>
-      {warnings.length ? <div>{t("resources.memorySweep")}</div> : null}
+    <div role={warnings.length ? "status" : undefined} data-memory-pressure={state} className="px-3.5 pb-2 text-xs leading-relaxed">
+      <div title={hint}>
+        {inMemory
+          ? <MemoryRow label="/tmp" usedPercent={share} color={color} note={value} />
+          : <div className="flex items-baseline justify-between"><span className="text-[11px] font-semibold text-primary">/tmp</span><span className="text-[11px] tabular-nums text-muted">{value}</span></div>}
+      </div>
+      {warnings.length ? (
+        <div className="mt-1.5 text-warning">
+          <strong className="block">{t("resources.memoryHigh")}</strong>
+          {warnings.map(warning => <div key={warning}>{warning}</div>)}
+          <div>{t("resources.memorySweep")}</div>
+        </div>
+      ) : null}
     </div>
   );
 }
