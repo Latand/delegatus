@@ -197,7 +197,6 @@ export function SessionTitle({ file, displayMax = 90, titleClassName = "", class
       conversationId: file.conversationId,
       title: trimmed,
       baseRevision,
-      windowName: trimmed ?? autoTitle,
     });
     if (stale()) return;
     if (result.ok) {
@@ -217,8 +216,7 @@ export function SessionTitle({ file, displayMax = 90, titleClassName = "", class
         conversationId: file.conversationId,
         title: trimmed,
         baseRevision: serverRevision,
-        windowName: trimmed ?? autoTitle,
-      });
+        });
       if (stale()) return;
       if (retried.ok) {
         // Use the server-reported effective revision, so a retry that resolved

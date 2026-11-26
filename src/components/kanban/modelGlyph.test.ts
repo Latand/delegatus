@@ -5,8 +5,10 @@ import { ENGINE_MODELS } from "@/lib/agent/models";
 import { GLYPH_STATE, GLYPH_TURN_MS, glyphTier, modelGlyphKind, modelGlyphName } from "./modelGlyph";
 
 test("every catalogued Claude and Codex model has its glyph, by family", () => {
-  expect(ENGINE_MODELS.claude.map((option) => modelGlyphKind("claude", option.id))).toEqual(["opus", "fable", "sonnet", "sonnet", "haiku", "haiku", "haiku"]);
+  expect(ENGINE_MODELS.claude.map((option) => modelGlyphKind("claude", option.id))).toEqual(["opus", "fable", "fable", "fable", "sonnet", "sonnet", "haiku", "haiku", "haiku"]);
   expect(ENGINE_MODELS.codex.map((option) => [option.id, modelGlyphKind("codex", option.id)])).toEqual([
+    ["gpt-6.2-sol", "sol"],
+    ["gpt-6.2-astra", "astra"],
     ["gpt-6-astra", "astra"],
     ["gpt-6.1-sol", "sol"],
     ["gpt-6.1-terra", "terra"],
@@ -18,9 +20,30 @@ test("every catalogued Claude and Codex model has its glyph, by family", () => {
   ]);
 });
 
+test("every catalogued Antigravity model has its glyph: the element line, Flash, GPT-OSS, the orchestrators as their base element, and served Claude as Claude", () => {
+  expect(ENGINE_MODELS.antigravity.map((option) => [option.id, modelGlyphKind("antigravity", option.id)])).toEqual([
+    ["gemini-4-neon", "neon"],
+    ["gemini-4-argon", "argon"],
+    ["gemini-4-hydrogen", "hydrogen"],
+    ["gemini-3.8-flash", "flash"],
+    ["claude-opus-5-5", "opus"],
+    ["claude-sonnet-5-5", "sonnet"],
+    ["gpt-oss-120b-medium", "oss"],
+    ["gemini-pro-orchestrator-neon", "orch-neon"],
+    ["gemini-pro-orchestrator-g1-pro", "orch-argon"],
+  ]);
+  /* Nine different glyph kinds for the nine rows, none of them the plain dot. */
+  expect(new Set(ENGINE_MODELS.antigravity.map((option) => modelGlyphKind("antigravity", option.id))).size).toBe(9);
+  expect(modelGlyphKind("antigravity", "gemini-9-krypton")).toBeNull();
+  expect(modelGlyphKind("antigravity", "")).toBeNull();
+  /* A name that looks like another engine's model draws nothing on this one. */
+  expect(modelGlyphKind("antigravity", "gpt-6-sol")).toBeNull();
+});
+
 test("versioned Claude ids read as their family, as resume and migration read them", () => {
   expect(modelGlyphKind("claude", "opus-5-5")).toBe("opus");
   expect(modelGlyphKind("claude", "claude-fable-5-1")).toBe("fable");
+  expect(modelGlyphKind("claude", "claude-fable-5-2")).toBe("fable");
   expect(modelGlyphKind("claude", "claude-sonnet-5")).toBe("sonnet");
   expect(modelGlyphKind("claude", "Haiku")).toBe("haiku");
 });
@@ -41,7 +64,10 @@ test("any other model, engine or a blank record has no glyph, so the host keeps 
 test("the accessible name takes the catalogue's full label", () => {
   expect(modelGlyphName("codex", "gpt-6-astra")).toBe("GPT-6-Astra");
   expect(modelGlyphName("claude", "opus")).toBe("Opus 5.5");
+  expect(modelGlyphName("claude", "fable")).toBe("Fable");
+  expect(modelGlyphName("claude", "claude-fable-5-2")).toBe("Fable 5.2");
   expect(modelGlyphName("claude", "fable-5-1")).toBe("Fable 5.1");
+  expect(modelGlyphName("claude", "claude-fable-5-1")).toBe("Fable 5.1");
   expect(modelGlyphName("claude", "haiku")).toBe("Haiku 5.5");
   expect(modelGlyphName("claude", "claude-haiku-5-5")).toBe("Haiku 5.5");
   expect(modelGlyphName("claude", "claude-haiku-4-5")).toBe("Haiku 4.5");
@@ -68,4 +94,31 @@ test("only an applied priority or ultrafast tier speeds a Codex glyph up; anythi
   /* Claude has no tier: a stray value on its entry changes nothing. */
   expect(glyphTier("claude", "ultrafast")).toBe("ordinary");
   expect(glyphTier("copilot", "priority")).toBe("ordinary");
+});
+
+test("GPT-6.2 models retain their family glyph and catalogue label", () => {
+  expect(modelGlyphKind("codex", "gpt-6.2-sol")).toBe("sol");
+  expect(modelGlyphKind("codex", "gpt-6.2-astra")).toBe("astra");
+  expect(modelGlyphName("codex", "gpt-6.2-sol")).toBe("GPT-6.2-Sol");
+  expect(modelGlyphName("codex", "gpt-6.2-astra")).toBe("GPT-6.2-Astra");
+});
+
+test("Antigravity element models read by their element, a suffix and a version bump included; look-alikes and other engines draw nothing", () => {
+  expect(modelGlyphKind("antigravity", "gemini-4-neon")).toBe("neon");
+  expect(modelGlyphKind("antigravity", "gemini-4-neon-xhigh")).toBe("neon");
+  expect(modelGlyphKind("antigravity", "gemini-pro-orchestrator-neon")).toBe("orch-neon");
+  expect(modelGlyphKind("antigravity", "Gemini-4.5-Neon")).toBe("neon");
+  expect(modelGlyphKind("antigravity", "gemini-4.5-argon-high")).toBe("argon");
+  expect(modelGlyphKind("antigravity", "Gemini-5-Hydrogen")).toBe("hydrogen");
+
+  for (const id of ["gemini-4-neonic", "gemini-4-argonaut", "gemini-pro-orchestrator", "gpt-oss", ""]) {
+    expect(modelGlyphKind("antigravity", id)).toBeNull();
+  }
+  expect(modelGlyphKind("codex", "gemini-4-neon")).toBeNull();
+  expect(modelGlyphKind("claude", "gemini-4-neon")).toBeNull();
+  expect(modelGlyphKind("copilot", "gemini-4-neon")).toBeNull();
+
+  expect(modelGlyphName("antigravity", "gemini-4-neon")).toBe("Gemini 4 Neon");
+  expect(modelGlyphName("antigravity", "gemini-pro-orchestrator-neon")).toBe("Orchestrator (Neon)");
+  expect(glyphTier("antigravity", "ultrafast")).toBe("ordinary");
 });

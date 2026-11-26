@@ -1,100 +1,172 @@
-import { afterAll, expect, test, harness, create as fixtureCreate, loadPipelines, savePipelines, tickPipelines, patchPipeline, path, realProvisioningRepo, fs, os } from "./engine.fixture";
+import { afterAll, expect, test, savePipelines, tickPipelines, patchPipeline, path, fs, os } from "./engine.fixture";
 import { reviewSetupRecipe, setProjectSetupRecipe } from "@/lib/projects/setupRecipe";
-import { afterEach } from "bun:test";
+import { afterEach, setSystemTime } from "bun:test";
+import crypto from "node:crypto";
+import { roleMemoryCollection } from "@/lib/memory/roleStore";
+import { runPrivacyWork, shutdownTaskPageWorker, taskPageWorkerDiagnostics } from "@/lib/links/taskPageWorker";
+import { withPrivacyWorkerOwner } from "@/lib/memory/privacyDiagnostics";
 import { normalizeStages } from "./engine";
 import { settlePipelineControllerJobs } from "./controllerJobs";
 import { tickPipelinesController } from "./controllerPass";
-import { codexCloudEnvironmentId, setCodexCloudEnvironmentId, resetProjectSettingsForTests, setPipelineStageRuntime, reserveCloudStageAccount } from "@/lib/projects/settings";
-import { CLOUD_STAGE_TIMEOUT_MS, type CloudStageClient } from "./cloudStage";
-import { HostedCloudError } from "./cloudHostedErrors";
-import { CloudSubmissionNotStartedError, createHostedCloudStageClient } from "./cloudHostedClient";
+import { codexCloudEnvironmentId, setCodexCloudEnvironmentId, resetProjectSettingsForTests } from "@/lib/projects/settings";
+import { stageExecution, CLOUD_STAGE_TIMEOUT_MS } from "./cloudStage";
+
+import { createHostedCloudStageClient } from "./cloudHostedClient";
 import { EventEmitter } from "node:events";
-import { stubCloudBackend } from "./cloudEnvironment.fixture";
+
 import type WebSocket from "ws";
-import { TOOL_INPUT_SCHEMAS } from "@/lib/mcp/server";
+
 import { stageDigest } from "./stageDigest";
 import { composeStageInput, composeStageText } from "./stageInput";
 import { learnedRulesForLaunchProfile } from "@/lib/memory/roleLaunch";
 import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
 import { spawn, spawnSync } from "node:child_process";
 import { spyOn } from "bun:test";
-import { deadlineChild, deadlineReport, heldCloudAcknowledgement, superviseCloudDeadline } from "./fixtures/cloudDeadline";
-import type { PipelineStageInput, PatchPipelineRequest } from "./types";
-import type { BoardTask } from "@/lib/tasks/types";
 
-async function create(...args: Parameters<typeof fixtureCreate>) {
-  const result = await fixtureCreate(...args);
-  const record = loadPipelines()[0]!;
-  record.inputContext = { handoffDigest: "Preserve the accepted scope and verification plan." };
-  savePipelines([record]);
-  return result;
+import type { PipelineStageInput } from "./types";
+
+import { taskId, taskUrl, stage, pass, lane, attempt, privacyDigest, fixture, step, submitted } from "./engine.cloud.fixture";
+
+const privacyRule = "Preserve amber orchard receipts until the owning operation completes";
+
+const privacyRows = () => taskPageWorkerDiagnostics().privacy?.rows ?? [];
+
+function putPrivacyRule(rule = privacyRule, why = "") {
+  roleMemoryCollection(true)!.boundedPatch(1, tx => tx.put({ kind: "rule", id: "r_cloud_owner", scope: "machine",
+    rule, why, state: "active", hints: [], source: { project: "fixture", pipelineId: "fixture", stageId: "review",
+      attempt: 1, roleId: "reviewer", fixRound: false, conversationId: "conversation_fixture" },
+    createdAt: "2026-11-05T00:00:00Z", changedAt: "2026-11-05T00:00:00Z" }));
 }
 
-const taskId = "current-review-1";
-const taskUrl = `https://example.com/cloud/${taskId}`;
-const stage: PipelineStageInput = { id: "review", kind: "run", runtime: "codex-cloud", role: { roleId: "reviewer" },
-  engine: "codex", model: "gpt-6.1-sol", effort: "xhigh", prompt: "Review {{task}}. {{prev.output}}", next: null };
-const pass = 'All checked.\n\n```json\n{"status":"pass","findings":[]}\n```';
-const lane = () => loadPipelines()[0]!;
-const attempt = () => lane().runs[0]!.attempts.at(-1)!;
-
-async function fixture(options: { accountId?: string; enabled?: boolean; publication?: "internal" | "remote-branch"; stages?: PipelineStageInput[]; repoDir?: string; deliveryBranch?: string } = {}) {
-  await settlePipelineControllerJobs();
-  const h = harness();
-  if (options.deliveryBranch) {
-    const execute = h.ports.exec;
-    h.ports.exec = async (command, args, cwd, env, execOptions) => {
-      const result = await execute(command, args, cwd, env, execOptions);
-      if (command === "git" && args[0] === "show-ref" && args.at(-1) === `refs/heads/${loadPipelines()[0]?.branch}`) {
-        return { ...result, code: 1, stdout: "" };
-      }
-      return command === "git" && args[0] === "ls-remote"
-        ? { ...result, stdout: result.stdout.replace(/refs\/heads\/[^\n]+/, options.deliveryBranch!) }
-        : result;
-    };
-  }
-  let clock = Date.UTC(2026, 9, 23);
-  h.ports.now = () => new Date(clock).toISOString();
-  h.advanceWallClock = milliseconds => { clock += milliseconds; };
-  const submits: Parameters<CloudStageClient["submit"]>[0][] = [];
-  const reads: Parameters<CloudStageClient["poll"]>[0][] = [];
-  h.ports.resolveProjectSpawn = (_engine, request) => ({ kind: "available", account: {
-    engine: "codex", accountId: request.requestedId ?? options.accountId ?? "cloud-account", kind: "managed", home: path.resolve("fixture-account"), transcriptRoot: path.resolve("fixture-account"), env: { NODE_ENV: "test" },
-  } });
-  h.ports.cloudClient = {
-    supportsModel: model => model === "gpt-6.1-sol",
-    hasEnvironment: async () => true,
-    submit: async input => { submits.push(input); return { taskId, taskUrl }; },
-    poll: async input => { reads.push(input); return { state: "completed", model: "gpt-6.1-sol" }; },
-    readFinalMessage: async () => ({ message: pass, model: "gpt-6.1-sol" }),
-    readDiff: async () => { throw new Error("read-only stages must never read a diff"); },
+function privacyTestContext(seed: string) {
+  setSystemTime(new Date("2026-11-05T00:00:00Z"));
+  let n = 0;
+  const ids = spyOn(crypto, "randomUUID").mockImplementation(() => {
+    const hex = privacyDigest(`${seed}:${++n}`);
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4000-8000-${hex.slice(20, 32)}`;
+  });
+  savePipelines([]);
+  resetProjectSettingsForTests();
+  putPrivacyRule();
+  return async () => {
+    await shutdownTaskPageWorker();
+    roleMemoryCollection(true)!.boundedPatch(1, tx => tx.delete("r:r_cloud_owner"));
+    ids.mockRestore(); setSystemTime();
   };
-  await create(h.ports, (options.stages ?? [stage]) as never, { publication: options.publication ?? "remote-branch",
-    ...(options.repoDir ? { repoDir: options.repoDir } : {}),
-    ...(options.deliveryBranch ? { delivery: { branch: options.deliveryBranch } } : {}) });
-  expect(setCodexCloudEnvironmentId(lane().project, options.enabled === false ? "" : "env-fixture")).toBe(true);
-  return { h, submits, reads };
 }
 
-async function step(h: ReturnType<typeof harness>) {
-  await tickPipelines([], h.ports);
-  await settlePipelineControllerJobs();
+function privacyCloudStage(runtime: "codex-cloud" | "claude-cloud"): PipelineStageInput {
+  return { ...stage, runtime, prompt: privacyRule,
+    ...(runtime === "claude-cloud" ? { engine: "claude", model: "opus", effort: "high" } : {}) };
 }
-async function submitted(h: ReturnType<typeof harness>, expectedTaskId = taskId) {
-  for (let i = 0; i < 4 && !lane().runs[0]?.attempts.at(-1)?.cloud?.taskId && ["provisioning", "running"].includes(lane().state); i++) await step(h);
-  if (!attempt()) throw new Error(`Cloud fixture has no attempt: ${lane().state}: ${lane().stateDetail}`);
-  expect({ phase: attempt().cloud?.phase, error: attempt().error, cloudError: attempt().cloud?.error }).toEqual({ phase: "polling", error: null, cloudError: undefined });
-  expect(attempt().cloud?.taskId).toBe(expectedTaskId);
-}
+
+const privacyOwner = () => ({ pipeline: privacyDigest(lane().id), stage: privacyDigest("review"), attempt: attempt().n });
+
+test.each(["codex-cloud", "claude-cloud"] as const)("Cloud privacy ownership survives repeated and nested callbacks (%s)", async runtime => {
+  const restore = privacyTestContext(`${runtime}:success`);
+  try {
+    const before = new Set(privacyRows().map(row => row.jobId));
+    const { h, submits, client } = await fixture({ stages: [privacyCloudStage(runtime)] });
+    const submit = client.submit;
+    client.submit = async input => {
+      // Exercise the transport's preparation callback before its simulated effect.
+      const prompt = await input.preparePrompt!("thread_fixture");
+      expect(prompt).not.toContain(privacyRule);
+      const lastJob = new Set(privacyRows().map(row => row.jobId));
+      await withPrivacyWorkerOwner("foreign pipeline", "foreign stage", 9, async () => {
+        // Unchanged callbacks reuse completed filtering without inventing jobs.
+        expect(await input.preparePrompt!("thread_repeat")).toBe(prompt);
+        expect(await input.preparePrompt!("thread_repeat")).toBe(prompt);
+        expect(privacyRows().filter(row => !lastJob.has(row.jobId))).toHaveLength(0);
+        // A semantic revision forces real work so ownership cannot pass vacuously.
+        for (const why of ["first repeated callback", "second repeated callback"]) {
+          putPrivacyRule(privacyRule, why);
+          expect(await input.preparePrompt!("thread_repeat")).not.toContain(privacyRule);
+        }
+      });
+      const repeated = privacyRows().filter(row => !lastJob.has(row.jobId));
+      const settled = repeated.filter(row => row.phase === "settled");
+      expect(settled).toHaveLength(2);
+      expect(new Set(settled.map(row => row.requestId)).size).toBe(2);
+      expect(repeated.every(row => JSON.stringify(row.owner) === JSON.stringify(privacyOwner()))).toBe(true);
+
+      await withPrivacyWorkerOwner(lane().id, "review", attempt().n, async () => {
+        putPrivacyRule(privacyRule, "nested callback");
+        await runPrivacyWork({ kind: "filter", value: privacyRule });
+        const parentRequest = privacyRows().at(-1)!.requestId;
+        const beforeNested = new Set(privacyRows().map(row => row.jobId));
+        expect(await input.preparePrompt!("thread_nested")).not.toContain(privacyRule);
+        const nested = privacyRows().filter(row => !beforeNested.has(row.jobId));
+        expect(nested.filter(row => row.phase === "settled")).toHaveLength(1);
+        expect(nested.every(row => row.requestId === parentRequest)).toBe(true);
+      });
+      return submit({ ...input, prompt });
+    };
+    await submitted(h);
+    expect(submits).toHaveLength(1);
+    expect(h.spawnInputs).toHaveLength(0);
+    const expected = privacyOwner();
+    const owned = privacyRows().filter(row => !before.has(row.jobId));
+    expect(owned.some(row => row.phase === "started")).toBe(true);
+    expect(owned.filter(row => row.phase === "settled")).toHaveLength(5);
+    expect(owned.every(row => JSON.stringify(row.owner) === JSON.stringify(expected))).toBe(true);
+    // A completed submission's callback still carries its owner, while the
+    // existing dispatch fence refuses its superseded intent.
+    await expect(submits[0]!.preparePrompt!("thread_retired")).rejects.toThrow("operation superseded");
+    expect(privacyRows().at(-1)?.owner).toEqual(expected);
+    await runPrivacyWork({ kind: "filter", value: privacyRule });
+    expect(privacyRows().at(-1)?.owner).toBe("unknown");
+    expect(JSON.stringify(privacyRows())).not.toContain(privacyRule);
+  } finally { await restore(); }
+}, 30_000);
+
+for (const runtime of ["codex-cloud", "claude-cloud"] as const) test.each(["initial", "callback"] as const)(
+  `Cloud privacy ownership retains preparation failures (${runtime}, %s)`, async failureAt => {
+    const restore = privacyTestContext(`${runtime}:${failureAt}`);
+    try {
+      const before = new Set(privacyRows().map(row => row.jobId));
+      const { h, submits, client } = await fixture({ stages: [privacyCloudStage(runtime)] });
+      let callbacks = 0;
+      // A stored text above the matcher's individual source bound makes the
+      // production worker refuse complete filtering, through its real error frame.
+      if (failureAt === "initial") putPrivacyRule("amber".repeat(7_000));
+      client.submit = async input => {
+        callbacks++;
+        putPrivacyRule("amber".repeat(7_000));
+        await input.preparePrompt!("thread_failure");
+        throw new Error("a refused preparation must stop before submission");
+      };
+      for (let i = 0; i < 4 && attempt()?.cloud?.phase !== "failed"; i++) await step(h);
+      expect(callbacks).toBe(failureAt === "callback" ? 1 : 0);
+      expect(submits).toHaveLength(0);
+      expect(h.spawnInputs).toHaveLength(0);
+      expect(attempt().cloud).toMatchObject({ phase: "failed", failures: 1, submissionUnresolved: failureAt === "callback" });
+      expect(attempt().cloud?.error).toContain("worker-unavailable");
+      const observed = privacyRows().filter(row => !before.has(row.jobId));
+      expect(observed.some(row => row.phase === "started")).toBe(true);
+      expect(observed.at(-1)).toMatchObject({ phase: "settled", failure: "worker-unavailable", owner: privacyOwner() });
+      expect(observed.every(row => JSON.stringify(row.owner) === JSON.stringify(privacyOwner()))).toBe(true);
+      expect(JSON.stringify(observed)).not.toContain("amber");
+      // Failure unwinds its async context and does not contaminate unrelated jobs.
+      putPrivacyRule();
+      await runPrivacyWork({ kind: "filter", value: privacyRule });
+      expect(privacyRows().at(-1)?.owner).toBe("unknown");
+    } finally { await restore(); }
+  }, 30_000);
 
 const setupRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cloud-builder-setup-"));
+
 afterAll(() => fs.rmSync(setupRoot, { recursive: true, force: true }));
+
 let setupProject: string | undefined;
+
 afterEach(async () => {
   if (setupProject) await setProjectSetupRecipe(setupProject, null);
   setupProject = undefined;
 });
+
 const setupRecipe = { command: ["sh", "setup.sh"], cwd: "." };
+
 async function setupBuilder(name: string, roleId: "builder" | "reviewer" = "builder") {
   const result = await fixture({ repoDir: path.join(setupRoot, name, "repo"), stages: [{ ...stage, id: "build",
     role: { roleId }, access: roleId === "builder" ? "read-write" : "read-only", sandbox: "restricted" }] });
@@ -107,41 +179,19 @@ async function setupBuilder(name: string, roleId: "builder" | "reviewer" = "buil
   return result;
 }
 
-for (const outcome of ["failed", "changed", "invalid", "passed"] as const)
-  test(`Cloud builder setup uses its local execution worktree (${outcome})`, async () => {
-    const { h, submits } = await setupBuilder(outcome);
-    if (outcome === "changed") fs.writeFileSync(path.join(lane().worktreeDir, "setup.sh"), "echo changed\n");
-    if (outcome === "invalid") await setProjectSetupRecipe(lane().project, { ...setupRecipe, hash: "unapproved", approvedAt: h.ports.now() });
-    let calls = 0;
-    h.ports.executeProjectSetup = async (cwd, reviewed, sandbox, _signal, authorize) => {
-      authorize!();
-      expect(cwd).toBe(lane().worktreeDir); expect(sandbox).toBe("restricted");
-      expect(reviewed.command).toEqual(setupRecipe.command);
-      expect(submits).toHaveLength(0); expect(h.spawnInputs).toHaveLength(0);
-      calls++;
-      return { code: outcome === "failed" ? 9 : 0, stdout: "setup output", stderr: "" };
-    };
-    for (let i = 0; i < 6 && lane().state === "running" && !h.spawnInputs.length; i++) await step(h);
-    expect(submits).toHaveLength(0);
-    const success = outcome === "passed";
-    expect(calls).toBe(outcome === "changed" || outcome === "invalid" ? 0 : 1);
-    expect(h.spawnInputs).toHaveLength(success ? 1 : 0);
-    if (success) {
-      expect(attempt().cloud?.fallback?.reason).toContain("project setup");
-      expect(attempt().executionRuntime).toBe("cloud-then-local");
-      expect(attempt().setup).toMatchObject({ state: "passed", code: 0, stdout: "setup output" });
-      // A fresh process observes the durable result; a later tick cannot rerun it.
-      const read = `import {findPipelineRecord} from ${JSON.stringify(path.resolve("src/lib/pipelines/store.ts"))};
-        console.log(JSON.stringify(findPipelineRecord(${JSON.stringify(lane().id)}).runs[0].attempts.at(-1).setup));`;
-      const child = spawnSync(process.execPath, ["-e", read], { env: { ...process.env }, encoding: "utf8" });
-      expect({ status: child.status, error: child.stderr }).toMatchObject({ status: 0 });
-      expect(JSON.parse(child.stdout)).toEqual(attempt().setup);
-      await step(h); expect(calls).toBe(1); expect(h.spawnInputs).toHaveLength(1);
-    } else {
-      expect(lane().state).toBe("needs_decision");
-      expect(attempt().error).toContain(outcome === "failed" ? "exit 9" : outcome === "changed" ? "approve it again" : "approval is invalid");
-    }
-  });
+test("a Cloud builder requiring local setup refuses before running the recipe or a local stage", async () => {
+  const { h, submits } = await setupBuilder("required-cloud");
+  let calls = 0;
+  h.ports.executeProjectSetup = async () => { calls++; return { code: 0, stdout: "", stderr: "" }; };
+  for (let i = 0; i < 6 && lane().state === "running"; i++) await step(h);
+  expect(calls).toBe(0);
+  expect(submits).toHaveLength(0);
+  expect(h.spawnInputs).toHaveLength(0);
+  expect(attempt().error).toContain("project setup requires a local builder");
+  expect(attempt().definition?.runtime).toBe("codex-cloud");
+  expect(stageExecution(lane().stages[0]!, attempt())).toMatchObject({ requestedRuntime: "codex-cloud", executionRuntime: "not-executed", reason: expect.stringContaining("project setup") });
+  expect(attempt().cloud?.fallback).toBeUndefined();
+});
 
 test("Cloud builder setup disabled retains Cloud submission", async () => {
   const { h, submits } = await setupBuilder("disabled");
@@ -185,7 +235,8 @@ test("Cloud builder setup enabled during catalog admission prevents submission",
   h.ports.executeProjectSetup = async () => { calls++; return { code: 9, stdout: "", stderr: "failed setup" }; };
   for (let i = 0; i < 6 && lane().state === "running"; i++) await step(h);
   expect(submits).toHaveLength(0); expect(h.spawnInputs).toHaveLength(0);
-  expect(calls).toBe(1); expect(attempt().setup?.code).toBe(9);
+  expect(calls).toBe(0); expect(attempt().setup).toBeUndefined();
+  expect(attempt().error).toContain("project setup requires a local builder");
   expect(lane().state).toBe("needs_decision");
 });
 
@@ -276,7 +327,7 @@ test("cloud role tier preferences visibly fall back to the provider default", as
 });
 
 for (const detail of ["Environment setup failed: missing dependency", "Cloud task timed out"]) for (const legacy of [false, true])
-  test(`a confirmed Cloud failure falls back with its diagnostic: ${detail} (legacy: ${legacy})`, async () => {
+  test(`a confirmed Cloud failure stops with its diagnostic: ${detail} (legacy: ${legacy})`, async () => {
   const { h } = await fixture();
   const error = `Codex Cloud turn failed: ${detail}`;
   h.ports.cloudClient!.poll = async () => ({ state: "failed", model: "gpt-6.1-sol", error });
@@ -290,12 +341,14 @@ for (const detail of ["Environment setup failed: missing dependency", "Cloud tas
   expect(attempt().cloud?.error).toBe(error);
   expect(attempt().cloud?.accountId).toBe(accountId);
   expect(attempt().cloud?.failureConfirmed).toBe(true);
-  expect(attempt().cloud?.fallback?.reason).toBe(error);
-  expect(attempt().executionRuntime).toBe("cloud-then-local");
-  expect(attempt().state).toBe("pending");
+  expect(attempt().cloud?.fallback).toBeUndefined();
+  expect(attempt().executionRuntime).toBe("cloud");
+  expect(attempt().state).toBe("failed");
+  expect(attempt().error).toContain(error);
+  expect(h.spawnInputs).toHaveLength(0);
 });
 
-test("confirmed Cloud failure releases account custody for an allowed local fallback", async () => {
+test("confirmed Cloud failure cannot switch to an allowed local account", async () => {
   const { h, submits } = await fixture();
   await submitted(h);
   const originalAccount = attempt().accountId!;
@@ -310,11 +363,12 @@ test("confirmed Cloud failure releases account custody for an allowed local fall
     : { kind: "available", account: { engine: "codex", accountId: "replacement-account", kind: "managed",
       home: path.resolve("replacement"), transcriptRoot: path.resolve("replacement"), env: { NODE_ENV: "test" } } };
   for (let i = 0; i < 8 && !h.spawnInputs.length; i++) await step(h);
-  expect(h.spawnInputs).toHaveLength(1); expect(submits).toHaveLength(1);
-  expect(attempt().executionRuntime).toBe("cloud-then-local");
+  expect(h.spawnInputs).toHaveLength(0); expect(submits).toHaveLength(1);
+  expect(attempt().executionRuntime).toBe("cloud");
   expect(attempt().cloud?.accountId).toBe(originalAccount);
-  expect(attempt().cloud?.fallback?.reason).toBe("Cloud run timed out");
-  expect(attempt().accountId).toBe("replacement-account");
+  expect(attempt().cloud?.fallback).toBeUndefined();
+  expect(attempt().accountId).toBe(originalAccount);
+  expect(attempt().error).toContain("Cloud run timed out");
 });
 
 test.each([
@@ -328,7 +382,7 @@ test.each([
   { status: "unknown", error: { message: "Provider failure" }, confirmed: false },
   { status: "failed", error: { message: "Provider failure" }, confirmed: true },
   { status: "interrupted", error: null, confirmed: true },
-])("hosted $status with error $error grants fallback only with terminal proof ($confirmed)", async ({ status, error, confirmed }) => {
+])("hosted $status with error $error retains custody and requires explicit local execution ($confirmed)", async ({ status, error, confirmed }) => {
   const { h, submits } = await fixture();
   const threadId = "00000000-0000-0000-0000-000000000000", turnId = "turn-fixture";
   const hosted = { environmentId: "ccarenv_fixture", cwd: "/workspace/project", model: stage.model! };
@@ -363,7 +417,8 @@ test.each([
   expect(attempt().cloud?.taskId).toBe(receipt!.taskId);
   expect(attempt().cloud?.thread).toEqual(receipt!.thread);
   expect(attempt().cloud?.failureConfirmed === true).toBe(confirmed);
-  expect(h.spawnInputs).toHaveLength(confirmed ? 1 : 0);
+  expect(h.spawnInputs).toHaveLength(0);
+  expect(attempt().cloud?.fallback).toBeUndefined();
   expect(submits).toHaveLength(1);
   expect(sockets.length).toBeGreaterThan(0);
   expect(sockets.every(socket => socket.readyState === 3)).toBe(true);
@@ -378,6 +433,14 @@ test.each([
     expect(attempt().cloud?.taskId).toBe(threadId);
     expect(h.spawnInputs).toHaveLength(0);
     expect(submits).toHaveLength(1);
+  } else {
+    expect((await patchPipeline(lane().id, { action: "override-stage", stageId: stage.id, runtime: "local" }, h.ports)).error).toBeUndefined();
+    expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
+    await step(h); await step(h);
+    expect(attempt().n).toBe(2);
+    expect(attempt().definition?.runtime).toBe("local");
+    expect(h.spawnInputs).toHaveLength(1);
+    expect(lane().runs[0]!.attempts[0]!.cloud?.taskId).toBe(threadId);
   }
 });
 
@@ -420,16 +483,16 @@ test.each(["local", "codex-cloud"] as const)("cloud review findings activate a %
   }
 });
 
-test("missing environment falls back once; an internal lane retains its custody refusal", async () => {
+test("missing environment stops a required Cloud stage; an internal lane retains its custody refusal", async () => {
   expect(codexCloudEnvironmentId("absent-cloud-project")).toBe("");
   const { h, submits } = await fixture({ enabled: false });
   for (let i = 0; i < 6 && !h.spawnInputs.length; i++) await step(h);
   expect(submits).toHaveLength(0);
-  expect(h.spawnInputs).toHaveLength(1);
-  expect(attempt().executionRuntime).toBe("cloud-then-local");
-  expect(attempt().cloud?.fallback?.reason).toContain("environment unavailable");
+  expect(h.spawnInputs).toHaveLength(0);
+  expect(attempt().executionRuntime).toBe("cloud");
+  expect(attempt().error).toContain("environment unavailable");
   await step(h); await step(h);
-  expect(h.spawnInputs).toHaveLength(1);
+  expect(h.spawnInputs).toHaveLength(0);
   const internal = await fixture({ publication: "internal" });
   await step(internal.h); await step(internal.h);
   expect(internal.h.spawnInputs).toHaveLength(0);
@@ -588,7 +651,7 @@ test("account refusal never submits or falls back, and runtime validation covers
   h.ports.resolveProjectSpawn = () => ({ kind: "not_allowed", accountId: "forbidden", allowedAccountIds: ["allowed"] });
   await step(h); await step(h); await step(h);
   expect(attempt().error).toContain("not_allowed"); expect(submits).toHaveLength(0);
-  for (const override of [{ runtime: "other" }, { role: { roleId: "builder" }, access: "read-only" }, { kind: "review-loop" }, { engine: "claude", model: null }, { outputs: ["review.md"] }, { model: null }, { model: "" }, { model: undefined }]) {
+  for (const override of [{ runtime: "other" }, { role: { roleId: "builder" }, access: "read-only" }, { kind: "review-loop" }, { engine: "claude", model: null }, { outputs: ["review.md"] }, { model: null }, { model: "" }]) {
     expect(normalizeStages([{ ...stage, ...override }], h.ports.roleLookup).error).toBeTruthy();
   }
   const stored = lane().stages[0]!;
@@ -813,859 +876,4 @@ test.each(["delivery", "disabled-environment", "changed-environment"].flatMap(ki
   expect(attempt().error).toContain(kind === "delivery" ? "active published lane branch" : "environment changed");
   expect(submits).toHaveLength(seam === "before-submit" ? 0 : 1);
   if (seam === "submit") expect(attempt().cloud).toMatchObject({ taskId, taskUrl, phase: "failed" });
-});
-
-test.each(["reject", "edit"] as const)("proactive authority is rechecked before cloud dispatch after %s", async change => {
-  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
-  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
-  const { mutateTasks, loadTasksByIds } = await import("@/lib/tasks/store");
-  const { patchTask } = await import("@/lib/tasks/commands");
-  const { proactiveTaskExecutionError } = await import("@/lib/tasks/proactiveExecution");
-  const { proactiveCandidateDecision } = await import("@/lib/tasks/proactive");
-  const { h, submits } = await fixture();
-  const record = lane();
-  record.project = `${record.project}-cloud-authority-${change}-${record.id}`;
-  savePipelines([record]);
-  const project = record.project;
-  expect(setCodexCloudEnvironmentId(project, "env-fixture")).toBe(true);
-  const startedAt = new Date(NOW - (change === "reject" ? 1_000 : 2_000)).toISOString();
-  const { task } = await admitProactiveTask({ ...candidate(`cloud-authority-${change}`), project },
-    { ...context(startedAt), project }, undefined, authority(NOW, startedAt));
-  const now = () => new Date(NOW).toISOString();
-  await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, now);
-  const linked = lane();
-  linked.taskIds = [task.id];
-  savePipelines([linked]);
-
-  const exec = h.ports.exec;
-  let invalidated = false;
-  h.ports.exec = async (command, args, ...rest) => {
-    const result = await exec(command, args, ...rest);
-    if (!invalidated && args.includes("ls-remote") && lane().runs[0]?.attempts.at(-1)?.cloud?.phase === "submitting") {
-      invalidated = true;
-      if (change === "reject") {
-        const currentTask = loadTasksByIds(new Set([task.id]))[0]!;
-        await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(currentTask), undefined, now);
-      } else {
-        mutateTasks(tasks => {
-          const result = patchTask(tasks, task.id, { text: "The accepted scope changed before Cloud dispatch" });
-          if (!result.ok) throw new Error(result.error);
-          return { tasks: result.tasks, result: null };
-        });
-        const changedTask = loadTasksByIds(new Set([task.id]))[0]!;
-        expect(changedTask.text).toBe("The accepted scope changed before Cloud dispatch");
-        expect(changedTask.proactive?.scopeRevision).toBeGreaterThan(0);
-        expect(proactiveCandidateDecision(changedTask)).toEqual({ rejected: false, adopted: false });
-        expect(proactiveTaskExecutionError([task.id])).toBeTruthy();
-      }
-    }
-    return result;
-  };
-  try {
-    await tickPipelines([], h.ports);
-    await tickPipelines([], h.ports);
-    await settlePipelineControllerJobs();
-  } finally { h.ports.exec = exec; }
-
-  expect(invalidated).toBe(true);
-  expect(submits).toHaveLength(0);
-  expect(attempt().cloud?.phase).toBe("failed");
-  // Editing removes ordinary adoption; this fixture has no active episode to
-  // replace it, so the live permission fence is also decisive.
-  expect(attempt().cloud?.error).toMatch(/rejected|scope review|unreadable|permission.*inactive/i);
-});
-
-test("the hosted transport guard rejects authority revoked after engine admission", async () => {
-  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
-  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
-  const { loadTasksByIds } = await import("@/lib/tasks/store");
-  const { h, submits } = await fixture();
-  const record = lane();
-  record.project = `${record.project}-cloud-authority-transport-${record.id}`;
-  savePipelines([record]);
-  const project = record.project;
-  expect(setCodexCloudEnvironmentId(project, "env-fixture")).toBe(true);
-  const startedAt = new Date(NOW - 4_000).toISOString();
-  const { task } = await admitProactiveTask({ ...candidate("cloud-authority-transport"), project },
-    { ...context(startedAt), project }, undefined, authority(NOW, startedAt));
-  const now = () => new Date(NOW).toISOString();
-  await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, now);
-  const linked = lane();
-  linked.taskIds = [task.id];
-  savePipelines([linked]);
-
-  h.ports.cloudClient!.submit = async input => {
-    const currentTask = loadTasksByIds(new Set([task.id]))[0]!;
-    await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(currentTask), undefined, now);
-    input.assertCurrent();
-    submits.push(input);
-    return { taskId, taskUrl };
-  };
-  await tickPipelines([], h.ports);
-  await tickPipelines([], h.ports);
-  await settlePipelineControllerJobs();
-
-  expect(submits).toHaveLength(0);
-  expect(attempt().cloud?.phase).toBe("failed");
-  expect(attempt().cloud?.error).toContain("invented work was rejected");
-});
-
-test("a Cloud submission already in flight keeps its receipt after proactive authority is revoked", async () => {
-  const { admitProactiveTask, decideProactiveTask, proactiveDecisionToken } = await import("@/lib/tasks/proactive");
-  const { candidate, context, authority, NOW } = await import("@/lib/tasks/proactive.fixture");
-  const { loadTasksByIds } = await import("@/lib/tasks/store");
-  const { h, submits } = await fixture();
-  const record = lane();
-  record.project = `${record.project}-cloud-authority-inflight-${record.id}`;
-  savePipelines([record]);
-  const project = record.project;
-  expect(setCodexCloudEnvironmentId(project, "env-fixture")).toBe(true);
-  const startedAt = new Date(NOW - 3_000).toISOString();
-  const { task } = await admitProactiveTask({ ...candidate("cloud-authority-inflight"), project },
-    { ...context(startedAt), project }, undefined, authority(NOW, startedAt));
-  const now = () => new Date(NOW).toISOString();
-  await decideProactiveTask(task.id, "adopt", "operator", proactiveDecisionToken(task), undefined, now);
-  const linked = lane();
-  linked.taskIds = [task.id];
-  savePipelines([linked]);
-
-  let ready!: () => void, release!: () => void;
-  const started = new Promise<void>(resolve => { ready = resolve; });
-  const held = new Promise<void>(resolve => { release = resolve; });
-  h.ports.cloudClient!.submit = async input => {
-    input.assertCurrent();
-    submits.push(input);
-    ready();
-    await held;
-    return { taskId, taskUrl };
-  };
-  try {
-    await tickPipelines([], h.ports);
-    await tickPipelines([], h.ports);
-    await started;
-    const currentTask = loadTasksByIds(new Set([task.id]))[0]!;
-    await decideProactiveTask(task.id, "reject", "operator", proactiveDecisionToken(currentTask), undefined, now);
-  } finally { release(); await settlePipelineControllerJobs(); }
-
-  expect(submits).toHaveLength(1);
-  expect(attempt().cloud).toMatchObject({ taskId, taskUrl, phase: "polling", submissionUnresolved: false });
-});
-
-
-test.each(["refused", "missing-transport"] as const)("%s Cloud execution falls back locally once with its reason after bounded retries", async kind => {
-  const { h, submits } = await fixture();
-  if (kind === "refused") h.ports.cloudClient!.submit = async () => { throw new HostedCloudError("Cloud capacity refused", "cloud-limit"); };
-  else h.ports.cloudClient = undefined;
-  for (let i = 0; i < 12 && !h.spawnInputs.length; i++) { await step(h); h.advanceWallClock(30_000); }
-  expect(attempt().executionRuntime).toBe("cloud-then-local");
-  expect(attempt().cloud?.fallback?.reason).toContain(kind === "refused" ? "capacity refused" : "not configured");
-  expect(attempt().cloud?.failures).toBe(kind === "refused" ? 1 : 3);
-  const child = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id], {
-    env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8" });
-  expect(child.status).toBe(0);
-  expect(JSON.parse(child.stdout).fallback).toEqual(attempt().cloud!.fallback);
-  await step(h); await step(h);
-  expect(h.spawnInputs).toHaveLength(1);
-  expect(submits).toHaveLength(0);
-});
-
-test("local fallback keeps the role and definition bound before a future-stage override", async () => {
-  const { h } = await fixture();
-  await submitted(h);
-  const role = structuredClone(attempt().effectiveRole), definition = structuredClone(attempt().definition);
-  expect((await patchPipeline(lane().id, { action: "override-stage", stageId: "review", model: "gpt-6-sol", prompt: "Future instruction" }, h.ports)).error).toBeUndefined();
-  h.ports.cloudClient!.poll = async () => ({ state: "failed", model: "gpt-6.1-sol", error: "Cloud limit reached" });
-  await step(h); await step(h); await step(h);
-  expect(h.spawnInputs).toHaveLength(1);
-  expect(h.spawnInputs[0]!.role).toEqual(role);
-  expect(attempt().definition).toEqual(definition);
-});
-
-test("an unanswered Cloud submission cannot start another paid turn or a local fallback", async () => {
-  const { h, submits } = await fixture();
-  h.ports.cloudClient!.submit = async input => {
-    submits.push(input);
-    throw new HostedCloudError("Cloud connection lost after submission", "unavailable");
-  };
-  for (let i = 0; i < 8; i++) { await step(h); h.advanceWallClock(30_000); }
-  expect(submits).toHaveLength(1);
-  expect(h.spawnInputs).toHaveLength(0);
-  expect(lane().state).toBe("needs_decision");
-  expect(attempt().cloud?.fallback).toBeUndefined();
-  expect(attempt().cloud?.error).toBe("Cloud connection lost after submission");
-});
-
-test("a failed Cloud handshake retries before falling back because no turn started", async () => {
-  const { h, submits } = await fixture();
-  h.ports.cloudClient!.submit = async input => {
-    submits.push(input);
-    throw new CloudSubmissionNotStartedError("Codex Cloud handshake failed", "unavailable");
-  };
-  for (let i = 0; i < 12 && !h.spawnInputs.length; i++) { await step(h); h.advanceWallClock(30_000); }
-  expect(submits).toHaveLength(3);
-  expect(h.spawnInputs).toHaveLength(1);
-  expect(attempt().cloud?.failures).toBe(3);
-  expect(attempt().cloud?.fallback?.reason).toBe("Codex Cloud handshake failed");
-});
-
-test("a confirmed pre-turn refusal permits retry without treating it as an unresolved submission", async () => {
-  const { h, submits } = await fixture();
-  h.ports.cloudClient!.submit = async input => { submits.push(input); throw new CloudSubmissionNotStartedError("Cloud model setup refused", "invalid"); };
-  for (let i = 0; i < 6 && lane().state !== "needs_decision"; i++) await step(h);
-  expect(lane().state).toBe("needs_decision");
-  expect(attempt().cloud).toMatchObject({ taskId: null, submissionUnresolved: false, fallbackEligible: false });
-  expect(h.spawnInputs).toHaveLength(0);
-  h.ports.cloudClient!.submit = async input => { submits.push(input); return { taskId, taskUrl }; };
-  expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
-  await submitted(h);
-  expect(submits).toHaveLength(2);
-  expect(attempt().cloud?.submissionUnresolved).toBe(false);
-});
-
-test.each(["poll", "readFinalMessage", "readDiff"] as const)("transient %s failures retain the receipt and durable retry budget", async operation => {
-  const { h, submits } = await fixture({ stages: operation === "readDiff" ? [{ ...stage, role: { roleId: "builder" }, access: "read-write" }] : undefined });
-  await submitted(h);
-  let polls = 0;
-  h.ports.cloudClient![operation] = async () => { polls++; throw new HostedCloudError("Cloud unavailable", "unavailable"); };
-  for (const [failures, delay] of [[1, 2000], [2, 4000]] as const) {
-    if (operation === "poll" && failures === 2) {
-      const child = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id,
-        "poll-unavailable", h.ports.now()], { env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8" });
-      expect({ status: child.status, error: child.stderr }).toMatchObject({ status: 0 });
-      const output = JSON.parse(child.stdout);
-      expect(output).toMatchObject({ pollRequests: 1, submissions: 0, failures: 2 });
-      polls += output.pollRequests;
-    } else await step(h);
-    expect(attempt().cloud).toMatchObject({ phase: "polling", failures, taskId });
-    const child = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id], {
-      env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8" });
-    expect(child.status).toBe(0); expect(JSON.parse(child.stdout).failures).toBe(failures);
-    await step(h); expect(polls).toBe(failures);
-    h.advanceWallClock(delay);
-  }
-  await step(h); await step(h); await step(h);
-  expect(polls).toBe(3); expect(submits).toHaveLength(1); expect(h.spawnInputs).toHaveLength(0);
-  expect(lane().state).toBe("needs_decision");
-  expect(attempt().cloud?.fallback).toBeUndefined();
-  expect(attempt().cloud?.error).toBe("Cloud unavailable");
-  expect(attempt().cloud?.fallbackEligible).toBe(false);
-  const receipt = attempt().cloud!.taskId, n = attempt().n;
-  if (operation === "poll") h.ports.cloudClient!.poll = async () => ({ state: "completed", model: "gpt-6.1-sol" });
-  else if (operation === "readFinalMessage") h.ports.cloudClient!.readFinalMessage = async () => ({ message: pass, model: "gpt-6.1-sol" });
-  // A diff retry is exercised against real Git by the builder checks below.
-  if (operation !== "readDiff") {
-    const child = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id], {
-      env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8" });
-    expect(child.status).toBe(0); expect(JSON.parse(child.stdout).taskId).toBe(receipt);
-    expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
-    await step(h); await step(h);
-    expect(attempt().n).toBe(n); expect(attempt().cloud!.taskId).toBe(receipt);
-    expect(attempt().state).toBe("passed"); expect(submits).toHaveLength(1);
-  }
-});
-
-test("Cloud account selection skips a missing environment and spreads durable reservations", async () => {
-  const { h, submits } = await fixture();
-  const catalogs: string[] = [];
-  h.ports.resolveProjectSpawn = (_engine, request) => {
-    const id = request.requestedId ?? ["account-a", "account-b", "account-c"].find(id => !request.unavailableIds?.includes(id));
-    return id ? { kind: "available", account: { engine: "codex", accountId: id, kind: "managed", home: path.resolve(id), transcriptRoot: path.resolve(id), env: { NODE_ENV: "test" } } }
-      : { kind: "unavailable", allowedAccountIds: [] };
-  };
-  h.ports.cloudClient!.hasEnvironment = async input => { catalogs.push(input.account.accountId); return input.account.accountId !== "account-a"; };
-  await submitted(h);
-  expect(catalogs).toEqual(["account-a", "account-b", "account-c"]);
-  expect(attempt().cloud?.accountId).toBe("account-b");
-  expect(submits[0]!.account.accountId).toBe("account-b");
-  await step(h); await step(h);
-  // A new reservation reads the previous attempt, including after a restart.
-  const record = lane(), previous = structuredClone(record.runs[0]!.attempts[0]!);
-  record.state = "running"; record.cursor = { stageId: "review", state: "pending", input: null, activatedBy: null };
-  Object.assign(record.delivery!, { active: true, publish: "enabled", disposition: "owner", ownerId: record.id });
-  record.runs[0]!.attempts.push({ ...previous, n: 2, state: "pending", startedAt: null, completedAt: null,
-    verdict: null, accountId: null, definition: undefined, cloud: undefined, executionRuntime: undefined });
-  savePipelines([record]);
-  await submitted(h);
-  expect(attempt().cloud?.accountId).toBe("account-c");
-  expect(submits[1]!.account.accountId).toBe("account-c");
-  const child = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id,
-    "reserve", JSON.stringify(["account-b", "account-c"])], { env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8" });
-  expect(child.status).toBe(0);
-  expect(JSON.parse(child.stdout).accountId).toBe("account-b");
-});
-
-test("legacy fallback eligibility cannot abandon a known Cloud receipt", async () => {
-  const { h, submits } = await fixture();
-  await submitted(h);
-  const record = lane();
-  Object.assign(record.runs[0]!.attempts.at(-1)!.cloud!, { phase: "failed", fallbackEligible: true, error: "Cloud unavailable" });
-  savePipelines([record]);
-  await step(h); await step(h);
-  expect(h.spawnInputs).toHaveLength(0); expect(lane().state).toBe("needs_decision");
-  expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
-  await step(h); await step(h);
-  expect(attempt().cloud?.taskId).toBe(taskId); expect(attempt().state).toBe("passed");
-  expect(submits).toHaveLength(1);
-});
-
-for (const replacement of [false, true]) test(`fresh preselected accounts require catalog admission (eligible replacement: ${replacement})`, async () => {
-  const { h, submits } = await fixture();
-  await submitted(h);
-  const record = lane(), current = record.runs[0]!.attempts.at(-1)!;
-  Object.assign(current.cloud!, { phase: "reserved", taskId: null, taskUrl: null, accountId: "account-a" });
-  current.accountId = "account-a";
-  savePipelines([record]); submits.length = 0;
-  const catalogs: string[] = [];
-  h.ports.resolveProjectSpawn = (_engine, request) => {
-    const id = request.requestedId ?? ["account-a", ...(replacement ? ["account-b"] : [])].find(id => !request.unavailableIds?.includes(id));
-    return id ? { kind: "available", account: { engine: "codex", accountId: id, kind: "managed", home: path.resolve(id), transcriptRoot: path.resolve(id), env: { NODE_ENV: "test" } } }
-      : { kind: "unavailable", allowedAccountIds: [] };
-  };
-  h.ports.cloudClient!.hasEnvironment = async input => { catalogs.push(input.account.accountId); return input.account.accountId === "account-b"; };
-  await step(h); await step(h);
-  expect(catalogs).toContain("account-a");
-  if (replacement) {
-    expect(submits).toHaveLength(1); expect(submits[0]!.account.accountId).toBe("account-b");
-  } else {
-    expect(submits).toHaveLength(0); expect(attempt().cloud?.fallback?.reason).toContain("environment unavailable");
-  }
-});
-
-test("local account recovery catalog-admits its replacement before a new Cloud submission", async () => {
-  const { h, submits } = await fixture({ enabled: false });
-  const originalSpawn = h.ports.spawnAgent;
-  h.ports.spawnAgent = async (input, reserved) => ({ ...await originalSpawn(input, reserved), paneId: null });
-  for (let i = 0; i < 6 && !h.spawnInputs.length; i++) await step(h);
-  expect(h.spawnInputs).toHaveLength(1);
-  expect(attempt().executionRuntime).toBe("cloud-then-local");
-  h.setConversationActive(false);
-  h.advanceWallClock(1000);
-  const text = "You've hit your usage limit", ts = Date.parse(h.ports.now());
-  h.durableTurns.set("/codex/stage-1.jsonl", { turn: "terminal", message: { text, ts },
-    terminalProviderMessage: { text, ts, errorClass: "usage_limit_exceeded", usageLimit: { resetsAt: null } } });
-  setCodexCloudEnvironmentId(lane().project, "env-fixture");
-  const catalogs: string[] = [];
-  h.ports.resolveProjectSpawn = () => ({ kind: "available", account: { engine: "codex", accountId: "replacement-account", kind: "managed",
-    home: path.resolve("replacement"), transcriptRoot: path.resolve("replacement"), env: { NODE_ENV: "test" } } });
-  h.ports.cloudClient!.hasEnvironment = async input => { catalogs.push(input.account.accountId); return false; };
-  for (let i = 0; i < 8 && !catalogs.length; i++) await step(h);
-  expect(lane().runs[0]!.attempts.length).toBeGreaterThan(1);
-  expect(catalogs).toEqual(["replacement-account"]);
-  expect(submits).toHaveLength(0);
-});
-
-test("Cloud reservation yields under a peer settings lock while stage work continues", async () => {
-  const { h } = await fixture();
-  await submitted(h);
-  const child = spawn(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id, "hold-settings-lock"], {
-    env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, stdio: ["pipe", "pipe", "pipe"],
-  });
-  const exited = new Promise<number | null>((resolve, reject) => { child.once("exit", resolve); child.once("error", reject); });
-  let inputError: Error | undefined;
-  child.stdin.on("error", error => { inputError = error; });
-  let reservation: Promise<string | null> | undefined;
-  try {
-    await new Promise<void>((resolve, reject) => {
-      child.stdout.once("data", data => data.toString().includes("locked") ? resolve() : reject(new Error("lock not acquired")));
-      child.once("error", reject); child.once("exit", () => reject(new Error("lock holder exited before readiness")));
-    });
-    let settled = false;
-    reservation = Promise.resolve(reserveCloudStageAccount(lane().project, ["account-a", "account-b"]))
-      .then(value => { settled = true; return value; });
-    await new Promise<void>(resolve => setImmediate(resolve));
-    expect(settled).toBe(false);
-    await step(h); await step(h);
-    expect(attempt().state).toBe("passed");
-    expect(settled).toBe(false);
-    child.stdin.end("release");
-    expect(await exited).toBe(0); expect(inputError).toBeUndefined();
-    expect(await reservation).toBe("account-a");
-    expect(await reserveCloudStageAccount(lane().project, ["account-a", "account-b"])).toBe("account-b");
-  } finally {
-    if (!child.stdin.destroyed) child.stdin.end("release");
-    await exited;
-    await reservation;
-  }
-});
-
-test("MCP runtime choices persist through creation, overrides, defaults and frozen definitions", async () => {
-  const { h } = await fixture();
-  const project = lane().project;
-  expect(setPipelineStageRuntime(project, "codex-cloud")).toBe(true);
-  try {
-    const schema = TOOL_INPUT_SCHEMAS.create_pipeline;
-    const input = schema.parse({ clientRequestId: "cloud-runtime-create", task: "Cloud runtime", repoDir: "/repo",
-      stages: [{ ...stage, runtime: "local" }] });
-    await create(h.ports, input.stages as never);
-    expect(lane().stages[0]!.runtime).toBe("local");
-    const override = TOOL_INPUT_SCHEMAS.pipeline_action.parse({ clientRequestId: "cloud-runtime-override", pipelineId: lane().id,
-      action: "override-stage", stageId: "review", runtime: "codex-cloud" }) as unknown as PatchPipelineRequest;
-    expect((await patchPipeline(lane().id, override, h.ports)).error).toBeUndefined();
-    expect(lane().stages[0]!.runtime).toBe("codex-cloud");
-    const local = { ...override, runtime: "local" as const };
-    expect((await patchPipeline(lane().id, local, h.ports)).error).toBeUndefined();
-    expect(lane().stages[0]!.runtime).toBe("local");
-    const inherited = { ...stage };
-    delete inherited.runtime;
-    expect(normalizeStages([inherited], h.ports.roleLookup, undefined, 1, project).stages?.[0]?.runtime).toBe("codex-cloud");
-    expect(normalizeStages([inherited], h.ports.roleLookup, undefined, 1, project).stages?.[0]?.model).toBe(stage.model);
-    await step(h); await step(h);
-    expect(attempt().definition?.runtime).toBe("local");
-    expect(attempt().executionRuntime).toBe("local");
-    expect((await patchPipeline(lane().id, { ...override, runtime: "other" } as never, h.ports)).error).toContain("runtime");
-    expect(attempt().definition?.runtime).toBe("local");
-  } finally { setPipelineStageRuntime(project, "local"); }
-});
-
-test("the Cloud project default skips unsupported stages and preserves frozen local choices", async () => {
-  const h = harness();
-  const project = "runtime-default-project";
-  const lookup: typeof h.ports.roleLookup = roleId => roleId === "verifier" ? h.ports.roleLookup!("reviewer") : h.ports.roleLookup!(roleId);
-  setPipelineStageRuntime(project, "codex-cloud");
-  try {
-    const inputs: PipelineStageInput[] = [
-      { ...stage, id: "review", runtime: undefined },
-      { ...stage, id: "verify", runtime: undefined, role: { roleId: "verifier" } },
-      { ...stage, id: "build", runtime: undefined, role: { roleId: "builder" } },
-      { ...stage, id: "fix", runtime: undefined, role: { roleId: "builder" } },
-      { ...stage, id: "claude", runtime: undefined, role: { roleId: "architect" }, engine: undefined, model: undefined, effort: undefined },
-      { ...stage, id: "outputs", runtime: undefined, outputs: ["review.md"] },
-      { ...stage, id: "explicit", runtime: "local" },
-    ];
-    const result = normalizeStages(inputs, lookup, undefined, 1, project);
-    expect(result.error).toBeUndefined();
-    expect(result.stages?.map(s => s.runtime ?? "local")).toEqual(["codex-cloud", "codex-cloud", "codex-cloud", "codex-cloud", "local", "local", "local"]);
-    const legacyLocal = new Map(result.stages!.map(s => [s.id, { ...s, runtime: undefined }]));
-    expect(normalizeStages(inputs, lookup, legacyLocal, 1, project).stages?.map(s => s.runtime ?? "local")).toEqual(inputs.map(() => "local"));
-    expect(normalizeStages([{ ...inputs[4]!, runtime: "codex-cloud" }], lookup, undefined, 1, project).error).toBeTruthy();
-    const frozen = result.stages!;
-    setPipelineStageRuntime(project, "local");
-    expect(normalizeStages(inputs, lookup, new Map(frozen.map(s => [s.id, s])), 1, project).stages?.map(s => s.runtime ?? "local")).toEqual(frozen.map(s => s.runtime ?? "local"));
-  } finally { setPipelineStageRuntime(project, "local"); }
-});
-
-
-for (const [id, refuseHook, exhaustedWriter, diffOutage, lateWriter] of [["builder", false, false, false, false], ["fix", false, false, false, false],
-  ["builder", true, false, false, false], ["builder", false, true, false, false], ["builder", false, false, true, false],
-  ["builder", false, false, false, true]] as const)
-  test(`Cloud ${id} diff settlement honours commit hooks (refused: ${refuseHook}, writer exhausted: ${exhaustedWriter}, diff outage: ${diffOutage}, late writer: ${lateWriter})`, async () => {
-  const native = await realProvisioningRepo(`cloud-${id}`);
-  try {
-    const { repo, root, git, realExec } = native;
-    fs.writeFileSync(path.join(repo, "existing.txt"), "before\n");
-    await git(repo, "add", "."); await git(repo, "commit", "-m", "base");
-    const origin = path.join(root, "origin.git");
-    await git(root, "init", "--bare", "--initial-branch=main", origin);
-    await git(repo, "remote", "add", "origin", origin); await git(repo, "push", "origin", "main");
-    const { h, submits } = await fixture();
-    h.ports.exec = realExec;
-    const { realProvisionExec } = await import("./git"); h.ports.provisionExec = realProvisionExec;
-    const cloudBuilder = { ...stage, id, role: { roleId: "builder" }, access: "read-write", prompt: "Implement {{task}} from {{prev.output}}" };
-    await create(h.ports, [cloudBuilder] as never, { publication: "remote-branch", repoDir: repo });
-    setCodexCloudEnvironmentId(lane().project, "env-fixture");
-    const hook = path.join(repo, ".git", "hooks", "pre-commit"), receipt = path.join(root, "hook-ran");
-    fs.mkdirSync(path.dirname(hook), { recursive: true });
-    fs.writeFileSync(hook, '#!/bin/sh\nprintf "hook\n" >> "' + receipt + '"\n' + (refuseHook ? 'exit 1\n' : ''), { mode: 0o755 });
-    h.ports.cloudClient!.readDiff = async () => [
-      "diff --git a/existing.txt b/existing.txt", "--- a/existing.txt", "+++ b/existing.txt", "@@ -1 +1 @@", "-before", "+after",
-      "diff --git a/new.txt b/new.txt", "new file mode 100644", "--- /dev/null", "+++ b/new.txt", "@@ -0,0 +1 @@", "+created", "",
-    ].join("\n");
-    await submitted(h);
-    expect(submits[0]!.headSha).toBe(await git(repo, "rev-parse", "main"));
-    if (diffOutage) {
-      const readDiff = h.ports.cloudClient!.readDiff;
-      h.ports.cloudClient!.readDiff = async () => { throw new HostedCloudError("Cloud diff unavailable", "unavailable"); };
-      for (const delay of [2000, 4000, 0]) { await step(h); h.advanceWallClock(delay); }
-      await step(h);
-      expect(lane().state).toBe("needs_decision"); expect(h.spawnInputs).toHaveLength(0);
-      expect(attempt().cloud?.fallback).toBeUndefined(); expect(submits).toHaveLength(1);
-      h.ports.cloudClient!.readDiff = readDiff;
-      expect((await patchPipeline(lane().id, { action: "retry-stage" }, h.ports)).error).toBeUndefined();
-    }
-    const record = lane(), current = record.runs[0]!.attempts.at(-1)!;
-    const previous = { ...structuredClone(current), n: 1, state: "passed" as const, cloud: undefined,
-      completedAt: h.ports.now(), verdict: { status: "pass" as const, findings: [] },
-      definition: current.definition && { ...structuredClone(current.definition), runtime: "local" as const },
-      conversationId: "previous-local-writer", executionRuntime: "local" as const };
-    current.n = 2;
-    record.runs[0]!.attempts.unshift(previous); savePipelines([record]);
-    const base = record.lastPassedCommit;
-    let writerAlive = true, writerChecks = 0, stops = 0;
-    h.ports.stageHostTreeStillRunning = ids => { writerChecks++; return writerAlive && ids.includes(previous.conversationId) ? "previous writer remains alive" : null; };
-    h.ports.stopSettledStageWriter = async () => { stops++; return { outcome: "failed", error: "writer still alive" }; };
-    await step(h); await step(h);
-    expect(writerChecks).toBeGreaterThan(0); expect(stops).toBe(1);
-    expect(attempt().cloud?.patch?.applied).toBeUndefined();
-    expect(fs.readFileSync(path.join(lane().worktreeDir, "existing.txt"), "utf8")).toBe("before\n");
-    expect(lane().lastPassedCommit).toBe(base); expect(fs.existsSync(receipt)).toBe(false);
-    expect(await git(repo, "ls-remote", "--heads", "origin", `refs/heads/${lane().branch}`)).toStartWith(base);
-    if (exhaustedWriter) {
-      for (let i = 0; i < 4 && lane().state === "running"; i++) { h.advanceWallClock(5000); await step(h); }
-      expect(lane().state).toBe("needs_decision"); expect(stops).toBe(3);
-      expect(attempt().cloud?.patch?.applied).toBeUndefined();
-      expect(fs.existsSync(receipt)).toBe(false); expect(lane().lastPassedCommit).toBe(base);
-      return;
-    }
-    writerAlive = false;
-    if (lateWriter) {
-      const execute = h.ports.exec;
-      h.ports.exec = async (command, args, cwd, env, options) => {
-        const result = await execute(command, args, cwd, env, options);
-        if (command === "git" && args[0] === "diff" && args.includes("--cached") && args.includes("--quiet")) writerAlive = true;
-        return result;
-      };
-    }
-    for (let i = 0; i < 8 && lane().state === "running"; i++) await step(h);
-    if (lateWriter) {
-      expect(lane().state).toBe("needs_decision"); expect(attempt().error).toContain("prior stage writer");
-      expect(attempt().cloud?.patch?.applied).toBeUndefined();
-      expect(fs.readFileSync(path.join(lane().worktreeDir, "existing.txt"), "utf8")).toBe("before\n");
-      expect(fs.existsSync(receipt)).toBe(false); expect(lane().lastPassedCommit).toBe(base);
-      expect(await git(repo, "ls-remote", "--heads", "origin", `refs/heads/${lane().branch}`)).toStartWith(base);
-      return;
-    }
-    if (refuseHook) {
-      expect(lane().state).toBe("needs_decision");
-      expect(attempt().error).toContain("commit");
-      expect(await git(lane().worktreeDir, "diff", "--cached", "--name-only")).toBe("existing.txt\nnew.txt");
-      expect(await git(repo, "ls-remote", "--heads", "origin", `refs/heads/${lane().branch}`)).toStartWith(lane().lastPassedCommit);
-      expect(attempt().cloud?.patch?.applied).toBe(true);
-      return;
-    }
-    expect({ state: lane().state, detail: lane().stateDetail, error: attempt().error }).toMatchObject({ state: "completed" });
-    expect(fs.readFileSync(receipt, "utf8")).toBe("hook\n");
-    expect(await git(lane().worktreeDir, "status", "--porcelain")).toBe("");
-    expect(await git(lane().worktreeDir, "show", "HEAD:existing.txt")).toBe("after");
-    expect(await git(lane().worktreeDir, "show", "HEAD:new.txt")).toBe("created");
-    expect(await git(repo, "ls-remote", "--heads", "origin", `refs/heads/${lane().branch}`)).toStartWith(lane().lastPassedCommit);
-    expect(attempt().executionRuntime).toBe("cloud");
-    expect(attempt().cloud?.patch?.applied).toBe(true);
-    expect(h.spawnInputs).toHaveLength(0);
-  } finally { await settlePipelineControllerJobs(); fs.rmSync(native.root, { recursive: true, force: true }); }
-}, 30_000);
-
-
-for (const createEnvironment of [false, true]) test(`an unconfigured project discovers or creates its account environment through real hosted HTTP/WebSocket transport (create: ${createEnvironment})`, async () => {
-  const accountId = createEnvironment ? "cloud-create" : "cloud-discover";
-  const { h, submits } = await fixture({ enabled: false, accountId });
-  const backend = stubCloudBackend({ create: createEnvironment, repository: "sample/project", ref: "main" });
-  try {
-    // The normal create() helper above uses the production stage normalizer.
-    // Give its publication target the GitHub repository represented by the stub.
-    await step(h);
-    const record = lane();
-    record.delivery!.target.remote = "https://github.com/sample/project.git";
-    record.baseBranch = "main";
-    savePipelines([record]);
-    backend.setHead(record.lastPassedCommit);
-    h.ports.cloudClient = createHostedCloudStageClient(backend.dependencies);
-    await submitted(h, ["00000000", "0000", "0000", "0000", "000000000000"].join("-"));
-    expect(attempt().cloud).toMatchObject({ environmentId: `asenvcfg_${accountId}`, accountId });
-    await step(h); await step(h);
-    expect(attempt().verdict).toMatchObject({ status: "pass" });
-    expect(h.spawnInputs).toHaveLength(0);
-    expect(submits).toHaveLength(0);
-    expect(backend.calls.filter(call => call.method === "turn/start")).toHaveLength(1);
-    expect(backend.calls.filter(call => call.path === "/backend-api/wham/github/repositories/repo-fixture").length).toBeGreaterThanOrEqual(2);
-    expect(backend.calls.find(call => call.method === "thread/start")?.body.environments).toEqual([{ environmentConfigId: `asenvcfg_${accountId}`, cwd: "/workspace/project" }]);
-    expect(backend.calls.filter(call => call.method === "POST" && call.path === "/v1/environment-configs")).toHaveLength(createEnvironment ? 1 : 0);
-  } finally { backend.stop(); }
-});
-
-test("a missing workspace GitHub connection produces one durable local fallback with its exact prerequisite", async () => {
-  const { h } = await fixture({ enabled: false, accountId: "cloud-missing" });
-  const backend = stubCloudBackend({ create: true, missingConnector: true, repository: "sample/project", ref: "main" });
-  try {
-    await step(h); const record = lane();
-    record.delivery!.target.remote = "https://github.com/sample/project.git"; record.baseBranch = "main"; savePipelines([record]);
-    h.ports.cloudClient = createHostedCloudStageClient(backend.dependencies);
-    for (let i = 0; i < 8 && !h.spawnInputs.length; i++) await step(h);
-    expect(attempt().cloud?.fallback?.reason).toContain("github_connector_not_configured");
-    expect(h.spawnInputs).toHaveLength(1);
-    expect(backend.calls.some(c => c.method === "turn/start")).toBe(false);
-    const restarted = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id], {
-      env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8",
-    });
-    expect(restarted.status).toBe(0); expect(JSON.parse(restarted.stdout).fallback).toEqual(attempt().cloud?.fallback);
-    await step(h); await step(h); expect(h.spawnInputs).toHaveLength(1);
-  } finally { backend.stop(); }
-});
-
-test.each([
-  { name: "an unknown provider refusal of the branch checkout", replies: { "command/exec": { error: { code: -32600, message: "refused for fixture-auth", data: { codexErrorInfo: "providerRefusalFixture" } } } },
-    fallback: "Codex Cloud RPC refused (command/exec, code providerRefusalFixture, rpc -32600, category unknown): refused for [redacted]" },
-  { name: "a failed branch checkout", replies: { "command/exec": { result: { exitCode: 128, stdout: "", stderr: "fatal: couldn't find remote ref refs/heads/lane\n" } } },
-    fallback: "Codex Cloud lane branch preparation failed (exit 128, category preparation): fatal: couldn't find remote ref refs/heads/lane" },
-  { name: "a stage configuration refusal", replies: { "thread/start": { error: { code: -32600, message: "effort unsupported", data: { codexErrorInfo: "badRequest" } } } },
-    fallback: null, refusal: "Codex Cloud RPC refused (thread/start, code badRequest, rpc -32600, category configuration): effort unsupported" },
-])("$name through the hosted transport records its cause; only a non-configuration cause runs locally once", async ({ replies, fallback, refusal }) => {
-  const { h } = await fixture({ enabled: false, accountId: "cloud-refused" });
-  const backend = stubCloudBackend({ repository: "sample/project", ref: "main", replies });
-  try {
-    await step(h); const record = lane();
-    record.delivery!.target.remote = "https://github.com/sample/project.git"; record.baseBranch = "main"; savePipelines([record]);
-    h.ports.cloudClient = createHostedCloudStageClient(backend.dependencies);
-    for (let i = 0; i < 8 && !h.spawnInputs.length && !lane().runs[0]?.attempts.at(-1)?.cloud?.error; i++) await step(h);
-    await step(h); await step(h);
-    expect(backend.calls.some(call => call.method === "turn/start")).toBe(false);
-    expect(attempt().cloud?.failures).toBe(1);
-    if (fallback) {
-      expect(attempt().cloud?.fallback?.reason).toBe(fallback);
-      expect(attempt().executionRuntime).toBe("cloud-then-local");
-      expect(h.spawnInputs).toHaveLength(1);
-    } else {
-      expect(attempt().cloud).toMatchObject({ phase: "failed", fallbackEligible: false, error: refusal });
-      expect(attempt().cloud?.fallback).toBeUndefined();
-      expect(h.spawnInputs).toHaveLength(0);
-    }
-    expect(backend.calls.filter(call => call.method === "thread/start")).toHaveLength(1);
-  } finally { backend.stop(); }
-});
-
-
-const privateRefusalBodies = [
-  { format: "JSON", message: 'upstream refused: {"headers":{"x-fixture-route":"private-header-marker"},"payload":"private-body-marker"}' },
-  { format: "HTML", message: 'upstream refused: <!DOCTYPE html><html><body>private-body-marker</body></html>' },
-  { format: "XML", message: 'upstream refused: <?xml version="1.0"?><error>private-body-marker</error>' },
-];
-test.each(privateRefusalBodies.flatMap(body => (["rpc", "preparation"] as const).map(kind => ({ ...body, kind }))))(
-  "review privacy: $kind $format body and headers never reach the persisted attempt or fallback reason", async ({ kind, message }) => {
-  const { h } = await fixture({ enabled: false, accountId: "cloud-refused" });
-  const replies = { "command/exec": kind === "rpc"
-    ? { error: { code: -32600, message, data: { codexErrorInfo: "providerRefusalFixture" } } }
-    : { result: { exitCode: 128, stdout: "", stderr: message } } };
-  const backend = stubCloudBackend({ repository: "sample/project", ref: "main", replies });
-  try {
-    await step(h); const record = lane();
-    record.delivery!.target.remote = "https://github.com/sample/project.git"; record.baseBranch = "main"; savePipelines([record]);
-    h.ports.cloudClient = createHostedCloudStageClient(backend.dependencies);
-    for (let i = 0; i < 8 && !h.spawnInputs.length; i++) await step(h);
-    const expected = kind === "rpc"
-      ? "Codex Cloud RPC refused (command/exec, code providerRefusalFixture, rpc -32600, category unknown): upstream refused"
-      : "Codex Cloud lane branch preparation failed (exit 128, category preparation): upstream refused";
-    expect(attempt().cloud?.error).toBe(expected);
-    expect(attempt().cloud?.fallback?.reason).toBe(expected);
-    const restarted = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/fixtures/cloudStageRestart.ts"), lane().id], {
-      env: { ...process.env, LLV_CLOUD_RESTART_PROBE: "1" }, encoding: "utf8",
-    });
-    expect({ status: restarted.status, error: restarted.stderr }).toMatchObject({ status: 0 });
-    expect(JSON.parse(restarted.stdout)).toMatchObject({ error: expected, fallback: { reason: expected } });
-    await step(h); await step(h);
-    expect(h.spawnInputs).toHaveLength(1);
-    expect(backend.calls.filter(call => call.method === "thread/start")).toHaveLength(1);
-    expect(backend.calls.some(call => call.method === "turn/start")).toBe(false);
-  } finally { backend.stop(); }
-});
-
-test("an environment changed after pipeline preparation falls back once before Cloud work", async () => {
-  const { h } = await fixture({ enabled: false, accountId: "cloud-changed" });
-  const backend = stubCloudBackend({ repository: "sample/project", ref: "main" });
-  try {
-    await step(h); const record = lane();
-    record.delivery!.target.remote = "https://github.com/sample/project.git"; record.baseBranch = "main"; savePipelines([record]);
-    backend.setHead(record.lastPassedCommit);
-    const client = createHostedCloudStageClient(backend.dependencies);
-    const prepare = client.prepareEnvironment!;
-    client.prepareEnvironment = async input => {
-      const prepared = await prepare(input);
-      if (prepared.state === "ready") backend.configs.get(prepared.environmentId)!.repositories = [
-        { repository_id: "repo-fixture", ref: "other", mount_path: "/workspace/project" }];
-      return prepared;
-    };
-    h.ports.cloudClient = client;
-    for (let i = 0; i < 8 && !h.spawnInputs.length; i++) await step(h);
-    expect(attempt().cloud?.fallback?.reason).toContain("base ref changed");
-    expect(backend.calls.some(call => call.method === "thread/start" || call.method === "turn/start")).toBe(false);
-    await step(h); await step(h);
-    expect(h.spawnInputs).toHaveLength(1);
-  } finally { backend.stop(); }
-});
-
-test("Cloud dispatch refuses a missing source handoff before submitting any work", async () => {
-  const { h, submits } = await fixture();
-  const record = lane();
-  delete record.inputContext;
-  savePipelines([record]);
-  for (let index = 0; index < 4 && ["provisioning", "running"].includes(lane().state); index++) await step(h);
-  expect(submits).toHaveLength(0);
-  expect(attempt().cloud?.error).toContain("requires a handoff digest");
-  expect(h.spawnInputs).toHaveLength(0);
-});
-
-test("creation context survives storage and invalid context is refused", async () => {
-  const { rawCreatePipelineFromRequest } = await import("./engine.fixture");
-  const { h } = await fixture();
-  const context = { taskDetails: "Accepted details", handoffDigest: "Preserve scope and compatibility." };
-  const parsed = TOOL_INPUT_SCHEMAS.create_pipeline.parse({ clientRequestId: "context-fixture", task: "Complete input",
-    repoDir: "/repo", spec: "Acceptance", stages: [stage], src: "/codex/creator.jsonl", publication: "remote-branch", inputContext: context });
-  const created = await rawCreatePipelineFromRequest(parsed as never, h.ports);
-  expect(created.error).toBeUndefined();
-  expect(loadPipelines().find(row => row.id === created.pipeline!.id)!.inputContext).toEqual(context);
-  const invalid = await rawCreatePipelineFromRequest({ ...parsed, inputContext: { skillPaths: ["../SKILL.md"] } } as never, h.ports);
-  expect(invalid.error).toContain("inputContext");
-});
-
-
-for (const expired of [false, true]) for (const size of [4_000, 70_000]) {
-  const name = `the Cloud runtime enforces the remaining stage deadline: expired=${expired} size=${size}`;
-  test(name, async () => {
-    const budgetMs = expired ? 5_123 : 60_123;
-    if (!deadlineChild(name)) return superviseCloudDeadline(import.meta.path, name, expired, budgetMs);
-    const { h } = await fixture({ accountId: "fixture", stages: [{ ...stage, role: { roleId: "builder" }, access: "read-write" }] });
-    await step(h);
-    const backend = stubCloudBackend({ repository: "sample/project", ref: "main" });
-    const { roleMemoryCollection } = await import("@/lib/memory/roleStore");
-    const { memoryDeliveries } = await import("@/lib/memory/deliveryLedger");
-    const collection = roleMemoryCollection(true)!;
-    const scope = collection.get("s:machine"), existing = collection.get("r:r_cloud_runtime_fixture");
-    const rule = "Keep receipt ownership until the matching operation reaches completion";
-    collection.boundedPatch(2, tx => {
-      tx.put({ kind: "scope", scope: "machine", revision: 1, active: ["r_cloud_runtime_fixture"], history: [] });
-      tx.put({ kind: "rule", id: "r_cloud_runtime_fixture", scope: "machine", rule, why: "", state: "active", hints: [],
-        source: { project: lane().project, pipelineId: lane().id, stageId: "review", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" },
-        createdAt: "2026-10-14T00:00:00Z", changedAt: "2026-10-14T00:00:00Z" });
-    });
-    const acknowledgement = heldCloudAcknowledgement();
-    const originalNow = h.ports.now;
-    // Keep the durable thirty-minute deadline, but start this controller job
-    // with only a bounded remainder. The production timer itself is unchanged.
-    h.ports.now = () => {
-      const deadline = lane().runs[0]?.attempts.at(-1)?.cloud?.deadlineAt;
-      return deadline ? new Date(Date.parse(deadline) - budgetMs).toISOString() : originalNow();
-    };
-    const realTimer = globalThis.setTimeout;
-    let armed = 0;
-    const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, ms: number) => {
-      const handle = realTimer(callback, ms);
-      if (ms === budgetMs) { armed++; deadlineReport("armed"); }
-      return handle;
-    }) as typeof setTimeout);
-    try {
-      const record = lane();
-      record.spec = "Acceptance 界🙂\n".repeat(4000);
-      record.inputContext = { taskDetails: rule + "\n" + "Accepted detail 界🙂. ".repeat(size), handoffDigest: "Keep the accepted API stable." };
-      record.delivery!.target.remote = "https://github.com/sample/project.git";
-      record.baseBranch = "main";
-      savePipelines([record]);
-      setCodexCloudEnvironmentId(record.project, "asenvcfg_fixture");
-      const threadId = `00000000-0000-0000-0000-${String(size).padStart(12, "0")}`;
-      const environment = { environmentId: "ccarenv_fixture", environmentConfigId: "asenvcfg_fixture", cwd: "/workspace/project" };
-      const frames: { method?: string; params?: { input?: { text: string }[] } }[] = [];
-      let turnNumber = 0, acknowledged = 0;
-      let crossed = false;
-      class Socket extends EventEmitter {
-        readyState = 1;
-        send(value: string, done?: (error?: Error) => void) {
-          const frame = JSON.parse(value); frames.push(frame); done?.();
-          if (frame.id === undefined) return;
-          if (frame.method === "turn/start") expect(turnNumber).toBe(acknowledged);
-          const turn = { id: `input_${turnNumber}`, status: "completed", model: stage.model };
-          const result = frame.method === "thread/start" || frame.method === "thread/read"
-            ? { model: stage.model, thread: { id: threadId, ephemeral: false, environments: [environment] } }
-            : frame.method === "command/exec" ? { exitCode: 0, stdout: lane().lastPassedCommit, stderr: "" }
-            : frame.method === "turn/start" ? { turn: { ...turn, id: `input_${++turnNumber}` } }
-            : frame.method === "thread/turns/list" ? { data: [turn], nextCursor: null } : {};
-          const answer = () => {
-            if (frame.method === "thread/turns/list") acknowledged++;
-            this.emit("message", Buffer.from(JSON.stringify({ id: frame.id, result })));
-          };
-          if (frame.method === "thread/turns/list" && !crossed) {
-            crossed = true; acknowledgement.hold(answer);
-          } else queueMicrotask(answer);
-        }
-        terminate() { this.readyState = 3; this.emit("close"); }
-      }
-      const sockets: Socket[] = [];
-      h.ports.cloudClient = createHostedCloudStageClient({
-        ...backend.dependencies,
-        socket: () => { const socket = new Socket(); sockets.push(socket); return socket as unknown as WebSocket; },
-      });
-      if (expired) {
-        for (let index = 0; index < 4 && !attempt()?.cloud?.error; index++) await step(h);
-        expect(attempt().cloud?.error).toBe("Codex Cloud operation timed out");
-        expect(attempt().cloud?.taskId).toBeNull();
-        expect(attempt().cloud?.submissionUnresolved).toBe(true);
-        expect(attempt().cloud?.fallback).toBeUndefined();
-        expect(h.spawnInputs).toHaveLength(0);
-      } else await submitted(h, threadId);
-      expect(armed).toBe(1);
-      expect(crossed).toBe(true);
-      expect(sockets.every(socket => socket.readyState === 3)).toBe(true);
-      const sent = frames.filter(frame => frame.method === "turn/start").map(frame => frame.params!.input![0]!.text);
-      if (expired) {
-        expect(sent).toHaveLength(1);
-        expect(acknowledged).toBe(0);
-        deadlineReport("done");
-        return;
-      }
-      expect(sent.length).toBeGreaterThan(1);
-      expect(acknowledged).toBe(turnNumber - 1);
-      expect(sent.every(text => Buffer.byteLength(text) <= 32000)).toBe(true);
-      const body = sent.map(text => text.slice(text.indexOf("\n\n") + 2)).join("");
-      expect(crossed).toBe(true);
-      if (size === 70_000) expect(Buffer.byteLength(body)).toBeGreaterThan(1024 * 1024);
-      const local = await composeStageText(lane(), lane().stages[0]!, attempt().effectiveRole, attempt().input ?? "");
-      expect(local).not.toContain(rule);
-      const memory = await learnedRulesForLaunchProfile({ learnedRules: { project: record.project, roleId: "builder" } });
-      expect(memory).toContain(rule);
-      expect(body.slice(0, `${memory}\n\n${local}`.length)).toBe(`${memory}\n\n${local}`);
-      const receipt = memoryDeliveries().find(row => row.delivery.conversationId === threadId);
-      expect(receipt).toBeDefined();
-      expect(receipt!.delivery.attempt).toEqual({ pipelineId: record.id, stageId: "review", attempt: 1 });
-      deadlineReport("done");
-    } finally {
-      timer.mockRestore();
-      acknowledgement.close();
-      backend.stop();
-      collection.boundedPatch(2, tx => {
-        if (scope) tx.put(scope); else tx.delete("s:machine");
-        if (existing) tx.put(existing); else tx.delete("r:r_cloud_runtime_fixture");
-      });
-    }
-  }, 180_000);
-}
-
-for (const pendingSource of [false, true]) test(pendingSource
-  ? "task spawn drafts inherit a launchable Cloud stage before their source transcript exists"
-  : "task assignment drafts inherit a launchable Cloud stage", async () => {
-  const { ensurePipelineForTask } = await import("./taskBinding");
-  const { createPipelineFromRequest: rawCreate, ensureTaskPipelineForAssignment } = await import("./engine");
-  const { loadTasks, saveTasks } = await import("@/lib/tasks/store");
-  const { h, submits } = await fixture();
-  const project = lane().project;
-  const secret = "gh" + "p_" + "fixture".repeat(6);
-  const boardTask: BoardTask = {
-    id: "assignment-cloud-task", project,
-    text: "Implement the accepted API and preserve its response",
-    details: `Keep the accepted response fields.\nAuthorization: Bearer ${secret}`,
-    status: "inbox", placement: "unplaced", assignments: [],
-    createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z",
-  };
-  const previousTasks = loadTasks();
-  saveTasks([...previousTasks, boardTask]);
-  savePipelines([]);
-  setPipelineStageRuntime(project, "codex-cloud");
-  try {
-    const params = { repoDir: "/repo", engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", srcPath: "/codex/creator.jsonl" };
-    const created = pendingSource
-      ? await ensureTaskPipelineForAssignment(boardTask, { ...params, srcPath: null, launchId: "launch-assignment-cloud", conversationId: "conversation_creator" }, h.ports)
-      : await rawCreate(ensurePipelineForTask(boardTask, [], params)!, h.ports);
-    expect({ error: created.error, code: created.code }).toMatchObject({ error: undefined });
-    expect(created.pipeline!.state).toBe("draft");
-    expect(created.pipeline!.stages[0]!.runtime).toBe("codex-cloud");
-    if (pendingSource) expect(created.pipeline!.srcPath).toBeNull();
-    const persisted = loadPipelines()[0]!;
-    expect(persisted.inputContext?.handoffDigest).toContain(boardTask.text);
-    expect(persisted.inputContext?.handoffDigest).toContain("Keep the accepted response fields.");
-    expect(persisted.inputContext?.handoffDigest).not.toContain(secret);
-    const started = await patchPipeline(created.pipeline!.id, { action: "start" }, h.ports);
-    expect(started.error).toBeUndefined();
-    await submitted(h);
-    expect(submits).toHaveLength(1);
-    expect(submits[0]!.prompt).toContain(persisted.inputContext!.handoffDigest!);
-    expect(submits[0]!.prompt).not.toContain(secret);
-  } finally {
-    setPipelineStageRuntime(project, "local");
-    saveTasks(previousTasks);
-  }
 });

@@ -46,6 +46,9 @@ export interface QueueEntry {
   images?: StructuredImageRef[];
   /** Optional caller fence. A mismatch is rejected before any engine write. */
   expectedTurnId?: string | null;
+  /** Broker-local observation for this attempt; excluded from durable identity
+      and public command parsing. A moved turn refuses the unwritten attempt. */
+  attemptTurnId?: string | null;
   /** Per-turn runtime settings snapshotted on the durable send effect (issue
       #390 §10). A host applies what its protocol can honor and ignores the
       rest; absent = the host's own configuration, exactly as before. */
@@ -103,11 +106,16 @@ export function normalizeQueueEntry(entry: QueueEntry): NormalizedQueueEntry {
   };
 }
 
+export type DeliveryAcceptanceObservation =
+  | { outcome: "accepted"; turnId: string }
+  | { outcome: "rejected"; reason: string }
+  | { outcome: "uncertain"; reason: string };
+
 export type DeliveryReceipt =
   | { outcome: "steered"; turnId: string }
-  | { outcome: "turn-started"; turnId: string }
+  | { outcome: "turn-started"; turnId: string; observeAcceptance?: () => Promise<DeliveryAcceptanceObservation> }
   | { outcome: "queued-next-turn"; turnId: string }
-  | { outcome: "rejected"; reason: "stale-turn" | "dead-host" };
+  | { outcome: "rejected"; reason: "stale-turn" | "dead-host"; refusal?: string };
 
 export type RuntimeEvent =
   /** One canonical realtime transcript segment, from the app-server's own
@@ -125,9 +133,9 @@ export type RuntimeEvent =
   | { kind: "native-queue-changed"; threadId: string;
     /** Canonical readback invalidated earlier retained items for this exact client. */
     evidenceRejectedFor?: string; seq: number }
-  | { kind: "turn-started"; turnId: string; seq: number }
+  | { kind: "turn-started"; turnId: string; seq: number; accountingAt?: string }
   | { kind: "delta"; turnId: string; text: string; seq: number }
-  | { kind: "item"; viewerMcp?: ViewerMcpObservation; turnId: string | null; item: unknown; phase: "started" | "completed"; voiceResponse?: RuntimeVoiceResponse | null;
+  | { kind: "item"; accountingAt?: string; viewerMcp?: ViewerMcpObservation; turnId: string | null; item: unknown; phase: "started" | "completed"; voiceResponse?: RuntimeVoiceResponse | null;
     /** Explicit identity from a Codex user-message or Viewer MCP notification; projection fallbacks supply none. */
     codexItemIdentity?: { threadId: string; turnId: string };
     /** Raw live user-echo observation, retained through event replay. */
@@ -136,7 +144,7 @@ export type RuntimeEvent =
     activityAt?: string | null; seq: number }
   | { kind: "voice-chunk"; turnId: string; delivery: RuntimeVoiceDelivery; seq: number }
   /** History can infer interruption after a lost process; it carries no operator pause intent. */
-  | { kind: "turn-ended"; turnId: string; status: "completed" | "interrupted" | "error"; interruptionSource?: "history"; seq: number }
+  | { kind: "turn-ended"; accountingAt?: string; turnId: string; status: "completed" | "interrupted" | "error"; interruptionSource?: "history"; claudeResultUuid?: string; seq: number }
   | { kind: "attention"; id: string; method: string; attention: unknown; codexReceipt?: import("./codexRequestReceipt").CodexRequestReceipt; seq: number }
   | { kind: "attention-resolved"; id: string; resolution: "answered" | "host-restarted" | "server-resolved" | "turn-ended"; codexReceipt?: import("./codexRequestReceipt").CodexRequestReceipt; seq: number }
   | { kind: "limits"; snapshot: unknown; seq: number }
@@ -172,6 +180,11 @@ export function normalizeViewerMcpObservation(value: unknown): ViewerMcpObservat
 }
 
 export interface HostState {
+  agentStateAttention?: { pending: string[]; unverified: boolean };
+  agentStateTurnStartedAt?: number | null;
+  agentStateNativeTurnId?: string | null;
+  agentStateNativePromptOrdinal?: number | null;
+  agentStateNativePromptAnchor?: import("@/lib/agentState/model").NativePromptAnchor | null;
   viewerMcp?: ViewerMcpObservation;
   exitProcess?: import("@/lib/processIdentity").ProcessIdentity;
   signalDomain?: AgentSignalDomain;
@@ -236,6 +249,9 @@ export interface EngineHost {
   /** send() accepts input into the engine's own queue while a turn is active
       or awaiting attention, preserving that turn until it finishes. */
   readonly supportsQueuedSend?: boolean;
+  /** The broker persists per-input native identity even with admission off.
+      Queue attempts must keep observed turn fences out of payload identity. */
+  readonly usesNativeInputIdentity?: boolean;
   /** How a host without steer takes a message meant for its running turn.
       `interrupt`: the delivery queue interrupts that turn and sends the
       message as the next one (Copilot's ACP has no steer). Absent keeps the
@@ -246,12 +262,25 @@ export interface EngineHost {
       starts the next turn with it. Only an explicit interrupt stops the turn.
       Absent keeps the replacement: the running turn is interrupted first. */
   readonly sendWaitsForRunningTurn?: boolean;
+  /** The engine reads an input written during a running turn at that turn's
+      next tool boundary, without cutting the tool call; an input the turn
+      never reads starts the next turn. The delivery queue hands such a host
+      an operator's ordinary send while the turn runs, one input at a time.
+      The receipt is `steered` when the running turn took it. */
+  readonly acceptsInputDuringTurn?: boolean;
+  /** Drops idle payloads while the caller still owns this host and its
+      conversation remains outside a realtime binding. */
+  releaseIdleEventWindow?(canRelease: () => boolean): Promise<boolean>;
   attach(afterSeq: number): AsyncIterable<RuntimeEvent>;
   send(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void, observeTiming?: DeliveryTimingObserver): Promise<DeliveryReceipt>;
   /** Acknowledges the write before waiting for input to land in the running turn. */
   steer?(entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorizeDispatch?: () => void): Promise<RuntimeSteerOutcome>;
   interrupt(turnRef: string): Promise<void>;
   answer(attentionRef: string, value: unknown): Promise<void>;
+  /** Applies an in-place model/effort change while the host is idle, without restarting the child. */
+  reconfigure?(settings: { model?: string | null; effort?: string | null }): Promise<void>;
+  reconcileAgentStateTerminal?(turnRef: string, nativeId: string | null, at: number, outcome?: "completed" | "interrupted" | "error"): boolean;
+  agentStateMemory?(): { activeTurnRef: string | null; pendingAttention: string[]; eventCursor: number; nativeTurnId?: string | null; deliveredNativeTurnId?: string | null; promptOrdinal?: number | null; startedAt?: number | null; attentionUnverified?: boolean };
   health(): Promise<HostState>;
   /** Current owner memory, synchronously read under its fence at automatic wake dispatch. */
   readViewerMcpObservation?(): ViewerMcpObservation | undefined;

@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 import { persistProjectAliases } from "@/lib/projects/aliases";
-import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
+import { writeStoredSeatRecord } from "@/lib/orchestrator/seatStoreFixture";
 import type { PauseResumeActor } from "@/lib/pauseResumeActor";
 import { continueReviewActorRefusal, decisionAnswerActorRefusal, patchPipeline, type PipelinePorts } from "./engine";
 import { buildPipeline, loadPipelines, savePipelines } from "./store";
@@ -76,7 +77,7 @@ for (const action of ["resolve-decision", "continue-review", "accept-head"] as c
 }
 
 test("unreadable server seat records fail closed for agents", () => {
-  fs.writeFileSync(path.join(sandbox, "orchestrator-seats.json"), "{broken");
+  writeStoredSeatRecord("{broken");
   const pipeline = buildPipeline({ id: "p", task: "t", project: "project", repoDir: "/repo", state: "draft", stages: [], srcPath: null, now: AT, srcConversationId: "conversation_creator" });
   expect(decisionAnswerActorRefusal(pipeline, agent("conversation_creator"), "answer")?.status).toBe(403);
   expect(continueReviewActorRefusal(pipeline, agent("conversation_creator"))?.status).toBe(403);
@@ -107,7 +108,7 @@ test("an alias preserves seat creator lineage after independent project designat
   // A later seat write normalizes the aliased rows on disk; the creator proof
   // must survive that write instead of depending on the old source key.
   designate("project-unrelated", "conversation-unrelated");
-  const storedSeats = JSON.parse(fs.readFileSync(path.join(sandbox, "orchestrator-seats.json"), "utf8")) as { seatLineage?: { project: string; conversationId: string }[] };
+  const storedSeats = readOrchestratorSeatFile();
   expect(storedSeats.seatLineage).toContainEqual(expect.objectContaining({ project: "project-current", conversationId: "conversation-x", seatEpoch: expect.any(Number) }));
   const before = loadPipelines();
   for (const action of ["resolve-decision", "continue-review", "accept-head"] as const) {

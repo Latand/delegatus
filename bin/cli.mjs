@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 
+import "./launcher-inherited-children.mjs";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import http from "node:http";
 import net from "node:net";
 import { constants, homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -30,7 +30,7 @@ let browserOpenCommand, cliRuntimeHostConfig, cliRuntimeHostEnvironment,
   newlyBoundNonLoopbackAddress, readNonLoopbackBindState, viewerChildProcessOptions,
   viewerServerBunRuntime, viewerExitStatus, runtimeHostStartupProgress, waitForRuntimeHostStartup;
 let createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
-  waitForPageAndChunk, createReadinessJournal, selfUpdatePaths, watchRestartRequests, runtimeHostStartIdentity;
+  waitForViewerReadiness, releaseHasRevisionReadiness, accessKeyCanRoundTrip, waitForPageAndChunk, createReadinessJournal, selfUpdatePaths, watchRestartRequests, runtimeHostStartIdentity;
 let probeHeadersFrom, viewerBootGateKey, findLegacySystemdUnits, legacySystemdNotice, linkSkills;
 let createRelaunch, relaunch;
 let assertLauncherAvailable, ensureWebPortFree, takeOverOrphanHost;
@@ -47,13 +47,6 @@ if (!process.env.LLV_STATE_OWNER) process.env.LLV_STATE_OWNER = "launcher";
 const DEFAULT_PORT = 8898;
 const DEFAULT_HOSTNAME = "127.0.0.1";
 const READINESS_TIMEOUT_MS = 90_000;
-const READINESS_INTERVAL_MS = 200;
-// Socket timeout for a single readiness probe. The probe hits /api/files,
-// which scans every log under ~/.claude and ~/.codex; with a few hundred
-// conversations that scan takes 250-600ms, well past the 200ms poll cadence.
-// Reusing READINESS_INTERVAL_MS here made every probe abort before the healthy
-// server could answer, so startup always "timed out" and killed its own server.
-const READINESS_PROBE_TIMEOUT_MS = 5_000;
 const RUNTIME_HOST_RESTART_BASE_MS = 500;
 const RUNTIME_HOST_RESTART_MAX_MS = 10_000;
 const RUNTIME_HOST_STABLE_UPTIME_MS = 30_000;
@@ -97,6 +90,8 @@ Options:
   -h, --help           Show this help
 
 Commands:
+  service install [--port <n>]  Start Delegatus at login (opt-in)
+  service remove       Remove the login service
   stop --all           Stop the Viewer, the runtime host and every agent
                        host Delegatus started`,
     badPort: (value) => `Invalid port: ${value}`,
@@ -153,6 +148,8 @@ Commands:
   -h, --help           Показати довідку
 
 Команди:
+  service install [--port <n>]  Запускати Delegatus під час входу
+  service remove       Видалити службу входу
   stop --all           Зупинити Viewer, runtime host і кожен хост агента,
                        який запустив Delegatus`,
     badPort: (value) => `Некоректний порт: ${value}`,
@@ -203,7 +200,7 @@ const m = MESSAGES[LANG];
    print their startup diagnostics (`src/lib/startupDiagnostics.ts`). An error
    is never dropped: it waits for the banner, or for the launcher to fail. */
 const NEXT_STARTUP_PREFIXES = ["▲ Next.js ", "- Local:", "- Network:", "- Environments:", "- Experiments:", "✓ Starting", "✓ Ready in", "✓ Running next.config"];
-const TERMINAL_DIAGNOSTIC_PREFIXES = ["[viewer loop-gap] ", "[performance summary] ", "[state transaction-hold] "];
+const TERMINAL_DIAGNOSTIC_PREFIXES = ["[viewer loop-gap] ", "[performance summary] ", "[state transaction-hold] ", "[viewer startup phase] "];
 const HELD_OUTPUT_LIMIT_BYTES = 1024 * 1024;
 /* The name `src/lib/startupDiagnostics.ts` reads. */
 const QUIET_DIAGNOSTICS_ENV = "LLV_QUIET_DIAGNOSTICS";
@@ -617,6 +614,7 @@ function startServer(server, options, runtime, tailscaleProcessRef, runtimeHostS
   const stderr = startupOutput.source(process.stderr, child.stderr);
   child.stdout?.on("data", (chunk) => stdout.write(chunk));
   child.stderr?.on("data", (chunk) => {
+    launch.onStartupOutput?.(chunk);
     const text = chunk.toString("utf8");
     if (text.includes("EADDRINUSE")) {
       state.sawAddressInUse = true;
@@ -896,52 +894,6 @@ function createRuntimeHostSupervisor(config, bunRuntime, environment, packageRoo
       }
     },
   };
-}
-
-function probe(url, timeoutMs = READINESS_PROBE_TIMEOUT_MS) {
-  return new Promise((resolve) => {
-    const request = http.get(url, (response) => {
-      response.resume();
-      resolve(response.statusCode !== undefined && response.statusCode >= 200 && response.statusCode < 500);
-    });
-
-    request.on("error", () => {
-      resolve(false);
-    });
-
-    const timer = setTimeout(() => {
-      request.destroy();
-      resolve(false);
-    }, timeoutMs);
-    request.once("close", () => clearTimeout(timer));
-  });
-}
-
-/* `processHandle`, when given, is the child the readiness belongs to: its exit
-   ends the wait at once, since a port answered by anyone else is no proof. */
-async function waitForReadiness(port, timeoutMs = READINESS_TIMEOUT_MS, processHandle = null, onPhase = () => {}) {
-  const deadline = performance.now() + timeoutMs;
-  const url = `http://127.0.0.1:${port}/api/files`;
-
-  while (performance.now() < deadline) {
-    if (processHandle?.state.spawnError) {
-      onPhase({ phase: "files", status: "running" });
-      onPhase({ phase: "files", status: "failed", detail: "Viewer readiness probe failed" });
-      throw new Error(`could not start (${processHandle.state.spawnError.message})`);
-    }
-    if (processHandle && (processHandle.child.exitCode !== null || processHandle.child.signalCode !== null)) {
-      onPhase({ phase: "files", status: "running" });
-      onPhase({ phase: "files", status: "failed", detail: "Viewer readiness probe failed" });
-      throw new Error(`exited before it answered (${processHandle.child.signalCode ? `signal ${processHandle.child.signalCode}` : `exit code ${processHandle.child.exitCode}`})`);
-    }
-    onPhase({ phase: "files", status: "running" });
-    const ready = await probe(url, Math.max(1, Math.min(READINESS_PROBE_TIMEOUT_MS, deadline - performance.now())));
-    onPhase({ phase: "files", status: ready ? "ready" : "failed" });
-    if (ready) return;
-    await wait(Math.max(0, Math.min(READINESS_INTERVAL_MS, deadline - performance.now())));
-  }
-
-  throw new Error(m.serverTimeout(timeoutMs / 1000));
 }
 
 /* The key rides in the local link too when this start gates on one: the
@@ -1231,20 +1183,22 @@ async function main() {
     if (webRestartTimer) clearTimeout(webRestartTimer);
     webRestartTimer = null;
   };
-    const probeHeaders = () => {
-      /* The key the serving Viewer asks for, by the rule its own boot follows:
-         the one this launcher hands it, else the key file while the
-         phone-access flag or a links gate is present. The files are read on
-         every probe, because the Viewer can turn its gate on while this
-         launcher keeps running. A key no header can carry never reaches
-         fetch: its header error would include the rejected value. */
-      const childEnv = buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment);
-      const key = viewerBootGateKey({ ...childEnv, LLV_STATE_DIR: childEnv.LLV_STATE_DIR || runtimeHostConfig.stateDirectory });
-      const value = typeof key === "string" ? key.trim() : "";
-      const headers = probeHeadersFrom(runtimeHostConfig.stateDirectory);
-      if (value && !/[^\t\x20-\x7e]/.test(value)) headers.authorization = `Bearer ${value}`;
-      return headers;
-    };
+  const probeAccess = () => {
+    /* The key the serving Viewer asks for, by the rule its own boot follows:
+       the one this launcher hands it, else the key file while the
+       phone-access flag or a links gate is present. The files are read on
+       every probe, because the Viewer can turn its gate on while this
+       launcher keeps running. A key no header can carry never reaches
+       fetch: its header error would include the rejected value. */
+    const childEnv = buildChildEnv(options, runtime, packageRoot, runtimeHostEnvironment);
+    const key = viewerBootGateKey({ ...childEnv, LLV_STATE_DIR: childEnv.LLV_STATE_DIR || runtimeHostConfig.stateDirectory });
+    const value = typeof key === "string" ? key : "";
+    const headers = probeHeadersFrom(runtimeHostConfig.stateDirectory);
+    const accessKeyUnsendable = Boolean(key) && !accessKeyCanRoundTrip(value);
+    if (value && !accessKeyUnsendable) headers.authorization = `Bearer ${value}`;
+    return { headers, accessKeyUnsendable };
+  };
+  const probeHeaders = () => probeAccess().headers;
   relaunch = createRelaunch({ paths: selfUpdate, installRoot: packageRoot, entry: cliPath,
     release: serverRef.release, servingRelease: () => serverRef.release, record: {
       set: (...input) => record?.set(...input), remove: () => record?.remove(),
@@ -1379,7 +1333,8 @@ async function main() {
       {
         restarting,
         stateDirectory: runtimeHostConfig.stateDirectory,
-        extraEnv: { LLV_SELF_UPDATE_RECORD: selfUpdate.record },
+        extraEnv: { LLV_SELF_UPDATE_RECORD: selfUpdate.record, LLV_VIEWER_STARTUP_PHASES: "1" },
+        onStartupOutput: chunk => handle.readiness.observeStartupOutput(chunk),
         onUnexpectedExit: (child) => {
           record.set("web", { state: "failed", error: exitError(child, handle.startedAt) });
           if (recoverWeb) {
@@ -1391,11 +1346,28 @@ async function main() {
         },
       },
     );
+    handle.readiness = createReadinessJournal(selfUpdate.readiness, { revision: release.sha, pid: handle.child.pid });
     handle.startedAt = Date.now();
     serverRef.current = handle;
     serverRef.release = release;
     record.started("web", handle.child, release);
     return handle;
+  };
+  const waitForReadiness = async (timeoutMs, { child, state, readiness }, release) => {
+    const ready = await waitForViewerReadiness(options.port, {
+      revision: release.sha, timeoutMs, allowLegacyFallback: !releaseHasRevisionReadiness(release),
+      probeAccess, onPhase: readiness.observe,
+      assertChildRunning: () => {
+        if (state.spawnError) throw new Error(`could not start (${state.spawnError.message})`);
+        if (child.exitCode !== null || child.signalCode !== null) {
+          throw new Error(`exited before it answered (${child.signalCode ? `signal ${child.signalCode}` : `exit code ${child.exitCode}`})`);
+        }
+      },
+    });
+    if (!ready) {
+      const phase = readiness.pendingStartupPhase() ?? "HTTP readiness";
+      throw new Error(`${m.serverTimeout(timeoutMs / 1000)} [${phase}]`);
+    }
   };
   const serverProcess = launchWeb(serverRef.release, relaunch.isReplacementStart());
 
@@ -1406,9 +1378,9 @@ async function main() {
     tailscaleProcessRef.current = serveTailscale(runtime.tailscalePath, options.port);
   }
 
-  const readiness = createReadinessJournal(selfUpdate.readiness, { revision: serverRef.release.sha, pid: serverProcess.child.pid });
+  const { readiness } = serverProcess;
   try {
-    await waitForReadiness(options.port, relaunch.isReplacementStart() ? RESTART_READINESS_TIMEOUT_MS : READINESS_TIMEOUT_MS, serverProcess, readiness.observe);
+    await waitForReadiness(relaunch.isReplacementStart() ? RESTART_READINESS_TIMEOUT_MS : READINESS_TIMEOUT_MS, serverProcess, serverRef.release);
     if (relaunch.isReplacementStart()) {
       const page = await waitForPageAndChunk(options.port, { headers: probeHeaders(), onPhase: readiness.observe });
       if (page) throw new Error(page);
@@ -1465,9 +1437,15 @@ async function main() {
   // settings and must not ask for custody that the settlement released.
   delete process.env.LLV_LAUNCHER_CREDENTIAL_HANDOFF;
   startupLock.release();
+  // The bootstrap retains successful startup after shutdown removes the record.
+  // Its private child channel also covers a stop immediately after readiness.
+  if (process.connected && typeof process.send === "function") {
+    try { process.send({ kind: "delegatus-launcher-healthy" }, () => {}); }
+    catch { /* A departed bootstrap cannot receive this optional observation. */ }
+  }
 
-  /* Restart requests are taken only once startup has finished, and only from
-     a checkout: a packaged install is updated by its package manager. */
+  /* Restart requests are taken once startup finishes, for checkouts and
+     packaged installs whose launcher supports relaunch. */
   {
     const attemptWeb = async (release, verifyPage = true, keepWhenRefused = false) => {
       if (!await ensureWebPortFree(selfUpdate, options.port, runtimeHostConfig.socketPath, options.hostname, packageRoot)) {
@@ -1478,9 +1456,9 @@ async function main() {
       await boundedWait(serverRef.current?.state.retired, STOP_TIMEOUT_MS, "Viewer retirement timed out");
       if (!recoverWeb) return "shutdown";
       const handle = launchWeb(release, true);
-      const readiness = createReadinessJournal(selfUpdate.readiness, { revision: release.sha, pid: handle.child.pid });
+      const { readiness } = handle;
       try {
-        await waitForReadiness(options.port, RESTART_READINESS_TIMEOUT_MS, handle, readiness.observe);
+        await waitForReadiness(RESTART_READINESS_TIMEOUT_MS, handle, release);
         if (verifyPage) {
           const page = await waitForPageAndChunk(options.port, { headers: probeHeaders(), onPhase: readiness.observe });
           if (page && keepWhenRefused && /^GET \/ answered 40[13]$/.test(page)) {
@@ -1692,7 +1670,7 @@ function handOffLauncher({ checkout, entry, record }) {
   return new Promise((done) => {
     const env = { ...process.env, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: checkout };
     const child = spawn(process.execPath, [...process.execArgv, entry, ...process.argv.slice(2)], {
-      cwd: checkout, env, stdio: "inherit",
+      cwd: checkout, env, stdio: ["inherit", "inherit", "inherit", "ipc"],
     });
     let forwarded = false;
     let startupSettled = false;
@@ -1721,11 +1699,21 @@ function handOffLauncher({ checkout, entry, record }) {
     process.on("SIGTERM", forward);
     let spawnError = null;
     let timer;
+    let healthTimer;
+    const settled = () => {
+      startupSettled = true;
+      clearInterval(healthTimer);
+      clearTimeout(timer);
+    };
+    child.on("message", message => {
+      if (message?.kind === "delegatus-launcher-healthy") settled();
+    });
     let finished = false;
     const finish = started => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      clearInterval(healthTimer);
       clearTimeout(signalStopTimer);
       clearTimeout(signalKillTimer);
       process.off("SIGINT", forward);
@@ -1740,7 +1728,7 @@ function handOffLauncher({ checkout, entry, record }) {
         try { recorded = JSON.parse(readFileSync(record, "utf8"))?.launcher?.pid === child.pid; } catch { /* no record */ }
       }
       const oneShot = ["team", "stop", "export", "import"].includes(process.argv[2]) || process.argv.slice(2).some((arg) => ["-v", "--version", "-h", "--help"].includes(arg));
-      if (!recorded && !forwarded && !oneShot) {
+      if (!recorded && !startupSettled && !forwarded && !oneShot) {
         console.error(`[self-update] installed launcher could not start (${spawnError?.message || `exit ${status}`}); using the checkout launcher.`);
         finish(false);
       } else {
@@ -1749,6 +1737,11 @@ function handOffLauncher({ checkout, entry, record }) {
       }
     });
     const json = file => { try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; } };
+    // Older releases have no readiness message. Retain their healthy record too.
+    healthTimer = setInterval(() => {
+      if (startupHandoffSucceeded(child.pid, child.exitCode == null && child.signalCode == null, forwarded, json(record))) settled();
+    }, 100);
+    healthTimer.unref?.();
     const directory = dirname(record);
     const suffix = record.slice(record.lastIndexOf("launcher-") + 9);
     const trialFile = join(directory, `trial-${suffix}`);
@@ -1853,7 +1846,7 @@ async function checkoutLauncher() {
     viewerServerBunRuntime, viewerExitStatus, runtimeHostStartupProgress, waitForRuntimeHostStartup } = runtime);
   runtime.discardUnsupportedApiCredentials();
   ({ createLauncherRecord, exitError, hostEntrypoint, installedRelease, isGitCheckout,
-    waitForPageAndChunk, createReadinessJournal, selfUpdatePaths, watchRestartRequests, runtimeHostStartIdentity } = await import("./self-update-supervisor.mjs"));
+    waitForViewerReadiness, releaseHasRevisionReadiness, accessKeyCanRoundTrip, waitForPageAndChunk, createReadinessJournal, selfUpdatePaths, watchRestartRequests, runtimeHostStartIdentity } = await import("./self-update-supervisor.mjs"));
   ({ probeHeadersFrom } = await import("./internalService.mjs"));
   ({ viewerBootGateKey } = await import("./viewerGateKey.mjs").catch(() => ({ viewerBootGateKey: (environment) => environment.LLV_TOKEN || null })));
   ({ findLegacySystemdUnits, legacySystemdNotice } = await import("./legacySystemd.mjs"));
@@ -1868,7 +1861,10 @@ async function checkoutLauncher() {
   await main();
 }
 
-if (process.argv[2] === "doctor") {
+if (process.argv[2] === "service") {
+  const { runServiceCommand } = await import("./login-service.mjs");
+  process.exitCode = await runServiceCommand(process.argv.slice(3), { root: findPackageRoot(cliDir), lang: LANG });
+} else if (process.argv[2] === "doctor") {
   // Stay outside launcher custody, release selection and startup side effects.
   try {
     const { runDoctorCommand } = await import("./doctor-command.mjs");

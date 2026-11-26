@@ -108,10 +108,10 @@ export async function observeStageBranchProtection(pipeline: Pipeline, exec: Exe
     }
     return { ...observation, error: "the remote forge's stage branch protection cannot be verified" };
   }
-  const present = await remoteExec("timeout", ["--signal=KILL", "5s", "git", "ls-remote", "--heads", remote, `refs/heads/${branch}`], pipeline.worktreeDir);
+  const present = await remoteExec("git", ["ls-remote", "--heads", remote, `refs/heads/${branch}`], pipeline.worktreeDir, undefined, { timeoutMs: 5_000 });
   if (present.code !== 0) return { ...observation, error: "the stage branch's remote protection cannot be verified" };
   if (!present.stdout.trim()) return observation; // Unpublished local branch; no remote branch is adopted or modified.
-  const protection = await remoteExec("timeout", ["--signal=KILL", "5s", "gh", "api", `repos/${repository}/branches/${encodeURIComponent(branch)}`, "--jq", ".protected"], pipeline.worktreeDir);
+  const protection = await remoteExec("gh", ["api", `repos/${repository}/branches/${encodeURIComponent(branch)}`, "--jq", ".protected"], pipeline.worktreeDir, undefined, { timeoutMs: 5_000 });
   if (protection.code !== 0 || !["true", "false"].includes(protection.stdout.trim())) return { ...observation, error: "the stage branch's forge protection cannot be verified" };
   return { ...observation, error: protection.stdout.trim() === "true" ? "the stage is on a protected forge branch" : null };
 }

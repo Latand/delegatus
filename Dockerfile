@@ -106,7 +106,12 @@ groups=\$(id -G | tr ' ' ',')
 # Compose shares the host PID namespace. Keep the launch handle through exec.
 # A host without python3 reports an unprotected launch. Guarded launches need
 # the Python exec acknowledgement and refuse when it is unavailable.
+# nsenter is setuid, so glibc starts it in secure-execution mode and drops
+# TMPDIR from its environment. A stage's TMPDIR names its on-disk attempt
+# scratch; carry it across under another name and restore it on the host.
+if [ -n "\${TMPDIR+x}" ]; then export LLV_SHIM_TMPDIR="\$TMPDIR"; else unset LLV_SHIM_TMPDIR; fi
 exec nsenter -t 1 -m -p -C --no-fork -- /usr/bin/setpriv --reuid="\$uid" --regid="\$gid" --groups="\$groups" -- /bin/sh -c 'cd "\$1" || exit; shift
+if [ -n "\${LLV_SHIM_TMPDIR+x}" ]; then TMPDIR=\$LLV_SHIM_TMPDIR; export TMPDIR; unset LLV_SHIM_TMPDIR; fi
 if [ -n "\${LLV_SIGNAL_LAUNCHER:-}" ]; then
   launcher=\$LLV_SIGNAL_LAUNCHER; receipt=\$LLV_SIGNAL_RECEIPT; unset LLV_SIGNAL_LAUNCHER LLV_SIGNAL_RECEIPT LLV_DOCKER_NSENTER_SHIMS
   if [ -x /usr/bin/python3 ]; then
@@ -133,10 +138,10 @@ WRAPPER
 make_nsenter_shim claude '$HOME/.bun/bin/claude'
 make_nsenter_shim codex '$HOME/.bun/bin/codex'
 make_nsenter_shim copilot '$HOME/.bun/bin/copilot'
+make_nsenter_shim agy '$HOME/.local/bin/agy'
 make_nsenter_shim bun '$HOME/.bun/bin/bun'
 make_nsenter_shim uv '$HOME/.local/bin/uv'
 make_nsenter_shim just /usr/bin/just
-make_nsenter_shim tmux /usr/bin/tmux
 make_nsenter_shim tailscale /usr/bin/tailscale
 cat > /usr/local/bin/docker <<'WRAPPER'
 #!/bin/sh
@@ -154,107 +159,10 @@ groups=$(id -G | tr ' ' ',')
 exec nsenter -t 1 -m -p -C --no-fork -- /usr/bin/setpriv --reuid="$uid" --regid="$gid" --groups="$groups" -- /bin/sh -c 'cd "$1" || exit; shift; exec "$@"' sh "$wd" /usr/bin/docker "$@"
 WRAPPER
 chmod +x /usr/local/bin/docker
-cat > /usr/local/bin/tmux <<'WRAPPER'
-#!/bin/sh
-state_dir=/tmp/llv-tmux-cwd
-
-host_wd() {
-  case "$PWD" in
-    "$HOME"|"$HOME"/*) printf '%s' "$PWD" ;;
-    *) printf '%s' "$HOME" ;;
-  esac
-}
-
-run_host_tmux() {
-  wd=$(host_wd)
-  uid=$(id -u)
-  gid=$(id -g)
-  groups=$(id -G | tr ' ' ',')
-  # LC_ALL: without a UTF-8 locale tmux sanitizes control bytes in `-F` output,
-  # turning the TAB field separators panePidMap relies on into "_" — which left
-  # the viewer unable to see (or kill) any tmux session. Force UTF-8 so tabs
-  # survive regardless of whether the container env propagates through nsenter.
-  nsenter -t 1 -m -p -C --no-fork -- /usr/bin/setpriv --reuid="$uid" --regid="$gid" --groups="$groups" -- /bin/sh -c 'cd "$1" || exit; shift; exec "$@"' sh "$wd" env LC_ALL=C.UTF-8 /usr/bin/tmux "$@"
-}
-
-target_key() {
-  printf '%s' "$1" | tr -cd 'A-Za-z0-9_.-'
-}
-
-quote_shell() {
-  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
-}
-
-host_command_text() {
-  printf '%s' "$1" \
-    | sed \
-      -e "s|'\/usr\/local\/bin\/claude'|'$HOME/.bun/bin/claude'|g" \
-      -e "s|'\/usr\/local\/bin\/codex'|'$HOME/.bun/bin/codex'|g" \
-      -e "s|'\/usr\/local\/bin\/bun'|'$HOME/.bun/bin/bun'|g" \
-      -e "s|'\/usr\/local\/bin\/uv'|'$HOME/.local/bin/uv'|g" \
-      -e "s|'\/usr\/local\/bin\/just'|'/usr/bin/just'|g" \
-      -e "s|'\/usr\/local\/bin\/tmux'|'/usr/bin/tmux'|g" \
-      -e "s|/usr/local/bin/claude|$HOME/.bun/bin/claude|g" \
-      -e "s|/usr/local/bin/codex|$HOME/.bun/bin/codex|g" \
-      -e "s|/usr/local/bin/bun|$HOME/.bun/bin/bun|g" \
-      -e "s|/usr/local/bin/uv|$HOME/.local/bin/uv|g" \
-      -e 's|/usr/local/bin/just|/usr/bin/just|g' \
-      -e 's|/usr/local/bin/tmux|/usr/bin/tmux|g'
-}
-
-# File-backed launch delivery asks the same adapter to translate its contents.
-if [ "$1" = "delegatus-host-command-text" ]; then
-  host_command_text "$2"
-  exit $?
-fi
-
-if [ "$1" = "new-window" ]; then
-  cwd=
-  prev=
-  for arg in "$@"; do
-    if [ "$prev" = "-c" ]; then
-      cwd=$arg
-      break
-    fi
-    prev=$arg
-  done
-  out=$(mktemp)
-  err=$(mktemp)
-  run_host_tmux "$@" >"$out" 2>"$err"
-  code=$?
-  cat "$out"
-  if [ "$code" -eq 0 ] && [ -n "$cwd" ]; then
-    target=$(awk 'NR == 1 { print $1 }' "$out")
-    if [ -n "$target" ]; then
-      mkdir -p "$state_dir"
-      printf '%s' "$cwd" > "$state_dir/$(target_key "$target")"
-    fi
-  fi
-  cat "$err" >&2
-  rm -f "$out" "$err"
-  exit "$code"
-fi
-
-if [ "$1" = "send-keys" ] && [ "${2:-}" = "-t" ] && [ "${4:-}" = "-l" ] && [ -n "${5:-}" ]; then
-  target=$3
-  command_text=$(host_command_text "$5")
-  cwd_file="$state_dir/$(target_key "$target")"
-  if [ -f "$cwd_file" ]; then
-    cwd=$(cat "$cwd_file")
-    rm -f "$cwd_file"
-    run_host_tmux send-keys -t "$target" -l "cd $(quote_shell "$cwd") && $command_text"
-    exit $?
-  fi
-  run_host_tmux send-keys -t "$target" -l "$command_text"
-  exit $?
-fi
-
-run_host_tmux "$@"
-WRAPPER
-chmod +x /usr/local/bin/tmux
 EOF
 
 FROM runtime-system AS runtime
+ENV LLV_GATE_IMAGE_BUN=bun-container
 COPY --from=build /app/.next ./.next
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/public ./public
@@ -263,14 +171,15 @@ COPY --from=build /app/bin ./bin
 COPY --from=build /app/next.config.ts ./next.config.ts
 COPY --from=build /app/tsconfig.json ./tsconfig.json
 COPY --from=build /app/src ./src
-COPY --from=build /app/scripts/privacy-known-value-fingerprints.json ./scripts/privacy-known-value-fingerprints.json
-COPY --from=build /app/scripts/whisper_transcribe.py ./scripts/whisper_transcribe.py
+COPY --from=build /app/scripts ./scripts
+COPY --from=build /app/.githooks/pre-push ./.githooks/pre-push
 # The pinned Telegram connector (#1059) is resolved at runtime from
 # /app/vendor — without this line the image ships without it and sign-in
 # dies with start_failed (#1081).
 COPY --from=build /app/vendor ./vendor
 COPY --from=build /app/scripts/runtime-host-viewer-adapter.ts ./scripts/runtime-host-viewer-adapter.ts
 COPY --from=build /app/scripts/runtime-host-healthcheck.ts ./scripts/runtime-host-healthcheck.ts
+COPY --from=build /app/scripts/verify-provisioning-release.mjs ./scripts/verify-provisioning-release.mjs
 COPY --from=build /app/scripts/gate-slot.sh /app/scripts/owned-runner.ts /app/scripts/cpu-admission.ts /app/scripts/cpu-admission-lock.ts /app/scripts/test-child-guardian.ts ./scripts/
 COPY --from=build /app/node_modules ./node_modules
 

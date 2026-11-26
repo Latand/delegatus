@@ -1,3 +1,4 @@
+import { textLengthError } from "@/lib/textLimits";
 import { collapseSpaces, normalizeTaskSummary } from "@/lib/tasks/summary";
 import type { TaskSummaryContent } from "@/lib/tasks/types";
 import { MAX_STAGE_RESULT_CHARS, MAX_STAGE_FINDING_CHARS, MAX_STAGE_REPORT_FINDINGS, MAX_STAGE_REPORT_SUMMARY_CHARS } from "./limits";
@@ -366,7 +367,7 @@ export function normalizeStageCompletion(input: StageCompletionInput): Normalize
   const findings: StageFinding[] = [];
   if (input.findings !== undefined && input.findings !== null) {
     if (!Array.isArray(input.findings)) return refusal("findings must be an array of { severity, text }");
-    if (input.findings.length > MAX_FINDINGS) return refusal(`findings must hold at most ${MAX_FINDINGS} entries`);
+    if (input.findings.length > MAX_FINDINGS) return refusal(`findings must hold at most ${MAX_FINDINGS} entries; actual count is ${input.findings.length}`);
     for (const raw of input.findings) {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return refusal("each finding must be an object { severity, text }");
       const finding = raw as Record<string, unknown>;
@@ -377,7 +378,7 @@ export function normalizeStageCompletion(input: StageCompletionInput): Normalize
       const text = typeof finding.text === "string" ? finding.text.trim() : "";
       if (!text) return refusal("each finding needs a non-empty text");
       if (stageFindingText({ severity: severity as StageFindingSeverity, text }).length > MAX_FINDING_CHARS) {
-        return refusal(`each rendered finding must be at most ${MAX_FINDING_CHARS} characters`);
+        return refusal(textLengthError(`findings.${findings.length}.text (including severity prefix)`, stageFindingText({ severity: severity as StageFindingSeverity, text }).length, MAX_FINDING_CHARS, "UTF-16 code units"));
       }
       findings.push({ severity: severity as StageFindingSeverity, text });
     }
@@ -388,15 +389,17 @@ export function normalizeStageCompletion(input: StageCompletionInput): Normalize
   /* The rendered `P1 — text` is the stored finding. Validate its full length
      before handing it to the shared normalizer so no accepted body loses text. */
   const rendered = rankStageFindings(findings).map(stageFindingText);
+  if (typeof input.blockedReason === "string" && input.blockedReason.trim().length > MAX_STAGE_REPORT_SUMMARY_CHARS) return refusal(textLengthError("blockedReason", input.blockedReason.trim().length, MAX_STAGE_REPORT_SUMMARY_CHARS, "UTF-16 code units"));
   const verdict = stageVerdictFrom({ status, ...(rendered.length ? { findings: rendered } : {}),
     ...(input.blocked !== undefined ? { blocked: input.blocked } : {}),
     ...(input.blockedReason !== undefined ? { blockedReason: input.blockedReason } : {}),
   });
-  if (!verdict) return refusal("the reported verdict is invalid: blocked must be boolean; blocked:true requires fail and a non-empty blockedReason of at most " + MAX_STAGE_REPORT_SUMMARY_CHARS + " characters; blockedReason requires blocked:true");
-  const summary = typeof input.summary === "string" ? input.summary.trim().slice(0, MAX_STAGE_REPORT_SUMMARY_CHARS) : "";
-  if (input.result !== undefined && typeof input.result !== "string") return refusal(`result must be a string of at most ${MAX_STAGE_RESULT_CHARS} characters`);
+  if (!verdict) return refusal("the reported verdict is invalid: blocked must be boolean; blocked:true requires fail and a non-empty blockedReason of at most " + MAX_STAGE_REPORT_SUMMARY_CHARS + " UTF-16 code units; blockedReason requires blocked:true");
+  const summary = typeof input.summary === "string" ? input.summary.trim() : "";
+  if (summary.length > MAX_STAGE_REPORT_SUMMARY_CHARS) return refusal(textLengthError("summary", summary.length, MAX_STAGE_REPORT_SUMMARY_CHARS, "UTF-16 code units"));
+  if (input.result !== undefined && typeof input.result !== "string") return refusal(`result must be a string of at most ${MAX_STAGE_RESULT_CHARS} UTF-16 code units`);
   const result = typeof input.result === "string" ? collapseSpaces(input.result) : "";
-  if (result.length > MAX_STAGE_RESULT_CHARS) return refusal(`result must be at most ${MAX_STAGE_RESULT_CHARS} characters`);
+  if (result.length > MAX_STAGE_RESULT_CHARS) return refusal(textLengthError("result", result.length, MAX_STAGE_RESULT_CHARS, "UTF-16 code units"));
   const taskSummary = input.taskSummary === undefined ? null : normalizeTaskSummary(input.taskSummary);
   if (taskSummary && "error" in taskSummary) return refusal(taskSummary.error.replace(/^summary/, "taskSummary"));
   return { verdict, summary: summary || null, result: result || null, taskSummary: taskSummary?.value ?? null };

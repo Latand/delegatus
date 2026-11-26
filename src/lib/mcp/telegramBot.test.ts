@@ -3,15 +3,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 
 import { TelegramBotError } from "@/lib/telegram/bot/service";
 import { telegramBotFailure } from "@/lib/telegram/bot/http";
 
 import { productionViewerControlDependencies, viewerMcpBindings, type ViewerControlDependencies } from "./bindings";
-import { createMcpToolService, McpDispatchVerdictError, McpToolRefusal, MemoryMcpReceiptStore, SqliteMcpReceiptStore } from "./server";
+import { createMcpToolService, createViewerMcpServer, McpDispatchVerdictError, McpToolRefusal, MemoryMcpReceiptStore, SqliteMcpReceiptStore } from "./server";
 
-/* The three Telegram bot tools reach the Viewer's agent route and nothing
+/* The Telegram bot tools reach the Viewer's agent route and nothing
    else (docs/design/telegram-bot-account.md, Decision 6). */
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-telegram-bot-"));
@@ -80,6 +83,78 @@ test("telegram_bot_send forwards links for the agent route to decide whether a t
   expect(dispatched[2]!.body).not.toHaveProperty("topicId");
 });
 
+test("reaction tools forward the chat and targeted message, preserving the custom emoji ID", async () => {
+  const reaction = { type: "custom_emoji", custom_emoji_id: "9007199254740993" };
+  const chat = "team-reports";
+  const answer = { chat, chatId: "-1000000000101", messageId: 517, reaction, setBy: { name: "Report Bot", username: null } };
+  dispatchAnswer = async () => answer;
+  expect(await bindings().telegram_bot_set_reaction({ clientRequestId: "reaction-set", chat, messageId: 517, reaction })).toEqual(answer);
+  expect(dispatched).toEqual([{
+    pathname: "/api/telegram/bot/agent",
+    body: { op: "set_reaction", clientRequestId: "reaction-set", chat, messageId: 517, reaction },
+    headers: expect.objectContaining({ [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY }),
+  }]);
+  await bindings().telegram_bot_reactions({ clientRequestId: "reaction-read", chat });
+  expect(reads).toEqual(["/api/telegram/bot/agent?op=reactions&chat=team-reports"]);
+});
+
+test("reaction tool envelopes preserve named refusals and replay an uncertain write without redispatch", async () => {
+  let writes = 0;
+  const viewer = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (req) => {
+    if (req.method === "GET") return telegramBotFailure(new TelegramBotError("rate_limited", "Telegram rate limit", { retryAfterSeconds: 4 }));
+    writes++;
+    return telegramBotFailure(writes === 1
+      ? new TelegramBotError("reaction_paid_unsupported", "Telegram bots cannot set paid reactions")
+      : new TelegramBotError("reaction_uncertain", "Telegram did not confirm whether the reaction was set"));
+  } });
+  const previousControl = process.env.LLV_VIEWER_CONTROL_URL;
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
+  try {
+    const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), new MemoryMcpReceiptStore());
+    const chat = "team-reports";
+    const read = await service.callTool("telegram_bot_reactions", { clientRequestId: "reaction-rate-limit", chat });
+    expect(read).toMatchObject({ ok: false, code: "rate_limited", retryable: true, details: { retryAfterSeconds: 4 } });
+    const paid = await service.callTool("telegram_bot_set_reaction", { clientRequestId: "reaction-paid", chat, messageId: 5, reaction: { type: "paid" } });
+    expect(paid).toMatchObject({ ok: false, code: "reaction_paid_unsupported", retryable: false });
+    const args = { clientRequestId: "reaction-uncertain", chat, messageId: 5, reaction: { type: "emoji", emoji: "👍" } };
+    expect(await service.callTool("telegram_bot_set_reaction", args)).toMatchObject({ ok: false, code: "reaction_uncertain", retryable: false, replayed: false });
+    expect(await service.callTool("telegram_bot_set_reaction", args)).toMatchObject({ ok: false, code: "reaction_uncertain", retryable: false, replayed: true });
+    expect(writes).toBe(2);
+  } finally {
+    if (previousControl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL;
+    else process.env.LLV_VIEWER_CONTROL_URL = previousControl;
+    viewer.stop(true);
+  }
+});
+
+test("the MCP protocol accepts one reaction and rejects arrays and out-of-range message IDs before dispatch", async () => {
+  const tool = "telegram_bot_set_reaction";
+  const service = createMcpToolService(bindings(), new MemoryMcpReceiptStore());
+  const server = createViewerMcpServer(service, [tool]);
+  const client = new Client({ name: "reaction-test", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const reaction = { type: "custom_emoji", custom_emoji_id: "9007199254740993" };
+    const args = { chat: "team-reports", messageId: 5, reaction };
+    for (const [clientRequestId, overrides] of [
+      ["array", { reaction: [reaction, reaction] }],
+      ["zero", { messageId: 0 }],
+      ["overflow", { messageId: 2147483648 }],
+    ] as const) {
+      expect((await client.callTool({ name: tool, arguments: { ...args, ...overrides, clientRequestId } })).isError).toBe(true);
+    }
+    expect(dispatched).toEqual([]);
+    const result = await client.callTool({ name: tool, arguments: { ...args, clientRequestId: "single" } });
+    expect(result.isError).not.toBe(true);
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]!.body).toEqual({ ...args, op: "set_reaction", clientRequestId: "single" });
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test("telegram_bot_send_media forwards album paths and captions with the caller capability", async () => {
   const images = [{ path: "/sandbox/one.jpg", caption: "One" }, { path: "/sandbox/two.png", caption: "Two" }];
   await bindings().telegram_bot_send_media({ clientRequestId: "media-1", chat: "team-reports", images, format: "html", topicId: 5, silent: true, conversationId: "forged" });
@@ -87,14 +162,17 @@ test("telegram_bot_send_media forwards album paths and captions with the caller 
   expect(dispatched[0]!.body).not.toHaveProperty("conversationId");
 });
 
-test("media send preserves send_uncertain through MCP and replays the refusal", async () => {
-  const viewer = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => telegramBotFailure(new TelegramBotError("send_uncertain", "Telegram did not confirm the album")) });
+test("media send preserves send_uncertain through MCP, and a repeat asks the Viewer again (#3786)", async () => {
+  let requests = 0;
+  const viewer = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => { requests += 1; return telegramBotFailure(new TelegramBotError("send_uncertain", "Telegram did not confirm the album")); } });
   process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
   try {
     const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), new MemoryMcpReceiptStore());
     const args = { clientRequestId: "media-uncertain", chat: "team-reports", images: [{ path: "/sandbox/one.jpg", caption: "One" }] };
     expect(await service.callTool("telegram_bot_send_media", args)).toMatchObject({ ok: false, code: "send_uncertain", retryable: false });
-    expect(await service.callTool("telegram_bot_send_media", args)).toMatchObject({ ok: false, code: "send_uncertain", replayed: true });
+    /* The Viewer holds the send claim under this key, so the repeat is its to answer. */
+    expect(await service.callTool("telegram_bot_send_media", args)).toMatchObject({ ok: false, code: "send_uncertain", retryable: false });
+    expect(requests).toBe(2);
   } finally {
     viewer.stop(true);
   }
@@ -108,7 +186,6 @@ test.each([
   const filename = path.join(receiptDir, "receipts.sqlite");
   let dispatches = 0;
   let httpSends = 0;
-  let sendState: "pending" | "sent" = "pending";
   const barrier = () => {
     let enter!: () => void;
     let release!: () => void;
@@ -120,26 +197,28 @@ test.each([
     };
   };
   let currentBarrier = barrier();
+  /* The Viewer's own send claim, one per clientRequestId: the first request
+     posts once, and every later request under that key is answered from it. */
+  const viewerClaims = new Map<string, { state: "pending" | "sent"; messageIds: number[] }>();
+  let settleBeforeReply = false;
+  const sent = (messageIds: number[]) => ({ chat: "team-reports", messageIds, attributedTo: { conversationId: "conversation_writer" } });
   const stores: SqliteMcpReceiptStore[] = [];
   const controlForRestart = (): ViewerControlDependencies => ({
     get: async () => ({ chats: [], limits: [] }),
     post: async () => ({}),
-    dispatch: async () => {
+    dispatch: async (_pathname, body) => {
       dispatches += 1;
-      if (dispatches === 1 || dispatches === 3) {
-        httpSends += 1;
-        if (dispatches === 1) {
-          currentBarrier.arrive();
-          await currentBarrier.wait;
-          return { chat: "team-reports", messageIds: [71], attributedTo: { conversationId: "conversation_writer" } };
-        }
-        sendState = "sent";
-        currentBarrier.arrive();
-        await currentBarrier.wait;
-        return { chat: "team-reports", messageIds: [72], attributedTo: { conversationId: "conversation_writer" } };
-      }
-      if (sendState === "pending") throw new McpDispatchVerdictError("the downstream Telegram send is still pending", { status: 502, code: "send_uncertain" });
-      return { chat: "team-reports", messageIds: [72], attributedTo: { conversationId: "conversation_writer" } };
+      const key = String((body as { clientRequestId?: unknown }).clientRequestId);
+      const held = viewerClaims.get(key);
+      if (held?.state === "sent") return sent(held.messageIds);
+      if (held) throw new McpDispatchVerdictError("the downstream Telegram send is still pending", { status: 502, code: "send_uncertain" });
+      httpSends += 1;
+      const claim = { state: settleBeforeReply ? "sent" as const : "pending" as const, messageIds: [70 + httpSends] };
+      viewerClaims.set(key, claim);
+      currentBarrier.arrive();
+      await currentBarrier.wait;
+      claim.state = "sent";
+      return sent(claim.messageIds);
     },
   });
   const args = { clientRequestId: "media-reopen-uncertain", chat: "team-reports", ...payload };
@@ -153,13 +232,19 @@ test.each([
     stores.push(reopenedStore);
     const reopened = createMcpToolService(viewerMcpBindings(undefined, controlForRestart()), reopenedStore);
     expect(await reopened.callTool(tool, args)).toMatchObject({ ok: false, code: "send_uncertain", retryable: false });
-    expect(await reopened.callTool(tool, args)).toMatchObject({ ok: false, code: "send_uncertain", replayed: true });
-    expect({ dispatches, httpSends }).toEqual({ dispatches: 2, httpSends: 1 });
+    /* The unknown answer is asked again at the Viewer, which still posts nothing (#3786). */
+    expect(await reopened.callTool(tool, args)).toMatchObject({ ok: false, code: "send_uncertain", retryable: false });
+    expect({ dispatches, httpSends }).toEqual({ dispatches: 3, httpSends: 1 });
     currentBarrier.release();
     await pending;
+    /* Once the post finished, the same key learns it. */
+    expect(await reopened.callTool(tool, args)).toMatchObject({ ok: true, messageIds: [71] });
+    expect(httpSends).toBe(1);
 
     /* A second restart boundary replays a completed downstream receipt. */
     currentBarrier = barrier();
+    settleBeforeReply = true;
+    const before = dispatches;
     const completedStore = new SqliteMcpReceiptStore(filename);
     stores.push(completedStore);
     const completed = createMcpToolService(viewerMcpBindings(undefined, controlForRestart()), completedStore);
@@ -169,10 +254,9 @@ test.each([
     const completedReopenedStore = new SqliteMcpReceiptStore(filename);
     stores.push(completedReopenedStore);
     const completedReopened = createMcpToolService(viewerMcpBindings(undefined, controlForRestart()), completedReopenedStore);
-    sendState = "sent";
     expect(await completedReopened.callTool(tool, completedArgs)).toMatchObject({ ok: true, messageIds: [72] });
     expect(await completedReopened.callTool(tool, completedArgs)).toMatchObject({ ok: true, messageIds: [72], replayed: true });
-    expect({ dispatches, httpSends }).toEqual({ dispatches: 4, httpSends: 2 });
+    expect({ dispatches: dispatches - before, httpSends }).toEqual({ dispatches: 2, httpSends: 2 });
     currentBarrier.release();
     await pendingCompleted;
   } finally {
@@ -258,8 +342,10 @@ test("through the MCP service, a send refusal answers with the bot's code and it
     const partial = await send("req-partial", new TelegramBotError("send_partial", "parts 1–2 of 3 were posted", { sentMessageIds: [80, 81] }));
     expect(partial).toMatchObject({ ok: false, code: "send_partial", retryable: false, details: { code: "send_partial", sentMessageIds: [80, 81] } });
 
-    /* The refusal is the key's answer: a replay never posts. */
-    expect(await send("req-uncertain", new TelegramBotError("chat_unknown", "a second dispatch"))).toMatchObject({ code: "send_uncertain", replayed: true });
+    /* A settled refusal is the key's answer: a replay never reaches the Viewer. */
+    expect(await send("req-chat_not_allowed", new TelegramBotError("chat_unknown", "a second dispatch"))).toMatchObject({ code: "chat_not_allowed", replayed: true });
+    /* An uncertain one is the Viewer's to answer, from the claim it holds under that key (#3786). */
+    expect(await send("req-uncertain", new TelegramBotError("send_uncertain", "the first send is still unconfirmed"))).toMatchObject({ ok: false, code: "send_uncertain", error: "the first send is still unconfirmed" });
   } finally {
     viewer.stop(true);
   }

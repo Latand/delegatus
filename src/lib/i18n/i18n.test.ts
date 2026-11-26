@@ -159,15 +159,11 @@ describe("attach copy (issue #68) is present in both locales", () => {
     "attach.readonly",
     "attach.copy",
     "attach.copyReadonly",
-    "attach.hint",
     "attach.readonlyHint",
     "attach.loading",
     "attach.copied",
     "attach.copiedReadonly",
-    "attach.stale",
-    "attach.restarted",
     "attach.unavailable",
-    "attach.badRequest",
     "attach.network",
     "attach.clipboard",
     "attach.refresh",
@@ -178,13 +174,6 @@ describe("attach copy (issue #68) is present in both locales", () => {
       expect(key in en, `en ${key}`).toBe(true);
       expect(key in uk, `uk ${key}`).toBe(true);
     }
-  });
-
-  test("the stale/restart copy tells the user to refresh in both languages", () => {
-    expect(en["attach.stale"]).toBe("This pane changed or closed. Refresh and try again.");
-    expect(uk["attach.stale"]).toContain("Онови");
-    expect(en["attach.restarted"]).toContain("Refresh");
-    expect(uk["attach.restarted"]).toContain("Онови");
   });
 });
 
@@ -227,30 +216,12 @@ describe("mandate card copy (#1166)", () => {
   });
 });
 
-describe("copy that renders on a structured host names no transport (#1301)", () => {
-  /* The question card's note is shown by the `pending && !hasPane` branch,
-     which is every structured conversation: `hasPane` is `paneTarget !== null`
-     and a structured host resolves no pane. It used to read "tmux pane
-     unavailable", sending whoever was answering to look for a server that does
-     not run here. */
-  test("the no-pane note states what is missing without naming tmux", () => {
+describe("no interface copy names tmux", () => {
+  test("neither locale mentions tmux in any string", () => {
     for (const [locale, dictionary] of [["en", en], ["uk", uk]] as const) {
-      const value = dictionary["question.noPane"];
-      expect(typeof value).toBe("string");
-      expect(`${locale}:${value as string}`.toLowerCase()).not.toContain("tmux");
+      const offenders = Object.entries(dictionary).filter(([, value]) => /tmux/i.test(String(value))).map(([key]) => `${locale}:${key}`);
+      expect(offenders).toEqual([]);
     }
-  });
-
-  /* Guards the exemption: the attach row really does drive tmux — it copies a
-     `tmux attach` command for a pane — so its copy must keep saying so, and a
-     later sweep of the word must not swallow it. */
-  test("attach copy still names the tmux it actually drives", () => {
-    expect(en["attach.hint"]).toContain("tmux");
-    expect(en["attach.restarted"]).toContain("tmux");
-    /* What is unavailable is the tmux server, not the HTTP endpoint: the route
-       is the shared conversation-host handler and answers fine. */
-    expect(en["attach.unavailable"]).toContain("tmux server");
-    expect(en["attach.unavailable"]).not.toContain("endpoint");
   });
 });
 

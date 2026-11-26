@@ -1,8 +1,9 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 /* Everything here runs against a throwaway state directory: pipelines, the
    binding record and the role registry all resolve inside this sandbox, and
@@ -35,11 +36,17 @@ const RESERVED = "acct-reserved";
 const SPARE = "acct-spare";
 const REPO = path.join(sandbox, "repo");
 fs.mkdirSync(REPO, { recursive: true });
+const initRepository = (dir: string) => { fs.mkdirSync(dir, { recursive: true }); execFileSync("git", ["init", "-q", dir]);
+  execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-q", "-m", "initial"], { cwd: dir }); };
+initRepository(REPO);
 
-const fixtureExec: PipelinePorts["exec"] = (command, args) => {
+const fixtureExec: PipelinePorts["exec"] = (command, args, cwd, env, options) => {
   if (command === "git" && args[0] === "remote" && args[1] === "get-url") {
     return { code: 2, stdout: "", stderr: "No such remote" };
   }
+  /* The checkouts below are empty repositories with no remotes: every other
+     read the engine makes of them is answered by git itself. */
+  if (command === "git") return defaultPipelinePorts().exec(command, args, cwd, env, options);
   throw new Error(`unexpected fixture command: ${command} ${args.join(" ")}`);
 };
 
@@ -59,7 +66,7 @@ const NEBULA = "project-nebula";
 const VEGA = "project-vega";
 const OTHER_REPO = path.join(sandbox, "repo-other");
 const SHARED_REPO = path.join(sandbox, "repo-shared");
-for (const dir of [OTHER_REPO, SHARED_REPO]) fs.mkdirSync(dir, { recursive: true });
+for (const dir of [OTHER_REPO, SHARED_REPO]) initRepository(dir);
 const PROJECT_BY_REPO: Record<string, string> = { [REPO]: ATLAS, [OTHER_REPO]: NEBULA, [SHARED_REPO]: VEGA };
 const ALLOWED_BY_PROJECT: Record<string, string[]> = { [ATLAS]: [RESERVED], [NEBULA]: [SPARE], [VEGA]: [RESERVED, SPARE] };
 
@@ -433,6 +440,208 @@ test("update-draft moves a draft whose pin the destination project allows", asyn
   expect(moved.error).toBeUndefined();
   expect(moved.pipeline?.project).toBe(VEGA);
   expect(moved.pipeline?.stages[0]?.account).toBe(RESERVED);
+});
+
+/* A member's lane runs on an automatically chosen account where its project has
+   no account list: nothing a member names is stored. The project stays free for
+   the owner and for installation lanes, as the earlier tests show. */
+describe("a lane bound to a member", () => {
+  const WS = `w_${"e".repeat(32)}`;
+  const COMET = "project-comet";
+  const COMET_REPO = path.join(sandbox, "repo-comet");
+  initRepository(COMET_REPO);
+  const memberId = "m_lane_member";
+  let principal: { memberId: string; workspaceId: string };
+
+  const memberPorts = (): PipelinePorts => ({
+    ...portsAcross(),
+    preflightRepo: (repoDir: string) => ({ ok: true, repoDir, gitCommonDir: path.join(repoDir, ".git"), worktreeParent: sandbox }),
+    projectForCwd: (cwd: string) => (cwd === COMET_REPO ? COMET : PROJECT_BY_REPO[cwd] ?? ATLAS),
+    allowedAccountIds: (project: string) => (project === COMET ? null : project === ATLAS ? null : ALLOWED_BY_PROJECT[project] ?? null),
+  });
+
+  beforeEach(async () => {
+    const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
+    resetTeamStoreForTests();
+    fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "team"), { recursive: true, force: true });
+    const { claimInstall } = await import("@/lib/team/members");
+    const { createWorkspace } = await import("@/lib/team/workspaces");
+    const store = teamStore();
+    const owner = claimInstall(store, "Owner", { surface: "desktop", browser: "chrome" }).member;
+    store.insertMember({ id: memberId, name: "Member", role: "member", status: "active", color: "teal", telegram: null,
+      createdAt: new Date().toISOString(), createdBy: owner.id, revokedAt: null });
+    createWorkspace(store, owner, { id: WS, name: "Alpha", projects: [ATLAS, VEGA, COMET] });
+    store.putWorkspaceMember(WS, memberId, "member", owner.id, new Date().toISOString());
+    principal = { memberId, workspaceId: WS };
+  });
+  afterAll(async () => { (await import("@/lib/team/store")).resetTeamStoreForTests(); });
+
+  const create = (account: string | undefined, ports = memberPorts()) => createPipelineFromRequest(draft(account), ports, { workspace: principal, allowOperatorDraftWithoutLineage: true });
+
+  test("create refuses a stage that names an account where the project has no account list, and stores nothing", async () => {
+    const refused = await create(RESERVED);
+    expect(refused.status).toBe(400);
+    expect(refused.violations?.[0]?.field).toBe("stages[0].account");
+    expect(refused.error).toContain("no ");
+    expect(refused.pipeline).toBeUndefined();
+    expect(loadPipelines()).toEqual([]);
+    /* The same answer for an account that exists and one that never did. */
+    const unknown = await create("acct-never-existed");
+    expect(unknown.status).toBe(400);
+    expect(unknown.violations?.[0]?.field).toBe("stages[0].account");
+    expect(unknown.error?.replaceAll("acct-never-existed", RESERVED)).toBe(refused.error);
+    /* A stage that names none is stored; so is a pin inside a set pool. */
+    expect((await create(undefined)).pipeline?.workspace).toEqual(principal);
+    expect((await createPipelineFromRequest({ ...draft(RESERVED), repoDir: SHARED_REPO }, memberPorts(), { workspace: principal, allowOperatorDraftWithoutLineage: true })).error).toBeUndefined();
+  });
+
+  test("add-stage and override-stage refuse a named account without a list and leave the lane as it was", async () => {
+    const created = await create(undefined);
+    const id = created.pipeline!.id;
+    const added = await patchPipeline(id, { action: "add-stage", stage: { id: "verify", kind: "run", prompt: "Verify", next: null, account: RESERVED } }, memberPorts());
+    expect(added.status).toBe(400);
+    expect(added.violations?.[0]?.field).toMatch(/^stages\[\d+\]\.account$/);
+    const overridden = await patchPipeline(id, { action: "override-stage", stageId: "build", account: RESERVED }, memberPorts());
+    expect(overridden.status).toBe(400);
+    expect(overridden.violations?.[0]?.field).toBe("stages[0].account");
+    const stored = loadPipelines().find(pipeline => pipeline.id === id)!;
+    expect(stored.stages.map(stage => [stage.id, stage.account])).toEqual([["build", undefined]]);
+    /* Clearing a pin, and any other override, still work. */
+    expect((await patchPipeline(id, { action: "override-stage", stageId: "build", account: null }, memberPorts())).error).toBeUndefined();
+  });
+
+  test("a service tier refusal names no account the member is not shown, whatever account the stage names, and the owner's still does", async () => {
+    const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+    const hidden = createManagedCodexAccount("Hidden Account Label");
+    fs.writeFileSync(path.join(hidden.home, "auth.json"), "{}");
+    fs.writeFileSync(path.join(hidden.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-5.6-terra", service_tiers: [] }] }));
+    const request = (account?: string) => ({ ...draft(account), stages: [{ ...draft(account).stages[0]!, engine: "codex" as const, model: "gpt-5.6-terra", effort: "high", serviceTier: "priority" }] });
+    const ports = { ...memberPorts(), engineReadiness: () => "connected" as const };
+    const answers: string[] = [];
+    for (const account of [undefined, hidden.id, "acct-never-existed"]) {
+      const refused = await createPipelineFromRequest(request(account), ports, { workspace: principal, allowOperatorDraftWithoutLineage: true });
+      expect(refused.status).toBe(400);
+      expect(refused.pipeline).toBeUndefined();
+      answers.push(refused.error ?? "");
+      expect(refused.error).not.toContain(hidden.label);
+    }
+    /* Only the id the caller typed comes back; the stage that names none learns of no account. */
+    expect(answers[0]).not.toContain(hidden.id);
+    expect(answers[0]).toContain("no account offers serviceTier priority for model gpt-5.6-terra");
+    /* An account that exists and one that never did get the same answer. */
+    expect(answers[2]!.replaceAll("acct-never-existed", hidden.id)).toBe(answers[1]);
+    expect(loadPipelines()).toEqual([]);
+    /* The installation's own lane keeps the full diagnosis. */
+    const owner = await createPipelineFromRequest(request(), ports, { allowOperatorDraftWithoutLineage: true });
+    expect(owner.status).toBe(400);
+    expect(owner.error).toContain(hidden.label);
+  });
+
+  test("a member who first edits a lane of the owner's cannot pin an account where the project has no list, and nothing is stored", async () => {
+    const created = await createPipelineFromRequest(draft(), memberPorts(), { allowOperatorDraftWithoutLineage: true });
+    expect(created.error).toBeUndefined();
+    const id = created.pipeline!.id;
+    expect(created.pipeline?.workspace).toBeUndefined();
+    const before = JSON.stringify(loadPipelines().find(pipeline => pipeline.id === id));
+    const added = await patchPipeline(id, { action: "add-stage", stage: { id: "verify", kind: "run", prompt: "Verify", next: null, account: RESERVED } }, memberPorts(), undefined, undefined, memberId);
+    expect(added.status).toBe(400);
+    const overridden = await patchPipeline(id, { action: "override-stage", stageId: "build", account: RESERVED }, memberPorts(), undefined, undefined, memberId);
+    expect(overridden.status).toBe(400);
+    const moved = await patchPipeline(id, { action: "update-draft", repoDir: COMET_REPO, stages: [{ ...draft(RESERVED).stages[0]! }] } as never, memberPorts(), undefined, undefined, memberId);
+    expect(moved.error).toBeDefined();
+    /* No pin, no principal, no partial change. */
+    expect(JSON.stringify(loadPipelines().find(pipeline => pipeline.id === id))).toBe(before);
+    /* The owner's own edit and a member's edit that names none still go through. */
+    expect((await patchPipeline(id, { action: "override-stage", stageId: "build", account: RESERVED }, memberPorts())).error).toBeUndefined();
+    expect((await patchPipeline(id, { action: "override-stage", stageId: "build", account: null }, memberPorts(), undefined, undefined, memberId)).error).toBeUndefined();
+    expect(loadPipelines().find(pipeline => pipeline.id === id)?.workspace).toEqual(principal);
+  });
+
+  test("a member's first edit of an owner's lane may pin an account the project's list allows", async () => {
+    const created = await createPipelineFromRequest({ ...draft(), repoDir: SHARED_REPO }, memberPorts(), { allowOperatorDraftWithoutLineage: true });
+    const id = created.pipeline!.id;
+    const edited = await patchPipeline(id, { action: "override-stage", stageId: "build", account: RESERVED }, memberPorts(), undefined, undefined, memberId);
+    expect(edited.error).toBeUndefined();
+    expect(loadPipelines().find(pipeline => pipeline.id === id)).toMatchObject({ workspace: principal, stages: [{ account: RESERVED }] });
+  });
+
+  test("a member's lane that kept a named account after its project's list was removed is refused at launch before any account is read", async () => {
+    clearAccountFixture(BINDINGS_SOURCE);
+    const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => { throw new Error("ACCOUNT_RESOLVER_REACHED"); });
+    try {
+      const message = await defaultPipelinePorts().spawnAgent({ ...spawnInput(RESERVED), workspace: principal }, () => {}).then(() => "launched", (error: Error) => error.message);
+      expect(message).toContain("no claude account list");
+      expect(resolve).not.toHaveBeenCalled();
+    } finally { resolve.mockRestore(); }
+  });
+
+  test("a member's lane whose list is removed while its account is being selected is refused before a reservation", async () => {
+    const reservations: unknown[] = [];
+    seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "claude", accountId: RESERVED, project: ATLAS, createdAt: new Date().toISOString() }] });
+    const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => {
+      /* The list is removed while the account is being selected. */
+      clearAccountFixture(BINDINGS_SOURCE);
+      return { kind: "available", account: { accountId: RESERVED } } as never;
+    });
+    try {
+      const message = await defaultPipelinePorts().spawnAgent({ ...spawnInput(RESERVED), workspace: principal }, (reservation) => { reservations.push(reservation); })
+        .then(() => "launched", (error: Error) => error.message);
+      expect(resolve).toHaveBeenCalled();
+      expect(message).toContain("no claude account list");
+      expect(reservations).toEqual([]);
+    } finally { resolve.mockRestore(); }
+  });
+
+  test("a launch whose account Delegatus chose, and the owner's launch, still reach selection without a list", async () => {
+    clearAccountFixture(BINDINGS_SOURCE);
+    const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => { throw new Error("ACCOUNT_RESOLVER_REACHED"); });
+    try {
+      for (const input of [{ ...spawnInput(RESERVED), workspace: principal, accountChosenAutomatically: true }, spawnInput(RESERVED)]) {
+        const message = await defaultPipelinePorts().spawnAgent(input, () => {}).then(() => "launched", (error: Error) => error.message);
+        expect(message).toBe("ACCOUNT_RESOLVER_REACHED");
+      }
+    } finally { resolve.mockRestore(); }
+  });
+
+  test("a member's automatic launch refused for capacity names no account or reset time of the unlisted pool, and the owner's refusal does", async () => {
+    clearAccountFixture(BINDINGS_SOURCE);
+    for (const kind of ["exhausted", "unavailable"] as const) {
+      const resolve = spyOn(accountManager, "resolveProjectSpawn").mockImplementation(() => (kind === "exhausted"
+        ? { kind, resetsAt: 1_900_000_000, allowedAccountIds: ["hidden-account-a", "hidden-account-b"] }
+        : { kind, allowedAccountIds: ["hidden-account-a", "hidden-account-b"] }));
+      try {
+        const member = await defaultPipelinePorts().spawnAgent({ ...spawnInput(null), workspace: principal }, () => {}).then(() => "launched", (error: Error) => error.message);
+        expect(member).toBe(`no claude account can take work for project ${ATLAS} right now`);
+        const owner = await defaultPipelinePorts().spawnAgent(spawnInput(null), () => {}).then(() => "launched", (error: Error) => error.message);
+        expect(owner).toContain("hidden-account-a");
+      } finally { resolve.mockRestore(); }
+    }
+  });
+
+  test("a member's stage that cannot get its service tier is refused at launch without naming an account, and the owner's launch names them", async () => {
+    const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
+    const hidden = createManagedCodexAccount("Hidden Launch Label");
+    fs.writeFileSync(path.join(hidden.home, "auth.json"), "{}");
+    fs.writeFileSync(path.join(hidden.home, "models_cache.json"), JSON.stringify({ models: [{ slug: "gpt-5.6-terra", service_tiers: [] }] }));
+    clearAccountFixture(BINDINGS_SOURCE);
+    const base = spawnInput(null);
+    const input = { ...base, role: { ...base.role, engine: "codex" as const, model: "gpt-5.6-terra", effort: "high", serviceTier: "priority", serviceTierSource: "explicit" as const } };
+    const memberError = await defaultPipelinePorts().spawnAgent({ ...input, workspace: principal, clientAttemptId: "member-tier-launch" }, () => {}).then(() => "", (error: Error) => error.message);
+    expect(memberError).toBe("no account offers serviceTier priority for model gpt-5.6-terra");
+    const ownerError = await defaultPipelinePorts().spawnAgent({ ...input, clientAttemptId: "owner-tier-launch" }, () => {}).then(() => "", (error: Error) => error.message);
+    expect(ownerError).toContain(hidden.label);
+  });
+
+  test("moving a draft with a pinned account to a project without a list is refused and the draft stays", async () => {
+    const created = await createPipelineFromRequest({ ...draft(RESERVED), repoDir: SHARED_REPO }, memberPorts(), { workspace: principal, allowOperatorDraftWithoutLineage: true });
+    const id = created.pipeline!.id;
+    const saved = loadPipelines()[0]!;
+    delete saved.delivery; savePipelines([saved]);
+    const moved = await patchPipeline(id, { action: "update-draft", repoDir: COMET_REPO }, memberPorts());
+    expect(moved.status).toBe(400);
+    expect(moved.violations?.[0]?.field).toBe("stages[0].account");
+    expect(loadPipelines()[0]!.project).toBe(VEGA);
+  });
 });
 
 /* The launch seam itself. A refusal here is what parks the stage with the

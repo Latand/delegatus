@@ -1,0 +1,3077 @@
+{
+  "campaigns": [
+    {
+      "name": "typecheck",
+      "exitStatus": 0,
+      "terminalReceiptAt": "2026-11-12T10:26:45.296548+00:00"
+    },
+    {
+      "name": "tests",
+      "exitStatus": 1,
+      "terminalReceiptAt": "2026-11-12T10:28:09.887336+00:00"
+    },
+    {
+      "name": "tests-2",
+      "exitStatus": 124,
+      "terminalReceiptAt": "2026-11-12T11:28:28.736528+00:00"
+    },
+    {
+      "name": "ui-lint",
+      "exitStatus": 1,
+      "terminalReceiptAt": "2026-11-12T11:30:23.899607+00:00"
+    },
+    {
+      "name": "completion",
+      "exitStatus": 0,
+      "terminalReceiptAt": "2026-11-12T12:04:47.389058+00:00"
+    },
+    {
+      "name": "renewal",
+      "exitStatus": 0,
+      "terminalReceiptAt": "2026-11-12T12:16:38.846883+00:00"
+    },
+    {
+      "name": "final-validation",
+      "exitStatus": 0,
+      "terminalReceiptAt": "2026-11-12T12:22:33.475942+00:00"
+    },
+    {
+      "name": "runner-integration",
+      "exitStatus": 0,
+      "terminalReceiptAt": "2026-11-12T12:25:46.430625+00:00"
+    }
+  ],
+  "requirement": "A hidden lane is hidden consistently in the UI and through MCP; a new provisioning decision returns to attention without a round.",
+  "checkedAt": "2026-11-12T12:26:01.934496+00:00",
+  "mergedMain": "3c086dfc91aa650bfabe0417eaeaf74604745d3f",
+  "procedure": {
+    "workingCopies": "Fresh scratch exports with the shared installed, unchanged lockfile dependency tree. Edits and commits remain in the assigned worktree.",
+    "wrapper": "Controller-supplied STAGE_GATE (gate-slot.sh), recorded once per campaign; each row is a separate command under that admission.",
+    "isolation": {
+      "HOME": "CHECK_ROOT/home",
+      "XDG_CONFIG_HOME": "CHECK_ROOT/xdg_config_home",
+      "XDG_CACHE_HOME": "CHECK_ROOT/xdg_cache_home",
+      "XDG_DATA_HOME": "CHECK_ROOT/xdg_data_home",
+      "LLV_STATE_DIR": "CHECK_ROOT/llv_state_dir",
+      "TMPDIR": "CHECK_ROOT/tmpdir",
+      "LLV_VIEWER_CONTROL_URL": "http://127.0.0.1:1",
+      "LLV_GATE_RUNNER": "off",
+      "CODEX_HOME": "CHECK_ROOT/codex_home",
+      "CLAUDE_CONFIG_DIR": "CHECK_ROOT/claude_config_dir",
+      "GEMINI_CLI_HOME": "CHECK_ROOT/gemini_cli_home",
+      "LLV_CODEX_HOME": "CHECK_ROOT/llv_codex_home",
+      "LLV_CLAUDE_HOME": "CHECK_ROOT/llv_claude_home",
+      "NODE_ENV": "test"
+    },
+    "execution": "Heavy checks sequential. Every test command names one file. Failing branch files get fresh main exports with the same isolation. Raw logs and the driver are retained in the run evidence.",
+    "revisionNote": "Later main merges change comparator reporting and Windows-specific check cleanup. Product source is byte-identical to the first merged tree; the Linux runner branch is unchanged. Typecheck and the touched tool test files are renewed after each merge."
+  },
+  "sourceSha256": {
+    "src/components/attention/needsYouPanel.fixture.tsx": "3cbc990462382f4fa04506fee96f19f00f0c470bae6831f53ebb24819c9a4395",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "328ae7aba90b45c6b40dbebb0b1cb01148a806e7b834ff0a3e2e9e8e2dbbc442",
+    "src/components/mobile/mobileBoardModel.ts": "44c06e44b9a8b081021f5c1212b1f6e423dc337c55c244fdaeffe92fc8f096da",
+    "src/lib/mcp/pipelineVisibility.integration.test.ts": "f05b84c5822387810a0aecae8bb97c95ce4c4ef9aded4c3ce3088be6d54be4e1",
+    "src/lib/pipelines/engine.ts": "9f548803c02c5a2b1b1a331a4d21beb718fc78907170b561d01db505b3fee98c",
+    "src/lib/pipelines/laneMovement.ts": "e929dd8484607a532faabe217cd5de56a8ca847246fba23c244fd71dc9823a3d",
+    "src/lib/pipelines/listProjection.test.ts": "704d8a5395c7648174e7590330eb94c4954bcc4136bdae12526a8984343bed2d",
+    "src/lib/pipelines/listProjection.ts": "29fe9f5049b512b05c2136857e1bcf57b37dce3d28b65a518dc2f690ff497606"
+  },
+  "headTestTotals": {
+    "pass": 3321,
+    "fail": 16,
+    "skip": 318,
+    "expect() calls": 24874
+  },
+  "distinctHeadTestFiles": 101,
+  "newFailures": 0,
+  "matchingMainFailures": [
+    {
+      "file": "./src/lib/pipelines/engine.provisioning.test.ts",
+      "headExitStatus": 1,
+      "baseExitStatus": 1,
+      "headCounts": {
+        "pass": 70,
+        "fail": 4,
+        "skip": 0,
+        "expect() calls": 377
+      },
+      "baseCounts": {
+        "pass": 70,
+        "fail": 4,
+        "skip": 0,
+        "expect() calls": 377
+      },
+      "failures": [
+        "portable provisioning controller settles a real Git base without timeout: fetch",
+        "portable provisioning controller settles a real Git base without timeout: pinned",
+        "portable provisioning controller settles a real Git base without timeout: failed",
+        "(unnamed)"
+      ]
+    },
+    {
+      "file": "./src/lib/pipelines/engine.proactive.part2.test.ts",
+      "headExitStatus": 1,
+      "baseExitStatus": 1,
+      "headCounts": {
+        "pass": 50,
+        "fail": 2,
+        "skip": 0,
+        "expect() calls": 445
+      },
+      "baseCounts": {
+        "pass": 50,
+        "fail": 2,
+        "skip": 0,
+        "expect() calls": 445
+      },
+      "failures": [
+        "unadopted merge custody survives restart: head-changed",
+        "unadopted merge custody survives restart: review-changed"
+      ]
+    },
+    {
+      "file": "./src/lib/pipelines/engine.routing.test.ts",
+      "headExitStatus": 1,
+      "baseExitStatus": 1,
+      "headCounts": {
+        "pass": 99,
+        "fail": 8,
+        "skip": 0,
+        "expect() calls": 700
+      },
+      "baseCounts": {
+        "pass": 99,
+        "fail": 8,
+        "skip": 0,
+        "expect() calls": 700
+      },
+      "failures": [
+        "a stage conversation switched to another account continues on the message held for the switch and settles on the successor's verdict without the fail edge (#1695 K6c)",
+        "a replaced attempt names its cause when no restart happened: dead",
+        "a replaced attempt names its cause when no restart happened: idle",
+        "a replaced attempt names its cause when no restart happened: stalled",
+        "a stage that keeps working after its turn ended keeps its host through the recovery tick and the deferred cursor write",
+        "a descendant that outlives the runtime's release is still signalled, and the attempt is replaced",
+        "an attempt that worked on after a restart and is stopped for silence later is not called a restart",
+        "an attempt that worked on after a restart and whose host is found gone later is not called a restart"
+      ]
+    },
+    {
+      "file": "./src/lib/pipelines/engine.activation.test.ts",
+      "headExitStatus": 1,
+      "baseExitStatus": 1,
+      "headCounts": {
+        "pass": 52,
+        "fail": 1,
+        "skip": 0,
+        "expect() calls": 332
+      },
+      "baseCounts": {
+        "pass": 52,
+        "fail": 1,
+        "skip": 0,
+        "expect() calls": 332
+      },
+      "failures": [
+        "an internal terminal pass an older build left waiting on publication closes without the network (#1692)"
+      ]
+    },
+    {
+      "file": "./src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+      "headExitStatus": 1,
+      "baseExitStatus": 1,
+      "headCounts": {
+        "pass": 8,
+        "fail": 1,
+        "skip": 0,
+        "expect() calls": 64
+      },
+      "baseCounts": {
+        "pass": 8,
+        "fail": 1,
+        "skip": 0,
+        "expect() calls": 64
+      },
+      "failures": [
+        "One more round reads the revision the operator saw and grants exactly one round, as the desktop menu does"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "label": "typecheck",
+      "tree": "head",
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit"
+      ],
+      "exitStatus": 0,
+      "counts": {},
+      "durationSeconds": 511.236,
+      "log": "types/001-head.log",
+      "campaign": "types",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5"
+    },
+    {
+      "label": "./src/lib/mcp/pipelineVisibility.integration.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/mcp/pipelineVisibility.integration.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 227
+      },
+      "durationSeconds": 5.086,
+      "log": "tests/001-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/listProjection.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/listProjection.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 28,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 90
+      },
+      "durationSeconds": 0.868,
+      "log": "tests/002-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/components/mobile/mobileBoardModel.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/components/mobile/mobileBoardModel.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 18,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 114
+      },
+      "durationSeconds": 0.817,
+      "log": "tests/003-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.rolePrivacyEffects.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.rolePrivacyEffects.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 27,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 27
+      },
+      "durationSeconds": 131.257,
+      "log": "tests/004-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerBudgetKinds.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 28,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 147
+      },
+      "durationSeconds": 40.857,
+      "log": "tests/005-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 6,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 18
+      },
+      "durationSeconds": 79.467,
+      "log": "tests/006-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.recoveryAuthority.part2.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 86,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 478
+      },
+      "durationSeconds": 87.638,
+      "log": "tests/007-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerBudget.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerBudget.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 42,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 172
+      },
+      "durationSeconds": 37.179,
+      "log": "tests/008-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerBudgetOutput.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerBudgetOutput.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 15
+      },
+      "durationSeconds": 71.81,
+      "log": "tests/009-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.recoveryAdmission.part2.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 116,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 306
+      },
+      "durationSeconds": 68.008,
+      "log": "tests/010-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerReset.part3.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerReset.part3.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 27,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 177
+      },
+      "durationSeconds": 83.544,
+      "log": "tests/011-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.provisioning.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.provisioning.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 70,
+        "fail": 4,
+        "skip": 0,
+        "expect() calls": 377
+      },
+      "durationSeconds": 140.332,
+      "log": "tests/012-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [
+        "portable provisioning controller settles a real Git base without timeout: fetch",
+        "portable provisioning controller settles a real Git base without timeout: pinned",
+        "portable provisioning controller settles a real Git base without timeout: failed",
+        "(unnamed)"
+      ],
+      "betweenTestsErrors": 3,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.provisioning.test.ts",
+      "tree": "main",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.provisioning.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 70,
+        "fail": 4,
+        "skip": 0,
+        "expect() calls": 377
+      },
+      "durationSeconds": 141.573,
+      "log": "tests/013-main.log",
+      "campaign": "tests",
+      "testedRevision": "2614b079b3f174eb06bb65d9311460ea57aa6fee",
+      "failures": [
+        "portable provisioning controller settles a real Git base without timeout: fetch",
+        "portable provisioning controller settles a real Git base without timeout: pinned",
+        "portable provisioning controller settles a real Git base without timeout: failed",
+        "(unnamed)"
+      ],
+      "betweenTestsErrors": 3,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.mechanicalRecovery.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.mechanicalRecovery.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 42,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 822
+      },
+      "durationSeconds": 169.283,
+      "log": "tests/014-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.historyWrites.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.historyWrites.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 10,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 108
+      },
+      "durationSeconds": 8.749,
+      "log": "tests/015-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.succession.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.succession.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 32,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 149
+      },
+      "durationSeconds": 95.883,
+      "log": "tests/016-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.creation.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.creation.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 113,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 722
+      },
+      "durationSeconds": 85.27,
+      "log": "tests/017-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.missingWorktree.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.missingWorktree.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 35,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 352
+      },
+      "durationSeconds": 75.452,
+      "log": "tests/018-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.roleMemoryDispatch.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.roleMemoryDispatch.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 110,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 1155
+      },
+      "durationSeconds": 128.425,
+      "log": "tests/019-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.recoveredPending.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.recoveredPending.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 43,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 622
+      },
+      "durationSeconds": 29.831,
+      "log": "tests/020-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.containment.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.containment.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 55,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 402
+      },
+      "durationSeconds": 58.55,
+      "log": "tests/021-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.closeAttempts.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.closeAttempts.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 50,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 323
+      },
+      "durationSeconds": 7.129,
+      "log": "tests/022-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.controllerPass.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.controllerPass.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 74,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 732
+      },
+      "durationSeconds": 68.611,
+      "log": "tests/023-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.pauseMetadata.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.pauseMetadata.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 19,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 47
+      },
+      "durationSeconds": 4.326,
+      "log": "tests/024-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.settlementPreparation.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.settlementPreparation.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 31,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 544
+      },
+      "durationSeconds": 33.136,
+      "log": "tests/025-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerChains.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerChains.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 16,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 96
+      },
+      "durationSeconds": 49.608,
+      "log": "tests/026-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 15
+      },
+      "durationSeconds": 78.88,
+      "log": "tests/027-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerBudgetChains.part2.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerBudgetChains.part2.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 18,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 82
+      },
+      "durationSeconds": 85.32,
+      "log": "tests/028-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.recoveryAuthority.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.recoveryAuthority.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 98,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 388
+      },
+      "durationSeconds": 90.157,
+      "log": "tests/029-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.controllerSnapshot.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.controllerSnapshot.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 2,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 7
+      },
+      "durationSeconds": 6.536,
+      "log": "tests/030-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.succession.part3.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.succession.part3.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 105,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 530
+      },
+      "durationSeconds": 104.757,
+      "log": "tests/031-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.settlement.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.settlement.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 121,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 1016
+      },
+      "durationSeconds": 117.818,
+      "log": "tests/032-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.accountGuard.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.accountGuard.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 31,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 161
+      },
+      "durationSeconds": 47.22,
+      "log": "tests/033-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.launchLease.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.launchLease.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 15,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 15
+      },
+      "durationSeconds": 28.891,
+      "log": "tests/034-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.succession.part2.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.succession.part2.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 99,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 651
+      },
+      "durationSeconds": 64.295,
+      "log": "tests/035-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.cloud.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.cloud.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 134,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 1301
+      },
+      "durationSeconds": 186.631,
+      "log": "tests/036-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.claudeCloud.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.claudeCloud.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 11,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 93
+      },
+      "durationSeconds": 14.933,
+      "log": "tests/037-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerBudgetChains.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerBudgetChains.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 18,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 82
+      },
+      "durationSeconds": 126.46,
+      "log": "tests/038-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.accounting.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.accounting.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 8,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 66
+      },
+      "durationSeconds": 21.399,
+      "log": "tests/039-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.rolePrivacy.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.rolePrivacy.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 20,
+        "fail": 0,
+        "skip": 1,
+        "expect() calls": 178
+      },
+      "durationSeconds": 64.3,
+      "log": "tests/040-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.proactive.part2.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.proactive.part2.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 50,
+        "fail": 2,
+        "skip": 0,
+        "expect() calls": 445
+      },
+      "durationSeconds": 239.183,
+      "log": "tests/041-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [
+        "unadopted merge custody survives restart: head-changed",
+        "unadopted merge custody survives restart: review-changed"
+      ],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.proactive.part2.test.ts",
+      "tree": "main",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.proactive.part2.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 50,
+        "fail": 2,
+        "skip": 0,
+        "expect() calls": 445
+      },
+      "durationSeconds": 131.465,
+      "log": "tests/042-main.log",
+      "campaign": "tests",
+      "testedRevision": "2614b079b3f174eb06bb65d9311460ea57aa6fee",
+      "failures": [
+        "unadopted merge custody survives restart: head-changed",
+        "unadopted merge custody survives restart: review-changed"
+      ],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.suspendedRetry.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.suspendedRetry.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 21,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 193
+      },
+      "durationSeconds": 17.803,
+      "log": "tests/043-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.recoveryAdmission.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.recoveryAdmission.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 65,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 411
+      },
+      "durationSeconds": 47.691,
+      "log": "tests/044-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 15
+      },
+      "durationSeconds": 67.651,
+      "log": "tests/045-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 6,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 18
+      },
+      "durationSeconds": 62.208,
+      "log": "tests/046-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.spawnSilence.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.spawnSilence.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 25,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 132
+      },
+      "durationSeconds": 22.771,
+      "log": "tests/047-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.recovery.part2.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.recovery.part2.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 85,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 605
+      },
+      "durationSeconds": 59.373,
+      "log": "tests/048-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.terminalBudget.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.terminalBudget.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 11,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 136
+      },
+      "durationSeconds": 38.985,
+      "log": "tests/049-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.spawnRetry.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.spawnRetry.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 103,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 1091
+      },
+      "durationSeconds": 75.452,
+      "log": "tests/050-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.routing.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.routing.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 99,
+        "fail": 8,
+        "skip": 0,
+        "expect() calls": 700
+      },
+      "durationSeconds": 95.493,
+      "log": "tests/051-head.log",
+      "campaign": "tests",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [
+        "a stage conversation switched to another account continues on the message held for the switch and settles on the successor's verdict without the fail edge (#1695 K6c)",
+        "a replaced attempt names its cause when no restart happened: dead",
+        "a replaced attempt names its cause when no restart happened: idle",
+        "a replaced attempt names its cause when no restart happened: stalled",
+        "a stage that keeps working after its turn ended keeps its host through the recovery tick and the deferred cursor write",
+        "a descendant that outlives the runtime's release is still signalled, and the attempt is replaced",
+        "an attempt that worked on after a restart and is stopped for silence later is not called a restart",
+        "an attempt that worked on after a restart and whose host is found gone later is not called a restart"
+      ],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.routing.test.ts",
+      "tree": "main",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.routing.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 99,
+        "fail": 8,
+        "skip": 0,
+        "expect() calls": 700
+      },
+      "durationSeconds": 91.376,
+      "log": "completion/001-main.log",
+      "campaign": "completion",
+      "testedRevision": "2614b079b3f174eb06bb65d9311460ea57aa6fee",
+      "failures": [
+        "a stage conversation switched to another account continues on the message held for the switch and settles on the successor's verdict without the fail edge (#1695 K6c)",
+        "a replaced attempt names its cause when no restart happened: dead",
+        "a replaced attempt names its cause when no restart happened: idle",
+        "a replaced attempt names its cause when no restart happened: stalled",
+        "a stage that keeps working after its turn ended keeps its host through the recovery tick and the deferred cursor write",
+        "a descendant that outlives the runtime's release is still signalled, and the attempt is replaced",
+        "an attempt that worked on after a restart and is stopped for silence later is not called a restart",
+        "an attempt that worked on after a restart and whose host is found gone later is not called a restart"
+      ],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.fencedMessage.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.fencedMessage.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 24,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 229
+      },
+      "durationSeconds": 24.677,
+      "log": "completion/002-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.activation.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.activation.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 52,
+        "fail": 1,
+        "skip": 0,
+        "expect() calls": 332
+      },
+      "durationSeconds": 33.219,
+      "log": "completion/003-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [
+        "an internal terminal pass an older build left waiting on publication closes without the network (#1692)"
+      ],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.activation.test.ts",
+      "tree": "main",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.activation.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 52,
+        "fail": 1,
+        "skip": 0,
+        "expect() calls": 332
+      },
+      "durationSeconds": 32.789,
+      "log": "completion/004-main.log",
+      "campaign": "completion",
+      "testedRevision": "2614b079b3f174eb06bb65d9311460ea57aa6fee",
+      "failures": [
+        "an internal terminal pass an older build left waiting on publication closes without the network (#1692)"
+      ],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerBudgetChains.part3.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 26,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 94
+      },
+      "durationSeconds": 67.991,
+      "log": "completion/005-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.cpuQueue.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.cpuQueue.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 2,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 36
+      },
+      "durationSeconds": 4.943,
+      "log": "completion/006-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.dependencies.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.dependencies.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 4,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 19
+      },
+      "durationSeconds": 3.639,
+      "log": "completion/007-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.rolePrivacyEffects.part2.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.rolePrivacyEffects.part2.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 26,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 26
+      },
+      "durationSeconds": 145.193,
+      "log": "completion/008-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.restoreContinuation.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.restoreContinuation.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 78,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 296
+      },
+      "durationSeconds": 80.867,
+      "log": "completion/009-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerReset.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerReset.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 18,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 96
+      },
+      "durationSeconds": 155.284,
+      "log": "completion/010-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerSignals.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerSignals.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 28,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 128
+      },
+      "durationSeconds": 86.604,
+      "log": "completion/011-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.ports.part2.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.ports.part2.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 51,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 426
+      },
+      "durationSeconds": 213.673,
+      "log": "completion/012-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.proactive.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.proactive.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 41,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 170
+      },
+      "durationSeconds": 205.362,
+      "log": "completion/013-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.settlementAuthority.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.settlementAuthority.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 15
+      },
+      "durationSeconds": 5.349,
+      "log": "completion/014-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.recovery.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.recovery.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 67,
+        "fail": 0,
+        "skip": 1,
+        "expect() calls": 521
+      },
+      "durationSeconds": 79.286,
+      "log": "completion/015-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerReset.part2.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerReset.part2.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 25
+      },
+      "durationSeconds": 90.43,
+      "log": "completion/016-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.capacity.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.capacity.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 25,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 410
+      },
+      "durationSeconds": 25.633,
+      "log": "completion/017-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.ports.part3.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.ports.part3.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 18,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 658
+      },
+      "durationSeconds": 80.082,
+      "log": "completion/018-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.watchdogRegression.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.watchdogRegression.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 17
+      },
+      "durationSeconds": 4.825,
+      "log": "completion/019-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 15
+      },
+      "durationSeconds": 57.842,
+      "log": "completion/020-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.providerChains.part2.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.providerChains.part2.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 32,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 304
+      },
+      "durationSeconds": 42.175,
+      "log": "completion/021-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.publication.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.publication.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 36,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 454
+      },
+      "durationSeconds": 53.069,
+      "log": "completion/022-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.setupRecipe.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.setupRecipe.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 7,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 52
+      },
+      "durationSeconds": 5.375,
+      "log": "completion/023-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.cpuAdmissionPolling.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 15,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 112
+      },
+      "durationSeconds": 71.872,
+      "log": "completion/024-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.rolePrivacyEffects.part3.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.rolePrivacyEffects.part3.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 26,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 26
+      },
+      "durationSeconds": 96.215,
+      "log": "completion/025-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.privacyCorrelation.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.privacyCorrelation.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 5
+      },
+      "durationSeconds": 2.841,
+      "log": "completion/026-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/pipelines/engine.ports.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.ports.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 81,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 1735
+      },
+      "durationSeconds": 137.226,
+      "log": "completion/027-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/components/kanban/kanbanBoard.browser.test.tsx",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/components/kanban/kanbanBoard.browser.test.tsx"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0,
+        "skip": 306,
+        "expect() calls": 1
+      },
+      "durationSeconds": 2.385,
+      "log": "completion/028-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/proc/memory.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/proc/memory.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 17,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 27
+      },
+      "durationSeconds": 0.678,
+      "log": "completion/029-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/proc/portable.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/proc/portable.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 2
+      },
+      "durationSeconds": 0.669,
+      "log": "completion/030-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/proc/darwinIdentity.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/proc/darwinIdentity.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 3,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 7
+      },
+      "durationSeconds": 0.666,
+      "log": "completion/031-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/proc/index.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/proc/index.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 6,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 19
+      },
+      "durationSeconds": 0.969,
+      "log": "completion/032-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/proc/windowsSnapshot.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/proc/windowsSnapshot.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 14,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 36
+      },
+      "durationSeconds": 0.77,
+      "log": "completion/033-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/proc/windowsIdentity.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/proc/windowsIdentity.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 6,
+        "fail": 0,
+        "skip": 1,
+        "expect() calls": 12
+      },
+      "durationSeconds": 0.776,
+      "log": "completion/034-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/proc/windowsCwd.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/proc/windowsCwd.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 3,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 8
+      },
+      "durationSeconds": 0.824,
+      "log": "completion/035-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/proc/windows.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/proc/windows.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 16,
+        "fail": 0,
+        "skip": 5,
+        "expect() calls": 157
+      },
+      "durationSeconds": 1.188,
+      "log": "completion/036-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/processGroup.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/processGroup.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 15,
+        "fail": 0,
+        "skip": 2,
+        "expect() calls": 31
+      },
+      "durationSeconds": 1.092,
+      "log": "completion/037-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/platformHome.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/platformHome.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 16
+      },
+      "durationSeconds": 1.201,
+      "log": "completion/038-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/runtime/localEndpoint.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/runtime/localEndpoint.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 5,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 15
+      },
+      "durationSeconds": 1.107,
+      "log": "completion/039-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/scanner/describe.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/scanner/describe.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 59,
+        "fail": 0,
+        "skip": 2,
+        "expect() calls": 482
+      },
+      "durationSeconds": 10.872,
+      "log": "completion/040-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/lib/state/durableJson.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/state/durableJson.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 6,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 31
+      },
+      "durationSeconds": 1.264,
+      "log": "completion/041-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/runtime-host/socket.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/runtime-host/socket.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 7,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 16
+      },
+      "durationSeconds": 1.604,
+      "log": "completion/042-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/runtime-host/runtimeHostFence.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/runtime-host/runtimeHostFence.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 6,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 14
+      },
+      "durationSeconds": 1.596,
+      "log": "completion/043-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./bin/server-runtime.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./bin/server-runtime.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 31,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 116
+      },
+      "durationSeconds": 2.57,
+      "log": "completion/044-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./bin/bind-guard.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./bin/bind-guard.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 15,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 50
+      },
+      "durationSeconds": 0.879,
+      "log": "completion/045-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "Linux backend",
+      "tree": "head",
+      "command": [
+        "bun",
+        "scripts/verify-platform-backend.ts",
+        "--expect",
+        "linux"
+      ],
+      "exitStatus": 0,
+      "counts": {},
+      "durationSeconds": 0.075,
+      "log": "completion/046-head.log",
+      "campaign": "completion",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5"
+    },
+    {
+      "label": "changed-file lint",
+      "tree": "head",
+      "command": [
+        "bun",
+        "scripts/eslint-changes.ts",
+        "--base",
+        "origin/main",
+        "./src/components/attention/needsYouPanel.fixture.tsx",
+        "./src/components/kanban/kanbanBoard.browser.test.tsx",
+        "./src/components/mobile/mobileBoardModel.ts",
+        "./src/lib/mcp/pipelineVisibility.integration.test.ts",
+        "./src/lib/pipelines/engine.ts",
+        "./src/lib/pipelines/laneMovement.ts",
+        "./src/lib/pipelines/listProjection.test.ts",
+        "./src/lib/pipelines/listProjection.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {},
+      "durationSeconds": 15.168,
+      "log": "browser/001-head.log",
+      "campaign": "browser",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5"
+    },
+    {
+      "label": "./src/components/kanban/stagesModel.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/components/kanban/stagesModel.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 22,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 106
+      },
+      "durationSeconds": 0.666,
+      "log": "browser/002-head.log",
+      "campaign": "browser",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 8,
+        "fail": 1,
+        "skip": 0,
+        "expect() calls": 64
+      },
+      "durationSeconds": 1.618,
+      "log": "browser/003-head.log",
+      "campaign": "browser",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [
+        "One more round reads the revision the operator saw and grants exactly one round, as the desktop menu does"
+      ],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx",
+      "tree": "main",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/components/mobile/MobilePipelineScreen.actions.dom.test.tsx"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 8,
+        "fail": 1,
+        "skip": 0,
+        "expect() calls": 64
+      },
+      "durationSeconds": 1.819,
+      "log": "browser/004-main.log",
+      "campaign": "browser",
+      "testedRevision": "2614b079b3f174eb06bb65d9311460ea57aa6fee",
+      "failures": [
+        "One more round reads the revision the operator saw and grants exactly one round, as the desktop menu does"
+      ],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "hidden lane rendered UI",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/components/kanban/kanbanBoard.browser.test.tsx",
+        "--test-name-pattern",
+        "hidden lane visibility"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 1,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 12
+      },
+      "durationSeconds": 9.791,
+      "log": "browser/005-head.log",
+      "campaign": "browser",
+      "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "final typecheck",
+      "tree": "renewed",
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit"
+      ],
+      "exitStatus": 0,
+      "counts": {},
+      "durationSeconds": 372.021,
+      "log": "renewal/001-renewed.log",
+      "campaign": "renewal",
+      "testedRevision": "79e5c75d4ba529deccb6df4f0a8ff4b347ed68dd"
+    },
+    {
+      "label": "./scripts/local-gate-tests.test.ts",
+      "tree": "renewed",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./scripts/local-gate-tests.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 33,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 168
+      },
+      "durationSeconds": 70.505,
+      "log": "renewal/002-renewed.log",
+      "campaign": "renewal",
+      "testedRevision": "79e5c75d4ba529deccb6df4f0a8ff4b347ed68dd",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./scripts/local-gate-tests.retry.test.ts",
+      "tree": "renewed",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./scripts/local-gate-tests.retry.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 50,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 379
+      },
+      "durationSeconds": 135.396,
+      "log": "renewal/003-renewed.log",
+      "campaign": "renewal",
+      "testedRevision": "79e5c75d4ba529deccb6df4f0a8ff4b347ed68dd",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "final merged typecheck",
+      "tree": "final-tree",
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit"
+      ],
+      "exitStatus": 0,
+      "counts": {},
+      "durationSeconds": 235.106,
+      "log": "final-validation/001-final-tree.log",
+      "campaign": "final-validation",
+      "testedRevision": "52f1cd78c63124b16ef55dfcc326e3fb329cde49"
+    },
+    {
+      "label": "./bin/launcher-relaunch.test.ts",
+      "tree": "final-tree",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./bin/launcher-relaunch.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 11,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 87
+      },
+      "durationSeconds": 10.749,
+      "log": "final-validation/002-final-tree.log",
+      "campaign": "final-validation",
+      "testedRevision": "52f1cd78c63124b16ef55dfcc326e3fb329cde49",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./scripts/local-gate.workflows.test.ts",
+      "tree": "final-tree",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./scripts/local-gate.workflows.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 8,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 65
+      },
+      "durationSeconds": 0.767,
+      "log": "final-validation/003-final-tree.log",
+      "campaign": "final-validation",
+      "testedRevision": "52f1cd78c63124b16ef55dfcc326e3fb329cde49",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./scripts/owned-runner.portable.test.ts",
+      "tree": "final-tree",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./scripts/owned-runner.portable.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 2,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 4
+      },
+      "durationSeconds": 1.119,
+      "log": "final-validation/004-final-tree.log",
+      "campaign": "final-validation",
+      "testedRevision": "52f1cd78c63124b16ef55dfcc326e3fb329cde49",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./scripts/owned-runner.test.ts",
+      "tree": "final-tree",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./scripts/owned-runner.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "durationSeconds": 0.008,
+      "log": "final-validation/005-final-tree.log",
+      "campaign": "final-validation",
+      "testedRevision": "52f1cd78c63124b16ef55dfcc326e3fb329cde49",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": false,
+      "selectionError": "Optional runner test path does not exist; corrected by running scripts/owned-runner.integration.test.ts."
+    },
+    {
+      "label": "./scripts/owned-runner.test.ts",
+      "tree": "final-main",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./scripts/owned-runner.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "durationSeconds": 0.017,
+      "log": "final-validation/006-final-main.log",
+      "campaign": "final-validation",
+      "testedRevision": "3c086dfc91aa650bfabe0417eaeaf74604745d3f",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": false,
+      "selectionError": "Optional runner test path does not exist; corrected by running scripts/owned-runner.integration.test.ts."
+    },
+    {
+      "label": "./src/lib/recordedChecks/commandTiming.test.ts",
+      "tree": "final-tree",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/recordedChecks/commandTiming.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 4,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 12
+      },
+      "durationSeconds": 0.834,
+      "log": "final-validation/007-final-tree.log",
+      "campaign": "final-validation",
+      "testedRevision": "52f1cd78c63124b16ef55dfcc326e3fb329cde49",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    },
+    {
+      "label": "./scripts/owned-runner.integration.test.ts",
+      "tree": "final-tree",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./scripts/owned-runner.integration.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 49,
+        "fail": 0,
+        "skip": 0,
+        "expect() calls": 183
+      },
+      "durationSeconds": 174.05,
+      "log": "runner-integration/001-final-tree.log",
+      "campaign": "runner-integration",
+      "testedRevision": "52f1cd78c63124b16ef55dfcc326e3fb329cde49",
+      "failures": [],
+      "betweenTestsErrors": 0,
+      "runnerSummary": true
+    }
+  ],
+  "interruptedCampaigns": [
+    {
+      "command": "STAGE_GATE --record CHECK_LOG python3 CHECK_DRIVER tests",
+      "exitStatus": 1,
+      "testsStarted": 0,
+      "reason": "Scratch namespace collision before any test; corrected before a fresh launch."
+    },
+    {
+      "command": "STAGE_GATE --record CHECK_LOG python3 CHECK_DRIVER tests",
+      "exitStatus": 124,
+      "completedHeadFiles": 49,
+      "completedHeadCounts": {
+        "pass": 2243,
+        "fail": 14,
+        "skip": 1
+      },
+      "unfinishedCommand": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.routing.test.ts"
+      ],
+      "unfinishedSide": "main",
+      "unfinishedChildExitStatus": null,
+      "unfinishedChildCounts": null,
+      "reason": "One-hour campaign deadline. All named process identities absent after terminal cleanup. The completed head files were preserved; a fresh main routing comparison and the remaining files complete separately."
+    }
+  ],
+  "sourcePrivacy": {
+    "command": [
+      "bun",
+      "scripts/privacy-publication-gate.ts",
+      "--base",
+      "origin/main",
+      "--require-known-values",
+      "--check-commits"
+    ],
+    "exitStatus": 0,
+    "at": "2026-11-12T10:34:40.470778+00:00",
+    "findings": 0,
+    "testedRevision": "cffc90347fa7b0caa7fe5fd298d1883e8caec7e5",
+    "base": "2614b079b3f174eb06bb65d9311460ea57aa6fee"
+  },
+  "rendered": {
+    "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+    "case": "hidden lane visibility",
+    "viewport": [
+      1440,
+      900
+    ],
+    "readings": [
+      {
+        "lang": "en",
+        "scheme": "light",
+        "hiddenRows": 0,
+        "restoredRows": 1,
+        "action": "undoFlag"
+      },
+      {
+        "lang": "en",
+        "scheme": "dark",
+        "hiddenRows": 0,
+        "restoredRows": 1,
+        "action": "undoFlag"
+      },
+      {
+        "lang": "uk",
+        "scheme": "light",
+        "hiddenRows": 0,
+        "restoredRows": 1,
+        "action": "undoFlag"
+      },
+      {
+        "lang": "uk",
+        "scheme": "dark",
+        "hiddenRows": 0,
+        "restoredRows": 1,
+        "action": "undoFlag"
+      }
+    ],
+    "frames": [
+      {
+        "file": "hidden-lane/en-dark-hidden.png",
+        "sha256": "783912db7d254ea6136099c5255fcb4cfa47bc3db754f3148e909676f3eae5e6",
+        "visuallyInspected": true
+      },
+      {
+        "file": "hidden-lane/en-dark-restored.png",
+        "sha256": "eac751117e638dc92760457fb3a3c20470f41ec2b7b708b0265ca83c676329cc",
+        "visuallyInspected": true
+      },
+      {
+        "file": "hidden-lane/en-light-hidden.png",
+        "sha256": "f7aed6851c855fe9c8a45e8a50a5f603dbec84cbe1f3b07d6cb5b007c40be737",
+        "visuallyInspected": true
+      },
+      {
+        "file": "hidden-lane/en-light-restored.png",
+        "sha256": "a0a213828f86ba3c2a8ed2ab24f1cdc015fd7fb56db4f567516ec5f4ee1a5291",
+        "visuallyInspected": true
+      },
+      {
+        "file": "hidden-lane/uk-dark-hidden.png",
+        "sha256": "cb3b462b922183c014ceb49a48c1345bf4c6c34882aa5daadebfd3b04d78f517",
+        "visuallyInspected": true
+      },
+      {
+        "file": "hidden-lane/uk-dark-restored.png",
+        "sha256": "1a8fab6d774c7e7fc9c47520fa1ff256aefcd760f5ca076f866ca4dea036435b",
+        "visuallyInspected": true
+      },
+      {
+        "file": "hidden-lane/uk-light-hidden.png",
+        "sha256": "0a53ed1242feb3a309e4f1b972a1dbe502991ea6db2b6bfb69a18c94179e0c19",
+        "visuallyInspected": true
+      },
+      {
+        "file": "hidden-lane/uk-light-restored.png",
+        "sha256": "995be4f05fc448467ed9808def9e449c82093f4b817b0694489a28700cf65cd9",
+        "visuallyInspected": true
+      }
+    ]
+  },
+  "performanceClaim": null,
+  "notes": [
+    "Matching main failures are notes; their commands, exits and counts remain visible.",
+    "The ordinary browser-file run has opt-in cases skipped; the changed hidden-lane case also ran with Chromium enabled.",
+    "Publication and pull-request creation belong to the pipeline publisher.",
+    "The two unmatched optional runner-filter commands started no tests and are explicitly marked as selection errors; the real integration file then passed."
+  ]
+}

@@ -36,7 +36,7 @@ function encodeQuoted(text: string, quote: string): string {
 
 /** An invalid quoted token can still carry a raw log assignment or a mapping
  * with the opposite quote style. Never send those through the prose fallback. */
-function containsSensitiveAssignment(text: string): boolean {
+export function containsSensitiveAssignment(text: string): boolean {
   for (let depth = 0; depth <= MAX_ENCODED_DEPTH; depth++) {
     // Credential suffixes have at most three words, including value/hash.
     // Keep raw prefixes bounded and start at an identifier's edge.
@@ -100,7 +100,7 @@ function compoundValueEnd(text: string, start: number): number {
 
 /** Redact only decoded text or the gaps between quoted tokens. Running this
  * over re-encoded strings would treat JSON escapes as URL/header content. */
-function redactPlainText(text: string): string {
+function redactArchiveText(text: string): string {
   return redactMonitorText(text).replace(/https?:\/\/[^\s<>"'\\]+/g, match => {
     try {
       const url = new URL(match);
@@ -116,7 +116,7 @@ function redactPlainText(text: string): string {
  * each quoted token before applying all secret rules, then keep its serialized
  * representation opaque to the enclosing pass. Discard ambiguous encoded
  * credential tokens, including a token truncated after its embedded secret. */
-function redactStructuredText(text: string, depth = 0): string {
+export function redactStructuredText(text: string, redactPlainText = redactArchiveText, depth = 0): string {
   if (depth > MAX_ENCODED_DEPTH) throw new ArchiveReadError("ARCHIVE_TOO_LARGE", 413);
   if (text.includes("\0")) throw new ArchiveReadError("ARCHIVE_UNAVAILABLE", 503);
   // A raw header owns its whole physical line, even when its value has quotes.
@@ -172,7 +172,7 @@ function redactStructuredText(text: string, depth = 0): string {
       fields.lastIndex = sensitiveValueEnd(text, fields.lastIndex);
       replacement = `${token}${separator}"[redacted]"`;
     } else {
-      const redacted = redactStructuredText(decoded, depth + 1);
+      const redacted = redactStructuredText(decoded, redactPlainText, depth + 1);
       replacement = (redacted === decoded ? token : encodeQuoted(redacted, token[0])) + (separator ?? "");
     }
     parts.push(redactPlainText(prefix), replacement);

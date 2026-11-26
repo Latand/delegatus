@@ -2,6 +2,9 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 
+import { effortTint, engineBadgeFor } from "@/components/utils";
+import type { FileEntry } from "@/lib/types";
+
 /*
  * Issue #700: the three roles that carry state text — `text-muted`
  * ("4 branches running"), `text-success` ("working…", "live tail") and
@@ -150,9 +153,10 @@ test("the design system §1.5 table documents the shipped token values", () => {
    mark token, already pinned at its own floor. */
 test("the model glyphs' silhouette inks clear the graphical-object floor in both schemes", () => {
   const surfaces = ["surface-card", "surface-canvas", "surface-well", "surface-sunken"].map(values);
-  for (const ink of ["glyph-sol-edge", "glyph-astra", "glyph-terra-rim", "glyph-luna"]) {
+  for (const ink of ["glyph-sol-edge", "glyph-astra", "glyph-terra-rim", "glyph-luna", "glyph-neon", "glyph-argon", "glyph-hydrogen", "glyph-flash", "glyph-oss", "color-antigravity-mark"]) {
     const inks = values(ink);
     expect(inks.length).toBe(3);
+    expect(inks[1]).toBe(inks[2]);
     for (const scheme of [0, 1]) {
       for (const surface of surfaces) expect(contrast(inks[scheme], surface[scheme])).toBeGreaterThanOrEqual(3);
     }
@@ -198,7 +202,10 @@ test("a waiting glyph's drained silhouette still clears the graphical-object flo
   /* The Claude glyphs take the Claude mark: `--color-claude-mark` in light,
      which the dark blocks point at `--color-claude`. */
   const claude = [values("color-claude-mark")[0], values("color-claude")[1]];
-  const inks = { "glyph-claude": claude, ...Object.fromEntries(["glyph-sol-edge", "glyph-astra", "glyph-terra-rim", "glyph-luna"].map((name) => [name, values(name)])) };
+  const inks = {
+    "glyph-claude": claude,
+    ...Object.fromEntries(["glyph-sol-edge", "glyph-astra", "glyph-terra-rim", "glyph-luna", "glyph-neon", "glyph-argon", "glyph-hydrogen", "glyph-flash", "glyph-oss"].map((name) => [name, values(name)])),
+  };
   const surfaces = ["surface-card", "surface-canvas", "surface-well", "surface-sunken"].map(values);
   for (const [name, pair] of Object.entries(inks)) {
     for (const scheme of [0, 1]) {
@@ -240,5 +247,91 @@ test("the remote-card pinstripe leaves muted and secondary text above their floo
     }
     /* The mark beside the host label is a graphical object: 3:1 over the chip's card fill. */
     expect(contrast(info[scheme], card[scheme])).toBeGreaterThanOrEqual(3);
+  }
+});
+
+function hslToHex(h: number, s: number, l: number): string {
+  const sn = s / 100;
+  const ln = l / 100;
+  const c = (1 - Math.abs(2 * ln - 1)) * sn;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = ln - c / 2;
+  const [r, g, b] =
+    h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x]
+      : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  return `#${[r, g, b].map((v) => Math.round((v + m) * 255).toString(16).padStart(2, "0")).join("")}`;
+}
+
+function parseHslList(value: string): { h: number; s: number; l: number; alpha: number }[] {
+  return [...value.matchAll(/hsl\(\s*([\d.]+)\s+([\d.]+)%\s+([\d.]+)%(?:\s*\/\s*([\d.]+))?\s*\)/g)].map((m) => ({
+    h: Number(m[1]),
+    s: Number(m[2]),
+    l: Number(m[3]),
+    alpha: m[4] === undefined ? 1 : Number(m[4]),
+  }));
+}
+
+function compositeHex(foreground: string, background: string, alpha: number): string {
+  return `#${[1, 3, 5].map((offset) => {
+    const fg = parseInt(foreground.slice(offset, offset + 2), 16);
+    const bg = parseInt(background.slice(offset, offset + 2), 16);
+    return Math.round(fg * alpha + bg * (1 - alpha)).toString(16).padStart(2, "0");
+  }).join("")}`;
+}
+
+/* Antigravity chips (`CardIdentityChip`, `BranchPane`) and `EngineBadge` derive
+   their chip fill and label ink through `effortTint` / `engineBadgeFor`, while
+   the engine mark inside uses `--color-antigravity-mark` and pulses `--glyph-neon-glow`
+   behind the letters. Every tier in the Antigravity scale must clear 3:1 over the
+   actual composited chip fill (and peak working gas) in both themes. */
+test("Antigravity chips, badges, and mark ink clear 3:1 across every effort tier and working gas peak in both schemes", () => {
+  const surfaces = ["surface-card", "surface-canvas", "surface-well", "surface-sunken"].map(values);
+  const mark = values("color-antigravity-mark");
+  const glow = values("glyph-neon-glow");
+  const glyphCss = fs.readFileSync(path.join(import.meta.dir, "../components/kanban/modelGlyph.css"), "utf8");
+  const keyframeMatch = /@keyframes mg-neon\s*\{((?:[^{}]|\{[^}]*\})*)\}/.exec(glyphCss);
+  expect(keyframeMatch).not.toBeNull();
+  const peakGasOpacity = Math.max(...[...keyframeMatch![1].matchAll(/opacity:\s*([\d.]+)/g)].map((m) => Number(m[1])));
+  expect(peakGasOpacity).toBeGreaterThan(0.3);
+
+  const badge = engineBadgeFor("antigravity");
+  const chips: { name: string; color: string; soft: string }[] = [
+    { name: "EngineBadge", color: badge.style.color, soft: badge.style.backgroundColor },
+    ...([undefined, "low", "medium", "high", "xhigh"] as const).map((effort) => {
+      const tint = effortTint({ engine: "antigravity", model: "gemini-4-neon", effort } as FileEntry);
+      return { name: `effort=${effort ?? "none"}`, color: tint.color, soft: tint.soft };
+    }),
+  ];
+
+  for (const chip of chips) {
+    const inks = parseHslList(chip.color);
+    expect(inks, `${chip.name} light-dark() ink`).toHaveLength(2);
+    const [soft] = parseHslList(chip.soft);
+    expect(soft, `${chip.name} soft fill`).toBeDefined();
+    /* One neon cyan hue everywhere — never the old purple #6f42c1 (hue ~261). */
+    expect(inks[0].h).toBeGreaterThanOrEqual(185);
+    expect(inks[0].h).toBeLessThanOrEqual(205);
+    expect(inks[1].h).toBe(inks[0].h);
+    const softHex = hslToHex(soft.h, soft.s, soft.l);
+
+    for (const scheme of [0, 1]) {
+      const inkHex = hslToHex(inks[scheme].h, inks[scheme].s, inks[scheme].l);
+      for (const surface of surfaces) {
+        const chipFill = compositeHex(softHex, surface[scheme], soft.alpha);
+        expect(
+          contrast(inkHex, chipFill),
+          `${chip.name} ink ${inkHex} on chip ${chipFill} (scheme ${scheme})`,
+        ).toBeGreaterThanOrEqual(3);
+        expect(
+          contrast(mark[scheme], chipFill),
+          `${chip.name} mark ${mark[scheme]} on chip ${chipFill} (scheme ${scheme})`,
+        ).toBeGreaterThanOrEqual(3);
+        const peakGasBg = compositeHex(glow[scheme], chipFill, peakGasOpacity);
+        expect(
+          contrast(mark[scheme], peakGasBg),
+          `${chip.name} mark ${mark[scheme]} over peak gas ${peakGasBg} (scheme ${scheme})`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+    }
   }
 });

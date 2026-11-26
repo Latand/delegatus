@@ -3,6 +3,8 @@ import { createMcpToolService, MCP_TOOL_NAMES, McpToolRefusal, MemoryMcpReceiptS
 
 test.each([
   ["STAGE_REPORT_SETTLED", false],
+  ["STAGE_REPORT_INVALID", false],
+  ["STAGE_REPORT_CONTRADICTORY", false],
   ["STAGE_REPORT_NOT_AN_ATTEMPT", false],
   ["STAGE_REPORT_NOT_HELD", false],
   ["STAGE_REPORT_SUPERSEDED", false],
@@ -20,6 +22,8 @@ test.each([
   const args = { clientRequestId: `report-${code}`, verdict: "pass" };
   const refused = await service.callTool("stage_report", args);
   expect(refused).toMatchObject({ ok: false, retryable, details: { code } });
+  if (refused.ok) throw new Error("refusal was accepted");
+  if (!retryable) expect(refused.code).toBe(code);
   expect(await service.callTool("stage_report", args)).toMatchObject({ retryable, replayed: true });
   expect(calls).toBe(1);
 });

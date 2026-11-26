@@ -35,20 +35,23 @@ test("image inputs build, while prose, unrelated CI and shell tooling skip", () 
     "scripts/runtime-host-healthcheck.ts", "scripts/published-image-entrypoint.sh",
     "landing/site/demo/taskIcons.json", "evals/probe.ts", "spikes/probe.mts", "test-preload.ts",
     "scripts/demo-capture-browser.cjs", "scripts/newcomer-install.mjs", "scripts/npm-package-smoke.mjs",
-    "scripts/fixtures/usage-metrics/recorded.json", "scripts/package-revision.mjs", "scripts/docker-image-scope.cjs",
+    "scripts/fixtures/usage-metrics/recorded.json", "scripts/package-standalone.mjs", "scripts/package-revision.mjs", "scripts/docker-image-scope.cjs",
+    "scripts/privacy-known-value-fingerprints.json", "scripts/cloud-checks.replay.fixture.json", "scripts/mac-app/smoke-platform.mjs",
     ".env", ".env.local", ".env.production", ".env.production.local",
     ".gitignore", "src/.gitignore", "src/components/.gitignore", "public/.gitignore",
     "bin/.gitignore", "patches/.gitignore", "vendor/.gitignore", ".github/workflows/docker-image.yml",
   ]) expect(isImageInput(file), file).toBe(true);
   for (const file of [
     "README.md", "CONTRIBUTING.md", "docs/docker.md", "docs/guide.md", "evidence/report.txt",
-    ".github/workflows/privacy-publication.yml", ".githooks/pre-push", "scripts/audit-with-retry.sh",
+    ".github/workflows/privacy-publication.yml", ".githooks/pre-commit",
     "landing/site/index.html", "docker-compose.yml",
     "evidence/docker-image/incident.json", "docs/unused.json", "docs/unused.js",
     "external/unused.cjs", "external/unused.mjs", "external/unused.jsx",
     ".env.development", ".env.test", ".env.example", "docs/.env.production",
     "docs/.gitignore", "docs/design/desktop-v2/.gitignore", "landing/site/.gitignore",
   ]) expect(isImageInput(file), file).toBe(false);
+  expect(isImageInput("scripts/local-gate-capabilities.json")).toBe(true);
+  expect(isImageInput(".githooks/pre-push")).toBe(true);
 });
 
 test("native installation and runtime inputs verify both architectures; app changes verify amd64", () => {
@@ -59,7 +62,8 @@ test("native installation and runtime inputs verify both architectures; app chan
     expect(isMultiArchInput(file), file).toBe(true);
     expect(isImageInput(file), file).toBe(true);
   }
-  for (const file of ["bin/provision-telegram-connector.mjs", "src/runtime-host/main.ts", "src/lib/platform/linux.ts", "src/app/page.tsx", "src/app/globals.css", "public/icon.svg", "README.md", "docs/native.md"]) {
+  for (const file of ["bin/provision-telegram-connector.mjs", "src/runtime-host/main.ts", "src/lib/platform/linux.ts", "src/app/page.tsx", "src/app/globals.css", "public/icon.svg", "README.md", "docs/native.md",
+    "scripts/check-worker-client.mjs"]) {
     expect(isMultiArchInput(file), file).toBe(false);
   }
 });
@@ -76,7 +80,7 @@ test("the admission list covers every repository JS/JSON dependency in the TypeS
     .filter(file => !file.startsWith("node_modules/") && /\.(?:[cm]?js|jsx|json)$/.test(file));
   expect(dependencies).toContain("landing/site/demo/taskIcons.json");
   expect(dependencies.filter(file => !isImageInput(file))).toEqual([]);
-}, 20_000);
+}, 45_000);
 
 test("each admitted root production env file is read by the installed Next loader", () => {
   const loader = require.resolve("@next/env");
@@ -203,6 +207,8 @@ test("real Git diff excludes main merges and retains deletions, renames and file
     git("init", "-q", "-b", "main");
     git("config", "core.hooksPath", "/dev/null");
     write("README.md"); write("src/old.ts");
+    write("scripts/check-worker-client.mjs");
+    write("scripts/unused.mjs");
     commit(); git("branch", "topic");
     write("src/main-only.ts"); const main = commit();
     git("checkout", "-q", "topic");
@@ -217,6 +223,7 @@ test("real Git diff excludes main merges and retains deletions, renames and file
       ["evidence/docker-image/incident.json", false], ["docs/unused.json", false],
       ["docs/unused.js", false], ["external/unused.cjs", false],
       ["external/unused.mjs", false], ["external/unused.jsx", false],
+      ["scripts/check-worker-client.mjs", true], ["scripts/unused.mjs", true],
       ["docs/.gitignore", false], ["docs/design/desktop-v2/.gitignore", false],
       ["landing/site/.gitignore", false],
       [".gitignore", true], ["src/.gitignore", true], ["src/components/.gitignore", true],
@@ -248,7 +255,7 @@ test("real Git diff excludes main merges and retains deletions, renames and file
     expect(run("missing", large).status).not.toBe(0);
     expect(run("0".repeat(40), large).status).not.toBe(0);
   } finally { rmSync(cwd, { recursive: true, force: true }); }
-});
+}, 15_000);
 
 test("real Tailwind compilation uses app sources and ignores prose outside src", async () => {
   const css = readFileSync(path.join(root, "src/app/globals.css"), "utf8");

@@ -1,3 +1,4 @@
+import { MERGE_REASONS } from "@/lib/forge/mergeReasons";
 import type { Pipeline } from "./types";
 
 type SuccessorKey = string;
@@ -17,17 +18,17 @@ function addOwner(index: Map<SuccessorKey, Pipeline>, key: SuccessorKey, candida
 }
 
 /** Build one bounded owner lookup for a pipeline snapshot. */
-export function indexMergeSuccessors(lanes: readonly Pipeline[]): MergeSuccessorIndex {
+export function indexMergeSuccessors(lanes: readonly Pipeline[], deliveryAuthority = false): MergeSuccessorIndex {
   const owners: MergeSuccessorIndex = {
     targetPr: new Map(), targetBranch: new Map(), targetUnnumberedBranch: new Map(), mergePr: new Map(),
   };
   for (const candidate of lanes) {
     const delivery = candidate.delivery;
     if (!delivery || delivery.disposition !== "owner" || delivery.ownerId !== candidate.id
-      || (!delivery.active && candidate.state !== "completed")) continue;
+      || (!deliveryAuthority && !delivery.active && candidate.state !== "completed")) continue;
     // A completed claim can be refused merge admission. Its predecessor still
     // owns the actionable merge stop until the successor carries a merge.
-    if (candidate.state === "completed" && !candidate.merge) continue;
+    if (!deliveryAuthority && candidate.state === "completed" && !candidate.merge) continue;
     addOwner(owners.targetBranch, targetBranchKey(delivery.target.repository, delivery.target.branch), candidate);
     if (delivery.target.pr == null) {
       addOwner(owners.targetUnnumberedBranch, targetBranchKey(delivery.target.repository, delivery.target.branch), candidate);
@@ -44,6 +45,12 @@ export function indexMergeSuccessors(lanes: readonly Pipeline[]): MergeSuccessor
 export function mergeSuccessor(lane: Pipeline, owners: MergeSuccessorIndex): Pipeline | undefined {
   const delivery = lane.delivery;
   if (lane.state !== "completed" || !delivery || delivery.active) return undefined;
+  return deliverySuccessor(lane, owners);
+}
+
+function deliverySuccessor(lane: Pipeline, owners: MergeSuccessorIndex): Pipeline | undefined {
+  const delivery = lane.delivery;
+  if (!delivery) return undefined;
   const matches: Pipeline[] = [];
   const target = delivery.target;
   const branchKey = targetBranchKey(target.repository, target.branch);
@@ -63,4 +70,35 @@ export function mergeSuccessor(lane: Pipeline, owners: MergeSuccessorIndex): Pip
   }
   return matches.filter(candidate => candidate.id !== lane.id && candidate.delivery!.epoch > delivery.epoch)
     .sort((left, right) => right.delivery!.epoch - left.delivery!.epoch)[0];
+}
+
+/** Queue authority includes claims that have not reached merge admission yet.
+ * Completion releases publication, so active:false alone does not revoke merge. */
+export function mergeWithdrawalReason(lane: Pipeline, owners: MergeSuccessorIndex): string | null {
+  if (lane.state === "closed") return "Lane is closed";
+  const delivery = lane.delivery;
+  if (delivery?.disposition === "comparison") return "comparison lane does not own publication";
+  if (delivery && delivery.ownerId !== lane.id) return "Lane no longer owns delivery";
+  const successor = deliverySuccessor(lane, owners);
+  return successor ? `Merge superseded by delivery owner ${successor.id}` : null;
+}
+
+/** Avoid reopening the writer for an already withdrawn or reconciled entry. */
+export function mergeWithdrawalNeeded(lane: Pipeline, reason: string): boolean {
+  const merge = lane.merge;
+  if (!merge || merge.state === "merged" || merge.state === "merging" || merge.effectUncertain
+    || merge.state === "blocked" && merge.reason === MERGE_REASONS.closed
+    || merge.state === "cancelled" && merge.reason === reason) return false;
+  return true;
+}
+
+/** Withdraw undispatched work while retaining any outstanding landing receipt. */
+export function withdrawPipelineMerge(lane: Pipeline, reason: string, at: string): boolean {
+  if (!mergeWithdrawalNeeded(lane, reason)) return false;
+  const merge = lane.merge!;
+  merge.state = "cancelled";
+  merge.reason = reason;
+  merge.nextReadAt = null;
+  merge.updatedAt = new Date(Math.max(Date.parse(at), Date.parse(merge.updatedAt) + 1)).toISOString();
+  return true;
 }

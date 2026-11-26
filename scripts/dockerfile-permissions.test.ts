@@ -6,12 +6,14 @@
 // stage copies them and (b) verify readability as the non-root runtime
 // identity after the last COPY, so a bad checkout fails the build instead.
 import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -90,7 +92,11 @@ describe("runtime-host Docker credentials (#102)", () => {
     expect(wrapper).not.toContain("--setuid");
   });
 
-  test("host CLI and tmux shims retain every supplementary group", () => {
+  test("the image carries no tmux shim or wrapper", () => {
+    expect(dockerfile).not.toMatch(/tmux/i);
+  });
+
+  test("host CLI shims retain every supplementary group", () => {
     const cliShim = dockerfile.match(/make_nsenter_shim\(\) \{([\s\S]*?)\n\}/)?.[1];
     expect(cliShim).toBeDefined();
     expect(cliShim).toContain("nsenter -t 1 -m -p -C --no-fork --");
@@ -98,14 +104,6 @@ describe("runtime-host Docker credentials (#102)", () => {
     expect(cliShim).toContain('/usr/bin/setpriv --reuid="\\$uid" --regid="\\$gid" --groups="\\$groups" --');
     expect(cliShim).not.toContain("--setgid");
     expect(cliShim).not.toContain("--setuid");
-
-    const tmuxWrapper = dockerfile.match(/cat > \/usr\/local\/bin\/tmux <<'WRAPPER'([\s\S]*?)WRAPPER/)?.[1];
-    expect(tmuxWrapper).toBeDefined();
-    expect(tmuxWrapper).toContain("nsenter -t 1 -m -p -C --no-fork --");
-    expect(tmuxWrapper).toContain("groups=$(id -G | tr ' ' ',')");
-    expect(tmuxWrapper).toContain('/usr/bin/setpriv --reuid="$uid" --regid="$gid" --groups="$groups" --');
-    expect(tmuxWrapper).not.toContain("--setgid");
-    expect(tmuxWrapper).not.toContain("--setuid");
   });
 
   test("the runtime passwd home follows the portable Compose HOME for every git caller (#999)", () => {
@@ -124,6 +122,40 @@ describe("SQLite registry Viewer runtime (#187)", () => {
   test("Docker launches every Viewer through the in-container Bun runtime", () => {
     expect(runtimeStage).toContain("CMD [\"sh\", \"-c\", \"exec bun-container --bun node_modules/.bin/next start");
     expect(compose).toContain("exec bun-container --bun node_modules/.bin/next start");
+  });
+
+  test("the packaged canonical publication hook stays inside the image Bun namespace", () => {
+    expect(runtimeStage).toContain("ENV LLV_GATE_IMAGE_BUN=bun-container");
+    expect(runtimeStage).toContain("COPY --from=build /app/scripts ./scripts");
+    expect(runtimeStage).toContain("COPY --from=build /app/.githooks/pre-push ./.githooks/pre-push");
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "image-hook-")));
+    try {
+      const image = join(root, "image app");
+      const candidate = join(root, "candidate");
+      const bin = join(root, "bin");
+      mkdirSync(join(image, ".githooks"), { recursive: true });
+      mkdirSync(join(image, "scripts"));
+      mkdirSync(candidate);
+      mkdirSync(bin);
+      const hook = join(image, ".githooks", "pre-push");
+      const gate = join(image, "scripts", "local-gate.ts");
+      copyFileSync(join(import.meta.dir, "..", ".githooks", "pre-push"), hook);
+      writeFileSync(gate, "");
+      writeFileSync(join(bin, "bun"), "#!/bin/sh\nexit 97\n", { mode: 0o700 });
+      writeFileSync(join(bin, "bun-container"), '#!/bin/sh\ntest -f "$1" || exit 98\nprintf "%s\\n" "$@"\n', { mode: 0o700 });
+
+      const result = spawnSync("bash", [hook], { cwd: candidate, input: "", encoding: "utf8", env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        LLV_SKIP_HOOKS: "0",
+        LLV_GATE_CANONICAL_TOOLS: "1",
+        LLV_GATE_IMAGE_BUN: "bun-container",
+      } });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trimEnd().split("\n")).toEqual([gate, "pre-push"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("every image stage uses the production-burned-in Bun runtime (#552)", () => {

@@ -2,8 +2,9 @@ import "./engineEnvironment.fixture";
 import { expect, spyOn, test } from "bun:test";
 import * as timers from "node:timers/promises";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import path from "node:path";
-import { create, harness, tickPipelines, loadPipelines, savePipelines, reserveActivationOnly } from "./engine.fixture";
+import { create, harness, tickPipelines, loadPipelines, savePipelines, reserveActivationOnly, frozenWallClock } from "./engine.fixture";
 import { roleMemoryCollection, storedLessonRevision } from "@/lib/memory/roleStore";
 import { TaskPageWorker, shutdownTaskPageWorker } from "@/lib/links/taskPageWorker";
 import { RoleMemoryChanged } from "@/lib/memory/privacy";
@@ -47,7 +48,7 @@ test.each(["timeout-recovery", "busy-recovery", "exhaustion", "permanent"] as co
       expect(text).toContain(mode === "busy-recovery" ? "store-busy" : "worker-timeout");
     } else {
       expect(h.spawnInputs).toHaveLength(0);
-      expect(lane.state).toBe("needs_decision");
+      expect(lane.state).toBe(mode === "permanent" ? "needs_decision" : "running");
       expect(lane.stateDetail).toContain(mode === "permanent" ? "access-denied" : "worker-timeout; retry window exhausted after 180 seconds");
       expect(lane.stateDetail).not.toContain(rule);
       expect(clock).toBe(mode === "permanent" ? 0 : 180_000);
@@ -89,6 +90,8 @@ for (const boundary of ["input", "wait", "cached"] as const) {
       attempt.roleMemoryWait = { revision: storedLessonRevision(), observations: 1, retryAfter: "1970-01-01T00:00:00Z" };
       savePipelines([lane]);
     }
+    const wallTime = h.ports.now();
+    h.ports.now = () => wallTime;
     const source = fs.readFileSync(path.join(import.meta.dir, "engine.ts"), "utf8");
     const marker = boundary === "input" ? "inputRevision = storedLessonRevision();"
       : boundary === "wait" ? "const revision = storedLessonRevision();"
@@ -132,10 +135,11 @@ for (const boundary of ["input", "wait", "cached"] as const) {
         expect(h.spawnInputs[0]!.prompt).toContain("[learned rule]");
       } else {
         expect(delivered).toBe(0);
-        expect(lane.state).toBe("needs_decision");
+        expect(lane.state).toBe(mode === "permanent" ? "needs_decision" : "running");
         expect(lane.stateDetail).toContain(mode === "permanent" ? "access-denied" : "store-busy; retry window exhausted after 180 seconds");
         expect(lane.stateDetail).not.toContain(rule);
-        expect(clock).toBe(mode === "permanent" ? 0 : 180_000);
+        const windows = (lane.runs[0]!.attempts.at(-1)!.roleMemoryFailures ?? 0) - (boundary === "wait" ? 1 : 0);
+        expect(clock).toBe(mode === "permanent" ? 0 : windows * 180_000);
         if (mode === "permanent") expect(pause).not.toHaveBeenCalled();
       }
     } finally { read.mockRestore(); now.mockRestore(); pause.mockRestore(); log.mockRestore(); await shutdownTaskPageWorker(); }
@@ -206,10 +210,115 @@ test.each(["once", "persistent"] as const)("revision-change recovery retries its
       expect(h.spawnInputs[0]!.prompt).not.toContain(rule);
     } else {
       expect(h.spawnInputs).toHaveLength(0);
-      expect(after.state).toBe("needs_decision");
+      expect(after.state).toBe("running");
       expect(after.stateDetail).toContain("store-busy; retry window exhausted after 180 seconds");
       expect(after.stateDetail).not.toContain(rule);
       expect(clock).toBe(180_000);
     }
   } finally { read.mockRestore(); now.mockRestore(); pause.mockRestore(); log.mockRestore(); await shutdownTaskPageWorker(); }
+});
+
+
+test.each(["slow-worker", "changing-store"] as const)("privacy preparation resumes durably after %s", async mode => {
+  if (process.env.LLV_PRIVACY_RETRY_CASE !== mode) {
+    const directory = fs.mkdtempSync(path.join(process.env.TMPDIR!, "privacy-retry-case-"));
+    try {
+      const child = Bun.spawn([process.execPath, "test", "--timeout=60000", import.meta.path,
+        "-t", `^privacy preparation resumes durably after ${mode}$`], {
+        env: { ...process.env, LLV_STATE_DIR: directory, LLV_PRIVACY_RETRY_CASE: mode },
+        stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      });
+      const [exit, output, errors] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(exit, output + errors).toBe(0);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+    return;
+  }
+  let sequence = mode === "slow-worker" ? 1_000_000 : 2_000_000;
+  const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
+  const variants = ["amber", "cobalt", "indigo", "saffron", "violet", "umber", "coral"];
+  const protectedText = (index: number) => `Preserve ${variants[index] ?? `variant-${index}`} fixture launch evidence until its declared owner completes preparation`;
+  const collection = roleMemoryCollection(true)!;
+  const put = (index: number) => collection.boundedPatch(1, tx => tx.put({
+    kind: "rule", id: `r_slow_${index}`, scope: "machine", rule: protectedText(index), why: "", state: "active", hints: [],
+    source: { project: "fixture", pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" },
+    createdAt: "2026-11-09T00:00:00Z", changedAt: "2026-11-09T00:00:00Z",
+  }));
+  put(0);
+  const h = harness();
+  const advanceWall = frozenWallClock(h);
+  let clock = 0, calls = 0, unstable = true;
+  const { waitForPipelineControllerJob } = await import("./controllerJobs");
+  const step = async () => {
+    await tickPipelines([], h.ports);
+    await waitForPipelineControllerJob(loadPipelines()[0]!.id, "settlement");
+  };
+  const inputModule = await import("./stageInput");
+  const compose = inputModule.composeStageInput;
+  const compositionWork: number[] = [];
+  const composition = spyOn(inputModule, "composeStageInput").mockImplementation(async (...args) => {
+    const before = calls;
+    try { return await compose(...args); }
+    finally { compositionWork.push(calls - before); }
+  });
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const real = TaskPageWorker.prototype.privacy;
+  const worker = spyOn(TaskPageWorker.prototype, "privacy").mockImplementation(async function(this: TaskPageWorker, request) {
+    calls++;
+    const result = await real.call(this, request);
+    if (unstable) {
+      if (mode === "slow-worker") clock += 180_000;
+      else put(calls);
+    }
+    return result;
+  });
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const quoted = Array.from({ length: mode === "changing-store" ? 7 : 1 }, (_, index) => protectedText(index)).join("\n");
+    await create(h.ports, [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: `Build safely. ${quoted}`, next: null }] as never);
+    await step();
+    await step();
+    const deferred = loadPipelines()[0]!;
+    expect(h.spawnInputs).toHaveLength(0);
+    expect(deferred.state).toBe("running");
+    const attempt = deferred.runs[0]!.attempts.at(-1)!;
+    expect(attempt.state).toBe("pending");
+    expect(attempt.roleMemoryFailures).toBe(1);
+    expect(attempt.roleMemoryWait).toBeDefined();
+    if (mode === "slow-worker") expect(attempt.roleMemoryWait!.detail).toContain("window-exhausted; retry window exhausted after 180 seconds during privacy worker request");
+    expect(calls).toBeLessThanOrEqual(mode === "slow-worker" ? 1 : 3);
+    const restarted = Bun.spawn([process.execPath, "-e", `
+      import { loadPipelines } from "./src/lib/pipelines/store";
+      const attempt = loadPipelines()[0].runs[0].attempts.at(-1);
+      console.log(JSON.stringify({ state: attempt.state, failures: attempt.roleMemoryFailures, retryAfter: attempt.roleMemoryWait.retryAfter, detail: attempt.roleMemoryWait.detail }));
+    `], { cwd: process.cwd(), env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [exit, output, errors] = await Promise.all([restarted.exited, new Response(restarted.stdout).text(), new Response(restarted.stderr).text()]);
+    expect(exit, errors).toBe(0);
+    expect(JSON.parse(output)).toEqual({ state: "pending", failures: 1, retryAfter: attempt.roleMemoryWait!.retryAfter, ...(attempt.roleMemoryWait!.detail ? { detail: attempt.roleMemoryWait!.detail } : {}) });
+    // Reload the durable writer's output before the next scheduled turn.
+    savePipelines(loadPipelines());
+    if (mode === "changing-store") {
+      const firstCalls = calls;
+      for (let turn = 0; turn < 8 && loadPipelines()[0]!.runs[0]!.attempts.at(-1)!.roleMemoryFailures === 1; turn++) {
+        advanceWall(31_000); await step();
+      }
+      const again = loadPipelines()[0]!.runs[0]!.attempts.at(-1)!;
+      expect(again.roleMemoryFailures, JSON.stringify({ calls, firstCalls, state: again.state, observations: again.roleMemoryWait?.observations })).toBe(2);
+      expect(again.roleMemoryWait!.retryAfter > attempt.roleMemoryWait!.retryAfter).toBe(true);
+      expect(compositionWork.length).toBeGreaterThanOrEqual(2);
+      expect(Math.max(...compositionWork)).toBeLessThanOrEqual(3);
+      savePipelines(loadPipelines());
+    }
+    unstable = false;
+    advanceWall(31_000);
+    for (let turn = 0; turn < 8 && h.spawnInputs.length === 0; turn++) await step();
+    expect(h.spawnInputs).toHaveLength(1);
+    for (const text of quoted.split("\n")) expect(h.spawnInputs[0]!.prompt).not.toContain(text);
+    expect(h.spawnInputs[0]!.prompt).toContain("[learned rule]");
+    const running = loadPipelines()[0]!.runs[0]!.attempts.at(-1)!;
+    expect(running.state).toBe("running");
+    expect(running.roleMemoryFailures).toBeUndefined();
+    if (mode === "slow-worker") expect(calls).toBe(2);
+    expect(clock).toBe(mode === "slow-worker" ? 180_000 : 0);
+    for (const text of quoted.split("\n")) expect(log.mock.calls.flat().join("\n")).not.toContain(text);
+  } finally { worker.mockRestore(); composition.mockRestore(); now.mockRestore(); log.mockRestore(); ids.mockRestore(); await shutdownTaskPageWorker(); }
 });

@@ -61,6 +61,37 @@ test("an item over 200 characters is dropped whole, and a section's items past i
   expect(warnings.some((warning) => warning.includes("over 200 characters"))).toBe(true);
 });
 
+test.each([200, 201])("a decision of %i UTF-16 units has matching display and Telegram visibility", length => {
+  const decision = "я".repeat(length - 2) + "🧭";
+  const { cut, complete, warnings } = render({ class: "question", summary: "Choose the next step.", sections: { decision: [decision] } });
+  expect(decision.length).toBe(length);
+  const visible = cut.sections.find(section => section.id === "decision")?.items ?? [];
+  if (length === 200) {
+    expect(visible).toEqual([decision]);
+    expect(renderPlain(cut)).toContain(decision);
+    expect(renderTelegram(cut)).toContain(decision);
+    expect(warnings).toEqual([]);
+  } else {
+    expect(visible).toEqual([]);
+    expect(renderPlain(cut)).not.toContain(decision);
+    expect(renderTelegram(cut)).not.toContain(decision);
+    expect(complete?.sections).toContainEqual({ heading: "Needs a decision", items: [decision] });
+    expect(warnings.some(warning => warning.includes("1 item(s) over 200 characters dropped"))).toBe(true);
+  }
+});
+
+test("decisions after the third appear only as a count in display and Telegram", () => {
+  const decisions = ["Choose the scope.", "Choose the order.", "Approve the budget.", "Choose the release date."];
+  const { cut, complete } = render({ class: "question", summary: "Four decisions are pending.", sections: { decision: decisions } });
+  expect(cut.sections.find(section => section.id === "decision")).toMatchObject({ items: decisions.slice(0, 3), more: 1 });
+  for (const displayed of [renderPlain(cut), renderTelegram(cut)]) {
+    for (const decision of decisions.slice(0, 3)) expect(displayed).toContain(decision);
+    expect(displayed).not.toContain(decisions[3]!);
+    expect(displayed).toContain("and 1 more");
+  }
+  expect(complete?.sections).toContainEqual({ heading: "Needs a decision", items: decisions });
+});
+
 test("a blocked or question report without a decision item is warned about, and machine ids in an item too", () => {
   expect(render({ class: "question", summary: "Which wave next?" }).warnings.some((warning) => warning.includes("decision section"))).toBe(true);
   expect(render({ summary: "ok", sections: { prod: ["deploy 1c41d3610c6f3b1e"] } }).warnings.some((warning) => warning.includes("machine ids"))).toBe(true);

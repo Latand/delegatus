@@ -9,7 +9,7 @@ type Writer = ProcessIdentity & { token: string; callSite: string; acquiredAt: n
 /** Diagnostic evidence only. SQLite owns admission and releases its OS lock
  * when a process dies; a stale sidecar can never prevent or grant a write. */
 export function observeRegistryWriter<T extends Database>(
-  db: T, filename: string, fallbackCallSite = "registry synchronous write",
+  db: T, filename: string, fallbackCallSite: string | (() => string) = "registry synchronous write",
 ): T {
   const exec = db.exec.bind(db);
   const close = db.close.bind(db);
@@ -30,7 +30,8 @@ export function observeRegistryWriter<T extends Database>(
     const result = exec(sql, ...args as []);
     if (/^\s*BEGIN\s+IMMEDIATE\b/i.test(sql)) {
       writer = { ...identity, token: crypto.randomUUID(),
-        callSite: currentWaitCorrelation()?.label ?? fallbackCallSite, acquiredAt: Date.now() };
+        callSite: currentWaitCorrelation()?.label ?? (typeof fallbackCallSite === "function" ? fallbackCallSite() : fallbackCallSite),
+        acquiredAt: Date.now() };
       try { fs.writeFileSync(sidecar, JSON.stringify(writer), { mode: 0o600 }); }
       catch { /* diagnostic evidence is best effort */ }
     }

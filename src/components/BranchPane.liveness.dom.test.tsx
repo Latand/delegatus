@@ -6,8 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { emptyStore, installSnapshot, type RuntimeSnapshot } from "@/components/runtime/runtimeModel";
 import type { RuntimeBus, RuntimeBusState } from "@/hooks/runtimeBus";
 import { setLocale, translate } from "@/lib/i18n";
-import { createFailedLegacyBufferProjection } from "@/lib/runtime/fixtures/failedLegacyBufferProjection";
-import { bindStructuredDeliveryQueue, hasStructuredDeliveryHost } from "@/lib/runtime/structuredDeliveryController";
+import { bindStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliveryController";
 import type { FileEntry } from "@/lib/types";
 import { resetOrchestratorSeatCacheForTests } from "./orchestrator/useOrchestratorSeat";
 import { cancelOutbox, enqueueOutbox, readOutbox, updateOutbox } from "./conversation/outbox";
@@ -96,7 +95,7 @@ mock.module("@/hooks/useLogTail", () => ({
 }));
 
 const { BranchPane } = await import("./BranchPane");
-const { appendComposerDraft } = await import("./TmuxComposer");
+const { appendComposerDraft } = await import("./ConversationComposer");
 const originalFetch = globalThis.fetch;
 const composerStorage = installComposerStorageForTests();
 
@@ -402,42 +401,6 @@ function deadProjectionSnapshot(conversationId: string): RuntimeSnapshot {
     deployments: [],
   };
 }
-
-test("a failed legacy pane-buffer probe reaches BranchPane as one live running verdict", async () => {
-  const fixture = await createFailedLegacyBufferProjection();
-  try {
-    expect(fixture.failedDelivery).toMatchObject({
-      ok: false,
-      outcome: "failed",
-      error: "Pane buffer unreadable — message was not sent.",
-    });
-    for (const rawIdentifier of fixture.rawIdentifiers) {
-      expect(JSON.stringify(fixture.failedDelivery)).not.toContain(rawIdentifier);
-    }
-    expect(fixture.snapshot.sessions.filter((session) => session.conversationId === fixture.conversationId)).toHaveLength(1);
-    expect(fixture.snapshot.sessions.find((session) => session.conversationId === fixture.conversationId)).toMatchObject({
-      hostKind: "tmux-legacy",
-      host: "hosted",
-      turn: "running",
-      provenance: "derived",
-    });
-    expect(hasStructuredDeliveryHost(fixture.key)).toBeFalse();
-
-    installRuntimeSnapshot(fixture.snapshot);
-    const host = mount(liveLegacyFile({ conversationId: fixture.conversationId }));
-    expect(host.querySelectorAll('[data-card-status="running"]')).toHaveLength(1);
-    expect(host.querySelectorAll('[data-strip-surface="live-root"]')).toHaveLength(1);
-    expect(host.querySelector("[data-dead-host-banner]")).toBeNull();
-    expect(host.querySelector('[data-strip-surface="dead"]')).toBeNull();
-    expect(host.textContent).not.toContain("Respawn conversation");
-    expect(host.textContent).not.toContain("Drafted images will be sent after the host recovers");
-    for (const rawIdentifier of fixture.rawIdentifiers) {
-      expect(host.innerHTML).not.toContain(rawIdentifier);
-    }
-  } finally {
-    await fixture.dispose();
-  }
-});
 
 test.each([
   ["live host", "conversation_conflicting_live_process", { activity: "idle", lastTurn: { startedAt: 1_000, endedAt: 2_000 } }],

@@ -519,9 +519,8 @@ Today the whole page teaches review flows as the current mechanism. Code:
   (`src/lib/orchestrator/prompt.ts:485,488`); a `review-loop` stage in a new
   pipeline is converted into a reviewer and a fix stage
   (`src/lib/pipelines/legacyReviewDefinition.ts:424-454`).
-- `/api/flows` still creates and patches flows (`src/app/api/flows/route.ts:30-49`,
-  `src/app/api/flows/[id]/route.ts:15-32`) and the MCP tools `list_flows`,
-  `get_flow` and `flow_action` remain (`src/lib/mcp/server.ts:81,143`).
+- `/api/flows` is retired: its routes answer 410 and the MCP tools `list_flows`,
+  `get_flow` and `flow_action` are gone from the tool list.
 - Line 45's artifact path `~/.claude/viewer-state/flows/<id>/…` is stale: flow
   state resolves through `statePath` (`src/lib/flows/store.ts:25-27`) and the
   old directory was migrated (`src/lib/configDir.ts:100,199`).

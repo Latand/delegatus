@@ -2,7 +2,7 @@ import { readBackgroundTaskLedger, pendingBackgroundTasks } from "@/lib/pipeline
 import fs from "node:fs";
 import path from "node:path";
 import { activityFactsFromRecords } from "@/lib/lifecycle/agentActivityEvidence";
-import { activityProcessReader } from "@/lib/lifecycle/agentActivityProcesses";
+import { activityProcessReader, resourceActivityProcessReader } from "@/lib/lifecycle/agentActivityProcesses";
 import { tailRecordsResult } from "./activity";
 import type { FileEntry, ProjectCatalogEntry } from "../types";
 import { agentRegistry, RegistryReadError, resolveConversationAlias } from "../agent/registry";
@@ -17,7 +17,6 @@ import { loadTasksForList } from "../tasks/store";
 import { waitForStateLock } from "../state/lockWait";
 import { admitScannedConversations, planAdmissions } from "../tasks/membership";
 import { loadPipelinesForProjection } from "../pipelines/store";
-import { panePidMap, resolveTarget } from "../tmux";
 import { activityVerdict, transcriptTurnResult } from "./activity";
 import type { ConversationCatalogEntry } from "./conversationCatalog";
 import { ctxFor } from "./context";
@@ -27,14 +26,13 @@ import { describeFile } from "./describe";
 import { durableServiceTierIndexForPaths, entryEffort, entryEffortResult, entryServiceTier } from "./effort";
 import { linkEntries } from "./links";
 import { entryModelsResult } from "./model";
-import { agentProcesses, outputHolders } from "./process";
+import { agentProcesses, outputHolders, resourceAgentProcesses, resourceOutputHolders } from "./process";
 import { goalFor, planFor } from "./plan";
 import { pendingQuestionFor } from "./questions";
 import { pendingWakeupFor } from "./wakeup";
-import { assignTranscriptPids } from "./transcripts";
+import { assignTranscriptPids, assignTranscriptPidsAsync } from "./transcripts";
 import { scanRootEntries } from "./roots";
-import { createTranscriptPathCanonicalizer, type TranscriptPathCanonicalizer } from "./transcriptIdentity";
-import { waitingInputProbe } from "./waitingInput";
+import { createTranscriptPathCanonicalizer } from "./transcriptIdentity";
 import { observeCodexSubagentTranscripts } from "../runtime/codexSubagentDetection";
 import { machineCpuPressurePollMs } from "../runtime/cpuPressure";
 
@@ -88,8 +86,7 @@ async function forEachEntryBatchYielding(
 
 export interface FileScanOptions {
   persist?: boolean;
-  /** Refresh process and tmux pane observations before hydrating FileEntry
-      ownership and pane-derived state. */
+  /** Refresh the process observation before hydrating FileEntry ownership. */
   fresh?: boolean;
   /** Persist parsed per-file summaries while keeping controller mutations out
       of request-owned scans. */
@@ -287,11 +284,10 @@ function withDeputyTranscripts(demoted: ReadonlySet<string>): ReadonlySet<string
 }
 
 function archivedPredecessorPaths(): ReadonlySet<string> {
-  const archived = sessionProjectProjection(true).archivedPaths;
-  if (!archived.size) return archived;
+  const { archivedPaths: archived, latestPaths } = sessionProjectProjection(true);
+  if (!archived.size || !latestPaths.length) return archived;
   const canonicalize = createTranscriptPathCanonicalizer(scanRootEntries().map(([, root]) => root));
-  const current = currentTranscriptPaths(canonicalize);
-  if (!current.size) return archived;
+  const current = new Set(latestPaths.map(canonicalize));
   const predecessors = new Set<string>();
   for (const pathname of archived) {
     if (!current.has(canonicalize(pathname))) predecessors.add(pathname);
@@ -299,29 +295,19 @@ function archivedPredecessorPaths(): ReadonlySet<string> {
   return predecessors;
 }
 
-/** Canonical path of every conversation's current generation. */
-function currentTranscriptPaths(canonicalize: TranscriptPathCanonicalizer): ReadonlySet<string> {
-  const paths = new Set<string>();
-  try {
-    for (const conversation of Object.values(agentRegistry().readOnlySnapshot().conversations)) {
-      const latest = conversation.generations.at(-1)?.path;
-      if (latest) paths.add(canonicalize(latest));
-    }
-  } catch (error) {
-    /* An unreadable registry leaves demotion exactly as the projection saw it. */
-    if (!(error instanceof RegistryReadError)) throw error;
-  }
-  return paths;
-}
+const HOSTED_TRANSCRIPT_PATH: RegistryRowProjector<"entries", string | null> = {
+  id: "scanner.hosted-transcript-path.v1",
+  collection: "entries",
+  project: entry => entry.status === "dead" || entry.status === "unhosted" ? null : entry.artifactPath || null,
+};
 
 /** Transcripts a registered host is running right now (issue #942). The scheme
     window keeps their cards whatever the caps say. */
 export function hostedTranscriptPaths(): ReadonlySet<string> {
   const paths = new Set<string>();
   try {
-    for (const entry of Object.values(agentRegistry().readOnlySnapshot().entries)) {
-      if (entry.status === "dead" || entry.status === "unhosted") continue;
-      if (entry.artifactPath) paths.add(entry.artifactPath);
+    for (const [, pathname] of registryRowProjection(agentRegistry().readOnlySnapshot(), HOSTED_TRANSCRIPT_PATH)) {
+      if (pathname) paths.add(pathname);
     }
   } catch (error) {
     if (!(error instanceof RegistryReadError)) throw error;
@@ -359,15 +345,16 @@ async function listFilesInternal(
   if (options.signal?.aborted) throw new DOMException("file scan cancelled", "AbortError");
   const entries = scan.files;
   if (options.fresh) {
-    const panes = panePidMap(true);
-    agentProcesses(true);
-    await panes;
+    if (stagedResourceScope) await resourceAgentProcesses(true);
+    else agentProcesses(true);
   }
   // The /proc fd scan is only needed to attribute background-task outputs to a
   // live pid. When the shortlist has no such entries, skip the scan entirely;
   // activity() only consults holders on the same claude-tasks/.output path.
   const needsHolders = entries.some((entry) => entry.root === "claude-tasks" && entry.path.endsWith(".output"));
-  const holders = needsHolders ? outputHolders() : NO_HOLDERS;
+  const holders = needsHolders
+    ? stagedResourceScope ? await resourceOutputHolders() : outputHolders()
+    : NO_HOLDERS;
   const durableTiers = await durableServiceTierIndexForPaths(entries.map(entry => entry.path));
   const invalidTails = new Set<string>();
   const hydrateEntry = (entry: FileEntry) => {
@@ -375,7 +362,7 @@ async function listFilesInternal(
     entry.activity = verdict.state;
     entry.activityReason = verdict.reason;
     entry.derivationComplete = verdict.complete;
-    if (entry.path.endsWith(".jsonl") && (entry.engine === "claude" || entry.engine === "codex" || entry.engine === "openclaw" || entry.engine === "copilot")) {
+    if (entry.path.endsWith(".jsonl") && (entry.engine === "claude" || entry.engine === "codex" || entry.engine === "openclaw" || entry.engine === "copilot" || entry.engine === "antigravity")) {
       const authoritative = transcriptTurnResult(entry.path, entry.size, entry.mtime * 1000, entry.engine);
       entry.derivationComplete &&= authoritative.complete;
       if (authoritative.complete) {
@@ -427,12 +414,13 @@ async function listFilesInternal(
   await forEachEntryYielding(entries, (entry) => {
     applyProcessState(entry, holders);
   });
-  assignTranscriptPids(entries);
-  const activityProcesses = activityProcessReader();
+  if (stagedResourceScope) await assignTranscriptPidsAsync(entries);
+  else assignTranscriptPids(entries);
+  const activityProcesses = stagedResourceScope ? resourceActivityProcessReader() : activityProcessReader();
   // After pid assignment: the claude effort source is the live process argv.
   await forEachEntryBatchYielding(entries, async (entry) => {
     if (entry.agentActivity && entry.proc === "running" && entry.pid !== null) {
-      entry.agentActivity.workProcesses = activityProcesses(entry.pid);
+      entry.agentActivity.workProcesses = await activityProcesses(entry.pid);
       entry.agentActivity.turnStartedAt = entry.lastTurn?.endedAt === null ? entry.lastTurn.startedAt : entry.agentActivity.turnStartedAt;
     }
     entry.effort = entryEffort(entry);
@@ -443,20 +431,9 @@ async function listFilesInternal(
       entry.agentActivity.backgroundVerified = ledger !== null;
       if (ledger) entry.agentActivity.background = pendingBackgroundTasks(ledger, Date.now()).filter(task => task.kind !== "wakeup").map(task => ({ id: task.id, description: entry.agentActivity?.background?.find(item => item.id === task.id)?.description ?? null }));
     }
-    const pending = pendingQuestionFor(entry);
-    entry.pendingQuestion = pending && entry.pid !== null
-      ? { ...pending, paneTarget: await resolveTarget(entry.pid) }
-      : pending;
-    const probe = await waitingInputProbe(entry);
-    entry.waitingInput = probe.waiting;
-    entry.rateLimit = probe.rateLimit;
-    /* A stalled transcript whose pane sits at a plain composer was interrupted
-       mid-turn (Esc leaves the turn open in the jsonl): the agent is idle, not
-       blocked, so it must not wear the «interrupted or waiting for permission» state. */
-    if (probe.atComposer && entry.activity === "stalled") {
-      entry.activity = Date.now() / 1000 - entry.mtime < 900 ? "recent" : "idle";
-      entry.activityReason = "pane_at_composer";
-    }
+    entry.pendingQuestion = pendingQuestionFor(entry);
+    entry.waitingInput = null;
+    entry.rateLimit = null;
   });
   await linkEntries(entries, { persist });
   if (options.signal?.aborted) throw new DOMException("file scan cancelled", "AbortError");

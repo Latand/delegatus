@@ -1,3 +1,4 @@
+import { publicationSummary, publicationTitle } from "@/lib/forge/publicationLanguage";
 import { withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -15,7 +16,7 @@ import { recordWorktreeProvenance } from "@/lib/pipelines/worktreeProvenance";
 
 /**
  * Git/gh/setup actions of a workflow, over an injectable exec port so the
- * state machine tests never touch a real repo (the flows/exec.ts pattern).
+ * state machine tests never touch a real repo.
  * Only the long-running setup command escapes the port: it runs detached with
  * file-backed artifacts, mirroring headless reviewers, so a viewer restart
  * never loses it.
@@ -40,6 +41,8 @@ export interface ExecOptions {
   inheritFd?: number;
   /** Independent resource owners survive wrappers that replace inheritFd. */
   additionalInheritedFds?: readonly number[];
+  /** Called once with the child's PID right after it is spawned. */
+  onSpawn?: (pid: number) => void;
 }
 
 export type ExecPort = (command: string, args: string[], cwd: string, env?: Partial<NodeJS.ProcessEnv>, options?: ExecOptions) => ExecResult | Promise<ExecResult>;
@@ -58,6 +61,8 @@ export const realExec: ExecPort = (command, args, cwd, env, options = {}) => new
     stdio: ["ignore", "pipe", "pipe", ...(options.inheritFd === undefined ? [] : [options.inheritFd]), ...options.additionalInheritedFds ?? []],
     env: budget.env,
   });
+  // An observer's failure never orphans the child this promise owns.
+  if (child.pid) try { options.onSpawn?.(child.pid); } catch { /* observation only */ }
   const stop = (reason: string) => {
     if (stopped) return;
     stopped = reason;
@@ -218,9 +223,9 @@ export function setupStatus(wf: Workflow, now: number = Date.now()): SetupStatus
 
 export type FinishResult = { ok: true; prUrl: string | null } | { ok: false; error: string; recoveryRequired?: boolean };
 
-/** First line of the task as the PR title, in the repo's usual short form. */
+/** Derive the English public title in the workflow's usual short form. */
 export function prTitle(wf: Workflow): string {
-  const line = wf.task.split("\n").map((part) => part.trim()).find(Boolean) ?? wf.name;
+  const line = publicationTitle(wf.task || wf.name);
   return line.length > 72 ? line.slice(0, 69) + "…" : line;
 }
 
@@ -237,7 +242,7 @@ export async function finishPr(wf: Workflow, body: string, exec: ExecPort): Prom
   if (push.code !== 0) return failure("git push", push);
   const create = (await exec(
     "gh",
-    ["pr", "create", "--title", prTitle(wf), "--body", body, "--base", wf.baseBranch, "--head", wf.branch],
+    ["pr", "create", "--title", prTitle(wf), "--body", publicationSummary(body), "--base", wf.baseBranch, "--head", wf.branch],
     wf.worktreeDir,
     forge,
   ));

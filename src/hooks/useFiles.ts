@@ -7,7 +7,6 @@ import { FLOWS_CHANGED_EVENT } from "@/components/flows/flowModel";
 import { PIPELINES_CHANGED_EVENT, PIPELINES_PATCHED_EVENT } from "@/components/pipelines/pipelineEvents";
 import { SESSION_TITLES_CHANGED_EVENT } from "@/components/session/sessionTitleApi";
 import { TASKS_CHANGED_EVENT } from "@/components/tasks/taskApi";
-import { WORKFLOWS_CHANGED_EVENT } from "@/components/workflows/workflowModel";
 import { readTeamAuthority, subscribeTeamAuthority } from "@/components/team/teamClient";
 import { readConfirmedWorkspaces, subscribeConfirmedWorkspaces } from "@/components/team/workspacesClient";
 import { FILES_BUILT_HEADER, filesBuiltBefore, filesBuiltSuperseded, parseFilesBuilt, type FilesBuilt } from "@/lib/filesBuilt";
@@ -126,7 +125,7 @@ export interface FilesData {
   builtGeneration?: number;
 }
 
-const HEALTHY_SYSTEM = { tmux: { status: "healthy" as const } };
+const HEALTHY_SYSTEM = {};
 const EMPTY: FilesData = { files: [], pinOverlayPaths: [], requestScope: null, projectCatalog: [], projectAliases: {}, projectDisplayNames: {}, crownedProjects: [], archivedProjects: [], projectCwds: {}, flows: [], pipelines: [], workflows: [], tasks: [], systemHealth: HEALTHY_SYSTEM, conversationAliases: {}, launchRoutes: {}, workLinks: EMPTY_FILES_WORK_LINKS, loaded: false, scopeCertified: false, catalogFailures: 0 };
 
 export function filesApiUrl(_project?: string | null, pinnedPath?: string | null): string {
@@ -142,6 +141,12 @@ type FilesFetcher = (input: string, init?: RequestInit) => Promise<Response>;
 /** The server's own representation, exactly as certified by its ETag — what a
     delta applies to. Rows are shared with the published snapshot. */
 type RawFilesResponse = Record<string, unknown>;
+/** A full global response already contains the exact JSON needed by IndexedDB.
+    Delta results have their own identity and must encode the reconstructed body. */
+const fullCatalogText = new WeakMap<RawFilesResponse, string>();
+function catalogText(raw: RawFilesResponse): string {
+  return fullCatalogText.get(raw) ?? JSON.stringify(raw);
+}
 type Representation = {
   data: FilesData;
   etag?: string;
@@ -868,7 +873,7 @@ export function createFilesClientCache(
           creationWrites = creationWrites.then(async () => {
             if (!ownsCreation(generation) || !store?.updateCreations) return;
             await store.updateCreations(authority!.owner, [], materialized, () => ownsCreation(generation),
-              { version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: global.etag, text: JSON.stringify(global.raw) }, authority!.signature);
+              { version: FILES_SNAPSHOT_VERSION, savedAt: Date.now(), etag: global.etag, text: catalogText(global.raw) }, authority!.signature);
             if (!ownsCreation(generation)) return;
             for (const id of materialized) creations.delete(id);
             publishCreations();
@@ -1139,6 +1144,9 @@ export function createFilesClientCache(
     shownBuilt = built;
     const raw = Array.isArray(parsed) ? undefined
       : scopedIncoming === incoming ? rawSharingRows(parsed as unknown as RawFilesResponse, snapshot) : parsed as unknown as RawFilesResponse;
+    if (url === filesApiUrl() && etag && raw && deltaBase === null && text.length <= FILES_SNAPSHOT_MAX_BYTES) {
+      fullCatalogText.set(raw, text);
+    }
     rememberRepresentation(url, snapshot, etag ?? undefined, etag ? raw : undefined, built);
     settleServerPipelines(logicalGeneration ?? generation, !generationIncomplete);
     publish(url);
@@ -1366,7 +1374,9 @@ export function createFilesClientCache(
     snapshot = data;
     serverPipelines = data.pipelines;
     serverTasks = data.tasks;
-    rememberRepresentation(url, data, record.etag, rawSharingRows(parsed as RawFilesResponse, data));
+    const raw = rawSharingRows(parsed as RawFilesResponse, data);
+    fullCatalogText.set(raw, record.text);
+    rememberRepresentation(url, data, record.etag, raw);
     publish(undefined, "urgent");
     return true;
   };
@@ -1551,7 +1561,7 @@ function persistFilesSnapshot(): void {
   if (!store || !current || current.etag === persistedEtag) return;
   let text: string;
   try {
-    text = JSON.stringify(current.raw);
+    text = catalogText(current.raw);
   } catch {
     return;
   }
@@ -1916,7 +1926,6 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
     const unsubscribeWorkspaces = subscribeConfirmedWorkspaces(onAuthorityChanged);
     window.addEventListener(FLOWS_CHANGED_EVENT, onChanged);
     window.addEventListener(PIPELINES_CHANGED_EVENT, onChanged);
-    window.addEventListener(WORKFLOWS_CHANGED_EVENT, onChanged);
     window.addEventListener(TASKS_CHANGED_EVENT, onChanged);
     window.addEventListener(SESSION_TITLES_CHANGED_EVENT, onChanged);
     window.addEventListener(FILES_CHANGED_EVENT, onChanged);
@@ -2016,7 +2025,6 @@ export function useFiles(project?: string | null, pinnedPath?: string | null): F
       unsubFiles();
       window.removeEventListener(FLOWS_CHANGED_EVENT, onChanged);
       window.removeEventListener(PIPELINES_CHANGED_EVENT, onChanged);
-      window.removeEventListener(WORKFLOWS_CHANGED_EVENT, onChanged);
       window.removeEventListener(TASKS_CHANGED_EVENT, onChanged);
       window.removeEventListener(SESSION_TITLES_CHANGED_EVENT, onChanged);
       window.removeEventListener(FILES_CHANGED_EVENT, onChanged);

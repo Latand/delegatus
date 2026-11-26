@@ -39,7 +39,7 @@ function authorFromProvenance(provenance: DeliveredMessageProvenance): AgentReco
 
 function recordEvidence(
   record: AuthorEvidenceRecord,
-  engine: "claude" | "codex" | "copilot",
+  engine: "claude" | "codex" | "copilot" | "antigravity",
   occurrenceDigests: ReadonlySet<string>,
 ): {
   text: string; origin: MessageOrigin | null;
@@ -67,7 +67,7 @@ function recordEvidence(
  * requested page alone. */
 export function agentRecordAuthors(
   transcriptPath: string,
-  engine: "claude" | "codex" | "copilot",
+  engine: "claude" | "codex" | "copilot" | "antigravity",
   records: ReadonlyArray<AuthorEvidenceRecord>,
   context: ReadonlyArray<AuthorEvidenceRecord> | null = null,
   claudeOrigins?: ReturnType<typeof claudeMessageProvenance>,

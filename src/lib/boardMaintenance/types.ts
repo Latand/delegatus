@@ -20,12 +20,14 @@ export interface MaintenanceChange {
 }
 export interface MaintenanceAttention { taskId: string; text: string; options: string[]; nextStep?: string }
 export interface MaintenanceLeftAlone { taskId: string; reason: string }
+export interface MaintenanceSeatHandoff { taskId: string; reason: string; action: string }
 export interface MaintenanceRunLog {
   changes: MaintenanceChange[];
   omittedChanges: number;
   logGaps: number;
   attention: MaintenanceAttention[];
   leftAlone: MaintenanceLeftAlone[];
+  seat: MaintenanceSeatHandoff[];
   verdict: "pass" | "fail" | "needs_decision" | null;
 }
 export interface MaintenanceCounts {
@@ -39,7 +41,7 @@ export interface MaintenanceCounts {
   looks: number;
 }
 export const emptyMaintenanceCounts = (): MaintenanceCounts => ({ writes: 0, tasks: 0, status: 0, closed: 0, created: 0, text: 0, details: 0, looks: 0 });
-export const emptyMaintenanceLog = (): MaintenanceRunLog => ({ changes: [], omittedChanges: 0, logGaps: 0, attention: [], leftAlone: [], verdict: null });
+export const emptyMaintenanceLog = (): MaintenanceRunLog => ({ changes: [], omittedChanges: 0, logGaps: 0, attention: [], leftAlone: [], seat: [], verdict: null });
 export const maintenanceRunIsLive = (run: Pick<MaintenanceRun, "state">): boolean => ["claimed", "launching", "running"].includes(run.state);
 export interface MaintenanceRun {
   kind: "run";

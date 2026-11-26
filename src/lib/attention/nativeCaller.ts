@@ -1,15 +1,15 @@
 import path from "node:path";
 
-import type { AgentRegistry } from "@/lib/agent/registry";
-type RegistrySnapshot = ReturnType<AgentRegistry["readOnlySnapshot"]>;
+import type { McpCallerRegistryRows } from "@/lib/agent/registry";
 import type { ProcessIdentity, ProcessIdentityStatus } from "@/lib/processIdentity";
 
 export type NativeCallerReason =
-  | "platform-unverified" | "no-claude-ancestor" | "capability-unresolved" | "capability-conflict"
+  | "platform-unverified" | "no-claude-ancestor" | "capability-unresolved" | "capability-conflict" | "ancestry-ambiguous"
   | "foreign-host" | "unknown-claude-home" | "session-record-missing" | "session-record-invalid"
   | "session-kind" | "process-identity-mismatch" | "domain-mismatch" | "record-predates-process"
   | "session-held-twice" | "session-not-scanned" | "generation-ambiguous"
   | "generation-not-current" | "transcript-outside-home" | "generation-hosted"
+  | "evidence-incomplete"
   | "session-changed" | "session-proof-unavailable" | "approval-waiting" | "approval-refused" | "approval-unavailable";
 export interface NativeCallerRefusal { reason: NativeCallerReason; retryable: boolean }
 export type NativeCallerVerdict =
@@ -37,7 +37,7 @@ export interface NativeCallerSources {
   bootTime(): number | null;
   processStartedAt(pid: number): number | null;
   sessionHeldElsewhere(sessionId: string, pid: number): boolean;
-  snapshot(): Pick<RegistrySnapshot, "conversations" | "entries">;
+  snapshot(sessionId: string): McpCallerRegistryRows | null;
   generationProof(pid: number, transcript: string): string | null;
   association(evidence: NativeAdmissionEvidence): { status: "approved" | "waiting" | "refused"; proof: string };
   cwd(pid: number): string | null;
@@ -45,7 +45,7 @@ export interface NativeCallerSources {
 }
 
 export function nativeCallerRefusal(reason: NativeCallerReason): NativeCallerVerdict & { kind: "refused" } {
-  return { kind: "refused", reason, retryable: reason === "session-not-scanned" };
+  return { kind: "refused", reason, retryable: reason === "session-not-scanned" || reason === "evidence-incomplete" };
 }
 
 export function nativeSessionRecord(value: unknown, pid: number): NativeSessionRecord | null {
@@ -92,7 +92,9 @@ export function resolveNativeCaller(sources: NativeCallerSources): NativeCallerV
       return refuse("record-predates-process");
     }
     if (sources.sessionHeldElsewhere(record.sessionId, pid)) return refuse("session-held-twice");
-    const snapshot = sources.snapshot();
+    const snapshot = sources.snapshot(record.sessionId);
+    if (!snapshot) return refuse("session-record-invalid");
+    if (snapshot.nativeGenerationAmbiguous) return refuse("generation-ambiguous");
     const matches = Object.values(snapshot.conversations).flatMap((conversation) => conversation.engine === "claude"
       ? conversation.generations.filter((generation) => generation.id === record.sessionId).map((generation) => ({ conversation, generation })) : []);
     if (!matches.length) return refuse("session-not-scanned");
@@ -107,14 +109,14 @@ export function resolveNativeCaller(sources: NativeCallerSources): NativeCallerV
     const relative = transcript && projects ? path.relative(projects, transcript) : null;
     if (!transcript || !relative || path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)
       || path.basename(transcript) !== `${record.sessionId}.jsonl`) return refuse("transcript-outside-home");
+    if (snapshot.nativeHostsLookupLimitExceeded) return { ...refuse("evidence-incomplete"), retryable: false };
+    if (snapshot.nativeHostsIncomplete) return refuse("evidence-incomplete");
+    if (snapshot.nativeArtifact !== undefined && snapshot.nativeArtifact !== transcript) return refuse("session-changed");
     for (const entry of Object.values(snapshot.entries)) {
+      if (!entry.structuredHost) continue;
       if (entry.artifactPath !== generation.path && sources.realpath(entry.artifactPath) !== transcript) continue;
-      if ((entry.host && !entry.host.agent?.pid) || (entry.structuredHost && !entry.structuredHost.process?.pid)) {
-        return refuse("generation-hosted");
-      }
-      for (const host of [entry.host?.agent, entry.structuredHost?.process]) {
-        if (host?.pid && sources.hostStatus(host) !== "dead") return refuse("generation-hosted");
-      }
+      const host = entry.structuredHost.process;
+      if (!host?.pid || sources.hostStatus(host) !== "dead") return refuse("generation-hosted");
     }
     const recordBytes = JSON.stringify(record);
     const generationProof = sources.generationProof(pid, transcript);
@@ -152,6 +154,7 @@ const REASONS: Record<NativeCallerReason, string> = {
   "no-claude-ancestor": "This MCP server has no eligible Claude Code parent; HTTP callers need a launch credential.",
   "capability-unresolved": "The presented Delegatus launch credential is unrecognised or malformed. Start the session from this Delegatus.",
   "capability-conflict": "The process and launch credential name different conversations.",
+  "ancestry-ambiguous": "The registry could not establish a single conversation for the caller's process ancestry.",
   "foreign-host": "The Claude parent carries a Delegatus host stamp that this installation cannot attribute.",
   "unknown-claude-home": "The Claude parent's config directory is not a known account home.",
   "session-record-missing": "The Claude parent's session record is missing. Restart Claude Code.",
@@ -166,8 +169,12 @@ const REASONS: Record<NativeCallerReason, string> = {
   "generation-not-current": "This session is archived, superseded, migrating or no longer current.",
   "transcript-outside-home": "The session transcript is outside the matched account's projects directory.",
   "generation-hosted": "Delegatus already hosts this generation, or its host identity cannot be verified. Continue it there.",
+  "evidence-incomplete": "Delegatus is still preparing native caller evidence. Repeat the same request after preparation finishes.",
 };
 
 export function nativeAdmissionMessage(admission?: NativeCallerRefusal): string {
+  if (admission?.reason === "evidence-incomplete" && !admission.retryable) {
+    return "[evidence-incomplete] The native host lookup exceeded its verification limit. Open the conversation in Delegatus and continue it under its host.";
+  }
   return `${admission ? `[${admission.reason}] ${REASONS[admission.reason]} ` : ""}A Claude Code session started outside Delegatus needs explicit operator approval for its live process and transcript generation. Otherwise open the conversation in Delegatus and continue it there under its host.`;
 }

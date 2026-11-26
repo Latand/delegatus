@@ -53,6 +53,7 @@ function slot(over: { pipeline?: Partial<Pipeline>; stage?: Partial<PipelineStag
     baseRef: "a",
     lastPassedCommit: "a",
     stages: [theStage],
+    taskIds: [],
     runs: [],
     cursor: null,
     state: "draft",
@@ -159,7 +160,7 @@ test.each(["high", "max"])("switching a stage at %s to an unresolved model keeps
   host.remove();
 });
 
-test.each(["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"])("a codex stage on %s offers the current models, keeps its own, and that model's own tiers", (model) => {
+test.each(["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"])("a codex stage on %s offers the current models, keeps its own, and that model's own tiers", (model) => {
   const effectiveRole = { ...stage().effectiveRole, engine: "codex" as const, model, effort: "max" };
   const { host, root } = mount(<StagePlaceholderPane slot={slot({ stage: { effectiveRole } })} interactive />);
   openConfig(host);
@@ -167,7 +168,7 @@ test.each(["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"])("a codex 
   expect(modelSelect!.value).toBe(model);
   const labels = [...modelSelect!.options].map((option) => option.textContent);
   // The retired GPT-6-Sol is offered only to the stage already saved on it.
-  expect(labels.slice(1)).toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna", ...(model === "gpt-6-sol" ? ["GPT-6-Sol"] : [])]);
+  expect(labels.slice(1)).toEqual(["GPT-6.2-Sol", "GPT-6.2-Astra", "GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna", ...(model === "gpt-6-sol" ? ["GPT-6-Sol"] : [])]);
   expect(effortSelect!.value).toBe("max");
   expect(Boolean(effortSelect!.querySelector('option[value="ultra"]'))).toBe(model !== "gpt-6-luna");
   flushSync(() => root.unmount());
@@ -232,7 +233,7 @@ test("placeholder runtime controls stay usable at 390px: the row wraps and every
 function draftSlot(stages: PipelineStage[], index: number): StageSlot {
   const pipeline = {
     id: "p1", task: "Ship it", project: "demo", repoDir: "/r", worktreeDir: "/w", branch: "b", baseBranch: "main",
-    baseRef: "a", lastPassedCommit: "a", stages, runs: [], cursor: null, state: "draft", pausedState: null,
+    baseRef: "a", lastPassedCommit: "a", stages, taskIds: [], runs: [], cursor: null, state: "draft", pausedState: null,
     stateDetail: null, srcPath: null, srcConversationId: null, createdAt: "1970", closedAt: null,
   } as unknown as Pipeline;
   const theStage = stages[index]!;

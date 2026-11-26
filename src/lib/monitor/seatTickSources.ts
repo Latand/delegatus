@@ -1,3 +1,6 @@
+import { captureSeatWakeResponseStart, observeSeatWakeResponse, type SeatWakeResponse, type WakeResponseEvidence, type WakeResponseStart } from "./seatWakeResponse";
+import { seatTickInstructionLines, seatTickInstructionReview } from "./seatTickInstructions";
+import { issueDeliverySeatSignals } from "@/lib/forge/issueDelivery";
 import { sendFailureSignals } from "@/lib/runtime/sendFailureNotice";
 import { createInterface } from "node:readline";
 import { taskMonitorRef } from "./cards";
@@ -6,12 +9,14 @@ import type { OverdueTaskCursor } from "@/lib/state/sqliteStateStore";
 import { overdueSweepCursor, shownOverdueDates } from "./seatTickReminders";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { forEachCooperatively as forEachSharedRow } from "@/lib/cooperative";
-import { forEachSeatTickRow as forEachCooperatively, seatTickYield as yieldToRuntime, assertSeatTickWork, guardedSeatTickPort, seatTickMutation, seatTickWorkSignal } from "./seatTickWork";
+import { forEachSeatTickRow as forEachCooperatively, seatTickYield as yieldToRuntime, assertSeatTickWork, guardedSeatTickPort, seatTickMutation, seatTickWorkRemainingMs, seatTickWorkSignal } from "./seatTickWork";
+import { systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { shortId } from "@/lib/shortIds";
-import { seatTickCatchUp } from "./seatTick";
+import { seatTickCatchUp, seatTickSignalVersion } from "./seatTick";
+import { pendingAutonomyReports } from "./autonomy";
 import { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 import { defaultSeatTickAdmissionSources } from "./seatTickAdmissionSources";
 import { readReleaseProject } from "@/lib/release/store";
@@ -23,13 +28,18 @@ import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { contextReading, readOrchestratorTranscriptFacts } from "@/lib/orchestrator/health";
 import type { SeatContextUsage } from "./seatAutoRotation";
 import { readDiskPressure, diskPressureLabel, diskPressureWakeReady, type DiskPressure } from "@/lib/state/diskPressure";
+import { currentMemoryPressure, memoryPressureLine, memoryPressureSignals, type MemoryPressure } from "@/lib/state/memoryPressure";
+import { tempSweepStatus } from "@/lib/tempSweep";
 import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { memoryProblemSignals, prepareMemoryProblemRead } from "@/lib/memory/roleProblems";
+import { acknowledgeCurationNoAccountWarning, curationNoAccountWarning } from "@/lib/memory/curation/store";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { liveFreshObservation } from "@/lib/accounts/accountProjection";
+import { pauseReminderDue } from "@/lib/pipelines/pauseReminder";
+import type { SeatAgendaPauses } from "@/lib/attention/seatAgenda";
 import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import fs from "node:fs";
 import path from "node:path";
@@ -56,19 +66,23 @@ import { pageFromEvents, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { refreshLifecycleJournal } from "@/lib/lifecycle/projector";
 import { scopedReportId } from "@/lib/bridge/store";
 import { recordDeploySnapshots } from "@/lib/bridge/taskChanges";
-import type { SeatTickReportRow } from "./seatTickReports";
+import type { SeatTickReportLog } from "./seatTickReports";
 import { operatorLocale } from "@/lib/operator/settings";
 import { bridgeReportsEnabled } from "@/lib/projects/settings";
+import { diskCleanerSignals } from "@/lib/cleaner/diskReport";
 import { viewerRepositoryProjects } from "@/lib/projects/viewerRepository";
 import viewerPackageManifest from "../../../package.json";
 import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
 import { orchestratorMandateCarriesTickContract } from "@/lib/orchestrator/prompt";
-import { canonicalOrchestratorProject, orchestratorSeatEverHeld, orchestratorSeatFor } from "@/lib/orchestrator/seats";
+import { canonicalOrchestratorProject, orchestratorSeatEverHeld, orchestratorSeatFor, orchestratorSeatRevocationSource } from "@/lib/orchestrator/seats";
 import { activeSeatsByCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
 import { pipelineCompletedUnreviewed, pipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import { loadArchivedPipelinesForList, loadArchivedPipelinesForListAsync, loadPipelinesForList, loadPipelinesForListAsync } from "@/lib/pipelines/store";
 import { projectTaskPipelineIds } from "@/lib/pipelines/taskBinding";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline } from "@/lib/pipelines/types";
+import { forgeCacheView } from "@/lib/forge/cache";
+import { canonicalRepository, lanePullRequest, pipelineWorkLinks } from "@/lib/forge/resolve";
+import type { ForgeCacheView } from "@/lib/forge/workLinks";
 import { runtimeHostClient, type RuntimeHostClient } from "@/lib/runtime/client";
 import type { RuntimeReceiptStatus } from "@/lib/runtime/contracts";
 import { latestLedgerDeployment, ledgerDeployment, ledgerDeployments } from "@/lib/runtime/deploymentLedger";
@@ -152,8 +166,9 @@ const EVENT_PAGE = 200;
 /** Open pull requests one check reads. Bounds the `gh` answer, not the lanes:
     a project with more open pull requests than this has other problems. */
 const PULL_REQUEST_LIMIT = 60;
-/** Optional GitHub enrichment must leave most of the check budget for delivery. */
-const PULL_REQUEST_ENRICHMENT_BUDGET_MS = 200;
+/** Allow slow forge replies without consuming the rest of the shared check
+    deadline, which also bounds the other sources, retries and delivery. */
+const PULL_REQUEST_ENRICHMENT_BUDGET_MS = 5_000;
 /** Finished lanes examined for local commits per check, in bounded Git batches.
     The persisted lane cursor advances subsequent checks and survives restarts. */
 const LOCAL_FINISHED_LANE_LIMIT = 60;
@@ -225,10 +240,10 @@ const RUNTIME_LANDED: ReadonlySet<string> = new Set(["delivered", "applied", "an
 /** The delivery the Viewer registry is holding under this wake's idempotency
     key. The key is the tick's own and carries the project, the seat epoch and
     the state fingerprint, so it identifies one wake across the whole file. */
-function registryDeliveryFor(wake: SeatTickOutstandingWake): { id: string; state: string } | null {
-  const found = Object.values(agentRegistry().readOnlySnapshot().heldDeliveries)
+export function registryDeliveryFor(wake: SeatTickOutstandingWake): { id: string; state: string; operationId: string } | null {
+  const found = Object.values(agentRegistry().deliverySnapshotForMessageKey(wake.conversationId, wake.clientMessageId).heldDeliveries)
     .find((delivery) => delivery.clientMessageId === wake.clientMessageId);
-  return found ? { id: found.id, state: found.state } : null;
+  return found ? { id: found.id, state: found.state, operationId: found.command.operationId } : null;
 }
 
 /** The runtime journal's receipt for one operation, as far as the tick reads
@@ -236,6 +251,7 @@ function registryDeliveryFor(wake: SeatTickOutstandingWake): { id: string; state
 export interface SeatTickJournalReceipt {
   status: RuntimeReceiptStatus;
   reason: string | null;
+  primaryFailure?: SendReceipt["primaryFailure"];
 }
 
 /**
@@ -279,7 +295,8 @@ export interface SeatTickWakeObservation {
     under the id. Throws when the host cannot be asked. */
 export async function journalReceipt(operationId: string, client: RuntimeHostClient): Promise<SeatTickJournalReceipt | null> {
   const current = await client.operationStatus(operationId, { currentRetryLeaf: true });
-  return current ? { status: current.receipt.status, reason: current.receipt.reason ?? null } : null;
+  return current ? { status: current.receipt.status, reason: current.receipt.reason ?? null,
+    ...(current.receipt.primaryFailure ? { primaryFailure: current.receipt.primaryFailure } : {}) } : null;
 }
 
 /**
@@ -526,6 +543,8 @@ function overdueTaskInputs(sources: SeatTickSources, project: string, now: numbe
 }
 
 export interface SeatTickSources {
+  wakeResponse?: (row: SeatWakeResponse, project?: string) => Promise<WakeResponseEvidence>;
+  wakeResponseStart?: (conversationId: string) => Promise<WakeResponseStart | undefined>;
   prepareRead?: () => Promise<void>;
   /** Warm problem credit without preparing general history for a deploy wake. */
   prepareMemoryProblems?: () => Promise<void>;
@@ -534,11 +553,18 @@ export interface SeatTickSources {
   /** The waits «Waiting for you» routes to this project's seat
       (docs/design/attention-auto-resolve.md), read from the board projection
       the panel itself reads. Absent: none. Null: read skipped or unavailable. */
-  workerAsks?: (project: string) => Promise<readonly SeatTickWorkerAskInput[] | null>;
+  workerAsks?: (project: string, seatConversationId?: string, pauses?: SeatAgendaPauses) => Promise<readonly SeatTickWorkerAskInput[] | import("./types").SeatTickAgendaInput | null>;
   seatTurnOutcome?: (conversationId: string) => Promise<SeatTurnOutcome | null>;
   recoverQuota?: (project: string) => Promise<boolean>;
+  /** Start a fresh host for a designated seat whose host is gone, without a
+      model turn. Absent: the check records the loss and revives nothing. */
+  reviveSeatHost?: import("./seatHostRecovery").SeatHostRevival;
   seatContextUsage?: (conversationId: string) => SeatContextUsage | null;
   diskPressure?: () => Promise<DiskPressure>;
+  /** RAM, swap and the tmpfs /tmp; absent reads as no machine line. */
+  memoryPressure?: () => MemoryPressure | null;
+  /** The last temp sweep's stray counts, for the machine line. */
+  tempSweep?: () => ReturnType<typeof tempSweepStatus>;
   maintenanceRuns?: (project: string) => readonly MaintenanceRun[];
   seatFor: typeof orchestratorSeatFor;
   /** Whether an orchestrator ever held the project (#2170). Absent: assumed,
@@ -612,7 +638,7 @@ export interface SeatTickSources {
       language (§5.1). Absent: the check keeps no report ledger, as with bridge
       reports off. */
   reports?: {
-    log: (project: string) => readonly SeatTickReportRow[] | Promise<readonly SeatTickReportRow[]>;
+    log: (project: string) => SeatTickReportLog | Promise<SeatTickReportLog>;
     enabled: (project: string) => boolean;
     operatorLocale: () => "en" | "uk" | null;
   };
@@ -718,6 +744,10 @@ export async function confirmedClaudeWakeDelivery(wake: SeatTickOutstandingWake,
   const ledger = new FileClaudeDeliveryLedger();
   for (const generation of generations) {
     const entry = ledger.load(generation.id).find(candidate => candidate.entry.id === operationId);
+    if (entry?.native || entry?.nativeUnverified) {
+      const { confirmedSend } = await import("@/lib/runtime/confirmedSend");
+      return confirmedSend(file, operationId, false);
+    }
     if (entry?.delivered && entry.entry.contentDigest === digest) return true;
   }
   return false;
@@ -738,9 +768,9 @@ export async function settleRecordFromJournal(
   target: WakeRecordTarget,
   receipt: SeatTickJournalReceipt,
 ): Promise<SendReceipt | null> {
-  const verdict = journalVerdict(receipt.status, receipt.reason);
-  /* Only what {@link journalWakeState} would act on: the settlement's own
-     unverified `failed` classifies as lost here and is not one. */
+  const verdict = journalVerdict(receipt.status, receipt.reason, receipt.primaryFailure);
+  /* Only what {@link journalWakeState} would act on. Unverified outcomes
+     retain their duplicate risk and cannot settle the wake as safely lost. */
   if (!verdict || verdict.disposition === "unverified" || journalWakeState(receipt) === "uncertain") return null;
   /* Off the loop (docs/design/delivery-progress-and-drain.md, C2); refused,
      it answers null like an undecidable verdict, and the next tick reads it
@@ -754,7 +784,7 @@ export async function settleRecordFromJournal(
     } else if (target.deliveryId) {
       const deliveryId = target.deliveryId;
       const written = await registry.deliveryWrite(correlation,
-        () => registry.recordDeliveryOutcome(deliveryId, "failed", receipt.reason ?? verdict.reason, "lost"));
+        () => registry.recordDeliveryOutcome(deliveryId, "failed", receipt.reason ?? verdict.reason, "lost", null, verdict.primaryFailure));
       if (!written.acquired) return null;
     } else {
       return null;
@@ -765,9 +795,16 @@ export async function settleRecordFromJournal(
   return sendReceiptFor(registry.readOnlySnapshot(), target.operationId);
 }
 
-function seatProjectResolver(): (project: string) => string {
-  const resolve = projectAliasResolver();
-  return project => resolve(project.trim());
+type SeatProjectResolver = ((project: string) => string) & { keys(project: string): string[] };
+function seatProjectResolver(): SeatProjectResolver {
+  const snapshot = projectAliasSnapshot();
+  const resolve = projectAliasResolver(snapshot);
+  const resolver = ((project: string) => resolve(project.trim())) as SeatProjectResolver;
+  resolver.keys = (project: string) => {
+    const canonical = resolve(project.trim());
+    return [canonical, ...Object.keys(snapshot.aliases).filter(key => key !== canonical && resolve(key) === canonical)];
+  };
+  return resolver;
 }
 
 export function defaultSeatTickSources(): SeatTickSources {
@@ -815,7 +852,11 @@ export function defaultSeatTickSources(): SeatTickSources {
       if (!conversation || !generation || (conversation.engine !== "claude" && conversation.engine !== "codex")) return null;
       return readSeatTurnOutcome(conversation.engine, generation.path);
     },
+    wakeResponse: observeSeatWakeResponse,
+    wakeResponseStart: captureSeatWakeResponseStart,
     recoverQuota: recoverSeatQuota,
+    reviveSeatHost: async (request, dependencies) =>
+      (await import("@/lib/runtime/structuredRecovery")).recoverDeadStructuredConversation(request, dependencies),
     maintenanceRuns,
     /* Seats under the project they serve now (#1874): a seat keyed by its
        folder's old identity is the seat of the key its lanes are written to. */
@@ -832,14 +873,16 @@ export function defaultSeatTickSources(): SeatTickSources {
     deploymentByKey: findSeatDeploymentByKey,
     deployment: (deploymentId) => ledgerDeployment(deploymentId),
     diskPressure: () => readDiskPressure(),
+    memoryPressure: () => currentMemoryPressure(),
+    tempSweep: () => tempSweepStatus(),
     retirementReport: () => {
       const report = readJsonCache(statePath("host-retirement-report.json"));
       return report && typeof report === "object" ? report as StructuredHostRetirementReport : null;
     },
     retirementJournal: (sinceMs) => readRetirementJournalWindow(statePath("host-retirement-journal.ndjson"), sinceMs),
-    workerAsks: (project) => withViewerOperation("seat-tick.worker-asks", () => performanceSpans.wait("seat-tick.worker-asks", async () => {
+    workerAsks: (project, seatConversationId, pauses) => withViewerOperation("seat-tick.worker-asks", () => performanceSpans.wait("seat-tick.worker-asks", async () => {
       const { operatorSeatAgenda } = await import("@/app/api/files/operatorProjection");
-      return operatorSeatAgenda(project);
+      return operatorSeatAgenda(project, seatConversationId, pauses);
     })),
     openPullRequests: (options) => openPullRequestsForRepo(options),
     /* One rule for both halves: ask, and act on, the layer that is actually
@@ -862,7 +905,7 @@ export function defaultSeatTickSources(): SeatTickSources {
          again inside the write: an attempt may have claimed it while the
          writer was held, and then it is not withdrawn. */
       const registry = agentRegistry();
-      const operationId = registry.readOnlySnapshot().heldDeliveries[delivery.id]?.command.operationId ?? null;
+      const operationId = delivery.operationId;
       const withdrawn = await registry.deliveryWrite({ label: "delivery.withdraw", operationId },
         () => registry.withdrawHeldDelivery(delivery.id, operationId, reason));
       return withdrawn.acquired ? withdrawn.value : "unknown";
@@ -873,7 +916,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     reports: {
       log: (project) => withViewerOperation("seat-tick.reports", () => performanceSpans.wait("seat-tick.reports", async () => {
         const { runSeatSourceInWorker } = await import("@/lib/scanner/filesResponseWorker");
-        return JSON.parse((await runSeatSourceInWorker({ type: "seat-reports", project })).body) as SeatTickReportRow[];
+        return JSON.parse((await runSeatSourceInWorker({ type: "seat-reports", project })).body) as SeatTickReportLog;
       })),
       enabled: (project) => bridgeReportsEnabled(project),
       operatorLocale: () => operatorLocale(),
@@ -932,15 +975,18 @@ async function reportsInput(project: string, sources: SeatTickSources): Promise<
     /* A row is the project's when its key folds to the project: a seat recorded
        before its folder changed key filed under the old one, and those rows
        still discharge what they covered. */
-    const manager = (await port.log(project)).filter((report) => !!report.project && report.origin?.kind === "manager"
+    const log = await port.log(project);
+    const applicable = log.reports.filter((report) => !!report.project
       && (report.project === project || canonicalOrchestratorProject(report.project) === project));
+    const manager = applicable.filter(report => report.origin?.kind === "manager");
     const filedUnder = [...new Set([project, ...manager.map((report) => report.project!)])];
     const reportedIds = new Set<string>();
+    const coveredIds = new Set<string>();
     let lastReportAt: string | null = null;
     let latestCoversOwedAt: string | null = null;
     for (const report of manager) {
       reportedIds.add(report.id);
-      for (const id of report.covers ?? []) reportedIds.add(id);
+      for (const id of report.covers ?? []) coveredIds.add(id);
       if (!lastReportAt || Date.parse(report.at) > Date.parse(lastReportAt)) lastReportAt = report.at;
       if (report.coversOwedAt && (!latestCoversOwedAt || Date.parse(report.coversOwedAt) > Date.parse(latestCoversOwedAt))) latestCoversOwedAt = report.coversOwedAt;
     }
@@ -949,6 +995,9 @@ async function reportsInput(project: string, sources: SeatTickSources): Promise<
       operatorLocale: port.operatorLocale(),
       lastReportAt,
       reportedIds: [...reportedIds],
+      coveredIds: [...coveredIds],
+      reservedIds: log.reservedIds,
+      occupiedIds: [...new Set([...(log.occupiedIds ?? []), ...applicable.map(report => report.id)])],
       reportIdsFor: (key) => filedUnder.map((filed) => scopedReportId(filed, key)),
       latestCoversOwedAt,
     };
@@ -1297,6 +1346,19 @@ function pauseInputs(pipelines: readonly Pipeline[], seat: SeatTickSeatInput | n
   });
 }
 
+function agendaPauses(pauses: ReturnType<typeof pauseInputs>, now: number, deployThrough: number): SeatAgendaPauses {
+  const quotaReadyLaneIds: string[] = [];
+  const deployLaneIds: string[] = [];
+  for (const [id, lane] of pauses) {
+    if (lane.pauseConditionMet) quotaReadyLaneIds.push(id);
+    if (deployThrough > 0 && lane.pausedBy === "seat" && Date.parse(lane.pausedAt) <= deployThrough
+      && (!lane.pause?.resumeCondition || pauseReminderDue(lane.pause, lane.pausedAt, now, lane.pauseConditionMet))) {
+      deployLaneIds.push(id);
+    }
+  }
+  return { quotaReadyLaneIds, deployLaneIds };
+}
+
 function taskSummary(task: BoardTask & { pipelineIds: string[] }): TaskSummary {
   return {
     id: task.id,
@@ -1580,8 +1642,30 @@ export function readRetirementJournalWindow(filename: string, sinceMs: number): 
   return { covered: false, sweeps };
 }
 
-function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources): SeatTickSignalInput[] {
-  const found: SeatTickSignalInput[] = [...sendFailureSignals(seat?.conversationId), ...telegramPostSignals(project, sources.tasks(), loadSeatRounds(project)), ...postMergeSeatSignals(sources.pipelines(), project, seatProjectResolver())];
+function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatTickSources, shown: readonly string[] = [], projectKeys: readonly string[] = [project]): SeatTickSignalInput[] {
+  const found: SeatTickSignalInput[] = [...sendFailureSignals(seat?.conversationId), ...telegramPostSignals(project, sources.tasks(), loadSeatRounds(project)), ...postMergeSeatSignals(sources.pipelines(), project, seatProjectResolver()), ...issueDeliverySeatSignals(sources.pipelines(), project, seatProjectResolver())];
+  if (seat) {
+    try {
+      const warning = curationNoAccountWarning(projectKeys);
+      if (warning) {
+        const signal = {
+          id: "curator-no-account", episode: warning.episode, actionable: true,
+          label: "The role memory curator could not run because no account was available for this project (no-account).",
+        };
+        if (shown.includes(seatTickSignalVersion(signal, seat))) acknowledgeCurationNoAccountWarning(warning.project, warning.episode);
+        else found.push(signal);
+      }
+    } catch { /* An unreadable curation store leaves other wake evidence available. */ }
+  }
+  for (const lane of projectRows(sources.pipelines(), project)) {
+    const names = lane.merge?.optionalFailedChecks;
+    if (lane.hiddenAt || !names?.length) continue;
+    found.push({
+      id: `optional-check-failures:${lane.id}`,
+      actionable: true,
+      label: redactBounded(`Note: optional checks failed on PR #${lane.merge!.prNumber}: ${names.join(", ")}; merge depends on required checks only`, 800),
+    });
+  }
   if (viewerOwnProjectKeys().includes(project)) {
     found.push(...selfUpdateSignals(readAuto(statePath("self-update", "auto.json"))));
   }
@@ -1648,6 +1732,21 @@ function signals(project: string, seat: SeatTickSeatInput | null, sources: SeatT
     found.push({ id: "seat-host", label: `the seat's own turn is ${seatActivity.lifecycle} in ${project} (${seatActivity.reason})` });
   }
   return found;
+}
+
+/** Read once per check; a failed read leaves the machine line and its item out. */
+function memoryPressureOf(sources: SeatTickSources): MemoryPressure | null {
+  try { return sources.memoryPressure?.() ?? null; } catch { return null; }
+}
+
+/** The wake's machine line: memory, swap, the tmpfs /tmp, and what the last
+    temp sweep removed from /tmp and /var/tmp. */
+export function seatTickMachineLine(pressure: MemoryPressure | null, sweep: ReturnType<typeof tempSweepStatus> | null | undefined): string | null {
+  if (!pressure) return null;
+  const stray = sweep?.stray;
+  return memoryPressureLine(pressure) + (stray && sweep
+    ? ` Last temp sweep at ${sweep.at}: removed ${stray.removed} stray director${stray.removed === 1 ? "y" : "ies"} older than ${stray.maxAgeHours} h from /tmp and /var/tmp (${(stray.removedBytes / 1e9).toFixed(2)} GB), ${stray.deferred} deferred.`
+    : "");
 }
 
 async function diskPressureSignals(sources: SeatTickSources): Promise<SeatTickSignalInput[]> {
@@ -1922,12 +2021,58 @@ interface PullRequestEvidence {
 
 const execFileAsync = promisify(execFile);
 
+/** Internal output and comparison lanes owe no main-branch delivery. Legacy
+ * local code lanes still work without a forge or a delivery remote. A linked
+ * PR is an explicit delivery even when the lane otherwise stays internal. */
+function localLaneDelivery(pipeline: Pipeline, cache: ForgeCacheView): "none" | "merged" | "pending" {
+  if (pipeline.delivery?.disposition === "comparison") return "none";
+  if (pipeline.merge?.state === "merged") return "merged";
+  // Only the explicitly recorded delivery PR proves the lane's delivery.
+  // pipelineWorkLinks also includes manual links, provenance, and cached PRs
+  // from a reused branch; their merge state cannot settle this lane.
+  const deliveryPr = pipeline.delivery?.target.pr ? lanePullRequest(pipeline) : null;
+  const canonical = canonicalRepository(cache);
+  if (deliveryPr && pipelineWorkLinks(pipeline, cache).links.some(link => link.kind === "pr"
+    && link.number === deliveryPr.number && canonical(link.repository) === canonical(deliveryPr.repository)
+    && link.state === "merged")) return "merged";
+  const prs = pipelineWorkLinks(pipeline, cache).links.filter(link => link.kind === "pr");
+  if (prs.length || pipeline.delivery?.target.pr || pipeline.publication === "remote-branch") return "pending";
+  if (pipeline.publication === "internal") return "none";
+  if (!pipeline.delivery?.target.remote && pipeline.stages.length
+    && pipeline.stages.every(stage => (stage.access ?? stage.effectiveRole?.access) === "read-only")) return "none";
+  return "pending";
+}
+
+/** Compare path, mode and postimage, including deletions. NUL separators keep
+ * arbitrary Git filenames intact. Rename detection is disabled by the caller. */
+function gitPostimages(raw: string): Array<[string, string]> {
+  const parts = raw.split("\0"), images: Array<[string, string]> = [];
+  for (let index = 0; index < parts.length; index++) {
+    const header = /^:\d+ (\d+) [0-9a-f]+ ([0-9a-f]+) [A-Z]\d*$/.exec(parts[index]!.trimStart());
+    if (header && index + 1 < parts.length) images.push([parts[++index]!, `${header[1]}:${header[2]}`]);
+  }
+  return images;
+}
+
+/** Squash and batch merges change commit identity. Main's bounded raw history
+ * proves delivery of each changed path even after later edits replace it.
+ * Failure to complete the read is unknown, never evidence of missing work. */
+async function localLaneContentMissing(base: string, sha: string, ref: string, git: (args: string[]) => Promise<string>): Promise<boolean> {
+  const images = new Map(gitPostimages(await git(["diff", "--raw", "-z", "--no-abbrev", "--no-renames", base, sha, "--"])));
+  if (!images.size) return false;
+  const history = await git(["--literal-pathspecs", "log", "--format=", "--raw", "-z", "--no-abbrev", "--no-renames", "-m", `${base}..${ref}`, "--", ...images.keys()]);
+  // A file can be changed repeatedly; keep every observed postimage.
+  for (const [file, image] of gitPostimages(history)) if (images.get(file) === image) images.delete(file);
+  return images.size > 0;
+}
+
 /** A local lane tip outside its recorded local base is actionable without any
  * forge account, remote, or `gh` response. The lane row and its accepted SHA
  * identify the exact work; the signal version includes that SHA so a later
  * accepted revision is a new item. */
 async function localFinishedLaneSignals(project: string, pipelines: readonly Pipeline[], cursor: string | null): Promise<{ signals: SeatTickSignalInput[]; cursor: string | null }> {
   const canonicalProject = seatProjectResolver();
+  const cache = forgeCacheView();
   const finished = [...new Map(pipelines
     .filter((pipeline) => canonicalProject(pipeline.project) === project && !pipeline.hiddenAt && isFinished(pipeline)
       && !(pipeline.merge && (PIPELINE_MERGE_LIVE_STATES.has(pipeline.merge.state) || pipeline.merge.state === "refreshing")))
@@ -1953,25 +2098,30 @@ async function localFinishedLaneSignals(project: string, pipelines: readonly Pip
     firstLocalProbeFailure ??= detail;
   };
   {
-    const remaining = LOCAL_GIT_TIMEOUT_MS;
     const batch = candidates.slice(0, LOCAL_GIT_BATCH_SIZE);
     const outcomes = await Promise.all(batch.map(async (pipeline) => {
+      if (localLaneDelivery(pipeline, cache) !== "pending") return null;
       const sha = pipeline.lastPassedCommit;
       const base = pipeline.baseBranch;
       if (!pipeline.repoDir || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sha)
         || !base || !/^[A-Za-z0-9._/-]+$/.test(base) || base.includes("..") || base.startsWith("/")) return null;
-      if (pipeline.merge?.state === "merged"
-        && (pipeline.merge.reviewedHead === sha || pipeline.merge.chain.includes(sha) || pipeline.merge.mergedHead === sha)) return null;
+      const deadline = performance.now() + LOCAL_GIT_TIMEOUT_MS;
+      const git = async (args: string[]) => {
+        const remaining = Math.ceil(deadline - performance.now());
+        if (remaining <= 0) throw new Error("local Git deadline expired");
+        return (await execFileAsync("git", args, {
+          cwd: pipeline.repoDir, timeout: remaining, encoding: "utf8", maxBuffer: 256 * 1024,
+        })).stdout;
+      };
       const refs = [`refs/remotes/origin/${base}`, `refs/heads/${base}`];
       for (const ref of refs) {
         try {
-          await execFileAsync("git", ["merge-base", "--is-ancestor", `${sha}^{commit}`, `${ref}^{commit}`], {
-            cwd: pipeline.repoDir, timeout: remaining, encoding: "utf8", maxBuffer: 16 * 1024,
-          });
-          return null;
+          const common = (await git(["merge-base", `${sha}^{commit}`, `${ref}^{commit}`])).trim();
+          if (common === sha) return null;
+          try { return await localLaneContentMissing(common, sha, ref, git) ? { pipeline, sha } : null; }
+          catch { noteLocalProbeFailure(`${pipeline.id}: content unavailable`); return null; }
         } catch (error) {
           const code = String((error as NodeJS.ErrnoException).code);
-          if (code === "1") return { pipeline, sha };
           if (code !== "128") {
             noteLocalProbeFailure(`${pipeline.id}: ${code}`);
             return null;
@@ -2000,21 +2150,23 @@ async function localFinishedLaneSignals(project: string, pipelines: readonly Pip
   return { signals: found, cursor };
 }
 
-async function readPullRequestsWithinBudget(
+export async function readPullRequestsWithinBudget(
   source: () => Promise<OpenPullRequestsResult>,
+  budgetMs = Math.min(PULL_REQUEST_ENRICHMENT_BUDGET_MS, (seatTickWorkRemainingMs() ?? PULL_REQUEST_ENRICHMENT_BUDGET_MS) / 2),
+  scheduler: DeadlineScheduler = systemScheduler,
 ): Promise<OpenPullRequestsResult> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: unknown;
   try {
     return await Promise.race([
       source(),
       new Promise<OpenPullRequestsResult>((resolve) => {
-        timer = setTimeout(() => resolve({ ok: false, unavailable: "timed-out" }), PULL_REQUEST_ENRICHMENT_BUDGET_MS);
+        timer = scheduler.setTimeout(() => resolve({ ok: false, unavailable: "timed-out" }), budgetMs);
       }),
     ]);
   } catch {
     return { ok: false, unavailable: "command-failed" };
   } finally {
-    if (timer) clearTimeout(timer);
+    if (timer !== undefined) scheduler.clearTimeout(timer);
   }
 }
 
@@ -2374,6 +2526,7 @@ interface ChildEvidence {
   children: SeatTickChildInput[];
   unavailable: SeatTickChildrenGap | null;
   catchUpPending: boolean;
+  ledgerWarnings: SeatTickSignalInput[];
 }
 
 /** The one token a check carries when several conditions stand: the first in
@@ -2428,8 +2581,8 @@ async function childWork(
   policy: SeatTickPolicy,
   sources: SeatTickSources,
 ): Promise<ChildEvidence> {
-  if (!seat) return { children: [], unavailable: null, catchUpPending: false };
-  if (!state.accounting) return { children: [], unavailable: "registry-unreadable", catchUpPending: false };
+  if (!seat) return { children: [], unavailable: null, catchUpPending: false, ledgerWarnings: [] };
+  if (!state.accounting) return { children: [], unavailable: "registry-unreadable", catchUpPending: false, ledgerWarnings: [] };
   assertSeatTickWork();
   const accounting = guardedSeatTickPort(new SeatTickAccounting(state.accounting.filename, project), "accounting.children");
   const registry = sources.registry();
@@ -2439,6 +2592,7 @@ async function childWork(
   const migration = accountingGap(state.accounting.gap);
   if (migration) gaps.add(migration);
   const children: SeatTickChildInput[] = [];
+  const ledgerWarnings = new Map<string, SeatTickSignalInput>();
   /* Enumerated once per check and handed to every projection (#1783): the
      roots decide whether a child's transcript is one this Viewer can read. */
   const roots = transcriptRoots();
@@ -2564,13 +2718,25 @@ async function childWork(
     } else if (retainedLatestSettlement) {
       child.input = { ...child.input, status: "terminal", outcome: previousInput.outcome, terminalAt: previousInput.terminalAt };
     }
-    unplaced();
     bytesLeft -= read.bytes;
     // A vanished host and both records gone have a named failure receipt.
     // Keep the cursor and every earlier outcome for a later recovery.
-    if (source.cursor.gap !== null && !lost) gaps.add("ledger-gap");
+    const ledgerGap = source.cursor.gap !== null && !lost;
+    if (ledgerGap && !read.cursor.atEnd && read.outcomes.length >= OUTCOME_LIMIT) readablePageLimited = true;
+    if (ledgerGap) {
+      if (child.input.status === "unknown") children.push(child.input);
+      const id = `child-ledger:${child.input.conversationId}:${generation.id}`;
+      ledgerWarnings.set(id, {
+        id, episode: JSON.stringify([source.cursor.identity, source.cursor.gap]), actionable: true,
+        label: `${child.input.title} — spawned child's event ledger has incomplete evidence (${source.cursor.gap})`,
+      });
+    } else unplaced();
     child.generationIndex = (child.generationIndex + 1) % generations.length;
-    /* A read the budget stopped short of the end resumes first next check. */
+    /* Resume budget-limited healthy reads first. A damaged ledger keeps its
+       cursor and rotates so it cannot repeatedly hold up healthy children. */
+    // A readable page of a damaged ledger still owes a bounded continuation.
+    // Keep that ticket ahead of the frozen catch-up cutoff until the readable
+    // prefix is exhausted; healthy children retain their independent tickets.
     const cut = !read.cursor.atEnd && (read.bytes >= budget || read.outcomes.length >= OUTCOME_LIMIT);
     if (child.input.status === "terminal" && read.bytes === 0 && read.outcomes.length === 0 && read.cursor.atEnd
       && child.generationIndex === previousGeneration && JSON.stringify(previousCursor) === JSON.stringify(read.cursor)
@@ -2580,9 +2746,10 @@ async function childWork(
   };
 
   let catchUpPending = false;
+  let readablePageLimited = false;
   try {
     const active = await seatTickMutation("owner", () => accounting.owner(seat.conversationId, seat.seatEpoch));
-    if (await seatTickMutation("discoverRevokedOwners", () => accounting.discoverRevokedOwners(statePath("orchestrator-seats.json"), (ownerProject) => canonicalOrchestratorProject(ownerProject) === project))) {
+    if (await seatTickMutation("discoverRevokedOwners", () => accounting.discoverRevokedOwners(orchestratorSeatRevocationSource(), (ownerProject) => canonicalOrchestratorProject(ownerProject) === project))) {
       gaps.add("discovery-incomplete");
     }
     if (await discover(active)) {
@@ -2670,8 +2837,8 @@ async function childWork(
       const next = accounting.page("poll", 1)[0];
       const pending = next?.kind === "poll" && (next.key.startsWith(`poll/${encodeURIComponent(project)}/!`)
         || Number(next.key.slice(next.key.lastIndexOf("/") + 1)) <= catchUpPollThrough);
-      catchUpPending = !!pending;
-      if (pending) gaps.add("ledger-pending");
+      catchUpPending = !!pending || readablePageLimited;
+      if (catchUpPending) gaps.add("ledger-pending");
       else await seatTickMutation("endCatchUpPoll", () => accounting.endCatchUpPoll());
     }
     // Page the persisted ready queue, yielding between pages. The cutoff is
@@ -2735,7 +2902,7 @@ async function childWork(
       });
     }
   } catch { gaps.add("registry-unreadable"); }
-  return { children, unavailable: worstChildrenGap(gaps), catchUpPending };
+  return { children, unavailable: worstChildrenGap(gaps), catchUpPending, ledgerWarnings: [...ledgerWarnings.values()] };
 }
 
 function stageAttempt(lane: Pipeline) {
@@ -2791,6 +2958,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
   const tasks: SeatTickTaskInput[] = board.map((task, index) => ({
     id: task.id, title: taskEvidence[index]!.title, status: task.status, owned: task.chosen === true ? openTasks.has(task.id) : taskEvidence[index]!.owner !== null,
     updatedAt: task.updatedAt ?? null, dueAt: task.dueAt,
+    priority: task.priority, createdAt: task.createdAt, dueHistory: task.dueHistory,
     accepted: task.chosen === true, hold: task.hold, waitingSince: task.statusBy?.at ?? task.createdAt ?? task.updatedAt,
     ...(linked && !runsHere(task, linked) ? { runsOn: machineLabel(task.machine!, linked).label } : {}),
   }));
@@ -2799,6 +2967,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
   const openIds = openSeatPipelineIds(hotLanes);
   const refreshed: SeatTickCheckInput = {
     ...input, now, pipelines, tasks, ownLanes,
+    instructionReview: instructionReviewFor(input.project, now, settings, hotLanes, sourceTasks, input.seat),
     overdueTasks: overdueTaskInputs(sources, input.project, now, openTasks, input.state.itemsShown ?? [], sourceTasks),
     ...(sources.memoryProblems ? { signals: [...input.signals.filter(signal => !signal.id.startsWith("memory-problem:")), ...sources.memoryProblems(input.project, input.state.itemsShown ?? [], input.seat?.conversationId ? input.seat : null)] } : {}),
     events: input.events.map((event) => ({ ...event, pipelineTerminal: event.pipelineId !== null && !openIds.has(event.pipelineId) })),
@@ -2894,6 +3063,7 @@ function reuseSeatTickProjection(input: SeatTickCheckInput, sources: SeatTickSou
     && input.settledDeploys === cache.settledDeploys && input.settledMaintenance === cache.settledMaintenance;
   const refreshed: SeatTickCheckInput = {
     ...input, now, pipelines, tasks: cache.tasks, ownLanes: cache.ownLanes, events: linked, signals, settings,
+    instructionReview: instructionReviewFor(input.project, now, settings, cache.pipelinesSource, cache.tasksSource, input.seat),
     overdueTasks: overdueTaskInputs(sources, input.project, now, cache.openTasks, input.state.itemsShown ?? [], cache.tasksSource),
     changeFingerprint: fingerprintStable ? cache.fingerprint : seatTickFingerprint(pipelines, cache.tasks, input.children,
       input.pullRequests, input.pullRequestsUnavailable, cache.ownLanes, input.settledDeploys ?? [], input.settledMaintenance ?? []),
@@ -3182,23 +3352,26 @@ export async function refreshSeatTickEvidence(input: SeatTickCheckInput, sources
   let fresh = await refreshSeatTickInputCooperatively(input, sources);
   const key = await pullRequestEvidenceKey(fresh, sources);
   fresh = await refreshSeatTickInputCooperatively(fresh, sources);
-  const currentlyOwned = () => {
+  const currentlyOwned = (ids: ReadonlySet<string>) => {
     const canonicalProject = seatProjectResolver();
+    const cache = forgeCacheView();
     const currentLanes = [...sources.pipelines(), ...sources.archivedPipelines()]
-      .filter(lane => canonicalProject(lane.project) === fresh.project && !lane.hiddenAt);
-    return new Set(currentLanes.filter((lane) => lane.merge
-      && (PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state) || lane.merge.state === "refreshing"
-        || (lane.merge.state === "merged" && (lane.merge.reviewedHead === lane.lastPassedCommit
-          || lane.merge.chain.includes(lane.lastPassedCommit) || lane.merge.mergedHead === lane.lastPassedCommit)))).map(lane => lane.id));
+      .filter(lane => ids.has(lane.id) && canonicalProject(lane.project) === fresh.project && !lane.hiddenAt);
+    return new Map(currentLanes.map(lane => [lane.id,
+      lane.merge && (PIPELINE_MERGE_LIVE_STATES.has(lane.merge.state) || lane.merge.state === "refreshing")
+        ? "owned" : localLaneDelivery(lane, cache)] as const));
   };
   const excludeCurrentlyOwned = (value: SeatTickCheckInput): SeatTickCheckInput => {
     if (!value.pullRequests.length && !value.signals.some(signal => signal.id.startsWith("local-unmerged-lane:"))) return value;
-    const owners = currentlyOwned();
+    const owners = currentlyOwned(new Set([...value.pullRequests.map(pr => pr.pipelineId), ...value.signals
+      .filter(signal => signal.id.startsWith("local-unmerged-lane:"))
+      .map(signal => signal.id.slice("local-unmerged-lane:".length))]));
     return {
       ...value,
-      pullRequests: value.pullRequests.filter(pr => !owners.has(pr.pipelineId)),
+      pullRequests: value.pullRequests.filter(pr => owners.get(pr.pipelineId) !== "owned" && owners.get(pr.pipelineId) !== "merged"),
       signals: value.signals.filter(signal => !signal.id.startsWith("local-unmerged-lane:")
-        || !owners.has(signal.id.slice("local-unmerged-lane:".length))),
+        || !owners.has(signal.id.slice("local-unmerged-lane:".length))
+        || owners.get(signal.id.slice("local-unmerged-lane:".length)) === "pending"),
     };
   };
   if (key === input.pullRequestEvidenceKey) return excludeCurrentlyOwned(fresh);
@@ -3256,6 +3429,25 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   const settings = effectiveSeatTickSettings(sources.settings(project), sources.now(), SEAT_TICK_WAKE_INTERVAL_MS);
   const paused = projectRows(sources.pipelines(), project).filter(lane => isOpen(lane) && lane.state === "paused");
   const pauses = pauseInputs(paused, seat, sources, sources.now());
+  const deployThrough = Math.max(...settledDeploys.map(deploy => Date.parse(deploy.settledAt ?? "") || 0));
+  const pauseSelection = agendaPauses(pauses, now, deployThrough);
+  let workerAsksObserved = true;
+  let workerAsks: SeatTickCheckInput["workerAsks"];
+  let decisionForms: SeatTickCheckInput["decisionForms"];
+  let pauseWaitingTasks: SeatTickCheckInput["pauseWaitingTasks"];
+  if (sources.workerAsks) {
+    try {
+      const read = await sources.workerAsks(project, seat.conversationId ?? undefined, pauseSelection);
+      workerAsksObserved = read !== null;
+      if (read && "asks" in read) { workerAsks = read.asks; decisionForms = read.forms; pauseWaitingTasks = read.pauseWaitingTasks; }
+    } catch (error) {
+      workerAsksObserved = false;
+      console.error("[seat tick] routed asks unavailable", error instanceof Error ? error.name : "unknown");
+    }
+    assertSeatTickWork();
+    const currentSeat = sources.seatFor(project).active;
+    if (currentSeat?.conversationId !== seat.conversationId || currentSeat?.seatEpoch !== seat.seatEpoch) return null;
+  }
   const pipelines: SeatTickPipelineInput[] = [];
   await forEachCooperatively(paused, lane => {
     const evidence = evidenceFromPipelines([{ id: lane.id, task: lane.task, project: lane.project,
@@ -3265,6 +3457,9 @@ export async function gatherSeatTickDeployInput(project: string, state: SeatTick
   }, { batchSize: 4, timeBudgetMs: 8 });
   return { project, now: sources.now(), seat, state, policy, settings,
     pipelines, tasks: [], events: [], children: [], childrenUnavailable: null,
+    workerAsksObserved, ...(workerAsks ? { workerAsks } : {}),
+    ...(pauseWaitingTasks ? { pauseWaitingTasks } : {}), ...(decisionForms ? { decisionForms } : {}),
+    instructionReview: instructionReviewFor(project, sources.now(), settings, sources.pipelines(), sources.tasks(), seat),
     ownLanes: [], pullRequests: [], pullRequestsUnavailable: null, pullRequestsObserved: false,
     signals: [], settledDeploys, deploySettlementWakeDue: true, ...(observedReports ? { reports: observedReports } : {}),
     changeFingerprint: seatTickFingerprint(pipelines, [], [], [], null, [], settledDeploys, []),
@@ -3337,6 +3532,7 @@ async function gatherSeatTickInputWork(
     status: task.status,
     owned: task.chosen === true ? openTasks.has(task.id) : taskEvidence[index]!.owner !== null,
     updatedAt: task.updatedAt ?? null, dueAt: task.dueAt,
+    priority: task.priority, createdAt: task.createdAt, dueHistory: task.dueHistory,
     accepted: task.chosen === true, hold: task.hold, waitingSince: task.statusBy?.at ?? task.createdAt ?? task.updatedAt,
     /* The guard is the guarantee; this only saves wakes (M.4). */
     ...(linked && !runsHere(task, linked) ? { runsOn: machineLabel(task.machine!, linked).label } : {}),
@@ -3354,7 +3550,7 @@ async function gatherSeatTickInputWork(
   try {
     const release = readReleaseProject(canonical);
     for (const run of release.history) if (now - run.at <= policy.backlogAfterMs) releaseAlerts.push({ kind: "release-settled", id: `release-settled:${run.key}:${run.at}`, label: `Release ${run.outcome}; task ${run.taskId}, lane ${run.pipelineId}. Read its stage summaries for any product defect seen in the README pictures.` });
-    if (release.blocked && now - release.blocked.since >= 24 * 3_600_000) releaseAlerts.push({ kind: "release-blocked", id: `release-blocked:${release.blocked.episode}`, label: `A due release has waited 24 hours: ${release.observation?.reason ?? "unreadable blocker"}. Read seat_tick_settings release status.` });
+    if (settings.release?.enabled && release.blocked && now - release.blocked.since >= 24 * 3_600_000) releaseAlerts.push({ kind: "release-blocked", id: `release-blocked:${release.blocked.episode}`, label: `A due release has waited 24 hours: ${release.observation?.reason ?? "unreadable blocker"}. Read seat_tick_settings release status.` });
   } catch { /* The release controller journals store failures; other seat work still wakes. */ }
 
 
@@ -3372,16 +3568,26 @@ async function gatherSeatTickInputWork(
   }
   const { events, cursor } = eventsSince(canonical, state.eventsThrough, openPipelineIds, hotLanes, sources, catchUp);
   await yieldToRuntime();
-  const { children, unavailable: childrenUnavailable, catchUpPending: childrenCatchUpPending } = await withViewerOperation("seat-tick.children", () => childWork(canonical, seat, state, policy, sources));
+  const { children, unavailable: childrenUnavailable, catchUpPending: childrenCatchUpPending, ledgerWarnings } = await withViewerOperation("seat-tick.children", () => childWork(canonical, seat, state, policy, sources));
   /* An unreadable board costs this check its routed asks, never the check:
      the waits stay routed and the next check reads them again. */
   let workerAsks: readonly SeatTickWorkerAskInput[] = [];
   let workerAsksObserved = true;
-  if (seat && settings.enabled && sources.workerAsks) {
+  let decisionForms: SeatTickCheckInput["decisionForms"];
+  let pauseWaitingTasks: SeatTickCheckInput["pauseWaitingTasks"];
+  if (seat && (settings.enabled || pendingAutonomyReports(settings, now).length > 0) && sources.workerAsks) {
     try {
-      const read = await sources.workerAsks(canonical);
+      const through = Math.max(Date.parse(state.deployResumeThrough ?? "") || 0,
+        ...settledDeploys.map(deploy => Date.parse(deploy.settledAt ?? "") || 0));
+      const read = await sources.workerAsks(canonical, seat.conversationId ?? undefined, agendaPauses(pauses, now, through));
       workerAsksObserved = read !== null;
-      workerAsks = read ?? [];
+      if (read && "asks" in read) {
+        const remoteTasks = new Set(tasks.filter(task => task.runsOn).map(task => task.id));
+        workerAsks = read.asks.filter(ask => ask.seatOwnedLane || !ask.waitingTaskIds || !remoteTasks.has(ask.id));
+        decisionForms = read.forms;
+        pauseWaitingTasks = read.pauseWaitingTasks;
+      }
+      else workerAsks = read ?? [];
     } catch (error) {
       workerAsksObserved = false;
       console.error("[seat tick] routed asks unavailable", error instanceof Error ? error.name : "unknown");
@@ -3414,10 +3620,15 @@ async function gatherSeatTickInputWork(
   });
 
   await yieldToRuntime();
+  const memory = memoryPressureOf(sources);
+  let sweep: ReturnType<typeof tempSweepStatus> = null;
+  try { sweep = sources.tempSweep?.() ?? null; } catch { /* The line goes without the sweep. */ }
+  const machine = seatTickMachineLine(memory, sweep);
   const gathered: SeatTickCheckInput = {
     project: canonical,
     now,
     seat,
+    ...(machine ? { machine } : {}),
     workers: { ...(() => {
       const limit = effectiveWorkerLimit(canonical);
       return { limit: limit.value, source: limit.source, machine: limit.machine };
@@ -3426,14 +3637,17 @@ async function gatherSeatTickInputWork(
     pipelines,
     tasks,
     overdueTasks: overdueTaskInputs(sources, canonical, now, openTasks, state.itemsShown ?? [], hotTasks),
+    instructionReview: instructionReviewFor(canonical, now, settings, hotLanes, hotTasks, seat),
     workerAsksObserved,
+    ...(decisionForms ? { decisionForms } : {}),
+    ...(pauseWaitingTasks ? { pauseWaitingTasks } : {}),
     ...(workerAsks.length ? { workerAsks } : {}),
     events,
     pullRequests,
     pullRequestsUnavailable,
     pullRequestsObserved,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
-    signals: [...signals(canonical, seat, sources), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
+    signals: [...ledgerWarnings, ...signals(canonical, seat, sources, state.itemsShown ?? [], canonicalProject.keys(canonical)), ...(localPending ?? []), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources), ...await diskCleanerSignals(canonical, state.itemsShown ?? [], seat), ...memoryPressureSignals(memory)],
     ownLanes,
     settledDeploys,
     settledMaintenance,
@@ -3475,4 +3689,23 @@ async function gatherSeatTickInputWork(
     });
   }
   return gathered;
+}
+
+function instructionReviewFor(project: string, now: number, settings: ReturnType<typeof effectiveSeatTickSettings>, lanes: readonly Pipeline[], tasks: readonly BoardTask[], seat: SeatTickCheckInput["seat"]): string | undefined {
+  if (!settings.reason) return undefined;
+  const finished = new Map<string, string>();
+  for (const lane of projectRows(lanes, project)) {
+    if (lane.state === "completed" || lane.state === "closed") {
+      // closedAt is the durable terminal event. Movement timestamps can point
+      // at an earlier attempt or pause and hide work closed after review.
+      const at = lane.closedAt ?? stageAttempt(lane)?.completedAt ?? laneMovedAt(lane);
+      if (at) finished.set(lane.id, at);
+    }
+    if (lane.merge?.state === "merged") {
+      const number = lane.merge.prNumber ?? lane.delivery?.target.pr;
+      if (number) finished.set(`#${number}`, lane.merge.updatedAt);
+    }
+  }
+  for (const task of projectRows(tasks, project)) if (task.status === "done") finished.set(task.id, task.doneAt ?? task.updatedAt);
+  return seatTickInstructionReview(seatTickInstructionLines(settings), { project, now, instructionsReviewedAt: settings.instructionsReviewedAt, ...(seat ? { seat } : {}), finished, canonicalProject: seatProjectResolver() });
 }

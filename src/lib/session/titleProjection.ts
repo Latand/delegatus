@@ -24,6 +24,7 @@ interface RegistryProjection {
     get(pathname: string): { displayName: string; projectRoot?: string; unresolved?: true } | undefined;
   };
   archivedPaths: Set<string>;
+  latestPaths: string[];
 }
 
 /* Keyed on the snapshot object itself: the registry's readOnlySnapshot returns
@@ -82,6 +83,7 @@ function projectRegistrySnapshot(
   const projectByPath = new Map<string, string>();
   const projectCwdByPath = new Map<string, string>();
   const archivedPaths = new Set<string>();
+  const latestPaths: string[] = [];
   /* One resolution state per projection, and one cwd resolution per distinct
      cwd. Each `projectInfoFromCwd` call without a state re-reads the state
      database's collection revisions, which for every conversation of a
@@ -103,6 +105,7 @@ function projectRegistrySnapshot(
     const latest = conversation.latest;
     if (!latest) continue;
     if (includeProjects) {
+      if (latest.path) latestPaths.push(latest.path);
       const cwd = latest.cwd?.trim();
       const { project } = resolveProjectAttribution({
         projectOwnership: conversation.projectOwnership,
@@ -161,6 +164,7 @@ function projectRegistrySnapshot(
     projectByPath,
     projectMetadataByPath,
     archivedPaths,
+    latestPaths,
   };
   return projection;
 }
@@ -359,22 +363,6 @@ export function searchSessionTitleProjector(): (entry: FileEntry) => void {
   return sessionTitleProjector(false, undefined, false);
 }
 
-/** Applies the canonical title projection to a full search index while
- * yielding between batches so a cold global search does not monopolize the
- * server event loop. */
-export async function overlaySessionTitlesYielding(
-  entries: FileEntry[],
-  batchSize = 48,
-  yieldControl: () => Promise<void> = () => new Promise((resolve) => setImmediate(resolve)),
-  includeProjectMetadata = true,
-): Promise<void> {
-  const project = sessionTitleProjector(true, undefined, includeProjectMetadata);
-  for (let index = 0; index < entries.length; index += 1) {
-    project(entries[index]);
-    if ((index + 1) % batchSize === 0) await yieldControl();
-  }
-}
-
 /** Projects registry launch-profile projects before an empty-query project
  * filter runs. This stays metadata-only and leaves transcript heads untouched. */
 export function overlaySessionProjects(entries: FileEntry[]): void {
@@ -394,12 +382,14 @@ export function sessionProjectProjection(surfaceUnexpectedError = false): {
     get(pathname: string): { displayName: string; projectRoot?: string; unresolved?: true } | undefined;
   };
   archivedPaths: ReadonlySet<string>;
+  latestPaths: readonly string[];
 } {
   const projection = registryProjection(agentRegistry(), surfaceUnexpectedError);
-  if (!projection) return { projectByPath: new Map(), projectMetadataByPath: new Map(), archivedPaths: new Set() };
+  if (!projection) return { projectByPath: new Map(), projectMetadataByPath: new Map(), archivedPaths: new Set(), latestPaths: [] };
   return {
     projectByPath: projection.projectByPath,
     projectMetadataByPath: projection.projectMetadataByPath,
     archivedPaths: projection.archivedPaths,
+    latestPaths: projection.latestPaths,
   };
 }

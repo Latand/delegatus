@@ -1,6 +1,7 @@
 # Voice call reconnect: the call comes back by itself and goes on from where it stopped
 
-Design only; no product code. Task `de4377a6`, pipeline `64b8f113`. Written against
+Original design. Slices 0 and 1 are merged; slice 2 implements the cursor and resume speech.
+Task `de4377a6`, pipeline `64b8f113`. Written against
 `main` at `c97325311` on 2026-11-01. Every `file:line` below refers to that commit.
 
 ## The requirement
@@ -218,10 +219,9 @@ A drop, as the operator should live it:
    today, `src/lib/voiceCompanion/callHistory.ts:48`, `callResume.ts:78-91`).
 3. When the network is back, the call is back within a few seconds without a click:
    the connect cue, the "Connection restored" notice.
-4. If the voice was in the middle of a reply, it carries on from the start of the
-   sentence the cut fell in, without repeating what the operator heard. When it does
-   not know how much was heard (a reload), or the rest is long, it says in one line
-   where it stopped and asks whether to go on (Choice D1).
+4. If the voice was in the middle of a reply, it always says in one line where it
+   stopped and asks whether to go on (operator choice D1 = c). Its continuation context
+   starts at the beginning of the cut sentence, so accepting continuation skips no words.
 5. If the operator was speaking, their words up to the cut are kept: the voice answers
    them, or, when the sentence was cut off, says in one short line where it lost them
    and lets them finish.
@@ -462,8 +462,8 @@ specification names:
    arrived with no reply after it was never spoken.
 
 Without a cursor (a reload, another device), the server treats the newest reply that
-ended in the last 10 s of the part as possibly unheard, and the resume line becomes the
-one-line form of Choice D1.
+ended in the last 10 s of the part as possibly unheard. The resume line always uses
+the one-line form of operator choice D1 = c, with or without a cursor.
 
 The cursor also feeds the continuation block: `lines()` (`callResume.ts:41-52`) marks
 `voice (cut; the operator heard up to «…»)` and `operator (cut off, unanswered)`, lists
@@ -483,8 +483,7 @@ instruction.
 
 | Situation | The voice says | API (`session.commentary.append`, `liveSession.ts:1045-1051`) | Codex (`thread/realtime/appendSpeech`) |
 | --- | --- | --- | --- |
-| A reply was cut and the rest is short (Choice D1) | the rest of the reply from the start of the cut sentence | instruction to carry on, with the heard tail and the rest "read as written, in order", the pattern reports already use (`liveSession.ts:1026-1032`), split under the 500-byte limit (`liveSession.ts:167-170`) | a fixed bridge ("Picking up where it cut off:" / «Продовжу з місця, де обірвалося:») and the rest, as written |
-| A reply was cut and the rest is long, or nothing is known of what was heard | one line saying where it stopped, then "Shall I go on?" | instruction naming what it was explaining | a fixed line quoting the last words heard, or the reply's opening words when none are known: "The connection dropped at «…». Shall I go on?" / «Зʼєднання обірвалося на словах „…“. Продовжити?» |
+| A reply was cut, or what was heard is unknown (operator choice D1 = c) | always one line saying where it stopped, then "Shall I go on?" | instruction naming the explanation from the start of the cut sentence, asking before continuing | a server-composed line quoting the last words heard, or the reply's opening words when none are known: "The connection dropped at «…». Shall I go on?" / «Зʼєднання обірвалося на словах „…“. Продовжити?» |
 | The operator's last turn went unanswered | its answer; when the turn was cut off, one line: "The connection dropped after «…». Go on." / «Зʼєднання обірвалося після „…“. Продовжуйте.» | instruction | the line as written; its answer then comes from the voice's own turn |
 | A request result arrived with no reply after it | one line with its outcome | instruction | a fixed line from the request's project and status, followed by the report text the way a report is read (`liveSession.ts:1031`) |
 | A request was waiting for the operator's yes | one question asking whether to send it, through the normal confirmation gate | instruction | a fixed line quoting the request: "Shall I send this to the orchestrator: «…»?" / «Надіслати це оркестратору: „…“?» |
@@ -814,9 +813,10 @@ and dark, at 390 px and a desktop width. No new driver. No slice touches
   second drop; a report already queued travels with it, and with no carried watermark yet
   no report is scanned twice.
 - Acceptance (`callResume.test.ts`, `liveSession.test.ts`, `liveAdapter.test.ts`):
-  - a reply of three sentences cut 40 % into its audio: the API resume line carries the
-    text from the start of the second sentence, and none of the first; on Codex the
-    estimate lands at a sentence start at or before the cut;
+  - a reply of three sentences cut 40 % into its audio: the API resume context carries
+    the text from the start of the second sentence, and none of the first; on Codex the
+    estimate lands at a sentence start at or before the cut. On both backends the line
+    always names the stop and asks whether to go on (D1 = c);
   - an operator turn cut off mid-sentence: the resume line names its last words once; a
     second reconnect of the same call does not repeat it;
   - no cursor (reload): the one-line form, which on Codex quotes the reply's words;
@@ -910,8 +910,8 @@ per reconnect, including parts nobody heard. Today's baseline: drop to the next 
   what it was explaining. On Codex the server composes the line, so it quotes the last
   words heard and cannot summarise (§3.6).
 - (c) Always (b).
-- Recommendation: (a) when the rest fits one hand-off (500 bytes, about two sentences),
-  (b) when it is longer or what was heard is unknown.
+- Operator decision: **(c)**. Always name where the reply stopped in one line, then ask
+  whether to go on. This supersedes the original length-based recommendation.
 
 **D2. How long to keep trying before giving up.**
 - (a) 30 s or 6 attempts.

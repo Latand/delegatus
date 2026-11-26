@@ -1,5 +1,6 @@
 import { expect, spyOn, test } from "bun:test";
 import http from "node:http";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { watch } from "node:fs";
 import fs from "node:fs/promises";
@@ -37,13 +38,13 @@ test("media metadata and extracted documents survive negotiated parsing only", (
   expect(legacy.input.documents[0]).toEqual({ title: "Document", text: "Extracted" });
 });
 test("all inbound metadata limits fail closed with exact errors", () => {
-  const album = request(Array.from({ length: 10 }, (_, i) => ref(`media_${i}`, 10 * MiB)));
+  const album = request(Array.from({ length: 10 }, (_, i) => ref(`media_${i}`, 20 * MiB)));
   expect(validateMediaInput(requestSchema.parse(album))).toHaveLength(10);
   const extra = request(Array.from({ length: 11 }, (_, i) => ref(`media_${i}`)));
   refuses(() => validateMediaInput(extra), "too_large", 413);
   expect(requestSchema.safeParse(extra).success).toBe(false);
   refuses(() => validateMediaInput(request([ref("media_a", 20 * MiB + 1)])), "too_large", 413);
-  refuses(() => validateMediaInput(request([...Array.from({ length: 5 }, (_, i) => ref(`media_${i}`, 20 * MiB)), ref("extra", 1)])), "too_large", 413);
+  refuses(() => validateMediaInput(request([...Array.from({ length: 10 }, (_, i) => ref(`media_${i}`, 20 * MiB)), ref("extra", 1)])), "too_large", 413);
   for (const changed of [{ ref: "../secret" }, { ref: "https://example.com/x" }, { filename: "../secret" }, { filename: "a\\secret" }, { filename: "a\u0000b" }, { byte_size: 0 }, { byte_size: undefined }, { mime_type: undefined }, { expires_at: undefined }, { expires_at: "bad" }]) {
     const r = request(); Object.assign(r.input.conversation[0]!.media![0]!, changed);
     refuses(() => validateMediaInput(r), "malformed", 400);
@@ -75,8 +76,8 @@ const options = () => ({ signal: new AbortController().signal, deadlineAt: Date.
 
 function historyRequest(trigger: number, parent: number | null, mediaIndexes: readonly number[], size = 5) {
   const r = request([]);
-  r.input.requester = requestSchema.parse(contextRequest).input.requester;
   const template = r.input.conversation[0]!;
+  r.input.requester = { ...requestSchema.parse(contextRequest).input.requester!, key: template.author.key };
   r.input.conversation = Array.from({ length: 40 }, (_, index) => ({
     ...template, id: `message_${index}`, text: `History entry ${index}`,
     reply_to: index === trigger && parent !== null ? `message_${parent}` : null,
@@ -156,7 +157,7 @@ test.each([38, 39])("trigger/direct-parent entry %s retains every metadata check
     [{ ...ref(), ref: "../outside" }], [{ ...ref(), filename: "../outside" }],
     [{ ...ref(), expires_at: undefined }], [{ ...ref(), mime_type: "image/svg+xml" }],
     [{ ...ref(), byte_size: 20 * MiB + 1 }],
-    [...Array.from({ length: 5 }, (_, index) => ref(`large_${index}`, 20 * MiB)), ref("extra", 1)],
+    [...Array.from({ length: 10 }, (_, index) => ref(`large_${index}`, 20 * MiB)), ref("extra", 1)],
     Array.from({ length: 11 }, (_, index) => ref(`ref_${index}`)),
   ];
   let downloads = 0;
@@ -168,7 +169,8 @@ test.each([38, 39])("trigger/direct-parent entry %s retains every metadata check
     for (const media of failures) {
       const raw = historyRequest(39, 38, [37, 38, 39]);
       raw.input.conversation[entryIndex]!.media = media;
-      expect(requestSchema.safeParse(raw).success).toBe(false);
+      const policyRefusal = media.length === 1 && (media[0]!.mime_type === "image/svg+xml" || media[0]!.byte_size! > 20 * MiB);
+      expect(requestSchema.safeParse(raw).success).toBe(policyRefusal);
       await expect(prepareInboundMedia(f.relay, raw, f.directory, options())).rejects.toBeInstanceOf(ExternalRelayError);
     }
     const duplicate = historyRequest(39, 38, [37, 38, 39]);
@@ -216,7 +218,7 @@ test.each([
     await result.dispose(); expect(await fs.readdir(f.directory)).toEqual([]);
     await expect(prepareInboundMedia(f.relay, request([media]), f.directory, options()))
       .rejects.toMatchObject({ code: "unsupported_media_type", status: 415 });
-    expect(requestSchema.safeParse(request([media])).success).toBe(false);
+    expect(requestSchema.parse(request([media])).input.conversation[0]!.media![0]!.availability).toBe("unsupported_type");
     expect(calls).toBe(1);
   } finally { await f.close(); }
 });
@@ -276,13 +278,13 @@ test("Windows device names and unsafe characters are sanitized on every host pla
 test("any-document feature preserves metadata limits, photo restrictions and unavailable extraction", () => {
   const binary = (id: string, size: number) => ({ ...ref(id, size), mime_type: "application/octet-stream" });
   validateMediaInput(documentRequest([binary("a", 20 * MiB), binary("b", 20 * MiB)]));
-  for (const items of [[binary("a", 20 * MiB + 1)], [...Array.from({ length: 5 }, (_, i) => binary(`m_${i}`, 20 * MiB)), binary("extra", 1)], Array.from({ length: 11 }, (_, i) => binary(`m_${i}`, 1))]) {
+  for (const items of [[binary("a", 20 * MiB + 1)], [...Array.from({ length: 10 }, (_, i) => binary(`m_${i}`, 20 * MiB)), binary("extra", 1)], Array.from({ length: 11 }, (_, i) => binary(`m_${i}`, 1))]) {
     refuses(() => validateMediaInput(documentRequest(items)), "too_large", 413);
   }
   for (const mime_type of ["application/octet-stream", "image/svg+xml", "application/pdf", "text/plain"]) {
     const r = documentRequest([{ ...ref(), kind: "photo", mime_type }]);
     refuses(() => validateMediaInput(r), "unsupported_media_type", 415);
-    expect(requestSchema.safeParse(r).success).toBe(false);
+    expect(requestSchema.parse(r).input.conversation[0]!.media![0]!.availability).toBe("unsupported_type");
   }
   const r = documentRequest([binary("a", 5)]);
   r.input.documents = [{ title: "Extracted", text: "untrusted", message_id: "message", media_ref: "a", extraction: "complete" }];
@@ -401,7 +403,7 @@ test("PDF memory exhaustion kills only the bounded parser process and removes al
   } finally { await f.close(); }
 });
 test.each([false, true])("stream accepts exact file and total limits without accumulating original buffers (any-document=%s)", async enabled => {
-  const r = request(Array.from({ length: 5 }, (_, i) => ref(`media_${i}`, 20 * MiB)));
+  const r = request(Array.from({ length: 10 }, (_, i) => ref(`media_${i}`, 20 * MiB)));
   const mime = enabled ? "application/octet-stream" : "text/plain";
   if (enabled) { r.features!.push(RELAY_MEDIA_ANY_DOCUMENT); for (const media of r.input.conversation[0]!.media!) media.mime_type = mime; }
   const f = await fixture(async (_req, res) => {
@@ -410,16 +412,16 @@ test.each([false, true])("stream accepts exact file and total limits without acc
     for (let i = 0; i < 320; i++) if (!res.write(chunk)) await once(res, "drain");
     res.end();
   });
-  try { const result = await prepareInboundMedia(f.relay, r, f.directory, options()); expect(result.files).toHaveLength(5); await result.dispose(); }
+  try { const result = await prepareInboundMedia(f.relay, r, f.directory, options()); expect(result.files).toHaveLength(10); await result.dispose(); }
   finally { await f.close(); }
 });
 test("stream byte budgets reset after restarting the real downloader process", async () => {
   let downloads = 0;
   const f = await fixture(async (_req, res) => {
     downloads++;
-    res.writeHead(200, { "content-type": "application/octet-stream", "content-length": 10 * MiB });
+    res.writeHead(200, { "content-type": "application/octet-stream", "content-length": 20 * MiB });
     const chunk = Buffer.alloc(65536, 120);
-    for (let i = 0; i < 160; i++) if (!res.write(chunk)) await once(res, "drain");
+    for (let i = 0; i < 320; i++) if (!res.write(chunk)) await once(res, "drain");
     res.end();
   });
   const script = `import { prepareInboundMedia } from "./src/lib/externalRelay/mediaInput.ts";
@@ -435,7 +437,7 @@ test("stream byte budgets reset after restarting the real downloader process", a
       const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env,
         HOME: path.join(sandbox, "home"), XDG_CONFIG_HOME: path.join(sandbox, "config"), LLV_STATE_DIR: path.join(sandbox, "state"), TMPDIR: path.join(sandbox, "tmp"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
       }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-      child.stdin.write(JSON.stringify({ relay: f.relay, request: documentRequest(Array.from({ length: 10 }, (_, i) => ({ ...ref(`media_${i}`, 10 * MiB), mime_type: "application/octet-stream" }))), directory: f.directory }));
+      child.stdin.write(JSON.stringify({ relay: f.relay, request: documentRequest(Array.from({ length: 10 }, (_, i) => ({ ...ref(`media_${i}`, 20 * MiB), mime_type: "application/octet-stream" }))), directory: f.directory }));
       child.stdin.end();
       const [output, errors, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       expect({ status, errors }).toEqual({ status: 0, errors: "" });
@@ -765,7 +767,7 @@ test("an eleventh ref or excess aggregate bytes sends no download", async () => 
   const f = await fixture((_req, res) => { downloads++; res.end(); });
   try {
     for (const items of [Array.from({ length: 11 }, (_, i) => ref(`media_${i}`)),
-      [...Array.from({ length: 5 }, (_, i) => ref(`media_${i}`, 20 * MiB)), ref("extra", 1)]]) {
+      [...Array.from({ length: 10 }, (_, i) => ref(`media_${i}`, 20 * MiB)), ref("extra", 1)]]) {
       await expect(prepareInboundMedia(f.relay, request(items), f.directory, options())).rejects.toMatchObject({ code: "too_large", status: 413 });
     }
     expect(downloads).toBe(0); expect(await fs.readdir(f.directory)).toEqual([]);
@@ -815,4 +817,58 @@ test("a later failed original removes previously downloaded files and a retry st
     expect(retry.files.map(file => file.ref)).toEqual(["media_a", "media_b"]);
     await retry.dispose(); expect(await fs.readdir(f.directory)).toEqual([]);
   } finally { await f.close(); }
+});
+
+test.each(["mismatch", "decode", "executable", "archive"])("skipping a refused item preserves a passing peer and removes refused bytes (%s)", async mode => {
+  const bytes = mode === "decode" ? Buffer.from([137,80,78,71,13,10,26,10,0])
+    : Buffer.from(mode === "executable" ? "MZbinary" : mode === "archive" ? "PKbinary" : "hello");
+  const mime = mode === "decode" ? "image/png" : "text/plain";
+  const r = request([{ ...ref("bad", bytes.length), mime_type: mime }, ref("good")]);
+  const f = await fixture((req, res) => {
+    const bad = req.url!.endsWith("/bad"); const body = bad ? bytes : Buffer.from("hello");
+    res.writeHead(200, { "content-type": bad && mode === "mismatch" ? "video/mp4" : bad ? mime : "text/plain", "content-length": body.length }); res.end(body);
+  });
+  try {
+    const result = await prepareInboundMedia(f.relay, r, f.directory, { ...options(), skipRejected: true });
+    expect(result.files.map(file => file.ref)).toEqual(["good"]);
+    expect(await fs.readFile(result.files[0]!.path, "utf8")).toBe("hello");
+    const stat = await fs.stat(result.files[0]!.path);
+    expect(result.files[0]!.snapshot).toEqual({ dev: stat.dev, ino: stat.ino, size: stat.size,
+      sha256: createHash("sha256").update("hello").digest("hex") });
+    const media = JSON.parse(result.prompt.split("<inbound_media>\n")[1]!.split("\n</inbound_media>")[0]!);
+    expect(media[0]).toMatchObject({ ref: "bad", readable: false, reason: "unsupported_media_type" });
+    expect(media[0]).not.toHaveProperty("local_path");
+    expect((await fs.readdir(path.dirname(result.files[0]!.path))).length).toBe(1);
+    await result.dispose(); expect(await fs.readdir(f.directory)).toEqual([]);
+  } finally { await f.close(); }
+});
+
+test("skip mode keeps malformed metadata and custody loss decisive", async () => {
+  let calls = 0, authorized = true;
+  const f = await fixture((_req, res) => {
+    calls++; authorized = false;
+    res.writeHead(200, { "content-type": "video/mp4", "content-length": 5 }); res.end("hello");
+  });
+  try {
+    const malformed = request([{ ...ref(), mime_type: "image/gif", filename: "../escape" }]);
+    const changed = { ...options(), skipRejected: true, authorize: () => { if (!authorized) throw new ExternalRelayError("lease_lost", 409); } };
+    await expect(prepareInboundMedia(f.relay, malformed, f.directory, changed)).rejects.toMatchObject({ code: "malformed" });
+    expect(calls).toBe(0);
+    await expect(prepareInboundMedia(f.relay, request(), f.directory, changed)).rejects.toMatchObject({ code: "lease_lost" });
+    expect(calls).toBe(1); expect(await fs.readdir(f.directory)).toEqual([]);
+  } finally { await f.close(); }
+});
+
+test.each(["image/gif", "video/mp4", "application/zip", "application/x-msdownload", "oversize"])("claim policy refusal stays unavailable through reparsing and seed admission (%s)", mode => {
+  const r = request([{ ...ref("refused", mode === "oversize" ? 20 * MiB + 1 : 5), mime_type: mode === "oversize" ? "text/plain" : mode }]);
+  const parsed = requestSchema.parse(r);
+  const media = parsed.input.conversation[0]!.media![0]!;
+  expect(media.availability).toBe(mode === "oversize" ? "too_large" : "unsupported_type");
+  expect(requestSchema.parse(parsed)).toEqual(parsed);
+  expect(validateMediaInput(parsed)).toEqual([media]);
+  expect(admittedSeedMedia(parsed, { seed_media_refs: [media.ref] })).toBe(false);
+  for (const changed of [{ filename: "../escape" }, { ref: "../escape" }, { byte_size: 0 }, { expires_at: undefined }]) {
+    const malformed = structuredClone(r); Object.assign(malformed.input.conversation[0]!.media![0]!, changed);
+    expect(requestSchema.safeParse(malformed).success).toBe(false);
+  }
 });

@@ -1,3 +1,4 @@
+import { bindVoiceSession, releaseVoiceSession } from "./voiceViewBinding";
 import { kickStructuredDeliveryQueue } from "./structuredDeliverySignal";
 import type { ViewerMcpObservation, QueueEntry, DeliveryReceipt } from "./engineHost";
 import crypto from "node:crypto";
@@ -18,9 +19,52 @@ import type { RuntimeHostClient } from "./client";
 import {
   structuredDeliveryMcpObservation,
   bindStructuredDeliveryQueue,
+  completeStructuredDeliveryQueueStartup,
+  structuredDeliveryHeapCounts,
+  releaseIdleStructuredHostEventWindows,
   publishStructuredHostProjection,
+  publishStructuredDeliveryHost,
   terminateStructuredDeliveryHost,
 } from "./structuredDeliveryController";
+
+for (const revoked of [false, true]) test(`an addressed startup host retains its dispatch proof when recovery publishes before returning (${revoked})`, async () => {
+  const f = migrationDeliveryFixture();
+  const operationId = `startup-original-${revoked}`;
+  const startup = await import("./startup");
+  const { StructuredRecoveryHeldForUpdateError } = await import("./structuredRecovery");
+  let current = true;
+  const guard = () => { if (!current) throw new StructuredRecoveryHeldForUpdateError("fixture recipient authority changed"); };
+  const prepare = spyOn(startup, "prepareStructuredStartupRecipient").mockImplementation(async () => ({
+    admissionGuard: guard, authorityGuard: guard, acceptSuccessorClaim: guard,
+  }));
+  let recoveries = 0;
+  try {
+    f.journal.append({ scope: { type: "session", id: f.conversation.id }, kind: "session-status",
+      producer: { kind: "codex-app-server" }, payload: {
+        conversationId: f.conversation.id, sessionKey: f.key, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+        provenance: "structured", accountId: null, parentConversationId: null, cwd: f.root,
+        artifactPath: f.conversation.generations.at(-1)!.path, capabilities: { steer: true, structuredAttention: true }, activeTurnId: null,
+      } });
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: f.client, deferStartupWork: true,
+      watchdogIntervalMs: 0, settlementSweepMs: 0, hostlessSettleIntervalMs: 0,
+      recover: async () => {
+        recoveries++;
+        await publishStructuredDeliveryHost({ key: f.key, host: f.host });
+        if (revoked) { current = false; guard(); }
+        return { target: null, path: f.conversation.generations.at(-1)!.path, conversationId: f.conversation.id,
+          spawned: true, admissionGuard: guard };
+      },
+    });
+    f.journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId,
+      conversationId: f.conversation.id, text: "original addressed operation", policy: "queue" });
+    await kickStructuredDeliveryQueue();
+    await kickStructuredDeliveryQueue();
+    expect(recoveries).toBe(1);
+    expect(prepare.mock.calls[0]?.[3]).toBe(operationId);
+    expect(f.host.ledger.writes).toHaveLength(revoked ? 0 : 1);
+    expect(f.journal.operationResult(operationId)?.receipt.status).toBe(revoked ? "queued" : "delivered");
+  } finally { prepare.mockRestore(); await f.cleanup(); }
+});
 
 for (const qualified of [false, true]) test(`${qualified ? "qualified" : "unqualified"} termination preserves a replacement host claimed during writer admission`, async () => {
   const f = migrationDeliveryFixture();
@@ -50,6 +94,7 @@ for (const qualified of [false, true]) test(`${qualified ? "qualified" : "unqual
   try {
     await bindStructuredDeliveryQueue([{ key: f.key, host: registeredHost }], { registry: f.registry, client: f.client,
       watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    expect(structuredDeliveryHeapCounts()).toMatchObject({ hosts: 1, registrations: 1 });
     await holder.hold();
     const termination = terminateStructuredDeliveryHost(f.key, qualified ? { pid: process.pid + 100_000, startIdentity: "expected-old-host" } : undefined);
     await waiting;
@@ -78,6 +123,31 @@ test("unqualified termination still retires its captured host row", async () => 
       status: "dead", claimOwner: null, structuredHost: null,
     });
   } finally { await f.cleanup(); }
+});
+
+test("accepted native release evidence survives a registry writer failure", async () => {
+  const f = migrationDeliveryFixture();
+  let accepted = 0;
+  const releaseIfOwned = async (_expected: { pid: number; startIdentity: string }, authorize?: () => Promise<{ status: 403 | 409; error: string } | null>) => {
+    expect(await authorize?.()).toBeNull();
+    return true;
+  };
+  const host = Object.assign(f.host, { releaseIfOwned });
+  const admission = spyOn(f.registry, "deliveryWriteOrBusy").mockImplementation(async (correlation) => {
+    if (correlation.label === "registry.terminateStructuredHost") throw new Error("registry writer admission timed out after release");
+    throw new Error(`unexpected writer: ${correlation.label}`);
+  });
+  try {
+    await bindStructuredDeliveryQueue([{ key: f.key, host }], { registry: f.registry, client: f.client,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    await expect(terminateStructuredDeliveryHost(f.key,
+      { pid: process.pid + 100_000, startIdentity: "expected-old-host" }, async () => null,
+      () => { accepted++; })).rejects.toThrow("registry writer admission timed out after release");
+    expect(accepted).toBe(1);
+  } finally {
+    admission.mockRestore();
+    await f.cleanup();
+  }
 });
 
 test("structured host projection publishes a files revision for connected viewers", async () => {
@@ -392,4 +462,123 @@ test("engine denial leaves an ordinary operator control eligible", async () => {
     expect(host.ledger.writes).toHaveLength(1);
     expect(f.journal.operationResult("mcp-operator")?.receipt.status).toBe("delivered");
   } finally { await f.cleanup(); }
+});
+
+for (const change of ["none", "voice-before", "voice-after", "owner-after", "epoch-after", "process-after", "writer-after"] as const) {
+  test(`idle window sweep rechecks published ownership and voice binding: ${change}`, async () => {
+    const f = migrationDeliveryFixture();
+    let cleared = false;
+    Object.assign(f.host, { releaseIdleEventWindow: async (canRelease: () => boolean) => {
+      if (!canRelease()) return false;
+      await Promise.resolve();
+      if (change === "voice-after") bindVoiceSession(f.conversation.id, "fixture-call", null);
+      if (change === "owner-after") await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+      if (change === "epoch-after") {
+        const row = f.registry.hostEntry(f.key)!;
+        f.registry.upsert({ ...row, claimEpoch: row.claimEpoch + 1 });
+      }
+      if (change === "process-after" || change === "writer-after") {
+        const row = f.registry.hostEntry(f.key)!;
+        f.registry.upsert({ ...row, structuredHost: { ...row.structuredHost!,
+          ...(change === "process-after" ? { process: { pid: 1234567, startIdentity: "replacement", bootEpoch: "fixture" } }
+            : { writerClaimEpoch: row.structuredHost!.writerClaimEpoch + 1 }),
+        } });
+      }
+      if (!canRelease()) return false;
+      cleared = true;
+      return true;
+    } });
+    try {
+      await bindStructuredDeliveryQueue([{ key: f.key, host: f.host }], { registry: f.registry, client: f.client,
+        watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+      if (change === "voice-before") bindVoiceSession(f.conversation.id, "fixture-call", null);
+      expect(await releaseIdleStructuredHostEventWindows()).toBe(change === "none" ? 1 : 0);
+      expect(cleared).toBe(change === "none");
+    } finally { releaseVoiceSession(f.conversation.id); await f.cleanup(); }
+  });
+}
+
+test("fallback publication retries an interrupted archive sweep and repeats it after the journal is replaced", async () => {
+  const f = migrationDeliveryFixture();
+  const previousJournal = process.env.LLV_RUNTIME_JOURNAL;
+  const journalPath = path.join(f.root, "publication-identity.sqlite");
+  fs.writeFileSync(journalPath, "first journal identity");
+  process.env.LLV_RUNTIME_JOURNAL = journalPath;
+  const entry = f.registry.hostEntry(f.key)!;
+  f.registry.upsert({ ...entry, status: "dead", claimOwner: null,
+    structuredHost: { ...entry.structuredHost!, endpoint: "stdio:released" } });
+  expect(f.registry.archiveInactiveRows()).toBe(1);
+  const client = {
+    ...f.client, readSession: async () => null,
+    append: async (_event: Parameters<RuntimeHostClient["append"]>[0]): Promise<unknown> => {
+      throw new Error("fixture lost publication reply");
+    },
+  };
+  const read = spyOn(client, "readSession");
+  try {
+    const bind = () => bindStructuredDeliveryQueue([], { registry: f.registry, client, deferStartupWork: true,
+      watchdogIntervalMs: 0, settlementSweepMs: 0, hostlessSettleIntervalMs: 0 });
+    await bind();
+    await expect(completeStructuredDeliveryQueueStartup([])).rejects.toThrow("fixture lost publication reply");
+    expect(f.registry.startupFallbackSweep("unrelated-journal")!.previous).toBeNull();
+    client.append = f.client.append;
+    await completeStructuredDeliveryQueueStartup([]);
+    expect(read).toHaveBeenCalledTimes(2);
+    const before = read.mock.calls.length;
+    await bind();
+    await completeStructuredDeliveryQueueStartup([]);
+    expect(read).toHaveBeenCalledTimes(before);
+    const replacement = `${journalPath}.new`;
+    fs.writeFileSync(replacement, "replacement journal identity");
+    fs.renameSync(replacement, journalPath);
+    await bind();
+    await completeStructuredDeliveryQueueStartup([]);
+    expect(read).toHaveBeenCalledTimes(before + 1);
+  } finally {
+    read.mockRestore();
+    if (previousJournal === undefined) delete process.env.LLV_RUNTIME_JOURNAL;
+    else process.env.LLV_RUNTIME_JOURNAL = previousJournal;
+    await f.cleanup();
+  }
+});
+
+test("startup checks an archived recipient when its first message arrives", async () => {
+  const f = migrationDeliveryFixture();
+  const current = f.registry.hostEntry(f.key)!;
+  f.registry.upsert({ ...current, status: "dead", claimOwner: null,
+    structuredHost: { ...current.structuredHost!, endpoint: "stdio:released" } });
+  expect(f.registry.archiveInactiveRows()).toBe(1);
+  const startup = await import("./startup");
+  let held = true;
+  const authority = spyOn(startup, "pipelineStartupTargetDeferred").mockImplementation(async () => held);
+  const recover = spyOn({ recover: async () => null }, "recover");
+  try {
+    await bindStructuredDeliveryQueue([], {
+      registry: f.registry, client: f.client, deferStartupWork: true, recover,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0,
+    });
+    await completeStructuredDeliveryQueueStartup([], undefined, undefined, new Set(), {
+      registry: f.registry, snapshot: await f.registry.prepareReadOnlySnapshot(), deferUnselected: true,
+    });
+    f.journal.append({ scope: { type: "session", id: f.conversation.id }, kind: "session-status", payload: {
+      conversationId: f.conversation.id, sessionKey: f.key, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+      accountId: null, parentConversationId: null, cwd: f.root, artifactPath: current.artifactPath,
+    } });
+    const operationId = "archived-recipient-held-at-startup";
+    const send = f.journal.executeOperation({ kind: "send", operationId, idempotencyKey: operationId,
+      conversationId: f.conversation.id, text: "Synthetic message after startup", policy: "queue" });
+    expect(["queued", "pending"]).toContain(send.receipt.status);
+    expect(f.journal.effectBatch(100, ["runtime.send"])).toHaveLength(1);
+    await kickStructuredDeliveryQueue();
+    expect(authority).toHaveBeenCalledWith(f.registry, f.conversation.id);
+    expect(recover).not.toHaveBeenCalled();
+    expect(["queued", "pending"]).toContain(f.journal.operationResult(operationId)?.receipt.status ?? "missing");
+    held = false;
+    await kickStructuredDeliveryQueue();
+    expect(recover).toHaveBeenCalledTimes(1);
+  } finally {
+    authority.mockRestore();
+    recover.mockRestore();
+    await f.cleanup();
+  }
 });

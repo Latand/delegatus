@@ -6,6 +6,16 @@ import { procBackend } from "@/lib/proc";
 import { stopFixtureProcess } from "./fixtureProcess";
 import { admitPortableTestRunner } from "./portableTestAdmission";
 
+/** A zombie can retain its PID and start token until the runner reaps its
+ * handle. It has exited and must not keep an owned-child teardown open. */
+export function ownedTestChildIsRunning(
+  identity: ProcessIdentity,
+  status: typeof processIdentityStatus = processIdentityStatus,
+  exited: (pid: number) => boolean = pid => procBackend.processExited(pid),
+): boolean {
+  return status(identity) === "alive" && !exited(identity.pid);
+}
+
 /** The preload owns real subprocess handles before spawn returns. This covers
  * imported aliases, fork/execFile and product helpers exercised by a test, too.
  * A separate guardian retains the identities if the test runner is SIGKILLed.
@@ -73,8 +83,8 @@ export function beginTestChildOwnership(root: string): () => Promise<void> {
   process.env.LLV_FIXTURE_PARENT_IDENTITY = JSON.stringify(owner);
   return async () => {
     prototype.spawn = rawNodeSpawn; Bun.spawn = rawBunSpawn; Bun.spawnSync = rawBunSpawnSync;
-    const survivors = [...nodeChildren].filter(([, identity]) => processIdentityStatus(identity) === "alive").map(([child]) => child);
-    const bunSurvivors = [...bunChildren].filter(([, identity]) => processIdentityStatus(identity) === "alive").map(([child]) => child);
+    const survivors = [...nodeChildren].filter(([, identity]) => ownedTestChildIsRunning(identity)).map(([child]) => child);
+    const bunSurvivors = [...bunChildren].filter(([, identity]) => ownedTestChildIsRunning(identity)).map(([child]) => child);
     for (const child of survivors) await stopFixtureProcess(child);
     for (const child of bunSurvivors) {
       child.kill("SIGTERM");
@@ -87,7 +97,7 @@ export function beginTestChildOwnership(root: string): () => Promise<void> {
       guardian.kill("SIGKILL"); throw new Error("owned test child guardian did not finish");
     })]);
     const identities = fs.readFileSync(ledger, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
-    if (identities.some(identity => processIdentityStatus(identity) === "alive")) throw new Error("owned test child survived the final identity check");
+    if (identities.some(identity => ownedTestChildIsRunning(identity))) throw new Error("owned test child survived the final identity check");
     // Native CLIs can fork their own protocol servers. Keep the test runner
     // alive while those kernel-owned children finish shutdown, then fail with
     // identities if they exceed the bound. The service reaps persistent tails.

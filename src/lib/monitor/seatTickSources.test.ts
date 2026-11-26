@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { shortId } from "@/lib/shortIds";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-tick-sources-"));
+const pullRequestHangCase = process.env.LLV_PULL_REQUEST_HANG_CASE;
 const RESTORE = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR };
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.HOME = SANDBOX;
@@ -21,7 +22,8 @@ fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 const SESSIONS = path.join(SANDBOX, "openclaw", "agents", "fixtures", "sessions");
 fs.mkdirSync(SESSIONS, { recursive: true });
 
-const { gatherSeatTickInput: gatherProduction, refreshSeatTickInput, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, selfUpdateSignals, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
+const { gatherSeatTickInput: gatherProduction, readPullRequestsWithinBudget, refreshSeatTickInput, readRetirementJournalWindow, repoDirForProject, RETIREMENT_STALL_WINDOW_MS, runtimeWakeState, seatTickProjects, selfUpdateSignals, stalledRetirementClause, wakeStateFromRecord, withdrawRuntimeWake } = await import("./seatTickSources");
+const { SeatTickWork } = await import("./seatTickWork");
 const { SeatTickAccounting } = await import("./seatTickAccounting");
 const { SEND_UNVERIFIED_REASON, resolveOriginalSend } = await import("@/lib/runtime/sendSettlement");
 const { FileRuntimeEventStore } = await import("@/lib/runtime/eventStore");
@@ -40,11 +42,64 @@ const { structuredContentDigest } = await import("@/lib/runtime/structuredConten
 const { wakeRecordPorts } = await import("./seatTickSources");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
 
+test.each(["recipient", "alias", "key"] as const)("registry wake lookup preserves %s semantics without a whole read", async semantics => {
+  const { registryDeliveryFor } = await import("./seatTickSources");
+  const sqliteFilename = path.join(SANDBOX, `keyed-wake-${semantics}.sqlite`);
+  const registry = new AgentRegistry(path.join(SANDBOX, `keyed-wake-${semantics}.json`), () => false, undefined, { sqliteMode: "sqlite", sqliteFilename });
+  await registry.prepareRecoveryIndexes();
+  const recipient = registry.ensureConversation("codex", path.join(SANDBOX, "recipient.jsonl"), null);
+  const other = registry.ensureConversation("codex", path.join(SANDBOX, "other.jsonl"), null);
+  const key = "seat-tick:fixture:exact-key";
+  const hold = (id: string, messageKey: string) => registry.holdDelivery(id as `conversation_${string}`, "Check pending work.", messageKey, "text", [], undefined,
+    { kind: "send", policy: "interrupt-active", origin: { kind: "agent", role: "seat-tick" } });
+  // Insert the foreign recipient first: a whole-file key search picks it.
+  hold(other.id, key);
+  const expected = hold(recipient.id, key);
+  const suffixed = hold(recipient.id, `${key}:suffix`);
+  const alias = "conversation_wake_alias";
+  const store = new SqliteAgentRegistryStore(sqliteFilename, { initialSnapshot: () => registry.snapshot(), normalize: normalizeRegistry });
+  store.mutate(file => { file.conversationAliases[alias as `conversation_${string}`] = recipient.id; });
+  store.close();
+  const fullRead = spyOn(registry, "readOnlySnapshot").mockImplementation(() => { throw Error("whole registry read"); });
+  setAgentRegistryForTests(registry);
+  const wake = { conversationId: recipient.id, clientMessageId: key } as SeatTickOutstandingWake;
+  try {
+    expect(registryDeliveryFor(wake)).toEqual({ id: expected.id, state: expected.state, operationId: expected.command.operationId });
+    if (semantics === "alias") {
+      expect(registryDeliveryFor({ ...wake, conversationId: alias })).toEqual(registryDeliveryFor(wake));
+      const writer = new SqliteAgentRegistryStore(sqliteFilename, { initialSnapshot: () => registry.snapshot(), normalize: normalizeRegistry });
+      try { writer.mutate(file => { file.heldDeliveries[expected.id]!.conversationId = alias as `conversation_${string}`; }); }
+      finally { writer.close(); }
+      expect(registryDeliveryFor(wake)).toEqual({ id: expected.id, state: expected.state, operationId: expected.command.operationId });
+    } else if (semantics === "key") {
+      expect(registryDeliveryFor({ ...wake, clientMessageId: `${key}:suffix` })?.id).toBe(suffixed.id);
+      expect(registryDeliveryFor({ ...wake, clientMessageId: "absent-key" })).toBeNull();
+    } else {
+      expect(registryDeliveryFor({ ...wake, conversationId: "conversation_absent" })).toBeNull();
+    }
+    expect(fullRead).not.toHaveBeenCalled();
+  } finally { fullRead.mockRestore(); setAgentRegistryForTests(null); registry.close(); }
+});
+
 test("self-update sends one wait or off signal from its durable state", () => {
   const quiet = { waitingTarget: null, lastBlockers: null, pending: null };
   expect(selfUpdateSignals({ ...quiet, off: null, noticeAt: null, waitingSince: null })).toEqual([]);
   expect(selfUpdateSignals({ ...quiet, waitingTarget: "a".repeat(40), off: null, noticeAt: "2026-01-02", waitingSince: "2026-01-01" })).toEqual([]);
   expect(selfUpdateSignals({ ...quiet, off: { at: "2026-01-02", target: "a".repeat(40), stage: "build", reason: "build failed" }, noticeAt: null, waitingSince: null })).toMatchObject([{ id: "self-update-off" }]);
+});
+
+test("a paused automatic release leaves its queued request unannounced", async () => {
+  const { mutateReleaseProject, readReleaseProject } = await import("@/lib/release/store");
+  mutateReleaseProject(PROJECT, row => ({ ...row,
+    request: { at: "2026-08-27T00:00:00Z", by: { kind: "gateway", project: PROJECT, conversationId: null, seatEpoch: null }, why: "queued" },
+    blocked: { kind: 1, since: NOW - 25 * 60 * 60_000, episode: "old-blocker" },
+  }));
+  const input = await gather({ settings: { ...defaultSeatTickSettings(PROJECT), release: {
+    enabled: false, askBeforePublish: true, minChanges: 30, minGapHours: 12,
+    updatedAt: new Date(NOW).toISOString(), setBy: { kind: "gateway", project: PROJECT, conversationId: null, seatEpoch: null }, why: null,
+  } } });
+  expect(input.releaseAlerts).toEqual([]);
+  expect(readReleaseProject(PROJECT).request).toMatchObject({ why: "queued" });
 });
 
 test("drain notice names unfinished work and the operator choices", () => {
@@ -261,6 +316,8 @@ function sources(over: {
   livenessThrows?: boolean;
   events?: LifecycleEvent[];
   latestDeployment?: ReturnType<SeatTickSources["latestDeployment"]>;
+  seatDeployments?: SeatTickSources["seatDeployments"];
+  deployment?: SeatTickSources["deployment"];
   settings?: ReturnType<SeatTickSources["settings"]>;
   livenessCalls?: { project?: string; conversationId?: string; stallAfterMs: number }[];
   openPullRequests?: OpenPullRequest[];
@@ -314,6 +371,8 @@ function sources(over: {
     },
     lifecycleJournal: () => journal(over.events ?? []),
     latestDeployment: () => over.latestDeployment ?? ({ state: "unreadable", error: "no ledger" }) as never,
+    ...(over.seatDeployments ? { seatDeployments: over.seatDeployments } : {}),
+    ...(over.deployment ? { deployment: over.deployment } : {}),
     retirementReport: () => null,
     ...(over.retirementJournal ? { retirementJournal: over.retirementJournal } : {}),
     settings: () => over.settings ?? defaultSeatTickSettings(PROJECT),
@@ -332,6 +391,49 @@ function sources(over: {
 function gather(over: Parameters<typeof sources>[0], state: SeatTickProjectState = emptySeatTickState()) {
   return gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources(over));
 }
+
+test("a failed host-death attempt leaves the seat projection with its failure and clears the old stall", async () => {
+  const active = lane();
+  const ports = sources({ pipelines: [active] });
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  gathered.pipelines[0]!.stageActivity = {
+    lifecycle: "gone", reason: "host_gone_turn_unverified", verified: false, turnState: "busy",
+    conversationId: STAGE_CONVERSATION,
+  };
+  const stalled = seatTickDecision(gathered);
+  expect(stalled.state.stalledSeen).toContain("pipeline_a1");
+
+  const failure = "stage host exited after recovery was cancelled; stopped by pipeline-stage-stop";
+  const settled = lane({
+    state: "needs_decision", stateDetail: failure,
+    cursor: { stageId: "build", state: "needs_decision", input: null, activatedBy: null },
+    runs: [{ stageId: "build", attempts: [{ n: 1, state: "failed", error: failure, completedAt: new Date(NOW).toISOString(),
+      conversationId: STAGE_CONVERSATION, agentPath: TRANSCRIPT, startedAt: new Date(NOW - 60_000).toISOString() }] }],
+  });
+  ports.pipelines = () => [settled] as never;
+  const refreshed = refreshSeatTickInput({ ...gathered, state: stalled.state }, ports);
+  expect(refreshed.pipelines).toHaveLength(1);
+  expect(refreshed.pipelines[0]).toMatchObject({ state: "inert", stageState: "needs_decision", stageAttemptState: "failed" });
+  expect(settled.stateDetail).toContain("stopped by pipeline-stage-stop");
+  const afterSettlement = seatTickDecision(refreshed);
+  expect(afterSettlement.state.stalledSeen).not.toContain("pipeline_a1");
+
+  const retried = lane({
+    state: "running", stateDetail: null,
+    cursor: { stageId: "build", state: "running", input: null, activatedBy: null },
+    runs: [{ stageId: "build", attempts: [{ n: 2, state: "running", conversationId: STAGE_CONVERSATION,
+      agentPath: TRANSCRIPT, startedAt: new Date(NOW + 1).toISOString() }] }],
+  });
+  ports.pipelines = () => [retried] as never;
+  const retryProjection = refreshSeatTickInput({ ...refreshed, state: afterSettlement.state }, ports);
+  expect(retryProjection.pipelines[0]).toMatchObject({ state: "active", stageAttemptState: "running" });
+  expect(seatTickDecision(retryProjection).state.stalledSeen).not.toContain("pipeline_a1");
+
+  ports.pipelines = () => [finishedLane()] as never;
+  const terminalProjection = refreshSeatTickInput({ ...retryProjection, state: afterSettlement.state }, ports);
+  expect(terminalProjection.pipelines).toHaveLength(0);
+  expect(seatTickDecision(terminalProjection).state.stalledSeen).not.toContain("pipeline_a1");
+});
 
 test("gather yields while frozen lanes move and refresh carries the replacement agenda", async () => {
   const { deepFreeze } = await import("@/lib/deepFreeze");
@@ -362,7 +464,8 @@ test("gather and refresh retain explicit work and its blocker for the reminder c
   const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
   for (const observed of [gathered, refreshSeatTickInput(gathered, ports)]) {
     expect(observed.tasks[0]).toMatchObject({ accepted: true, hold, waitingSince: task.createdAt });
-    expect(seatTickDecision(observed).verdict.kind).toBe("quiet");
+    const verdict = seatTickDecision(observed).verdict;
+    expect(verdict.kind === "wake" && verdict.taskPage!.rows[0]!.item.reminderKind).toBe("waiting");
   }
   delete task.hold;
   const refreshed = refreshSeatTickInput(gathered, ports);
@@ -827,8 +930,8 @@ test("under a journal the cursor has already passed, only a card that recently m
   const decision = seatTickDecision(input);
   expect(reasonsOf(decision)).toEqual(["unstarted-task"]);
   expect(decision.verdict.kind === "wake" && decision.verdict.reasons[0]!.detail)
-    .toBe("wire the chip — assigned, nothing started it; 2 older than the backlog bound");
-  expect(decision.verdict.kind === "wake" && decision.verdict.items.map((item) => item.id)).toEqual(["task_b2"]);
+    .toContain("see Tasks");
+  expect(decision.verdict.kind === "wake" && decision.verdict.taskPage!.rows.map(row => row.item.id)).toEqual(["task_b2"]);
 });
 
 /* The permanently-true reason, gone: a board of nothing but stale assigned
@@ -886,6 +989,38 @@ test("the deployment signal reports the latest deployment, and stays silent when
   /* A deployment still running is not an outcome to report at all. */
   const running = await gather({ latestDeployment: deployment({ phase: "promoting", terminal: false }) });
   expect(running.signals).toEqual([]);
+});
+
+test("a settled deploy wake carries the linked legacy seat pause and omits operator-held tasks", async () => {
+  const { gatherSeatTickDeployInput } = await import("./seatTickSources");
+  const { seatAgendaAsks } = await import("@/lib/attention/seatAgenda");
+  const pipelineId = "paused-after-deploy";
+  const task = { id: "task-after-deploy", project: PROJECT, text: "Resume the release", status: "blocked", placement: "unplaced", assignments: [],
+    createdAt: new Date(NOW - 60 * 60_000).toISOString(), updatedAt: new Date(NOW - 60 * 60_000).toISOString(),
+    hold: { kind: "external", note: "Paused for deployment", since: new Date(NOW - 60 * 60_000).toISOString(), by: "agent" } };
+  const operatorTask = { ...task, id: "operator-access-task", text: "Change account access", hold: { kind: "operator", note: "Grant access to the release account", since: new Date(NOW - 60 * 60_000).toISOString(), by: "operator" } };
+  const pipeline = lane({ id: pipelineId, state: "paused", taskIds: [task.id], pausedAt: new Date(NOW - 60 * 60_000).toISOString(),
+    stateDetail: `paused by builder ${CONVERSATION}`, pause: { reason: "Deploy in progress" } });
+  pipeline.taskIds = [task.id, operatorTask.id];
+  const settledAt = new Date(NOW - 30 * 60_000).toISOString();
+  const ports = sources({ now: NOW, pipelines: [pipeline], tasks: [task, operatorTask], seatDeployments: () => [{ deploymentId: "deployment-fixture", conversationId: CONVERSATION,
+    project: PROJECT, revision: "a".repeat(40), requestedAt: new Date(NOW - 45 * 60_000).toISOString() }],
+  deployment: () => ({ state: "ok", value: { deploymentId: "deployment-fixture", phase: "succeeded", revision: "a".repeat(40), updatedAt: settledAt, terminal: true } }) as never });
+  ports.workerAsks = async (project, seatId, selection) => {
+    expect(seatId).toBe(CONVERSATION);
+    expect(selection?.deployLaneIds).toEqual([pipelineId]);
+    const waits = new Map<string, string[]>();
+    const asks = seatAgendaAsks({ files: [], pipelines: ports.pipelines(), tasks: ports.tasks() }, NOW / 1000, project, waits, selection);
+    return { asks, forms: { rows: [], count: 0 }, pauseWaitingTasks: Object.fromEntries(waits) };
+  };
+  const gathered = await gatherSeatTickDeployInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(gathered?.pauseWaitingTasks).toEqual({ [pipelineId]: [task.id] });
+  const decision = seatTickDecision(gathered!);
+  if (decision.verdict.kind !== "wake") throw new Error("settled deploy should wake the seat");
+  const resumeLabel = decision.verdict.items.find(item => item.kind === "pipeline")?.label ?? "";
+  expect(resumeLabel).toContain(task.id);
+  expect(resumeLabel).toContain("pipeline_action resume");
+  expect(resumeLabel).not.toContain(operatorTask.id);
 });
 
 /* ------------------------------------------------------------------------- *
@@ -1145,6 +1280,111 @@ test("a finished lane whose branch still has an open pull request is carried, na
   expect(reasonsOf(seatTickDecision(input))).toEqual(["unmerged-pr"]);
 });
 
+test("a successful pull request read delayed 639 ms reaches the seat agenda", async () => {
+  const ports = sources({ pipelines: [finishedLane()] });
+  const calls: { cwd: string; limit: number }[] = [];
+  ports.openPullRequests = async (options) => {
+    calls.push(options);
+    await new Promise(resolve => setTimeout(resolve, 639));
+    return { ok: true, pullRequests: [openPullRequest()] };
+  };
+
+  const input = await gatherSeatTickInput(PROJECT, withCursor(0, OVERDUE), DEFAULT_SEAT_TICK_POLICY, ports);
+
+  expect(calls).toEqual([{ cwd: "/srv/repo", limit: 60 }]);
+  expect(input.pullRequests).toEqual([expect.objectContaining({ number: 1289, pipelineId: "pipeline_z9" })]);
+  expect(input.pullRequestsObserved).toBe(true);
+  expect(input.pullRequestsUnavailable).toBeNull();
+  expect(input.state.pullRequestGap).toBeNull();
+  expect(reasonsOf(seatTickDecision(input))).toEqual(["unmerged-pr"]);
+});
+
+test.skipIf(pullRequestHangCase !== "production")("production pull request timeout subprocess", async () => {
+  const ports = sources({ pipelines: [finishedLane()] });
+  ports.openPullRequests = () => {
+    return new Promise(() => {});
+  };
+
+  const work = new SeatTickWork(PROJECT, 30_000);
+  process.stdout.write("\nPULL_REQUEST_READ_ENTERED\n");
+  try {
+    const input = await work.run(() => gatherSeatTickInput(PROJECT, withCursor(0, OVERDUE), DEFAULT_SEAT_TICK_POLICY, ports));
+    expect(input.pullRequests).toEqual([]);
+    expect(input.pullRequestsObserved).toBe(false);
+    expect(input.pullRequestsUnavailable).toBe("timed-out");
+    expect(input.state.pullRequestGap).toMatchObject({ gap: "timed-out" });
+    expect(seatTickDecision(input).verdict).toMatchObject({
+      kind: "error",
+      detail: "the open pull requests of this project's finished lanes could not be read (timed-out), so nothing owed is not established",
+    });
+  } finally { work.close(); }
+}, 60_000);
+
+test.skipIf(!!pullRequestHangCase)("a hung production pull request read reports its gap within the five-second cap", async () => {
+  const child = Bun.spawn([process.execPath, "test", "--timeout=60000", import.meta.path,
+    "--test-name-pattern", "^production pull request timeout subprocess$"], {
+    env: { ...process.env, LLV_PULL_REQUEST_HANG_CASE: "production" }, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  let output = "", entered = false, timedOut = false;
+  const started = performance.now();
+  let timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 15_000);
+  const collect = async (stream: ReadableStream<Uint8Array>) => {
+    const reader = stream.getReader();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      output = (output + new TextDecoder().decode(value)).slice(-16_000);
+      if (!entered && output.includes("PULL_REQUEST_READ_ENTERED")) {
+        entered = true;
+        clearTimeout(timer);
+        timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 7_000);
+      }
+    }
+  };
+  try {
+    const [status] = await Promise.all([child.exited, collect(child.stdout), collect(child.stderr)]);
+    expect({ entered, timedOut, status, output }).toMatchObject({ entered: true, timedOut: false, status: 0 });
+    expect(performance.now() - started).toBeLessThan(8_000);
+  } finally {
+    clearTimeout(timer);
+    if (child.exitCode === null) child.kill("SIGKILL");
+  }
+}, 20_000);
+
+test("pull request read has a five-second cap when the check has ample time", async () => {
+  let requestedMs = 0;
+  const scheduler = {
+    setTimeout(handler: () => void, ms: number) { requestedMs = ms; handler(); return 1; },
+    clearTimeout() {},
+  };
+  const work = new SeatTickWork(PROJECT, 30_000);
+  try {
+    const result = await work.run(() => readPullRequestsWithinBudget(() => new Promise(() => {}), undefined, scheduler));
+    expect(requestedMs).toBe(5_000);
+    expect(result).toEqual({ ok: false, unavailable: "timed-out" });
+  } finally { work.close(); }
+});
+
+test("a hung pull request read uses at most half of the remaining check budget", async () => {
+  let requestedMs = 0;
+  const scheduler = {
+    setTimeout(handler: () => void, ms: number) { requestedMs = ms; handler(); return 1; },
+    clearTimeout() {},
+  };
+  const work = new SeatTickWork(PROJECT, 2_400, () => 0, {
+    setTimeout() { return 1; },
+    clearTimeout() {},
+  });
+
+  const result = await work.run(() => readPullRequestsWithinBudget(
+    () => new Promise(() => {}), undefined, scheduler,
+  ));
+
+  expect(requestedMs).toBe(1_200);
+  expect(result).toEqual({ ok: false, unavailable: "timed-out" });
+  work.close();
+});
+
 /* #2187 §3.5: a lane can complete on a spent review budget with a head no
    reviewer saw; the seat that merges its pull request reads that first. */
 test("a finished lane whose last fix was never re-reviewed says so on its open pull request", async () => {
@@ -1192,6 +1432,26 @@ test("a pull request the merge runner holds is left out, and a stopped merge nam
       .toBe(`pull request #1289 left open by a lane that finished; merge stopped: ${reason}`);
     expect(verdict.kind === "wake" && verdict.items.find((item) => item.kind === "pull-request")?.label).toContain(`merge stopped: ${reason}`);
   }
+});
+
+test("optional check failures reach the seat wake after landing and stay project-scoped", async () => {
+  const merge = { state: "merged", by: "auto-merge", prNumber: 1289, optionalFailedChecks: ["optional-audit"] };
+  const input = await gather({ pipelines: [finishedLane({ merge }),
+    finishedLane({ id: "hidden-lane", hiddenAt: "2026-08-27T11:00:00.000Z", merge }),
+    finishedLane({ id: "other-lane", project: "another-project", merge })], openPullRequests: [] }, withCursor(0, OVERDUE));
+  const notes = input.signals.filter(signal => signal.id.startsWith("optional-check-failures:"));
+  expect(notes).toHaveLength(1);
+  expect(notes[0]!.label).toContain("Note: optional checks failed on PR #1289: optional-audit");
+  const verdict = seatTickDecision(input).verdict;
+  expect(verdict.kind).toBe("wake");
+  if (verdict.kind === "wake") expect(verdict.items.find(item => item.id === notes[0]!.id)?.label).toContain("merge depends on required checks only");
+  if (verdict.kind === "wake") {
+    const shown = verdict.items.map(item => item.itemVersion!).filter(Boolean);
+    const again = seatTickDecision({ ...input, state: { ...input.state, itemsShown: shown } }).verdict;
+    expect(again.kind === "wake" && again.items.some(item => item.id === notes[0]!.id)).toBe(false);
+  }
+  const recovered = await gather({ pipelines: [finishedLane({ merge: { ...merge, optionalFailedChecks: [] } })], openPullRequests: [] }, withCursor(0, OVERDUE));
+  expect(recovered.signals.some(signal => signal.id.startsWith("optional-check-failures:"))).toBe(false);
 });
 
 /* #2187 §5.3: a finished lane marked as finishing its task, whose move to
@@ -2211,8 +2471,8 @@ function childRegistry(name: string): ChildRegistry {
   };
 }
 
-function childGather(fixture: Omit<ChildRegistry, "spawn">, over: Parameters<typeof sources>[0] = {}, state: SeatTickProjectState = emptySeatTickState()) {
-  return gatherSeatTickInput(fixture.project, state, DEFAULT_SEAT_TICK_POLICY, sources({
+function childGather(fixture: Omit<ChildRegistry, "spawn">, over: Parameters<typeof sources>[0] = {}, state: SeatTickProjectState = emptySeatTickState(), project = fixture.project) {
+  return gatherSeatTickInput(project, state, DEFAULT_SEAT_TICK_POLICY, sources({
     registry: fixture.registry,
     seatConversationId: fixture.seatId,
     pipelines: [],
@@ -2223,7 +2483,7 @@ function childGather(fixture: Omit<ChildRegistry, "spawn">, over: Parameters<typ
 
 /** A production SQLite layout with fixed identities and clocks for recovery
  * regressions. The JSON seed is normalized by the production reader. */
-function replayChildren(name: string, cases: { title: string; unobserved?: boolean; host?: "dead" | "live"; ledger?: boolean | "partial"; generations?: number; admissionOwned?: boolean }[]) {
+function replayChildren(name: string, cases: { title: string; unobserved?: boolean; host?: "dead" | "live"; ledger?: boolean | "partial"; generations?: number; admissionOwned?: boolean; turn?: "busy" | "idle" | "terminal" | "unknown" }[]) {
   const dir = fs.mkdtempSync(path.join(SANDBOX, `${name}-`));
   const cwd = path.join(dir, "repo");
   fs.mkdirSync(cwd);
@@ -2231,8 +2491,9 @@ function replayChildren(name: string, cases: { title: string; unobserved?: boole
   const seatId = `conversation_${name}_seat`;
   const successorId = `conversation_${name}_successor`;
   const createdAt = new Date(NOW - 10 * MINUTE_MS).toISOString();
-  const conversation = (id: string, generations: unknown[] = []) => ({ id, engine: "claude", generations,
-    turn: { state: "unknown", source: "empty", terminalAt: null, observedAt: null }, createdAt, updatedAt: createdAt });
+  const conversation = (id: string, generations: unknown[] = [], turn: { state: string; source: string; terminalAt: string | null; observedAt: string | null } = {
+    state: "unknown", source: "empty", terminalAt: null, observedAt: null,
+  }) => ({ id, engine: "claude", generations, turn, createdAt, updatedAt: createdAt });
   const file = normalizeRegistry({ version: 2, entries: {}, receipts: {}, conversations: {
     [seatId]: conversation(seatId), [successorId]: conversation(successorId),
   } });
@@ -2255,7 +2516,8 @@ function replayChildren(name: string, cases: { title: string; unobserved?: boole
         state: options.unobserved ? "starting" : "completed", transport: "structured", launchProfile: profile,
         admissionOwner: options.admissionOwned ? { pid: 42, startIdentity: null } : null,
         artifactPath: options.unobserved ? null : childPath, key: options.unobserved ? null : key },
-    }, conversations: options.unobserved ? {} : { [id]: conversation(id, generations.map((item) => ({ id: item.id, path: item.path, accountId: null, launchProfile: profile, host: null, createdAt }))) } });
+    }, conversations: options.unobserved ? {} : { [id]: conversation(id, generations.map((item) => ({ id: item.id, path: item.path, accountId: null, launchProfile: profile, host: null, createdAt })),
+      { state: options.turn ?? "unknown", source: "assistant", terminalAt: options.turn === "terminal" ? createdAt : null, observedAt: createdAt }) } });
     Object.assign(file.receipts, seed.receipts);
     Object.assign(file.conversations, seed.conversations);
     if (options.host) file.entries[`claude:${generation}`] = { key, artifactPath: childPath, cwd, accountId: null,
@@ -2341,6 +2603,258 @@ test("a settled child with an unknown registry turn clears the gap and stays ack
   expect(new SeatTickAccounting(first.state.accounting!.filename, fixture.project).ready(10)).toEqual([]);
 });
 
+test("one unreadable child ledger is named once and healthy workers stay in the wake", async () => {
+  const f = replayChildren("damaged-ledger", [
+    { title: "worker with an unreadable ledger", host: "dead" },
+    { title: "worker with a finished turn", host: "dead", ledger: true },
+  ]);
+  const [damaged, healthy] = f.workers;
+  const ledgerDir = statePath("structured-host-events");
+  const damagedPath = path.join(ledgerDir, `${damaged.generation}.jsonl`);
+  fs.mkdirSync(damagedPath);
+  const first = await childGather(f);
+  expect(first.childrenUnavailable).toBeNull();
+  expect(first.state.childrenGap).toBeNull();
+  expect(first.children).toEqual(expect.arrayContaining([
+    expect.objectContaining({ conversationId: damaged.id, status: "unknown" }),
+    expect.objectContaining({ conversationId: healthy.id, status: "terminal", outcome: "finished" }),
+  ]));
+  const decision = seatTickDecision(first);
+  if (decision.verdict.kind !== "wake") throw new Error("expected a wake carrying the healthy worker and ledger warning");
+  expect(decision.verdict.gaps).toEqual([]);
+  expect(decision.verdict.items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ kind: "signal", id: `child-ledger:${damaged.id}:${damaged.generation}`, label: expect.stringContaining("ledger-unreadable") }),
+    expect.objectContaining({ kind: "child", label: expect.stringContaining("worker with a finished turn") }),
+  ]));
+  const commit = seatTickWakeCommitPlan(decision.verdict, {
+    fingerprint: first.changeFingerprint, eventsThrough: 0, terminalChildren: first.children.flatMap(child => child.outcomeId ? [child.outcomeId] : []),
+  })!;
+  const accounting = new SeatTickAccounting(first.state.accounting!.filename, f.project);
+  const wake = { clientMessageId: "ledger-warning-wake", conversationId: f.seatId, seatEpoch: 7, operationId: null, commit };
+  expect(accounting.prepare(accounting.readState(), wake)).toBe(true);
+  expect(accounting.settle(wake.clientMessageId, seatTickWakeCommit(decision.state, commit, f.now), "landed")).toBe(true);
+  const now = f.now + 65 * MINUTE_MS;
+  const sameDamage = await childGather(f, { now }, accounting.readState());
+  expect(sameDamage.childrenUnavailable).toBeNull();
+  expect(seatTickDecision(sameDamage).verdict.kind).toBe("quiet");
+
+  fs.rmdirSync(damagedPath);
+  const ledger = new FileRuntimeEventStore(ledgerDir);
+  ledger.append(damaged.generation, { kind: "turn-started", turnId: "recovered-turn", seq: 1 });
+  ledger.append(damaged.generation, { kind: "turn-ended", turnId: "recovered-turn", status: "completed", seq: 2 });
+  const repaired = await childGather(f, { now }, sameDamage.state);
+  expect(repaired.signals.some(signal => signal.id.startsWith("child-ledger:"))).toBe(false);
+  expect(repaired.children).toMatchObject([{ conversationId: damaged.id, status: "terminal", outcome: "finished" }]);
+});
+
+test("a missing curator account reaches the seat once across retries and is reported again after recovery", async () => {
+  const f = replayChildren("curator-account", []);
+  const { leaveOperatorLessons } = await import("@/lib/memory/roleStore");
+  const { claimPass, patchPass } = await import("@/lib/memory/curation/store");
+  const { CURATION_INTERVAL_MS } = await import("@/lib/memory/roleTypes");
+  const source = { origin: "operator" as const, project: f.project, roleId: null, fixRound: false as const, conversationId: f.seatId };
+  leaveOperatorLessons({ source, lessons: [{ scope: "project", rule: "Read the account settings before inspecting a launch refusal.", why: "Keep account selection traceable." }],
+    now: new Date(f.now).toISOString() });
+  const finish = (now: number, failure: string | null) => {
+    const pass = claimPass({ project: f.project, repoDir: f.cwd, now });
+    if (!pass) throw new Error("expected a curator pass");
+    patchPass(pass.id, { state: failure ? "failed" : "succeeded", endedAt: new Date(now).toISOString(), failure });
+    return pass;
+  };
+  const first = finish(f.now, "no-account");
+  const gathered = await childGather(f);
+  const decision = seatTickDecision(gathered);
+  if (decision.verdict.kind !== "wake") throw new Error("expected an account warning in the seat wake");
+  expect(decision.verdict.items).toEqual([expect.objectContaining({ id: "curator-no-account", label: expect.stringContaining("no account was available") })]);
+  const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: gathered.changeFingerprint, eventsThrough: 0 })!;
+  const landed = seatTickWakeCommit(decision.state, commit, f.now);
+  const next = f.now + CURATION_INTERVAL_MS;
+  expect(finish(next, "no-account").noAccountEpisode).toBe(first.id);
+  expect((await childGather(f, { now: next }, landed)).signals.some(signal => signal.id === "curator-no-account")).toBe(false);
+
+  finish(next + CURATION_INTERVAL_MS, null);
+  expect((await childGather(f, { now: next + CURATION_INTERVAL_MS }, landed)).signals).toEqual([]);
+  const recurrence = next + 2 * CURATION_INTERVAL_MS;
+  finish(recurrence, "no-account");
+  expect(seatTickDecision(await childGather(f, { now: recurrence }, landed)).verdict).toMatchObject({
+    kind: "wake", items: [expect.objectContaining({ id: "curator-no-account" })],
+  });
+});
+
+test("a readable page limit keeps catch-up debt when another child ledger has a gap", async () => {
+  const f = replayChildren("catchup-readable-gap", [
+    { title: "damaged worker with readable outcomes", turn: "terminal" },
+    { title: "healthy finished worker", turn: "terminal", ledger: true },
+  ]);
+  const damaged = f.workers[0]!;
+  const ledgerDir = statePath("structured-host-events");
+  fs.mkdirSync(ledgerDir, { recursive: true });
+  const ledgerFile = path.join(ledgerDir, `${damaged.generation}.jsonl`);
+  fs.rmSync(ledgerFile, { force: true });
+  const rows: Record<string, unknown>[] = [];
+  let seq = 1;
+  for (let index = 0; index < 257; index++) {
+    if (index === 1) seq++;
+    rows.push({ kind: "turn-started", turnId: `readable-${index}`, seq: seq++ });
+    rows.push({ kind: "turn-ended", turnId: `readable-${index}`, status: "completed", seq: seq++ });
+  }
+  fs.writeFileSync(ledgerFile, `${rows.map(row => JSON.stringify(row)).join("\n")}\n`);
+  const backlog = new Date(f.now - 2 * 60 * MINUTE_MS).toISOString();
+  let gathered = await childGather(f, {}, { ...emptySeatTickState(), unreachableSince: backlog, unreachableBacklogSince: backlog });
+  expect(gathered.childrenCatchUpPending).toBe(true);
+  expect(gathered.children).toEqual(expect.arrayContaining([expect.objectContaining({ conversationId: f.workers[1]!.id })]));
+  const outcomesByWorker = new Map(f.workers.map(worker => [worker.id, new Set<string>()]));
+  const record = (children: typeof gathered.children) => {
+    for (const child of children) if (child.outcomeId) outcomesByWorker.get(child.conversationId)?.add(child.outcomeId);
+  };
+  record(gathered.children);
+  for (let pass = 0; gathered.childrenCatchUpPending && pass < 20; pass++) {
+    gathered = await childGather(f, {}, gathered.state);
+    record(gathered.children);
+  }
+  expect(gathered.childrenCatchUpPending).toBe(false);
+  expect(outcomesByWorker.get(f.workers[0]!.id)?.size).toBe(257);
+  expect(outcomesByWorker.get(f.workers[1]!.id)?.size).toBe(1);
+});
+
+test("a deferred no-account warning survives another failure and is acknowledged after delivery", async () => {
+  const f = replayChildren("curator-deferred", []);
+  const { leaveOperatorLessons } = await import("@/lib/memory/roleStore");
+  const { claimPass, patchPass, curationNoAccountWarning } = await import("@/lib/memory/curation/store");
+  leaveOperatorLessons({ source: { origin: "operator", project: f.project, roleId: null, fixRound: false, conversationId: f.seatId },
+    lessons: [{ scope: "project", rule: "Preserve the undelivered account warning.", why: "The seat must receive the cause." }],
+    now: new Date(f.now).toISOString() });
+  const finish = (now: number, failure: string) => {
+    const pass = claimPass({ project: f.project, repoDir: f.cwd, now });
+    if (!pass) throw new Error("expected a curator pass");
+    patchPass(pass.id, { state: "failed", endedAt: new Date(now).toISOString(), failure });
+    return pass;
+  };
+  const first = finish(f.now, "no-account");
+  const warning = curationNoAccountWarning(f.project)!;
+  const { CURATION_INTERVAL_MS } = await import("@/lib/memory/roleTypes");
+  finish(f.now + CURATION_INTERVAL_MS, "launch-refused");
+  expect(curationNoAccountWarning(f.project)).toEqual(warning);
+  const pending = await childGather(f);
+  expect(pending.signals).toEqual(expect.arrayContaining([expect.objectContaining({ id: "curator-no-account", episode: warning.episode })]));
+  const { seatTickSignalVersion } = await import("./seatTick");
+  const version = seatTickSignalVersion(pending.signals.find(signal => signal.id === "curator-no-account")!, pending.seat);
+  const deliveredState = { ...pending.state, itemsShown: [...(pending.state.itemsShown ?? []), version] };
+  const afterDelivery = await childGather(f, {}, deliveredState);
+  expect(afterDelivery.signals.some(signal => signal.id === "curator-no-account")).toBe(false);
+  expect(curationNoAccountWarning(f.project)).toBeNull();
+  finish(f.now + 2 * CURATION_INTERVAL_MS, "no-account");
+  expect(curationNoAccountWarning(f.project)?.episode).not.toBe(first.id);
+});
+
+test("the tick reads a fixed-size curator warning record as pass history grows", async () => {
+  const f = replayChildren("curator-warning-size", []);
+  const { leaveOperatorLessons } = await import("@/lib/memory/roleStore");
+  const { claimPass, patchPass, curationNoAccountWarning, curationCollection } = await import("@/lib/memory/curation/store");
+  leaveOperatorLessons({ source: { origin: "operator", project: f.project, roleId: null, fixRound: false, conversationId: f.seatId },
+    lessons: [{ scope: "project", rule: "Keep the warning lookup bounded.", why: "Tick reads must remain predictable." }],
+    now: new Date(f.now).toISOString() });
+  const pass = claimPass({ project: f.project, repoDir: f.cwd, now: f.now })!;
+  patchPass(pass.id, { state: "failed", endedAt: new Date(f.now).toISOString(), failure: "no-account" });
+  const collection = curationCollection()!;
+  collection.boundedPatch(4, tx => {
+    const row = tx.get(`p:${f.project}`);
+    if (row?.kind === "project") tx.put({ ...row, passes: [...row.passes, ...Array.from({ length: 5000 }, (_, index) => `retained-${index}`)] });
+  });
+  const reads: { key: string; bytes: number }[] = [];
+  const original = collection.get.bind(collection);
+  const observed = spyOn(collection, "get").mockImplementation((key: string) => {
+    const row = original(key);
+    reads.push({ key, bytes: row ? Buffer.byteLength(JSON.stringify(row)) : 0 });
+    return row;
+  });
+  try {
+    expect(curationNoAccountWarning(f.project)).toMatchObject({ episode: pass.id });
+    expect(reads).toEqual([{ key: `w:${f.project}`, bytes: expect.any(Number) }]);
+    expect(reads[0]!.bytes).toBeLessThan(200);
+  } finally { observed.mockRestore(); }
+});
+
+test("curator warnings survive project succession before and after settlement", async () => {
+  const f = replayChildren("curator-warning-succession", []);
+  const { leaveOperatorLessons } = await import("@/lib/memory/roleStore");
+  const { claimPass, patchPass, curationNoAccountWarning } = await import("@/lib/memory/curation/store");
+  const { persistProjectAliases } = await import("@/lib/projects/aliases");
+  const { seatTickSignalVersion } = await import("./seatTick");
+  leaveOperatorLessons({ source: { origin: "operator", project: f.project, roleId: null, fixRound: false, conversationId: f.seatId },
+    lessons: [{ scope: "project", rule: "Keep the account warning through project succession.", why: "The successor seat must acknowledge it." }],
+    now: new Date(f.now).toISOString() });
+  const finish = (project: string, repoDir: string, now: number) => {
+    const pass = claimPass({ project, repoDir, now });
+    if (!pass) throw new Error("expected a curator pass");
+    patchPass(pass.id, { state: "failed", endedAt: new Date(now).toISOString(), failure: "no-account" });
+    return pass;
+  };
+
+  const firstPass = finish(f.project, f.cwd, f.now);
+  expect(persistProjectAliases([{ source: f.project, target: "repo-curator-successor", displayName: "successor" }])).toBe(true);
+  const successorGather = await childGather(f, {}, emptySeatTickState(), "repo-curator-successor");
+  const successorSignal = successorGather.signals.find(signal => signal.id === "curator-no-account");
+  expect(successorSignal).toMatchObject({ episode: firstPass.id });
+  const successorVersion = seatTickSignalVersion(successorSignal!, successorGather.seat);
+  const successorSettled = await childGather(f, {}, {
+    ...successorGather.state, itemsShown: [...(successorGather.state.itemsShown ?? []), successorVersion],
+  }, "repo-curator-successor");
+  expect(successorSettled.signals.some(signal => signal.id === "curator-no-account")).toBe(false);
+  expect(curationNoAccountWarning(f.project)).toBeNull();
+
+  // A warning settled under its predecessor key stays cleared when its alias is added later.
+  const g = replayChildren("curator-warning-succession-after-settlement", []);
+  leaveOperatorLessons({ source: { origin: "operator", project: g.project, roleId: null, fixRound: false, conversationId: g.seatId },
+    lessons: [{ scope: "project", rule: "Keep a settled warning cleared across later succession.", why: "A successor must not resurrect it." }],
+    now: new Date(g.now).toISOString() });
+  const settledPass = finish(g.project, g.cwd, g.now);
+  const predecessorGather = await childGather(g);
+  const predecessorSignal = predecessorGather.signals.find(signal => signal.id === "curator-no-account");
+  expect(predecessorSignal).toMatchObject({ episode: settledPass.id });
+  const predecessorVersion = seatTickSignalVersion(predecessorSignal!, predecessorGather.seat);
+  const predecessorSettled = await childGather(g, {}, {
+    ...predecessorGather.state, itemsShown: [...(predecessorGather.state.itemsShown ?? []), predecessorVersion],
+  });
+  expect(predecessorSettled.signals.some(signal => signal.id === "curator-no-account")).toBe(false);
+  expect(curationNoAccountWarning(g.project)).toBeNull();
+  expect(persistProjectAliases([{ source: g.project, target: "repo-curator-successor-after-settlement", displayName: "successor" }])).toBe(true);
+  expect((await childGather(g, {}, emptySeatTickState(), "repo-curator-successor-after-settlement")).signals.some(signal => signal.id === "curator-no-account")).toBe(false);
+});
+
+test("a delayed acknowledgement cannot erase a newer no-account episode", async () => {
+  const f = replayChildren("curator-warning-delayed-ack", []);
+  const { leaveOperatorLessons } = await import("@/lib/memory/roleStore");
+  const { claimPass, patchPass, curationNoAccountWarning, acknowledgeCurationNoAccountWarning } = await import("@/lib/memory/curation/store");
+  const { CURATION_INTERVAL_MS } = await import("@/lib/memory/roleTypes");
+  leaveOperatorLessons({ source: { origin: "operator", project: f.project, roleId: null, fixRound: false, conversationId: f.seatId },
+    lessons: [{ scope: "project", rule: "Retain the latest account warning episode.", why: "A late delivery must not clear it." }],
+    now: new Date(f.now).toISOString() });
+  const finish = (now: number, failure: string) => {
+    const pass = claimPass({ project: f.project, repoDir: f.cwd, now });
+    if (!pass) throw new Error("expected a curator pass");
+    patchPass(pass.id, { state: failure === "succeeded" ? "succeeded" : "failed", endedAt: new Date(now).toISOString(), failure });
+    return pass;
+  };
+  const oldPass = finish(f.now, "no-account");
+  const gatheredOld = await childGather(f);
+  const oldWarningSignal = gatheredOld.signals.find(signal => signal.id === "curator-no-account")!;
+  const { seatTickSignalVersion } = await import("./seatTick");
+  const oldVersion = seatTickSignalVersion(oldWarningSignal, gatheredOld.seat);
+  finish(f.now + CURATION_INTERVAL_MS, "succeeded");
+  const newPass = finish(f.now + 2 * CURATION_INTERVAL_MS, "no-account");
+  const newWarning = curationNoAccountWarning(f.project)!;
+  expect(newPass.id).not.toBe(oldPass.id);
+  expect(newWarning.episode).not.toBe(oldWarningSignal.episode);
+  const delayed = await childGather(f, {}, { ...gatheredOld.state, itemsShown: [...(gatheredOld.state.itemsShown ?? []), oldVersion] });
+  expect(delayed.signals).toEqual(expect.arrayContaining([expect.objectContaining({ id: "curator-no-account", episode: newWarning.episode })]));
+  expect(acknowledgeCurationNoAccountWarning(f.project, oldWarningSignal.episode!)).toBe(false);
+  expect(curationNoAccountWarning(f.project)).toEqual(newWarning);
+  const repeat = finish(f.now + 3 * CURATION_INTERVAL_MS, "no-account");
+  expect(repeat.noAccountEpisode).toBe(newWarning.episode);
+  expect(curationNoAccountWarning(f.project)?.episode).toBe(newWarning.episode);
+});
+
 test("an expired launch without a conversation is a named failure owed until its wake lands", async () => {
   const fixture = replayChildren("abandoned-launch", [{ title: "launch never materialized", unobserved: true }]);
   const worker = fixture.workers[0]!;
@@ -2375,7 +2889,8 @@ test("a gap in a completed ledger preserves the unplaced child and its owed resu
   const worker = fixture.workers[0]!;
   fs.appendFileSync(statePath("structured-host-events", `${worker.generation}.jsonl`), JSON.stringify({ kind: "unhosted", seq: 4 }) + "\n");
   const input = await childGather(fixture);
-  expect(input.childrenUnavailable).not.toBeNull();
+  expect(input.childrenUnavailable).toBeNull();
+  expect(input.signals).toContainEqual(expect.objectContaining({ id: `child-ledger:${worker.id}:${worker.generation}`, label: expect.stringContaining("sequence-gap") }));
   expect(input.children.some(child => child.conversationId === worker.id && child.status === "unknown")).toBe(true);
   const accounting = new SeatTickAccounting(input.state.accounting!.filename, fixture.project);
   expect(accounting.ready(10)).toHaveLength(1);
@@ -2892,10 +3407,11 @@ test("maintenance gather offers only unannounced ended project runs and moves th
    inside the write it waited for. Another process holds the SQLite writer;
    once it lets go, the switch is cancelled and an attempt claims the row in
    the same tick, before the withdrawal's next probe. */
-async function withdrawalRace(name: string, withdraw: (registry: InstanceType<typeof AgentRegistry>, held: { id: string; operationId: string; key: string }) => Promise<string>) {
+async function withdrawalRace(name: string, withdraw: (registry: InstanceType<typeof AgentRegistry>, held: { id: string; operationId: string; key: string; conversationId: string }) => Promise<string>) {
   const dir = fs.mkdtempSync(path.join(SANDBOX, `${name}-`));
   const sqlitePath = path.join(dir, "agent-registry.sqlite");
   const registry = new AgentRegistry(path.join(dir, "agent-registry.json"), () => false, undefined, { sqliteMode: "sqlite", sqliteFilename: sqlitePath });
+  await registry.prepareRecoveryIndexes();
   const conversation = registry.ensureConversation("codex", path.join(dir, `${crypto.randomUUID()}.jsonl`), null);
   registry.setConversationMigration(conversation.id, {
     intentId: `${name}-intent`, phase: "requested", targetId: "default", revision: 1, error: null, updatedAt: new Date().toISOString(),
@@ -2909,7 +3425,7 @@ async function withdrawalRace(name: string, withdraw: (registry: InstanceType<ty
   holder.exec("PRAGMA busy_timeout = 5000");
   holder.exec("BEGIN IMMEDIATE");
   try {
-    const withdrawing = withdraw(registry, { id: held.id, operationId: held.command.operationId, key });
+    const withdrawing = withdraw(registry, { id: held.id, operationId: held.command.operationId, key, conversationId: conversation.id });
     await new Promise((resolve) => setTimeout(resolve, 60));
     holder.exec("ROLLBACK");
     registry.setConversationMigration(conversation.id, null);
@@ -2931,7 +3447,7 @@ test("a held-wake withdrawal that waited for the writer leaves a row an attempt 
   process.env.LLV_RUNTIME_HOST_SOCKET = "";
   try {
     const { answer, row } = await withdrawalRace("seat-withdraw-race", (_registry, held) =>
-      defaultSeatTickSources().withdrawWake({ ...WAKE, clientMessageId: held.key, operationId: null }, "the seat rotated"));
+      defaultSeatTickSources().withdrawWake({ ...WAKE, conversationId: held.conversationId, clientMessageId: held.key, operationId: null }, "the seat rotated"));
     expect(answer).toBe("unknown");
     expect(row).toMatchObject({ state: "delivery-uncertain", text: "wake the seat" });
   } finally {
@@ -2944,6 +3460,7 @@ test("a held-wake withdrawal that finds its row still held after the wait ends i
   const { defaultSeatTickSources } = await import("./seatTickSources");
   const dir = fs.mkdtempSync(path.join(SANDBOX, "seat-withdraw-held-"));
   const registry = new AgentRegistry(path.join(dir, "agent-registry.json"), () => false, undefined, { sqliteMode: "sqlite", sqliteFilename: path.join(dir, "agent-registry.sqlite") });
+  await registry.prepareRecoveryIndexes();
   const conversation = registry.ensureConversation("codex", path.join(dir, `${crypto.randomUUID()}.jsonl`), null);
   registry.setConversationMigration(conversation.id, {
     intentId: "held-intent", phase: "requested", targetId: "default", revision: 1, error: null, updatedAt: new Date().toISOString(),
@@ -2951,7 +3468,7 @@ test("a held-wake withdrawal that finds its row still held after the wait ends i
   const held = registry.holdDelivery(conversation.id, "wake the seat", "seat-withdraw-held-key");
   setAgentRegistryForTests(registry);
   try {
-    expect(await defaultSeatTickSources().withdrawWake({ ...WAKE, clientMessageId: "seat-withdraw-held-key", operationId: null }, "the seat rotated")).toBe("withdrawn");
+    expect(await defaultSeatTickSources().withdrawWake({ ...WAKE, conversationId: conversation.id, clientMessageId: "seat-withdraw-held-key", operationId: null }, "the seat rotated")).toBe("withdrawn");
     expect(registry.readOnlySnapshot().heldDeliveries[held.id]).toMatchObject({ state: "failed", text: "" });
   } finally {
     setAgentRegistryForTests(null);
@@ -2979,7 +3496,7 @@ test("foreign flipping retirement reports never wake an idle project or make its
     conversation: () => foreign,
     readOnlySnapshot: () => ({ ...registry.readOnlySnapshot(), conversations: { fixtureForeign: foreign } }),
   }) as never;
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() };
   const baseline = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
   state = { ...state, reportFingerprint: baseline.digestFingerprint!, checkFingerprint: baseline.digestFingerprint! };
@@ -3000,9 +3517,14 @@ test("foreign flipping retirement reports never wake an idle project or make its
 test("non-actionable signal churn and machine-wide retirement stalls leave idle checks quiet", async () => {
   for (const status of [null, "inbox", "blocked"]) {
     const ports = sources({ pipelines: [], tasks: status ? [boardCard({ status })] : [] });
-    ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+    ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
     let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString(), lastProposalAt: new Date(NOW).toISOString() };
     const baseline = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
+    if (status === "blocked") {
+      const decision = seatTickDecision(baseline);
+      const { seatTickWakeCommit, seatTickWakeCommitPlan } = await import("./seatTick");
+      state = seatTickWakeCommit(decision.state, seatTickWakeCommitPlan(decision.verdict, { fingerprint: baseline.changeFingerprint, eventsThrough: 0 })!, NOW);
+    }
     state = { ...state, reportFingerprint: baseline.digestFingerprint!, checkFingerprint: baseline.digestFingerprint! };
     for (let check = 0; check < 24; check++) {
       ports.now = () => NOW + check * 15 * 60_000;
@@ -3022,7 +3544,7 @@ test("an own-project lane change wakes and makes a digest due while signal churn
   let pipelines: Record<string, unknown>[] = [];
   const ports = sources({ pipelines: [], tasks: [boardCard({ status: "inbox" })] });
   ports.pipelines = () => pipelines as never;
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const initial = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() };
   const baseline = await gatherSeatTickInput(PROJECT, initial, DEFAULT_SEAT_TICK_POLICY, ports);
   let state: SeatTickProjectState = { ...initial, reportFingerprint: baseline.digestFingerprint!, checkFingerprint: baseline.digestFingerprint! };
@@ -3056,7 +3578,7 @@ test.each(["task note edits", "maintenance timestamps", "details appends", "repo
   const ports = sources({ laneRows: [livenessRow({ lifecycle: "running" })] });
   ports.tasks = () => [task] as never;
   let reports: { id: string; project: string; at: string; origin: { kind: "manager" } }[] = [];
-  ports.reports = { log: () => reports as never, enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: reports as never, reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const baseline = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports));
   let state = baseline.state;
@@ -3093,7 +3615,7 @@ test.each(["task status", "stage transition", "stage state", "attempt state", "m
     revision: "c".repeat(40), requestedAt: new Date(NOW).toISOString() }] : [];
   ports.deployment = () => ({ state: "ok", value: { deploymentId: "deploy-material", phase: "succeeded", terminal: true,
     revision: "c".repeat(40), error: null, updatedAt: new Date(NOW).toISOString() } }) as never;
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const baseline = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports));
   ports.now = () => NOW + 2 * 60 * 60_000;
@@ -3115,7 +3637,7 @@ test.each(["task status", "stage transition", "stage state", "attempt state", "m
 
 test("a legacy digest baseline upgrades without owing a digest for task timestamps", async () => {
   const ports = sources({ tasks: [boardCard({ status: "inbox", updatedAt: new Date(NOW).toISOString() })] });
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const state = { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE,
     reportFingerprint: "legacy-board", checkFingerprint: "legacy-board" };
   const decision = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
@@ -3133,7 +3655,7 @@ test("a legacy digest baseline upgrades without owing a digest for task timestam
 test("a flapping pull-request source owes no digest, but a verified merge does", async () => {
   const ports = sources({ pipelines: [lane(), finishedLane()], openPullRequests: [openPullRequest()],
     laneRows: [livenessRow({ lifecycle: "running" })] });
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
   for (let check = 1; check <= 4; check++) {
@@ -3159,7 +3681,7 @@ test("gated PR reads and report writes cannot invent digest movement", async () 
   const ports = sources({ pipelines: [lane(), finishedLane()], openPullRequests: [openPullRequest()], pullRequestCalls,
     laneRows: [livenessRow({ lifecycle: "running" })] });
   let reports: { id: string; project: string; at: string; origin: { kind: "manager" } }[] = [];
-  ports.reports = { log: () => reports as never, enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: reports as never, reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
   state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
@@ -3186,7 +3708,7 @@ test("gated PR reads and report writes cannot invent digest movement", async () 
 test("recovered PR evidence establishes a baseline before a later verified merge", async () => {
   const ports = sources({ pipelines: [lane(), finishedLane()], laneRows: [livenessRow({ lifecycle: "running" })] });
   ports.openPullRequests = async () => ({ ok: false, unavailable: "command-failed" });
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
   state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
@@ -3211,7 +3733,7 @@ test("first recovered PR evidence preserves unreported board movement", async ()
   let task = boardCard({ status: "inbox" });
   const ports = sources({ pipelines: [lane(), finishedLane()], tasks: [task], laneRows: [livenessRow({ lifecycle: "running" })] });
   ports.openPullRequests = async () => ({ ok: false, unavailable: "command-failed" });
-  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [], reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
     { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
   state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
@@ -3229,7 +3751,7 @@ test("first recovered PR evidence preserves unreported board movement", async ()
 test("observing an old report without a board baseline cannot invent digest movement", async () => {
   const ports = sources({});
   const reportedAt = new Date(NOW - 2 * 60 * 60_000).toISOString();
-  ports.reports = { log: () => [{ id: "fixture-report", project: PROJECT, at: reportedAt, origin: { kind: "manager" } }] as never, enabled: () => true, operatorLocale: () => "en" };
+  ports.reports = { log: () => ({ reports: [{ id: "fixture-report", project: PROJECT, at: reportedAt, origin: { kind: "manager" } }] as never, reservedIds: [] }), enabled: () => true, operatorLocale: () => "en" };
   const first = seatTickDecision(await gatherSeatTickInput(PROJECT, { ...emptySeatTickState(), seatEpoch: 7 }, DEFAULT_SEAT_TICK_POLICY, ports));
   expect(first.verdict.kind).toBe("wake");
   if (first.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
@@ -3500,4 +4022,76 @@ test("project liveness completes and refreshes catalogue discovery before using 
     expect(complete).toHaveBeenCalledTimes(2);
     expect(read).toHaveBeenCalledTimes(2);
   } finally { read.mockRestore(); current.mockRestore(); complete.mockRestore(); }
+});
+
+
+test("task page facts and finished-reference review survive gathering and both refresh paths", async () => {
+  const task = boardCard({ id: "task-review-facts", priority: "high", dueAt: new Date(NOW - 1000).toISOString(), dueHistory: { firstAt: new Date(NOW - 86_400_000).toISOString(), slips: 3 } }) as unknown as import("@/lib/tasks/types").BoardTask;
+  const ports = sources({ tasks: [], pipelines: [] });
+  const tasks = Object.freeze([Object.freeze(task)]);
+  const pipelines = Object.freeze([]);
+  ports.tasks = () => tasks;
+  ports.pipelines = () => pipelines;
+  const stored = { ...defaultSeatTickSettings(PROJECT), reason: "Wait for task-review-facts", instructionLines: [{ text: "Wait for task-review-facts", author: null, at: null }] };
+  ports.settings = () => stored;
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  const refreshed = refreshSeatTickInput(gathered, ports);
+  const cached = refreshSeatTickInput(refreshed, ports);
+  expect(cached.tasks).toBe(refreshed.tasks);
+  for (const value of [gathered, refreshed, cached]) {
+    expect(value.tasks[0]).toMatchObject({ priority: "high", createdAt: task.createdAt, dueHistory: task.dueHistory });
+    expect(value.instructionReview).toContain("Instructions to review");
+  }
+  ports.tasks = () => [{ ...task, status: "done", doneAt: new Date(NOW - 1000).toISOString() }] as never;
+  expect(refreshSeatTickInput(gathered, ports).instructionReview).toContain("names task-review-facts");
+});
+
+test("closing a lane after instruction review flags it on gather and refresh, then a new review clears it", async () => {
+  const reviewedAt = "2026-08-28T11:30:00.000Z";
+  const closedAt = "2026-08-28T11:50:00.000Z";
+  const finished = lane({ id: "deadbeef", state: "closed", closedAt,
+    runs: [{ stageId: "build", attempts: [{ n: 1, state: "failed", startedAt: "2026-08-28T11:15:00.000Z", completedAt: "2026-08-28T11:16:00.000Z" }] }] });
+  const ports = sources({ pipelines: [finished], tasks: [] });
+  const settings = { ...defaultSeatTickSettings(PROJECT), reason: "Wait for deadbeef",
+    instructionLines: [{ text: "Wait for deadbeef", author: null, at: null }], instructionsReviewedAt: reviewedAt };
+  ports.settings = () => settings;
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(gathered.instructionReview).toContain("names deadbeef");
+  expect(refreshSeatTickInput(gathered, ports).instructionReview).toContain("names deadbeef");
+  expect(refreshSeatTickInput(refreshSeatTickInput(gathered, ports), ports).instructionReview).toContain("names deadbeef");
+  settings.instructionsReviewedAt = "2026-08-28T12:00:00.000Z";
+  expect(refreshSeatTickInput(gathered, ports).instructionReview).toBeUndefined();
+});
+
+
+test("a native wake observer waits for durable original-key proof without mutating its receipt", async () => {
+  const { confirmedClaudeWakeDelivery } = await import("./seatTickSources");
+  const directory = fs.mkdtempSync(path.join(SANDBOX, "native-wake-proof-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), () => false, undefined, { sqliteMode: "sqlite" });
+  await registry.prepareRecoveryIndexes();
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000020"].join("-");
+  const conversation = registry.ensureConversation("claude", path.join(directory, `${sessionId}.jsonl`), null);
+  const text = "Check pending work.", key = "seat-tick:fixture:native-proof";
+  const held = registry.holdDelivery(conversation.id, text, key, "text", [], structuredContentDigest({ text, images: [] }), {
+    kind: "send", policy: "interrupt-active", origin: { kind: "agent", role: "seat-tick" },
+  });
+  expect(registry.beginDeliveryAttempt(held.id, sessionId)).toBeTruthy();
+  registry.recordDeliveryOutcome(held.id, "failed", "Claude delivery confirmation timed out; outcome is uncertain", "unverified");
+  const ledger = new FileClaudeDeliveryLedger();
+  const native = { version: 1 as const, sessionId, writerId: ["00000000", "0000", "4000", "8000", "000000000021"].join("-"),
+    process: { pid: 4100, startIdentity: "4100:fixture" }, inputUuid: ["00000000", "0000", "4000", "8000", "000000000001"].join("-"), intent: "may-have-written" as const };
+  await ledger.recordNativeIntent(sessionId, { id: held.command.operationId, text }, "turn-started", native);
+  const wake = { ...WAKE, conversationId: conversation.id, clientMessageId: key, operationId: null, text };
+  setAgentRegistryForTests(registry);
+  try {
+    expect(await confirmedClaudeWakeDelivery(wake, held.command.operationId)).toBe(false);
+    await ledger.confirmNativeResult(sessionId, { ...native, version: 1, resultUuid: ["00000000", "0000", "4000", "8000", "000000000030"].join("-"),
+      inputUuids: [native.inputUuid], turnId: held.command.operationId, status: "completed" });
+    const unavailable = spyOn(FileClaudeDeliveryLedger.prototype, "loadDurable").mockRejectedValueOnce(new Error("fixture durable read unavailable"));
+    try { expect(await confirmedClaudeWakeDelivery(wake, held.command.operationId)).toBe(false); }
+    finally { unavailable.mockRestore(); }
+    const before = JSON.stringify(registry.readOnlySnapshot());
+    expect(await confirmedClaudeWakeDelivery(wake, held.command.operationId)).toBe(true);
+    expect(JSON.stringify(registry.readOnlySnapshot())).toBe(before);
+  } finally { setAgentRegistryForTests(null); }
 });

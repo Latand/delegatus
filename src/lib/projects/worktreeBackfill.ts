@@ -2,6 +2,8 @@ import { worktreeMapStore, readProjectDocument } from "./persistence";
 import fs from "node:fs";
 import path from "node:path";
 
+import { readProjectCatalogRecords } from "@/lib/scanner/projectCatalogStore";
+
 import { migrateBoardProjects } from "@/lib/board/store";
 import { lifecycleEventId, lifecycleJournalPath, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { operatorSafeSummary } from "@/lib/lifecycle/vocabulary";
@@ -17,6 +19,12 @@ interface CatalogFile {
   project: string;
   cwd?: string | null;
   projectRoot?: string | null;
+}
+/** The catalog by transcript path: a scan's own records, or the store's. */
+type CatalogFiles = Readonly<Record<string, CatalogFile>> | ReadonlyMap<string, CatalogFile>;
+
+function entriesOfCatalog(files: CatalogFiles): [string, CatalogFile][] {
+  return files instanceof Map ? [...files] : Object.entries(files as Readonly<Record<string, CatalogFile>>);
 }
 interface WorktreeMapping { repo: string; worktree: string }
 export interface WorktreeBackfillItem {
@@ -132,12 +140,13 @@ function siblingSuffix(cwd: string, repo: string): string | null {
 /** Planning reads only the supplied catalog, map, checkout metadata and heads.
     Sibling naming only selects candidates; native evidence must confirm them. */
 export function planWorktreeBackfill(
-  files: Record<string, CatalogFile>, map: Record<string, WorktreeMapping>, project?: string,
+  files: CatalogFiles, map: Record<string, WorktreeMapping>, project?: string,
   manualProjects: readonly ManualProject[] = [],
 ): WorktreeBackfillReport {
   const report: WorktreeBackfillReport = { dryRun: true, folded: [], leftAlone: [], rescanned: false };
   const repositories = new Map<string, { project: string; displayName: string }>();
-  for (const file of Object.values(files)) {
+  const catalogEntries = entriesOfCatalog(files);
+  for (const [, file] of catalogEntries) {
     if (!file.projectRoot || !file.project.startsWith("repo-")) continue;
     const identity = projectIdentityFromRepositoryRoot(file.projectRoot);
     if (identity && identity.project === canonicalProject(file.project)) repositories.set(path.resolve(file.projectRoot), identity);
@@ -151,9 +160,8 @@ export function planWorktreeBackfill(
     if (identity) repositories.set(path.resolve(entry.repo), identity);
   }
   const candidates = new Map<string, Array<[string, CatalogFile]>>();
-  const catalogEntries = Object.entries(files);
   const hintsByFile = new Map<string, ReturnType<typeof transcriptHints>>();
-  for (const [filename, file] of Object.entries(files)) {
+  for (const [filename, file] of catalogEntries) {
     if (!file.cwd || !file.project.startsWith("dir-")) continue;
     const entries = candidates.get(file.cwd) ?? [];
     entries.push([filename, file]);
@@ -217,12 +225,20 @@ export function planWorktreeBackfill(
   return report;
 }
 
-function readRecoveryPlan(project?: string, files?: Record<string, CatalogFile>): WorktreeBackfillReport {
-  if (!files) {
-    const catalog = JSON.parse(fs.readFileSync(statePath("project-catalog.json"), "utf8")) as { files: Record<string, CatalogFile> };
-    if (!catalog.files || typeof catalog.files !== "object" || Array.isArray(catalog.files)) throw new Error("Project catalog is unreadable");
-    files = catalog.files;
+/** The stored catalog's records that name a project, or ENOENT while no
+    scan has written one. */
+function storedCatalogFiles(): Map<string, CatalogFile> {
+  const records = readProjectCatalogRecords();
+  if (records === null) throw Object.assign(new Error("No project catalog has been written"), { code: "ENOENT" });
+  const files = new Map<string, CatalogFile>();
+  for (const [filename, record] of records) {
+    if (typeof record.project === "string") files.set(filename, record as unknown as CatalogFile);
   }
+  return files;
+}
+
+function readRecoveryPlan(project?: string, files?: CatalogFiles): WorktreeBackfillReport {
+  files ??= storedCatalogFiles();
   projectAliasSnapshot({ strict: true });
   const map: Record<string, WorktreeMapping> = { ...readProjectDocument(worktreeMapStore, "worktree-map.json") };
   for (const row of readWorktreeRecoveries()) {
@@ -236,7 +252,7 @@ function readRecoveryPlan(project?: string, files?: Record<string, CatalogFile>)
 
 /** Automatic writes are admitted only under the startup fence. No evidence
     means no initialization, leases, journal entries or cache writes. */
-export function recoverWorktreeProjects(trigger: "startup" | "rescan", files?: Record<string, CatalogFile>, project?: string): WorktreeBackfillReport {
+export function recoverWorktreeProjects(trigger: "startup" | "rescan", files?: CatalogFiles, project?: string): WorktreeBackfillReport {
   assertStateStartupMutation(stateDir(), "worktree project recovery");
   let report: WorktreeBackfillReport;
   try { report = readRecoveryPlan(project, files); }
@@ -281,31 +297,49 @@ export function recoverWorktreeProjects(trigger: "startup" | "rescan", files?: R
       })));
 }
 
-/** Seats retain a read-only diagnostic. The domain apply branch is used by
-    startup; the HTTP/MCP endpoint refuses apply now that recovery is automatic. */
+async function rescanRecoveredWorktrees(): Promise<void> {
+  const { discoverFilesWithProjectCatalog } = await import("@/lib/scanner/discover");
+  const scan = await discoverFilesWithProjectCatalog();
+  if (!scan.complete) throw new Error("Worktree recovery catalog rescan is incomplete; the next full scan retries");
+}
+
+function applyWorktreeBackfill(project?: string) {
+  const report = recoverWorktreeProjects("startup", undefined, project);
+  const sources = new Set(readWorktreeRecoveries().map(row => row.source));
+  const pendingProjection = sources.size > 0
+    && entriesOfCatalog(storedCatalogFiles()).some(([, file]) => sources.has(file.project));
+  return { report, rescanRequired: report.folded.length > 0 || pendingProjection };
+}
+
+/** Seats retain a read-only diagnostic. The HTTP/MCP endpoint refuses apply
+    now that recovery is automatic. */
 export async function backfillWorktreeProjects(options: { dryRun?: boolean; project?: string } = {},
-  rescan: () => Promise<void> = async () => {
-    const { discoverFilesWithProjectCatalog } = await import("@/lib/scanner/discover");
-    const scan = await discoverFilesWithProjectCatalog();
-    if (!scan.complete) throw new Error("Worktree recovery catalog rescan is incomplete; the next full scan retries");
-  },
+  rescan: () => Promise<void> = rescanRecoveredWorktrees,
 ): Promise<WorktreeBackfillReport> {
   if (options.dryRun !== false) return readRecoveryPlan(options.project);
-  const report = recoverWorktreeProjects("startup", undefined, options.project);
-  const sources = new Set(readWorktreeRecoveries().map(row => row.source));
-  let pendingProjection = false;
-  if (sources.size) {
-    const catalog = JSON.parse(fs.readFileSync(statePath("project-catalog.json"), "utf8")) as { files: Record<string, CatalogFile> };
-    pendingProjection = Object.values(catalog.files).some(file => sources.has(file.project));
-  }
-  if (report.folded.length || pendingProjection) {
+  const { report, rescanRequired } = applyWorktreeBackfill(options.project);
+  if (rescanRequired) {
     await rescan();
     report.rescanned = true;
   }
   return report;
 }
 
-export async function runWorktreeRecoveryAtStartup(log: (...args: unknown[]) => void = console.error, rescan?: () => Promise<void>): Promise<void> {
-  try { await backfillWorktreeProjects({ dryRun: false }, rescan); }
-  catch { log("[worktree recovery] startup recovery deferred; the next startup or full catalog scan retries"); }
+export async function runWorktreeRecoveryAtStartup(
+  log: (...args: unknown[]) => void = console.error,
+  rescan: () => Promise<void> = rescanRecoveredWorktrees,
+  deferRescan?: (refresh: () => Promise<void>) => void,
+): Promise<{ folded: number; leftAlone: number }> {
+  const warn = () => log("[worktree recovery] startup recovery deferred; the next startup or full catalog scan retries");
+  // This return is the worker's commit receipt. Transaction errors must reach
+  // the caller so the seat tick stays fenced and recovery can retry.
+  const { report, rescanRequired } = applyWorktreeBackfill();
+  if (!rescanRequired) return { folded: report.folded.length, leftAlone: report.leftAlone.length };
+  const refresh = async () => {
+    try { await rescan(); }
+    catch { warn(); }
+  };
+  if (deferRescan) deferRescan(refresh);
+  else await refresh();
+  return { folded: report.folded.length, leftAlone: report.leftAlone.length };
 }

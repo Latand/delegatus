@@ -19,16 +19,14 @@
  * byte for byte inside the gate, and a browser screenshot cannot be
  * reproduced that way. Chrome prints the frame to PDF and poppler turns the
  * page into an SVG whose glyphs are paths, so the file carries no raster and
- * no font dependency. The gate does not OCR an SVG, so the driver runs the
- * gate's own checks before it keeps one: the frame's text goes through the
- * gate's sensitive-text classifier, the full-frame PNG through its raster
- * inspection (OCR included), and the text must not contain this machine's
- * home, user name or host name. Every shot also declares
+ * no font dependency. The driver checks the visible text for sensitive values,
+ * inspects PNG metadata and compares the rendered vector with the screenshot.
+ * It also checks for this machine's home, user name and host name. Each shot declares
  * the text it must and must not show.
  *
  * Flags: --serve keeps the server up for inspection instead of capturing.
  * --seed-only checks the complete seed without a build or browser.
- * --check-layout checks every frame in the built Viewer without vector/OCR work
+ * --check-layout checks every frame in the built Viewer without vector conversion
  * or changing repository media; PNGs and bounds stay in its private capture root.
  * Requirements: a completed `bun run build`, Chrome (CHROME_BIN, default
  * /usr/bin/google-chrome-stable) and poppler's `pdftocairo`.
@@ -40,7 +38,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import type { Browser, Page } from "playwright-core";
+import { errors, type Browser, type Page } from "playwright-core";
 
 import { createCaptureDirectory } from "./capture-directory";
 import { inspectPaths, sensitiveClasses } from "./privacy-publication-gate";
@@ -89,14 +87,21 @@ const WIDE = { width: 1728, height: 944 };
    the nearest multiple of 8 above a common 412 px phone, draws it whole. */
 const PHONE = { width: 416, height: 848 };
 
+/* The card the seat-tick monitor files in Inbox when it finds the demo seat's
+   Viewer MCP unavailable. A board that shows it has a second Inbox task the
+   seed never wrote. */
+const MONITOR_ALARM_TEXT = ["Orchestrator seat cannot use its", "Viewer MCP"];
+
 const clickLabel = (page: Page, label: string) => page.locator(`[aria-label="${label}"]`).first().click();
 const clickText = (page: Page, text: string) => page.getByText(text, { exact: false }).first().click();
 /* A project without an orchestrator opens with the create draft unfolded;
    the board shots fold it to its one-line bar. A screen too short for the
    chat opens with it folded already. */
 const foldOrchestrator = async (page: Page) => {
+  await page.locator("[data-orchestrator-panel] [data-seat-collapse]").first().waitFor({ state: "visible" });
   const fold = page.locator('[aria-label="Collapse the orchestrator chat (O)"]');
   if (await fold.count()) await fold.first().click();
+  await page.locator('[data-orchestrator-panel] [data-seat-collapse][aria-expanded="false"]').first().waitFor({ state: "visible" });
 };
 /* The frame ends at the element's border box. Its corners go square, since
    the frame's own edge is now its edge: a rounded corner would show the
@@ -128,6 +133,32 @@ const cropToColumns = (statuses: string[]) => async (page: Page): Promise<CropRe
   const bottom = Math.max(...content) + 2 * margin;
   return { x: left, y: top, width: right - left, height: bottom - top };
 }, statuses);
+/* The window shows one tab per stage and the selected stage's pane under
+   them. The named stages each have a tab, and the selected pane lies whole
+   inside the pane area, with no other pane drawn beside it. A tab's label
+   starts with its position and name («1 Build»). */
+async function assertStageTabsAndPane(page: Page, names: string[]): Promise<void> {
+  const problems = await page.evaluate((names) => {
+    const sheet = document.querySelector<HTMLElement>("[data-stages-sheet]");
+    const lane = sheet?.querySelector<HTMLElement>(".lane");
+    if (!sheet || !lane) return ["no stage pane area on the sheet"];
+    const bounds = lane.getBoundingClientRect();
+    const problems: string[] = [];
+    const tabs = [...sheet.querySelectorAll<HTMLElement>('[role="tab"][data-tab-stage]')];
+    for (const name of names) {
+      if (!tabs.some((tab) => new RegExp(`\\b${name}\\b`).test(tab.innerText))) problems.push(`${name}: no tab`);
+    }
+    const panes = [...lane.querySelectorAll<HTMLElement>(".pane[data-stage]")];
+    if (panes.length !== 1) problems.push(`${panes.length} panes under the tabs, one expected`);
+    for (const pane of panes) {
+      const rect = pane.getBoundingClientRect();
+      if (rect.left < bounds.left - 0.5 || rect.right > bounds.right + 0.5) problems.push(`pane ${pane.dataset.stage}: ${Math.round(rect.left)}..${Math.round(rect.right)} outside the pane area ${Math.round(bounds.left)}..${Math.round(bounds.right)}`);
+    }
+    return problems;
+  }, names);
+  if (problems.length) throw new Error(`pipeline: stage tabs and pane not whole: ${problems.join("; ")}`);
+}
+
 /* A stage's reader rests on the tail of its conversation, and its top edge
    would cut a line of text in half. Each reader gets just enough room under
    its last message for its tail to start on a whole message. */
@@ -264,7 +295,7 @@ export const SHOTS: ReadmeShot[] = [
     viewport: { width: WIDE.width, height: 600 },
     requiredText: ["Idempotent refunds", "Rotate webhook signing keys", "Move invoices to the new ledger", "Document refund error codes", "Needs your answer", "1 needs you", "Waiting outside: finance to confirm the rounding rule"],
     /* "resume ·" is a pane recovery opened for the seat: a stray agent card. */
-    absentText: ["tmux", "Untitled task", "resume ·", "no reason given"],
+    absentText: ["tmux", "Untitled task", "resume ·", "no reason given", ...MONITOR_ALARM_TEXT],
     prepare: foldOrchestrator,
     crop: cropToColumns(["inbox", "assigned", "blocked"]),
     description: "Three columns of a project's board: a task in Inbox; in In progress the agents working on each task, a running pipeline's stages and a card waiting on your answer, counted in the column's head; in Waiting a card that names what it waits for.",
@@ -318,10 +349,14 @@ export const SHOTS: ReadmeShot[] = [
     id: "pipeline",
     subjects: ["[data-stages-sheet]"],
     target: { kind: "project", project: "harbor-api" },
-    /* Each stage column keeps its agent's head on one line and the tail of
-       its conversation whole. */
-    viewport: WIDE,
-    requiredText: ["Idempotent refunds", "Build", "Review", "Verify", "passed", "running", "waiting"],
+    /* The stage tabs run along the top of the sheet and the selected stage's
+       pane stands under them, so the frame holds one conversation whole
+       beside no sliver of another. */
+    viewport: { width: 1272, height: WIDE.height },
+    /* The tabs name every stage and its state, and the selected Review pane
+       is mid-turn and carries its commentary ("Reading the diff"); the
+       tabs-and-pane check in prepare covers the layout. */
+    requiredText: ["Idempotent refunds", "Build", "Review", "Verify", "passed", "running", "waiting", "Reading the diff"],
     prepare: async (page) => {
       await foldOrchestrator(page);
       await page.waitForTimeout(500);
@@ -332,18 +367,24 @@ export const SHOTS: ReadmeShot[] = [
       await page.locator('[data-open-stages][aria-label^="Idempotent refunds"]').first().click();
       await page.waitForSelector("[data-stages-sheet]");
       await page.waitForTimeout(1_000);
+      /* The sheet opens on the stage the lane row named (the running Review):
+         its tab is selected and its conversation stands under the tabs, whole,
+         beside a tab for every other stage. */
+      await page.waitForTimeout(500);
       await alignReadersToMessages(page, "[data-stages-sheet]");
+      await assertStageTabsAndPane(page, ["Build", "Review"]);
     },
     crop: cropTo("[data-stages-sheet]"),
-    description: "A pipeline opened from its card: the stage graph with its fail edge, and each stage's conversation side by side.",
+    description: "A pipeline opened from its card: the stage tabs with the fail rule under them, and the selected stage's conversation.",
   },
   {
     id: "card-menu",
     subjects: ['[role="menu"]'],
     target: { kind: "project", project: "harbor-api" },
     viewport: WIDE,
-    requiredText: ["Idempotent refunds", "Inbox", "Done", "Top of the Inbox", "Appearance", "Pipeline actions", "keeps working"],
-    absentText: ["tmux", "Untitled task", "resume ·"],
+    /* The priority hints («Top of the Inbox») belong to an Inbox card; this card is assigned, so its menu shows the three priorities as bare segments. */
+    requiredText: ["Idempotent refunds", "Inbox", "Done", "High", "Normal", "Low", "Appearance", "Pipeline actions", "keeps working"],
+    absentText: ["tmux", "Untitled task", "resume ·", "Top of the Inbox", "Bottom of the Inbox"],
     prepare: async (page) => {
       await foldOrchestrator(page);
       await page.waitForTimeout(500);
@@ -392,7 +433,7 @@ export const SHOTS: ReadmeShot[] = [
     target: { kind: "project", project: "harbor-api" },
     viewport: PHONE,
     requiredText: ["Inbox", "In progress", "Waiting", "Done", "Back off webhook retries", "Idempotent refunds"],
-    absentText: ["Untitled task", "resume ·"],
+    absentText: ["Untitled task", "resume ·", ...MONITOR_ALARM_TEXT],
     prepare: async (page) => {
       await page.locator('[data-phone-kanban-tab="assigned"]').first().click();
       await page.waitForTimeout(600);
@@ -431,6 +472,14 @@ export function buildCaptureEnvironment(root: string, source = process.env): Nod
     LLV_CODEX_BINARY: path.join(root, "bin", "codex"),
     LLV_ACCOUNT_CONTROLLER_DISABLED: "1",
     LLV_REAPER_ENABLED: "0",
+    /* The seat-tick monitor sweeps once as the server boots and again every
+       few minutes. The demo seat's conversation is not in the agent registry,
+       so every sweep reads its Viewer MCP as unverified and files the alarm
+       card «Orchestrator seat cannot use its Viewer MCP» in Inbox. Whether a
+       frame shows that card then depends on whether the first sweep, a few
+       seconds after boot, lands before the board page loads. 0 switches the
+       monitor off, which is what a capture of invented state wants. */
+    LLV_SEAT_TICK_CHECK_MINUTES: "0",
     LLV_RESOURCES_FIXTURE: path.join(state, "resources.json"),
     NEXT_TELEMETRY_DISABLED: "1",
     /* A production server: without this it would send the install ping. */
@@ -548,10 +597,8 @@ export function cropSvg(svg: string, crop: CropRect): string {
   return svg.replace(root[0], cropped);
 }
 
-/** Returns how many raster tiles the vector frame embeds. Chrome prints CSS
-    gradients (the board's dot grid, column washes) as image patterns; they
-    carry no text, and the full-frame PNG they are rendered into is what the
-    gate's OCR reads before the SVG is kept. */
+/** Count embedded raster tiles in the vector frame. Chrome can print CSS
+    gradients as image patterns. The render-back check compares the full frame. */
 export function pdfToSvg(pdf: Buffer, target: string, scratchParent: string): number {
   const scratch = fs.mkdtempSync(path.join(scratchParent, "svg-"));
   try {
@@ -950,16 +997,50 @@ async function main(): Promise<void> {
 
 type Layout = Awaited<ReturnType<typeof materialize>>;
 
-async function openTarget(page: Page, baseUrl: string, target: Target, layout: Layout): Promise<void> {
-  await page.goto(`${baseUrl}/`, { waitUntil: "networkidle" });
-  if (target.kind === "overview") return;
+export async function openTarget(page: Page, baseUrl: string, target: Target, layout: Layout): Promise<void> {
+  let fragment = "";
   if (target.kind === "project") {
-    await page.goto(`${baseUrl}/#p=${encodeURIComponent(layout.ids[target.project])}`, { waitUntil: "networkidle" });
-    return;
+    fragment = `#p=${encodeURIComponent(layout.ids[target.project])}`;
+  } else if (target.kind === "conversation") {
+    const file = layout.files[target.key];
+    if (!file) throw new Error(`no transcript seeded for ${target.key}`);
+    fragment = `#f=${encodeURIComponent(file.path)}`;
   }
-  const file = layout.files[target.key];
-  if (!file) throw new Error(`no transcript seeded for ${target.key}`);
-  await page.goto(`${baseUrl}/#f=${encodeURIComponent(file.path)}`, { waitUntil: "networkidle" });
+  // Put the target in the initial URL. A later hash-only navigation can land
+  // between the Viewer's first render and its hashchange listener mounting.
+  // Background requests may stay open after the frame is ready. Its content
+  // and preparation controls below provide their own bounded readiness waits.
+  await page.goto(`${baseUrl}/${fragment}`, { waitUntil: "domcontentloaded" });
+}
+
+/** Wait for the whole frame before freezing its clock: network idle and elapsed
+ * time do not prove that React has painted the seeded board. All required text
+ * shares one deadline, including frames whose preparation opens more content. */
+export async function waitForFrameText(page: Page, shot: Pick<ReadmeShot, "id" | "requiredText">, timeout = 30_000): Promise<void> {
+  if (!shot.requiredText.length) return;
+  try {
+    const ready = await page.waitForFunction((required) => {
+      const text = document.body.innerText;
+      return required.every(value => text.includes(value));
+    }, shot.requiredText, { timeout });
+    await ready.dispose();
+  } catch (error) {
+    if (error instanceof errors.TimeoutError) {
+      const text = await page.evaluate(() => document.body.innerText);
+      const missing = shot.requiredText.find(value => !text.includes(value));
+      if (missing !== undefined) throw new Error(`${shot.id}: missing text ${JSON.stringify(missing)}`);
+    }
+    throw error;
+  }
+}
+
+/** Pin Date before pausing timers so a slow browser cannot overtake the pause
+ * target between reading its clock and delivering the pause command. */
+export async function freezeFrameClock(page: Page): Promise<number> {
+  const moment = await page.evaluate(() => Date.now() + 1_000);
+  await page.clock.setFixedTime(moment);
+  await page.clock.pauseAt(moment);
+  return moment;
 }
 
 /** Use the same prepared page and crop as the README capture. Never scroll a
@@ -1042,11 +1123,11 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
       await openTarget(page, baseUrl, shot.target, layout);
       await page.waitForTimeout(2_500);
       if (shot.prepare) await shot.prepare(page);
-      await page.waitForTimeout(1_000);
+      await waitForFrameText(page, shot);
       /* The print is taken seconds after the PNG, and a live timer or a
          pulsing dot would read differently in each: stop the page's clock and
          every animation where they stand, so both show one frame. */
-      await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1_000));
+      await freezeFrameClock(page);
       await page.evaluate(() => {
         for (const animation of document.getAnimations()) animation.pause();
       });
@@ -1087,14 +1168,9 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
       }
       await assertTextWhole(page, shot, crop);
       const frame = await page.screenshot({ path: png, ...(crop ? { clip: crop } : {}) });
-      /* A browser raster never carries provenance, so those two classes are
-         expected here; anything else the gate finds in the pixels is not.
-         OCR is a second reader of a finished frame and never a capture
-         prerequisite: without tesseract the frame goes unread by OCR, and
-         the person committing it looks at every PNG themselves. */
-      const rasterClasses = [...inspectPaths([png]).keys()];
-      if (rasterClasses.includes("tool_unavailable")) process.stdout.write(`${shot.id}: no OCR on this machine; look at ${png} before committing its SVG\n`);
-      const rasterFindings = rasterClasses.filter((finding) => !finding.startsWith("provenance_") && finding !== "tool_unavailable");
+      // The private screenshot has no publication manifest. Its metadata still
+      // passes the same content checks as a published PNG.
+      const rasterFindings = [...inspectPaths([png]).keys()].filter(finding => !finding.startsWith("provenance_"));
       if (rasterFindings.length) throw new Error(`${shot.id}: the gate finds ${rasterFindings.join(", ")} in the rendered frame`);
       await page.emulateMedia({ media: "screen", colorScheme: "dark" });
       /* The print is one page the size of the screen: a card that crosses its

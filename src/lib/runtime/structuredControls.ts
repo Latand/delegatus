@@ -1,4 +1,6 @@
-import { registryReceiptsForConversation } from "@/lib/agent/registry";
+import { hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
+import { fencePendingSends } from "./sendSettlement";
+import { ownsItsSettlement, registryReceiptsForConversation } from "@/lib/agent/registry";
 import { cancelSeatQuotaOnControl } from "@/lib/monitor/seatQuotaRecovery";
 import { structuredHostsEnabled } from "./flags";
 import { agentRegistry, type AgentRegistry, type ProcessIdentity, type StructuredHostColumns } from "@/lib/agent/registry";
@@ -7,6 +9,7 @@ import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
 import { listCopilotAccounts } from "@/lib/accounts/copilot";
 import { copilotModelCatalog } from "@/lib/agent/copilotModels";
+import { antigravityModelCatalog, resolveAntigravityModelAndEffort } from "@/lib/agent/antigravityModels";
 import {
   attributeNamedAccountChoice,
   type AccountChoiceActor,
@@ -272,6 +275,8 @@ export async function dispatchStructuredControl(
     onResumed?: (conversationId: string) => void | Promise<void>;
     hostProcessAlive?: (identity: ProcessIdentity | null) => boolean;
     preflightSource?: typeof import("@/lib/accounts/migration/provider").preflightCodexSource;
+    /** A caller with durable custody can reconcile under its own deadline. */
+    recoverTransportReceipt?: false;
   } = {},
 ): Promise<StructuredControlResult | null> {
   if (request.providerRecovery && (request.action !== "kill" || !request.onlyIfIdle)) {
@@ -294,21 +299,26 @@ export async function dispatchStructuredControl(
   const snapshot = registry.readOnlySnapshot();
   const entry = snapshot.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
   if (!entry) return null;
-  // Current legacy ownership wins over retained structured adapter metadata.
-  // The legacy executor revalidates its process fence immediately before acting.
-  if (entry.host) return null;
   /* Host teardown clears the structuredHost column before terminal kill
      projection or reconfigure recovery finishes. Durable conversation state
      keeps those controls on the structured channel throughout that gap. */
-  const structuredKill = request.action === "kill" && !entry.host;
+  const structuredKill = request.action === "kill";
+  // Capture before command admission: a later send is outside this kill's cohort.
+  const pendingSendIds = structuredKill ? [...new Set([
+    ...hotRegistryRows(snapshot, "heldDeliveries").filter(([, row]) => row.conversationId === conversation.id
+      && row.state !== "failed" && row.state !== "delivered").map(([, row]) => row.command.operationId),
+    ...hotRegistryRows(snapshot, "deliveryOperationOwners").filter(([, row]) => row.conversationId === conversation.id
+      && ownsItsSettlement(row) && row.terminalState === null).map(([id]) => id),
+  ])] : [];
+  const pendingSendSet = new Set(pendingSendIds);
+  const fenceSends = (ids = pendingSendIds) => fencePendingSends(ids.filter(id => pendingSendSet.has(id)), { registry,
+    client: dependencies.client === undefined ? runtimeHostClient() : dependencies.client });
   const completedStructuredOwnership = request.action === "reconfigure"
-    && !entry.host
     && registryReceiptsForConversation(snapshot, conversation.id).some((receipt) =>
       receipt.transport === "structured"
         && receipt.state === "completed"
         && registry.canonicalConversationId(receipt.conversationId) === conversation.id);
   const structuredReconfigureRestart = request.action === "reconfigure"
-    && !entry.host
     && (conversation.reconfigure?.status === "applying" || completedStructuredOwnership);
   if (!entry.structuredHost && !structuredKill && !structuredReconfigureRestart) return null;
 
@@ -395,12 +405,13 @@ export async function dispatchStructuredControl(
   const reconfigurableEngine = conversation.engine;
 
   const pipelineStage = snapshot.memberships[conversation.id]?.some(membership => membership.kind === "pipeline");
-  if (structuredKill && ((request.controlOrigin?.kind ?? request.actor?.kind) === "agent" || !pipelineStage)
+  if (structuredKill && !request.operationId && ((request.controlOrigin?.kind ?? request.actor?.kind) === "agent" || !pipelineStage)
     && !entry.structuredHost?.process
     && (entry.status === "dead" || entry.status === "unhosted")) {
     /* The durable projection already records this session as torn down, so a
        retirement replays the terminal outcome. Pipeline operator stops still
        need durable admission to fence recovery of the dead stage. */
+    await fenceSends();
     return { status: 200, body: { ok: true, structured: true, target: conversation.id, outcome: "delivered" } };
   }
 
@@ -417,15 +428,21 @@ export async function dispatchStructuredControl(
   let attributeSwitch: (() => AccountOverrideNotice | undefined) | null = null;
   let assertSwitchCurrent: (() => void) | null = null;
   try {
-    const requestedCopilotModel = typeof request.reconfiguration?.model === "string" ? request.reconfiguration.model.trim() : "";
+    const requestedModel = typeof request.reconfiguration?.model === "string" ? request.reconfiguration.model.trim() : "";
     const copilotAccount = conversation.engine === "copilot"
       ? listCopilotAccounts().find((account) => account.id === generation.accountId)
       : undefined;
-    const copilotModelEfforts = copilotAccount && requestedCopilotModel
-      ? copilotModelCatalog(copilotAccount.id, copilotAccount.sessionStateDir).models.find((model) => model.id === requestedCopilotModel)?.efforts
-      : undefined;
+    const catalogModelEfforts = copilotAccount && requestedModel
+      ? copilotModelCatalog(copilotAccount.id, copilotAccount.sessionStateDir).models.find((model) => model.id === requestedModel)?.efforts
+      : conversation.engine === "antigravity" && requestedModel
+        ? (() => {
+            const resolved = resolveAntigravityModelAndEffort(requestedModel, null);
+            return antigravityModelCatalog(generation.accountId ?? "default").models
+              .find((model) => model.id === (resolved.baseModel ?? requestedModel))?.efforts;
+          })()
+        : undefined;
     const reconfiguration = request.action === "reconfigure"
-      ? reconfigurationFromBody(reconfigurableEngine!, request.reconfiguration ?? {}, copilotModelEfforts)
+      ? reconfigurationFromBody(reconfigurableEngine!, request.reconfiguration ?? {}, catalogModelEfforts)
       : null;
     if (reconfiguration && !reconfiguration.value) {
       return { status: 400, body: { error: reconfiguration.error ?? "invalid configuration" } };
@@ -436,6 +453,9 @@ export async function dispatchStructuredControl(
       const named = reconfiguration.value.accountId;
       if (conversation.engine === "copilot" && named && named !== generation.accountId) {
         return { status: 409, body: { error: "a Copilot session stays in its account's COPILOT_HOME; account changes require a new conversation", code: "unsupported-capability" } };
+      }
+      if (conversation.engine === "antigravity" && named && named !== (generation.accountId ?? "default")) {
+        return { status: 409, body: { error: "an Antigravity session uses the host's signed-in account; account changes are not supported", code: "unsupported-capability" } };
       }
       const unsettled = await waitingSwitch(client, registry, conversation.id);
       const waiting = unsettled?.phase === "waiting" ? unsettled : null;
@@ -500,7 +520,7 @@ export async function dispatchStructuredControl(
     if (reconfiguration?.value?.accountId) {
       const accountExists = dependencies.accountExists ?? ((engine: "claude" | "codex", accountId: string) =>
         (engine === "claude" ? listClaudeAccounts() : listCodexAccounts()).some((account) => account.id === accountId));
-      if (conversation.engine !== "copilot" && !accountExists(reconfigurableEngine as "claude" | "codex", reconfiguration.value.accountId)) {
+      if (conversation.engine !== "copilot" && conversation.engine !== "antigravity" && !accountExists(reconfigurableEngine as "claude" | "codex", reconfiguration.value.accountId)) {
         return { status: 400, body: { error: `account is not available for ${conversation.engine}` } };
       }
       if (conversation.engine === "codex" && reconfiguration.value.accountId !== generation.accountId) {
@@ -554,7 +574,7 @@ export async function dispatchStructuredControl(
     }
     const sessionKey = { engine: conversation.engine, sessionId: generation.id };
     const command: RuntimeOperationCommand = request.action === "kill"
-      ? { kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey,
+      ? { kind: "kill", operationId, idempotencyKey: operationId, conversationId: conversation.id, sessionKey, pendingSendIds,
           origin: request.controlOrigin ?? (request.actor?.kind === "agent" ? { kind: "agent", conversationId: request.actor.conversationId } : { kind: "operator" }),
           ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
           ...(request.providerRecovery ? { providerRecovery: request.providerRecovery } : {}) }
@@ -590,6 +610,10 @@ export async function dispatchStructuredControl(
             };
     assertSwitchCurrent?.();
     const result = await client.command(command);
+    if (structuredKill && (!request.onlyIfIdle || result.receipt.status === "delivered")
+      && ["pending", "queued", "delivering", "applying", "delivered"].includes(result.receipt.status)) {
+      await fenceSends(result.receipt.pendingSendIds ?? (result.replayed ? [] : pendingSendIds));
+    }
     /* The host holds a durable receipt for this reconfigure, so the switch is a
        thing that happened and the record describes it. */
     assertSwitchCurrent?.();
@@ -611,12 +635,17 @@ export async function dispatchStructuredControl(
       const safe = sanitizeProviderError(error);
       return { status: 409, body: { error: safe.message, code: error instanceof HistorySecurityError ? error.code : "source-ancestor-missing" } };
     }
-    if ((request.action === "kill" || request.action === "reconfigure" || request.action === "compact")
+    if (dependencies.recoverTransportReceipt !== false
+      && (request.action === "kill" || request.action === "reconfigure" || request.action === "compact")
       && isRuntimeHostTransportFailure(error)) {
       /* The socket failed after the command may have reached the journal. The
          durable receipt decides whether structured control owns the response. */
       const durable = await client.operationStatus(operationId).catch(() => null);
       if (durable) {
+        if (structuredKill && (!request.onlyIfIdle || durable.receipt.status === "delivered")
+          && ["pending", "queued", "delivering", "applying", "delivered"].includes(durable.receipt.status)) {
+          await fenceSends(durable.receipt.pendingSendIds ?? []);
+        }
         /* The socket failed, the receipt did not: the command was accepted, so
            this is the same acceptance the success path attributes. */
         try { assertSwitchCurrent?.(); } catch { return { status: 409, body: { error: "account switch ownership changed" } }; }

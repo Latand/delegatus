@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { signalAgentDomain, signalDomain, spawnSignalSandbox } from "../src/lib/runtime/agentSignalSandbox";
+import { GATE_TASKS_MAX } from "./gate-tasks";
 
 // A gate run from inside an agent signal domain must reach the gate service
 // (its memory and CPU limits) without leaving the caller's namespaces. The
@@ -129,13 +130,13 @@ nested = None
 if os.environ.get("PROBE_NESTED"):
     run = subprocess.run(["bash", os.environ["PROBE_NESTED"], "/bin/sh", "-c", "cut -d: -f3 /proc/self/cgroup; readlink /proc/self/ns/pid"], capture_output=True, text=True, timeout=60)
     nested = {"code": run.returncode, "lines": run.stdout.split(), "stderr": run.stderr[-2000:]}
-print(json.dumps({"group": group, "memoryMax": read("memory.max"), "cpuMax": read("cpu.max"),
+print(json.dumps({"group": group, "memoryMax": read("memory.max"), "cpuMax": read("cpu.max"), "tasksMax": read("pids.max"),
     "pidNamespace": os.readlink("/proc/self/ns/pid"), "allocated": len(block), "nested": nested}), flush=True)
 sys.exit(int(os.environ.get("PROBE_EXIT", "0")))
 `;
 
 type Run = { code: number | null; stdout: string; stderr: string; caller: { pidNamespace: string }; root: string; scope?: string };
-type Report = { group: string; memoryMax: string; cpuMax: string; pidNamespace: string; allocated: number; nested: { code: number; lines: string[]; stderr: string } };
+type Report = { group: string; memoryMax: string; cpuMax: string; tasksMax: string; pidNamespace: string; allocated: number; nested: { code: number; lines: string[]; stderr: string } };
 const report = (run: Run): Report => JSON.parse(run.stdout.trim().split("\n").at(-1)!);
 
 function isolatedEnv(root: string, extra: Record<string, string>): NodeJS.ProcessEnv {
@@ -217,11 +218,13 @@ kernelTest("a namespaced caller's memory-hungry gate command runs in a gate serv
     expect(probe.group).toContain(`/${slice}/`);
     expect(probe.memoryMax).toBe(String(512 * 2 ** 20));
     expect(probe.cpuMax).toBe("20000 20000");
+    expect(probe.tasksMax).toBe(String(GATE_TASKS_MAX));
     expect(probe.allocated).toBe(2 * CALLER_CAP);
     expect(probe.pidNamespace).toBe(run.caller.pidNamespace);
     // A gate inside the gate reuses its slot, gets its own service and stays
     // in the same namespace.
     expect(probe.nested.code, probe.nested.stderr).toBe(0);
+    expect(probe.nested.stderr).toContain(`pids.max=${GATE_TASKS_MAX}`);
     expect(probe.nested.lines[0]).toMatch(SERVICE);
     expect(probe.nested.lines[0]).not.toBe(probe.group);
     expect(probe.nested.lines[1]).toBe(run.caller.pidNamespace);

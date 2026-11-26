@@ -2,7 +2,7 @@
  * Acceptance harness for issue #499 — mobile structured composer: reliable
  * Send + one obvious model/reasoning pill.
  *
- * Unlike the static #390 harness, this mounts the REAL `TmuxComposer` against
+ * Unlike the static #390 harness, this mounts the REAL `ConversationComposer` against
  * a scripted wire: the runtime bus is enabled and fed a production-shaped
  * `/api/runtime/snapshot` carrying one hosted codex-app-server session for a
  * Viewer-launched conversation (`spawnOrigin: "viewer"`), and `/api/runtime/send`
@@ -28,7 +28,7 @@
 import { createRoot } from "react-dom/client";
 
 import { DeadHostBanner } from "@/components/runtime/DeadHostBanner";
-import { TmuxComposer } from "@/components/TmuxComposer";
+import { ConversationComposer } from "@/components/ConversationComposer";
 import { setLocale, translate, type Locale, type MessageKey } from "@/lib/i18n";
 import type { RuntimeSendSettings } from "@/lib/runtime/contracts";
 import type { FileEntry } from "@/lib/types";
@@ -215,7 +215,7 @@ function Shell() {
       {view === "dead" ? <DeadHostBanner file={viewerFile} /> : null}
       {/* The blocked view passes NO prop: the composer derives the unresolved
           block itself (issue #499 round 2) from the plane-on/no-session state. */}
-      <TmuxComposer
+      <ConversationComposer
         file={viewerFile}
         {...(view === "dead" ? { deadHost: true } : {})}
       />

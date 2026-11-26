@@ -9,10 +9,10 @@ import { createElement, useSyncExternalStore } from 'react';
 import { NativeConversationPane } from '@/components/scheme/NativeConversationPane';
 import { installSnapshot, type RuntimeReceipt } from '@/components/runtime/runtimeModel';
 import { setRuntimeBusForTests } from '@/hooks/runtimeBus';
-import { setTmuxComposerRuntimeDependenciesForTests } from '@/components/tmuxComposerRuntime';
+import { setConversationComposerRuntimeDependenciesForTests } from '@/components/conversationComposerRuntime';
 import { setLogFeedDependenciesForTests } from '@/components/logFeedDependencies';
 import { composerSubmissionPayloads } from '@/lib/composerSubmissionPayloads';
-import { readPendingDeliveries } from '@/components/TmuxComposer';
+import { readPendingDeliveries } from '@/components/ConversationComposer';
 import { readOutbox, enqueueOutbox, updateOutbox } from '@/components/conversation/outbox';
 import { viewBus } from '@/hooks/viewPresenceBus';
 import { setLocale } from '@/lib/i18n';
@@ -61,7 +61,7 @@ const pollReceipts = async () => {
   if (JSON.stringify(next) !== JSON.stringify(receipts)) publishReceipts(next);
 };
 if (journal) setInterval(() => { void pollReceipts().catch(() => {}); }, 100);
-setTmuxComposerRuntimeDependenciesForTests({
+setConversationComposerRuntimeDependenciesForTests({
   refreshRuntime: async () => { refreshes++; if (journal) await pollReceipts(); return true; },
   useRuntimeReceiptsForArtifact: () => useSyncExternalStore(listener => {listeners.add(listener);return()=>{listeners.delete(listener);};},()=>receipts,()=>receipts),
   ...(journal ? {} : { sendRuntimeMessage: async (body: Parameters<typeof import('@/hooks/useRuntime').sendRuntimeMessage>[0]) => {

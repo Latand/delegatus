@@ -19,6 +19,7 @@ import {
   runningModelId,
   savedResumeProfile,
   sendRuntimeFrom,
+  unlistedModelName,
   writeProfile,
   writeResumeProfile,
 } from "./runtimeProfile";
@@ -182,18 +183,35 @@ test("a Claude conversation names its observed release, not the family alias a d
   expect(defaults({ ...claudeFile, model: null, launchModel: "opus" }).model).toBe("opus");
 });
 
-test("a Fable conversation reads as the fable row whether the launch asked for the alias or recorded nothing", () => {
+test("a Fable 5.2 conversation reads as the pinned Fable 5.2 row whether the launch asked for the alias or recorded nothing", () => {
   for (const launchModel of ["fable", null, undefined] as const) {
-    const fable: FileEntry = { ...claudeFile, model: "fable-5-1", launchModel };
-    expect(defaults(fable).model).toBe("fable");
-    expect(runningModelId(fable)).toBe("fable");
-    expect(listedModelId(fable)).toBe("fable");
+    for (const model of ["fable-5-2", "claude-fable-5-2", "fable-5-2[1m]", "claude-fable-5-2-20261109"]) {
+      const fable: FileEntry = { ...claudeFile, model, launchModel };
+      expect(defaults(fable).model).toBe("claude-fable-5-2");
+      expect(runningModelId(fable)).toBe("claude-fable-5-2");
+      expect(listedModelId(fable)).toBe("claude-fable-5-2");
+      expect(unlistedModelName(fable)).toBe("");
+    }
   }
-  expect(defaults({ ...claudeFile, model: "claude-fable-5-1", launchModel: "fable" }).model).toBe("fable");
-  expect(defaults({ ...claudeFile, model: "fable-5-1[1m]", launchModel: null }).model).toBe("fable");
+  /* Before the transcript names a release, the launch alias stands and names no version. */
+  expect(defaults({ ...claudeFile, model: null, launchModel: "fable" }).model).toBe("fable");
   /* A family the catalogue lists a pinned release of keeps another version off its alias row. */
   expect(defaults({ ...claudeFile, model: "sonnet-4-5", launchModel: "sonnet" }).model).toBe("");
+  expect(defaults({ ...claudeFile, model: "fable-5", launchModel: "fable" }).model).toBe("");
   expect(defaults({ ...claudeFile, model: "opus-4-1", launchModel: null }).model).toBe("");
+});
+
+test("a Fable 5.1 conversation keeps its own release: it never reads or relaunches as Fable 5.2", () => {
+  /* Claude Code 2.1.318 runs claude-fable-5-1 for `fable`; 2.1.321 runs 5.2; the pinned row keeps 5.1 on either. */
+  for (const launchModel of ["fable", null, undefined] as const) {
+    for (const model of ["fable-5-1", "claude-fable-5-1", "fable-5-1[1m]", "claude-fable-5-1-20260901"]) {
+      const fable: FileEntry = { ...claudeFile, model, launchModel };
+      expect(defaults(fable).model).toBe("claude-fable-5-1");
+      expect(runningModelId(fable)).toBe("claude-fable-5-1");
+      expect(listedModelId(fable)).toBe("claude-fable-5-1");
+      expect(unlistedModelName(fable)).toBe("");
+    }
+  }
 });
 
 test("a held change says why in words that name the change: no model, or one the pickers cannot send", () => {
@@ -210,6 +228,7 @@ test("a held change says why in words that name the change: no model, or one the
     ]).size).toBe(4);
     /* A listed model holds nothing, Fable's transcript release included. */
     expect(modelHoldMessage(t, { ...claudeFile, model: "fable-5-1", launchModel: null }, "move")).toBeNull();
+    expect(modelHoldMessage(t, { ...claudeFile, model: "fable-5-2", launchModel: null }, "move")).toBeNull();
     expect(modelHoldMessage(t, { ...claudeFile, model: null, launchModel: "gpt-6-luna", engine: "codex" })).toBeNull();
   }
 });

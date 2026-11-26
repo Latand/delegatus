@@ -1,3 +1,6 @@
+import { provisioningStepView } from "./provisioningRecord";
+import { cloudEngine, isCloudRuntime, stageExecution } from "./cloudStage";
+import { hardenedRedact } from "@/lib/view/compactText";
 /**
  * The bounded list projection behind `list_pipelines` (issue #863).
  *
@@ -21,6 +24,7 @@
  */
 import type { RuntimeEngine as FlowEngine } from "@/lib/agent/runtimeConfig";
 
+import { pipelineHiddenFromBoard } from "./laneMovement";
 import { latestOperationalStageAttempt } from "./attemptSelection";
 import { failEdgeExhaustion, failEdgeMaxRounds, pipelineReviewSummary, type PipelineReviewSummary } from "./failEdgeBudget";
 import { selectArchivedPipelines, loadPipelinesForList, withDeliveryPublicationDetail } from "./store";
@@ -67,6 +71,7 @@ export type PipelineListFilter = {
 
 /** The bounded view of one attempt: who ran, how it ended, where to look next. */
 export type PipelineListAttempt = {
+  execution: ReturnType<typeof boundedStageExecution>;
   n: number;
   state: PipelineAttemptState;
   verdict: StageVerdictStatus | null;
@@ -76,7 +81,7 @@ export type PipelineListAttempt = {
   completedAt: string | null;
   /** Clamped; present only when the attempt recorded one. */
   error: string | null;
-};
+} & Partial<NonNullable<ReturnType<typeof cloudAttemptRead>>>;
 
 export type PipelineListStage = {
   id: string;
@@ -106,9 +111,13 @@ export type PipelineListRow = {
   branch: string;
   baseBranch: string;
   state: PipelineState;
+  dismissedAt: string | null;
+  /** Effective visibility of the current decision, as on the board. */
+  hiddenFromBoard: boolean;
   pausedState: Pipeline["pausedState"];
   /** Clamped. */
   stateDetail: string | null;
+  provisioningStep?: Pipeline["provisioningStep"];
   /** Whether a pinned specification exists — the body itself is a get_pipeline read. */
   hasSpec: boolean;
   createdAt: string;
@@ -201,9 +210,43 @@ export async function loadPipelineListRecords(filter: PipelineListFilter, checkp
   return [...hot, ...archive];
 }
 
-function attemptRow(attempt: PipelineStageAttempt | null): PipelineListAttempt | null {
+export function boundedStageExecution(stage: PipelineStage, attempt: PipelineStageAttempt, reasonLimit = 400) {
+  const execution = stageExecution(stage, attempt);
+  // Redact before truncation so a clipped credential cannot evade detection.
+  return { ...execution,
+    ...(execution.executionRuntime === "cloud" ? { taskId: attempt.cloud!.taskId, taskUrl: attempt.cloud!.taskUrl } : {}),
+    reason: clampChars(execution.reason === null ? null : hardenedRedact(execution.reason), reasonLimit) };
+}
+
+/** Cloud settlement stores output and a receipt without a local stage report.
+ * Derive its bounded conclusion here for both stage and list readers, including
+ * retained attempts. A copied role alone never proves remote execution. */
+export function cloudAttemptRead(stage: PipelineStage, attempt: PipelineStageAttempt, summaryLimit = 2_000) {
+  const execution = stageExecution(stage, attempt);
+  if (execution.executionRuntime !== "cloud") return null;
+  const cloud = attempt.cloud!;
+  const output = cloud.phase === "completed" && attempt.verdict ? attempt.output?.trim() || null : null;
+  const result = attempt.report
+    ? (typeof attempt.report.result === "string" ? attempt.report.result : null)
+    : clampLine(output, 159);
+  return {
+    summary: clampChars(attempt.report ? attempt.report.summary : output, summaryLimit),
+    result: result !== null && result.length > 160 ? clampChars(result, 159) : result,
+    runtime: attempt.effectiveRole ? {
+      engine: isCloudRuntime(execution.requestedRuntime) ? cloudEngine(execution.requestedRuntime) : attempt.effectiveRole.engine,
+      model: cloud.model,
+      effort: attempt.effectiveRole.effort,
+      accountId: cloud.accountId ?? attempt.accountId ?? null,
+      serviceTier: attempt.effectiveRole.serviceTier ?? null,
+      serviceTierSource: attempt.effectiveRole.serviceTierSource ?? null,
+    } : null,
+  };
+}
+
+function attemptRow(attempt: PipelineStageAttempt | null, stage: PipelineStage): PipelineListAttempt | null {
   if (!attempt) return null;
   return {
+    execution: boundedStageExecution(stage, attempt),
     n: attempt.n,
     state: attempt.state,
     verdict: attempt.verdict?.status ?? null,
@@ -212,6 +255,7 @@ function attemptRow(attempt: PipelineStageAttempt | null): PipelineListAttempt |
     startedAt: attempt.startedAt ?? null,
     completedAt: attempt.completedAt ?? null,
     error: clampText(attempt.error),
+    ...cloudAttemptRead(stage, attempt, MAX_ROW_TEXT),
   };
 }
 
@@ -234,7 +278,7 @@ function stageRow(
     attempts: attempts.length,
     /* The canonical selector, not "the last element": a lineage-adopted
        historical attempt is evidence, never the stage's current work. */
-    latestAttempt: attemptRow(latestOperationalStageAttempt(pipeline, stage.id)),
+    latestAttempt: attemptRow(latestOperationalStageAttempt(pipeline, stage.id), stage),
   };
 }
 
@@ -264,8 +308,11 @@ export function pipelineListRow(record: Pipeline): PipelineListRow {
     branch: pipeline.branch,
     baseBranch: pipeline.baseBranch,
     state: pipeline.state,
+    dismissedAt: pipeline.dismissedAt ?? null,
+    hiddenFromBoard: pipelineHiddenFromBoard(pipeline),
     pausedState: pipeline.pausedState ?? null,
     stateDetail: clampText(withDeliveryPublicationDetail(pipeline).stateDetail),
+    ...(pipeline.provisioningJob ? { provisioningStep: provisioningStepView(pipeline) } : {}),
     hasSpec: typeof pipeline.spec === "string" && pipeline.spec.length > 0,
     createdAt: pipeline.createdAt,
     closedAt: pipeline.closedAt ?? null,
@@ -289,14 +336,19 @@ export type PipelineCompactRow = {
   /** First line of the title, clamped. */
   task: string;
   state: PipelineState;
+  dismissedAt: string | null;
+  /** Effective visibility of the current decision, as on the board. */
+  hiddenFromBoard: boolean;
   cursor: { stageId: string; state: PipelineCursorState } | null;
   /** Clamped. */
   stateDetail: string | null;
+  provisioningStep?: Pipeline["provisioningStep"];
   /** As on the full row (#1938). */
   review?: PipelineReviewSummary;
   stages: Array<{
     id: string;
-    latestAttempt: { n: number; state: PipelineAttemptState; verdict: StageVerdictStatus | null } | null;
+    latestAttempt: ({ execution: ReturnType<typeof boundedStageExecution>; n: number; state: PipelineAttemptState; verdict: StageVerdictStatus | null }
+      & Partial<NonNullable<ReturnType<typeof cloudAttemptRead>>>) | null;
   }>;
 };
 
@@ -322,14 +374,18 @@ export function pipelineCompactRow(record: Pipeline): PipelineCompactRow {
     id: pipeline.id,
     task: clampLine(pipeline.task, COMPACT_TASK_CHARS) ?? "",
     state: pipeline.state,
+    dismissedAt: pipeline.dismissedAt ?? null,
+    hiddenFromBoard: pipelineHiddenFromBoard(pipeline),
     cursor: pipeline.cursor ? { stageId: pipeline.cursor.stageId, state: pipeline.cursor.state } : null,
     stateDetail: clampChars(withDeliveryPublicationDetail(pipeline).stateDetail, COMPACT_DETAIL_CHARS),
+    ...(pipeline.provisioningJob ? { provisioningStep: provisioningStepView(pipeline) } : {}),
     ...reviewField(pipeline),
     stages: (pipeline.stages ?? []).map((stage) => {
       const attempt = latestOperationalStageAttempt(pipeline, stage.id);
       return {
         id: stage.id,
-        latestAttempt: attempt ? { n: attempt.n, state: attempt.state, verdict: attempt.verdict?.status ?? null } : null,
+        latestAttempt: attempt ? { execution: boundedStageExecution(stage, attempt), n: attempt.n, state: attempt.state,
+          verdict: attempt.verdict?.status ?? null, ...cloudAttemptRead(stage, attempt, MAX_ROW_TEXT) } : null,
       };
     }),
   };

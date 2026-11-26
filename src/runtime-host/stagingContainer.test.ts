@@ -33,7 +33,6 @@ const composeService = {
     LLV_RUNTIME_HOST_SOCKET: "/home/user/.config/agent-log-viewer/state/runtime-host.sock",
     LLV_VIEWER_DEPLOY_TARGET: "/home/user/.config/agent-log-viewer/state/viewer-release.json",
     LLV_VIEWER_PORT: "8898",
-    TMUX_TMPDIR: "/tmp",
     LLV_DOCKER_NSENTER_SHIMS: "1",
     GIT_SSH_COMMAND: "ssh compose-config",
   },
@@ -48,13 +47,11 @@ const composeService = {
   "user": "1000:1000",
   volumes: [
     { type: "bind", source: "/home/user", target: "/home/user", bind: {} },
-    { type: "bind", source: "/tmp/tmux-1000", target: "/tmp/tmux-1000", bind: {} },
   ],
   working_dir: "/app",
 } satisfies ViewerComposeService;
 
 const paths = stagingStatePaths("/home/user/.config/agent-log-viewer/state-staging");
-const tmux = { tmuxTmpdir: "/tmp" };
 
 function valuesAfter(args: string[], flag: string): string[] {
   return args.flatMap((value, index) => value === flag ? [args[index + 1]!] : []);
@@ -101,7 +98,7 @@ test("issue 1683: the staging image sets the container user's passwd home the wa
 });
 
 test("the staging viewer container serves the fixed staging port from isolated state", () => {
-  const args = stagingViewerDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths, tmux });
+  const args = stagingViewerDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths });
   const environment = environmentFromArgs(args);
   expect(valuesAfter(args, "--name")).toEqual([STAGING_VIEWER_CONTAINER]);
   expect(args[args.length - composeService.command.length - 1]).toBe(stagingImageName(revision));
@@ -117,8 +114,8 @@ test("the staging viewer container serves the fixed staging port from isolated s
 
 test("staging containers are never labelled as prod-managed releases", () => {
   for (const args of [
-    stagingViewerDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths, tmux }),
-    stagingRuntimeHostDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths, tmux }),
+    stagingViewerDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths }),
+    stagingRuntimeHostDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths }),
   ]) {
     const labels = valuesAfter(args, "--label");
     expect(labels).toContain(`${STAGING_LABEL}=1`);
@@ -129,8 +126,8 @@ test("staging containers are never labelled as prod-managed releases", () => {
 
 test("staging containers retain the configured supplementary groups", () => {
   for (const args of [
-    stagingViewerDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths, tmux }),
-    stagingRuntimeHostDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths, tmux }),
+    stagingViewerDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths }),
+    stagingRuntimeHostDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths }),
   ]) {
     expect(valuesAfter(args, "--group-add")).toEqual(["957"]);
   }
@@ -139,8 +136,8 @@ test("staging containers retain the configured supplementary groups", () => {
 test("issue 1683: staging containers pin release, port, control and journal env to staging, never prod", () => {
   const prodStateDir = "/home/user/.config/agent-log-viewer/state";
   for (const args of [
-    stagingViewerDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths, tmux }),
-    stagingRuntimeHostDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths, tmux }),
+    stagingViewerDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths }),
+    stagingRuntimeHostDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths }),
   ]) {
     const environment = environmentFromArgs(args);
     expect(environment.LLV_VIEWER_DEPLOY_TARGET).toBe(paths.releaseTarget);
@@ -156,7 +153,7 @@ test("issue 1683: staging containers pin release, port, control and journal env 
 });
 
 test("issue 1683: a staging stage agent's Viewer MCP control resolves to the staging port", () => {
-  const context = { revision, image: stagingImageName(revision), service: composeService, paths, tmux };
+  const context = { revision, image: stagingImageName(revision), service: composeService, paths };
   const agentEnvironment = stagingAgentViewerMcpEnvironment(context);
   expect(agentEnvironment).toEqual({
     HOME: "/home/user",
@@ -173,7 +170,7 @@ test("issue 1683: a staging stage agent's Viewer MCP control resolves to the sta
 });
 
 test("the staging runtime-host runs the events host against the staging journal without deployments", () => {
-  const args = stagingRuntimeHostDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths, tmux });
+  const args = stagingRuntimeHostDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths });
   const environment = environmentFromArgs(args);
   expect(valuesAfter(args, "--name")).toEqual([STAGING_RUNTIME_HOST_CONTAINER]);
   expect(environment.LLV_RUNTIME_EVENTS).toBe("1");
@@ -185,11 +182,11 @@ test("the staging runtime-host runs the events host against the staging journal 
 
 test("staging container args refuse a state dir that resolves to prod state", () => {
   const prodPaths = stagingStatePaths("/home/user/.config/agent-log-viewer/state");
-  expect(() => stagingViewerDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths: prodPaths, tmux }))
+  expect(() => stagingViewerDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths: prodPaths }))
     .toThrow(/staging/i);
-  expect(() => stagingRuntimeHostDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths: prodPaths, tmux }))
+  expect(() => stagingRuntimeHostDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths: prodPaths }))
     .toThrow(/staging/i);
   const legacyPaths = stagingStatePaths("/home/user/.claude/viewer-state");
-  expect(() => stagingViewerDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths: legacyPaths, tmux }))
+  expect(() => stagingViewerDockerArgs({ revision, image: stagingImageName(revision), service: composeService, paths: legacyPaths }))
     .toThrow(/staging/i);
 });

@@ -407,16 +407,19 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
     ? value
     : t("seatTick.switch.valueText", { value: until ? t("seatTick.switch.value.until", { value, time: until }) : value, summary: reading.summary });
 
-  const autonomyOn = autonomyActive(autonomy, now);
-  const autonomyTime = autonomy?.until ? seatTickLocalTime(autonomy.until, now, locale) : null;
+  const autonomyUntil = answer?.switchState?.autonomy.until ?? autonomy?.until;
+  const autonomyOn = answer?.switchState ? answer.switchState.autonomy.active && (!autonomyUntil || Date.parse(autonomyUntil) > now) : autonomyActive(autonomy, now);
+  const autonomyTime = autonomyUntil ? seatTickLocalTime(autonomyUntil, now, locale) : null;
   const autonomyWords = !autonomyOn ? null
     : autonomyTime ? t("seatTick.autonomy.chip", { time: autonomyTime }) : t("seatTick.autonomy.chipUnlimited");
   /* Turbo's mark beside the health dot, and its words in the spoken value (§2.3). */
   const turbo = read.answer?.turbo;
-  const turboOn = turbo?.active === true && !!turbo.episode;
-  const turboTime = turboOn && turbo!.episode!.until ? seatTickLocalTime(turbo!.episode!.until, now, locale) : null;
+  const turboUntil = answer?.switchState?.turbo.until ?? turbo?.episode?.until;
+  const turboOn = answer?.switchState ? answer.switchState.turbo.active && (!turboUntil || Date.parse(turboUntil) > now) : turbo?.active === true && !!turbo.episode;
+  const turboPaid = answer?.switchState?.turbo.paid ?? turbo?.episode?.credits.approved;
+  const turboTime = turboOn && turboUntil ? seatTickLocalTime(turboUntil, now, locale) : null;
   const turboWords = !turboOn ? null
-    : turboTime ? t(turbo!.episode!.credits.approved ? "seatTick.turbo.chipPaid" : "seatTick.turbo.chipFree", { time: turboTime }) : t("seatTick.turbo.chipUnlimited");
+    : turboTime ? t(turboPaid ? "seatTick.turbo.chipPaid" : "seatTick.turbo.chipFree", { time: turboTime }) : t("seatTick.turbo.chipUnlimited");
   const marks = [autonomyWords, turboWords].filter((words): words is string => !!words);
   const spoken = marks.length ? `${marks.join(". ")}. ${valueText}` : valueText;
   const line = marks.length ? `${marks.join("\n")}\n${reading.line}` : reading.line;
@@ -488,7 +491,7 @@ export function SeatTickSwitch({ read, reading, now, surface, open, onOpen, onRe
         {autonomyOn ? <AutonomyRing /> : null}
       </span>
       {until ? <Hourglass data-seat-tick-until aria-hidden className={`${phone ? "h-3.5 w-3.5" : "h-3 w-3"} shrink-0 text-secondary`} /> : null}
-      {turboOn ? <TurboMark attr={{ "data-seat-tick-turbo-mark": turbo!.episode!.credits.approved ? "credits" : "free" }} /> : null}
+      {turboOn ? <TurboMark attr={{ "data-seat-tick-turbo-mark": turboPaid ? "credits" : "free" }} /> : null}
       <SeatTickDot tone={reading.tone} />
     </div>
   );

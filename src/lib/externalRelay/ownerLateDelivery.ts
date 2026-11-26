@@ -5,17 +5,24 @@ import { changeRunAsync, ownerRelayStoreDeadline, ownerStopPending, type PairedR
 import type { StagedAttachment } from "./attachments";
 import type { RelayAnswerDelivery } from "./answers";
 import { relayRequestInFlight } from "./activity";
-import { readAnswerRecord } from "./answers";
-import { ownerTierFor } from "./profile";
+import { readAnswerRecord, recordLateAnswerExpired } from "./answers";
+import { ownerBindingRefusal, ownerTierFor } from "./profile";
 import { ownerFailureAnswer } from "./ownerRun";
 import { isDeepStrictEqual } from "node:util";
 import { answerCapabilities } from "./answerV2";
 import { isOwnerRequestTimeoutReply } from "./requestTimeout";
+import { ownerLateDeliveryAllowed } from "./ownerAuthority";
 
 /** Older custody rows retained the input in the answer record. Reconstruct only
  * from that record and the already verified owner request, never from chat text. */
 export function ownerRecoveryRequest(run: RunRecord, relay: PairedRelay): unknown | null {
-  if (run.ownerTurn?.rawRequest) return run.ownerTurn.rawRequest;
+  if (run.ownerTurn?.rawRequest) {
+    const raw = run.ownerTurn.rawRequest;
+    const parsed = requestSchema.safeParse(raw);
+    return parsed.success && parsed.data.request_id === run.requestId && parsed.data.lease_id === run.leaseId
+      && parsed.data.target_id === run.targetId && !ownerBindingRefusal(relay, parsed.data)
+      && ownerTierFor({ ownerTier: true }, parsed.data, { guestHandoff: true }) ? raw : null;
+  }
   const record = readAnswerRecord(run.relayId, run.targetId, run.requestId);
   if (!record?.profile?.owner || !run.ownerTurn?.request) return null;
   const parsed = requestSchema.safeParse({ request_id: run.requestId, lease_id: run.leaseId,
@@ -32,6 +39,47 @@ export function ownerRecoveryRequest(run: RunRecord, relay: PairedRelay): unknow
 type LateAnswer = NonNullable<NonNullable<RunRecord["ownerTurn"]>["lateAnswer"]>;
 const RETRY_MS = 30_000;
 const KEY_LIFETIME_MS = 24 * 60 * 60 * 1000;
+/** How long a late answer that cannot be delivered at all (its request carried
+ * no usable delivery context) keeps its alarm before it is written off. It
+ * equals the service's 24 h key lifetime, the window every attempted send
+ * already has from its first attempt. The request's start is the one timestamp
+ * such a row carries. An answer that can be delivered and was never attempted
+ * has no such limit: an install that was off for days still sends it. */
+export const OWNER_LATE_ANSWER_WINDOW_MS = KEY_LIFETIME_MS;
+/** Statuses the sweep never retries: nothing more will be sent for the row. */
+export function ownerLateAnswerTerminal(pending: Pick<LateAnswer, "status"> | undefined): boolean {
+  return pending?.status === "retry-expired" || pending?.status === "refused" || pending?.status === "uncertain";
+}
+/** True for an answer that has waited the whole window with no delivery context. */
+export function ownerLateAnswerUndeliverable(run: Pick<RunRecord, "startedAt" | "ownerTurn">, now = Date.now()): boolean {
+  if (run.ownerTurn?.lateAnswer?.status !== "pending-delivery-context" || ownerDeliverySchema.safeParse(run.ownerTurn.delivery).success) return false;
+  const started = Date.parse(run.startedAt);
+  return !Number.isFinite(started) || now - started >= OWNER_LATE_ANSWER_WINDOW_MS;
+}
+/** Writes an undeliverable late answer off as `retry-expired`, in the ledger
+ * and in its answer record. Needs no relay or target settings, so a paused or
+ * revoked relay's row still reaches its terminal state. Custody is retained. */
+export async function expireOwnerLateAnswer(requestId: string, now = Date.now()): Promise<boolean> {
+  let expired = false;
+  let ageMs: number | null = null;
+  let relayId = "", targetId = "";
+  await changeRunAsync(requestId, row => {
+    const pending = row.ownerTurn?.lateAnswer;
+    if (!pending || row.completionAccepted || !ownerLateAnswerUndeliverable(row, now)) return row;
+    expired = true;
+    relayId = row.relayId; targetId = row.targetId;
+    const started = Date.parse(row.startedAt);
+    ageMs = Number.isFinite(started) ? now - started : null;
+    return { ...row, ...(!ownerStopPending(row) && !relayRequestInFlight(requestId) ? { capacityReleased: true as const } : {}),
+      ownerTurn: { ...row.ownerTurn!, lateAnswer: { ...pending, status: "retry-expired" as const } } };
+  }, ownerRelayStoreDeadline());
+  if (expired) {
+    recordLateAnswerExpired(relayId, targetId, requestId);
+    console.error("Owner relay late delivery expired", JSON.stringify({ event: "relay_late_answer_expired", requestId,
+      status: "retry-expired", ageMs }));
+  }
+  return expired;
+}
 const FILE_NOTE = "[Files were produced; late delivery supports text only, so files are omitted.]";
 // Telegram measures parsed text in UTF-16 units. Plain text avoids expansion
 // and preserves literal markup; a code point is never cut between surrogates.
@@ -68,12 +116,12 @@ function payloadsFor(pending: LateAnswer, relayId: string, requestId: string,
 export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: string,
   body: ExternalRelayCompletion, files: StagedAttachment[], authorize: () => boolean,
 ): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery }> {
-  const prepared = { pending: undefined as LateAnswer | undefined };
+  const prepared = { pending: undefined as LateAnswer | undefined, run: undefined as RunRecord | undefined };
   let targetId = "";
   let missingContextAlarm = false;
   try {
     await changeRunAsync(requestId, row => {
-      if (!row.ownerTurn || row.relayId !== relay.id || !authorize()) return row;
+      if (!row.ownerTurn || row.relayId !== relay.id || !authorize() || !ownerLateDeliveryAllowed(row)) return row;
       targetId = row.targetId;
       let pending: LateAnswer = { ...row.ownerTurn.lateAnswer, body: row.ownerTurn.lateAnswer?.body ?? body,
         files: row.ownerTurn.lateAnswer?.files ?? files };
@@ -119,11 +167,13 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
         }
       }
       prepared.pending = pending;
+      prepared.run = row;
       return { ...row, ...(!ownerStopPending(row) && !relayRequestInFlight(requestId) ? { capacityReleased: true as const } : {}),
         ownerTurn: { ...row.ownerTurn, lateAnswer: pending } };
     }, ownerRelayStoreDeadline());
     let pending = prepared.pending;
-    if (!pending || !authorize()) return { body, delivery: "refused" };
+    const run = prepared.run;
+    if (!pending || !run || !authorize() || !ownerLateDeliveryAllowed(run)) return { body, delivery: "refused" };
     body = pending.body;
     if (pending.status === "uncertain") return { body, delivery: "unconfirmed" };
     if (!pending.parts) {
@@ -140,6 +190,7 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
       if (part.firstAttemptAt !== undefined && Date.now() - part.firstAttemptAt >= KEY_LIFETIME_MS - 60_000) {
         await changeRunAsync(requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!,
           lateAnswer: { ...row.ownerTurn!.lateAnswer!, status: "retry-expired" } } }), ownerRelayStoreDeadline());
+        recordLateAnswerExpired(relay.id, targetId, requestId);
         return { body, delivery: "unconfirmed" };
       }
       const hadUnresolvedAttempt = part.firstAttemptAt !== undefined;
@@ -152,7 +203,7 @@ export async function deliverOwnerLateAnswer(relay: PairedRelay, requestId: stri
         return { ...row, ownerTurn: { ...row.ownerTurn!, lateAnswer: pending } };
       }, ownerRelayStoreDeadline());
       const sent = await sendAsClone(relay, targetId, part.payload, { partIndex: index, beforeSend: () => {
-        if (!authorize()) throw new Error("owner relay revoked");
+        if (!authorize() || !ownerLateDeliveryAllowed(run)) throw new Error("owner relay revoked");
       } });
       await changeRunAsync(requestId, row => {
         const saved = row.ownerTurn!.lateAnswer!;

@@ -121,7 +121,8 @@ node's bottom corners squared so the two read as one card.
 | Shape | Strip text | Click |
 |---|---|---|
 | dock | `↺`, the fix stage's state mark (`StageToneMark`), its name with attempt suffix | opens the fix stage, as its node did |
-| return | `↺` and `kanban.loop.backTo`: "back to Build" / «назад до Build» | opens the target stage |
+| return, to an earlier stage of the pass chain | `↺` and `kanban.loop.backTo`: "back to Build" / «назад до Build» | opens the target stage |
+| return, to a stage off the pass chain (a fix the lane goes on to, which re-enters the chain) | drawn as a dock: `↺`, the fix's state mark and its name. The lane never goes *back* to it | opens the fix stage |
 | self | `↺` and `kanban.loop.retry`: "retry" / «повтор» | none |
 
 A self loop that never fired draws no strip; its budget stays in the node's
@@ -136,10 +137,14 @@ A strip whose edge was just travelled takes the existing `live` accent for
 
 - one position per round of the budget, `failEdgeMaxRounds` (granted rounds
   included);
-- a filled danger dot for each round the edge fired (`edgeRoundsUsed`);
-- a filled success dot after them when the source's latest attempt passed;
-- an accent ring on the next position while the source or its fix runs;
+- one mark for each round the edge fired, read from the fix's own attempts
+  (`fixRoundMarks`): ✓ when the fix passed, ✕ when it failed, a filled dot while
+  it is at work;
 - hollow muted dots for the rounds left.
+
+The Stages window's tab for the same fix draws the same marks and adds the
+count, and the failing source's tab wears `↺ n/max`; the strip never counts the
+source's own failures as marks, so a tab and a strip of one edge cannot disagree.
 
 No hollow dot left means the budget is spent: shape carries it, colour repeats
 it. A budget above six rounds draws `n/max` as text in place of dots. The
@@ -164,6 +169,17 @@ high (today 1 204 × 300).
                                   │↺ ✓ Critique fix · 2 ●●│ │↺ ✓ Review fix · 3 ●●●│
                                   └───────────────┘    └───────────────┘
 ```
+
+**Fixes only a failure reaches (redesign S2).** A stage that nothing on the pass
+chain passes into and that only a fail edge leads to (a fix two stages share, a
+fix that re-enters the chain somewhere else, a chain of two fixes) is not a
+root: it stands on the layer before the stage it re-enters, one row down, so its
+dashed wire runs the short way up into that stage and never behind another
+node. A chain of fixes takes one layer each, ending at the re-entered stage. A
+fix that re-enters nothing stands after the stages that lead to it. The nodes
+of the pass chain keep their layers, shifted right when a fix needs the room.
+A stage that has not run and may never be needed says «if needed» in its node,
+as its Stages tab does, and not «waiting · not started».
 
 **Compact (top-to-bottom).** One column, always. Node width is
 `clamp(available − 24, 132, 268)`, so the graph is never wider than its card

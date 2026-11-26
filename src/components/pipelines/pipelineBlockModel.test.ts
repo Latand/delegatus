@@ -105,6 +105,17 @@ test("provisioning names its disk wait and clears the reason after recovery", ()
   expect(pipelineReason(t, parked({ state: "provisioning", stateDetail: null }), nameOf)).toBeNull();
 });
 
+test("provisioning retry waits expose their typed cause in both locales", () => {
+  const pipeline = parked({ state: "provisioning", provisioningStep: {
+    kind: "provision", step: "checkingDependencies", since: 1_000, deadlineAt: 6_000,
+    status: "waiting", reason: "toolchain-reply-lost", blockerToken: "4f3a9c21-owner-fixture",
+  } });
+  expect(pipelineReason(t, pipeline, nameOf, 4_000))
+    .toBe("Retry pending · Checking dependency inputs · 3 s · Waiting: the toolchain reply was lost · Owner token 4f3a9c21");
+  expect(pipelineReason((key, params) => translate("uk", key, params), pipeline, nameOf, 4_000))
+    .toBe("Очікування повтору · Перевірка вхідних даних залежностей · 3 с · Очікування: втрачено відповідь інструментів · Токен власника 4f3a9c21");
+});
+
 test("a decision is answered with Skip and Retry on the stage it waits on, a stop after the last fix with Accept as is", () => {
   const decision = pipelineAnswers(parked(), nameOf)!;
   expect(decision.kind).toBe("decision");
@@ -211,6 +222,8 @@ test("a completed lane's merge says its word, and a stopped one asks with two pl
   expect(answers.choices.map((choice) => answerLabel(t, answers, choice, false))).toEqual(["Leave the PR open", "Try the merge again"]);
   expect(answers.choices.map((choice) => answerLabel(uk, answers, choice, true))).toEqual(["Залишити PR відкритим", "Спробувати мердж ще раз"]);
   expect(mergeReasonText(t, stopped.merge!.reason)).toBe("check slow failed");
+  expect(mergeReasonText(t, 'check "slow" failed; the required check set is unknown')).toBe("check slow failed; the required check set is unknown");
+  expect(mergeReasonText(uk, 'check "slow" failed; the required check set is unknown')).toBe("перевірка slow провалилась; набір обов’язкових перевірок невідомий");
   expect(mergeReasonText(t, "a reviewer requested changes")).toBe("a reviewer requested changes");
   expect(mergeReasonText(uk, "a reviewer requested changes")).toBe("ревʼюер запросив зміни");
   expect(mergeReasonText(uk, "conflict with the base branch")).toBe("конфлікт з базовою гілкою");

@@ -1,3 +1,4 @@
+import { publicationLanguageHints, publicationSummary, publicationTitle } from "@/lib/forge/publicationLanguage";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -12,6 +13,7 @@ import { mailboxPattern } from "@/lib/privacy/mailbox";
 import type { ExecPort, ExecResult } from "@/lib/workflows/provision";
 import { pipelinePublicationTextSafe } from "./git";
 import { pipelineArtifactsDir } from "./store";
+import { settledPublicationForHead } from "./publicationEvidence";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 export type PullRequestTextRefusal = { part: "title" | "body" | "title/body"; check: string; kind: string; line?: number };
@@ -19,6 +21,43 @@ export type StagePullRequestResult = { ok: true } | { ok: false; error: string; 
 
 function isFinalBudgetFix(attempt: PipelineStageAttempt): boolean {
   return attempt.activatedBy?.edge === "fail" && attempt.activatedBy.budgetSpent === true;
+}
+
+function terminalRecheck(pipeline: Pipeline, head: string): PipelineStageAttempt | undefined {
+  return pipeline.runs.flatMap(run => run.attempts)
+    .filter(a => !a.historical && a.activatedBy?.budgetRecheck
+      && (a.reviewHeadSha ?? a.reviewedHead ?? a.report?.provenance.head) === head
+      && a.completedAt && a.verdict && !a.verdict.blocked
+      && ["passed", "failed", "needs_decision"].includes(a.state))
+    .sort((a, b) => b.completedAt!.localeCompare(a.completedAt!))[0];
+}
+
+function recheckResult(attempt: PipelineStageAttempt): string {
+  if (attempt.verdict?.status === "pass") return "**Last fix re-checked and passed.**";
+  const findings = attempt.verdict?.findings ?? [];
+  const counts = ["P0", "P1", "P2", "P3"].map(severity =>
+    [severity, findings.filter(finding => new RegExp(`^${severity}\\b`).test(finding)).length] as const);
+  const classified = counts.reduce((sum, [, count]) => sum + count, 0);
+  const severities = counts.filter(([, count]) => count).map(([severity, count]) => `${severity}: ${count}`);
+  if (classified < findings.length) severities.push(`unspecified severity: ${findings.length - classified}`);
+  return `**Last fix re-checked with ${findings.length} findings left${severities.length ? ` (${severities.join(", ")})` : ""}.**`;
+}
+
+const RESULT_START = "<!-- delegatus:latest-pipeline-result -->";
+const RESULT_END = "<!-- /delegatus:latest-pipeline-result -->";
+function replaceLatestResult(body: string, update: string, legacyReports: string[]): string {
+  const start = body.indexOf(RESULT_START);
+  const end = start < 0 ? -1 : body.indexOf(RESULT_END, start);
+  if (end >= 0) return body.slice(0, start) + update + body.slice(end + RESULT_END.length + (body.startsWith("\n\n", end + RESULT_END.length) ? 2 : 0));
+  // Recover an unmarked block only when its complete persisted report matches.
+  const legacy = /## Latest pipeline result\n\nHead: `[0-9a-f]{40}`\n\n\*\*Last fix was not re-reviewed: review budget spent\.\*\*\n\nFix stage report \(supersedes earlier head, checks and review-status statements\):\n\n/.exec(body);
+  if (legacy) {
+    for (const report of legacyReports) {
+      const prefix = legacy[0] + report + "\n\n---\n\n";
+      if (body.startsWith(prefix, legacy.index)) return body.slice(0, legacy.index) + update + body.slice(legacy.index + prefix.length);
+    }
+  }
+  return update + body;
 }
 
 export function stagePullRequestProducer(pipeline: Pipeline, attempt: PipelineStageAttempt): PipelineStageAttempt {
@@ -31,7 +70,7 @@ function refused(part: PullRequestTextRefusal["part"], check: string, kind: stri
   return { ok: false, privacy: { part, check, kind, ...(line ? { line } : {}) },
     error: `pull request publication privacy gate refused ${part} [redacted]: ${check} (${kind})`
       + (line ? `; decoded line ${line}` : "")
-      + (part.includes("title") ? "; the title comes from the pipeline task; the seat must correct that task line" : "") };
+      + (part.includes("title") ? "; the seat must correct the pipeline publication title" : "") };
 }
 
 /** No detector output or matched value is copied into a refusal. */
@@ -124,13 +163,21 @@ async function inspectRepositoryText(part: "title" | "body", file: string, gate:
 const HEAD_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 14_000];
 const HEAD_RETRY_BUDGET_MS = 30_000;
 type HeadRetryTiming = { now(): number; sleep(ms: number): Promise<void> };
+export type StagePullRequestRecovery = { allowTerminalRefresh?: boolean; authorize?: () => boolean };
 
 /** Called under the settlement's lane lock and cancellation fence, outside
  * the state mutation lease. Discovery recovers a create whose reply was lost. */
 export async function ensureStagePullRequest(pipeline: Pipeline, attempt: PipelineStageAttempt, exec: ExecPort, acceptedHead = pipeline.lastPassedCommit,
-  timing: HeadRetryTiming = { now: () => performance.now(), sleep }): Promise<StagePullRequestResult> {
+  timing: HeadRetryTiming = { now: () => performance.now(), sleep }, recovery: StagePullRequestRecovery = {}): Promise<StagePullRequestResult> {
   const delivery = pipeline.delivery;
-  if (!delivery || delivery.publish !== "enabled" || !delivery.active || delivery.disposition !== "owner"
+  const pendingRefresh = delivery && delivery.pendingPullRequestRefresh?.epoch === delivery.epoch
+    && delivery.pendingPullRequestRefresh.sha === acceptedHead ? delivery.pendingPullRequestRefresh : undefined;
+  const terminalRefresh = recovery.allowTerminalRefresh === true && Boolean(pendingRefresh)
+    && (pipeline.state === "completed" || pipeline.state === "needs_decision");
+  const releasedCompletedRefresh = terminalRefresh && pipeline.state === "completed"
+    && !delivery?.active && delivery?.publish === "disabled";
+  if (!delivery || (delivery.publish !== "enabled" && !releasedCompletedRefresh)
+    || (!delivery.active && !releasedCompletedRefresh) || delivery.disposition !== "owner"
     || delivery.ownerId !== pipeline.id || (acceptedHead === pipeline.baseRef && delivery.target.pr === undefined)) return { ok: true };
   /* A fork PR lives in the upstream `prRepository`, and its head in the fork
      the delivery remote pushes to. */
@@ -144,31 +191,75 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
   const crossRepository = repository !== pushRepository;
   if (crossRepository && delivery.target.pr === undefined) return { ok: false, error: "a fork delivery names no pull request; the lane cannot open one in the fork" };
   const branch = delivery.target.branch.replace(/^refs\/heads\//, "");
-  const refresh = isFinalBudgetFix(attempt);
+  const recheck = terminalRecheck(pipeline, acceptedHead);
+  const refresh = isFinalBudgetFix(attempt) || Boolean(recheck) || Boolean(pendingRefresh);
+  // Summary/output are internal reports. Deferred refreshes also derive the
+  // public result from the durable producer, including records from old controllers.
+  const publicResult = (producer = stagePullRequestProducer(pipeline, attempt)) =>
+    recheck ? recheckResult(recheck) : producer.report?.result?.trim() || "Fix stage passed.";
   // Only this attempt's accepted publication can explain a temporarily stale
-  // PR head. Review checks and older publication receipts keep refusing at once.
+  // PR head. Other settlements skip backoff and need fresh Git proof below.
   const operation = delivery.operation;
   const justPublished = pipeline.publishedCommit === acceptedHead && operation?.sha === acceptedHead
     && operation.epoch === delivery.epoch && operation.state === "settled" && operation.passedStage === true
     && operation.requestKey === `pass:${pipeline.cursor?.stageId}:${attempt.n}`
     && operation.result?.ok === true && operation.result.remote === "published";
-  type Found = { ok: true; number: number | null; body?: string; title?: string } | (Extract<StagePullRequestResult, { ok: false }> & { retryHead?: true });
+  type Found = { ok: true; number: number | null; body?: string; title?: string; gitEvidence?: true }
+    | (Extract<StagePullRequestResult, { ok: false }> & { retryHead?: true; staleHead?: string; number?: number; unavailable?: true });
+  // Publication and review capture use Git. This proof never authorizes a
+  // forge merge, which still requires its head to equal the reviewed commit.
+  const proofTarget = { remote: delivery.target.remote, branch: delivery.target.branch, pr: delivery.target.pr,
+    epoch: delivery.epoch, operation: delivery.operation?.id, repository: delivery.target.repository,
+    prRepository: delivery.target.prRepository, baseBranch: pipeline.baseBranch, worktreeDir: pipeline.worktreeDir,
+    lastPassedCommit: pipeline.lastPassedCommit };
+  const ownsPublication = () => pipeline.delivery === delivery && (delivery.active || releasedCompletedRefresh)
+    && (delivery.publish === "enabled" || releasedCompletedRefresh)
+    && delivery.disposition === "owner" && delivery.ownerId === pipeline.id && delivery.epoch === proofTarget.epoch
+    && delivery.operation?.id === proofTarget.operation && delivery.target.remote === proofTarget.remote
+    && delivery.target.branch === proofTarget.branch && delivery.target.pr === proofTarget.pr
+    && delivery.target.repository === proofTarget.repository && delivery.target.prRepository === proofTarget.prRepository
+    && pipeline.baseBranch === proofTarget.baseBranch && pipeline.worktreeDir === proofTarget.worktreeDir
+    && pipeline.lastPassedCommit === proofTarget.lastPassedCommit
+    && pipeline.publishedCommit === acceptedHead && !!settledPublicationForHead(pipeline, acceptedHead)
+    && (recovery.authorize?.() ?? true);
+  const gitProvesPublication = async (staleHead?: string, staleHeadIsAncestor = false): Promise<boolean> => {
+    if (!ownsPublication()
+      || !/^[0-9a-f]{40}$/.test(acceptedHead)
+      || (staleHead !== undefined && !/^[0-9a-f]{40}$/.test(staleHead))) return false;
+    try {
+      if (staleHead !== undefined && !staleHeadIsAncestor) {
+        const ancestor = await exec("git", ["merge-base", "--is-ancestor", staleHead, acceptedHead],
+          pipeline.worktreeDir, undefined, { timeoutMs: 5_000 });
+        if (ancestor.code !== 0 || !ownsPublication()) return false;
+      }
+      // Read last: neither a cached receipt nor a tracking ref proves where
+      // the delivery branch is after the forge reads and ancestry await.
+      const remote = await exec("git", ["ls-remote", "--heads", delivery.target.remote, delivery.target.branch],
+        pipeline.worktreeDir, undefined, { timeoutMs: 5_000 });
+      return ownsPublication() && remote.code === 0 && remote.stdout.trim() === `${acceptedHead}\trefs/heads/${branch}`;
+    } catch { return false; }
+  };
   const readOnce = async (timeoutMs: number): Promise<Found> => {
     const linked = delivery.target.pr;
     const fields = "number,headRefName,baseRefName,state,headRefOid,isCrossRepository"
       + (crossRepository ? ",headRepository,headRepositoryOwner" : "") + (refresh ? ",body,title" : "");
     const args = linked !== undefined
       ? ["pr", "view", String(linked), "--repo", repository, "--json", fields]
-      : ["pr", "list", "--repo", repository, "--head", branch, "--base", pipeline.baseBranch,
+      : ["pr", "list", "--repo", repository, "--head", branch,
         "--state", "open", "--limit", "2", "--json", fields];
-    const read = await exec("gh", args, pipeline.worktreeDir, undefined, { timeoutMs });
-    if (read.code !== 0) return { ok: false, error: "the delivery pull request lookup failed" };
-    const rows = linked !== undefined ? [JSON.parse(read.stdout)] : JSON.parse(read.stdout);
+    let rows: unknown;
+    try {
+      const read = await exec("gh", args, pipeline.worktreeDir, undefined, { timeoutMs });
+      if (read.code !== 0) return { ok: false, unavailable: true, error: "the delivery pull request lookup failed" };
+      rows = linked !== undefined ? [JSON.parse(read.stdout)] : JSON.parse(read.stdout);
+    } catch { return { ok: false, unavailable: true, error: refresh
+      ? "the delivery pull request body refresh could not be verified; the stage cannot pass without it"
+      : "the delivery pull request could not be verified; the stage cannot pass without it" }; }
     if (!Array.isArray(rows) || rows.length > 1) return { ok: false, error: "the delivery pull request is ambiguous" };
     if (!rows.length) return { ok: true, number: null };
     const pr = rows[0];
-    // A linked PR is addressed in its own repository. Its base can differ
-    // from a successor lane's base, which is commonly the PR's own head branch.
+    // Check the head before the base so an earlier PR with the wrong
+    // destination remains a visible refusal.
     const mismatches = [
       !Number.isSafeInteger(pr?.number) || pr.number < 1 || (linked !== undefined && pr.number !== linked) ? "number" : null,
       pr?.state !== "OPEN" ? `state (expected OPEN, received ${["CLOSED", "MERGED"].includes(pr?.state) ? pr.state : "unknown"})` : null,
@@ -177,16 +268,25 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
       pr?.isCrossRepository !== crossRepository ? `isCrossRepository (expected ${crossRepository ? "the fork" : "same repository"})` : null,
       crossRepository && canonical(`${pr?.headRepositoryOwner?.login}/${pr?.headRepository?.name}`.toLowerCase()).toLowerCase() !== pushRepository
         ? "headRepository (expected the delivery remote's repository)" : null,
-      linked === undefined && pr?.baseRefName !== pipeline.baseBranch ? "baseRefName" : null,
+      pr?.baseRefName !== pipeline.baseBranch
+        ? "baseRefName (expected the lane's baseBranch; correct the PR base before retrying)" : null,
     ].filter(Boolean);
-    if (mismatches.length) return { ok: false, error: `the delivery pull request differs in ${mismatches.join(", ")}`,
-      ...(mismatches.length === 1 && mismatches[0] === "headRefOid" ? { retryHead: true } : {}) };
+    if (mismatches.length) return { ok: false, number: Number.isSafeInteger(pr?.number) ? pr.number : linked,
+      error: `the delivery pull request differs in ${mismatches.join(", ")}`,
+      ...(mismatches.length === 1 && mismatches[0] === "headRefOid" ? { retryHead: true, staleHead: pr.headRefOid, number: pr.number } : {}) };
     return { ok: true, number: pr.number,
       body: typeof pr.body === "string" ? pr.body : undefined, title: typeof pr.title === "string" ? pr.title : undefined };
   };
   const find = async (): Promise<Found> => {
     let found = await readOnce(30_000);
     if (found.ok || !found.retryHead || !justPublished) return found;
+    // A stale PR head can remain unchanged across every retry. If the exact
+    // published branch and its ancestry already prove the delivery, hand the
+    // result to the Git-evidence path without spending the retry budget.
+    if (found.staleHead) {
+      const proven = await gitProvesPublication(found.staleHead);
+      if (proven || !ownsPublication()) return found;
+    }
     // The retry deadline covers both asynchronous sleeps and every gh read.
     // The settlement executor revalidates its cancellation/ownership fence
     // before each read; the controller's mutation lease is never held here.
@@ -197,28 +297,123 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
         await timing.sleep(delay);
         const remaining = deadline - timing.now();
         if (remaining <= 0) break;
+        const previous = found;
         found = await readOnce(remaining);
+        if (!found.ok && found.unavailable && !previous.ok && previous.retryHead)
+          return { ...found, retryHead: true, staleHead: previous.staleHead, number: previous.number };
         if (found.ok || !found.retryHead) return found;
       }
       return found;
     }));
   };
-  try {
+  const findWithGitEvidence = async (): Promise<Found> => {
     const found = await find();
-    if (!found.ok) return { ok: false, error: found.error };
+    if (found.ok) return found;
+    if (!ownsPublication()) return found;
+    let staleHeadIsAncestor = false;
+    const refusalMatches = () => {
+      const refusal = delivery.pullRequestRefusal;
+      return refusal?.epoch === delivery.epoch && refusal.sha === acceptedHead;
+    };
+    if (found.unavailable && refusalMatches()) {
+      const refusal = delivery.pullRequestRefusal!;
+      return { ...found, error: refusal.reason };
+    }
+    const onlyStaleHead = found.retryHead && found.error === "the delivery pull request differs in headRefOid"
+      && typeof found.staleHead === "string" && /^[0-9a-f]{40}$/.test(found.staleHead);
+    if (!found.unavailable && !onlyStaleHead) {
+      delivery.pullRequestRefusal = { epoch: delivery.epoch, sha: acceptedHead,
+        number: found.number ?? delivery.target.pr ?? null, head: null, reason: found.error };
+      return found;
+    }
+    if (found.retryHead && found.staleHead && /^[0-9a-f]{40}$/.test(found.staleHead)) {
+      let ancestor = false;
+      try {
+        const checked = await exec("git", ["merge-base", "--is-ancestor", found.staleHead, acceptedHead],
+          pipeline.worktreeDir, undefined, { timeoutMs: 5_000 });
+        ancestor = checked.code === 0 && ownsPublication();
+      } catch { /* an unavailable ancestry check cannot erase a recorded refusal */ }
+      staleHeadIsAncestor = ancestor;
+      if (!ancestor) delivery.pullRequestRefusal = { epoch: delivery.epoch, sha: acceptedHead,
+        number: found.number ?? delivery.target.pr ?? null, head: found.staleHead, reason: found.error };
+    }
+    const provesPublication = (found.retryHead || found.unavailable)
+      && (!found.retryHead || staleHeadIsAncestor)
+      ? await gitProvesPublication(found.retryHead ? found.staleHead : undefined, staleHeadIsAncestor)
+      : false;
+    if (provesPublication && refusalMatches() && found.retryHead && staleHeadIsAncestor
+      && delivery.pullRequestRefusal?.number === found.number) {
+      // A prior identity refusal no longer describes this PR after the fresh
+      // read proves its identity, and exact Git evidence proves its stale head
+      // is an ancestor of the published branch. Keep the refusal on unknown,
+      // foreign and divergent reads.
+      delete delivery.pullRequestRefusal;
+    }
+    if (provesPublication && (found.retryHead || found.unavailable) && !refusalMatches()) {
+      // No forge writes on this path. Retain the linked PR (or the validated
+      // discovery), and re-read the forge on the next settlement. The attempt
+      // keeps the advisory across storage/restart without changing its verdict.
+      const number = found.retryHead ? found.number! : delivery.target.pr ?? null;
+      if (refresh && number !== null) {
+        const summary = publicResult();
+        if (summary.length > 60 * 1024) return refused("body", "size", "size");
+        delivery.pendingPullRequestRefresh = { epoch: delivery.epoch, sha: acceptedHead, number,
+          summary };
+      }
+      attempt.error = found.retryHead
+        ? "publication verified by Git; the pull request head is an older ancestor; forge confirmation deferred"
+        : "publication verified by Git; the pull request service is unavailable; forge confirmation deferred";
+      return { ok: true, number, gitEvidence: true };
+    }
+    return found;
+  };
+  try {
+    const found = await findWithGitEvidence();
+    if (!found.ok) return { ok: false, error: found.error, ...(found.privacy ? { privacy: found.privacy } : {}) };
+    if (found.gitEvidence) {
+      if (found.number !== null) delivery.target.pr = found.number;
+      else if (!refresh && pipeline.cursor?.stageId && attempt.n > 0) {
+        const pending = delivery.pendingFirstPullRequest;
+        delivery.pendingFirstPullRequest = pending?.epoch === delivery.epoch && pending.sha === acceptedHead
+          ? pending
+          : { epoch: delivery.epoch, sha: acceptedHead, stageId: pipeline.cursor.stageId, attempt: attempt.n };
+      }
+      delete attempt.pullRequestInspection;
+      return { ok: true };
+    }
+    if (found.ok && delivery.pullRequestRefusal?.epoch === delivery.epoch
+      && delivery.pullRequestRefusal.sha === acceptedHead) {
+      delete delivery.pullRequestRefusal;
+    }
+    if (attempt.error?.startsWith("publication verified by Git;")) attempt.error = null;
     let number = found.number;
     if (number !== null && attempt.pullRequestInspection) attempt.error = attempt.pullRequestInspection.detail;
     if (number === null || refresh) {
       const producer = stagePullRequestProducer(pipeline, attempt);
-      const summary = producer.report?.summary?.trim() || producer.output?.trim() || "";
-      const update = `## Latest pipeline result\n\nHead: \`${acceptedHead}\`\n\n**Last fix was not re-reviewed: review budget spent.**\n\n`
-        + `Fix stage report (supersedes earlier head, checks and review-status statements):\n\n${summary}\n\n---\n\n`;
+      const rawSummary = producer.report?.summary?.trim() || producer.output?.trim() || "";
+      const rawResult = publicResult(producer);
+      const summary = refresh || producer.activatedBy?.edge === "fail" ? rawResult : rawSummary;
+      const result = publicationSummary(rawResult);
+      const update = `${RESULT_START}\n## Latest pipeline result\n\nHead: \`${acceptedHead}\`\n\n`
+        + (recheck ? result : `**Last fix was not re-reviewed: review budget spent.**\n\nFix result: ${result}`)
+        + `\n${RESULT_END}\n\n`;
       // Preserve the producer's description and attribution footer byte for
-      // byte. The exact prefix also recovers a lost edit acknowledgement.
-      const alreadyUpdated = refresh && number !== null && found.body?.startsWith(update);
+      // byte. Comparing the whole body also recovers a lost edit acknowledgement.
+      const legacyReports = pipeline.runs.flatMap(run => run.attempts).filter(isFinalBudgetFix)
+        .map(a => a.report?.summary?.trim() || a.output?.trim() || "");
+      if (pendingRefresh) legacyReports.push(pendingRefresh.summary);
+      // Older publication code could normalize the report before writing it.
+      const updatedBody = replaceLatestResult(found.body ?? "", update,
+        legacyReports.flatMap(report => [report, publicationSummary(report)]));
+      const alreadyUpdated = refresh && number !== null && found.body === updatedBody;
       const incomplete = refresh && number !== null && (typeof found.body !== "string" || typeof found.title !== "string");
-      const body = alreadyUpdated ? found.body! : refresh ? update + (found.body ?? "") : summary;
-      const title = found.title ?? pipeline.task.split("\n").map(line => line.trim()).find(Boolean)?.slice(0, 120) ?? "";
+      if (pendingRefresh && incomplete) return { ok: false, error: "the deferred pull request body refresh needs a complete PR body and title read" };
+      const body = alreadyUpdated ? found.body! : refresh ? updatedBody : publicationSummary(summary);
+      const title = found.title ?? publicationTitle(pipeline.task, summary, pipeline.prTitle);
+      const hints = [...publicationLanguageHints("title", title), ...publicationLanguageHints("body", body),
+        ...publicationLanguageHints("body", rawSummary), ...publicationLanguageHints("body", summary)];
+      if (hints.length) attempt.publicationLanguageHints = { at: attempt.publicationLanguageHints?.at ?? new Date().toISOString(),
+        hints: [...new Map(hints.map(hint => [`${hint.part}:${hint.line}`, hint])).values()] };
       for (const [part, value] of [["title", title], ["body", body]] as const) {
         const inspected = await inspectPullRequestText(part, value);
         if (!inspected.ok) return inspected;
@@ -279,14 +474,16 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
           delete attempt.pullRequestInspection;
           return { ok: true };
         }
-        if (incomplete || alreadyUpdated) {
+        if ((incomplete && !pendingRefresh) || alreadyUpdated) {
           delivery.target.pr = number!;
           if (incomplete) attempt.error = `pull request publication privacy gate inspection-error: existing PR inputs ${JSON.stringify({
             body: typeof found.body === "string" ? "available" : "missing", title: typeof found.title === "string" ? "available" : "missing" })}`;
           delete attempt.pullRequestInspection;
+          if (alreadyUpdated) delete delivery.pendingPullRequestRefresh;
           return { ok: true };
         }
         const creating = number === null;
+        if (!ownsPublication()) return { ok: false, error: "the delivery pull request refresh lost its publication owner" };
         const written = await exec("gh", creating
           ? ["pr", "create", "--repo", repository, "--title", title, "--body-file", bodyFile,
             "--base", pipeline.baseBranch, "--head", branch]
@@ -294,16 +491,30 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
         pipeline.worktreeDir, engineForgeWriteEnv(), { timeoutMs: 60_000 });
         // A timeout/status is no proof of whether a write landed. Read the
         // branch and, for a refresh, the body before accepting or retrying.
-        const recovered = await find();
+        const recovered = await findWithGitEvidence();
         if (!recovered.ok) return { ok: false, error: recovered.error };
+        if (recovered.gitEvidence && !refresh) {
+          if (recovered.number !== null) delivery.target.pr = recovered.number;
+          else if (pipeline.cursor?.stageId && attempt.n > 0) {
+            const pending = delivery.pendingFirstPullRequest;
+            delivery.pendingFirstPullRequest = pending?.epoch === delivery.epoch && pending.sha === acceptedHead
+              ? pending
+              : { epoch: delivery.epoch, sha: acceptedHead, stageId: pipeline.cursor.stageId, attempt: attempt.n };
+          }
+          delete attempt.pullRequestInspection;
+          return { ok: true };
+        }
         number = recovered.number;
         if (number === null) return { ok: false, error: written.code === 0
           ? "the forge answered without a linked delivery pull request" : "the delivery pull request could not be opened" };
         if (refresh && recovered.body !== body)
           return { ok: false, error: "the delivery pull request body refresh could not be verified; the stage cannot pass without it" };
+        if (refresh) delete delivery.pendingPullRequestRefresh;
       } finally { await fs.rm(directory, { recursive: true, force: true }); }
     }
     delivery.target.pr = number;
+    delete delivery.pendingFirstPullRequest;
+    if (refresh) delete delivery.pendingPullRequestRefresh;
     delete attempt.pullRequestInspection;
     return { ok: true };
   } catch { return { ok: false, error: refresh

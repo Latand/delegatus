@@ -36,6 +36,7 @@ import { reconnectEvidence } from "@/components/voiceCompanion/reconnectEvidence
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
+import { buildStageShapes } from "@/components/kanban/stageShapes.fixture";
 import { attachVoiceOutput, openVoiceMicrophone, type VoiceMicrophone } from "@/lib/audio/voiceDevices";
 import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
 import { RUNTIME_PLANE_ABSENT } from "@/lib/runtime/flags";
@@ -144,6 +145,12 @@ const RUNNING_PATH = `/state/agent-log-viewer/shared/accounts/claude/${ACCOUNT}/
 /* `?seatnoise=<i..v>` (docs/design/seat-panel-noise.md): the running conversation is an orchestrator seat, on a
    structured host, in the state the case names; the driver opens it in the focus view. */
 const SEAT_NOISE = new URLSearchParams(location.search).get("seatnoise");
+/* `?kanban=1&runtime=structured&seathost=<seconds|running>`: the BOARD's orchestrator seat (the kanban scene's own
+   "Orchestrator" conversation, which `seatnoise` never touches) is hosted on a structured host, so its card and sheet
+   resolve a host instead of reading «opening». A number is how long ago its turn ended (idle, the host alive);
+   `running` is a turn in flight. */
+const SEAT_HOST = new URLSearchParams(location.search).get("seathost");
+const SEAT_IDLE = new URLSearchParams(location.search).has("seatidle") ? Number(new URLSearchParams(location.search).get("seatidle")) : null;
 /* Composer context mode (docs/design/composer-context-mode.md, `?context-mode=1`): the running conversation is a
    Codex conversation on a structured host that can inject. `noinject` serves the same session without the
    capability. The driver flips the turn and publishes receipts through `evidence`. */
@@ -154,7 +161,7 @@ const CONTEXT_MODE = new URLSearchParams(location.search).get("context-mode");
 const ROTATION = new URLSearchParams(location.search).has("rotation");
 const FIRST_MESSAGE = new URLSearchParams(location.search).get("firstmessage");
 const RUNTIME_PERF = new URLSearchParams(location.search).get("runtime") === "perf";
-const STRUCTURED = RUNTIME_PERF || new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_NOISE !== null || CONTEXT_MODE !== null || FIRST_MESSAGE !== null;
+const STRUCTURED = RUNTIME_PERF || new URLSearchParams(location.search).get("runtime") === "structured" || SEAT_HOST !== null || SEAT_NOISE !== null || CONTEXT_MODE !== null || FIRST_MESSAGE !== null;
 const NEXT_ACCOUNT = new URLSearchParams(location.search).get("next") || "relief";
 
 /* With the deck asked for (#1795 below), the running conversation is the round
@@ -275,13 +282,19 @@ const files: FileEntry[] = [
        freshly launched agent, the way a real operator's open question does. */
     ...(new URLSearchParams(location.search).has("launch") ? {
       pendingQuestion: {
-        kind: "question", toolUseId: "toolu-launch-previous", transcriptPath: RUNNING_PATH, pid: 4_401, paneTarget: null, askedAt: iso(300),
+        kind: "question", toolUseId: "toolu-launch-previous", transcriptPath: RUNNING_PATH, pid: 4_401, askedAt: iso(300),
         questions: [{ question: "Which format?", header: "Format", multiSelect: false, options: [] }],
       },
     } : {}),
     ...(queueRecovery ? {
       activity: "idle", lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 20) * 1_000 },
       authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(20), terminalKind: "completed" },
+    } : {}),
+    /* `&seatidle=<seconds>` (with `seatnoise=ii&runtime=structured`): the seat's own turn ended that long ago and its host
+       stays alive, so the seat reads «waiting» with no decision form open. */
+    ...(SEAT_IDLE !== null ? {
+      activity: "idle", mtime: now - SEAT_IDLE, lastTurn: { startedAt: (now - SEAT_IDLE - 400) * 1_000, endedAt: (now - SEAT_IDLE) * 1_000 },
+      authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(SEAT_IDLE), terminalKind: "completed" },
     } : {}),
   }),
   ...Array.from({ length: 30 }, (_, i) => conversation(
@@ -736,7 +749,7 @@ function kanbanConversation(title: string, state: "working" | "settled" | "askin
     settled: { mtime: now - ago, lastAgentWorkAt: (now - ago) * 1_000 },
     asking: {
       activity: "live", proc: "running", pid: 5_000 + kanbanSeq, mtime: now - ago, lastAgentWorkAt: (now - ago) * 1_000,
-      pendingQuestion: { kind: "question", toolUseId: `toolu-kanban-${kanbanSeq}`, transcriptPath: path, pid: 5_000 + kanbanSeq, paneTarget: null, askedAt: iso(ago),
+      pendingQuestion: { kind: "question", toolUseId: `toolu-kanban-${kanbanSeq}`, transcriptPath: path, pid: 5_000 + kanbanSeq, askedAt: iso(ago),
         questions: [{ question: "Which unit file stays, the user unit or the system one?", header: "Unit", multiSelect: false, options: [] }] },
     },
     stalled: { activity: "stalled", activityReason: "jsonl_turn_stalled", proc: "running", pid: 5_000 + kanbanSeq, mtime: now - ago, engine: "codex", model: "gpt-6-astra", lastTurn: { startedAt: (now - ago - 600) * 1_000, endedAt: null }, lastAgentWorkAt: (now - ago) * 1_000 },
@@ -799,6 +812,29 @@ if (KANBAN && MANY_CARDS > 0) {
       { id: "implement", state: "passed", ago: 1_800 }, { id: "review", state: "running", ago: 240 + index, role: "reviewer" }, { id: "verify" },
     ]));
     kanbanTasks.push(kanbanTask(id, "assigned", title, { assignments: [kanbanAssign(worker)], updatedAt: iso(600 + index * 60) }));
+  }
+}
+/* The conversations of the stage-shape lanes, which the transcript route answers with a short feed: the stage's brief, then two replies (invented). */
+const shapePaths = new Set<string>();
+const shapeLang = localStorage.getItem("llv_lang") === "uk" ? "uk" : "en";
+const shapeFeed = (): string => `${[
+  JSON.stringify({ type: "user", uuid: "shape-u-1", timestamp: iso(1_200), sessionId: "conversation_shape", message: { role: "user", content: shapeLang === "uk" ? "Візьми зауваження з попереднього етапу й виправ їх." : "Pick up the findings of the stage before and fix them." } }),
+  JSON.stringify({ type: "assistant", uuid: "shape-a-1", timestamp: iso(1_140), sessionId: "conversation_shape", message: { role: "assistant", model: "claude-fable-5-1", content: [{ type: "text", text: shapeLang === "uk" ? "Починаю: спершу читаю зауваження й відкриваю потрібні файли." : "Starting on it: reading the findings and opening the files they name." }] } }),
+  JSON.stringify({ type: "assistant", uuid: "shape-a-2", timestamp: iso(900), sessionId: "conversation_shape", message: { role: "assistant", model: "claude-fable-5-1", content: [{ type: "text", text: shapeLang === "uk" ? "Перший пункт виправлено, переходжу до наступного." : "The first point is fixed; moving on to the next one." }] } }),
+].join("\n")}\n`;
+if (KANBAN && new URLSearchParams(location.search).has("stageshapes")) {
+  /* Redesign S2: the lanes of every graph shape the Stages window draws (`stageShapes.fixture.ts`), on a task each. */
+  const uk = localStorage.getItem("llv_lang") === "uk";
+  for (const entry of buildStageShapes({
+    project: PROJECT, iso, L: (en, ukText) => (uk ? ukText : en),
+    file: (_id, title, state) => {
+      const path = kanbanConversation(title, state, state === "working" ? 400 : state === "asking" ? 540 : 3_600);
+      shapePaths.add(path);
+      return { path, conversationId: idOf(path) };
+    },
+  })) {
+    kanbanPipelines.push(entry.pipeline);
+    kanbanTasks.push(kanbanTask(`t-shape-${entry.slug}`, "assigned", entry.pipeline.task));
   }
 }
 if (KANBAN) {
@@ -987,7 +1023,7 @@ if (KANBAN) {
       stuckDelivery: { since: iso(41 * 60), attempts: 2, state: "held" },
     });
     const cleared = reason("Pick the log retention for the stage box", {
-      pendingQuestion: { kind: "question", toolUseId: "toolu-needs-cleared", transcriptPath: "", pid: 5_900, paneTarget: null, askedAt: iso(1_500),
+      pendingQuestion: { kind: "question", toolUseId: "toolu-needs-cleared", transcriptPath: "", pid: 5_900, askedAt: iso(1_500),
         questions: [{ question: "Keep 14 days of logs or 30?", header: "Retention", multiSelect: false, options: [] }] },
       attentionDismissal: { at: iso(600), by: { kind: "manager", conversationId: "conversation_seat", role: "orchestrator" }, reasonId: "toolu-needs-cleared" },
     });
@@ -1230,6 +1266,16 @@ if (SEATLESS) {
   if (SEATLESS === "donly") kanbanTasks.push(kanbanTask("t-done-only", "done", "Add a --version flag", { updatedAt: iso(86_400) }));
 }
 const SEAT_PATH = kanbanFiles.find((entry) => entry.title === "Orchestrator")?.path ?? null;
+const SEAT_HOST_IDLE = SEAT_HOST === null || SEAT_HOST === "running" ? null : Number(SEAT_HOST);
+if (SEAT_PATH && SEAT_HOST !== null) {
+  Object.assign(kanbanFiles.find((entry) => entry.path === SEAT_PATH)!, SEAT_HOST_IDLE === null
+    ? { activity: "live", proc: "running", pid: 5_900, mtime: now - 20, lastTurn: { startedAt: (now - 400) * 1_000, endedAt: null } }
+    : {
+      activity: "idle", proc: "running", pid: 5_900, mtime: now - SEAT_HOST_IDLE,
+      lastTurn: { startedAt: (now - SEAT_HOST_IDLE - 400) * 1_000, endedAt: (now - SEAT_HOST_IDLE) * 1_000 },
+      authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(SEAT_HOST_IDLE), terminalKind: "completed" },
+    });
+}
 if (ROTATION && fm.confirmed) {
   fmTarget = conversation(FM_SEAT_PATH, "Successor orchestrator", { conversationId: FM_CONVERSATION_ID, activity: "live", proc: "running", pid: 4_402, mtime: now - 5 });
   kanbanFiles.push(fmTarget); fmApply();
@@ -1526,8 +1572,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       if (RELAY_SCENE === "paired" || RELAY_SCENE === "chats") return json({
         relays: [
           relayRow({ targets: [
-            target({ engine: "claude", model: "opus", effort: "low", concurrency: 2, answered_by: "install", ownerTier: true }),
-            target({ id: "bot-2", name: "Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays", engine: "codex", model: "gpt-6-astra", effort: "high", memberLimitPerHour: null }),
+            target({ engine: "claude", model: "opus", effort: "low", concurrency: 2, answered_by: "install", grantStatus: "active" }),
+            target({ id: "bot-2", name: "Sales assistant for the weekend shift in the Kyiv and Lviv stores, evenings and public holidays", engine: "codex", model: "gpt-6-astra", effort: "high", memberLimitPerHour: null, grantStatus: "suspended" }),
             target({ id: "bot-3", name: "New bot" }),
             target({ id: "bot-4", name: "Пошук по базі знань для нових учасників чату магазину", engine: "claude", model: "sonnet", concurrency: 3, memberLimitPerHour: 25, answered_by: "install" }),
             target({ id: "bot-5", name: "Moderation helper for the returns and warranty chat", engine: "claude", model: "opus", effort: "high", concurrency: 4, answered_by: "install" }),
@@ -1536,6 +1582,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           relayRow({ id: "relay-2", origin: "https://second-relay.example", name: "Second relay", description: "", paused: true, targets: [target({ engine: "claude", model: "sonnet" })] }),
         ],
         pending: [],
+        reviewDestination: { targetName: "Support bot", installationOwner: true },
         status: [
           { id: "relay-1", state: { state: "polling", lastOutcome: "answered", lastOutcomeAt: iso(240), lastProgress: { targetId: "bot-1", label: "Reading the last messages in the thread", at: iso(300) } }, running: { "bot-1": 1, "bot-2": 0, "bot-3": 0, "bot-4": 2, "bot-5": 4, "bot-6": 0 } },
           { id: "relay-2", state: { state: "paused", lastOutcome: "declined:no_capacity", lastOutcomeAt: iso(7_200), lastProgress: null }, running: { "bot-1": 0 } },
@@ -1547,6 +1594,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           relayRow({ id: "relay-2", origin: "https://second-relay.example", name: "Second relay", description: "", targets: [target({ engine: "claude", model: "sonnet", answered_by: "install" })] }),
         ],
         pending: [],
+        reviewDestination: { targetName: "Support bot", installationOwner: false },
         status: [
           { id: "relay-1", state: { state: "credential_rejected", lastOutcome: "failed:agent_error", lastOutcomeAt: iso(3_600), lastProgress: null }, running: { "bot-1": 0 } },
           { id: "relay-2", state: { state: "unreachable", lastOutcome: "answered", lastOutcomeAt: iso(1_800), lastProgress: null }, running: { "bot-1": 0 } },
@@ -1600,7 +1648,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname.startsWith("/api/tts")) return serverFetch(url.pathname + url.search, init);
   if (OVERLAY_LINKS && url.pathname.startsWith("/api/artifact")) return serverFetch(url.pathname + url.search, init);
   if (url.pathname === "/api/log/provenance" && AGENT_LABEL) return json((await deliveredAgentEvidence()).provenance);
-  if (STAGE_AGENT && ["/api/conversation-host", "/api/tmux", "/api/runtime/send"].includes(url.pathname) && method === "POST") {
+  if (STAGE_AGENT && ["/api/conversation-host", "/api/conversation-host", "/api/runtime/send"].includes(url.pathname) && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
     if (typeof body.text === "string") evidence.sends.push(body);
     return json({ ok: true, outcome: "resumed", receipt: { operationId: "stage-agent-send", idempotencyKey: body.idempotencyKey, conversationId: body.conversationId, kind: "send", status: "delivered", text: body.text, at: new Date().toISOString(), revision: 1 } });
@@ -1720,13 +1768,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({
       files: kanbanFiles, projectCatalog: Object.values(OVERVIEW_KEYS).map((project) => ({ project, conversations: kanbanFiles.filter((entry) => entry.project === project).length, smt: now - 20 })),
       projectDisplayNames: OVERVIEW_NAMES, flows: [], pipelines: kanbanPipelines,
-      workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
+      workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
     });
   }
   if (url.pathname === "/api/files" && KANBAN) {
     return json({
       files: ROTATION && evidence.rotationGap ? kanbanFiles.filter((file) => file !== fmTarget) : kanbanFiles, projectCatalog: [{ project: PROJECT, conversations: kanbanFiles.length, smt: now - 20 }], flows: [], pipelines: kanbanPipelines,
-      workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
+      workflows: [], tasks: kanbanTasks, workLinks: kanbanLinks, systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
       ...(FIRST_MESSAGE !== null ? { launchRoutes: { [`spawn:${FM_LAUNCH_ID}`]: FM_CONVERSATION_ID } } : {}),
     });
   }
@@ -1736,13 +1784,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     });
     return json({
       files: [...files, launched], projectCatalog: [{ project: PROJECT, conversations: files.length + 1, smt: now - 20 }], flows, pipelines,
-      workflows: [], tasks, systemHealth: { tmux: { status: "healthy" } },
+      workflows: [], tasks, systemHealth: {},
     });
   }
   if (url.pathname === "/api/files") {
     return json({
       files, projectCatalog: [{ project: PROJECT, conversations: files.length, smt: now - 20 }], flows, pipelines,
-      workflows: [], tasks, systemHealth: { tmux: { status: "healthy" }, ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
+      workflows: [], tasks, systemHealth: { ...(new URLSearchParams(location.search).has("state-disk-full") ? { storage: { incidents: [], writes: { state: "disk-full", freeBytes: 32 * 1024 * 1024, since: "2026-10-01T12:00:00Z" } } } : {}) },
       /* The durable route of the launch, as the server hands it, so the pane follows the conversation from `spawn:` to its transcript. */
       ...(FIRST_MESSAGE !== null ? { launchRoutes: { [`spawn:${FM_LAUNCH_ID}`]: FM_CONVERSATION_ID } } : {}),
     });
@@ -1755,14 +1803,19 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       schemaVersion: 1, snapshotSeq: (snapshotReads += 1), retentionFloorSeq: 0, structuredHostsEnabled: true, runtime: { hostEpoch: 1, health: "ready" }, filesRevision: 1,
       sessions: [{
         conversationId: SEAT_NOISE !== null ? files[0]!.conversationId : "conversation_running", sessionKey: { engine: SEAT_NOISE !== null || CONTEXT_MODE !== null ? files[0]!.engine : "claude", sessionId: "running-session" }, hostKind: MENU_STATE === "compact" ? "codex-app-server" : (SEAT_NOISE !== null || CONTEXT_MODE !== null) && files[0]!.engine === "codex" ? "codex-app-server" : "claude-broker", host: "hosted",
-        turn: CONTEXT_MODE !== null ? evidence.contextTurn : queueRecovery ? "idle" : "running", provenance: "structured", revision: 1, attentionIds: [],
+        turn: CONTEXT_MODE !== null ? evidence.contextTurn : queueRecovery || SEAT_IDLE !== null ? "idle" : "running", provenance: "structured", revision: 1, attentionIds: [],
         recentReceipts: CONTEXT_MODE !== null ? evidence.contextReceipts : [], accountId: ACCOUNT,
         parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: SEAT_NOISE !== null ? files[0]!.path : RUNNING_PATH,
         capabilities: CONTEXT_MODE !== null
           ? { steer: true, structuredAttention: true, ...(CONTEXT_MODE === "noinject" ? {} : { inject: true }) }
           : { steer: false, structuredAttention: true },
-        activeTurnId: CONTEXT_MODE !== null ? (evidence.contextTurn === "running" ? "turn-1" : null) : queueRecovery ? null : "turn-1", pendingReconfigure: null,
-      }],
+        activeTurnId: CONTEXT_MODE !== null ? (evidence.contextTurn === "running" ? "turn-1" : null) : queueRecovery || SEAT_IDLE !== null ? null : "turn-1", pendingReconfigure: null,
+      }, ...(SEAT_HOST !== null && SEAT_PATH ? [{
+        conversationId: idOf(SEAT_PATH), sessionKey: { engine: "claude", sessionId: "board-seat-session" }, hostKind: "claude-broker", host: "hosted",
+        turn: SEAT_HOST_IDLE === null ? "running" : "idle", provenance: "structured", revision: 1, attentionIds: [],
+        recentReceipts: [], accountId: ACCOUNT, parentConversationId: null, flowId: null, workflowId: null, cwd: "/repo", artifactPath: SEAT_PATH,
+        capabilities: { steer: false, structuredAttention: true }, activeTurnId: SEAT_HOST_IDLE === null ? "turn-1" : null, pendingReconfigure: null,
+      }] : [])],
       attentions: [], recentOperations: [], edges: [], flows: [], workflows: [], tasks: [], deployments: [],
     });
   }
@@ -1914,7 +1967,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const asked = JSON.parse(String(init?.body ?? "{}")) as { reqs?: Array<{ id: string; path: string; offset: number }> };
     const chunks: Record<string, { offset: number; start: number; size: number; data: string }> = {};
     (asked.reqs ?? []).forEach((request, index) => {
-      const body = request.path.startsWith(RELAY_CHAT_ROOT) ? RELAY_CHAT_FEED : FAST_TTS ? FAST_TTS_FEED : FIRST_MESSAGE !== null ? (fmTarget && request.path === (fmTarget as { path: string }).path && !request.path.startsWith("spawn:") ? fmTranscript() : "") : SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? (files[0]!.engine === "codex" ? SEAT_CODEX_FEED : voiceFeed(SEAT_FEED)) : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
+      const body = shapePaths.has(request.path) ? shapeFeed() : request.path.startsWith(RELAY_CHAT_ROOT) ? RELAY_CHAT_FEED : FAST_TTS ? FAST_TTS_FEED : FIRST_MESSAGE !== null ? (fmTarget && request.path === (fmTarget as { path: string }).path && !request.path.startsWith("spawn:") ? fmTranscript() : "") : SEAT_NOISE !== null ? (request.path === files[0]!.path && !files[0]!.spawn ? (files[0]!.engine === "codex" ? SEAT_CODEX_FEED : voiceFeed(SEAT_FEED)) : "") : request.path === RUNNING_PATH ? evidenceFeed : "";
       const from = Math.min(Math.max(request.offset, 0), body.length);
       chunks[String(index)] = { offset: body.length, start: from, size: body.length, data: body.slice(from) };
     });
@@ -1943,7 +1996,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (body?.mode === "select" && typeof body.id === "string") activeAccount = body.id;
     return json({ ok: true });
   }
-  if (url.pathname === "/api/tmux" && method === "POST") {
+  if (url.pathname === "/api/conversation-host" && method === "POST") {
     evidence.runtimeRequests.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
     return json(STRUCTURED ? { ok: true, structured: true } : { ok: true, outcome: "pending", operationId: "reconfigure-evidence" });
   }

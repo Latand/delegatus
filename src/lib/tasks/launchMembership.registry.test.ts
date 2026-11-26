@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -298,15 +299,24 @@ test("a dedicated task launch joins exactly its task at the reservation; the rep
   expect(loadTasks().length).toBe(1);
 });
 
-function queuedTmuxReceipt(registry: InstanceType<typeof AgentRegistry>, attempt: string, retryAt: string, taskIds?: string[]) {
+/** A runtime host that holds no operation and no session. */
+const QUIET_RUNTIME_CLIENT = {
+  operationStatus: async () => null,
+  snapshot: async () => ({ revision: 0, sessions: [] }),
+  effectBatch: async () => [],
+} as unknown as RuntimeHostClient;
+
+function queuedPinnedReceipt(registry: InstanceType<typeof AgentRegistry>, attempt: string, retryAt: string, taskIds?: string[]) {
   const begun = registry.beginSpawnRequest({
     engine: "claude",
     cwd: stateDir,
-    transport: "tmux",
+    transport: "structured",
     accountId: "account-a",
     accountPin: true,
     clientAttemptId: attempt,
-    requestDigest: "c".repeat(64),
+    /* One digest per attempt: two launches with the same digest are one
+       request repeated, and recovery retires the older one. */
+    requestDigest: createHash("sha256").update(attempt).digest("hex"),
     origin: { kind: "operator" },
     launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Queued work" }),
     launchDisplay: { prompt: "Continue the queued work", images: 0, echo: "Continue the queued work" },
@@ -324,6 +334,10 @@ function queuedTmuxReceipt(registry: InstanceType<typeof AgentRegistry>, attempt
     parentArtifactPath: null,
     pipelineSourceConversationId: null,
   }, `Pinned account quota is exhausted — queued until ${retryAt}`);
+  /* The launching process is gone by the time recovery runs: its claim on the
+     launch is released, as a restart leaves it. */
+  const owner = registry.spawnReceipt(begun.receipt.launchId)?.admissionOwner;
+  if (owner) registry.releaseSpawnActuation(begun.receipt.launchId, owner);
   return begun.receipt;
 }
 
@@ -333,20 +347,20 @@ test("a queued pinned launch recovered for its first execution keeps the members
   saveTasks([task("queued-target", "Target of a queued launch")]);
   const registry = registryAt("queued");
   const retryAt = new Date(Date.now() - 1_000).toISOString();
-  const kept = queuedTmuxReceipt(registry, "queued_kept_attempt", retryAt, ["queued-target"]);
-  const orphaned = queuedTmuxReceipt(registry, "queued_orphaned_attempt", retryAt, ["queued-target"]);
+  const kept = queuedPinnedReceipt(registry, "queued_kept_attempt", retryAt, ["queued-target"]);
+  const orphaned = queuedPinnedReceipt(registry, "queued_orphaned_attempt", retryAt, ["queued-target"]);
   expect(holders(kept.conversationId)).toEqual(["queued-target"]);
   /* The second launch loses its membership row while it waits in the queue
      (its target deleted, or its write lost); the first keeps its row. */
   saveTasks(loadTasks().map((candidate) => ({ ...candidate, assignments: candidate.assignments.filter((assignment) => assignment.conversationId !== orphaned.conversationId) })));
   const spawned: string[] = [];
   const restarted = registryAt("queued");
-  const tick = await terminalizeStaleStructuredSpawns(restarted, null, {
+  const tick = await terminalizeStaleStructuredSpawns(restarted, QUIET_RUNTIME_CLIENT, {
     now: () => Date.now(),
     resolveSpawnAccount: () => account,
     resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
-    spawnTmuxAgent: async (_spec, _prompt, receipt) => {
-      spawned.push(receipt?.launchId ?? "unknown");
+    spawnStructuredConversation: async ({ receipt }) => {
+      spawned.push(receipt.launchId);
       throw new Error("stop at the actuation seam");
     },
   });
@@ -362,7 +376,7 @@ test("a queued pinned launch recovered for its first execution keeps the members
 test("an unavailable task store keeps a recovered queued launch from executing: the receipt fails and no agent is started", async () => {
   saveTasks([]);
   const registry = registryAt("queued-unavailable");
-  const receipt = queuedTmuxReceipt(registry, "queued_unavailable_attempt", new Date(Date.now() - 1_000).toISOString());
+  const receipt = queuedPinnedReceipt(registry, "queued_unavailable_attempt", new Date(Date.now() - 1_000).toISOString());
   expect(loadTasks().length).toBe(1);
   /* The store becomes unreadable between reservation and recovery: a
      malformed row lands under a new collection revision (#1870). */
@@ -382,12 +396,12 @@ test("an unavailable task store keeps a recovered queued launch from executing: 
   try {
     const spawned: string[] = [];
     const restarted = registryAt("queued-unavailable");
-    const tick = await terminalizeStaleStructuredSpawns(restarted, null, {
+    const tick = await terminalizeStaleStructuredSpawns(restarted, QUIET_RUNTIME_CLIENT, {
       now: () => Date.now(),
       resolveSpawnAccount: () => account,
       resolvePinnedSpawnAdmission: async () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null }),
-      spawnTmuxAgent: async (_spec, _prompt, claimed) => {
-        spawned.push(claimed?.launchId ?? "unknown");
+      spawnStructuredConversation: async ({ receipt: claimed }) => {
+        spawned.push(claimed.launchId);
         throw new Error("an agent must not start outside every task");
       },
     });
@@ -699,18 +713,18 @@ test("a fresh failure from a retired seat writes no wake event for its successor
   const { queryLifecycleEvents } = await import("@/lib/lifecycle/journal");
   const { readSpawnNoticeTurn } = await import("@/lib/spawnNotice/store");
   const { ORCHESTRATOR_SEATS_SCHEMA_VERSION } = await import("@/lib/orchestrator/seats");
-  const seatsFile = path.join(stateDir, "orchestrator-seats.json");
+  const { clearStoredSeatRecord, writeStoredSeatRecord } = await import("@/lib/orchestrator/seatStoreFixture");
   const registry = registryAt("retired-launcher");
   const begun = registry.beginSpawnRequest({ engine: "codex", cwd: stateDir, explicitProject: project, transport: "structured",
     clientAttemptId: "retired-launcher", launcher: { conversationId: "conversation_retired_seat", notify: true },
     launchProfile: emptyLaunchProfile({ cwd: stateDir, title: "Retired launcher work" }) });
   if (begun.kind !== "created") throw new Error("expected launch");
-  fs.writeFileSync(seatsFile, JSON.stringify({ schemaVersion: ORCHESTRATOR_SEATS_SCHEMA_VERSION, seats: {},
-    revocations: [{ project, conversationId: "conversation_retired_seat", seatEpoch: 1, revokedAt: new Date().toISOString(), successorConversationId: "conversation_current_seat" }] }));
+  writeStoredSeatRecord({ schemaVersion: ORCHESTRATOR_SEATS_SCHEMA_VERSION, seats: {},
+    revocations: [{ project, conversationId: "conversation_retired_seat", seatEpoch: 1, revokedAt: new Date().toISOString(), successorConversationId: "conversation_current_seat" }] });
   try {
     registry.failStructuredSpawn(begun.receipt.launchId, "host vanished");
     await terminalizeStaleStructuredSpawns(registryAt("retired-launcher"), null);
     expect(queryLifecycleEvents({ conversationId: begun.receipt.conversationId, type: "spawn_failed" }).events).toEqual([]);
     expect(readSpawnNoticeTurn(begun.receipt.conversationId, `launch:${begun.receipt.launchId}`)).toBeNull();
-  } finally { fs.rmSync(seatsFile, { force: true }); }
+  } finally { clearStoredSeatRecord(); }
 });

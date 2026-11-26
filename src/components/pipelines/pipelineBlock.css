@@ -169,6 +169,8 @@
 .pblock .stage-lesson .rule { min-width: 0; color: var(--color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pblock p.stage-lesson[data-stage-lesson="none"] { padding: 0 8px; border-left-color: var(--color-border); background: none; color: var(--color-muted); cursor: default; }
 .pblock .graph-edit { margin: 0; font-size: var(--text-caption); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A controller edit states its cause, which must stay readable: that line wraps. */
+.pblock .graph-edit[data-graph-edit-cause] { white-space: normal; overflow-wrap: anywhere; }
 .pblock .review-heads { margin: 2px 0 0; font-size: var(--text-label); font-weight: 600; color: var(--color-warning); overflow-wrap: anywhere; }
 
 /* The answer in place: what stopped the lane, and the two ways on. */
@@ -453,6 +455,7 @@
   display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; margin-top: 2px;
   border-top: 1px solid var(--border-default); text-align: left; font-size: var(--text-ui); font-weight: 600; color: var(--color-accent);
 }
+.pblock a.pb-open-conv { text-decoration: none; }
 .pblock .pb-open-conv > span { flex: 1 1 auto; min-width: 0; }
 .pblock .pb-open-conv > svg { width: 18px; height: 18px; flex: none; color: var(--color-muted); }
 .pblock .pb-open-conv:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }

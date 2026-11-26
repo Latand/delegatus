@@ -5,13 +5,15 @@ import { accountForSpawn, activeCodexAccountId, codexAccountListed, codexAccount
 import { activeClaudeAccountId, claudeAccountForSpawn, claudeAccountListed, claudeAccountsMutationLocked, claudeHomeOwningTranscript, claudeAccountEnvironment, CorruptClaudeAccountsError, createManagedClaudeAccount, listClaudeAccounts, readClaudeProviderRuntime, setActiveClaudeAccount, UnknownClaudeAccountError } from "./claude";
 import { claudeLoginSupervisor, LIVE_CLAUDE_LOGIN_PHASES } from "./claudeLogin";
 import { managedCodexRuntime } from "./codexRuntime";
+import { activeAntigravityAccountId, antigravityAccountContext, antigravityAccountForSpawn, antigravityAuthCheckedAt, antigravityHomeOwningSessionPath, listAntigravityAccounts } from "./antigravity";
+import { isAntigravitySessionWindowActive } from "@/lib/limits/antigravityQuota";
 import { activeCopilotAccountId, copilotAccountContext, copilotAccountForSpawn, copilotConfigCheckedAt, copilotHomeOwningSessionPath, copilotLoginCommand, copilotSignedInUser, createManagedCopilotAccount, listCopilotAccounts, setActiveCopilotAccount, UnknownCopilotAccountError } from "./copilot";
 import { copilotLoginSupervisor } from "./copilotLogin";
 import type { AccountContext, AccountEngineName, AccountManager, AccountSummary, CopilotAccountSummary, ProjectSpawnRequest, ProjectSpawnResolution } from "./contracts";
 import { unavailableLimits } from "./contracts";
 import { afterAccountMutationAdmission, accountProbeSnapshot, accountProbeIdentity, AccountAdmissionChangedError, isAccountAdmissionRetryable, withAccountMutationLockAsync } from "./accountMutation";
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
-import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedAccountIdsForProject, fallbackAccountIdsForProject, projectAccountRefusalDetail, type AccountProjectBinding } from "./projectBindings";
+import { AccountProjectBindingsUnreadableError, accountProjectBindings, allowedAccountIdsForProject, fallbackAccountIdsForProject, projectAccountRefusalDetail, hiddenAccountsSelectionRefusal, type AccountProjectBinding } from "./projectBindings";
 import { selectProjectAccount } from "./projectSelection";
 import { accountCreditGuardBlock } from "./creditPolicy";
 import { turboCreditExemptFor } from "./turboCreditExemption";
@@ -19,6 +21,31 @@ import { refreshStaleExhaustion, type LiveLimitsDeps } from "./liveLimits";
 import { ClaudeCredentialUnavailableError, selectHealthyClaudeAccount } from "./spawnHealth";
 import { classifySpawnAccountAdmission, type SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
 import { readProviderMessageHealth } from "./claudeProviderHealth";
+import { gatingWindows } from "./migration/quotaPolicy";
+import type { AccountSelectionSnapshot, DurableQuotaObservation } from "./migration/contracts";
+import { accountQuotaVerdict } from "./headlessSelection";
+
+function claudeSelectionSnapshot(observations: DurableQuotaObservation[], accountId: string, model: string | null | undefined, now: number): AccountSelectionSnapshot {
+  const observation = observations.find(item => item.accountId === accountId);
+  const windows = gatingWindows("claude", observation?.limits ?? null, model).map(({ window, value }) => ({
+    name: window === "session" || window === "weekly" ? window : "tier" as const,
+    usedPercent: value?.usedPercent ?? null,
+    resetsAt: value?.resetsAt ?? null,
+  })).slice(0, 3);
+  const verdict = accountQuotaVerdict(observations, accountId, now, model);
+  return {
+    model: model ?? null,
+    selectedAccountId: accountId,
+    selectedAt: new Date(now).toISOString(),
+    reason: verdict.capacity === "available" ? "headroom" : "unknown-capacity",
+    thresholdPercent: 100,
+    observationAt: observation?.observedAt ?? null,
+    authCheckedAt: observation?.authCheckedAt ?? null,
+    observationFresh: !!observation && now >= Date.parse(observation.observedAt) && now - Date.parse(observation.observedAt) <= 300_000,
+    authFresh: !!observation && now >= Date.parse(observation.authCheckedAt) && now - Date.parse(observation.authCheckedAt) <= 300_000,
+    windows,
+  };
+}
 
 /** The engine's routed account while it is still listed. Routing left on an
     account the operator removed names nothing, so every launch, resume and
@@ -98,6 +125,9 @@ export async function resolveHealthySpawnAccount(
   model?: string | null,
   serviceTier?: { id: string; model: string; required: boolean },
 ): Promise<HealthySpawnAccountResolution> {
+  if (engine === "antigravity") {
+    return antigravityAccountForSpawn(requested ?? null);
+  }
   if (engine === "copilot") {
     const selected = selectProjectAccount({
       project: null,
@@ -304,15 +334,18 @@ export async function resolveHealthySpawnAccount(
 export class ProjectAccountRefusedError extends Error {
   constructor(
     readonly resolution: Exclude<ProjectSpawnResolution, { kind: "available" }>,
-    engine: "claude" | "codex",
+    readonly engine: "claude" | "codex" | "antigravity",
     project: string | null,
     /** What the seam behind the rule said, when the rule reported a pool the
         selection survived and something further in refused it anyway. Kept in
         the message so the operator learns which account to repair. */
     detail?: string,
+    /** The caller may not see which accounts exist: the message names none of
+        them and carries no limit window. The resolution still drives retries. */
+    concealed = false,
   ) {
-    const refusal = projectAccountRefusalDetail(resolution, engine, project ?? "");
-    super(detail ? `${refusal}: ${detail}` : refusal);
+    const refusal = concealed ? hiddenAccountsSelectionRefusal(engine, project ?? "") : projectAccountRefusalDetail(resolution, engine, project ?? "");
+    super(detail && !concealed ? `${refusal}: ${detail}` : refusal);
     this.name = "ProjectAccountRefusedError";
   }
 }
@@ -344,6 +377,9 @@ export function resolveProjectSpawnAccount(
 ): AccountContext {
   const resolution = accountManager.resolveProjectSpawn(engine, { project, preferredId: preferredAccountId ?? null, model });
   if (resolution.kind !== "available") {
+    if (engine === "antigravity") throw new Error(resolution.kind === "exhausted"
+      ? "Antigravity account has exhausted its 5-hour quota"
+      : "no Antigravity CLI account is available");
     if (engine === "copilot") throw new Error(resolution.kind === "exhausted"
       ? "all signed-in Copilot accounts have exhausted their monthly quota"
       : "no signed-in Copilot account is available");
@@ -491,8 +527,46 @@ function copilotSummary(id: string): CopilotAccountSummary {
   };
 }
 
+function antigravitySummary(id: string): AccountSummary {
+  const account = listAntigravityAccounts().find((item) => item.id === id);
+  if (!account) throw new Error(`unknown antigravity account: ${id}`);
+  const observation = agentRegistry().quotaObservations("antigravity").find((row) => row.accountId === id);
+  const observedMs = observation ? Date.parse(observation.observedAt) : Number.NaN;
+  const nowSec = Math.floor(Date.now() / 1000);
+  const session = observation?.limits?.session ?? null;
+  const activeLimit = Boolean(
+    observation?.limits
+    && isAntigravitySessionWindowActive(session, nowSec),
+  );
+  const fresh = observation?.authenticated === true
+    && Number.isFinite(observedMs)
+    && Date.now() >= observedMs
+    && Date.now() - observedMs <= 5 * 60_000;
+  return {
+    id: account.id,
+    label: account.label,
+    kind: account.kind,
+    active: activeAntigravityAccountId() === id,
+    auth: {
+      state: account.auth === "signed_in" ? "authenticated" : account.auth === "signed_out" ? "signed_out" : "unknown",
+      method: "google",
+      email: null,
+      plan: account.tierName,
+      checkedAt: antigravityAuthCheckedAt(),
+    },
+    limits: activeLimit && observation?.limits ? {
+      state: fresh ? "fresh" : "stale",
+      session: observation.limits.session,
+      weekly: observation.limits.weekly,
+      checkedAt: observation.observedAt,
+    } : unavailableLimits(),
+    login: null,
+  };
+}
+
 function summary(engine: AccountEngineName, id: string): AccountSummary {
   if (engine === "copilot") return copilotSummary(id);
+  if (engine === "antigravity") return antigravitySummary(id);
   const account = (engine === "claude" ? listClaudeAccounts() : listCodexAccounts()).find((item) => item.id === id);
   if (!account) throw new Error(`unknown ${engine} account: ${id}`);
   if (engine === "claude" && "provider" in account && account.provider) {
@@ -508,7 +582,7 @@ function summary(engine: AccountEngineName, id: string): AccountSummary {
 }
 
 export class AccountAuthenticationRequiredError extends Error {
-  constructor(readonly engine: "claude" | "codex", readonly accountId: string) {
+  constructor(readonly engine: "claude" | "codex" | "antigravity", readonly accountId: string) {
     super(`${engine} account requires authentication`);
     this.name = "AccountAuthenticationRequiredError";
   }
@@ -569,6 +643,9 @@ export async function selectAccount(engine: AccountEngineName, id: string, routi
     setActiveCopilotAccount(id);
     return copilotSummary(id);
   }
+  if (engine === "antigravity") {
+    return antigravitySummary(id);
+  }
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const snapshot = await accountProbeSnapshot(() => {
       const account = (engine === "claude" ? listClaudeAccounts() : listCodexAccounts()).find(item => item.id === id);
@@ -596,10 +673,12 @@ export const accountManager: AccountManager = {
       claude: { active: activeClaudeAccountId(), accounts: listClaudeAccounts().map((item) => summary("claude", item.id)) },
       codex: { active: activeCodexAccountId(), accounts: listCodexAccounts().map((item) => summary("codex", item.id)) },
       copilot: { active: activeCopilotAccountId() ?? "", accounts: listCopilotAccounts().map((item) => copilotSummary(item.id)) },
+      antigravity: { active: activeAntigravityAccountId(), accounts: listAntigravityAccounts().map((item) => antigravitySummary(item.id)) },
     };
   },
   async add(engine, label) {
     if (engine === "copilot") return copilotSummary(createManagedCopilotAccount(label).id);
+    if (engine === "antigravity") throw new Error("Antigravity CLI uses the host machine's signed-in Google account; multi-account switching is not yet supported");
     return await afterAccountMutationAdmission(() => {
       const item = engine === "claude" ? createManagedClaudeAccount(label) : createManagedCodexAccount(label);
       return summary(engine, item.id);
@@ -617,9 +696,17 @@ export const accountManager: AccountManager = {
   },
   resolveSpawn(engine, requested) {
     if (engine === "copilot") return copilotAccountForSpawn(requested ?? null);
+    if (engine === "antigravity") return antigravityAccountForSpawn(requested ?? null);
     return contextForSpawn(engine, requested ?? routedAccountId(engine) ?? undefined);
   },
   resolveHeadlessSpawn(engine, requested, excludedIds, project, model, unavailableIds) {
+    if (engine === "antigravity") {
+      try {
+        return { kind: "available", account: antigravityAccountForSpawn(requested ?? null) };
+      } catch {
+        return { kind: "unavailable" };
+      }
+    }
     if (engine === "copilot") {
       const selected = selectProjectAccount({
         project: null,
@@ -636,11 +723,12 @@ export const accountManager: AccountManager = {
       if (selected.kind === "available") return { kind: "available", account: copilotAccountForSpawn(selected.accountId) };
       return selected.kind === "exhausted" ? { kind: "exhausted", resetsAt: selected.resetsAt } : { kind: "unavailable" };
     }
+    const observations = agentRegistry().quotaObservations(engine);
     const selected = selectProjectAccount({
       project,
       engine,
       accounts: engine === "claude" ? listClaudeAccounts() : listCodexAccounts(),
-      observations: agentRegistry().quotaObservations(engine),
+      observations,
       bindings: accountProjectBindings(),
       /* Headless selection has no pin: `requested` has always been a
          preference here, and it stays one — the fence is the candidate set. */
@@ -665,6 +753,13 @@ export const accountManager: AccountManager = {
      else, and when all of them are out of capacity that is reported, never
      resolved by widening the set. */
   resolveProjectSpawn(engine, request) {
+    if (engine === "antigravity") {
+      try {
+        return { kind: "available", account: antigravityAccountForSpawn(request.requestedId ?? request.preferredId ?? null) };
+      } catch {
+        return { kind: "unavailable", allowedAccountIds: [] };
+      }
+    }
     if (engine === "copilot") {
       const selected = selectProjectAccount({
         project: null,
@@ -684,11 +779,13 @@ export const accountManager: AccountManager = {
       try { return { kind: "available", account: copilotAccountForSpawn(selected.accountId) }; }
       catch { return { kind: "unavailable", allowedAccountIds: [] }; }
     }
+    const observations = agentRegistry().quotaObservations(engine);
+    const selectionNow = Date.now();
     const selected = selectProjectAccount({
       project: request.project,
       engine,
       accounts: engine === "claude" ? listClaudeAccounts() : listCodexAccounts(),
-      observations: agentRegistry().quotaObservations(engine),
+      observations,
       bindings: accountProjectBindings(),
       requestedId: request.requestedId,
       requireCapacity: request.requireCapacity,
@@ -698,11 +795,22 @@ export const accountManager: AccountManager = {
       preferredId: listedAccountId(engine, request.preferredId) ?? routedAccountId(engine),
       excludedIds: request.excludedIds ?? [],
       unavailableIds: request.unavailableIds ?? [],
+      now: selectionNow,
     });
     if (selected.kind !== "available") return selected;
-    return { kind: "available", account: contextForSpawn(engine, selected.accountId ?? undefined, request.project) };
+    return { kind: "available", account: contextForSpawn(engine, selected.accountId ?? undefined, request.project),
+      ...(engine === "claude" && selected.accountId ? { accountSelection: claudeSelectionSnapshot(observations, selected.accountId, request.model, selectionNow) } : {}) };
   },
   resolveTranscriptOwner(engine, transcript) {
+    if (engine === "antigravity") {
+      const recorded = agentRegistry().transcriptAccountId("antigravity", transcript);
+      const accounts = listAntigravityAccounts();
+      const byRecord = recorded ? accounts.find((candidate) => candidate.id === recorded) : undefined;
+      if (byRecord) return antigravityAccountContext(byRecord);
+      const home = antigravityHomeOwningSessionPath(transcript);
+      const byHome = home ? accounts.find((candidate) => candidate.home === home) : undefined;
+      return byHome ? antigravityAccountContext(byHome) : null;
+    }
     if (engine === "copilot") {
       const recorded = agentRegistry().transcriptAccountId("copilot", transcript);
       const accounts = listCopilotAccounts();

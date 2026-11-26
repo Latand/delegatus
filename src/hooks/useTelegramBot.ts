@@ -118,6 +118,14 @@ export function useTelegramBot(enabled: boolean): TelegramBotState {
     pendingRef.current.delete(chatId);
     setPending(new Set(pendingRef.current));
   }, [drawn]);
+  /* The sender of a chat is a local store write too. */
+  const assignBot = useCallback(async (chatId: string, bot: string | null) => {
+    await drawn(
+      (held) => ({ ...held, chats: held.chats.map((chat) => chat.chatId === chatId ? { ...chat, assignedBot: bot } : chat) }),
+      (current, before) => ({ ...current, chats: current.chats.map((chat) => chat.chatId === chatId ? { ...chat, assignedBot: before.chats.find((held) => held.chatId === chatId)?.assignedBot ?? null } : chat) }),
+      { action: "chat_bot", chatId, bot },
+    );
+  }, [drawn]);
   const setDocumentRoots = useCallback(async (roots: string[]) => {
     if (!roots.length) return (await act({ action: "documents", roots })) !== null;
     return (await drawn((held) => ({ ...held, documents: { roots, custom: true } }), (current, before) => ({ ...current, documents: before.documents }), { action: "documents", roots })) !== null;
@@ -147,7 +155,7 @@ export function useTelegramBot(enabled: boolean): TelegramBotState {
     setDocumentRoots,
     addBot: async (token) => { await act({ action: "add_bot", token }); },
     removeBot: async (bot) => { await act({ action: "remove_bot", bot }); },
-    assignBot: async (chatId, bot) => { await act({ action: "chat_bot", chatId, bot }); },
+    assignBot,
     remove: async () => { await act({ action: "remove" }); },
   };
 }

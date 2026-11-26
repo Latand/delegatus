@@ -53,7 +53,7 @@ export interface CodexAppServerOptions {
   generateProtocolSchemas?: CodexSchemaGenerator;
   /** Thread migration and voice declare the methods and fields they need.
       Status/sign-in clients stay on the stable surface. */
-  protocolProfile?: "account" | "thread-control" | "voice";
+  protocolProfile?: "account" | "quota" | "thread-control" | "voice";
 }
 
 export interface DeviceCodeChallenge {
@@ -299,8 +299,12 @@ export class CodexAppServerClient {
   }
 
   static async start(options: CodexAppServerOptions): Promise<CodexAppServerClient> {
-    const { withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
-    return withCodexCliLaunch(options.launchBinary ?? codexAccountBinary(), () => this.startWithCliGuard(options));
+    const { withCodexCliLaunch, withCodexQuotaLaunch } = await import("@/lib/codexUpdate/installation");
+    const binary = options.launchBinary ?? codexAccountBinary();
+    const start = () => this.startWithCliGuard(options);
+    return options.protocolProfile === "quota"
+      ? withCodexQuotaLaunch(binary, options.home, start)
+      : withCodexCliLaunch(binary, start);
   }
 
   private static async startWithCliGuard(options: CodexAppServerOptions): Promise<CodexAppServerClient> {
@@ -420,8 +424,10 @@ export class CodexAppServerClient {
     return response.outcome as AppServerResetCreditOutcome;
   }
 
-  async forkThread(threadId: string): Promise<AppServerThreadRef> {
-    const response = await this.request("thread/fork", { threadId });
+  async forkThread(threadId: string, options: { omitSkillsInstructions?: boolean } = {}): Promise<AppServerThreadRef> {
+    const response = await this.request("thread/fork", { threadId,
+      ...(options.omitSkillsInstructions ? { config: { skills: { include_instructions: false } } } : {}),
+    });
     const thread = isRecord(response) && isRecord(response.thread) ? response.thread : response;
     if (!isRecord(thread)) throw protocolError("thread/fork response is malformed");
     return {
@@ -431,6 +437,7 @@ export class CodexAppServerClient {
   }
 
   async resumeThread(threadId: string, options: {
+    omitSkillsInstructions?: boolean;
     path?: string | null;
     cwd?: string;
     model?: string | null;
@@ -447,7 +454,7 @@ export class CodexAppServerClient {
       includeLayers: false,
     });
     const config = {
-      ...headlessCodexThreadConfig(effectiveConfig),
+      ...headlessCodexThreadConfig(effectiveConfig, false, undefined, undefined, "stdio", [], false, options.omitSkillsInstructions === true),
       ...(options.effort ? { model_reasoning_effort: options.effort } : {}),
     };
     const resumeParams = {

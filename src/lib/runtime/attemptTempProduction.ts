@@ -1,77 +1,317 @@
+import { attemptTempRemaining, sweepMonotonicNow } from "./attemptTempDeadline";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { statePath } from "@/lib/configDir";
-import { AttemptTempStore, sweepAttemptTemps, type AttemptTempOwner, type AttemptTempState, type AttemptTempSweepOptions } from "./attemptTempRetention";
-import { pipelineRecordReader } from "@/lib/pipelines/store";
+import { AttemptTempStore, sweepAttemptTemps, type AttemptTempAuthority, type AttemptTempOwner, type AttemptTempState, type AttemptTempSweepOptions } from "./attemptTempRetention";
+import { pipelineChangeSource, pipelineRecordReader } from "@/lib/pipelines/store";
+import { laneFinish, FINISHED_LANE_RETENTION_MS } from "@/lib/pipelines/laneFinish";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
-import { tempSweepMode } from "@/lib/tempSweep";
+import { attemptTempJournalPath, tempSweepMode } from "@/lib/tempSweep";
+import { attemptTempFailureDetail } from "./attemptTempDiagnostics";
+import { runUnregisteredScratchPass, unregisteredScratchSummary, type UnregisteredScratchReport } from "./unregisteredScratch";
 import { writeJsonDurably } from "@/lib/state/durableJson";
-import path from "node:path";
 import fs from "node:fs";
-import { repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
+import { createHash } from "node:crypto";
+import { RepositoryLinkInventory, type RetainedCheckoutReads } from "./attemptTempFilesystem";
+import { attributeCopyBeforeRootRetirement, sweepEvidenceCopies } from "./attemptEvidenceCopies";
+import { measureAttemptAllocation } from "./attemptTempFilesystem";
+import { agentRegistry } from "@/lib/agent/registry";
+import { finishedAgent } from "./temporaryDataProduction";
+import { stateDatabaseBusy } from "@/lib/state/lockWait";
+import { ATTEMPT_SCRATCH_AUDIT_INTERVAL_MS, ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS, ATTEMPT_SCRATCH_RETENTION_MS,
+  attemptScratchAuditDue, attemptScratchExpiry } from "./attemptScratchPolicy";
 
-export async function attemptTempState(owner: AttemptTempOwner): Promise<AttemptTempState> {
-  if (!owner.pipelineId) return "orphan";
+/** The sweep helper serves every minute tick from one process. */
+const checkoutReads: RetainedCheckoutReads = new Map();
+const ALLOCATION_WINDOW_MS = 5_000;
+
+export async function attemptTempAuthority(owner: AttemptTempOwner, _inventory = new RepositoryLinkInventory(), now = Date.now,
+  retentionMs = FINISHED_LANE_RETENTION_MS, policy: "lane" | "attempt" | "scratch" = "lane"): Promise<AttemptTempAuthority> {
+  if (!owner.pipelineId) {
+    // A missing process snapshot cannot end a standalone host: reconnect and
+    // resume keep its durable launch alive. Pin the keyed facts through dispatch.
+    const registry = agentRegistry(), input = { launchId: owner.launchId };
+    const read = () => {
+      const receipt = registry.spawnReceipt(input.launchId);
+      return { receipt, entry: receipt?.key ? registry.hostEntry(receipt.key) : null, pipelines: [] };
+    };
+    const fingerprint = (facts: ReturnType<typeof read>) => createHash("sha256").update(JSON.stringify(facts)).digest("hex");
+    const facts = read(), revision = fingerprint(facts);
+    const ended = facts.receipt ? finishedAgent(facts) : null;
+    const expiresAt = ended === null ? null : ended + retentionMs;
+    const state = !facts.receipt ? "orphan" : ended === null ? "live"
+      : now() >= expiresAt! ? "expired" : "closed";
+    return { state, expiresAt, revision,
+      isCurrent: () => fingerprint(read()) === revision
+        && (state !== "expired" || now() >= expiresAt!) };
+  }
   const reader = pipelineRecordReader(owner.pipelineId), version = reader.version();
+  const observed = (state: AttemptTempState, expiresAt: number | null = null): AttemptTempAuthority => ({ state, expiresAt, revision: version,
+    isCurrent: () => reader.version() === version && (state !== "expired" || expiresAt !== null && now() >= expiresAt) });
   const pipeline = reader.read();
-  if (!pipeline) return "orphan";
-  if (pipeline.state === "closed" || pipeline.state === "completed") return "closed";
+  if (!pipeline) return observed("orphan");
   const matches = (attempt: PipelineStageAttempt) => attempt.launchId === owner.launchId
     || attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId);
   const run = pipeline.runs.find(run => run.attempts.some(matches));
   const attempt = run?.attempts.find(matches);
-  if (!attempt) return "unknown";
-  const stage = pipeline.stages.find(stage => stage.id === run!.stageId);
-  if (!path.basename(owner.directory).startsWith("llv-stage-config-")
-    && (attempt.definition?.outputs?.length || stage?.outputs?.length || stage?.effectiveRole.roleId === "visual-critic")) return "live";
-  if (attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId)
-    || ["passed", "failed", "skipped", "needs_decision"].includes(attempt.state)) {
-    if (pipeline.worktreeDir && fs.existsSync(pipeline.worktreeDir)) {
-      const referenced = await repositoryReferencesAttemptTemp(pipeline.worktreeDir, owner.directory);
-      if (reader.version() !== version) return "unknown";
-      if (referenced) return "live";
-    }
-    return "settled";
+  if (policy === "attempt" && !attempt) return observed("unknown");
+  if (attempt?.launchId === owner.launchId && attempt.state === "running") return observed("live");
+  if (policy === "scratch") {
+    const expiry = attemptScratchExpiry(pipeline, owner);
+    if (expiry !== null) return { ...observed(now() >= expiry ? "expired" : "closed", expiry),
+      ...(pipeline.state === "closed" || pipeline.state === "completed" ? {} : { checkout: pipeline.worktreeDir ?? pipeline.repoDir }) };
+    return observed(attempt || pipeline.state === "closed" || pipeline.state === "completed" ? "live" : "unknown");
   }
-  return "live";
+  if (pipeline.state === "closed" || pipeline.state === "completed") {
+    const finish = laneFinish(pipeline, retentionMs);
+    if (!finish.finished) return observed("live");
+    return observed(now() >= finish.expiresAt ? "expired" : "closed", finish.expiresAt);
+  }
+  if (!attempt) return observed("unknown");
+  return observed("live");
+}
+export async function attemptTempState(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory()): Promise<AttemptTempState> {
+  return (await attemptScratchAuthority(owner, inventory)).state;
+}
+/** The common authority above retains the evidence clock. Ordinary scratch
+ * and approved scratch lists use this separate, strict completion-age clock. */
+export function attemptScratchAuthority(owner: AttemptTempOwner, inventory = new RepositoryLinkInventory(), now = Date.now) {
+  return attemptTempAuthority(owner, inventory, now, ATTEMPT_SCRATCH_EXPIRY_OFFSET_MS, "scratch");
+}
+/** The sweep's state port. Every read that finds the lane finished also
+ * records when its retention ends, including for a root that a later
+ * observation holds, so the ledger can order expired roots across pages. */
+export function recordingAttemptTempState(store: AttemptTempStore,
+  authority: (owner: AttemptTempOwner, inventory: RepositoryLinkInventory) => Promise<AttemptTempAuthority> = attemptScratchAuthority) {
+  return async (owner: AttemptTempOwner, inventory = new RepositoryLinkInventory()): Promise<AttemptTempState> => {
+    const observed = await authority(owner, inventory);
+    const current = store.owner(owner.directory);
+    if (observed.isCurrent() && current?.pipelineId === owner.pipelineId && current.launchId === owner.launchId
+      && current.createdAt === owner.createdAt && !!current.retainUntilClose === !!owner.retainUntilClose) {
+      if (observed.state === "closed" || observed.state === "expired") store.noteRetentionEnd(owner.directory, observed);
+      else { store.retainRoot(owner.directory, null); store.rootEligible(owner.directory, false); }
+    }
+    return observed.state;
+  };
+}
+
+/** Metadata repair must not depend on a root's size, permissions or continued
+ * existence. A bounded page advances independently, including open lanes
+ * whose eventual finish will need a deadline. It grants no removal authority. */
+export async function backfillAttemptTempRetention(store: AttemptTempStore, options: {
+  authority?: (owner: AttemptTempOwner) => Promise<AttemptTempAuthority>;
+  remaining?: () => number;
+  limit?: number;
+  audit?: true;
+} = {}) {
+  store.upgradeScratchRetention();
+  let checked = 0, updated = 0, errors = 0, deferred = 0;
+  const page = store.retentionPage(options.limit);
+  for (const owner of page) {
+    if ((options.remaining?.() ?? 1) <= 0) break;
+    try {
+      if (options.audit || owner.released && owner.pipelineId) {
+        const observed = await (options.authority ?? attemptScratchAuthority)(owner);
+        // The owner or its ledger binding may have changed while awaiting a read.
+        const current = store.owner(owner.directory);
+        if (observed.isCurrent() && current?.identity === owner.identity && (options.audit || current.released)
+          && current.pipelineId === owner.pipelineId && current.launchId === owner.launchId
+          && current.createdAt === owner.createdAt && current.retainUntilClose === owner.retainUntilClose) {
+          if (observed.state === "closed" || observed.state === "expired") {
+            const before = store.retentionExpiry(owner.directory);
+            store.noteRetentionEnd(owner.directory, observed);
+            if (before !== store.retentionExpiry(owner.directory)) updated++;
+          } else { const before = store.retentionExpiry(owner.directory); store.retainRoot(owner.directory, null);
+            store.rootEligible(owner.directory, false); if (before !== null) updated++; }
+        }
+      }
+    } catch (error) {
+      if (stateDatabaseBusy(error) || error instanceof FileTransactionBusyError) deferred++;
+      else {
+        errors++;
+        try { store.rootFailure(owner.directory, `retention backfill: ${error instanceof Error ? error.message : String(error)}`.slice(0, 512)); }
+        catch (noteError) { if (!stateDatabaseBusy(noteError)) throw noteError; deferred++; }
+      }
+    }
+    try { store.checkpointRetention(owner.directory); }
+    catch (error) { if (!stateDatabaseBusy(error)) throw error; deferred++; break; }
+    checked++;
+  }
+  if (options.audit && !page.length) store.completeRetentionAudit(Date.now() + ATTEMPT_SCRATCH_AUDIT_INTERVAL_MS);
+  return { checked, updated, ...(errors ? { errors } : {}), ...(deferred ? { deferred } : {}) };
+}
+
+/** A committed terminal transition has the creation records it needs by lane
+ * id. The feed is durable, so a helper that dies can replay the same deadlines.
+ * The independent legacy audit covers missing or truncated change history. */
+export function scheduleAttemptTempChanges(store: AttemptTempStore, remaining: () => number) {
+  const source = pipelineChangeSource();
+  let cursor = store.schedulePosition();
+  const limit = 8;
+  let page = source.changesAfter(cursor.revision, cursor.rowKey, limit);
+  const historyGap = () => cursor.revision > page.revision || cursor.revision < page.changeFloor
+    || cursor.revision === page.changeFloor && cursor.rowKey !== "";
+  if (historyGap()) {
+    store.scheduleCheckpoint(page.changeFloor, "", true);
+    if (remaining() <= 0) return;
+    cursor = store.schedulePosition();
+    // Bounded pruning can leave physical rows below the advertised floor.
+    // Read again from that floor so their keys cannot rewind the checkpoint.
+    page = source.changesAfter(cursor.revision, cursor.rowKey, limit);
+    if (historyGap()) return;
+  }
+  const seen = new Set<string>();
+  for (const entry of page.entries) {
+    if (remaining() <= 0) return;
+    if (!seen.has(entry.key) && entry.valueJson) {
+      let pipeline: ReturnType<typeof source.parse> | undefined;
+      try { pipeline = source.parse(entry.valueJson); }
+      catch (error) { console.error("[attempt temp] terminal event left for audit", error instanceof Error ? error.message : String(error)); }
+      if (pipeline) store.schedulePipeline(pipeline);
+    }
+    seen.add(entry.key);
+    store.scheduleCheckpoint(entry.revision, entry.key);
+  }
+  if (page.entries.length < limit && (page.entries.length || cursor.revision !== page.revision || cursor.rowKey))
+    store.scheduleCheckpoint(page.revision, "");
 }
 function setting(raw: string | undefined, fallback: number) {
   const value = raw?.trim() ? Number(raw) : fallback;
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
-type TickCondition = { mode: "on" | "dry-run"; overCap: boolean; failing: boolean };
+type TickCondition = { mode: "on" | "dry-run"; overCap: boolean; failing: boolean; lowSpace?: boolean };
 const quiet = (mode: TickCondition["mode"]): TickCondition => ({ mode, overCap: false, failing: false });
-function recordedCondition(file: string, mode: TickCondition["mode"]): TickCondition {
+function recordedReport(file: string, mode: TickCondition["mode"]): { condition: TickCondition; retention?: unknown } {
   try {
-    const condition = JSON.parse(fs.readFileSync(file, "utf8"))?.condition;
-    if (condition && typeof condition.overCap === "boolean" && typeof condition.failing === "boolean") return condition;
+    const report = JSON.parse(fs.readFileSync(file, "utf8")), condition = report?.condition;
+    return { condition: condition && typeof condition.overCap === "boolean" && typeof condition.failing === "boolean"
+      ? condition : quiet(mode), retention: report?.retention };
   } catch { /* A missing or unreadable report counts as the quiet condition. */ }
-  return quiet(mode);
+  return { condition: quiet(mode) };
 }
 
-/** A minute tick reports only when it removed, held over the cap or failed,
- * or when its condition changed from the recorded report. The recorded
- * condition is on disk, so a restarted helper does not repeat itself. */
-export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "scan">, env: NodeJS.ProcessEnv = process.env) {
+/** Every minute tick writes fresh cleanup counters; console output remains
+ * limited to removals, holds, failures and changed forecasts. */
+export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "scan" | "references" | "availableBytes">, env: NodeJS.ProcessEnv = process.env) {
   const mode = tempSweepMode(env);
-  if (!mode) return null;
-  const store = new AttemptTempStore();
+  if (!mode || attemptTempRemaining() <= 0) return null;
+  const cpuStarted = process.cpuUsage();
+  let store: AttemptTempStore;
+  try { store = new AttemptTempStore(); }
+  catch (error) {
+    if (!stateDatabaseBusy(error)) throw error;
+    console.error("[attempt temp] deferred: ledger database is locked; retry next tick"); return null;
+  }
   try {
-    const report = await sweepAttemptTemps(store, {
-      state: attemptTempState, mode, scan: ports.scan,
-      maxRoots: (() => {
-        try { return JSON.parse(fs.readFileSync(statePath("disk-pressure-report.json"), "utf8")).episode ? 32 : undefined; }
-        catch { return undefined; }
-      })(),
+    let backfill: Awaited<ReturnType<typeof backfillAttemptTempRetention>> = { checked: 0, updated: 0 };
+    let cleanupChildCpuSeconds = 0;
+    let sourceAttributedBeforeRetirement = 0;
+    // Roots nothing owns are removed by age and liveness, ahead of the ledger
+    // page, so a ledger that is under its cap cannot leave them on the disk.
+    let unregistered: UnregisteredScratchReport | null = null;
+    try {
+      unregistered = await runUnregisteredScratchPass(store, { mode, scan: ports.scan, references: ports.references, availableBytes: ports.availableBytes,
+        checkoutReads, accountCpuSeconds: seconds => { if (Number.isFinite(seconds) && seconds > 0) cleanupChildCpuSeconds += seconds; } });
+    } catch (error) { console.error("[attempt temp] unregistered scratch pass failed", attemptTempFailureDetail(error)); }
+    const options: AttemptTempSweepOptions = {
+      runBudgetMs: attemptTempRemaining(40_000),
+      state: recordingAttemptTempState(store), authority: attemptScratchAuthority, evidenceAuthority: attemptTempAuthority,
+      requireExpired: true, scheduledOnly: true, mode, ...ports, checkoutReads,
+      accountCpuSeconds: seconds => { if (Number.isFinite(seconds) && seconds > 0) cleanupChildCpuSeconds += seconds; },
+      prepare: async rootRemaining => {
+        store.upgradeScratchRetention();
+        const end = sweepMonotonicNow() + Math.min(ALLOCATION_WINDOW_MS, rootRemaining());
+        const feedEnd = Math.min(end, sweepMonotonicNow() + 250);
+        scheduleAttemptTempChanges(store, () => feedEnd - sweepMonotonicNow());
+        if (attemptScratchAuditDue(store.schedulePosition().auditAfter, Date.now())) {
+          const auditEnd = Math.min(end, sweepMonotonicNow() + 350);
+          backfill = await backfillAttemptTempRetention(store, { audit: true, remaining: () => auditEnd - sweepMonotonicNow() });
+        }
+        const remaining = () => end - sweepMonotonicNow();
+        for (const owner of store.allocationDue(Date.now(), 4)) {
+          if (remaining() <= 0) break;
+          let bytes: number | null = null;
+          try {
+            const before = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
+            if (!before && !store.recoveredTrash(owner.directory)
+              && !fs.lstatSync(attemptTempJournalPath(owner.directory), { throwIfNoEntry: false })) bytes = 0;
+            if (before?.isDirectory() && `${before.dev}:${before.ino}` === owner.identity) {
+              const measured = await measureAttemptAllocation(owner.directory, { budgetMs: Math.max(1, remaining()) });
+              const after = fs.lstatSync(owner.directory, { throwIfNoEntry: false });
+              if (after?.isDirectory() && `${after.dev}:${after.ino}` === owner.identity)
+                bytes = measured.unreadable ? Math.max(owner.bytes, measured.bytes) : measured.bytes;
+            }
+          } catch { /* Keep the last allocation when the observation could not complete. */ }
+          // Advance even on ENOENT, a replaced inode or a refused read.
+          // Ownership and any quarantine remain available for normal replay.
+          store.recordAllocation(owner, bytes, Date.now());
+        }
+      },
+      beforeRootRetirement: (directory, identity) => {
+        sourceAttributedBeforeRetirement += attributeCopyBeforeRootRetirement(store, directory, identity);
+      },
       onRetired: (count, bytes) => console.log(`[attempt temp] retired ${count} directories, ${bytes} attributed bytes`),
       capBytes: setting(env.LLV_ATTEMPT_TEMP_CAP_BYTES, 100 * 1024 ** 3),
       maxAgeMs: setting(env.LLV_ATTEMPT_TEMP_MAX_AGE_DAYS, 1) * 86400000,
-    });
+      retentionMs: FINISHED_LANE_RETENTION_MS,
+    };
+    const roots = await sweepAttemptTemps(store, options);
+    const copies = await sweepEvidenceCopies(store, { ...options, authority: attemptTempAuthority }, { agentCopiesManagedSeparately: true });
+    copies.sourceAttributed += sourceAttributedBeforeRetirement;
+    const cpu = process.cpuUsage(cpuStarted);
+    const cleanup = store.cleanupMetrics(Date.now(), roots.reclaimedBytes, (cpu.user + cpu.system) / 1e6 + cleanupChildCpuSeconds);
+    const report = { ...roots, errors: roots.errors + (backfill.errors ?? 0) + (unregistered?.errors ?? 0), copies, backfill,
+      cleanup, unregistered,
+      retention: { ...store.retention(Date.now(), options.retentionMs), scratchPeriodDays: ATTEMPT_SCRATCH_RETENTION_MS / 86400000,
+        evidencePeriodDays: FINISHED_LANE_RETENTION_MS / 86400000 } };
     const file = statePath("attempt-temp-report.json");
-    const condition: TickCondition = { mode, overCap: report.overCapBytes > 0, failing: report.errors > 0 };
-    const changed = JSON.stringify(recordedCondition(file, mode)) !== JSON.stringify(condition);
-    if (report.removed || report.errors || report.overCapBytes || changed) {
-      writeJsonDurably(file, { at: new Date().toISOString(), condition, ...report });
-      console.log(`[attempt temp] ${mode === "dry-run" ? "would remove" : "removed"} ${report.removed} directories, ${report.removedBytes} bytes; ${report.held} held; ${report.errors} errors; ${report.overCapBytes} measured bytes over cap`);
+    const condition: TickCondition = { mode, overCap: report.overCapBytes > 0, ...(report.lowSpace ? { lowSpace: true } : {}),
+      failing: report.errors > 0 || copies.errors > 0 || report.spaceError !== null };
+    const previous = recordedReport(file, mode);
+    const changed = JSON.stringify(previous.condition) !== JSON.stringify(condition);
+    const forecastChanged = previous.retention !== undefined && JSON.stringify(previous.retention) !== JSON.stringify(report.retention);
+    const noteworthy = unregistered?.removed || unregistered?.finishedInterrupted || unregistered?.errors || unregistered?.trigger || unregistered?.deferred
+      || report.pass || report.adopted || report.operatorHeld || report.removed || copies.removed || copies.sourceAttributed || report.errors || copies.errors
+      || report.spaceError || report.lowSpace || report.deferred || report.overCapBytes || changed || forecastChanged
+      || report.retention.dueBytes || report.retention.upcomingBytes;
+    {
+      const gb = (bytes: number) => `${(bytes / 1e9).toFixed(2)} GB`;
+      const minutes = (ms: number) => `${(ms / 60000).toFixed(1)} min`;
+      const pass = report.pass, last = report.lastPass, full = report.lastFullPass;
+      const passText = (pass ? `Pressure pass at ${pass.position} of ${pass.total} roots${pass.ended === "complete" ? " (complete)" : pass.ended ? " (ended: pressure cleared)" : ""} `
+        + `after ${pass.ticks} ticks and ${minutes(pass.elapsedMs)}; ${mode === "dry-run" ? "would remove" : "removed"} ${pass.removed} roots (${gb(pass.removedBytes)}) in this pass. ` : "")
+        + (last ? `Last pass ${last.ended === "complete" ? "completed" : "ended when pressure cleared"} in ${minutes(last.durationMs)} over ${last.ticks} ticks, `
+          + `${last.visited} visits, ${last.removed} roots removed (${gb(last.removedBytes)}). ` : "")
+        + (full && last?.ended !== "complete" ? `Last full pass completed in ${minutes(full.durationMs)} over ${full.ticks} ticks. ` : "");
+      const u = report.unregistered;
+      const unregisteredText = u ? unregisteredScratchSummary(u, mode, gb) : "";
+      const summary = passText + unregisteredText + `${report.lowSpace ? "Scratch free space is below the working reserve. " : ""}`
+        + `${report.spaceError ? `Scratch free-space observation failed: ${report.spaceError}. ` : ""}`
+        + `Recorded allocation ${gb(report.bytes)}; cap ${gb(report.capBytes)}; ${mode === "dry-run" ? "would reclaim" : "reclaimed"} ${gb(report.removedBytes)} attributed; `
+        + `budget deferred ${gb(report.deferredBytes)}; held live ${gb(report.liveHeldBytes)}; held by evidence ${gb(report.evidenceHeldBytes)}; `
+        + `held for the operator ${gb(report.operatorHeldBytes)}; other holds ${gb(report.otherHeldBytes)}; failed ${gb(report.failedBytes)}; outside this page ${gb(report.unexaminedBytes)}. `
+        + `${report.blocked.roots} roots in the ledger (${gb(report.blocked.bytes)}) hold directories this user cannot remove; they are listed under "blocked". `
+        + `automatic copies reclaimed ${gb(copies.removedBytes)}; unattributed copies retained ${gb(copies.unattributed.bytes)}; `
+        + `${copies.sourceAttributed} legacy copies matched registered scratch this tick. `
+        + "Hold categories describe this page; unexamined allocation still needs classification.";
+      writeJsonDurably(file, { at: new Date().toISOString(), condition, summary, ...report });
+      if (noteworthy) console.log(`[attempt temp] ${mode === "dry-run" ? "would remove" : "removed"} ${report.removed} directories, ${report.removedBytes} bytes; `
+        + `${report.deferred} budget deferred (${report.deferredBytes} bytes); ${report.liveHeld} held live (${report.liveHeldBytes} bytes); `
+        + `${report.evidenceHeld} held by evidence (${report.evidenceHeldBytes} bytes); ${report.operatorHeld} held for the operator (${report.operatorHeldBytes} bytes); `
+        + `${report.held - report.liveHeld - report.evidenceHeld - report.operatorHeld} other holds (${report.otherHeldBytes} bytes); `
+        + `${report.errors + copies.errors} errors (${report.failedBytes} root bytes); ${report.unexaminedBytes} bytes outside this page; ${report.overCapBytes} measured bytes over cap; `
+        + `${copies.removed} automatic copies removed, ${copies.unattributed.count} unattributed copies retained`
+        + (pass ? `; pass ${pass.position}/${pass.total} roots, ${pass.ticks} ticks, ${pass.removed} roots (${pass.removedBytes} bytes) removed this pass${pass.ended ? `, ${pass.ended}` : ""}` : "")
+        + (last ? `; last pass ${last.ended} in ${last.durationMs} ms over ${last.ticks} ticks, ${last.removed} roots (${last.removedBytes} bytes) removed` : "")
+        + (full ? `; last full pass ${full.durationMs} ms` : "")
+        + (u ? `; unregistered scratch ${u.found} roots, ${u.examined} examined, ${u.removed + u.finishedInterrupted} removed (${u.removedBytes} bytes), ${u.errors} errors${u.trigger ? `, trigger ${u.trigger}` : ""}${u.deferred ? `, ${u.deferred}` : ""}` : ""));
     }
     return report;
+  } catch (error) {
+    // Admission can consume the last of the tick before a root was visited.
+    if (error instanceof FileTransactionBusyError && attemptTempRemaining() <= 0) return null;
+    if (stateDatabaseBusy(error)) {
+      console.error("[attempt temp] deferred: shared retention ledger is busy; durable cursor retained"); return null;
+    }
+    throw error;
   } finally { store.close(); }
 }

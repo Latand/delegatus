@@ -19,7 +19,11 @@ import {
 } from "@/lib/orchestrator/seats";
 import { beginDeputy, DEPUTY_HISTORY_CAP, endDeputy, recordDeputyFork } from "@/lib/orchestrator/deputies";
 import { productionSeatCommandDependencies, setSeatCommandDependenciesForTests, type SeatCommandDependencies } from "@/lib/orchestrator/seatCommand";
+import { changeSeatTickSettings } from "@/lib/monitor/seatTickSettings";
+import { appendSeatTickRecord } from "@/lib/monitor/journalStore";
+import type { SeatTickRunRecord } from "@/lib/monitor/types";
 import * as taskStore from "@/lib/tasks/store";
+import * as seatStore from "@/lib/orchestrator/seatStore";
 
 import { POST as rotatePost } from "../rotate/route";
 import { GET as seatGet, POST as seatPost } from "./route";
@@ -225,21 +229,16 @@ test("the seat read keeps naming a deputy whose full record the history cap trim
  * the whole answer comes out of one parse of it, and the task store — the
  * larger read — is touched once, only when there is a seat to find notes for.
  */
-test("the status read parses the seat record once, and reads the task store once (#1841)", async () => {
-  const seatsRead = (paths: readonly string[]) => paths.filter((each) => each.endsWith("orchestrator-seats.json")).length;
-  const reads = async (run: () => unknown): Promise<string[]> => {
-    const paths: string[] = [];
-    const real = fs.readFileSync;
-    (fs as unknown as { readFileSync: unknown }).readFileSync = ((target: never, ...rest: never[]) => {
-      paths.push(String(target));
-      return (real as unknown as (...args: never[]) => never)(target, ...rest);
-    }) as never;
-    try {
-      await run();
-    } finally {
-      (fs as unknown as { readFileSync: unknown }).readFileSync = real;
-    }
-    return paths;
+test("the status read reads the seat record once, and reads the task store once (#1841)", async () => {
+  /* The record is counted by CALLS into the seat store, like the task store
+     below: the store keeps what it read per revision, so the work one read
+     costs depends on what ran before, while how many times the route asks
+     does not. */
+  const record = spyOn(seatStore, "readOrchestratorSeatStore");
+  const reads = async (run: () => unknown): Promise<number> => {
+    record.mockClear();
+    await run();
+    return record.mock.calls.length;
   };
 
   /* A seated project with a retired predecessor: every branch of the answer —
@@ -252,35 +251,91 @@ test("the status read parses the seat record once, and reads the task store once
   seat(1, "/seats/r1.jsonl", "2026-09-18T14:02:00.000Z");
   seat(2, "/seats/r2.jsonl", "2026-09-19T03:10:00.000Z");
 
-  /* The task store is counted by CALLS: the store caches its collection, so how
-     much FILE work one read of it costs depends on what ran before, while how
-     many times the route asks for it does not. */
   const store = spyOn(taskStore, "loadTasksForList");
   try {
     let status = 0;
     const answer = await reads(async () => { status = (await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=repo-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))).status; });
     expect(status).toBe(200);
-    /* One parse of the record for the seat, the previous seats and the
+    /* One read of the record for the seat, the previous seats and the
        cross-project set; one read of the store for their notes. */
-    expect(seatsRead(answer)).toBe(1);
+    expect(answer).toBe(1);
     expect(store.mock.calls.length).toBe(1);
 
     /* The cross-project scope reads the record once too, and asks the task
        store for nothing: it answers with conversations, not notes. */
     store.mockClear();
-    const everywhere = await reads(() => seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?scope=all")));
-    expect(seatsRead(everywhere)).toBe(1);
+    expect(await reads(() => seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?scope=all")))).toBe(1);
     expect(store.mock.calls.length).toBe(0);
 
     /* And a project with no seat and nothing retired reads the record once and
        the store not at all. */
     store.mockClear();
-    const vacant = await reads(() => seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=repo-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")));
-    expect(seatsRead(vacant)).toBe(1);
+    expect(await reads(() => seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=repo-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")))).toBe(1);
     expect(store.mock.calls.length).toBe(0);
   } finally {
     store.mockRestore();
+    record.mockRestore();
   }
+});
+
+/* The card paints the tick toggle from this answer (the closed switch's summary
+   shape), so the toggle needs no request of its own for its first frame. */
+test("the seat read carries the stored tick schedule for a seated project, without reading the run journal", async () => {
+  const project = "repo-cccccccccccccccccccccccccccccccc";
+  beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId: "req_tick_00001", mode: "spawn", now: "2026-09-18T14:02:00.000Z" });
+  completeOrchestratorSeatIntent({ project, clientRequestId: "req_tick_00001", conversationId: "conversation_tick_1", path: "/seats/t1.jsonl", engine: "claude", now: "2026-09-18T14:02:00.000Z" });
+  const changed = changeSeatTickSettings(project, { wakeIntervalMinutes: 30, reason: "a release afternoon" }, { at: "2026-09-18T15:00:00.000Z", actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null } });
+  expect(changed.ok).toBe(true);
+
+  const body = await (await seatGet(new NextRequest(`http://127.0.0.1/api/orchestrator/seat?project=${project}`))).json() as {
+    tick?: { view: string; effective: { enabled: boolean; wakeIntervalMinutes: number; isDefault: boolean }; defaultWakeIntervalMinutes: number; journalError: string | null; lastRun: unknown; settings: { monitorPrompt: string | null } };
+  };
+  expect(body.tick).toMatchObject({ view: "summary", effective: { enabled: true, wakeIntervalMinutes: 30, isDefault: false } });
+  /* Unread, and said so: the client words that as unknown, never as a quiet tick. */
+  expect(body.tick?.journalError).toBeString();
+  expect(body.tick?.lastRun).toBeNull();
+  /* The monitor note stays on the panel's own read. */
+  expect(body.tick?.settings.monitorPrompt).toBeNull();
+});
+
+function tickCheck(project: string, at: string, verdict: SeatTickRunRecord["verdict"]): SeatTickRunRecord {
+  return { schemaVersion: 1, at, project, seatEpoch: 1, verdict, reasons: [], items: 0, deferred: 0, eventsThrough: 1, delivery: null, detail: verdict === "error" ? "the check threw" : null };
+}
+
+/* A journal the seed does not summarise still decides whether the tick is
+   healthy: three failed checks in a row are a blocked tick on the first frame. */
+test("the seat read's tick carries the check-error alarm when the last three checks failed, and none after a completed check", async () => {
+  const project = "repo-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+  beginOrchestratorSeatIntent({ project, mandate: "own the board", clientRequestId: "req_tick_00002", mode: "spawn", now: "2026-09-18T14:02:00.000Z" });
+  completeOrchestratorSeatIntent({ project, clientRequestId: "req_tick_00002", conversationId: "conversation_tick_2", path: "/seats/t2.jsonl", engine: "claude", now: "2026-09-18T14:02:00.000Z" });
+  const read = async () => (await (await seatGet(new NextRequest(`http://127.0.0.1/api/orchestrator/seat?project=${project}`))).json() as {
+    tick?: { checkErrorAlarm?: { since: string; detail: string }; lastRun: unknown; lastDelivery: unknown; journalError: string | null };
+  }).tick;
+
+  expect((await read())?.checkErrorAlarm).toBeUndefined();
+  appendSeatTickRecord(tickCheck(project, "2026-09-18T15:00:00.000Z", "error"));
+  appendSeatTickRecord(tickCheck(project, "2026-09-18T15:10:00.000Z", "error"));
+  expect((await read())?.checkErrorAlarm).toBeUndefined();
+  appendSeatTickRecord(tickCheck(project, "2026-09-18T15:20:00.000Z", "error"));
+  const blocked = await read();
+  expect(blocked?.checkErrorAlarm).toMatchObject({ since: "2026-09-18T15:00:00.000Z" });
+  /* The run and delivery summaries stay unread, and say so. */
+  expect(blocked?.lastRun).toBeNull();
+  expect(blocked?.lastDelivery).toBeNull();
+  expect(blocked?.journalError).toBeString();
+
+  /* Another project's failures never count. */
+  appendSeatTickRecord(tickCheck("repo-ffffffffffffffffffffffffffffffff", "2026-09-18T15:25:00.000Z", "quiet"));
+  expect((await read())?.checkErrorAlarm).toBeDefined();
+  /* A completed check ends the streak. */
+  appendSeatTickRecord(tickCheck(project, "2026-09-18T15:30:00.000Z", "quiet"));
+  expect((await read())?.checkErrorAlarm).toBeUndefined();
+});
+
+test("the seat read carries no tick for a project without a seat", async () => {
+  const body = await (await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=repo-dddddddddddddddddddddddddddddddd"))).json() as Record<string, unknown>;
+  expect(body.seat).toBeNull();
+  expect("tick" in body).toBe(false);
 });
 
 /* A project is still required of the read that answers about one. */
@@ -492,4 +547,20 @@ test("canonical status reads use the folder's resolved display name without cura
   } finally {
     for (const mock of [spawn, stamp, readiness, report, now]) mock.mockRestore();
   }
+});
+
+test("the panel can reuse the same seat while receiving a fresh tick, and a moved seat replaces it", async () => {
+  const project = "repo-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const read = (base: string) => seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=" + project,
+    { headers: { "x-delegatus-seat-base": base } }));
+  const first = await read("initial");
+  const revision = first.headers.get("x-delegatus-seat-revision");
+  expect(revision).toMatch(/^[a-f0-9]{64}$/);
+  expect(await first.json()).toHaveProperty("seat", null);
+  const repeat = await read(revision!);
+  expect(await repeat.json()).toMatchObject({ unchanged: true });
+  beginOrchestratorSeatIntent({ project, mandate: "own the board", mode: "spawn", clientRequestId: "req_changed_00001" });
+  const changed = await read(revision!);
+  expect(changed.headers.get("x-delegatus-seat-revision")).not.toBe(revision);
+  expect(await changed.json()).toHaveProperty("pending.intent.clientRequestId", "req_changed_00001");
 });

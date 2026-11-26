@@ -1,13 +1,24 @@
 import fs from "node:fs";
 
 import { statePath } from "@/lib/configDir";
-import { writeJsonDurably } from "@/lib/state/durableJson";
+import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
+import { LegacyDocumentStore } from "@/lib/state/legacyDocumentStore";
+import {
+  lazyReconcileAllowed,
+  legacyDatabasePath,
+  legacyImportAllowed,
+  type LegacyImportHooks,
+  type LegacyImportOutcome,
+} from "@/lib/state/legacyImport";
+import { stateLockAttempt } from "@/lib/state/lockWait";
+import { readStateCollectionRevision, readStateImport, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
 
 import type { ReportLogAsk } from "./types";
 
 /*
  * What the "Asks you" classifier has decided (docs/research/attention-classifier.md
- * §7), in one state file the Viewer's classifier alone writes:
+ * §7), in one store the Viewer alone writes (the classifier, and the memory
+ * decisions that share its monthly cap):
  *
  *  - `asks`: every message it judged an ask, newest last. The newest per
  *    conversation is that conversation's open ask; each one is a line in its
@@ -20,10 +31,10 @@ import type { ReportLogAsk } from "./types";
  *
  * A send is recorded before its call, with its largest possible cost, and
  * settled after it (sweep.ts), so a write that fails after a call leaves the
- * cost counted and the message seen. A file that is not there is a first run.
- * A file that is there but cannot be read or parsed holds a month's spend
+ * cost counted and the message seen. A store nothing was ever written to is a
+ * first run. A store that is there but cannot be read holds a month's spend
  * nobody can know: the classifier's read and every write refuse it, so the
- * sweep sends nothing and no write puts an empty file over the real one. The
+ * sweep sends nothing and no write puts an empty store over the real one. The
  * board's reads (the overlay, the report log, the spend line) answer empty.
  */
 
@@ -114,7 +125,7 @@ function parseScores(value: unknown): Record<string, number> {
   return scores;
 }
 
-/** The file is there, but what it holds cannot be known. */
+/** The store is there, but what it holds cannot be known. */
 export class OperatorAsksUnreadable extends Error {
   constructor(message: string) {
     super(message);
@@ -122,11 +133,32 @@ export class OperatorAsksUnreadable extends Error {
   }
 }
 
-/**
- * The file as the classifier needs it: empty only when it is not there, and
- * `OperatorAsksUnreadable` when it is there and cannot be read or parsed.
- */
-export function loadOperatorAsks(file = operatorAsksFile(), now = new Date()): OperatorAsksFileV1 {
+/** A legacy body as the classifier reads it, or `OperatorAsksUnreadable`. */
+function parseOperatorAsks(raw: unknown, now: Date): OperatorAsksFileV1 {
+  const parsed = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Partial<OperatorAsksFileV1> : {};
+  if (parsed.schemaVersion !== OPERATOR_ASKS_SCHEMA_VERSION) throw new OperatorAsksUnreadable(`schema ${String(parsed.schemaVersion)}`);
+  return {
+    schemaVersion: OPERATOR_ASKS_SCHEMA_VERSION,
+    revision: Number.isInteger(parsed.revision) ? parsed.revision! : 0,
+    spend: parseSpend(parsed.spend, now),
+    seen: Array.isArray(parsed.seen) ? parsed.seen.filter((key): key is string => typeof key === "string") : [],
+    scores: parseScores(parsed.scores),
+    asks: Array.isArray(parsed.asks) ? parsed.asks.map(parseAsk).filter((ask): ask is OperatorAskRecord => ask !== null) : [],
+  };
+}
+
+function parseSpend(value: unknown, now: Date): AsksSpend {
+  const spend = value && typeof value === "object" ? value as Partial<AsksSpend> : {};
+  return {
+    month: typeof spend.month === "string" ? spend.month : spendMonth(now),
+    usd: finite(spend.usd) && spend.usd >= 0 ? spend.usd : 0,
+    calls: finite(spend.calls) ? spend.calls : 0,
+    capped: finite(spend.capped) ? spend.capped : 0,
+  };
+}
+
+/** The legacy file as the classifier read it before the store moved. */
+function loadLegacyOperatorAsks(file: string, now: Date): OperatorAsksFileV1 {
   let text: string;
   try {
     text = fs.readFileSync(file, "utf8");
@@ -140,28 +172,253 @@ export function loadOperatorAsks(file = operatorAsksFile(), now = new Date()): O
   } catch {
     throw new OperatorAsksUnreadable("cannot parse");
   }
-  const parsed = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Partial<OperatorAsksFileV1> : {};
-  if (parsed.schemaVersion !== OPERATOR_ASKS_SCHEMA_VERSION) throw new OperatorAsksUnreadable(`schema ${String(parsed.schemaVersion)}`);
-  const spend = parsed.spend && typeof parsed.spend === "object" ? parsed.spend as Partial<AsksSpend> : {};
+  return parseOperatorAsks(raw, now);
+}
+
+/* ------------------------------------------------------- state.sqlite rows */
+
+/*
+ * The store lives in the `operator_asks` collection of `state.sqlite`, moved
+ * out of `operator-asks.json`, which every send and every spend settlement
+ * rewrote whole (1.5 MB on a busy installation, two writes for each memory
+ * decision). One row per key:
+ *
+ *   meta            { schemaVersion, revision, spend }
+ *   ask:<id>        one ask, oldest first
+ *   seen:<key>      one message already sent or skipped, oldest first
+ *   score:<hash>    one classified text's score, oldest first
+ *
+ * Rows keep the order they were written in, so the capacity trims drop the
+ * oldest as the file's arrays did; a text scored again moves to the end. A
+ * write stores the rows that changed: a spend settlement rewrites `meta`
+ * alone. `revision` continues from the file's and moves on every write.
+ *
+ * A row that does not decode makes the whole store unreadable, as a torn file
+ * did: the classifier's read and every write refuse it, the board reads
+ * empty. A legacy file that cannot be read is never imported: it stays the
+ * store, refused the same way, until it reads again.
+ */
+
+export const OPERATOR_ASKS_COLLECTION = "operator_asks";
+const META_KEY = "meta";
+const ASK_PREFIX = "ask:";
+const SEEN_PREFIX = "seen:";
+const SCORE_PREFIX = "score:";
+
+interface OperatorAskRow {
+  key: string;
+  value: unknown;
+}
+
+function isRow(value: unknown): value is OperatorAskRow {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+    && typeof (value as OperatorAskRow).key === "string" && (value as OperatorAskRow).key.length > 0
+    && Object.hasOwn(value as object, "value");
+}
+
+function toRows(file: OperatorAsksFileV1): OperatorAskRow[] {
+  const rows: OperatorAskRow[] = [{ key: META_KEY, value: { schemaVersion: file.schemaVersion, revision: file.revision, spend: file.spend } }];
+  const asks = new Set<string>();
+  for (const ask of file.asks) {
+    if (asks.has(ask.id)) continue;
+    asks.add(ask.id);
+    rows.push({ key: `${ASK_PREFIX}${ask.id}`, value: ask });
+  }
+  for (const key of new Set(file.seen)) rows.push({ key: `${SEEN_PREFIX}${key}`, value: 1 });
+  for (const [key, score] of Object.entries(file.scores)) rows.push({ key: `${SCORE_PREFIX}${key}`, value: score });
+  return rows;
+}
+
+/** The document the rows hold, or `OperatorAsksUnreadable` for a meta row of
+    another schema. No meta row is a first run. */
+function fromRows(rows: readonly OperatorAskRow[], now: Date): OperatorAsksFileV1 {
+  let meta: OperatorAskRow | null = null;
+  const asks: OperatorAskRecord[] = [];
+  const seen: string[] = [];
+  const scores: Record<string, number> = {};
+  for (const row of rows) {
+    if (row.key === META_KEY) meta = row;
+    else if (row.key.startsWith(ASK_PREFIX)) {
+      const ask = parseAsk(row.value);
+      if (ask) asks.push(ask);
+    } else if (row.key.startsWith(SEEN_PREFIX)) seen.push(row.key.slice(SEEN_PREFIX.length));
+    else if (row.key.startsWith(SCORE_PREFIX)) {
+      if (finite(row.value) && row.value >= 0 && row.value <= 1) scores[row.key.slice(SCORE_PREFIX.length)] = row.value;
+    }
+  }
+  const document = meta ? parseOperatorAsks({ ...(meta.value as object), seen: [], scores: {}, asks: [] }, now) : emptyFile(now);
+  return { ...document, seen, scores, asks };
+}
+
+/** A private copy a writer may change. Asks are copied; scores and seen keys
+    are values. */
+function workingCopy(file: OperatorAsksFileV1): OperatorAsksFileV1 {
   return {
-    schemaVersion: OPERATOR_ASKS_SCHEMA_VERSION,
-    revision: Number.isInteger(parsed.revision) ? parsed.revision! : 0,
-    spend: {
-      month: typeof spend.month === "string" ? spend.month : spendMonth(now),
-      usd: finite(spend.usd) && spend.usd >= 0 ? spend.usd : 0,
-      calls: finite(spend.calls) ? spend.calls : 0,
-      capped: finite(spend.capped) ? spend.capped : 0,
-    },
-    seen: Array.isArray(parsed.seen) ? parsed.seen.filter((key): key is string => typeof key === "string") : [],
-    scores: parseScores(parsed.scores),
-    asks: Array.isArray(parsed.asks) ? parsed.asks.map(parseAsk).filter((ask): ask is OperatorAskRecord => ask !== null) : [],
+    schemaVersion: file.schemaVersion,
+    revision: file.revision,
+    spend: { ...file.spend },
+    seen: [...file.seen],
+    scores: { ...file.scores },
+    asks: file.asks.map((ask) => ({ ...ask })),
   };
 }
 
-/** The board's read: anything unreadable reads as empty. */
+const ASK_FIELDS = ["id", "subject", "conversationId", "path", "project", "role", "title", "messageId", "messageAt", "gist", "score", "recordedAt"] as const satisfies readonly (keyof OperatorAskRecord)[];
+
+function sameAsk(left: OperatorAskRecord, right: OperatorAskRecord): boolean {
+  return ASK_FIELDS.every((field) => left[field] === right[field]);
+}
+
+/** The rows that make `held` hold `next`. A score that changed moves to the
+    end, as re-inserting it in the file's object did. */
+function rowsPatch(held: OperatorAsksFileV1, next: OperatorAsksFileV1): { records: OperatorAskRow[]; deleteKeys: string[]; appendKeys: string[] } {
+  const records: OperatorAskRow[] = [];
+  const deleteKeys: string[] = [];
+  const appendKeys: string[] = [];
+  const meta = { schemaVersion: next.schemaVersion, revision: next.revision, spend: next.spend };
+  if (JSON.stringify(meta) !== JSON.stringify({ schemaVersion: held.schemaVersion, revision: held.revision, spend: held.spend })) {
+    records.push({ key: META_KEY, value: meta });
+  }
+  const heldAsks = new Map(held.asks.map((ask) => [ask.id, ask] as const));
+  const nextAsks = new Set<string>();
+  for (const ask of next.asks) {
+    if (nextAsks.has(ask.id)) continue;
+    nextAsks.add(ask.id);
+    const prior = heldAsks.get(ask.id);
+    if (!prior || !sameAsk(prior, ask)) records.push({ key: `${ASK_PREFIX}${ask.id}`, value: ask });
+  }
+  for (const id of heldAsks.keys()) if (!nextAsks.has(id)) deleteKeys.push(`${ASK_PREFIX}${id}`);
+  const heldSeen = new Set(held.seen);
+  const nextSeen = new Set(next.seen);
+  for (const key of nextSeen) if (!heldSeen.has(key)) records.push({ key: `${SEEN_PREFIX}${key}`, value: 1 });
+  for (const key of heldSeen) if (!nextSeen.has(key)) deleteKeys.push(`${SEEN_PREFIX}${key}`);
+  for (const [key, score] of Object.entries(next.scores)) {
+    const prior = held.scores[key];
+    if (prior === score) continue;
+    records.push({ key: `${SCORE_PREFIX}${key}`, value: score });
+    if (prior !== undefined) appendKeys.push(`${SCORE_PREFIX}${key}`);
+  }
+  for (const key of Object.keys(held.scores)) if (!Object.hasOwn(next.scores, key)) deleteKeys.push(`${SCORE_PREFIX}${key}`);
+  return { records, deleteKeys, appendKeys };
+}
+
+/* The import, the rollback mirror and the roll-forward merge are the shared
+   legacy helper's; reads and writes go through this module's own collection. */
+/* Built on first use: a module that reaches this one while the shared helper
+   is still loading (the state store's history projection) must not construct
+   it then. */
+let legacyStoreInstance: LegacyDocumentStore<OperatorAsksFileV1> | null = null;
+function legacyStore(): LegacyDocumentStore<OperatorAsksFileV1> {
+  return legacyStoreInstance ??= new LegacyDocumentStore<OperatorAsksFileV1>({
+    collection: OPERATOR_ASKS_COLLECTION,
+    migrationId: "operator-asks-json-v1",
+    busyMessage: "operator asks state is busy",
+    /* A file that cannot be read holds a month's spend nobody can know: it is
+       never imported as empty, and stays the store until it reads again. */
+    validateLegacyPath: (filePath) => {
+      if (readStateImport(legacyDatabasePath(filePath), OPERATOR_ASKS_COLLECTION)) return;
+      if (!fs.lstatSync(filePath, { throwIfNoEntry: false })?.isFile()) return;
+      loadLegacyOperatorAsks(filePath, new Date());
+    },
+    parse: (raw) => parseOperatorAsks(raw, new Date()),
+    toRows,
+    fromRows: (rows) => fromRows(rows, new Date()),
+    toFile: (document) => document,
+    readLegacy: (filePath) => loadLegacyOperatorAsks(filePath, new Date()),
+    error: (message, cause) => new OperatorAsksUnreadable(cause instanceof Error ? `${message}: ${cause.message}` : message),
+  });
+}
+
+interface AskStoreRuntime {
+  collections: Map<string, { identity: string | null; collection: SqliteStateCollection<OperatorAskRow> }>;
+  documents: Map<string, { ordered: readonly OperatorAskRow[]; document: OperatorAsksFileV1 }>;
+  indexes: WeakMap<OperatorAsksFileV1, Map<string, OperatorAskRecord>>;
+}
+const runtimeHost = globalThis as typeof globalThis & { __delegatusOperatorAsksStoreV1__?: AskStoreRuntime };
+const runtime = runtimeHost.__delegatusOperatorAsksStoreV1__ ??= { collections: new Map(), documents: new Map(), indexes: new WeakMap() };
+
+function databaseIdentity(database: string): string | null {
+  const stat = fs.statSync(database, { bigint: true, throwIfNoEntry: false });
+  return stat ? `${stat.dev}:${stat.ino}` : null;
+}
+
+function readMarker(database: string) {
+  return stateLockAttempt("state.marker.operator-asks", () => readStateImport(database, OPERATOR_ASKS_COLLECTION), OPERATOR_ASKS_COLLECTION);
+}
+
+/** The collection once the legacy file was imported, else null. */
+function openCollection(database: string): SqliteStateCollection<OperatorAskRow> | null {
+  const identity = databaseIdentity(database);
+  const held = runtime.collections.get(database);
+  if (held && held.identity === identity) return held.collection;
+  held?.collection.close();
+  runtime.collections.delete(database);
+  runtime.documents.delete(database);
+  if (identity === null || !readMarker(database)) return null;
+  const collection = new SqliteStateCollection<OperatorAskRow>(database, {
+    collection: OPERATOR_ASKS_COLLECTION,
+    schemaVersion: 1,
+    busyMessage: "operator asks state is busy",
+    key: (row) => row.key,
+    decode: (value) => isRow(value) ? value : null,
+    clone: (row) => structuredClone(row),
+    strictDecode: true,
+    decodeError: () => new OperatorAsksUnreadable("a stored row cannot be read"),
+  });
+  runtime.collections.set(database, { identity, collection });
+  return collection;
+}
+
+/** The committed document, read once per committed revision and shared. */
+function committedDocument(database: string, collection: SqliteStateCollection<OperatorAskRow>, now: Date): OperatorAsksFileV1 {
+  const ordered = collection.loadReadonly();
+  const held = runtime.documents.get(database);
+  if (held?.ordered === ordered) return held.document;
+  const document = fromRows(ordered, now);
+  runtime.documents.set(database, { ordered, document });
+  return document;
+}
+
+/** The collection for a write, importing the legacy file first when this
+    process may (no release target, or the activated release). */
+function writableCollection(file: string): SqliteStateCollection<OperatorAskRow> {
+  const database = legacyDatabasePath(file);
+  const held = openCollection(database);
+  if (held) return held;
+  if (!legacyImportAllowed(file, database)) throw new FileTransactionBusyError("operator asks state is waiting for release promotion");
+  legacyStore().importLegacy(file, { reconcile: lazyReconcileAllowed(file, database) });
+  const collection = openCollection(database);
+  if (!collection) throw new FileTransactionBusyError("operator asks state is not imported");
+  return collection;
+}
+
+/** The committed document, shared, or the legacy file before the import. */
+function sharedOperatorAsks(file: string, now: Date): OperatorAsksFileV1 {
+  const database = legacyDatabasePath(file);
+  const collection = openCollection(database);
+  if (!collection) return loadLegacyOperatorAsks(file, now);
+  try {
+    return committedDocument(database, collection, now);
+  } catch (error) {
+    if (error instanceof OperatorAsksUnreadable || error instanceof FileTransactionBusyError) throw error;
+    throw new OperatorAsksUnreadable(error instanceof Error ? error.message : String(error));
+  }
+}
+
+/**
+ * The store as the classifier needs it: empty only when nothing was ever
+ * recorded, and `OperatorAsksUnreadable` when it is there and cannot be read.
+ * The caller gets its own copy.
+ */
+export function loadOperatorAsks(file = operatorAsksFile(), now = new Date()): OperatorAsksFileV1 {
+  return workingCopy(sharedOperatorAsks(file, now));
+}
+
+/** The board's read: anything unreadable reads as empty. The answer is shared
+    by every reader of the same revision: never change it. */
 export function readOperatorAsks(file = operatorAsksFile(), now = new Date()): OperatorAsksFileV1 {
   try {
-    return loadOperatorAsks(file, now);
+    return sharedOperatorAsks(file, now);
   } catch {
     return emptyFile(now);
   }
@@ -173,31 +430,64 @@ export function currentSpend(file: OperatorAsksFileV1, now: Date): AsksSpend {
   return file.spend.month === month ? file.spend : { month, usd: 0, calls: 0, capped: 0 };
 }
 
-/** One read-modify-write. The classifier is the only writer, in one process.
-    A file that cannot be read is left as it is: the write throws. */
+/** One read-modify-write under the collection lease: only the rows that
+    changed are written. A store that cannot be read is left as it is: the
+    write throws. */
 export function mutateOperatorAsks(
   mutation: (current: OperatorAsksFileV1) => void,
   now = new Date(),
   file = operatorAsksFile(),
 ): OperatorAsksFileV1 {
-  const current = loadOperatorAsks(file, now);
-  current.spend = currentSpend(current, now);
-  mutation(current);
-  const floor = now.getTime() - ASK_RETENTION_MS;
-  const next: OperatorAsksFileV1 = {
-    ...current,
-    revision: current.revision + 1,
-    seen: current.seen.slice(-SEEN_CAPACITY),
-    scores: Object.fromEntries(Object.entries(current.scores).slice(-SEEN_CAPACITY)),
-    asks: current.asks.filter((ask) => ask.messageAt >= floor).slice(-ASK_CAPACITY),
-  };
-  writeJsonDurably(file, next, { space: 0 });
-  return next;
+  const database = legacyDatabasePath(file);
+  const collection = writableCollection(file);
+  let next: OperatorAsksFileV1 | null = null;
+  /* Read before the lease, so under it the read takes only what changed since. */
+  committedDocument(database, collection, now);
+  collection.patchSync(() => {
+    const held = committedDocument(database, collection, now);
+    const current = workingCopy(held);
+    current.spend = currentSpend(current, now);
+    mutation(current);
+    const floor = now.getTime() - ASK_RETENTION_MS;
+    next = {
+      ...current,
+      revision: current.revision + 1,
+      seen: current.seen.slice(-SEEN_CAPACITY),
+      scores: Object.fromEntries(Object.entries(current.scores).slice(-SEEN_CAPACITY)),
+      asks: current.asks.filter((ask) => ask.messageAt >= floor).slice(-ASK_CAPACITY),
+    };
+    return rowsPatch(held, next);
+  });
+  return next!;
 }
 
-/** Each conversation's newest ask, by durable id and by transcript path. */
+/** Import `operator-asks.json` now. The Viewer's activation calls this with
+    `reconcile: true`. */
+export function importLegacyOperatorAsks(file = operatorAsksFile(), options: { reconcile: boolean; hooks?: LegacyImportHooks } = { reconcile: true }): LegacyImportOutcome {
+  return legacyStore().importLegacy(file, options);
+}
+
+/** Write `operator-asks.json` from SQLite for a rollback release that
+    predates the move. */
+export function checkpointOperatorAsksRollbackMirrorForDemotion(file = operatorAsksFile()): void {
+  legacyStore().checkpointRollbackMirror(file);
+}
+
+/** Test seam: forget every open collection and cached read, the way a
+    restarted process would. */
+export function resetOperatorAsksStoreForTests(): void {
+  for (const { collection } of runtime.collections.values()) collection.close();
+  runtime.collections.clear();
+  runtime.documents.clear();
+}
+
+/** Each conversation's newest ask, by durable id and by transcript path.
+    Built once per document: the board asks for it on every poll. */
 export function openAskIndex(file: OperatorAsksFileV1): Map<string, OperatorAskRecord> {
+  const held = runtime.indexes.get(file);
+  if (held) return held;
   const index = new Map<string, OperatorAskRecord>();
+  runtime.indexes.set(file, index);
   for (const ask of file.asks) {
     const held = index.get(ask.subject);
     if (held && held.messageAt > ask.messageAt) continue;
@@ -220,8 +510,12 @@ export function reportLogAsk(ask: OperatorAskRecord): ReportLogAsk {
   };
 }
 
-/** Moves whenever the file does, for the report log's `unchanged` answer. */
+/** Moves whenever the store does, for the report log's `unchanged` answer:
+    the collection revision, or the legacy file's stat before the import. */
 export function operatorAsksSignature(file = operatorAsksFile()): string {
+  const database = legacyDatabasePath(file);
+  const revision = readStateCollectionRevision(database, OPERATOR_ASKS_COLLECTION);
+  if (revision !== null) return `asks:sqlite:${databaseIdentity(database)}:${revision}`;
   try {
     const stat = fs.statSync(file);
     return `asks:${stat.size}:${stat.mtimeMs}`;
@@ -265,4 +559,10 @@ export function projectReportLogAsks(
     asks: page.map(reportLogAsk),
     nextBefore: older.length > page.length ? askCursor(page.at(-1)!) : null,
   };
+}
+
+/** Test seam: the write collection, for fixtures that clear or damage the
+    stored rows. */
+export function operatorAsksCollectionForTests(file = operatorAsksFile()): SqliteStateCollection<{ key: string; value: unknown }> {
+  return writableCollection(file);
 }

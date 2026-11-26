@@ -98,3 +98,37 @@ existing native runtime gate also runs the Codex cases for its pinned executable
 through `NATIVE_CODEX_QUEUE_TEST_BINARY`.
 
 Verification results are recorded in the stage report after the final checks.
+
+## An operator's message to a running Claude turn (2026-11-10)
+
+A pipeline stage runs as one turn, so a message the operator sent to a working
+Claude builder waited for the whole stage: the receipt rested in
+`awaiting-turn` with no attempt while the agent kept working.
+
+Claude Code reads an input written to its stream during a turn at that turn's
+next tool boundary. Checked against CLI 2.1.319 with a real account: an input
+written while a tool ran was echoed (`isReplay`) right after the tool result,
+the same turn answered it, and one `result` ended that turn. An input the turn
+never reads starts the next turn after the result, as before. Two inputs
+written during one turn came back as two echoes on that version; an earlier
+version joined them into one frame (#2742).
+
+The Claude broker declares `acceptsInputDuringTurn`. The delivery queue then
+writes an operator's `interrupt-active` send while the turn is `active`:
+
+| Case | Behaviour |
+| --- | --- |
+| Operator send, turn running a tool or thinking | Written at once; the receipt is `delivering` until the echo, then `delivered` with the running turn's id. No interrupt. |
+| Operator send, turn awaiting an answer | Waits for the turn, as before. |
+| Operator send at a seat with a combined inbox | Waits and is combined, as before. |
+| Agent `queue` and `steer-or-queue` sends | Wait for the turn, as before. |
+| A second operator send before the first echo | Waits; one input is in flight at a time, so an echo names exactly one operation. The broker refuses a second write on its own as well. |
+| A turn the CLI began itself (background work) | No write is aimed into it; the send waits for its end. |
+
+In the broker, an echo that arrives ahead of the running turn's result removes
+that input from the turn queue, so the one result ends the turn and leaves no
+turn behind for an input already read. This is the defect that led to the
+containment in `docs/verification/claude-queued-send-containment.md`; native
+batching of several inputs stays contained. The receipt keeps a fresh
+`turn-boundary` deadline while the write is in flight, because a tool call can
+outlast the settlement window.

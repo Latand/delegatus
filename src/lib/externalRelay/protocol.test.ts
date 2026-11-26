@@ -3,8 +3,8 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { ownerIndex, ownerRequest, x1Claim, x1Request, x1Results } from "./toolLoop.fixture";
 import { expect, test } from "bun:test";
-import { checkedAnswer, checkedRound, toolCallResultSchema, descriptorSchema, requestSchema } from "./protocol";
-import type { ExternalRelayRequest } from "./protocol";
+import { checkedAnswer, checkedRound, toolCallResultSchema, descriptorSchema, requestSchema, targetSchema, targetsSchema, pairingStatusSchema, pairingConfirmedSchema } from "./protocol";
+import type { ExternalRelayRequest, ExternalRelayTarget } from "./protocol";
 import { contextRequest, sampleRequest, serviceClaims } from "./request.fixture";
 
 test("paired service windows and late claims parse in requests and descriptors", () => {
@@ -39,6 +39,54 @@ test("request limits and additive fields", () => {
       },
     }).success,
   ).toBe(false);
+});
+
+test("sticker rows retain optional details within the service limits", () => {
+  const row = sampleRequest.input.conversation[0];
+  const sticker = { ...row, text: "", kind: "sticker", sticker_emoji: "⭐️", sticker_format: "tgs" } as const;
+  const parse = (message: unknown) => requestSchema.safeParse({
+    ...sampleRequest, input: { ...sampleRequest.input, conversation: [message] },
+  });
+  for (const sticker_format of ["webp", "tgs", "webm"] as const) {
+    const message = { ...sticker, sticker_format };
+    expect(parse(message).data?.input.conversation).toEqual([message]);
+  }
+  const described = { ...sticker, sticker_emoji: "😀".repeat(128), media_description: "😀".repeat(4000) };
+  expect(parse(described).data?.input.conversation).toEqual([described]);
+  for (const invalid of [{ sticker_emoji: "😀".repeat(129) }, { media_description: "😀".repeat(4001) }, { sticker_format: "gif" }])
+    expect(parse({ ...sticker, ...invalid }).success).toBe(false);
+  expect(parse(row).data?.input.conversation).toStrictEqual([row]);
+  const future = parse({ ...row, kind: "future" });
+  expect(future.success).toBe(true);
+  expect(future.data?.input.conversation[0]?.kind).toBeUndefined();
+  expect(JSON.stringify(future.data?.input.conversation)).toBe(JSON.stringify(parse(row).data?.input.conversation));
+});
+
+test("reply metadata is optional and each malformed field is discarded independently", () => {
+  const row = sampleRequest.input.conversation[0];
+  const parse = (message: unknown) => requestSchema.parse({
+    ...sampleRequest, input: { ...sampleRequest.input, conversation: [message] },
+  }).input.conversation[0]!;
+  const longest = "😀".repeat(12000);
+  const quote = { text: longest, position: 0 };
+  expect(parse({ ...row, quote, external_reply_context: longest })).toStrictEqual({ ...row, quote, external_reply_context: longest });
+  const withoutPosition = { ...row, quote: { text: "Q" }, external_reply_context: "" };
+  expect(parse(withoutPosition)).toStrictEqual(withoutPosition);
+  const firstAboveSafeInteger = { ...row, quote: { text: "Q", position: 9007199254740992 } };
+  expect(parse(firstAboveSafeInteger)).toStrictEqual(firstAboveSafeInteger);
+  expect(parse(row)).toStrictEqual(row);
+
+  for (const invalid of [null, "quote", {}, { text: 1 }, { text: "" }, { text: longest + "!" },
+    { text: "Q", position: -1 }, { text: "Q", position: 0.5 }, { text: "Q", position: "0" }]) {
+    const { quote: parsedQuote, ...message } = parse({ ...row, quote: invalid, external_reply_context: longest });
+    expect(parsedQuote).toBeUndefined();
+    expect(message).toStrictEqual({ ...row, external_reply_context: longest });
+  }
+  for (const invalid of [null, 1, {}, longest + "!"]) {
+    const { external_reply_context, ...message } = parse({ ...row, quote, external_reply_context: invalid });
+    expect(external_reply_context).toBeUndefined();
+    expect(message).toStrictEqual({ ...row, quote });
+  }
 });
 
 test("F4 descriptor features survive parsing and owner I10 schemas survive unchanged", () => {
@@ -275,4 +323,17 @@ test("owner answer URL button labels and filenames use Unicode code point limits
   expect(relayAnswerSchema.safeParse({ buttons: [[{ text: "😀".repeat(65), url: "https://example.com/" }]] }).success).toBe(false);
   expect(relayAnswerSchema.safeParse({ attachments: [{ path: "/file", kind: "document", filename: "😀".repeat(124) + ".pdf" }] }).success).toBe(true);
   expect(relayAnswerSchema.safeParse({ attachments: [{ path: "/file", kind: "document", filename: "😀".repeat(125) + ".pdf" }] }).success).toBe(false);
+});
+
+test("target ownership survives list and pairing schemas; malformed ownership is refused", () => {
+  const target = { target_id: "clone", name: "Clone", answered_by: "service", fallback: "service", answered_elsewhere: true } satisfies ExternalRelayTarget;
+  const owner = { namespace: "test", id: "owner", display_name: "Owner", handle: null };
+  expect(targetSchema.parse(target)).toEqual(target);
+  expect(targetsSchema.parse({ targets: [target] }).targets).toEqual([target]);
+  expect(pairingStatusSchema.parse({ status: "awaiting_install", owner, targets: [target] }).targets).toEqual([target]);
+  expect(pairingConfirmedSchema.parse({ credential: "x".repeat(43), version: 1, owner, targets: [target] }).targets).toEqual([target]);
+  for (const value of ["true", 1, null, {}]) expect(targetSchema.safeParse({ ...target, answered_elsewhere: value }).success).toBe(false);
+  expect(targetSchema.parse({ ...target, answered_elsewhere: false }).answered_elsewhere).toBe(false);
+  const { answered_elsewhere: _, ...legacy } = target;
+  expect(targetSchema.parse(legacy).answered_elsewhere).toBeUndefined();
 });

@@ -44,6 +44,17 @@ export function callDuration(seconds: number): string {
   const [hours, minutes, rest] = [Math.floor(whole / 3600), Math.floor(whole / 60) % 60, whole % 60];
   return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}` : `${minutes}:${String(rest).padStart(2, "0")}`;
 }
+/** A call's length in words, for a line that also holds a date or a clock time: 4 min 12 s, 5 min, 1 h 2 min. Each part keeps its unit. */
+export function spokenDuration(seconds: number, t: TFunction): string {
+  const whole = Math.max(0, Math.floor(seconds));
+  const [hours, minutes, rest] = [Math.floor(whole / 3600), Math.floor(whole / 60) % 60, whole % 60];
+  const parts = [
+    hours ? t("voiceCompanion.usage.hours", { n: hours }) : "",
+    minutes ? t("voiceCompanion.usage.minutes", { n: minutes }) : "",
+    rest && !hours || !whole ? t("voiceCompanion.usage.seconds", { n: rest }) : "",
+  ];
+  return parts.filter(Boolean).join(" ").replaceAll(" ", "\u00a0");
+}
 /** The plan type as the accounts panel writes it. */
 export const planName = (plan: CompanionPlan) => plan.type ? plan.type.charAt(0).toUpperCase() + plan.type.slice(1) : "Codex";
 /** A window named by its length: 5 h, week, day. The number and its unit are joined by a no-break space, so a

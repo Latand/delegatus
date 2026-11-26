@@ -15,6 +15,8 @@ import {
   readArgv,
   readCwd,
   writingHolders,
+  resourceWritingHolders,
+  resourceAgentProcesses,
   type AgentEngine,
   type AgentProcess,
 } from "./process";
@@ -22,7 +24,7 @@ import { claudeProjectRootFor, codexSessionRootFor } from "./roots";
 
 /**
  * Pid attribution for interactive transcripts (claude-projects and
- * codex-sessions .jsonl), so the tmux composer and the kill control work for
+ * codex-sessions .jsonl), so the composer and the kill control work for
  * live REPL agents the same way they do for background tasks. Signals, most
  * trusted first:
  *
@@ -143,17 +145,26 @@ function markRunning(entry: FileEntry, pid: number): void {
   entry.proc = "running";
 }
 
+function needsProcessInventory(entries: FileEntry[], holders: Map<string, number>): boolean {
+  const claimed = new Set<number>();
+  for (const entry of entries) {
+    const holder = holders.get(entry.path);
+    if (holder === undefined || claimed.has(holder) || !pidAlive(holder)) return true;
+    claimed.add(holder);
+  }
+  return false;
+}
+
 /**
  * Assigns pids to interactive transcript entries in place. `entries` arrive
  * mtime-desc from the scanner; the freshest transcripts win both the candidate
  * cap and the per-project fallback slot.
  */
-export function assignTranscriptPids(entries: FileEntry[]): void {
+function assignTranscriptPidsFrom(entries: FileEntry[], holders: Map<string, number>, processes: AgentProcess[]): void {
   const exactCandidates = entries.filter((entry) => entry.pid === null && isTopLevelTranscript(entry));
   const candidates = exactCandidates.filter(isTranscriptCandidate).slice(0, MAX_TRANSCRIPT_CANDIDATES);
   if (exactCandidates.length === 0 && candidates.length === 0) return;
 
-  const holders = writingHolders(exactCandidates.map((entry) => entry.path));
   const claimed = new Set<number>();
   const unheld: FileEntry[] = [];
   for (const entry of exactCandidates) {
@@ -178,7 +189,7 @@ export function assignTranscriptPids(entries: FileEntry[]): void {
      before projecting it: a process can exit inside that memo's lifetime, and
      an argv/session match from the stale row must never render `running`
      (#1296). */
-  const procs = agentProcesses().filter((proc) => !claimed.has(proc.pid) && pidAlive(proc.pid));
+  const procs = processes.filter((proc) => !claimed.has(proc.pid) && pidAlive(proc.pid));
 
   const bySession = new Map<string, AgentProcess[]>();
   for (const proc of procs) {
@@ -227,6 +238,21 @@ export function assignTranscriptPids(entries: FileEntry[]): void {
       claimed.add(owners[0].pid);
     }
   }
+}
+
+export function assignTranscriptPids(entries: FileEntry[]): void {
+  const exactCandidates = entries.filter((entry) => entry.pid === null && isTopLevelTranscript(entry));
+  if (exactCandidates.length === 0) return;
+  const holders = writingHolders(exactCandidates.map((entry) => entry.path));
+  assignTranscriptPidsFrom(entries, holders, needsProcessInventory(exactCandidates, holders) ? agentProcesses() : []);
+}
+
+export async function assignTranscriptPidsAsync(entries: FileEntry[]): Promise<void> {
+  const exactCandidates = entries.filter((entry) => entry.pid === null && isTopLevelTranscript(entry));
+  if (exactCandidates.length === 0) return;
+  const holders = await resourceWritingHolders(exactCandidates.map((entry) => entry.path));
+  const processes = needsProcessInventory(exactCandidates, holders) ? await resourceAgentProcesses(false) : [];
+  assignTranscriptPidsFrom(entries, holders, processes);
 }
 
 /** Destructive-operation guard for a specific hydrated transcript. It uses a

@@ -451,10 +451,10 @@ test("the model drill-down keeps model rows available for turn-boundary reconfig
   await click(submenu[0]!);
   // One anchored surface — the root panel is gone, the model panel is in place.
   const modelRows = [...host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')];
-  expect(modelRows.map((row) => row.textContent)).toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna", "GPT-5.6-Sol"]);
+  expect(modelRows.map((row) => row.textContent)).toEqual(["GPT-6.2-Sol", "GPT-6.2-Astra", "GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna", "GPT-5.6-Sol"]);
   // The conversation runs on the retired 5.6 Sol, so its row stays, checked,
   // after the current choices; the others stay selectable.
-  expect(modelRows[4]!.getAttribute("aria-checked")).toBe("true");
+  expect(modelRows.find(row => row.getAttribute("data-runtime-value") === "gpt-5.6-sol")!.getAttribute("aria-checked")).toBe("true");
   expect(modelRows[0]!.getAttribute("aria-checked")).toBe("false");
   expect(modelRows[0]!.hasAttribute("disabled")).toBe(false);
   // The back row returns to the root panel; its accessible name is the wired
@@ -482,7 +482,7 @@ test("a conversation on a retired model can move to Terra 6.1 and back, and a cu
   await openModels();
   // The drafted Terra is checked; the model the transcript still reports stays listed to go back to.
   expect(modelRows().map((row) => [row.textContent, row.getAttribute("aria-checked")])).toEqual([
-    ["GPT-6-Astra", "false"], ["GPT-6.1-Sol", "false"], ["GPT-6.1-Terra", "true"], ["GPT-6-Luna", "false"], ["GPT-5.6-Sol", "false"],
+    ["GPT-6.2-Sol", "false"], ["GPT-6.2-Astra", "false"], ["GPT-6-Astra", "false"], ["GPT-6.1-Sol", "false"], ["GPT-6.1-Terra", "true"], ["GPT-6-Luna", "false"], ["GPT-5.6-Sol", "false"],
   ]);
   await act(async () => root.unmount());
 
@@ -490,7 +490,7 @@ test("a conversation on a retired model can move to Terra 6.1 and back, and a cu
   await click(current.host.querySelector("[data-runtime-pill]")!);
   await click([...current.host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')].find((row) => row.getAttribute("data-runtime-value") === "model")!);
   expect([...current.host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')].map((row) => row.textContent))
-    .toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna"]);
+    .toEqual(["GPT-6.2-Sol", "GPT-6.2-Astra", "GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna"]);
   await act(async () => current.root.unmount());
 });
 
@@ -601,7 +601,7 @@ test("a resume profile saved on a retired model stays listed and checked while t
   await click(host.querySelector("[data-runtime-pill]")!);
   await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="submenu"]')].find((row) => row.getAttribute("data-runtime-value") === "model")!);
   expect([...host.ownerDocument.querySelectorAll('[data-runtime-row="model"]')].map((row) => [row.textContent, row.getAttribute("aria-checked")])).toEqual([
-    ["GPT-6-Astra", "false"], ["GPT-6.1-Sol", "false"], ["GPT-6.1-Terra", "false"], ["GPT-6-Luna", "false"], ["GPT-5.6-Terra", "true"],
+    ["GPT-6.2-Sol", "false"], ["GPT-6.2-Astra", "false"], ["GPT-6-Astra", "false"], ["GPT-6.1-Sol", "false"], ["GPT-6.1-Terra", "false"], ["GPT-6-Luna", "false"], ["GPT-5.6-Terra", "true"],
   ]);
   // Opening the list rewrites nothing that was saved.
   expect(JSON.parse(localStorage.getItem(key + ":resume")!)).toEqual({ model: "gpt-5.6-terra", effort: "ultra", fast: false });
@@ -1230,29 +1230,47 @@ test("a model the catalogue does not list is named as the transcript reports it,
   await act(async () => claude.root.unmount());
 });
 
-test("a Fable conversation keeps its catalogue model: tiers stay enabled and an effort pick is sent on fable", async () => {
+test("a Fable 5.2 conversation keeps its catalogue model: it reads Fable 5.2, tiers stay enabled and an effort pick keeps it on claude-fable-5-2", async () => {
   for (const launchModel of ["fable", null] as const) {
     requests.length = 0;
-    const fable: FileEntry = { ...claudeFile, model: "fable-5-1", launchModel, effort: "high" };
+    const fable: FileEntry = { ...claudeFile, model: "fable-5-2", launchModel, effort: "high" };
     const { host, root } = await renderPill(<RuntimePill file={fable} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />);
-    expect(faceOf(host)).toContain("Fable");
+    expect(faceOf(host)).toContain("Fable 5.2");
+    expect(faceOf(host)).not.toContain("Fable 5.1");
     await click(host.querySelector("[data-runtime-pill]")!);
     expect(host.ownerDocument.querySelector("[data-runtime-hold]")).toBeNull();
     const tiers = [...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')];
     expect(tiers.length).toBeGreaterThan(0);
     expect(tiers.some((row) => row.hasAttribute("aria-disabled"))).toBe(false);
     await click(tiers.find((row) => row.getAttribute("aria-checked") !== "true")!);
-    expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "fable" });
+    expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "claude-fable-5-2" });
+    await act(async () => root.unmount());
+  }
+});
+
+test("a Fable 5.1 conversation still reads Fable 5.1 and an effort pick keeps it on Fable 5.1", async () => {
+  for (const launchModel of ["fable", null] as const) {
+    requests.length = 0;
+    const fable: FileEntry = { ...claudeFile, model: "claude-fable-5-1", launchModel, effort: "high" };
+    const { host, root } = await renderPill(<RuntimePill file={fable} surface="structured" runtimeSettings={CLAUDE_STRUCTURED} />);
+    expect(faceOf(host)).toContain("Fable 5.1");
+    expect(faceOf(host)).not.toContain("Fable 5.2");
+    await click(host.querySelector("[data-runtime-pill]")!);
+    expect(host.ownerDocument.querySelector("[data-runtime-hold]")).toBeNull();
+    const tiers = [...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')];
+    expect(tiers.some((row) => row.hasAttribute("aria-disabled"))).toBe(false);
+    await click(tiers.find((row) => row.getAttribute("aria-checked") !== "true")!);
+    expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "claude-fable-5-1" });
     await act(async () => root.unmount());
   }
 });
 
 test("a live Fable conversation settles its reconfigure once the transcript's release reports the effort picked", async () => {
-  const fable: FileEntry = { ...claudeFile, model: "fable-5-1", launchModel: "fable", effort: "high" };
+  const fable: FileEntry = { ...claudeFile, model: "fable-5-2", launchModel: "fable", effort: "high" };
   const { host, root } = await renderPill(<RuntimePill file={fable} surface="live-root" runtimeSettings={CLAUDE_STRUCTURED} />);
   await click(host.querySelector("[data-runtime-pill]")!);
   await click([...host.ownerDocument.querySelectorAll('[data-runtime-row="tier"]')].find((row) => row.textContent === "Medium")!);
-  expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "fable", effort: "medium" });
+  expect(requests.at(-1)).toMatchObject({ action: "reconfigure", model: "claude-fable-5-2", effort: "medium" });
   const phase = "llvAgentRuntime:conversation_claude:phase";
   expect(localStorage.getItem(phase)).toBe("confirming");
   /* A poll that has not moved the effort yet leaves the change confirming. */

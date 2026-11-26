@@ -28,7 +28,7 @@ test("issue 51 keeps a Codex turn busy through interim assistant text and tool w
   ], "codex")).toEqual({ state: "terminal", source: "lifecycle", terminalAt: "2026-07-10T12:00:00.000Z" });
 });
 
-test("issue 51 requires the matching terminal event after every open tool closes", () => {
+test("a native terminal settles turn-local tools even when an output never arrives", () => {
   const open = [
     { type: "event_msg", timestamp: "2026-07-10T00:00:00Z", payload: { type: "task_started", turn_id: "turn-1" } },
     { type: "event_msg", timestamp: "2026-07-10T00:00:01Z", payload: { type: "agent_message", message: "I am checking" } },
@@ -48,7 +48,7 @@ test("issue 51 requires the matching terminal event after every open tool closes
     timestamp: "2026-07-10T00:00:02.500Z",
     payload: { type: "task_complete", turn_id: "turn-1" },
   }];
-  expect(turnStateFromRecords(prematureTerminal, "codex").state).toBe("busy");
+  expect(turnStateFromRecords(prematureTerminal, "codex").state).toBe("terminal");
 
   const terminal = [...closedTool, {
     type: "event_msg",

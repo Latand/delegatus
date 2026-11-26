@@ -31,7 +31,6 @@ function rv(hostKind: HostKind, host: HostAxis): RuntimeSessionView {
     uiState: {} as RuntimeSessionView["uiState"],
     attentions: [],
     receipts: [],
-    legacy: false,
     structuredControlsEnabled: true,
   };
 }

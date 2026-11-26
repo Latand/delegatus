@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { saveTasks, loadTasks } from "@/lib/tasks/store";
+import { patchTask } from "@/lib/tasks/commands";
 import { publishPOST as gatedPublishPOST, reviewGET, reviewPOST, reviewReadPOST } from "./http";
 import { viewerMcpBindings } from "@/lib/mcp/bindings";
 import { VIEWER_SPAWN_CAPABILITY_ENV, VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
@@ -78,6 +79,16 @@ test("publication copies a task's prototype before its worktree disappears", asy
   expect(body.rounds[0].variants[0].frames[0].image.available).toBe(true);
   expect(body.waitingReviewId).toBe(body.rounds[0].id);
   expect(loadTasks()[0]!.prototypeReviews).toHaveLength(1);
+});
+
+test("a hold write reads a published unanswered form from stored task history, then releases after its answer", async () => {
+  const reviewId = await publish(await fullInput("stored-form-hold"));
+  const pending = patchTask(loadTasks(), "task-prototype", { status: "blocked", hold: { kind: "operator", note: "" } }, "2026-10-01T00:01:00Z", { actor: "operator" });
+  expect(pending).toMatchObject({ ok: true, task: { status: "blocked", hold: { kind: "operator", note: "" } } });
+  const answered = await reviewPOST(request("/review", { reviewId, chosen: [1], comment: "Use the compact layout." }), "task-prototype");
+  expect(answered.status).toBe(200);
+  const released = patchTask(loadTasks(), "task-prototype", { status: "blocked", hold: { kind: "operator", note: "" } }, "2026-10-01T00:02:00Z", { actor: "operator" });
+  expect(released).toMatchObject({ ok: true, task: { status: "inbox" } });
 });
 
 test("the agent surface exposes a publishing tool and a decision read", () => {
@@ -177,6 +188,27 @@ test("no orchestrator keeps the decision, combination, exact comment and history
   const changed = await reviewPOST(request("/review",{ reviewId: id,chosen: [1],comment: "Changed decision" }),"task-prototype"); expect(changed.status).toBe(200);
   expect(loadTasks()[0]!.prototypeReviews![0]!.decision).toMatchObject({ chosen: [1],comment: "Changed decision",revision: 2,delivery: { state: "no-orchestrator",clientMessageId: `prototype-decision:${id}:2` } });
   expect(loadTasks()[0]!.prototypeReviews![0]!.decision!.delivery.text).not.toContain("amended");
+});
+
+test("task Waiting writes follow the stored decision form before and after its answer", async () => {
+  const { waitingRoute, waitingRouteIndex } = await import("@/lib/tasks/waitingRoute");
+  const reviewId = await publish(await fullInput("stored-form-hold"));
+  let stored = loadTasks()[0]!;
+  const write = patchTask([stored], stored.id, { status: "blocked", hold: { kind: "operator", note: "" } }, "2026-10-01T01:00:00Z", { actor: "operator" });
+  expect(write.ok).toBe(true);
+  if (!write.ok) throw new Error(write.error);
+  saveTasks(write.tasks);
+  stored = loadTasks()[0]!;
+  expect(stored.status).toBe("blocked");
+  expect(waitingRoute(stored, waitingRouteIndex([stored], []), Date.parse("2026-10-01T01:00:00Z"))).toMatchObject({ owner: "operator", rule: "form" });
+
+  const answer = await reviewPOST(request("/review", { reviewId, chosen: [1], comment: "Approved" }), "task-prototype");
+  expect(answer.status).toBe(200);
+  stored = loadTasks()[0]!;
+  const afterAnswer = patchTask([stored], stored.id, { status: "blocked", hold: { kind: "operator", note: "" } }, "2026-10-01T02:00:00Z", { actor: "operator" });
+  expect(afterAnswer).toMatchObject({ ok: true, task: { status: "inbox" } });
+  if (!afterAnswer.ok) throw new Error(afterAnswer.error);
+  expect(waitingRoute(afterAnswer.task, waitingRouteIndex([afterAnswer.task], []), Date.parse("2026-10-01T02:00:00Z"))).toMatchObject({ owner: "seat", rule: "form-answered" });
 });
 
 test("a decision on the newer of two rounds retires the older undecided one: nothing waits, history keeps it as superseded", async () => {
@@ -516,6 +548,21 @@ test("publication refuses a builder pass after the critic stage is changed, unti
   expect(published.status).toBe(200);
   expect((await published.json()).critic).toEqual({ stageId: "critic", attempt: 2, outcome: "passed" });
 });
+test.each(["Layout ".repeat(17), "🌍".repeat(60)])("an operator-skipped critic publishes a review with a durable visible disclosure (%s)", async titleInput => {
+  const lane = criticLane();
+  Object.assign(criticAttempt(lane), { n: 3, state: "skipped", operatorCriticSkip: true });
+  lane.runs[1]!.attempts[0]!.startedAt = "2026-10-12T09:00:00Z";
+  const input = { ...await fullInput("operator-skipped-critic"), title: titleInput };
+  const response = await gatedPublishPOST(request("/api/prototype-reviews", input), { ...reviewedWorld, pipeline: () => lane });
+  expect(response.status).toBe(200);
+  expect((await response.json()).critic).toEqual({ stageId: "critic", attempt: 3, outcome: "skipped-by-operator" });
+  const title = (await read()).rounds[0]!.title;
+  expect(title).toContain("Visual critic skipped by operator");
+  expect(title.length).toBeLessThanOrEqual(120);
+  expect(prototypeReviewReplica(loadTasks()[0]!)!.rounds[0]!.title).toBe(title);
+  expect(isPrototypeReplica(prototypeReviewReplica(loadTasks()[0]!), "task-prototype", "project-a")).toBe(true);
+});
+
 test("question-only forms bypass the gate and a reviewed publication stores local provenance", async () => {
   const questionnaire = await gatedPublishPOST(request("/api/prototype-reviews", { clientRequestId: "only-questions", taskId: "task-prototype", title: "Questions", questions }), prototypeWorld);
   expect(questionnaire.status).toBe(200);

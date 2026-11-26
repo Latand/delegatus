@@ -9,8 +9,10 @@ import { appendLifecycleEvents, readLifecycleJournal } from "@/lib/lifecycle/jou
 import { discoverFilesWithProjectCatalog } from "@/lib/scanner/discover";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { projectCatalogSnapshotFromRaw } from "@/lib/scanner/projectCatalog";
+import { seedProjectCatalogForTests } from "@/lib/scanner/projectCatalogStore";
 import { stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
 import { publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
+import { recoverWorktreesInWorker } from "@/lib/state/durability";
 import { checkpointLegacyCollectionMirrorsForDemotion } from "@/lib/state/legacyCollections";
 import { closeStateMutationActivationForTests, withStateMutationActivation } from "@/lib/state/stateMutationBarrier";
 import { completeViewerRuntimeActivation } from "@/lib/viewerInstrumentation";
@@ -46,7 +48,9 @@ function fixture(defaultState = false, repositoryName = "widgets") {
     return filename;
   };
   transcript(repo);
-  const write = () => fs.writeFileSync(path.join(state, "project-catalog.json"), JSON.stringify({ version: 2, files }));
+  /* The catalog as a scan would have stored it: through the store, so a
+     later read imports nothing and writes no state of its own. */
+  const write = () => seedProjectCatalogForTests({ version: 2, files }, path.join(state, "project-catalog.json"));
   const raw = () => Object.keys(files).map(filename => ({ rootName: "codex-sessions" as const, root: sessions, path: filename, st: fs.statSync(filename) }));
   const scan = () => discoverFilesWithProjectCatalog([["codex-sessions", sessions]]);
   return { state, repo, remote, identity, transcript, write, files, raw, scan };
@@ -60,7 +64,7 @@ function durableBytes(directory: string) {
   return Object.fromEntries(Object.entries(bytes(directory)).filter(([name]) => name !== "state.sqlite-shm"));
 }
 
-test.each(["widgets", longRepositoryName])("Viewer activation recovers %s after hot-state activation and before controllers, once without replay writes", async repositoryName => {
+test.each(["widgets", longRepositoryName])("Viewer activation defers removed-checkout recovery for %s until after readiness", async repositoryName => {
   const f = fixture(false, repositoryName);
   const cwd = f.repo + "-review";
   f.transcript(cwd, { repository_url: f.remote }); f.write();
@@ -69,16 +73,37 @@ test.each(["widgets", longRepositoryName])("Viewer activation recovers %s after 
   expect(patchBoard(source, 0, { manual: ["conversation_old"] }, board).ok).toBe(true);
   const order: string[] = [];
   let scans = 0;
-  const startup = () => runWorktreeRecoveryAtStartup(message => { throw Error(String(message)); }, async () => { scans++; await f.scan(); });
+  let refreshCatalog: (() => Promise<void>) | undefined;
+  let releaseRecovery!: () => void;
+  const recoveryGate = new Promise<void>(resolve => { releaseRecovery = resolve; });
+  let finishRecovery!: () => void;
+  const recoveryFinished = new Promise<void>(resolve => { finishRecovery = resolve; });
+  const startup = () => runWorktreeRecoveryAtStartup(message => { throw Error(String(message)); },
+    async () => { scans++; await f.scan(); }, refresh => { refreshCatalog = refresh; });
   await completeViewerRuntimeActivation({
     initializeOperatorCapability: async () => { order.push("capability"); },
     publishHotStateActivation: () => { order.push("fence"); },
-    runWorktreeRecovery: async () => { order.push("recovery"); await startup(); },
     startStructuredHosts: null, startControllers: async () => {
-      expect(canonicalProject(source)).toBe(f.identity.project); order.push("controllers");
+      // The live checkout path mapping is already persisted by the scanner;
+      // this pending repair targets only retained rows from a removed checkout.
+      expect(canonicalProject(source)).toBe(source); order.push("controllers");
     }, publishViewerReleaseReady: () => { order.push("ready"); },
+    refineBoard: async () => {
+      await recoveryGate;
+      order.push("recovery");
+      await startup();
+      expect(canonicalProject(source)).toBe(f.identity.project);
+      await refreshCatalog?.();
+      finishRecovery();
+    },
   });
-  expect(order).toEqual(["capability", "fence", "recovery", "controllers", "ready"]);
+  expect(order).toEqual(["capability", "fence", "controllers", "ready"]);
+  expect(scans).toBe(0);
+  expect(canonicalProject(source)).toBe(source);
+  releaseRecovery();
+  await recoveryFinished;
+  expect(order).toEqual(["capability", "fence", "controllers", "ready", "recovery"]);
+  expect(refreshCatalog).toBeDefined();
   expect(scans).toBe(1);
   expect(boardFor(f.identity.project, board).prefs.manual).toEqual(["conversation_old"]);
   expect(projectInfoFromCwd(cwd)?.project).toBe(f.identity.project);
@@ -90,7 +115,9 @@ test.each(["widgets", longRepositoryName])("Viewer activation recovers %s after 
   expect(journal.events[0]?.summary).toContain(f.identity.project);
   expect(journal.events[0]!.summary.length).toBeLessThanOrEqual(200);
   const before = bytes(f.state);
+  refreshCatalog = undefined;
   await startup();
+  expect(refreshCatalog).toBeUndefined();
   expect(scans).toBe(1);
   expect(bytes(f.state)).toEqual(before);
   expect(readLifecycleJournal()).toEqual(journal);
@@ -204,14 +231,14 @@ test("startup failure is deferred and retried on the next startup with no lost a
   const journal = path.join(f.state, "lifecycle-journal.json");
   fs.writeFileSync(journal, "broken");
   const logs: unknown[] = [];
-  await runWorktreeRecoveryAtStartup(message => logs.push(message), async () => {});
-  expect(logs).toHaveLength(1);
+  await expect(runWorktreeRecoveryAtStartup(message => logs.push(message), async () => {})).rejects.toThrow("unreadable");
+  expect(logs).toHaveLength(0);
   expect(readWorktreeRecoveries()).toEqual([]);
   expect(canonicalProject(directoryProjectId(cwd))).toBe(directoryProjectId(cwd));
   fs.writeFileSync(journal, JSON.stringify({ version: 1, lastSeq: 0, events: [], retired: [] }));
   await runWorktreeRecoveryAtStartup(message => logs.push(message), async () => {});
   expect(readLifecycleJournal().events[0]?.summary).toContain("sibling-name-and-branch-hint");
-  expect(logs).toHaveLength(1);
+  expect(logs).toHaveLength(0);
 });
 
 test.each([undefined, "tool", "mcp", "launcher", "deploy-adapter"])("automatic recovery refuses operator state for owner %s before reading any file", owner => {
@@ -235,11 +262,12 @@ test("missing startup catalog and repeated dry-run diagnostics initialize nothin
   expect(recoverWorktreeProjects("startup").folded).toEqual([]);
   expect(bytes(f.state)).toEqual(before);
   f.transcript(f.repo + "-review", { branch: "confirmed" }); f.write();
+  const listing = fs.readdirSync(f.state).sort();
   const signature = stateDatabaseSignature(path.join(f.state, "state.sqlite"));
   expect((await backfillWorktreeProjects()).folded).toHaveLength(1);
   expect((await backfillWorktreeProjects()).folded).toHaveLength(1);
   expect(stateDatabaseSignature(path.join(f.state, "state.sqlite"))).toBe(signature);
-  expect(fs.readdirSync(f.state)).toEqual(["project-catalog.json"]);
+  expect(fs.readdirSync(f.state).sort()).toEqual(listing);
 });
 
 
@@ -253,6 +281,49 @@ test("startup folds an older directory project using only its agreeing durable m
   expect(projectInfoFromCwd(path.join(cwd, "nested"))?.project).toBe(f.identity.project);
 });
 
+
+test("the leased startup worker publishes recovery for the serving process", async () => {
+  const f = fixture();
+  const cwd = f.repo + "-review";
+  const source = directoryProjectId(cwd);
+  f.transcript(cwd, { branch: "confirmed" });
+  f.write();
+  const board = path.join(f.state, "board.json");
+  expect(patchBoard(source, 0, { manual: ["conversation_old"] }, board).ok).toBe(true);
+  expect(canonicalProject(source)).toBe(source);
+
+  const controller = new AbortController();
+  controller.abort(new Error("retired"));
+  await expect(recoverWorktreesInWorker(f.state, controller.signal)).rejects.toThrow("retired");
+  expect(readWorktreeRecoveries()).toEqual([]);
+
+  await recoverWorktreesInWorker(f.state, new AbortController().signal);
+  expect(canonicalProject(source)).toBe(f.identity.project);
+  expect(projectInfoFromCwd(cwd)?.project).toBe(f.identity.project);
+  expect(boardFor(f.identity.project, board).prefs.manual).toEqual(["conversation_old"]);
+  expect(readLifecycleJournal().events.map(event => event.seq)).toEqual([1]);
+}, 30_000);
+
+test("the leased worker rejects an uncommitted recovery and returns a commit receipt on retry", async () => {
+  const f = fixture();
+  const cwd = f.repo + "-review";
+  const source = directoryProjectId(cwd);
+  f.transcript(cwd, { branch: "confirmed" }); f.write();
+  const board = path.join(f.state, "board.json");
+  expect(patchBoard(source, 0, { manual: ["conversation_old"] }, board).ok).toBe(true);
+  const database = new Database(path.join(f.state, "state.sqlite"));
+  database.exec("CREATE TRIGGER recovery_commit_failure BEFORE DELETE ON state_rows WHEN OLD.collection = 'board' BEGIN SELECT RAISE(ABORT, 'induced board failure'); END");
+  try {
+    await expect(recoverWorktreesInWorker(f.state, new AbortController().signal)).rejects.toThrow();
+    expect(readWorktreeRecoveries()).toEqual([]);
+    expect(canonicalProject(source)).toBe(source);
+    database.exec("DROP TRIGGER recovery_commit_failure");
+    const receipt = await recoverWorktreesInWorker(f.state, new AbortController().signal);
+    expect(receipt).toEqual({ folded: 1, leftAlone: 0 });
+    expect(canonicalProject(source)).toBe(f.identity.project);
+    expect(boardFor(f.identity.project, board).prefs.manual).toEqual(["conversation_old"]);
+  } finally { database.close(); }
+}, 30_000);
 
 test("a failed startup catalog refresh retries on the next startup without repeating the fold", async () => {
   const f = fixture(); const cwd = f.repo + "-review";

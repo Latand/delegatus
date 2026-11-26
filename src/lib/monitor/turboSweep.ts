@@ -34,8 +34,6 @@ export interface TurboCandidate {
   seat?: boolean;
   /** The running attempt of a pipeline stage. */
   stage?: { pipelineId: string; stageId: string; attempt: number; definitionTier: string | null; switchOpen: boolean };
-  /** A legacy tmux launch, whose tier is a launch flag. */
-  legacy?: boolean;
   /** A turn is running; idle conversations go first. */
   busy?: boolean;
 }
@@ -230,7 +228,6 @@ export class TurboSweep {
     const base = { conversationId: candidate.conversationId, accountId: candidate.accountId ?? "", model: candidate.model ?? "", from: candidate.tier, to: to ?? "priority" as TurboTier, at,
       ...(candidate.stage ? { stage: { pipelineId: candidate.stage.pipelineId, stageId: candidate.stage.stageId, attempt: candidate.stage.attempt, definitionFrom: candidate.stage.definitionTier } } : {}) };
     const skip = (reason: string): TurboSwitch => ({ ...base, state: "skipped", reason });
-    if (candidate.legacy) return skip("legacy terminal launch: its speed is a launch flag");
     if (!account) return skip("its account is not an allowed Codex account");
     if (!to) return skip("its account offers no faster tier for this model");
     if (candidate.stage?.switchOpen) return skip("another runtime switch is open on this stage");

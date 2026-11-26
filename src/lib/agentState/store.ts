@@ -1,0 +1,453 @@
+import crypto from "node:crypto";
+import type { AgentRegistry, AgentRegistryEntry, RegistryFile } from "@/lib/agent/registry";
+import {
+  attachAgentStateJournalSubjectIndex,
+  noteAgentStateJournalRow,
+  registryCollectionPage,
+  registryConversationsForEntryKey,
+  registryLatestAgentStateJournalBySubject,
+  removeAgentStateJournalRowFromIndex,
+  type AntigravityAgentStatesView,
+} from "@/lib/agent/sqliteRegistryStore";
+import { sessionKeyId } from "@/lib/agent/sessionKey";
+import { AGENT_STATE_POLICY, emptyAgentStateMetrics, evaluateAgentState, fact, validAgentFacts, validAgentEvidence, type AgentFacts, type AgentProjection, type AgentStateJournal, type AgentStateMetrics, type AgentStateMetricsRow } from "./model";
+
+export function copyAgentStateRow<T>(row: T): T {
+  if (row === null || typeof row !== "object") return row;
+  if (Array.isArray(row)) return row.map((item) => copyAgentStateRow(item)) as T;
+  const copy: Record<string, unknown> = {};
+  for (const key of Object.keys(row as Record<string, unknown>)) {
+    const value = (row as Record<string, unknown>)[key];
+    if (value !== undefined) copy[key] = copyAgentStateRow(value);
+  }
+  return copy as T;
+}
+const hash = (v: unknown) => crypto.createHash("sha256").update(JSON.stringify(v)).digest("hex");
+export function subjectId(entry: AgentRegistryEntry): string {
+  return hash([sessionKeyId(entry.key), entry.structuredHost?.process ?? entry.structuredHost?.exitProcess ?? entry.hostExitProcess]).slice(0, 48);
+}
+/** All writers, copies, defaults and CAS inputs meet at this tuple. */
+export function entryRevision(entry: AgentRegistryEntry): string {
+  return hash(entry);
+}
+export function artifactRevision(entry: AgentRegistryEntry): string {
+  return hash([entry.key, entry.artifactPath, entry.structuredHost?.process, entry.structuredHost?.agentStateNativePromptAnchor]);
+}
+
+const metricsDefaults = emptyAgentStateMetrics();
+
+export function normalizeAgentStateRows(value: unknown, kind: "projection"): Record<string, AgentProjection>;
+export function normalizeAgentStateRows(value: unknown, kind: "journal"): Record<string, AgentStateJournal>;
+export function normalizeAgentStateRows(value: unknown, kind: "metrics", preserveStoredShape: true): Record<string, AgentStateMetricsRow>;
+export function normalizeAgentStateRows(value: unknown, kind: "metrics"): Record<string, AgentStateMetrics>;
+export function normalizeAgentStateRows(value: unknown, kind: "projection" | "journal" | "metrics", preserveStoredShape = false): Record<string, AgentProjection | AgentStateJournal | AgentStateMetricsRow> {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid agent-state collection");
+  const rows: Record<string, AgentProjection | AgentStateJournal | AgentStateMetricsRow> = {};
+  const journalSubjectIndex = kind === "journal" ? new Map<string, AgentStateJournal>() : null;
+  for (const [key, row] of Object.entries(value)) {
+    if (!row || row.version !== 1 || key.length > 128 || Buffer.byteLength(JSON.stringify(row)) > 8192
+      || (kind === "projection" && (!validAgentFacts(row.facts) || row.subject !== row.facts.subject || !row.verdict || !Number.isSafeInteger(row.revision)))
+      || (kind === "journal" && (row.id !== key || typeof row.at !== "number" || !Array.isArray(row.evidence) || row.evidence.length > 16 || !row.evidence.every(validAgentEvidence)))) throw new Error("invalid agent-state row");
+    if (kind === "metrics") {
+      const metrics = normalizeAgentStateMetrics(row);
+      if (!metrics) throw new Error("invalid agent-state row");
+      // Registry snapshots are written as whole files. Keep the original
+      // sparse representation there so an unrelated write cannot migrate history.
+      rows[key] = preserveStoredShape ? row as AgentStateMetricsRow : metrics;
+    } else {
+      rows[key] = row;
+      if (journalSubjectIndex) {
+        const journalRow = row as AgentStateJournal;
+        const existing = journalSubjectIndex.get(journalRow.subject);
+        if (!existing || journalRow.at >= existing.at) {
+          journalSubjectIndex.set(journalRow.subject, journalRow);
+        }
+      }
+    }
+  }
+  if (journalSubjectIndex) {
+    attachAgentStateJournalSubjectIndex(rows as Record<string, AgentStateJournal>, journalSubjectIndex);
+  }
+  return rows;
+}
+export function validAgentStateMetrics(v: unknown): v is AgentStateMetricsRow {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+  const row = v as Record<string, unknown>;
+  return Object.entries(metricsDefaults).every(([key, sample]) => {
+    const value = row[key];
+    if (key === "version") return value === 1;
+    if (key === "stuckByEngine" || key === "stuckByReason") {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      const buckets = Object.entries(value);
+      return (key === "stuckByEngine" || buckets.length === Object.keys(sample!).length)
+        && buckets.every(([bucket, count]) => Object.hasOwn(sample!, bucket)
+          && typeof count === "number" && Number.isSafeInteger(count) && count >= 0);
+    }
+    if (key === "afterKey") return value === null || typeof value === "string" && value.length <= 128;
+    if (sample === null) return value === null || typeof value === "number" && Number.isFinite(value) && value >= 0;
+    return typeof value === "number" && Number.isFinite(value) && value >= 0;
+  }) && (row.physicalSubjects === undefined || Array.isArray(row.physicalSubjects) && row.physicalSubjects.length <= 16 && row.physicalSubjects.every(id => typeof id === "string" && /^[a-f0-9]{48}$/.test(id)))
+    && Object.keys(row).length === Object.keys(metricsDefaults).length + Number(row.physicalSubjects !== undefined);
+}
+export function normalizeAgentStateMetrics(value: unknown): AgentStateMetrics | null {
+  if (!validAgentStateMetrics(value)) return null;
+  return { ...value, stuckByEngine: { ...metricsDefaults.stuckByEngine, ...value.stuckByEngine } };
+}
+
+export interface StateObservation {
+  entry: AgentRegistryEntry;
+  conversationRevision: string;
+  projection: AgentProjection;
+  journal: AgentStateJournal;
+  repair: boolean;
+  repairConversation?: boolean;
+}
+export function conversationRevision(file: RegistryFile, entry: AgentRegistryEntry): string {
+  return hash(registryConversationsForEntryKey(file, sessionKeyId(entry.key)).map(row => [row.id, row.generations, row.turn]));
+}
+function contribution(row?: AgentProjection): Record<"unownedHosts" | "unownedRssMeasured" | "unownedRssUnknown" | "stuckTurns" | "subjectsObserved" | "subjectsUnverified" | "pendingProjectionPublications" | "registryTranscriptDivergencesCurrent", number> {
+  const unowned = row?.verdict.state === "unowned";
+  return { unownedHosts: Number(unowned), unownedRssMeasured: Number(unowned && row?.rssBytes !== null),
+    unownedRssUnknown: Number(unowned && row?.rssBytes === null), stuckTurns: Number(row?.verdict.stuck ?? false),
+    subjectsObserved: Number(Boolean(row)), subjectsUnverified: Number(Boolean(row && row.verdict.missing.length)),
+    pendingProjectionPublications: Number(row?.pendingPublication ?? false), registryTranscriptDivergencesCurrent: Number(Boolean(row?.divergence)) };
+}
+function changeMetrics(
+  file: RegistryFile,
+  metrics: AgentStateMetrics,
+  old: AgentProjection | undefined,
+  next: AgentProjection,
+  extraStates?: AntigravityAgentStatesView,
+  previouslyObservedWithoutRow = false,
+  previousUnverified = false,
+): void {
+  const before = contribution(old), after = contribution(next);
+  if (!old && previouslyObservedWithoutRow) {
+    before.subjectsObserved = 1;
+    if (previousUnverified) before.subjectsUnverified = 1;
+  }
+  for (const key of ["subjectsObserved", "subjectsUnverified", "pendingProjectionPublications", "registryTranscriptDivergencesCurrent"] as const)
+    metrics[key] = Math.max(0, metrics[key] + after[key] - before[key]);
+  const identity = next.facts.process.determined ? next.facts.process.value.identity : null;
+  if (!identity) return;
+  const key = `process:${hash(identity).slice(0, 48)}`;
+  const prior = file.agentStateMetrics[key] ?? emptyAgentStateMetrics();
+  const members = [...new Set([...(prior.physicalSubjects ?? []), next.subject])];
+  const rows = members.flatMap(id => {
+    const row = id === next.subject ? next : file.agentStates[id] ?? extraStates?.get(id);
+    return row?.facts.process.determined && row.facts.process.value.status === "alive" ? [row] : [];
+  });
+  const physical = emptyAgentStateMetrics();
+  physical.physicalSubjects = rows.map(row => row.subject).slice(0, 16);
+  physical.at = next.verdict.evaluatedAt;
+  physical.physicalAliasesUnverified = Number(prior.physicalAliasesUnverified > 0 || members.length > 16);
+  physical.unownedHosts = Number(rows.length > 0 && !physical.physicalAliasesUnverified
+    && rows.every(row => row.facts.owner.determined && row.facts.owner.value === "absent"));
+  const stuck = rows.filter(row => row.verdict.stuck).sort((a, b) => a.subject.localeCompare(b.subject))[0];
+  physical.stuckTurns = Number(Boolean(stuck));
+  if (stuck) {
+    physical.stuckByEngine[stuck.facts.engine] = 1;
+    const activity = stuck.facts.activity.determined ? stuck.facts.activity.value : null;
+    physical.stuckByReason[activity?.providerRetry ? "providerWait" : activity?.flags.length ? "checking" : "silent"] = 1;
+  }
+  for (const group of ["stuckByEngine", "stuckByReason"] as const) {
+    for (const key of Object.keys(physical[group])) {
+      const aggregate = metrics[group] as Record<string, number>;
+      aggregate[key] = Math.max(0, (aggregate[key] ?? 0) + (physical[group] as Record<string, number>)[key]! - ((prior[group] as Record<string, number>)[key] ?? 0));
+    }
+  }
+  const measured = rows.filter(row => row.rssBytes !== null && row.rssCapturedAt !== undefined
+    && next.verdict.evaluatedAt - row.rssCapturedAt < AGENT_STATE_POLICY.reconcileMs).sort((a, b) => (b.rssCapturedAt ?? 0) - (a.rssCapturedAt ?? 0))[0];
+  physical.unownedRssMeasured = Number(physical.unownedHosts > 0 && measured !== undefined);
+  physical.unownedRssUnknown = Number(physical.unownedHosts > 0 && measured === undefined);
+  physical.unownedRssBytes = physical.unownedRssMeasured ? measured!.rssBytes : null;
+  const bytes = (metrics.unownedRssBytes ?? 0) + (physical.unownedRssBytes ?? 0) - (prior.unownedRssBytes ?? 0);
+  for (const gauge of ["unownedHosts", "stuckTurns", "unownedRssMeasured", "unownedRssUnknown", "physicalAliasesUnverified"] as const)
+    metrics[gauge] = Math.max(0, metrics[gauge] + physical[gauge] - prior[gauge]);
+  metrics.unownedRssBytes = metrics.unownedRssMeasured ? Math.max(0, bytes) : null;
+  if (rows.length) file.agentStateMetrics[key] = physical;
+  else delete file.agentStateMetrics[key];
+}
+function semantic(row: AgentProjection): string {
+  type PublishedFact = AgentFacts["process"] | AgentFacts["owner"] | AgentFacts["turn"] | AgentFacts["attention"]
+    | AgentFacts["transcript"] | AgentFacts["obligations"] | AgentFacts["activity"];
+  const factMeaning = (value: PublishedFact, semanticValue?: unknown) => {
+    if (!value || typeof value !== "object" || !("evidence" in value)) return null;
+    const evidence = value.evidence;
+    return { determined: value.determined, value: value.determined ? semanticValue ?? value.value : null,
+      why: value.determined ? null : value.why,
+      evidence: { source: evidence.source, subjectRevision: evidence.subjectRevision, ref: evidence.ref,
+        eventAt: evidence.eventAt } };
+  };
+  const facts = Object.fromEntries(Object.entries(row.facts).filter(([key]) => key !== "revision")
+    .map(([key, raw]) => {
+      const value = raw as PublishedFact;
+      const semanticValue = key === "transcript" && value.determined
+        ? Object.fromEntries(Object.entries(value.value).filter(([field]) => field !== "bytesRead"))
+        : undefined;
+      return [key, factMeaning(value, semanticValue)];
+    }));
+  return JSON.stringify([row.subject, row.entryKey, row.conversationId, facts, row.verdict.state, row.verdict.reason,
+    row.verdict.stuck, row.verdict.missing, row.divergence, row.divergenceKey, row.rssBytes, row.publishable]);
+}
+/** Inputs exposed by the board that can change even while the session stays idle. */
+function boardFacts(row: AgentProjection): string {
+  const { transcript, obligations, attention } = row.facts;
+  return JSON.stringify([row.conversationId, row.entryKey,
+    transcript.determined ? transcript.value.artifact : null,
+    obligations.determined ? obligations.value : null, attention.determined ? attention.value : null,
+    row.verdict.state, row.verdict.quality, row.verdict.reason, row.verdict.stuck]);
+}
+
+/** The repair, conversation axis, journal, metrics and Antigravity projection
+    share one atomic commit boundary in SQLite (`registry_antigravity_agent_states`). */
+export function commitAgentObservation(registry: AgentRegistry, observation: StateObservation, guard: () => boolean): AgentProjection | null {
+  const isAntigravity = observation.projection.facts.engine === "antigravity";
+  return registry.agentStateWrite((file, readMetrics, antigravityStates) => {
+    const key = sessionKeyId(observation.entry.key);
+    const current = file.entries[key];
+    if (!current || entryRevision(current) !== entryRevision(observation.entry)
+      || conversationRevision(file, current) !== observation.conversationRevision || !guard()) return null;
+    const old = isAntigravity
+      ? antigravityStates.get(observation.projection.subject) ?? file.agentStates[observation.projection.subject]
+      : file.agentStates[observation.projection.subject];
+    const next = copyAgentStateRow(observation.projection);
+    const open = next.facts.turn.determined && next.facts.turn.value.state === "open";
+    if (observation.repair) {
+      current.structuredHost!.activeTurnRef = null;
+      current.status = open ? "live" : "idle";
+      next.facts.revision = entryRevision(current);
+      for (const value of Object.values(next.facts)) {
+        if (value && typeof value === "object" && "evidence" in value && value.evidence.source !== "native-transcript") {
+          value.evidence.subjectRevision = next.facts.revision;
+        }
+      }
+      next.divergence = null;
+    }
+    if (observation.repair || observation.repairConversation) {
+      for (const conversation of registryConversationsForEntryKey(file, key)) {
+        if (conversation.generations.at(-1)?.id !== current.key.sessionId) continue;
+        const terminal = next.facts.turn.determined ? next.facts.turn.value.at : null;
+        const state = open ? "busy" : next.facts.turn.determined && next.facts.turn.value.state === "absent" ? "idle" : "terminal";
+        const terminalAt = open || terminal === null ? null : new Date(terminal).toISOString();
+        if (conversation.turn.state === state && conversation.turn.terminalAt === terminalAt) continue;
+        conversation.turn = { state, source: "lifecycle", terminalAt, observedAt: new Date(observation.journal.at).toISOString() };
+        file.conversationRevision[conversation.engine]++;
+      }
+      next.divergence = null;
+    }
+    if (old && !observation.repair && !observation.repairConversation && semantic(old) === semantic(next)) return copyAgentStateRow(old);
+
+    // When a JSON-mode registry (`off` / `dual-write`) was rewritten by a prior
+    // release that dropped top-level `antigravityAgentStates`, the journal and
+    // per-process `physicalSubjects` still prove this subject was already
+    // accounted for. Re-materialize the projection without double-counting
+    // `subjectsObserved` or appending a duplicate journal row.
+    let previouslyObservedWithoutRow = false;
+    let latestJournalForSubject: AgentStateJournal | undefined;
+    if (isAntigravity && !old) {
+      const identity = next.facts.process.determined ? next.facts.process.value.identity : null;
+      const priorProcessMetric = identity ? file.agentStateMetrics[`process:${hash(identity).slice(0, 48)}`] : undefined;
+      const inPhysicalSubjects = Boolean(priorProcessMetric?.physicalSubjects?.includes(next.subject));
+      // Match strictly by exact subject identity (`next.subject`, bound to `(entryKey,
+      // processIdentity)`), never by `entryKey` alone: replacing a session's host process
+      // produces a distinct subject that MUST get its own first-observation accounting
+      // and journal row, whereas an already-journaled subject (even if its earlier
+      // observation was unverified and therefore absent from `physicalSubjects`) MUST
+      // NOT be counted a second time after a prior JSON release dropped its projection row.
+      // Point lookup only: SQLite uses `registry_agent_state_journal_subject` (`LIMIT 1`),
+      // JSON mode uses the per-subject index built once on load — never a full journal scan.
+      latestJournalForSubject = registryLatestAgentStateJournalBySubject(file, next.subject);
+      previouslyObservedWithoutRow = inPhysicalSubjects || Boolean(latestJournalForSubject && latestJournalForSubject.to !== "dead");
+      if (previouslyObservedWithoutRow && latestJournalForSubject && !observation.repair && !observation.repairConversation) {
+        const nextEffectiveAt = next.facts.turn.determined ? next.facts.turn.value.at : null;
+        const nextTurnState = next.facts.turn.determined ? next.facts.turn.value.state : null;
+        const nextTurnNativeId = next.facts.turn.determined ? next.facts.turn.value.nativeId : null;
+        const nextCacheRef = current.structuredHost?.activeTurnRef ?? null;
+        const matchesPriorJournal = latestJournalForSubject.to === next.verdict.state
+          && latestJournalForSubject.conversationId === next.conversationId
+          && latestJournalForSubject.effectiveAt === nextEffectiveAt
+          && (latestJournalForSubject.toTurn?.state ?? null) === nextTurnState
+          && (latestJournalForSubject.toTurn?.nativeId ?? null) === nextTurnNativeId
+          && (latestJournalForSubject.toTurn?.cacheRef ?? null) === nextCacheRef;
+        if (matchesPriorJournal) {
+          const metrics = readMetrics();
+          next.revision = metrics.revision;
+          next.verdict.projectionRevision = metrics.revision;
+          next.pendingPublication = false;
+          next.pendingFilesRevision = false;
+          if (file.agentStates[next.subject]) delete file.agentStates[next.subject];
+          antigravityStates.set(next.subject, next);
+          return copyAgentStateRow(next);
+        }
+      }
+    }
+
+    const metrics = readMetrics();
+    metrics.revision++;
+    metrics.at = observation.journal.at;
+    next.revision = metrics.revision;
+    next.verdict.projectionRevision = next.revision;
+    next.pendingPublication = next.conversationId !== null && next.publishable !== false;
+    next.pendingFilesRevision = !old || old.publishable === false || (old.pendingPublication && old.pendingFilesRevision !== false)
+      || boardFacts(old) !== boardFacts(next);
+    const journal: AgentStateJournal = { ...observation.journal, from: old?.verdict.state ?? (previouslyObservedWithoutRow ? latestJournalForSubject?.to ?? null : null), to: next.verdict.state,
+      conversationId: next.conversationId, entryKey: next.entryKey,
+      effectiveAt: next.facts.turn.determined ? next.facts.turn.value.at : null,
+      fromTurn: { state: old?.facts.turn.determined ? old.facts.turn.value.state : null,
+        nativeId: old?.facts.turn.determined ? old.facts.turn.value.nativeId : null, cacheRef: observation.entry.structuredHost?.activeTurnRef ?? null },
+      toTurn: { state: next.facts.turn.determined ? next.facts.turn.value.state : null,
+        nativeId: next.facts.turn.determined ? next.facts.turn.value.nativeId : null, cacheRef: current.structuredHost?.activeTurnRef ?? null } };
+    normalizeAgentStateRows({ [next.subject]: next }, "projection");
+    normalizeAgentStateRows({ [journal.id]: journal }, "journal");
+    if (!file.agentStateJournal[journal.id]) {
+      // A failure inserting this row rolls back the repaired cache too.
+      file.agentStateJournal[journal.id] = journal;
+      noteAgentStateJournalRow(file.agentStateJournal, journal);
+      metrics.journalRows++;
+      for (const stale of registryCollectionPage(file, "agentStateJournal", "", 2)) {
+        if (metrics.journalRows <= 16384) break;
+        if (stale !== journal.id) {
+          removeAgentStateJournalRowFromIndex(file.agentStateJournal, stale);
+          delete file.agentStateJournal[stale];
+          metrics.journalRows--;
+        }
+      }
+      if (journal.divergence && old?.divergenceKey !== next.divergenceKey) metrics.registryTranscriptDivergencesTotal++;
+    }
+    const previousUnverified = latestJournalForSubject?.to === null
+      || Boolean(latestJournalForSubject?.reason.startsWith("unverified "));
+    changeMetrics(file, metrics, old, next, antigravityStates, previouslyObservedWithoutRow, previousUnverified);
+    if (isAntigravity) {
+      // Keep Antigravity projections out of the shared `agentStates` collection
+      // so rollback to a prior release never fails strict engine validation,
+      // while persisting them in the exact same SQLite/JSON atomic boundary.
+      if (file.agentStates[next.subject]) delete file.agentStates[next.subject];
+      antigravityStates.set(next.subject, next);
+    } else {
+      file.agentStates[next.subject] = next;
+    }
+    file.agentStateMetrics.current = metrics;
+    return copyAgentStateRow(next);
+  });
+}
+
+export function readAgentStateMetrics(registry: AgentRegistry): AgentStateMetrics {
+  return registry.agentStateMetricsRead();
+}
+export function readAgentProjection(registry: AgentRegistry, subject: string): AgentProjection | null {
+  return registry.agentStateRead((file, antigravityStates) => {
+    const row = file.agentStates[subject] ?? antigravityStates.get(subject) ?? null;
+    return row ? copyAgentStateRow(row) : null;
+  });
+}
+export function readAgentStatesPage(registry: AgentRegistry, after = "", limit = 32): AgentProjection[] {
+  return registry.agentStateRead((file, antigravityStates) => {
+    const primaryKeys = registryCollectionPage(file, "agentStates", after, limit);
+    const combined = new Map<string, AgentProjection>();
+    for (const key of primaryKeys) {
+      const row = file.agentStates[key];
+      if (row) combined.set(key, copyAgentStateRow(row));
+    }
+    for (const [key, row] of antigravityStates.page(after, limit)) {
+      combined.set(key, copyAgentStateRow(row));
+    }
+    return [...combined.entries()]
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .slice(0, limit)
+      .map(([, row]) => row);
+  });
+}
+export function readAgentStatePage(registry: AgentRegistry, collection: "agentStateJournal" | "agentStateMetrics", after = "", limit = 32) {
+  const currentMetrics = collection === "agentStateMetrics" ? registry.agentStateMetricsRead() : null;
+  return registry.agentStateRead(file => {
+    const keys = registryCollectionPage(file, collection, after, limit);
+    return { rows: keys.map(key => collection === "agentStateMetrics"
+      ? key === "current" && currentMetrics ? currentMetrics : normalizeAgentStateMetrics(file.agentStateMetrics[key])
+      : copyAgentStateRow(file.agentStateJournal[key])), nextCursor: keys.length === limit ? keys.at(-1) : null };
+  });
+}
+/** A status transition noticed at the runtime owner must survive a failed files publication. */
+export function requireAgentFilesRevision(registry: AgentRegistry, subject: string, revision: number): boolean {
+  return registry.agentStateWrite((file, _readMetrics, antigravityStates) => {
+    const primary = file.agentStates[subject];
+    const row = primary ?? antigravityStates.get(subject);
+    if (!row || row.revision !== revision || !row.pendingPublication) return false;
+    row.pendingFilesRevision = true;
+    if (!primary) antigravityStates.set(subject, row);
+    return true;
+  });
+}
+
+export function acknowledgeAgentProjection(registry: AgentRegistry, subject: string, revision: number, at = Date.now()): boolean {
+  return registry.agentStateWrite((file, readMetrics, antigravityStates) => {
+    const primary = file.agentStates[subject];
+    const row = primary ?? antigravityStates.get(subject);
+    if (!row || row.revision !== revision || !row.pendingPublication) return false;
+    row.pendingPublication = false;
+    row.pendingFilesRevision = false;
+    if (!primary) antigravityStates.set(subject, row);
+    if (file.agentStateMetrics.current) {
+      const metrics = readMetrics();
+      metrics.pendingProjectionPublications = Math.max(0, metrics.pendingProjectionPublications - 1);
+      metrics.revision++;
+      metrics.at = at;
+      file.agentStateMetrics.current = metrics;
+    }
+    return true;
+  });
+}
+
+/** Ending one physical identity never mutates a replacement's registry row. */
+export function recordAgentProcessEnded(registry: AgentRegistry, observed: AgentProjection, journal: AgentStateJournal, guard: () => boolean): boolean {
+  return registry.agentStateWrite((file, readMetrics, antigravityStates) => {
+    const primary = file.agentStates[observed.subject];
+    const row = primary ?? antigravityStates.get(observed.subject);
+    if (!row || row.revision !== observed.revision || row.verdict.state === "dead" || !row.facts.process.determined || !guard()) return false;
+    const metrics = readMetrics();
+    const before = copyAgentStateRow(row);
+    row.facts.process = fact({ ...row.facts.process.value, status: "dead" }, {
+      ...row.facts.process.evidence, observedAt: journal.at, validUntil: undefined,
+    });
+    row.verdict = evaluateAgentState(row.facts, journal.at);
+    row.revision = ++metrics.revision;
+    row.verdict.projectionRevision = row.revision;
+    row.pendingPublication = false;
+    if (!primary) antigravityStates.set(observed.subject, row);
+    const deadJournal: AgentStateJournal = { ...journal, from: before.verdict.state, to: "dead" };
+    file.agentStateJournal[journal.id] = deadJournal;
+    noteAgentStateJournalRow(file.agentStateJournal, deadJournal);
+    metrics.journalRows++;
+    changeMetrics(file, metrics, before, row, antigravityStates);
+    file.agentStateMetrics.current = metrics;
+    return true;
+  });
+}
+
+/** Terminal diagnostics are disposable only after registry custody settled. */
+export function pruneTerminalAgentProjection(registry: AgentRegistry, subject: string, at: number, guard: () => boolean): void {
+  registry.agentStateWrite((file, readMetrics, antigravityStates) => {
+    const primary = file.agentStates[subject];
+    const row = primary ?? antigravityStates.get(subject);
+    if (!row || row.verdict.state !== "dead" || row.pendingPublication || !guard()) return;
+    const entry = file.entries[row.entryKey];
+    if (entry?.structuredHost?.process || entry?.structuredHost?.scope || entry?.structuredHost?.memory?.unit
+      || entry?.structuredTerminationSurvivors?.length || entry?.pendingHostExits?.length
+      || entry?.structuredHost?.signalDomain && entry.structuredHost.signalDomain.retired !== true) return;
+    const metrics = readMetrics();
+    if (row.terminalAt === undefined) { row.terminalAt = at; metrics.terminalSubjects++; }
+    if (at - row.terminalAt >= 86400_000 || metrics.terminalSubjects > 4096) {
+      const old = contribution(row);
+      metrics.subjectsObserved = Math.max(0, metrics.subjectsObserved - 1);
+      metrics.subjectsUnverified = Math.max(0, metrics.subjectsUnverified - old.subjectsUnverified);
+      metrics.registryTranscriptDivergencesCurrent = Math.max(0, metrics.registryTranscriptDivergencesCurrent - old.registryTranscriptDivergencesCurrent);
+      metrics.terminalSubjects = Math.max(0, metrics.terminalSubjects - 1);
+      if (primary) delete file.agentStates[subject];
+      else antigravityStates.delete(subject);
+    } else if (!primary) {
+      antigravityStates.set(subject, row);
+    }
+    file.agentStateMetrics.current = metrics;
+  });
+}

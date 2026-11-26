@@ -40,6 +40,22 @@ test("ordinary worker, seat, root and local operator reach real history with no-
     const body = await response.text(); expect(body).toContain("Example group 1"); expect(body).not.toContain(double.credential);
   }
 });
+
+test("A3: media shares route authority, switch and strict argument checks", async () => {
+  pair(); setCallerConversationResolverForTests(() => "conversation_worker");
+  const media = { op: "media", chat: "-101", messageId: 1 };
+  const call = (body: unknown) => POST(request(body, { [VIEWER_SPAWN_CAPABILITY_HEADER]: "c".repeat(43) }));
+  expect(await (await call(media)).json()).toMatchObject({ reason: "not_offered" });
+  const end = historyOwnerRun("conversation_reply");
+  try {
+    setCallerConversationResolverForTests(() => "conversation_reply");
+    expect(await (await call(media)).json()).toMatchObject({ code: "owner_history_refused" });
+  } finally { end(); }
+  setCallerConversationResolverForTests(() => "conversation_worker");
+  for (const body of [{ ...media, messageId: 0 }, { ...media, owner: "foreign" }]) expect((await call(body)).status).toBe(400);
+  setRelaySwitch("relay:owner_tools:enabled", false);
+  expect(await (await call(media)).json()).toMatchObject({ reason: "switch_off" });
+});
 test("stored operator IANA zone drives the actual route's today window", async () => {
   pair(); setCallerConversationResolverForTests(() => null);
   expect(updateOperatorSettings({ timeZone: "Europe/Kyiv" })).not.toBeNull();

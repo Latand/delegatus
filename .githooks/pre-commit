@@ -7,5 +7,9 @@ for name in GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG GIT_CONFIG_PARAMETERS GI
   unset "$name"
 done
 for name in ${!GIT_CONFIG_KEY_@} ${!GIT_CONFIG_VALUE_@}; do unset "$name"; done
+if [[ -f /.dockerenv && -x /usr/local/bin/bun-container && $(command -v bun) == /usr/local/bin/bun ]]; then
+  /usr/local/bin/bun-container scripts/prepare-stage-dependencies.ts
+  exec /usr/local/bin/bun-container scripts/local-gate.ts pre-commit
+fi
 bun scripts/prepare-stage-dependencies.ts
 exec bun scripts/local-gate.ts pre-commit

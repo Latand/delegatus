@@ -1,0 +1,365 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "cases": [
+    {
+      "locale": "en",
+      "width": 1280,
+      "selected": "GPT-OSS 120B (Medium)",
+      "selectWidth": 212,
+      "labels": [
+        {
+          "label": "Gemini 4 Neon",
+          "room": 90
+        },
+        {
+          "label": "Gemini 4 Argon",
+          "room": 84.7
+        },
+        {
+          "label": "Gemini 4 Hydrogen",
+          "room": 64
+        },
+        {
+          "label": "Gemini 3.8 Flash",
+          "room": 78.6
+        },
+        {
+          "label": "Claude Opus 5.5",
+          "room": 80
+        },
+        {
+          "label": "Claude Sonnet 5.5",
+          "room": 70
+        },
+        {
+          "label": "GPT-OSS 120B (Medium)",
+          "room": 32
+        },
+        {
+          "label": "Orchestrator (Neon)",
+          "room": 60
+        },
+        {
+          "label": "Orchestrator (Argon)",
+          "room": 54.7
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "locale": "en",
+      "width": 1024,
+      "selected": "GPT-OSS 120B (Medium)",
+      "selectWidth": 212,
+      "labels": [
+        {
+          "label": "Gemini 4 Neon",
+          "room": 90
+        },
+        {
+          "label": "Gemini 4 Argon",
+          "room": 84.7
+        },
+        {
+          "label": "Gemini 4 Hydrogen",
+          "room": 64
+        },
+        {
+          "label": "Gemini 3.8 Flash",
+          "room": 78.6
+        },
+        {
+          "label": "Claude Opus 5.5",
+          "room": 80
+        },
+        {
+          "label": "Claude Sonnet 5.5",
+          "room": 70
+        },
+        {
+          "label": "GPT-OSS 120B (Medium)",
+          "room": 32
+        },
+        {
+          "label": "Orchestrator (Neon)",
+          "room": 60
+        },
+        {
+          "label": "Orchestrator (Argon)",
+          "room": 54.7
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "locale": "en",
+      "width": 740,
+      "selected": "GPT-OSS 120B (Medium)",
+      "selectWidth": 200,
+      "labels": [
+        {
+          "label": "Gemini 4 Neon",
+          "room": 78
+        },
+        {
+          "label": "Gemini 4 Argon",
+          "room": 72.7
+        },
+        {
+          "label": "Gemini 4 Hydrogen",
+          "room": 52
+        },
+        {
+          "label": "Gemini 3.8 Flash",
+          "room": 66.6
+        },
+        {
+          "label": "Claude Opus 5.5",
+          "room": 68
+        },
+        {
+          "label": "Claude Sonnet 5.5",
+          "room": 58
+        },
+        {
+          "label": "GPT-OSS 120B (Medium)",
+          "room": 20
+        },
+        {
+          "label": "Orchestrator (Neon)",
+          "room": 48
+        },
+        {
+          "label": "Orchestrator (Argon)",
+          "room": 42.7
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "locale": "en",
+      "width": 700,
+      "selected": "GPT-OSS 120B (Medium)",
+      "selectWidth": 626,
+      "labels": [
+        {
+          "label": "Gemini 4 Neon",
+          "room": 504
+        },
+        {
+          "label": "Gemini 4 Argon",
+          "room": 498.7
+        },
+        {
+          "label": "Gemini 4 Hydrogen",
+          "room": 478
+        },
+        {
+          "label": "Gemini 3.8 Flash",
+          "room": 492.6
+        },
+        {
+          "label": "Claude Opus 5.5",
+          "room": 494
+        },
+        {
+          "label": "Claude Sonnet 5.5",
+          "room": 484
+        },
+        {
+          "label": "GPT-OSS 120B (Medium)",
+          "room": 446
+        },
+        {
+          "label": "Orchestrator (Neon)",
+          "room": 474
+        },
+        {
+          "label": "Orchestrator (Argon)",
+          "room": 468.7
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 1280,
+      "selected": "GPT-OSS 120B (Medium)",
+      "selectWidth": 212,
+      "labels": [
+        {
+          "label": "Gemini 4 Neon",
+          "room": 90
+        },
+        {
+          "label": "Gemini 4 Argon",
+          "room": 84.7
+        },
+        {
+          "label": "Gemini 4 Hydrogen",
+          "room": 64
+        },
+        {
+          "label": "Gemini 3.8 Flash",
+          "room": 78.6
+        },
+        {
+          "label": "Claude Opus 5.5",
+          "room": 80
+        },
+        {
+          "label": "Claude Sonnet 5.5",
+          "room": 70
+        },
+        {
+          "label": "GPT-OSS 120B (Medium)",
+          "room": 32
+        },
+        {
+          "label": "Orchestrator (Neon)",
+          "room": 60
+        },
+        {
+          "label": "Orchestrator (Argon)",
+          "room": 54.7
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 1024,
+      "selected": "GPT-OSS 120B (Medium)",
+      "selectWidth": 212,
+      "labels": [
+        {
+          "label": "Gemini 4 Neon",
+          "room": 90
+        },
+        {
+          "label": "Gemini 4 Argon",
+          "room": 84.7
+        },
+        {
+          "label": "Gemini 4 Hydrogen",
+          "room": 64
+        },
+        {
+          "label": "Gemini 3.8 Flash",
+          "room": 78.6
+        },
+        {
+          "label": "Claude Opus 5.5",
+          "room": 80
+        },
+        {
+          "label": "Claude Sonnet 5.5",
+          "room": 70
+        },
+        {
+          "label": "GPT-OSS 120B (Medium)",
+          "room": 32
+        },
+        {
+          "label": "Orchestrator (Neon)",
+          "room": 60
+        },
+        {
+          "label": "Orchestrator (Argon)",
+          "room": 54.7
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 740,
+      "selected": "GPT-OSS 120B (Medium)",
+      "selectWidth": 200,
+      "labels": [
+        {
+          "label": "Gemini 4 Neon",
+          "room": 78
+        },
+        {
+          "label": "Gemini 4 Argon",
+          "room": 72.7
+        },
+        {
+          "label": "Gemini 4 Hydrogen",
+          "room": 52
+        },
+        {
+          "label": "Gemini 3.8 Flash",
+          "room": 66.6
+        },
+        {
+          "label": "Claude Opus 5.5",
+          "room": 68
+        },
+        {
+          "label": "Claude Sonnet 5.5",
+          "room": 58
+        },
+        {
+          "label": "GPT-OSS 120B (Medium)",
+          "room": 20
+        },
+        {
+          "label": "Orchestrator (Neon)",
+          "room": 48
+        },
+        {
+          "label": "Orchestrator (Argon)",
+          "room": 42.7
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "locale": "uk",
+      "width": 700,
+      "selected": "GPT-OSS 120B (Medium)",
+      "selectWidth": 626,
+      "labels": [
+        {
+          "label": "Gemini 4 Neon",
+          "room": 504
+        },
+        {
+          "label": "Gemini 4 Argon",
+          "room": 498.7
+        },
+        {
+          "label": "Gemini 4 Hydrogen",
+          "room": 478
+        },
+        {
+          "label": "Gemini 3.8 Flash",
+          "room": 492.6
+        },
+        {
+          "label": "Claude Opus 5.5",
+          "room": 494
+        },
+        {
+          "label": "Claude Sonnet 5.5",
+          "room": 484
+        },
+        {
+          "label": "GPT-OSS 120B (Medium)",
+          "room": 446
+        },
+        {
+          "label": "Orchestrator (Neon)",
+          "room": 474
+        },
+        {
+          "label": "Orchestrator (Argon)",
+          "room": 468.7
+        }
+      ],
+      "pageErrors": []
+    }
+  ]
+}

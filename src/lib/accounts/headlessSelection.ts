@@ -29,6 +29,17 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
   if (!Number.isFinite(observedAt) || !Number.isFinite(authCheckedAt) || now < observedAt || now < authCheckedAt) {
     return { kind: "unknown" };
   }
+  // A Claude window's reset bounds its exhaustion independently of probe age.
+  // Keep stale partial balances unknown and preserve authentication/credit policy.
+  if (observation.engine === "claude" && observation.authenticated && !paidCredits
+    && ["live", "cache", "transcript"].includes(observation.provenance.source)) {
+    const spent = gatingWindows("claude", observation.limits, model).flatMap(({ value }) =>
+      value && value.usedPercent === 100 ? [value] : []);
+    const future = spent.filter(window => Number.isSafeInteger(window.resetsAt) && window.resetsAt! > Math.floor(now / 1000));
+    if (future.length) return { kind: "exhausted", resetsAt: Math.max(...future.map(window => window.resetsAt!)) };
+    if (spent.length && spent.every(window => Number.isSafeInteger(window.resetsAt)
+      && window.resetsAt! > 0 && window.resetsAt! <= Math.floor(now / 1000))) return { kind: "unknown" };
+  }
   const observationFresh = now - observedAt <= FRESH_QUOTA_MS;
   const authFresh = now - authCheckedAt <= FRESH_QUOTA_MS;
   const copilotTranscript = observation.engine === "copilot" && observation.provenance.source === "transcript";
@@ -103,8 +114,8 @@ export function accountQuotaVerdict(observations: DurableQuotaObservation[], acc
 /**
  * Selects an authenticated account for an unattended spawn. Confirmed fresh
  * headroom wins, then an account whose quota is unknown. Exhaustion is only
- * reported when every authenticated account has a fresh zero-capacity sample
- * or is held by the paid-credit guard.
+ * reported when every authenticated account has a fresh zero-capacity sample,
+ * a Claude spent window before its reset, or a paid-credit guard hold.
  *
  * Within each retry tier, accounts above the existing balance threshold (25%
  * remaining in EVERY governing window) spend their soonest binding reset first.

@@ -3,8 +3,9 @@ import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 import { publicationFailurePhase, publicationPrivacyRefusal, publicationRemoteRefusalLine } from "./publicationHistory";
 
 const RUNNER_DEADLINE = /^NEW .*<runner error> runner did not finish \(124\)$/;
+export const PUBLICATION_MEMORY_DEFERRAL = "publication memory admission deferred before checks started";
 
-function decisiveRefusal(line: string, allowFrozenInstall = false): boolean {
+export function decisiveRefusal(line: string, allowFrozenInstall = false): boolean {
   const member = /^pre-push: ([^;:]{1,60}): failed \(([^)]*)\)/.exec(line);
   const otherCheckFailed = member && !["touched tests", "Linux tests"].includes(member[1]!) && member[2] !== "124"
     && !(allowFrozenInstall && member[1] === "frozen install");
@@ -48,26 +49,33 @@ export const LOCAL_DELIVERY_PUBLISH_REFUSAL = "this lane's delivery target has n
 /** A deadline without a decisive refusal is a capacity retry.
  * Inspect the complete captured output before publication keeps a bounded tail.
  * A test assertion, another failed check or failed cleanup always wins. */
-export function publicationDeadlineKind(output: string): "execution" | "admission" | null {
+export function publicationDeadlineKind(output: string): "execution" | "admission" | "memory" | null {
   let deadline = false;
-  let admission = false, admissionExpired = false, checksStarted = false;
+  let admission = false, admissionExpired = false, checksStarted = false, memoryDeferred = false;
   for (const raw of output.split("\n")) {
     const line = raw.trim();
     const member = /^pre-push: ([^;:]{1,60}): failed \(([^)]*)\)/.exec(line);
     if (decisiveRefusal(line)) return null;
+    if (line === `pre-push: ${PUBLICATION_MEMORY_DEFERRAL}`) memoryDeferred = true;
     const phase = /^pre-push: ([^;:]{1,60})$/.exec(line)?.[1];
     if (phase === "CPU admission for publication checks") admission = true;
     else if (phase && phase !== "privacy" && !phase.startsWith("branch is ")) checksStarted = true;
     if (member) checksStarted = true;
     if (/^gate-slot: CPU admission queue lock deadline exceeded after \d+ ms; checks did not start$/.test(line)) admissionExpired = true;
+    if (/^pre-push: Cloud checks refused \[timeout\]: Cloud (?:check|session) deadline expired; remote cleanup confirmed\b/.test(line)) deadline = true;
     if (/^command timed out after \d+ms/.test(line)
       || /^pre-push: no verdict within the push budget of \d+ s:/.test(line)
       || /^owned runner: (?:deadline expired|execution guard expired)$/.test(line)
       // The gate runner lost a started run: nothing was judged, and the
       // retries after 1, 5 and 15 minutes run here (scripts/gate-runner).
       || /^gate-runner: no verdict:/.test(line)
+      || /^touched-tests: no verdict: /.test(line)
+      // Accepted heads can still carry the comparator's older diagnostic.
+      || /^touched-tests: (?:head|baseline|head rerun|base rerun): test run exceeded its (?:15 minute|flaky rerun) budget; gate error \(blocking\)$/.test(line)
+      || /^touched-tests: baseline: flaky rerun budget exhausted during setup; gate error \(blocking\)$/.test(line)
       || RUNNER_DEADLINE.test(line)) deadline = true;
   }
+  if (memoryDeferred) return "memory";
   if (admission && admissionExpired && !checksStarted) return "admission";
   return deadline ? "execution" : null;
 }

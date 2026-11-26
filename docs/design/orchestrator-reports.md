@@ -1015,8 +1015,14 @@ Both answers are tested at the tool; the ask line is tested at the tick.
 - **Failure and retry**: a retryable code (`rate_limited`, `network_failed`,
   `timed_out`, `telegram_failed`) leaves `state: "failed"`, and calling
   `bridge_report` again with the same key, still a replay for the log, re-sends
-  the row's stored `telegram.html`, byte for byte, under
-  `bridge-report:<reportId>:r<n>`. The replay's own arguments are ignored:
+  the row's stored `telegram.html`, byte for byte, under the same bot receipt
+  key. The bot service re-admits a confirmed refusal with no posted messages.
+  `telegram.receiptAttempt` freezes the key's suffix separately from the
+  bookkeeping attempt count; an older row keeps its existing `:r<n>` suffix.
+  A pending copy also recovers through that receipt. Once the row is stored,
+  the tool acknowledges its sequence even if Telegram bookkeeping is deferred;
+  `destinations.telegram.bookkeeping.state: "pending"` identifies that deferral.
+  The replay's own arguments are ignored:
   nothing is re-rendered, and the task list and deny list are not re-read. So
   the group gets exactly what was prepared beside the bridge row. `send_uncertain` is never
   re-sent: a second public post is worse than a missing one. The stored copy

@@ -4,13 +4,15 @@ import { getLocale, translate, type Locale, type TFunction } from "@/lib/i18n";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { activeCardMigration } from "@/lib/accounts/migration";
 import { laneRouteNow } from "@/lib/attention/routeTypes";
-import { laneMovedAt } from "@/lib/pipelines/laneMovement";
+import { pipelineHiddenFromBoard } from "@/lib/pipelines/laneMovement";
 import { pipelineReviewSummary, type PipelineReviewSummary } from "@/lib/pipelines/failEdgeBudget";
 import type { Pipeline, PipelineStage } from "@/lib/pipelines/types";
 import { cleanTitle } from "@/lib/title";
 import type { FileEntry } from "@/lib/types";
 
-import { attentionReason, buildAttentionQueue, reasonAsksOperator, stalledAttention, type ConversationReason } from "../attention";
+export { pipelineHiddenFromBoard } from "@/lib/pipelines/laneMovement";
+
+import { attentionReason, buildAttentionQueue, heldStuckDelivery, reasonAsksOperator, stalledAttention, type ConversationReason } from "../attention";
 import { pipelineNeedsYou } from "../pipelines/pipelineBlockModel";
 import { isAuxTask, isChildConversation, isConversation, isSubagent, projectKey } from "../projectModel";
 import { turnIsRunning, turnLeftOpen } from "../turnDuration";
@@ -125,15 +127,27 @@ function waitingBadge(reason: ConversationReason): MobileRowBadge {
   }
 }
 
-function heldDeliveries(file: FileEntry): number {
-  return activeCardMigration(file.migration, accountIdFromPath(file.path))?.heldDeliveries ?? 0;
+/** Messages queued behind something that is not the agent: the account-switch fence's count, else the one reservation
+    the outbox is still holding past the queue's wait. Either way the lane must not read as running. */
+function heldDeliveries(file: FileEntry, now: number): number {
+  const fence = activeCardMigration(file.migration, accountIdFromPath(file.path))?.heldDeliveries ?? 0;
+  if (fence > 0) return fence;
+  return file.stuckDelivery && heldStuckDelivery(file, now) !== null ? 1 : 0;
 }
 
 /**
  * The one state of one conversation, by the design's precedence. `now` is in
  * epoch seconds, like every other clock the board reads.
  */
-export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000): MobileRowState {
+export function mobileRowState(
+  file: FileEntry,
+  now: number = Date.now() / 1000,
+  { decisionWaiting = false, seatWaiting = false }: {
+    decisionWaiting?: boolean;
+    /** The project's seat is hosted and idle between turns, with no form open: it is waiting for the next task, quietly. */
+    seatWaiting?: boolean;
+  } = {},
+): MobileRowState {
   const bits = (over: Partial<MobileRowState> & { key: MobileRowStateKey }): MobileRowState => ({
     section: sectionOf(over.key),
     dot: "neutral",
@@ -175,7 +189,7 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000)
       seconds: Math.max(0, now - file.mtime),
     });
   }
-  const held = heldDeliveries(file);
+  const held = heldDeliveries(file, now);
   if (held > 0) return bits({ key: "held", dot: "warning", held });
   /* A dead host runs nothing, whatever freshness the transcript still carries. */
   if (file.proc !== "killed" && turnIsRunning(file)) {
@@ -183,19 +197,24 @@ export function mobileRowState(file: FileEntry, now: number = Date.now() / 1000)
     const activity = file.agentActivity && file.proc === "running" ? fileAgentActivity(file, now * 1000).state : null;
     return bits({ key: "working", dot: "success", activity, seconds: since === null ? null : Math.max(0, now - since / 1000) });
   }
+  /* The seat's own turn is over while a decision form of its project waits: it is waiting on the operator, and says so, not «done». */
+  if (decisionWaiting) return bits({ key: "waiting", dot: "warning", edge: "warning", badge: "decision", seconds: Math.max(0, now - file.mtime) });
+  /* An idle hosted seat is waiting for its next task. It asks nothing of the
+     operator, so it keeps the neutral dot, no badge, and the recent section. */
+  if (seatWaiting) return bits({ key: "waiting", section: "recent", dot: "neutral", seconds: Math.max(0, now - file.mtime) });
   if (file.activity === "recent") return bits({ key: "returned", dot: "accent", seconds: Math.max(0, now - file.mtime) });
   return bits({ key: "done", dot: "neutral", seconds: Math.max(0, now - file.mtime) });
 }
 
 /** The word a state is named by on the reader header, the rail and the tile:
     the dot's own words for an agent whose activity the scan knows («idle»,
-    «waiting on a check»), the row key's word otherwise. A launch placeholder
-    that settled reads the phone's own finished word («готово»), so both
-    surfaces name the same launch the same way. */
-export function rowStateWord(t: TFunction, row: { key: string; activity?: MobileRowState["activity"]; settledLaunch?: boolean }): string {
-  if (row.key === "done" && row.settledLaunch) return t("kanban.memberState.launchDone");
+    «waiting on a check»), the row key's word otherwise. The key's word is the
+    phone's word for the same state, so one conversation reads one way on both. */
+export function rowStateWord(t: TFunction, row: { key: string; activity?: MobileRowState["activity"]; badge?: MobileRowState["badge"] }): string {
   if (row.activity === "idle") return t("cardStatus.idle");
   if (row.activity === "checking") return t("cardStatus.checking");
+  /* A wait that asks the operator nothing (an idle seat) is «waiting», the word the seat's own head wears; «needs you» is for a wait with a badge. */
+  if (row.key === "waiting" && row.badge === null) return t("orchPanel.badgeWaiting");
   return t(`kanban.memberState.${row.key as MobileRowStateKey}`);
 }
 
@@ -371,18 +390,6 @@ const NO_IDS: readonly string[] = [];
  */
 export function pipelineAsks(pipeline: Pipeline): boolean {
   return pipelineNeedsYou(pipeline) && !pipelineHiddenFromBoard(pipeline) && !laneRouteNow(pipeline);
-}
-
-/**
- * Whether the operator's Hide still covers the decision this lane waits on
- * (#1671). A Hide answers the decision the operator saw. `dismissedAt` stays on
- * the record after the lane moves on, so once any of its rounds has started or
- * ended since, the lane has parked again on a decision nobody hid and it is
- * back in the queue. A lane that waits on no decision has nothing hidden.
- */
-export function pipelineHiddenFromBoard(pipeline: Pipeline): boolean {
-  if ((pipeline.state !== "needs_decision" && pipeline.state !== "needs_review") || !pipeline.dismissedAt) return false;
-  return laneMovedAt(pipeline) <= Date.parse(pipeline.dismissedAt);
 }
 
 /** A conversation the phone board may list: no background task, no subagent

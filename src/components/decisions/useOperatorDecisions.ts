@@ -28,6 +28,8 @@ export type DecisionAnswer = Omit<DecidePrototypeInput, "reviewId">;
 export function useOperatorDecisions(project: string, active: boolean, initial?: OperatorDecisionView[]) {
   const [state, setState] = useState<{ project: string; decisions: OperatorDecisionView[] | null; failed: boolean }>(
     () => ({ project, decisions: initial ?? null, failed: false }));
+  const [withdrawing, setWithdrawing] = useState<string | null>(null);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
   const [answering, setAnswering] = useState<ReadonlySet<string>>(() => new Set());
   /* Decided records whose Retry or Revoke is on its way, drawn as it will leave them. */
   const [predicted, setPredicted] = useState<ReadonlyMap<string, OperatorDecisionView>>(() => new Map());
@@ -94,8 +96,26 @@ export function useOperatorDecisions(project: string, active: boolean, initial?:
     }
   }, [project]);
 
+  const withdraw = useCallback(async (decision: OperatorDecisionView) => {
+    if (inflight.current.has(decision.id)) return;
+    inflight.current.add(decision.id);
+    setWithdrawing(decision.id); setWithdrawError(null);
+    ++sequence.current;
+    try {
+      const response = await fetch("/api/attention/dismissals", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ project: decision.project, target: { kind: "prototype", taskId: decision.taskId, reviewId: decision.id } }),
+      });
+      if (!response.ok) throw new Error("withdrawal refused");
+      ++sequence.current;
+      setState(held => ({ ...held, decisions: held.decisions?.filter(row => row.id !== decision.id) ?? null }));
+      fireTasksChanged();
+    } catch { setWithdrawError(decision.id); }
+    finally { inflight.current.delete(decision.id); setWithdrawing(null); }
+  }, []);
+
   const decisions = current.decisions?.filter((decision) => !answering.has(decision.id)).map((decision) => predicted.get(decision.id) ?? decision) ?? null;
-  return { decisions, loaded: current.decisions !== null, failed: current.failed && current.decisions === null, answer, error, refresh };
+  return { decisions, loaded: current.decisions !== null, failed: current.failed && current.decisions === null, answer, error, refresh, withdraw, withdrawing, withdrawError };
 }
 
 /** A decided record as its Retry (the message on its way) or its Revoke (the access refused) leaves it. */

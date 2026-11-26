@@ -1,5 +1,5 @@
 import type { AccountContext } from "@/lib/accounts/contracts";
-import type { EffectivePipelineRole, PipelineStage, PipelineStageRuntime } from "./types";
+import type { EffectivePipelineRole, PipelineStage, PipelineStageRuntime, PipelineStageAttempt } from "./types";
 import { stageVerdictFrom, type ParsedStageVerdict, type RejectedStageVerdict } from "./verdict";
 
 export const CLOUD_STAGE_TIMEOUT_MS = 30 * 60_000;
@@ -13,6 +13,25 @@ export function isCloudRuntime(value: unknown): value is CloudRuntime { return v
 /** The provider's name in every operator-visible message. */
 export function cloudLabel(runtime: CloudRuntime): string { return runtime === "claude-cloud" ? "Claude Cloud" : "Codex Cloud"; }
 export function cloudEngine(runtime: CloudRuntime): "claude" | "codex" { return runtime === "claude-cloud" ? "claude" : "codex"; }
+/** Shared result projection, including durable records written before fallback was refused. */
+export function stageExecution(stage: Pick<PipelineStage, "runtime">, attempt: PipelineStageAttempt | null | undefined) {
+  const requestedRuntime = attempt?.definition ? attempt.definition.runtime ?? "local"
+    : attempt?.cloud ? "codex-cloud" : attempt ? "local" : stage.runtime ?? "local";
+  const movedLocal = attempt?.executionRuntime === "cloud-then-local" || !!attempt?.cloud?.fallback;
+  const unresolved = !attempt?.cloud?.taskId && (attempt?.cloud?.submissionUnresolved === true || attempt?.cloud?.phase === "submitting"
+    || attempt?.cloud?.phase === "failed" && attempt.cloud.submissionUnresolved !== false);
+  const executionRuntime = movedLocal ? "local-after-cloud-failure" as const
+    : attempt?.cloud?.taskId ? "cloud" as const
+    : unresolved ? "unknown" as const
+    : isCloudRuntime(requestedRuntime) ? "not-executed" as const
+    : attempt?.startedAt ? "local" as const : "not-executed" as const;
+  return { requestedRuntime, executionRuntime,
+    reason: (movedLocal ? attempt?.cloud?.fallback?.reason ?? attempt?.cloud?.error ?? attempt?.error
+      : unresolved ? attempt?.cloud?.error ?? attempt?.error ?? "Cloud submission outcome is unresolved"
+      : attempt?.cloud?.phase === "failed" ? attempt.cloud.error ?? attempt.error
+        : isCloudRuntime(requestedRuntime) && attempt?.state === "failed" ? attempt.error : null) ?? null };
+}
+
 export function cloudStageDeadlineMs(runtime: CloudRuntime, access: EffectivePipelineRole["access"]): number {
   return runtime === "claude-cloud" && access === "read-write" ? CLOUD_WRITER_STAGE_TIMEOUT_MS : CLOUD_STAGE_TIMEOUT_MS;
 }
@@ -20,6 +39,32 @@ export function cloudStageDeadlineMs(runtime: CloudRuntime, access: EffectivePip
 /** Hosted app-server notifications and reads must be scoped to this pair. */
 export type CloudThreadReference = { threadId: string; turnId: string;
   hosted?: { environmentId: string; cwd: string; model: string } };
+
+/** Claude's run and follow-up receipts, persisted before every remote write. */
+export type ClaudeSubmission = {
+  nonce: string;
+  startedAt: number;
+  sessionId?: string;
+  sent: string[];
+  sending?: { digest: string; token?: string; final?: boolean };
+  lastToken?: string;
+  complete?: boolean;
+};
+
+export type CloudStageSubmitInput = {
+  environmentId: string; branch: string; headSha: string; prompt: string; model: string;
+  writable?: boolean;
+  preparePrompt?: (threadId: string) => Promise<string>;
+  reasoningEffort: string | null; serviceTier?: string | null; environmentPrincipal?: string;
+  environmentScope?: { repository: string; ref: string }; allowProviderModelFallback: false;
+  account: AccountContext; signal: AbortSignal; assertCurrent: () => void;
+  claudeSubmission?: ClaudeSubmission;
+  checkpointSubmission?: (submission: ClaudeSubmission) => Promise<void>;
+};
+export type CloudSubmissionReceipt = { taskId: string; taskUrl: string; thread?: CloudThreadReference };
+export type CloudSubmissionRecovery =
+  | { state: "found"; receipt: CloudSubmissionReceipt }
+  | { state: "absent" | "unknown"; reason: string };
 
 export type CloudStageAttempt = {
   phase: "reserved" | "submitting" | "polling" | "completed" | "failed";
@@ -41,6 +86,11 @@ export type CloudStageAttempt = {
   environmentPrincipal?: string;
   /** A receiptless submission may still be executing remotely. */
   submissionUnresolved?: boolean;
+  claudeSubmission?: ClaudeSubmission;
+  /** One durable recovery admission; a restart while running keeps the outcome unknown. */
+  submissionRecovery?: { state: "running" | "found" | "absent" | "unknown"; deadlineAt: string };
+  /** Withdrawing custody fences all later cloud replies, including a delayed submit reply. */
+  submissionAbandoned?: { at: string; reason: string };
   failures?: number;
   fallbackEligible?: boolean;
   /** Only a terminal failed observation releases custody of a known task. */
@@ -73,17 +123,15 @@ export interface CloudStageClient {
   supportsModel(model: string, reasoningEffort: string | null): boolean;
   /** Stage models may be aliases of the id a provider reports. Absent means exact equality. */
   sameModel?(reported: string, requested: string): boolean;
-  submit(input: { environmentId: string; branch: string; headSha: string; prompt: string; model: string;
-    /** A writable stage returns its changes as a diff. */
-    writable?: boolean;
-    /** Recompose with the remote thread identity to record memory delivery before the first turn. */
-    preparePrompt?: (threadId: string) => Promise<string>;
-    reasoningEffort: string | null; serviceTier?: string | null; environmentPrincipal?: string; environmentScope?: { repository: string; ref: string }; allowProviderModelFallback: false; account: AccountContext; signal: AbortSignal;
-    assertCurrent: () => void }): Promise<{ taskId: string; taskUrl: string; thread?: CloudThreadReference }>;
+  submit(input: CloudStageSubmitInput): Promise<CloudSubmissionReceipt>;
+  /** Read the original Claude identity and continue its receipt journal; never creates a session. */
+  recoverSubmission?(input: CloudStageSubmitInput): Promise<CloudSubmissionRecovery>;
   poll(input: CloudTaskAccess): Promise<CloudTaskObservation>;
   readFinalMessage(input: CloudTaskAccess): Promise<{ message: string; model: string }>;
   /** Catalog read under this account's subscription, before any work is submitted. */
   hasEnvironment(input: { account: AccountContext; environmentId: string; signal: AbortSignal; assertCurrent: () => void }): Promise<boolean>;
+  /** Queue account preparation before execution-capacity selection. Starts no session. */
+  demandPreparation?(input: { project: string; repository: string; assertCurrent: () => void }): Promise<void>;
   prepareEnvironment?(input: import("@/lib/projects/codexCloudEnvironments").PrepareCloudEnvironmentInput): Promise<import("@/lib/projects/codexCloudEnvironments").CloudEnvironmentPreparation>;
   /** Read-only stages never request/apply a diff. */
   readDiff(input: CloudTaskAccess): Promise<string>;
@@ -133,6 +181,11 @@ export function isCloudStageAttempt(value: unknown): value is CloudStageAttempt 
     && (row.environmentBindingRevision === undefined || Number.isSafeInteger(row.environmentBindingRevision) && Number(row.environmentBindingRevision) > 0)
     && (row.environmentPrincipal === undefined || typeof row.environmentPrincipal === "string" && /^[a-f0-9]{64}$/.test(row.environmentPrincipal))
     && (row.submissionUnresolved === undefined || typeof row.submissionUnresolved === "boolean")
+    && (row.claudeSubmission === undefined || validClaudeSubmission(row.claudeSubmission))
+    && (row.submissionRecovery === undefined || ["running", "found", "absent", "unknown"].includes(String(record(row.submissionRecovery).state))
+      && Number.isFinite(Date.parse(String(record(row.submissionRecovery).deadlineAt))))
+    && (row.submissionAbandoned === undefined || typeof record(row.submissionAbandoned).reason === "string"
+      && Number.isFinite(Date.parse(String(record(row.submissionAbandoned).at))))
     && (row.failures === undefined || Number.isSafeInteger(row.failures) && Number(row.failures) >= 0 && Number(row.failures) <= 3)
     && (row.fallbackEligible === undefined || typeof row.fallbackEligible === "boolean")
     && (row.failureConfirmed === undefined || typeof row.failureConfirmed === "boolean")
@@ -147,6 +200,19 @@ export function isCloudStageAttempt(value: unknown): value is CloudStageAttempt 
     && (!["polling", "completed"].includes(String(row.phase)) || typeof row.taskId === "string")
     && (row.phase !== "completed" || row.result !== undefined)
     && (row.phase !== "failed" || typeof row.error === "string");
+}
+
+export function validClaudeSubmission(value: unknown): value is ClaudeSubmission {
+  const row = record(value), sending = record(row.sending);
+  const digest = (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  const token = (value: unknown) => typeof value === "string" && /^[a-f0-9]{32}$/.test(value);
+  return token(row.nonce) && Number.isSafeInteger(row.startedAt) && Number(row.startedAt) >= 0
+    && (row.sessionId === undefined || typeof row.sessionId === "string" && /^(?:session|cse)_[A-Za-z0-9_-]{1,150}$/.test(row.sessionId))
+    && Array.isArray(row.sent) && row.sent.length <= 100 && row.sent.every(digest)
+    && (row.sending === undefined || digest(sending.digest) && (sending.token === undefined || token(sending.token)) && (sending.final === undefined || typeof sending.final === "boolean"))
+    && (row.lastToken === undefined || token(row.lastToken))
+    && (row.complete === undefined || typeof row.complete === "boolean")
+    && (row.complete !== true || typeof row.sessionId === "string" && token(row.lastToken) && row.sending === undefined);
 }
 
 export function cloudStageConfigurationError(stage: Pick<PipelineStage, "runtime" | "kind" | "effectiveRole" | "outputs" | "model">): string | null {

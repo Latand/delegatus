@@ -696,7 +696,6 @@ describe("a decision the operator owes outranks every word for «it is running»
     toolUseId: "tool-use-orch",
     transcriptPath: "/transcripts/orchestrator.jsonl",
     pid: 4242,
-    paneTarget: null,
     askedAt: "2026-08-25T10:00:00.000Z",
     questions: [{ header: "Rollout window", question: "Approve the proposed rollout window", multiSelect: false, options: [] }],
   };

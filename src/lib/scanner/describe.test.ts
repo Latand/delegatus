@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { Database } from "bun:sqlite";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import { z } from "zod";
 
@@ -24,6 +25,7 @@ import {
   projectFromSlug,
   projectRootForCwd,
   recordWorktreeResolution,
+  recordRecoveredWorktrees,
   searchTextForTranscript,
 } from "./describe";
 
@@ -110,6 +112,10 @@ test("symlinked and physical sibling worktrees keep one project after deletion",
 afterAll(() => {
   resetLegacyDocumentStoresForTests();
   resetStateReadonlyReaderForTests();
+  if (REAL_STATE !== undefined) process.env.LLV_STATE_DIR = REAL_STATE;
+  else delete process.env.LLV_STATE_DIR;
+  if (REAL_HOME !== undefined) process.env.HOME = REAL_HOME;
+  else delete process.env.HOME;
   // Linux permits unlinking open SQLite files; Windows requires them closed.
   if (process.platform === "linux" && fs.existsSync("/proc/self/fd")) {
     const held = fs.readdirSync("/proc/self/fd").flatMap(fd => {
@@ -117,10 +123,13 @@ afterAll(() => {
     }).filter(filename => filename.startsWith(SANDBOX + path.sep) && filename.includes("state.sqlite"));
     expect(held).toEqual([]);
   }
-  if (REAL_STATE !== undefined) process.env.LLV_STATE_DIR = REAL_STATE;
-  else delete process.env.LLV_STATE_DIR;
-  if (REAL_HOME !== undefined) process.env.HOME = REAL_HOME;
-  else delete process.env.HOME;
+  // Leaving WAL mode needs an exclusive lock, even where unlinking succeeds.
+  for (const file of new Bun.Glob("**/state.sqlite").scanSync({ cwd: SANDBOX })) {
+    using db = new Database(path.join(SANDBOX, file), { readwrite: true });
+    db.exec("PRAGMA busy_timeout = 0");
+    const mode = db.query<{ journal_mode: string }, []>("PRAGMA journal_mode = DELETE").get();
+    expect(mode?.journal_mode, file).toBe("delete");
+  }
   fs.rmSync(SANDBOX, { recursive: true, force: true });
 });
 
@@ -476,6 +485,48 @@ test("a Copilot session from a deleted worktree still groups under its parent re
   expect(projectForCwd(repo)).toBe(described.project);
 });
 
+test("an Antigravity session from a deleted worktree still groups under its parent repo", () => {
+  /* docs/design/antigravity-engine.md 3.5: an Antigravity transcript's cwd is
+     `session.start.data.cwd`, routed through `projectInfoFromCwd` so live and
+     deleted checkouts resolve to the exact same parent repository project. */
+  useStateDirectory("deleted-antigravity-state");
+  const repo = path.join(SANDBOX, "deleted-antigravity-main");
+  const identity = createRepository(repo);
+  const deadWorktree = path.join(repo, ".worktrees", "antigravity-lane");
+  expect(fs.existsSync(deadWorktree)).toBe(false);
+  const root = path.join(SANDBOX, "antigravity-home", "sessions");
+  const sessionId = crypto.randomUUID();
+  const transcript = path.join(root, sessionId, "events.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, [
+    {
+      type: "session.start",
+      data: {
+        sessionId,
+        cwd: deadWorktree,
+        model: "gemini-4-neon",
+        baseModel: "gemini-4-neon",
+        effort: "xhigh",
+        agyVersion: "1.5.13",
+      },
+      timestamp: "2026-11-23T20:00:00.000Z",
+    },
+    { type: "user.message", data: { content: "Investigate worktree grouping" }, timestamp: "2026-11-23T20:00:01.000Z" },
+  ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+
+  const described = describe("antigravity-sessions", root, transcript, fs.statSync(transcript));
+  expect(described).toMatchObject({
+    engine: "antigravity",
+    fmt: "antigravity",
+    kind: "session",
+    cwd: deadWorktree,
+    project: identity.project,
+    worktree: "antigravity-lane",
+    title: "Investigate worktree grouping",
+  });
+  expect(projectForCwd(repo)).toBe(described.project);
+});
+
 test("conversation metadata carries the exact cwd and its canonical project root", () => {
   const repo = path.join(SANDBOX, "cwd-project");
   const cwd = path.join(repo, ".worktrees", "issue-173");
@@ -590,6 +641,86 @@ test.each(["native", "Windows"])("a nested `worktrees` segment under .claude/.co
   expect(flushMode === "Windows" ? withWindowsDirectoryFlush(persist) : persist()).toBe(true);
   const codex = path.join(state, ".codex", "worktrees", "2d25", "shared-repository");
   expect(projectForCwd(codex)).toBe(identity.project);
+});
+
+test.each(["same-repository", "changed-repository"])("worktree map imports duplicate and empty keys without losing deleted checkout groupings (%s)", mode => {
+  const state = useStateDirectory(`dirty-map-${mode}`);
+  const repo = path.join(state, "repository");
+  const identity = createRepository(repo);
+  const otherRepo = path.join(state, "other-repository");
+  createRepository(otherRepo, "ssh://git@example.invalid/team/other-repository.git");
+  const checkout = path.join(state, "deleted-checkout");
+  const before = path.join(state, "deleted-before");
+  const after = path.join(state, "deleted-after");
+  const first = { repo: mode === "same-repository" ? repo : otherRepo, worktree: "old-lane" };
+  const latest = { repo, worktree: "latest-lane" };
+  const expected = {
+    [before]: { repo, worktree: "before" },
+    [checkout]: latest,
+    [after]: { repo, worktree: "after" },
+  };
+  const member = (key: string, value: unknown) => `${JSON.stringify(key)}:${JSON.stringify(value)}`;
+  const bytes = `{${[
+    member(before, expected[before]), member(checkout, first), member("", first),
+    member(after, expected[after]), member(checkout, latest), member(" \t", first),
+  ].join(",")}}`;
+  const file = path.join(state, "worktree-map.json");
+  fs.writeFileSync(file, bytes);
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    // Unpromoted readers and the importer decode the same last recorded value.
+    const legacyRead = worktreeMapStore.readExisting(file);
+    const outcome = worktreeMapStore.importLegacy(file);
+    expect(legacyRead).toEqual(expected);
+    expect(outcome.state).toBe("imported");
+    expect(outcome.record.gap).toBeNull();
+    expect(outcome.record.rowCount).toBe(3);
+    expect(warning).toHaveBeenCalledWith("[state import] worktree_map skipped 2 empty keys");
+  } finally { warning.mockRestore(); }
+  expect(worktreeMapStore.read(file)).toEqual(expected);
+  expect(worktreeMapStore.importLegacy(file).state).toBe("already-imported");
+  for (const [cwd, mapping] of Object.entries(expected)) {
+    expect(fs.existsSync(cwd)).toBe(false);
+    expect(projectInfoFromCwd(path.join(cwd, "src"))).toMatchObject({ project: identity.project, ...mapping });
+  }
+  const kept = fs.readdirSync(state).filter(name => name.startsWith("worktree-map.json.imported-"));
+  expect(kept).toHaveLength(1);
+  expect(fs.readFileSync(path.join(state, kept[0]!), "utf8")).toBe(bytes);
+  worktreeMapStore.checkpointRollbackMirror(file);
+  expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(expected);
+  const script = `const { worktreeMapStore } = await import(${JSON.stringify(path.resolve(import.meta.dir, "../projects/persistence.ts"))});`
+    + `const { projectInfoFromCwd } = await import(${JSON.stringify(path.resolve(import.meta.dir, "describe.ts"))});`
+    + `const file=${JSON.stringify(file)};`
+    + `console.log(JSON.stringify({state:worktreeMapStore.importLegacy(file).state,map:worktreeMapStore.read(file),`
+    + `groups:${JSON.stringify(Object.keys(expected))}.map(cwd=>projectInfoFromCwd(cwd)?.project)}));`;
+  const restarted = spawnSync(process.execPath, ["-e", script], { env: { ...process.env, LLV_STATE_DIR: state }, encoding: "utf8" });
+  assertStateChildSuccess(restarted.status, restarted.stderr);
+  expect(JSON.parse(restarted.stdout)).toEqual({ state: "already-imported", map: expected, groups: Array(3).fill(identity.project) });
+});
+
+test("worktree map writers refuse empty keys before recording a live checkout or recovery", () => {
+  const state = useStateDirectory("empty-map-writer");
+  const repo = path.join(state, "repository");
+  createRepository(repo);
+  const checkout = path.join(state, "checkout");
+  fs.mkdirSync(checkout);
+  fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "lane")}\n`);
+  for (const cwd of ["", " \t"]) {
+    expect(recordWorktreeResolution(cwd, checkout)).toBeNull();
+    expect(() => recordRecoveredWorktrees([{ cwd: checkout, repo, worktree: "lane" }, { cwd, repo, worktree: "invalid" }]))
+      .toThrow("Worktree map key is empty");
+  }
+  const file = path.join(state, "worktree-map.json");
+  expect(fs.existsSync(path.join(state, "state.sqlite"))).toBe(false);
+  expect(recordWorktreeResolution(checkout)).toEqual({ repo, worktree: "lane" });
+  for (const cwd of ["", " \t"]) {
+    expect(() => worktreeMapStore.mutate(file, map => ({ next: { ...map, [cwd]: { repo, worktree: "invalid" } }, result: undefined })))
+      .toThrow("Worktree map key is empty");
+  }
+  const expected = { [checkout]: { repo, worktree: "lane" } };
+  expect(worktreeMapStore.read(file)).toEqual(expected);
+  worktreeMapStore.checkpointRollbackMirror(file);
+  expect(worktreeMapStore.legacyCollection(file).parse(JSON.parse(fs.readFileSync(file, "utf8")))).toEqual(expected);
 });
 
 test("Windows worktree paths survive SQLite import and a rollback mirror byte for byte", () => {
@@ -1416,4 +1547,56 @@ test("deleted worktree still groups under its parent repo after SQLite import", 
   globalCache("project-info-cwd-v2").clear();
   globalCache("worktree-git").clear();
   expect(projectInfoFromCwd(path.join(cwd, "src"))).toMatchObject({ project: identity.project, repo, worktree: "slice6-lane" });
+});
+
+
+test("deleted Codex worktree keeps its parent repository project via recorded worktree memory", () => {
+  useStateDirectory("deleted-codex-worktree-parent");
+  const base = path.join(SANDBOX, "codex-deleted-parent");
+  const repo = path.join(base, "main-repo");
+  const sessions = path.join(base, "sessions");
+  fs.mkdirSync(repo, { recursive: true });
+  const git = (args: string[]) => {
+    const res = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "user.name=Fixture", "-c", "user.email=noreply@example.invalid", "-C", repo, ...args], { encoding: "utf8" });
+    if (res.status !== 0) throw new Error(res.stderr);
+  };
+  git(["init", "-q", "-b", "main"]);
+  git(["commit", "--allow-empty", "-qm", "initial"]);
+  git(["remote", "add", "origin", "https://example.invalid/team/native-fixture.git"]);
+  const codexCheckout = path.join(base, ".codex", "worktrees", "f1a2", "main-repo");
+  fs.mkdirSync(path.dirname(codexCheckout), { recursive: true });
+  git(["worktree", "add", "-q", "-b", "fixture-codex", codexCheckout, "main"]);
+
+  const parent = projectInfoFromCwd(repo)!;
+  const transcript = path.join(sessions, "ag-codex-wt-1", "events.jsonl");
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, `${JSON.stringify({ type: "session.start", data: { cwd: codexCheckout } })}\n${JSON.stringify({ type: "user.message", data: { content: "hi" } })}\n`);
+
+  const liveEntry = describe("antigravity-sessions", sessions, transcript, fs.statSync(transcript));
+  expect(liveEntry.project).toBe(parent.project);
+  expect(liveEntry.projectName).toBe(parent.displayName);
+  persistWorktreeMap();
+
+  git(["worktree", "remove", "--force", codexCheckout]);
+  expect(fs.existsSync(codexCheckout)).toBe(false);
+  globalCache("project-info-cwd-v2").clear();
+  globalCache("worktree-git").clear();
+  globalCache("project-overlay-v1").clear();
+
+  const deletedEntry = describe("antigravity-sessions", sessions, transcript, fs.statSync(transcript));
+  expect(deletedEntry.project).toBe(parent.project);
+  expect(deletedEntry.projectName).toBe(parent.displayName);
+  expect(projectRootForCwd(codexCheckout)).toBe(repo);
+});
+
+test("relay media refs are excluded from catalog titles and search prompts", async () => {
+  const { conversationSearchText } = await import("./describe");
+  const ref = `media_${"a".repeat(32)}`;
+  for (const [engine, row] of [
+    ["claude", { type: "user", message: { content: `Inspect ${ref}` } }],
+    ["codex", { type: "event_msg", payload: { type: "user_message", message: `Inspect ${ref}` } }],
+  ] as const) {
+    const text = conversationSearchText(JSON.stringify(row), engine);
+    expect(text.firstPrompt).toContain("Inspect"); expect(JSON.stringify(text)).not.toContain(ref);
+  }
 });

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { withFileTransactionSync } from "./fileTransaction";
+import { withFileTransactionAttempt, withFileTransactionSync } from "./fileTransaction";
 import { captureProcessIdentity, processIdentityStatus, sameRecordedProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
 
 export const HOT_STATE_BACKEND = "sqlite-v1" as const;
@@ -238,6 +238,11 @@ function writeHotStateAuthority(
   return authority;
 }
 
+/** One attempt at the generation fence shared by all authority publishers. */
+export function withHotStateAuthorityAttempt<T>(directory: string, run: () => T): T {
+  return withFileTransactionAttempt(authorityFile(directory), "hot-state authority is busy", run);
+}
+
 export function publishHotStateAuthority(
   directory: string,
   mode: HotStateAuthorityMode,
@@ -298,6 +303,8 @@ export function acknowledgeHotStateFence(
     return writeHotStateAuthority(directory, current, "fencing", current.releaseRevision, {
       epoch: current.epoch,
       checkpoint: { acknowledgedAt: new Date().toISOString(), revisions },
+      ...(current.activationReadyAt ? { activationReadyAt: current.activationReadyAt } : {}),
+      ...(current.releaseReadyAt ? { releaseReadyAt: current.releaseReadyAt } : {}),
     });
   });
 }

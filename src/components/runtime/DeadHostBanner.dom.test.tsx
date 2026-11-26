@@ -11,17 +11,16 @@ import type { RuntimeAttention } from "./runtimeModel";
 
 const t = (key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => translate("en", key, params);
 
-function rv(hostKind: HostKind, host: HostAxis, legacy = false): RuntimeSessionView {
-  return { session: { hostKind, host } as RuntimeSessionView["session"], uiState: {} as RuntimeSessionView["uiState"], attentions: [], receipts: [], legacy, structuredControlsEnabled: true };
+function rv(hostKind: HostKind, host: HostAxis): RuntimeSessionView {
+  return { session: { hostKind, host } as RuntimeSessionView["session"], uiState: {} as RuntimeSessionView["uiState"], attentions: [], receipts: [], structuredControlsEnabled: true };
 }
 
 /* ------------------------------ isDeadHostSession ------------------------------ */
 
-test("only a dead or unhosted axis raises the banner; legacy and live never do", () => {
+test("only a dead or unhosted axis raises the banner; a live host never does", () => {
   expect(isDeadHostSession(rv("claude-broker", "dead"))).toBe(true);
   expect(isDeadHostSession(rv("codex-app-server", "unhosted"))).toBe(true);
   expect(isDeadHostSession(rv("codex-app-server", "hosted"))).toBe(false);
-  expect(isDeadHostSession(rv("tmux-legacy", "dead", true))).toBe(false);
   expect(isDeadHostSession(null)).toBe(false);
 });
 

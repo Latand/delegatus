@@ -56,9 +56,12 @@ when you ask; I'll suggest what could come next.
 ## What it does for you
 
 Write to it the way you would message a colleague: "take issues 12 and 14",
-"fix the flaky test in the scanner", "review PR 30". For each piece of work
-it opens a task, starts a pipeline in a worktree of its own and keeps the
-task's card up to date.
+"fix the flaky test in the scanner", "review PR 30". You can state only an
+outcome. For a vague ask it makes a quick, bounded scope check first, then
+chooses the route itself: a small permitted step done directly, a pipeline in
+a worktree of its own, or a research stage before building. It keeps the
+task's card up to date and asks you only about what stays materially
+ambiguous.
 
 - **It wakes when something is owed.** A new pipeline event, a stage waiting
   on a decision or a task nobody started wakes it. It answers in its chat and
@@ -69,9 +72,11 @@ task's card up to date.
 - **Side questions.** While it is busy with a turn, **Ask in parallel** in
   its composer sends a question to a copy of it, which answers in its own
   block inside the same chat.
-- **Everything is a pipeline.** Every piece of work it accepts is a pipeline on
-  that work's task. A review is a read-only reviewer stage whose fail edge
-  leads to a fix stage, and a fresh reviewer checks every round. See
+- **Work that needs agents is a pipeline.** Accepted work that needs agents
+  is a pipeline on that work's task, while a small permitted step, such as
+  reading a task's status, is done directly. A review is a read-only reviewer
+  stage whose fail edge leads to a fix stage, and a fresh reviewer checks every
+  round. See
   [Pipelines in depth](pipelines.md) and
   [docs/review-loop.md](../review-loop.md).
 - **Merges follow your setting.** With **Merge when the review passes** off,

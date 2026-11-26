@@ -250,6 +250,8 @@ export interface BridgeReportTelegram {
   message?: string;
   /** Sends attempted, the first included. */
   attempts: number;
+  /** Frozen bot receipt suffix; legacy copies start at their stored attempts. */
+  receiptAttempt?: number;
   at: string;
 }
 

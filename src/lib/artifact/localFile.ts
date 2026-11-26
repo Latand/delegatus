@@ -1,12 +1,15 @@
-import { constants as FS, realpathSync, type promises as fsp } from "node:fs";
+import { constants as FS, lstatSync, realpathSync, type promises as fsp } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { statePath } from "@/lib/configDir";
+import { APP_DIR_NAMES } from "../../../bin/appDir.mjs";
+import { repositoryRootForPath } from "@/lib/projects/identity";
+import { stateDir, statePath } from "@/lib/configDir";
 import { knownProjectFileRoots } from "@/lib/scanner/projectDirectories";
 import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { homeDirectory } from "@/lib/platformHome";
+import { keptReportRow, reportMediaCopyAllowed, reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { isEvidenceImage } from "./evidenceFormats";
 export { isEvidenceImage } from "./evidenceFormats";
 
@@ -45,6 +48,47 @@ export function evidenceRoots(): string[] {
   return roots.map((root) => root.trim()).filter((root) => path.isAbsolute(root)).map((root) => path.resolve(root));
 }
 
+/* The roots that serve rasters and nothing else: the evidence roots, and the
+   report picture store. The store is no evidence root: agents are never told
+   to render into it. */
+function rasterRoots(): string[] {
+  return [...new Set([...evidenceRoots(), reportMediaRoot()])];
+}
+
+/**
+ * Where a requested local path is read from. A file that lies at the path,
+ * under a root these routes serve, is read there. Otherwise the copy the
+ * report picture store kept when a report named the path stands for it: the
+ * picture was swept with its lane checkout or its temp directory, or it lies
+ * in a temp directory these routes do not read. The store copies from the
+ * served roots and the named temp roots only, so a copy reaches no further
+ * than that. The answer goes through the same admission as any other path.
+ */
+export function readablePlace(abs: string, roots: AllowedRoots = lexicalAllowedRoots()): string {
+  if (!hiddenPathAllowed(abs, roots)) return abs;
+  if (admittedAs(abs, roots)) {
+    try {
+      lstatSync(abs);
+      return abs;
+    } catch {
+      /* Gone from its own path. */
+    }
+  }
+  /* Keep legacy candidates visible to admission, which refuses their store
+     path with the existing 403 instead of mistaking them for missing files. */
+  return keptReportRow(abs)?.copy ?? abs;
+}
+
+/**
+ * The project whose members may read what `readablePlace` answered for a
+ * requested path: for a kept copy, the project its picture lay in when it was
+ * copied; undefined for a file read where it lies, whose own directory says.
+ */
+export function keptPictureProject(requested: string, place: string): string | null | undefined {
+  const kept = keptReportRow(requested);
+  return kept && kept.copy === place ? kept.row.project : undefined;
+}
+
 /* Stores under an allowed root that answer only through their own route. The
    prototype review copies are read by manifest, task and caller; a path route
    that handed them out would let any caller around that fence, so no path
@@ -58,17 +102,155 @@ export function inFencedStore(candidate: string, fenced: readonly string[]): boo
   return fenced.some((store) => underRoot(candidate, store));
 }
 
+/** A product-owned output directory inside a private area, with the class of file it may serve. */
+interface Passage {
+  root: string;
+  /** Raster files only, and never a project root at or below it. */
+  rasterOnly: boolean;
+}
+
+interface PrivateArea {
+  root: string;
+  /** Product-owned output directories inside this area that keep their main-branch admission. */
+  passages: Passage[];
+}
+
+/* The two directories the product writes stage output into: managed scratch
+   (a project root, any file) and durable evidence (a raster root, rasters
+   only). Their root, class and hidden-component rules still decide admission;
+   the passage only lifts the private-area veto that would otherwise cover the
+   state directory, and only for the class its root serves on main. Another
+   project root that contains evidence, or a cwd recorded inside it, therefore
+   reaches its rasters and nothing else. */
+const STATE_OUTPUTS = [{ name: "scratch", rasterOnly: false }, { name: "evidence", rasterOnly: true }] as const;
+
+function realOrWritten(root: string): string {
+  try {
+    const anchor = path.parse(root).root;
+    const parts = root.slice(anchor.length).split(process.platform === "win32" ? /[\\/]+/ : /\/+/);
+    // Bun's realpathSync also collapses `..` before following links. Resolve
+    // each prefix before ascending so the filesystem chooses its parent.
+    if (!parts.includes("..")) return realpathSync(root);
+    let resolved = path.resolve(anchor || ".");
+    let pending: string[] = [];
+    for (const part of parts) {
+      if (part === "..") {
+        resolved = path.dirname(realpathSync(path.join(resolved, ...pending)));
+        pending = [];
+      } else pending.push(part);
+    }
+    return realpathSync(path.join(resolved, ...pending));
+  } catch { return root; }
+}
+
+function privateRootNames(root: string): string[] {
+  const lexical = path.resolve(root);
+  // Follow links in the original spelling before collapsing `..`. Retain
+  // the lexical consumer's location and any link it follows as well.
+  return [...new Set([lexical, realOrWritten(root), realOrWritten(lexical)].map(name => path.resolve(name)))];
+}
+
+/** Private tool/config areas stay private even when another allowed root contains them.
+ * Keep both written and resolved names: a configured home can itself be a link.
+ */
+function privateAreas(): PrivateArea[] {
+  const literalHome = process.env.HOME;
+  const literalProfile = process.env.USERPROFILE;
+  const homes = [...new Set([
+    homeRoot(),
+    os.homedir(),
+    ...(literalHome && path.isAbsolute(literalHome) ? [literalHome, literalHome.trim()].filter(Boolean) : []),
+    ...(literalProfile && path.isAbsolute(literalProfile) ? [literalProfile, literalProfile.trim()].filter(Boolean) : []),
+  ].flatMap(privateRootNames))];
+  const tools = homes.flatMap(home => [".codex", ".claude", ".copilot", ".openclaw"].map(name => path.join(home, name)));
+  for (const key of ["LLV_CODEX_HOME", "CODEX_HOME", "DELEGATUS_CODEX_HOME", "LLV_CLAUDE_HOME", "CLAUDE_CONFIG_DIR", "DELEGATUS_CLAUDE_HOME", "COPILOT_HOME", "OPENCLAW_STATE_DIR"]) {
+    const configured = process.env[key];
+    if (!configured) continue;
+    // Some consumers use the configured value literally while others trim it.
+    // Protect both filesystem locations so whitespace cannot select a path
+    // outside this guard or weaken the existing trimmed-home policy.
+    tools.push(configured);
+    const trimmed = configured.trim();
+    if (trimmed) tools.push(trimmed);
+  }
+  const configs = homes.map(home => path.join(home, ".config"));
+  if (process.env.XDG_CONFIG_HOME) configs.push(process.env.XDG_CONFIG_HOME);
+  const states = privateRootNames(stateDir());
+  // Each output is named below every spelling of the state directory and never
+  // by its own resolved target: a linked output that leads elsewhere inside a
+  // private area gains nothing, because the resolved candidate is judged again.
+  const outputs: Passage[] = states.flatMap(state => STATE_OUTPUTS.map(({ name, rasterOnly }) => ({ root: path.join(state, name), rasterOnly })));
+  const areas: PrivateArea[] = [];
+  const add = (root: string, withOutputs: boolean) => {
+    for (const name of privateRootNames(root)) {
+      areas.push({ root: name, passages: withOutputs ? outputs.filter(output => output.root !== name && underRoot(output.root, name)) : [] });
+    }
+  };
+  for (const root of new Set(tools)) add(root, false);
+  for (const root of new Set([...configs.flatMap(privateRootNames).flatMap(config => APP_DIR_NAMES.map(name => path.join(config, name))), ...states])) add(root, true);
+  // Managed homes and shared credentials follow a relocated state directory.
+  for (const state of states) {
+    for (const name of ["accounts", "shared"]) add(path.join(path.dirname(state), name), false);
+  }
+  return areas;
+}
+
+/**
+ * Whether no private area vetoes a path. A file candidate passes a passage of
+ * its class; a project root candidate passes only a passage that serves every
+ * file, because a root inside a raster passage would serve its other files.
+ */
+function privatePathAllowed(candidate: string, areas: readonly PrivateArea[], asRoot = false): boolean {
+  const passes = (passage: Passage) => underRoot(candidate, passage.root)
+    && (!passage.rasterOnly || (!asRoot && isEvidenceImage(candidate)));
+  return areas.every(({ root, passages }) => !underRoot(candidate, root) || passages.some(passes));
+}
+
+/** Secret destinations have no passages through private areas or fenced stores. */
+export function isPrivateLocalPath(candidate: string): boolean {
+  const configs = [path.join(homeRoot(), ".config"), path.join(os.homedir(), ".config"), process.env.XDG_CONFIG_HOME];
+  return privateAreas().some(({ root }) => underRoot(candidate, root))
+    || [...configs, ...fencedStores()].some(root => root && privateRootNames(root).some(name => underRoot(candidate, name)));
+}
+
 /** Exact project folders and worktrees, plus the product-owned stage scratch. */
 function projectRoots(): string[] {
   return [...new Set([...knownProjectFileRoots(), ...projectCurationSnapshot().manualProjects.map(entry => entry.root), statePath("scratch")])]
-    .filter(root => path.isAbsolute(root) && !underRoot(homeRoot(), path.resolve(root)));
+    .filter(root => path.isAbsolute(root)).map(root => path.resolve(root));
 }
 
 export type Admission = "project" | "evidence";
 
+/**
+ * Hidden components below any containing root of the admission kind are
+ * private. Only product-owned directory passages are served; a hidden file
+ * name is always private. Root components are deliberately outside the rule.
+ * The picture writer supplies temp roots only for paths outside served roots.
+ * With no surviving root, still refuse a hidden name before kept-copy lookup.
+ */
+export function hiddenPathAllowed(candidate: string, roots: AllowedRoots, temp: readonly string[] = []): boolean {
+  if (!privatePathAllowed(candidate, roots.privateAreas ?? [])) return false;
+  const containing = (group: readonly string[]) => group.filter(root => underRoot(candidate, root));
+  const projects = containing(roots.projects);
+  const evidence = projects.length ? [] : containing(roots.evidence);
+  const selected = projects.length ? projects : evidence.length ? evidence : containing(temp);
+  if (!selected.length) return !path.basename(candidate).startsWith(".");
+  return selected.every(root => {
+    const relative = path.relative(root, candidate);
+    if (!relative) return true;
+    const parts = relative.split(path.sep);
+    return parts.every((part, index) => {
+      if (!part.startsWith(".")) return true;
+      if (index === parts.length - 1) return false;
+      return part === ".artifacts" || part === ".worktrees"
+        || (part === ".claude" && parts[index + 1] === "worktrees" && index + 2 < parts.length);
+    });
+  });
+}
+
 /** Check lexical containment before resolving links; evidence roots admit rasters only. */
 export function admittedAs(candidate: string, roots: AllowedRoots): Admission | null {
-  if (inFencedStore(candidate, roots.fenced)) return null;
+  if (inFencedStore(candidate, roots.fenced) || !hiddenPathAllowed(candidate, roots) || !reportMediaCopyAllowed(candidate)) return null;
   if (roots.projects.some(root => underRoot(candidate, root))) return "project";
   return isEvidenceImage(candidate) && roots.evidence.some((root) => underRoot(candidate, root)) ? "evidence" : null;
 }
@@ -77,19 +259,27 @@ export function admittedAs(candidate: string, roots: AllowedRoots): Admission | 
 export function realpathAdmitted(lexical: Admission, real: string, roots: AllowedRoots): boolean {
   const resolved = admittedAs(real, roots);
   if (lexical === "project") return resolved !== null;
-  return resolved !== null && isEvidenceImage(real) && roots.evidence.some((root) => underRoot(real, root));
+  return resolved !== null && isEvidenceImage(real) && roots.evidence.some((root) => underRoot(real, root))
+    && hiddenPathAllowed(real, { ...roots, projects: [] });
 }
 
 export interface AllowedRoots {
   home: string;
   projects: string[];
+  /** Roots that serve rasters only: the evidence roots and the report picture store. */
   evidence: string[];
   /** Fenced stores, which no root admits. */
   fenced: string[];
+  /** Private tool/config areas, with narrowly owned output passages. */
+  privateAreas?: PrivateArea[];
 }
 
 export function lexicalAllowedRoots(): AllowedRoots {
-  return { home: homeRoot(), projects: projectRoots(), evidence: evidenceRoots(), fenced: fencedStores() };
+  const home = homeRoot();
+  const candidates = projectRoots();
+  const areas = privateAreas();
+  const projects = candidates.filter(root => !underRoot(home, root) && privatePathAllowed(root, areas, true));
+  return { home, projects, evidence: rasterRoots(), fenced: fencedStores(), privateAreas: areas };
 }
 
 /** The same roots with symlinks resolved; a root that does not exist is dropped. */
@@ -107,13 +297,15 @@ export function realAllowedRootsSync(): AllowedRoots {
     }
   };
   const home = real(homeRoot()) ?? homeRoot();
-  const evidence = evidenceRoots().map(real).filter((root): root is string => root !== null);
+  const evidence = rasterRoots().map(real).filter((root): root is string => root !== null);
   /* A store that does not exist yet holds nothing to read; one reached through
      a link is fenced at the place the link leads to as well. */
   const stores = fencedStores();
   const fenced = [...new Set([...stores, ...stores.map(real).filter((store): store is string => store !== null)])];
-  const projects = projectRoots().map(real).filter((root): root is string => root !== null && !underRoot(home, root));
-  return { home, projects, evidence, fenced };
+  const lexical = lexicalAllowedRoots();
+  const areas = lexical.privateAreas ?? [];
+  const projects = lexical.projects.map(real).filter((root): root is string => root !== null && !underRoot(home, root) && privatePathAllowed(root, areas, true));
+  return { home, projects, evidence, fenced, privateAreas: areas };
 }
 
 /* macOS refuses an open with this flag (`ELOOP`) when any component of the

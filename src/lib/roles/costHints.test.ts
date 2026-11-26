@@ -9,7 +9,7 @@ test("cost classes of the shipped defaults reflect the selected model and effort
   expect(byRole.reviewer).toBe("very-heavy");
   expect(byRole.builder).toBe("heavy");
   expect(byRole.orchestrator).toBe("heavy");
-  expect(byRole.cleaner).toBe("light");
+  expect(byRole.cleaner).toBe("heavy");
   expect(byRole.architect).toBe("very-heavy");
   expect(byRole["prod-auditor"]).toBe("very-heavy");
   expect(costClass({ model: "haiku", effort: "low" })).toBe("light");
@@ -43,4 +43,8 @@ test("a pinned Claude id with the claude- prefix lands on its family's size clas
   expect(costClass({ model: "claude-sonnet-5-5", effort: "high" })).toBe(costClass({ model: "sonnet", effort: "high" }));
   const limits = { weekly: { usedPercent: 10 }, tiers: [{ tier: "seven_day_sonnet", usedPercent: 80 }] };
   expect(tightestHeadroom("claude", "claude-sonnet-5-5", limits)).toEqual(tightestHeadroom("claude", "sonnet", limits));
+});
+
+test("GPT-6.2 Sol and Astra retain the large model cost class", () => {
+  for (const model of ["gpt-6.2-sol", "gpt-6.2-astra"]) expect(modelSizeClass(model)).toBe(3);
 });

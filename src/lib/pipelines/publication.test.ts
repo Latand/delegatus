@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { publicationApp403, publicationDeadlineOnly, publicationFrozenInstallFailure, publicationTransportLine, pipelinePublishesRemoteBranch } from "./publication";
+import { publicationApp403, publicationDeadlineKind, publicationDeadlineOnly, publicationFrozenInstallFailure, publicationTransportLine, pipelinePublishesRemoteBranch } from "./publication";
 import { FORGE_PUSH_MINT_MARKER } from "../../../bin/forge-app-token.mjs";
 import type { Pipeline } from "./types";
 import { admissionLockWait } from "../../../scripts/cpu-admission-lock";
@@ -30,6 +30,14 @@ async function admissionFailureOutput(): Promise<string> {
 
 test("a production admission lock deadline before checks start is retryable", async () => {
   expect(publicationDeadlineOnly(await admissionFailureOutput())).toBe(true);
+});
+
+test("a Cloud execution deadline stays retryable unless its output includes a decisive refusal", () => {
+  const timeout = "pre-push: Cloud checks refused [timeout]: Cloud check deadline expired; remote cleanup confirmed; no bound command receipt";
+  expect(publicationDeadlineKind(timeout)).toBe("execution");
+  expect(publicationDeadlineKind("pre-push: Cloud checks refused [timeout]: Cloud check deadline expired; remote cleanup unresolved")).toBeNull();
+  expect(publicationDeadlineOnly(`${timeout}\n(fail) a.test.ts: named assertion`)).toBe(false);
+  expect(publicationDeadlineOnly(`${timeout}\nowned runner: budget cleanup failed: child still running`)).toBe(false);
 });
 
 test.each(["types", "eslint", "touched tests", "frozen install", "touched tests: failed (1)", "Linux tests: failed (1)"])("a started %s phase prevents an admission retry", async phase => {
@@ -137,6 +145,12 @@ test.each([
   "NEW src/work.test.ts: <runner error> runner did not finish (124)",
   "command timed out after 900000ms",
   "pre-push: Viewer runtime: failed (124)\nowned runner: deadline expired",
+  "pre-push: touched tests\ntouched-tests: no verdict: head: test run exceeded its 15 minute budget; 58 of 70 files completed; nothing was judged\npre-push: touched tests: failed (75)",
+  "touched-tests: head: test run exceeded its 15 minute budget; gate error (blocking)",
+  "touched-tests: baseline: test run exceeded its 15 minute budget; gate error (blocking)",
+  "touched-tests: head rerun: test run exceeded its flaky rerun budget; gate error (blocking)",
+  "touched-tests: base rerun: test run exceeded its flaky rerun budget; gate error (blocking)",
+  "touched-tests: baseline: flaky rerun budget exhausted during setup; gate error (blocking)",
 ])("a deadline without a refusal is retryable: %s", output => {
   expect(publicationDeadlineOnly(output)).toBe(true);
 });
@@ -160,6 +174,25 @@ test.each([
 
 test("an ordinary touched-test exit has no capacity evidence", () => {
   expect(publicationDeadlineOnly("pre-push: touched tests: failed (1)")).toBe(false);
+});
+
+test.each([
+  "NEW src/work.test.ts: named assertion", "PRIVACY GATE: FAIL", "pre-push: types: failed (1)",
+  "owned runner: budget cleanup failed: child tree could not be stopped",
+])("a comparator budget cannot erase a decisive refusal: %s", refusal => {
+  for (const budget of ["touched-tests: no verdict: head: test run exceeded its 15 minute budget; nothing was judged",
+    "touched-tests: head: test run exceeded its 15 minute budget; gate error (blocking)"]) {
+    expect(publicationDeadlineOnly(`${budget}\n${refusal}`)).toBe(false);
+    expect(publicationDeadlineOnly(`${refusal}\n${budget}`)).toBe(false);
+  }
+});
+
+test.each([
+  "touched-tests: baseline: dependency setup failed; gate error (blocking)",
+  "touched-tests: head: test run exceeded its unknown budget; gate error (blocking)",
+  "(pass) touched-tests: no verdict: quoted diagnostic",
+])("a comparator fault keeps its refusal: %s", output => {
+  expect(publicationDeadlineOnly(output)).toBe(false);
 });
 
 // The remote gate runner lost a started run (scripts/gate-runner/client.ts).

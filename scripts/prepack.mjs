@@ -1,9 +1,10 @@
-import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { cp, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
 import { stampPackageRevision } from "./package-revision.mjs";
+import { assembleStandaloneRuntime } from "./package-standalone.mjs";
 import {
   discardUnsupportedApiCredentials,
   viewerChildProcessOptions,
@@ -173,17 +174,7 @@ async function main() {
   await runMcpBuild();
   await runGateBuild();
 
-  // Next traces route imports, so it misses file-based launcher dependencies
-  // and public URLs. Assemble these complete runtime inputs explicitly. The
-  // MCP launcher resolves dist/mcp-server.mjs relative to its own bin directory.
-  for (const directory of ["bin", "public", "vendor"]) {
-    await cp(join(root, directory), join(distStandaloneDir, directory), { recursive: true });
-  }
-  const standaloneBundles = join(distStandaloneDir, "dist");
-  await mkdir(standaloneBundles, { recursive: true });
-  for (const bundle of ["mcp-server.mjs", "runtime-host.mjs", "gate"]) {
-    await cp(join(distDir, bundle), join(standaloneBundles, bundle), { recursive: true });
-  }
+  await assembleStandaloneRuntime(root, distStandaloneDir);
 
   if (!existsSync(join(distStandaloneDir, "server.js")) || !existsSync(runtimeHostBundle)) {
     throw new Error("Prepack did not produce the standalone server and runtime host bundles.");

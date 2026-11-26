@@ -105,7 +105,7 @@ export async function turboAnswer(project: string, settings: { turbo?: TurboSett
   const candidates = await liveCandidates(project);
   const raised = candidates.filter(candidate => {
     const tier = candidate.model ? context!.plan.find(account => account.accountId === candidate.accountId)?.tiers[candidate.model] : undefined;
-    return !candidate.legacy && !candidate.stage?.switchOpen && !!tier && raisesTier(candidate.tier, tier);
+    return !candidate.stage?.switchOpen && !!tier && raisesTier(candidate.tier, tier);
   });
   const observations = agentRegistry().quotaObservations("codex");
   answer.preview = {
@@ -154,9 +154,7 @@ async function liveCandidates(project: string): Promise<TurboCandidate[]> {
     if (!generation || generation.archivedAt) continue;
     const key = `codex:${generation.id}`;
     const entry = snapshot.entries[key];
-    const hosted = held.has(key);
-    const legacy = !hosted && !!entry?.host && entry.status === "live";
-    if (!hosted && !legacy) continue;
+    if (!held.has(key)) continue;
     if (conversationProjectKey(conversation.projectOwnership, generation.launchProfile) !== project) continue;
     const membership = (snapshot.memberships[conversation.id] ?? []).find(item => item.kind === "pipeline" && item.stageId);
     let stage: TurboCandidate["stage"];
@@ -172,7 +170,7 @@ async function liveCandidates(project: string): Promise<TurboCandidate[]> {
     }
     out.push({ conversationId: conversation.id, accountId: generation.accountId, model: generation.launchProfile.model,
       tier: launchServiceTier(generation.launchProfile) ?? null, ...(seat && registry.canonicalConversationId(seat as ViewerConversationId) === conversation.id ? { seat: true } : {}),
-      ...(stage ? { stage } : {}), ...(legacy ? { legacy: true } : {}), busy: entry?.structuredHost?.activeTurnRef != null });
+      ...(stage ? { stage } : {}), busy: entry?.structuredHost?.activeTurnRef != null });
   }
   return out;
 }

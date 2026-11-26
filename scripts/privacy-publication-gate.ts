@@ -82,7 +82,6 @@ const textExtensions = new Set([
 ]);
 const textBasenames = new Set(["CODEOWNERS", "Dockerfile", "LICENSE", "Makefile", "README"]);
 const maxPublicationBytes = 32 * 1024 * 1024;
-const maxVideoStreams = 16;
 const supportedGeneratorRuntime = "bun-1.3.3";
 // Reviewed public forms, stored without publication-sensitive literals.
 // Identity normalization preserves case, punctuation and every raw code point.
@@ -1056,7 +1055,11 @@ function loadKnownValues(): { error: boolean; fingerprints: KnownValueFingerprin
     preparedValues.push({ ...value, primary, fingerprint,
       fingerprintNeedle: value.exactOnly ? primary : compactSensitiveText(value.value) });
   }
-  const fingerprintFile = process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE;
+  // Only the command supplies a default. Importers keep their existing
+  // environment-driven policy, and an explicit empty value disables it.
+  const fingerprintFile = process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE
+    ?? (import.meta.main && process.argv.includes("--require-known-values")
+      ? join(import.meta.dir, "privacy-known-value-fingerprints.json") : undefined);
   if (fingerprintFile) {
     try {
       const catalog = JSON.parse(readSafeRegularFile(fingerprintFile).toString("utf8")) as {
@@ -1098,11 +1101,6 @@ const knownValues = loadKnownValues();
 // per-line notices. The prepared text is shared across those views; cache the
 // config-specific match so fingerprint windows are not hashed twice.
 const knownValueMatches = new WeakMap<object, boolean>();
-
-function configuredOcrLanguages(): string | undefined {
-  const languages = (process.env.LLV_PRIVACY_OCR_LANGUAGES ?? "eng").trim();
-  return /^[a-z0-9_]+(?:\+[a-z0-9_]+)*$/i.test(languages) ? languages : undefined;
-}
 
 function extensionMediaKind(path: string): MediaKind | undefined {
   const extension = extname(path).toLowerCase();
@@ -1248,13 +1246,45 @@ function changedPaths(arguments_: string[], repository: string, resolvedBase?: s
   return { error: false, paths: [...paths] };
 }
 
-function commitInputGit(repository: string, args: string[], env: Record<string, string | undefined> = withoutUnsupportedApiCredentials(process.env), stdin?: Buffer): Buffer {
-  const result = Bun.spawnSync({
+function spawnCommitInputGit(repository: string, args: string[], env: Record<string, string | undefined> = withoutUnsupportedApiCredentials(process.env), stdin?: Buffer) {
+  return Bun.spawnSync({
     cmd: ["git", "--no-replace-objects", "--literal-pathspecs", "-C", repository, ...args],
     env, stdin, stdout: "pipe", stderr: "pipe",
   });
+}
+
+function commitInputGit(repository: string, args: string[], env?: Record<string, string | undefined>, stdin?: Buffer): Buffer {
+  const result = spawnCommitInputGit(repository, args, env, stdin);
   if (result.exitCode !== 0) throw new Error("commit input unreadable");
   return result.stdout;
+}
+
+function isolatedCommitGitEnvironment(): Record<string, string | undefined> {
+  const env = Object.fromEntries(Object.entries(withoutUnsupportedApiCredentials(process.env)).filter(([name]) => !name.startsWith("GIT_")));
+  return { ...env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+}
+
+function commitDiffAttributes(repository: string, commit: string, paths: Buffer, supportsSource: boolean): Buffer {
+  const args = ["-z", "diff", "--stdin"];
+  if (supportsSource) return commitInputGit(repository, ["check-attr", "--source", commit, ...args], undefined, paths);
+
+  // Git 2.39 reads historical attributes through --cached. Build the index
+  // in a scratch repository to keep index writes and hooks isolated.
+  const scratch = mkdtempSync(join(tmpdir(), "llv-privacy-index-"));
+  try {
+    const snapshot = join(scratch, "repository");
+    const index = join(scratch, "index");
+    const snapshotEnv = isolatedCommitGitEnvironment();
+    commitInputGit(scratch, ["clone", "--quiet", "--bare", "--shared", "--template=", "--", repository, snapshot], snapshotEnv);
+    commitInputGit(snapshot, ["read-tree", "--no-sparse-checkout", "--no-recurse-submodules", commit], { ...snapshotEnv, GIT_INDEX_FILE: index });
+    // Attribute precedence outside the tree remains that of the inspection repository.
+    const attributeEnv = { ...withoutUnsupportedApiCredentials(process.env), GIT_ATTR_SOURCE: undefined, GIT_INDEX_FILE: index };
+    // Git 2.39 can hide committed attributes outside a cone-mode sparse
+    // checkout even when the scratch index contains the complete tree.
+    return commitInputGit(repository, ["-c", "core.sparseCheckout=false", "check-attr", "--cached", ...args], attributeEnv, paths);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 /** New-side text from changed hunks, including three context lines, without removed text or diff syntax. */
@@ -1296,19 +1326,36 @@ type CommitInput = { commit: string; path: string; blob: string } & (
 );
 
 /** Read immutable commit objects. Checkout, index and untracked bytes cannot enter this selection. */
-function* commitInputs(repository: string, base: string): Generator<CommitInput> {
+export function* commitInputs(repository: string, base: string): Generator<CommitInput> {
   const commits = commitInputGit(repository, ["rev-list", "--parents", `${base}..HEAD`]).toString().trim();
+  if (!commits) return;
+  const help = spawnCommitInputGit(repository, ["check-attr", "-h"]);
+  const supportsSource = /(?:^|\s)--source[ =]/m.test(help.stdout.toString() + help.stderr.toString());
   const binaryBlobs = new Set<string>();
-  for (const row of commits ? commits.split("\n") : []) {
+  for (const row of commits.split("\n")) {
     const [commit, ...parents] = row.split(" ");
     if (![commit, ...parents].every(hash => COMMIT_HASH.test(hash))) throw new Error("invalid commit input");
-    // A merge can add a resolution which appears in neither parent's own diff.
     const endpoints = parents.length ? [parents[0], commit] : [commit];
     const options = ["diff-tree", "--root", "--no-commit-id", "--no-renames", "--no-abbrev", "--no-ext-diff", "--no-textconv", "-r", "-z"];
+    // Git's combined diff selects paths whose result differs from every
+    // parent, including octopus merges. A path inherited unchanged from a
+    // parent is already covered: that parent is either in base or is scanned
+    // separately in this complete base..HEAD traversal. Keep first-parent
+    // hunks for the selected paths so new merge resolutions retain context.
+    let mergePaths: Set<string> | undefined;
+    if (parents.length > 1) {
+      const paths = new TextDecoder("utf-8", { fatal: true }).decode(commitInputGit(repository,
+        [...options, "--name-only", "-c", commit])).split("\0");
+      if (paths.pop() !== "") throw new Error("unframed merge paths");
+      mergePaths = new Set(paths);
+      if (mergePaths.size === 0) continue;
+    }
     const raw = new TextDecoder("utf-8", { fatal: true }).decode(commitInputGit(repository, [...options, "--raw", ...endpoints])).split("\0");
     if (raw.pop() !== "") throw new Error("unframed commit paths");
-    const attributeOutput = commitInputGit(repository, ["check-attr", "--source", commit, "-z", "diff", "--stdin"], undefined,
-      Buffer.from(raw.filter((_, index) => index % 2 === 1).map(path => `${path}\0`).join(""))).toString().split("\0");
+    if (raw.length === 0) continue;
+    const paths = raw.filter((path, index) => index % 2 === 1 && (!mergePaths || mergePaths.has(path)));
+    const attributeOutput = commitDiffAttributes(repository, commit, Buffer.from(paths.map(path => `${path}\0`).join("")), supportsSource)
+      .toString().split("\0");
     if (attributeOutput.pop() !== "" || attributeOutput.length % 3 !== 0) throw new Error("invalid commit attributes");
     const diffAttributes = new Map<string, string>();
     for (let index = 0; index < attributeOutput.length; index += 3) {
@@ -1319,6 +1366,7 @@ function* commitInputs(repository: string, base: string): Generator<CommitInput>
       const metadata = /^:(\d{6}) (\d{6}) ([a-f0-9]{40}) ([a-f0-9]{40}) [AMDT]$/.exec(raw[index]);
       const path = raw[index + 1];
       if (!metadata || !path) throw new Error("invalid commit path");
+      if (mergePaths && !mergePaths.has(path)) continue;
       const [, oldMode, mode, oldBlob, blob] = metadata;
       if (mode === "000000") continue;
       const input = { commit, path, blob };
@@ -1707,8 +1755,8 @@ function pngMetadata(bytes: Buffer): { animated?: boolean; error: boolean; liveS
   return { animated, error: false, liveSource, text: values.join("\n") };
 }
 
-function inspectRasterMetadata(path: string, kind: MediaKind | undefined): Set<FindingClass> {
-  if (kind !== "png" && kind !== "raster") return new Set();
+function inspectMediaMetadata(path: string, kind: MediaKind | undefined): Set<FindingClass> {
+  if (kind !== "png" && kind !== "raster" && kind !== "animated") return new Set();
   try {
     const bytes = readFileSync(path);
     if (kind === "png") {
@@ -1720,6 +1768,24 @@ function inspectRasterMetadata(path: string, kind: MediaKind | undefined): Set<F
       return findings;
     }
     if (bytes.length > 32 * 1024 * 1024) return new Set(["inspection_error"]);
+    if (kind === "animated") {
+      // Container tags can be UTF-8 even when adjacent frame bytes are binary.
+      const strings: string[] = bytes.toString("utf8").match(/[^\x00-\x1f\x7f-\x9f\ufffd]{4,}/gu) ?? [];
+      // ISO-BMFF metadata data boxes declare their encoding and byte extent.
+      // Type 2 stores UTF-16. Scan both alignments and byte orders just as
+      // for PNG metadata, without decoding any frame or launching a tool.
+      if (bytes.toString("ascii", 4, 8) === "ftyp") {
+        for (let pos = bytes.indexOf("data", 4); pos !== -1; pos = bytes.indexOf("data", pos + 4)) {
+          if (pos + 12 > bytes.length || bytes.readUInt32BE(pos + 4) !== 2) continue;
+          const size = bytes.readUInt32BE(pos - 4);
+          if (size < 16 || size > bytes.length - pos + 4) continue;
+          const end = pos - 4 + size;
+          for (const text of metadataStrings(bytes.subarray(pos + 12, end))) strings.push(text);
+          pos = end - 4;
+        }
+      }
+      return sensitiveClasses(strings.join("\n"));
+    }
     const printableMetadata = bytes.toString("latin1").match(/[\x20-\x7e]{4,}/g)?.join("\n") ?? "";
     return sensitiveClasses(printableMetadata);
   } catch {
@@ -2026,135 +2092,6 @@ function inspectText(path: string, kind: MediaKind | undefined): Set<FindingClas
   } catch {
     return new Set(["inspection_error"]);
   }
-}
-
-function inspectRaster(path: string, kind: MediaKind | undefined): Set<FindingClass> {
-  if (kind !== "png" && kind !== "raster") return new Set();
-  if (!Bun.which("tesseract")) return new Set(["tool_unavailable"]);
-  const languages = configuredOcrLanguages();
-  if (!languages) return new Set(["configuration_error"]);
-  const result = Bun.spawnSync({
-    cmd: ["tesseract", path, "stdout", "-l", languages],
-    env: withoutUnsupportedApiCredentials(process.env),
-    stderr: "pipe",
-    stdout: "pipe",
-  });
-  if (result.exitCode !== 0) return new Set(["inspection_error"]);
-  return sensitiveClasses(result.stdout.toString());
-}
-
-function inspectAnimated(path: string, kind: MediaKind | undefined): Set<FindingClass> {
-  if (kind !== "animated") return new Set();
-  if (!Bun.which("ffprobe") || !Bun.which("ffmpeg") || !Bun.which("tesseract")) {
-    return new Set(["tool_unavailable"]);
-  }
-  const languages = configuredOcrLanguages();
-  if (!languages) return new Set(["configuration_error"]);
-  const probe = Bun.spawnSync({
-    cmd: [
-      "ffprobe",
-      "-v",
-      "error",
-      "-count_frames",
-      "-select_streams",
-      "v",
-      "-show_entries",
-      "format=duration:format_tags:stream=duration,nb_frames,nb_read_frames:stream_tags",
-      "-of",
-      "json",
-      path,
-    ],
-    env: withoutUnsupportedApiCredentials(process.env),
-    stderr: "pipe",
-    stdout: "pipe",
-  });
-  if (probe.exitCode !== 0) return new Set(["inspection_error"]);
-  const findings = sensitiveClasses(probe.stdout.toString());
-  let formatDuration = 0;
-  let streams: Array<{ duration?: unknown; nb_frames?: unknown; nb_read_frames?: unknown }>;
-  try {
-    const metadata = JSON.parse(probe.stdout.toString()) as {
-      format?: { duration?: unknown };
-      streams?: unknown;
-    };
-    formatDuration = Number(metadata.format?.duration);
-    if (!Number.isFinite(formatDuration) || formatDuration < 0) formatDuration = 0;
-    if (!Array.isArray(metadata.streams) || metadata.streams.length === 0 || metadata.streams.length > maxVideoStreams
-      || metadata.streams.some((stream) => typeof stream !== "object" || stream === null || Array.isArray(stream))) {
-      findings.add("inspection_error");
-      return findings;
-    }
-    streams = metadata.streams as Array<{ duration?: unknown; nb_frames?: unknown; nb_read_frames?: unknown }>;
-  } catch {
-    return new Set([...findings, "inspection_error"]);
-  }
-  const fractions = [0, 0.25, 0.5, 0.75, 0.95];
-  for (const [streamOrdinal, stream] of streams.entries()) {
-    let duration = Number(stream.duration);
-    if (!Number.isFinite(duration) || duration < 0) duration = formatDuration;
-    let frameCount = 0;
-    for (const candidate of [stream.nb_read_frames, stream.nb_frames]) {
-      const count = Number(candidate);
-      if (!Number.isSafeInteger(count) || count < 1) continue;
-      frameCount = count;
-      break;
-    }
-    if (duration === 0 && frameCount === 0) {
-      findings.add("inspection_error");
-      continue;
-    }
-    const samples = duration > 0
-      ? fractions.map((fraction) => ({ kind: "time" as const, value: (duration * fraction).toFixed(3) }))
-      : fractions.map((fraction) => ({
-        kind: "frame" as const,
-        value: Math.floor((frameCount - 1) * fraction).toString(),
-      }));
-    const uniqueSamples = new Map(samples.map((sample) => [`${sample.kind}:${sample.value}`, sample]));
-    for (const sample of uniqueSamples.values()) {
-      const inputArguments = sample.kind === "time"
-        ? ["-ss", sample.value, "-i", path]
-        : ["-i", path];
-      const filterArguments = sample.kind === "frame" ? ["-vf", `select=eq(n\\,${sample.value})`] : [];
-      const frame = Bun.spawnSync({
-        cmd: [
-          "ffmpeg",
-          "-v",
-          "error",
-          ...inputArguments,
-          "-map",
-          `0:v:${streamOrdinal}`,
-          ...filterArguments,
-          "-frames:v",
-          "1",
-          "-f",
-          "image2pipe",
-          "-vcodec",
-          "png",
-          "pipe:1",
-        ],
-        env: withoutUnsupportedApiCredentials(process.env),
-        stderr: "pipe",
-        stdout: "pipe",
-      });
-      if (frame.exitCode !== 0 || frame.stdout.length === 0) {
-        findings.add("inspection_error");
-        continue;
-      }
-      const ocr = Bun.spawnSync({
-        cmd: ["tesseract", "stdin", "stdout", "-l", languages],
-        env: withoutUnsupportedApiCredentials(process.env),
-        stdin: frame.stdout,
-        stderr: "pipe",
-        stdout: "pipe",
-      });
-      if (ocr.exitCode !== 0) {
-        findings.add("inspection_error");
-        continue;
-      }
-      for (const finding of sensitiveClasses(ocr.stdout.toString())) findings.add(finding);
-    }
-  }
-  return findings;
 }
 
 type ProvenanceResult = {
@@ -2466,8 +2403,7 @@ function trustedVendorExemptions(path: string, inspectionRoot: string | undefine
 
 function inspectFileContents(path: string, kind: MediaKind | undefined): Set<FindingClass> {
   return new Set([
-    ...inspectRasterMetadata(path, kind), ...inspectRaster(path, kind),
-    ...inspectAnimated(path, kind), ...inspectText(path, kind),
+    ...inspectMediaMetadata(path, kind), ...inspectText(path, kind),
   ]);
 }
 
@@ -2539,15 +2475,14 @@ export function inspectPaths(
   return findings;
 }
 
-function inspectCommitAdditions(repository: string, base: string, requireKnownValues: boolean, notices: string[], deferMedia: boolean): Map<FindingClass, number> {
+function inspectCommitAdditions(repository: string, base: string, requireKnownValues: boolean, notices: string[]): Map<FindingClass, number> {
   const findings = inspectPaths([], false, requireKnownValues, repository, base, notices);
   let scratch: string | undefined, snapshot: string | undefined, snapshotCommit: string | undefined;
   // Cache detector results, never provenance: a copied blob still needs the
   // manifest and generator at its own path and commit. Kinds can depend on the
   // extension, so an opaque blob renamed to an image cannot inherit a text pass.
   const content = new Map<string, Set<FindingClass>>();
-  const snapshotEnv = Object.fromEntries(Object.entries(withoutUnsupportedApiCredentials(process.env)).filter(([name]) => !name.startsWith("GIT_")));
-  Object.assign(snapshotEnv, { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" });
+  const snapshotEnv = isolatedCommitGitEnvironment();
   const snapshotAt = (commit: string): string => {
     if (!scratch) {
       scratch = mkdtempSync(join(tmpdir(), "llv-privacy-commits-"));
@@ -2596,7 +2531,6 @@ function inspectCommitAdditions(repository: string, base: string, requireKnownVa
         if (!result) { result = inspectFileContents(path, kind); content.set(key, result); }
         return result;
       });
-      if (deferMedia && detected.delete("tool_unavailable")) notices.push(`${location} media OCR deferred to required hosted check (tool unavailable)`);
       for (const [finding, count] of detected) {
         findings.set(finding, (findings.get(finding) ?? 0) + count); notices.push(`${location} ${finding}`);
       }
@@ -2660,6 +2594,7 @@ function isMachineAttributionAddress(occurrence: EmailOccurrence): boolean {
      mailbox as the plain form would mean unquoting RFC 5322 inside a gate that
      has to fail closed, so a quoted role name stays attributable. */
   if (occurrence.localPart.startsWith('"')) return false;
+  if (isForgeAccountAddress(occurrence.address)) return false;
   const localPart = occurrence.localPart.toLowerCase();
   if (localPart === "noreply" || localPart === "no-reply") return true;
   return localPart === FORGE_ROLE_LOCAL_PART && occurrence.domain.toLowerCase() === FORGE_DOMAIN;
@@ -2693,11 +2628,17 @@ const EMBEDDED_MESSAGE_RULE = /^-{3,}[ \t]*$/;
 
 type MessageParagraph = { end: number; start: number };
 
+/* Git separates paragraphs only at a line holding nothing but its own ASCII
+   whitespace: space, tab and carriage return. `String.trim()` also blanks
+   U+00A0, U+FEFF, vertical tab and form feed, and a line holding one of them
+   would let body prose read as a trailer block git never parses. */
+const GIT_BLANK_LINE = /^[ \t\r]*$/;
+
 function messageParagraphs(lines: string[]): MessageParagraph[] {
   const found: MessageParagraph[] = [];
   let start: number | undefined;
   for (let index = 0; index <= lines.length; index += 1) {
-    if (index < lines.length && lines[index].trim() !== "") {
+    if (index < lines.length && !GIT_BLANK_LINE.test(lines[index])) {
       if (start === undefined) start = index;
       continue;
     }
@@ -2758,18 +2699,73 @@ function* addressLines(
 }
 
 export type CommitAddressReview = { attributable: string[]; exempt: string[] };
+/** `signedCommits` are the protected push's first-parent commits that git
+ * records as committed by the forge and whose GitHub signature was confirmed.
+ * `squashAddresses` maps each first-parent squash of the pushed range to every
+ * author and committer address GitHub recorded on the commits of the pull
+ * request it landed, read only after that commit's own GitHub signature and
+ * that pull request's merge were confirmed. */
+export type LandedPushEvidence = { signedCommits: readonly string[]; squashAddresses?: Readonly<Record<string, readonly string[]>> };
+
+function landedSquashAddresses(landed: LandedPushEvidence | undefined, commit: string): readonly string[] | undefined {
+  const addresses = landed?.squashAddresses;
+  return addresses && Object.hasOwn(addresses, commit) ? addresses[commit] : undefined;
+}
+
+/* Git ends a message for trailer parsing at its scissors line, written with the
+   comment character: the cut line and everything after it are never trailers.
+   This is the default comment character's line. A cut line under any other
+   character is git's only when configured so, and neither reading may grant an
+   exemption, so its presence leaves the message without one. */
+const GIT_CUT_LINE = "------------------------ >8 ------------------------";
+
+function gitTrailerParseEnd(message: string): number | undefined {
+  const scissors = `# ${GIT_CUT_LINE}\n`;
+  const at = message.indexOf("\n" + scissors);
+  const end = message.startsWith(scissors) ? 0 : at === -1 ? message.length : at + 1;
+  return message.slice(0, end).includes(GIT_CUT_LINE) ? undefined : end;
+}
+
+const COMPOSED_TRAILER_LINE = /^Co-authored-by: [^<>\r\n]+ <([^<>\s]+)>$/;
+
+/** The raw offset of each forge-account mailbox that a `Co-authored-by` line
+ * of the message's final trailer block carries and that GitHub recorded on a
+ * commit of the landed pull request. A repeated mailbox is ambiguous and maps
+ * to -1. Views of the message can expose more addresses; none of them can
+ * create a trailer, so only the raw position is exempt. */
+function squashTrailerOffsets(message: string, addresses: readonly string[]): Map<string, number> {
+  const offsets = new Map<string, number>();
+  const end = gitTrailerParseEnd(message);
+  if (end === undefined) return offsets;
+  const lines = message.slice(0, end).split("\n");
+  const paragraphs = messageParagraphs(lines);
+  const last = paragraphs.at(-1);
+  if (!last || paragraphs.length < 2 || !lines.slice(last.start, last.end).every(isTrailerLine)) return offsets;
+  const recorded = new Set(addresses.filter(isForgeAccountAddress));
+  let offset = 0;
+  for (let line = 0; line < last.end; line += 1) {
+    const text = lines[line];
+    const email = line >= last.start ? COMPOSED_TRAILER_LINE.exec(text)?.[1] : undefined;
+    if (email && recorded.has(email)) {
+      offsets.set(email, offsets.has(email) ? -1 : offset + text.length - email.length - 1);
+    }
+    offset += text.length + 1;
+  }
+  return offsets;
+}
 
 /**
- * Every address detected in a commit message, split by the one exemption.
+ * Every address detected in a commit message, split by exemption.
  *
  * Detection reads the whole message, in the same views of it the gate reads
  * for any other publication surface, and the split happens afterwards on what
  * detection reported. An address the exemption does not name stays
  * attributable wherever it sits, including on the same line as an exempt one.
  */
-export function commitMessageAddressReview(message: string): CommitAddressReview {
+export function commitMessageAddressReview(message: string, squashAddresses?: readonly string[]): CommitAddressReview {
   const attributable = new Set<string>();
   const exempt = new Set<string>();
+  const squashOffsets = squashAddresses && squashTrailerOffsets(message, squashAddresses);
   for (const { text: view, source } of emailTextViews(message)) {
     const lines = view.split("\n");
     const block = trailerBlockLines(lines);
@@ -2777,7 +2773,10 @@ export function commitMessageAddressReview(message: string): CommitAddressReview
       const attributed = !block.has(line)
         || !MACHINE_ATTRIBUTION_TRAILER.test(lines[line])
         || !isMachineAttributionAddress(occurrence);
-      (attributed ? attributable : exempt).add(occurrence.address);
+      const rawOffset = source ? source.raw.offsets[occurrence.index] : occurrence.index;
+      const squashOffset = squashOffsets?.get(occurrence.address);
+      const composedTrailer = squashOffset !== undefined && squashOffset >= 0 && squashOffset === rawOffset;
+      (attributed && !composedTrailer ? attributable : exempt).add(occurrence.address);
     }
   }
   return { attributable: [...attributable], exempt: [...exempt] };
@@ -2806,7 +2805,7 @@ function branchCommitHashes(repository: string, base: string): string[] | undefi
 function branchCommitMessages(repository: string, commits: string[]): Map<string, string> | undefined {
   if (commits.length === 0) return new Map();
   const result = Bun.spawnSync({
-    cmd: ["git", "-C", repository, "cat-file", "--batch"],
+    cmd: ["git", "--no-replace-objects", "-C", repository, "cat-file", "--batch"],
     stdin: Buffer.from(commits.join("\n") + "\n"),
     env: withoutUnsupportedApiCredentials(process.env), stderr: "pipe", stdout: "pipe",
   });
@@ -2862,6 +2861,7 @@ export function commitMessageFindings(
   repository: string,
   base: string,
   notices?: string[],
+  landed?: LandedPushEvidence,
 ): Map<FindingClass, number> {
   const findings = new Map<FindingClass, number>();
   const commits = branchCommitHashes(repository, base);
@@ -2880,7 +2880,7 @@ export function commitMessageFindings(
     const message = messages.get(commit)!;
     const messageFindings = sensitiveClasses(message);
     if (messageFindings.has("email_address")) {
-      const { attributable, exempt } = commitMessageAddressReview(message);
+      const { attributable, exempt } = commitMessageAddressReview(message, landedSquashAddresses(landed, commit));
       if (exempt.length > 0 && attributable.length === 0) messageFindings.delete("email_address");
     }
     const reported: FindingClass[] = [];
@@ -2956,8 +2956,9 @@ function isForgeComposerIdentityAddress(address: string, identity: CommitIdentit
     && isForgeComposerMailbox(address);
 }
 
-function isForgeComposerAddress(address: string, identity: CommitIdentity): boolean {
-  return identity.parentCount > 1 && isForgeComposerIdentityAddress(address, identity);
+function isForgeComposerAddress(address: string, identity: CommitIdentity, signedLanded: readonly string[] = []): boolean {
+  const composed = identity.parentCount > 1 || (signedLanded.includes(identity.commit) && identity.name === "GitHub");
+  return composed && isForgeComposerIdentityAddress(address, identity);
 }
 
 /** Each distinct identity git recorded on the commits the merge will squash. */
@@ -3021,7 +3022,7 @@ function composedAttributionMessage(identity: CommitIdentity): string {
  * its body, keeps the narrow reading the trailer rule gives it — this is the
  * merge-boundary identity path, and it widens nothing else.
  */
-export function mergeBoundaryReview(repository: string, base: string): MergeBoundaryReview {
+export function mergeBoundaryReview(repository: string, base: string, signedLanded?: readonly string[]): MergeBoundaryReview {
   const findings = new Map<FindingClass, number>();
   const notices: string[] = [];
   const identities = branchIdentities(repository, base);
@@ -3045,12 +3046,12 @@ export function mergeBoundaryReview(repository: string, base: string): MergeBoun
     const { attributable } = commitMessageAddressReview(attribution);
     /* The composed trailer rules classify any exact `noreply` local part as
        machine attribution. For the forge's web-flow mailbox, the commit graph
-       is the additional proof: a zero- or one-parent commit did not come from
-       the forge's merge composer and remains attributable. */
+       identifies a merge. A protected push can also verify GitHub's signature
+       on each forge-committed first-parent commit it just published. */
     const unverifiedForgeComposer = isForgeComposerIdentityAddress(identity.address, identity)
-      && !isForgeComposerAddress(identity.address, identity);
+      && !isForgeComposerAddress(identity.address, identity, signedLanded);
     const publishes = unverifiedForgeComposer || attributable.some((address) => {
-      return !isForgeAccountAddress(address) && !isForgeComposerAddress(address, identity);
+      return !isForgeAccountAddress(address) && !isForgeComposerAddress(address, identity, signedLanded);
     });
     if (!publishes) continue;
     addFinding(findings, "email_address");
@@ -3072,8 +3073,11 @@ export function reportPrivacyFindings(findings: Map<FindingClass, number>, notic
   process.exitCode = 1;
 }
 
-if (import.meta.main) {
-  const arguments_ = process.argv.slice(2);
+export function runPublicationGate(arguments_: string[], landed?: LandedPushEvidence): void {
+  if (arguments_.includes("--require-known-values") && knownValues.fingerprints.length === 0
+    && (!knownValues.error || process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE === undefined)) {
+    console.error("Known-value catalog unavailable. Set LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE to the committed scripts/privacy-known-value-fingerprints.json, or pass LLV_PRIVACY_KNOWN_VALUES_FILE or LLV_PRIVACY_KNOWN_VALUES.");
+  }
   const repositoryArgument = argumentValue(arguments_, "--repository");
   const inspectionRoot = repositoryArgument ? resolve(repositoryArgument) : (repositoryRoot ?? resolve("."));
   const requestedBase = argumentValue(arguments_, "--base") ?? "origin/main";
@@ -3093,7 +3097,7 @@ if (import.meta.main) {
     };
   const notices: string[] = [...range.notices];
   const pathFindings = addedLines && !range.error && !repositoryError
-    ? inspectCommitAdditions(inspectionRoot, trustedBase, arguments_.includes("--require-known-values"), notices, arguments_.includes("--defer-unavailable-media"))
+    ? inspectCommitAdditions(inspectionRoot, trustedBase, arguments_.includes("--require-known-values"), notices)
     : inspectPaths(
     selection.paths,
     false,
@@ -3106,13 +3110,13 @@ if (import.meta.main) {
     pathFindings.set("inspection_error", (pathFindings.get("inspection_error") ?? 0) + 1);
   }
   if (arguments_.includes("--check-commits")) {
-    for (const [finding, count] of commitMessageFindings(inspectionRoot, trustedBase, notices)) {
+    for (const [finding, count] of commitMessageFindings(inspectionRoot, trustedBase, notices, landed)) {
       pathFindings.set(finding, (pathFindings.get(finding) ?? 0) + count);
     }
     /* The branch commits publish their messages when they are pushed; the merge
        publishes a commit composed from their identities. Both are the commit
        surface, so one flag reads both. */
-    const boundary = mergeBoundaryReview(inspectionRoot, trustedBase);
+    const boundary = mergeBoundaryReview(inspectionRoot, trustedBase, landed?.signedCommits);
     for (const [finding, count] of boundary.findings) {
       pathFindings.set(finding, (pathFindings.get(finding) ?? 0) + count);
     }
@@ -3120,3 +3124,5 @@ if (import.meta.main) {
   }
   reportPrivacyFindings(pathFindings, notices);
 }
+
+if (import.meta.main) runPublicationGate(process.argv.slice(2));

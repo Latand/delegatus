@@ -5,7 +5,10 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { ResourceSession, ResourcesViewer } from "@/lib/types";
 
-import { CleanupPanel, DiskPressureNotice, ResourcesFooter, stickySnap } from "./ResourcesFooter";
+import { setLocale } from "@/lib/i18n";
+import type { MemoryPressure } from "@/lib/state/memoryPressure";
+
+import { CleanupPanel, DiskPressureNotice, MemoryPressureLines, ResourcesFooter, stickySnap } from "./ResourcesFooter";
 
 const dom = new Window();
 Object.assign(globalThis, {
@@ -123,12 +126,26 @@ test("structured hosts get a row each, with role, stage, model and ownership", (
   expect(lane).toContain("Structured lane");
   expect(lane).toContain("builder");
   expect(lane).toContain("implement");
-  expect(lane).toContain("opus");
+  expect(lane).toContain("Opus 5.5");
   expect(lane).toContain("owned");
   expect(rows[1]!.textContent).toContain("released");
   expect(rows[2]!.textContent).toContain("orphaned");
   /* The empty state used to name tmux; the list is transport-neutral now. */
   expect(view.textContent).not.toContain("tmux");
+});
+
+test("a host row names its model as the catalogue does, Fable 5.2 and Fable 5.1 apart", () => {
+  const view = mount([
+    host({ target: "structured:claude:new", model: "claude-fable-5-2" }),
+    host({ target: "structured:claude:old", model: "claude-fable-5-1" }),
+    host({ target: "structured:codex:other", engine: "codex", model: "gpt-6.1-sol" }),
+  ]);
+  const rows = [...view.querySelectorAll('[data-testid="resource-host-row"]')].map((row) => row.textContent ?? "");
+  expect(rows[0]).toContain("Fable 5.2");
+  expect(rows[0]).not.toContain("claude-fable-5-2");
+  expect(rows[1]).toContain("Fable 5.1");
+  expect(rows[1]).not.toContain("Fable 5.2");
+  expect(rows[2]).toContain("gpt-6.1-sol");
 });
 
 test("the header counts hosts, idle hosts and the memory they hold", () => {
@@ -360,6 +377,9 @@ test("the System panel names the low volume, the largest consumers first, and th
     consumers: [
       { kind: "state" as const, bytes: 2 * GiB, measuredAt: "2026-10-06T10:04:00.000Z" },
       { kind: "worktrees" as const, bytes: 90 * GiB, measuredAt: "2026-10-06T10:04:00.000Z" },
+      { kind: "temp" as const, bytes: GiB, measuredAt: "2026-10-06T10:04:00Z" },
+      { kind: "dockerImages" as const, bytes: 3 * GiB, measuredAt: "2026-10-06T10:04:00Z" },
+      { kind: "dockerCache" as const, bytes: 4 * GiB, measuredAt: "2026-10-06T10:04:00Z" },
     ],
   };
   flushSync(() => { root.render(<DiskPressureNotice pressure={pressure} />); });
@@ -368,7 +388,8 @@ test("the System panel names the low volume, the largest consumers first, and th
   expect(notice.textContent).toContain("Disk space low");
   expect(notice.textContent).toContain("State / Worktrees: 1.5 GiB free");
   expect(notice.textContent).not.toContain("Temp:");
-  expect(notice.textContent).toContain("Most space: Worktrees 90 GiB, State 2.0 GiB");
+  expect([...notice.querySelectorAll("div[title] > div")].map(row => row.textContent))
+    .toEqual(["Worktrees 90 GiB", "Docker build cache 4.0 GiB", "Docker images 3.0 GiB", "State 2.0 GiB", "Temporary files (including scratch) 1.0 GiB"]);
   expect(notice.textContent).not.toContain("lower bound");
   expect(notice.textContent).toContain("New checkouts wait for space");
   flushSync(() => { root.render(<DiskPressureNotice pressure={{ ...pressure, volumes: [{ roles: ["temp"], freeBytes: 0.5 * GiB, level: "critical" }] }} />); });
@@ -429,6 +450,10 @@ for (const density of ["line", "detail"] as const) {
     const notes = [...notice.querySelectorAll<HTMLElement>("[data-meter-note]")];
     expect(notes.map((note) => note.textContent)).toEqual(density === "line" ? ["Most space: Worktrees 90 GiB, State 2.0 GiB", "New checkouts wait for space"] : []);
     expect(notes.map((note) => note.title)).toEqual(density === "line" ? ["Delegatus files, at least: Worktrees 90 GiB, State 2.0 GiB", "New checkouts wait for space and retry automatically."] : []);
+    if (density === "detail") {
+      expect([...notice.querySelectorAll("div[title] > div")].map(row => row.textContent))
+        .toEqual(["Worktrees 90 GiB", "State 2.0 GiB"]);
+    }
     /* Two volumes with the same roles are two keyed lines. */
     expect(errors.filter((args) => String(args[0]).includes("same key"))).toEqual([]);
     /* A warning admits new checkouts, so nothing waits; unmeasured consumers say so in the same line. */
@@ -467,11 +492,12 @@ for (const density of ["line", "detail"] as const) {
       const dot = element.querySelector<HTMLElement>('[data-testid="resources-stale-dot"]')!;
       expect(dot.title).toContain("resource data is stale");
       expect(element.querySelector("button")!.title).toContain("resource data is stale");
-      /* What is left, in words: the bar beside it draws the same share. */
-      expect(element.querySelector("button")!.title).toContain("RAM 9.0 GiB free");
-      expect(element.querySelector("button")!.title).toContain("Swap 7.0 GiB free");
-      expect([...element.querySelectorAll("[data-meter-bar]")].map((bar) => bar.getAttribute("data-meter-bar"))).toEqual(["28", "88"]);
-      expect(element.textContent).toContain("9.0 GiB free");
+      /* Used of the total, once per resource: the bar beside it draws the same share. */
+      expect(element.querySelector("button")!.title).toContain("RAM 23 GiB of 32 GiB used");
+      expect(element.querySelector("button")!.title).toContain("Swap 1.0 GiB of 8.0 GiB used");
+      expect([...element.querySelectorAll("[data-meter-bar]")].map((bar) => bar.getAttribute("data-meter-bar"))).toEqual(["72", "13"]);
+      expect([...element.querySelectorAll("[data-meter-value]")].map((value) => value.textContent)).toEqual(["23 GiB / 32 GiB", "1.0 GiB / 8.0 GiB"]);
+      expect(element.textContent).not.toContain("9.0 GiB");
       /* How old the reading is stands on the screen only behind "All windows". */
       expect(element.querySelector("[data-meter-note]")?.textContent ?? "").toContain(density === "detail" ? "captured" : "");
       expect(Boolean(element.querySelector("[data-meter-note]"))).toBe(density === "detail");
@@ -481,5 +507,58 @@ for (const density of ["line", "detail"] as const) {
       globalThis.setTimeout = realTimeout;
       globalThis.fetch = realFetch;
     }
+  });
+}
+
+/* The memory meters state RAM and swap; this block adds /tmp and, during a
+   pressure episode, the crossed thresholds and the cleanup it started. */
+for (const density of ["full", "line"] as const) {
+  test(`the ${density} System block adds only the tmpfs /tmp and the memory pressure warning`, () => {
+    const GiB = 1024 ** 3;
+    const element = document.createElement("div");
+    document.body.append(element);
+    const root: Root = createRoot(element);
+    mounted.push(() => {
+      flushSync(() => { root.unmount(); });
+      setLocale("en");
+      element.remove();
+    });
+    const calm: MemoryPressure = {
+      at: "2026-11-26T10:00:00.000Z", episode: null, reasons: [], swapWarnPercent: 50, tmpWarnBytes: 4e9,
+      ram: { usedBytes: 20 * GiB, totalBytes: 64 * GiB }, swap: { usedBytes: 4 * GiB, totalBytes: 32 * GiB },
+      tmp: { usedBytes: GiB, totalBytes: 32 * GiB, tmpfs: true, view: "host" },
+    };
+    flushSync(() => { root.render(<MemoryPressureLines pressure={calm} density={density} />); });
+    let block = element.querySelector<HTMLElement>("[data-memory-pressure]")!;
+    expect(block.dataset.memoryPressure).toBe("ok");
+    expect(block.getAttribute("role")).toBeNull();
+    expect(block.textContent).toBe("/tmp1.0 GiB / 32 GiB");
+
+    const hot: MemoryPressure = { ...calm, episode: calm.at, reasons: ["swap", "tmp"],
+      swap: { usedBytes: 29 * GiB, totalBytes: 32 * GiB }, tmp: { ...calm.tmp!, usedBytes: 8 * GiB } };
+    flushSync(() => { root.render(<MemoryPressureLines pressure={hot} density={density} />); });
+    block = element.querySelector<HTMLElement>("[data-memory-pressure]")!;
+    expect(block.dataset.memoryPressure).toBe("warning");
+    expect(block.getAttribute("role")).toBe("status");
+    for (const part of ["Memory pressure", "Swap is over 50% used", "/tmp holds over 4 GB in memory", "8.0 GiB / 32 GiB"]) expect(block.textContent).toContain(part);
+    /* The meters above hold RAM and swap: neither is repeated here. */
+    expect(block.textContent).not.toContain("29 GiB");
+    expect(block.textContent).not.toContain("RAM");
+    const cleanup = "Temp cleanup of /tmp and /var/tmp runs now, at most every 15 minutes.";
+    if (density === "full") expect(block.textContent).toContain(cleanup);
+    else expect(block.querySelector<HTMLElement>("[data-meter-note]")!.title).toBe(cleanup);
+
+    flushSync(() => { setLocale("uk"); root.render(<MemoryPressureLines pressure={hot} density={density} />); });
+    block = element.querySelector<HTMLElement>("[data-memory-pressure]")!;
+    for (const part of ["Тиск на пам'ять", "Swap зайнятий більше ніж на 50%", "/tmp займає в пам'яті понад 4 GB", "8.0 GiB / 32 GiB"]) expect(block.textContent).toContain(part);
+
+    /* Only the crossed threshold is named; a disk-backed or unreadable /tmp says so and draws no bar. */
+    flushSync(() => { setLocale("en"); root.render(<MemoryPressureLines pressure={{ ...hot, reasons: ["swap"], tmp: { ...hot.tmp!, tmpfs: false } }} density={density} />); });
+    block = element.querySelector<HTMLElement>("[data-memory-pressure]")!;
+    expect(block.textContent).toContain("8.0 GiB on disk");
+    expect(block.textContent).not.toContain("/tmp holds over");
+    expect(block.querySelector("[data-meter-bar]")).toBeNull();
+    flushSync(() => { root.render(<MemoryPressureLines pressure={{ ...calm, tmp: null }} density={density} />); });
+    expect(element.textContent).toContain("unreadable");
   });
 }

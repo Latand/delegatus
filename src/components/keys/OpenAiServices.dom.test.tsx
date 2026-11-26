@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useState, useSyncExternalStore } from "react";
 import type { Root } from "react-dom/client";
 
 import type { MobileNav } from "@/components/mobile/mobileNav";
@@ -14,10 +14,10 @@ import { setLocale, translate } from "@/lib/i18n";
 /*
  * What a saved OpenAI key serves (docs/design/openai-key-services.md, variant 3):
  * the list under the OpenAI row and each feature's page, over the real
- * `/api/openai-services`, `/api/keys` and voice settings routes and the real
- * provider policy, in a throw-away config directory. The page's requests go
- * to the route handlers with the operator's own session cookie, so what a row
- * names is what the policy resolves for the next request.
+ * `/api/openai-services`, `/api/keys`, ChatGPT plan and voice settings routes
+ * and the real provider policy, in a throw-away config directory. The routes
+ * receive the page's browser session so the UI reads the same policy as the
+ * next request.
  */
 
 const dom = new Window({ url: "http://localhost/", width: 1440, height: 900 });
@@ -33,15 +33,19 @@ const { NextRequest } = await import("next/server");
 const { KeysMenuPage } = await import("./KeysSection");
 const { OpenAiFeaturePage, SERVICE_FEATURES, resetOpenAiServicesForTests } = await import("./OpenAiServices");
 const { HeaderMenuPanel, HeaderMenuSheet } = await import("@/components/headerMenu/HeaderMenu");
+const { SettingsWindowHost } = await import("@/components/settings/SettingsWindow");
+const { MobileNavContext } = await import("@/components/mobile/mobileNav");
 const { OPEN_KEYS_EVENT, serviceSettled, settleKeys } = await import("./openKeys");
 const { invalidateLiveToken, prewarmLiveToken, useDictation } = await import("@/hooks/useDictation");
 const transcribeToken = await import("@/app/api/transcribe/token/route");
 const transcribeBackend = await import("@/app/api/transcribe/backend/route");
 const { MicButtonView } = await import("@/components/MicButton");
 const { VoiceStep } = await import("@/components/onboarding/VoiceStep");
-const { VoiceCompanionSetting } = await import("@/components/voiceCompanion/VoiceCompanionSetting");
+const { VoiceSection } = await import("@/components/settings/VoiceSection");
+const VoiceCompanionSetting = () => <VoiceSection sub={null} go={() => {}} back={() => {}} />;
 const services = await import("@/app/api/openai-services/route");
 const keysList = await import("@/app/api/keys/route");
+const planStatus = await import("@/app/api/chatgpt-plan/route");
 const keyWrite = await import("@/app/api/keys/[id]/route");
 const voiceSettings = await import("@/app/api/voice-companion/settings/route");
 const asksYouRoute = await import("@/app/api/asks-you/route");
@@ -58,7 +62,9 @@ const { resolveService } = await import("@/lib/openaiServices/policy");
 const { writeTtsBackend } = await import("@/lib/ttsBackend");
 const { writeTranscribeBackend } = await import("@/lib/transcribeBackend");
 const { CompanionStorage } = await import("@/lib/voiceCompanion/storage");
-const { resetTeamStoreForTests } = await import("@/lib/team/store");
+const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/members");
+const { MEMBER_COOKIE } = await import("@/lib/team/sessions");
+const { resetTeamStoreForTests, teamStore } = await import("@/lib/team/store");
 const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
 
 /* Placeholders built at run time from runs of one character; a row shows only a masked tail. */
@@ -132,25 +138,27 @@ const bearer = (init?: RequestInit) => {
   return (headers.authorization ?? headers.Authorization ?? "").replace(/^Bearer /, "");
 };
 const origin = "http://127.0.0.1";
-const asOperator = (url: string, init?: RequestInit) => new NextRequest(origin + url, {
+let memberCookie: string | undefined;
+const browserRequest = (url: string, init?: RequestInit) => new NextRequest(origin + url, {
   method: init?.method ?? "GET",
-  headers: { host: "127.0.0.1", origin, cookie: `llv_operator=${soloBrowserSession()}`, "content-type": String((init?.headers as Record<string, string> | undefined)?.["content-type"] ?? "application/json") },
+  headers: { host: "127.0.0.1", origin, cookie: memberCookie ?? `llv_operator=${soloBrowserSession()}`, "content-type": String((init?.headers as Record<string, string> | undefined)?.["content-type"] ?? "application/json") },
   body: typeof init?.body === "string" ? init.body : undefined,
 });
 async function route(url: string, call: Call, state: Owned, init?: RequestInit): Promise<Response> {
   const refused = refuse?.(call);
   if (refused) return refused;
-  if (url === "/api/openai-services") return call.method === "PUT" ? services.PUT(asOperator(url, init)) : services.GET(asOperator(url, init));
-  if (url === "/api/keys") return keysList.GET(asOperator(url, init));
+  if (url === "/api/openai-services") return call.method === "PUT" ? services.PUT(browserRequest(url, init)) : services.GET(browserRequest(url, init));
+  if (url === "/api/keys") return keysList.GET(browserRequest(url, init));
+  if (url === "/api/chatgpt-plan" && call.method === "GET") return planStatus.GET(browserRequest(url, init));
   if (url.startsWith("/api/keys/")) {
     const params = { params: Promise.resolve({ id: url.slice("/api/keys/".length) }) };
-    return call.method === "DELETE" ? keyWrite.DELETE(asOperator(url, init), params) : keyWrite.PUT(asOperator(url, init), params);
+    return call.method === "DELETE" ? keyWrite.DELETE(browserRequest(url, init), params) : keyWrite.PUT(browserRequest(url, init), params);
   }
-  if (url === "/api/voice-companion/settings") return call.method === "PUT" ? voiceSettings.PUT(asOperator(url, init)) : voiceSettings.GET(asOperator(url, init));
-  if (url === "/api/transcribe/token") return transcribeToken.POST(asOperator(url, init));
-  if (url === "/api/asks-you") return call.method === "PUT" ? asksYouRoute.PUT(asOperator(url, init)) : asksYouRoute.GET();
-  if (url.startsWith("/api/memory/settings")) return call.method === "PUT" ? memorySettings.PUT(asOperator(url, init)) : memorySettings.GET(asOperator(url, init));
-  if (url === "/api/transcribe/backend") return call.method === "POST" ? transcribeBackend.POST(asOperator(url, init)) : transcribeBackend.GET();
+  if (url === "/api/voice-companion/settings") return call.method === "PUT" ? voiceSettings.PUT(browserRequest(url, init)) : voiceSettings.GET(browserRequest(url, init));
+  if (url === "/api/transcribe/token") return transcribeToken.POST(browserRequest(url, init));
+  if (url === "/api/asks-you") return call.method === "PUT" ? asksYouRoute.PUT(browserRequest(url, init)) : asksYouRoute.GET();
+  if (url.startsWith("/api/memory/settings")) return call.method === "PUT" ? memorySettings.PUT(browserRequest(url, init)) : memorySettings.GET(browserRequest(url, init));
+  if (url === "/api/transcribe/backend") return call.method === "POST" ? transcribeBackend.POST(browserRequest(url, init)) : transcribeBackend.GET();
   /* Vendor stand-ins: only the transports leave this process in production. */
   if (holdMint && (url === "https://api.openai.com/v1/realtime/client_secrets" || url.startsWith("https://api.elevenlabs.io/"))) await hold(state, holdMint);
   if (url === "https://api.openai.com/v1/realtime/client_secrets") {
@@ -164,6 +172,7 @@ async function route(url: string, call: Call, state: Owned, init?: RequestInit):
     minted.set(token, ((init?.headers ?? {}) as Record<string, string>)["xi-api-key"] ?? "");
     return Response.json({ token });
   }
+  if (url === "/api/transcribe/diagnostics") return new Response(null, { status: 204 });
   if (url === "/api/transcribe") return Response.json({ text: "recorded speech" });
   return Response.json({ error: "not_found" }, { status: 404 });
 }
@@ -208,7 +217,7 @@ afterEach(async () => {
   /* An «Open Keys» request no menu took would open the next test's menu on «Keys». */
   settleKeys();
   document.body.innerHTML = ""; setLocale("en");
-  globalThis.fetch = originalFetch; refuse = null;
+  globalThis.fetch = originalFetch; refuse = null; memberCookie = undefined;
   resetTeamStoreForTests();
   for (const [name, value] of Object.entries(saved)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -231,6 +240,9 @@ const click = async (element: Element | null | undefined) => {
 const norm = (text: string) => text.replace(/\s+/g, " ").trim();
 const words = (element: Element | null | undefined) => norm(element?.textContent ?? "");
 const say = (lang: "en" | "uk", key: Parameters<typeof translate>[1], params?: Parameters<typeof translate>[2]) => norm(translate(lang, key, params));
+/* What the page says serves a feature: its selected choice. */
+const SERVING_NAMES: Record<string, string> = { api: "OpenAI", openai: "OpenAI", codex: "Codex V3", soniox: "Soniox", elevenlabs: "ElevenLabs", openrouter: "OpenRouter", fishaudio: "Fish Audio", chatgpt: "ChatGPT", local: "Local" };
+const serving = (page: Element) => SERVING_NAMES[page.querySelector("[data-openai-option][data-selected]")?.getAttribute("data-openai-option") ?? ""];
 /** Each feature row as «feature: what serves it now», with «!» for a held choice. */
 const listed = (host: HTMLElement) => [...host.querySelectorAll("[data-openai-service]")].map((row) =>
   `${row.getAttribute("data-openai-service")}: ${words(row.querySelector("[data-openai-service-now]"))}${row.hasAttribute("data-held") ? "!" : ""}`);
@@ -260,8 +272,10 @@ for (const lang of ["en", "uk"] as const) for (const size of ["menu", "sheet"] a
   serve();
   const opened: string[] = [];
   const host = await mount(<KeysMenuPage size={size} onImport={() => {}} onOpenService={(feature) => opened.push(feature)} />);
-  /* Directly under the OpenAI row, inside the key list. */
-  expect(host.querySelector("[data-keys-row='openai']")!.nextElementSibling?.hasAttribute("data-openai-services")).toBe(true);
+  const plan = host.querySelector("[data-keys-row='openai']")!.nextElementSibling!;
+  expect(plan.getAttribute("data-keys-row")).toBe("chatgpt-plan");
+  expect(plan.getAttribute("data-chatgpt-plan-state")).toBe("off_unconfigured");
+  expect(plan.nextElementSibling?.hasAttribute("data-openai-services")).toBe(true);
   expect(words(host.querySelector("[data-openai-services] p"))).toBe(say(lang, "openaiServices.group"));
   expect(listed(host)).toEqual(["asks: OpenRouter", "memory: OpenRouter", "rules: OpenRouter", "dictation: Soniox", "read: ElevenLabs", "voice: Codex V3"]);
   expect(host.querySelector("[data-openai-services-codex]")).toBeNull();
@@ -284,11 +298,11 @@ test("pick OpenAI, remove the key, save it again: the list, the page and the pol
     const page = await mount(<OpenAiFeaturePage feature={feature} />);
     const id = feature === "voice" ? "api" : "openai";
     expect(radio(page, id).disabled).toBe(false);
-    /* Optimistic: the choice and «Now» move before the server answers. */
+    /* Optimistic: the choice moves before the server answers. */
     let release = () => {};
     holdPut = (go) => { release = go; };
     await click(radio(page, id));
-    expect(words(page.querySelector("[data-openai-feature-now]"))).toBe("Now OpenAI");
+    expect(serving(page)).toBe("OpenAI");
     expect(radio(page, id).checked).toBe(true);
     holdPut = null;
     await act(async () => { release(); });
@@ -312,7 +326,7 @@ test("pick OpenAI, remove the key, save it again: the list, the page and the pol
 
   /* The page of a held feature: its previous provider serves it, and OpenAI waits for the key, amber, with the way to it. */
   const held = await mount(<OpenAiFeaturePage feature="dictation" />);
-  expect(words(held.querySelector("[data-openai-feature-now]"))).toBe("Now Soniox");
+  expect(serving(held)).toBe("Soniox");
   expect(radio(held, "soniox").checked).toBe(true);
   expect(radio(held, "openai").disabled).toBe(true);
   expect(words(option(held, "openai").querySelector("[data-openai-option-reason='held']"))).toBe(say("en", "openaiServices.held"));
@@ -335,13 +349,20 @@ test("without a key the OpenAI choice is disabled with its reason and the way to
   writeTtsBackend("soniox");
   const page = await mount(<OpenAiFeaturePage feature="read" />);
   expect([...page.querySelectorAll("[data-openai-option]")].map((node) => node.getAttribute("data-openai-option"))).toEqual(["elevenlabs", "soniox", "fishaudio", "openai"]);
-  expect(words(page.querySelector("[data-openai-feature-now]"))).toBe("Now Soniox");
+  expect(serving(page)).toBe("Soniox");
   expect(radio(page, "openai").disabled).toBe(true);
   expect(words(option(page, "openai").querySelector("[data-openai-option-reason='unavailable']"))).toBe("No OpenAI key yet");
   expect(option(page, "openai").querySelector("[data-openai-add-key]")).not.toBeNull();
   expect(radio(page, "elevenlabs").disabled).toBe(true);
   expect(words(option(page, "elevenlabs").querySelector("[data-openai-option-reason]"))).toBe("No ElevenLabs key yet");
-  expect(option(page, "elevenlabs").querySelector("[data-openai-add-key]")).toBeNull();
+  /* Each option that lacks a key has its own way to it. */
+  expect(option(page, "elevenlabs").querySelector("[data-openai-add-key]")?.getAttribute("data-openai-add-key")).toBe("elevenlabs");
+  const asked: unknown[] = [];
+  const listen = (event: Event) => asked.push((event as CustomEvent).detail);
+  window.addEventListener(OPEN_KEYS_EVENT, listen);
+  await click(option(page, "elevenlabs").querySelector("[data-openai-add-key]")!);
+  window.removeEventListener(OPEN_KEYS_EVENT, listen);
+  expect(asked).toEqual([{ key: "elevenlabs" }]);
   expect(radio(page, "soniox").checked).toBe(true);
 });
 
@@ -349,7 +370,7 @@ test("read aloud on its legacy OpenAI default with no key: OpenAI stays checked 
   serve();
   fs.rmSync(configFilePath("tts-backend"));
   const page = await mount(<OpenAiFeaturePage feature="read" />);
-  expect(words(page.querySelector("[data-openai-feature-now]"))).toBe("Now OpenAI");
+  expect(serving(page)).toBe("OpenAI");
   expect(radio(page, "openai").checked).toBe(true);
   expect(radio(page, "openai").disabled).toBe(true);
   expect(words(option(page, "openai").querySelector("[data-openai-option-reason]"))).toBe("No OpenAI key yet");
@@ -362,7 +383,7 @@ test("a refused choice goes back to what the server last confirmed and says so i
   refuse = (call) => call.method === "PUT" ? Response.json({ error: "write_failed", code: "write_failed" }, { status: 500 }) : null;
   await click(radio(page, "openai"));
   expect(radio(page, "openrouter").checked).toBe(true);
-  expect(words(page.querySelector("[data-openai-feature-now]"))).toBe("Now OpenRouter");
+  expect(serving(page)).toBe("OpenRouter");
   expect(words(page.querySelector("[data-openai-feature-error][role=alert]"))).toBe(say("en", "openaiServices.saveFailed"));
   expect(resolveService("memory").effective).toBe("openrouter");
 });
@@ -386,23 +407,53 @@ test("two quick choices reach the server in the order pressed: the page and the 
   await settle();
   expect(calls.filter((call) => call.method === "PUT").map((call) => (call.body as { provider: string }).provider)).toEqual(["openai", "elevenlabs"]);
   expect(radio(page, "elevenlabs").checked).toBe(true);
-  expect(words(page.querySelector("[data-openai-feature-now]"))).toBe("Now ElevenLabs");
+  expect(serving(page)).toBe("ElevenLabs");
   expect(resolveService("dictation").effective).toBe("elevenlabs");
 });
 
 /* The ⋯ menu itself, on the desktop and in the phone's sheet: «Back» from a feature's page unmounts it, and the Keys list or the page opened again must still know the choice it made. */
+/* The phone's sheet state, as the navigation store keeps it, and a window sized as a phone. */
+function phoneNav() {
+  let sheet: string | null = null;
+  const watchers = new Set<() => void>();
+  const set = (next: string | null) => { sheet = next; for (const watcher of watchers) watcher(); };
+  return { subscribe: (watcher: () => void) => { watchers.add(watcher); return () => { watchers.delete(watcher); }; }, getState: () => ({ sheet }), openSheet: (name: string) => set(name), closeSheet: () => set(null), leave: () => {} } as unknown as MobileNav;
+}
+const desktopMedia = window.matchMedia;
+afterEach(() => {
+  (window as unknown as { matchMedia: unknown }).matchMedia = desktopMedia;
+  (globalThis as unknown as { matchMedia: unknown }).matchMedia = desktopMedia;
+});
+function phoneViewport() {
+  const stub = (query: string) => ({ matches: true, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent() { return false; } });
+  (window as unknown as { matchMedia: unknown }).matchMedia = stub;
+  (globalThis as unknown as { matchMedia: unknown }).matchMedia = stub;
+}
+/* The menu steps aside for the window, as the rail and the phone's sheet have it. */
+function DesktopMenu({ project }: { project: string | null }) {
+  const [open, setOpen] = useState(true);
+  return <>{open ? <HeaderMenuPanel project={project} onClose={() => setOpen(false)} /> : null}<SettingsWindowHost project={project} /></>;
+}
+function PhoneMenu({ project, nav }: { project: string | null; nav: MobileNav }) {
+  const sheet = useSyncExternalStore(nav.subscribe, () => nav.getState().sheet);
+  return <>{sheet === "settings" ? null : <HeaderMenuSheet title="atlas" project={project} nav={nav} board={[]} onClose={() => {}} />}<SettingsWindowHost project={project} /></>;
+}
 const surfaces = {
   desktop: {
-    node: (project: string | null = null) => <HeaderMenuPanel project={project} onClose={() => {}} />,
+    node: (project: string | null = null) => <DesktopMenu project={project} />,
     keys: ["[data-rail-menu-settings]", "[data-rail-menu-keys]"],
     memory: ["[data-rail-menu-settings]", "[data-rail-menu-memory]"],
-    back: "[data-rail-menu-back]",
+    back: "[data-settings-back]",
   },
   phone: {
-    node: (project: string | null = null) => <HeaderMenuSheet title="atlas" project={project} nav={{ closeSheet: () => {}, leave: () => {} } as unknown as MobileNav} board={[]} onClose={() => {}} />,
-    keys: ["[data-mobile2-menu-row='settings']", "[data-mobile2-menu-row='keys']"],
-    memory: ["[data-mobile2-menu-row='settings']", "[data-mobile2-menu-row='memory']"],
-    back: "[data-mobile2-menu-row='back']",
+    node: (project: string | null = null) => {
+      phoneViewport();
+      const nav = phoneNav();
+      return <MobileNavContext.Provider value={nav}><PhoneMenu project={project} nav={nav} /></MobileNavContext.Provider>;
+    },
+    keys: ["[data-mobile2-menu-row='settings']", "[data-settings-section-row='keys']"],
+    memory: ["[data-mobile2-menu-row='settings']", "[data-settings-section-row='memory']"],
+    back: "[data-settings-back]",
   },
 } as const;
 async function openMenuOnKeys(where: keyof typeof surfaces) {
@@ -434,7 +485,7 @@ for (const where of ["desktop", "phone"] as const) test(`${where}: a choice stil
   expect(resolveService("asks").effective).toBe("openai");
   expect(asksRow()).toBe("OpenAI");
   await openFeature("asks");
-  expect(words(page().querySelector("[data-openai-feature-now]"))).toBe("Now OpenAI");
+  expect(serving(page())).toBe("OpenAI");
 
   /* A refused choice after «Back»: the list goes back to what the server confirmed. */
   refuse = (call) => call.method === "PUT" ? Response.json({ error: "write_failed", code: "write_failed" }, { status: 500 }) : null;
@@ -446,7 +497,7 @@ for (const where of ["desktop", "phone"] as const) test(`${where}: a choice stil
   expect(resolveService("asks").effective).toBe("openai");
   expect(asksRow()).toBe("OpenAI");
   await openFeature("asks");
-  expect(words(page().querySelector("[data-openai-feature-now]"))).toBe("Now OpenAI");
+  expect(serving(page())).toBe("OpenAI");
   expect(radio(page(), "openai").checked).toBe(true);
 });
 
@@ -463,14 +514,14 @@ for (const where of ["desktop", "phone"] as const) test(`${where}: choices made 
   expect(asksRow()).toBe("OpenRouter");
   await openFeature("asks");
   /* The reopened page shows the last press, still on its way. */
-  expect(words(page().querySelector("[data-openai-feature-now]"))).toBe("Now OpenRouter");
+  expect(serving(page())).toBe("OpenRouter");
   await click(radio(page(), "openai"));
-  expect(words(page().querySelector("[data-openai-feature-now]"))).toBe("Now OpenAI");
+  expect(serving(page())).toBe("OpenAI");
   /* Let the saves go newest first, as far as any is held. */
   while (releases.length) {
     await act(async () => { releases.pop()!(); });
     await settle();
-    expect(words(page().querySelector("[data-openai-feature-now]"))).toBe("Now OpenAI");
+    expect(serving(page())).toBe("OpenAI");
   }
   expect(puts()).toEqual(["openai", "openrouter", "openai"]);
   expect(resolveService("asks").effective).toBe("openai");
@@ -502,10 +553,18 @@ test("Voice Delegatus keeps its own «Show the voice» switch on its page", asyn
 });
 
 test("a team member's page has no list: the route refuses and the rest of «Keys» stays", async () => {
+  const store = teamStore();
+  const device = { surface: "desktop", browser: "chrome" } as const;
+  const owner = claimInstall(store, "Owner fixture", device);
+  const member = redeemJoin(store, createInvite(store, owner.member, null).code, "Member fixture", device);
+  memberCookie = `${MEMBER_COOKIE}=${member.cookie}`;
   serve();
-  refuse = (call) => call.url === "/api/openai-services" ? Response.json({ error: "only the owner can do this", code: "owner_required" }, { status: 403 }) : null;
   const host = await mount(<KeysMenuPage onImport={() => {}} onOpenService={() => {}} />);
-  expect(host.querySelectorAll("[data-keys-row]").length).toBe(6);
+  expect(host.querySelectorAll("[data-keys-source]")).toHaveLength(6);
+  const plan = host.querySelector("[data-keys-row='chatgpt-plan']")!;
+  expect(words(plan)).toContain(say("en", "chatgptPlan.ownerOnly"));
+  expect(plan.querySelector("button")).toBeNull();
+  expect(calls.some((call) => call.url === "/api/openai-services")).toBe(true);
   expect(host.querySelector("[data-openai-services]")).toBeNull();
 });
 
@@ -556,7 +615,7 @@ test("on every feature page a held choice can be let go: the provider serving it
     const page = await mount(<OpenAiFeaturePage feature={feature} />);
     const previous = fallbacks[feature];
     // Explicit Rules choices hold their provider when its key is absent.
-    expect(words(page.querySelector("[data-openai-feature-now]"))).toBe(`Now ${feature === "rules" ? "OpenAI" : fallbackNames[feature]}`);
+    expect(serving(page)).toBe(feature === "rules" ? "OpenAI" : fallbackNames[feature]);
     expect(radio(page, feature === "rules" ? "openai" : previous).checked).toBe(true);
     expect(page.querySelector("[data-openai-option-reason='held']")).not.toBeNull();
     const puts = calls.filter((call) => call.method === "PUT").length;
@@ -588,37 +647,39 @@ test("the voice settings dialog lets a held API choice go: its checked Codex is 
   const keys = await mount(<KeysMenuPage onImport={() => {}} onOpenService={() => {}} />);
   await saveOpenAiKey(keys);
   const voicePuts = () => calls.filter((call) => call.method === "PUT" && call.url === "/api/voice-companion/settings").map((call) => call.body);
-  const backendRadio = (dialog: HTMLElement, id: "api" | "codex") => dialog.querySelector<HTMLInputElement>(`[data-voice-backend='${id}'] input[type=radio]`)!;
+  const backendSelect = (dialog: HTMLElement) => dialog.querySelector<HTMLSelectElement>("[data-voice-backend-select]")!;
+  const chooseBackend = async (dialog: HTMLElement, id: "api" | "codex") => {
+    await act(async () => { backendSelect(dialog).value = id; backendSelect(dialog).dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event); });
+    await settle();
+  };
   const stored = () => { const { backend, requestedBackend, held } = new CompanionStorage().settings(); return { backend, requestedBackend, held }; };
 
-  /* Unheld, the radios behave as before: the checked one sends nothing, the other is the choice. */
+  /* Unheld, nothing offers to stay: the select shows the backend, and the other value is the choice. */
   let dialog = await mount(<VoiceCompanionSetting />);
-  expect(backendRadio(dialog, "codex").checked).toBe(true);
-  await click(backendRadio(dialog, "codex"));
+  expect(backendSelect(dialog).value).toBe("codex");
+  expect(dialog.querySelector("[data-voice-companion-stay]")).toBeNull();
   expect(voicePuts()).toEqual([]);
-  await click(backendRadio(dialog, "api"));
+  await chooseBackend(dialog, "api");
   expect(voicePuts()).toEqual([{ backend: "api" }]);
   expect(stored()).toEqual({ backend: "api", requestedBackend: "api", held: false });
 
   await removeOpenAiKey(keys);
   expect(stored()).toEqual({ backend: "codex", requestedBackend: "api", held: true });
   dialog = await mount(<VoiceCompanionSetting />);
-  expect(backendRadio(dialog, "codex").checked).toBe(true);
-  /* The Codex serving it now is the one pressed: that is the decision to stay, so it goes to the server. */
-  await click(backendRadio(dialog, "codex"));
+  expect(backendSelect(dialog).value).toBe("codex");
+  /* The Codex serving it now is the one the select shows, and a select fires nothing on its own value: staying is a press of its own, sent to the server. */
+  await click(dialog.querySelector("[data-voice-companion-stay]"));
   expect(voicePuts()).toEqual([{ backend: "api" }, { backend: "codex" }]);
   expect(stored()).toEqual({ backend: "codex", requestedBackend: "codex", held: false });
-  expect(backendRadio(dialog, "codex").checked).toBe(true);
+  expect(backendSelect(dialog).value).toBe("codex");
   expect(dialog.querySelector("[data-voice-companion-setting-error]")).toBeNull();
-  /* Pressed again, a choice already kept sends nothing. */
-  await click(backendRadio(dialog, "codex"));
-  expect(voicePuts()).toHaveLength(2);
+  /* A choice already kept offers nothing more. */
+  expect(dialog.querySelector("[data-voice-companion-stay]")).toBeNull();
 
   await saveOpenAiKey(keys);
   expect(stored()).toEqual({ backend: "codex", requestedBackend: "codex", held: false });
   dialog = await mount(<VoiceCompanionSetting />);
-  expect(backendRadio(dialog, "codex").checked).toBe(true);
-  expect(backendRadio(dialog, "api").checked).toBe(false);
+  expect(backendSelect(dialog).value).toBe("codex");
 });
 
 /* ---- The mic spends no token minted under an earlier key or choice ------ */
@@ -660,8 +721,9 @@ class SocketFixture extends Target {
 class AudioFixture {
   sampleRate = 16000;
   destination = {};
-  createMediaStreamSource() { return { connect() {} }; }
-  createScriptProcessor() { return { connect() {}, disconnect() {}, onaudioprocess: null }; }
+  static processors: Array<{ onaudioprocess: ((event: unknown) => void) | null }> = [];
+  createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+  createScriptProcessor() { const processor = { connect() {}, disconnect() {}, onaudioprocess: null }; AudioFixture.processors.push(processor); return processor; }
   createAnalyser() { return { frequencyBinCount: 64, getByteFrequencyData() {} }; }
   async close() {}
 }
@@ -685,9 +747,11 @@ async function withMic(run: (mic: () => ReturnType<typeof useDictation>) => Prom
   const before = new Map(Object.keys(fixtures).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(fixtures)) Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   Object.defineProperty(dom.navigator, "mediaDevices", { configurable: true, value: { getUserMedia: async () => { await micGate; return micStream; } } });
+  AudioFixture.processors = [];
   PeerFixture.all = []; SocketFixture.urls = []; SocketFixture.latest = null; offerGate = null; micGate = null;
   const observed: { current?: ReturnType<typeof useDictation> } = {};
-  function Mic() { observed.current = useDictation({ onError() {}, onUnclaimedText() {}, onLiveCommit() {} }); return null; }
+  const hold = (hook: ReturnType<typeof useDictation>) => { observed.current = hook; };
+  function Mic() { hold(useDictation({ onError() {}, onUnclaimedText() {}, onLiveCommit() {} })); return null; }
   try {
     await mount(<Mic />);
     await run(() => observed.current!);
@@ -709,6 +773,7 @@ async function pressHeld(mic: () => ReturnType<typeof useDictation>) {
 const release = async (mic: () => ReturnType<typeof useDictation>) => {
   let text = null as string | null;
   await act(async () => {
+    for (const processor of AudioFixture.processors) processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => new Float32Array(1600).fill(0.25) } });
     const stopped = mic().stop();
     const peer = PeerFixture.all.at(-1);
     if (peer && !peer.closed) {
@@ -728,7 +793,7 @@ const ELEVENLABS = `sk_${"1".repeat(48)}`;
 const ELEVENLABS_NEXT = `sk_${"5".repeat(48)}`;
 async function onOpenAi() {
   file("openai-api-key", `${OPENAI}\n`);
-  await services.PUT(asOperator("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature: "dictation", provider: "openai" }) }));
+  await services.PUT(browserRequest("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature: "dictation", provider: "openai" }) }));
   expect(resolveService("dictation").effective).toBe("openai");
 }
 async function onElevenLabs() {
@@ -736,7 +801,7 @@ async function onElevenLabs() {
   writeTranscribeBackend("elevenlabs");
   expect(resolveService("dictation").effective).toBe("elevenlabs");
 }
-const keyRoute = (id: string, init: RequestInit) => own(keyWrite[init.method === "DELETE" ? "DELETE" : "PUT"](asOperator(`/api/keys/${id}`, init), { params: Promise.resolve({ id }) }));
+const keyRoute = (id: string, init: RequestInit) => own(keyWrite[init.method === "DELETE" ? "DELETE" : "PUT"](browserRequest(`/api/keys/${id}`, init), { params: Promise.resolve({ id }) }));
 
 for (const where of ["here", "on another tab"] as const) {
   test(`a key removed ${where} after the mic warmed a secret: the next press records instead of reaching OpenAI`, () => withMic(async (mic) => {
@@ -871,7 +936,7 @@ test("dictation moved onto OpenAI while a press waits on the mic's pending Eleve
 async function heldOn(baseline: "elevenlabs" | "local") {
   file("openai-api-key", `${OPENAI}\n`);
   writeTranscribeBackend(baseline);
-  await services.PUT(asOperator("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature: "dictation", provider: "openai" }) }));
+  await services.PUT(browserRequest("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature: "dictation", provider: "openai" }) }));
   await keyRoute("openai", { method: "DELETE" });
   expect(resolveService("dictation")).toMatchObject({ effective: baseline, requested: "openai", held: true });
 }
@@ -1032,7 +1097,7 @@ for (const lang of ["en", "uk"] as const) for (const enabled of [false, true]) t
 
   expect(await explanations()).toEqual(expected("openrouter"));
 
-  for (const feature of ["asks", "memory"]) await services.PUT(asOperator("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature, provider: "openai" }) }));
+  for (const feature of ["asks", "memory"]) await services.PUT(browserRequest("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature, provider: "openai" }) }));
   const onOpenAi = await explanations();
   expect(onOpenAi).toEqual(expected("openai"));
   expect(`${onOpenAi.asks} ${onOpenAi.memory}`).not.toMatch(/OpenRouter|Jev/);
@@ -1052,13 +1117,14 @@ async function openMemoryPage(where: keyof typeof surfaces) {
   expect(document.querySelector("[data-memory-page]")).not.toBeNull();
 }
 async function chooseMemoryUnderKeys(where: keyof typeof surfaces, provider: "openai" | "openrouter") {
-  await back(where);
+  /* The phone's sheet returns to its section list; the desktop keeps the list beside the section. */
+  if (where === "phone") await back(where);
   await click(document.querySelector(surfaces[where].keys[1]));
   await openFeature("memory");
   await click(radio(page(), provider));
   expect(resolveService("memory").effective).toBe(provider);
   await back(where);
-  await back(where);
+  if (where === "phone") await back(where);
   await openMemoryPage(where);
 }
 for (const lang of ["en", "uk"] as const) for (const where of ["desktop", "phone"] as const) test(`${lang} ${where}: the memory page opened again after memory's provider is chosen under «Keys» names that provider, without a remount or a timer`, async () => {
@@ -1130,7 +1196,7 @@ for (const outcome of ["kept", "refused"] as const) test(`a provider chosen unde
   await click(host.querySelector("[data-memory-switch]"));
   expect(released).toHaveLength(2);
   /* Both are chosen under «Keys» while the switches' answers, computed before the choice, are still on their way. */
-  for (const feature of ["asks", "memory"]) await services.PUT(asOperator("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature, provider: "openai" }) }));
+  for (const feature of ["asks", "memory"]) await services.PUT(browserRequest("/api/openai-services", { method: "PUT", body: JSON.stringify({ feature, provider: "openai" }) }));
   await act(async () => { serviceSettled("asks"); serviceSettled("memory"); });
   await settle();
   holdSwitch = null;

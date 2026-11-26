@@ -13,7 +13,7 @@ const inheritedGit = Object.fromEntries(Object.entries(process.env).filter(([key
 for (const key of Object.keys(inheritedGit)) delete process.env[key];
 const state = fs.mkdtempSync(path.join(os.tmpdir(), "llv-publication-repair-state-"));
 process.env.LLV_STATE_DIR = state;
-const { defaultPipelinePorts, tickPipelines, patchPipeline } = await import("./engine");
+const { defaultPipelinePorts, tickPipelines, patchPipeline, settlePendingStageGit } = await import("./engine");
 const { savePipelines, findPipelineRecord } = await import("./store");
 const { pipelineCorpus } = await import("./fixtures/corpus");
 const { realExec } = await import("@/lib/workflows/provision");
@@ -111,8 +111,10 @@ function fixture({ emptyAccepted = false } = {}) {
 
 
 test.each([
- { label: "pending attention", host: "hosted", turn: "running", attentionIds: ["permission-1"] },
- { label: "conflicting host", host: "conflict", turn: "idle", attentionIds: [] },
+ { label: "pending attention", host: "hosted", turn: "running", attentionIds: ["permission-1"], replace: false },
+ { label: "conflicting host", host: "conflict", turn: "idle", attentionIds: [], replace: false },
+ { label: "active host", host: "hosted", turn: "running", attentionIds: [], replace: false },
+ { label: "idle host", host: "hosted", turn: "idle", attentionIds: [], replace: true },
 ])("retry treats fresh $label evidence conservatively", async fresh => {
  const h=fixture();
  const { RuntimeJournal }=await import("@/runtime-host/journal");
@@ -127,13 +129,13 @@ test.each([
  try {
   fs.writeFileSync(h.hook,"#!/bin/sh\necho 'pre-push: eslint' >&2\nexit 1\n",{mode:0o700});
   h.ports.resumeSeveredTurn=async()=>false;
-  await h.tick(); h.advance(21*60_000); await h.tick();
+  await h.tick(); h.advance(21*60_000); await settlePendingStageGit(h.ports);
   expect(h.current().state).toBe("needs_decision");
   const socket=`/proc/${process.pid}/fd/${socketDirectory}/runtime.sock`; process.env.LLV_RUNTIME_HOST_SOCKET=socket;
   server=serveRuntimeHost(socket,{handle:request=>host.handle(request)}); await once(server,"listening");
   const publish=(state:"dead"|"hosted"|"conflict", turn?:"running"|"idle", attentionIds:readonly string[]=[])=>journal.append({scope:{type:"session",id:"conversation_producer"},kind:"session-status",payload:{
    conversationId:"conversation_producer",sessionKey:{engine:"codex",sessionId:"repair-owner"},hostKind:"codex-app-server",
-   host:state,turn:turn??(state==="hosted"?"running":"idle"),attentionIds:[...attentionIds],activeTurnId:state==="hosted"?"repair-running":null,
+   host:state,turn:turn??(state==="hosted"?"running":"idle"),attentionIds:[...attentionIds],activeTurnId:state==="hosted"&&turn==="running"?"repair-running":null,
   }});
   publish("dead");
   const native=defaultPipelinePorts();
@@ -144,15 +146,23 @@ test.each([
   ports.publicationRepairProducerGone=async id=>{const answer=await native.publicationRepairProducerGone!(id); proof.push(answer as boolean);return answer;};
   ports.stageRepairDelivery=async()=>({operationId:"uncertain-repair",state:"failed",safeToReplace:false});
   ports.conversationDeliveryOutstanding=()=>false;
+  const states:string[]=[];
+  ports.publicationRepairProducerState=async id=>{
+   const state=await native.publicationRepairProducerState?.(id)??"unknown";
+   states.push(state);
+   return state;
+  };
   ports.durableTurnEvidence=async()=>{
    publish(fresh.host as "hosted"|"conflict",fresh.turn as "running"|"idle",fresh.attentionIds);
    return {turn:"terminal",message:{text:"accepted",ts:Date.parse("2026-10-11T04:01:00Z")}};
   };
   const {patchPipeline}=await import("./engine");
-  await patchPipeline(h.lane.id,{action:"retry-stage"},ports);
+  const retried=await patchPipeline(h.lane.id,{action:"retry-stage"},ports);
+  if(native.publicationRepairProducerState) expect(states.at(-1)).toBe(fresh.replace?"idle":fresh.label==="active host"?"active":"blocked");
+  if (fresh.replace) expect(retried.error).toBeUndefined();
   expect(proof.every(gone=>gone!==true)).toBe(true);
   expect(journal.readSession({conversationId:"conversation_producer"})).toMatchObject({host:fresh.host,turn:fresh.turn,attentionIds:fresh.attentionIds});
-  expect(h.current().runs[0]!.attempts).toHaveLength(1);
+  expect(h.current().runs[0]!.attempts).toHaveLength(fresh.replace ? 2 : 1);
  } finally {
   if(server) await new Promise<void>(resolve=>server!.close(()=>resolve()));
   if(previous===undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET=previous;
@@ -193,7 +203,7 @@ test.each([
  let server:ReturnType<typeof serveRuntimeHost>|undefined;
  try {
   fs.writeFileSync(h.hook,"#!/bin/sh\necho 'pre-push: eslint' >&2\nexit 1\n",{mode:0o700});
-  await h.tick();h.advance(21*60_000);await h.tick();
+  await h.tick();h.advance(21*60_000);await settlePendingStageGit(h.ports);
   expect(h.current().state).toBe("needs_decision");
   expect(h.current().runs[0]!.attempts[0]!.publicationRepair?.delivery?.safeToReplace).toBe(true);
   const persisted = h.current();

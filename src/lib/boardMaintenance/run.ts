@@ -5,8 +5,13 @@ import { launchAutonomousConversation as launchMaintenanceConversation, observeS
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createTask, patchTask } from "@/lib/tasks/commands";
-import { loadTasks, mutateTasks, mutateTasksFile } from "@/lib/tasks/store";
+import { loadTasksForList, mutateTasks, mutateTasksFile } from "@/lib/tasks/store";
 import { taskSeatHoldingSnapshot } from "@/lib/tasks/seatHolding";
+import { holdPullRequestState, seatRoundLookup } from "@/lib/tasks/holdEvidence";
+import { waitingRoute, waitingRouteIndex } from "@/lib/tasks/waitingRoute";
+import { overlayAttentionRoutes } from "@/lib/attention/routeOverlay";
+import { waitingRoundIds } from "@/lib/attention/routing";
+import { seatDecisionNotices, withPrototypeReviewSummaries } from "@/lib/prototypeReview/read";
 import { archiveConversationPaths } from "@/lib/board/archivePlacement";
 import { boardFor } from "@/lib/board/store";
 import { applyBoardCommand } from "@/lib/board/command";
@@ -56,6 +61,7 @@ export async function maintenanceWorkEvidence(project: string, now: number, sour
   const pipelines = sources.pipelines().filter(p => canonicalOrchestratorProject(p.project) === project);
   const records = await sources.liveness({ project, stallAfterMs: 30 * 60_000, limit: 200 }).catch(() => []);
   const byId = new Map(records.filter(r => r.conversationId).map(r => [r.conversationId!, r]));
+  const byPath = new Map(records.flatMap(r => [r.transcriptPath, ...(r.previousPaths ?? [])].map(path => [path, r] as const)));
   const branches = [...new Set(pipelines.map(p => p.branch).filter(Boolean))];
   const commits = new Map<string, string>();
   if (repoDir && branches.length) {
@@ -75,7 +81,7 @@ export async function maintenanceWorkEvidence(project: string, now: number, sour
       const r = byId.get(id);
       workers.push({ conversationId: id, via, pipelineId, stageId, lifecycle: r?.lifecycle ?? "unknown", lastRecordAt: r?.lastRecordAt ?? null });
     };
-    task.assignments.forEach(a => add(a.conversationId, "assignment"));
+    task.assignments.forEach(a => add(a.conversationId ?? (a.path ? byPath.get(a.path)?.conversationId : null), "assignment"));
     lanes.forEach(p => p.runs.forEach(r => r.attempts.forEach(a => add(a.conversationId, "stage", p.id, r.stageId))));
     return taskWorkEvidence(task, workers, lanes.map(p => ({ pipelineId: p.id, state: p.state, closedAt: p.closedAt, hiddenAt: p.hiddenAt, branch: p.branch, movedAt: newestWorkAt(pipelineSummary(p).activityAt ?? []), branchCommitAt: commits.get(p.branch) ?? null })), now);
   }).filter(e => e.verdict !== "idle");
@@ -113,14 +119,14 @@ function archiveRun(run: MaintenanceRun, sources: SeatTickSources): void {
 function settle(run: MaintenanceRun, patch: Partial<MaintenanceRun>, ports: BoardMaintenancePorts): void {
   const fresh = readMaintenanceRun(run.runId);
   if (!fresh || !maintenanceRunIsLive(fresh)) return;
-  const next = { ...fresh, ...patch, ...(patch.log ? { log: { ...fresh.log, attention: patch.log.attention, leftAlone: patch.log.leftAlone, verdict: patch.log.verdict } } : {}), endedAt: new Date(ports.sources.now()).toISOString() };
+  const next = { ...fresh, ...patch, ...(patch.log ? { log: { ...fresh.log, attention: patch.log.attention, leftAlone: patch.log.leftAlone, seat: patch.log.seat, verdict: patch.log.verdict } } : {}), endedAt: new Date(ports.sources.now()).toISOString() };
   if (next.failure) next.failure = { ...next.failure, detail: redactMonitorText(next.failure.detail).replace(/\s+/g, " ").slice(0, 300) };
-  if (next.taskId) patchCard(next.taskId, { text: maintenanceCardText((ports.locale ?? (() => operatorLocale() ?? "uk"))(), next, ports.timeZone?.() ?? operatorTimeZone() ?? undefined), status: next.state === "succeeded" ? "done" : "blocked", board: next.state === "succeeded" ? "hidden" : "shown", appendLine: `Result: ${next.state} ${next.endedAt}; ${next.failure ? `${next.failure.kind}: ${next.failure.detail}` : `${next.counts.writes} writes on ${next.counts.tasks} tasks${next.log.verdict ? "" : "; no verdict line"}`}.` });
+  if (next.taskId) patchCard(next.taskId, { text: maintenanceCardText((ports.locale ?? (() => operatorLocale() ?? "uk"))(), next, ports.timeZone?.() ?? operatorTimeZone() ?? undefined), status: next.state === "succeeded" ? "done" : next.failure?.kind === "no-account" || next.failure?.kind === "needs-decision" ? "blocked" : "inbox", ...(next.state !== "succeeded" && (next.failure?.kind === "no-account" || next.failure?.kind === "needs-decision") ? { hold: { kind: "operator", note: "Review the maintenance failure and choose the next action." } } : { hold: null }), board: next.state === "succeeded" ? "hidden" : "shown", appendLine: `Result: ${next.state} ${next.endedAt}; ${next.failure ? `${next.failure.kind}: ${next.failure.detail}` : `${next.counts.writes} writes on ${next.counts.tasks} tasks${next.log.verdict ? "" : "; no verdict line"}`}.` });
   if (next.state === "succeeded") (ports.archive ?? (r => archiveRun(r, ports.sources)))(next);
   const superseded: string[] = [];
-  const tasks = loadTasks(statePath("tasks.json"));
+  const tasks = loadTasksForList(statePath("tasks.json"));
   for (const old of maintenanceRuns(run.project)) {
-    if (old.runId === run.runId || !old.taskId || tasks.find(t => t.id === old.taskId)?.status !== "blocked") continue;
+    if (old.runId === run.runId || !old.taskId || tasks.find(t => t.id === old.taskId)?.status === "done") continue;
     if (old.conversationId || old.transcriptPath) (ports.archive ?? (r => archiveRun(r, ports.sources)))(old);
     patchCard(old.taskId, { status: "done", board: "hidden", appendLine: `Superseded by maintenance run ${run.runId} (card ${run.taskId}).` });
     superseded.push(old.taskId);
@@ -148,6 +154,33 @@ function maintenanceScheduleHold(run: MaintenanceRun, ports: BoardMaintenancePor
   if (!settings.maintenance.enabled) return "maintenance: paused while maintenance is off";
   return maintenanceWindowOpen(settings.maintenance.window, now) ? null : "maintenance: outside scheduled window";
 }
+
+function maintenanceWaiting(project: string, tasks: ReturnType<SeatTickSources["tasks"]>, sources: SeatTickSources, evidence: readonly TaskWorkEvidence[], now: number) {
+  if (!tasks.some(task => task.status === "blocked" && canonicalOrchestratorProject(task.project) === project)) {
+    return { operator: 0, lines: [] };
+  }
+  const summarized = withPrototypeReviewSummaries(tasks, undefined, now);
+  const waiting = summarized.filter(task => task.status === "blocked" && canonicalOrchestratorProject(task.project) === project);
+  const lanes = sources.pipelines().filter(lane => canonicalOrchestratorProject(lane.project) === project).map(lane => ({ ...lane }));
+  const seatDecisions = seatDecisionNotices(project);
+  overlayAttentionRoutes([], lanes, waitingRoundIds(summarized, seatDecisions), now / 1000);
+  // The same prerequisite evidence the seat tick reads, so both classify a wait alike.
+  const index = waitingRouteIndex(summarized, lanes, new Set(evidence.flatMap(row => row.workers
+    .filter(worker => worker.lifecycle === "running" || worker.lifecycle === "starting").map(worker => worker.conversationId))),
+  {}, holdPullRequestState(summarized, sources.pipelines()), seatRoundLookup(seatDecisions));
+  const working = new Set(evidence.filter(row => row.workers.some(worker =>
+    worker.via === "assignment" && (worker.lifecycle === "running" || worker.lifecycle === "starting"))).map(row => row.taskId));
+  const lines: string[] = [];
+  let operator = 0;
+  for (const task of waiting) {
+    const route = waitingRoute(task, index, now, working.has(task.id));
+    if (!route) continue;
+    if (route.owner === "operator") operator++;
+    else lines.push(`- ${task.id} | ${route.owner}/${route.rule} | ${route.action}`);
+  }
+  return { operator, lines };
+}
+
 async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Promise<string> {
   if (deferMaintenanceAdmission(run, ports)) return "maintenance: held for the automatic update";
   // Recovered claims and launch replays obey the current switch too.
@@ -160,15 +193,16 @@ async function launchRun(run: MaintenanceRun, ports: BoardMaintenancePorts): Pro
   }
   if (!run.repoDir) { settle(run, { state: "failed", failure: { kind: "no-repository", detail: "project repository could not be found" } }, ports); return "maintenance: failed, no repository"; }
   if (!run.launchBody) {
-    const tasks = ports.sources.tasks();
     const previous = previousMaintenanceRun(run.project, run.runId);
     const evidence = await (ports.evidence ?? ((project, now, cwd) => maintenanceWorkEvidence(project, now, ports.sources, cwd)))(run.project, ports.sources.now(), run.repoDir);
     if (deferMaintenanceAdmission(run, ports)) return "maintenance: held for the automatic update";
+    const tasks = ports.sources.tasks();
+    const now = ports.sources.now();
     const holding = taskSeatHoldingSnapshot();
     let deployment: ReturnType<SeatTickSources["latestDeployment"]> = { state: "ok", value: null };
     try { deployment = ports.sources.latestDeployment(); } catch { /* installs without a deployment ledger */ }
     const productionLine = viewerOwnProjectKeys().includes(run.project) ? `Delegatus deployment: ${(deployment.state === "ok" ? deployment.value?.revision : null) ?? "unread"}; for a deployed note, confirm it succeeded and git merge-base --is-ancestor <merge sha> <deployed revision>.` : "Delegatus records no deployments for this project. Read its instruction files for how it ships; when they name none, a merged pull request is shipped.";
-    const brief = maintenanceBrief({ run, previous, previousCardText: tasks.find(t => t.id === previous?.taskId)?.text ?? null, seatTaskIds: tasks.filter(t => t.project === run.project && holding(t) === "holds").map(t => t.id), productionLine, mergeOnReview: mergeOnReviewEnabled(run.project), evidence, openCount: tasks.filter(t => t.project === run.project && t.status !== "done").length, now: ports.sources.now() });
+    const brief = maintenanceBrief({ run, previous, previousCardText: tasks.find(t => t.id === previous?.taskId)?.text ?? null, seatTaskIds: tasks.filter(t => t.project === run.project && holding(t) === "holds").map(t => t.id), productionLine, mergeOnReview: mergeOnReviewEnabled(run.project), evidence, openCount: tasks.filter(t => t.project === run.project && t.status !== "done").length, now, waiting: maintenanceWaiting(run.project, tasks, ports.sources, evidence, now) });
     const body = { role: "maintainer", roleParams: {}, cwd: run.repoDir, project: run.project, "prompt": brief, title: tasks.find(t => t.id === run.taskId)?.text.split("\n")[0], taskId: run.taskId, clientAttemptId: run.runId, mcpServers: ["viewer"], notifyLauncher: false };
     // Persist the exact spawn payload before dispatch; restart replays the same digest.
     run = patchMaintenanceRun(run.runId, { state: "launching", launchBody: body })!;

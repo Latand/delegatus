@@ -67,7 +67,7 @@ curl -sS -X POST "http://127.0.0.1:8898/api/conversation-host?k=$TOK" \
 - `path` is the conversation transcript (Claude `~/.claude/projects/**.jsonl`, Codex `~/.codex/sessions/**.jsonl`); Delegatus resolves it to the conversation's live host, or resumes/respawns one. The same handlers are still mounted at the legacy path `/api/tmux`; that name is historical and no tmux is involved.
 - `clientMessageId` makes retries idempotent; give each distinct message its own id — reusing one across different messages fails with `Idempotency key already belongs to another request`.
 - Receipt outcomes: `delivered-to-live | queued | delivering | delivered | resumed | held`. Delivery is confirmed when the message appears in the target transcript; replies are readable there too, which makes this endpoint full duplex with any agent.
-- Actions on the same endpoint: `{"action":"interrupt"}` (Escape), `{"action":"kill"}`, `{"action":"resume"}`, `{"action":"compact"}`, `{"action":"dialog-key","key":...}`.
+- Actions on the same endpoint: `{"action":"interrupt"}` (Escape), `{"action":"kill"}`, `{"action":"resume"}`, `{"action":"compact"}`.
 
 **Session ownership.** Delegatus tracks which process controls each session. `no-claim` / `structured resume host claim is unavailable` means a live process outside Delegatus owns the target session — Delegatus correctly refuses to write into it, and the session stays read-only (live tail) until that owner exits. To bring such a session under viewer control, act through the owning process; as a last resort kill it and let Delegatus resume the session as its own structured host, after which structured delivery with receipts works.
 

@@ -30,6 +30,10 @@ function pickEffort(entry: FileEntry, obj: Record<string, unknown>): string | nu
   if (entry.root === "copilot-sessions" && (obj.type === "session.start" || obj.type === "session.model_change")) {
     return stringValue(recordValue(obj.data)?.reasoningEffort);
   }
+  if (entry.root === "antigravity-sessions" && (obj.type === "session.start" || obj.type === "session.resume" || obj.type === "session.model_change")) {
+    const data = recordValue(obj.data);
+    return stringValue(data?.effort) ?? stringValue(data?.reasoningEffort);
+  }
   if (entry.root === "openclaw-sessions" && obj.type === "thinking_level_change") {
     return stringValue(obj.thinkingLevel);
   }
@@ -72,7 +76,7 @@ export interface EntryEffortResult {
 
 export function entryEffortResult(entry: FileEntry): EntryEffortResult {
   if (
-    (entry.root !== "claude-projects" && entry.root !== "codex-sessions" && entry.root !== "openclaw-sessions" && entry.root !== "copilot-sessions")
+    (entry.root !== "claude-projects" && entry.root !== "codex-sessions" && entry.root !== "openclaw-sessions" && entry.root !== "copilot-sessions" && entry.root !== "antigravity-sessions")
     || !entry.path.endsWith(".jsonl")
   ) {
     return { value: null, complete: true };
@@ -155,30 +159,6 @@ export async function durableServiceTierIndexForPaths(paths: readonly string[], 
       } catch (error) { if (!(error instanceof RegistryReadError)) throw error; }
     }
     if (offset + 16 < paths.length) await yieldToRuntime();
-  }
-  return tiers;
-}
-
-/** One registry walk per scan, including misses. Conversation generations win
-    over continuity aliases and receipts in the same order as registry lookup. */
-export function durableServiceTierIndex(registry = agentRegistry()): ReadonlyMap<string, string | null> {
-  const tiers = new Map<string, string | null>();
-  try {
-    const snapshot = registry.readOnlySnapshot();
-    const put = (pathname: string, profile: { serviceTier?: string | null; fast?: boolean | null }) => {
-      if (!tiers.has(pathname)) tiers.set(pathname, normalizeServiceTier(profile.serviceTier)
-        ?? (profile.fast === true ? "priority" : profile.fast === false ? "default" : null));
-    };
-    for (const conversation of Object.values(snapshot.conversations)) {
-      for (const generation of conversation.generations) put(generation.path, generation.launchProfile);
-      const current = conversation.generations.at(-1);
-      if (current) for (const pathname of conversation.continuityPaths) put(pathname, current.launchProfile);
-    }
-    for (const receipt of Object.values(snapshot.receipts)) {
-      if (receipt.artifactPath) put(receipt.artifactPath, receipt.launchProfile);
-    }
-  } catch (error) {
-    if (!(error instanceof RegistryReadError)) throw error;
   }
   return tiers;
 }

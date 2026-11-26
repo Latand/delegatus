@@ -3,6 +3,7 @@ import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { deadlineSignal, DeadlineExceededError, type DeadlineScheduler } from "@/lib/deadline";
 import { forEachCooperatively, yieldToRuntime, type CooperativeBatchOptions } from "@/lib/cooperative";
+import { SeatTickTimings } from "./seatTickTiming";
 
 const currentWork = new AsyncLocalStorage<SeatTickWork>();
 
@@ -17,10 +18,12 @@ export class SeatTickWork {
   private readonly deadline;
   private readonly sourceSpent = new Map<string, number>();
   readonly skippedSources = new Set<string>();
+  readonly timings: SeatTickTimings;
 
   constructor(readonly project: string, readonly budgetMs: number,
     readonly clock: () => number = () => performance.now(), private readonly scheduler?: DeadlineScheduler) {
     this.started = this.progressed = clock();
+    this.timings = currentWork.getStore()?.timings ?? new SeatTickTimings(clock);
     this.deadline = deadlineSignal(budgetMs, { scheduler, signal: this.cancellation.signal, reason: "seat project deadline exceeded" });
   }
 
@@ -66,7 +69,7 @@ export class SeatTickWork {
     if (this.clock() - this.started >= this.budgetMs) throw new Error("seat project deadline exceeded");
   }
 
-  async wait<T>(label: string, value: PromiseLike<T>): Promise<T> {
+  async wait<T>(label: string, value: PromiseLike<T>, trace = true): Promise<T> {
     // The caller may have already started this work. Install a rejection
     // observer before checking the deadline so an expired opening scope
     // cannot abandon a later rejecting continuation.
@@ -75,6 +78,7 @@ export class SeatTickWork {
     this.assert();
     this.phase = label;
     this.progressed = this.clock();
+    const end = trace ? this.timings.begin(label) : undefined;
     const signal = this.deadline.signal;
     let abort!: () => void;
     try {
@@ -85,7 +89,7 @@ export class SeatTickWork {
       this.assert();
       this.progressed = this.clock();
       return result;
-    } finally { signal.removeEventListener("abort", abort); }
+    } finally { signal.removeEventListener("abort", abort); end?.(); }
   }
 
   /** Functions keep their receiver. Nested port objects (reports, recovery,
@@ -101,9 +105,15 @@ export class SeatTickWork {
         this.assert();
         this.phase = `${label}.${String(key)}`;
         this.progressed = this.clock();
-        const result = Reflect.apply(value, target, args);
-        return result && typeof (result as PromiseLike<unknown>).then === "function"
-          ? this.wait(this.phase, result as PromiseLike<unknown>) : result;
+        const end = this.timings.begin(this.phase);
+        try {
+          const result = Reflect.apply(value, target, args);
+          if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+            return this.wait(this.phase, result as PromiseLike<unknown>, false).finally(end);
+          }
+          end();
+          return result;
+        } catch (error) { end(); throw error; }
       } : this.ports(value, `${label}.${String(key)}`);
       wrappers.set(key, { value, wrapped });
       return wrapped;
@@ -126,6 +136,9 @@ export class SeatTickWork {
 export function seatTickWorkDetail(): string | undefined { return currentWork.getStore()?.detail(); }
 export function seatTickWorkSignal(): AbortSignal | undefined { return currentWork.getStore()?.signal; }
 export function seatTickWorkRemainingMs(): number | undefined { return currentWork.getStore()?.remainingMs; }
+export function seatTickQueueSpan(phase: string): () => void {
+  return currentWork.getStore()?.timings.begin(phase) ?? (() => {});
+}
 export function seatTickSkippedSources(): string | null {
   const names = [...(currentWork.getStore()?.skippedSources ?? [])];
   return names.length ? `Skipped sources (budget): ${names.join(", ")}; retry next check.` : null;

@@ -8,8 +8,10 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { classifyArtifact } from "@/lib/artifact/classify";
 import { frameUrl, mintFrameScope } from "@/lib/artifact/frameScope";
+import { requestSession } from "@/lib/team/sessions";
+import { existingTeamStore } from "@/lib/team/store";
 import { artifactEtag, artifactLimits, artifactResponseHeaders, parseByteRange, SNIFF_BYTES, sniffAgrees } from "@/lib/artifact/serve";
-import { admittedAs, lexicalAllowedRoots, openAdmitted, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
+import { admittedAs, lexicalAllowedRoots, keptPictureProject, openAdmitted, readablePlace, realAllowedRoots, realpathAdmitted, resolveLocal, streamWindow } from "@/lib/artifact/localFile";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
 
@@ -24,9 +26,9 @@ export const dynamic = "force-dynamic";
  * Access model — identical to /api/image, the existing local-bytes route: the
  * same-origin/Host gate IS the operator authority on this loopback service
  * (see `page.tsx`), and the allowed-root policy confines reads to the
- * operator's home, where every agent workspace and transcript artifact lives,
- * plus the evidence roots agents render into (`/var/tmp`, #2084), which serve
- * raster images and nothing else.
+ * recorded project folders, their checkouts, manual projects and stage scratch.
+ * Evidence roots and the report picture store serve raster images only.
+ * The home directory itself is never an allowed root.
  *
  * Containment is enforced twice (lexical resolve, then realpath) so neither
  * `..` traversal nor a symlink under a root may reach outside it; the final open
@@ -74,7 +76,9 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
   const raw = req.nextUrl.searchParams.get("path") ?? "";
   if (!raw) return NextResponse.json({ error: "path is required" }, { status: 400 });
 
-  const abs = resolveLocal(raw);
+  /* A picture a report named is read from its kept copy once it is gone. */
+  const requested = resolveLocal(raw);
+  const abs = readablePlace(requested);
   const admission = admittedAs(abs, lexicalAllowedRoots());
   if (!admission) return fail("access-denied", "path is outside the allowed roots");
 
@@ -95,7 +99,9 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
   if (!realpathAdmitted(admission, real, await realAllowedRoots())) return fail("access-denied", "path is outside the allowed roots");
 
   const workspace = requestWorkspaceScope(req);
-  if (workspace && !workspace.canReadFile(projectForCwd(path.dirname(real)))) return workspaceDenied();
+  /* A kept copy belongs to the project its picture lay in. */
+  const kept = keptPictureProject(requested, abs);
+  if (workspace && !workspace.canReadFile(kept === undefined ? projectForCwd(path.dirname(real)) : kept)) return workspaceDenied();
   /* realpath resolved every link above; a link appearing at the final
      component or at any directory above it between then and now is a race,
      refused. A FIFO does not wedge the open — its fstat below rejects it. */
@@ -136,7 +142,10 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<FailBody> | 
       /* An HTML report is shown as a browser would show it, in a sandboxed
          frame fed by the frame route; the scope minted here is the only way
          to reach that route, and it covers this report's directory alone. */
-      const frame = /\.html?$/i.test(real) ? frameUrl(mintFrameScope(path.dirname(real)), path.basename(real)) : undefined;
+      const live = requestSession(req);
+      if (/\.html?$/i.test(real) && existingTeamStore()?.hasActiveOwner() && !live)
+        return NextResponse.json({ error: "sign in to open a report frame", code: "member_required" }, { status: 401 });
+      const frame = /\.html?$/i.test(real) ? frameUrl(mintFrameScope(path.dirname(real), Date.now(), live?.session.id ?? null), path.basename(real)) : undefined;
       return NextResponse.json(
         { name, kind, mime, size: stat.size, mtimeMs: Math.round(stat.mtimeMs), etag, ...(frame ? { frame } : {}) },
         { headers: { "cache-control": "private, no-store" } },

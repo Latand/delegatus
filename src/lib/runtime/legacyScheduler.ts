@@ -2,9 +2,6 @@ import type { FileEntry } from "@/lib/types";
 
 export interface LegacySchedulerPorts {
   scan(): Promise<FileEntry[]>;
-  /** Compatibility ports are ignored after S5. */
-  tickFlows?(entries: FileEntry[]): Promise<unknown>;
-  tickWorkflows?(entries: FileEntry[]): Promise<unknown>;
   publishFiles?(entries: FileEntry[]): Promise<void> | void;
 }
 

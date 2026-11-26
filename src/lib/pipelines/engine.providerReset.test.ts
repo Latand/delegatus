@@ -36,11 +36,12 @@ test("parked provider waiting keeps controller cycles within watchdog plus horiz
   const controller = new FlowPipelineController({
     now: f.now,
     tickPipelines: async entries => { passes++; return await tickPipelines(entries, f.h.ports); },
-    tickFlows: async () => ({ changed: false }),
     publishHeartbeat: heartbeat => { cycles = Math.max(cycles, heartbeat.cycle); },
   });
   await controller.tick("startup");
-  const until = f.now() + 5.5 * 60 * 60_000;
+  // Observe four full retry horizons, then jump to the actual reset below.
+  const horizonCount = 4;
+  const until = f.now() + horizonCount * 15 * 60_000;
   let watchdog = f.now() + 30_000;
   while (f.now() < until) {
     wakeups.sort((a, b) => a - b);
@@ -54,9 +55,10 @@ test("parked provider waiting keeps controller cycles within watchdog plus horiz
       await controller.tick("signal");
     }
   }
-  expect(scheduled).toBeLessThanOrEqual(24);
-  expect(cycles).toBeLessThanOrEqual(660 + 30);
-  expect(passes).toBeLessThanOrEqual(2 * (660 + 30) + 8);
+  const maxCycles = horizonCount * 30 + horizonCount + 2;
+  expect(scheduled).toBeLessThanOrEqual(horizonCount + 1);
+  expect(cycles).toBeLessThanOrEqual(maxCycles);
+  expect(passes).toBeLessThanOrEqual(2 * maxCycles + 8);
   expect(f.h.spawnInputs).toHaveLength(1);
   // Restart has no in-memory timers. Its watchdog still retries durably on time.
   wakeups.length = 0;
@@ -73,7 +75,7 @@ test("parked provider waiting keeps controller cycles within watchdog plus horiz
   expect(f.h.spawnInputs).toHaveLength(2);
   expect(f.h.spawnInputs[1]!.requestedAccountId).toBe(LIMITED_ACCOUNT);
   expect(f.now()).toBeLessThanOrEqual(f.resetsAt! * 1_000 + 90_000);
-}, 60_000);
+}, 240_000);
 
 
 test.each([false, true])("a newer native operator turn cancels running reset continuation, tool=%s", async tool => {

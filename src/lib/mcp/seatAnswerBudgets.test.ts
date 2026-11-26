@@ -134,7 +134,7 @@ test("seat_tick_settings acknowledges a write in 300 B, edits one note line for 
     expect(readSeatTickSettings(PROJECT).monitorPrompt).not.toContain(secret);
     const overflow = await mcp.call("seat_tick_settings", { appendLine: "n".repeat(SEAT_TICK_PROMPT_LIMIT) });
     expect(overflow.failed).toBe(true);
-    expect(JSON.stringify(overflow.payload)).toContain(`the limit is ${SEAT_TICK_PROMPT_LIMIT}`);
+    expect(JSON.stringify(overflow.payload)).toContain(`monitorPrompt must be at most ${SEAT_TICK_PROMPT_LIMIT} UTF-16 code units; actual length is ${readSeatTickSettings(PROJECT).monitorPrompt!.length + 1 + SEAT_TICK_PROMPT_LIMIT}`);
 
     const note = readSeatTickSettings(PROJECT).monitorPrompt!;
     const verbose = await mcp.call("seat_tick_settings", { verbose: true });

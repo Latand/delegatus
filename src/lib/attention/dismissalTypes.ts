@@ -9,6 +9,13 @@
  * reason that starts later comes back on its own.
  */
 
+export class DismissalError extends Error {
+  constructor(readonly code: string, message: string, readonly status = 400) {
+    super(message);
+    this.name = "DismissalError";
+  }
+}
+
 /** Who cleared it, attributed on the server and never taken from the caller.
     An agent's is the same shape the attention record's `raisedBy` carries.
     `system` is Delegatus itself, clearing a reason its own evidence proves is
@@ -88,7 +95,7 @@ export type DismissalSubject =
   | { kind: "conversation"; conversationId: string }
   | { kind: "pipeline"; pipelineId: string }
   | { kind: "report"; seq: number }
-  | { kind: "prototype"; taskId: string; reviewId: string };
+  | { kind: "prototype"; taskId: string | null; reviewId: string };
 
 /** What the caller asks to clear. A task expands to the subjects its card
     drew, when the caller names them, and otherwise to everything on it. */
@@ -96,7 +103,7 @@ export type DismissalTarget =
   | { kind: "conversation"; conversationId?: string; path?: string; reasonId?: string | null }
   | { kind: "pipeline"; pipelineId: string; laneMovedAt?: number | null }
   | { kind: "report"; seq: number }
-  | { kind: "prototype"; taskId: string; reviewId: string }
+  | { kind: "prototype"; taskId: string | null; reviewId: string }
   | { kind: "task"; taskId: string; subjects?: DismissalSubjectRequest[] }
   /** A card no task owns: the subjects it drew, and nothing else. The
       operator's route takes it; the MCP tool names one of the three above. */

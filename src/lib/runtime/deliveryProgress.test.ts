@@ -1,17 +1,83 @@
+import { OWNER_ENDINGS_CURSOR } from "@/lib/agent/registryEndings";
 import { withoutWriterWait } from "@/lib/agent/registryLockHolderFixture";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { AsyncResource } from "node:async_hooks";
+import { OperationLease, currentOperationLease } from "@/lib/operationLease";
 
-import { DELIVERY_PHASE_HISTORY_LIMIT, DELIVERY_TIMING_MARK_LIMIT, DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, DeliveryProgressStore, readDeliveryProgress, type DeliveryProgressRecord } from "./deliveryProgress";
+import { DELIVERY_PHASE_HISTORY_LIMIT, DELIVERY_TIMING_MARK_LIMIT, DELIVERY_PROGRESS_TERMINAL_RETENTION_MS, DeliveryProgressStore, readDeliveryProgress, setDeliveryProgressStoreForTests, type DeliveryProgressRecord } from "./deliveryProgress";
 
 /* Private temporary files only. */
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-delivery-progress-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const noTimer = (() => 0 as unknown as ReturnType<typeof setTimeout>);
+
+test("accepted progress retries outside an expired caller lease and survives reopening", () => {
+  const filename = path.join(root, "expired-caller.sqlite");
+  const now = Date.parse("2026-11-17T06:00:00Z");
+  const callbacks: Array<() => void> = [];
+  const leases: unknown[] = [];
+  const store = new DeliveryProgressStore(filename, () => now, callback => {
+    callbacks.push(AsyncResource.bind(() => { leases.push(currentOperationLease()); callback(); }));
+    return noTimer();
+  });
+  store.note("seed", "conversation", { waitReason: "queued" });
+  callbacks.shift()!();
+  const holder = new Database(filename);
+  holder.exec("BEGIN IMMEDIATE");
+  const lease = new OperationLease();
+  try {
+    lease.run(() => store.note("accepted", "conversation", { waitReason: "dispatching", attempted: true, originalKey: "accepted-key" }));
+    // The first refusal owes only persistence; no delivery wake belongs here.
+    callbacks.shift()!();
+    expect(readDeliveryProgress(["accepted"], filename).size).toBe(0);
+    lease.expire();
+    holder.exec("ROLLBACK");
+    // Make prune due on the retry as in the production incident.
+    const later = new DeliveryProgressStore(filename, () => now + 11 * 60_000, callback => {
+      callbacks.push(AsyncResource.bind(() => { leases.push(currentOperationLease()); callback(); }));
+      return noTimer();
+    });
+    lease.run(() => later.note("ending", "conversation", { waitReason: "dispatching", attempted: true }));
+    later.settle("ending", "delivered", null);
+    callbacks.shift()!();
+    callbacks.shift()!();
+    expect(readDeliveryProgress(["accepted", "ending"], filename).size).toBe(2);
+    expect(leases.every(value => value === undefined)).toBe(true);
+    later.close();
+    store.close();
+    const reopened = new DeliveryProgressStore(filename, () => now + 11 * 60_000, noTimer);
+    expect(reopened.get("accepted")).toMatchObject({ originalKey: "accepted-key", attempt: 1 });
+    expect(reopened.get("ending")?.terminal?.state).toBe("delivered");
+    reopened.close();
+  } finally {
+    try { holder.exec("ROLLBACK"); } catch { /* already released */ }
+    holder.close();
+    store.close();
+  }
+});
+
+test("a closed progress owner cannot flush a late retry over its successor", () => {
+  const filename = path.join(root, "closed-owner.sqlite");
+  const callbacks: Array<() => void> = [];
+  const first = new DeliveryProgressStore(filename, () => Date.parse("2026-11-17T06:00:00Z"), callback => {
+    callbacks.push(callback); return noTimer();
+  });
+  first.note("owned", "conversation", { waitReason: "queued" });
+  first.close();
+  const successor = new DeliveryProgressStore(filename, () => Date.parse("2026-11-17T06:01:00Z"), noTimer);
+  try {
+    successor.settle("owned", "delivered", null);
+    expect(successor.flush()).toBe(true);
+    first.note("owned", "conversation", { waitReason: "awaiting-host" });
+    for (const callback of callbacks) callback();
+    expect(readDeliveryProgress(["owned"], filename).get("owned")?.terminal?.state).toBe("delivered");
+  } finally { successor.close(); first.close(); }
+});
 
 test("operation marks are bounded, schedule no writes and survive an ordinary progress write", () => {
   const filename = path.join(root, "timing.sqlite");
@@ -144,6 +210,33 @@ test("updates hydrate retained sends outside the startup cache and preserve thei
       engineEchoAt: new Date(now).toISOString() });
   } finally {
     reopened.close();
+  }
+});
+
+test("an owned cold progress read is keyed and leaves unrelated open history unloaded", () => {
+  const filename = path.join(root, "cold-keyed-read.sqlite");
+  const seed = new DeliveryProgressStore(filename, () => Date.parse("2026-10-11T00:00:00Z"), noTimer);
+  for (let index = 0; index < 250; index++) {
+    seed.note(`foreign-open-${index}`, `foreign-conversation-${index}`, { waitReason: "queued" });
+  }
+  seed.note("seat-operation", "seat-conversation", {
+    waitReason: "queued", detail: "claude-native-broker/admission: native-evidence-uncertain",
+  });
+  expect(seed.flush()).toBe(true);
+  seed.close();
+
+  const cold = new DeliveryProgressStore(filename, () => Date.parse("2026-10-11T00:00:00Z"), noTimer);
+  try {
+    setDeliveryProgressStoreForTests(cold);
+    const found = readDeliveryProgress(["seat-operation"]);
+    expect(found.get("seat-operation")?.refusal).toMatchObject({
+      component: "claude-native-broker", stage: "admission", reason: "native-evidence-uncertain",
+    });
+    expect(found.size).toBe(1);
+    expect((cold as unknown as { loaded: boolean }).loaded).toBe(false);
+  } finally {
+    setDeliveryProgressStoreForTests(null);
+    cold.close();
   }
 });
 
@@ -965,7 +1058,7 @@ test("an archived legacy send with mixed-format candidate endings is restored be
         const rebuild = new Database(options.sqliteFilename);
         try {
           rebuild.run("DELETE FROM registry_owner_endings");
-          rebuild.run("DELETE FROM registry_meta WHERE key='owner_endings_cursor'");
+          rebuild.run("DELETE FROM registry_meta WHERE key=?", [OWNER_ENDINGS_CURSOR]);
         } finally { rebuild.close(); }
       }
       const progressFile = path.join(directory, `delivery-progress-${pass}.sqlite`);
@@ -1021,4 +1114,49 @@ test("a renewed turn deadline survives a process restart and a stale admission c
   expect(await child.exited).toBe(0);
   expect(record.deadlinePolicy).toBe("turn-boundary");
   expect(Date.parse(record.deadlineAt!)).toBe(now + 100 * 60_000);
+});
+
+test("a failed-switch deadline remains fixed when a later retry writes a turn deadline", () => {
+  const now = Date.parse("2026-11-02T12:00:00Z");
+  const store = new DeliveryProgressStore(path.join(root, "failed-switch-deadline.sqlite"), () => now, noTimer);
+  try {
+    store.note("switch-bound-message", "conversation_switch_bound", { waitReason: "switch-failed" });
+    const fixed = new Date(now + 10 * 60_000).toISOString();
+    store.deadline("switch-bound-message", fixed, "failed-switch");
+    store.deadline("switch-bound-message", new Date(now + 90 * 60_000).toISOString(), "turn-boundary");
+    expect(store.get("switch-bound-message")).toMatchObject({ deadlineAt: fixed, deadlinePolicy: "failed-switch" });
+  } finally {
+    store.close();
+  }
+});
+
+test("native refusing component survives history eviction, settlement and reopening", () => {
+  const filename = path.join(root, "native-refusal.sqlite");
+  let clock = Date.parse("2026-11-01T12:00:00Z");
+  const store = new DeliveryProgressStore(filename, () => clock, noTimer);
+  try {
+    for (let i = 0; i < 3; i++) {
+      store.note("refused-input", "fixture-recipient", { waitReason: "awaiting-turn", detail:
+        "claude-native-broker/admission: native-evidence-uncertain; outstanding=0; expected=unset; observed=idle" });
+      clock++;
+    }
+    for (let i = 0; i < DELIVERY_PHASE_HISTORY_LIMIT + 2; i++) {
+      store.note("refused-input", "fixture-recipient", { waitReason: "checking", detail: `fixture queue observation ${i}` });
+    }
+    store.settle("refused-input", "failed", "fixture terminal fence");
+    expect(store.flush()).toBe(true);
+    store.close();
+    const reopened = new DeliveryProgressStore(filename, () => clock, noTimer);
+    try {
+      const record = reopened.get("refused-input")!;
+      expect(record.refusal).toEqual({ component: "claude-native-broker", stage: "admission", reason: "native-evidence-uncertain",
+        firstAt: "2026-11-01T12:00:00.000Z", lastAt: "2026-11-01T12:00:00.002Z", count: 3 });
+      expect(record.phaseHistory!.some(phase => phase.reason?.includes("native-evidence-uncertain"))).toBe(false);
+      expect(readDeliveryProgress(["refused-input"], filename).get("refused-input")?.refusal).toEqual(record.refusal);
+      reopened.note("different", "fixture-recipient", { waitReason: "awaiting-turn", detail: "fixture arbitrary provider error" });
+      expect(reopened.get("different")?.refusal).toBeUndefined();
+      reopened.settle("different", "uncertain", "claude-native-ledger/intent: persistence-uncertain; errno=EIO");
+      expect(reopened.get("different")?.refusal).toMatchObject({ component: "claude-native-ledger", stage: "intent", reason: "persistence-uncertain" });
+    } finally { reopened.close(); }
+  } finally { store.close(); }
 });

@@ -442,9 +442,9 @@ test("a completion call is refused for the shapes a fenced verdict is refused fo
     .toMatchObject({ code: "STAGE_REPORT_INVALID" });
 });
 
-test("a completion call clamps its summary and accepts a verdict with no findings", () => {
+test("a completion call refuses an oversized summary and accepts a verdict with no findings", () => {
   const long = normalizeStageCompletion({ verdict: "needs_decision", summary: "x".repeat(4_000) });
-  expect(long).toEqual({ verdict: { status: "needs_decision" }, summary: "x".repeat(2_000), result: null, taskSummary: null });
+  expect(long).toMatchObject({ code: "STAGE_REPORT_INVALID", error: expect.stringContaining("actual length is 4000") });
   expect(normalizeStageCompletion({ verdict: "pass", summary: "  " })).toEqual({ verdict: { status: "pass" }, summary: null, result: null, taskSummary: null });
 });
 

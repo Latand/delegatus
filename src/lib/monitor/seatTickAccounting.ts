@@ -1,3 +1,4 @@
+import { validFormPage } from "./seatTickForms";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { initializeStateCollections, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
@@ -7,9 +8,9 @@ import { emptySeatTickState, SEAT_TICK_RETIRED_WAKE_LIMIT, type SeatTickChildInp
 import { emptyLedgerCursor, type LedgerCursor, type LedgerOutcome } from "./seatTickChildLedger";
 
 type Base = { key: string; schemaVersion: 1; project: string };
-/** What the seat file looked like when its revocations were last read: a
-    file that has not changed is not read again, and one that could not be read
-    keeps saying so until it changes. */
+/** Which seat record its revocations were last read from: a record that has
+    not changed is not read again, and one that could not be read keeps saying
+    so until it changes. */
 type OwnerScan = { identity: string; gap: boolean };
 export type AccountingProject = Base & { kind: "project"; revision: number; sequence: number; catchUpPollThrough?: number | null; ownerScan?: OwnerScan; state: SeatTickProjectState; migration: "ready" | "pending" | "unknown"; gap: string | null };
 /** A seat that owns children: the active one and every predecessor the seat
@@ -52,16 +53,22 @@ const databaseIdentity = (filename: string) => { const stat = fs.statSync(filena
 export const outcomeIdentity = (tuple: readonly string[]): string => crypto.createHash("sha256").update(JSON.stringify(tuple)).digest("hex");
 const segment = (value: string) => encodeURIComponent(value);
 const key = (kind: string, project: string, id = "") => `${kind}/${segment(project)}/${segment(id)}`;
-/** The legacy tick-state JSON and the seat file are bounded, atomically written
-    documents; either is read whole under a size ceiling. The real ones are
-    kilobytes; the ceilings only refuse a file that is not what it claims. */
+/** The legacy tick-state JSON is a bounded, atomically written document read
+    whole under a size ceiling. The real ones are kilobytes; the ceiling only
+    refuses a file that is not what it claims. */
 export const LEGACY_STATE_LIMIT = 4 * 1024 * 1024;
-export const SEAT_FILE_LIMIT = 16 * 1024 * 1024;
+/** The orchestrator seat record's committed revocations, read on demand. */
+export interface SeatRevocationSource {
+  /** Identity of the committed record; null when it cannot be read. */
+  identity(): string | null;
+  /** Its revocations, or null when the record cannot be established. */
+  revocations(): readonly unknown[] | null;
+}
 /** Rows one transaction may touch importing legacy acknowledgments, so a
     crowd of them is imported in several bounded transactions rather than one
     unbounded one; each put is keyed, so a crash between two is replayed. */
 const LEGACY_IMPORT_BATCH = 1000;
-/** Predecessor owners one read of the seat file records. */
+/** Predecessor owners one read of the seat record records. */
 const OWNER_LIMIT = 200;
 /** Running children one check observes, and how many of them move to the back
     of the queue afterwards. Observing eight and rotating four means every
@@ -93,6 +100,8 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
         const value = state[name];
         if (value !== null && (typeof value !== "string" || !Number.isFinite(Date.parse(value)))) return null;
       }
+      if (state.lastTaskWakeAt !== undefined
+        && (!string(state.lastTaskWakeAt) || !Number.isFinite(Date.parse(state.lastTaskWakeAt)))) return null;
       if (state.wakeDecidedSince !== undefined && state.wakeDecidedSince !== null
         && (typeof state.wakeDecidedSince !== "string" || !Number.isFinite(Date.parse(state.wakeDecidedSince)))) return null;
       if (state.checkErrorAlarmPending !== undefined && typeof state.checkErrorAlarmPending !== "boolean") return null;
@@ -110,6 +119,7 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
       /* Absent on every row written before #1783 round two, and absent is the
          safe reading: a seat remembered as having been shown nothing is
          offered its children again rather than held back from them. */
+      if (state.formPageAfter !== undefined && (!string(state.formPageAfter) || state.formPageAfter.length > 500)) return null;
       if (state.itemsShown !== undefined && (!Array.isArray(state.itemsShown) || !state.itemsShown.every(string))) return null;
       if (state.childrenShown !== undefined && (!Array.isArray(state.childrenShown) || !state.childrenShown.every(string))) return null;
       /* Absent on every row written before #1799, and absent is the safe
@@ -125,6 +135,7 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
       /* Absent on every row written before reported stalls; absent keeps every
          stall ahead of the unstarted tasks. */
       if (state.reportedStalls !== undefined && (!Array.isArray(state.reportedStalls) || !state.reportedStalls.every(string))) return null;
+      if (state.reportsAcknowledged !== undefined && (!Array.isArray(state.reportsAcknowledged) || state.reportsAcknowledged.length > 64 || !state.reportsAcknowledged.every(string))) return null;
       const validWake = (wake: SeatTickOutstandingWake | null | undefined): boolean => {
         if (!wake || !string(wake.clientMessageId) || !string(wake.conversationId)
           || !integer(wake.seatEpoch) || !nullableString(wake.operationId) || !wake.commit
@@ -135,6 +146,7 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
             && (!Array.isArray(wake.commit.acknowledgmentLines) || !wake.commit.acknowledgmentLines.every(item => item && string(item.key) && string(item.line))))
           || (wake.commit.itemLines !== undefined
             && (!Array.isArray(wake.commit.itemLines) || !wake.commit.itemLines.every(item => item && string(item.version) && string(item.line))))
+          || (wake.commit.formPage !== undefined && !validFormPage(wake.commit.formPage))
           || (wake.commit.itemsShown !== undefined
             && (!Array.isArray(wake.commit.itemsShown) || !wake.commit.itemsShown.every(string)))
           || (wake.commit.shownChildren !== undefined
@@ -433,42 +445,30 @@ export class SeatTickAccounting {
     return recorded;
   }
   /**
-   * Record the project's predecessor seats from the seat file's committed
+   * Record the project's predecessor seats from the seat record's committed
    * revocations, so their children are discovered too. Abandoned pending-seat
    * history grants no ownership.
    *
-   * The seat file is written atomically and is kilobytes long, so it is read
-   * whole under {@link SEAT_FILE_LIMIT} and parsed once; the identity of the
-   * file last read is remembered on the project row, and an unchanged file is
-   * not read again. Returns whether this check's owner discovery is incomplete.
+   * The identity of the record last read is remembered on the project row,
+   * and an unchanged record is not read again. A record that cannot be read
+   * is a gap until it changes. Returns whether this check's owner discovery is
+   * incomplete.
    */
-  discoverRevokedOwners(filename: string, matches: (project: string) => boolean): boolean {
+  discoverRevokedOwners(source: SeatRevocationSource, matches: (project: string) => boolean): boolean {
     const opening = this.row()!;
-    let identity: string;
-    try {
-      const stat = fs.statSync(filename);
-      identity = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
-    } catch (error) {
-      return (error as NodeJS.ErrnoException).code !== "ENOENT";
-    }
+    const identity = source.identity();
+    if (identity === null) return true;
     if (opening.ownerScan?.identity === identity) return opening.ownerScan.gap;
-    const document = readJsonDocument(filename, SEAT_FILE_LIMIT);
-    if (document.kind === "absent") return false;
-    let gap = document.kind === "gap";
+    const revocations = source.revocations();
+    const gap = revocations === null;
     const owners: { conversationId: string; epoch: number }[] = [];
-    if (document.kind === "parsed") {
-      const file = document.value as Record<string, unknown> | null;
-      const revocations = file && typeof file === "object" && !Array.isArray(file) && file.schemaVersion === 1 && Array.isArray(file.revocations)
-        ? file.revocations : null;
-      if (!revocations) gap = true;
-      else for (const candidate of revocations) {
-        const row = (candidate ?? {}) as Record<string, unknown>;
-        if (typeof row.project === "string" && matches(row.project)
-          && typeof row.conversationId === "string" && row.conversationId.startsWith("conversation_")
-          && Number.isSafeInteger(row.seatEpoch) && Number(row.seatEpoch) >= 1
-          && typeof row.revokedAt === "string" && Number.isFinite(Date.parse(row.revokedAt))) {
-          owners.push({ conversationId: row.conversationId, epoch: Number(row.seatEpoch) });
-        }
+    for (const candidate of revocations ?? []) {
+      const row = (candidate ?? {}) as Record<string, unknown>;
+      if (typeof row.project === "string" && matches(row.project)
+        && typeof row.conversationId === "string" && row.conversationId.startsWith("conversation_")
+        && Number.isSafeInteger(row.seatEpoch) && Number(row.seatEpoch) >= 1
+        && typeof row.revokedAt === "string" && Number.isFinite(Date.parse(row.revokedAt))) {
+        owners.push({ conversationId: row.conversationId, epoch: Number(row.seatEpoch) });
       }
     }
     const recorded = owners.slice(0, OWNER_LIMIT);

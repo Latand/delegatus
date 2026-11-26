@@ -3,7 +3,7 @@ import path from "node:path";
 import type { AgentEngine } from "./cli";
 
 /** Stable identity for an engine conversation. Mutable host details deliberately
-    live elsewhere: a pane, PID, or tmux server can disappear and be replaced. */
+    live elsewhere: a host process can disappear and be replaced. */
 export interface SessionKey {
   engine: AgentEngine;
   sessionId: string;
@@ -26,9 +26,9 @@ export function sessionKeyId(key: SessionKey): string {
 }
 
 export function sessionKeyFromTranscript(engine: AgentEngine, pathname: string): SessionKey | null {
-  /* Copilot names every transcript `events.jsonl`; the session id is its
-     directory, `$COPILOT_HOME/session-state/<id>/events.jsonl`. */
-  if (engine === "copilot") {
+  /* Copilot and Antigravity name every transcript `events.jsonl`; the session id is its
+     directory (`<root>/<id>/events.jsonl`). */
+  if (engine === "copilot" || engine === "antigravity") {
     if (path.basename(pathname) !== "events.jsonl") return null;
     return sessionKey(engine, path.basename(path.dirname(pathname)));
   }

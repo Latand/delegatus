@@ -95,7 +95,7 @@ function clientWith(handler: (child: FakeChild, message: Record<string, unknown>
   child.onWrite = (message) => handler(child, message);
   return {
     child,
-    start: (options = {}) => CodexAppServerClient.start({ launchBinary: "/fixture/codex", readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, ...options, home: "/fake/home", spawn: () => child as never }),
+    start: (options = {}) => CodexAppServerClient.start({ launchBinary: "/fixture/codex", readProtocolVersion: () => "0.162.1", signalProcess: signalFakeGroup, home: "/fake/home", ...options, spawn: () => child as never }),
   };
 }
 
@@ -112,6 +112,53 @@ test("mocked app-server launch uses its fixture binary and never touches an inst
   } finally { mkdir.mockRestore(); }
 });
 
+async function checkQuotaHomeAlias(replaceHome: boolean): Promise<void> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "quota-home-alias-"));
+  const home = path.join(root, "home"), alias = path.join(root, "alias");
+  const binary = path.join(root, "codex"), target = path.join(root, "node_modules/@openai/codex/bin/codex.js");
+  fs.mkdirSync(home);
+  fs.symlinkSync(home, alias);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, "fixture");
+  fs.symlinkSync(target, binary);
+  const entered = Promise.withResolvers<void>(), proceed = Promise.withResolvers<void>();
+  let secondEntered = false;
+  const first = clientWith((child, message) => {
+    if (message.method !== "initialize") return;
+    entered.resolve();
+    void proceed.promise.then(() => child.respond(requestId(message), {}));
+  });
+  const second = clientWith((child, message) => {
+    if (message.method !== "initialize") return;
+    secondEntered = true;
+    child.respond(requestId(message), {});
+  });
+  const pending = [first.start({ home, launchBinary: binary, protocolProfile: "quota" })];
+  try {
+    await entered.promise;
+    if (replaceHome) {
+      fs.renameSync(home, path.join(root, "previous"));
+      fs.mkdirSync(home);
+    }
+    pending.push(second.start({ home: alias, launchBinary: binary, protocolProfile: "quota" }));
+    const queue = path.join(root, ".delegatus-codex", "switch.write-locks");
+    const deadline = Date.now() + 3_000;
+    while (!secondEntered && fs.readdirSync(queue).length < 2 && Date.now() < deadline) await Bun.sleep(5);
+    expect(secondEntered).toBe(false);
+    expect(fs.readdirSync(queue)).toHaveLength(2);
+  } finally {
+    proceed.resolve();
+    for (const client of await Promise.all(pending)) client.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  expect(secondEntered).toBe(true);
+}
+
+test.skipIf(process.platform === "win32")("quota launches for two aliases of one account home still serialize",
+  () => checkQuotaHomeAlias(false));
+test.skipIf(process.platform === "win32")("quota launches serialize after an active account home is replaced",
+  () => checkQuotaHomeAlias(true));
+
 test("an unsupported executable is refused before spawning an account app-server", async () => {
   let spawned = false;
   // Its generated schema lacks methods the newest pin has: not additive.
@@ -123,14 +170,14 @@ test("an unsupported executable is refused before spawning an account app-server
     generateProtocolSchemas,
     signalProcess: signalFakeGroup,
     spawn: () => { spawned = true; return new FakeChild() as never; },
-  })).rejects.toThrow("CLI 0.999.0; Supported: 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: not an additive extension of pin 0.166.0");
+  })).rejects.toThrow("CLI 0.999.0; Supported: 0.172.0, 0.171.0, 0.170.0; cause: not an additive extension of pin 0.172.0");
   await expect(CodexAppServerClient.start({
     home: "/fake/home",
     launchBinary: "/fixture/codex",
     readProtocolVersion: () => "0.150.0",
     signalProcess: signalFakeGroup,
     spawn: () => { spawned = true; return new FakeChild() as never; },
-  })).rejects.toThrow("CLI 0.150.0; Supported: 0.166.0, 0.165.0, 0.164.0, 0.163.0, 0.162.1, 0.159.0, 0.154.0; cause: no older pin");
+  })).rejects.toThrow("CLI 0.150.0; Supported: 0.172.0, 0.171.0, 0.170.0; cause: no older pin");
   expect(spawned).toBe(false);
 });
 
@@ -162,7 +209,7 @@ test("account-management app-server retains zero-MCP process isolation", async (
   client.close();
 });
 
-test.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0", "0.165.0", "0.166.0"])("a voice caller can choose app-server arguments and send experimental requests (%s)", async version => {
+test.each(["0.154.0", "0.159.0", "0.162.1", "0.163.0", "0.164.0", "0.165.0", "0.166.0", "0.167.0", "0.168.0", "0.169.0", "0.170.0", "0.171.0", "0.172.0"])("a voice caller can choose app-server arguments and send experimental requests (%s)", async version => {
   const child = new FakeChild();
   child.onWrite = message => { if (message.id) child.respond(requestId(message), {}); };
   let args: readonly string[] = [];
@@ -368,6 +415,26 @@ test("successor thread methods use the structured fork, resume, read, name, and 
     },
   });
   client.close();
+});
+
+test.each([false, true])("account fork and validation resume preserve skills policy (delegated=%s)", async (delegated) => {
+  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const { start } = clientWith((fake, message) => {
+    if (message.method === "initialized") return;
+    if (message.method === "config/read") return fake.respond(requestId(message), { config: { mcp_servers: {} } });
+    if (message.method === "initialize") return fake.respond(requestId(message), {});
+    requests.push(message as typeof requests[number]);
+    fake.respond(requestId(message), { thread: { id: "skills-thread" } });
+  });
+  const client = await start({ protocolProfile: "thread-control" });
+  try {
+    const options = { omitSkillsInstructions: delegated };
+    await client.forkThread("source", options);
+    await client.resumeThread("skills-thread", options);
+    expect(requests.map(row => row.method)).toEqual(["thread/fork", "thread/resume"]);
+    for (const row of requests) expect((row.params.config as Record<string, unknown> | undefined)?.skills)
+      .toEqual(delegated ? { include_instructions: false } : undefined);
+  } finally { client.close(); }
 });
 
 test("account thread resume reads all five memory states on the same client", async () => {

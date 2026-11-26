@@ -20,6 +20,7 @@ test("scheduler and API bundles share freshness, cursors and per-link serializat
   let active = 0, maximum = 0, calls = 0, fail = false, malformed = false;
   let release!: () => void;
   let entered!: () => void;
+  let shutdownTaskPageWorker: (() => Promise<void>) | undefined;
   const started = new Promise<void>((resolve) => { entered = resolve; });
   const held = new Promise<void>((resolve) => { release = resolve; });
   const server = http.createServer(async (req, res) => {
@@ -62,6 +63,7 @@ test("scheduler and API bundles share freshness, cursors and per-link serializat
     // Resolve external dependencies from this checkout even though the bundles are isolated.
     fs.symlinkSync(path.join(process.cwd(), "node_modules"), path.join(root, "node_modules"), "dir");
     const scheduler: typeof import("./runtimeState.fixture") = await import(path.join(root, "scheduler.mjs"));
+    shutdownTaskPageWorker = scheduler.shutdownTaskPageWorker;
     const api: typeof import("./runtimeState.fixture") = await import(path.join(root, "api.mjs"));
     const first = scheduler.syncPeer(peer);
     await started;
@@ -103,9 +105,13 @@ test("scheduler and API bundles share freshness, cursors and per-link serializat
   } finally {
     Date.now = realNow;
     release?.();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    if (original.state === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = original.state;
-    if (original.config === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = original.config;
-    fs.rmSync(root, { recursive: true, force: true });
+    try {
+      await shutdownTaskPageWorker?.();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      if (original.state === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = original.state;
+      if (original.config === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = original.config;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   }
 }, 30_000);

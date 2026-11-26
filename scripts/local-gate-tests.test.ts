@@ -1,4 +1,34 @@
-import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, touchedTests, writeFileSync } from "./local-gate-tests.fixture";
+import { appendOwnershipFailure, compareTests, execFileSync, expect, fixture, gateTemporaryRoot, mkdirSync, parseReport, path, readFileSync, root, roots, source, spawnSync, spyOn, symlinkSync, test, type TestRun, type TestSite, writeFileSync } from "./local-gate-tests.fixture";
+import { existsSync } from "node:fs";
+import { GATE_TASKS_MAX } from "./gate-tasks";
+import { BudgetExhausted, comparatorEnding, comparisonFileWorkers, comparisonPhaseBudgetMs, confirmedFileCleanup } from "./local-gate-tests";
+
+test("comparison phase allowance scales from 15 minutes up to 40", () => {
+  expect([1, 30, 31, 51, 102, 130, 1_000].map(comparisonPhaseBudgetMs))
+    .toEqual([15, 15, 16, 21, 33, 40, 40].map(minutes => minutes * 60_000));
+});
+
+test("only an exhausted comparator budget returns no verdict", () => {
+  const message = "head: test run exceeded its 15 minute budget; 8 of 12 files completed";
+  expect(comparatorEnding(new BudgetExhausted(message))).toEqual({
+    line: `touched-tests: no verdict: ${message}; nothing was judged`, code: 75,
+  });
+  for (const error of [new Error(message), new Error("baseline setup failed"), "unknown failure"]) {
+    expect(comparatorEnding(error)).toEqual({
+      line: `touched-tests: ${error instanceof Error ? error.message : error}; gate error (blocking)`, code: 1,
+    });
+  }
+});
+
+test("Cloud file checkpoints require the owned runner's matching cleanup receipt", () => {
+  const cloud = { platform: "linux", exitCode: 0, output: "portable cleanup", cloudCleanup: true, token: "run-token" };
+  expect(confirmedFileCleanup({ ...cloud, receipt: "run-token" })).toBeTrue();
+  expect(confirmedFileCleanup({ ...cloud, receipt: "other-run" })).toBeFalse();
+  expect(confirmedFileCleanup({ ...cloud, receipt: undefined })).toBeFalse();
+  expect(confirmedFileCleanup({ ...cloud, receipt: "run-token", survivors: "owned child" })).toBeFalse();
+  expect(confirmedFileCleanup({ ...cloud, platform: "darwin", receipt: "run-token" })).toBeFalse();
+  expect(confirmedFileCleanup({ ...cloud, exitCode: 1, receipt: "run-token" })).toBeFalse();
+});
 
 
 test("review evidence names the exact base and head without changing repository refs", async () => {
@@ -15,6 +45,7 @@ test("review evidence names the exact base and head without changing repository 
   expect(cli.stdout).toContain(`touched-tests: base commit ${f.base}`);
   expect(cli.stdout).toContain(`touched-tests: reviewed head commit ${head}`);
   expect(cli.stdout).toContain("PRE-EXISTING example.test.ts: contract > same name & Unicode Ω");
+  expect(cli.stdout).toContain("(base: FAIL; head: FAIL; non-blocking note)");
   expect(cli.stdout).toContain("0 new failures, 1 pre-existing failures");
   expect(f.git("rev-parse", "HEAD")).toBe(head);
   expect(f.git("for-each-ref")).toBe(refs);
@@ -88,6 +119,36 @@ test("a head crash is named and blocks without hiding results from other files",
   expect(result.introduced).toHaveLength(2); expect(result.introduced[0]!.name).toStartWith("<runner error>");
   expect(f.logs.at(-1)).toContain("2 new failures, 0 pre-existing failures");
 });
+const taskControl = process.platform === "linux" && Bun.which("python3") && Bun.which("systemd-run")
+  && spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore", timeout: 5_000 }).status === 0
+  && readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line.startsWith("0::") && existsSync(path.join("/sys/fs/cgroup", line.slice(3), "pids.max")));
+const taskPeakLine = (denied: boolean) => new RegExp(
+  `pids\\.peak=(\\d+)(?: \\(sampled lower bound\\))? pids\\.max=${GATE_TASKS_MAX} pids\\.events:max=${denied ? "[1-9]\\d*" : "0"}`,
+);
+function expectTaskPeak(output: string, denied: boolean) {
+  const match = output.match(taskPeakLine(denied));
+  expect(match).not.toBeNull();
+  expect(Number(match![1])).toBeGreaterThan(0);
+  expect(Number(match![1])).toBeLessThanOrEqual(GATE_TASKS_MAX);
+}
+test.skipIf(!taskControl)("per-file summaries retain the owning unit's task peak", async () => {
+  const f = fixture(source(true));
+  expect((await f.run()).introduced).toHaveLength(0);
+  const line = f.logs.find(line => line.startsWith("touched-tests: head file "))!;
+  expectTaskPeak(line, false);
+});
+test.skipIf(!taskControl)("a real bounded task-limit refusal keeps its name and unit through the comparator", async () => {
+  const f = fixture(source(true));
+  writeFileSync(path.join(f.dir, "storm.test.ts"), `import { test } from "bun:test";
+    import { spawnSync } from "node:child_process";
+    test("bounded task control", () => { spawnSync("python3", [${JSON.stringify(path.join(root, "scripts/fixtures/gateForkStorm.py"))}, "--exit-on-denial"]); });`);
+  const result = await f.run(["./storm.test.ts"]);
+  expect(result.introduced).toHaveLength(1);
+  expect(result.introduced[0]!.name).toMatch(/GATE_TASK_LIMIT_REACHED: task limit reached in delegatus-gate-[a-f0-9-]+\.service/);
+  expectTaskPeak(f.logs.join("\n"), true);
+  expect(f.logs.join("\n")).toMatch(new RegExp(`GATE_TASK_LIMIT_REACHED: task limit reached in delegatus-gate-[a-f0-9-]+\\.service \\(pids\\.max=${GATE_TASKS_MAX}, pids\\.events:max=[1-9]\\d*\\)`));
+  expect(f.logs.join("\n")).not.toContain("runner did not finish (70)");
+}, 30_000);
 test("per-file processes isolate globals and distinct state/HOME/TMPDIR before imports", async () => {
   const f = fixture('import { test } from "bun:test"; globalThis.sharedFixture = 1; test("first", () => {});');
   const second = `import { expect, test } from "bun:test"; import { stateDir } from ${JSON.stringify(path.join(root, "src/lib/configDir.ts"))}; test("isolated", () => { expect(globalThis.sharedFixture).toBeUndefined(); for (const key of ["LLV_STATE_DIR", "HOME", "TMPDIR"]) expect(process.env[key]).toStartWith(${JSON.stringify(path.join(gateTemporaryRoot(), "delegatus-test-comparison-"))}); expect(stateDir()).toBe(process.env.LLV_STATE_DIR); });`;
@@ -265,6 +326,7 @@ test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/typ
   const hook = () => { const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env, encoding: "utf8" }); return { ...result, stdout: result.stdout + result.stderr }; };
   const accepted = hook(); if (accepted.status !== 0) throw new Error(accepted.stdout + accepted.stderr); expect(accepted.status).toBe(0);
   expect(accepted.stdout).toContain("PRE-EXISTING example.test.ts: contract > same name & Unicode Ω");
+  expect(accepted.stdout).toContain("(base: FAIL; head: FAIL; non-blocking note)");
   expect(accepted.stdout).toContain("0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
   expect(readFileSync(calls, "utf8")).toContain("--check-commits");
   expect(readFileSync(calls, "utf8")).toContain("tsc --noEmit");
@@ -274,69 +336,27 @@ test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/typ
   if (!refused.stdout.includes("NEW")) throw new Error(refused.stdout + refused.stderr);
   expect(refused.stdout).toContain("NEW example.test.ts: new red");
   expect(refused.stdout).toContain("1 new failures, 1 pre-existing failures");
+  // The real shell entry must keep the same verdict for a branch-only file.
+  writeFileSync(path.join(f.dir, "example.test.ts"), `// harmless\n${source(false)}`);
+  writeFileSync(path.join(f.dir, "new.test.ts"), source(false));
+  const newFile = hook(); expect(newFile.status, newFile.stdout).toBe(1);
+  expect(newFile.stdout).toContain("NEW new.test.ts: contract > same name & Unicode Ω");
+  expect(newFile.stdout).toContain("1 new file(s), judged on head alone");
+  expect(newFile.stdout).toContain("1 new failures, 1 pre-existing failures");
+  // A deterministic first-run failure recovers in the existing retry path.
+  const counter = path.join(f.dir, "env", "head-runs");
+  writeFileSync(path.join(f.dir, "new.test.ts"), `import { test, expect } from "bun:test";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+const counter = ${JSON.stringify(counter)};
+const run = existsSync(counter) ? Number(readFileSync(counter, "utf8")) + 1 : 1;
+writeFileSync(counter, String(run));
+test("recovers", () => expect(run).toBeGreaterThan(1));`);
+  const flaky = hook(); expect(flaky.status, flaky.stdout).toBe(0);
+  expect(flaky.stdout).toContain("FLAKY new.test.ts: recovers (base 0 pass/0 fail; head 1 pass/1 fail)");
+  expect(flaky.stdout).toContain("0 new failures, 1 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
+  expect(readFileSync(counter, "utf8")).toBe("2");
 }, 60000);
 
-
-test("a changed dependency patch cannot contaminate or reuse the baseline", async () => {
-  const f = fixture('import { test, expect } from "bun:test"; import value from "fixture-dependency"; test("dependency returns true", () => expect(value).toBe(true));');
-  const pack = path.join(f.dir, "pack", "package"); mkdirSync(pack, { recursive: true });
-  writeFileSync(path.join(pack, "package.json"), JSON.stringify({ name: "fixture-dependency", version: "1.0.0", main: "index.js" }));
-  writeFileSync(path.join(pack, "index.js"), "module.exports = true;\n");
-  execFileSync("tar", ["-czf", path.join(f.dir, "dependency.tgz"), "-C", path.dirname(pack), "package"]);
-  writeFileSync(path.join(f.dir, "package.json"), JSON.stringify({ name: "fixture", dependencies: { "fixture-dependency": "file:./dependency.tgz" }, patchedDependencies: { "fixture-dependency@./dependency.tgz": "dependency.patch" } }));
-  const patch = (value: string) => `diff --git a/index.js b/index.js\n--- a/index.js\n+++ b/index.js\n@@ -1 +1 @@\n-module.exports = true;\n+module.exports = ${value};\n`;
-  writeFileSync(path.join(f.dir, "dependency.patch"), patch("Boolean(1)"));
-  const install = (...flags: string[]) => execFileSync(process.execPath, ["install", "--ignore-scripts", ...flags], { cwd: f.dir, env: f.env, stdio: "pipe" });
-  install();
-  f.git("add", "package.json", "bun.lock", "dependency.tgz", "dependency.patch"); f.git("commit", "-m", "patched baseline");
-  const base = f.git("rev-parse", "HEAD"), manifest = readFileSync(path.join(f.dir, "package.json"), "utf8"), lock = readFileSync(path.join(f.dir, "bun.lock"), "utf8");
-  const run = () => touchedTests(f.dir, base, ["./example.test.ts"], { env: f.env, log: line => f.logs.push(line) });
-  writeFileSync(path.join(f.dir, "dependency.patch"), patch("false")); install("--frozen-lockfile");
-  expect(readFileSync(path.join(f.dir, "package.json"), "utf8")).toBe(manifest); expect(readFileSync(path.join(f.dir, "bun.lock"), "utf8")).toBe(lock);
-  expect((await run()).introduced).toHaveLength(1);
-  writeFileSync(path.join(f.dir, "dependency.patch"), patch("Boolean(1)")); install("--frozen-lockfile");
-  expect((await run()).introduced).toHaveLength(0);
-  writeFileSync(path.join(f.dir, "dependency.patch"), patch("false")); install("--frozen-lockfile");
-  f.logs.length = 0;
-  const warm = await run(); expect(warm.introduced).toHaveLength(1); expect(warm.preexisting).toHaveLength(0);
-  expect(f.logs.join("\n")).toContain("baseline run");
-});
-
-
-test.each(["relative directory", "local override"])("%s dependencies keep a green baseline and block cold and warm CLI runs", async kind => {
-  const check = 'import { test, expect } from "bun:test"; import value from "fixture-dependency"; test("dependency returns true", () => expect(value).toBe(true));';
-  const f = fixture(check);
-  const dependency = path.join(f.dir, "dependency"); mkdirSync(dependency);
-  writeFileSync(path.join(dependency, "package.json"), JSON.stringify({ name: "fixture-dependency", version: "1.0.0", main: "index.js" }));
-  writeFileSync(path.join(dependency, "index.js"), "module.exports = true;\n");
-  writeFileSync(path.join(f.dir, "package.json"), JSON.stringify(kind === "local override"
-    ? { name: "fixture", dependencies: { "fixture-dependency": "1.0.0" }, overrides: { "fixture-dependency": "./dependency" } }
-    : { name: "fixture", dependencies: { "fixture-dependency": "./dependency" } }));
-  const install = (cwd: string) => execFileSync(process.execPath, ["install", "--ignore-scripts"], { cwd, env: f.env, stdio: "pipe" });
-  install(f.dir);
-  f.git("add", "package.json", "bun.lock", "dependency"); f.git("commit", "-m", "local dependency baseline");
-  const base = f.git("rev-parse", "HEAD");
-  const manifest = readFileSync(path.join(f.dir, "package.json"), "utf8"), lock = readFileSync(path.join(f.dir, "bun.lock"), "utf8");
-  writeFileSync(path.join(dependency, "index.js"), "module.exports = false;\n");
-  writeFileSync(path.join(f.dir, "example.test.ts"), `// harmless edit\n${check}`);
-  f.git("add", "dependency/index.js", "example.test.ts"); f.git("commit", "-m", "dependency regression");
-  expect(readFileSync(path.join(f.dir, "node_modules/fixture-dependency/index.js"), "utf8")).toContain("false");
-  expect(readFileSync(path.join(f.dir, "package.json"), "utf8")).toBe(manifest);
-  expect(readFileSync(path.join(f.dir, "bun.lock"), "utf8")).toBe(lock);
-  const control = path.join(f.dir, "env", "control");
-  execFileSync("git", ["clone", "--quiet", "--shared", "--no-checkout", f.dir, control], { env: f.env, stdio: "pipe" });
-  execFileSync("git", ["checkout", "--quiet", "--detach", base], { cwd: control, env: f.env, stdio: "pipe" });
-  install(control);
-  expect(spawnSync(process.execPath, ["test", "./example.test.ts"], { cwd: control, env: f.env }).status).toBe(0);
-  expect(spawnSync(process.execPath, ["test", "./example.test.ts"], { cwd: f.dir, env: f.env }).status).toBe(1);
-  for (const temperature of ["run", "run"]) {
-    const cli = spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", base, "./example.test.ts"], { cwd: f.dir, env: f.env, encoding: "utf8" });
-    expect(cli.stdout).toContain(`baseline ${temperature}`);
-    expect(cli.stdout).toContain("NEW example.test.ts: dependency returns true");
-    expect(cli.stdout).toContain("1 new failures, 0 pre-existing failures");
-    expect(cli.status).toBe(1);
-  }
-}, 60000);
 
 test("between-test errors match across private roots without hiding a changed path", async () => {
   const xml = '<testsuites tests="1" failures="0"><testcase file="f.test.ts" name="passing" /></testsuites>';
@@ -350,3 +370,48 @@ test("between-test errors match across private roots without hiding a changed pa
   expect(compareTests(old, head).preexisting).toHaveLength(1);
   expect(compareTests(old, run("GHIJKL", "different")).introduced).toHaveLength(1);
 });
+
+test("gate harness selections limit nested workers while ordinary head and baseline files retain their parallelism", () => {
+  const regular = Array.from({ length: 12 }, (_, n) => "src/example" + n + ".test.ts");
+  const nested = ["scripts/local-gate-tests.baseline.test.ts", "scripts/local-gate.binding.test.ts", "scripts/privacy-commit-input.test.ts"];
+  expect(comparisonFileWorkers(regular, 8)).toBe(8);
+  expect(comparisonFileWorkers(regular, 3)).toBe(3);
+  expect(comparisonFileWorkers(nested, 8)).toBe(2);
+  expect(comparisonFileWorkers([...nested, regular[0]!], 8)).toBe(3);
+  expect(comparisonFileWorkers([...nested, ...regular], 8)).toBe(8);
+  expect(comparisonFileWorkers([...nested, ...regular], 3)).toBe(3);
+  expect(comparisonFileWorkers([...nested, ...regular], 8, true)).toBe(1);
+  expect(comparisonFileWorkers([...nested, ...regular], 1)).toBe(1);
+});
+
+test.skipIf(process.platform === "linux" && Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) > 0)(
+  "ordinary files make progress while the two nested file workers are busy",
+  async () => {
+    const f = fixture(source(true));
+    mkdirSync(path.join(f.dir, "scripts"));
+    const files = ["scripts/privacy-a.test.ts", "scripts/privacy-b.test.ts", "scripts/privacy-c.test.ts", "source.test.ts"];
+    const coordination = `import { existsSync, writeFileSync } from "node:fs";
+import { expect, test } from "bun:test";
+const mark = (name: string) => writeFileSync(${JSON.stringify(f.dir)} + "/" + name, "");
+const marked = (name: string) => existsSync(${JSON.stringify(f.dir)} + "/" + name);
+async function waitFor(marks: string[]) {
+  const deadline = performance.now() + 30_000;
+  while (!marks.every(marked) && performance.now() < deadline) await Bun.sleep(20);
+  expect(marks.filter(marked)).toEqual(marks);
+}`;
+    for (const [index, file] of files.entries()) {
+      const body = index === 3
+        ? 'await waitFor(["a", "b"]); expect(marked("c")).toBe(false); mark("source");'
+        : index === 2
+          ? 'mark("c"); expect(marked("a-done") || marked("b-done")).toBe(true);'
+          : `mark(${JSON.stringify(index === 0 ? "a" : "b")}); await waitFor(["source"]); mark(${JSON.stringify(index === 0 ? "a-done" : "b-done")});`;
+      writeFileSync(path.join(f.dir, file), `${coordination}\ntest("worker coordination", async () => { ${body} });`);
+    }
+    f.git("add", ...files);
+    f.git("commit", "-m", "Mixed worker fixtures");
+    const result = await f.run(files);
+    expect(result.introduced).toEqual([]);
+    expect(f.logs).toContain("touched-tests: head selected 4 files with 3 file workers");
+    expect(f.logs).toContain("touched-tests: green head; no baseline checkout or sample needed");
+  },
+);

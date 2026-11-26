@@ -187,3 +187,36 @@ test("starter revocation while the structured probe is held prevents legacy fall
   expect(legacyCalls).toBe(0);
   expect(delivered).toEqual([]);
 });
+
+for (const backend of ["api", "codex"] as const) test(`slice 3: ${backend} adoption replays the real host relay once after a lost send reply and two lost starts`, async () => {
+  const f = fixture(); f.admission.retire(f.session.id);
+  const { CompanionLiveSessions } = await import("./liveSession");
+  const { FakeLiveProvider } = await import("./fakeProvider");
+  let now = Date.UTC(2026, 10, 11, 12), attempts = 0;
+  const reports: import("@/lib/bridge/types").BridgeReportV1[] = [];
+  const storage = new CompanionStorage(() => now); storage.updateSettings({ enabled: true, backend });
+  const admission = new CompanionAdmission(storage, { ...companionDeliveryPaths, reports: () => reports,
+    send: async binding => { const result = await companionDeliveryPaths.send(binding); if (++attempts === 1) throw new Error("lost send reply"); return result; } }, () => now);
+  const provider = new FakeLiveProvider(); if (backend === "codex") Object.defineProperty(provider, "backend", { value: "codex" });
+  const service = new CompanionLiveSessions(storage, admission, fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), provider,
+    { now: () => now, key: () => "synthetic-credential", timers: false });
+  const p = await service.start({ project: f.session.project, locale: "en", sdp: "v=0", startedBy: f.session.startedBy });
+  provider.replay(p.providerId, { type: "session.input_transcript.delta", event_id: "operator", delta: "Review the plan", start_ms: 0, end_ms: 400 });
+  await service.drain(p.sessionId);
+  await admission.delegate(p.sessionId, "lost-call", "lost-turn", "Review the plan");
+  const request = Object.values(admission.session(p.sessionId).proposals)[0];
+  expect(request.status).toBe("unknown"); expect(delivered).toHaveLength(1);
+  reports.push({ id: "relay-report", seq: 1, project: f.session.project, at: new Date(now).toISOString(), class: "completed", body: "RELAY_RESULT",
+    origin: { kind: "manager", conversationId: request.delivery!.recipient.conversationId, role: "orchestrator" } });
+  admission.pollReports(p.sessionId); await service.close(p.sessionId, "transport");
+  for (let i = 0; i < 2; i++) {
+    const input = { project: f.session.project, locale: "en" as const, sdp: `lost-${i}`, requestId: `lost-start-${i}`, startedBy: f.session.startedBy, resume: p.sessionId, cursor: {} };
+    expect(await service.start(input)).toEqual(await service.start(input));
+  }
+  const n = await service.start({ project: f.session.project, locale: "en", sdp: "v=3", startedBy: f.session.startedBy, resume: p.sessionId, cursor: {} });
+  await service.events(n.sessionId, 0); now += 15_001; await service.events(n.sessionId, 0); await service.events(n.sessionId, 0);
+  expect(attempts).toBe(2); expect(delivered).toHaveLength(1); expect(Object.values(registry.snapshot().heldDeliveries)).toHaveLength(1);
+  expect(admission.session(n.sessionId).proposals[request.proposal.proposalId]).toMatchObject({ status: "delivered", delivery: { clientMessageId: request.delivery!.clientMessageId } });
+  expect(provider.commands.filter(row => row.type === "session.commentary.append" && String(row.content).includes("RELAY_RESULT"))).toHaveLength(1);
+  await service.close(n.sessionId);
+});

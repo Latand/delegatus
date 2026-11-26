@@ -154,8 +154,7 @@ const previous = entry({
   activity: "live", proc: "running", pid: 4_402,
   lastTurn: { startedAt: (NOW - 900) * 1_000, endedAt: null },
   pendingQuestion: {
-    kind: "question", toolUseId: "toolu-format", transcriptPath: "/repo/sessions/previous.jsonl", pid: 4_402, paneTarget: null,
-    askedAt: new Date((NOW - 540) * 1_000).toISOString(),
+    kind: "question", toolUseId: "toolu-format", transcriptPath: "/repo/sessions/previous.jsonl", pid: 4_402,     askedAt: new Date((NOW - 540) * 1_000).toISOString(),
     questions: [{ question: PREVIOUS_QUESTION, header: "Format", multiSelect: false, options: [] }],
   },
 } as unknown as Partial<FileEntry> & { path: string });

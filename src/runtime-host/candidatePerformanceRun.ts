@@ -194,9 +194,6 @@ function sandboxEnvironment(root: string): Record<string, string> {
     /* Claude Code's task directory follows this before TMPDIR; inherited, the
        scanner would list another session's task output. */
     CLAUDE_CODE_TMPDIR: path.join(root, "tmp"),
-    /* tmux finds its server under this; inherited from a host, the Viewer
-       would observe the operator's own panes and processes. */
-    TMUX_TMPDIR: path.join(root, "tmux"),
     LLV_STATE_DIR: path.join(root, "state"),
     LLV_AGENT_REGISTRY_SQLITE: "sqlite",
     /* No control URL is reachable from here: ticks and notifications fail fast. */
@@ -1063,7 +1060,7 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
   let runtimeHost: CandidateRuntimeHost | null = null;
   try {
     const env = sandboxEnvironment(root);
-    for (const directory of [env.HOME!, env.XDG_CONFIG_HOME!, env.CLAUDE_CODE_TMPDIR!, env.TMUX_TMPDIR!, env.LLV_STATE_DIR!, path.join(root, "w")]) {
+    for (const directory of [env.HOME!, env.XDG_CONFIG_HOME!, env.CLAUDE_CODE_TMPDIR!, env.LLV_STATE_DIR!, path.join(root, "w")]) {
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     }
     /* The dataset is built here, under the sandbox's state directory and
@@ -1090,13 +1087,15 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     note(`runtime host ${runtimeHost.pid} answering`);
     const workers: WorkerSpec[] = dataset.workers.map((worker, index) => ({ ...worker, socket: path.join(root, "w", `${index}.sock`) }));
     const deliveryIds = [...dataset.pendingDeliveryIds, ...dataset.uncertainDeliveryIds];
-    const deliveriesBefore = rowsOf(dataset.filename, "heldDeliveries", deliveryIds);
+    const { deadRecipientDeliveryIds, deliveryEvidenceVerdict } = await import("./candidateDeliveryEvidence");
     const { Database } = process.getBuiltinModule("bun:sqlite") as typeof import("bun:sqlite");
     const censusDb = new Database(dataset.filename, { readonly: true });
     const retainedDeliveryIds = censusDb.query<{ row_key: string }, []>("SELECT row_key FROM registry_records WHERE collection='heldDeliveries'").all().map(row => row.row_key);
     const pendingLaunchIds = censusDb.query<{ row_key: string }, []>("SELECT row_key FROM registry_records WHERE collection='receipts' AND json_extract(value_json,'$.state')='path-pending'").all().map(row => row.row_key);
+    /* Settlement may end these when it runs: their recipient is proven dead. */
+    const deadRecipientIds = deadRecipientDeliveryIds(censusDb, deliveryIds);
     censusDb.close();
-    const retainedDeliveries = rowsOf(dataset.filename, "heldDeliveries", retainedDeliveryIds);
+    const deliveriesBefore = rowsOf(dataset.filename, "heldDeliveries", retainedDeliveryIds);
     const pendingLaunches = rowsOf(dataset.filename, "receipts", pendingLaunchIds);
     /* Eight scopes, each pinning a different conversation with a transcript. */
     const pinned = Array.from({ length: SCOPES }, (_, scope) => dataset.conversationPaths[(scope * 7 + 3) % dataset.conversationPaths.length]!);
@@ -1357,16 +1356,13 @@ async function gateMain(): Promise<CandidatePerformanceEvidence> {
     const loops = [aReport.servedLoop, bReport.servedLoop].map((value) => (value ?? {}) as { p95Ms?: number; maxMs?: number });
     const queues = [aReport.queue, bReport.queue].map((value) => (value ?? {}) as { maxWaiting?: number; refused?: number; expired?: number });
     const externalLatencies = numbers(externalOutcome.report.latencies);
-    const deliveriesAfter = rowsOf(dataset.filename, "heldDeliveries", deliveryIds);
-    const retainedAfter = rowsOf(dataset.filename, "heldDeliveries", retainedDeliveryIds);
-    const launchesAfter = rowsOf(dataset.filename, "receipts", pendingLaunchIds);
-    const retainedPreserved = retainedDeliveryIds.every(id => retainedDeliveries.get(id)?.json === retainedAfter.get(id)?.json)
-      && pendingLaunchIds.every(id => pendingLaunches.get(id)?.json === launchesAfter.get(id)?.json);
-    const deliveryPreserved = retainedPreserved && deliveryIds.every((id) => {
-      const before = deliveriesBefore.get(id);
-      const after = deliveriesAfter.get(id);
-      return before && after && !after.cold && before.json === after.json;
+    const deliveryEvidence = deliveryEvidenceVerdict({
+      openIds: deliveryIds, retainedIds: retainedDeliveryIds, launchIds: pendingLaunchIds, deadRecipientIds,
+      deliveriesBefore, deliveriesAfter: rowsOf(dataset.filename, "heldDeliveries", retainedDeliveryIds),
+      launchesBefore: pendingLaunches, launchesAfter: rowsOf(dataset.filename, "receipts", pendingLaunchIds),
     });
+    const deliveryPreserved = deliveryEvidence.preserved;
+    note(`delivery evidence: ${deliveryEvidence.settledOnDeadRecipients} of ${deadRecipientIds.size} open deliveries to dead recipients settled; changed ${deliveryEvidence.changed.length}${deliveryEvidence.changed.length ? `: ${deliveryEvidence.changed.slice(0, 8).join(", ")}` : ""}`);
     if (externalOutcome.error) note(`separate writer: ${externalOutcome.error}`);
     /* Keep completion separate from the elapsed time of an unfinished activation. */
     const activationOf = (report: Record<string, unknown>, since: number | null) => {

@@ -106,7 +106,7 @@ export type Payload =
   | { type: "transcript.delta"; speaker: "operator" | "companion"; itemId: Id; responseId?: Id; delta: string }
   | { type: "transcript.final"; speaker: "operator" | "companion"; itemId: Id; responseId?: Id; text: string }
   /** Whole display segment; final marks a display boundary, never consent. */
-  | { type: "transcript.snapshot"; speaker: "operator" | "companion"; itemId: Id; text: string; final: boolean; startMs?: number; endMs?: number }
+  | { type: "transcript.snapshot"; speaker: "operator" | "companion"; itemId: Id; text: string; final: boolean; startMs?: number; endMs?: number; audioMs?: number }
   | { type: "response.started"; responseId: Id; itemId: Id }
   | { type: "response.generated"; responseId: Id; status: "completed" | "cancelled" | "failed" }
   /** A started playback names the line it plays. The same response again names
@@ -165,10 +165,27 @@ export interface ResumableCall { sessionId: Id; project: string | null }
  * Until then the Viewer answers that nothing dropped, so a page that reloaded mid-call asks again after it. */
 export const STALE_BROWSER_MS = 5_000;
 
+/** Browser playback evidence, interpreted only against the part named by resume. */
+export interface ResumeCursor {
+  heard?: { itemId: Id; playedMs: number };
+  unplayed?: Id[];
+  operatorOpen?: Id;
+}
+/** Shared by HTTP admission and the service; no text or authority comes from a cursor. */
+export function resumeCursorValid(value: unknown): value is ResumeCursor {
+  const object = (row: unknown): row is Record<string, unknown> => !!row && typeof row === "object" && !Array.isArray(row);
+  const id = (row: unknown) => typeof row === "string" && /^[A-Za-z0-9_-]{1,200}$/.test(row);
+  if (!object(value) || Object.keys(value).some(key => !["heard", "unplayed", "operatorOpen"].includes(key))) return false;
+  return (value.heard === undefined || object(value.heard) && Object.keys(value.heard).every(key => ["itemId", "playedMs"].includes(key))
+    && id(value.heard.itemId) && Number.isSafeInteger(value.heard.playedMs) && (value.heard.playedMs as number) >= 0)
+    && (value.unplayed === undefined || Array.isArray(value.unplayed) && value.unplayed.length <= 64 && value.unplayed.every(id))
+    && (value.operatorOpen === undefined || id(value.operatorOpen));
+}
+
 export interface VoiceCompanionAdapter {
   readonly mode: CompanionMode;
   /** `resume` continues a dropped call: the new session starts with its conversation. */
-  start(options: { locale: Locale; project: Id; resume?: Id; drop?: DropDiagnostic; reconnect?: ReconnectRecord; signal?: AbortSignal }): Promise<void>;
+  start(options: { locale: Locale; project: Id; resume?: Id; cursor?: ResumeCursor; drop?: DropDiagnostic; reconnect?: ReconnectRecord; signal?: AbortSignal }): Promise<void>;
   /** Call-wide retry sounds and release of retained media on give-up. */
   reconnect?(status: "trying" | "tick" | "gave-up" | "cancelled"): void;
   /** Updates browser context on the same call, including while it starts. */

@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 
@@ -8,10 +8,8 @@ import type { ProcBackend, ProcessMemory, ProcSnapshotEntry, SystemMemory } from
 
 /**
  * macOS (and any non-Linux POSIX) backend: no `/proc`, so process state comes
- * from shelling out to `ps` and `lsof`. Both calls are blocking (spawnSync) so
- * this backend's functions stay synchronous like the Linux ones; they are
- * expensive enough (tens of ms to ~1s per call) that every accessor here goes
- * through the same short-TTL snapshot cache instead of spawning per pid.
+ * from shelling out to `ps` and `lsof`. Legacy accessors share a short-TTL
+ * synchronous snapshot. Resources have their own asynchronous snapshot.
  *
  * `ps -axo pid=,ppid=,tty=,args=` and `lsof`'s `-F` field output are the two
  * primitives used throughout; both are POSIX/BSD-compatible option forms
@@ -22,6 +20,41 @@ import type { ProcBackend, ProcessMemory, ProcSnapshotEntry, SystemMemory } from
 const SNAPSHOT_TTL_MS = 5_000;
 const RUN_TIMEOUT_MS = 10_000;
 const MAX_BUFFER = 16 * 1024 * 1024;
+
+function runCaptureAsync(cmd: string, args: string[], allowPartial = false): Promise<string> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+    let stdout = "";
+    let bytes = 0;
+    let settled = false;
+    let timedOut = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (value: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+      killTimer = setTimeout(() => child.kill("SIGKILL"), 500);
+      killTimer.unref();
+    }, RUN_TIMEOUT_MS);
+    timer.unref();
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      bytes += Buffer.byteLength(chunk);
+      if (bytes <= MAX_BUFFER) stdout += chunk;
+      else child.kill();
+    });
+    child.once("error", () => finish(""));
+    child.once("close", (code) => finish(
+      !timedOut && bytes <= MAX_BUFFER && (code === 0 || (allowPartial && code !== null)) ? stdout : "",
+    ));
+  });
+}
 
 interface SnapshotRow {
   argv: string[];
@@ -125,7 +158,20 @@ function parseFdEntries(stdout: string, visit: (target: string, pid: number, wri
   }
 }
 
-let snapshotMemo: { at: number; byPid: Map<number, SnapshotRow> } | null = null;
+type ProcessSnapshot = { at: number; byPid: Map<number, SnapshotRow> };
+
+let snapshotMemo: ProcessSnapshot | null = null;
+const PROCESS_ARGS = ["-axo", "pid=,ppid=,tty=,args="];
+// One bulk cwd read, restricted to lsof's cwd pseudo-fd.
+const CWD_ARGS = ["-w", "-d", "cwd", "-Fpn"];
+
+function mergeSnapshot(processes: string, directories: string): Map<number, SnapshotRow> {
+  const rows = parsePs(processes);
+  const cwds = parsePidNameGroups(directories);
+  const byPid = new Map<number, SnapshotRow>();
+  for (const [pid, row] of rows) byPid.set(pid, { ...row, cwd: cwds.get(pid) ?? null });
+  return byPid;
+}
 
 /**
  * Always TTL-cached, even for kill-time revalidation: argv/cwd read through
@@ -140,17 +186,28 @@ function snapshot(): Map<number, SnapshotRow> {
   const now = Date.now();
   if (snapshotMemo && now - snapshotMemo.at < SNAPSHOT_TTL_MS) return snapshotMemo.byPid;
 
-  const ps = parsePs(runCapture("ps", ["-axo", "pid=,ppid=,tty=,args="]));
-  // A dedicated bulk cwd pass beats querying each pid one at a time: `-d cwd`
-  // restricts lsof to the cwd pseudo-fd of every process in a single call.
-  const cwds = parsePidNameGroups(runCapture("lsof", ["-w", "-d", "cwd", "-Fpn"]));
-
-  const byPid = new Map<number, SnapshotRow>();
-  for (const [pid, row] of ps) {
-    byPid.set(pid, { argv: row.argv, ppid: row.ppid, tty: row.tty, cwd: cwds.get(pid) ?? null });
-  }
+  const byPid = mergeSnapshot(runCapture("ps", PROCESS_ARGS), runCapture("lsof", CWD_ARGS));
   snapshotMemo = { at: now, byPid };
   return byPid;
+}
+
+let resourceSnapshotFlight: Promise<Map<number, SnapshotRow>> | null = null;
+let resourceSnapshotMemo: ProcessSnapshot | null = null;
+
+function resourceSnapshot(fresh = false): Promise<Map<number, SnapshotRow>> {
+  if (resourceSnapshotFlight) return resourceSnapshotFlight;
+  const now = Date.now();
+  if (!fresh && resourceSnapshotMemo && now - resourceSnapshotMemo.at < SNAPSHOT_TTL_MS) return Promise.resolve(resourceSnapshotMemo.byPid);
+  resourceSnapshotFlight = Promise.all([
+    runCaptureAsync("ps", PROCESS_ARGS),
+    // lsof can report inaccessible processes and still return usable cwd rows.
+    runCaptureAsync("lsof", CWD_ARGS, true),
+  ]).then(([ps, cwds]) => {
+    const byPid = mergeSnapshot(ps, cwds);
+    resourceSnapshotMemo = { at: Date.now(), byPid };
+    return byPid;
+  }).finally(() => { resourceSnapshotFlight = null; });
+  return resourceSnapshotFlight;
 }
 
 function pidAlive(pid: number): boolean {
@@ -189,6 +246,11 @@ function processExited(pid: number): boolean {
   return runCapture("ps", ["-o", "stat=", "-p", String(pid)]).trim().startsWith("Z");
 }
 
+async function resourceProcessExited(pid: number): Promise<boolean> {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  return (await runCaptureAsync("ps", ["-o", "stat=", "-p", String(pid)])).trim().startsWith("Z");
+}
+
 /**
  * No per-pid CPU accounting without /proc that does not cost a `ps`
  * subprocess, and this is read per structured host on a controller tick. The
@@ -211,12 +273,20 @@ function readEnvVar(): string | null {
   return null;
 }
 
-function listProcesses(): ProcSnapshotEntry[] {
+function snapshotEntries(rows: ReadonlyMap<number, SnapshotRow>): ProcSnapshotEntry[] {
   const list: ProcSnapshotEntry[] = [];
-  for (const [pid, row] of snapshot()) {
+  for (const [pid, row] of rows) {
     list.push({ pid, argv: row.argv, cwd: row.cwd, tty: row.tty });
   }
   return list;
+}
+
+function listProcesses(): ProcSnapshotEntry[] {
+  return snapshotEntries(snapshot());
+}
+
+async function resourceListProcesses(): Promise<ProcSnapshotEntry[]> {
+  return snapshotEntries(await resourceSnapshot());
 }
 
 /**
@@ -239,6 +309,14 @@ function systemMemory(): SystemMemory | null {
   };
 }
 
+async function resourceSystemMemory(): Promise<SystemMemory | null> {
+  const ramTotal = os.totalmem();
+  const ramAvailable = parseVmStat(await runCaptureAsync("vm_stat", []));
+  if (!ramTotal || ramAvailable === null) return null;
+  const swap = parseSwapUsage(await runCaptureAsync("sysctl", ["-n", "vm.swapusage"]));
+  return { ramTotal, ramAvailable: Math.min(ramAvailable, ramTotal), swapTotal: swap?.swapTotal ?? 0, swapUsed: swap?.swapUsed ?? 0 };
+}
+
 /** One bulk `ps` pass; per-process swap has no portable source, so swapBytes
     is 0 and callers show RSS alone. */
 function processMemory(pids: Iterable<number>): Map<number, ProcessMemory> {
@@ -254,12 +332,34 @@ function processMemory(pids: Iterable<number>): Map<number, ProcessMemory> {
   return map;
 }
 
-function ppidMap(): Map<number, number> {
+function parentMap(rows: ReadonlyMap<number, SnapshotRow>): Map<number, number> {
   const map = new Map<number, number>();
-  for (const [pid, row] of snapshot()) {
+  for (const [pid, row] of rows) {
     if (row.ppid !== null) map.set(pid, row.ppid);
   }
   return map;
+}
+
+function ppidMap(): Map<number, number> {
+  return parentMap(snapshot());
+}
+
+async function resourcePpidMap(fresh = false): Promise<Map<number, number>> {
+  return parentMap(await resourceSnapshot(fresh));
+}
+
+let resourceMemoryFlight: Promise<Map<number, number>> | null = null;
+
+async function resourceProcessMemory(pids: Iterable<number>): Promise<Map<number, ProcessMemory>> {
+  const wanted = new Set([...pids].filter((pid) => Number.isInteger(pid) && pid > 0));
+  if (!wanted.size) return new Map();
+  resourceMemoryFlight ??= runCaptureAsync("ps", ["-axo", "pid=,rss="])
+    .then(parsePsMemory).finally(() => { resourceMemoryFlight = null; });
+  const result = new Map<number, ProcessMemory>();
+  for (const [pid, rssBytes] of await resourceMemoryFlight) {
+    if (wanted.has(pid)) result.set(pid, { rssBytes, swapBytes: 0 });
+  }
+  return result;
 }
 
 function scanFdTargetsUnder(underDir: string, visit: (target: string, pid: number, writable: () => boolean) => void): void {
@@ -267,10 +367,21 @@ function scanFdTargetsUnder(underDir: string, visit: (target: string, pid: numbe
   parseFdEntries(runCapture("lsof", ["-w", "+D", underDir, "-Fpfan"]), visit);
 }
 
+async function resourceScanFdTargetsUnder(underDir: string, visit: (target: string, pid: number, writable: () => boolean) => void): Promise<void> {
+  if (!underDir || !fs.existsSync(underDir)) return;
+  parseFdEntries(await runCaptureAsync("lsof", ["-w", "+D", underDir, "-Fpfan"]), visit);
+}
+
 function scanFdTargetsFor(paths: string[], visit: (target: string, pid: number, writable: () => boolean) => void): void {
   const unique = [...new Set(paths.filter(Boolean))];
   if (unique.length === 0) return;
   parseFdEntries(runCapture("lsof", ["-w", "-Fpfan", "--", ...unique]), visit);
+}
+
+async function resourceScanFdTargetsFor(paths: string[], visit: (target: string, pid: number, writable: () => boolean) => void): Promise<void> {
+  const unique = [...new Set(paths.filter(Boolean))];
+  if (unique.length === 0) return;
+  parseFdEntries(await runCaptureAsync("lsof", ["-w", "-Fpfan", "--", ...unique]), visit);
 }
 
 function pidWritesPath(pid: number, pathname: string): boolean {
@@ -301,10 +412,17 @@ export const portableBackend: ProcBackend = {
   readEnvVar,
   listProcesses,
   systemMemory,
+  resourceSystemMemory,
+  resourceListProcesses,
+  resourceProcessExited,
+  resourcePpidMap,
+  resourceProcessMemory,
   processMemory,
   ppidMap,
   scanFdTargetsUnder,
+  resourceScanFdTargetsUnder,
   scanFdTargetsFor,
+  resourceScanFdTargetsFor,
   pidWritesPath,
   pidHoldsPath,
 };

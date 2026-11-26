@@ -1,7 +1,8 @@
 import { waitForStateLock } from "@/lib/state/lockWait";
 import fs from "node:fs";
 
-import { importLegacyTasks, loadTasks, mutateTasks, mutateTasksAsync } from "./store";
+import { importLegacyTasks, loadTasks, mutateTasks, mutateTasksAsync, prepareTaskRows } from "./store";
+import { patchTask } from "./commands";
 import type { BoardTask } from "./types";
 
 const [mode, filePath, arg, gate] = process.argv.slice(2);
@@ -24,7 +25,22 @@ function task(id: string): BoardTask {
   };
 }
 
-if (mode === "import") {
+if (mode === "keyed-patch") {
+  if (gate) waitFor(gate);
+  for (let index = 0; index < 3; index++) await mutateTasksAsync(tasks => {
+    const result = patchTask(tasks, arg!, { note: `${arg}-${index}` }, "2026-11-01T00:00:00.000Z");
+    if (!result.ok) throw new Error(result.error);
+    return { tasks: result.tasks, result: undefined };
+  }, filePath);
+} else if (mode === "recover-preparation") {
+  const changedRows = await waitForStateLock("tasks.prepare.recovery", () => prepareTaskRows(filePath));
+  console.log(JSON.stringify({ changedRows, repeat: prepareTaskRows(filePath) }));
+} else if (mode === "hold-preparation") {
+  prepareTaskRows(filePath, { afterPersist: () => {
+    fs.writeFileSync(arg!, "ready");
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000);
+  } });
+} else if (mode === "import") {
   if (gate) waitFor(gate);
   const outcome = await waitForStateLock("tasks.import", () => importLegacyTasks(filePath, { reconcile: true }));
   console.log(JSON.stringify({ state: outcome.state, digest: outcome.record.rowDigest, rows: outcome.record.rowCount }));

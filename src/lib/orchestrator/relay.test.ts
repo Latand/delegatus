@@ -14,6 +14,7 @@ process.env.XDG_CONFIG_HOME = path.join(root, "config");
 delete process.env.LLV_ROOT_CONVERSATION_ID;
 
 const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+const { structuredHostFixture } = await import("@/lib/agent/registryTestFixtures");
 const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/capabilityHeader");
 const { requireOperatorAuthority } = await import("@/lib/agent/operatorAuthority");
 const { setDeputyRootResolverForTests } = await import("./deputyAsker");
@@ -97,8 +98,7 @@ async function nativeRelayFixture(hooks: {
   const recipient = actor("project-b", "orchestrator", "codex", "conversation_native_recipient");
   const entry = Object.values(registry.readOnlySnapshot().entries).find(row => row.artifactPath === registry.conversation(sender.id)!.generations.at(-1)!.path)!;
   const identity = captureProcessIdentity(process.pid);
-  registry.upsert({ ...entry, host: { kind: "tmux", endpoint: "fixture", server: identity, paneId: "%1", panePid: identity,
-    windowName: "fixture", agent: identity, argv: [] } });
+  registry.upsert({ ...entry, structuredHost: structuredHostFixture(identity, "codex-app-server") });
   delete process.env.LLV_SPAWN_CAPABILITY;
   const envelopes: Record<string, unknown>[] = [];
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async request => {
@@ -411,6 +411,76 @@ test("HTTP refuses worker, unidentified and invalid-capability relays before del
   expect(delivered).toEqual([]);
 });
 
+/** The journal lines a relay refusal writes, parsed; other lines are skipped. */
+function refusalJournal() {
+  const lines: Record<string, unknown>[] = [];
+  const spy = spyOn(console, "warn").mockImplementation((...args) => {
+    try {
+      const line = JSON.parse(String(args[1])) as Record<string, unknown>;
+      if (line.event === "orchestrator_relay_refused") lines.push(line);
+    } catch { /* Unstructured warnings are not refusal lines. */ }
+  });
+  return { lines, restore: () => spy.mockRestore() };
+}
+
+test("each admission refusal names its own failed condition under the stable code", async () => {
+  const recipient = actor("project-b");
+  const worker = actor();
+  const journal = refusalJournal();
+  try {
+    const reasons: unknown[] = [];
+    for (const capability of [worker.capability, "invalid"]) {
+      const response = await POST(request(capability, relayBody(recipient.id)));
+      const body = await response.json();
+      expect(response.status).toBe(403);
+      expect(body.code).toBe("orchestrator_relay_refused");
+      reasons.push(body.reason);
+    }
+    expect(reasons).toEqual(["sender_not_authorized", "caller_unidentified"]);
+    expect(journal.lines.map(line => line.reason)).toEqual(reasons);
+    expect(journal.lines[0]).toMatchObject({ stage: "admission", sender: worker.id, clientMessageId: "fixture-send", operationId: null });
+    for (const line of journal.lines) expect(JSON.stringify(line)).not.toContain("Please investigate");
+  } finally { journal.restore(); }
+  expect(delivered).toEqual([]);
+});
+
+/* Issue 3737's shape: a designated seat's cross-project relay passes admission
+   and is then refused with 409 under the stable code and no operation id. That
+   is the delivery-time guard; here two of its conditions are staged. */
+for (const [cause, reason] of [["recipient", "recipient_seat_changed"], ["sender", "sender_seat_revoked"]] as const)
+test(`a relay refused at delivery after the ${cause} seat changed answers 409 with its reason and one journal line`, async () => {
+  const { DeliveryAdmissionRefusedError } = await import("@/lib/deliveryAdmission");
+  const sender = actor("project-a");
+  const recipient = actor("project-b");
+  const journal = refusalJournal();
+  setConversationHostDependenciesForTests({
+    collectImagePayloads: () => ({ images: [], error: null }),
+    // The delivery queue runs the guard under its own lock, after a seat
+    // changed, and turns its refusal into this pre-reservation failure.
+    enqueueStructuredMessage: async (message) => {
+      actor(cause === "recipient" ? "project-b" : "project-a");
+      try { message.admissionGuard?.(); message.admissionGuard?.(); }
+      catch (error) {
+        if (!(error instanceof DeliveryAdmissionRefusedError)) throw error;
+        return { ok: false, structured: true, outcome: "failed", error: error.message, code: error.code, status: 409, admission: "refused" };
+      }
+      throw new Error("the guard admitted a relay whose seat changed");
+    },
+    recordOperatorRequest: () => null,
+  });
+  try {
+    const response = await POST(request(sender.capability, relayBody(recipient.id)));
+    const body = await response.json();
+    expect(response.status).toBe(409);
+    expect(body).toMatchObject({ code: "orchestrator_relay_refused", reason, admission: "refused" });
+    expect(body.operationId).toBeUndefined();
+    expect(journal.lines).toHaveLength(1);
+    expect(journal.lines[0]).toMatchObject({ reason, stage: "delivery", sender: sender.id, recipient: recipient.id,
+      clientMessageId: "fixture-send", operationId: null });
+    expect(JSON.stringify(journal.lines[0])).not.toContain("Please investigate");
+  } finally { journal.restore(); }
+});
+
 test("a rotated former seat loses relay authority immediately", async () => {
   const sender = actor("project-a");
   const recipient = actor("project-b");
@@ -587,64 +657,6 @@ function realAdmission(afterRuntimeRead?: () => void) {
     }),
     recordOperatorRequest: () => null,
   });
-}
-
-for (const [mount, post] of [POST, legacyPOST, orchestratorPOST].entries()) {
-  for (const compaction of ["count", "age"] as const) {
-    for (const rotate of [false, true]) {
-      test(`compacted legacy relay retry does not actuate: mount ${mount}, ${compaction}, rotation ${rotate}`, async () => {
-        const sender = actor("project-a");
-        const recipient = actor("project-b");
-        const recipientPath = registry.conversation(recipient.id as `conversation_${string}`)!.generations.at(-1)!.path;
-        fs.writeFileSync(recipientPath, "");
-        const typed: string[] = [];
-        setConversationHostDependenciesForTests({
-          collectImagePayloads: () => ({ images: [], error: null }),
-          enqueueStructuredMessage: async () => null,
-          deliverConversationMessage: (message) => deliverConversationMessage(message, {
-            recover: async () => null,
-            pathAllowed: () => true,
-            listFiles: async () => [{ root: "codex-sessions", path: recipientPath, project: "project-b", mtime: 0, size: 0 } as never],
-            resumeSpecFor: () => ({ command: "codex", args: [], cwd: root, env: {} }) as never,
-            deliver: async ({ payload }) => { typed.push(payload); return { ok: true, outcome: "delivered-to-live", target: "%7" }; },
-          }),
-          recordOperatorRequest: () => null,
-        });
-        const body = { ...relayBody(recipient.id, "report"), project: "project-b", clientMessageId: "legacy-compacted" };
-        expect((await post(request(sender.capability, body))).status).toBe(200);
-        expect(typed).toHaveLength(1);
-        const original = Object.values(registry.readOnlySnapshot().heldDeliveries)[0]!;
-        expect(original.state).toBe("delivered");
-        if (compaction === "count") {
-          await Bun.sleep(2);
-          const generation = registry.conversation(recipient.id as `conversation_${string}`)!.generations.at(-1)!.id;
-          for (let index = 0; index < 100; index++) {
-            const later = registry.holdDelivery(recipient.id as `conversation_${string}`, `later ${index}`, `legacy-later-${index}`);
-            registry.beginDeliveryAttempt(later.id, generation);
-            registry.recordDeliveryOutcome(later.id, "delivered", null, "delivered");
-          }
-        }
-        if (rotate) actor("project-b");
-        const filename = registry.filename;
-        registry.close();
-        registry = new AgentRegistry(filename, undefined, undefined, compaction === "age" ? { now: () => Date.now() + 8 * 86_400_000 } : {});
-        setAgentRegistryForTests(registry);
-        const before = registry.readOnlySnapshot();
-        expect(before.heldDeliveries[original.id]).toBeUndefined();
-        expect(before.deliveryOperationOwners[original.command.operationId]).toMatchObject({ terminalState: "delivered" });
-        const retryBody = mount === 2 ? { ...body, conversationId: undefined } : body;
-        const retry = await post(request(sender.capability, retryBody));
-        expect(retry.status).toBe(200);
-        expect(typed).toHaveLength(1);
-        expect(await retry.json()).toMatchObject({ operationId: original.command.operationId, outcome: "delivered",
-          receipt: { operationId: original.command.operationId, status: "delivered", conversationId: recipient.id } });
-        const other = actor("project-c");
-        expect((await post(request(other.capability, body))).status).toBe(409);
-        expect(typed).toHaveLength(1);
-        expect(registry.readOnlySnapshot().heldDeliveries).toEqual(before.heldDeliveries);
-      });
-    }
-  }
 }
 
 for (const [name, attachment] of [

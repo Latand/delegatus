@@ -48,6 +48,13 @@ export const STORAGE_INCIDENTS_FILE = "storage-incidents.json";
 export const BACKUP_BUDGET_BYTES = 2 * 1024 ** 3;
 /** Backups are never evicted below this many per database, even over budget. */
 const PROTECTED_GENERATIONS = 3;
+/** The two large stores change all day, so every due pass copies them whole
+    (2.85 GB together on a measured installation). An hour bounds that write
+    volume; the loss bound for media corruption is the same hour. */
+const LARGE_STORE_BACKUP_INTERVAL_MS = HOUR;
+/** The newest tier of the tiered retention: three hours at full cadence, which
+    ends before the four-hour tier begins. */
+const TIERED_NEWEST_GENERATIONS = 3;
 const INCIDENT_VISIBLE_MS = 7 * DAY;
 const INCIDENT_RECORD_CAP = 50;
 /** A temp file younger than this is never swept: its writer may be alive in a
@@ -57,7 +64,7 @@ const TEMP_SWEEP_MIN_AGE_MS = HOUR;
 const PID_MAX = 4_194_304;
 
 export type BackupRetention =
-  /** The newest 6, then one per 4 hours for 24 hours, then one per day for 3 days. */
+  /** The newest 3, then one per 4 hours for 24 hours, then one per day for 3 days. */
   | { kind: "tiered" }
   | { kind: "newest"; count: number };
 
@@ -81,7 +88,7 @@ export function stateDatabases(stateDirectory: string): StateDatabase[] {
       name: "state.sqlite",
       filename: at("state.sqlite"),
       check: "integrity_check",
-      backup: { intervalMs: 10 * MINUTE, retention: { kind: "tiered" } },
+      backup: { intervalMs: LARGE_STORE_BACKUP_INTERVAL_MS, retention: { kind: "tiered" } },
       revisionSql: "SELECT (SELECT COUNT(*) FROM state_collections) || ':' || (SELECT COALESCE(SUM(revision), 0) FROM state_collections) AS revision",
       rebuiltTriggers: PIPELINE_REFERENCE_TRIGGERS,
     },
@@ -89,7 +96,7 @@ export function stateDatabases(stateDirectory: string): StateDatabase[] {
       name: "agent-registry.sqlite",
       filename: at("agent-registry.sqlite"),
       check: "integrity_check",
-      backup: { intervalMs: 10 * MINUTE, retention: { kind: "tiered" } },
+      backup: { intervalMs: LARGE_STORE_BACKUP_INTERVAL_MS, retention: { kind: "tiered" } },
       revisionSql: "SELECT value AS revision FROM registry_meta WHERE key = 'revision'",
       rebuiltTriggers: [],
     },
@@ -938,14 +945,17 @@ export function pruneBackups(
 
 function retained(backups: readonly BackupFile[], retention: BackupRetention, now: number): Set<BackupFile> {
   if (retention.kind === "newest") return new Set(backups.slice(0, retention.count));
-  const keep = new Set(backups.slice(0, 6));
+  const newest = backups.slice(0, TIERED_NEWEST_GENERATIONS);
+  const keep = new Set(newest);
+  /* A four-hour window the newest tier already covers needs no second copy. */
+  const covered = new Set(newest.map((backup) => Math.floor(backup.at / (4 * HOUR))));
   const fourHourly = new Set<number>();
   const daily = new Set<number>();
-  for (const backup of backups.slice(6)) {
+  for (const backup of backups.slice(TIERED_NEWEST_GENERATIONS)) {
     const age = now - backup.at;
     if (age <= DAY) {
       const bucket = Math.floor(backup.at / (4 * HOUR));
-      if (fourHourly.size < 6 && !fourHourly.has(bucket)) {
+      if (fourHourly.size < 6 && !fourHourly.has(bucket) && !covered.has(bucket)) {
         fourHourly.add(bucket);
         keep.add(backup);
       }
@@ -1113,7 +1123,7 @@ export function backupsDue(stateDirectory: string, lastRevisions: ReadonlyMap<st
 export interface BackupWorkerRequest {
   stateDirectory: string;
   lastRevisions: [string, string][];
-  operation?: "activation" | "checkpoint" | "retirement-guard";
+  operation?: "activation" | "checkpoint" | "retirement-guard" | "worktree-recovery";
   revision?: string;
   owner?: import("@/lib/processIdentity").ProcessIdentity;
 }
@@ -1122,6 +1132,8 @@ export interface BackupWorkerResponse {
   outcomes: [string, BackupOutcome][];
   incidents?: StorageIncident[];
   recoveryFailure?: string;
+  worktreeRecoveryFinished?: true;
+  worktreeRecovery?: { folded: number; leftAlone: number };
   checkpoint?: import("./hotStateAuthority").HotStateCheckpoint["revisions"];
 }
 
@@ -1193,13 +1205,28 @@ export async function checkpointHotStateRollbackMirrorsInWorker(stateDirectory: 
   return response.checkpoint;
 }
 
+/** The catalog and transcript evidence are read synchronously. Run recovery
+    and its follow-up scan on the leased worker, outside the HTTP thread. */
+export async function recoverWorktreesInWorker(stateDirectory: string, signal: AbortSignal): Promise<{ folded: number; leftAlone: number }> {
+  assertStateStartupMutation(stateDirectory, "worktree project recovery");
+  const response = await runDurabilityWorker({ stateDirectory, lastRevisions: [], operation: "worktree-recovery" }, { signal });
+  const recovery = response.worktreeRecovery;
+  if (response.worktreeRecoveryFinished !== true || !recovery
+    || !Number.isSafeInteger(recovery.folded) || recovery.folded < 0
+    || !Number.isSafeInteger(recovery.leftAlone) || recovery.leftAlone < 0) {
+    throw new Error("the worktree recovery worker returned no commit or verified no-op result");
+  }
+  return recovery;
+}
+
 async function runDurabilityWorker(
   request: BackupWorkerRequest,
-  options: { launch?: { executable: string; workerPath: string }; timeoutMs?: number } = {},
+  options: { launch?: { executable: string; workerPath: string }; timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<BackupWorkerResponse> {
   const { stateDirectory } = request;
   const launch = options.launch ?? stateBackupWorkerLaunch();
   const { endLeasedHelper, leasedHelperInput, spawnLeasedHelper } = await import("@/lib/helperLease");
+  options.signal?.throwIfAborted();
   const useNice = fs.existsSync("/usr/bin/nice");
   /* Under a lease: a pass that outlives its Viewer would keep the service's
      cgroup populated after it (src/lib/helperLease.ts). */
@@ -1220,16 +1247,23 @@ async function runDurabilityWorker(
       // worker before reporting its timeout, so recovery cannot race imports.
     }, options.timeoutMs ?? BACKUP_WORKER_TIMEOUT_MS);
     timeout.unref?.();
+    const abort = () => endLeasedHelper(child);
+    options.signal?.addEventListener("abort", abort, { once: true });
+    const cleanup = () => {
+      clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", abort);
+    };
     child.stdout!.setEncoding("utf8");
     child.stdout!.on("data", (chunk: string) => { output += chunk; });
     input.on("error", () => { /* the exit below reports it */ });
     child.once("error", (error) => {
-      clearTimeout(timeout);
+      cleanup();
       reject(error);
     });
     child.once("close", (code, signal) => {
-      clearTimeout(timeout);
+      cleanup();
       try {
+        options.signal?.throwIfAborted();
         if (timedOut) throw new Error(`the backup worker ran past ${options.timeoutMs ?? BACKUP_WORKER_TIMEOUT_MS} ms and was stopped`);
         if (code !== 0) throw new Error(`the backup worker exited with ${code ?? signal}`);
         resolve(JSON.parse(output.trim().split("\n").at(-1) ?? "") as BackupWorkerResponse);
@@ -1237,6 +1271,7 @@ async function runDurabilityWorker(
         reject(error);
       }
     });
+    if (options.signal?.aborted) abort();
     input.end(JSON.stringify(request));
   });
   return response;

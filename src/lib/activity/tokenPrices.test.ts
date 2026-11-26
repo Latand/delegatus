@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { costByKind, costByModel, estimateCost, priceTier, PRICE_TABLE_DATE, tokenCost, tokenRate } from "./tokenPrices";
+import { CLAUDE_ALIAS_RELEASES } from "@/lib/agent/models";
 import type { TokenCounts } from "./tokenUsage";
 
 const million = (counts: Partial<TokenCounts>): TokenCounts => ({ input: 0, cacheRead: 0, cacheWrite: 0, cacheWrite1h: 0, output: 0, reasoning: 0, requests: 1, ...counts });
@@ -16,6 +17,26 @@ test("Claude rates split five-minute and one-hour cache writes and use the model
   expect(tokenRate("claude-fable-5-1", "standard")?.cacheRead).toBe(0.25);
   expect(tokenRate("claude-sonnet-5-5", "standard")?.cacheRead).toBe(0.1);
   expect(tokenRate("claude-haiku-4-5", "standard")?.cacheRead).toBeCloseTo(0.1, 9);
+});
+
+test("Fable 5.2 carries its own standard and fast rates", () => {
+  // $8 input, $10 5-minute write, $16 1-hour write, $0.20 read, $40 output.
+  expect(tokenRate("claude-fable-5-2", "standard")).toEqual({ input: 8, cacheRead: 0.2, cacheWrite: 10, cacheWrite1h: 16, output: 40 });
+  // Fast mode: $16 input, $80 output, with the cache multipliers on top.
+  expect(tokenRate("claude-fable-5-2", "fast")).toEqual({ input: 16, cacheRead: 0.4, cacheWrite: 20, cacheWrite1h: 32, output: 80 });
+  // cacheWrite counts every write; cacheWrite1h is the one-hour share of it.
+  const counts = million({ input: 1e6, cacheRead: 1e6, cacheWrite: 2e6, cacheWrite1h: 1e6, output: 1e6 });
+  expect(tokenCost("claude-fable-5-2", "standard", counts)).toBeCloseTo(8 + 0.2 + 10 + 16 + 40, 6);
+  // Fable 5.1 keeps its own, higher rates.
+  expect(tokenRate("claude-fable-5-1", "standard")?.input).toBe(10);
+  expect(tokenRate("claude-fable-5-1", "fast")).toBeNull();
+});
+
+test("every launch alias is priced as the release the installed CLI runs for it", () => {
+  /* Claude Code 2.1.321 resolves `fable` to Fable 5.2; 2.1.318 resolved it to Fable 5.1, which keeps its own higher rates. */
+  expect(tokenRate(CLAUDE_ALIAS_RELEASES.fable, "standard")?.input).toBe(8);
+  expect(tokenRate("claude-fable-5-1", "standard")?.input).toBe(10);
+  for (const release of Object.values(CLAUDE_ALIAS_RELEASES)) expect(tokenRate(release, "standard")).not.toBeNull();
 });
 
 test("reasoning is part of output and never priced twice", () => {
@@ -92,3 +113,17 @@ test("models the providers publish are priced, retired Claude and older OpenAI r
   expect(tokenCost("gpt-5-mini", "flex", million({ input: 1e6 }))).toBe(0.125);
   expect(tokenCost("gpt-5.3-codex", "flex", million({ input: 1e6 }))).toBeNull();
 });
+
+for (const [model, input, cached, output] of [["gpt-6.2-sol", 2, 0.1, 10], ["gpt-6.2-astra", 8, 0.4, 40]] as const) {
+  test(`${model} uses its published standard, Fast and promotional Ultrafast rates`, () => {
+    for (const [tier, multiplier] of [["standard", 1], ["priority", 2], ["ultrafast", 3]] as const) {
+      const rate = tokenRate(model, tier)!;
+      expect(rate.input).toBeCloseTo(input * multiplier);
+      expect(rate.cacheRead).toBeCloseTo(cached * multiplier);
+      expect(rate.output).toBeCloseTo(output * multiplier);
+      expect(tokenCost(model, tier, million({ input: 1e6, cacheRead: 1e6, output: 1e6 }))).toBeCloseTo((input + cached + output) * multiplier);
+    }
+    expect(tokenRate(model, "flex")).toBeNull();
+    expect(tokenRate(model, "unknown")).toBeNull();
+  });
+}

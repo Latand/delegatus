@@ -8,7 +8,7 @@ export interface SeatTickInstructionLine {
   at: string | null;
 }
 
-type Instructions = { reason: string | null; instructionLines?: SeatTickInstructionLine[] };
+type Instructions = { reason: string | null; instructionLines?: SeatTickInstructionLine[]; instructionReview?: string };
 
 export function seatTickInstructionLines(settings: Instructions): SeatTickInstructionLine[] {
   const { reason, instructionLines } = settings;
@@ -47,9 +47,9 @@ export function replaceSeatTickInstructions(settings: Instructions, text: string
   return kept;
 }
 
-/** A line a seat or an agent session wrote for itself. Every other line is
- * the operator's: their own, and the older lines no author was recorded for
- * (#3091), which only the operator could have written. */
+/** A line a seat or an agent session wrote for itself. The panel keeps
+ * unknown-author legacy lines in the operator's field until an explicit
+ * operator save or a designated seat rewrite replaces them. */
 export function isSeatNote(line: SeatTickInstructionLine): boolean {
   return line.author?.kind === "manager" || line.author?.kind === "agent";
 }
@@ -69,12 +69,13 @@ export interface SeatNoteRemoval { index: number; text: string; at: string | nul
 
 export const SEAT_NOTE_REMOVAL_STALE = "a seat note to remove is no longer stored as the panel read it. Nothing was stored — check the notes and save again";
 
-/** An operator's edit of the instructions. `text` absent keeps the field's
+/** An attributed edit of the instructions. `text` absent keeps the field's
  * lines as stored; `claimUnknown` makes the lines with no known author part of
  * the block `text` replaces. */
 export interface SeatTickInstructionEdit {
   text?: string | null;
   claimUnknown?: boolean;
+  claimInherited?: (line: SeatTickInstructionLine) => boolean;
   removeSeatNotes?: unknown;
 }
 
@@ -101,12 +102,12 @@ export function previewSeatTickInstructions(settings: Instructions, edit: SeatTi
   }
   if (edit.text === undefined) return { ok: true, lines };
   const remaining = { reason: lines.map(line => line.text).join("\n") || null, instructionLines: lines };
-  if (!edit.claimUnknown) return { ok: true, lines: replaceSeatTickInstructions(remaining, edit.text, actor, at) };
+  if (!edit.claimUnknown && !edit.claimInherited) return { ok: true, lines: replaceSeatTickInstructions(remaining, edit.text, actor, at) };
   /* Lines with no known author join the actor's block for this write and keep
      their entries when kept. */
   const originals = new Map<SeatTickInstructionLine, SeatTickInstructionLine>();
   const claimed = lines.map(line => {
-    if (!hasUnknownAuthor(line)) return line;
+    if (!(edit.claimUnknown && hasUnknownAuthor(line)) && !edit.claimInherited?.(line)) return line;
     const own = { ...line, author: actor };
     originals.set(own, line);
     return own;
@@ -135,5 +136,37 @@ export function seatTickInstructionSections(settings: Instructions): string[] {
     }
   }
   if (unknown.length) rendered.push("", "Instructions — author unknown:", ...unknown.map(line => `> ${line.text}`));
+  if (settings.instructionReview) rendered.push("", settings.instructionReview);
   return rendered;
+}
+
+/** Only the current project's seat inherits these blocks. Operator and agent
+ * authorship is never inferred from a row's last editor. */
+export function seatMayInheritInstruction(line: SeatTickInstructionLine, project: string, canonical: (project: string) => string = p => p, writer?: Pick<SeatTickSettingsActor, "conversationId" | "seatEpoch">): boolean {
+  if (hasUnknownAuthor(line)) return true;
+  const author = line.author;
+  return author?.kind === "manager" && !!author.project && canonical(author.project) === canonical(project)
+    && (!writer || author.seatEpoch == null || writer.seatEpoch !== null && author.seatEpoch < writer.seatEpoch
+      || author.seatEpoch === writer.seatEpoch && author.conversationId === writer.conversationId);
+}
+
+export function seatTickInstructionReview(lines: readonly SeatTickInstructionLine[], context: {
+  project: string; now: number; instructionsReviewedAt?: string | null;
+  canonicalProject?: (project: string) => string;
+  seat?: Pick<SeatTickSettingsActor, "conversationId" | "seatEpoch">;
+  finished: ReadonlyMap<string, string>;
+}): string | undefined {
+  const reviewed = Date.parse(context.instructionsReviewedAt ?? "");
+  const facts: string[] = [];
+  lines.forEach((line, index) => {
+    if (!seatMayInheritInstruction(line, context.project, context.canonicalProject, context.seat)) return;
+    const at = Math.max(Date.parse(line.at ?? "") || 0, reviewed || 0);
+    const references = line.text.match(/#\d+|\b[\w-]+\b/g) ?? [];
+    const finished = references.find(id => Date.parse(context.finished.get(id) ?? "") > at);
+    if (finished) facts.push(`line ${index + 1} names ${finished}, completed ${context.finished.get(finished)}`);
+    else if (!at || context.now - at > 3 * 24 * 60 * 60_000) facts.push(`line ${index + 1} (${!at ? "author/date unknown" : `${Math.floor((context.now - at) / 86_400_000)} days since review`})`);
+  });
+  if (!facts.length) return undefined;
+  const action = ". Rewrite with seat_tick_settings reason: replaces author-unknown and earlier-seat lines; operator lines stay.";
+  return `Instructions to review: ${facts.join("; ")}`.slice(0, 400 - action.length) + action;
 }

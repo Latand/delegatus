@@ -52,8 +52,7 @@ import { transcriptClaimResolver } from "./transcriptClaims";
 import { launchHistoryClaimPaths, pipelineRetryTarget, retryPipelineLaunch } from "./launchHistoryModel";
 import { isPlacedTask } from "./scheme/taskGeometry";
 import { loadExpandedTasks, persistExpandedTasks } from "./scheme/taskStacks";
-import { clearWorkflowDraftStorage } from "./workflows/WorkflowDraftPane";
-import { dropLegacyWorkflowDrafts, isWorkflowDraftId } from "./workflows/workflowModel";
+import { clearWorkflowDraftStorage, dropLegacyWorkflowDrafts, isWorkflowDraftId } from "./workflows/workflowModel";
 import { pushTaskToast, scrollClearOfToasts, TaskToastHost } from "./tasks/taskToast";
 import { cleanTitle } from "@/lib/title";
 import { MobileBoardDock, mobileBoardOf } from "./mobile/MobileBoard";
@@ -588,16 +587,19 @@ function ProjectDashboardView({
   const [openedConversation, setOpenedConversation] = useState<string | null>(null);
   /* Runtime receipts bridge the scan interval: a queued send immediately keeps
      its target on the board, then the next files poll carries the new turn. */
+  // Collapse protection is queried only for files on this project's board.
+  const projectConversationIds = useMemo(() => new Set(files.flatMap(file => file.conversationId ? [file.conversationId] : [])), [files]);
   const activeDeliverySignature = useRuntimeSelector(
     (state) => {
       const active = new Set(Object.values(state.store.operations)
         /* #1560: an injection being admitted keeps its card marked active
            between board polls, exactly as a send does. */
         .filter((receipt) => (receipt.kind === "send" || receipt.kind === "steer" || receipt.kind === "inject")
-          && ACTIVE_DELIVERY_RECEIPTS.has(receipt.status))
+          && ACTIVE_DELIVERY_RECEIPTS.has(receipt.status) && projectConversationIds.has(receipt.conversationId))
         .map((receipt) => receipt.conversationId));
-      for (const session of Object.values(state.store.sessions)) {
-        if (session.turn === "running" || session.turn === "interrupt_requested") active.add(session.conversationId);
+      for (const id of projectConversationIds) {
+        const turn = state.store.sessions[id]?.turn;
+        if (turn === "running" || turn === "interrupt_requested") active.add(id);
       }
       return [...active].sort().join("\n");
     },
@@ -2567,6 +2569,7 @@ function ProjectDashboardView({
                 closedPaths={board.prefs.hidden}
                 onRestoreConversation={restoreClosedConversation}
                 onReadersChange={holdReaders}
+                onReaderClosed={onCloseFile ? (file) => onCloseFile(file.path) : undefined}
                 seat={(boardId) => (
                   <KanbanSeat project={project} projectName={projectName} projectCwd={projectCwd} files={files} tasks={projectTasks} boardId={boardId} seatRead={desktopSeatRead} />
                 )}

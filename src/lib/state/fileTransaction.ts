@@ -3,7 +3,19 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
-import { recordBlockingWait } from "@/lib/blockingWaits";
+import {
+  blockingWaitRole,
+  currentWaitCorrelation,
+  fileTransactionCallSite,
+  KNOWN_FILE_TRANSACTION_WAIT_LABELS,
+  normalizeBlockingWaitHolderKind,
+  recordBlockingWait,
+  sanitizeFileTransactionOperationId,
+  sanitizeFileTransactionWaitLabel,
+  type BlockingWaitCorrelation,
+  type FileLockHolder,
+} from "@/lib/blockingWaits";
+import { noteWriterAdmitted } from "./admissionWitness";
 import { procBackend } from "@/lib/proc";
 
 const LOCK_ATTEMPTS = 6_000;
@@ -12,12 +24,176 @@ const LOCK_STALE_MS = 30_000;
 const SYNC_SLEEP = new Int32Array(new SharedArrayBuffer(4));
 const activeAsyncTransactions = new Map<string, number>();
 
+const KNOWN_LOCK_PARENT_SUBJECTS: ReadonlyMap<string, string> = new Map([
+  ["recorded-check-host-fences", "recorded-check-host-fences/<slot>"],
+  ["recorded-check-observers", "recorded-check-observers/<slot>"],
+  ["seat-quota-recovery", "seat-quota-recovery/<entry>"],
+  ["done-media", "done-media/owner.lock"],
+  ["report-media", "report-media/owner"],
+  ["prototype-reviews", "prototype-reviews/<entry>"],
+  ["telegram", "telegram/<entry>"],
+  ["codex-update", "codex-update/<entry>"],
+]);
+
+const KNOWN_LOCK_BASENAME_SUBJECTS: ReadonlySet<string> = new Set([
+  "attempt-temp.sqlite.sweep",
+  "hot-state-authority.json",
+  "lifecycle-journal.json",
+  "operator-settings.json",
+  "worker-limit.json",
+  "project-settings.json",
+  "tasks-row-preparation.json",
+  "disk-pressure.json",
+  "disk-pressure-notices.json",
+  "release-runs.json",
+  "structured-user-metadata-publication",
+  ".delegatus-initialization",
+  "import-job",
+  "publication.lock",
+  "openai-api-key",
+  "voice-settings.json",
+  "accounts.json",
+  "asks-you-settings.json",
+  "companion-state.json",
+  "memory-settings.json",
+  "role-memory-history.json",
+  "provider-settings.json",
+  "loop-profiler.json",
+]);
+
+const KNOWN_BUSY_LABELS: ReadonlyMap<string, string> = new Map([
+  ["recorded check host custody", "recorded-check.host-custody"],
+  ["recorded-check handoff", "recorded-check.handoff"],
+  ["recorded-check acknowledgement", "recorded-check.acknowledgement"],
+  ["recorded-check observation", "recorded-check.observation"],
+  ["attempt-temp sweep admission", "attempt-temp.sweep"],
+  ["attempt evidence copy admission", "attempt-evidence.copy"],
+  ["approved attempt-temp execution", "attempt-temp.approved"],
+  ["temporary data retention", "temporary-data.retention"],
+  ["done media is busy", "done.media"],
+  ["report media is busy", "report.media"],
+  ["prototype decision is busy", "prototype.decision"],
+  ["prototype publication is busy", "prototype.publication"],
+  ["Telegram review polls are busy", "telegram.review-polls"],
+  ["Telegram review post is busy", "telegram.review-post"],
+  ["operator settings are busy", "operator.settings"],
+  ["worker limit store is busy", "operator.worker-limit"],
+  ["hot-state authority is busy", "state.hot-authority"],
+  ["retirement guard fence is busy", "state.retirement-guard"],
+  ["disk pressure report is busy", "state.disk-pressure"],
+  ["disk pressure notices", "state.disk-pressure-notices"],
+  ["release runs busy", "release.runs"],
+  ["profile-store-busy", "loop-profiler.store"],
+  ["memory import busy", "memory.import"],
+  ["memory source busy", "memory.source"],
+  ["shared memory settings are busy", "memory.settings"],
+  ["role memory history setting is busy", "memory.role-history"],
+  ["metadata collection is busy", "metadata.collection"],
+  ["account guard obligations are busy", "account-guard.obligations"],
+  ["interruption index initialization is busy", "interruption.index"],
+  ["recipient interruption evidence is busy", "interruption.evidence"],
+  ["project initialization is already in progress; retry", "pipeline.initialize"],
+  ["conversation migration journals are busy", "accounts.migration"],
+  ["the voice settings are busy", "voice.settings"],
+  ["the provider settings are busy", "provider.settings"],
+  ["the key is busy", "keys.store"],
+  ["companion state is busy", "voice-companion.state"],
+  ["asks-you settings are busy", "asks-you.settings"],
+  ["native caller proof is busy", "attention.native-proof"],
+  ["Codex sub-agent observation boundary is busy", "codex.subagent-boundary"],
+  ["App repository declaration is busy", "git.forge-credentials"],
+]);
+
+/** Maps a target lock path strictly onto a closed set of canonical subject
+    tokens so untrusted directory names, account ids, usernames, or filenames
+    can never enter diagnostic logs. */
+export function fileTransactionSubject(filePath: string): string {
+  const segments = filePath.replaceAll("\\", "/").split("/").filter(Boolean);
+  const rawBase = segments.at(-1) ?? "";
+  const rawParent = segments.at(-2) ?? "";
+  if (rawParent === "prototype-reviews") {
+    if (rawBase.endsWith(".polls.lock")) return "prototype-reviews/<id>.polls.lock";
+    if (rawBase.endsWith(".telegram.lock")) return "prototype-reviews/<id>.telegram.lock";
+    if (rawBase === "publication.lock") return "prototype-reviews/publication.lock";
+    return "prototype-reviews/<entry>";
+  }
+  const parentSubject = KNOWN_LOCK_PARENT_SUBJECTS.get(rawParent);
+  if (parentSubject) return parentSubject;
+  if (KNOWN_LOCK_BASENAME_SUBJECTS.has(rawBase)) return rawBase;
+  if (rawBase.endsWith(".pending.jsonl")) return "interruption-obligations";
+  if (rawBase.endsWith(".polls.lock")) return "prototype-reviews/<id>.polls.lock";
+  if (rawBase.endsWith(".telegram.lock")) return "prototype-reviews/<id>.telegram.lock";
+  return "file-transaction";
+}
+
+/** Maps a wait onto a closed set of canonical operation labels (or the closed
+    subject token). Arbitrary caller busy messages and untrusted correlation
+    labels are never echoed into logs. */
+export function fileTransactionWaitLabel(busyMessage: string, subject: string, explicitLabel?: string): string {
+  const explicit = explicitLabel?.trim();
+  if (explicit && KNOWN_FILE_TRANSACTION_WAIT_LABELS.has(explicit)) return explicit;
+  const knownBusy = KNOWN_BUSY_LABELS.get(busyMessage.trim());
+  if (knownBusy) return knownBusy;
+  return sanitizeFileTransactionWaitLabel(subject, "file-transaction");
+}
+
+function fileTransactionWaitCorrelation(
+  busyMessage: string,
+  subject: string,
+  explicitLabel?: string,
+): BlockingWaitCorrelation {
+  const current = currentWaitCorrelation();
+  const candidate = current?.label?.trim();
+  const label = candidate && KNOWN_FILE_TRANSACTION_WAIT_LABELS.has(candidate)
+    ? candidate
+    : fileTransactionWaitLabel(busyMessage, subject, explicitLabel);
+  const operationId = sanitizeFileTransactionOperationId(current?.operationId);
+  return operationId ? { label, operationId } : { label };
+}
+
+function parseHolderRecord(raw: string, mtimeMs: number): FileLockHolder | undefined {
+  try {
+    const parsed = JSON.parse(raw) as { pid?: unknown; role?: unknown };
+    const pid = typeof parsed.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0 ? parsed.pid : null;
+    const sameProcess = pid === process.pid;
+    const fallback = sameProcess ? blockingWaitRole() : "other-process";
+    const kind = normalizeBlockingWaitHolderKind(parsed.role, fallback);
+    return {
+      kind,
+      ageMs: Math.max(0, Date.now() - mtimeMs),
+      sameProcess,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function readLockHolderSync(lockPath: string): FileLockHolder | undefined {
+  try {
+    const raw = fs.readFileSync(lockPath, "utf8");
+    const stat = fs.statSync(lockPath);
+    return parseHolderRecord(raw, stat.mtimeMs);
+  } catch {
+    return undefined;
+  }
+}
+
+async function readLockHolderAsync(lockPath: string): Promise<FileLockHolder | undefined> {
+  try {
+    const [raw, stat] = await Promise.all([fsp.readFile(lockPath, "utf8"), fsp.stat(lockPath)]);
+    return parseHolderRecord(raw, stat.mtimeMs);
+  } catch {
+    return undefined;
+  }
+}
+
 function transactionPath(filePath: string): string { return path.resolve(filePath); }
 
 interface LockOwner {
   pid: number;
   startIdentity: string | null;
   token: string;
+  role?: string;
 }
 
 interface LockTicket {
@@ -139,6 +315,7 @@ function enqueue(filePath: string): LockTicket {
     pid: process.pid,
     startIdentity: procBackend.processIdentity(process.pid),
     token: crypto.randomUUID(),
+    role: normalizeBlockingWaitHolderKind(blockingWaitRole(), "unowned"),
   };
   const ticketPath = path.join(
     queuePath,
@@ -194,6 +371,7 @@ export function withFileTransactionAttempt<T>(filePath: string, busyMessage: str
   try {
     const descriptor = tryAcquire(ticket);
     if (descriptor === null) throw new FileTransactionAdmissionError(busyMessage);
+    noteWriterAdmitted();
     try { return operation(); }
     finally { release(ticket, descriptor); }
   } finally { removeIfOwned(ticket.ticketPath, ticket.owner.token); }
@@ -203,10 +381,12 @@ export function withFileTransactionAttempt<T>(filePath: string, busyMessage: str
  * Run one synchronous read-modify-write transaction under the process-shared
  * FIFO lock for the target file.
  */
-export function withFileTransactionSync<T>(filePath: string, busyMessage: string, operation: () => T): T {
+export function withFileTransactionSync<T>(filePath: string, busyMessage: string, operation: () => T, options: { label?: string } = {}): T {
   const startedAt = performance.now();
   let waited = false;
   let admittedAt: number | undefined;
+  let holder: FileLockHolder | undefined;
+  let callSiteStack: string | undefined;
   // A same-process async owner cannot make progress while this API blocks the
   // event loop. Refuse before queuing so mixed sync/async callers stay safe.
   if ((activeAsyncTransactions.get(transactionPath(filePath)) ?? 0) > 0) {
@@ -217,23 +397,42 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
       const descriptor = tryAcquire(ticket);
       if (descriptor === null) {
-        waited = true;
+        if (!waited) {
+          waited = true;
+          callSiteStack = new Error().stack;
+        }
         // eslint-disable-next-line no-restricted-syntax -- Legacy synchronous file-transaction API still reached while serving; async API is available.
         Atomics.wait(SYNC_SLEEP, 0, 0, LOCK_WAIT_MS);
         continue;
       }
       admittedAt = performance.now();
+      noteWriterAdmitted();
       try {
         return operation();
       } finally {
         release(ticket, descriptor);
       }
     }
+    // Collect holder metadata only on final timeout so diagnostic stat/read
+    // I/O never runs between retry attempts or delays admission.
+    holder = readLockHolderSync(ticket.lockPath);
     throw new FileTransactionBusyError(busyMessage);
   } finally {
     removeIfOwned(ticket.ticketPath, ticket.owner.token);
-    if (waited) recordBlockingWait({ site: "file-transaction", synchronous: true,
-      durationMs: (admittedAt ?? performance.now()) - startedAt, subject: "file-transaction", refused: admittedAt === undefined });
+    if (waited) {
+      const durationMs = (admittedAt ?? performance.now()) - startedAt;
+      const subject = fileTransactionSubject(filePath);
+      recordBlockingWait({
+        site: "file-transaction",
+        synchronous: true,
+        durationMs,
+        subject,
+        correlation: fileTransactionWaitCorrelation(busyMessage, subject, options.label),
+        ...(durationMs >= 50 && callSiteStack ? { callSite: fileTransactionCallSite(callSiteStack) } : {}),
+        ...(holder ? { holder } : {}),
+        refused: admittedAt === undefined,
+      });
+    }
   }
 }
 
@@ -241,20 +440,29 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
  * Run one asynchronous read-modify-write transaction under the same
  * process-shared FIFO lock used by synchronous writers.
  */
-export async function withFileTransaction<T>(filePath: string, busyMessage: string, operation: () => Promise<T> | T): Promise<T> {
+export async function withFileTransaction<T>(filePath: string, busyMessage: string, operation: () => Promise<T> | T, options: { label?: string } = {}): Promise<T> {
   const startedAt = performance.now();
   let waited = false;
   let admittedAt: number | undefined;
+  let holder: FileLockHolder | undefined;
+  let callSiteStack: string | undefined;
   const ticket = enqueue(filePath);
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
       const descriptor = tryAcquire(ticket);
       if (descriptor === null) {
-        waited = true;
+        if (!waited) {
+          waited = true;
+          callSiteStack = new Error().stack;
+          void readLockHolderAsync(ticket.lockPath).then((resolved) => {
+            holder = resolved;
+          }, () => undefined);
+        }
         await new Promise<void>(resolve => setTimeout(resolve, LOCK_WAIT_MS));
         continue;
       }
       admittedAt = performance.now();
+      noteWriterAdmitted();
       try {
         const result = operation();
         // A synchronous commit releases before another in-process synchronous
@@ -265,25 +473,40 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
     throw new FileTransactionBusyError(busyMessage);
   } finally {
     removeIfOwned(ticket.ticketPath, ticket.owner.token);
-    if (waited) recordBlockingWait({ site: "file-transaction", synchronous: false,
-      durationMs: (admittedAt ?? performance.now()) - startedAt, subject: "file-transaction", refused: admittedAt === undefined });
+    if (waited) {
+      const durationMs = (admittedAt ?? performance.now()) - startedAt;
+      const subject = fileTransactionSubject(filePath);
+      recordBlockingWait({
+        site: "file-transaction",
+        synchronous: false,
+        durationMs,
+        subject,
+        correlation: fileTransactionWaitCorrelation(busyMessage, subject, options.label),
+        ...(durationMs >= 50 && callSiteStack ? { callSite: fileTransactionCallSite(callSiteStack) } : {}),
+        ...(holder ? { holder } : {}),
+        refused: admittedAt === undefined,
+      });
+    }
   }
 }
 
 /** Async filesystem admission for paths whose publication must not perform
  * synchronous filesystem work on the Viewer loop. */
-export async function withFileTransactionAsync<T>(filePath: string, busyMessage: string, operation: () => Promise<T> | T, options: { waitMs?: number } = {}): Promise<T> {
+export async function withFileTransactionAsync<T>(filePath: string, busyMessage: string, operation: () => Promise<T> | T, options: { waitMs?: number; label?: string } = {}): Promise<T> {
   const startedAt = performance.now();
   let waited = false;
   let admittedAt: number | undefined;
+  let holder: FileLockHolder | undefined;
   const inProcessPath = transactionPath(filePath);
-  activeAsyncTransactions.set(inProcessPath, (activeAsyncTransactions.get(inProcessPath) ?? 0) + 1);
+  const inProcessActive = activeAsyncTransactions.get(inProcessPath) ?? 0;
+  let callSiteStack: string | undefined = inProcessActive > 0 ? new Error().stack : undefined;
+  activeAsyncTransactions.set(inProcessPath, inProcessActive + 1);
   try {
   const lockPath = `${filePath}.write-lock`;
   const queuePath = `${filePath}.write-locks`;
   const deadline = options.waitMs === undefined ? Infinity : startedAt + Math.max(0, options.waitMs);
   await fsp.mkdir(queuePath, { recursive: true, mode: 0o700 });
-  const owner: LockOwner = { pid: process.pid, startIdentity: await processIdentityAsync(process.pid), token: crypto.randomUUID() };
+  const owner: LockOwner = { pid: process.pid, startIdentity: await processIdentityAsync(process.pid), token: crypto.randomUUID(), role: normalizeBlockingWaitHolderKind(blockingWaitRole(), "unowned") };
   const ticketPath = path.join(queuePath, `${String(Date.now()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`);
   const ticket = { lockPath, queuePath, owner, ticketPath };
   const ticketHandle = await fsp.open(ticketPath, "wx", 0o600);
@@ -349,7 +572,16 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
       if (performance.now() >= deadline) throw new FileTransactionBusyError(busyMessage);
       const handle = await acquireAsync();
       if (handle === null) {
-        waited = true;
+        if (!waited) {
+          waited = true;
+          callSiteStack ??= new Error().stack;
+          // Diagnostic holder inspection runs off the admission path so slow
+          // filesystem metadata can never delay lock acquisition or trigger
+          // a false FileTransactionBusyError before the caller's deadline.
+          void readLockHolderAsync(lockPath).then((resolved) => {
+            holder = resolved;
+          }, () => undefined);
+        }
         await new Promise<void>((resolve) => setTimeout(resolve, Math.min(LOCK_WAIT_MS, Math.max(0, deadline - performance.now()))));
         continue;
       }
@@ -359,6 +591,7 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
         throw new FileTransactionBusyError(busyMessage);
       }
       admittedAt = performance.now();
+      noteWriterAdmitted();
       try {
         const result = operation();
         // A synchronous commit releases before another in-process synchronous
@@ -372,8 +605,20 @@ export async function withFileTransactionAsync<T>(filePath: string, busyMessage:
     throw new FileTransactionBusyError(busyMessage);
   } finally {
     await removeOwnedAsync(ticket.ticketPath, owner.token);
-    if (waited) recordBlockingWait({ site: "file-transaction", synchronous: false,
-      durationMs: (admittedAt ?? performance.now()) - startedAt, subject: "file-transaction", refused: admittedAt === undefined });
+    if (waited) {
+      const durationMs = (admittedAt ?? performance.now()) - startedAt;
+      const subject = fileTransactionSubject(filePath);
+      recordBlockingWait({
+        site: "file-transaction",
+        synchronous: false,
+        durationMs,
+        subject,
+        correlation: fileTransactionWaitCorrelation(busyMessage, subject, options.label),
+        ...(durationMs >= 50 && callSiteStack ? { callSite: fileTransactionCallSite(callSiteStack) } : {}),
+        ...(holder ? { holder } : {}),
+        refused: admittedAt === undefined,
+      });
+    }
   }
   } finally {
     const remaining = (activeAsyncTransactions.get(inProcessPath) ?? 1) - 1;

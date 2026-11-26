@@ -6,8 +6,8 @@ export const APP_PUSH_WAIT_REASON = "waiting for GitHub to accept the App push";
 export const APP_PUSH_WINDOW_ENDED_REASON = `${APP_PUSH_WAIT_REASON}; the one-hour automatic retry window ended`;
 export const APP_PUSH_RETRY_WINDOW_MS = 60 * 60_000;
 
-export function publicationInterrupted(result: { error: string; outcome?: "not-landed" }): boolean {
-  return result.outcome === "not-landed" || result.error === "interrupted publication did not leave its accepted head on the remote";
+export function publicationInterrupted(result: { error: string; outcome?: "not-landed" | "superseded" }): boolean {
+  return result.outcome !== "superseded" && (result.outcome === "not-landed" || result.error === "interrupted publication did not leave its accepted head on the remote");
 }
 
 export function publicationEnvironmentFailure(result: { error: string; failure?: Pick<PipelinePublicationFailure, "step" | "outputTail"> & Partial<PipelinePublicationFailure> }): boolean {
@@ -15,8 +15,30 @@ export function publicationEnvironmentFailure(result: { error: string; failure?:
   return result.error.startsWith("stage environment:") || failure?.step === "preparing publication dependencies";
 }
 
+/** The publisher can time out while reading the sealed graph, before it has
+ * a child failure to attach. The settled refusal retains the phase verbatim. */
+export function publicationDependencyValidationDeadline(result: { error: string; failure?: PipelinePublicationFailure }): boolean {
+  return (!result.failure || result.failure.step === "preparing publication dependencies")
+    && result.error.startsWith("stage environment: dependency preparation failed: dependency preparation deadline exceeded [validation: existing link and seal,");
+}
+
 export function publicationPrivacyRefusal(line: string): boolean {
   return /^PRIVACY GATE:[ \t]*FAIL$|^pre-push: privacy:.*(?:failed|refused)/.test(line.trim());
+}
+
+/** Every failed scanner report must contain only its configuration fault.
+ * Missing or mixed summaries retain the scanner's refusal. */
+export function publicationPrivacyConfigurationFault(output: string): boolean {
+  const lines = output.split("\n").map(line => line.trim());
+  let found = false;
+  for (let index = 0; index < lines.length; index++) {
+    if (!/^PRIVACY GATE:[ \t]*FAIL$/.test(lines[index]!)) continue;
+    found = true;
+    const counts: string[] = [];
+    for (let next = index + 1; next < lines.length && /^[a-z_]+: \d+$/.test(lines[next]!); next++) counts.push(lines[next]!);
+    if (counts.length !== 1 || !/^configuration_error: [1-9]\d*$/.test(counts[0]!)) return false;
+  }
+  return found;
 }
 
 const TRANSPORT_ADMITTED = "pre-push: verified completed checks for this publication; transport admitted";
@@ -52,13 +74,15 @@ export function publicationRemoteRefusal(failure: PipelinePublicationFailure | u
       || !!publicationRemoteRefusalLine(failure.outputTail));
 }
 
-export function recoverablePublication(result: { error: string; failure?: PipelinePublicationFailure; outcome?: "not-landed" }): boolean {
-  return result.failure?.retryableApp403 === true || result.failure?.retryableDeadline === true || publicationInterrupted(result)
+export function recoverablePublication(result: { error: string; failure?: PipelinePublicationFailure; outcome?: "not-landed" | "superseded" }): boolean {
+  if (result.outcome === "superseded") return false;
+  return result.failure?.retryableApp403 === true || result.failure?.retryableDeadline === true
+    || publicationDependencyValidationDeadline(result) || publicationInterrupted(result)
     || result.failure?.changedFiles === 0 && publicationFailurePhase(result.failure) !== "privacy" && !publicationRemoteRefusal(result.failure);
 }
 
-/** One failed operation owns one cause and one retry time, even when its
- * acknowledgement, controller or ownership epoch is replaced. */
+/** One recorded operation owns one cause and retry time across recovery.
+ * Superseded admissions retain their disposition without spending a budget. */
 export function recordPublicationFailure(pipeline: Pipeline, attempt: Pick<PipelineStageAttempt, "publicationRetry"> | undefined,
   input: Omit<PipelinePublicationRecovery["history"][number], "retryAt"> & { recoverable: boolean },
   delays: readonly number[],
@@ -74,14 +98,17 @@ export function recordPublicationFailure(pipeline: Pipeline, attempt: Pick<Pipel
   const recorded = recovery.history.find(item => item.operationId === operation.id);
   if (recorded) return recorded;
   const result = operation.result ?? operation.executor?.result;
-  const cause = result?.ok === false && publicationEnvironmentFailure(result) || input.detail.startsWith("stage environment:")
+  const superseded = input.cause === "superseded" || result?.outcome === "superseded";
+  const recoverable = !superseded && input.recoverable;
+  const cause = superseded ? "superseded" : result?.ok === false && publicationEnvironmentFailure(result) || input.detail.startsWith("stage environment:")
     ? "environment" : input.cause === "check-failure" && result?.ok === false && publicationRemoteRefusal(result.failure)
       ? "remote-refusal" : input.cause;
   // Takeover's legacy writer passes the beginning of the push output. A long
   // successful hook log can fill it before the remote explains its refusal.
   const remoteLine = cause === "remote-refusal" && result?.failure && publicationRemoteRefusalLine(result.failure.outputTail);
-  const detail = remoteLine ? `remote publication was refused; underlying cause is unknown: ${remoteLine}`.slice(0, 400) : input.detail;
-  if (input.cause === "app-git-403") {
+  const detail = remoteLine ? `remote publication was refused; underlying cause is unknown: ${remoteLine}`.slice(0, 400)
+    : result?.ok === false && publicationDependencyValidationDeadline(result) ? result.error.slice(0, 400) : input.detail;
+  if (!superseded && input.cause === "app-git-403") {
     const result = operation.result ?? operation.executor?.result;
     // Older receipts have no observation field. Their immutable refusal journal
     // predates controller recovery too; never replace it with the restart time.
@@ -90,12 +117,12 @@ export function recordPublicationFailure(pipeline: Pipeline, attempt: Pick<Pipel
     const observedAt = result?.failure?.observedAt ?? journal ?? input.at;
     recovery.app403Since = [recovery.app403Since, observedAt].filter((at): at is string => !!at).sort()[0]!;
   }
-  if (input.recoverable && !sameLegacy) recovery.failures++;
-  if (sameLegacy && legacy.exhausted) recovery.failures = Math.max(recovery.failures, delays.length + 1);
-  const delay = input.recoverable && recovery.failures <= delays.length ? delays[Math.max(0, recovery.failures - 1)] : undefined;
-  let retryAt = sameLegacy && !legacy.exhausted ? legacy.retryAt
+  if (recoverable && !sameLegacy) recovery.failures++;
+  if (!superseded && sameLegacy && legacy.exhausted) recovery.failures = Math.max(recovery.failures, delays.length + 1);
+  const delay = recoverable && recovery.failures <= delays.length ? delays[Math.max(0, recovery.failures - 1)] : undefined;
+  let retryAt = !superseded && sameLegacy && !legacy.exhausted ? legacy.retryAt
     : delay === undefined ? null : new Date(Date.parse(input.at) + delay).toISOString();
-  if (input.cause === "app-git-403" && input.recoverable) {
+  if (!superseded && input.cause === "app-git-403" && input.recoverable) {
     const end = Date.parse(recovery.app403Since!) + APP_PUSH_RETRY_WINDOW_MS;
     const count = recovery.history.filter(entry => entry.cause === "app-git-403").length;
     retryAt = Date.parse(input.at) >= end ? null
@@ -103,7 +130,7 @@ export function recordPublicationFailure(pipeline: Pipeline, attempt: Pick<Pipel
   }
   const record = { operationId: input.operationId, epoch: input.epoch, at: input.at,
     cause, detail, retryAt };
-  recovery.totalAttempts++;
+  if (!superseded) recovery.totalAttempts++;
   recovery.history = [...recovery.history, record].slice(-HISTORY_LIMIT);
   return record;
 }
@@ -119,7 +146,7 @@ export function mergePublicationRecovery(previous: Pipeline["publicationRecovery
     const entries = new Map([...old.history, ...row.history].map(entry => [entry.operationId, entry]));
     merged[sha] = { sha, failures: Math.max(old.failures, row.failures),
       ...((old.app403Since || row.app403Since) ? { app403Since: [old.app403Since, row.app403Since].filter((at): at is string => !!at).sort()[0] } : {}),
-      totalAttempts: Math.max(old.totalAttempts, row.totalAttempts, entries.size),
+      totalAttempts: Math.max(old.totalAttempts, row.totalAttempts, [...entries.values()].filter(entry => entry.cause !== "superseded").length),
       history: [...entries.values()].sort((a, b) => a.epoch - b.epoch || a.at.localeCompare(b.at)).slice(-HISTORY_LIMIT) };
   }
   return merged;
@@ -134,11 +161,11 @@ export function isPublicationRecovery(value: unknown): boolean {
     return row.sha === sha && Number.isSafeInteger(row.failures) && row.failures >= 0
       && (row.app403Since === undefined || typeof row.app403Since === "string" && Number.isFinite(Date.parse(row.app403Since)))
       && Number.isSafeInteger(row.totalAttempts) && Array.isArray(row.history) && row.history.length <= HISTORY_LIMIT
-      && row.totalAttempts >= row.failures && row.totalAttempts >= row.history.length
+      && row.totalAttempts >= row.failures && row.totalAttempts >= row.history.filter(entry => entry?.cause !== "superseded").length
       && new Set(row.history.map(entry => entry?.operationId)).size === row.history.length
       && row.history.every(entry => entry && typeof entry.operationId === "string" && !!entry.operationId
         && Number.isSafeInteger(entry.epoch) && entry.epoch > 0 && typeof entry.at === "string" && Number.isFinite(Date.parse(entry.at))
-        && ["infrastructure-deadline", "interrupted", "check-failure", "app-git-403", "environment", "remote-refusal"].includes(entry.cause)
+        && ["infrastructure-deadline", "interrupted", "check-failure", "app-git-403", "environment", "remote-refusal", "superseded"].includes(entry.cause)
         && typeof entry.detail === "string" && entry.detail.length <= 400
         && (entry.retryAt === null || typeof entry.retryAt === "string" && Number.isFinite(Date.parse(entry.retryAt))));
   });

@@ -32,7 +32,7 @@ export function isTopModalLayer(id: symbol): boolean {
   return layers.length > 0 && layers[layers.length - 1] === id;
 }
 
-const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+export const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
 /**
  * Is this element in the browser's Tab order at all?

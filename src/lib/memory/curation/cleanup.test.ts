@@ -5,8 +5,8 @@ import path from "node:path";
 import { createTask } from "@/lib/tasks/commands";
 import { loadTasks, loadTasksFile, saveTasks } from "@/lib/tasks/store";
 import { groupHideState } from "@/lib/tasks/groupHide";
-import { initializeStateCollections, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
-import { lifecycleJournalPath, readLifecycleJournal } from "@/lib/lifecycle/journal";
+import { initializeStateCollections, injectStateWriteFaultForTests, SqliteStateCollection } from "@/lib/state/sqliteStateStore";
+import { importLegacyLifecycleJournal, LIFECYCLE_COLLECTION, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { retireCuratorPlaceholdersAtStartup } from "./cleanup";
 import { readPass, type CuratorPass } from "./store";
 
@@ -70,11 +70,12 @@ test("loss of startup authority writes neither tasks nor a migration marker", as
 });
 test("a journal failure replays the committed per-project count on the next startup", async () => {
   saveTasks([seed("retry", "project-a")], path.join(directory, "tasks.json"));
-  const journal = lifecycleJournalPath();
-  fs.mkdirSync(journal);
-  await expect(retireCuratorPlaceholdersAtStartup(NOW)).rejects.toThrow();
+  importLegacyLifecycleJournal();
+  injectStateWriteFaultForTests({ site: "commit", collection: LIFECYCLE_COLLECTION, error: new Error("the journal is unwritable") });
+  try {
+    await expect(retireCuratorPlaceholdersAtStartup(NOW)).rejects.toThrow("the journal is unwritable");
+  } finally { injectStateWriteFaultForTests(null); }
   expect(loadTasks(path.join(directory, "tasks.json"))[0].status).toBe("done");
-  fs.rmdirSync(journal);
   expect(await retireCuratorPlaceholdersAtStartup(NOW)).toEqual({});
   expect(readLifecycleJournal().events).toHaveLength(1);
   expect(readLifecycleJournal().events[0].summary).toContain("1 curator placeholder");

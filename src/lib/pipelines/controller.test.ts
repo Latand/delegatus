@@ -56,20 +56,18 @@ test("incomplete ticks log their start, age and one completion with exact suppre
   }
 });
 
-test("an incomplete catalog defers flows quietly under the CLI and still reports actual failures", async () => {
+test("an incomplete catalog stays quiet under the CLI and still reports actual failures", async () => {
   const previous = process.env.LLV_QUIET_DIAGNOSTICS;
   const info = spyOn(console, "info").mockImplementation(() => {});
   const error = spyOn(console, "error").mockImplementation(() => {});
-  let fail = false, flows = 0;
+  let fail = false;
   const controller = new FlowPipelineController({
     tickPipelines: async () => { if (fail) throw new Error("fixture pipeline failure"); return { changed: false }; },
-    tickFlows: async () => { flows++; return { changed: false }; },
     scan: async () => ({ files: [], complete: false }),
   }, { maxPasses: 1 });
   try {
     process.env.LLV_QUIET_DIAGNOSTICS = "1";
     await controller.tick();
-    expect(flows).toBe(0);
     expect(info).not.toHaveBeenCalled();
     delete process.env.LLV_QUIET_DIAGNOSTICS;
     await controller.tick();
@@ -123,7 +121,6 @@ test("an automatic handoff holds a new controller cycle until the next tick", as
   const controller = new FlowPipelineController({
     handoffHeld: () => held,
     tickPipelines: async () => { stages += 1; return { changed: false }; },
-    tickFlows: async () => ({ changed: false }),
   }, { maxPasses: 1 });
   await controller.tick();
   expect(stages).toBe(0);
@@ -148,8 +145,6 @@ function accountControllerWedgedInRuntime(): Promise<void> {
     {
       scan: async () => ({ files: [], projectCatalog: [], complete: true }),
       reconcileInventory: async () => registry.snapshot(),
-      reconcileFlowOwnership: async () => undefined,
-      reconcileWorkflowOwnership: async () => undefined,
       reconcileHandoffOwnership: async () => undefined,
       reconcileFiles: async () => undefined,
       reconcileRuntime: async () => {
@@ -208,15 +203,10 @@ test("a phase deadline releases the controller and later watchdog ticks keep pip
   const heartbeatFile = path.join(sandbox, "wedged-heartbeat.json");
   let now = 1_000;
   let flowCalls = 0;
-  let pipelineCalls = 0;
   let markFlowStarted = () => {};
   const flowStarted = new Promise<void>((resolve) => { markFlowStarted = resolve; });
   const wedged = new Promise<never>(() => {});
   const ports: FlowPipelineControllerPorts = {
-    tickFlows: async () => {
-      pipelineCalls += 1;
-      return { changed: false };
-    },
     tickPipelines: async () => {
       flowCalls += 1;
       markFlowStarted();
@@ -243,7 +233,6 @@ test("a phase deadline releases the controller and later watchdog ticks keep pip
   await first;
 
   expect(flowCalls).toBe(1);
-  expect(pipelineCalls).toBe(0);
   expect(heartbeats).toContainEqual(expect.objectContaining({
     phase: "pipelines",
     state: "timed-out",
@@ -259,49 +248,11 @@ test("a phase deadline releases the controller and later watchdog ticks keep pip
 
   await controller.poll();
   expect(flowCalls).toBe(2);
-  expect(pipelineCalls).toBe(0);
   expect(heartbeats).toContainEqual(expect.objectContaining({
     phase: "pipelines",
     state: "completed",
     ageMs: 0,
   }));
-});
-
-test("a retired flow port cannot block completed scans or pipeline settlement", async () => {
-  type ManualTimer = { active: boolean; callback: () => void };
-  const timers: ManualTimer[] = [];
-  const entry = { path: "/sessions/completed-builder.jsonl" } as never;
-  const pipelineEntries: unknown[][] = [];
-  let scans = 0;
-  let markFlowStarted = () => {};
-  const flowStarted = new Promise<void>((resolve) => { markFlowStarted = resolve; });
-  const wedged = new Promise<never>(() => {});
-  const controller = new FlowPipelineController({
-    scan: async () => {
-      scans += 1;
-      return { files: [entry], complete: true };
-    },
-    tickPipelines: async (entries) => {
-      pipelineEntries.push(entries);
-      return { changed: false };
-    },
-    tickFlows: async () => {
-      markFlowStarted();
-      return wedged;
-    },
-    scheduleTimeout: (callback) => {
-      const timer = { active: true, callback };
-      timers.push(timer);
-      return timer;
-    },
-    clearTimeout: (timer) => { (timer as ManualTimer).active = false; },
-  }, { phaseDeadlineMs: 500 });
-
-  const tick = controller.tick("durable-pass-verdict");
-  await tick;
-
-  expect(scans).toBe(1);
-  expect(pipelineEntries).toEqual([[], [entry]]);
 });
 
 test("startup recovery and the watchdog converge a pending transition without duplicate effects", async () => {
@@ -314,7 +265,6 @@ test("startup recovery and the watchdog converge a pending transition without du
       transitions += 1;
       return { changed: true };
     },
-    tickFlows: async () => ({ changed: false }),
   });
 
   await controller.recover();
@@ -336,7 +286,6 @@ test("a wake during controller settlement runs one additional cycle without dupl
       transitionEffects += 1;
       return { changed: true };
     },
-    tickFlows: async () => ({ changed: false }),
     publishHeartbeat: (heartbeat) => {
       if (heartbeat.phase !== "idle") return;
       idleCycles.push(heartbeat.cycle);
@@ -422,12 +371,6 @@ test("pipeline settlement leads the cycle and one scanner snapshot feeds the nex
       pipelineChanged = false;
       return { changed };
     },
-    tickFlows: async (...args: unknown[]) => {
-      const files = args[0] as unknown[] | undefined;
-      calls.push(`flows:${files?.length ?? 0}`);
-      expect(files).toEqual([entry]);
-      return { changed: false };
-    },
   } as unknown as FlowPipelineControllerPorts;
 
   await new FlowPipelineController(ports).tick("terminal-event");
@@ -444,7 +387,6 @@ test("every settled cycle starts the spawn completion-notice sweep, and a sweep 
   const logged: string[] = [];
   const controller = new FlowPipelineController({
     tickPipelines: async () => ({ changed: false }),
-    tickFlows: async () => ({ changed: false }),
     sweepSpawnNotices: () => { sweeps += 1; if (sweeps === 2) throw new Error("store busy"); },
     log: (message) => { logged.push(message); },
   }, { maxPasses: 1 });
@@ -461,7 +403,6 @@ test("a failed scan still starts independent sweeps and a later tick recovers", 
   const sweeps: string[] = [];
   const heartbeats: FlowPipelineControllerHeartbeat[] = [];
   let scans = 0;
-  let flows = 0;
   const controller = new FlowPipelineController({
     now: () => 1_000,
     tickPipelines: async () => ({ changed: false }),
@@ -469,7 +410,6 @@ test("a failed scan still starts independent sweeps and a later tick recovers", 
       if (++scans === 1) throw failure;
       return { files: [], complete: true };
     },
-    tickFlows: async () => { flows++; return { changed: false }; },
     sweepForgeLinks: () => { sweeps.push("forge"); },
     sweepAutoMerge: () => { sweeps.push("merge"); },
     sweepSpawnNotices: () => { sweeps.push("notice"); },
@@ -479,13 +419,11 @@ test("a failed scan still starts independent sweeps and a later tick recovers", 
 
   await expect(controller.tick()).rejects.toBe(failure);
   expect(sweeps).toEqual(["forge", "merge", "notice"]);
-  expect(flows).toBe(0);
   expect(heartbeats.at(-1)).toMatchObject({ phase: "scan", state: "failed" });
   expect(controller.idle()).toBe(true);
 
   await controller.tick();
   expect(scans).toBe(2);
-  expect(flows).toBe(0);
   expect(sweeps).toEqual(["forge", "merge", "notice", "forge", "merge", "notice"]);
   expect(heartbeats.at(-1)).toMatchObject({ phase: "idle", state: "idle" });
 });
@@ -501,7 +439,7 @@ test("one failed cycle settles before trailing success, with one phase failure",
   let calls = 0;
   const controller = new FlowPipelineController({ now: () => 0,
     tickPipelines: () => { calls++; entered(); return calls === 1 ? first : trailing; },
-    tickFlows: async () => ({ changed: false }), log: (_, error) => { if (error) errors.push(error); },
+    log: (_, error) => { if (error) errors.push(error); },
   }, { maxPasses: 1 });
   let settled = false;
   const failure = new Error("one admission refusal");
@@ -521,7 +459,6 @@ test("continuous wakes cannot extend a controller request beyond its cycle budge
   let calls = 0;
   const controller: FlowPipelineController = new FlowPipelineController({ now: () => 0,
     tickPipelines: async () => { calls++; if (calls < 12) controller.tick("more"); return { changed: false }; },
-    tickFlows: async () => ({ changed: false }),
   }, { maxPasses: 1 });
   await controller.tick();
   expect(calls).toBeLessThanOrEqual(2);
@@ -623,7 +560,6 @@ test.each([1, 2, 3])("one deferred error with 953 wakes, 31 polls and 9 remote w
   let calls = 0, phase = 0, requested = 0, watchdog = 0, route = 0;
   const controller = new FlowPipelineController({ now: () => 0,
     tickPipelines: () => { calls++; entered(); return calls === 1 ? first : trailing; },
-    tickFlows: async () => ({ changed: false }),
     log: (_, error) => { if (error) phase++; },
   }, { maxPasses: 1 });
   const unregister = registerPipelineTick(() => controller.tick("signal"));
@@ -660,7 +596,6 @@ test("initial and trailing cycles share the same request deadline", async () => 
   let now = 0, calls = 0;
   const controller: FlowPipelineController = new FlowPipelineController({ now: () => now,
     tickPipelines: async () => { calls++; now += 12; controller.tick("more"); return { changed: false }; },
-    tickFlows: async () => { now += 6; return { changed: false }; },
   }, { maxPasses: 1, requestDeadlineMs: 10 });
   await controller.tick();
   expect(calls).toBe(1);

@@ -240,6 +240,23 @@ test("account_limits accepts Copilot as an engine through the MCP protocol", asy
   });
 });
 
+test("account_limits accepts Antigravity as an engine through the MCP protocol", async () => {
+  let receivedEngine: unknown;
+  await withProtocolClient(inertBindings({
+    account_limits: async (args) => {
+      receivedEngine = args.engine;
+      return { count: 0, accounts: [] };
+    },
+  }), async (client) => {
+    const result = await client.callTool({
+      name: "account_limits",
+      arguments: { clientRequestId: "limits-antigravity-schema", engine: "antigravity" },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(receivedEngine).toBe("antigravity");
+  });
+});
+
 test("every harmless bounded MCP numeric clamps, coerces, and defaults before its binding", async () => {
   const calls = new Map<McpToolName, Record<string, unknown>[]>();
   const bindings = inertBindings(Object.fromEntries(
@@ -346,13 +363,11 @@ test("extreme bounded integers clamp toward the nearest bound", async () => {
 test("operator mutations and identity-bearing numerics retain exact protocol validation", async () => {
   const calls: string[] = [];
   const bindings = inertBindings({
-    flow_action: async () => { calls.push("flow_action"); return {}; },
     operator_snapshot: async () => { calls.push("operator_snapshot"); return {}; },
     conversation_migration: async () => { calls.push("conversation_migration"); return {}; },
     bridge_directive: async () => { calls.push("bridge_directive"); return {}; },
   });
   const invalidCalls = [
-    { name: "flow_action", arguments: { clientRequestId: "strict-flow-rounds", flowId: "flow_a", action: "set-round-limit", rounds: 51 } },
     { name: "operator_snapshot", arguments: { clientRequestId: "strict-snapshot-pid", caller: { pid: "42" } } },
     { name: "conversation_migration", arguments: { clientRequestId: "strict-migration-revision", conversationId: "conversation_a", action: "retry", expectedRevision: -1 } },
     { name: "bridge_directive", arguments: { clientRequestId: "strict-directive-utterance", rootTurnId: "turn-a", utterance: -1, instruction: "continue" } },
@@ -765,7 +780,7 @@ test("create_pipeline publishes the stage contract in its tool definition", asyn
       "access", "account", "agentMemoryMaxBytes", "effort", "engine", "id", "kind", "model", "next", "onFail", "outputs", "prompt", "role", "runtime", "sandbox", "serviceTier",
     ]);
     expect(stage?.kind?.enum).toEqual(["run", "review-loop"]);
-    expect(stage?.engine?.enum).toEqual(["claude", "codex"]);
+    expect(stage?.engine?.enum).toEqual(["claude", "codex", "antigravity"]);
     expect(stage?.role?.properties?.roleId?.enum).toEqual([...ROLE_IDS]);
     /* #1868: the fail edge publishes what happens once its rounds are spent. */
     type EdgeSchema = { properties?: Record<string, { enum?: string[]; description?: string }>; anyOf?: EdgeSchema[] };
@@ -1099,7 +1114,7 @@ test("the published update_task schema advertises replaceable notes without auth
   await withProtocolClient(inertBindings(), async client => {
     const tool = (await client.listTools()).tools.find(tool => tool.name === "update_task")!;
     const properties = tool.inputSchema.properties!;
-    expect(properties.note).toMatchObject({ type: ["string", "null"] });
+    expect(properties.note).toMatchObject({ anyOf: [{ type: "string" }, { type: "null" }] });
     expect(properties.author).toBeUndefined();
     expect(properties.noteAuthor).toBeUndefined();
   });

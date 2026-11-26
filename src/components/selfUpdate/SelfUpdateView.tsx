@@ -37,13 +37,35 @@ import {
    the dialog owns the feed and the actions, and the DOM tests render this
    with fixture snapshots. */
 
+/** What one action ended in: why the server refused it (worded in the
+    operator's language), or which optional CI checks failed for an update it
+    admitted anyway. */
+export interface ActionOutcome {
+  error: ActionError | null;
+  optionalCheckFailures?: readonly string[];
+}
+
 export interface ViewState {
   now: number;
   armed: boolean;
   openLogs: ReadonlySet<string>;
   pending: ReadonlySet<string>;
-  /** Why the last action was refused, worded here in the operator's language. */
+  /** The outcome of the last action started outside the Update and install
+      cards (Check now, the restarts, the auto switch). The header shows it. */
   error: ActionError | null;
+  optionalCheckFailures?: readonly string[];
+  /** The outcome of the Update card's own actions (Update, Retry), kept apart
+      from the other actions' so a late answer lands where its button is. The
+      Update card draws it on every layout: the confirmation scrolls the
+      dialog to that card, and the header sits above it, off screen wherever
+      the dialog scrolls (a phone, or a desktop window narrower than two
+      columns). */
+  updateOutcome?: ActionOutcome;
+  /** The outcome of the install action (Restart launcher and its kin). Its card
+      draws it, on every layout, and the confirmation scrolls to that card: the
+      card sits above the header, so the header is off screen after the scroll
+      to the Update card, and in the unsupported layout it has no outcome line. */
+  installOutcome?: ActionOutcome;
   /** A web restart was asked for and nothing answers yet. */
   waitingForWeb: boolean;
   /** The web process answering now is not the one that served this page. */
@@ -225,12 +247,34 @@ function Header({ s, state, actions, t, locale }: { s: Snapshot; state: ViewStat
         </span>
       </div>
       {s.check.state === "failed" && checkError ? <p data-error="check" className={ERROR_LINE}>{checkError}</p> : null}
-      {state.error ? <p data-error="action" className={ERROR_LINE}>{refusalText(state.error, t)}</p> : null}
+      <OutcomeLines outcome={{ error: state.error, optionalCheckFailures: state.optionalCheckFailures }} t={t} />
     </section>
   );
 }
 
 const ERROR_LINE = "m-0 rounded-[8px] bg-danger-soft px-2 py-1.5 font-mono text-label text-danger [overflow-wrap:anywhere]";
+
+/** An action's outcome as lines: why it was refused, then the optional CI
+    checks that failed for an update the server admitted. Each outcome is drawn
+    in the card of the action that produced it, which is the card the
+    confirmation scrolls to: the Update card for Update and Retry, the install
+    action's card for its own action. The header draws the other actions'
+    (Check now, the restarts, the auto switch). The action picks the one place
+    at every size. */
+function OutcomeLines({ outcome, t }: { outcome: ActionOutcome | undefined; t: TFunction }) {
+  if (!outcome) return null;
+  return <>
+    {outcome.error ? <p data-error="action" className={ERROR_LINE}>{refusalText(outcome.error, t)}</p> : null}
+    {outcome.optionalCheckFailures?.length ? <p role="status" data-warning="optional-checks" className="m-0 rounded-[8px] bg-warning-soft px-2 py-1.5 text-label text-warning [overflow-wrap:anywhere]">
+      {t("selfUpdate.warning.optionalChecks", { checks: outcome.optionalCheckFailures.join(", ") })}
+    </p> : null}
+  </>;
+}
+
+/** The Update card's own outcome, drawn in the card on every layout. */
+function UpdateOutcome({ state, t }: { state: ViewState; t: TFunction }) {
+  return <OutcomeLines outcome={state.updateOutcome} t={t} />;
+}
 
 function StepRow({ step, short, state, actions, t, managed }: { step: Step; short: string; state: ViewState; actions: ViewActions; t: TFunction; managed: boolean }) {
   const kind: IconKind = step.state === "pending" ? "pending" : step.state === "running" ? "running" : step.state === "done" ? "done" : "failed";
@@ -310,6 +354,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
       return (
         <section data-section="update" data-update="idle" className={CARD}>
           {heading(t("selfUpdate.update.heading"))}
+          <UpdateOutcome state={state} t={t} />
           <p className="m-0 text-ui text-secondary">{copy}</p>
           {rebuildCheckout ? <Button action="update" tone="primary" label={t("selfUpdate.update.rebuildCheckout")} onClick={actions.update} disabled={s.busy !== null || state.pending.has("update")} /> : null}
         </section>
@@ -322,6 +367,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
       return (
         <section data-section="update" data-update="package-manual" className={CARD}>
           {heading(t("selfUpdate.update.to", { target: target.version }))}
+          <UpdateOutcome state={state} t={t} />
           <p className="m-0 text-ui text-secondary">{t("selfUpdate.update.packageManual")}</p>
         </section>
       );
@@ -334,6 +380,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
             <Button action="update" tone="primary" label={t("selfUpdate.update.button")} onClick={actions.update} disabled={s.busy !== null || state.pending.has("update")} />
           </div>
         </div>
+        <UpdateOutcome state={state} t={t} />
         <p className="m-0 text-ui text-secondary">{t(managed ? "selfUpdate.update.noteManaged" : s.action ? "selfUpdate.update.note" : "selfUpdate.update.noteApply")}</p>
         {s.mode === "package" ? <p data-note="package-manual" className="m-0 text-ui text-secondary">{t("selfUpdate.update.packageManual")}</p> : null}
         <WorkLine s={s} t={t} />
@@ -356,6 +403,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
             {t("selfUpdate.update.progress", { n: runningStepNumber(update.steps), total: update.steps.length })}
           </span>
         </div>
+        <UpdateOutcome state={state} t={t} />
         {update.trigger === "auto" ? <p className="m-0 text-ui text-secondary">{t("selfUpdate.auto.started")}</p> : null}
         {steps(short, update.steps)}
       </section>
@@ -365,6 +413,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
     return (
       <section data-section="update" data-update="done" className={`${CARD} ${EDGE.success}`}>
         {heading(t("selfUpdate.update.updatedTo", { target }))}
+        <UpdateOutcome state={state} t={t} />
         {update.trigger === "auto" ? <p className="m-0 text-ui text-secondary">{t("selfUpdate.auto.started")}</p> : null}
         <p data-outcome="done" className="m-0 rounded-[8px] bg-success-soft px-2.5 py-2 text-ui text-success">
           {t(managed ? "selfUpdate.update.deployed" : "selfUpdate.update.built", { sha: short, duration: duration(elapsed, t) })} {appliedCopy(s, short, t)}
@@ -400,6 +449,7 @@ function UpdateSection({ s, state, actions, t }: { s: Snapshot; state: ViewState
           /> : null}
         </div>
       </div>
+      <UpdateOutcome state={state} t={t} />
       <div data-outcome="failed" className="flex flex-col gap-1 rounded-[8px] bg-danger-soft px-2.5 py-2 text-ui text-danger">
         <p className="m-0">{copy}</p>
         {cause ? <p data-cause="" className="m-0 font-mono text-label [overflow-wrap:anywhere]">{cause}</p> : null}
@@ -697,19 +747,36 @@ function Footer({ s, live, t }: { s: Snapshot; live: Live; t: TFunction }) {
   );
 }
 
+/** The install action's card. A confirmed Restart launcher relaunches the
+    Viewer, and the snapshot that answers afterwards carries no action: the
+    relaunch-capable launcher needs none. The card the person pressed in then
+    stays for as long as it holds the answer (the optional CI checks that
+    failed for the build it started), without the action's own text and
+    button, so that answer does not vanish with the action beside the new-
+    version banner. */
 function InstallActionCard({ s, actions, state, t }: { s: Snapshot; actions: ViewActions; state: ViewState; t: TFunction }) {
   const action = s.action;
-  if (!action) return null;
+  const outcome = state.installOutcome;
+  if (!action && !outcome?.error && !outcome?.optionalCheckFailures?.length) return null;
   return <section data-section="install-action" className={CARD}>
-    <p className="m-0 text-ui text-secondary">{t(action.terminalEveryUpdate ? "selfUpdate.action.restart-terminal-windows" : `selfUpdate.action.${action.id}`, { unit: action.unit ?? "" })}</p>
-    {action.command ? <code className="text-label text-primary [overflow-wrap:anywhere] whitespace-pre-wrap">{action.command}</code> : null}
-    {action.button ? <Button action="install-action" tone="primary" disabled={state.pending.has("install-action")}
-      label={t(`selfUpdate.actionButton.${action.id}` as MessageKey)} onClick={action.id === "update-first" ? actions.update : () => actions.installAction?.()} /> : null}
+    <OutcomeLines outcome={outcome} t={t} />
+    {action ? <>
+      <p className="m-0 text-ui text-secondary">{t(action.terminalEveryUpdate ? "selfUpdate.action.restart-terminal-windows" : `selfUpdate.action.${action.id}`, { unit: action.unit ?? "" })}</p>
+      {action.command ? <code className="text-label text-primary [overflow-wrap:anywhere] whitespace-pre-wrap">{action.command}</code> : null}
+      {action.button ? <Button action="install-action" tone="primary" disabled={state.pending.has("install-action")}
+        label={t(`selfUpdate.actionButton.${action.id}` as MessageKey)} onClick={action.id === "update-first" ? actions.update : () => actions.installAction?.()} /> : null}
+    </> : null}
   </section>;
 }
 
 export function SelfUpdateView({ snapshot: s, live, state, actions }: { snapshot: Snapshot; live: Live; state: ViewState; actions: ViewActions }) {
   const { t, locale } = useLocale();
+  if (s.selfUpdateDisabled) return (
+    <section data-section="updates-disabled" role="status" className={CARD}>
+      <h2 className="m-0 text-body font-semibold text-primary">{t("selfUpdate.disabled.title")}</h2>
+      <p className="m-0 text-ui text-secondary">{t("selfUpdate.refusal.updates-disabled")}</p>
+    </section>
+  );
   const banner = state.waitingForWeb
     ? <p data-banner="waiting" role="status" className="m-0 flex items-center gap-2 rounded-[8px] bg-accent-soft px-3 py-2 text-ui text-primary"><Icon kind="running" />{t("selfUpdate.reconnect.waiting")}</p>
     : state.reloadTo

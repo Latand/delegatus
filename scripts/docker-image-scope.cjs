@@ -7,9 +7,12 @@ const { execFileSync } = require("node:child_process");
 const files = new Set([
   "Dockerfile", ".dockerignore", "Dockerfile.dockerignore", ".gitignore", "package.json", "bun.lock", "bunfig.toml",
   "tsconfig.json", "tsconfig.production.json", ".github/workflows/docker-image.yml",
+  ".githooks/pre-push",
   "scripts/whisper_transcribe.py", "scripts/published-image-entrypoint.sh",
   "scripts/demo-capture-browser.cjs", "scripts/newcomer-install.mjs",
-  "scripts/npm-package-smoke.mjs", "scripts/package-revision.mjs", "scripts/docker-image-scope.cjs",
+  "scripts/npm-package-smoke.mjs", "scripts/package-standalone.mjs", "scripts/package-revision.mjs", "scripts/docker-image-scope.cjs",
+  "scripts/check-worker-client.mjs",
+  "scripts/privacy-known-value-fingerprints.json", "scripts/cloud-checks.replay.fixture.json", "scripts/mac-app/smoke-platform.mjs",
   "scripts/fixtures/usage-metrics/recorded.json", "landing/site/demo/taskIcons.json",
   // Docker copies these root files; Next loads them with NODE_ENV=production.
   ".env", ".env.local", ".env.production", ".env.production.local",
@@ -18,7 +21,9 @@ const files = new Set([
   ".browserslistrc", "browserslist",
   ".postcssrc.json", ".postcssrc.js",
 ]);
-const directories = ["src/", "public/", "bin/", "patches/", "vendor/"];
+// The runtime image carries the canonical publication gate and every helper
+// beside it, so changes anywhere in scripts/ change the shipped image.
+const directories = ["src/", "public/", "bin/", "patches/", "vendor/", "scripts/"];
 
 function isImageInput(file) {
   return files.has(file)

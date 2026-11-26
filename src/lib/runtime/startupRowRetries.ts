@@ -45,24 +45,51 @@ export class StartupRowRetries {
   get(key: string): StartupRowRetry | undefined { return this.rows.get(key); }
   due(key: string, now = Date.now()): boolean { return (this.rows.get(key)?.nextAt ?? 0) <= now; }
 
+  /** Retry filenames are hashes, so discover archived targets from the
+      records themselves. Temporary writes never appear in this selection. */
+  async discover(): Promise<string[]> {
+    let filenames: string[];
+    try { filenames = await fs.readdir(this.directory); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
+    const keys: string[] = [];
+    for (const filename of filenames.sort()) {
+      if (!/^[a-f0-9]{64}\.json$/.test(filename)) continue;
+      try {
+        const row = this.parse(await fs.readFile(path.join(this.directory, filename), "utf8"));
+        if (this.file(row.key) !== path.join(this.directory, filename)) throw new Error("invalid structured startup retry key");
+        if (!this.rows.has(row.key)) this.rows.set(row.key, row);
+        keys.push(row.key);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    return keys;
+  }
+
   async load(keys: readonly string[]): Promise<void> {
     try { await fs.access(this.directory); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
     for (const key of keys) {
       if (this.rows.has(key)) continue;
       try {
-        const row = JSON.parse(await fs.readFile(this.file(key), "utf8")) as StartupRowRetry;
-        if (row.key !== key || !Number.isSafeInteger(row.attempts) || row.attempts < 1
-          || !Number.isSafeInteger(row.nextAt) || row.nextAt < 0
-          || !["missing-rollout", "adoption-failed", "incumbent-owned"].includes(row.reason)
-          || (row.resolved !== undefined && typeof row.resolved !== "boolean")
-          || (row.noticePending !== undefined && typeof row.noticePending !== "boolean")
-          || row.quarantined !== (row.attempts >= QUARANTINE_AFTER)) throw new Error("invalid structured startup retry record");
+        const row = this.parse(await fs.readFile(this.file(key), "utf8"));
+        if (row.key !== key) throw new Error("invalid structured startup retry key");
         this.rows.set(key, row);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
     }
+  }
+
+  private parse(text: string): StartupRowRetry {
+    const row = JSON.parse(text) as StartupRowRetry;
+    if (typeof row?.key !== "string" || !Number.isSafeInteger(row.attempts) || row.attempts < 1
+      || !Number.isSafeInteger(row.nextAt) || row.nextAt < 0
+      || !["missing-rollout", "adoption-failed", "incumbent-owned"].includes(row.reason)
+      || (row.resolved !== undefined && typeof row.resolved !== "boolean")
+      || (row.noticePending !== undefined && typeof row.noticePending !== "boolean")
+      || row.quarantined !== (row.attempts >= QUARANTINE_AFTER)) throw new Error("invalid structured startup retry record");
+    return row;
   }
 
   async failed(key: string, reason: StartupRowReason, now = Date.now(), assertActive = () => {}, resolved = false): Promise<StartupRowRetry> {
@@ -136,9 +163,61 @@ export function startupRowRetries(registry: AgentRegistry): StartupRowRetries {
   return store;
 }
 
+/** What the notice can say beyond the row key. */
+export interface StartupRowNoticeContext {
+  /** The row's engine still runs while its recorded owner process is gone. */
+  orphaned?: boolean;
+  /** The conversations that row hosts, as the seat knows them. */
+  conversationIds?: readonly string[];
+}
+
 /** Uses the existing task write admission. A deterministic item survives
- * restarts and is available to the project's seat through list_tasks. */
-export async function startupRowNotice(entry: Pick<AgentRegistryEntry, "key" | "cwd">, row: StartupRowRetry | null, assertActive = () => {}): Promise<void> {
+ * restarts and is available to the project's seat through list_tasks. An
+ * orphan nobody could re-adopt after a release handover is an
+ * alarm: its card names the conversation and is assigned, which is what wakes
+ * the project's seat; an inbox card wakes none. */
+export async function startupRowNotice(entry: Pick<AgentRegistryEntry, "key" | "cwd">, row: StartupRowRetry | null, assertActive = () => {},
+  context: StartupRowNoticeContext = {}): Promise<void> {
+  const key = `${entry.key.engine}:${entry.key.sessionId}`;
+  if (!row) return structuredHostNotice(entry, null, assertActive);
+  const english = operatorLocale() === "en";
+  const conversations = context.conversationIds?.length ? `\n${context.conversationIds.join("\n")}` : "";
+  const orphan = !context.orphaned ? "" : english
+    ? "\nOrphaned host: its recorded owner process is gone while the engine still runs, and re-adoption failed. A send to the conversation stops it after a bounded grace and resumes it; otherwise stop or rotate it."
+    : "\nОсиротілий хост: процес-власник уже завершився, а двигун ще працює, і повторне прийняття не вдалося. Повідомлення в цю розмову зупинить його після обмеженої паузи й відновить; інакше зупиніть або замініть його.";
+  const text = english
+    ? `Structured host startup quarantine\n\n${key}${conversations}\nReason: ${row.reason}. Only this row retries with bounded backoff.${orphan}`
+    : `Карантин запуску structured-хоста\n\n${key}${conversations}\nПричина: ${row.reason}. Повторюється лише цей рядок із обмеженою затримкою.${orphan}`;
+  return structuredHostNotice(entry, { text, status: context.orphaned ? "assigned" : "inbox" }, assertActive);
+}
+
+/** The alarm for an orphan that no startup pass adopted or quarantined: its
+ * engine still runs while its recorded owner process is gone, typically
+ * after a release handover. It shares the row's one card with the quarantine
+ * notice, so a row never carries two, and it is assigned so the project's
+ * seat is woken. `refusal` is set when a send's recovery could not stop it,
+ * and says why. */
+export async function orphanedHostNotice(entry: Pick<AgentRegistryEntry, "key" | "cwd">, conversationIds: readonly string[], assertActive = () => {},
+  refusal: string | null = null): Promise<void> {
+  const key = `${entry.key.engine}:${entry.key.sessionId}`;
+  const conversations = conversationIds.length ? `\n${conversationIds.join("\n")}` : "";
+  const english = operatorLocale() === "en";
+  const next = refusal === null
+    ? english
+      ? "A send to the conversation stops it after a bounded grace and resumes it; otherwise stop or rotate it."
+      : "Повідомлення в цю розмову зупинить його після обмеженої паузи й відновить; інакше зупиніть або замініть його."
+    : english
+      ? `A send could not stop it: ${refusal}. Stop or rotate it.`
+      : `Повідомлення не змогло його зупинити: ${refusal}. Зупиніть або замініть його.`;
+  const text = english
+    ? `Orphaned structured host\n\n${key}${conversations}\nIts recorded owner process is gone while the engine still runs, and nothing here can re-adopt it. ${next}`
+    : `Осиротілий structured-хост\n\n${key}${conversations}\nПроцес-власник уже завершився, а двигун ще працює, і повторно прийняти його тут неможливо. ${next}`;
+  return structuredHostNotice(entry, { text, status: "assigned" }, assertActive);
+}
+
+/** Writes, or with `null` closes, the row's one deterministic card. */
+async function structuredHostNotice(entry: Pick<AgentRegistryEntry, "key" | "cwd">,
+  notice: { text: string; status: "inbox" | "assigned" } | null, assertActive: () => void): Promise<void> {
   const key = `${entry.key.engine}:${entry.key.sessionId}`;
   const hash = id(key);
   // A deterministic UUIDv8 keeps retries idempotent and passes older peers'
@@ -150,23 +229,28 @@ export async function startupRowNotice(entry: Pick<AgentRegistryEntry, "key" | "
   await mutateTasksAsync(tasks => {
     assertActive();
     const existing = tasks.find(task => task.id === taskId) ?? tasks.find(task => task.id === legacyId);
-    if (!row) {
+    if (!notice) {
       if (!existing || existing.status === "done") return { tasks: undefined, result: undefined };
       const closed = patchTask(tasks, existing.id, { status: "done" });
       if (!closed.ok) throw new Error(closed.error);
       return { tasks: closed.tasks, result: undefined };
     }
-    const text = operatorLocale() === "en"
-      ? `Structured host startup quarantine\n\n${key}\nReason: ${row.reason}. Only this row retries with bounded backoff.`
-      : `Карантин запуску structured-хоста\n\n${key}\nПричина: ${row.reason}. Повторюється лише цей рядок із обмеженою затримкою.`;
+    const { text, status } = notice;
     if (existing) {
-      if (existing.text === text && existing.status !== "done") return { tasks: undefined, result: undefined };
-      const updated = patchTask(tasks, existing.id, { text, status: "inbox" });
+      // A card someone already moved stays where it is; an orphan's alarm
+      // only lifts one still sitting in the inbox.
+      if (existing.text === text && existing.status !== "done" && (status === "inbox" || existing.status !== "inbox")) {
+        return { tasks: undefined, result: undefined };
+      }
+      const updated = patchTask(tasks, existing.id, { text, status });
       if (!updated.ok) throw new Error(updated.error);
       return { tasks: updated.tasks, result: undefined };
     }
     const created = createTask(tasks, { project, text, placement: "unplaced" }, [], { id: () => taskId });
     if (!created.ok) throw new Error(created.error);
-    return { tasks: created.tasks, result: undefined };
+    if (status === "inbox") return { tasks: created.tasks, result: undefined };
+    const assigned = patchTask(created.tasks, taskId, { status });
+    if (!assigned.ok) throw new Error(assigned.error);
+    return { tasks: assigned.tasks, result: undefined };
   }, statePath("tasks.json"));
 }

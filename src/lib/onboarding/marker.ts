@@ -36,6 +36,11 @@ export type OnboardingMarker = {
   /** The interface walk (#2166 §3.8): null until it ran once and was
       finished or skipped. A marker written before the field reads null. */
   walk: OnboardingWalkState;
+  /** When the person closed the inherited-state notice (the install runs on a
+      linked earlier state directory). It is kept apart from the guide's own
+      progress: the guide may be finished, left or never decided, and the
+      notice is still owed once. Absent on a marker written before the field. */
+  legacyNoticeAckedAt?: string | null;
 };
 
 const markerFile = () => statePath("onboarding.json");
@@ -72,6 +77,7 @@ function parseMarker(raw: unknown): OnboardingMarker | null {
     steps,
     lastHealth: parseLastHealth(record.lastHealth),
     walk: record.walk === "done" || record.walk === "skipped" ? record.walk : null,
+    legacyNoticeAckedAt: time(record.legacyNoticeAckedAt),
   };
 }
 
@@ -100,7 +106,7 @@ export function writeOnboardingMarker(marker: OnboardingMarker, file = markerFil
 }
 
 export function freshMarker(): OnboardingMarker {
-  return { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: emptySteps(), lastHealth: null, walk: null };
+  return { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps: emptySteps(), lastHealth: null, walk: null, legacyNoticeAckedAt: null };
 }
 
 /** Whether the install already holds state the Viewer wrote: a seat (active,
@@ -137,16 +143,18 @@ export type OnboardingPatch = {
   dismissed?: true;
   steps?: Partial<Record<OnboardingStepId, OnboardingStepState>>;
   walk?: Exclude<OnboardingWalkState, null>;
+  /** The inherited-state notice was closed on purpose. */
+  legacyNoticeAcknowledged?: true;
 };
 
 export function parseOnboardingPatch(raw: unknown): OnboardingPatch | string {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "request body must be an object";
   const record = raw as Record<string, unknown>;
-  const allowed = new Set(["completed", "dismissed", "steps", "walk"]);
+  const allowed = new Set(["completed", "dismissed", "steps", "walk", "legacyNoticeAcknowledged"]);
   const unknown = Object.keys(record).filter((key) => !allowed.has(key));
   if (unknown.length) return `unknown field: ${unknown.join(", ")}`;
   const patch: OnboardingPatch = {};
-  for (const flag of ["completed", "dismissed"] as const) {
+  for (const flag of ["completed", "dismissed", "legacyNoticeAcknowledged"] as const) {
     if (record[flag] === undefined) continue;
     if (record[flag] !== true) return `${flag} must be true`;
     patch[flag] = true;
@@ -178,6 +186,8 @@ export function applyOnboardingPatch(current: OnboardingMarker | null, patch: On
   if (patch.dismissed) next.dismissedAt = now;
   if (patch.completed) next.completedAt = now;
   if (patch.walk) next.walk = patch.walk;
+  /* The first acknowledgement stands; a second close never moves it. */
+  if (patch.legacyNoticeAcknowledged && !next.legacyNoticeAckedAt) next.legacyNoticeAckedAt = now;
   return next;
 }
 

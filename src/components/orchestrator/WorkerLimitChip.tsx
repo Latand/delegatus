@@ -1,6 +1,5 @@
 "use client";
 
-import { Layers } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAnchoredBox } from "@/components/feed/SpeakMenu";
@@ -172,18 +171,12 @@ export function WorkerLimitSettingsRow({ project, phone = false }: { project: st
     : answer.running.here === null ? t("workers.machineRunning", { machine: answer.running.machine })
     : own !== null ? t("workers.hereOwnRunning", { here: answer.running.here, value: own, machine: answer.running.machine })
     : t("workers.hereRunning", { here: answer.running.here, machine: answer.running.machine });
-  /* The geometry of the sibling Settings rows: the sheet's 44 px row (18 px icon, 12 px gap, body title)
-     on the phone, the panel's still row (16 px icon, 8 px gap, 12 px title) on desktop; the state line is
-     the muted medium word the Memory row uses, and the field is two digits wide. */
-  return <div data-header-menu-workers className={phone
-    ? "flex min-h-11 w-full flex-wrap items-center gap-3 px-4 py-1.5 text-body font-semibold text-primary"
-    : "flex min-h-[30px] w-full flex-wrap items-center gap-2 rounded-[8px] px-2 py-1 text-[12px] font-semibold text-primary"}>
-    <span className={`flex shrink-0 items-center justify-center text-secondary ${phone ? "h-[18px] w-[18px]" : ""}`}>
-      <Layers className={phone ? "h-[18px] w-[18px]" : "h-4 w-4"} aria-hidden data-worker-limit-icon />
-    </span>
-    <span className="flex min-w-0 flex-1 flex-col gap-px">
-      <span data-worker-limit-title className="truncate leading-4">{t("workers.settingsTitle")}</span>
-      <span data-worker-limit-state className={`font-medium text-muted ${phone ? "text-label" : "text-[11px] leading-[14px]"}`}>{state}</span>
+  /* A row of the Settings window: the title and its muted line in one block, the field at the right edge two
+     digits wide. */
+  return <div data-header-menu-workers className={`flex w-full flex-wrap items-center gap-3 text-body font-semibold text-primary ${phone ? "min-h-11 px-4 py-1.5" : "min-h-10 px-5 py-1.5"}`}>
+    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <span data-worker-limit-title className="truncate">{t("workers.settingsTitle")}</span>
+      <span data-worker-limit-state className="text-ui font-normal leading-snug text-muted">{state}</span>
     </span>
     {answer ? <LimitField project={project} value={answer.machine.value} machine onPredict={next => {
       const before = read;

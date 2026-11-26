@@ -6,7 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { runtimeScope } from "@/lib/runtime/contracts";
-import { RuntimeJournal } from "./journal";
+import { RuntimeJournal, RUNTIME_ENTITY_READ_CACHE_BYTES, RUNTIME_ENTITY_READ_CACHE_ENTRIES } from "./journal";
 
 const now = Date.parse("2026-10-28T00:00:00Z");
 function status(journal: RuntimeJournal, id: string, turn = "idle") {
@@ -46,7 +46,9 @@ test("peer commits, deletes and same-revision edits invalidate snapshots and sur
   try {
     status(journal, "conversation-kept"); status(journal, "conversation-deleted");
     journal.snapshotJson(); journal.snapshotJson([]);
-    peer.query("UPDATE entities SET state_json=json_set(state_json,'$.turn','running') WHERE kind='session' AND id=?").run("conversation-kept");
+    // A peer keeps the revision and stamps its event's new seq, as a receipt projection does.
+    peer.query(`UPDATE entities SET state_json=json_set(state_json,'$.turn','running'),
+      checkpoint_seq=(SELECT max(checkpoint_seq) + 1 FROM entities) WHERE kind='session' AND id=?`).run("conversation-kept");
     peer.query("DELETE FROM entities WHERE kind='session' AND id=?").run("conversation-deleted");
     const expected = journal.snapshot();
     expect(expected.sessions).toHaveLength(1);
@@ -85,8 +87,29 @@ test("rolled-back local SQL edits evict safely and a later edit cannot replay th
   } finally { journal.close(); }
 });
 
+test("a population above the former 8192-row cap rebuilds from one changed row", () => {
+  // Sessions plus their edges exceeded the old row cap on a busy install, so
+  // each rebuild evicted and re-read every stored row.
+  const journal = new RuntimeJournal(":memory:", { now: () => now });
+  const state = journal as unknown as { db: Database };
+  try {
+    const insert = state.db.query("INSERT INTO entities(kind,id,revision,state_json,checkpoint_seq) VALUES ('task',?,1,?,1)");
+    state.db.exec("BEGIN");
+    for (let index = 0; index < 9000; index++) insert.run(`task-${String(index).padStart(5, "0")}`, JSON.stringify({ id: `task-${index}`, text: "x" }));
+    state.db.exec("COMMIT");
+    const first = journal.snapshotJson();
+    expect(JSON.parse(first).tasks).toHaveLength(9000);
+    const reads = journal.snapshotProjectionReads;
+    state.db.run("UPDATE entities SET state_json = ? WHERE kind = 'task' AND id = 'task-04500'", [JSON.stringify({ id: "task-4500", text: "changed" })]);
+    const second = JSON.parse(journal.snapshotJson());
+    expect(journal.snapshotProjectionReads - reads).toBe(1);
+    expect(journal.snapshotEntityEvictions).toBe(0);
+    expect(second.tasks.filter((task: { value?: { text: string }; text?: string }) => (task.value ?? task).text === "changed")).toHaveLength(1);
+  } finally { journal.close(); }
+});
+
 test("row and byte limits bound cache registrations across a real-process restart", () => {
-  for (const [rows, textSize] of [[8200, 1], [18, 1024 * 1024], [1, 17 * 1024 * 1024]]) {
+  for (const [rows, textSize] of [[RUNTIME_ENTITY_READ_CACHE_ENTRIES + 8, 1], [66, 1024 * 1024], [1, 17 * 1024 * 1024]]) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-projection-bounds-"));
     const filename = path.join(root, "journal.sqlite");
     const journal = new RuntimeJournal(filename, { now: () => now });
@@ -100,8 +123,8 @@ test("row and byte limits bound cache registrations across a real-process restar
       state.db.exec("COMMIT");
       const snapshot = journal.snapshot();
       expect(snapshot.tasks).toHaveLength(rows!);
-      expect(state.entityReadBytes).toBeLessThanOrEqual(16 * 1024 * 1024);
-      expect(state.entityReads.size).toBeLessThanOrEqual(8192);
+      expect(state.entityReadBytes).toBeLessThanOrEqual(RUNTIME_ENTITY_READ_CACHE_BYTES);
+      expect(state.entityReads.size).toBeLessThanOrEqual(RUNTIME_ENTITY_READ_CACHE_ENTRIES);
       expect(state.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM snapshot_entity_keys").get()!.n).toBe(state.entityReads.size);
       expect(journal.snapshot()).toEqual(snapshot);
       const digest = createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
@@ -121,15 +144,15 @@ test("row and byte limits bound cache registrations across a real-process restar
       expect(restarted.tasks).toBe(rows!);
       expect(restarted.digest).toBe(digest);
       expect(restarted.reads).toBe(rows!);
-      expect(restarted.bytes).toBeLessThanOrEqual(16 * 1024 * 1024);
-      expect(restarted.variants).toBeLessThanOrEqual(8192);
+      expect(restarted.bytes).toBeLessThanOrEqual(RUNTIME_ENTITY_READ_CACHE_BYTES);
+      expect(restarted.variants).toBeLessThanOrEqual(RUNTIME_ENTITY_READ_CACHE_ENTRIES);
       expect(restarted.keys).toBe(restarted.variants);
     } finally {
       if (!closed) journal.close();
       fs.rmSync(root, { recursive: true, force: true });
     }
   }
-});
+}, 60_000);
 
 test("a failed snapshot rolls back its cache registrations and retries from committed state", () => {
   const journal = new RuntimeJournal(":memory:", { now: () => now });
@@ -174,9 +197,10 @@ test("a peer commit between the pinned read and cache validation reaches the nex
   const query = db.query.bind(db);
   let inject = false;
   const read = spyOn(db, "query").mockImplementation(((sql: string, ...args: unknown[]) => {
-    if (inject && sql === "PRAGMA data_version") {
+    if (inject && sql.includes(" AS stamp ")) {
       inject = false;
-      peer.exec("UPDATE entities SET state_json=json_set(state_json,'$.turn','running') WHERE kind='session'");
+      peer.exec(`UPDATE entities SET state_json=json_set(state_json,'$.turn','running'),
+        checkpoint_seq=(SELECT max(checkpoint_seq) + 1 FROM entities) WHERE kind='session'`);
     }
     return query(sql, ...args as []);
   }) as typeof db.query);
@@ -188,4 +212,104 @@ test("a peer commit between the pinned read and cache validation reaches the nex
     expect(inject).toBe(false);
     expect(journal.snapshot().sessions[0]?.turn).toBe("running");
   } finally { read.mockRestore(); peer.close(); journal.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an unrelated peer commit re-reads no entity, and a peer's entity write re-reads only that entity", () => {
+  // The runtime host's peers commit too: the vacuum child records last_vacuum_at,
+  // and an older release may write during succession. Each moves data_version.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-projection-peer-reads-"));
+  const filename = path.join(root, "journal.sqlite");
+  const journal = new RuntimeJournal(filename, { now: () => now });
+  const peer = new Database(filename);
+  const metadata = (journal as unknown as { sessionHostMetadata: { ready: boolean; step(): void } }).sessionHostMetadata;
+  try {
+    for (let index = 0; index < 12; index++) status(journal, `conversation-${String(index).padStart(2, "0")}`);
+    // Both stamp sources: the entity row while the metadata backfill runs, its metadata row once ready.
+    for (const [phase, target] of [["backfilling", "conversation-03"], ["ready", "conversation-07"]] as const) {
+      if (phase === "ready") while (!metadata.ready) metadata.step();
+      expect(metadata.ready).toBe(phase === "ready");
+      journal.snapshotJson(); journal.snapshotJson([]);
+      const reads = journal.snapshotProjectionReads;
+      peer.query("INSERT INTO journal_meta(key, value) VALUES ('last_vacuum_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(phase);
+      const unrelated = JSON.parse(journal.snapshotJson());
+      journal.snapshotJson([]);
+      expect(journal.snapshotProjectionReads - reads).toBe(0);
+      expect(unrelated).toEqual(journal.snapshot());
+      peer.query(`UPDATE entities SET state_json=json_set(state_json,'$.turn','running'),
+        checkpoint_seq=(SELECT max(checkpoint_seq) + 1 FROM entities) WHERE kind='session' AND id=?`).run(target);
+      const changed = JSON.parse(journal.snapshotJson());
+      const summary = JSON.parse(journal.snapshotJson([]));
+      // One read for each cached representation of the changed session.
+      expect(journal.snapshotProjectionReads - reads).toBe(2);
+      for (const frame of [changed, summary]) {
+        expect(frame.sessions.filter((session: { turn: string }) => session.turn === "running")
+          .map((session: { conversationId: string }) => session.conversationId)).toContain(target);
+      }
+      expect(changed).toEqual(journal.snapshot());
+    }
+  } finally { peer.close(); journal.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a peer write is seen whatever it does to revision and checkpoint_seq, and a restored row is read again", () => {
+  // Another connection's write is invisible to this connection's TEMP triggers.
+  // Each case keeps the row's checkpoint_seq, so only the write itself can tell.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-projection-peer-stamp-"));
+  const filename = path.join(root, "journal.sqlite");
+  const journal = new RuntimeJournal(filename, { now: () => now });
+  const peer = new Database(filename);
+  const metadata = (journal as unknown as { sessionHostMetadata: { ready: boolean; step(): void } }).sessionHostMetadata;
+  const turns = () => [JSON.parse(journal.snapshotJson()), JSON.parse(journal.snapshotJson([]))]
+    .map(frame => frame.sessions.map((session: { conversationId: string; turn: string }) => `${session.conversationId}:${session.turn}`));
+  try {
+    status(journal, "conversation-a"); status(journal, "conversation-b");
+    while (!metadata.ready) metadata.step();
+    turns();
+    peer.exec(`UPDATE entities SET revision=revision+1, state_json=json_set(state_json,'$.revision',revision+1,'$.turn','running')
+      WHERE kind='session' AND id='conversation-a'`);
+    expect(turns()).toEqual([["conversation-a:running", "conversation-b:idle"], ["conversation-a:running", "conversation-b:idle"]]);
+    peer.exec("UPDATE entities SET state_json=json_set(state_json,'$.turn','interrupt_requested') WHERE kind='session' AND id='conversation-b'");
+    expect(turns()[0]).toEqual(["conversation-a:running", "conversation-b:interrupt_requested"]);
+    // An older writer's INSERT OR REPLACE keeps every column it copies.
+    peer.exec(`INSERT OR REPLACE INTO entities(kind,id,revision,state_json,checkpoint_seq,updated_at)
+      SELECT kind,id,revision,json_set(state_json,'$.turn','idle'),checkpoint_seq,updated_at FROM entities WHERE kind='session' AND id='conversation-b'`);
+    expect(turns()[0]).toEqual(["conversation-a:running", "conversation-b:idle"]);
+    // Deleted, observed gone, then restored from an archive with its old id, revision and seq.
+    peer.exec("CREATE TABLE archive AS SELECT * FROM entities WHERE kind='session' AND id='conversation-a'");
+    peer.exec("DELETE FROM entities WHERE kind='session' AND id='conversation-a'");
+    expect(turns()).toEqual([["conversation-b:idle"], ["conversation-b:idle"]]);
+    peer.exec(`INSERT INTO entities SELECT kind,id,revision,json_set(state_json,'$.turn','unknown'),checkpoint_seq,updated_at FROM archive`);
+    expect(turns()).toEqual([["conversation-a:unknown", "conversation-b:idle"], ["conversation-a:unknown", "conversation-b:idle"]]);
+    expect(JSON.parse(journal.snapshotJson())).toEqual(journal.snapshot());
+    // An unrelated commit after all of that still re-reads nothing.
+    const reads = journal.snapshotProjectionReads;
+    peer.exec("INSERT INTO journal_meta(key, value) VALUES ('last_vacuum_at', 'later') ON CONFLICT(key) DO UPDATE SET value = excluded.value");
+    turns();
+    expect(journal.snapshotProjectionReads - reads).toBe(0);
+  } finally { peer.close(); journal.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a snapshotJson rebuild serializes cached entities without copying them, and snapshot() still detaches", () => {
+  const journal = new RuntimeJournal(":memory:", { now: () => now });
+  const clone = spyOn(globalThis, "structuredClone");
+  try {
+    for (let index = 0; index < 8; index++) status(journal, `conversation-${index}`);
+    journal.snapshotJson(); journal.snapshotJson([]);
+    status(journal, "conversation-3", "running");
+    clone.mockClear();
+    const full = journal.snapshotJson();
+    const summary = journal.snapshotJson([]);
+    expect(clone).not.toHaveBeenCalled();
+    // A caller mutating a detached snapshot reaches neither the cache nor a later frame.
+    const detached = journal.snapshot();
+    expect(clone).toHaveBeenCalled();
+    detached.sessions[0]!.voiceDeliveries![0]!.responses[0]!.text = "caller mutation";
+    detached.sessions[0]!.turn = "running";
+    status(journal, "conversation-5", "running");
+    const after = JSON.parse(journal.snapshotJson());
+    expect(after).toEqual(journal.snapshot());
+    expect(after.sessions[0].voiceDeliveries[0].responses[0].text).toBe("voice body");
+    expect(after.sessions[0].turn).toBe("idle");
+    expect(JSON.parse(full).sessions.find((session: { conversationId: string }) => session.conversationId === "conversation-3").turn).toBe("running");
+    expect(JSON.parse(summary).sessions.every((session: { voiceDeliveries: { responses: { text: string }[] }[] }) => session.voiceDeliveries[0]!.responses[0]!.text === "")).toBe(true);
+  } finally { clone.mockRestore(); journal.close(); }
 });

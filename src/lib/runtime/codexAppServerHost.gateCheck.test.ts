@@ -10,6 +10,180 @@ import { procBackend } from "@/lib/proc";
 import { cpuOwnerIdentity } from "./signalSandboxContext";
 import { custodyClock, physical } from "../recordedChecks/wire";
 import * as wire from "../recordedChecks/wire";
+import { FileRuntimeEventStore } from "./eventStore";
+import { validCodexRequestReceipt } from "./codexRequestReceipt";
+import { RuntimeJournal } from "../../runtime-host/journal";
+import { projectEngineHostEvent } from "./engineHostEvents";
+
+for (const completion of ["after-reconnect", "during-handover", "dispatch-before-handover", "refused-dispatch-before-handover", "deadline", "changed-ticket", "native-resolved", "native-confirmed", "turn-ended"] as const)
+test.skipIf(process.platform !== "linux")(`a pending callback survives a real Viewer restart: ${completion}`, async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "gw-"));
+  fs.chmodSync(directory, 0o700);
+  const stageRoot = path.join(directory, "stage"), viewerRoot = path.join(directory, "viewer");
+  fs.mkdirSync(stageRoot); fs.mkdirSync(viewerRoot);
+  const log = path.join(stageRoot, "check.log"), ticket = `${log}.gate`;
+  fs.mkdirSync(ticket); fs.writeFileSync(log, "retained result\n");
+  const recorder = cpuOwnerIdentity(process.pid), deadlineUptimeMs = custodyClock() + 60_000;
+  fs.writeFileSync(path.join(ticket, "owner.json"), JSON.stringify(recorder));
+  fs.writeFileSync(path.join(ticket, "completion.json"), JSON.stringify({ recorder, directoryIdentity: physical(ticket), deadlineUptimeMs }));
+  const descriptor = path.join(directory, "descriptor.json");
+  // The engine is native-faithful: it never confirms an answered dynamic tool
+  // call, except where a case opts into a late confirmation.
+  const refused = completion === "refused-dispatch-before-handover";
+  const config = { socket: path.join(directory, "rpc.sock"), directory, log: refused ? path.join(directory, "foreign.log") : log,
+    result: path.join(directory, "result.json"), events: path.join(directory, "events"),
+    stop: path.join(directory, "stop"), count: path.join(directory, "count"), noReplay: true, duplicate: true,
+    ...(completion === "native-confirmed" ? { confirmResolution: true } : {}) };
+  fs.writeFileSync(descriptor, JSON.stringify(config));
+  const children: ReturnType<typeof spawn>[] = [];
+  const launch = (mode: string, root: string) => {
+    const child = spawn(process.execPath, [path.join(import.meta.dir, "fixtures/gateCheckHost.ts"), mode, descriptor], {
+      env: { ...process.env, TMPDIR: root, [gateTool.GATE_CHECK_ROOT_IDENTITY_ENV]: physical(root) }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    children.push(child);
+    let errors = "", output = "";
+    child.stderr!.on("data", bytes => { errors += String(bytes); });
+    const line = new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`fixture timed out: ${errors}`)), 20_000);
+      child.stdout!.on("data", bytes => { output += String(bytes); if (output.includes("\n")) { clearTimeout(timer); resolve(output.trim()); } });
+      child.once("error", error => { clearTimeout(timer); reject(error); });
+      child.once("close", code => { clearTimeout(timer); if (!output.includes("\n")) reject(new Error(`fixture exit ${code}: ${errors}`)); });
+    });
+    const closed = new Promise<number | null>(resolve => child.once("close", resolve));
+    return { child, line, closed, errors: () => errors };
+  };
+  const stored = () => new FileRuntimeEventStore(config.events).load("gate-reconnect-thread");
+  try {
+    const engine = launch("engine", stageRoot), owner = JSON.parse(await engine.line);
+    fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner }));
+    const first = launch(completion === "dispatch-before-handover" || refused ? "crash-dispatch" : "hold", stageRoot);
+    // A refusal needs no recording, so it may reach dispatch before the holder reports.
+    expect(await first.line).toEqual(refused ? expect.stringMatching(/^(held|dispatched)$/) : "held");
+    const pending = stored().find(event => event.kind === "attention" && event.codexReceipt?.gateWait);
+    expect(pending?.kind).toBe("attention");
+    if (pending?.kind !== "attention") throw new Error("pending receipt absent");
+    expect(validCodexRequestReceipt(pending.codexReceipt)).toBe(true);
+    expect(pending.codexReceipt?.identity).toMatchObject({ threadId: "gate-reconnect-thread", turnId: "gate-reconnect-turn", requestId: "gate-wait" });
+    expect(pending.codexReceipt?.dispatch).toBeUndefined();
+    expect(fs.existsSync(config.result)).toBe(false);
+    if (refused) expect(pending.codexReceipt?.gateWait?.runId).toBeUndefined();
+    if (completion === "dispatch-before-handover") fs.writeFileSync(path.join(ticket, "exit"), "37\n");
+    else fs.writeFileSync(config.stop, "detach");
+    expect(await first.closed, first.errors()).toBe(0);
+    expect(engine.child.exitCode).toBeNull();
+    if (completion === "during-handover" || completion === "native-confirmed") fs.writeFileSync(path.join(ticket, "exit"), "37\n");
+    if (completion === "changed-ticket") fs.writeFileSync(path.join(ticket, "completion.json"), JSON.stringify({ recorder, directoryIdentity: physical(ticket), deadlineUptimeMs: deadlineUptimeMs + 1000 }));
+    fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner,
+      ...(completion === "native-resolved" ? { resolveWait: true } : {}),
+      ...(completion === "turn-ended" ? { turnEnded: true } : {}),
+      ...(completion === "deadline" ? { nowUptime: deadlineUptimeMs + wire.CUSTODY_CLEANUP_MS } : {}) }));
+    const storedBefore = stored().filter(event => event.kind === "session-status").length;
+    const next = launch(completion === "native-resolved" ? "resolved" : completion === "turn-ended" ? "retired" : "host", viewerRoot);
+    if (completion === "after-reconnect") {
+      // Completion follows adoption: the successor must have restored the wait.
+      const adoption = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => { watcher.close(); reject(new Error("successor did not adopt")); }, 15_000);
+        const read = () => {
+          if (stored().filter(event => event.kind === "session-status").length > storedBefore) { clearTimeout(timer); watcher.close(); resolve(); }
+        };
+        const watcher = fs.watch(config.events, read);
+        read();
+      });
+      await adoption;
+      expect(fs.existsSync(config.result)).toBe(false);
+      fs.writeFileSync(path.join(ticket, "exit"), "37\n");
+    }
+    if (completion === "turn-ended") {
+      // The native turn ended during the handover, so its callback is gone: the
+      // restored wait retires instead of holding the host's attention set.
+      expect(await next.line).toBe("retired");
+      expect(await next.closed, next.errors()).toBe(0);
+      expect(fs.existsSync(config.count)).toBe(false);
+      const retired = stored().filter(event => event.kind === "attention-resolved" && event.codexReceipt?.gateWait);
+      expect(retired).toHaveLength(1);
+      expect(retired[0]).toMatchObject({ resolution: "host-restarted",
+        codexReceipt: { recovery: { outcome: "callback-unavailable", reason: "resumed-without-callback" } } });
+      expect(stored().map(event => projectEngineHostEvent("conversation", "codex:gate-reconnect-thread", event))
+        .filter(event => event?.kind === "attention" || event?.kind === "attention-resolved")).toEqual([]);
+      // The recorder's verdict stays retrievable by run id with no waiter.
+      fs.writeFileSync(path.join(ticket, "exit"), "37\n");
+      const runId = pending.codexReceipt!.gateWait!.runId!;
+      const retained = await gateTool.runGateCheckTool({ log, reason: "read retained run" }, gateTool.bindGateCheckRoot(stageRoot), new AbortController().signal, runId);
+      expect(JSON.parse(retained.contentItems[0].text)).toMatchObject({ runId, terminal: true, code: 37 });
+      return;
+    }
+    if (completion === "native-resolved") {
+      expect(await next.line).toBe("resolved");
+      expect(await next.closed, next.errors()).toBe(0);
+      expect(fs.existsSync(config.result)).toBe(false);
+      expect(fs.existsSync(config.count)).toBe(false);
+      expect(stored().some(event => event.kind === "attention" && event.codexReceipt?.dispatch)).toBe(false);
+      expect(stored().some(event => event.kind === "attention-resolved" && event.codexReceipt?.serverResolution?.outcome === "server-resolved")).toBe(true);
+      return;
+    }
+    const result = JSON.parse(await next.line);
+    expect(await next.closed, next.errors()).toBe(0);
+    expect(fs.readFileSync(config.count, "utf8")).toBe("1");
+    const runId = pending.codexReceipt!.gateWait!.runId!;
+    // The host's own reply is terminal: native Codex sends no confirmation.
+    const settled = stored().filter(event => event.kind === "attention-resolved" && event.codexReceipt?.gateWait);
+    expect(settled).toHaveLength(1);
+    expect(settled[0]).toMatchObject({ resolution: "answered", codexReceipt: { serverResolution: { outcome: "answered" } } });
+    if (refused) {
+      expect(result.success).toBe(false);
+      expect(result.contentItems[0].text).toContain("outside this stage's temporary root");
+      expect(settled[0].kind === "attention-resolved" && settled[0].codexReceipt?.gateWait?.result).toEqual(result);
+    } else if (completion === "changed-ticket") {
+      expect(result.success).toBe(false);
+      expect(result.contentItems[0].text).toContain(runId);
+      expect(result.contentItems[0].text).toContain("run identity changed");
+    } else {
+      expect(result.success).toBe(true);
+      expect(JSON.parse(result.contentItems[0].text)).toMatchObject(completion === "deadline"
+        ? { runId, outcome: "unknown", terminal: false, reason: expect.stringContaining("expired") }
+        : { runId, terminal: true, code: 37 });
+    }
+    const dispatch = stored().find(event => event.kind === "attention" && event.codexReceipt?.dispatch);
+    expect(dispatch?.kind === "attention" && validCodexRequestReceipt(dispatch.codexReceipt)).toBe(true);
+    // Reopen both durable readers using the writer's actual events.
+    let journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+    for (const event of stored()) {
+      const projected = projectEngineHostEvent("conversation", "codex:gate-reconnect-thread", event);
+      if (projected) journal.append(projected);
+    }
+    journal.close();
+    journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+    // The automatic wait never becomes operator attention, so the session's
+    // attention set stays empty and idle continuation and retirement can hold.
+    try {
+      const snapshot = journal.snapshot();
+      expect(snapshot.attentions).toEqual([]);
+      expect(snapshot.sessions.flatMap(session => session.attentionIds)).toEqual([]);
+    } finally { journal.close(); }
+    // Later processes adopt the settled wait: by reconciliation alone, then
+    // with the native callback replayed. Neither writes a second response.
+    const dispatches = () => stored().filter(event => event.kind === "attention" && event.codexReceipt?.dispatch).length;
+    const dispatchedBefore = dispatches();
+    for (const replay of [false, true]) {
+      fs.writeFileSync(descriptor, JSON.stringify({ ...config, owner, ...(replay ? { forceReplay: true } : {}) }));
+      const duplicate = launch("host", viewerRoot);
+      expect(JSON.parse(await duplicate.line)).toEqual(result);
+      expect(await duplicate.closed, duplicate.errors()).toBe(0);
+      expect(fs.readFileSync(config.count, "utf8"), `replay=${replay}`).toBe("1");
+    }
+    expect(dispatches()).toBe(dispatchedBefore);
+    expect(stored().filter(event => event.kind === "attention-resolved" && event.codexReceipt?.gateWait)).toHaveLength(1);
+    if (completion !== "changed-ticket" && !refused) {
+      fs.writeFileSync(path.join(ticket, "exit"), "37\n");
+      const retained = await gateTool.runGateCheckTool({ log, reason: "read retained run" }, gateTool.bindGateCheckRoot(stageRoot), new AbortController().signal, runId);
+      expect(JSON.parse(retained.contentItems[0].text)).toMatchObject({ runId, terminal: true, code: 37 });
+    }
+  } finally {
+    for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await Promise.all(children.filter(child => child.exitCode === null && child.signalCode === null).map(child => new Promise<void>(resolve => child.once("close", () => resolve()))));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 90_000);
 
 // Every subprocess is owned by this explicit-file runner and gets only isolated state.
 test.skipIf(process.platform !== "linux")("a restarted Viewer waits on the retained stage root with a different or absent TMPDIR", async () => {

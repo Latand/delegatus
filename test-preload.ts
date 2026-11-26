@@ -11,17 +11,8 @@ import { spawn } from "node:child_process";
 import { setHeadlessSpawnForTests } from "./src/lib/runtime/agentSignalSandbox";
 import { darwinProcessArgv } from "./src/lib/proc/darwinArgv";
 import { windowsBackend } from "./src/lib/proc/windows";
-
-const homeKeys = ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "LLV_CLAUDE_HOME", "LLV_CODEX_HOME", "COPILOT_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "OPENCLAW_STATE_DIR", "CLAUDE_CODE_TMPDIR"] as const;
-const accountAliasKeys = ["DELEGATUS_CLAUDE_HOME", "DELEGATUS_CODEX_HOME"] as const;
-function isolateHomes(root: string, env: NodeJS.ProcessEnv): void {
-  for (const key of homeKeys) {
-    env[key] = path.join(root, key.toLowerCase());
-    fs.mkdirSync(env[key]!, { recursive: true, mode: 0o700 });
-  }
-  // Entry points fold public aliases after inheriting the test environment.
-  for (const key of accountAliasKeys) env[key] = env[key.replace("DELEGATUS_", "LLV_")];
-}
+import { admitTestProcess } from "./scripts/check-admission";
+import { homeKeys, accountAliasKeys, isolateHomes } from "./scripts/check-test-home";
 
 // Some readers have no home override (Codex auth, transcript defaults, legacy
 // migrations). Bun caches os.homedir() at startup, so changing HOME here cannot
@@ -60,18 +51,24 @@ if (process.env.LLV_TEST_STARTUP_HOME !== os.homedir()) {
 // A nested runner cannot reuse its parent's admission. Without a manager the
 // owned runner binds portable admission to the command PID and warns about
 // polling limits. Re-enter before modules load, preserving Bun's command line.
-const admitted = process.platform !== "linux"
+const admitted = Boolean(process.env.LLV_CHECK_BROKER ?? process.env.DELEGATUS_CHECK_BROKER) && (process.platform !== "linux"
   || Number(process.env.LLV_PORTABLE_TEST_RUNNER_PID) === process.pid
   || (Number(process.env.LLV_OWNED_TEST_RUNNER_PID) === process.pid
-    && fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line === `0::${process.env.LLV_OWNED_TEST_RUN_CGROUP}`));
+    && fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line === `0::${process.env.LLV_OWNED_TEST_RUN_CGROUP}`)));
 if (!admitted) {
-  const runner = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "scripts/owned-runner.ts"), ...testArguments()], {
+  const runner = Bun.spawn([process.execPath, path.resolve(import.meta.dir, "scripts/owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), ...testArguments()], {
     env: { ...process.env, LLV_OWNED_RUN_PARENT_IDENTITY: JSON.stringify(captureProcessIdentity(process.pid)) }, stdin: "inherit", stdout: "inherit", stderr: "inherit",
   });
   process.on("SIGTERM", () => runner.kill("SIGTERM"));
   process.on("SIGINT", () => runner.kill("SIGINT"));
   process.exit(await runner.exited);
 }
+
+// Each actual test process spends one machine permit, including comparator
+// branch/base runs and children of an already admitted gate. No inherited
+// lease can bypass it. Hold through all repetitions and asynchronous cleanup;
+// the next waiter reclaims the row once this exact process has exited.
+await admitTestProcess();
 
 // Bun preserves an ambient NODE_ENV. Pin the test runtime before JSX modules load.
 Object.assign(process.env, { NODE_ENV: "test" });
@@ -92,16 +89,16 @@ await import("./src/test-helpers/domInspect");
  * emitting `exit` or `beforeExit`. A run that is killed leaves its root, named
  * with an owned prefix, and the Viewer's sweeper removes it once it is stale.
  */
-// A launch's environment-level hooksPath outranks every fixture repository's
-// config and even affects `rev-parse --git-path hooks`. Drop launch bindings
+// A launch's hooksPath outranks fixture config, and its forge shim can
+// delegate to a fixture's Git wrapper and recurse. Drop launch bindings
 // before test modules load, including the task database a gate waited on.
 // The gate has already claimed its CPU slot; fixtures get their own bindings.
 // Keep newly generated guards in this run too.
 if (process.env.PATH) process.env.PATH = process.env.PATH.split(path.delimiter)
-  .filter(directory => !/[/\\]delegatus[/\\]agent-git-hooks[/\\]/.test(directory)).join(path.delimiter);
+  .filter(directory => !/[/\\]delegatus[/\\]agent-(?:git-hooks|forge)[/\\]/.test(directory)).join(path.delimiter);
 for (const key of Object.keys(process.env)) {
   if (/^GIT_(?:CONFIG(?:_|$)|DIR$|WORK_TREE$|COMMON_DIR$|INDEX_FILE$|OBJECT_DIRECTORY$|ALTERNATE_OBJECT_DIRECTORIES$|IMPLICIT_WORK_TREE$|GRAFT_FILE$|NO_REPLACE_OBJECTS$|REPLACE_REF_BASE$|PREFIX$|SHALLOW_FILE$)/.test(key)
-    || /^LLV_(?:AGENT_GIT_GUARD_DIR|AGENT_GIT_ORIGINAL_HOOKS|REPOSITORY_PUBLICATION_IDENTITY|STAGE_GIT_RECEIPT|STAGE_GIT_WORKTREE|GATE_CPU_PRIORITY_SOURCE|GATE_PUSH_HEAD|GATE_LANE_ID|GATE_STAGE_ID|GATE_CLOUD_CONFIG|GATE_STATE_DIR)$/.test(key)) delete process.env[key];
+    || /^LLV_(?:AGENT_GIT_GUARD_DIR|AGENT_GIT_ORIGINAL_HOOKS|AGENT_FORGE_(?:DIR|REPOSITORIES|AUDIT_FILE)|REPOSITORY_PUBLICATION_IDENTITY|STAGE_GIT_RECEIPT|STAGE_GIT_WORKTREE|GATE_CPU_PRIORITY_SOURCE|GATE_PUSH_HEAD|GATE_LANE_ID|GATE_STAGE_ID|GATE_CLOUD_CONFIG|GATE_STATE_DIR)$/.test(key)) delete process.env[key];
 }
 // Fixture repositories own their heads and settings. An enclosing publication's
 // Cloud endpoint and selectors must not reach them; Cloud tests opt in explicitly.

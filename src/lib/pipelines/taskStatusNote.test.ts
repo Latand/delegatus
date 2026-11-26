@@ -4,7 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { updateOperatorSettings, resetOperatorSettingsForTests } from "@/lib/operator/settings";
-import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
+import { writeStoredSeatRecord } from "@/lib/orchestrator/seatStoreFixture";
 import { createTask } from "@/lib/tasks/commands";
 import { TASKS_FILE, loadTasks, saveTasks, mutateTaskNote } from "@/lib/tasks/store";
 import { SqliteStateCollection, StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
@@ -24,8 +25,9 @@ test.each([
   ["ownership preparation", "committing the passed stage: branch ownership preparation did not stabilize within 15 minutes"],
   ["unclassified park", "stage needs reconciliation"],
 ])("%s addresses the project's seat only when designated", async (_label, detail) => {
-  const files = [statePath("orchestrator-seats.json"), statePath("operator-settings.json")];
+  const files = [statePath("operator-settings.json")];
   const previous = files.map(file => fs.existsSync(file) ? fs.readFileSync(file) : null);
+  const previousSeats = readOrchestratorSeatFile();
   try {
     for (const locale of ["en", "uk"] as const) {
       const project = `park-note-${locale}`;
@@ -52,6 +54,7 @@ test.each([
       if (previous[i] === null) fs.rmSync(file, { force: true });
       else fs.writeFileSync(file, previous[i]!);
     });
+    writeStoredSeatRecord(previousSeats);
     resetOperatorSettingsForTests();
   }
 });

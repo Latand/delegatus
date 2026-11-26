@@ -23,6 +23,8 @@ reports safe phases; equivalent inputs give equivalent redaction; the
 timeout increase and no privacy bypass. Sections 1 to 4 below are that
 revision.
 
+Local pipeline recovery now also defers exhausted retryable preparation automatically; see [Role-memory privacy during stage launch](role-memory-privacy-timeout.md#implementation). The historical diagnosis below retains the original park outcome. Permanent refusals and uncertain reserved launches retain their existing fences.
+
 ## Bounded retry (#3678, unchanged)
 
 Stage input preparation waits through transient privacy-worker timeouts and

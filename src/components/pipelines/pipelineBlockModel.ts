@@ -9,6 +9,15 @@ import { stageAccess, type StageChipState } from "./pipelineModel";
 import { currentProviderWait, latestAttempt, stageAttempts } from "@/lib/pipelines/stageChip";
 import { pipelineMovedAtMs, stageFindings } from "@/lib/pipelines/laneReads";
 
+const provisionWaitCause: Partial<Record<string, Parameters<TFunction>[0]>> = {
+  "provision-step-timeout": "pipelineBlock.provision.cause.stepTimeout",
+  "provision-execution-budget-exhausted": "pipelineBlock.provision.cause.executionBudget",
+  "toolchain-reply-lost": "pipelineBlock.provision.cause.toolchainReplyLost",
+  "waiting-for-provisioning-turn": "pipelineBlock.provision.cause.provisioningTurn",
+  "provisioning-owner-expired": "pipelineBlock.provision.cause.ownerExpired",
+  "checkout-writer-unverified": "pipelineBlock.provision.cause.checkoutWriter",
+};
+
 export { pipelineMovedAtMs, stageFindings };
 
 /*
@@ -201,7 +210,7 @@ export interface ReviewStop {
 }
 
 /** What a legacy review flow stores as its first finding when it ends at its
-    round limit (`flows/engine.ts` `markNeedsDecision`). */
+    round limit; the engine that wrote it is removed, stored records keep it. */
 const LEGACY_ROUND_LIMIT = /^(flow review )?round limit reached$/;
 /** The engine's park detail for a spent fail edge (`routeFailedAttempt`). */
 const BUDGET_EXHAUSTED = "fail-edge budget exhausted";
@@ -333,8 +342,20 @@ export function screenCurrentStageId(summary: KanbanPipeline): string | null {
  * a stop on a review says why in one sentence (§3.4), any other decision
  * "Implement failed · 1 finding". The caller adds the age.
  */
-export function pipelineReason(t: TFunction, pipeline: Pipeline, nameOf: (stage: PipelineStage) => string): string | null {
+export function pipelineReason(t: TFunction, pipeline: Pipeline, nameOf: (stage: PipelineStage) => string, nowMs?: number): string | null {
   if (pipeline.state === "provisioning" && pipeline.stateDetail?.startsWith("waiting for disk space:")) return pipeline.stateDetail;
+  const step = pipeline.provisioningStep;
+  if (step && nowMs !== undefined && (pipeline.state === "provisioning" || pipeline.state === "needs_decision")) {
+    const label = t(`pipelineBlock.provision.${step.step}`);
+    const seconds = Math.max(0, Math.floor((nowMs - step.since) / 1_000));
+    const waiting = step.status === "waiting";
+    if (step.retrying) return t("pipelineBlock.provision.retrying", { step: label, seconds });
+    const detail = t(waiting ? "pipelineBlock.provision.retry" : "pipelineBlock.provision.age", { step: label, seconds });
+    const cause = waiting ? ` · ${t(provisionWaitCause[step.reason ?? ""] ?? "pipelineBlock.provision.waitCause",
+      { reason: step.reason ?? "scheduled" })}`
+      + (step.blockerToken ? ` · ${t("pipelineBlock.provision.blocker", { token: step.blockerToken.slice(0, 8) })}` : "") : "";
+    return step.status === "parked" && pipeline.stateDetail ? `${detail}${cause} · ${pipeline.stateDetail}` : `${detail}${cause}`;
+  }
   const wait = currentProviderWait(pipeline);
   if (wait?.condition.kind === "transient") {
     const reason = t(wait.condition.label === "model at capacity" ? "pipelineBlock.provider.capacity"
@@ -421,7 +442,8 @@ export function mergeReasonText(t: TFunction, reason: string | null): string {
       || LEGACY_MERGE_REASONS[candidate]?.includes(reason));
   if (key) return t(`pipelineBlock.mergeReason.${key}`);
   const check = MERGE_REASON_PATTERNS.check.exec(reason);
-  if (check) return t("pipelineBlock.mergeReason.check", { name: check[1]! });
+  if (check) return t("pipelineBlock.mergeReason.check", { name: check[1]! })
+    + (reason.endsWith(`; ${MERGE_REASONS.requiredUnknown}`) ? `; ${t("pipelineBlock.mergeReason.requiredUnknown")}` : "");
   const merge = MERGE_REASON_PATTERNS.refusedMerge.exec(reason);
   if (merge) return t("pipelineBlock.mergeReason.refusedMerge", { message: merge[1]! });
   const refresh = MERGE_REASON_PATTERNS.refusedRefresh.exec(reason);

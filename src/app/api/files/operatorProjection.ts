@@ -1,5 +1,6 @@
 import { performanceSpans } from "@/lib/performanceSpans";
-import { MeasuredCache, MeasuredWeakCache } from "@/lib/cacheTelemetry";
+import { DeadlineExceededError } from "@/lib/deadline";
+import { MeasuredCache } from "@/lib/cacheTelemetry";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -16,7 +17,6 @@ import { diffFilesBodies, FILES_DELTA_ACCEPT_HEADER, FILES_DELTA_BASE_HEADER } f
 import { BOARD_PROTOCOL_HEADER, BOARD_SCOPE_HEADER } from "@/lib/boardDelta";
 import { BoardEncoder, boardCursorScope } from "@/lib/boardEncoding";
 import { BoardHistory } from "@/lib/boardHistory";
-import { acceptsGzip, gzipBody } from "@/lib/http/gzipBody";
 import { readStateCollectionRevision, readStateCollectionRevisions } from "@/lib/state/sqliteStateStore";
 import { ensureEmptyTaskBoardVisibilityMigration } from "@/lib/tasks/boardVisibilityMigration";
 import { markBoardViewed } from "@/lib/links/boardPresence";
@@ -54,9 +54,9 @@ type ProjectionResult = {
   cacheStatus: "hit" | "joined" | "miss" | "stale";
 };
 type CachedProjection = { key: string; representation: ProjectionRepresentation };
-// v2: pre-#1718 full bodies lack lastAgentWorkAt even after a fresh scan.
-// Invalidate them independently of the persisted scan's schema.
-const PERSISTED_PROJECTION_VERSION = 2;
+// v3: decision notices retain their publishing source for form currency.
+// Older bodies need rebuilding even when their stored data did not change.
+const PERSISTED_PROJECTION_VERSION = 3;
 type PersistedProjection = {
   version: typeof PERSISTED_PROJECTION_VERSION;
   bodyFile: string;
@@ -71,23 +71,16 @@ const PERSISTED_PROJECTION_META_FILE = "files-response-cache.json";
 const PERSISTED_PROJECTION_BODY_PREFIX = "files-response-cache-";
 const PERSISTED_PROJECTION_KEY_PREFIX = "persisted:";
 const PROJECTION_STATE_FILES = [
-  "reaper-state.json",
   /* A state database fallback or a refused backup (#1870 slice 10) shows in
      `systemHealth.storage` on the next poll, not after some other store moves. */
   "storage-incidents.json",
-  /* A new ask ("Asks you") and the switch that shows or hides them move no
-     scan and no other store. */
-  "operator-asks.json",
+  /* The switch that shows or hides asks moves no scan and no other store. */
   "asks-you-settings.json",
-  /* Who answers a worker's ask is the project's designated seat
-     (docs/design/attention-auto-resolve.md): a rotation moves no scan. */
-  "orchestrator-seats.json",
 ] as const;
 const projectionCacheStore = globalThis as typeof globalThis & {
   __llvFilesProjectionCache?: Map<string, CachedProjection>;
   __llvBoardHistory?: BoardHistory;
   __llvBoardEncoder?: BoardEncoder;
-  __llvFilesGzipBodiesV2?: MeasuredWeakCache<ProjectionRepresentation, { promise: Promise<Uint8Array>; bytes: number }>;
   __llvFilesProjectionInflight?: Map<string, Promise<ProjectionRepresentation>>;
   __llvFilesProjectionPersistenceTail?: Promise<void>;
   __llvFilesPersistedProjectionChecked?: boolean;
@@ -117,23 +110,6 @@ function boardHistory(): BoardHistory {
 
 function boardEncoder(): BoardEncoder {
   return projectionCacheStore.__llvBoardEncoder ??= new BoardEncoder();
-}
-
-/** One compression per representation, however many clients fetch it. */
-function gzippedRepresentation(representation: ProjectionRepresentation): Promise<Uint8Array> {
-  const cache = projectionCacheStore.__llvFilesGzipBodiesV2 ??= new MeasuredWeakCache("gzip-bodies", "files/operatorProjection", entry => entry.bytes);
-  let compressed = cache.get(representation);
-  if (!compressed) {
-    const entry = { promise: gzipBody(representation.body), bytes: 0 };
-    compressed = entry;
-    cache.set(representation, entry);
-    void entry.promise.then(bytes => {
-      if (cache.get(representation) !== entry) return;
-      entry.bytes = bytes.byteLength;
-      cache.set(representation, entry);
-    }, () => cache.delete(representation));
-  }
-  return compressed.promise;
 }
 
 function projectionInflight(): Map<string, Promise<ProjectionRepresentation>> {
@@ -197,6 +173,7 @@ function projectionBaseKey(
   pinnedPath: string | undefined,
 ): string {
   return createHash("sha1").update(JSON.stringify({
+    projectionVersion: PERSISTED_PROJECTION_VERSION,
     pinnedPath: pinnedPath ?? null,
     // A full disk can change with no successful state write or scan revision.
     // Healthy free-byte fluctuations do not warrant rebuilding the projection.
@@ -237,6 +214,14 @@ function projectionBaseKey(
       `seat-decisions:${readStateCollectionRevision(statePath("state.sqlite"), SEAT_DECISIONS_COLLECTION) ?? "none"}`,
       /* A tick switched off hands its project's routed asks back to the operator. */
       hotStateSignature("seat_tick_settings", "seat-tick-settings.json"),
+      /* Who answers a worker's ask is the project's designated seat
+         (docs/design/attention-auto-resolve.md): a rotation moves no scan. */
+      hotStateSignature("orchestrator_seats", "orchestrator-seats.json"),
+      /* A new ask ("Asks you") moves no scan and no other store. */
+      hotStateSignature("operator_asks", "operator-asks.json"),
+      /* The reaper's authorship evidence pins owner-touched workers and clears
+         freshly scanned ones (#112). */
+      hotStateSignature("reaper", "reaper-state.json"),
     ],
   })).digest("hex");
 }
@@ -496,8 +481,9 @@ async function projectionFor(
           return { ...projected, built: { epoch, generation, sequence } };
         }));
       } catch (error) {
-        if (error instanceof FilesProjectionQueueError && cached) {
-          /* The last representation stands until a build gets its turn. */
+        if ((error instanceof FilesProjectionQueueError || error instanceof DeadlineExceededError) && cached) {
+          /* The last representation stands until a build gets its turn, or
+             until a build the worker could not finish is tried again. */
           return cached.representation;
         }
         if (!isDiskFullError(error)) throw error;
@@ -602,13 +588,53 @@ export function HEAD(request: Request): Response {
 export type AfterFilesResponse = (work: () => Promise<void>) => void;
 const nextTurn: AfterFilesResponse = (work) => { setTimeout(() => { void work(); }, 0); };
 
+/** A queue refusal for a scope with nothing to serve, as the HTTP answer. It
+    carries no rows, ETag or build stamp, so the caller learns nothing about any
+    scope; the client's own backoff asks again. Only this boundary converts it:
+    `getFiles` keeps throwing for the board's internal preparation, which treats
+    a throw as "not prepared yet". */
+function projectionUnavailableResponse(request: Request, error: FilesProjectionQueueError | DeadlineExceededError): Response {
+  const reason = error instanceof FilesProjectionQueueError ? error.reason : "build-timeout";
+  const waitedMs = error instanceof FilesProjectionQueueError ? error.waitedMs : error.timeoutMs;
+  const url = new URL(request.url);
+  const diagnostics = filesProjectionQueueDiagnostics();
+  const yesNo = (flag: boolean) => (flag ? "yes" : "no");
+  /* The worker's bounded stderr tail travels only in this message. Next used to
+     print it with the thrown error; the summary line below stays free of it. */
+  if (error instanceof DeadlineExceededError) console.warn(`[files projection] deadline detail: ${error.message}`);
+  console.warn(
+    `[files projection] ${reason} for a scope with nothing to serve: waited ${Math.round(waitedMs)}ms; `
+    + `waiting ${diagnostics.waiting}, expired ${diagnostics.expired}, refused ${diagnostics.refused}; `
+    + `pinned ${yesNo(!!url.searchParams.get("path")?.trim())}, summary ${yesNo(url.searchParams.get("view") === "summary")}, `
+    + `agent ${yesNo(request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER))}`,
+  );
+  return Response.json(
+    { error: "files projection unavailable", code: "files_projection_unavailable", reason },
+    {
+      status: 503,
+      headers: {
+        "cache-control": "no-store",
+        "x-llv-files-projection-cache": "unavailable",
+        "server-timing": `files-worker-queue;dur=${waitedMs.toFixed(1)};desc="${reason}"`,
+      },
+    },
+  );
+}
+
 export async function GET(request: Request, afterResponse: AfterFilesResponse = nextTurn): Promise<Response> {
   const id = randomUUID();
   performanceSpans.request(id, new URL(request.url).searchParams.get("view") === "storage-health" ? "health" : "files");
   performanceSpans.event("http.dispatch", id);
   let failed = true;
   try {
-    const response = await performanceSpans.correlate(id, () => withViewerOperation("files.get", () => getFiles(request, false, afterResponse)));
+    const response = await performanceSpans.correlate(id, () => withViewerOperation("files.get", async () => {
+      try {
+        return await getFiles(request, false, afterResponse);
+      } catch (error) {
+        if (error instanceof FilesProjectionQueueError || error instanceof DeadlineExceededError) return projectionUnavailableResponse(request, error);
+        throw error;
+      }
+    }));
     failed = false;
     return response;
   } finally {
@@ -633,9 +659,8 @@ function boardBootstrap(): BoardBootstrap {
   return bootstrapStore.__llvBoardBootstrap;
 }
 
-/** Registration loads this module and the saved bytes before Next accepts
- * requests, including on a passive candidate. Building a missing artifact
- * requires release ownership and runs during activation. */
+/** Read the saved bytes, or warm a missing artifact in the owning release's
+ * fenced background startup. The first board request can read on demand. */
 export async function prepareBoardSummary(buildIfMissing = false): Promise<void> {
   const saved = await boardBootstrap().read;
   if (!buildIfMissing) return;
@@ -680,13 +705,11 @@ async function bootstrapResponse(request: Request, afterResponse: AfterFilesResp
       }
     });
   }
-  const gzip = acceptsGzip(request);
-  return new Response(bootstrapBody(gzip ? saved.gzip : saved.body), { headers: {
+  return new Response(bootstrapBody(saved.body), { headers: {
     "content-type": "application/json",
     "cache-control": "no-store",
     etag: saved.etag,
     vary: `accept-encoding, ${FILES_DELTA_ACCEPT_HEADER}`,
-    ...(gzip ? { "content-encoding": "gzip" } : {}),
     "x-llv-files-projection-cache": "bootstrap",
     "x-llv-files-cache": "stale",
     "x-llv-files-generation": "0",
@@ -785,7 +808,7 @@ async function getFiles(request: Request, skipBootstrap = false, afterResponse: 
        is the one the body was built from, older when the answer is stale. */
     ...(projected.representation.built ? { [FILES_BUILT_HEADER]: formatFilesBuilt(projected.representation.built) } : {}),
   };
-  let body: string | Uint8Array | null = null;
+  let body: string | null = null;
   const fullBytes = projected.representation.bytes ??= Buffer.byteLength(projected.representation.body);
   if (!notModified) {
     /* A client that certified an earlier representation of this scope, and
@@ -809,12 +832,8 @@ async function getFiles(request: Request, skipBootstrap = false, afterResponse: 
       }
     }
     headers["cache-control"] = "no-store";
-    if (acceptsGzip(request) && body.length >= 1024) {
-      body = delta ? await boardHistory().gzip(delta) : await gzippedRepresentation(projected.representation);
-      headers["content-encoding"] = "gzip";
-    }
   }
-  headers["x-llv-files-bytes"] = String(body === null ? 0 : typeof body === "string" ? Buffer.byteLength(body) : body.byteLength);
+  headers["x-llv-files-bytes"] = String(body === null ? 0 : Buffer.byteLength(body));
   const response = new Response(body as BodyInit | null, {
     status: notModified ? 304 : 200,
     headers,
@@ -844,6 +863,6 @@ export async function operatorBoardRepresentation(signal?: AbortSignal): Promise
 }
 
 /** The exact panel representation, decoded and reduced outside the Viewer. */
-export async function operatorSeatAgenda(project: string): Promise<import("@/lib/monitor/types").SeatTickWorkerAskInput[]> {
-  return seatAgendaInWorker(await operatorBoardBody(), project, Date.now() / 1000);
+export async function operatorSeatAgenda(project: string, seatConversationId?: string, pauses?: import("@/lib/attention/seatAgenda").SeatAgendaPauses): Promise<import("@/lib/monitor/types").SeatTickAgendaInput> {
+  return seatAgendaInWorker(await operatorBoardBody(), project, Date.now() / 1000, undefined, seatConversationId, pauses);
 }

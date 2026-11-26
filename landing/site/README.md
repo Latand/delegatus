@@ -228,7 +228,7 @@ product file, compare the drawing, fix `boardDemo.js` and `styles.css`.
 | Seat draft («Create the orchestrator for …», Runs on, the cream button) | `src/components/orchestrator/OrchestratorPanel.tsx`, `RunsOnRow.tsx` |
 | Seat head (costume avatar, dot and word, role tab, chips) | `OrchestratorPanel.tsx`, `IncumbentHeader.tsx`, `src/components/brand/RoleAvatar.tsx` |
 | Chat rows, tool rows, «Worked for», the turn line | `src/components/feed/FeedItem.tsx`, `UserMessageRow.tsx`, `cards/ToolCard.tsx` |
-| Composer (placeholder, mic, send, footer row) | `src/components/TmuxComposer.tsx` |
+| Composer (placeholder, mic, send, footer row) | `src/components/ConversationComposer.tsx` |
 | Phone composer (one box, field above the tools row: model chip, attach, dictate, send) | `src/components/ComposerBar.tsx` (`unitTools`) |
 | Phone seat badge and chat state line | `src/components/mobile/MobileOrchestratorSheet.tsx` (`SeatBadge`), `MobileBoard.tsx` (`statePhrase`), `MobileFocusView.tsx` |
 | Columns, strips, empty boxes, counts | `src/components/kanban/KanbanBoard.tsx`, `kanbanLayout.ts`, `kanbanBoard.css` |
@@ -318,7 +318,7 @@ more frame over the same world, reached by the product's own controls:
 | Section | Frame | Views (`data-view`) |
 | --- | --- | --- |
 | Full autonomy | `.live-auto`, 908×760, `data-exact` (the board is scrolled to its In progress column, so the frame's edge falls in the gap after it on every screen) | `autonomy`: the tick switch in the seat's head opens its panel, which spans the chat's column so no word of the chat stands beside it (the phone: the seat sheet, shortened until its last row is whole, then its tick row); `decisions`: the same panel with Details open, standing at the panel's top so the view opens on a heading |
-| Learned rules | `.live-mem`, 1180×760 | `rules`: the board's ⋯, «Learned rules», «All rules», the Orchestrator chip, its first rule expanded (the phone: the menu's project rules); `curator`: the builder's rule, the curator's passes and what it archived; the window's close control takes no focus ring |
+| Learned rules | `.live-mem`, 1180×760 | `rules`: the board's ⋯, «Learned rules», the Orchestrator's every-project row in the level list, its first rule expanded (the phone: the menu's project rules, then the level screen); `curator`: the project row, the curator's passes and what it archived; the window's close control takes no focus ring |
 | Limits | `.live-use`, 1444×760 (without the rail the board is 1404 px wide and holds its balanced columns, with the rail 1194 px and it scrolls: either way no card title breaks inside a word) | `spend`: the board with the seat folded, every card's marks; `task`: one card's spend popover (the phone: the task screen at its Limits), drawn larger as the page shrinks the frame and slid to where it covers whole lines or none; `history`: the rail's Claude week button opens the burndown, which takes the board's place beside the rail on a page drawn larger as the frame shrinks |
 
 A frame is drawn at 0.62 of its size on a 1000 px page. `setFrameZoom()` in

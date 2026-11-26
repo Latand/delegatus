@@ -70,7 +70,7 @@ function conversation(path: string, title: string, since: number, over: Partial<
     root: "claude-projects", name: path, path, project: PROJECT, title, engine: "codex", kind: "session", fmt: "codex",
     parent: null, mtime: NOW - 60, size: 10, activity: "idle", proc: null, pid: null, model: "gpt-5.6", waitingInput: null,
     pendingQuestion: {
-      kind: "question", toolUseId: `tool-${path}`, transcriptPath: path, pid: 4242, paneTarget: null, askedAt: new Date(since * 1000).toISOString(),
+      kind: "question", toolUseId: `tool-${path}`, transcriptPath: path, pid: 4242, askedAt: new Date(since * 1000).toISOString(),
       questions: [{ header: "", question: "Which endpoint first?", multiSelect: false, options: [] }],
     },
     ...over,
@@ -92,7 +92,7 @@ const FILES = [
   conversation("/p/export.jsonl", "Implement the export endpoint", NOW - 540),
   conversation("/p/migrate.jsonl", "Migrate accounts to the new binding", NOW - 120, {
     engine: "claude", fmt: "claude", model: "opus",
-    pendingQuestion: { kind: "plan", toolUseId: "tool-plan", transcriptPath: "/p/migrate.jsonl", pid: 1, paneTarget: null, askedAt: new Date((NOW - 120) * 1000).toISOString(), questions: [], plan: "1. read" },
+    pendingQuestion: { kind: "plan", toolUseId: "tool-plan", transcriptPath: "/p/migrate.jsonl", pid: 1, askedAt: new Date((NOW - 120) * 1000).toISOString(), questions: [], plan: "1. read" },
   } as Partial<FileEntry>),
 ];
 const PIPELINES = [pipeline("pipeline_atlas_p2", "Fast conversation switching", "needs_decision", NOW - 3_600), pipeline("pipeline_atlas_p1", "Board status projection", "running", NOW - 60)];

@@ -96,20 +96,32 @@ for (const engine of ["claude", "codex"] as const) for (const checkpoint of ["st
 native("Codex hands a follow-up to turn/steer while the incumbent provider response is open", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "steer-turn-"));
   let runtime: NativeCodexRuntime | null = null;
+  let restoreSteer = () => {};
   try {
     runtime = await startNativeCodexRuntime(directory, codexBinary!);
     const r = runtime;
+    const steer = r.host().steer.bind(r.host());
+    let steerAccepted = false;
+    const steering = spyOn(r.host(), "steer").mockImplementation(async (...args) => {
+      const result = await steer(...args);
+      steerAccepted = true;
+      return result;
+    });
+    restoreSteer = () => steering.mockRestore();
     const incumbent = r.host().send({ id: "incumbent", text: "incumbent" }); void incumbent.catch(() => {});
     await until(() => r.provider.open() === 1);
     await send(r, "steer-or-queue");
-    await until(() => r.rpc.some(call => call.method === "turn/steer" && call.params.clientUserMessageId === "long-turn-followup"));
+    // Dispatch can precede CLI acceptance; keep the incumbent open through its reply.
+    await until(() => steerAccepted);
     expect(r.provider.open()).toBe(1);
     r.provider.completeNext();
     await until(() => r.provider.requests.length === 2);
     r.provider.completeNext();
     await until(async () => (await query(r)).send.state === "delivered");
     expect(r.rpc.filter(call => call.method === "turn/steer" && call.params.clientUserMessageId === "long-turn-followup")).toHaveLength(1);
+    expect(r.rpc.filter(call => call.method === "turn/start" && call.params.clientUserMessageId === "long-turn-followup")).toHaveLength(0);
   } finally {
+    restoreSteer();
     if (runtime) { while (runtime.provider.completeNext()) {} await runtime.close(); }
     fs.rmSync(directory, { recursive: true, force: true });
   }

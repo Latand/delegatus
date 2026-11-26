@@ -1,6 +1,10 @@
+/** Maximum automatic claims of one admitted message across recovery and migration. */
+export const DELIVERY_ATTEMPT_LIMIT = 12;
+
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { assertAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
 import type { AgentEngine } from "@/lib/agent/cli";
+import type { RuntimeDeliveryFailure } from "@/lib/runtime/contracts";
 import type { QuotaEngine } from "./quotaPolicy";
 import { grantedMcpServers, type McpGrantPolicy } from "@/lib/agent/mcpAllowlist";
 import { grantedPlugins } from "@/lib/agent/pluginAllowlist";
@@ -56,8 +60,13 @@ export function normalizeProjectOwnership(value: unknown): ConversationProjectOw
 }
 
 export interface LaunchProfile {
+  /** Bounded proof of the Claude account selector's inputs at a pipeline launch. */
+  accountSelection?: AccountSelectionSnapshot;
   /** Server-attributed team launch; copied on resume, migration and delegation. */
-  workspace?: { memberId: string; workspaceId: string | null };
+  /** `fromMessage` marks a seat launch whose fence came from a member's message
+      and no designation: the next person who writes to the conversation decides
+      its reach. Absent, the binding is durable. */
+  workspace?: { memberId: string; workspaceId: string | null; fromMessage?: true };
   /** Stage request; null/absent inherits project and role settings at launch. */
   agentMemoryMaxBytes?: number | null;
   /** Text-free role variant selector for resource planning after restart. */
@@ -74,12 +83,16 @@ export interface LaunchProfile {
   /** Explicit tool/network boundary. Null/absent preserves legacy readOnly
       interpretation for durable generations created before the axis split. */
   sandbox?: "full" | "restricted" | null;
+  /** A verified owner relay may use only its request-bound seat handoff. */
+  ownerRelayHandoffOnly?: boolean;
   allowSubagents: boolean;
   /** No automatic memory reaches this conversation: no learned rules, no
       shared-memory hook, and its engine's own memory off. Set at spawn for a
       clean role or review gate (src/lib/memory/eligibility.ts) and kept on
       every resume. Absent means memory is allowed. */
   cleanMemory?: boolean;
+  /** Delegated Codex launches omit the machine skills catalogue on every resume. */
+  omitSkillsInstructions?: boolean;
   /** Text-free selector, replayed from SQLite at every engine process start.
       reader "operator" marks the operator's own root conversation in Delegatus
       mode: it reads the project and machine rules under its own notice. */
@@ -97,7 +110,7 @@ export interface LaunchProfile {
   plan: AgentPlan | null;
 }
 
-type DurableLaunchAccess = Partial<Pick<LaunchProfile, "readOnly" | "sandbox">> | null | undefined;
+type DurableLaunchAccess = Partial<Pick<LaunchProfile, "readOnly" | "sandbox" | "ownerRelayHandoffOnly">> | null | undefined;
 
 export function explicitLaunchProfileSandbox(profile: DurableLaunchAccess): "full" | "restricted" | null {
   return profile?.sandbox === "full" || profile?.sandbox === "restricted"
@@ -106,10 +119,11 @@ export function explicitLaunchProfileSandbox(profile: DurableLaunchAccess): "ful
 }
 
 export function launchProfileEngineReadOnly(profile: DurableLaunchAccess): boolean {
-  return explicitLaunchProfileSandbox(profile) === null && profile?.readOnly === true;
+  return profile?.ownerRelayHandoffOnly === true || explicitLaunchProfileSandbox(profile) === null && profile?.readOnly === true;
 }
 
 export function launchProfileCodexSandbox(profile: DurableLaunchAccess): string | null {
+  if (profile?.ownerRelayHandoffOnly === true) return "read-only";
   const sandbox = explicitLaunchProfileSandbox(profile);
   if (sandbox === "full") return "danger-full-access";
   if (sandbox === "restricted") return "workspace-write";
@@ -140,6 +154,7 @@ export function emptyLaunchProfile(
     goal: null,
     plan: null,
     ...overrides,
+    accountSelection: normalizedAccountSelection(overrides.accountSelection),
     /* Same bound, enforced again on the durable profile: an allowlist can only
        ever carry servers the Viewer is allowed to grant, and always carries
        `viewer` (issue #739). */
@@ -289,6 +304,31 @@ export interface MigrationIntent {
   requestIds: string[];
   evidence: MigrationEvidence | null;
   stoppedAt: string | null;
+  /** Present from the transaction that stopped the intent until the last
+      transaction of its sweep. The stop itself settles the conversations the
+      intent owns; the engine's other conversations are opted out of the
+      stopped target afterwards, a bounded number per transaction, so the
+      registry's write lock is never held for the whole engine. `stampedAt` is
+      the stop's own time, which every row the sweep writes carries. `optOut`
+      is the stop's decision: whether the engine was routed to this intent's
+      target when it stopped. While it is present, every conversation whose
+      migration the intent still owns is rolled back as far as any reader or
+      writer is concerned, whether or not the sweep has reached it. */
+  stopSweep?: MigrationStopSweep | null;
+}
+
+export interface MigrationStopSweep {
+  stampedAt: string;
+  optOut: boolean;
+  /** The stop's place among the opt-out decisions of its engine: a number the
+      registry hands out in the transaction that decides, each larger than the
+      one before, so two decisions of one millisecond are still ordered. A
+      conversation that starts or changes account while the stop's sweep is
+      still writing is placed against the same number, so what the stop
+      covered is never read from the clock. */
+  order?: number;
+  /** What the stop tells the senders of the input it cancels. */
+  reason?: string;
 }
 
 export interface AutoBalancePolicy {
@@ -334,6 +374,47 @@ export interface DurableQuotaObservation {
   /** The provider said the limit is reached whatever the windows show; see
       `QuotaObservation.limitReached`. Absent when the reading did not say. */
   limitReached?: boolean;
+  /** Unix-second watermark of the newest actual quota exhaustion event ever
+      recorded for this account (Antigravity). Preserved across empty polls and
+      expired windows so older transcripts cannot resurrect an already-reset window. */
+  lastQuotaEventAt?: number;
+}
+
+export interface AccountSelectionSnapshot {
+  model: string | null;
+  selectedAccountId: string;
+  selectedAt: string;
+  reason: "headroom" | "unknown-capacity";
+  thresholdPercent: 100;
+  observationAt: string | null;
+  authCheckedAt: string | null;
+  observationFresh: boolean;
+  authFresh: boolean;
+  windows: Array<{ name: "session" | "weekly" | "tier"; usedPercent: number | null; resetsAt: number | null }>;
+}
+
+function normalizedAccountSelection(value: unknown): AccountSelectionSnapshot | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as Record<string, unknown>;
+  if (typeof row.selectedAccountId !== "string" || !row.selectedAccountId.trim() || row.selectedAccountId.length > 128
+    || !(row.model === null || typeof row.model === "string" && row.model.length <= 120)
+    || typeof row.selectedAt !== "string" || !Number.isFinite(Date.parse(row.selectedAt))
+    || (row.reason !== "headroom" && row.reason !== "unknown-capacity") || row.thresholdPercent !== 100
+    || !(row.observationAt === null || typeof row.observationAt === "string" && Number.isFinite(Date.parse(row.observationAt)))
+    || !(row.authCheckedAt === null || typeof row.authCheckedAt === "string" && Number.isFinite(Date.parse(row.authCheckedAt)))
+    || typeof row.observationFresh !== "boolean" || typeof row.authFresh !== "boolean" || !Array.isArray(row.windows)) return undefined;
+  const windows = row.windows.slice(0, 3).flatMap((item): AccountSelectionSnapshot["windows"] => {
+    if (!item || typeof item !== "object") return [];
+    const window = item as Record<string, unknown>;
+    if (window.name !== "session" && window.name !== "weekly" && window.name !== "tier") return [];
+    if (!(window.usedPercent === null || typeof window.usedPercent === "number" && Number.isFinite(window.usedPercent) && window.usedPercent >= 0 && window.usedPercent <= 100)) return [];
+    if (!(window.resetsAt === null || typeof window.resetsAt === "number" && Number.isSafeInteger(window.resetsAt) && window.resetsAt >= 0)) return [];
+    return [{ name: window.name, usedPercent: window.usedPercent, resetsAt: window.resetsAt }];
+  });
+  return { model: row.model as string | null, selectedAccountId: row.selectedAccountId, selectedAt: row.selectedAt,
+    reason: row.reason, thresholdPercent: 100, observationAt: row.observationAt as string | null,
+    authCheckedAt: row.authCheckedAt as string | null, observationFresh: row.observationFresh,
+    authFresh: row.authFresh, windows };
 }
 
 export interface HeldDeliveryCommand {
@@ -410,6 +491,7 @@ export interface HeldDelivery {
   assignedAt: string | null;
   deliveredAt: string | null;
   error: string | null;
+  primaryFailure?: RuntimeDeliveryFailure;
 }
 
 export interface SuccessorProviderPort {

@@ -205,6 +205,7 @@ test("the workflow writer fixture waits for template role reads before writing",
           if (!line.startsWith(prefix)) continue;
           const sample = JSON.parse(line.slice(prefix.length));
           if (sample.stateWait?.callSite === "state.marker" && peer.inTransaction) {
+            expect(sample.synchronous).toBe(false);
             observedWait = sample.stateWait.outcome === "waiting";
             peer.exec("ROLLBACK");
           }

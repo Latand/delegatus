@@ -1075,7 +1075,7 @@
       "overflowX": 0
     },
     "unknown-phone-390-en-light-open": {
-      "disabledTiers": 6,
+      "disabledTiers": 7,
       "hold": {
         "text": "No model reported yet — pick a model to change reasoning and speed",
         "lines": 1,
@@ -1098,7 +1098,7 @@
       "overflowX": 0
     },
     "unknown-phone-390-en-dark-open": {
-      "disabledTiers": 6,
+      "disabledTiers": 7,
       "hold": {
         "text": "No model reported yet — pick a model to change reasoning and speed",
         "lines": 1,
@@ -1121,7 +1121,7 @@
       "overflowX": 0
     },
     "unknown-phone-390-uk-light-open": {
-      "disabledTiers": 6,
+      "disabledTiers": 7,
       "hold": {
         "text": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
         "lines": 2,
@@ -1144,7 +1144,7 @@
       "overflowX": 0
     },
     "unknown-phone-390-uk-dark-open": {
-      "disabledTiers": 6,
+      "disabledTiers": 7,
       "hold": {
         "text": "Модель ще не повідомлено — оберіть модель, щоб змінити міркування й швидкість",
         "lines": 2,
@@ -1311,7 +1311,7 @@
       "overflowX": 0
     },
     "unlisted-phone-390-en-light-open": {
-      "disabledTiers": 6,
+      "disabledTiers": 7,
       "hold": {
         "text": "gpt-5.5 is not in the model list — pick a model to change reasoning and speed",
         "lines": 2,
@@ -1334,7 +1334,7 @@
       "overflowX": 0
     },
     "unlisted-phone-390-en-dark-open": {
-      "disabledTiers": 6,
+      "disabledTiers": 7,
       "hold": {
         "text": "gpt-5.5 is not in the model list — pick a model to change reasoning and speed",
         "lines": 2,
@@ -1357,7 +1357,7 @@
       "overflowX": 0
     },
     "unlisted-phone-390-uk-light-open": {
-      "disabledTiers": 6,
+      "disabledTiers": 7,
       "hold": {
         "text": "gpt-5.5 немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
         "lines": 2,
@@ -1380,7 +1380,7 @@
       "overflowX": 0
     },
     "unlisted-phone-390-uk-dark-open": {
-      "disabledTiers": 6,
+      "disabledTiers": 7,
       "hold": {
         "text": "gpt-5.5 немає в списку моделей — оберіть модель, щоб змінити міркування й швидкість",
         "lines": 2,
@@ -2043,8 +2043,8 @@
       }
     },
     "fable-desktop-1440-en-light": {
-      "text": "Fable · High",
-      "label": "Model and reasoning — applies to your next message — Fable, High",
+      "text": "Fable 5.1 · High",
+      "label": "Model and reasoning — applies to your next message — Fable 5.1, High",
       "whole": true,
       "inView": true,
       "drawnWithinBox": true,
@@ -2056,8 +2056,8 @@
       "summary": null
     },
     "fable-desktop-1440-en-dark": {
-      "text": "Fable · High",
-      "label": "Model and reasoning — applies to your next message — Fable, High",
+      "text": "Fable 5.1 · High",
+      "label": "Model and reasoning — applies to your next message — Fable 5.1, High",
       "whole": true,
       "inView": true,
       "drawnWithinBox": true,
@@ -2069,8 +2069,8 @@
       "summary": null
     },
     "fable-desktop-1440-uk-light": {
-      "text": "Fable · Високі",
-      "label": "Модель і міркування — застосується до наступного повідомлення — Fable, Високі",
+      "text": "Fable 5.1 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable 5.1, Високі",
       "whole": true,
       "inView": true,
       "drawnWithinBox": true,
@@ -2082,8 +2082,8 @@
       "summary": null
     },
     "fable-desktop-1440-uk-dark": {
-      "text": "Fable · Високі",
-      "label": "Модель і міркування — застосується до наступного повідомлення — Fable, Високі",
+      "text": "Fable 5.1 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable 5.1, Високі",
       "whole": true,
       "inView": true,
       "drawnWithinBox": true,
@@ -2095,8 +2095,8 @@
       "summary": null
     },
     "fable-desktop-900-en-light": {
-      "text": "Fable · High",
-      "label": "Model and reasoning — applies to your next message — Fable, High",
+      "text": "Fable 5.1 · High",
+      "label": "Model and reasoning — applies to your next message — Fable 5.1, High",
       "whole": true,
       "inView": true,
       "drawnWithinBox": true,
@@ -2108,8 +2108,8 @@
       "summary": null
     },
     "fable-desktop-900-en-dark": {
-      "text": "Fable · High",
-      "label": "Model and reasoning — applies to your next message — Fable, High",
+      "text": "Fable 5.1 · High",
+      "label": "Model and reasoning — applies to your next message — Fable 5.1, High",
       "whole": true,
       "inView": true,
       "drawnWithinBox": true,
@@ -2121,8 +2121,8 @@
       "summary": null
     },
     "fable-desktop-900-uk-light": {
-      "text": "Fable · Високі",
-      "label": "Модель і міркування — застосується до наступного повідомлення — Fable, Високі",
+      "text": "Fable 5.1 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable 5.1, Високі",
       "whole": true,
       "inView": true,
       "drawnWithinBox": true,
@@ -2134,8 +2134,8 @@
       "summary": null
     },
     "fable-desktop-900-uk-dark": {
-      "text": "Fable · Високі",
-      "label": "Модель і міркування — застосується до наступного повідомлення — Fable, Високі",
+      "text": "Fable 5.1 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable 5.1, Високі",
       "whole": true,
       "inView": true,
       "drawnWithinBox": true,
@@ -2147,8 +2147,8 @@
       "summary": null
     },
     "fable-phone-390-en-light": {
-      "text": "Fable · high",
-      "label": "Model and reasoning — applies to your next message — Fable, high",
+      "text": "Fable 5.1 · high",
+      "label": "Model and reasoning — applies to your next message — Fable 5.1, high",
       "whole": true,
       "inView": true,
       "drawnWithinBox": true,
@@ -2158,15 +2158,15 @@
       "disabledTiers": 0,
       "hold": null,
       "summary": {
-        "text": "Applies to your next message: Fable · high",
+        "text": "Applies to your next message: Fable 5.1 · high",
         "lines": 1,
         "inView": true,
         "clipped": false
       }
     },
     "fable-phone-390-en-dark": {
-      "text": "Fable · high",
-      "label": "Model and reasoning — applies to your next message — Fable, high",
+      "text": "Fable 5.1 · high",
+      "label": "Model and reasoning — applies to your next message — Fable 5.1, high",
       "whole": true,
       "inView": true,
       "drawnWithinBox": true,
@@ -2176,15 +2176,15 @@
       "disabledTiers": 0,
       "hold": null,
       "summary": {
-        "text": "Applies to your next message: Fable · high",
+        "text": "Applies to your next message: Fable 5.1 · high",
         "lines": 1,
         "inView": true,
         "clipped": false
       }
     },
     "fable-phone-390-uk-light": {
-      "text": "Fable · high",
-      "label": "Модель і міркування — застосується до наступного повідомлення — Fable, high",
+      "text": "Fable 5.1 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable 5.1, high",
       "whole": true,
       "inView": true,
       "drawnWithinBox": true,
@@ -2194,15 +2194,15 @@
       "disabledTiers": 0,
       "hold": null,
       "summary": {
-        "text": "Стосується наступного повідомлення: Fable · high",
+        "text": "Стосується наступного повідомлення: Fable 5.1 · high",
         "lines": 1,
         "inView": true,
         "clipped": false
       }
     },
     "fable-phone-390-uk-dark": {
-      "text": "Fable · high",
-      "label": "Модель і міркування — застосується до наступного повідомлення — Fable, high",
+      "text": "Fable 5.1 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable 5.1, high",
       "whole": true,
       "inView": true,
       "drawnWithinBox": true,
@@ -2212,7 +2212,183 @@
       "disabledTiers": 0,
       "hold": null,
       "summary": {
-        "text": "Стосується наступного повідомлення: Fable · high",
+        "text": "Стосується наступного повідомлення: Fable 5.1 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "fable52-desktop-1440-en-light": {
+      "text": "Fable 5.2 · High",
+      "label": "Model and reasoning — applies to your next message — Fable 5.2, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable52-desktop-1440-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable52-desktop-1440-en-dark": {
+      "text": "Fable 5.2 · High",
+      "label": "Model and reasoning — applies to your next message — Fable 5.2, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable52-desktop-1440-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable52-desktop-1440-uk-light": {
+      "text": "Fable 5.2 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable 5.2, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable52-desktop-1440-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable52-desktop-1440-uk-dark": {
+      "text": "Fable 5.2 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable 5.2, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable52-desktop-1440-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable52-desktop-900-en-light": {
+      "text": "Fable 5.2 · High",
+      "label": "Model and reasoning — applies to your next message — Fable 5.2, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable52-desktop-900-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable52-desktop-900-en-dark": {
+      "text": "Fable 5.2 · High",
+      "label": "Model and reasoning — applies to your next message — Fable 5.2, High",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable52-desktop-900-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable52-desktop-900-uk-light": {
+      "text": "Fable 5.2 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable 5.2, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable52-desktop-900-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable52-desktop-900-uk-dark": {
+      "text": "Fable 5.2 · Високі",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable 5.2, Високі",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable52-desktop-900-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": null
+    },
+    "fable52-phone-390-en-light": {
+      "text": "Fable 5.2 · high",
+      "label": "Model and reasoning — applies to your next message — Fable 5.2, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable52-phone-390-en-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Fable 5.2 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "fable52-phone-390-en-dark": {
+      "text": "Fable 5.2 · high",
+      "label": "Model and reasoning — applies to your next message — Fable 5.2, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable52-phone-390-en-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Applies to your next message: Fable 5.2 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "fable52-phone-390-uk-light": {
+      "text": "Fable 5.2 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable 5.2, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable52-phone-390-uk-light-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: Fable 5.2 · high",
+        "lines": 1,
+        "inView": true,
+        "clipped": false
+      }
+    },
+    "fable52-phone-390-uk-dark": {
+      "text": "Fable 5.2 · high",
+      "label": "Модель і міркування — застосується до наступного повідомлення — Fable 5.2, high",
+      "whole": true,
+      "inView": true,
+      "drawnWithinBox": true,
+      "overflowX": 0
+    },
+    "fable52-phone-390-uk-dark-open": {
+      "disabledTiers": 0,
+      "hold": null,
+      "summary": {
+        "text": "Стосується наступного повідомлення: Fable 5.2 · high",
         "lines": 1,
         "inView": true,
         "clipped": false

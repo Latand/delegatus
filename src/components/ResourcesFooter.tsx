@@ -2,14 +2,15 @@
 
 import { startTransition, useEffect, useRef, useState } from "react";
 
+import { modelDisplayName } from "@/lib/agent/models";
 import { createFreshAwareCoalescer } from "@/lib/asyncCoalescer";
 import { useLocale, type MessageKey } from "@/lib/i18n";
 import type { DiskPressure } from "@/lib/state/diskPressure";
+import type { MemoryPressure } from "@/lib/state/memoryPressure";
 import type { ResourceSession, ResourcesPayload, ResourcesViewer } from "@/lib/types";
 
 import { X } from "./icons";
 import { LINE_EDGE, MeterLine, type RailFooterDensity } from "./railFooterDensity";
-import { AttachControls } from "./resources/AttachControls";
 import { fmtBytes } from "./resources/fmtBytes";
 import { WorktreeDrilldown } from "./resources/WorktreeDrilldown";
 import { bulkKillTargets, idleKillTargets, isStructuredHost, resourceCounts } from "./resources/hostSelection";
@@ -187,9 +188,13 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
   /* No probe ever succeeded and no sessions either: nothing to show. */
   if (!snap || (!system && sessions.length === 0)) return null;
 
-  const ramUsedPct = system ? (100 * (system.ramTotal - system.ramAvailable)) / system.ramTotal : 0;
+  const ramUsed = system ? system.ramTotal - system.ramAvailable : 0;
+  const ramUsedPct = system ? (100 * ramUsed) / system.ramTotal : 0;
   const ramAvailPct = system ? (100 * system.ramAvailable) / system.ramTotal : 100;
   const swapUsedPct = system && system.swapTotal > 0 ? (100 * system.swapUsed) / system.swapTotal : 0;
+  /* RAM and swap are each stated once, here: used of the total, with a bar of that share. */
+  const usedOf = (used: number, total: number) => t("resources.usedOfTotal", { used: fmtBytes(used), total: fmtBytes(total) });
+  const usedOfInWords = (used: number, total: number) => t("resources.usedOfTotalInWords", { used: fmtBytes(used), total: fmtBytes(total) });
 
   /* Why the amber dot is lit: the readings are old, or the session list is. */
   const staleReason = snap.staleSince
@@ -199,11 +204,9 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
         ? t("resources.sessionsStaleDot", { age: fmtAge(Date.parse(sessionsCapturedAt) / 1000) })
         : t("resources.sessionsUnavailable")
       : null;
-  /* A compact line names what is left and draws that same share, so the number and the bar agree. */
-  const swapFree = system ? system.swapTotal - system.swapUsed : 0;
   const reading = [
-    system ? `${t("resources.ram")} ${t("resources.free", { amount: fmtBytes(system.ramAvailable) })}` : t("resources.title"),
-    system && system.swapTotal > 0 ? `${t("resources.swap")} ${t("resources.free", { amount: fmtBytes(swapFree) })}` : null,
+    system ? `${t("resources.ram")} ${usedOfInWords(ramUsed, system.ramTotal)}` : t("resources.title"),
+    system && system.swapTotal > 0 ? `${t("resources.swap")} ${usedOfInWords(system.swapUsed, system.swapTotal)}` : null,
     system && viewer ? `${t("resources.viewer")} ${viewerAmount(viewer, t)}` : null,
     system ? t("resources.captured", { age: fmtAge(Date.parse(system.capturedAt) / 1000) }) : null,
     staleReason,
@@ -236,8 +239,8 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
         >
           {system ? (
             <>
-              <MeterLine label={<>{t("resources.ram")}{staleDot}</>} value={t("resources.free", { amount: fmtBytes(system.ramAvailable) })} percent={ramAvailPct} color={ramColor(ramAvailPct)} />
-              {system.swapTotal > 0 ? <MeterLine label={t("resources.swap")} value={t("resources.free", { amount: fmtBytes(swapFree) })} percent={100 - swapUsedPct} color={swapColor(swapUsedPct)} /> : null}
+              <MeterLine label={<>{t("resources.ram")}{staleDot}</>} value={usedOf(ramUsed, system.ramTotal)} percent={ramUsedPct} color={ramColor(ramAvailPct)} />
+              {system.swapTotal > 0 ? <MeterLine label={t("resources.swap")} value={usedOf(system.swapUsed, system.swapTotal)} percent={swapUsedPct} color={swapColor(swapUsedPct)} /> : null}
               {/* Behind "All windows": what Delegatus itself holds, and how old the reading is. */}
               {density === "detail" && viewer ? <span className="block" data-testid="resources-viewer-line" title={t("resources.viewerHint")}><MeterLine label={t("resources.viewer")} value={viewerAmount(viewer, t)} percent={null} color="var(--color-muted)" bar={false} /></span> : null}
               {density === "detail" ? <span data-meter-note="" className="block break-words pb-0.5 text-[10px] leading-[13px] text-muted">{t("resources.captured", { age: fmtAge(Date.parse(system.capturedAt) / 1000) })}</span> : null}
@@ -246,6 +249,7 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
             <MeterLine label={<>{t("resources.title")}{staleDot}</>} value={sessions.length} percent={null} color="var(--color-muted)" />
           )}
         </button>
+        {snap.data.memoryPressure ? <MemoryPressureLines pressure={snap.data.memoryPressure} density={density} /> : null}
         {snap.data.diskPressure ? <DiskPressureNotice pressure={snap.data.diskPressure} density={density} /> : null}
         {cleanup}
         {worktreesOpen ? <WorktreeDrilldown onClose={closeWorktrees} /> : null}
@@ -279,14 +283,14 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
               label={t("resources.ram")}
               usedPercent={ramUsedPct}
               color={ramColor(ramAvailPct)}
-              note={t("resources.free", { amount: fmtBytes(system.ramAvailable) })}
+              note={usedOfInWords(ramUsed, system.ramTotal)}
             />
             {system.swapTotal > 0 ? (
               <MemoryRow
                 label={t("resources.swap")}
                 usedPercent={swapUsedPct}
                 color={swapColor(swapUsedPct)}
-                note={t("resources.used", { amount: fmtBytes(system.swapUsed) })}
+                note={usedOfInWords(system.swapUsed, system.swapTotal)}
               />
             ) : null}
             {viewer ? (
@@ -307,6 +311,7 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
           <span className="text-[11px] font-semibold text-primary">{t("resources.title")}</span>
         )}
       </button>
+      {snap.data.memoryPressure ? <MemoryPressureLines pressure={snap.data.memoryPressure} /> : null}
       {snap.data.diskPressure ? <DiskPressureNotice pressure={snap.data.diskPressure} /> : null}
       {open ? (
         <CleanupPanel
@@ -326,14 +331,10 @@ export function ResourcesFooter({ density = "full" }: { density?: RailFooterDens
   );
 }
 
-/** Kills one row, on whichever transport owns it, for one named gesture.
-    A structured host goes to /api/runtime/hosts, which ends it through the
-    runtime when it still holds it and by process group otherwise, then retires
-    the registry row. A tmux pane keeps the kill-target action: the server
-    resolves the stable pane id recorded in the snapshot and verifies the pane
-    pid before killing, so the kill survives window renumbering mid-bulk.
-    Both sides refuse a target the last snapshot did not list.
-    Returns one explicit outcome for the row. */
+/** Kills one row for one named gesture through /api/runtime/hosts, which ends
+    the host through the runtime when it still holds it and by process group
+    otherwise, then retires the registry row. The server refuses a target the
+    last snapshot did not list. Returns one explicit outcome for the row. */
 type KillSessionOutcome =
   | { outcome: "killed" }
   | { outcome: "already-gone" }
@@ -351,32 +352,76 @@ async function killSession(
   gesture: { intent: "row" | "idle" | "all"; includeSeat: boolean; idleHours?: number },
 ): Promise<KillSessionOutcome> {
   try {
-    const res = isStructuredHost(session)
-      ? await fetch("/api/runtime/hosts", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "kill",
-          target: session.target,
-          /* The gesture travels with the request: the server re-reads the
-             promises it makes (settled turn, quiet transcript, untouched
-             orchestrator seat) instead of trusting the polled snapshot. */
-          intent: gesture.intent,
-          includeSeat: gesture.includeSeat,
-          ...(gesture.intent === "idle" ? { idleHours: gesture.idleHours } : {}),
-        }),
-        })
-      : await fetch("/api/tmux", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "kill-target", target: session.target }),
-        });
+    const res = await fetch("/api/runtime/hosts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "kill",
+        target: session.target,
+        /* The gesture travels with the request: the server re-reads the
+           promises it makes (settled turn, quiet transcript, untouched
+           orchestrator seat) instead of trusting the polled snapshot. */
+        intent: gesture.intent,
+        includeSeat: gesture.includeSeat,
+        ...(gesture.intent === "idle" ? { idleHours: gesture.idleHours } : {}),
+      }),
+    });
     const json = (await res.json().catch(() => ({}))) as { error?: string; via?: string };
     if (res.ok) return json.via === "already-exited" ? { outcome: "already-gone" } : { outcome: "killed" };
     return { outcome: "refused", reason: json.error ?? String(res.status) };
   } catch (error) {
     return { outcome: "refused", reason: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/** What the memory meters above do not say: how much `/tmp` holds, and,
+    during a memory pressure episode, the crossed thresholds and the temp
+    cleanup that started. */
+export function MemoryPressureLines({ pressure, density = "full" }: { pressure: MemoryPressure; density?: RailFooterDensity }) {
+  const { t } = useLocale();
+  const tmp = pressure.tmp;
+  /* A tmpfs `/tmp` is memory: it is read against its size, with a bar. */
+  const inMemory = !!tmp?.tmpfs && tmp.totalBytes > 0;
+  const value = !tmp ? t("resources.tmpUnknown")
+    : inMemory ? t("resources.usedOfTotal", { used: fmtBytes(tmp.usedBytes), total: fmtBytes(tmp.totalBytes) })
+      : t("resources.tmpOnDisk", { amount: fmtBytes(tmp.usedBytes) });
+  const hint = !tmp ? t("resources.tmpUnknownHint") : tmp.tmpfs ? t("resources.tmpTmpfsHint") : t("resources.tmpOnDiskHint");
+  const share = tmp && inMemory ? (100 * tmp.usedBytes) / tmp.totalBytes : 0;
+  const warnings = pressure.episode ? [
+    ...(pressure.reasons.includes("swap") ? [t("resources.memorySwapHigh", { percent: String(pressure.swapWarnPercent) })] : []),
+    ...(pressure.reasons.includes("tmp") ? [t("resources.memoryTmpHigh", { amount: `${(pressure.tmpWarnBytes / 1e9).toFixed(0)} GB` })] : []),
+  ] : [];
+  const color = pressure.episode && pressure.reasons.includes("tmp") ? "var(--color-warning)" : "var(--color-muted)";
+  const state = pressure.episode ? "warning" : "ok";
+  if (density !== "full") {
+    const NOTE = "block break-words text-[10px] leading-[13px] text-warning";
+    return (
+      <div role={warnings.length ? "status" : undefined} data-memory-pressure={state} className={`${LINE_EDGE} -mt-1 pb-1`}>
+        <span className="block" title={hint}>
+          <MeterLine label="/tmp" value={value} percent={inMemory ? share : null} color={color} bar={inMemory} />
+        </span>
+        {warnings.length ? (
+          <span data-meter-note="" className={NOTE} title={t("resources.memorySweep")}>{t("resources.memoryHigh")}: {warnings.join(" · ")}</span>
+        ) : null}
+      </div>
+    );
+  }
+  return (
+    <div role={warnings.length ? "status" : undefined} data-memory-pressure={state} className="px-3.5 pb-2 text-xs leading-relaxed">
+      <div title={hint}>
+        {inMemory
+          ? <MemoryRow label="/tmp" usedPercent={share} color={color} note={value} />
+          : <div className="flex items-baseline justify-between"><span className="text-[11px] font-semibold text-primary">/tmp</span><span className="text-[11px] tabular-nums text-muted">{value}</span></div>}
+      </div>
+      {warnings.length ? (
+        <div className="mt-1.5 text-warning">
+          <strong className="block">{t("resources.memoryHigh")}</strong>
+          {warnings.map(warning => <div key={warning}>{warning}</div>)}
+          <div>{t("resources.memorySweep")}</div>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /** Low free space on a volume Delegatus writes to, while its episode lasts
@@ -389,7 +434,11 @@ export function DiskPressureNotice({ pressure, density = "full" }: { pressure: D
   const low = pressure.volumes.filter((volume) => volume.level === "warning" || volume.level === "critical");
   if (!pressure.episode || low.length === 0) return null;
   const role = (name: string) => t(`resources.diskRole.${name}` as MessageKey);
-  const consumers = [...pressure.consumers].sort((a, b) => b.bytes - a.bytes).map((consumer) => `${role(consumer.kind)} ${fmtBytes(consumer.bytes)}`).join(", ");
+  const rows = [...pressure.consumers].sort((a, b) => b.bytes - a.bytes).map(consumer => {
+    const label = consumer.kind === "temp" ? t("resources.tempWithScratch") : role(consumer.kind);
+    return `${label} ${fmtBytes(consumer.bytes)}`;
+  });
+  const consumers = rows.join(", ");
   const waiting = low.some((volume) => volume.level === "critical" && (volume.provisioning || volume.roles.includes("state")));
   const volumeText = (volume: DiskPressure["volumes"][number]) => `${volume.roles.map(role).join(" / ")}: ${t("resources.free", { amount: fmtBytes(volume.freeBytes ?? 0) })}`;
   if (density !== "full") {
@@ -418,6 +467,11 @@ export function DiskPressureNotice({ pressure, density = "full" }: { pressure: D
             </span>
           );
         })}
+        {density === "detail" && rows.length ? (
+          <div className={NOTE} title={t("resources.diskConsumersHint")}>
+            {rows.map(row => <div key={row}>{row}</div>)}
+          </div>
+        ) : null}
         {!notes ? null : consumers
           ? <span data-meter-note="" className={`-mt-0.5 ${NOTE}`} title={`${t("resources.diskConsumersHint")} ${consumers}`}>{t("resources.diskConsumers")} {consumers}</span>
           : <span data-meter-note="" className={`-mt-0.5 ${NOTE}`}>{t("resources.diskMeasuring")}</span>}
@@ -432,7 +486,9 @@ export function DiskPressureNotice({ pressure, density = "full" }: { pressure: D
         <div key={`${index}:${volume.roles.join("/")}`}>{volumeText(volume)}</div>
       ))}
       {consumers
-        ? <div title={`${t("resources.diskConsumersHint")} ${consumers}`}>{t("resources.diskConsumers")} {consumers}</div>
+        ? <div title={t("resources.diskConsumersHint")}>{t("resources.diskConsumers")}
+          {rows.map(row => <div key={row}>{row}</div>)}
+        </div>
         : <div>{t("resources.diskMeasuring")}</div>}
       {waiting ? <div>{t("resources.diskWaiting")}</div> : null}
     </div>
@@ -625,7 +681,6 @@ export function CleanupPanel({
               onToggleSeat={() => toggleSeat(session.target)}
               onArm={() => setArmed(session.target)}
               onKill={() => void killOne(session)}
-              onRefresh={onRefresh}
             />
           ))
         )}
@@ -769,7 +824,6 @@ function SessionRow({
   onToggleSeat,
   onArm,
   onKill,
-  onRefresh,
 }: {
   session: ResourceSession;
   /** The row comes from an earlier capture a failed refresh fell back on. */
@@ -780,8 +834,6 @@ function SessionRow({
   onToggleSeat: () => void;
   onArm: () => void;
   onKill: () => void;
-  /** Re-poll the snapshot — the attach control's stale-pane recovery. */
-  onRefresh: () => Promise<void>;
 }) {
   const { t } = useLocale();
   const tint = engineTintOf(session.engine ?? "");
@@ -795,7 +847,7 @@ function SessionRow({
   const detail = [
     session.role,
     session.stage,
-    session.model,
+    session.model ? modelDisplayName(session.engine ?? "", session.model) : null,
     session.project,
   ].filter((value): value is string => Boolean(value));
   /* Live rows keep the kill button locked; the first click only arms it and a
@@ -822,7 +874,7 @@ function SessionRow({
           className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
           style={{ backgroundColor: tint.soft, color: tint.color }}
         >
-          {session.engine === "codex" ? "Codex" : session.engine === "claude" ? "Claude" : session.engine === "copilot" ? "Copilot" : "?"}
+          {session.engine === "codex" ? "Codex" : session.engine === "claude" ? "Claude" : session.engine === "copilot" ? "Copilot" : session.engine === "antigravity" ? "Antigravity" : "?"}
         </span>
         <span
           className="min-w-0 flex-1"
@@ -911,8 +963,6 @@ function SessionRow({
           {armed ? t("resources.confirm") : t("resources.kill")}
         </button>
       </div>
-      {/* Attaching means attaching to a tmux pane; a structured host has none. */}
-      {structured ? null : <AttachControls target={session.target} onRefresh={() => void onRefresh()} />}
     </div>
   );
 }

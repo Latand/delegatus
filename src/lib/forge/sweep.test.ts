@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,9 +8,9 @@ import { spawn } from "node:child_process";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
-import { forgeCacheView, nudgeForgeSweep, observeForgePullRequest, readForgeCache, resetForgeCacheForTests, PROPOSAL_ISSUE_LIMIT } from "./cache";
+import { clearForgeCacheForTests, FORGE_LINKS_COLLECTION, forgeCacheView, nudgeForgeSweep, observeForgePullRequest, readForgeCache, resetForgeCacheForTests, updateForgeCache, PROPOSAL_ISSUE_LIMIT } from "./cache";
 import { recordProjectRemote } from "@/lib/projects/aliases";
-import { FORGE_FILL_LIMIT, FORGE_IDLE_INTERVAL_MS, FORGE_LIVE_INTERVAL_MS, FORGE_NUDGE_DEBOUNCE_MS, FORGE_PAGE_LIMIT, sweepForgeLinks, type ForgeSweepPorts } from "./sweep";
+import { FORGE_FILL_LIMIT, FORGE_IDLE_INTERVAL_MS, FORGE_LIVE_INTERVAL_MS, FORGE_NUDGE_DEBOUNCE_MS, FORGE_PAGE_LIMIT, FORGE_RETRY_MS, sweepForgeLinks, type ForgeSweepPorts } from "./sweep";
 
 /* The forge sweep (#2059) against an injected `gh` and clock, in a private
    directory: invented repositories and branches, no network. */
@@ -92,6 +93,48 @@ const entry = () => readForgeCache(file).data.repositories[REPO]!;
 const isSearch = (args: string[]) => args.includes("--search");
 
 describe("the sweep", () => {
+  test("an exact PR hold discovers and refreshes its repository from a cold cache", async () => {
+    const repository = "other/repository";
+    const task = frozen({ id: "held-pr", project: "repo-without-work-links", status: "blocked", workLinks: undefined,
+      hold: { kind: "pr", ref: `https://github.com/${repository}/pull/41`, since: "2026-09-22T00:00:00Z", note: "Wait for this PR", by: "agent" } } as unknown as BoardTask);
+    let state: "OPEN" | "CLOSED" | "MERGED" = "OPEN";
+    const h = harness(args => {
+      if (args[0] !== "pr") throw new Error("unexpected forge request");
+      return [{ ...row({ number: 41, state }), url: `https://github.com/${repository}/pull/41` }];
+    }, { pipelines: [], tasks: [task] });
+
+    expect(await h.sweep()).toEqual([repository]);
+    expect(h.calls[0]).toEqual(expect.arrayContaining(["--repo", repository]));
+    expect(forgeCacheView(file).repository(repository)?.pr(41)?.state).toBe("open");
+
+    state = "CLOSED";
+    h.advance(FORGE_LIVE_INTERVAL_MS);
+    await h.sweep();
+    expect(forgeCacheView(file).repository(repository)?.pr(41)?.state).toBe("closed");
+
+    state = "MERGED";
+    h.advance(FORGE_LIVE_INTERVAL_MS);
+    await h.sweep();
+    expect(forgeCacheView(file).repository(repository)?.pr(41)?.state).toBe("merged");
+  });
+
+  test("a numbered PR hold takes its repository from the lane carrying the task through an open-to-closed transition", async () => {
+    const task = frozen({ id: "held-number", project: "repo-without-remote", status: "blocked",
+      hold: { kind: "pr", ref: "41", since: "2026-09-22T00:00:00Z", note: "Wait for this PR", by: "agent" } } as unknown as BoardTask);
+    let state: "OPEN" | "CLOSED" = "OPEN";
+    const h = harness(args => {
+      if (args[0] !== "pr") throw new Error("unexpected forge request");
+      return [row({ number: 41, state })];
+    }, { pipelines: [lane({ state: "closed", taskIds: [task.id] })], tasks: [task] });
+
+    expect(await h.sweep()).toEqual([REPO]);
+    expect(forgeCacheView(file).repository(REPO)?.pr(41)?.state).toBe("open");
+    state = "CLOSED";
+    h.advance(FORGE_LIVE_INTERVAL_MS);
+    await h.sweep();
+    expect(forgeCacheView(file).repository(REPO)?.pr(41)?.state).toBe("closed");
+  });
+
   test("seated repositories without lanes refresh a bounded replaceable proposal page", async () => {
     const project = `repo-${"a".repeat(32)}`;
     recordProjectRemote({ project, canonicalRemote: "github.com/acme/widgets" });
@@ -192,16 +235,23 @@ describe("the sweep", () => {
   });
 
   test("old gh falls back to GraphQL and preserves closing issue links", async () => {
-    const h = harness((args) => {
+    const delivery = { target: { repository: "repo-fixture", remote: `https://github.com/${REPO}.git`, branch: "main", pr: 8 } } as Pipeline["delivery"];
+    const h = harness(args => {
       if (args[0] === "api" && args[1] === "graphql") return { data: { repository: { p0: { closingIssuesReferences: { nodes: [{ number: 42, url: "https://github.com/acme/widgets/issues/42" }], pageInfo: { hasNextPage: false } } } } } };
       if (args.at(-1)?.includes("closingIssuesReferences")) return Object.assign(new Error("Unknown JSON field: closingIssuesReferences"), { stderr: 'Unknown JSON field: "closingIssuesReferences"' });
+      if (args[1] === "view") return row({ number: 8 });
       const legacy = row({ number: 7, headRefName: "pipeline/lane-a" });
       delete (legacy as Partial<typeof legacy>).closingIssuesReferences;
       return [legacy];
-    });
+    }, { pipelines: [lane({ delivery })] });
     expect(await h.sweep()).toEqual([REPO]);
-    expect(h.calls.map((args) => args.slice(0, 2))).toEqual([["pr", "list"], ["pr", "list"], ["api", "graphql"]]);
+    expect(h.calls.map(args => args.slice(0, 2))).toEqual([
+      ["pr", "list"], ["pr", "list"], ["api", "graphql"],
+      ["pr", "view"], ["pr", "view"], ["api", "graphql"],
+    ]);
     expect(entry().prs["7"]).toMatchObject({ closes: [42], headRefName: "pipeline/lane-a", state: "open" });
+    expect(entry().prs["8"]).toMatchObject({ closes: [42], state: "open" });
+    expect(entry().lastError).toBeNull();
     expect(entry().canonical).toBe(REPO);
   });
 
@@ -210,7 +260,7 @@ describe("the sweep", () => {
   test("title and mergedAt are asked for and kept, on the current and the legacy field set", async () => {
     for (const legacy of [false, true]) {
       resetForgeCacheForTests();
-      fs.rmSync(file, { force: true });
+      clearForgeCacheForTests(file);
       const rows = () => [
         { ...row({ number: 9, state: "MERGED", headRefName: "merge-batch/b1" }), title: "Merge batch: #7, #8", mergedAt: "2026-09-23T02:21:00Z" },
         { ...row({ number: 7, state: "CLOSED" }), title: "Lane seven", mergedAt: null },
@@ -291,7 +341,7 @@ describe("the sweep", () => {
     const idle = harness((args) => (isSearch(args) ? [row({ number: 7, state: "MERGED", updatedAt: "2026-09-23T09:59:00Z" })] : [row({ number: 7, state: "MERGED" })]),
       { pipelines: [lane({ state: "completed" })] });
     resetForgeCacheForTests();
-    fs.rmSync(file, { force: true });
+    clearForgeCacheForTests(file);
     await idle.sweep();
     idle.advance(FORGE_LIVE_INTERVAL_MS);
     expect(await idle.sweep()).toEqual([]);
@@ -343,6 +393,171 @@ describe("the sweep", () => {
     expect(await h.sweep()).toEqual([]);
   });
 
+  test.each([
+    ["missing CLI", "ENOENT", "", "gh) not found on PATH", "Install gh"],
+    ["no login", 1, "To get started with GitHub CLI, please run: gh auth login", "authentication failed", "GH_CONFIG_DIR"],
+    ["DNS", 1, "error connecting to api.github.com: lookup api.github.com: no such host", "DNS lookup failed", "Check DNS"],
+    ["TLS certificate", 1, "proxyconnect tcp: tls: failed to verify certificate: x509: certificate signed by unknown authority", "certificate verification failed", "Check the system trust store"],
+    ["other exit", 17, "unknown flag --fixture", "(exit 17): unknown flag.", "Check the gh installation"],
+  ] as const)("%s logs a remedy, keeps cached links and retries on cooldown", async (_name, code, stderr, cause, remedy) => {
+    let fail = false;
+    const error = Object.assign(new Error("Command failed: gh"), { code, stderr });
+    const h = harness(() => fail ? error : [row({ number: 7 })]);
+    const messages: string[] = [];
+    h.ports.log = (message, detail) => { messages.push(`${message} ${detail ?? ""}`); };
+    await h.sweep();
+    const before = entry();
+    fail = true;
+    h.advance(FORGE_LIVE_INTERVAL_MS);
+    expect(await h.sweep()).toEqual([REPO]);
+    expect(entry()).toMatchObject({ lastError: "command-failed", completeSince: before.completeSince, lastSweepAt: before.lastSweepAt, prs: before.prs });
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain(cause);
+    expect(messages[0]).toContain(remedy);
+
+    resetForgeCacheForTests();
+    h.advance(FORGE_RETRY_MS - 1);
+    expect(await h.sweep()).toEqual([]);
+    expect(h.calls).toHaveLength(2);
+    expect(messages).toHaveLength(1);
+
+    fail = false;
+    h.advance(1);
+    expect(await h.sweep()).toEqual([REPO]);
+    expect(h.calls).toHaveLength(3);
+    expect(entry().lastError).toBeNull();
+  });
+
+  test("generic gh stderr is withheld from sweep log detail while cache remains usable", async () => {
+    let fail = false;
+    const privateFragments = ["@synthetic_handle", "private-owner/private-repo", "/Volumes/Private Drive/Account A/config"];
+    const error = Object.assign(new Error("Command failed: gh"), {
+      code: 17,
+      stderr: `unknown gh failure ${privateFragments.join(" ")}`,
+    });
+    const h = harness(() => fail ? error : [row({ number: 7 })]);
+    const logs: string[] = [];
+    h.ports.log = (message, detail) => { logs.push(`${message} ${detail ?? ""}`); };
+    await h.sweep();
+    const before = entry();
+    fail = true;
+    h.advance(FORGE_LIVE_INTERVAL_MS);
+    await h.sweep();
+    expect(entry()).toMatchObject({ lastError: "command-failed", completeSince: before.completeSince, lastSweepAt: before.lastSweepAt, prs: before.prs });
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("exit 17");
+    expect(logs[0]).toContain("Check the gh installation and configuration");
+    for (const fragment of privateFragments) expect(logs[0]).not.toContain(fragment);
+  });
+
+  test.each([
+    ["command failure", Object.assign(new Error("DNS lookup failed"), { code: "ENOTFOUND" }), "command-failed", "network request failed"],
+    ["empty object", {}, "malformed-output", "invalid response"],
+  ] as const)("a numbered PR fill with %s keeps list evidence and waits through a nudge cooldown", async (_case, failure, code, diagnostic) => {
+    let fillFails = true;
+    const linked = lane({ delivery: { target: { repository: "repo-fixture", remote: `https://github.com/${REPO}.git`, branch: "main", pr: 8 } } as Pipeline["delivery"] });
+    const h = harness(args => {
+      if (args[0] === "pr" && args[1] === "view") {
+        if (fillFails) return failure;
+        return row({ number: 8 });
+      }
+      return [row({ number: 7 })];
+    }, { pipelines: [linked] });
+    const logs: string[] = [];
+    h.ports.log = (message, detail) => { logs.push(`${message} ${detail ?? ""}`); };
+    await h.sweep();
+    expect(entry().prs["7"]).toBeDefined();
+    expect(entry()).toMatchObject({ lastError: code, prs: { "7": expect.anything() }, issues: {} });
+    expect(entry().prs["8"]).toBeUndefined();
+    expect(logs).toEqual([expect.stringContaining(diagnostic)]);
+
+    resetForgeCacheForTests();
+    nudgeForgeSweep(REPO, T0);
+    h.advance(FORGE_RETRY_MS - 1);
+    expect(await h.sweep()).toEqual([]);
+    expect(h.calls.filter(args => args[1] === "view")).toHaveLength(1);
+    expect(entry().prs["7"]).toBeDefined();
+
+    fillFails = false;
+    h.advance(1);
+    await h.sweep();
+    expect(h.calls.filter(args => args[1] === "view")).toHaveLength(2);
+    expect(entry().prs["8"]).toBeDefined();
+    expect(entry().lastError).toBeNull();
+  });
+
+  test.each([false, true])("a slow read failure waits from completion (numbered fill: %s)", async fill => {
+    const duration = FORGE_RETRY_MS + 1;
+    const link = { target: { repository: "repo-fixture", remote: `https://github.com/${REPO}.git`, branch: "main", pr: 8 } } as Pipeline["delivery"];
+    let fail = true;
+    const h = harness(args => {
+      if (fill && args[1] === "list") return [row({ number: 7 })];
+      if (!fail) return fill ? row({ number: 8 }) : [row({ number: 7 })];
+      h.advance(duration);
+      return Object.assign(new Error("request timed out"), { code: "ETIMEDOUT" });
+    }, { pipelines: [lane({ ...(fill ? { delivery: link } : {}) })] });
+    expect(await h.sweep()).toEqual([REPO]);
+    resetForgeCacheForTests();
+    const finishedAt = new Date(T0 + duration).toISOString();
+    expect(entry()).toMatchObject({ lastError: "timed-out", lastAttemptAt: finishedAt,
+      lastSweepAt: fill ? new Date(T0).toISOString() : null });
+    if (fill) expect(entry().prs["7"]?.checkedAt).toBe(new Date(T0).toISOString());
+    const calls = h.calls.length;
+    fail = false;
+    expect(await h.sweep()).toEqual([]);
+    h.advance(FORGE_RETRY_MS - 1);
+    expect(await h.sweep()).toEqual([]);
+    expect(h.calls).toHaveLength(calls);
+    h.advance(1);
+    expect(await h.sweep()).toEqual([REPO]);
+    expect(entry().lastError).toBeNull();
+  });
+
+  test.each([
+    ["DNS failure", Object.assign(new Error("Command failed: gh api"), {
+      code: 1, stderr: "error connecting to api.github.com: lookup api.github.com: no such host",
+    }), "command-failed", "DNS lookup failed"],
+    ["null PR node", { data: { repository: { p0: null } } }, "malformed-output", "invalid response"],
+    ["PR lookup failure", new Error("Could not resolve to a PullRequest"), "command-failed", "repository data was not found"],
+  ] as const)("legacy GraphQL %s keeps its failure classification in list and fill", async (_case, answer, code, diagnostic) => {
+    for (const method of ["list", "view"]) {
+      clearForgeCacheForTests(file);
+      resetForgeCacheForTests();
+      const delivery = { target: { repository: "repo-fixture", remote: `https://github.com/${REPO}.git`, branch: "main", pr: 8 } } as Pipeline["delivery"];
+      const h = harness(args => {
+        if (args[0] === "api") return answer;
+        if (args[1] !== method) return [row({ number: 7 })];
+        if (args.at(-1)?.includes("closingIssuesReferences")) return new Error("Unknown JSON field: closingIssuesReferences");
+        return method === "list" ? [row({ number: 7 })] : row({ number: 8 });
+      }, { pipelines: [lane({ delivery })] });
+      const logs: string[] = [];
+      h.ports.log = (message, detail) => { logs.push(`${message} ${detail ?? ""}`); };
+      expect(await h.sweep()).toEqual([REPO]);
+      expect(h.calls.at(-1)?.slice(0, 2)).toEqual(["api", "graphql"]);
+      expect(entry().lastError).toBe(code);
+      expect(logs).toEqual([expect.stringContaining(diagnostic)]);
+      expect(Object.keys(entry().prs)).toEqual(method === "list" ? [] : ["7"]);
+      expect(entry().issues).toEqual({});
+    }
+  });
+
+  test.each(["[null]", "graphql-null"])("malformed legacy read %s reports invalid response without losing cache", async malformed => {
+    let legacy = false;
+    const h = harness(args => {
+      if (args[0] === "api") return "graphql-null";
+      if (args.at(-1)?.includes("closingIssuesReferences")) {
+        return Object.assign(new Error('Unknown JSON field: "closingIssuesReferences"'), { stderr: 'Unknown JSON field: "closingIssuesReferences"' });
+      }
+      legacy = true;
+      return malformed === "[null]" ? [null] : [row({ number: 7 })];
+    });
+    await h.sweep();
+    expect(legacy).toBe(true);
+    expect(entry().lastError).toBe("malformed-output");
+    expect(entry().lastSweepAt).toBeNull();
+    expect(entry().prs).toEqual({});
+  });
+
   test("numbers a record names outright and the cache lacks are read one by one, at most ten a sweep; a non-PR is recorded as an issue", async () => {
     const tasks = [frozen({
       id: "task-a", project: "repo-fixture",
@@ -362,18 +577,22 @@ describe("the sweep", () => {
     expect(Object.keys(entry().issues)).toHaveLength(5);
   });
 
-  test("the sweep writes no record and nothing but its cache file", async () => {
+  test("the sweep writes no record and nothing but its cache", async () => {
     const h = harness(() => [row({ number: 7, headRefName: "pipeline/lane-a" })]);
     /* Every record is deep-frozen: a write would throw inside the sweep. */
     await expect(h.sweep()).resolves.toEqual([REPO]);
-    expect(fs.readdirSync(dir)).toEqual(["forge-links.json"]);
+    expect(fs.readdirSync(dir).filter((name) => !name.startsWith("state.sqlite") && !name.startsWith("forge-links.json"))).toEqual([]);
+    const db = new Database(path.join(dir, "state.sqlite"), { readonly: true });
+    try {
+      expect(db.query<{ collection: string }, []>("SELECT DISTINCT collection FROM state_rows").all().map((rowOf) => rowOf.collection)).toEqual([FORGE_LINKS_COLLECTION]);
+    } finally { db.close(); }
   });
 
   test("a stage report's PR reaches the cache at once, without a forge call, and never overrides a fresher state", () => {
     observeForgePullRequest(REPO, { url: "https://github.com/acme/widgets/pull/9", number: 9, state: "OPEN" }, "pipeline/lane-a", "2026-09-23T10:00:00Z", file);
     expect(entry().prs["9"]).toMatchObject({ state: "open", headRefName: "pipeline/lane-a" });
     expect(entry().completeSince).toBeNull();
-    fs.writeFileSync(file, JSON.stringify({ schemaVersion: 1, repositories: { [REPO]: { ...entry(), prs: { 9: { ...entry().prs["9"], headRefName: "other", state: "merged" } } } } }));
+    updateForgeCache((data) => { data.repositories[REPO]!.prs["9"] = { ...data.repositories[REPO]!.prs["9"]!, headRefName: "other", state: "merged" }; }, file);
     observeForgePullRequest(REPO, { url: "https://github.com/acme/widgets/pull/9", number: 9, state: "OPEN" }, "pipeline/lane-a", "2026-09-23T10:05:00Z", file);
     expect(entry().prs["9"]).toMatchObject({ state: "merged", headRefName: "pipeline/lane-a" });
   });

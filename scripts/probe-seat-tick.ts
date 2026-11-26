@@ -41,7 +41,8 @@ async function installReplayEvidence() {
   const head = bytes.readUInt32BE(0);
   const manifest = JSON.parse(bytes.subarray(4, 4 + head).toString()) as { bodyBytes: number };
   const body = JSON.parse(bytes.subarray(4 + head, 4 + head + manifest.bodyBytes).toString());
-  const catalogue = JSON.parse(fs.readFileSync(path.join(state, "project-catalog.json"), "utf8")).files;
+  const { PROJECT_CATALOG_FILE_NAME, readProjectCatalog } = await import("@/lib/scanner/projectCatalogStore");
+  const catalogue = readProjectCatalog(path.join(state, PROJECT_CATALOG_FILE_NAME)).files;
   const scan = await import("@/lib/scanner/scanCache");
   const snapshot = { files: body.files, projectCatalog: [], complete: true };
   const snapshotFile = path.join(state, "probe-seat-scan.json");
@@ -60,7 +61,10 @@ async function installReplayEvidence() {
   const production = liveness.productionLivenessSources;
   mock.module("@/lib/lifecycle/liveness", () => ({ ...liveness, productionLivenessSources: (dependencies?: Parameters<typeof production>[0]) => {
     const source = production(dependencies);
-    source.describeTranscript = async file => catalogue[file] ? { ...catalogue[file], path: file } : null;
+    source.describeTranscript = async file => catalogue.has(file)
+      // The replay hands back the stored record as the old JSON read did.
+      ? { ...catalogue.get(file)!, path: file } as unknown as Awaited<ReturnType<typeof source.describeTranscript>>
+      : null;
     source.transcriptEvidence = async () => null;
     source.transcriptIdentity = async () => null;
     source.readHostTurnRecord = () => ({ state: "absent" });

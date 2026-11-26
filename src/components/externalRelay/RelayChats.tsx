@@ -152,6 +152,7 @@ function answerDot(answer: Pick<RelayAnswerRow, "state" | "outcome">): MobileRow
   if (answer.state === "running" || !answer.outcome) return "accent";
   if (answer.outcome === "answered") return "success";
   if (answer.outcome === "declined:handoff") return "neutral";
+  if (answer.outcome === "failure_notice") return "warning";
   return answer.outcome.startsWith("declined") ? "warning" : "danger";
 }
 const answerOutcome = (t: TFunction, answer: Pick<RelayAnswerRow, "state" | "outcome">) =>
@@ -172,6 +173,7 @@ type AnswerRecord = Omit<RelayAnswerRow, "relayId" | "targetName" | "request" | 
   model: string | null;
   answer: { action: string; text: string; reply_to: string | null } | null;
   input: unknown;
+  diagnostic?: { message: string };
 };
 type ReceivedInput = {
   conversation?: { id?: unknown; author?: { key?: unknown; name?: unknown }; text?: unknown }[];
@@ -185,8 +187,8 @@ function receivedMessage(input: unknown): { text: string; author: string | null 
   const value = (input && typeof input === "object" ? input : {}) as ReceivedInput;
   const conversation = Array.isArray(value.conversation) ? value.conversation : [];
   const trigger = conversation.find((message) => message?.id === value.respond_to);
-  const parts = [typeof trigger?.text === "string" ? trigger.text : null, typeof value.request_text === "string" ? value.request_text : null].filter(Boolean);
-  return { text: parts.join("\n\n"), author: typeof trigger?.author?.name === "string" ? trigger.author.name : null };
+  const parts = [trigger?.text, value.request_text].filter((part): part is string => typeof part === "string" && !!part.trim());
+  return { text: [...new Set(parts.map(part => part.trim()))].join("\n\n"), author: typeof trigger?.author?.name === "string" ? trigger.author.name : null };
 }
 const seconds = (ms: number) => (ms / 1000).toFixed(ms < 10_000 ? 1 : 0);
 const stamp = (value: string, locale: string) => new Date(value).toLocaleString(locale === "uk" ? "uk-UA" : "en-US");
@@ -246,6 +248,7 @@ function RelayAnswerReader({ relayId, answer, onLeave }: { relayId: string; answ
               {record.durationMs !== null ? <><dt className={term}>{t("externalRelay.answers.took")}</dt><dd className={detail}>{t("externalRelay.answers.seconds", { seconds: seconds(record.durationMs) })}</dd></> : null}
               <dt className={term}>{t("externalRelay.answers.outcome")}</dt>
               <dd data-relay-answer-outcome={record.outcome ?? "running"} className={detail}>{state}</dd>
+              {record.diagnostic && <><dt className={term}>{t("externalRelay.answers.diagnostic")}</dt><dd className={detail}>{record.diagnostic.message}</dd></>}
               {record.delivery ? <><dt className={term}>{t("externalRelay.answers.delivery")}</dt><dd className={detail}>{t(DELIVERY_KEYS[record.delivery])}</dd></> : null}
               {requester && typeof requester.is_admin === "boolean" ? <><dt className={term}>{t("externalRelay.answers.askedBy")}</dt><dd data-relay-answer-asked-by="" className={detail}>{[received.author, t(requester.is_admin === true ? "externalRelay.answers.role.admin" : "externalRelay.answers.role.member"), requester.is_owner === true ? t("externalRelay.answers.role.owner") : null, requester.is_anonymous_admin === true ? t("externalRelay.answers.role.anonymous") : null].filter(Boolean).join(" · ")}</dd></> : null}
               {Array.isArray(input.tools) && input.tools.length ? <><dt className={term}>{t("externalRelay.answers.tools")}</dt><dd className={detail}>{input.tools.length}</dd></> : null}

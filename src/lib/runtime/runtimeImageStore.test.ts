@@ -15,9 +15,37 @@ import {
   MAX_STRUCTURED_IMAGE_ENCODED_BYTES,
   collectRuntimeImageReachableDigests,
   RuntimeImageStore,
+  RuntimeImageWriterBusyError,
 } from "./runtimeImageStore";
 
 const WRITER_FIXTURE = path.join(import.meta.dir, "fixtures", "runtimeImageStoreWriter.ts");
+
+function imageWriter(root: string, controls: string, tag: string, maxBytes: number, publicationMode?: string, clockValue?: number) {
+  const child = Bun.spawn([
+    process.execPath, WRITER_FIXTURE, root, String(maxBytes), tag,
+    path.join(controls, `ready-${tag}`), path.join(controls, "start"), "",
+    ...(publicationMode ? [publicationMode, controls, ...(clockValue ? [String(clockValue)] : [])] : []),
+  ], { stdout: "pipe", stderr: "pipe" });
+  // Drain diagnostics while the writer runs, including unexpected refusals.
+  const result = Promise.all([
+    child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+  ]).then(([exit, stdout, stderr]) => ({ exit, stdout, stderr }));
+  return { child, result };
+}
+
+type ImageWriter = ReturnType<typeof imageWriter>;
+
+async function writerMilestone(filename: string, writer: ImageWriter): Promise<void> {
+  while (!fs.existsSync(filename)) {
+    if (writer.child.exitCode !== null) throw new Error(JSON.stringify(await writer.result));
+    await Bun.sleep(2);
+  }
+}
+
+async function stopImageWriters(writers: ImageWriter[]): Promise<void> {
+  for (const { child } of writers) if (child.exitCode === null) child.kill();
+  await Promise.all(writers.map(writer => writer.result));
+}
 
 const PNG = Buffer.from(
   "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415408d763f8cfc0f01f00050001ff89993d1d0000000049454e44ae426082",
@@ -264,6 +292,46 @@ test("delivered reservations and ledger entries retire after the bounded grace w
   expect(DELIVERED_REF_RETIREMENT_GRACE_MS).toBeLessThanOrEqual(7 * 24 * 60 * 60 * 1000);
 });
 
+test("native image retirement requires the replayed proof; missing or unknown evidence retains images", async () => {
+  const { FileClaudeDeliveryLedger } = await import("./claudeStreamBrokerHost");
+  const sessionId = ["00000000", "0000", "4000", "8000", "000000000040"].join("-");
+  const writer = { sessionId, writerId: ["00000000", "0000", "4000", "8000", "000000000041"].join("-"),
+    process: { pid: 4100, startIdentity: "4100:fixture" } };
+  const state = sandbox();
+  const directory = path.join(state, "claude-delivery-ledger");
+  const ledger = new FileClaudeDeliveryLedger(directory);
+  const inputs = ["closed", "pending"].map((id, index) => ({ id,
+    inputUuid: `00000000-0000-4000-8000-${String(50 + index).padStart(12, "0")}`,
+    image: { sha256: String(index + 1).repeat(64), mime: "image/png" as const, bytes: PNG.byteLength },
+  }));
+  for (const member of inputs) await ledger.recordNativeIntent(sessionId, {
+    id: member.id, text: "fixture image", images: [member.image],
+  }, "turn-started", { ...writer, version: 1, inputUuid: member.inputUuid, intent: "may-have-written" });
+  expect(await ledger.confirmNativeResult(sessionId, { ...writer, version: 1,
+    inputUuids: [inputs[0]!.inputUuid], resultUuid: ["00000000", "0000", "4000", "8000", "000000000060"].join("-"),
+    turnId: inputs[0]!.id, status: "completed",
+  })).toBe("accepted");
+  const filename = path.join(directory, `${sessionId}.jsonl`);
+  const rows = fs.readFileSync(filename, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  const retired = "2026-07-16T00:00:00.000Z";
+  for (const row of rows) if (row.kind === "delivered") row.deliveredAt = retired;
+  const now = Date.parse("2026-07-17T12:00:00.000Z");
+  const write = (records: unknown[]) => fs.writeFileSync(filename, records.map(row => JSON.stringify(row)).join("\n") + "\n");
+  write(rows);
+  expect([...collectRuntimeImageReachableDigests(state, { now, retiredGraceMs: 60_000 })]).toEqual([inputs[1]!.image.sha256]);
+  expect(new FileClaudeDeliveryLedger(directory).load(sessionId)[0]?.nativeResult?.turnId).toBe(inputs[0]!.id);
+  for (const mutation of ["missing-proof", "unknown-version", "wrong-session"]) {
+    const changed = structuredClone(rows).filter(row => mutation !== "missing-proof" || row.kind !== "native-result");
+    for (const row of changed) if (row.kind === "queued" && row.entry.id === "closed") {
+      if (mutation === "unknown-version") row.native.version = 2;
+      if (mutation === "wrong-session") row.native.sessionId = ["00000000", "0000", "4000", "8000", "000000000099"].join("-");
+    }
+    write(changed);
+    expect([...collectRuntimeImageReachableDigests(state, { now, retiredGraceMs: 60_000 })].sort())
+      .toEqual(inputs.map(member => member.image.sha256));
+  }
+});
+
 test("reachability tolerates a torn ledger tail and rejects interior corruption", () => {
   const state = sandbox();
   const now = Date.parse("2026-07-17T12:00:00.000Z");
@@ -486,28 +554,191 @@ test("concurrent runtime image writers cannot exceed the global byte quota", asy
   const controls = sandbox();
   const start = path.join(controls, "start");
   const maxBytes = 4 * 1024 * 1024 + 128;
-  const children = ["a", "b", "c", "d"].map((tag) => Bun.spawn([
-    process.execPath,
-    WRITER_FIXTURE,
-    root,
-    String(maxBytes),
-    tag,
-    path.join(controls, `ready-${tag}`),
-    start,
-  ], { stdout: "pipe", stderr: "pipe" }));
-  while (fs.readdirSync(controls).filter((entry) => entry.startsWith("ready-")).length < children.length) {
-    await Bun.sleep(2);
+  const tags = ["a", "b", "c", "d"];
+  const writers = tags.map(tag => imageWriter(root, controls, tag, maxBytes));
+  try {
+    await Promise.all(writers.map((writer, index) => writerMilestone(path.join(controls, `ready-${tags[index]}`), writer)));
+    fs.writeFileSync(start, "go");
+
+    const results = await Promise.all(writers.map(writer => writer.result));
+    const storedBytes = fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
+      .reduce((sum, entry) => sum + fs.statSync(path.join(root, entry.name)).size, 0);
+
+    expect(results.filter(result => result.exit === 0), JSON.stringify(results)).toHaveLength(1);
+    expect(results.filter(result => result.exit === 2), JSON.stringify(results)).toHaveLength(writers.length - 1);
+    expect(results).toEqual(results.map(result => ({ ...result, stdout: "", stderr: "" })));
+    expect(storedBytes).toBeLessThanOrEqual(maxBytes);
+  } finally {
+    await stopImageWriters(writers);
   }
-  fs.writeFileSync(start, "go");
+}, 20_000);
 
-  const exits = await Promise.all(children.map((child) => child.exited));
-  const storedBytes = fs.readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
-    .reduce((sum, entry) => sum + fs.statSync(path.join(root, entry.name)).size, 0);
+test.each(["empty", "partial"] as const)("concurrent runtime image writers preserve a %s ticket until publication", async mode => {
+  const root = sandbox();
+  const controls = sandbox();
+  const maxBytes = 4 * 1024 * 1024 + 128;
+  const publisher = imageWriter(root, controls, "a", maxBytes, mode);
+  const writers = [publisher];
+  fs.writeFileSync(path.join(controls, "start"), "go");
+  try {
+    const milestone = path.join(controls, "publication-paused");
+    await writerMilestone(milestone, publisher);
+    const unfinished = fs.readFileSync(milestone, "utf8");
+    const contents = fs.readFileSync(unfinished, "utf8");
+    expect(() => JSON.parse(contents)).toThrow();
 
-  expect(exits.filter((code) => code === 0)).toHaveLength(1);
-  expect(exits.filter((code) => code === 2)).toHaveLength(children.length - 1);
-  expect(storedBytes).toBeLessThanOrEqual(maxBytes);
+    // Keep the publisher held through a peer's entire write. That peer must
+    // make progress without discarding the unfinished owner's publication.
+    const peer = imageWriter(root, controls, "b", maxBytes);
+    writers.push(peer);
+    expect(await peer.result).toEqual({ exit: 0, stdout: "", stderr: "" });
+    expect(publisher.child.exitCode).toBeNull();
+    expect(fs.existsSync(unfinished)).toBe(true);
+    fs.writeFileSync(path.join(controls, "publication-release"), "go");
+    expect(await publisher.result).toEqual({ exit: 2, stdout: "", stderr: "" });
+
+    const blobs = fs.readdirSync(root).filter(name => name.endsWith(".png"));
+    expect(blobs).toHaveLength(1);
+    expect(fs.statSync(path.join(root, blobs[0]!)).size).toBeLessThanOrEqual(maxBytes);
+    expect(fs.readdirSync(root).filter(name => name.endsWith(".partial"))).toEqual([]);
+    expect(fs.readdirSync(path.join(root, ".writer-lock-gate.queue"))).toEqual([]);
+  } finally {
+    fs.writeFileSync(path.join(controls, "publication-release"), "go");
+    await stopImageWriters(writers);
+  }
+}, 20_000);
+
+test("a fresh incomplete legacy queue ticket holds its position until it becomes stale", () => {
+  const root = sandbox();
+  const queue = path.join(root, ".writer-lock-gate.queue");
+  fs.mkdirSync(queue, { mode: 0o700 });
+  const legacyTicket = path.join(queue, "0000000000000001-legacy-old.json");
+  fs.writeFileSync(legacyTicket, "{\"pid\":", { mode: 0o600 });
+
+  expect(() => new RuntimeImageStore(root, { writerLockStaleMs: 30_000, writerLockWaitMs: 20 }))
+    .toThrow(RuntimeImageWriterBusyError);
+  expect(fs.existsSync(legacyTicket)).toBe(true);
+
+  fs.utimesSync(legacyTicket, new Date(1), new Date(1));
+  const store = new RuntimeImageStore(root, { writerLockStaleMs: 30_000, writerLockWaitMs: 200 });
+  expect(store.putMany([{ base64: PNG.toString("base64"), mime: "image/png" }])).toHaveLength(1);
+  expect(fs.existsSync(legacyTicket)).toBe(false);
+  expect(fs.readdirSync(queue)).toEqual([]);
+});
+
+test("a live legacy gate owner is observed without changing its owner file", () => {
+  const root = sandbox();
+  const gate = path.join(root, ".writer-lock-gate");
+  fs.mkdirSync(gate, { mode: 0o700 });
+  const ownerPath = path.join(gate, "owner.json");
+  const contents = JSON.stringify({ pid: process.pid, startIdentity: null, token: "live-legacy" });
+  fs.writeFileSync(ownerPath, contents, { mode: 0o600 });
+  const before = fs.statSync(ownerPath);
+
+  expect(() => new RuntimeImageStore(root, { writerLockWaitMs: 20 })).toThrow(RuntimeImageWriterBusyError);
+
+  const after = fs.statSync(ownerPath);
+  expect(after.dev).toBe(before.dev);
+  expect(after.ino).toBe(before.ino);
+  expect(fs.readFileSync(ownerPath, "utf8")).toBe(contents);
+});
+
+test.each(["empty", "partial", "invalid-json"] as const)("an aged %s legacy gate owner permits recovery without deletion", mode => {
+  const root = sandbox();
+  const gate = path.join(root, ".writer-lock-gate");
+  fs.mkdirSync(gate, { mode: 0o700 });
+  const ownerPath = path.join(gate, "owner.json");
+  const contents = mode === "empty" ? "" : mode === "partial" ? "{\"pid\":" : "{invalid";
+  fs.writeFileSync(ownerPath, contents, { mode: 0o600 });
+  fs.utimesSync(gate, new Date(1), new Date(1));
+  const before = fs.statSync(ownerPath);
+
+  const store = new RuntimeImageStore(root, { writerLockStaleMs: 30_000, writerLockWaitMs: 200 });
+  expect(store.putMany([{ base64: PNG.toString("base64"), mime: "image/png" }])).toHaveLength(1);
+
+  const after = fs.statSync(ownerPath);
+  expect(after.dev).toBe(before.dev);
+  expect(after.ino).toBe(before.ino);
+  expect(fs.readFileSync(ownerPath, "utf8")).toBe(contents);
+});
+
+test("a fresh incomplete legacy owner waits, then recovers after its stale threshold", () => {
+  const root = sandbox();
+  const gate = path.join(root, ".writer-lock-gate");
+  fs.mkdirSync(gate, { mode: 0o700 });
+  const ownerPath = path.join(gate, "owner.json");
+  fs.writeFileSync(ownerPath, "{\"pid\":", { mode: 0o600 });
+  const before = fs.statSync(ownerPath);
+
+  expect(() => new RuntimeImageStore(root, { writerLockStaleMs: 30_000, writerLockWaitMs: 20 })).toThrow(RuntimeImageWriterBusyError);
+  const stillThere = fs.statSync(ownerPath);
+  expect(stillThere.dev).toBe(before.dev);
+  expect(stillThere.ino).toBe(before.ino);
+
+  fs.utimesSync(gate, new Date(1), new Date(1));
+  const store = new RuntimeImageStore(root, { writerLockStaleMs: 30_000, writerLockWaitMs: 200 });
+  expect(store.putMany([{ base64: PNG.toString("base64"), mime: "image/png" }])).toHaveLength(1);
+  expect(fs.readFileSync(ownerPath, "utf8")).toBe("{\"pid\":");
+});
+
+test("gate-owner replacement races require no unlink because new writers never retire legacy owners", () => {
+  const root = sandbox();
+  const gate = path.join(root, ".writer-lock-gate");
+  fs.mkdirSync(gate, { mode: 0o700 });
+  const ownerPath = path.join(gate, "owner.json");
+  fs.writeFileSync(ownerPath, "{broken", { mode: 0o600 });
+  fs.utimesSync(gate, new Date(1), new Date(1));
+  const before = fs.statSync(ownerPath);
+  const unlink = fs.unlinkSync;
+  let ownerUnlinked = false;
+  fs.unlinkSync = ((filename: fs.PathLike) => {
+    if (String(filename).endsWith("/.writer-lock-gate/owner.json")) ownerUnlinked = true;
+    return unlink(filename);
+  }) as typeof fs.unlinkSync;
+  try {
+    const store = new RuntimeImageStore(root, { writerLockWaitMs: 200 });
+    store.putMany([{ base64: PNG.toString("base64"), mime: "image/png" }]);
+  } finally {
+    fs.unlinkSync = unlink;
+  }
+  const after = fs.statSync(ownerPath);
+  expect(ownerUnlinked).toBe(false);
+  expect(after.dev).toBe(before.dev);
+  expect(after.ino).toBe(before.ino);
+});
+
+test("concurrent runtime image writers tolerate publication during partial cleanup", async () => {
+  const root = sandbox();
+  const controls = sandbox();
+  const maxBytes = 4 * 1024 * 1024 + 128;
+  const publisher = imageWriter(root, controls, "a", maxBytes, "partial");
+  const writers = [publisher];
+  fs.writeFileSync(path.join(controls, "start"), "go");
+  try {
+    const milestone = path.join(controls, "publication-paused");
+    await writerMilestone(milestone, publisher);
+    const unfinished = fs.readFileSync(milestone, "utf8");
+    const cleaner = imageWriter(root, controls, "b", maxBytes, "maintenance");
+    writers.push(cleaner);
+    await writerMilestone(path.join(controls, "maintenance-scanned"), cleaner);
+    expect(fs.existsSync(unfinished)).toBe(true);
+    fs.writeFileSync(path.join(controls, "publication-release"), "go");
+    await writerMilestone(path.join(controls, "ticket-published"), publisher);
+    expect(fs.existsSync(unfinished)).toBe(false);
+    expect(cleaner.child.exitCode).toBeNull();
+    fs.writeFileSync(path.join(controls, "maintenance-release"), "go");
+    const results = await Promise.all(writers.map(writer => writer.result));
+    expect(results.map(result => result.exit).sort(), JSON.stringify(results)).toEqual([0, 2]);
+    expect(results).toEqual(results.map(result => ({ ...result, stdout: "", stderr: "" })));
+    const blobs = fs.readdirSync(root).filter(name => name.endsWith(".png"));
+    expect(blobs).toHaveLength(1);
+    expect(fs.statSync(path.join(root, blobs[0]!)).size).toBeLessThanOrEqual(maxBytes);
+  } finally {
+    fs.writeFileSync(path.join(controls, "publication-release"), "go");
+    fs.writeFileSync(path.join(controls, "maintenance-release"), "go");
+    await stopImageWriters(writers);
+  }
 }, 20_000);
 
 test("an aged writer lock stays owned while its exact process identity is alive", () => {

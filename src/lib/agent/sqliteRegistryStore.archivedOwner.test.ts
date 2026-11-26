@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 
 import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "./registryPerformanceDataset";
 import { normalizeRegistry, type RegistryFile } from "./registry";
-import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { registryHotKeysMatching, registryStartupSelectionUnchanged, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 
 const directories: string[] = [];
 const stores: SqliteAgentRegistryStore[] = [];
@@ -139,4 +139,59 @@ test("the writer cache retains hot rows and reads archived owners through the me
   expect(owner).toBeDefined();
   expect(reads.get("deliveryOperationOwners")! - ownerReads).toBe(1);
   expect(reads.get("heldDeliveries")! - deliveryReads).toBeLessThanOrEqual(1);
+});
+
+test("a pinned hot selection keeps its archive cut while promotions invalidate startup", async () => {
+  const root = directory();
+  const filename = path.join(root, "registry.sqlite");
+  const host = { kind: "codex-app-server", endpoint: "stdio:released", process: null, eventCursor: 0, activeFlags: [] };
+  const entry = (sessionId: string, status: string) => ({
+    key: { engine: "codex", sessionId }, artifactPath: `/sessions/${sessionId}.jsonl`, cwd: "/repo",
+    accountId: null, status, host: null, structuredHost: host, claimEpoch: 0, claimOwner: null, pendingAction: null,
+    updatedAt: "2026-10-01T00:00:00.000Z",
+  });
+  const plain = normalizeRegistry({ version: 2, receipts: {}, entries: {
+    "codex:cold": entry("cold", "dead"), "codex:hot": entry("hot", "dead"), "codex:idle": entry("idle", "idle"),
+  } });
+  const select = (file: RegistryFile) => registryHotKeysMatching(file, "entries", "structuredHost.kind", ["codex-app-server"]);
+  expect(select(plain)).toEqual(["codex:cold", "codex:hot", "codex:idle"]);
+  const store = new SqliteAgentRegistryStore(filename, { initialSnapshot: plain, normalize: normalizeRegistry });
+  stores.push(store);
+  expect(store.archiveInactive(1)).toBe(1);
+  const held = (await store.prepareReadOnlySnapshot()).file;
+  expect(select(held)).toEqual(["codex:hot", "codex:idle"]);
+  expect(store.archiveInactive(1)).toBe(1);
+  expect(registryStartupSelectionUnchanged(held)).toBe(true);
+  expect(select(held)).toEqual(["codex:hot", "codex:idle"]);
+  store.mutate(file => { file.entries["codex:cold"]!.updatedAt = "2026-10-02T00:00:00.000Z"; }, false);
+  expect(registryStartupSelectionUnchanged(held)).toBe(false);
+  expect(select(held)).toEqual(["codex:hot", "codex:idle"]);
+  const current = (await store.prepareReadOnlySnapshot()).file;
+  expect(select(current)).toEqual(["codex:cold", "codex:idle"]);
+  expect(current.entries["codex:hot"]?.artifactPath).toBe("/sessions/hot.jsonl");
+});
+
+test("the archive sweep advances after confirmation and opens a new range after journal replacement", async () => {
+  const data = buildRegistryPerformanceDataset(directory(), {
+    ...scaledRegistryPerformanceShape(0.01),
+    conversations: 12, entries: 12, receipts: 0, heldDeliveries: 0, deliveryOperationOwners: 0,
+    lineageEdges: 0, memberships: 0, migrationIntents: 0, activeEntries: 0, workers: 0,
+    startupCensus: { archived: 10, failedDead: 0, failedUnhosted: 0, closedStaged: 0, live: 0, idle: 2, unhosted: 0 },
+  });
+  const store = new SqliteAgentRegistryStore(data.filename, {
+    initialSnapshot: () => { throw new Error("fixture already imported"); }, normalize: normalizeRegistry,
+  });
+  stores.push(store);
+  const first = store.startupFallbackSweep("journal-a")!;
+  expect(first.keys).toHaveLength(10);
+  const newer = first.keys[0]!;
+  store.mutate(file => { file.entries[newer]!.updatedAt = "2026-10-02T00:00:00.000Z"; }, false);
+  expect(store.archiveInactive(1)).toBe(1);
+  expect(await store.withWriter(() => store.finishStartupFallbackSweep(first))).toEqual({ acquired: true, value: true });
+  const second = store.startupFallbackSweep("journal-a")!;
+  expect(second.keys).toEqual([newer]);
+  expect(await store.withWriter(() => store.finishStartupFallbackSweep(first))).toEqual({ acquired: true, value: false });
+  expect(await store.withWriter(() => store.finishStartupFallbackSweep(second))).toEqual({ acquired: true, value: true });
+  expect(store.startupFallbackSweep("journal-a")!.keys).toEqual([]);
+  expect(store.startupFallbackSweep("journal-b")!.keys).toHaveLength(10);
 });

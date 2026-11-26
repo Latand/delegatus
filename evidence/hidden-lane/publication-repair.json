@@ -1,0 +1,326 @@
+{
+  "checkedAt": "2026-11-12T14:54:00.467586+00:00",
+  "acceptedRevision": "999d546e10cb28b63f55e49f026894e86cff2777",
+  "comparisonBase": "3c086dfc91aa650bfabe0417eaeaf74604745d3f",
+  "problem": "The publication comparison reached its existing per-file deadline in monolithic process and Git integration test files.",
+  "change": "Partition the same integration cases by publication recovery, authority recovery, launch recovery, Git custody, refresh completion, pending turns and worker capacity. Shared fixtures retain the original restart observer and Git setup.",
+  "productionCodeChanged": false,
+  "hookOrTimeoutChanges": false,
+  "staticInventory": {
+    "registrationBodiesBefore": 37,
+    "registrationBodiesAfter": 37,
+    "identicalBodies": true
+  },
+  "collectedInventory": [
+    {
+      "originalFile": "src/lib/pipelines/engine.mechanicalRecovery.test.ts",
+      "casesBefore": 42,
+      "casesAfter": 42
+    },
+    {
+      "originalFile": "src/lib/pipelines/engine.ports.part3.test.ts",
+      "casesBefore": 18,
+      "casesAfter": 18
+    },
+    {
+      "originalFile": "src/lib/pipelines/engine.proactive.part2.test.ts",
+      "casesBefore": 52,
+      "casesAfter": 52
+    }
+  ],
+  "headTotals": {
+    "pass": 110,
+    "fail": 2,
+    "expect() calls": 1925
+  },
+  "newFailures": 0,
+  "checks": [
+    {
+      "label": "typecheck",
+      "tree": "head",
+      "command": [
+        "bunx",
+        "tsc",
+        "--noEmit"
+      ],
+      "exitStatus": 0,
+      "counts": {},
+      "durationSeconds": 205.322283765,
+      "log": "publication-repair/split-validation/1.log"
+    },
+    {
+      "label": "engine.mechanicalRecovery.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.mechanicalRecovery.test.ts",
+        "--reporter=junit",
+        "--reporter-outfile=$REPORT_ROOT/2.xml"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 8,
+        "fail": 0,
+        "expect() calls": 282
+      },
+      "durationSeconds": 77.47769042599998,
+      "log": "publication-repair/split-validation/2.log"
+    },
+    {
+      "label": "engine.ports.part3.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.ports.part3.test.ts",
+        "--reporter=junit",
+        "--reporter-outfile=$REPORT_ROOT/3.xml"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 2,
+        "fail": 0,
+        "expect() calls": 521
+      },
+      "durationSeconds": 147.953108038,
+      "log": "publication-repair/split-validation/3.log"
+    },
+    {
+      "label": "engine.proactive.part2.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.proactive.part2.test.ts",
+        "--reporter=junit",
+        "--reporter-outfile=$REPORT_ROOT/4.xml"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 21,
+        "fail": 2,
+        "expect() calls": 182
+      },
+      "durationSeconds": 114.630070334,
+      "log": "publication-repair/split-validation/4.log"
+    },
+    {
+      "label": "engine.mechanicalRecovery.authority.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.mechanicalRecovery.authority.test.ts",
+        "--reporter=junit",
+        "--reporter-outfile=$REPORT_ROOT/5.xml"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 9,
+        "fail": 0,
+        "expect() calls": 323
+      },
+      "durationSeconds": 92.98915692199999,
+      "log": "publication-repair/split-validation/5.log"
+    },
+    {
+      "label": "engine.mechanicalRecovery.launch.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.mechanicalRecovery.launch.test.ts",
+        "--reporter=junit",
+        "--reporter-outfile=$REPORT_ROOT/6.xml"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 25,
+        "fail": 0,
+        "expect() calls": 217
+      },
+      "durationSeconds": 43.042041706999996,
+      "log": "publication-repair/split-validation/6.log"
+    },
+    {
+      "label": "engine.attemptGitCustody.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.attemptGitCustody.test.ts",
+        "--reporter=junit",
+        "--reporter-outfile=$REPORT_ROOT/7.xml"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 14,
+        "fail": 0,
+        "expect() calls": 123
+      },
+      "durationSeconds": 34.92547600800008,
+      "log": "publication-repair/split-validation/7.log"
+    },
+    {
+      "label": "engine.refreshCompletion.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.refreshCompletion.test.ts",
+        "--reporter=junit",
+        "--reporter-outfile=$REPORT_ROOT/8.xml"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 2,
+        "fail": 0,
+        "expect() calls": 14
+      },
+      "durationSeconds": 10.204392175000045,
+      "log": "publication-repair/split-validation/8.log"
+    },
+    {
+      "label": "engine.proactive.pending.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.proactive.pending.test.ts",
+        "--reporter=junit",
+        "--reporter-outfile=$REPORT_ROOT/9.xml"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 6,
+        "fail": 0,
+        "expect() calls": 48
+      },
+      "durationSeconds": 29.515462533999933,
+      "log": "publication-repair/split-validation/9.log"
+    },
+    {
+      "label": "engine.proactive.workerCapacity.test.ts",
+      "tree": "head",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.proactive.workerCapacity.test.ts",
+        "--reporter=junit",
+        "--reporter-outfile=$REPORT_ROOT/10.xml"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 23,
+        "fail": 0,
+        "expect() calls": 215
+      },
+      "durationSeconds": 75.84245810799999,
+      "log": "publication-repair/split-validation/10.log"
+    },
+    {
+      "label": "engine.mechanicalRecovery.test.ts",
+      "tree": "main",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.mechanicalRecovery.test.ts",
+        "--reporter=junit",
+        "--reporter-outfile=$REPORT_ROOT/11.xml"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 42,
+        "fail": 0,
+        "expect() calls": 822
+      },
+      "durationSeconds": 221.13228650200006,
+      "log": "publication-repair/split-validation/11.log"
+    },
+    {
+      "label": "engine.ports.part3.test.ts",
+      "tree": "main",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.ports.part3.test.ts",
+        "--reporter=junit",
+        "--reporter-outfile=$REPORT_ROOT/12.xml"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 18,
+        "fail": 0,
+        "expect() calls": 658
+      },
+      "durationSeconds": 187.38377212699993,
+      "log": "publication-repair/split-validation/12.log"
+    },
+    {
+      "label": "engine.proactive.part2.test.ts",
+      "tree": "main",
+      "command": [
+        "bun",
+        "test",
+        "--timeout=60000",
+        "./src/lib/pipelines/engine.proactive.part2.test.ts",
+        "--reporter=junit",
+        "--reporter-outfile=$REPORT_ROOT/13.xml"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 50,
+        "fail": 2,
+        "expect() calls": 445
+      },
+      "durationSeconds": 174.193663465,
+      "log": "publication-repair/split-validation/13.log"
+    }
+  ],
+  "lint": {
+    "command": [
+      "bun",
+      "scripts/eslint-changes.ts",
+      "--base",
+      "999d546e10cb28b63f55e49f026894e86cff2777",
+      "src/lib/pipelines/engine.mechanicalRecovery.test.ts",
+      "src/lib/pipelines/engine.ports.part3.test.ts",
+      "src/lib/pipelines/engine.proactive.part2.test.ts",
+      "src/lib/pipelines/engine.mechanicalRecovery.fixture.ts",
+      "src/lib/pipelines/engine.mechanicalRecovery.authority.test.ts",
+      "src/lib/pipelines/engine.mechanicalRecovery.launch.test.ts",
+      "src/lib/pipelines/engine.attemptGit.fixture.ts",
+      "src/lib/pipelines/engine.attemptGitCustody.test.ts",
+      "src/lib/pipelines/engine.refreshCompletion.test.ts",
+      "src/lib/pipelines/engine.proactive.pending.test.ts",
+      "src/lib/pipelines/engine.proactive.workerCapacity.test.ts"
+    ],
+    "exitStatus": 0,
+    "introducedErrors": 0
+  },
+  "conditions": {
+    "testFiles": "One explicit file per isolated process in a scratch export; fresh HOME, XDG directories, LLV_STATE_DIR and TMPDIR for each command.",
+    "fileBudgetMs": 300000,
+    "command": "bun test --timeout=60000 FILE --reporter=junit --reporter-outfile=REPORT",
+    "runner": "Controller-supplied gate-slot.sh; heavy commands sequential.",
+    "controlUrl": "http://127.0.0.1:1"
+  },
+  "notes": [
+    "All original assertions and parameter arrays remain unchanged.",
+    "The original main files ran with the same isolation and file limit.",
+    "The two unadopted-merge failures remain at their original file path and match the main sample.",
+    "Pre-repair full-hook refusals and process-cleanup observations are retained separately in run evidence."
+  ]
+}

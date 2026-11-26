@@ -23,8 +23,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { BranchPane } from "@/components/BranchPane";
 import { DraftAgentPane } from "@/components/DraftAgentPane";
-import { isWorkflowDraftId } from "@/components/workflows/workflowModel";
-import { WorkflowDraftPane } from "@/components/workflows/WorkflowDraftPane";
+import { dropLegacyWorkflowDrafts } from "@/components/workflows/workflowModel";
 import { RoundDeck } from "@/components/flows/RoundDeck";
 import { useServerReach } from "@/hooks/serverReach";
 import { BoardRowsSkeleton } from "../skeletons";
@@ -39,7 +38,9 @@ import { compactPipelineLayoutFlows } from "@/components/pipelines/pipelineModel
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { useFavorites } from "@/components/favorites/FavoritesContext";
 import { useOrchestratorSeat } from "@/components/orchestrator/useOrchestratorSeat";
+import { resolveSeatFile, seatLivenessOf } from "@/components/orchestrator/seatState";
 import { useSeatPanel } from "@/components/orchestrator/useSeatPanel";
+import { useSeatSurface } from "@/components/orchestrator/useSeatSurface";
 import { SessionTitle } from "@/components/session/SessionTitle";
 import { focusHandoffBus } from "@/components/attention/focusHandoffBus";
 import { deckKey } from "@/components/scheme/agentLinks";
@@ -264,7 +265,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   const deckFlows = useMemo(() => (reviewGroups.length ? [...flows, ...reviewGroups] : flows), [flows, reviewGroups]);
   const layoutFlows = useMemo(() => compactPipelineLayoutFlows(pipelines, deckFlows), [pipelines, deckFlows]);
   const layout = useMemo(
-    () => buildSchemeLayout(groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths),
+    () => buildSchemeLayout(groups, manual, files, layoutFlows, dropLegacyWorkflowDrafts(drafts), pipelines, surfacePipelines, favorites, isolatedManualPaths),
     [groups, manual, files, layoutFlows, drafts, pipelines, surfacePipelines, favorites, isolatedManualPaths],
   );
   /* Scheme order (depth-first, groups left to right) is the order the switcher
@@ -497,6 +498,25 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
   const holdsSeat = resolvedKey !== null && seatKey !== null && resolvedKey === seatKey;
   const seatPanel = useSeatPanel({ project, files, seat: seatRead, holdsSeat, open: seatSheetOpen });
   const openDecisions = useOpenDecisionCount(project);
+  /* Whether the seat's turn is idle with its host alive, read ONCE for every
+     phone surface that names the seat: the bar, the switcher row and the ⋯
+     menu head. The switcher opens over any conversation, so the seat's own
+     file and surface are read here and not only through `useSeatPanel`, which
+     answers while the seat itself is on screen. */
+  const seatFile = useMemo(
+    () => resolveSeatFile({
+      files,
+      conversationId: seatConversationId,
+      seatPath: seatStatus?.seat?.path ?? null,
+      currentPath: null,
+    }),
+    [files, seatConversationId, seatStatus?.seat?.path],
+  );
+  const seatSurface = useSeatSurface(seatFile);
+  const seatWaiting = seatPanel
+    ? seatPanel.state.kind === "live" && seatPanel.state.liveness === "waiting"
+    : seatConversationId !== null
+      && seatLivenessOf({ file: seatFile, surface: seatSurface, incumbent: null, hostLive: false }) === "waiting";
   /* A rotation confirmed from here lands in the SUCCESSOR: the incumbent stays
      live under the draft for as long as the rotation takes, so the phone waits
      for the seat read to name a conversation other than this one — and for the
@@ -595,6 +615,9 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
       <ChatBarTitle
         file={activeFile}
         offline={offline}
+        seat={holdsSeat}
+        decisionWaiting={holdsSeat && openDecisions > 0}
+        seatWaiting={holdsSeat && seatWaiting}
         stage={stage}
         bump={bumpPulse?.side ?? null}
         renamed={renamed && renamed.path === activeFile.path ? renamed.title : null}
@@ -626,6 +649,8 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
           title={displayName}
           entries={switchEntries}
           currentKey={resolvedKey}
+          seatWaiting={seatWaiting}
+          decisionWaiting={openDecisions > 0}
           onPick={(entry) => { close(); switchTo(entry, true); }}
           onBoard={canLeave ? () => { close(); nav.back(); } : undefined}
           onProjects={canLeave || !host ? undefined : () => nav.openSheet("projects")}
@@ -637,6 +662,8 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
       return (
         <MobileConversationMenu
           file={activeFile}
+          seatWaiting={holdsSeat && seatWaiting}
+          decisionWaiting={holdsSeat && openDecisions > 0}
           hasPinned={pinnedRelations.length > 0}
           backgroundCount={backgroundTasks.length}
           onOpenPinned={() => nav.openSheet("pinned")}
@@ -698,6 +725,7 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
           isRoot={activeNode.isRoot}
           showFavorite
           chromeInMenu
+          {...(holdsSeat ? { composerPlaceholder: t("composer.placeholderOrchestrator", { project: displayName }) } : {})}
           onClose={() => onClose(activeNode.file.path)}
           relatedTasks={relatedTasksByPath.get(activeNode.file.path)}
           onOpenTask={openPipelineTask}
@@ -721,24 +749,14 @@ export function MobileFocusView({ project, projectName, groups, manual, files, f
       </ConversationRoleScope>
     </div>
   ) : activeDraft ? (
-    isWorkflowDraftId(activeDraft.id) ? (
-      <WorkflowDraftPane
-        key={activeDraft.key}
-        draftId={activeDraft.id}
-        project={project}
-        onClose={() => onDraftClose(activeDraft.id)}
-        onLaunched={() => onDraftClose(activeDraft.id)}
-      />
-    ) : (
-      <DraftAgentPane
-        key={activeDraft.key}
-        draftId={activeDraft.id}
-        project={project}
-        files={files}
-        onClose={() => onDraftClose(activeDraft.id)}
-        onSpawned={(file) => onDraftSpawned(activeDraft.id, file)}
-      />
-    )
+    <DraftAgentPane
+      key={activeDraft.key}
+      draftId={activeDraft.id}
+      project={project}
+      files={files}
+      onClose={() => onDraftClose(activeDraft.id)}
+      onSpawned={(file) => onDraftSpawned(activeDraft.id, file)}
+    />
   ) : loaded ? (
     /* Nothing to show. The board is the phone's leaf for that (lane 2), and a
        provisioning pipeline is a row there with a screen behind it (lane 7);
@@ -883,18 +901,20 @@ const BAR_META_STATE = "min-w-0 max-w-[calc(100%-0.625rem)] truncate";
  * an ellipsis inside that; a line without the floor wraps the whole group out of
  * sight, so a model is never a single letter or a sliver.
  */
-function ChatIdentity({ file }: { file: FileEntry }) {
+function ChatIdentity({ file, working = false }: { file: FileEntry; working?: boolean }) {
   const { t } = useLocale();
   const badge = engineBadge(file);
   const modelName = conversationModelLabel(file);
   const model = modelName
     ? file.effort ? t("mobile2.chat.identity", { model: modelName, effort: file.effort }) : modelName
     : badge.label;
+  /* The cell ends in an ellipsis when the line has no room, so its title carries the full text, then the effort's own word. */
+  const tier = effortTitle(file);
   return (
     <span data-mobile2-chat-identity className="flex min-w-[calc(14px_+_0.5rem_+_6.5ch)] max-w-max grow basis-0 items-center gap-1">
       <span aria-hidden className="shrink-0 text-muted">·</span>
-      <ChatEngineMark file={file} />
-      <span data-mobile2-chat-model className="min-w-0 truncate" title={effortTitle(file)}>{model}</span>
+      <ChatEngineMark file={file} working={working} />
+      <span data-mobile2-chat-model className="min-w-0 truncate" title={tier ? `${model} — ${tier}` : model}>{model}</span>
     </span>
   );
 }
@@ -964,9 +984,15 @@ function ChatAccountTag({ file }: { file: FileEntry }) {
  * operator must not read as a running one because its own word ran out of room
  * (2026-08 audit findings 3 and 4).
  */
-export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskChange = null }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null; taskChange?: string | null }) {
+export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskChange = null, seat = false, decisionWaiting = false, seatWaiting = false }: { file: FileEntry; offline: boolean; stage: StagePosition | null; bump: "left" | "right" | null; renamed?: string | null; taskChange?: string | null;
+  /** The project's orchestrator: its title is its role's name, whole, and its account is under ⋯ → Details. */
+  seat?: boolean;
+  /** A decision form of the seat's project is open: a finished turn reads «waiting». */
+  decisionWaiting?: boolean;
+  /** The seat is hosted and idle with no form open: its finished turn reads «waiting», quietly. */
+  seatWaiting?: boolean }) {
   const { t } = useLocale();
-  const bits = chatStateBits(t, file, { offline });
+  const bits = chatStateBits(t, file, { offline, decisionWaiting, seatWaiting });
   /* While the server is being reconnected (#2071 D7) the quiet reconnecting
      line takes the meta line's place: the state it would show is the state
      from before the outage. */
@@ -980,9 +1006,9 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskC
     >
       <span className="flex min-w-0 items-baseline gap-1.5">
         <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">
-          {cleanTitle(renamed ?? file.title, 90)}
+          {seat ? t("orchPanel.title") : cleanTitle(renamed ?? file.title, 90)}
         </span>
-        <ChatAccountTag file={file} />
+        {seat ? null : <ChatAccountTag file={file} />}
       </span>
       {reach.kind === "reconnecting" ? <ReachLine reach={reach} /> : taskChange ? (
         <span data-mobile2-chat-task-change="" className="min-w-0 truncate text-label font-medium leading-tight text-secondary">
@@ -992,10 +1018,10 @@ export function ChatBarTitle({ file, offline, stage, bump, renamed = null, taskC
       <span className={BAR_META_ROW}>
         <span className={BAR_META_LINE}>
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${CHAT_TONE_DOT[bits.tone]} ${bits.key === "working" ? "animate-pulse motion-reduce:animate-none" : ""}`} aria-hidden />
-          <span data-mobile2-chat-state className={`${BAR_META_STATE} ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
+          <span data-mobile2-chat-state title={bits.phrase} className={`${BAR_META_STATE} ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
           {offline ? null : (
             <>
-              <ChatIdentity file={file} />
+              <ChatIdentity file={file} working={bits.key === "working"} />
               {stage?.current ? (
                 <span className="flex shrink-0 items-center gap-1">
                   <span aria-hidden className="text-muted">·</span>
@@ -1054,13 +1080,13 @@ export function EntryBarTitle({ entry, offline, bump }: { entry: SwitchEntry; of
         <span className={BAR_META_LINE}>
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${bits ? CHAT_TONE_DOT[bits.tone] : "bg-strong"}`} aria-hidden />
           {bits ? (
-            <span data-mobile2-chat-state className={`${BAR_META_STATE} ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
+            <span data-mobile2-chat-state title={bits.phrase} className={`${BAR_META_STATE} ${CHAT_TONE_TEXT[bits.tone]}`}>{bits.phrase}</span>
           ) : (
             <span data-mobile2-chat-state className={BAR_META_STATE}>{entry.meta}</span>
           )}
           {/* The round on screen is a conversation like any other: it says which
               model, tier and account the sheet on this surface would change. */}
-          {!offline && entry.file ? <ChatIdentity file={entry.file} /> : null}
+          {!offline && entry.file ? <ChatIdentity file={entry.file} working={bits?.key === "working"} /> : null}
         </span>
         {/* The same standing contract as the conversation's own cell (#165). */}
         {entry.file?.pendingWakeup ? (

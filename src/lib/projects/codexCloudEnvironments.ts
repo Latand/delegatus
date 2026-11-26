@@ -12,10 +12,16 @@ import { initializeStateCollectionsAsync, readStateCollectionRevision, SqliteSta
 import { CloudEnvironmentError, CloudEnvironmentMutationRefused, configurationId, ENVIRONMENT_REASONS, openCloudEnvironmentBackend, type EnvironmentConfiguration } from "@/lib/pipelines/cloudEnvironmentClient";
 import type { HostedCloudDependencies } from "@/lib/pipelines/cloudHostedClient";
 import { readCloudRunSetup } from "./cloudRunSetupImport";
+import { deriveRepositorySetup, readRepositorySetup, generatedRepositorySetup, type RepositorySetupFiles } from "./cloudEnvironmentSetup";
+
+export type CloudEnvironmentDependencies = HostedCloudDependencies & {
+  repositorySetup?: (repository: string, ref: string, guard: () => void) => Promise<RepositorySetupFiles>;
+};
 
 const id = z.string().regex(/^[A-Za-z0-9_~-]{1,200}$/);
 const instant = z.number().finite().nonnegative();
 const receiptSchema = z.object({ intent: id, configId: id.optional(), draftId: id.optional(), environmentId: id.optional(), operationId: id.optional(),
+  scriptHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   approvalAttempt: z.number().int().nonnegative().optional(), failedOperationId: id.optional(),
   draftRevision: z.number().int().nonnegative().optional(), configurationRevision: z.number().int().nonnegative().optional(),
   createDispatched: z.boolean().optional(), draftDispatched: z.boolean().optional() }).strict();
@@ -31,9 +37,10 @@ const bindingSchema = z.object({ key: z.string().max(1024), project: z.string().
   validatedAt: instant.nullable(), retryAt: instant, deadlineAt: instant, retries: z.number().int().min(0).max(3),
   setup: receiptSchema, actor: z.string().max(256).nullable(), selection: z.string().max(256),
   template: templateSchema.optional(),
+  setupReason: z.string().max(2000).optional(),
 }).strict();
 export type CloudEnvironmentBinding = z.infer<typeof bindingSchema>;
-export type CloudEnvironmentProjection = Omit<CloudEnvironmentBinding, "key" | "principal" | "setup" | "actor" | "selection" | "template"> & {
+export type CloudEnvironmentProjection = Omit<CloudEnvironmentBinding, "key" | "principal" | "setup" | "actor" | "selection" | "template" | "setupReason"> & {
   source: "account-override" | "project-override" | "automatic"; reason: string | null; overrideRevision: number;
 };
 const collection = "codex_cloud_environments";
@@ -63,6 +70,8 @@ function readStore(): SqliteStateCollection<CloudEnvironmentBinding> | null {
     decode: value => { const parsed = bindingSchema.safeParse(value); return parsed.success ? parsed.data : null; }, strictDecode: true,
     busyMessage: "Cloud environment bindings are busy" });
 }
+/** Changes with every binding write; null before the collection exists. */
+export function cloudEnvironmentBindingsRevision(): number | null { return readStateCollectionRevision(statePath("state.sqlite"), collection); }
 export async function initializeCloudEnvironmentBindings(): Promise<void> { await initializeStateCollectionsAsync(statePath("state.sqlite"), [seed]); }
 function read(key: string): CloudEnvironmentBinding | null { const store = readStore(); try { return store?.get(key) ?? null; } finally { store?.close(); } }
 async function update(value: CloudEnvironmentBinding, expected: number, assertCurrent: () => void): Promise<CloudEnvironmentBinding> {
@@ -108,6 +117,9 @@ export function cloudEnvironmentSelection(project: string, accountId: string): {
   return { environmentId: legacy, source: legacy ? "project-override" : "automatic", revision: override?.revision ?? 0 };
 }
 export function cloudEnvironmentChoiceFingerprint(project: string, accountId: string): string { return JSON.stringify(cloudEnvironmentSelection(project, accountId)); }
+function setupFailureReason(binding: CloudEnvironmentBinding): string | undefined {
+  return binding.code === "setup_pin_missing" || binding.code === "setup_script_missing" ? binding.setupReason : undefined;
+}
 function projection(binding: CloudEnvironmentBinding): CloudEnvironmentProjection {
   const choice = cloudEnvironmentSelection(binding.project, binding.accountId);
   const stale = binding.kind === "automatic" && binding.selection !== JSON.stringify(choice);
@@ -115,7 +127,7 @@ function projection(binding: CloudEnvironmentBinding): CloudEnvironmentProjectio
     environmentId: stale ? choice.environmentId || null : binding.environmentId, revision: binding.revision, accountVersion: binding.accountVersion,
     state: stale ? "discovering" : binding.state, code: stale ? null : binding.code, validatedAt: stale ? null : binding.validatedAt,
     retryAt: binding.retryAt, deadlineAt: binding.deadlineAt, retries: binding.retries,
-    source: choice.source, overrideRevision: choice.revision, reason: stale ? null : binding.code ? ENVIRONMENT_REASONS[binding.code] : null };
+    source: choice.source, overrideRevision: choice.revision, reason: stale ? null : setupFailureReason(binding) ?? (binding.code ? ENVIRONMENT_REASONS[binding.code] : null) };
 }
 /** Indexed project page. Reads neither initialize storage nor contact Cloud. */
 export function readCloudEnvironmentBindings(project: string, options: { accountId?: string; after?: string; limit?: number } = {}) {
@@ -172,12 +184,22 @@ export async function setCloudEnvironmentOverride(input: { project: string; acco
 }
 
 /** A default-ref lookup can fail before an actual ref is known. Retain that
- * account's prerequisite and retry budget in a separate unresolved-ref row. */
+ * account's prerequisite and retry budget in a separate unresolved-ref row.
+ * The lookup has the budget a preparation has: a ten-minute window of three
+ * failures with two and four seconds between them, then a 15-minute cooldown.
+ * A new window opens for the first failure, for a changed sign-in or choice,
+ * and for a retry of a row whose earlier window had closed. A `single` attempt
+ * opens no window: its failure returns the row to the cooldown at once. */
 export async function recordCloudEnvironmentPrerequisite(project: string, accountId: string, repository: string,
-  error: unknown, assertCurrent: () => void, accountVersion: string | null = null): Promise<void> {
-  const old = read(key(project, accountId, repository, "", "automatic")) ?? initial(project, accountId, repository, "", "automatic", Date.now());
+  error: unknown, assertCurrent: () => void, accountVersion: string | null = null, single = false): Promise<void> {
+  const now = Date.now(), selection = JSON.stringify(cloudEnvironmentSelection(project, accountId));
+  const saved = read(key(project, accountId, repository, "", "automatic"));
+  const old = saved ?? initial(project, accountId, repository, "", "automatic", now);
   const code = error instanceof CloudEnvironmentError ? error.code : "catalog_incomplete";
-  await update({ ...old, accountVersion, state: "unavailable", code, retryAt: Date.now() + 15 * 60_000, retries: Math.min(3, old.retries + 1) }, old.revision, assertCurrent);
+  const opens = !single && (!saved || old.accountVersion !== accountVersion || old.selection !== selection || old.retries >= 3 || old.deadlineAt <= now);
+  const retries = opens ? 1 : Math.min(3, old.retries + 1);
+  await update({ ...old, accountVersion, selection, state: "unavailable", code, retries, deadlineAt: opens ? now + 10 * 60_000 : old.deadlineAt,
+    retryAt: now + (single || retries >= 3 ? 15 * 60_000 : 2000 * 2 ** (retries - 1)) }, old.revision, assertCurrent);
 }
 export async function clearCloudEnvironmentPrerequisite(project: string, accountId: string, repository: string, assertCurrent: () => void): Promise<void> {
   const unresolvedKey = key(project, accountId, repository, "", "automatic"), store = readStore();
@@ -198,12 +220,45 @@ export interface PrepareCloudEnvironmentInput {
   /** The stage's bound model, for a provider whose target fixes one. */
   model?: string;
 }
+/** A connect result belongs only to the exact binding that admitted that stage.
+ * A late refusal cannot invalidate a newer preparation or another sign-in. */
+export async function recordCloudEnvironmentConnectFailure(input: PrepareCloudEnvironmentInput & {
+  environmentId: string; revision: number; selection: string; principal: string;
+  code: "environment_offline" | "environment_connect_failed" | "environment_missing";
+}): Promise<void> {
+  const accountVersion = cloudAccountVersion(input.account);
+  const repository = githubRepositoryOfRemote(`https://github.com/${input.repository}`);
+  const ref = input.ref.replace(/^refs\/heads\//, "");
+  if (!repository || !ref) return;
+  const guard = () => {
+    input.signal.throwIfAborted(); input.assertCurrent();
+    if (cloudAccountVersion(input.account) !== accountVersion
+      || cloudEnvironmentChoiceFingerprint(input.project, input.account.accountId) !== input.selection) {
+      throw new CloudEnvironmentError("preparation_superseded");
+    }
+  };
+  guard();
+  const saved = read(key(input.project, input.account.accountId, repository, ref, "automatic"));
+  if (!saved || saved.revision !== input.revision || saved.environmentId !== input.environmentId
+    || saved.selection !== input.selection || saved.principal !== input.principal || saved.accountVersion !== accountVersion) return;
+  const now = (input.now ?? Date.now)();
+  try {
+    await update({ ...saved, state: "unavailable", code: input.code, validatedAt: null,
+      retries: 3, retryAt: now + 30 * 60_000 }, saved.revision, guard);
+  } catch (error) {
+    // A newer binding can win while this writer awaits its lease. The stage's
+    // own connect refusal still needs settlement; do not leave it submitting.
+    guard();
+    if (!(error instanceof CloudEnvironmentError) || error.code !== "preparation_superseded") throw error;
+  }
+}
+
 export type CloudEnvironmentPreparation = { state: "ready"; environmentId: string; selection: string; revision: number; principal: string }
   | { state: "pending"; retryAt: number; reason: string } | { state: "unavailable"; reason: string };
 
 /** A slice advances persisted setup checkpoints; pending work is scheduled by
  * the controller. No network request owns a shared storage lease. */
-export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInput, dependencies?: HostedCloudDependencies): Promise<CloudEnvironmentPreparation> {
+export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInput, dependencies?: CloudEnvironmentDependencies): Promise<CloudEnvironmentPreparation> {
   const now = input.now ?? Date.now;
   const project = canonicalProject(input.project), repository = githubRepositoryOfRemote(`https://github.com/${input.repository}`);
   if (!repository || !input.ref || input.ref.length > 256) return { state: "unavailable", reason: "Codex Cloud requires a GitHub repository and base ref" };
@@ -241,11 +296,23 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
     await checkpoint({ environmentId: null, setup: { intent: digest(JSON.stringify([saved.setup.intent, saved.revision, code])) }, state: "discovering",
       template: undefined, code: null, validatedAt: null, retryAt: 0, deadlineAt: now() + 10 * 60_000, retries: 0 });
   };
-  if (saved.state === "unavailable" && now() < saved.retryAt) return { state: "unavailable", reason: `Codex Cloud: ${ENVIRONMENT_REASONS[saved.code ?? "configuration_invalid"]} (${saved.code})` };
+  if (saved.state === "unavailable" && now() < saved.retryAt) return { state: "unavailable", reason: setupFailureReason(saved) ?? `Codex Cloud: ${ENVIRONMENT_REASONS[saved.code ?? "configuration_invalid"]} (${saved.code})` };
   if (saved.retryAt > now() && saved.state !== "ready") return { state: "pending", retryAt: saved.retryAt, reason: "Cloud environment approval is pending" };
   let backend: Awaited<ReturnType<typeof openCloudEnvironmentBackend>> | undefined;
+  let setupSteps: string[] = [];
   try {
     if (saved.state !== "ready" && (saved.deadlineAt <= now() || saved.retries >= 3)) throw new CloudEnvironmentError("setup_deadline_exceeded");
+    let files: RepositorySetupFiles;
+    try { files = await (dependencies?.repositorySetup ?? readRepositorySetup)(repository, ref, guard); }
+    catch { guard(); throw new CloudEnvironmentError("repository_setup_unavailable"); }
+    guard();
+    const derived = deriveRepositorySetup(files);
+    setupSteps = derived.steps;
+    if (derived.reason) {
+      await checkpoint({ setupReason: derived.reason });
+      throw new CloudEnvironmentError("setup_pin_missing");
+    }
+    if (saved.setupReason) await checkpoint({ setupReason: undefined });
     backend = await openCloudEnvironmentBackend({ account: input.account, signal: input.signal, assertCurrent: guard }, dependencies);
     guard();
     if (saved.principal && saved.principal !== backend.principal) {
@@ -260,20 +327,44 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
       guard(); await checkpoint({ environmentId: config.id, state: "ready", code: null, validatedAt: now(), retryAt: now() + 24 * 60 * 60_000,
         template: templateSchema.parse({ ...(config.installScript ? { installScript: config.installScript } : {}), ...(config.startSkill ? { startSkill: config.startSkill } : {}),
           ...(config.networkPolicy ? { networkPolicy: config.networkPolicy } : {}) }),
-        setup: { ...saved.setup, configId: config.id, configurationRevision: config.revision } });
+        setup: { ...saved.setup, configId: config.id, configurationRevision: config.revision, scriptHash: digest(derived.installScript) } });
       return { state: "ready", environmentId: config.id, selection, revision: saved.revision, principal: saved.principal! };
+    };
+    const consider = async (config: EnvironmentConfiguration): Promise<CloudEnvironmentPreparation | null> => {
+      guard();
+      if (config.installScript !== derived.installScript) {
+        if (config.installScript?.trim() && !generatedRepositorySetup(config.installScript)) {
+          await checkpoint({ setupReason: `Operator installScript preserved. Required setup: ${derived.steps.join("; ")}` });
+          throw new CloudEnvironmentError("setup_script_missing");
+        }
+        if (choice.environmentId) {
+          await checkpoint({ setupReason: `Selected environment requires setup: ${derived.steps.join("; ")}` });
+          throw new CloudEnvironmentError("setup_script_missing");
+        }
+        // A ready version's completed receipt cannot approve the new setup.
+        if (config.ready && (saved.state === "ready" || !saved.setup.operationId && saved.setup.scriptHash !== digest(derived.installScript))) {
+          await checkpoint({ environmentId: config.id, state: "approving", validatedAt: null, retryAt: 0,
+            deadlineAt: now() + 10 * 60_000, retries: 0, code: null,
+            setup: { intent: digest(JSON.stringify([saved.setup.intent, config.id, config.revision, derived.installScript])), configId: config.id,
+              scriptHash: digest(derived.installScript) } });
+        }
+        return null;
+      }
+      return config.ready ? ready(config) : null;
     };
     if (choice.environmentId) {
       const config = await backend.detail(choice.environmentId);
       if (!await matches(config)) throw new CloudEnvironmentError("manual_environment_mismatched");
       if (!config.ready) throw new CloudEnvironmentError("approval_failed");
-      return await ready(config);
+      const result = await consider(config);
+      if (result) return result;
+      throw new CloudEnvironmentError("setup_script_missing");
     }
     if (saved.environmentId || saved.setup.configId) {
       try {
         const config = await backend.detail(saved.environmentId ?? saved.setup.configId!);
         if (!await matches(config)) await retireAutomatic("configuration_invalid");
-        else if (config.ready) return await ready(config);
+        else { const result = await consider(config); if (result) return result; }
       } catch (error) {
         if (!(error instanceof CloudEnvironmentError) || error.code !== "environment_missing") throw error;
         await retireAutomatic("environment_missing");
@@ -287,7 +378,7 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
       if (typeof repo.ref !== "string" || repo.ref.replace(/^refs\/heads\//, "") !== ref) continue;
       const config = await backend.detail(String(entry.id));
       if (!await matches(config)) continue;
-      if (config.ready) return await ready(config);
+      const result = await consider(config); if (result) return result;
       if (!saved.setup.configId && saved.setup.createDispatched && entry.name === `delegatus-${saved.setup.intent}`) {
         await checkpoint({ setup: { ...saved.setup, configId: config.id }, environmentId: config.id }, true); guard();
       }
@@ -306,8 +397,13 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
       try { template = projectRows(store, project, undefined, undefined, 100).map(row => row.binding)
         .find(prior => prior.state === "ready" && prior.repository === repository && prior.ref === ref && prior.template)?.template; }
       finally { store?.close(); }
-      await checkpoint({ state: "creating", setup: { ...saved.setup, createDispatched: true } });
-      const configId = await backend.create(`delegatus-${saved.setup.intent}`, target.id, ref, template).catch(async error => {
+      // A copied hand-written script remains authoritative and is never replaced.
+      if (template?.installScript?.trim() && !generatedRepositorySetup(template.installScript)) {
+        await checkpoint({ setupReason: `Operator installScript preserved. Required setup: ${derived.steps.join("; ")}` });
+        throw new CloudEnvironmentError("setup_script_missing");
+      }
+      await checkpoint({ state: "creating", setup: { ...saved.setup, createDispatched: true, scriptHash: digest(derived.installScript) } });
+      const configId = await backend.create(`delegatus-${saved.setup.intent}`, target.id, ref, { ...template, installScript: derived.installScript }).catch(async error => {
         // Only this mutation's confirmed refusal releases its dispatch marker.
         // Record it even if authority changed while the provider was replying.
         if (error instanceof CloudEnvironmentMutationRefused) saved = await releaseRefusedDispatch(saved, "createDispatched");
@@ -321,7 +417,16 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
       await retireAutomatic("configuration_invalid");
       return { state: "pending", retryAt: now() + 2000, reason: "Cloud environment preparation is being reconciled" };
     }
-    if (config.ready) return await ready(config);
+    const result = await consider(config); if (result) return result;
+    if (!saved.setup.draftId && config.draft) {
+      const existingDraft = await backend.inspectDraft(configId, config.draft.draftId, config.draft.environmentId);
+      if (existingDraft.installScript.trim() && !generatedRepositorySetup(existingDraft.installScript)) {
+        await checkpoint({ setupReason: `Operator draft installScript preserved. Required setup: ${derived.steps.join("; ")}` });
+        throw new CloudEnvironmentError("setup_script_missing");
+      }
+      await checkpoint({ state: "approving", setup: { ...saved.setup, draftId: config.draft.draftId,
+        environmentId: config.draft.environmentId, draftRevision: existingDraft.revision } });
+    }
     if (!saved.setup.draftId) {
       if (saved.setup.draftDispatched && config.draft) {
         await checkpoint({ state: "approving", setup: { ...saved.setup, ...config.draft } });
@@ -338,7 +443,7 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
     }
     const draftId = saved.setup.draftId!;
     if (!saved.setup.operationId) {
-      const revision = await backend.draftRevision(configId, draftId);
+      const revision = await backend.configureDraft(configId, draftId, derived.installScript); guard();
       await checkpoint({ setup: { ...saved.setup, draftRevision: revision } });
       const approvalKey = saved.setup.approvalAttempt ? digest(JSON.stringify([saved.setup.intent, saved.setup.approvalAttempt])) : saved.setup.intent;
       const operationId = await backend.begin(configId, draftId, revision, approvalKey);
@@ -347,7 +452,10 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
     if (await backend.operation(saved.setup.operationId!, saved.setup.environmentId!)) {
       await backend.complete(configId, draftId, saved.setup.operationId!); guard();
       const approved = await backend.detail(configId);
-      if (approved.ready && await matches(approved)) return await ready(approved);
+      if (approved.ready && await matches(approved)) {
+        if (approved.installScript !== derived.installScript) await checkpoint({ setup: { ...saved.setup, operationId: undefined } });
+        const result = await consider(approved); if (result) return result;
+      }
     }
     await checkpoint({ state: "approving", retryAt: now() + 2000 });
     return { state: "pending", retryAt: saved.retryAt, reason: "Cloud environment approval is pending" };
@@ -368,7 +476,9 @@ export async function prepareCloudEnvironment(input: PrepareCloudEnvironmentInpu
       ? { ...saved.setup, operationId: undefined, failedOperationId: safe.terminalOperationId, approvalAttempt: (saved.setup.approvalAttempt ?? 0) + 1 }
       : saved.setup;
     await checkpoint({ setup, state: "unavailable", code: safe.code, retries,
+      ...(safe.code !== "setup_pin_missing" && safe.code !== "setup_script_missing" ? { setupReason: undefined } : {}),
+      ...(safe.code === "setup_script_missing" && !saved.setupReason ? { setupReason: `Operator draft installScript preserved. Required setup: ${setupSteps.join("; ")}` } : {}),
       retryAt: now() + (retries >= 3 || safe.code === "setup_deadline_exceeded" ? 15 * 60_000 : 2000 * 2 ** (retries - 1)) });
-    return { state: "unavailable", reason: safe.message };
+    return { state: "unavailable", reason: setupFailureReason(saved) ?? safe.message };
   } finally { backend?.close(); }
 }

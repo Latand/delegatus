@@ -9,12 +9,12 @@ import { nativeAnswerResolution } from "./nativeAnswer";
    question card sends. */
 
 const question = (multiSelect = false): PendingQuestion => ({
-  kind: "question", toolUseId: "toolu_q", transcriptPath: "/t/q.jsonl", pid: 1, paneTarget: null, askedAt: "2026-10-11T11:50:00.000Z",
+  kind: "question", toolUseId: "toolu_q", transcriptPath: "/t/q.jsonl", pid: 1, askedAt: "2026-10-11T11:50:00.000Z",
   questions: [
     { question: "Which runner?", header: "Runner", multiSelect, options: [{ label: "Bigger", description: "", recommended: true }, { label: "Same", description: "", recommended: false }] },
   ],
 });
-const plan: PendingQuestion = { kind: "plan", toolUseId: "toolu_p", transcriptPath: "/t/p.jsonl", pid: 1, paneTarget: null, askedAt: "2026-10-11T11:50:00.000Z", plan: "Rebuild the index" };
+const plan: PendingQuestion = { kind: "plan", toolUseId: "toolu_p", transcriptPath: "/t/p.jsonl", pid: 1, askedAt: "2026-10-11T11:50:00.000Z", plan: "Rebuild the index" };
 
 test("options are chosen by number from 1, keyed by the question's text", () => {
   expect(nativeAnswerResolution(question(), { answers: [1] })).toEqual({ resolution: { behavior: "allow", updatedInput: { answers: { "Which runner?": "Bigger" } } }, label: "Bigger" });

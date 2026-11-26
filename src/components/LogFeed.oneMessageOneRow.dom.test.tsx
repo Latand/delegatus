@@ -35,8 +35,8 @@ import { useRuntimeReceiptsForArtifact, type RuntimeSessionView } from "@/hooks/
 import { setRuntimeUiEnabledForTests } from "@/hooks/runtimeBus";
 import type { FileEntry } from "@/lib/types";
 import { setLocale, translate } from "@/lib/i18n";
-import { attachModeFor, capabilitiesFor } from "./agentCapabilities";
-import { setTmuxComposerRuntimeDependenciesForTests } from "./tmuxComposerRuntime";
+import { capabilitiesFor } from "./agentCapabilities";
+import { setConversationComposerRuntimeDependenciesForTests } from "./conversationComposerRuntime";
 import { useAgentCapabilities } from "./useAgentCapabilities";
 
 const dom = new Window();
@@ -98,7 +98,7 @@ const structuredView: RuntimeSessionView = {
 
 import { LogFeed } from "./LogFeed";
 import { setLogFeedDependenciesForTests } from "./logFeedDependencies";
-import { TmuxComposer } from "./TmuxComposer";
+import { ConversationComposer } from "./ConversationComposer";
 import {
   enqueueContextOutbox, enqueueOutbox, outboxReceiptPatch, readOutbox, resetOutboxForTests, updateOutbox,
 } from "./conversation/outbox";
@@ -156,7 +156,6 @@ const serveProvenance = (submissions: Record<string, string>) => {
     if (String(input).startsWith("/api/log/provenance")) {
       return Response.json({ messages: {}, occurrences: [], submissions });
     }
-    if (String(input) === "/api/tmux/targets") return Response.json({ targets: {} });
     return new Response("{}", { status: 404 });
   }) as typeof fetch;
 };
@@ -177,7 +176,7 @@ beforeEach(() => {
     }),
   });
   setRuntimeUiEnabledForTests(false);
-  setTmuxComposerRuntimeDependenciesForTests({
+  setConversationComposerRuntimeDependenciesForTests({
     useAgentCapabilities: (candidate) => {
       const real = useAgentCapabilities(candidate);
       if (candidate.conversationId !== CARD) return real;
@@ -187,7 +186,6 @@ beforeEach(() => {
         runtime: structuredView,
         structuredSession: structuredView,
         runtimeEnabled: true,
-        attachMode: attachModeFor(candidate, structuredView, options),
       };
     },
     useRuntimeReceiptsForArtifact: (path, conversationId) => useRuntimeReceiptsForArtifact(path, conversationId),
@@ -197,7 +195,7 @@ beforeEach(() => {
 afterEach(() => {
   composerStorage.reset();
   setLogFeedDependenciesForTests(null);
-  setTmuxComposerRuntimeDependenciesForTests(null);
+  setConversationComposerRuntimeDependenciesForTests(null);
   setRuntimeUiEnabledForTests(null);
   setLocale("en");
   globalThis.fetch = realFetch;
@@ -220,7 +218,7 @@ const settle = async (fn: () => void) => {
 const surface = () => (
   <>
     <LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => {}} paused={false} follow={false} setFollow={() => {}} />
-    <TmuxComposer file={file} />
+    <ConversationComposer file={file} />
   </>
 );
 
@@ -333,7 +331,6 @@ test("an attachment-bearing submission paints its final row before its payload i
   const blocked = new Promise<void>((resolve) => { releasePreparation = () => resolve(); });
   const sends: unknown[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input) === "/api/tmux/targets") return Response.json({ targets: {} });
     if (String(input) === "/api/runtime/send") {
       sends.push(JSON.parse(String(init?.body)));
       return Response.json({ receipt: null }, { status: 202 });
@@ -413,7 +410,6 @@ test("every submission path paints the same final-form row", async () => {
   const root: Root = createRoot(host);
   let admitted = 0;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (String(input) === "/api/tmux/targets") return Response.json({ targets: {} });
     /* Admitted and parked behind the agent's turn: the rows stay observable in
        their submitted form and the composer is free to take the next one. */
     if (String(input) === "/api/runtime/send") {
@@ -709,7 +705,6 @@ const holdProvenance = () => {
       if (answer) return Response.json({ ...answer, occurrences: [] });
       return new Promise<Response>((resolve) => waiting.push(resolve));
     }
-    if (url === "/api/tmux/targets") return Response.json({ targets: {} });
     return new Response("{}", { status: 404 });
   }) as typeof fetch;
   return {
@@ -1336,7 +1331,6 @@ test("a record that names an operation the row does not carry yet is withheld un
       await new Promise<void>((resolve) => { answerProvenance = resolve; });
       return Response.json({ messages: {}, occurrences: [], submissions: { [early]: "key-early" } });
     }
-    if (String(input) === "/api/tmux/targets") return Response.json({ targets: {} });
     return new Response("{}", { status: 404 });
   }) as typeof fetch;
   contextRow("key-early");

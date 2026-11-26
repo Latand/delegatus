@@ -59,6 +59,7 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string, 
       choice[1]!.split(",").forEach(n => chosen.add(Number(n)));
       continue;
     }
+    const explicitAnswerList = /^відповіді(?:\s+|$)/i.test(segment);
     let words = segment.replace(/^відповіді(?:\s+|$)/i, "");
     const recommendation = /^(?:рекомендовані|рекомендованные|рекомендованное|recommended)(?=$|[^\p{L}\p{N}_])/iu.exec(words);
     if (recommendation && questions.length) {
@@ -69,10 +70,12 @@ export function parsePrototypeAnswer(round: PrototypeReviewRound, text: string, 
       if (words.trim()) notes.push(words);
       continue;
     }
-    words = words.replace(/(?<![\p{L}\p{N}_])([1-9]\d*)(\s*(?::\s*)?)([a-z]+\+?|\+)(?![\p{L}\p{N}_])/giu, (token, number: string, gap: string, letters: string) => {
-      // Spaced words such as "2 days" and numbered custom prose stay notes.
-      // Compact choices and single option letters must name a declared option.
-      if (gap && letters.replace("+", "").length > 1 && /[m-z]/i.test(letters)) return token;
+    const completeShorthand = /^(?:[1-9]\d*\s*(?::\s*)?[a-z]+\+?)(?:[\s,;]+[1-9]\d*\s*(?::\s*)?[a-z]+\+?)*$/iu.test(words.trim());
+    const canParseBundle = explicitAnswerList || completeShorthand;
+    words = words.replace(/(?<![\p{L}\p{N}_])([1-9]\d*)(\s*(?::\s*)?)([a-z]+\+?|\+)(?![\p{L}\p{N}_])/giu, (token, number: string, gap: string, letters: string, offset: number) => {
+      // A number followed by prose is a custom answer. Spaced bundles such as
+      // "2: ab" are shorthand only in an Answers list or a complete shorthand expression.
+      if ((!canParseBundle && offset !== 0) || (gap && !canParseBundle)) return token;
       const q = questions[Number(number) - 1];
       const options = [...letters.replace("+", "").toLowerCase()].map(c => c.charCodeAt(0) - 97);
       const prior = q && selected.get(q.id);
@@ -127,9 +130,20 @@ export function matchPrototypeAnswer(text: string, tasks: readonly BoardTask[] =
   seatRounds: readonly PrototypeReviewRound[] = loadSeatRounds(), replyToText?: string): PrototypeAnswerMatch | null {
   const explicit = /#proto-[a-f0-9]{8}\b/i.test(normalizeTelegramAnswer(text));
   const identity = explicit ? text : replyToText ?? "";
-  const references = normalizeTelegramAnswer(identity).match(/#proto-[a-f0-9]{8}\b/gi) ?? [];
+  const normalizedIdentity = normalizeTelegramAnswer(identity);
+  const allReferences = normalizedIdentity.match(/#proto-[a-f0-9]{8}\b/gi) ?? [];
+  // Current decision forms place their canonical reference on a dedicated
+  // line. Ignore incidental references in project/task names on that parent.
+  const identityLines = normalizedIdentity.split("\n").map(line => line.trim());
+  // Current forms reserve line 2 for the canonical reference, independently
+  // of the project and task lines. Keep project text out
+  // of identity parsing even when its valid display name contains a ref.
+  const currentHeaderReference = /^#?\s*🧪 /.test(identityLines[0] ?? "")
+    && /^#proto-[a-f0-9]{8}$/i.test(identityLines[1] ?? "") ? identityLines[1] : undefined;
+  const headerReference = currentHeaderReference;
+  const references = !explicit && headerReference ? [headerReference] : allReferences;
   if (!explicit && new Set(references.map(ref => ref.toLowerCase())).size !== 1) return null;
-  const line = normalizeTelegramAnswer(identity).split("\n").find(line => /#proto-[a-f0-9]{8}\b/i.test(line));
+  const line = !explicit && headerReference ? headerReference : references[0];
   const ref = line?.match(/#proto-[a-f0-9]{8}\b/i)?.[0].toLowerCase();
   if (!ref) return null;
   const matches: Array<{ task?: BoardTask; round: PrototypeReviewRound }> = [

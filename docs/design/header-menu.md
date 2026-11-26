@@ -21,6 +21,14 @@ what was built from them. Two earlier requests of the same day led there:
 The desktop ⋯ in the rail's header, 232 px wide, for every user and with no
 switch:
 
+**Since the Settings window (`docs/design/settings-redo/build-brief.md`):**
+the Settings row opens one window instead of a page of this menu. Its sections
+hold the entries of the page below (General, Shared memory, Keys, Roles and
+workers, Dictation, Privacy, Telegram, Voice Delegatus, Linked installs, Chat
+relay), and the phone's device rows and **Stop Delegatus** stand in General. This
+menu keeps the cells, Open on phone, Help and learning, Stop Delegatus on the
+desktop, and the phone's project rules. What follows records the menu as built.
+
 | Level | Entries |
 |---|---|
 | At rest | three icon cells, variant 2's: **Активність / Activity**, **Команда / Team**, **Оновлення / Updates**; then variant 3's rows: **Відкрити на телефоні / Open on phone** with its QR button, **Налаштування / Settings** (memory's state under its name, a count and an arrow to the right), **Довідка й навчання / Help and learning** (a count and an arrow down), **Зупинити Delegatus / Stop Delegatus** (its question and then its answer open under it; the owner's alone on a team install; on the phone it is the last row of Settings and asks on a page of its own), **Вийти · name / Sign out · name** for a signed-in member |

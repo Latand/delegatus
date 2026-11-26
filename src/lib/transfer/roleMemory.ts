@@ -1,3 +1,4 @@
+import { scopeRowWithEntry } from "@/lib/memory/roleHistoryRows";
 import crypto from "node:crypto";
 
 import { scopeChars } from "@/lib/memory/roleConsolidate";
@@ -70,7 +71,7 @@ function freshRuleId(taken: (id: string) => boolean, random: () => string): stri
 export function planRoleMemory(
   incoming: readonly StoredRow[],
   target: ReadonlyMap<string, string>,
-  context: { now: string; random?: () => string },
+  context: { now: string; random?: () => string; released?: ReadonlyMap<string, string> },
 ): RoleMemoryPlan {
   const random = context.random ?? (() => crypto.randomBytes(8).toString("hex"));
   const outcomes: RoleRecordOutcome[] = [];
@@ -121,7 +122,11 @@ export function planRoleMemory(
     const scope = row.value as RoleMemoryScopeRow;
     const held = current(row.key);
     if (!held) {
-      writes.set(row.key, structuredClone(scope));
+      // A bundle carries whole histories; a reference to rows of the install
+      // that wrote it names nothing here.
+      const arriving = structuredClone(scope);
+      delete arriving.historyRows;
+      writes.set(row.key, arriving);
       outcomes.push({ key: row.key, outcome: "new" });
       continue;
     }
@@ -134,12 +139,13 @@ export function planRoleMemory(
     const added = scope.active.filter(id => !present.has(id) && activeAfter.has(id));
     if (added.length) {
       const revision = held.revision + 1;
-      writes.set(row.key, {
-        ...held,
-        revision,
-        active: scope.scope === MACHINE_SCOPE ? [...added, ...held.active] : [...held.active, ...added],
-        history: [...held.history, { revision, ...(held.revisionScope ? { revisionScope: held.revisionScope } : {}), at: context.now, by: "transfer", added, merged: [], archived: [] }],
-      });
+      const merged = scopeRowWithEntry(held, { revision, active: scope.scope === MACHINE_SCOPE ? [...added, ...held.active] : [...held.active, ...added] },
+        { revision, ...(held.revisionScope ? { revisionScope: held.revisionScope } : {}), at: context.now, by: "transfer", added, merged: [], archived: [] }, { window: false });
+      // The target's row arrives here with its whole history in it. Stored
+      // that way, it stops naming the history rows it had; record their token.
+      const released = context.released?.get(row.key);
+      if (released) merged.historyDropped = [...(merged.historyDropped ?? []), { token: released, at: context.now }];
+      writes.set(row.key, merged);
     }
     outcomes.push({ key: row.key, outcome: "conflict", action: "merged", versions: { source: scope, target: held } });
   }

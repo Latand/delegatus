@@ -8,6 +8,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { canonicalProject } from "@/lib/projects/aliases";
 import { expandPrototypeInput, PrototypeError, PROTOTYPE_LIMITS } from "./input";
 import { copyMedia, mediaFilename } from "./copy";
 export { mediaFilename, sniffPrototype } from "./copy";
@@ -112,6 +113,7 @@ async function publishRound(input: PublishPrototypeInput, taskId: string | null,
   const id = prototypePublicationId(publicationKey);
   const replay = () => {
     const existing = [...loadTasksForList().flatMap(t => t.prototypeReviews ?? []), ...loadSeatRounds()].find(r => r.publicationKey === publicationKey);
+    if (existing && seatProject && canonicalProject(existing.project) !== canonicalProject(seatProject)) throw new PrototypeError("publication key already belongs to another project",409);
     if (existing && (existing.inputDigest !== inputDigest || existing.taskId !== taskId)) throw new PrototypeError("publication key already belongs to another payload",409);
     return existing ? structuredClone(existing) : undefined;
   };
@@ -131,7 +133,12 @@ async function publishRound(input: PublishPrototypeInput, taskId: string | null,
     const removed: string[] = [];
     try {
       await fs.writeFile(path.join(staging,"manifest.json"),JSON.stringify({ id }), { mode: 0o600, flush: true });
-      const round: PrototypeReviewRound = { id, taskId, project: seatProject ?? "", title: input.title, publicationKey, inputDigest, source, ...(critic ? { critic } : {}),
+      // The title is shown on the board, review, linked copies and Telegram.
+      // Keep its existing bound and the disclosure even for a maximum-length title.
+      const title = critic?.outcome === "skipped-by-operator"
+        ? `Visual critic skipped by operator: ${input.title}`.slice(0, 120).replace(/[\uD800-\uDBFF]$/, "")
+        : input.title;
+      const round: PrototypeReviewRound = { id, taskId, project: seatProject ?? "", title, publicationKey, inputDigest, source, ...(critic ? { critic } : {}),
         createdAt: new Date().toISOString(), variants: [], ...(input.questions ? { questions: input.questions } : {}) };
       round.telegramPost = { key: id, state: "pending", at: round.createdAt };
       let bytes = 0, imageBytes = 0;

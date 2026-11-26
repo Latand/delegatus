@@ -8,7 +8,7 @@ import { conversationIdentity } from "@/lib/accounts/identity";
 import { useLocale } from "@/lib/i18n";
 import type { FileEntry } from "@/lib/types";
 
-import { appendComposerDraft } from "./TmuxComposer";
+import { appendComposerDraft } from "./ConversationComposer";
 import { cleanTitle } from "./utils";
 import { Z } from "@/components/layers";
 

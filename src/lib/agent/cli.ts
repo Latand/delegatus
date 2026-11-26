@@ -25,7 +25,7 @@ import { claudeTranscriptPath, headCwd } from "./transcript";
 import { normalizedClaudePermissionMode, readClaudePermissionModeSync } from "./claudePermissionMode";
 import { grantedMcpServers } from "./mcpAllowlist";
 import { grantedPlugins } from "./pluginAllowlist";
-import { normalizeClaudeLaunchModel } from "./models";
+import { claudePinnedModelId, normalizeClaudeLaunchModel } from "./models";
 import {
   applyClaudeSpawnPolicy, claudeSpawnPolicyPaths, viewerMcpHttpCodexEntry,
   viewerMcpServerEntry, viewerMcpTransportForLaunch, viewerMcpHttpUrl, VIEWER_SPAWN_CAPABILITY_ENV,
@@ -43,7 +43,7 @@ export { ENGINE_EFFORTS, isEngineEffort } from "./efforts";
  * else.
  */
 
-export type AgentEngine = "claude" | "codex" | "copilot";
+export type AgentEngine = "claude" | "codex" | "copilot" | "antigravity";
 
 /**
  * Candidate absolute paths for an agent CLI on Windows, in probe order.
@@ -79,7 +79,7 @@ export function resolveBinary(name: string): string {
     return name;
   }
   const home = os.homedir();
-  if (process.env.LLV_DOCKER_NSENTER_SHIMS === "1" && (name === "claude" || name === "codex" || name === "copilot")) {
+  if (process.env.LLV_DOCKER_NSENTER_SHIMS === "1" && (name === "claude" || name === "codex" || name === "copilot" || name === "agy")) {
     const shim = "/usr/local/bin/" + name;
     try {
       fs.accessSync(shim, fs.constants.X_OK);
@@ -138,6 +138,27 @@ export function copilotBinaryGap(env: NodeJS.ProcessEnv = process.env): string |
     return null;
   } catch {
     return `the GitHub Copilot CLI at ${binary} is not executable`;
+  }
+}
+
+/** The Antigravity CLI a structured host launches: `LLV_ANTIGRAVITY_BIN` when
+    set (tests and pinned installs), otherwise the same probe for `agy`. */
+export function resolveAntigravityBinary(env: NodeJS.ProcessEnv = process.env): string {
+  return env.LLV_ANTIGRAVITY_BIN?.trim() || resolveBinary("agy");
+}
+
+/** Why an Antigravity launch cannot start on this machine, or null when `agy`
+    resolves to an executable file. */
+export function antigravityBinaryGap(env: NodeJS.ProcessEnv = process.env): string | null {
+  const binary = resolveAntigravityBinary(env);
+  if (!path.isAbsolute(binary)) {
+    return "the Antigravity CLI (`agy`) is not installed; install `agy` under $HOME/.local/bin or set LLV_ANTIGRAVITY_BIN";
+  }
+  try {
+    fs.accessSync(binary, fs.constants.X_OK);
+    return null;
+  } catch {
+    return `the Antigravity CLI at ${binary} is not executable`;
   }
 }
 
@@ -229,6 +250,7 @@ export function withSpawnCapability(spec: ResumeSpec, capability: string, source
 
 export interface FreshSpecOptions {
   cleanMemory?: boolean;
+  omitSkillsInstructions?: boolean;
   /** Durable human-readable identity for a viewer-controlled fresh launch. */
   title?: string | null;
   model?: string | null;
@@ -279,7 +301,7 @@ export function claudeEnvPrefix(home: string, mcpServers: readonly string[] = []
     ...(provider ? ["ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL", "ANTHROPIC_CUSTOM_HEADERS"] : []),
   ];
   const providerEnv = provider
-    ? ` bun ${shellQuote(claudeProviderLauncherPath(home))} --home ${shellQuote(home)} --base-url ${shellQuote(provider.baseUrl)} --default-model ${shellQuote(provider.model)} --small-model ${shellQuote(provider.smallFastModel ?? "")} --header-names ${shellQuote(JSON.stringify(provider.customHeaderNames ?? []))} --`
+    ? ` bun --no-env-file ${shellQuote(claudeProviderLauncherPath(home))} --home ${shellQuote(home)} --base-url ${shellQuote(provider.baseUrl)} --default-model ${shellQuote(provider.model)} --small-model ${shellQuote(provider.smallFastModel ?? "")} --header-names ${shellQuote(JSON.stringify(provider.customHeaderNames ?? []))} --`
     : "";
   return `env ${unsets.map((key) => `-u ${key}`).join(" ")} CLAUDE_CONFIG_DIR=${shellQuote(home)}${providerEnv}`;
 }
@@ -296,6 +318,7 @@ function codexEnvPrefix(home: string, mcpServers: readonly string[]): string {
 
 export interface ResumeSpecOptions {
   cleanMemory?: boolean;
+  omitSkillsInstructions?: boolean;
   model?: string | null;
   effort?: string | null;
   /** Codex only: override the service tier when reopening a conversation. */
@@ -546,7 +569,39 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
       },
     };
   }
+  if (engine === "antigravity") {
+    /* Antigravity runs on the structured transport over ACP (`agy acp`); the
+       host builds its own argv and applies model/effort via `session/set_config_option`. */
+    const permissionMode = options.readOnly ? "default" : options.permissionMode ?? "bypassPermissions";
+    const args = [resolveAntigravityBinary(), "acp", "--disable-telemetry"];
+    if (permissionMode === "bypassPermissions") args.push("--dangerously-skip-permissions");
+    return {
+      command: args.map(shellQuote).join(" "),
+      cwd,
+      windowName: "antigravity-new",
+      engine: "antigravity",
+      launchProfile: {
+        ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}),
+        cwd,
+        model: options.model ?? null,
+        effort: options.effort ?? null,
+        fast: null,
+        permissionMode,
+        readOnly: options.readOnly ?? false,
+        allowSubagents: options.allowSubagents ?? false,
+        mcpServers,
+        plugins: [],
+        title: options.title?.trim() || null,
+        project: null,
+        parentConversationId: null,
+        role: "worker",
+        goal: null,
+        plan: null,
+      },
+    };
+  }
   const args = [resolveCodexBinary()];
+  if (options.omitSkillsInstructions) args.push("-c", "skills.include_instructions=false");
   if (engineMemoryOff(options)) args.push("-c", "features.memories=false");
   const home = options.codexHome ?? accountForSpawn().home;
   args.push(...agentCodexPublicationArgs({}, process.env));
@@ -569,6 +624,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
     windowName: "codex-new",
     engine: "codex",
     launchProfile: {
+      ...(options.omitSkillsInstructions ? { omitSkillsInstructions: true } : {}),
       ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}),
       cwd,
       model: options.model ?? null,
@@ -689,7 +745,7 @@ export function resumeSpecForSession(
     }
     if (options.operatorDecisionForms && !engineReadOnly && permissionMode !== "plan") args.push("--disallowedTools", "AskUserQuestion,ExitPlanMode");
     pushClaudePolicyArgs(args, policy);
-    const launchModel = providerLaunchModel(home, normalizeClaudeLaunchModel(options.model));
+    const launchModel = providerLaunchModel(home, claudePinnedModelId(options.model) ?? normalizeClaudeLaunchModel(options.model));
     if (launchModel) args.push("--model", launchModel);
     if (options.effort) args.push("--effort", options.effort);
     args.push("--resume", sessionId);
@@ -709,6 +765,7 @@ export function resumeSpecForSession(
   }
   const codexBinary = resolveCodexBinary(options.hostTerminal);
   let command = shellQuote(codexBinary);
+  if (options.omitSkillsInstructions) command += " -c skills.include_instructions=false";
   if (engineMemoryOff(options)) command += " -c features.memories=false";
   const publicationArgs = agentCodexPublicationArgs({}, process.env);
   command += ` ${publicationArgs.map(shellQuote).join(" ")}`;
@@ -737,6 +794,7 @@ export function resumeSpecForSession(
     windowName: "codex-resume",
     engine: "codex",
     launchProfile: { ...emptyLaunchProfileForResume(cwd, options.model ?? null, options.effort ?? null),
+      ...(options.omitSkillsInstructions ? { omitSkillsInstructions: true } : {}),
       ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}), fast: options.serviceTier ? !["default", "standard"].includes(options.serviceTier) : options.fast ?? null, serviceTier: options.serviceTier ?? null, readOnly: options.readOnly ?? null, sandbox: explicitLaunchProfileSandbox(options), permissionMode: options.permissionMode ?? null, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
   };
 }

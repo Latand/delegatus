@@ -7,8 +7,9 @@ import type { BoardTask } from "@/lib/tasks/types";
 import { activeSeatsByCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
 
 import { emptyRepositoryEntry, forgeCacheFile, clearForgeNudges, pendingForgeNudges, readForgeCache, updateForgeCache, proposalIssueSnapshot, PROPOSAL_ISSUE_LIMIT, type ForgeRepositoryEntry, type ForgeSweepError, type StoredPullRequest } from "./cache";
-import { pipelineRepository, taskRepository } from "./resolve";
-import { githubRepositoryOfRemote, type PullRequestState } from "./workLinks";
+import { pipelineRepository, taskRepository, taskRepositoryOrCarrier } from "./resolve";
+import { githubRepositoryOfRemote, normalizeWorkLinkInput, type PullRequestState } from "./workLinks";
+import { githubReadDiagnostic } from "./githubReadFailure";
 
 /*
  * The one poller (#2059, docs/design/pr-issue-chips.md §4.2). One
@@ -103,16 +104,32 @@ function collectDemand(ports: ForgeSweepPorts): Map<string, Demand> {
     if (!entry) demand.set(repository, entry = { live: false, numbers: new Set() });
     return entry;
   };
+  const carriers = new Map<string, Pipeline[]>();
   for (const pipeline of ports.loadPipelines()) {
+    for (const taskId of pipeline.taskIds ?? []) {
+      const list = carriers.get(taskId) ?? [];
+      list.push(pipeline);
+      carriers.set(taskId, list);
+    }
     const own = want(pipelineRepository(pipeline));
     if (own && pipeline.state !== "completed" && pipeline.state !== "closed" && !pipeline.hiddenAt) own.live = true;
     if (own && pipeline.delivery?.target.pr) own.numbers.add(pipeline.delivery.target.pr);
     for (const link of pipeline.workLinks ?? []) want(link.repository)?.numbers.add(link.number);
   }
   for (const task of ports.loadTasks()) {
-    if (!task.workLinks?.length) continue;
-    want(taskRepository(task));
-    for (const link of task.workLinks) want(link.repository)?.numbers.add(link.number);
+    const repository = taskRepositoryOrCarrier(task, carriers.get(task.id) ?? []);
+    if (task.workLinks?.length) want(repository);
+    for (const link of task.workLinks ?? []) want(link.repository)?.numbers.add(link.number);
+    if (task.status !== "done" && task.hold?.kind === "pr" && task.hold.ref) {
+      const hold = normalizeWorkLinkInput(task.hold.ref, { repository, kind: "pr" });
+      if (hold.ok) {
+        const entry = want(hold.link.repository);
+        if (entry) {
+          entry.live = true;
+          entry.numbers.add(hold.link.number);
+        }
+      }
+    }
   }
   let seatProjects: readonly string[] = [];
   try { seatProjects = ports.loadSeatProjects?.() ?? []; }
@@ -127,8 +144,8 @@ function collectDemand(ports: ForgeSweepPorts): Map<string, Demand> {
 const ms = (iso: string | null) => (iso ? Date.parse(iso) : Number.NaN);
 
 function due(entry: ForgeRepositoryEntry | undefined, demand: Demand, nudgedAt: number | undefined, now: number): boolean {
-  const attempted = ms(entry?.lastAttemptAt ?? null);
-  if (Number.isFinite(attempted) && entry?.lastError && now - attempted < FORGE_RETRY_MS) return false;
+  const finished = ms(entry?.lastAttemptAt ?? null);
+  if (Number.isFinite(finished) && entry?.lastError && now - finished < FORGE_RETRY_MS) return false;
   if (!entry?.completeSince) return true;
   const swept = ms(entry.lastSweepAt);
   if (!Number.isFinite(swept)) return true;
@@ -139,62 +156,81 @@ function due(entry: ForgeRepositoryEntry | undefined, demand: Demand, nudgedAt: 
 }
 
 type RepositoryOutcome =
-  | { ok: true; rows: SweptRow[]; complete: boolean; full: boolean; canonical: string | null; filled: SweptRow[]; issues: number[] }
-  | { ok: false; error: ForgeSweepError };
+  | { ok: true; rows: SweptRow[]; complete: boolean; full: boolean; canonical: string | null; filled: SweptRow[]; issues: number[]; fillFailure?: RepositoryReadFailure }
+  | RepositoryReadFailure;
+
+type RepositoryReadFailure = { ok: false; error: ForgeSweepError; diagnostic: string };
+
+function failedRead(error: unknown): RepositoryReadFailure {
+  return { ok: false, error: githubUnavailableFromError(error), diagnostic: githubReadDiagnostic(error).message };
+}
+
+const malformedRead: RepositoryReadFailure = {
+  ok: false, error: "malformed-output", diagnostic: "GitHub read returned an invalid response. Check the gh version and retry.",
+};
 
 /** Debian's gh cannot name closingIssuesReferences in --json. Keep that
  * linkage by asking GraphQL for each returned page in one bounded batch. */
 async function legacyPullRequestRows(raw: string, run: GithubRunner): Promise<string> {
-  const rows: unknown = JSON.parse(raw);
-  if (!Array.isArray(rows)) throw new Error("legacy pull request list is malformed");
+  let rows: unknown;
+  try { rows = JSON.parse(raw); } catch { throw new InvalidLegacyResponse(); }
+  if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== "object" || Array.isArray(row))) throw new InvalidLegacyResponse();
   for (let start = 0; start < rows.length; start += FORGE_PAGE_LIMIT) {
     const batch = rows.slice(start, start + FORGE_PAGE_LIMIT) as Record<string, unknown>[];
     const repository = batch.map((row) => typeof row.url === "string" ? repositoryOfUrl(row.url) : null).find(Boolean);
-    if (!repository) throw new Error("legacy pull request list has no repository");
+    if (!repository) throw new InvalidLegacyResponse();
     const [owner, name] = repository.split("/");
     const aliases = batch.map((row, index) => {
-      if (!Number.isSafeInteger(row.number)) throw new Error("legacy pull request number is malformed");
+      if (!Number.isSafeInteger(row.number)) throw new InvalidLegacyResponse();
       return `p${index}: pullRequest(number: ${row.number}) { closingIssuesReferences(first: 100) { nodes { number url } pageInfo { hasNextPage } } }`;
     });
     const query = `query { repository(owner: ${JSON.stringify(owner)}, name: ${JSON.stringify(name)}) { ${aliases.join(" ")} } }`;
-    const answer = JSON.parse(await run(["api", "graphql", "-f", `query=${query}`])) as { data?: { repository?: Record<string, unknown> }; errors?: unknown[] };
-    if (answer.errors?.length || !answer.data?.repository) throw new Error("closing issue references could not be read");
+    const rawAnswer = await run(["api", "graphql", "-f", `query=${query}`]);
+    let answer: unknown;
+    try { answer = JSON.parse(rawAnswer); } catch { throw new InvalidLegacyResponse(); }
+    if (!answer || typeof answer !== "object" || Array.isArray(answer)) throw new InvalidLegacyResponse();
+    const response = answer as { data?: { repository?: Record<string, unknown> }; errors?: unknown[] };
+    if (response.errors?.length || !response.data?.repository) throw new InvalidLegacyResponse();
     for (const [index, row] of batch.entries()) {
-      const pr = answer.data.repository[`p${index}`] as { closingIssuesReferences?: { nodes?: unknown[]; pageInfo?: { hasNextPage?: boolean } } } | null;
+      const pr = response.data.repository[`p${index}`] as { closingIssuesReferences?: { nodes?: unknown[]; pageInfo?: { hasNextPage?: boolean } } } | null;
       const refs = pr?.closingIssuesReferences;
-      if (!Array.isArray(refs?.nodes) || refs.pageInfo?.hasNextPage !== false
+      const hasNextPage = refs?.pageInfo?.hasNextPage;
+      if (!Array.isArray(refs?.nodes) || typeof hasNextPage !== "boolean"
         || refs.nodes.some((ref) => !ref || typeof ref !== "object"
           || !Number.isSafeInteger((ref as { number?: unknown }).number)
-          || typeof (ref as { url?: unknown }).url !== "string")) throw new Error("closing issue references are incomplete");
+          || typeof (ref as { url?: unknown }).url !== "string")) throw new InvalidLegacyResponse();
+      if (hasNextPage) throw new Error("closing issue references are incomplete");
       row.closingIssuesReferences = refs.nodes;
     }
   }
   return JSON.stringify(rows);
 }
 
+class InvalidLegacyResponse extends Error {}
+
 async function readRepository(repository: string, entry: ForgeRepositoryEntry | undefined, demand: Demand, ports: ForgeSweepPorts, startedAt: string): Promise<RepositoryOutcome> {
   const name = entry?.canonical ?? repository;
-  const list = async (args: string[]): Promise<SweptRow[] | ForgeSweepError> => {
+  const list = async (args: string[]): Promise<SweptRow[] | RepositoryReadFailure> => {
     try {
-      return parseRows(await ports.run(["pr", "list", "--repo", name, "--state", "all", ...args, "--json", PR_FIELDS]), startedAt) ?? "malformed-output";
+      return parseRows(await ports.run(["pr", "list", "--repo", name, "--state", "all", ...args, "--json", PR_FIELDS]), startedAt) ?? malformedRead;
     } catch (error) {
-      if (!/Unknown JSON field[^\n]*closingIssuesReferences/i.test(`${(error as { stderr?: unknown })?.stderr ?? ""}\n${(error as Error)?.message ?? ""}`)) return githubUnavailableFromError(error);
+      if (!/Unknown JSON field[^\n]*closingIssuesReferences/i.test(`${(error as { stderr?: unknown })?.stderr ?? ""}\n${(error as Error)?.message ?? ""}`)) return failedRead(error);
       try {
         const raw = await ports.run(["pr", "list", "--repo", name, "--state", "all", ...args, "--json", LEGACY_PR_FIELDS]);
-        return parseRows(await legacyPullRequestRows(raw, ports.run), startedAt) ?? "malformed-output";
+        return parseRows(await legacyPullRequestRows(raw, ports.run), startedAt) ?? malformedRead;
       } catch (fallbackError) {
-        return githubUnavailableFromError(fallbackError);
+        return fallbackError instanceof InvalidLegacyResponse ? malformedRead : failedRead(fallbackError);
       }
     }
   };
-  let rows: SweptRow[] | ForgeSweepError | null = null;
+  let rows: SweptRow[] | null = null;
   let complete = false;
   let full = false;
   /* An entry cached before head commits were read is read in full once, so
      the merged PRs it already holds gain theirs. */
   if (entry?.completeSince && entry.lastSweepAt && entry.headRefOids) {
     const page = await list(["--limit", String(FORGE_PAGE_LIMIT), "--search", "sort:updated-desc"]);
-    if (typeof page === "string") return { ok: false, error: page };
+    if (!Array.isArray(page)) return page;
     const oldest = Math.min(...page.map((row) => ms(row.updatedAt)).filter(Number.isFinite));
     /* The page proves coverage when it reaches back to the previous sweep, or
        when it is the repository's whole history. An empty page proves nothing
@@ -207,7 +243,7 @@ async function readRepository(repository: string, entry: ForgeRepositoryEntry | 
   }
   if (rows === null) {
     const all = await list(["--limit", String(FORGE_FULL_LIMIT)]);
-    if (typeof all === "string") return { ok: false, error: all };
+    if (!Array.isArray(all)) return all;
     rows = all;
     complete = true;
     full = true;
@@ -218,37 +254,51 @@ async function readRepository(repository: string, entry: ForgeRepositoryEntry | 
   const missing = [...demand.numbers].filter((number) => !known.has(number)).slice(0, FORGE_FILL_LIMIT);
   const filled: SweptRow[] = [];
   const issues: number[] = [];
+  let fillFailure: RepositoryReadFailure | undefined;
   for (const number of missing) {
+    let raw: string;
+    let legacy = false;
     try {
-      let raw: string;
       try {
         raw = await ports.run(["pr", "view", String(number), "--repo", canonical ?? name, "--json", PR_FIELDS]);
       } catch (error) {
         if (!/Unknown JSON field[^\n]*closingIssuesReferences/i.test(`${(error as { stderr?: unknown })?.stderr ?? ""}\n${(error as Error)?.message ?? ""}`)) throw error;
-        const legacy = await ports.run(["pr", "view", String(number), "--repo", canonical ?? name, "--json", LEGACY_PR_FIELDS]);
-        raw = (await legacyPullRequestRows(`[${legacy.trim()}]`, ports.run)).slice(1, -1);
+        raw = await ports.run(["pr", "view", String(number), "--repo", canonical ?? name, "--json", LEGACY_PR_FIELDS]);
+        legacy = true;
       }
-      const parsed = parseRows(`[${raw.trim()}]`, startedAt);
-      if (parsed?.[0]) filled.push(parsed[0]);
     } catch (error) {
       /* gh names a number that is not a pull request this way; anything else
          is an outage, and the number is asked again next time. */
       const detail = `${(error as { stderr?: unknown })?.stderr ?? ""} ${(error as Error)?.message ?? ""}`;
       if (/Could not resolve to a PullRequest/i.test(detail)) issues.push(number);
+      else fillFailure ??= failedRead(error);
+      continue;
     }
+    let rowsJson = `[${raw.trim()}]`;
+    if (legacy) {
+      try { rowsJson = await legacyPullRequestRows(rowsJson, ports.run); }
+      catch (error) {
+        fillFailure ??= error instanceof InvalidLegacyResponse ? malformedRead : failedRead(error);
+        continue;
+      }
+    }
+    const parsed = parseRows(rowsJson, startedAt);
+    const [row] = parsed ?? [];
+    if (parsed?.length === 1 && row?.number === number) filled.push(row);
+    else fillFailure ??= malformedRead;
   }
-  return { ok: true, rows, complete, full, canonical, filled, issues };
+  return { ok: true, rows, complete, full, canonical, filled, issues, fillFailure };
 }
 
-function applyOutcome(entry: ForgeRepositoryEntry, outcome: RepositoryOutcome, startedAt: string): void {
-  entry.lastAttemptAt = startedAt;
+function applyOutcome(entry: ForgeRepositoryEntry, outcome: RepositoryOutcome, startedAt: string, finishedAt: string): void {
+  entry.lastAttemptAt = finishedAt;
   if (!outcome.ok) {
     /* Missing one read loses nothing when the next page overlaps, so the
        entries and `completeSince` stay exactly as they were. */
     entry.lastError = outcome.error;
     return;
   }
-  entry.lastError = null;
+  entry.lastError = outcome.fillFailure?.error ?? null;
   for (const row of [...outcome.rows, ...outcome.filled]) {
     const { number, updatedAt: _updatedAt, ...stored } = row;
     entry.prs[String(number)] = stored;
@@ -291,7 +341,8 @@ export async function sweepForgeLinks(ports: ForgeSweepPorts): Promise<string[]>
   for (const [name, wanted] of dueNow) {
     const startedAt = new Date(ports.now()).toISOString();
     const outcome = await readRepository(name, readForgeCache(file).data.repositories[name], wanted, ports, startedAt);
-    updateForgeCache((next) => applyOutcome(next.repositories[name] ??= emptyRepositoryEntry(), outcome, startedAt), file);
+    const finishedAt = new Date(ports.now()).toISOString();
+    updateForgeCache((next) => applyOutcome(next.repositories[name] ??= emptyRepositoryEntry(), outcome, startedAt, finishedAt), file);
     // Commit PR evidence first: a pending proposal read cannot hold it back.
     // The existing runner gives this separate request its own 20-second bound.
     if (wanted.proposals) {
@@ -305,11 +356,13 @@ export async function sweepForgeLinks(ports: ForgeSweepPorts): Promise<string[]>
         updateForgeCache(next => { (next.repositories[name] ??= emptyRepositoryEntry()).proposals = proposals; }, file);
       } catch (error) {
         // Keep the previous observation and its age, including after restart.
-        ports.log?.(`[forge proposals] ${name}: unavailable`, error instanceof Error ? error.name : "unknown");
+        const diagnostic = githubReadDiagnostic(error).message;
+        if (outcome.ok || diagnostic !== outcome.diagnostic) ports.log?.(`[forge proposals] ${name}: ${diagnostic}`);
       }
     }
     clearForgeNudges([name, data.repositories[name]?.canonical ?? name]);
-    if (!outcome.ok) ports.log?.(`[forge links] ${name}: ${outcome.error}`);
+    if (!outcome.ok) ports.log?.(`[forge links] ${name}: ${outcome.error}`, outcome.diagnostic);
+    else if (outcome.fillFailure) ports.log?.(`[forge links] ${name}: ${outcome.fillFailure.error}`, outcome.fillFailure.diagnostic);
     read.push(name);
   }
   return read;

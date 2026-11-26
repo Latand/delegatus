@@ -6,6 +6,7 @@ import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } f
 import { statePath } from "@/lib/configDir";
 import { captureProcessTree, signalProcessGroup } from "@/lib/processGroup";
 import { bindHostExitWriter, discardHostExitWriter, readHostExit, readHostExitSpool, reclaimHostExit, recordHostExit, recordHostStop } from "./hostExit";
+import { beforeStructuredSetupExecOffLoop, retainStructuredSetupWaiterOffLoop, structuredSetupCustodyActive } from "./structuredSetupCustody";
 
 /** Uses the serving interpreter and builtins only, including on installations
  * where the optional namespace launcher/Python is unavailable. */
@@ -29,6 +30,13 @@ const atomic = (file, value, first = false) => {
     }
   } finally { fs.rmSync(temporary, {force:true}); }
 };
+// A launch owner must durably retain this waiter before an engine can exist.
+// If it dies before that write, no permit is issued and this helper expires.
+if(input.awaitAdmission) {
+  const permit = path.join(directory,"start.json"), deadline = Date.now() + 15000;
+  while(!fs.existsSync(permit) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);
+  if(!fs.existsSync(permit)) process.exit(72);
+}
 const child = require("node:child_process").spawn(binary, argv, {stdio:"inherit", detached:true});
 let settled = false;
 const finish = (code, signal, error) => {
@@ -73,12 +81,14 @@ export function spawnNativeWaitOwner(command: string, args: string[], options: S
   const root = statePath("host-exit-waits");
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const directory = fs.mkdtempSync(path.join(root, "wait-"));
+  const awaitAdmission = structuredSetupCustodyActive();
   // Bun otherwise loads the target project's .env before this waiter spawns
   // the engine, silently adding credentials the caller deliberately removed.
   const waiter = spawn(process.execPath, [...nativeWaitOwnerRuntimeFlags(), "-e", nativeWaitOwnerSource, "--", JSON.stringify({
-    command: [directory, command, ...args], stopPath: "managed-engine-startup-cleanup",
+    command: [directory, command, ...args], stopPath: "managed-engine-startup-cleanup", awaitAdmission,
   })], { ...options, detached: true, stdio: ["pipe", "pipe", "pipe"] });
   const reaped = new Promise<void>(resolve => waiter.once("close", () => resolve()));
+  const waiterIdentity = captureProcessIdentity(waiter.pid!);
   const events = new EventEmitter();
   // Launch failures may happen before the host has installed its listeners.
   events.on("error", () => {});
@@ -95,7 +105,18 @@ export function spawnNativeWaitOwner(command: string, args: string[], options: S
     cleanup();
   });
   waiter.on("error", error => events.emit("error", error));
+  // The independent waiter remains the engine's ancestor until it exits.
+  // Retain it before the first readiness await, while native PID discovery
+  // is still pending, so a dead launch owner leaves a stoppable process tree.
   const spawnReady = (async () => {
+    // The waiter is a real native process and must be retained before it is
+    // allowed to create the engine. These writes can contend with a peer, so
+    // cross the asynchronous bounded custody boundary before granting exec.
+    await retainStructuredSetupWaiterOffLoop(waiter.pid);
+    if (awaitAdmission) {
+      await beforeStructuredSetupExecOffLoop();
+      fs.writeFileSync(path.join(directory, "start.json"), "true", { mode: 0o600 });
+    }
     const deadline = performance.now() + 10_000;
     const ready = path.join(directory, "native.json");
     while (!fs.existsSync(ready) && waiter.exitCode === null && waiter.signalCode === null && performance.now() < deadline) {
@@ -118,6 +139,10 @@ export function spawnNativeWaitOwner(command: string, args: string[], options: S
     cleanup();
   };
   const abortLaunch = async () => {
+    // No start permit means this waiter cannot have created an engine. Stop
+    // the exact helper we created, including when its custody write failed.
+    if (awaitAdmission && !fs.existsSync(path.join(directory, "start.json"))
+      && processIdentityStatus(waiterIdentity) === "alive") waiter.kill("SIGKILL");
     // Capture descendants before the native parent exits and loses them.
     // The independent waiter is outside this tree and must finish its write.
     const tree = native && processIdentityStatus(native) === "alive" ? captureProcessTree(native.pid) : { identities: [], unresolved: [] };

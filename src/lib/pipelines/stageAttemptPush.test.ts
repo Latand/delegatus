@@ -19,6 +19,69 @@ import { CodexAppServerHost } from "@/lib/runtime/codexAppServerHost";
 import { bindStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliveryController";
 import { buildPipeline, loadPipelines, pipelineIdentity, savePipelines } from "./store";
 import type { Pipeline, PipelineStageAttempt } from "./types";
+import { bindMergerContract } from "./mergerContract.fixture";
+import { git as batchGit } from "../../../scripts/merge-batch";
+
+test.each(["batch", "earlier producer", "pull ref only", "tracking ref"] as const)("merger contract native boundary: %s", async mode => {
+  const f = await fixture(true);
+  let contract: Awaited<ReturnType<typeof bindMergerContract>> | undefined;
+  try {
+    // Only main history is present locally. A PR fetch must not accidentally
+    // inherit tracking proof from the fixture producer's branch push.
+    await f.git(f.foreign, "checkout", "-b", "topic-13");
+    await fs.writeFile(path.join(f.foreign, "feature.txt"), "reviewed PR\n");
+    await f.git(f.foreign, "add", "feature.txt");
+    await f.git(f.foreign, "commit", "-m", "reviewed PR");
+    const pr = await f.git(f.foreign, "rev-parse", "HEAD");
+    await f.git(f.foreign, "push", "origin", `${pr}:refs/pull/13/head`, `${pr}:refs/heads/topic-13`);
+    await f.git(f.foreign, "checkout", "main");
+    await f.git(f.foreign, "commit", "--allow-empty", "-m", "main advances");
+    await f.git(f.foreign, "push", "origin", "main");
+    if (mode === "earlier producer") await f.commit("earlier producing stage");
+    const laneHead = await f.own("rev-parse", "HEAD");
+    const scratch = path.join(f.root, "merger-scratch");
+    await fs.mkdir(scratch);
+    contract = await bindMergerContract(f.lane, `merger-native-${mode.replaceAll(" ", "-")}`, { ...f.env, TMPDIR: scratch });
+    const env = { ...contract.env, LLV_SKIP_HOOKS: "1" };
+    const git = (cwd: string, ...args: string[]) => batchGit(cwd, args, undefined, env);
+    git(f.lane, "fetch", "origin", "main");
+    const work = path.join(scratch, "checkout");
+    const resolution = mode === "pull ref only" || mode === "tracking ref";
+    if (resolution) {
+      git(f.lane, "fetch", "origin", "refs/pull/13/head");
+      expect(git(f.lane, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/topic-13")).toBe("");
+      git(f.lane, "worktree", "add", "--detach", work, "FETCH_HEAD");
+      git(work, "merge", "--no-commit", "--no-ff", "origin/main");
+    } else {
+      git(f.lane, "fetch", "origin", "refs/pull/13/head");
+      git(f.lane, "worktree", "add", "-b", "merge-batch/fixture", work, "origin/main");
+      git(work, "merge", "--squash", pr);
+    }
+    batchGit(work, ["commit", "-F", "-"], "Fixture batch resolution\n", env);
+    const tip = git(work, "rev-parse", "HEAD");
+    expect(await fs.access(path.join(contract.receipt, "commits", tip)).then(() => true, () => false)).toBe(true);
+    if (mode === "tracking ref") git(work, "fetch", "origin", "+refs/heads/topic-13:refs/remotes/origin/topic-13");
+    const ref = resolution ? "refs/heads/topic-13" : "refs/heads/merge-batch/fixture";
+    const push = () => git(work, "push", resolution ? f.remote : "origin", `${tip}:${ref}`);
+    const refused = mode === "earlier producer" || mode === "pull ref only";
+    if (refused) {
+      expect(push).toThrow("stage push refused");
+      expect(await fs.readFile(path.join(contract.receipt, "refused"), "utf8")).toContain("stage push refused");
+      expect(await contract.settle()).toMatchObject({ ok: false, error: expect.stringContaining("stage push refused") });
+      expect(await f.git(f.remote, "for-each-ref", "--format=%(objectname)", ref)).toBe(resolution ? pr : "");
+    } else {
+      push();
+      expect(await fs.readFile(path.join(contract.receipt, "pushes", tip), "utf8")).toBe(`${ref}\n${f.remote}\n`);
+      expect(await fs.access(path.join(contract.receipt, "refused")).then(() => true, () => false)).toBe(false);
+      expect(await contract.settle()).toBeNull();
+      expect(await f.git(f.remote, "rev-parse", ref)).toBe(tip);
+    }
+    expect(await f.own("rev-parse", "HEAD")).toBe(laneHead);
+  } finally {
+    if (contract) await fs.rm(contract.receipt, { recursive: true, force: true });
+    await f.close();
+  }
+});
 
 const START = "2026-10-16T08:00:00.000Z", NOW = "2026-10-16T12:00:00.000Z";
 let nextFixture = 0;
@@ -193,7 +256,7 @@ test.skipIf(process.platform === "win32").each([
       }
       await f.own("config", "core.hooksPath", hooks);
     }
-    const originalGit = Bun.which("git")!;
+    const originalGit = Bun.which("git", { PATH: process.env.PATH })!;
     const bin = path.join(f.root, "bin");
     await fs.mkdir(bin);
     const marker = path.join(f.root, "handoff");
@@ -952,8 +1015,36 @@ test.each([1, 3])("A: main fast-forward plus %i own commits settles after an in-
 test("B: every commit remains provable beyond the former 256 limit", async () => {
   const f = await fixture();
   try {
-    let head = ""; for (let i = 0; i < 260; i++) head = await f.commit(`own ${i}`);
-    await f.push(); expect(await f.settle()).toEqual({ ok: true, sha: head });
+    const base = f.pipeline.baseRef;
+    const count = 260;
+    const stream = Array.from({ length: count - 1 }, (_, index) => {
+      const message = `own ${index}`;
+      return [
+        `commit refs/heads/${f.pipeline.branch}`,
+        `committer Fixture <noreply@example.invalid> ${Date.parse(f.env.GIT_COMMITTER_DATE!) / 1000} +0000`,
+        `data ${Buffer.byteLength(message)}`,
+        message,
+        ...(index === 0 ? [`from ${base}`] : []),
+        "",
+      ].join("\n");
+    }).join("\n");
+    const imported = Bun.spawnSync(["git", "fast-import", "--quiet", "--done"], {
+      cwd: f.lane, env: f.env, stdin: Buffer.from(`${stream}\ndone\n`), timeout: 15_000,
+    });
+    expect(imported.exitCode, imported.stderr.toString()).toBe(0);
+    // One ordinary commit still writes a native receipt. Seed the imported
+    // prefix with the same on-disk evidence to exercise settlement's paging.
+    const head = await f.commit("own final");
+    const commits = (await f.own("rev-list", "--reverse", `${base}..${head}`)).split("\n");
+    expect(commits).toHaveLength(count);
+    const [oldest, ...rest] = commits;
+    for (const sha of rest.slice(0, -1)) {
+      await fs.writeFile(path.join(f.receipt, "commits", sha), "", { flag: "wx" });
+    }
+    await f.push();
+    expect(await f.settle()).toMatchObject({ ok: false, error: expect.stringContaining(`commit ${oldest} was not created`) });
+    await fs.writeFile(path.join(f.receipt, "commits", oldest!), "", { flag: "wx" });
+    expect(await f.settle()).toEqual({ ok: true, sha: head });
   } finally { await f.close(); }
 }, 60000);
 

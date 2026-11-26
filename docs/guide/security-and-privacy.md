@@ -30,7 +30,7 @@ linked-install identity. The Worker adds Cloudflare's country code and stores
 these values in Analytics Engine, with no IP address. The endpoint receives the
 network connection as any HTTPS service does.
 
-Turn it off in the sidebar's ⋯ menu under **Settings → Install ping**, or start Delegatus with
+Turn it off in the sidebar's ⋯ menu under **Settings → Privacy**, or start Delegatus with
 `DELEGATUS_TELEMETRY=0` or `DO_NOT_TRACK=1`. Environment opt-outs always override
 the switch. Tests, CI, builds, development servers and the Docker test profile
 send nothing. Requests time out after five seconds and are attempted at most
@@ -55,8 +55,8 @@ model turns. Claude Code handles authentication and requests Anthropic account
 usage. The local reader uses its structured usage report. An unavailable or
 unsupported CLI report leaves limits unknown unless the following fallback is on.
 
-**Direct Anthropic API calls with my subscription**, under **Settings → Install
-ping → What leaves my machine**, permits Delegatus itself to send an authenticated
+**Direct Anthropic API calls with my subscription**, under **Settings → Privacy**,
+permits Delegatus itself to send an authenticated
 GET to `https://api.anthropic.com/api/oauth/usage` when CLI usage is unavailable.
 It carries the account's subscription OAuth token; it carries no rules, call
 text or transcript. Each endpoint request has an eight-second deadline. The

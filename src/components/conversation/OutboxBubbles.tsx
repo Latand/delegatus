@@ -18,7 +18,7 @@ import { DELIVERY_WAIT_TICK_MS } from "@/components/runtime/deliveryWait";
 import { humanReceiptReasonKey } from "@/components/runtime/runtimeModel";
 import { type TFunction, useLocale } from "@/lib/i18n";
 
-import { appendComposerDraft, restoreOutboxDraft } from "@/components/TmuxComposer";
+import { appendComposerDraft, restoreOutboxDraft } from "@/components/ConversationComposer";
 
 import { evidenceRepeats, messageRowModel, messageRowOperationId, type MessageRowSession, type MessageRowSwitchHold } from "./messageRow";
 import { publishRenderedMessageRows } from "./renderedRows";

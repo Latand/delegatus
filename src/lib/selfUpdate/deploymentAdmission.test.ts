@@ -7,6 +7,51 @@ import { saveCheckoutDeployment } from "./deployments";
 import type { ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 
 const SHA = "a".repeat(40);
+test("a callback that reaches the admission fence after its deadline closes the key without admitting", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "checkout-admission-deadline-"));
+  const request = { revision: SHA, idempotencyKey: "expired-admission-deadline" };
+  let effects = 0;
+  try {
+    await expect(checkoutAdmission(directory, request, undefined, () => ++effects, { deadlineAt: Date.now() - 1 }))
+      .rejects.toMatchObject({ code: "deploy_not_admitted" });
+    await expect(checkoutAdmission(directory, request, undefined, () => ++effects))
+      .rejects.toMatchObject({ code: "deploy_not_admitted" });
+    expect(effects).toBe(0);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("a retryable refusal fences older reads and their timeout across processes, while the same key retries", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "checkout-admission-generation-"));
+  const request = { revision: SHA, idempotencyKey: "retryable-refusal-generation" };
+  let oldAttempt = -1, effects = 0;
+  try {
+    await checkoutAdmission(directory, request, undefined, attempt => { oldAttempt = attempt; return null; });
+    await checkoutAdmission(directory, request, undefined, () => ({ state: "refused" }), { attempt: oldAttempt, refuse: true });
+    for (const reconcileOnly of [false, true]) {
+      await expect(checkoutAdmission(directory, { ...request, reconcileOnly }, undefined, () => ++effects, { attempt: oldAttempt }))
+        .rejects.toMatchObject({ code: "deploy_attempt_superseded" });
+    }
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { checkoutAdmission } from "./src/lib/selfUpdate/deploymentAdmission";
+      const request = JSON.parse(process.argv[2]);
+      const answers = [];
+      for (const reconcileOnly of [false, true]) {
+        try { await checkoutAdmission(process.argv[1], { ...request, reconcileOnly }, undefined, () => { throw Error("unexpected effect"); }, { attempt: Number(process.argv[3]) }); }
+        catch (error) { answers.push(error.code); }
+      }
+      console.log(JSON.stringify(answers));
+    `, directory, JSON.stringify(request), String(oldAttempt)], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect({ code, stderr, answers: JSON.parse(stdout) }).toEqual({ code: 0, stderr: "", answers: ["deploy_attempt_superseded", "deploy_attempt_superseded"] });
+    let nextAttempt = -1;
+    await checkoutAdmission(directory, request, undefined, attempt => { nextAttempt = attempt; return null; });
+    expect(nextAttempt).toBeGreaterThan(oldAttempt);
+    expect(await checkoutAdmission(directory, request, undefined, () => ++effects, { attempt: nextAttempt })).toBe(1);
+    await expect(checkoutAdmission(directory, { ...request, revision: "b".repeat(40) }, undefined, () => ++effects)).rejects.toThrow("idempotency-conflict");
+    expect(effects).toBe(1);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+}, 15_000);
+
 test("a Node page-data worker can load admission and refuses execution without Bun", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "checkout-admission-node-"));
   try {

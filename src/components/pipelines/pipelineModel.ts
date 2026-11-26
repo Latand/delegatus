@@ -9,6 +9,7 @@ import type { BoardTask } from "@/lib/tasks/types";
 import type { ReviewGroup as Flow } from "@/components/flows/reviewGroup";
 import type { FlowEngine } from "@/lib/flows/types";
 import { PIPELINE_DISALLOWED_ROLE_IDS } from "@/lib/pipelines/types";
+import { stageExecution, validCloudTaskReference } from "@/lib/pipelines/cloudStage";
 import type {
   CreatePipelineRequest,
   EffectivePipelineRole,
@@ -586,6 +587,26 @@ export function stageAgentRowModel(pipeline: Pipeline, stageId: string) {
       return target ? [{ n: attempt.n, position: index + 1, state: attempt.state, target }] : [];
     }),
   };
+}
+
+/** Whether the lane stands on a stage whose agent asked the operator a question: its conversation's composer is where the answer goes. */
+export function stageAsksOperator(pipeline: Pipeline, stageId: string): boolean {
+  return pipeline.state === "needs_decision" && Boolean(stageAgentRowModel(pipeline, stageId).question);
+}
+
+/** The cloud task a stage's latest attempt ran in, for the card's open control.
+    A cloud attempt has no transcript of its own, so `attemptNavTarget` is null
+    for it and the card showed no way in. Only an attempt that really ran in the
+    cloud counts (a task id was received, no move to this machine) and only a
+    task link the engine itself would accept; anything else, and every attempt
+    that has a conversation, stays with the conversation control. */
+export function stageCloudTaskUrl(pipeline: Pipeline, stageId: string): string | null {
+  const stage = pipeline.stages.find((candidate) => candidate.id === stageId);
+  const latest = stageAttempts(pipeline, stageId).filter((attempt) => !attempt.historical).at(-1) ?? null;
+  if (!stage || !latest?.cloud || attemptNavTarget(latest)) return null;
+  const { taskId, taskUrl } = latest.cloud;
+  if (stageExecution(stage, latest).executionRuntime !== "cloud") return null;
+  return validCloudTaskReference(taskId, taskUrl) ? taskUrl : null;
 }
 
 /** Resolve a stage-graph navigation target to the file its card should open.

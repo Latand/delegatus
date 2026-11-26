@@ -11,6 +11,7 @@ import {
   readBackgroundTaskLedger,
   runningBackgroundTasks,
   verifiedBackgroundWork,
+  VerifiedBackgroundWorkCache,
 } from "./backgroundTasks";
 
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "llv-background-tasks-"));
@@ -353,4 +354,84 @@ test("the verified reading skips a broken record that could move no background w
   const file = path.join(ROOT, "verified-foreign.jsonl");
   fs.writeFileSync(file, `${JSON.stringify(bashStart(T0, "bq1"))}\n{"type":"progress",BROKEN}\n`);
   expect(await verifiedBackgroundWork(file, T0 + 60_000)).toEqual({ state: "read", names: ["background task bq1"] });
+});
+
+test("verified background cache invalidates rewrites, replacement, truncation and repaired records", async () => {
+  const file = path.join(ROOT, "verified-versions.jsonl");
+  const cache = new VerifiedBackgroundWorkCache(2);
+  const write = (id: string) => fs.writeFileSync(file, JSON.stringify(bashStart(T0, id)) + "\n");
+  write("bq1");
+  expect(await cache.acquire(file, T0)).toEqual({ state: "read", names: ["background task bq1"] });
+  const old = fs.statSync(file);
+  write("bq2"); fs.utimesSync(file, old.atime, old.mtime);
+  expect(await cache.acquire(file, T0)).toEqual({ state: "read", names: ["background task bq2"] });
+  const replacement = path.join(ROOT, "replacement.jsonl");
+  fs.writeFileSync(replacement, JSON.stringify(bashStart(T0, "bq3")) + "\n");
+  fs.renameSync(replacement, file);
+  expect(await cache.acquire(file, T0)).toEqual({ state: "read", names: ["background task bq3"] });
+  fs.truncateSync(file, 0);
+  expect(await cache.acquire(file, T0)).toEqual({ state: "read", names: [] });
+  fs.writeFileSync(file, '{"toolUseResult":{"backgroundTaskId":BROKEN}}\n');
+  expect(await cache.acquire(file, T0)).toMatchObject({ state: "unreadable" });
+  expect(await cache.acquire(file, T0)).toMatchObject({ state: "unreadable" });
+  write("bq4");
+  expect(await cache.acquire(file, T0)).toEqual({ state: "read", names: ["background task bq4"] });
+  // A new process/cache must reconstruct the fact from the same persisted file.
+  expect(await new VerifiedBackgroundWorkCache().acquire(file, T0)).toEqual({ state: "read", names: ["background task bq4"] });
+});
+
+test("bounded background recovery advances across unchanged pages without proving an incomplete prefix", async () => {
+  const file = path.join(ROOT, "verified-budget.jsonl");
+  fs.writeFileSync(file, (JSON.stringify({ type: "metadata", padding: "x".repeat(100) }) + "\n").repeat(20)
+    + JSON.stringify(bashStart(T0, "late-task")) + "\n");
+  const cache = new VerifiedBackgroundWorkCache(1, 512);
+  let result = await cache.acquire(file, T0);
+  expect(result).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending" });
+  for (let page = 0; page < 10 && result.state !== "read"; page++) result = await cache.acquire(file, T0);
+  expect(result).toEqual({ state: "read", names: ["background task late-task"] });
+  fs.appendFileSync(file, JSON.stringify(delivered(T0 + 1000, "late-task", "completed")) + "\n");
+  expect(await cache.acquire(file, T0 + 1000)).toEqual({ state: "read", names: [] });
+  expect(await cache.acquire(file, T0 + 1000)).toEqual({ state: "read", names: [] });
+});
+
+test("a full cache preserves unfinished transcript cursors and admits later recovery after EOF", async () => {
+  const early = path.join(ROOT, "verified-capacity-early.jsonl");
+  const later = path.join(ROOT, "verified-capacity-later.jsonl");
+  fs.writeFileSync(early, (JSON.stringify({ type: "metadata", padding: "x".repeat(100) }) + "\n").repeat(20)
+    + JSON.stringify(bashStart(T0, "early-task")) + "\n");
+  fs.writeFileSync(later, JSON.stringify(bashStart(T0, "later-task")) + "\n");
+  const cache = new VerifiedBackgroundWorkCache(1, 512);
+
+  expect(await cache.acquire(early, T0)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending" });
+  expect(await cache.acquire(later, T0)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending cache capacity" });
+  let result = await cache.acquire(early, T0);
+  for (let page = 0; page < 10 && result.state !== "read"; page++) result = await cache.acquire(early, T0);
+  expect(result).toEqual({ state: "read", names: ["background task early-task"] });
+  expect(await cache.acquire(later, T0)).toEqual({ state: "read", names: ["background task later-task"] });
+});
+
+test("a deleted transcript releases its abandoned cursor so a replacement can settle", async () => {
+  const abandoned = path.join(ROOT, "verified-abandoned.jsonl");
+  const replacement = path.join(ROOT, "verified-after-abandonment.jsonl");
+  fs.writeFileSync(abandoned, (JSON.stringify({ type: "metadata", padding: "x".repeat(100) }) + "\n").repeat(20));
+  fs.writeFileSync(replacement, JSON.stringify(bashStart(T0, "replacement-task")) + "\n");
+  const cache = new VerifiedBackgroundWorkCache(1, 512);
+
+  expect(await cache.acquire(abandoned, T0)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending" });
+  fs.unlinkSync(abandoned);
+  expect(await cache.acquire(replacement, T0)).toEqual({ state: "read", names: ["background task replacement-task"] });
+});
+
+test("an unvisited cursor expires at a bounded idle age while an active recovery refreshes its lease", async () => {
+  const active = path.join(ROOT, "verified-active-recovery.jsonl");
+  const later = path.join(ROOT, "verified-after-idle.jsonl");
+  fs.writeFileSync(active, (JSON.stringify({ type: "metadata", padding: "x".repeat(100) }) + "\n").repeat(20)
+    + JSON.stringify(bashStart(T0, "active-task")) + "\n");
+  fs.writeFileSync(later, JSON.stringify(bashStart(T0, "later-task")) + "\n");
+  const cache = new VerifiedBackgroundWorkCache(1, 512);
+
+  expect(await cache.acquire(active, T0)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending" });
+  expect(await cache.acquire(active, T0 + 4 * 60_000)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending" });
+  expect(await cache.acquire(later, T0 + 8 * 60_000)).toMatchObject({ state: "unreadable", reason: "background transcript recovery is pending cache capacity" });
+  expect(await cache.acquire(later, T0 + 10 * 60_000)).toEqual({ state: "read", names: ["background task later-task"] });
 });

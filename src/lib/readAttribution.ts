@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { Worker, isMainThread, parentPort, threadId } from "node:worker_threads";
+import { attachSqliteMemoryWorker } from "./sqliteMemoryDiagnostics";
 
 export type ReadCounter = { bytes: number; observerBytes: number; observerMs?: number; degraded?: boolean; available?: boolean;
   sampledAt?: number; sequence?: number; owner?: number; };
@@ -121,7 +122,8 @@ type Reader = ReadTotals & { operation: string; reader: string; connection: numb
   worker?: string; workerSyncMs?: number; workerIntervals?: Array<{ start: number; end: number; syncMs: number }>; workerIntervalsDropped?: number };
 type WorkerReadEvent = { operation: string; reader: string; connection: number; syncMs: number; readBytes: number; decodedJsonBytes: number;
   start: number; end: number; observerMs: number; samplerDegraded: boolean; sampledCalls: number; unsampledCalls: number; unavailableCalls: number; failed: number };
-type Frame = { operation: string; id: number; childrenMs: number; childrenObserverMs: number; childrenBytes: number; ioComplete: boolean; hadChild: boolean };
+type Frame = { operation: string; id: number; parent: Frame | undefined; start: number; sampled: boolean; before: ReadCounter | null;
+  beforeSourceObserverMs: number; childrenMs: number; childrenObserverMs: number; childrenBytes: number; ioComplete: boolean; hadChild: boolean };
 const capacity = 128, samplesPerWindow = 32, sampleWindowMs = 10;
 let nextFrameId = 0;
 
@@ -161,95 +163,109 @@ export function createReadAttribution(now = () => performance.now(), read = main
     }
   });
   const operation = () => context.getStore() ?? "unscoped";
-  return {
+  // Keep native bookkeeping in separate frames from the profiled callback,
+  // so the sampler can distinguish them even after minification.
+  function beginRead(reader: string, sampleIo: boolean): Frame {
+    const start = now(), parent = frame;
+    if (start - sampleAt >= sampleWindowMs) { sampleAt = start; samples = 0; }
+    const sampled = sampleIo && samples < samplesPerWindow;
+    if (sampled) samples++;
+    const op = context.getStore() ?? parent?.operation ?? reader;
+    const id = ++nextFrameId;
+    if (parent) parent.hadChild = true;
+    if (sampled && usesDefaultCounter && process.platform === "linux") {
+      const source = counterSampler();
+      if (source) {
+        Atomics.store(source.cells, 9, BigInt(id)); Atomics.store(source.cells, 10, BigInt(0));
+        Atomics.store(source.cells, 11, BigInt(0)); Atomics.store(source.cells, 13, BigInt(0)); Atomics.store(source.cells, 8, BigInt(id));
+      }
+    }
+    const beforeSourceObserverMs = usesDefaultCounter && sampler ? Number(Atomics.load(sampler.cells, 3)) / 1000 : 0;
+    const before = sampled ? read() : null;
+    if (before) { observerMs += before.observerMs ?? 0; samplerDegraded ||= before.degraded ?? false; }
+    const current: Frame = { operation: op, id, parent, start, sampled, before, beforeSourceObserverMs,
+      childrenMs: 0, childrenObserverMs: 0, childrenBytes: 0, ioComplete: true, hadChild: false };
+    frame = current;
+    return current;
+  }
+  function finishRead(current: Frame, reader: string, connection: number, decodedJsonBytes: number,
+    sampleIo: boolean, failed: boolean, counters?: ReadTotals) {
+    const { parent, start, sampled, before, beforeSourceObserverMs, id, operation: op } = current;
+    const after = before ? read() : null;
+    if (after) { observerMs += after.observerMs ?? 0; samplerDegraded ||= after.degraded ?? false; }
+    const end = now(), sourceObserverMs = usesDefaultCounter && sampler ? Number(Atomics.load(sampler.cells, 3)) / 1000 : beforeSourceObserverMs;
+    const observerDelta = Math.max(0, (after?.observerMs ?? 0) + (before?.observerMs ?? 0));
+    const duration = Math.max(0, end - start - observerDelta - current.childrenObserverMs);
+    const sampledInterval = before?.sampledAt !== undefined || after?.sampledAt !== undefined;
+    const intervalOwned = !sampledInterval || (before?.owner === id && after?.owner === id
+      && (after?.sequence ?? 0) > (before?.sequence ?? 0) && (after?.sampledAt ?? -Infinity) >= start
+      && (after?.sampledAt ?? Infinity) <= end && !current.hadChild && !!sampler && Atomics.load(sampler.cells, 13) >= BigInt(2));
+    const totalBytes = before && after && intervalOwned && before.available !== false && after.available !== false && after.bytes >= before.bytes
+      ? Math.max(0, after.bytes - before.bytes - after.observerBytes) : null;
+    // An unsampled child invalidates the enclosing byte delta, preventing
+    // its traffic from being assigned to the parent reader.
+    const bytes = totalBytes === null || !current.ioComplete ? 0 : Math.max(0, totalBytes - current.childrenBytes);
+    frame = parent;
+    if (parent) {
+      parent.childrenMs += duration;
+      parent.childrenObserverMs += observerDelta + current.childrenObserverMs + Math.max(0, sourceObserverMs - beforeSourceObserverMs);
+      parent.childrenBytes += totalBytes ?? (sampleIo ? 0 : current.childrenBytes);
+      parent.ioComplete &&= sampleIo ? totalBytes !== null : current.ioComplete;
+    }
+    const syncMs = Math.max(0, duration - current.childrenMs);
+    const key = `${op}/${reader}`;
+    let row = rows.get(key);
+    if (!row && rows.size < capacity) {
+      row = { operation: op, reader, connection, connections: [], connectionSamplesDropped: 0, ...emptyReadTotals() };
+      rows.set(key, row);
+    }
+    if (row) {
+      if (row.connection !== connection) row.connection = 0;
+      if (connection && !row.connections.includes(connection)) {
+        if (row.connections.length < 8) row.connections.push(connection); else row.connectionSamplesDropped++;
+      }
+      row.calls++; row.syncMs += syncMs; row.readBytes += bytes; row.decodedJsonBytes += decodedJsonBytes;
+      row.sampledCalls += Number(totalBytes !== null && current.ioComplete);
+      row.unsampledCalls += Number(sampleIo && !sampled);
+      row.unavailableCalls += Number(sampled && totalBytes === null);
+      row.failed += Number(failed);
+    } else { dropped++; droppedMs += syncMs; droppedBytes += bytes; }
+    reportWorkerEvent({ operation: op, reader, connection, syncMs, readBytes: bytes, decodedJsonBytes,
+      start: performance.timeOrigin + start, end: performance.timeOrigin + end,
+      observerMs: observerDelta + Math.max(0, sourceObserverMs - beforeSourceObserverMs), samplerDegraded: !!(before?.degraded || after?.degraded),
+      sampledCalls: Number(totalBytes !== null && current.ioComplete), unsampledCalls: Number(sampleIo && !sampled),
+      unavailableCalls: Number(sampled && totalBytes === null), failed: Number(failed) });
+    if (counters) {
+      counters.calls++; counters.syncMs += syncMs; counters.readBytes += bytes; counters.decodedJsonBytes += decodedJsonBytes;
+      counters.sampledCalls += Number(totalBytes !== null && current.ioComplete);
+      counters.unsampledCalls += Number(sampleIo && !sampled);
+      counters.unavailableCalls += Number(sampled && totalBytes === null);
+      counters.failed += Number(failed);
+    }
+    if (sampled && sampler) {
+      const owner = parent?.id ?? 0;
+      Atomics.store(sampler.cells, 8, BigInt(owner)); Atomics.store(sampler.cells, 9, BigInt(owner));
+      Atomics.store(sampler.cells, 10, BigInt(0)); Atomics.store(sampler.cells, 11, BigInt(0)); Atomics.store(sampler.cells, 13, BigInt(0));
+    }
+  }
+  // The intrinsic method name survives optimization of inlined frames.
+  const { delegatusReadAttributionForward: sync } = {
+    delegatusReadAttributionForward<T>(reader: string, work: () => T, connection = 0, decodedJsonBytes = 0, sampleIo = true, counters?: ReadTotals): T {
+      if (!enabled) return work();
+      const current = beginRead(reader, sampleIo);
+      let failed = false;
+      try { return work(); }
+      catch (error) { failed = true; throw error; }
+      finally { finishRead(current, reader, connection, decodedJsonBytes, sampleIo, failed, counters); }
+    },
+  };
+  const attribution = {
     operation,
     setEnabled(value: boolean) { enabled = value; },
     run<T>(name: string, work: () => T): T {
       return context.run(name, () => this.sync("operation", work));
     },
-    sync<T>(reader: string, work: () => T, connection = 0, decodedJsonBytes = 0, sampleIo = true, counters?: ReadTotals): T {
-      if (!enabled) return work();
-      const start = now(), parent = frame;
-      if (start - sampleAt >= sampleWindowMs) { sampleAt = start; samples = 0; }
-      const sampled = sampleIo && samples < samplesPerWindow;
-      if (sampled) samples++;
-      const op = context.getStore() ?? parent?.operation ?? reader;
-      const id = ++nextFrameId;
-      const current: Frame = { operation: op, id, childrenMs: 0, childrenObserverMs: 0, childrenBytes: 0, ioComplete: true, hadChild: false };
-      if (parent) parent.hadChild = true;
-      if (sampled && usesDefaultCounter && process.platform === "linux") {
-        const source = counterSampler();
-        if (source) {
-          Atomics.store(source.cells, 9, BigInt(id)); Atomics.store(source.cells, 10, BigInt(0));
-          Atomics.store(source.cells, 11, BigInt(0)); Atomics.store(source.cells, 13, BigInt(0)); Atomics.store(source.cells, 8, BigInt(id));
-        }
-      }
-      const beforeSourceObserverMs = usesDefaultCounter && sampler ? Number(Atomics.load(sampler.cells, 3)) / 1000 : 0;
-      const before = sampled ? read() : null;
-      if (before) { observerMs += before.observerMs ?? 0; samplerDegraded ||= before.degraded ?? false; }
-      frame = current;
-      let failed = false;
-      try { return work(); }
-      catch (error) { failed = true; throw error; }
-      finally {
-        const after = before ? read() : null;
-        if (after) { observerMs += after.observerMs ?? 0; samplerDegraded ||= after.degraded ?? false; }
-        const end = now(), sourceObserverMs = usesDefaultCounter && sampler ? Number(Atomics.load(sampler.cells, 3)) / 1000 : beforeSourceObserverMs;
-        const observerDelta = Math.max(0, (after?.observerMs ?? 0) + (before?.observerMs ?? 0));
-        const duration = Math.max(0, end - start - observerDelta - current.childrenObserverMs);
-        const sampledInterval = before?.sampledAt !== undefined || after?.sampledAt !== undefined;
-        const intervalOwned = !sampledInterval || (before?.owner === id && after?.owner === id
-          && (after?.sequence ?? 0) > (before?.sequence ?? 0) && (after?.sampledAt ?? -Infinity) >= start
-          && (after?.sampledAt ?? Infinity) <= end && !current.hadChild && !!sampler && Atomics.load(sampler.cells, 13) >= BigInt(2));
-        const totalBytes = before && after && intervalOwned && before.available !== false && after.available !== false && after.bytes >= before.bytes
-          ? Math.max(0, after.bytes - before.bytes - after.observerBytes) : null;
-        // An unsampled child invalidates the enclosing byte delta, preventing
-        // its traffic from being assigned to the parent reader.
-        const bytes = totalBytes === null || !current.ioComplete ? 0 : Math.max(0, totalBytes - current.childrenBytes);
-        frame = parent;
-        if (parent) {
-          parent.childrenMs += duration;
-          parent.childrenObserverMs += observerDelta + current.childrenObserverMs + Math.max(0, sourceObserverMs - beforeSourceObserverMs);
-          parent.childrenBytes += totalBytes ?? (sampleIo ? 0 : current.childrenBytes);
-          parent.ioComplete &&= sampleIo ? totalBytes !== null : current.ioComplete;
-        }
-        const syncMs = Math.max(0, duration - current.childrenMs);
-        const key = `${op}/${reader}`;
-        let row = rows.get(key);
-        if (!row && rows.size < capacity) {
-          row = { operation: op, reader, connection, connections: [], connectionSamplesDropped: 0, ...emptyReadTotals() };
-          rows.set(key, row);
-        }
-        if (row) {
-          if (row.connection !== connection) row.connection = 0;
-          if (connection && !row.connections.includes(connection)) {
-            if (row.connections.length < 8) row.connections.push(connection); else row.connectionSamplesDropped++;
-          }
-          row.calls++; row.syncMs += syncMs; row.readBytes += bytes; row.decodedJsonBytes += decodedJsonBytes;
-          row.sampledCalls += Number(totalBytes !== null && current.ioComplete);
-          row.unsampledCalls += Number(sampleIo && !sampled);
-          row.unavailableCalls += Number(sampled && totalBytes === null);
-          row.failed += Number(failed);
-        } else { dropped++; droppedMs += syncMs; droppedBytes += bytes; }
-        reportWorkerEvent({ operation: op, reader, connection, syncMs, readBytes: bytes, decodedJsonBytes,
-          start: performance.timeOrigin + start, end: performance.timeOrigin + end,
-          observerMs: observerDelta + Math.max(0, sourceObserverMs - beforeSourceObserverMs), samplerDegraded: !!(before?.degraded || after?.degraded),
-          sampledCalls: Number(totalBytes !== null && current.ioComplete), unsampledCalls: Number(sampleIo && !sampled),
-          unavailableCalls: Number(sampled && totalBytes === null), failed: Number(failed) });
-        if (counters) {
-          counters.calls++; counters.syncMs += syncMs; counters.readBytes += bytes; counters.decodedJsonBytes += decodedJsonBytes;
-          counters.sampledCalls += Number(totalBytes !== null && current.ioComplete);
-          counters.unsampledCalls += Number(sampleIo && !sampled);
-          counters.unavailableCalls += Number(sampled && totalBytes === null);
-          counters.failed += Number(failed);
-        }
-        if (sampled && sampler) {
-          const owner = parent?.id ?? 0;
-          Atomics.store(sampler.cells, 8, BigInt(owner)); Atomics.store(sampler.cells, 9, BigInt(owner));
-          Atomics.store(sampler.cells, 10, BigInt(0)); Atomics.store(sampler.cells, 11, BigInt(0)); Atomics.store(sampler.cells, 13, BigInt(0));
-        }
-      }
-    },
+    sync,
     snapshot(windowMs: number) {
       const readers = [...rows.values()];
       const namedSyncMs = readers.filter(row => !row.worker).reduce((sum, row) => sum + row.syncMs, 0);
@@ -312,6 +328,7 @@ export function createReadAttribution(now = () => performance.now(), read = main
       observerBaseline = usesDefaultCounter && sampler ? Number(Atomics.load(sampler.cells, 3)) / 1000 : 0; samplerDegraded = false;
       workerBatches = workerTransportDropped = 0; },
   };
+  return attribution;
 }
 const shared = globalThis as typeof globalThis & { __delegatusReadAttribution?: ReturnType<typeof createReadAttribution> };
 export const readAttribution = shared.__delegatusReadAttribution ??= createReadAttribution();
@@ -319,6 +336,7 @@ export const readAttribution = shared.__delegatusReadAttribution ??= createReadA
 /** Attach bounded worker batches to the parent process monitor. */
 export function attachReadAttributionWorker(worker: Worker, identity: string): () => void {
   if (!/^[a-z0-9][a-z0-9._-]{0,47}$/i.test(identity)) throw new Error("worker attribution identity must be a short static label");
+  const detachMemory = attachSqliteMemoryWorker(worker);
   const listener = (message: unknown) => {
     if (!message || typeof message !== "object" || (message as { type?: unknown }).type !== "delegatus-read-attribution") return;
     const batch = message as { threadId: number; events: WorkerReadEvent[]; dropped: number };
@@ -327,5 +345,5 @@ export function attachReadAttributionWorker(worker: Worker, identity: string): (
     catch { readAttribution.noteWorkerTransportDrop(); }
   };
   worker.on("message", listener);
-  return () => worker.off("message", listener);
+  return () => { detachMemory(); worker.off("message", listener); };
 }

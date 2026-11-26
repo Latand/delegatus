@@ -1,9 +1,24 @@
 import { yieldToRuntime } from "@/lib/cooperative";
+import { startupDiagnostic } from "@/lib/startupDiagnostics";
 import { statePath } from "@/lib/configDir";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { assertOperationLease, withoutOperationLease } from "@/lib/operationLease";
 import { requestPipelineTick } from "./controllerSignal";
+import type { ProvisioningStepView } from "./provisioningRecord";
+
+type ProvisioningGitStep = "common-directory" | "fetch" | "worktree-add";
+type ProvisioningPhase =
+  | { phase: "accepted"; admission: "direct" | "queued" }
+  | { phase: "scheduler-selected" | "state-validated" | "first-attempt" }
+  | { phase: "toolchain-ready" }
+  | { phase: "step"; view: ProvisioningStepView }
+  | { phase: "git-started"; step: ProvisioningGitStep }
+  | { phase: "git-finished"; step: ProvisioningGitStep; status: "ok" | "failed" | "cancelled" };
+
+export function reportProvisioningPhase(pipelineId: string, phase: ProvisioningPhase, at = new Date().toISOString()): void {
+  startupDiagnostic("info", `[flow pipeline provisioning] ${JSON.stringify({ pipelineId, at, ...phase })}`);
+}
 
 const host = globalThis as typeof globalThis & {
   __llvPipelineControllerJobs?: Map<string, Promise<void>>;

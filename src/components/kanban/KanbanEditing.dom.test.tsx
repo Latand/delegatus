@@ -768,6 +768,17 @@ test("the Inbox draws high first and low last with a quiet mark on those two onl
   expect(prioMark(view.host, "a-high")?.dataset.priority).toBe("high");
 });
 
+test("the priority hints name the Inbox's ends, so an In progress card's menu carries none and its levels keep their plain titles", () => {
+  const view = mount([task("a", "inbox", "Write the release notes"), task("w", "assigned", "Ship the new header")]);
+  click(cardEl(view.host, "w")?.querySelector("[data-menu]"));
+  expect(view.host.querySelector('.menu [data-cm-segments][aria-label="Priority"]')).not.toBeNull();
+  expect(view.host.querySelector('.menu [data-cm-ends="priority"]')).toBeNull();
+  expect(view.host.querySelector(".menu [data-cm-end]")).toBeNull();
+  const levels = ["High", "Normal", "Low"].map((label) => menuItem(view.host, label));
+  expect(levels.map((item) => item?.getAttribute("title"))).toEqual(["High", "Normal", "Low"]);
+  expect(view.host.querySelector(".menu")?.textContent ?? "").not.toContain("of the Inbox");
+});
+
 test("priority comes from the card menu: three levels with the current one checked; a choice moves the card at once and is written on its own", async () => {
   const view = mount([
     task("a", "inbox", "Write the release notes", { updatedAt: "2026-09-14T12:00:00.000Z" }),

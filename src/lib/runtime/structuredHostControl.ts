@@ -1,3 +1,7 @@
+import { invalidateAgentState } from "@/lib/agentState/invalidation";
+import { projectAgentStateDisplay } from "@/lib/agentState/model";
+import { cachedAgentObservation } from "@/lib/agentState/projectionCache";
+import { entryRevision, readAgentProjection, subjectId } from "@/lib/agentState/store";
 import { differentKernelBoot, recordedAgentScope, recordedScopeProcess, sameAgentScope, stopAgentScope, type AgentScopeIdentity } from "./agentScope";
 import { recordHostStop, withHostStopOrigin, type HostStopOrigin } from "./hostExit";
 import fs from "node:fs";
@@ -38,6 +42,7 @@ import { hasStructuredDeliveryHost, terminateStructuredDeliveryHost } from "./st
 export function readStructuredHostRecords(dependencies: {
   snapshot?: () => RegistryFile;
   owned?: (key: SessionKey) => boolean;
+  now?: () => number;
 } = {}): StructuredHostRecord[] {
   const file = (dependencies.snapshot ?? (() => agentRegistry().readOnlySnapshot()))();
   const owned = dependencies.owned ?? hasStructuredDeliveryHost;
@@ -45,10 +50,7 @@ export function readStructuredHostRecords(dependencies: {
   // conversation payloads, including when the inventory is empty.
   const entries = hotRegistryRows(file, "entries").map(([, entry]) => entry)
     .filter((entry) => Boolean(entry.structuredHost?.process)
-      && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot")
-      /* A pane-hosted entry is already a tmux row; listing it twice would
-         offer two kills for one process tree. */
-      && entry.host === null)
+      && (entry.key.engine === "claude" || entry.key.engine === "codex" || entry.key.engine === "copilot" || entry.key.engine === "antigravity"))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .slice(0, RESOURCE_STRUCTURED_HOST_LIMIT);
   if (!entries.length) return [];
@@ -60,7 +62,7 @@ export function readStructuredHostRecords(dependencies: {
     for (const id of sessionIds) {
       // Keep the inventory's existing raw-session matching and last-owner
       // precedence across engines; the index itself uses qualified keys.
-      for (const engine of ["claude", "codex", "copilot"] as const) {
+      for (const engine of ["claude", "codex", "copilot", "antigravity"] as const) {
         for (const conversation of registryConversationsForEntryKey(file, `${engine}:${id}`)) {
           selected.set(conversation.id, conversation);
         }
@@ -84,9 +86,17 @@ export function readStructuredHostRecords(dependencies: {
     const generation = conversation?.generations.find((candidate) => candidate.id === entry.key.sessionId) ?? null;
     const memberships = conversation ? file.memberships[conversation.id] ?? [] : [];
     const pipeline = memberships.find((membership) => membership.kind === "pipeline") ?? null;
+    const candidate = cachedAgentObservation(subjectId(entry))
+      ?? file.agentStates?.[subjectId(entry)]
+      ?? (entry.key.engine === "antigravity" && !dependencies.snapshot ? readAgentProjection(agentRegistry(), subjectId(entry)) : undefined);
+    const central = candidate?.facts.revision === entryRevision(entry) ? candidate : null;
+    const display = central ? projectAgentStateDisplay(central, (dependencies.now ?? Date.now)()) : null;
+    if (!dependencies.snapshot && (!display || display.quality === "unverified")) invalidateAgentState(agentRegistry().filename, entry.key);
     return {
+      agentState: display ? display
+        : { subject: subjectId(entry), state: null, reason: "central agent state is unavailable", quality: "unverified", evaluatedAt: 0, revision: 0 },
       id: sessionKeyId(entry.key),
-      engine: entry.key.engine as "claude" | "codex",
+      engine: entry.key.engine,
       sessionId: entry.key.sessionId,
       pid: process.pid,
       startIdentity: process.startIdentity,
@@ -99,9 +109,7 @@ export function readStructuredHostRecords(dependencies: {
       model: generation?.launchProfile.model ?? null,
       stage: pipeline?.stageId ?? pipeline?.slot ?? null,
       seat: conversation === null ? null : memberships.some((membership) => membership.kind === "orchestrator"),
-      turnBusy: conversation === null || conversation.turn.state === "unknown"
-        ? null
-        : conversation.turn.state === "busy",
+      turnBusy: display?.quality === "verified" && central?.facts.turn.determined && !central.verdict.missing.includes("turn") ? central.facts.turn.value.state === "open" : null,
       owned: owned(entry.key),
     } satisfies StructuredHostRecord;
   });
@@ -180,7 +188,7 @@ export function structuredHostKillRefFromRegistry(
   if (!entry) return { ok: false, error: "the registry has no row for this session", owner };
   const process = recordedScopeProcess(entry.structuredHost);
   if (!process) return { ok: false, error: "the registry row names no host process", owner };
-  if (key.engine !== "claude" && key.engine !== "codex") {
+  if (key.engine !== "claude" && key.engine !== "codex" && key.engine !== "copilot" && key.engine !== "antigravity") {
     return { ok: false, error: `a ${key.engine} session has no structured host to end`, owner };
   }
   if (typeof process.startIdentity !== "string" || process.startIdentity.length === 0) {
@@ -349,6 +357,9 @@ export type StructuredHostTerminationOutcome =
       /** A runtime termination or signal was attempted; refusals must retain
           its effects even when authority is subsequently lost. */
       terminationStarted?: true;
+      /** Runtime release succeeded or the kernel accepted a signal for the
+          captured tree. Exit still has to be independently verified. */
+      stoppedVia?: "runtime" | "process-group";
       /** The authority this target carried is spent: the pid is no longer the
           process the snapshot listed, so the target is consumed, not retried. */
       stale?: true;
@@ -356,6 +367,10 @@ export type StructuredHostTerminationOutcome =
 
 export interface StructuredHostTerminationDependencies {
   stopOrigin?: HostStopOrigin;
+  /** The registry whose row this termination ends. Once the tree is proven
+      gone, the row's orphan alarm, if one is recorded, is closed there: the
+      host it warned about no longer runs. */
+  orphanAlarmRegistry?: import("@/lib/agent/registry").AgentRegistry;
   processIdentity?(pid: number): string | null;
   bootEpoch?(): string | null;
   pidAlive?(pid: number): boolean;
@@ -374,7 +389,9 @@ export interface StructuredHostTerminationDependencies {
       row and the transcript change because of this termination, so a caller
       comparing them against what it observed beforehand stops comparing. */
   onFirstEffect?(): void;
-  terminateOwnedHost?(key: SessionKey, expected: ProcessIdentity): Promise<boolean>;
+  terminateOwnedHost?(key: SessionKey, expected: ProcessIdentity,
+    authorizeAsync?: () => Promise<Extract<StructuredHostTerminationOutcome, { ok: false }> | null>,
+    onAccepted?: () => void): Promise<boolean>;
   retireRegistryEntry?(key: SessionKey, expected: ProcessIdentity, confirmed: readonly ProcessIdentity[], custody: StructuredHostCustody | null, confirmedScope?: AgentScopeIdentity | null): boolean | void | Promise<boolean | void>;
   /** Captured from the caller's registry before this termination can await. */
   registryCustody?: StructuredHostCustody | null;
@@ -438,7 +455,17 @@ export async function terminateStructuredHostTree(
   ref: StructuredHostKillRef,
   dependencies: StructuredHostTerminationDependencies = {},
 ): Promise<StructuredHostTerminationOutcome> {
-  return withRecordedHostFence(ref, () => terminateStructuredHostTreeFenced(ref, dependencies));
+  const outcome = await withRecordedHostFence(ref, () => terminateStructuredHostTreeFenced(ref, dependencies));
+  if (outcome.ok && ref.sessionId && dependencies.orphanAlarmRegistry) {
+    const key: SessionKey = { engine: ref.engine, sessionId: ref.sessionId };
+    try {
+      const { closeOrphanedHostAlarm } = await import("./orphanedHostAlarm");
+      await closeOrphanedHostAlarm(dependencies.orphanAlarmRegistry, key);
+    } catch (error) {
+      console.error("[structured hosts] orphaned host alarm closure after a stop deferred", { key: sessionKeyId(key), error: String(error) });
+    }
+  }
+  return outcome;
 }
 
 async function terminateStructuredHostTreeFenced(
@@ -640,7 +667,7 @@ async function terminateStructuredHostTreeFenced(
     return {
       ok: false,
       status: 409,
-      error: "structured termination evidence could not be persisted",
+      error: dependencies.authorize?.()?.error ?? "structured termination evidence could not be persisted",
       remaining: tree.filter(candidate => alive(candidate)),
       survivors: capturedIdentities.filter(identity => {
         try { return processIdentityStatus(identity, identityProbe) !== "dead"; }
@@ -650,6 +677,7 @@ async function terminateStructuredHostTreeFenced(
   }
   let terminationStarted = false;
   let completed = false;
+  let stoppedVia: "runtime" | "process-group" | undefined;
   /* Asking the runtime is not an effect: an answer of false means it holds
      nothing of this host and ended nothing, so a refusal that follows still
      owes the row its capture back. */
@@ -664,7 +692,7 @@ async function terminateStructuredHostTreeFenced(
       try { return processIdentityStatus(identity, identityProbe) !== "dead"; }
       catch { return true; }
     });
-    return { survivors, terminationStarted: true as const };
+    return { survivors, terminationStarted: true as const, ...(stoppedVia ? { stoppedVia } : {}) };
   };
   const identityRefusal = (): Extract<StructuredHostTerminationOutcome, { ok: false }> | null => {
     for (const [candidate, expectedIdentity] of identities) {
@@ -708,21 +736,26 @@ async function terminateStructuredHostTreeFenced(
      which is why the process this kill was authorized for goes with the ask.
      False means nothing the runtime holds is ours to end through it: the
      released/orphaned case, which only the process group reaches. */
+  let runtimeFailureReason: string | null = null;
   try {
     const refusedBeforeRuntime = await readAuthority() ?? authorityRefusal();
     if (refusedBeforeRuntime) return refusedBeforeRuntime;
-    let via: "runtime" | "process-group" = "process-group";
     let runtimeFailure = false;
     if (key && rootAlive && (dependencies.retainedSurvivors?.length ?? 0) === 0) {
       try {
-        if (await withHostStopOrigin(dependencies.stopOrigin ?? { path: "structured-host-kill", operationId: key.sessionId }, () => terminateOwned(key, expected))) {
-          via = "runtime";
+        if (await withHostStopOrigin(dependencies.stopOrigin ?? { path: "structured-host-kill", operationId: key.sessionId },
+          () => terminateOwned(key, expected, async () => await readAuthority() ?? authorityRefusal(), () => {
+            stoppedVia = "runtime";
+            markStarted();
+          }))) {
+          stoppedVia = "runtime";
           markStarted();
         }
-      } catch {
+      } catch (error) {
         /* A release that threw may have ended the host before it failed. */
         markStarted();
         runtimeFailure = true;
+        runtimeFailureReason = error instanceof Error ? error.message : String(error);
         const changed = identityRefusal();
         if (changed) return changed;
       }
@@ -733,7 +766,9 @@ async function terminateStructuredHostTreeFenced(
        been rebound while we waited, and a recycled group leader must never
        receive the fallback signal. The caller's authority crosses it too. */
     const refusedAfterRuntime = await readAuthority() ?? authorityRefusal();
-    if (refusedAfterRuntime) return refusedAfterRuntime;
+    if (refusedAfterRuntime) return runtimeFailureReason
+      ? { ...refusedAfterRuntime, error: `${refusedAfterRuntime.error}; runtime cleanup failed: ${runtimeFailureReason}` }
+      : refusedAfterRuntime;
     const changedAfterRuntime = identityRefusal();
     if (changedAfterRuntime) return changedAfterRuntime;
 
@@ -744,6 +779,7 @@ async function terminateStructuredHostTreeFenced(
         const changed = identityRefusal();
         if (changed) throw new Error(changed.error);
         signal(target, value);
+        stoppedVia ??= "process-group";
         return true;
       } catch (error) {
         const code = signalErrorCode(error);
@@ -783,7 +819,7 @@ async function terminateStructuredHostTreeFenced(
             added = true;
           }
           if (added && dependencies.persistCapturedTree && !await dependencies.persistCapturedTree([...identities.values()])) {
-            return { ok: false, status: 409, error: "structured termination evidence could not be persisted", remaining: survivors(), ...partialEvidence() };
+            return { ok: false, status: 409, error: dependencies.authorize?.()?.error ?? "structured termination evidence could not be persisted", remaining: survivors(), ...partialEvidence() };
           }
           const refused = await readAuthority() ?? authorityRefusal();
           if (refused) return refused;
@@ -833,7 +869,7 @@ async function terminateStructuredHostTreeFenced(
       /* Partial is not success: the registry row keeps describing the host that
          is still running, and the target keeps its authority for a retry. */
       let error: string;
-      if (runtimeFailure) error = "the runtime host termination failed and the process tree survived";
+      if (runtimeFailure) error = `the runtime host termination failed${runtimeFailureReason ? `: ${runtimeFailureReason}` : ""} and the process tree survived`;
       else if (refusals.length > 0) error = `the kill was refused (${refusals[0]})`;
       else error = `${remaining.length} process${remaining.length === 1 ? "" : "es"} outlived the kill`;
       return {
@@ -848,18 +884,33 @@ async function terminateStructuredHostTreeFenced(
        Retire only after the full captured tree has passed identity checks, and
        require the registry to accept that exact evidence on every path. */
     const scopeRefusal = await endScope();
-    if (scopeRefusal) return scopeRefusal;
+    if (scopeRefusal) return {
+      ...scopeRefusal,
+      ...(runtimeFailureReason ? { error: `${scopeRefusal.error}; runtime cleanup failed: ${runtimeFailureReason}` } : {}),
+      ...partialEvidence(),
+    };
     if (key && await retire(key, expected, [...identities.values()], registryCustody) === false) {
-      return { ok: false, status: 409, error: "structured host changed before registry retirement", remaining: [], survivors: [] };
+      const error = "structured host changed before registry retirement";
+      return { ok: false, status: 409,
+        error: runtimeFailureReason ? `${error}; runtime cleanup failed: ${runtimeFailureReason}` : error,
+        remaining: [], ...partialEvidence() };
     }
     completed = true;
-    return { ok: true, via, pids: tree };
+    if (runtimeFailureReason) return {
+      ok: false,
+      status: 500,
+      error: `runtime cleanup failed: ${runtimeFailureReason}`,
+      remaining: [],
+      ...partialEvidence(),
+    };
+    return { ok: true, via: stoppedVia ?? "already-exited", pids: stoppedVia ? tree : [] };
   } catch (error) {
     const evidence = partialEvidence();
+    const reason = error instanceof Error ? error.message : String(error);
     return {
       ok: false,
       status: 409,
-      error: `termination evidence became unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      error: `termination evidence became unavailable: ${reason}${runtimeFailureReason ? `; runtime cleanup failed: ${runtimeFailureReason}` : ""}`,
       remaining: evidence.survivors.map((identity) => identity.pid),
       ...evidence,
     };

@@ -61,10 +61,13 @@ function optionalNullableId(value: unknown, name: string): string | null | undef
 export function parseRuntimeIdleKillFence(value: unknown): import("./contracts").RuntimeIdleKillFence {
   const fence = object(value);
   if (!Number.isSafeInteger(fence.revision) || (fence.revision as number) < 1
-    || typeof fence.writerClaim !== "string" || !fence.writerClaim.trim()) {
+    || typeof fence.writerClaim !== "string" || !fence.writerClaim.trim()
+    || fence.releasedSession !== undefined && fence.releasedSession !== true
+    || fence.releasedSession === true && fence.writerClaim !== "released-session") {
     throw new Error("idle kill fence is invalid");
   }
-  return { revision: fence.revision as number, writerClaim: fence.writerClaim };
+  return { revision: fence.revision as number, writerClaim: fence.writerClaim,
+    ...(fence.releasedSession === true ? { releasedSession: true as const } : {}) };
 }
 
 export function parseRuntimeProviderRecoveryRef(value: unknown): import("./contracts").RuntimeProviderRecoveryRef {
@@ -81,10 +84,10 @@ export function parseRuntimeProviderRecoveryRef(value: unknown): import("./contr
   };
 }
 
-function runtimeSessionKey(value: unknown): { engine: "codex" | "claude" | "copilot"; sessionId: string } {
+function runtimeSessionKey(value: unknown): { engine: "codex" | "claude" | "copilot" | "antigravity"; sessionId: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("sessionKey is invalid");
   const candidate = value as Record<string, unknown>;
-  const engine = candidate.engine === "codex" || candidate.engine === "claude" || candidate.engine === "copilot" ? candidate.engine : null;
+  const engine = candidate.engine === "codex" || candidate.engine === "claude" || candidate.engine === "copilot" || candidate.engine === "antigravity" ? candidate.engine : null;
   const sessionId = typeof candidate.sessionId === "string" ? candidate.sessionId.trim() : "";
   if (!engine || !sessionId || sessionId.includes(":") || /\s/.test(sessionId)) throw new Error("sessionKey is invalid");
   return { engine, sessionId };
@@ -99,6 +102,20 @@ function idempotency(body: Record<string, unknown>, operationId: string | undefi
   const id = typeof value === "string" ? value.trim() : "";
   if (!id || /\s/.test(id) || id.length > 200) throw new Error("idempotencyKey is invalid");
   return id;
+}
+
+/** The conversation and key of a message-bearing request body, validated as
+    {@link parseRuntimeCommand} validates them, or null. Read before the body's
+    attachments are checked, so a refusal of those still has a key to be
+    recorded under (2026-11-09). */
+export function parseRuntimeCommandSubject(value: unknown): { conversationId: string; idempotencyKey: string } | null {
+  try {
+    const body = object(value);
+    const conversationId = requiredId(body.conversationId, "conversationId");
+    return { conversationId, idempotencyKey: idempotency(body, optionalId(body.operationId, "operationId")) };
+  } catch {
+    return null;
+  }
 }
 
 export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown, options: { durableReplay?: boolean } = {}): RuntimeOperationCommand {
@@ -248,6 +265,10 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown, 
   }
 
   if (kind === "kill") {
+    if (body.pendingSendIds !== undefined && (!Array.isArray(body.pendingSendIds)
+      || body.pendingSendIds.some(id => typeof id !== "string" || !id || id.length > 200))) {
+      throw new Error("pending send cohort is invalid");
+    }
     if (body.providerRecovery !== undefined && body.onlyIfIdle === undefined) {
       throw new Error("provider recovery requires an idle-only kill");
     }
@@ -258,6 +279,7 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown, 
       idempotencyKey,
       sessionKey: runtimeSessionKey(body.sessionKey),
       ...(parseMessageOrigin(body.origin) ? { origin: parseMessageOrigin(body.origin)! } : {}),
+      ...(body.pendingSendIds !== undefined ? { pendingSendIds: [...new Set(body.pendingSendIds as string[])] } : {}),
       ...(body.onlyIfIdle !== undefined ? { onlyIfIdle: parseRuntimeIdleKillFence(body.onlyIfIdle) } : {}),
       ...(body.providerRecovery !== undefined ? { providerRecovery: parseRuntimeProviderRecoveryRef(body.providerRecovery) } : {}),
     };
@@ -322,7 +344,7 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown, 
     };
   }
 
-  const engine = body.engine === "codex" || body.engine === "claude" || body.engine === "copilot" ? body.engine : null;
+  const engine = body.engine === "codex" || body.engine === "claude" || body.engine === "copilot" || body.engine === "antigravity" ? body.engine : null;
   if (!engine) throw new Error("engine is invalid");
   const cwd = typeof body.cwd === "string" ? body.cwd.trim() : "";
   if (!cwd) throw new Error("spawn cwd is required");

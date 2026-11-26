@@ -1097,7 +1097,7 @@ async function serverMemoryProfile(childMode: boolean): Promise<void> {
       const scan = await request("/api/files");
       const project = scan.files?.[0]?.project ?? "fixture";
       await phases("board-closed", ["/api/files"], 2000);
-      await phases("board-open", ["/api/files", `/api/board?project=${encodeURIComponent(project)}`, `/api/tasks?project=${encodeURIComponent(project)}`, `/api/pipelines?project=${encodeURIComponent(project)}`, `/api/flows?project=${encodeURIComponent(project)}`], 2000);
+      await phases("board-open", ["/api/files", `/api/board?project=${encodeURIComponent(project)}`, `/api/tasks?project=${encodeURIComponent(project)}`, `/api/pipelines?project=${encodeURIComponent(project)}`], 2000);
       await phases("resource-poll", ["/api/resources"], Math.min(seconds * 1000, 10000));
       await phases("transcript", [`/api/log?path=${encodeURIComponent(paths[0]!)}&before=999999999&bytes=4194304`], 250);
       await phases("cooldown", [], 1000);

@@ -1,15 +1,16 @@
 # Pinned Codex app-server boundary
 
 Delegatus pins the generated app-server schemas for Codex 0.154.0, 0.159.0,
-0.162.1, 0.163.0, 0.164.0, 0.165.0 and 0.166.0. Each version has the CLI's stable and experimental
-bundles and their SHA-256 digests under `src/lib/accounts/protocol/`. Each
+0.162.1, 0.163.0, 0.164.0, 0.165.0, 0.166.0, 0.167.0, 0.168.0, 0.169.0, 0.170.0,
+0.171.0 and 0.172.0.
+Each version has the CLI's stable and experimental bundles and their SHA-256 digests under `src/lib/accounts/protocol/`. Each
 schema is read and checked against its digest when a protocol check first
 needs it, then cached for the process. Production server bundles retain the
 small manifests. Next traces the JSON files into standalone releases, and
 `build:mcp` copies them beside its bundle in `dist/codex-protocol/` for managed
 MCP releases. The generated TypeScript closure for the server-request union and its response
-types sits beside 0.162.1; the 0.163.0, 0.164.0, 0.165.0 and 0.166.0 closures are byte-identical, so the
-router keeps importing it from there.
+types sits beside 0.162.1 and 0.167.0. The router imports the 0.167.0 closure,
+which adds the `humanCommand` approval kind and retains every older variant.
 
 Regenerate with the exact executable being reviewed:
 
@@ -20,22 +21,35 @@ bun scripts/generate-codex-protocol.ts --codex codex
 The generator runs `--version`, `app-server generate-json-schema` both with
 and without `--experimental`, and `generate-ts --experimental` for the current
 router. Generated schema bundles are retained verbatim. A new supported version
-also needs an explicit pin in `codexPinnedProtocol.ts` and a compatibility
+also needs an explicit manifest in `codexVersions.ts` and a compatibility
 review; installing a different CLI cannot silently change the adapter's wire
 contract.
 
 ## CI coverage
 
-Installed CLI pin: `0.162.1`.
+Installed CLI pin: `0.172.0`.
 
-Verified with `codex --version` on 2026-10-26. The shared
-`native-codex-versions` YAML anchor in `.github/workflows/bun-runtime.yml`
-declares the versions for the native runtime job, the manual queue campaign
-and the local pre-push native phase. It includes every retained pin: 0.154.0,
-0.159.0, 0.162.1, 0.163.0, 0.164.0, 0.165.0 and 0.166.0.
-`scripts/bun-runtime-workflow.test.ts` requires that matrix to match the
-schema directories. Workflow publication uses the GitHub App credential path,
-which requests `workflows: write` only when the installation grants it.
+The installed pin was verified with `codex --version` on 2026-11-26 (UTC).
+The supported CLI window is the latest three reviewed pins: **0.170.0,
+0.171.0 and 0.172.0**, with a minimum tested version of **0.170.0**.
+`src/lib/accounts/codexVersions.ts` selects them numerically from the retained
+protocol manifests. Adding a reviewed pin automatically rotates the oldest
+version out of the window. Historical schemas remain available for exact-version
+admission. `resolveCodexProtocol` admits every retained exact pin before
+considering fallback. Regression tests prove that **0.165.0 through
+0.169.0** retain their own schemas and skip generation. Structured-host tests
+take each of them through `thread/start` and `turn/start` with their original
+protocol receipts.
+
+The `codex-versions` job in `.github/workflows/bun-runtime.yml` resolves that
+window for the native runtime job and manual queue campaign. PRs (including
+merge batches), main pushes and dispatches use the same selection. The local
+pre-push native phase and protocol admission's supported-version message use
+that same window. `scripts/bun-runtime-workflow.test.ts` executes the resolver
+and checks both consumers; `codexVersions.test.ts` checks rotation and the
+retained schema inventory. The stable `runtime-gate` still requires both runtime
+verdicts. Workflow publication uses the GitHub App credential path, which
+requests `workflows: write` only when the installation grants it.
 Update the installed-pin line when the installed CLI changes.
 
 Codex 0.164.0 changes `ThreadItem.imageGeneration` to accept a durable
@@ -97,7 +111,181 @@ was removed from any request or notification union, the server-request closure
 is unchanged, and all 80 generated server-request type files match 0.162.1, so
 the router keeps its imports. Tests record the three breaks, show that 0.166.0
 is refused under 0.165.0 and admitted under its own pin, and exercise a
-synthetic 0.167.0 launch under the 0.166.0 pin.
+synthetic newer launch under the newest pin.
+
+## 0.167.0 compatibility review
+
+Generated with the installed Codex CLI 0.167.0 using the command above. The
+serving 0.166.0 pin refuses this executable: `CommandExecutionApprovalKind`
+changes from an enum to a union that adds `humanCommand`. That type is part
+of an incoming server request, so automatic admission must remain closed.
+The exact 0.167.0 pin validates the expanded contract. Of the 80 generated
+server-request type files, only this approval-kind file changes from 0.162.1.
+The router uses the new closure; decoding and answering still enforce the
+specific decisions offered by each request.
+
+Both bundles also allow audio input by an uploaded file ID alongside the
+existing URL form. The existing URL remains valid; tests cover both forms
+and reject missing or malformed audio references. Other additions are
+`InitializeCapabilities.requiredHumanApproval`, `OtelRequirements.log_sse_deltas`
+and the `thread/section/changed` notification. The experimental bundle adds
+`thread/guardianReview`, its assessment definitions and
+`ThreadSampleParams.interruptOnCancel`. No existing method is removed and
+Delegatus enables no new guardian or human-command execution feature.
+
+Tests cover exact-version admission, refusal of this schema under 0.166.0,
+the new approval kind, offered-decision enforcement and every retained pin.
+The native runtime matrix includes 0.167.0.
+
+## 0.168.0 compatibility review
+
+Installed into scratch with `npm install --prefix <scratch> --no-save
+--ignore-scripts @openai/codex@0.168.0`, matching CI. The launcher and native
+Linux x64 tarballs were checked against their registry SHA-512 integrity, and
+every installed file matched the verified tarballs. Generated with that exact
+binary using `bun scripts/generate-codex-protocol.ts --codex <binary>`; stable
+and experimental bundles are retained verbatim with SHA-256 manifests.
+
+Before any pin change, real-binary admission under 0.167.0 succeeded as an
+additive extension in both bundles. The full
+`bun scripts/verify-native-codex-runtime.ts <binary>` passed on the unchanged
+base. No launch or native runtime break was reproduced for users of 0.168.0.
+The exact 0.168.0 pin now skips fallback generation.
+
+Both bundles add `modelProvider/list`, `modelProvider/config/write`, their
+provider settings definitions, and optional list/search/resource fields. The
+experimental bundle also adds optional `ThreadItemEntry.outputDeferred` and
+optional `ThreadSearchParams.currentAccountOnly`; `ThreadSearchParams` itself
+already existed in 0.167.0. Neither addition appears in the stable bundle. No
+existing method or required field was removed. All 80 generated
+server-request type files are byte-identical to 0.167.0, so the router keeps
+that closure and continues enforcing the decisions each request offers.
+Delegatus enables no new provider configuration or output-deferral feature.
+Tests cover the additive fallback, exact admission, retained pins and offered
+approval decisions.
+
+## 0.169.0 compatibility review
+
+Installed and integrity-checked in scratch by the same procedure with
+`@openai/codex@0.169.0`. Generated from that exact native binary; both bundles
+and their SHA-256 manifests are retained verbatim.
+
+Before the change, real-binary admission refused 0.169.0 under 0.167.0. The
+native runtime driver also failed in
+`src/lib/runtime/nativeQueueCompaction.integration.test.ts` when its real host
+launch reached that refusal. This blocks Codex launches for users who updated
+to 0.169.0, including structured stages and account/Voice app-server callers.
+The same schemas are refused under 0.168.0. The comparison reports:
+
+- `ClientRequest` methods `account/gatewayOAuth/read` and
+  `account/gatewayOAuth/login` change `params` from null to an `anyOf` of an
+  options object and null. Each produces `type changed` and `params.anyOf:
+  added`. Null remains valid; options select a provider and, for login, device
+  authorization. Delegatus calls neither method.
+- `v2.FunctionCallOutputContentItem`'s `input_audio` variant moves `audio_url`
+  into an `anyOf` alongside `file_id`. Its three paths are `audio_url: removed`,
+  `audio_url: became optional` and `anyOf: added`. URL audio remains valid;
+  file audio is newly valid. Tests cover both, both together, missing references
+  and malformed references.
+
+These preserve the old wire values, while the conservative fallback refuses
+those schema transformations. Its three-path diagnostic limit hides the later
+paths; tests isolate each OAuth method and the audio definition to cover every
+reported change. Exact-version admission uses the reviewed 0.169.0 contract.
+Gateway params tests preserve null and reject malformed or unknown options.
+
+Other additions include `account/securitySetup/read`, optional account security,
+message display/moderation, model listing, queue metadata and environment
+settings fields. The experimental bundle adds `thread/prepareApprovedPlan`.
+No existing method was removed. All 80 generated server-request type files
+still match 0.167.0 byte for byte. The router retains that closure, and decoding
+and answers keep their offered-decision constraints. No new Codex feature is
+enabled. The native CI matrix, local pre-push native phase and supported-version
+message resolved 0.167.0–0.169.0 when this pin landed.
+
+## 0.170.0 compatibility review
+
+Both schema bundles were generated from the native executable in
+`@openai/codex@0.170.0` and retained verbatim with SHA-256 digests.
+Before adding the exact pin, production preflight refused the real 0.170.0
+binary during fallback to 0.169.0. In both bundles, the object with a required
+`action` in `v2.AgentMessageDisplay` becomes a versioned union with
+`show`, `hide` and `block` modes. This affects moderation metadata nested
+in assistant items. The compatibility check reports `properties: removed`,
+`action: became optional` and `type changed`. The schema tests exercise the
+legacy and current forms in `item/completed` payloads.
+
+The experimental bundle adds optional, nullable `biometricType` to
+`UserVerificationVerifyResponse` and expands the documentation for
+`thread/guardianReview`. The request and notification method sets and all 80
+generated server-request type files are unchanged. The runtime keeps the same
+router and treats moderation metadata as part of the item payload. Exact
+admission selects the new schema without changing fallback rules. The native CI
+matrix, local pre-push native phase and supported-version message resolved
+0.168.0–0.170.0 when this pin landed.
+
+## 0.171.0 and 0.172.0 compatibility review
+
+Both versions were installed into scratch prefixes; 0.172.0 is also the
+installed CLI. Each schema pair was generated from the native executable with
+`bun scripts/generate-codex-protocol.ts --codex <binary>`. The generator output
+layout is unchanged from 0.170.0: `generate-json-schema --out <dir>` still
+writes `codex_app_server_protocol.schemas.json`, now beside a v2-only bundle
+and per-message files that Delegatus does not read. Regenerating 0.170.0 by the
+same procedure reproduced its retained bundles byte for byte.
+
+0.171.0 is not an additive extension of 0.170.0, and 0.172.0 is not an additive
+extension of 0.171.0, so each needs its own exact pin:
+
+- **`mcpServer/elicitation/request` gains optional `environmentId`** (0.171.0,
+  both bundles). Server-request params are validated closed, so a 0.171.0 CLI
+  under the 0.170.0 pin would have its elicitations refused. The exact pins
+  accept the field. Verifying this exposed an older defect: the closed-object
+  transform closed the shared fields (`serverName`, `threadId`, `turnId`) and
+  each mode branch separately, so no elicitation could validate under any pin.
+  Each branch is now closed over both field sets; unknown fields, fields from
+  another mode and missing shared fields are still refused.
+- **`currentTime/read` is removed** (0.171.0, experimental). The CLI no longer
+  asks the client for its clock. Its route stays for the 0.170.0 pin, and newer
+  pins refuse it at ingress as an absent server request.
+- **`v2.Project.position` is removed** (0.171.0, both bundles). Delegatus calls
+  no `project/*` method and reads no project notification.
+- **`v2.ThreadRealtimeItem`'s `sessionEndInputSaved` becomes
+  `sessionInputSaved` with a `reason`** (`chunk` or `sessionEnd`) (0.172.0, both
+  bundles). Delegatus reads only `transcriptSegment` items from
+  `thread/realtime/item/*`; that variant is unchanged and other item types are
+  ignored.
+
+Additive changes include `thread/search/stream`, `thread/search/cancel`,
+`thread/search/stream/cancel`, `thread/realtime/list`,
+`modelProvider/default/set` and the `thread/search/partial` notification
+(0.171.0), optional `environmentId` on MCP status, resource, tool-call and
+OAuth params, `ThreadListParams.includedThreadIds`,
+`AccountUpdatedNotification.reason`, realtime frame and handoff items,
+`ThreadStartParams.daybreakProgramPropagationEnrolled`,
+`ThreadSampleParams.model` and an optional Bedrock `providerId` (0.172.0).
+`CodexErrorInfo` adds `bioPolicy` (0.171.0) and `apiKeySpendLimitExceeded`,
+`projectSpendLimitExceeded` and `organizationSpendLimitExceeded` (0.172.0).
+The spend limits belong to API-key billing, which Delegatus's Codex accounts do
+not use, so the existing usage-limit classifiers are unchanged. Of the 80
+retained server-request type files, `ServerRequest.ts`,
+`McpServerElicitationRequestParams.ts` and the two `CurrentTimeRead*` files
+differ. The router keeps the 0.167.0 closure because it still covers the
+0.170.0 pin's `currentTime/read`. No new Codex feature is enabled. The native CI
+matrix, local pre-push native phase and supported-version message resolve
+0.170.0–0.172.0 from the manifest inventory.
+
+## Fallback generation in the Docker install
+
+In the Docker install `codex` is an nsenter shim, so `generate-json-schema`
+runs in the host's mount namespace. Until this review the fallback wrote to a
+scratch directory under the container's `/tmp`; the CLI wrote the bundle into
+the host's `/tmp` at the same path, the Viewer could not find it (`ENOENT`), and
+the directory was never removed. Every CLI above the newest pin failed to launch
+this way, starting with 0.169.0 and again with 0.172.0. With
+`LLV_DOCKER_NSENTER_SHIMS=1` the scratch directory is created under the cache
+root in the home directory, which is mounted at the same path on both sides,
+and removed after reading. Other installs keep the process temp directory.
 
 ## Requested CLI checks
 

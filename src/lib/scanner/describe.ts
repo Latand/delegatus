@@ -1,3 +1,4 @@
+import { redactMediaText } from "@/lib/externalRelay/mediaPrivacy";
 import { worktreeMapStore, projectCurationStore, readProjectDocument, projectStoreSignature } from "@/lib/projects/persistence";
 import fs from "node:fs";
 import os from "node:os";
@@ -28,6 +29,7 @@ import { HEAD_READ_CHUNK_BYTES, headFingerprint, readHead, type HeadReadResult }
 import { readJsonResult, recordValue, recordsValue, stringValue } from "./json";
 import { openclawMessage } from "./openclawNative";
 import { copilotWorkspaceTitle } from "./copilotNative";
+import { readProjectCatalogFolders } from "./projectCatalogStore";
 import { projectResolutionStateKey } from "./projectState";
 
 
@@ -432,11 +434,7 @@ function liveWorktreeGitdir(cwd: string, gitFileText: string, accessibleCwd = cw
     const roots = new Set<string>();
     for (const [, , info] of projectInfoCwdCache.values()) if (info?.repo) roots.add(info.repo);
     for (const info of refreshWorktreeMap().values()) roots.add(info.repo);
-    const catalog = recordValue(readStateJson("project-catalog.json"));
-    for (const file of Object.values(recordValue(catalog?.files) ?? {})) {
-      const root = stringValue(recordValue(file)?.projectRoot);
-      if (root) roots.add(root);
-    }
+    for (const root of readProjectCatalogFolders().projectRoots) roots.add(root);
     const curation = readProjectDocument(projectCurationStore, "project-curation.json");
     for (const entry of recordsValue(curation?.manualProjects)) {
       const root = stringValue(entry.root);
@@ -637,6 +635,7 @@ export function persistWorktreeMap(): void {
     resolution on disk, or null when the checkout is not a linked worktree or
     the map could not be written: the caller must not remove it then. */
 export function recordWorktreeResolution(cwd: string, accessibleCwd = cwd): { repo: string; worktree: string } | null {
+  if (!cwd.trim()) return null;
   let info: { repo: string; worktree: string } | null = null;
   try {
     const gitPath = path.join(accessibleCwd, ".git");
@@ -689,6 +688,7 @@ function worktreeFromGitFile(cwd: string): WorktreeInfo | null {
 /** Explicit recovery writes the same map as live observation and the sweep.
     Refuse a competing mapping under the writer lock; never overwrite it. */
 export function recordRecoveredWorktrees(entries: Array<{ cwd: string; repo: string; worktree: string }>): void {
+  if (entries.some(({ cwd }) => !cwd.trim())) throw new Error("Worktree map key is empty");
   const file = path.join(stateDir(), WORKTREE_MAP_FILE);
   worktreeMapStore.patchRows(file, entries.length * 2, tx => {
     const recovered = new Map(readWorktreeRecoveries().map(row => [row.cwd, row]));
@@ -884,20 +884,27 @@ export function projectInfoFromCwd(cwd: string, requestedState?: string): Projec
   let worktree =
     worktreeFromPath(cwd) ??
     worktreeFromNested(cwd) ??
-    (codexWorktree ? liveWorktree ?? codexWorktree : liveWorktree);
+    liveWorktree;
   if (!worktree && !hasGitMarker(cwd)) {
-    /* An arbitrary-path worktree that has since been deleted: no live
-       recognizer matched and its `.git` is gone, but a resolution we recorded
-       while it was alive still names the parent repo. */
+    /* An arbitrary-path or deleted Codex worktree whose `.git` is gone:
+       no live recognizer matched, so consult a resolution recorded while it
+       was alive before falling back to a bare Codex path hint. */
     worktree = worktreeFromMemory(cwd, liveRepositoryRoot);
     if (!worktree && !liveRepositoryRoot) {
       const persisted = persistedProjects(resolutionState).byCwd.get(cwd);
       if (persisted) {
-        const resolved = aliasedProjectInfo(persisted.project, persisted.worktree, persisted.repo);
+        const resolved = aliasedProjectInfo(
+          persisted.project,
+          persisted.worktree ?? codexWorktree?.worktree,
+          persisted.repo,
+        );
         projectInfoCwdCache.set(cwd, [Date.now() + PROJECT_INFO_CWD_TTL_MS, resolutionState, resolved]);
         return resolved;
       }
     }
+  }
+  if (!worktree && codexWorktree) {
+    worktree = codexWorktree;
   }
   /* No repository claims the cwd: the directory itself is the project
      (operator decision, 2026-08-04). "Unresolved project" remains only for
@@ -956,9 +963,9 @@ export function projectRootForCwd(cwd: string): string | undefined {
   const worktree =
     worktreeFromPath(cwd) ??
     worktreeFromNested(cwd) ??
-    (worktreeFromCodexPath(cwd) ? worktreeFromGitFile(cwd) ?? worktreeFromCodexPath(cwd) : null) ??
     worktreeFromGitFile(cwd) ??
-    worktreeFromMemory(cwd, liveRepositoryRoot);
+    worktreeFromMemory(cwd, liveRepositoryRoot) ??
+    worktreeFromCodexPath(cwd);
   return worktree?.repo || liveRepositoryRoot || undefined;
 }
 
@@ -1033,6 +1040,8 @@ function cwdFromLines(lines: string[]): string | null {
       const record = recordValue(parsed);
       const cwd = stringValue(record?.cwd)
         ?? stringValue(recordValue(record?.payload)?.cwd)
+        /* Antigravity: `session.start` / `session.resume` carry `data.cwd`. */
+        ?? stringValue(recordValue(record?.data)?.cwd)
         /* Copilot: `session.start` / `session.resume` carry `data.context.cwd`. */
         ?? stringValue(recordValue(recordValue(record?.data)?.context)?.cwd);
       if (cwd) return cwd;
@@ -1044,12 +1053,12 @@ function cwdFromLines(lines: string[]): string | null {
 }
 
 function goodTitle(text: unknown): string | null {
-  const val = typeof text === "string" ? text.trim() : "";
+  const val = typeof text === "string" ? redactMediaText(text).trim() : "";
   return val && !skipTitlePrefixes.some((prefix) => val.startsWith(prefix)) ? val : null;
 }
 
 function userPromptFromRecord(obj: Record<string, unknown>, engine: TranscriptEngine): string | null {
-  if (engine === "copilot") {
+  if (engine === "copilot" || engine === "antigravity") {
     /* `data.content` is what the operator typed; `transformedContent` adds
        the CLI's own datetime preamble and is not the prompt. */
     if (obj.type !== "user.message") return null;
@@ -1139,7 +1148,8 @@ function conversationTextFromLines(lines: string[], engine: TranscriptEngine): C
     if (obj.type === "ai-title") {
       title ??= goodTitle(obj.aiTitle);
     }
-    const prompt = userPromptFromRecord(obj, engine);
+    const rawPrompt = userPromptFromRecord(obj, engine);
+    const prompt = rawPrompt ? redactMediaText(rawPrompt) : null;
     if (!prompt) continue;
     firstPrompt ??= prompt;
     title ??= goodTitle(prompt);
@@ -1416,6 +1426,29 @@ function deriveTranscriptMetadata(
       title = titleRead.value;
     }
     title ??= "Copilot session";
+  } else if (rootName === "antigravity-sessions") {
+    /* Host-written Antigravity `events.jsonl`: `session.start.data.cwd` names
+       the workspace and `user.message.data.content` supplies the fallback title. */
+    const cwdRead = complete
+      ? transcriptCwd(pathname, st)
+      : { value: null, complete: false, headPreserved: false };
+    complete &&= cwdRead.complete;
+    cwdComplete = cwdRead.complete;
+    cwd = cwdRead.value ?? undefined;
+    if (complete) {
+      const startedAtRead = transcriptStartedAt(pathname, st);
+      complete &&= startedAtRead.complete;
+      sessionStartedAt = startedAtRead.value;
+    }
+    engine = "antigravity";
+    kind = "session";
+    fmt = "antigravity";
+    if (complete) {
+      const titleRead = scanJsonlTitle(pathname, st, "antigravity");
+      complete &&= titleRead.complete;
+      title = titleRead.value;
+    }
+    title ??= "Antigravity session";
   } else if (rootName === "claude-tasks") {
     engine = "shell";
     kind = "background";
@@ -1467,9 +1500,9 @@ function resolveProjectOverlay(
       ?? (worktreeInfo
         ? aliasedProjectInfo(worktreeInfo.project, worktreeInfo.worktree, worktreeInfo.repo)
         : aliasedProjectInfo(projectFromSlug(slug)));
-  } else if (rootName === "copilot-sessions") {
-    /* The same one algorithm as every other engine: a Copilot session started
-       in a worktree groups under its parent repository. */
+  } else if (rootName === "copilot-sessions" || rootName === "antigravity-sessions") {
+    /* The same one algorithm as every other engine: a Copilot or Antigravity
+       session started in a live or deleted worktree groups under its parent repository. */
     info = (cwd ? projectInfoFromCwd(cwd, stateKey) : null) ?? projectInfoFromTranscript(pathname, stateKey);
   } else if (rootName === "openclaw-sessions") {
     /* The workspace recognizer inside `projectInfoFromCwd` is what gives an

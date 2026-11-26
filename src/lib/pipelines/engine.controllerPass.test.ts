@@ -1,10 +1,13 @@
 import { expect, test, harness, create, createPipelineFromRequest, BUILD_ONLY, loadPipelines, savePipelines, tickPipelines, pipelineIdentity, publishHarness, Database, path, fs, spawn, realWorktreeLane, stopFixtureProcess, defaultPipelinePorts, crypto, registerPipelineTick, reserveActivationOnly, engineModule } from "./engine.fixture";
 import { FlowPipelineController, type FlowPipelineControllerHeartbeat } from "./controller";
+import { requestPipelineTick } from "./controllerSignal";
 import { tickPipelinesController } from "./controllerPass";
+import { settlePipelineStopReadLanes } from "./controllerStopRead";
+import { latch, until, withControllerAuditState } from "./fixtures/ownedStageControl";
 import { pipelineControllerJobLanes, settlePipelineControllerJobs, startPipelineControllerJob, takePipelineControllerJobChanges } from "./controllerJobs";
-import { controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation, withPipelineControllerMutation, controllerUnclaimedPublications, PipelineStoreError } from "./store";
+import { controllerAttemptWindow, controllerOtherTerminalHosts, controllerHostHasLiveWork, controllerFlowAttached, acknowledgePipelineControllerWork, archiveSettledPipelines, controllerPipelineVersion, findControllerPipeline, pipelineControllerReady, selectControllerPipelines, selectPipelineControllerWork, withPipelineMutation, withDeliveryMutationAsync, withPipelineControllerMutation, controllerUnclaimedPublications, PipelineStoreError } from "./store";
 import { SqliteStateCollection, StateSnapshotChangedError, resetStateReadonlyConnectionCountForTests, stateReadonlyConnectionCountForTests } from "@/lib/state/sqliteStateStore";
-import { spyOn } from "bun:test";
+import { setSystemTime, spyOn } from "bun:test";
 import { performanceSpans, performanceSites } from "@/lib/performanceSpans";
 import { instanceCpuAdmissionFile, instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
 import { stateDir } from "@/lib/configDir";
@@ -23,12 +26,6 @@ async function committing(publication: "internal" | "remote-branch" = "internal"
   Object.assign(lane.runs[0]!.attempts[0]!, { state: "committing", verdict: { status: "pass" } });
   savePipelines([lane]);
   return { h, lane };
-}
-
-function latch() {
-  let resolve!: () => void;
-  const promise = new Promise<void>(done => { resolve = done; });
-  return { promise, resolve };
 }
 
 test.each(["never", "late-write"] as const)("an expired controller abandons a %s await and the next tick admits and launches the waiting stage", async mode => {
@@ -160,7 +157,7 @@ test("an in-flight reserved launch retains custody across pass expiry and settle
   } finally { release.resolve(); await settlePipelineControllerJobs(); queue.close(); }
 });
 
-test("a waiting production publisher releases its settlement permit for another passed stage", async () => {
+test("a waiting production publisher releases its settlement permit for another passed stage", () => withControllerAuditState(async () => {
   const publishers: Array<Awaited<ReturnType<typeof committing>> & {
     publication: ReturnType<typeof publishHarness>; exec: ReturnType<typeof harness>["ports"]["exec"];
   }> = [];
@@ -225,7 +222,7 @@ test("a waiting production publisher releases its settlement permit for another 
   } finally { release.resolve(); await settlePipelineControllerJobs(); }
   expect([...pushes.values()]).toEqual([1, 1, 1, 1]);
   for (const publisher of publishers) expect(loadPipelines().find(row => row.id === publisher.lane.id)!.delivery!.operation!.result?.ok).toBe(true);
-}, 60_000);
+}), 60_000);
 
 test("settlement admission retries three timed out windows before parking the preserved pass", async () => {
   const release = latch();
@@ -327,12 +324,6 @@ test("observing an unchanged external job does not request another immediate tic
   } finally { unregister(); }
 });
 
-async function until(promise: Promise<unknown>, timeout = 3_000) {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try { await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("boundary did not settle")), timeout); })]); }
-  finally { clearTimeout(timer); }
-}
-
 test("the real controller returns while a 20 second fenced Git job remains pending, without a second writer", async () => {
   const { h, lane } = await committing();
   const entered = latch(), release = latch();
@@ -344,7 +335,7 @@ test("the real controller returns while a 20 second fenced Git job remains pendi
   };
   const heartbeats: FlowPipelineControllerHeartbeat[] = [];
   const controller = new FlowPipelineController({
-    tickPipelines: files => tickPipelinesController(files, h.ports), tickFlows: async () => ({ changed: false }),
+    tickPipelines: files => tickPipelinesController(files, h.ports),
     now: () => 0, scan: async () => ({ files: [], complete: false }), publishHeartbeat: value => heartbeats.push(value), log: () => {},
   }, { maxPasses: 1 });
   const started = performance.now();
@@ -593,6 +584,7 @@ test.each([0, 1000])("the internal phase never builds a full returned snapshot w
     const peer = structuredClone(lane); peer.id = `settled-${n}`;
     Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
     peer.state = "closed"; peer.closedAt = h.ports.now(); peer.cursor = null; peer.runs = peer.runs.map(run => ({ ...run, attempts: Array.from({ length: 8 }, (_, index) => ({ ...structuredClone(run.attempts[0]!), n: index + 1,
+      accounting: { ...run.attempts[0]!.accounting!, repeatReason: index ? "unknown" as const : null },
       state: "failed", launchId: null, verdict: { status: "fail" }, completedAt: peer.closedAt, output: "retained evidence ".repeat(256) })) })); peer.delivery = undefined; peer.publication = "internal";
     peer.terminalReap = { rounds: 1, stopped: 0, lastAt: peer.closedAt!, settledAt: peer.closedAt!,
       settledAttempts: peer.runs.flatMap(run => run.attempts.map(attempt => `${run.stageId}:${attempt.n}`)) };
@@ -640,7 +632,9 @@ test("a paused lane rotates a bounded historical-attempt window and preserves it
   lane.state = "paused";
   const current = lane.runs[0]!.attempts[0]!;
   current.state = "running"; current.verdict = null; current.n = 34;
+  current.accounting!.repeatReason = "unknown";
   const history = Array.from({ length: 33 }, (_, index) => ({ ...structuredClone(current), n: index + 1, historical: true,
+    accounting: { ...current.accounting!, repeatReason: index ? "unknown" as const : null },
     conversationId: `historical-${index}`, agentPath: `/codex/history-${index}.jsonl`, launchId: null, paneId: null }));
   lane.runs[0]!.attempts = [...history, current];
   savePipelines([lane]);
@@ -663,6 +657,7 @@ test("a large completed lane reaps at most sixteen hosts per phase and reaches t
   lane.state = "completed"; lane.cursor = null;
   const original = lane.runs[0]!.attempts[0]!;
   lane.runs[0]!.attempts = Array.from({ length: 65 }, (_, index) => ({ ...structuredClone(original), n: index + 1,
+    accounting: { ...original.accounting!, repeatReason: index ? "unknown" as const : null },
     state: "passed", completedAt: h.ports.now(), conversationId: `finished-${index}`, agentPath: `/codex/finished-${index}.jsonl`,
     paneId: null, launchId: null }));
   let probes = 0;
@@ -804,6 +799,7 @@ test("continuation failures cannot starve later cancellation or host teardown ac
   const { h, lane } = await committing();
   const original = lane.runs[0]!.attempts[0]!;
   lane.runs[0]!.attempts = Array.from({ length: 17 }, (_, index) => ({ ...structuredClone(original), n: index + 1,
+    accounting: { ...original.accounting!, repeatReason: index ? "unknown" as const : null },
     conversationId: `close-${index}`, launchId: null, paneId: null, agentPath: null, state: "running", verdict: null, completedAt: null }));
   lane.state = "closed"; lane.closedAt = h.ports.now(); lane.cursor = null;
   const pending = lane.runs[0]!.attempts.map(attempt => ({ stageId: "build", attempt: attempt.n,
@@ -847,7 +843,7 @@ test("continuation failures cannot starve later cancellation or host teardown ac
   // deadline, beyond Bun's default five-second budget for this whole test.
 }, 30_000);
 
-test.each([0,1000])("resident terminal hosts and stale flow cleanup use indexed peer ownership with %s retained peers", async history => {
+test.each([0,1000])("resident terminal hosts use indexed peer ownership with %s retained peers", async history => {
   const { h, lane } = await committing();
   lane.state = "completed"; lane.cursor = null;
   const attempt = lane.runs[0]!.attempts[0]!;
@@ -856,28 +852,26 @@ test.each([0,1000])("resident terminal hosts and stale flow cleanup use indexed 
   Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
   peer.runs[0]!.attempts[0]!.state = "running";
   peer.runs[0]!.attempts[0]!.flowId = "attached-flow";
-  lane.pendingReviewFlowCleanup = ["attached-flow", "orphan-flow"];
   const retained = Array.from({ length: history }, (_, index) => {
     const row = structuredClone(lane); row.id = `ownership-history-${index}`;
     Object.assign(row,pipelineIdentity(row.id,row.task,row.repoDir));
-    row.state = "closed"; row.closedAt = h.ports.now(); row.pendingReviewFlowCleanup = [];
+    row.state = "closed"; row.closedAt = h.ports.now();
     row.delivery = undefined; row.runs = row.runs.map(run => ({ ...run, attempts: [] }));
     return row;
   });
   savePipelines([lane, peer, ...retained]);
   h.ports.stageHostResident = async () => true;
   h.ports.conversationAgentActive = async () => false;
-  let stopped = 0; const closed: string[] = [];
+  let stopped = 0;
   h.ports.stopStageAgent = async () => { stopped++; return { outcome: "stopped" }; };
-  h.ports.closeFlow = async id => { closed.push(id); return {}; };
   const original = SqliteStateCollection.prototype.loadReadonly;
   const loads = spyOn(SqliteStateCollection.prototype, "loadReadonly").mockImplementation(function(this: SqliteStateCollection<unknown>, ...args) {
-    if (new Error().stack?.match(/reconcileTerminalStageHosts|drainPendingStaleControllerFlows|settleStaleControllerFlow/)) throw new Error("whole collection ownership read");
+    if (new Error().stack?.match(/reconcileTerminalStageHosts/)) throw new Error("whole collection ownership read");
     return original.apply(this, args);
   });
   try {
     await tickPipelinesController([], h.ports);
-    expect(stopped).toBe(0); expect(closed).toEqual(["orphan-flow"]);
+    expect(stopped).toBe(0);
     expect(await controllerFlowAttached("attached-flow")).toBe(true);
     const rows = loadPipelines(); rows[1]!.runs[0]!.attempts[0]!.state = "passed"; savePipelines(rows);
     await tickPipelinesController([], h.ports);
@@ -885,14 +879,16 @@ test.each([0,1000])("resident terminal hosts and stale flow cleanup use indexed 
   } finally { loads.mockRestore(); }
 });
 
-test.each([64, 4096])("closed-lane cleanup keeps eligibility checks bounded with %s unlaunched attempts", async history => {
+test.each([64, 4096])("a closed lane with leftover review-flow cleanup ids keeps eligibility checks bounded with %s unlaunched attempts", async history => {
   const { h, lane } = await committing();
   const original = lane.runs[0]!.attempts[0]!;
   lane.state = "closed"; lane.cursor = null; lane.closedAt = h.ports.now();
   lane.runs[0]!.attempts = Array.from({ length: history }, (_, index) => ({ ...structuredClone(original), n: index + 1,
+    accounting: { ...original.accounting!, repeatReason: index ? "unknown" as const : null },
     historical: true, state: "failed", verdict: { status: "fail" }, completedAt: lane.closedAt,
     conversationId: null, agentPath: null, paneId: null, launchId: null }));
-  lane.runs[0]!.attempts.push({ ...structuredClone(original), n: history + 1, historical: true,
+  lane.runs[0]!.attempts.push({ ...structuredClone(original), n: history + 1,
+    accounting: { ...original.accounting!, repeatReason: "unknown" as const }, historical: true,
     state: "running", verdict: null, completedAt: null, conversationId: "late-host", agentPath: "late-host-transcript", launchId: null });
   for (const attempt of lane.runs[0]!.attempts) delete attempt.activation;
   lane.terminalReap = { rounds: 0, stopped: 0, lastAt: lane.closedAt!, settledAt: null,
@@ -910,9 +906,8 @@ test.each([64, 4096])("closed-lane cleanup keeps eligibility checks bounded with
   };
   try { await tickPipelinesController([], h.ports); }
   finally { Array.prototype.some = some; }
-  expect(closed).toEqual(["cleanup-flow"]);
+  expect(closed).toEqual([]);
   expect(visits).toBeLessThanOrEqual(256);
-  expect(loadPipelines()[0]!.pendingReviewFlowCleanup ?? []).toEqual([]);
   expect((await selectPipelineControllerWork(Number.MAX_SAFE_INTEGER, [])).some(work => work.row_key === lane.id)).toBe(true);
 }, 30_000);
 
@@ -929,9 +924,11 @@ test.each(["paused", "running"] as const)("complete warmed %s phases keep attemp
   const original = lane.runs[0]!.attempts[0]!;
   for (const history of [32,4096]) {
     lane.runs[0]!.attempts = Array.from({ length: history }, (_, index) => ({ ...structuredClone(original), n: index + 1,
+    accounting: { ...original.accounting!, repeatReason: index ? "unknown" as const : null },
       historical: true, state: "failed", verdict: { status: "fail" }, completedAt: h.ports.now(),
       conversationId: `retained-${index}`, agentPath: `retained-path-${index}`, paneId: null, launchId: null }));
     if (state === "running") lane.runs[0]!.attempts.push({ ...structuredClone(original), n: history + 1,
+    accounting: { ...original.accounting!, repeatReason: "unknown" as const },
       state: "running", verdict: null, completedAt: null });
     lane.terminalReap = { rounds:1,stopped:history,lastAt:h.ports.now(),settledAt:h.ports.now(),
       settledAttempts:Array.from({ length:history },(_,n) => `build:${n+1}`) };
@@ -996,6 +993,7 @@ test("new terminal batches retain five failed-stop opportunities across windows 
   lane.state = "paused"; lane.cursor = null;
   const original = lane.runs[0]!.attempts[0]!;
   lane.runs[0]!.attempts = Array.from({ length: 18 },(_,index) => ({ ...structuredClone(original), n: index+1,
+    accounting: { ...original.accounting!, repeatReason: index ? "unknown" as const : null },
     historical: true, state: "failed", verdict: { status: "fail" }, completedAt: h.ports.now(),
     conversationId: `terminal-${index}`, agentPath: `terminal-path-${index}`, paneId: null, launchId: null }));
   lane.terminalReap = { rounds: 4, stopped: 1, settledAt: h.ports.now(), lastAt: h.ports.now(), settledAttempts: ["build:1"] };
@@ -1032,10 +1030,11 @@ test("off-window survivor evidence prevents a fresh activation until a peer clea
   const lane = loadPipelines()[0]!, original = lane.runs[0]!.attempts[0]!;
   lane.state = "running"; lane.cursor!.state = "pending";
   const history = Array.from({ length: 65 },(_,n) => ({ ...structuredClone(original),n: n+1,historical: true,
+    accounting: { ...original.accounting!, repeatReason: n ? "unknown" as const : null },
     state: "failed" as const,verdict: { status: "fail" as const },completedAt: h.ports.now(),
     conversationId: null,agentPath: null,paneId: null,launchId: null }));
   history[64]!.unresolvedTermination = { recordedAt: h.ports.now(),error: "unverified descendant",survivors: [captureProcessIdentity(process.pid)!] };
-  lane.runs[0]!.attempts = [...history,{ ...original,n: 66,state: "pending",conversationId: null,agentPath: null,paneId: null,launchId: null }];
+  lane.runs[0]!.attempts = [...history,{ ...original,n: 66,accounting: { ...original.accounting!, repeatReason: "unknown" as const },state: "pending",conversationId: null,agentPath: null,paneId: null,launchId: null }];
   savePipelines([lane]);
   let spawns = 0;
   const spawnAgent = h.ports.spawnAgent;
@@ -1054,7 +1053,7 @@ test("lazy controller copies isolate discarded edits and checkpoint the whole re
   const original = lane.runs[0]!.attempts[0]!;
   const samples: { history: number;wallMs: number;holdMs: number }[] = [];
   for (const history of [32,1024,4096]) {
-    lane.runs[0]!.attempts = Array.from({ length: history },(_,n) => ({ ...structuredClone(original),n:n+1,historical:true,
+    lane.runs[0]!.attempts = Array.from({ length: history },(_,n) => ({ ...structuredClone(original),n:n+1,accounting: { ...original.accounting!, repeatReason: n ? "unknown" as const : null },historical:true,
       conversationId:null,agentPath:null,paneId:null,launchId:null,state:"failed",verdict:{status:"fail"},completedAt:h.ports.now() }));
     savePipelines([lane]);
     const refs = new Map([[lane.id,(await controllerAttemptWindow(lane.id,-1,"")).window]]);
@@ -1081,13 +1080,13 @@ test("an off-window activation keeps its custody while the current attempt waits
   const h = await reserveActivationOnly();
   const lane = loadPipelines()[0]!, original = lane.runs[0]!.attempts[0]!;
   const history = Array.from({ length: 65 },(_,n) => {
-    const attempt = { ...structuredClone(original),n:n+1,historical:true,state:"failed" as const,
+    const attempt = { ...structuredClone(original),n:n+1,accounting: { ...original.accounting!, repeatReason: n ? "unknown" as const : null },historical:true,state:"failed" as const,
       verdict:{status:"fail" as const},completedAt:h.ports.now() };
     delete attempt.activation;
     return attempt;
   });
   history[64]!.activation = structuredClone(original.activation!);
-  const current = { ...structuredClone(original),n:66,state:"pending" as const };
+  const current = { ...structuredClone(original),n:66,accounting: { ...original.accounting!, repeatReason: "unknown" as const },state:"pending" as const };
   delete current.activation;
   lane.runs[0]!.attempts = [...history,current];
   savePipelines([lane]);
@@ -1107,8 +1106,8 @@ test("indexed fallback membership preserves off-window conversation, launch and 
     { conversationId:null,launchId:"older-launch",agentPath:"older-path" },
     { conversationId:null,launchId:null,agentPath:"older-path" },
   ]) {
-    lane.runs[0]!.attempts = [...Array.from({ length:64 },(_,n) => ({ ...structuredClone(original),n:n+1,
-      conversationId:null,launchId:null,agentPath:null })),{ ...structuredClone(original),n:65,...identity }];
+    lane.runs[0]!.attempts = [...Array.from({ length:64 },(_,n) => ({ ...structuredClone(original),n:n+1,accounting: { ...original.accounting!, repeatReason: n ? "unknown" as const : null },
+      conversationId:null,launchId:null,agentPath:null })),{ ...structuredClone(original),n:65,accounting: { ...original.accounting!, repeatReason: "unknown" as const },...identity }];
     for (const conversationId of [null,"older-conversation","other-conversation"]) for (const launchId of [null,"older-launch","other-launch"]) {
       const tasks = [{ id:"inherited-task",project:lane.project,assignments:[{ state:"linked",conversationId,launchId,path:"older-path" }] }];
       const expected = structuredClone(lane); expected.taskIds = [];
@@ -1267,8 +1266,9 @@ test("nested controller jobs retain their bounded attempt selection", async () =
   const { h, lane } = await committing();
   const original = lane.runs[0]!.attempts[0]!;
   lane.runs[0]!.attempts = Array.from({ length: 1024 }, (_, n) => ({ ...structuredClone(original), n: n + 1,
+    accounting: { ...original.accounting!, repeatReason: n ? "unknown" as const : null },
     historical: true, state: "failed", output: "x".repeat(4096), launchId: null, verdict: { status: "fail" } }));
-  lane.runs[0]!.attempts.push({ ...original, n: 1025 });
+  lane.runs[0]!.attempts.push({ ...original, n: 1025, accounting: { ...original.accounting!, repeatReason: "unknown" as const } });
   savePipelines([lane]);
   const refs = await controllerAttemptWindow(lane.id, 0, "build");
   const references = new Map([[lane.id, [...refs.window, ...refs.current]]]);
@@ -1284,12 +1284,13 @@ test("nested controller jobs retain their bounded attempt selection", async () =
 });
 
 
-test("settlement polling reads revisions without cloning retained lane history", async () => {
+test("settlement polling reads revisions without cloning retained lane history", () => withControllerAuditState(async () => {
   const { h, lane } = await committing();
   const original = lane.runs[0]!.attempts[0]!;
   lane.runs[0]!.attempts = Array.from({ length: 1024 }, (_, n) => ({ ...structuredClone(original), n: n + 1,
+    accounting: { ...original.accounting!, repeatReason: n ? "unknown" as const : null },
     historical: true, state: "failed", output: "x".repeat(4096), launchId: null, verdict: { status: "fail" } }));
-  lane.runs[0]!.attempts.push({ ...original, n: 1025 });
+  lane.runs[0]!.attempts.push({ ...original, n: 1025, accounting: { ...original.accounting!, repeatReason: "unknown" as const } });
   const peers = Array.from({ length: 16 }, (_, n) => {
     const peer = structuredClone(lane); peer.id = `poll-peer-${n}`;
     Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
@@ -1329,7 +1330,7 @@ test("settlement polling reads revisions without cloning retained lane history",
       expect(reads.mock.calls).toHaveLength(0);
     } finally { reads.mockRestore(); }
   } finally { release.resolve(); await settlePipelineControllerJobs(); }
-});
+}), 15_000);
 
 
 test("shared compact authority observations keep each job's own lane out of its peer token", async () => {
@@ -1350,6 +1351,293 @@ test("shared compact authority observations keep each job's own lane out of its 
   });
   expect(await owner.read()).toBe(originalOwner);
   expect(await other.read()).not.toBe(originalOther);
+});
+
+test.each([
+  ["direct", "pinned", "dirty", 1], ["direct", "followed", "dirty", 1],
+  ["queued", "pinned", "dirty", 1], ["queued", "followed", "dirty", 1],
+  ["direct", "pinned", "due", 1], ["direct", "followed", "due", 1],
+  ["queued", "pinned", "due", 1], ["queued", "followed", "due", 1],
+  ["direct", "pinned", "due", 2], ["direct", "pinned", "due", 3],
+  ["direct", "pinned", "mixed-due", 2],
+] as const)("a %s lane with a %s base starts as %s despite %i repeatedly timed-out peers",
+  (admission, base, readiness, blockerCount) => withControllerAuditState(() => auditPeerRotation(admission, base, readiness, blockerCount)));
+
+async function auditPeerRotation(admission: "direct" | "queued", base: "pinned" | "followed",
+  readiness: "dirty" | "due" | "mixed-due", blockerCount: number) {
+  const { realExec } = await import("@/lib/workflows/provision");
+  const { realProvisionExec } = await import("./git");
+  const { StoreBusyBeforeAdmissionError } = await import("@/lib/state/fileTransaction");
+  const store = await import("./store");
+  const queue = await import("./creationQueue");
+  const h = harness();
+  const epoch = Date.parse("2026-11-18T00:00:00.000Z");
+  let elapsed = 0;
+  h.ports.now = () => new Date(epoch + elapsed).toISOString();
+  await create(h.ports, BUILD_ONLY as never);
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  const blocker = loadPipelines()[0]!;
+  Object.assign(blocker, { id: "always-dirty", state: "needs_decision", delivery: undefined });
+  Object.assign(blocker, pipelineIdentity(blocker.id, blocker.task, blocker.repoDir));
+  const oldAttempt = blocker.runs[0]!.attempts[0]!;
+  Object.assign(oldAttempt, { state: "needs_decision", conversationId: "conversation_blocked_stop" });
+  oldAttempt.providerWait = { condition: { kind: "host_death", label: "host died", scope: null, resetLabel: null },
+    accountId: null, text: "host died", turnTs: epoch, tries: 0, startedAt: h.ports.now(), resumeAt: h.ports.now(), resetsAt: null };
+  const blockers = Array.from({ length: blockerCount }, (_, index) => {
+    const peer = structuredClone(blocker);
+    peer.id = `always-dirty-${index}`;
+    Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
+    Object.assign(peer.runs[0]!.attempts[0]!, { conversationId: `conversation_blocked_stop_${index}` });
+    return peer;
+  });
+  const blockerConversations = new Map(blockers.map(peer => [peer.runs[0]!.attempts[0]!.conversationId, peer.id]));
+  savePipelines(blockers);
+  const root = fs.mkdtempSync(path.join(process.env.TMPDIR!, "provision-under-load-"));
+  const repo = path.join(root, "repo");
+  const origin = path.join(root, "origin.git");
+  fs.mkdirSync(repo);
+  const git = async (cwd: string, ...args: string[]) => {
+    const result = await realExec("git", args, cwd, {
+      GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "noreply@example.invalid",
+      GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "noreply@example.invalid",
+      GIT_AUTHOR_DATE: h.ports.now(), GIT_COMMITTER_DATE: h.ports.now(),
+    });
+    if (result.code !== 0) throw new Error(result.stderr || result.stdout);
+    return result.stdout.trim();
+  };
+  await git(repo, "init", "--initial-branch=main");
+  await git(repo, "-c", "commit.gpgSign=false", "commit", "--allow-empty", "-m", "base");
+  const sha = await git(repo, "rev-parse", "HEAD");
+  await git(root, "clone", "--bare", repo, origin);
+  await git(repo, "remote", "add", "origin", origin);
+
+  let entered = latch(), release = latch();
+  let enteredBlocker: string | undefined;
+  const visitedBlockers = new Set<string>();
+  const mixedDue = readiness === "mixed-due";
+  const block = async (peer: string) => {
+    enteredBlocker = peer;
+    visitedBlockers.add(peer);
+    entered.resolve();
+    await release.promise;
+  };
+  h.ports.conversationOperatorStopped = async id => {
+    const peer = blockerConversations.get(id);
+    if (!mixedDue && peer !== undefined) await block(peer);
+    return false;
+  };
+  const fixtureExec = h.ports.exec;
+  h.ports.exec = async (command, args, cwd, env, options) => {
+    const peer = blockers.find(peer => peer.worktreeDir === cwd);
+    if (mixedDue && peer && command === "git" && args[0] === "branch" && args[1] === "--show-current") await block(peer.id);
+    return cwd.startsWith(root + path.sep)
+      ? realExec(command, args, cwd, env, options) : fixtureExec(command, args, cwd, env, options);
+  };
+  let adds = 0, fetches = 0;
+  h.ports.provisionExec = (command, args, cwd, signal, options) => {
+    if (args[0] === "worktree" && args[1] === "add") adds++;
+    if (args[0] === "fetch") fetches++;
+    return realProvisionExec(command, args, cwd, signal, options);
+  };
+  h.ports.worktreePresent = fs.existsSync;
+
+  const diagnostics: Array<{ pipelineId: string; at: string; phase: string; admission?: string; step?: string; status?: string }> = [];
+  const trace = "[flow pipeline provisioning] ";
+  const quiet = process.env.LLV_QUIET_DIAGNOSTICS;
+  delete process.env.LLV_QUIET_DIAGNOSTICS;
+  const info = spyOn(console, "info").mockImplementation(message => {
+    if (typeof message === "string" && message.startsWith(trace)) diagnostics.push(JSON.parse(message.slice(trace.length)));
+  });
+  const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+  try {
+    setSystemTime(new Date(epoch));
+    const busy = admission === "queued" ? spyOn(store, "createPipelineWithDelivery").mockRejectedValueOnce(
+      new StoreBusyBeforeAdmissionError("fixture store busy before admission"),
+    ) : undefined;
+    const created = await (async () => {
+      try {
+        return await createPipelineFromRequest({ task: "Ready under load", spec: "First attempt under load", repoDir: repo,
+          stages: BUILD_ONLY as never, publication: "internal", ...(base === "pinned" ? { baseRef: sha } : {}),
+        }, h.ports, { queueWhenBusy: true, creationRequest: { key: "busy-controller-create", digest: "fixture-create" } });
+      } finally { busy?.mockRestore(); }
+    })();
+    const lane = created.pipeline!;
+    expect(lane.state).toBe("provisioning");
+    expect(Boolean(created.queued)).toBe(admission === "queued");
+    expect(fs.existsSync(lane.worktreeDir)).toBe(false);
+    expect((await findControllerPipeline(lane.id))?.id ?? null).toBe(admission === "queued" ? null : lane.id);
+
+    const timers: Array<{ active: boolean; callback: () => void }> = [];
+    const log: string[] = [];
+    const budget = mixedDue ? 15_000 : 500;
+    const controller = new FlowPipelineController({
+      tickPipelines: entries => tickPipelinesController(entries, h.ports),
+      now: () => epoch + elapsed, monotonicNow: () => elapsed,
+      scan: async () => ({ files: [], complete: false }),
+      publishHeartbeat: () => {},
+      scheduleTimeout: callback => { const timer = { active: true, callback }; timers.push(timer); return timer; },
+      clearTimeout: timer => { (timer as typeof timers[number]).active = false; },
+      log: message => { log.push(message); },
+    }, { phaseDeadlineMs: budget, requestDeadlineMs: budget, maxPasses: 1 });
+    for (let pass = 0; pass < 8; pass++) {
+      entered = latch(); release = latch(); enteredBlocker = undefined;
+      // Drive the blockers through the normal generation trigger. The
+      // controller records selection, then each hung call expires before ack.
+      for (const peer of blockers) {
+        db.query("UPDATE state_rows SET value_json=json_set(value_json,'$.stateDetail',?) WHERE collection='pipelines' AND row_key=?")
+          .run(`peer update ${pass}`, peer.id);
+      }
+      const setDue = db.query("UPDATE pipeline_tick_work SET dirty=0,due_at=? WHERE row_key=?");
+      if (mixedDue) setDue.run(epoch - 1, blockers[0]!.id);
+      if (readiness !== "dirty" && pass === 0) setDue.run(epoch, lane.id);
+      const tick = controller.tick();
+      let blocked = false;
+      await until(Promise.race([tick, entered.promise.then(() => { blocked = true; })]));
+      elapsed += budget;
+      setSystemTime(new Date(epoch + elapsed));
+      const readWork = db.query<{ generation: number; dirty: number; attempt_cursor: number }, [string]>(
+        "SELECT generation,dirty,attempt_cursor FROM pipeline_tick_work WHERE row_key=?",
+      );
+      const timedOutPeer = enteredBlocker;
+      const before = timedOutPeer === undefined ? null : readWork.get(timedOutPeer);
+      if (blocked) {
+        // The production selection transaction must already be durable.
+        expect(db.query<{ row_key: string }, []>("SELECT row_key FROM pipeline_tick_cursor WHERE id=1").get()?.row_key).toBe(timedOutPeer);
+        expect(before).toMatchObject({ dirty: mixedDue && timedOutPeer === blockers[0]!.id ? 0 : 1 });
+        timers.findLast(timer => timer.active)!.callback();
+      }
+      await until(tick);
+      if (timedOutPeer !== undefined) expect(readWork.get(timedOutPeer)).toEqual(before);
+      release.resolve();
+      await settlePipelineControllerJobs();
+      if (mixedDue && process.env.LLV_COLD_CONTROLLER_EVIDENCE) {
+        const dueCursor = db.query<{ row_key: string }, []>("SELECT row_key FROM pipeline_tick_priority_cursor WHERE kind='due'").get();
+        console.log("mixed-due-audit", JSON.stringify({ pass, timedOutPeer, dueCursorAtOldPeer: dueCursor?.row_key === blockers[0]!.id,
+          cold: readWork.get(lane.id), phases: diagnostics.filter(event => event.pipelineId === lane.id).map(event => event.phase) }));
+      }
+    }
+    const deadlines = log.filter(line => line.includes(mixedDue ? "port.exec" : "port.conversationOperatorStopped")).length;
+    const attempts = (await findControllerPipeline(lane.id))?.runs[0]?.attempts;
+    if (process.env.LLV_COLD_CONTROLLER_EVIDENCE) {
+      const cursor = db.query<{ row_key: string }, []>("SELECT row_key FROM pipeline_tick_cursor WHERE id=1").get();
+      console.log("dirty-peer-rotation-audit", JSON.stringify({ admission, base, readiness, blockerCount, deadlines,
+        attempts: attempts?.length ?? 0, cursorAtBlocker: blockers.some(peer => peer.id === cursor?.row_key) }));
+    }
+    expect(deadlines).toBeGreaterThan(0);
+    expect(visitedBlockers.size).toBe(blockerCount);
+    expect(attempts).toMatchObject([{ n: 1, state: "running" }]);
+    expect(h.spawnInputs.filter(input => input.cwd === lane.worktreeDir)).toHaveLength(1);
+    expect(adds).toBe(1);
+    expect(fetches).toBe(base === "pinned" ? 0 : 1);
+    expect(await git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(sha);
+    expect((await git(repo, "worktree", "list", "--porcelain")).split("\n").filter(line => line === `worktree ${lane.worktreeDir}`)).toHaveLength(1);
+    expect(queue.listQueuedPipelineCreations()).toEqual([]);
+    const events = diagnostics.filter(event => event.pipelineId === lane.id);
+    const { startedAt } = (await findControllerPipeline(lane.id))!.runs[0]!.attempts[0]!;
+    expect(events).toEqual([
+      { pipelineId: lane.id, at: new Date(epoch).toISOString(), phase: "accepted", admission },
+      { pipelineId: lane.id, at: expect.any(String), phase: "scheduler-selected" },
+      { pipelineId: lane.id, at: expect.any(String), phase: "state-validated" },
+      ...(["common-directory", ...(base === "pinned" ? [] : ["fetch"]), "worktree-add"].flatMap(step => [
+        { pipelineId: lane.id, at: expect.any(String), phase: "git-started", step },
+        { pipelineId: lane.id, at: expect.any(String), phase: "git-finished", step, status: "ok" },
+      ])),
+      { pipelineId: lane.id, at: startedAt, phase: "first-attempt" },
+    ]);
+    const times = events.map(event => Date.parse(event.at));
+    expect(times).toEqual([...times].sort((a, b) => a - b));
+    expect(Date.parse(startedAt!) - epoch).toBeLessThanOrEqual(4 * budget);
+  } finally {
+    release.resolve();
+    await settlePipelineStopReadLanes();
+    await settlePipelineControllerJobs();
+    db.close();
+    info.mockRestore();
+    setSystemTime();
+    if (quiet !== undefined) process.env.LLV_QUIET_DIAGNOSTICS = quiet;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test.each(["recovers", "exhausts"] as const)("a classified provisioning lock retry %s across controller processes", async outcome => {
+  const f = await realWorktreeLane("provision-lock-restart", BUILD_ONLY as never);
+  const initial = Date.parse("2026-11-18T00:00:00.000Z");
+  const iso = (offset: number) => new Date(initial + offset).toISOString();
+  f.h.ports.now = () => iso(0);
+  const source = `
+    import { defaultPipelinePorts } from "./src/lib/pipelines/engine.ts";
+    import { realProvisionExec } from "./src/lib/pipelines/git.ts";
+    import { tickPipelinesController } from "./src/lib/pipelines/controllerPass.ts";
+    import { settlePipelineControllerJobs } from "./src/lib/pipelines/controllerJobs.ts";
+    import { registerPipelineTick } from "./src/lib/pipelines/controllerSignal.ts";
+    registerPipelineTick(async () => {});
+    const ports = defaultPipelinePorts();
+    ports.now = () => process.env.LLV_FIXTURE_RETRY_AT;
+    ports.structuredDeliveryPublication = () => "unbound";
+    ports.worktreeDiskWait = () => null;
+    ports.cpuAdmissionReconcile = async () => {};
+    ports.scheduleTick = () => {};
+    let adds = 0;
+    ports.provisionExec = async (...args) => {
+      if (args[1][0] === "worktree" && args[1][1] === "add") adds++;
+      return realProvisionExec(...args);
+    };
+    await tickPipelinesController([], ports);
+    await settlePipelineControllerJobs();
+    console.log(adds);
+  `;
+  const runAt = async (offset: number) => {
+    const child = Bun.spawn([process.execPath, "-e", source], {
+      env: { ...process.env, LLV_QUIET_DIAGNOSTICS: "1", LLV_FIXTURE_RETRY_AT: iso(offset), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const result = Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    try {
+      await until(result, 10_000);
+      const [exit, stdout, stderr] = await result;
+      expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+      return Number(stdout.trim());
+    } finally {
+      if (child.exitCode === null) child.kill();
+      await child.exited;
+    }
+  };
+  try {
+    const created = await createPipelineFromRequest({ task: "Retry a held ref", repoDir: f.repo, baseRef: f.base,
+      stages: BUILD_ONLY as never, publication: "internal" }, f.h.ports);
+    const lane = created.pipeline!;
+    const lock = path.join(f.repo, ".git", "refs", "heads", `${lane.branch}.lock`);
+    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    fs.writeFileSync(lock, "");
+    await tickPipelinesController([], f.h.ports);
+    await settlePipelineControllerJobs();
+    const waiting = (await findControllerPipeline(lane.id))!;
+    expect(waiting.stateDetail).toContain("a Git lock was held");
+    expect(waiting.provisioningWait).toMatchObject({ startedAt: iso(0), retryAfter: iso(5_000), rounds: 1, budgetMs: 180_000 });
+    expect(await runAt(4_999)).toBe(0);
+    expect((await findControllerPipeline(lane.id))?.provisioningWait).toEqual(waiting.provisioningWait);
+    if (outcome === "exhausts") {
+      expect(await runAt(180_000)).toBe(1);
+      const parked = await findControllerPipeline(lane.id);
+      expect(parked).toMatchObject({ state: "needs_decision", baseRef: f.base,
+        stateDetail: expect.stringContaining("gave up after 1 retries over 180s: a Git lock was held") });
+      expect(parked?.runs[0]?.attempts).toEqual([]);
+      expect(await runAt(181_000)).toBe(0);
+      expect(fs.existsSync(lane.worktreeDir)).toBe(false);
+    } else {
+      fs.rmSync(lock);
+      expect(await runAt(5_000)).toBe(1);
+      expect(await f.git(lane.worktreeDir, "rev-parse", "HEAD")).toBe(f.base);
+      f.h.ports.now = () => iso(5_000);
+      for (let round = 0; round < 3; round++) await tickPipelinesController([], f.h.ports);
+      expect(f.h.spawnInputs.filter(input => input.cwd === lane.worktreeDir)).toHaveLength(1);
+      expect((await findControllerPipeline(lane.id))?.runs[0]?.attempts).toMatchObject([{ n: 1, state: "running" }]);
+      expect((await findControllerPipeline(lane.id))?.provisioningWait).toBeUndefined();
+    }
+  } finally {
+    await settlePipelineControllerJobs();
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
 });
 
 test("provisioning yields the controller phase and has capacity while all publishers wait", async () => {
@@ -1558,7 +1846,7 @@ test.each(["resolve", "reject"] as const)("repository waiters reacquire bounded 
   expect(pipelineControllerJobLanes()).toEqual([]);
 });
 
-test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)("repository-waiting provisioning rechecks authority after its predecessor: %s", async change => {
+test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)("repository-waiting provisioning rechecks authority after its predecessor: %s", change => withControllerAuditState(async () => {
   const h = harness();
   const lane = await create(h.ports, BUILD_ONLY as never, { repoDir: "/linked-a" });
   const peer = structuredClone(lane), unrelated = structuredClone(lane);
@@ -1566,8 +1854,8 @@ test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)
     row.id = id; row.repoDir = repo; row.delivery = undefined;
     Object.assign(row, pipelineIdentity(row.id, row.task, row.repoDir));
   }
-  savePipelines([lane, peer, unrelated]);
-  const entered = latch(), release = latch(), otherReady = latch();
+  savePipelines([lane]);
+  const entered = latch(), release = latch(), peerLookup = latch(), otherReady = latch();
   const unregister = registerPipelineTick(async () => {
     if ((await findControllerPipeline(unrelated.id))?.state === "running") otherReady.resolve();
   });
@@ -1575,7 +1863,7 @@ test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)
   let peerLookups = 0, peerCommands = 0, holding = false;
   h.ports.provisionExec = async (command, args, cwd) => {
     if (args.includes("--git-common-dir")) {
-      if (cwd === peer.repoDir) peerLookups++;
+      if (cwd === peer.repoDir) { peerLookups++; peerLookup.resolve(); }
       return { code: 0, stdout: cwd === unrelated.repoDir ? "/other-common.git" : "/linked-common.git", stderr: "" };
     }
     if (cwd === peer.repoDir || cwd === peer.worktreeDir) peerCommands++;
@@ -1587,8 +1875,15 @@ test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)
   };
   try {
     await until(tickPipelinesController([], h.ports));
+    // The worktree command runs under the common-directory owner. Admit the
+    // contenders while that command is held and retain the selected cursor.
     await until(entered.promise);
+    expect(pipelineControllerJobLanes()).toEqual([lane.id]);
+    await withDeliveryMutationAsync(tx => { tx.put(peer); tx.put(unrelated); }, 2);
+    await until(tickPipelinesController([], h.ports));
+    await until(peerLookup.promise);
     await until(otherReady.promise);
+    expect(pipelineControllerJobLanes()).toContain(peer.id);
     expect(peerLookups).toBe(1);
     expect(peerCommands).toBe(0);
     expect((await findControllerPipeline(peer.id))?.state).toBe("provisioning");
@@ -1618,7 +1913,7 @@ test.each(["success", "failure", "pause", "remove", "branch", "owner"] as const)
     if (change === "remove") expect(current).toBeNull();
     else expect(current?.state).toBe(change === "pause" ? "paused" : "provisioning");
   }
-});
+}), 10_000);
 
 test("four linked provisioning lanes leave capacity for a later independent launch", async () => {
   const h = harness();

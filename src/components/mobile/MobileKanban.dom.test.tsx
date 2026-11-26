@@ -1,8 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import type { ComponentProps } from "react";
-import { flushSync } from "react-dom";
-import { createRoot, type Root } from "react-dom/client";
+import type { Root } from "react-dom/client";
 
 import { setLocale, translate } from "@/lib/i18n";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -11,7 +10,6 @@ import type { FileEntry } from "@/lib/types";
 import type { SchemeLayout } from "@/components/scheme/layout";
 import type { PatchBody, PatchResult, TaskMutationPorts } from "@/components/kanban/useTaskMutations";
 
-import { MobileKanban } from "./MobileKanban";
 import { createMobileNav, MobileNavContext, type MobileNav } from "./mobileNav";
 import { fakeHistory } from "./mobileNavTestHistory";
 import { receipts, useReceipt } from "./MobileReceipt";
@@ -43,9 +41,11 @@ import { timelineStorageKey } from "@/components/kanban/boardTimelineStore";
 
 const NOW = 1_800_000_000;
 const dom = new Window({ url: "http://localhost/", width: 390, height: 844 });
+Object.defineProperty(dom.HTMLElement.prototype, "scrollIntoView", { configurable: true, writable: true, value: () => {} });
 const G = globalThis as Record<string, unknown>;
 const OVERRIDES: Record<string, unknown> = {
   window: dom, document: dom.document, navigator: dom.navigator, Node: dom.Node, HTMLElement: dom.HTMLElement, Element: dom.Element,
+  HTMLInputElement: dom.HTMLInputElement, HTMLSelectElement: dom.HTMLSelectElement,
   Event: dom.Event, KeyboardEvent: dom.KeyboardEvent, MouseEvent: dom.MouseEvent, PointerEvent: dom.PointerEvent,
   sessionStorage: dom.sessionStorage, localStorage: dom.localStorage,
   requestAnimationFrame: (cb: (t: number) => void) => setTimeout(() => cb(0), 0) as unknown as number,
@@ -53,8 +53,11 @@ const OVERRIDES: Record<string, unknown> = {
 };
 const HAS: Record<string, boolean> = {};
 const SAVED: Record<string, unknown> = {};
+for (const key of Object.keys(OVERRIDES)) { HAS[key] = key in G; SAVED[key] = G[key]; G[key] = OVERRIDES[key]; }
+const { flushSync } = await import("react-dom");
+const { createRoot } = await import("react-dom/client");
+const { MobileKanban } = await import("./MobileKanban");
 beforeAll(() => {
-  for (const key of Object.keys(OVERRIDES)) { HAS[key] = key in G; SAVED[key] = G[key]; G[key] = OVERRIDES[key]; }
   setLocale("en");
 });
 afterAll(async () => {
@@ -90,7 +93,7 @@ function file(index: number, extra: Partial<FileEntry> = {}): FileEntry {
 }
 const working = (index: number) => file(index, { activity: "live", lastTurn: { startedAt: (NOW - 120) * 1000, endedAt: null }, lastAgentWorkAt: (NOW - 30) * 1000 } as Partial<FileEntry>);
 const asking = (index: number) => file(index, {
-  pendingQuestion: { kind: "question", toolUseId: `tool-${index}`, transcriptPath: `/fixture/conversation-${index}.jsonl`, pid: 1, paneTarget: null, askedAt: new Date((NOW - 540) * 1000).toISOString(), questions: [{ question: "Which unit file stays?", header: "Unit", multiSelect: false, options: [] }] },
+  pendingQuestion: { kind: "question", toolUseId: `tool-${index}`, transcriptPath: `/fixture/conversation-${index}.jsonl`, pid: 1, askedAt: new Date((NOW - 540) * 1000).toISOString(), questions: [{ question: "Which unit file stays?", header: "Unit", multiSelect: false, options: [] }] },
 } as Partial<FileEntry>);
 
 function task(id: string, status: TaskStatus, paths: readonly string[] = [], text = `Task ${id}`): BoardTask {
@@ -281,6 +284,8 @@ test("Timeline is the only selected tab, survives remount and keyboard navigatio
   expect(qa(first.host, '[role="tab"][aria-selected="true"]').map(tab => tab.getAttribute("data-phone-kanban-tab"))).toEqual(["timeline"]);
   const active = q(first.host, '[data-timeline-task="a1"]');
   expect(active).not.toBeNull();
+  expect(active!.getAttribute("data-expanded")).toBe("0");
+  click(q(active!, "[data-timeline-expand]"));
   expect(active!.getAttribute("data-expanded")).toBe("1");
   expect(qa(first.host, "[data-timeline-bar]").length).toBe(1);
   expect(q(first.host, '[data-timeline-task="a2"]')).toBeNull();
@@ -315,7 +320,8 @@ test.each(["completed", "needs_decision"] as const)("Timeline expands resumed wo
   const role = { roleId: "builder" as const };
   const resolved = resolvePipelineRole({ role, engine: "codex", model: null, effort: "high", access: "read-write" }, "run", pipelineRoleLookup);
   if (!resolved.role) throw new Error(resolved.error);
-  const file = working(301), owner = task("resumed", "assigned");
+  // The stage's conversation is linked to its task, as a launch records it; the chart takes «working» from the card, as the kanban counts it.
+  const file = working(301), owner = task("resumed", "assigned", [working(301).path]);
   const stamp = (ago: number) => new Date((NOW - ago) * 1000).toISOString();
   const lane = buildPipeline({ id: "resumed-lane", task: owner.text, project: "fixture", taskIds: [owner.id], repoDir: "/fixture",
     srcPath: null, srcConversationId: null, now: stamp(3600), stages: [{ id: "build", kind: "run", next: null, prompt: "Build", role, effectiveRole: resolved.role }] });
@@ -325,6 +331,8 @@ test.each(["completed", "needs_decision"] as const)("Timeline expands resumed wo
     agentPath: file.path, paneId: null, flowId: null, startedAt: stamp(1800), completedAt: stamp(600), input: null, output: null, activatedBy: null, verdict: null, error: null });
   const { host } = mount({ files: [file], tasks: [owner], pipelines: [lane] });
   click(q(host, '[data-phone-kanban-tab="timeline"]'));
+  expect(q(host, '[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("0");
+  click(q(host, '[data-timeline-task="resumed"] [data-timeline-expand]'));
   expect(q(host, '[data-timeline-task="resumed"]')?.getAttribute("data-expanded")).toBe("1");
   expect(qa(host, '[data-live="1"] [data-timeline-bar]')).toHaveLength(1);
   expect(qa(host, '[data-live="0"] [data-timeline-bar]')).toHaveLength(1);
@@ -374,11 +382,21 @@ test("a long-press opens the card's sheet; Move to moves the card at once with U
 
   click(q(sheet, '[data-phone-card-action="move-blocked"]'));
   expect(nav.getState().sheet).toBeNull();
+  expect(cardsIn(host, "blocked")).toEqual([]);
+  expect(cardsIn(host, "assigned")).toEqual(["task:a1", "task:a2"]);
+  const editor = q(host, '[data-phone-hold-editor="a2"] [data-hold-editor]')!;
+  expect(editor).toBeTruthy();
+  const select = q(editor, "select") as HTMLSelectElement;
+  flushSync(() => { select.value = "operator"; select.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event); });
+  const note = q(editor, "input") as HTMLInputElement;
+  const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
+  flushSync(() => { setter.call(note, "Grant deployment access"); note.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event); });
+  click(q(editor, 'button[type="submit"]'));
   expect(cardsIn(host, "blocked")).toEqual(["task:a2"]);
-  expect(cardsIn(host, "assigned")).toEqual(["task:a1"]);
+  await sleep(20);
   expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: "Waiting" }));
   await sleep(20);
-  expect(patches.map((entry) => [entry.id, (entry.body as { status?: string }).status])).toEqual([["a2", "blocked"]]);
+  expect(patches.map((entry) => [entry.id, (entry.body as { status?: string; hold?: { note: string } }).status, (entry.body as { hold?: { note: string } }).hold?.note])).toEqual([["a2", "blocked", "Grant deployment access"]]);
 
   /* Undo moves it back through the same guarded queue. */
   click(q(host, "[data-test-undo]"));
@@ -719,11 +737,11 @@ test("released in place, a lifted card opens today's menu, and its click opens n
   expect(ghostOf()).toBeNull();
 });
 
-test("released over a column, a lifted card moves there with the usual receipt; the dock and the ghost go", async () => {
+test("released over Waiting, a lifted card opens the hold editor; saving the reason moves it and clears the dock and ghost", async () => {
   const { files, tasks } = board();
-  const patches: Array<{ id: string; status?: string }> = [];
+  const patches: Array<{ id: string; status?: string; note?: string }> = [];
   const ports: TaskMutationPorts = {
-    patch: async (id, patch) => { patches.push({ id, status: (patch as { status?: string }).status }); return { ok: true, task: task(id, (patch as { status: TaskStatus }).status, [], "Task a2") } as PatchResult; },
+    patch: async (id, patch) => { patches.push({ id, status: (patch as { status?: string }).status, note: (patch as { hold?: { note?: string } }).hold?.note }); return { ok: true, task: { ...task(id, (patch as { status: TaskStatus }).status, [], "Task a2"), hold: (patch as { hold?: BoardTask["hold"] }).hold } } as PatchResult; },
     read: async () => null, changed: () => {},
   };
   const { host } = mount({ files, tasks, ports });
@@ -736,10 +754,19 @@ test("released over a column, a lifted card moves there with the usual receipt; 
     expect(q(dock()!, '[data-phone-dock-tile="blocked"]')!.hasAttribute("data-over")).toBe(true);
     expect(q(dock()!, '[data-phone-dock-tile="inbox"]')!.hasAttribute("data-over")).toBe(false);
     fireOn(card, finger("pointerup", ...tileCenter("blocked")));
+    expect(cardsIn(host, "blocked")).toEqual([]);
+    const editor = q(host, '[data-phone-hold-editor="a2"] [data-hold-editor]')!;
+    expect(editor).toBeTruthy();
+    const select = q(editor, "select") as HTMLSelectElement;
+    flushSync(() => { select.value = "operator"; select.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event); });
+    const note = q(editor, "input") as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(dom.HTMLInputElement.prototype, "value")!.set!;
+    flushSync(() => { setter.call(note, "Grant deployment access"); note.dispatchEvent(new dom.Event("input", { bubbles: true }) as unknown as Event); });
+    click(q(editor, 'button[type="submit"]'));
     expect(cardsIn(host, "blocked")).toEqual(["task:a2"]);
-    expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: "Waiting" }));
     await sleep(20);
-    expect(patches).toEqual([{ id: "a2", status: "blocked" }]);
+    expect(q(host, "[data-test-receipt]")!.textContent).toContain(en("mobile2.kanban.moved", { column: "Waiting" }));
+    expect(patches).toEqual([{ id: "a2", status: "blocked", note: "Grant deployment access" }]);
     expect(dock()).toBeNull();
     expect(ghostOf()).toBeNull();
   } finally { restore(); }

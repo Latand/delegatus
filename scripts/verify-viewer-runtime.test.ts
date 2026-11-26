@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ChildProcess, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { procBackend } from "../src/lib/proc";
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
@@ -16,8 +17,11 @@ import {
   verifyBuiltCodexSocket,
   sandboxEnvironment,
   verifyViewerRuntime,
+  hasBuiltPipelineRoute,
+  collector,
 } from "./verify-viewer-runtime";
 import { isOperatorOwnedDirectory, setStateOwnershipPathsForTests } from "../src/lib/stateOwnership";
+import { recordProvisionFixtureEvent, waitForProvisionFixtureReply } from "../src/lib/pipelines/provisionFixtureSupervisor";
 
 /* What this file is defending is the shape of the check rather than its
    verdict: the verdict is produced by CI, under the pinned interpreter, on a
@@ -146,6 +150,77 @@ test("runtime probes preserve their signal namespace boundary without inheriting
   }
 });
 
+test("the output collector keeps a short failure tail yet still finds a frame printed before the tail", () => {
+  const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter() }) as unknown as ChildProcess;
+  const log = collector(child, "server");
+  child.stdout!.emit("data", '{"pipelineId":"baseline","phase":"toolchain-ready"}\n');
+  // Two later lanes print far more than the 40-line tail holds.
+  for (let lane = 0; lane < 2; lane++) {
+    child.stdout!.emit("data", Array.from({ length: 60 }, (_, index) => `lane ${lane} flow ${index}`).join("\n") + "\n");
+  }
+  expect(log().length).toBe(40);
+  expect(log().some(line => line.includes("baseline"))).toBe(false);
+  expect(log.search().some(line => line.includes('"pipelineId":"baseline"') && line.includes('"phase":"toolchain-ready"'))).toBe(true);
+  // The searched window is byte-bounded, so a flood cannot grow it without limit.
+  child.stdout!.emit("data", "x".repeat(300_000));
+  expect(log.search().join("\n").length).toBeLessThanOrEqual(128_000);
+});
+
+test("provisioning release tracing runs only for a completed App Router build", () => {
+  const root = fixtureRoot([path.join(BUILT_SERVER_DIR, "app/api/pipelines/route.js")]);
+  expect(hasBuiltPipelineRoute(root)).toBe(false);
+  fs.writeFileSync(path.join(root, ".next/BUILD_ID"), "fixture-build\n");
+  expect(hasBuiltPipelineRoute(root)).toBe(true);
+});
+
+test.each(["check-ignore", "cache-permit"] as const)("private release fixture supervisor holds the %s reply", async reply => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provision-supervisor-test-"));
+  roots.push(root);
+  const previous = process.env.LLV_PROVISION_FIXTURE_SUPERVISOR;
+  process.env.LLV_PROVISION_FIXTURE_SUPERVISOR = root;
+  const abort = new AbortController();
+  try {
+    fs.writeFileSync(path.join(root, `hold-${reply}`), "");
+    const held = waitForProvisionFixtureReply(reply, abort.signal, { workerPid: 1234, resultCode: 0 });
+    const entered = path.join(root, `entered-${reply}.json`);
+    const deadline = Date.now() + 1_000;
+    while (!fs.existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    expect(fs.existsSync(entered)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(entered, "utf8"))).toMatchObject({ reply, workerPid: 1234, resultCode: 0 });
+    await recordProvisionFixtureEvent("dependency-effect", { effect: "install-cache" });
+    fs.writeFileSync(path.join(root, `release-${reply}`), "");
+    await held;
+    expect(fs.readFileSync(path.join(root, "events.ndjson"), "utf8")).toContain('"effect":"install-cache"');
+  } finally {
+    if (previous === undefined) delete process.env.LLV_PROVISION_FIXTURE_SUPERVISOR;
+    else process.env.LLV_PROVISION_FIXTURE_SUPERVISOR = previous;
+  }
+});
+
+test("private release fixture supervisor interruption rejects before a late permit reply", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-provision-supervisor-abort-"));
+  roots.push(root);
+  const previous = process.env.LLV_PROVISION_FIXTURE_SUPERVISOR;
+  process.env.LLV_PROVISION_FIXTURE_SUPERVISOR = root;
+  const abort = new AbortController();
+  try {
+    fs.writeFileSync(path.join(root, "hold-cache-permit"), "");
+    const held = waitForProvisionFixtureReply("cache-permit", abort.signal, { workerPid: 1234 });
+    const entered = path.join(root, "entered-cache-permit.json");
+    const deadline = Date.now() + 1_000;
+    while (!fs.existsSync(entered) && Date.now() < deadline) await Bun.sleep(5);
+    expect(fs.existsSync(entered)).toBe(true);
+    fs.writeFileSync(path.join(root, "interrupt-cache-permit"), "");
+    await expect(held).rejects.toThrow("fixture supervisor interrupted the held reply");
+    expect(fs.existsSync(path.join(root, "events.ndjson"))).toBe(false);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_PROVISION_FIXTURE_SUPERVISOR;
+    else process.env.LLV_PROVISION_FIXTURE_SUPERVISOR = previous;
+  }
+});
+
+// Leave room for the verifier's TERM/KILL waits and the fixture's reaping
+// checks when other publication checks share the runner.
 test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed stop", "direct CLI", "portable CLI", "delayed exit", "delayed portable exit", "delayed failed stop", "missing exit"])("verification with %s reaps its served process and detached worker before reporting success", async mode => {
   const root = fixtureRoot([
     "package.json", "node_modules/next/dist/server/node-environment.js",
@@ -270,4 +345,4 @@ test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed s
     if (worker) expect(processIdentityStatus(worker)).toBe("dead");
     expect(processIdentityStatus(other)).toBe("dead");
   }
-}, 15_000);
+}, 60_000);

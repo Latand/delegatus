@@ -193,11 +193,11 @@ Outcome the brief pins for this install, in its own five parts:
   the two image-generation item names Codex uses elsewhere, should an exec
   stream ever carry them.
 - **Owner runs.** A new Viewer MCP tool, `relay_answer`, lets the owner agent
-  set `format`, `buttons` and `attachments` for its final message. It is bound
-  in the Viewer through the caller's live owner run, in the same way as lane
-  97089d71's `relay_service_tools`. The final message stays the answer text;
-  plain text is capped at 4,000 under negotiation, and rich text at 32,000
-  when the agent chose it.
+  give the chat reply as `text` and set `format`, `buttons` and `attachments`
+  for it. It is bound in the Viewer through the caller's live owner run, in
+  the same way as lane 97089d71's `relay_service_tools`. Without `text`, the
+  final message is the answer text; plain text is capped at 4,000 under
+  negotiation, and rich text at 32,000.
 
 ## 2. What happens at `49648aba`
 
@@ -526,9 +526,9 @@ legacy bodies. For a body carrying v2 parts:
 
 | Answer | Action |
 |---|---|
-| 422 `invalid_format`, 415, or 400 `malformed` | one resend without `format: "rich_markdown"`, buttons or attachments, if the text is nonblank and at most `plainMax`; otherwise `failed/invalid_answer`. These codes prove the body was not accepted |
-| 422 `attachment_not_ready` | one resend without attachments, under the same text rule |
-| 413 | today's rule: `failed/invalid_answer` (`:169-172`) |
+| 422 `invalid_format`, 415, or 400 `malformed` | one resend without `format: "rich_markdown"`, buttons or attachments, if the text is nonblank and at most `plainMax`; otherwise send a fixed plain notice that the answer was too long to deliver, within `plainMax`. Keep the original answer in the saved record. These codes prove the body was not accepted |
+| 422 `attachment_not_ready` | one resend without attachments, preserving rich text and buttons when no photo references require those attachments |
+| 413 | send the same bounded length notice; never truncate the answer |
 | 409 `already_completed` | delivery `accepted`; the claim settles terminal |
 | 409 `lease_lost`, 404, 401, 426 | terminal, as today |
 | 429 | wait `retry_after_s` if it fits before `until`, then the identical body |
@@ -538,6 +538,16 @@ legacy bodies. For a body carrying v2 parts:
 `invalid_format` would be retried with the same body until the deadline. Each
 resend happens only after an explicit 4xx, and `already_completed` appears
 only if a changed body follows an accepted one.
+
+Every refused completion records `completionRefusals` in its saved answer
+and emits a journal event with HTTP `status`, allowlisted error `code` and
+allowlisted `reason` (the code when no reason is supplied). Length explanations
+in the service error message become fixed length categories. Unknown codes and
+unrecognized free-form reasons become explicit redaction markers. Error messages and bodies
+are never copied. The lease worker forwards this diagnostic before its final
+result, so a later failed attempt retains earlier refusals. A delivered length
+notice is `failure_notice`; the record keeps the full original answer. If the
+notice itself is refused, delivery remains `refused` with both diagnostics.
 
 ## 8. Attachments
 
@@ -766,31 +776,58 @@ run.
 
 ### 10.1 Prompt and answer
 
-When `caps.rich`, `ownerRunPrompt` (`ownerRun.ts:24-46`) adds the
-`<format>` section. The opening sentence (`:29`) lists `<format>` among the
-sections that "may shape only how your reply reads". The closing sentence
-`Write plain text of at most ${request.answer.max_chars} characters as your
-last message.` (`:44`) becomes:
+When `caps.rich`, `ownerRunPrompt` adds the `<format>` section as trusted
+formatting guidance. This applies to both initial and continued owner turns.
 
-> Write your last message as plain text of at most {plainMax} characters.
-> For tables, lists, headings, code or a longer reply, first call
-> relay_answer with format rich_markdown, then write Markdown in the subset
-> <format> lists, of at most {richMax} characters. relay_answer also sets up
-> to {rows} rows of {perRow} https link buttons{media:, and up to {max_items}
-> files to send after your message (photo, document, audio or video) by
-> absolute path under your document roots}; never write a path into the
-> message itself.
+With rich-message negotiation the agent gives its chat reply as
+`relay_answer({text})`; the prompt tells it to call `relay_answer`, when it is
+available, before it finishes. The final assistant message stays in the
+session and is posted only when no call supplied `text`. A run without
+`relay_answer`, such as a Codex Cloud run, is told that its last message is
+the chat reply. The reply uses `rich_markdown` by default, including
+when a call omits `format`. Markdown bold, italic, links and lists pass to the
+service's renderer intact. `relay_answer({format: "plain"})` explicitly
+selects literal text. Each call replaces the prior parts, including `text`,
+and an omitted format returns to the rich default. Without negotiation the
+final assistant message is the chat reply, as before.
 
-`ownerAnswer(text, request, owner, credentials, staged)` (`:48-55`) scrubs as
-today. Plain text is truncated at `plainMax`, the same `…` rule the code
-applies today. Rich text is used when `staged.format` is `rich_markdown` and
-the scrubbed text passes §7.2. Otherwise the text falls back to plain under
-the same truncation. Buttons and captions pass through
-`scrubOwnerOutput` too, and a button whose url the scrub changed is dropped.
-Owner answers keep `reply_to: owner.messageId`.
+`ownerAnswer` scrubs the reply text before validating it. The scrub keeps
+public URLs and their Markdown delimiters intact, including ordinary query
+parameters. It still removes credential-bearing URLs and scrubs buttons and
+captions. Rich text uses the negotiated rich limit. Text that fails rich
+validation is rendered as readable plain text and bounded by `plainMax`.
+Owner answers keep
+`reply_to: owner.messageId`.
 
-Without negotiation none of this runs, and the owner prompt keeps its bytes
-(`owner-tools-off-*` hashes, `ownerTier.test.ts:58-71`).
+The owner wrapper addresses the agent as the chat assistant. Task handoffs
+and authority remain as before; the wrapper no longer asks for a separate
+report about the reply. Shared relay search guidance asks for citations as
+inline links beside supported claims.
+
+Why the reply is a tool argument: Claude Code's built-in WebSearch tool, which
+Delegatus does not write, ends its description with an instruction to end the
+response to the user with a "Sources:" list, and every search result ends with
+a reminder to include those sources in that response. When the final message
+was the chat post, that instruction put a separate Sources list into the chat
+in some replies, whatever the relay prompt said about citations. The chat
+reply is now what the agent composes for the chat, and the final message
+remains free for the engine's own conventions.
+
+Offline rendering checks run `ownerAnswer.render.test.ts` with
+`LLV_RELAY_SERVICE_ROOT` pointing at an isolated service backend export and
+`LLV_RELAY_RENDER_PYTHON` naming a Python interpreter with the service's
+`markdown-it-py` and Pydantic dependencies plus Telethon. They validate the
+actual answer with the service, render its HTML fallback and parse Telegram
+entities for bold, italic, links and lists. They import no transport.
+`ownerReply.native.test.ts` uses `LLV_RELAY_REPLY_PROBE=1` for an optional
+signed-in Claude rehearsal of an initial chat reply and a resumed turn with
+web search; set `LLV_RELAY_REPLY_CONFIG` to a private signed-in Claude config
+copy, and use private HOME, state and temp roots, retaining only
+synthetic output. Neither check posts a message.
+
+Without negotiation owner answers use the legacy plain wire format and length
+limit. Markdown emphasis becomes plain text, lists retain readable markers,
+and a Web link becomes its label followed by its URL.
 
 ### 10.2 The `relay_answer` tool
 
@@ -798,6 +835,7 @@ Without negotiation none of this runs, and the owner prompt keeps its bytes
 
   ```ts
   relay_answer: z.object({
+    text: z.string().min(1).max(32000).optional(),
     format: z.enum(["plain", "rich_markdown"]).optional(),
     buttons: z.array(z.array(z.object({ text: z.string().min(1).max(64), url: z.string().min(1).max(2048) }))
       .min(1).max(3)).max(2).optional(),
@@ -807,11 +845,11 @@ Without negotiation none of this runs, and the owner prompt keeps its bytes
   }),
   ```
 
-- **Description**: "Only while you answer a relay message as its owner: how
-  your last message is delivered. format rich_markdown renders Markdown up to
-  the length the prompt states; buttons are https links; attachments are files
-  under your document roots, sent after the message. Each call replaces the
-  previous one. Refused in any other conversation and after you answer."
+- **Description** (`relayAnswerDescription` in `protocol.ts`): `text` is the
+  reply posted in the chat, and without it the last message is posted;
+  format, buttons, mentions and attachments choose how it is delivered. Each
+  call replaces the previous one. Refused in any other conversation and after
+  the answer.
 - **Binding** (beside `relay_owner_history`, `bindings.ts:7954`), in order:
   (1) caller `kind: "agent"`, a conversation, no deputy (`:7437-7440`);
   (2) `liveOwnerRelayRequest(conversationId)` finds the live owner run;
@@ -820,8 +858,8 @@ Without negotiation none of this runs, and the owner prompt keeps its bytes
   and names no request or chat.
 - **Each call** validates everything with §7.3 and §8.2-8.3, stages the copies
   in the request's run directory, and replaces the entry's parts whole. It
-  answers `{ format, buttons, attachments: [{ index, kind, filename, bytes }],
-  limits }`. A refusal names the class (`document_outside_roots`,
+  answers `{ text_chars, format, buttons, attachments: [{ index,
+  attachment_id, kind, filename, bytes }], limits }`. A refusal names the class (`document_outside_roots`,
   `document_forbidden_path`, `document_type`, `document_secret`, `too_large`,
   `button_invalid`, `caption_too_long`, `media_not_negotiated`) and never the
   file content. A replaced call's copies are deleted by their recorded paths.
@@ -959,7 +997,7 @@ HOME under `/tmp`, as `ephemeral.probe.test.ts:14` does.
 | 7 | `runner.test.ts` | **attachment round-trip**: Codex target, `caps.generate`; the stub CLI emits `thread.started`, writes a decodable 2×2 PNG to `$CODEX_HOME/generated_images/<thread>/exec-1.png` and answers with that path, kind `photo` and a caption → the test service receives a PUT on `/requests/<id>/attachments/a0-<hex>` before `/complete`, with the lease, SHA-256, `image/png`, `Content-Length`, `filename*` and bearer headers and the same bytes; the completion lists `{attachment_id, kind: "photo", caption}`; the first PUT's connection is dropped and the retry reuses the id and gets 200; the run directory, and with it the per-run home, is gone after settlement | no PUT, no attachments |
 | 8 | `runner.test.ts` | **lease lost on upload**: PUT answers 409 `lease_lost` → no `/complete`, `runClaimedRequest` resolves `null` | main completes |
 | 9 | `runner.test.ts` | **upload refused**: 415 on the PUT → completion without that attachment and the record names `unsupported_media_type`; blank text with its only file dropped → `failed/invalid_answer` | no PUT |
-| 10 | `runner.test.ts` | **422 `invalid_format` on completion** → one resend as plain when the text fits, else `failed/invalid_answer`, never a third body | main retries the same body until the deadline |
+| 10 | `runner.test.ts` | **422 `invalid_format` on completion** → one resend as plain when the text fits, else a bounded plain length notice, preserving the original in the saved record | main retries the same body until the deadline |
 | 11 | `runner.test.ts` | **hostile path**: the stub answers a valid PNG path outside the run's generated directory → no PUT, record reason `outside_run` | (guard) |
 | 12 | `ephemeral.test.ts` | `imageGeneration` set: no `--disable image_generation`; `default_permissions="relay"` and the filesystem table naming the readable root; no `-s read-only`; `CODEX_HOME` under the run directory; unset → today's arguments, element for element; Claude ignores it | options absent |
 | 13 | `progress.test.ts` | with `imageGeneration`, `image_generation` and `image_generation_call` items map to a `tool` event; without it they are violations; the 0.162.1 stdout of §9.1 maps to no violation | admitted case is a violation |

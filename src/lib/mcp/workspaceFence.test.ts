@@ -1,9 +1,8 @@
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
 import { emptyLaunchProfile, migrationSuccessorLaunchProfile } from "@/lib/accounts/migration/contracts";
 import type { RegistryFile } from "@/lib/agent/registry";
@@ -17,7 +16,8 @@ import { buildPipeline } from "@/lib/pipelines/store";
 import { conversationWorkspacePrincipal } from "@/lib/team/workspacePrincipal";
 import { createPipelineFromRequest, defaultPipelinePorts, patchPipeline } from "@/lib/pipelines/engine";
 import { findPipelineRecord } from "@/lib/pipelines/store";
-import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, readOrchestratorSeatFile } from "@/lib/orchestrator/seats";
+import { writeStoredSeatRecord } from "@/lib/orchestrator/seatStoreFixture";
 import { queuePipelineCreation, admitQueuedPipelineCreations, queuedPipelineCreationStatus } from "@/lib/pipelines/creationQueue";
 import { workspaceRoute } from "@/lib/team/workspaceRoute";
 import { MEMBER_COOKIE, mintSession } from "@/lib/team/sessions";
@@ -31,9 +31,10 @@ import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { installSpawnCapabilityResolver } from "@/lib/agent/callerClaims";
 import { runAsMcpHttpCaller } from "./callerContext";
 import { viewerMcpBindings, productionDomainDependencies, productionViewerControlDependencies, type ViewerMcpDomainDependencies } from "./bindings";
-import { createMcpToolService, createProductionViewerMcpService, MemoryMcpReceiptStore, type McpToolArgs, type McpToolService } from "./server";
+import { createMcpToolService, createProductionViewerMcpService, FileMcpReceiptStore, MemoryMcpReceiptStore, MCP_TOOL_NAMES, type McpToolArgs, type McpToolService } from "./server";
 import { withWorkspaceMcpFence } from "./workspaceFence";
 import { nativeCallerRefusal } from "@/lib/attention/nativeCaller";
+import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { conversationHostPOST } from "@/app/api/conversation-host/handlers";
 import { setConversationHostDependenciesForTests } from "@/app/api/conversation-host/dependencies";
 
@@ -54,6 +55,14 @@ function person(id: string, role: Member["role"]): Member {
 function conversation(id: string, project: string, bound = true) {
   return { id, engine: "codex", continuityPaths: [], projectOwnership: { project }, generations: [{ path: `${id}.jsonl`, launchProfile: emptyLaunchProfile({ cwd: root, project,
     ...(bound ? { workspace: { memberId: member.id, workspaceId: W1 } } : {}) }) }] };
+}
+function seedDraftRepository() {
+  const env = { ...process.env, GIT_AUTHOR_DATE: AT, GIT_COMMITTER_DATE: AT };
+  for (const args of [["init", "-q", "-b", "main"],
+    ["-c", "user.name=Fixture", "-c", "user.email=noreply", "commit", "-q", "--allow-empty", "-m", "Fixture base"]]) {
+    const result = spawnSync("git", args, { cwd: root, env, encoding: "utf8" });
+    if (result.status !== 0) throw new Error(`Could not seed draft repository: ${result.error ?? result.stderr}`);
+  }
 }
 function rebuild() {
   service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, {
@@ -92,6 +101,225 @@ afterEach(() => {
 });
 const call = (tool: string, args: McpToolArgs = {}) => service.callTool(tool, { clientRequestId: `case-${tool}`, ...args });
 const REFUSED = { ok: false, code: "workspace_forbidden", retryable: false };
+const formQuestions = [{ id: "choice", text: "Choose a path", options: [{ label: "First", recommended: true }, { label: "Second" }] }];
+
+function fixtureAuthority(registry: AgentRegistry) {
+  return spyOn(registry, "conversationAuthorityFacts").mockImplementation(id => {
+    const row = snapshot.conversations[id];
+    return row ? { id: row.id, superseded: Boolean(row.supersededBy), hasGeneration: row.generations.length > 0,
+      project: row.projectOwnership?.project ?? null, directories: [] } : null;
+  });
+}
+
+function designateCaller(workspace?: { memberId: string; workspaceId: string }) {
+  beginOrchestratorSeatIntent({ project: own, mandate: "Run project work", clientRequestId: "regression-seat", mode: "existing",
+    conversationId: "conversation_member", workspace, now: AT });
+  completeOrchestratorSeatIntent({ project: own, clientRequestId: "regression-seat", conversationId: "conversation_member", path: "conversation_member.jsonl", now: AT });
+  dependencies.authorizedSeats = () => [{ project: own, conversationId: "conversation_member", path: "conversation_member.jsonl" }];
+}
+
+test("#4112: member input never changes an installation seat's tool permissions", async () => {
+  snapshot.conversations.conversation_member = conversation("conversation_member", own, false) as never;
+  designateCaller();
+  const calls: string[] = [];
+  const fenced = withWorkspaceMcpFence({ callTool: async tool => {
+    const toolName = MCP_TOOL_NAMES.find(name => name === tool);
+    if (!toolName) throw new Error("unexpected fixture tool");
+    calls.push(tool); return { ok: true, toolName, clientRequestId: null, replayed: false };
+  } }, dependencies);
+  for (const author of [null, member, owner, member]) {
+    if (author) store.admitConversationMember("conversation_member", author.id);
+    for (const tool of ["spawn_agent", "send_message_to_orchestrator", "relay_owner_history"]) {
+      expect(await fenced.callTool(tool, { cwd: path.join(root, "other"), project: other })).toMatchObject({ ok: true });
+    }
+  }
+  expect(calls).toHaveLength(12);
+  // The same input on a conversation with no seat keeps the member fence.
+  snapshot.conversations.conversation_worker = conversation("conversation_worker", own, false) as never;
+  store.admitConversationMember("conversation_worker", member.id);
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: "conversation_worker", role: "builder" });
+  expect(await fenced.callTool("relay_owner_history", {})).toMatchObject(REFUSED);
+  expect(await fenced.callTool("spawn_agent", { cwd: path.join(root, "other") })).toMatchObject(REFUSED);
+  expect(calls).toHaveLength(12);
+});
+
+for (const depth of [1, 2, 4]) test(`existing non-seat descendants retain project, account and installation fences at depth ${depth}`, async () => {
+  snapshot.conversations.conversation_member = conversation("conversation_member", own, false) as never;
+  designateCaller();
+  store.admitConversationMember("conversation_member", member.id);
+  await setWorkspaceDefaults(store, owner, W1, { accounts: { codex: ["account-a"] } });
+  let parent = "conversation_member";
+  for (let index = 1; index <= depth; index++) {
+    const id = `conversation_descendant_${index}`;
+    const child = conversation(id, own, false);
+    child.generations[0]!.launchProfile.parentConversationId = parent as `conversation_${string}`;
+    snapshot.conversations[id] = child as never;
+    parent = id;
+  }
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: parent, role: "builder" });
+  expect(await call("get_task", { taskId: "task_0" })).toMatchObject({ ok: true });
+  expect(await call("get_task", { taskId: "task_1" })).toMatchObject(REFUSED);
+  expect(await call("account_limits")).toMatchObject({ ...REFUSED, details: { check: "tool" } });
+  expect(await call("spawn_agent", { cwd: root, engine: "codex", accountId: "account-b" })).toMatchObject(REFUSED);
+  expect(await call("conversation_migration", { conversationId: parent, action: "select-account", accountId: "account-a" })).toMatchObject({ ok: true });
+  store.removeWorkspaceMember(W1, member.id);
+  expect(await call("get_task", { taskId: "task_0", clientRequestId: "after-revocation" })).toMatchObject({ ...REFUSED, details: { check: "caller-project" } });
+});
+
+test.each(["seat", "task"])("#3818: a refused transcript read leaves %s forms and their receipts usable", async target => {
+  const taskId = target === "task" ? "task_0" : undefined;
+  designateCaller({ memberId: member.id, workspaceId: W1 });
+  let scopeCalls = 0, publications = 0;
+  const control = {
+    get: async () => ({}),
+    post: async (url: string) => {
+      if (url.endsWith("/scope")) { scopeCalls++; return { conversationId: "conversation_member", project: own, taskId: taskId ?? null }; }
+      if (url.endsWith("/read")) return { rounds: [] };
+      publications++; return { reviewId: "review-one", project: own };
+    },
+  };
+  const receiptFile = path.join(root, "form-receipts.json");
+  const reopen = () => withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(receiptFile)), dependencies);
+  service = reopen();
+  await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
+    const args = { clientRequestId: "published-form", ...(taskId ? { taskId } : {}), title: "Choose", questions: formQuestions };
+    const readArgs = taskId ? { taskId } : {};
+    expect(await call("publish_prototype_review", args)).toMatchObject({ ok: true, replayed: false });
+    expect(await call("conversation_messages", { transcriptPath: "conversation_foreign.jsonl" })).toMatchObject(REFUSED);
+    expect(await call("read_prototype_review", readArgs)).toMatchObject({ ok: true });
+    expect(await call("publish_prototype_review", { ...args, clientRequestId: "second-form" })).toMatchObject({ ok: true });
+    const beforeReplay = scopeCalls;
+    store.removeWorkspaceMember(W1, member.id);
+    service = reopen();
+    expect(await call("publish_prototype_review", args)).toMatchObject({ ok: true, replayed: true });
+    expect(await call("read_prototype_review", readArgs)).toMatchObject({ ok: true, replayed: true });
+    expect(await call("read_prototype_review", { ...readArgs, clientRequestId: "fresh-read" })).toMatchObject(REFUSED);
+    expect(scopeCalls).toBe(beforeReplay);
+    const script = `
+      import { createMcpToolService, FileMcpReceiptStore } from ${JSON.stringify(path.resolve("src/lib/mcp/server.ts"))};
+      import { viewerMcpBindings, productionDomainDependencies } from ${JSON.stringify(path.resolve("src/lib/mcp/bindings.ts"))};
+      import { withWorkspaceMcpFence } from ${JSON.stringify(path.resolve("src/lib/mcp/workspaceFence.ts"))};
+      const dependencies = { ...productionDomainDependencies,
+        attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_member", role: "orchestrator" }),
+        authorizedSeats: () => [{ conversationId: "conversation_member", project: ${JSON.stringify(own)}, path: null }],
+        workspaceConversation: () => { throw new Error("replay reached workspace admission"); } };
+      const control = { get: async () => { throw new Error("replay dispatched"); }, post: async () => { throw new Error("replay dispatched"); } };
+      const service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(${JSON.stringify(receiptFile)})), dependencies);
+      console.log(JSON.stringify(await service.callTool("publish_prototype_review", ${JSON.stringify(args)})));
+    `;
+    const restarted = spawnSync(process.execPath, ["-e", script], { env: process.env, encoding: "utf8" });
+    expect(restarted.status).toBe(0);
+    expect(JSON.parse(restarted.stdout.trim())).toMatchObject({ ok: true, replayed: true, reviewId: "review-one" });
+    expect(await call("publish_prototype_review", { ...args, title: "Changed" })).toMatchObject({ ok: false, code: "idempotency_conflict" });
+    expect(await call("publish_prototype_review", { ...args, clientRequestId: "new-after-revocation" })).toMatchObject(REFUSED);
+    expect(publications).toBe(2);
+    const durable = fs.readFileSync(receiptFile, "utf8");
+    dependencies.authorizedSeats = () => [];
+    expect(await call("publish_prototype_review", args)).toMatchObject(REFUSED);
+    expect(fs.readFileSync(receiptFile, "utf8")).toBe(durable);
+    expect(scopeCalls).toBe(beforeReplay);
+  });
+});
+
+test.each((["read", "publish"] as const).flatMap(mode => ["caller", "designation", "task", "project", "missing-project", "ambiguous-project", "read-error"].map(change => [mode, change] as const)))("form replay rechecks identity after the receipt await: %s %s", async (mode, change) => {
+  designateCaller({ memberId: member.id, workspaceId: W1 });
+  const receiptFile = path.join(root, "race-receipts.json");
+  const receipts = new FileMcpReceiptStore(receiptFile);
+  let publications = 0;
+  const bindings = viewerMcpBindings(undefined, { get: async () => ({}), post: async url => {
+    if (url.endsWith("/scope")) return { conversationId: "conversation_member", project: own, taskId: null };
+    publications++; return { reviewId: "original-form" };
+  } }, dependencies);
+  service = withWorkspaceMcpFence(createMcpToolService(bindings, receipts), dependencies);
+  await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
+    const tool = mode === "read" ? "read_prototype_review" : "publish_prototype_review";
+    const args = { clientRequestId: "owned-form", ...(mode === "publish" ? { title: "Choose", questions: formQuestions } : {}) };
+    expect(await call(tool, args)).toMatchObject({ ok: true });
+    const durable = fs.readFileSync(receiptFile, "utf8");
+    const lookup = receipts.lookup.bind(receipts);
+    const read = spyOn(receipts, "lookup").mockImplementation(async key => {
+      const record = await lookup(key);
+      if (change === "read-error") throw new Error("receipt read failed");
+      if (change === "caller") dependencies.attentionAuthority = () => ({ kind: "unidentified", admission: { reason: "capability-unresolved" } } as never);
+      else if (change === "task") {
+        const pipeline = dependencies.getPipelines().pipelines[0]!;
+        pipeline.taskIds = ["task_0"];
+        pipeline.runs.push({ stageId: "review", attempts: [{ n: 1, conversationId: "conversation_member" }] } as never);
+      } else if (change === "project") dependencies.authorizedSeats = () => [{ conversationId: "conversation_member", project: other, path: null }];
+      else if (change === "missing-project") dependencies.authorizedSeats = () => [{ conversationId: "conversation_member", project: null, path: null }];
+      else if (change === "ambiguous-project") dependencies.authorizedSeats = () => [own, other].map(project => ({ conversationId: "conversation_member", project, path: null }));
+      else dependencies.authorizedSeats = () => [];
+      store.removeWorkspaceMember(W1, member.id);
+      return record;
+    });
+    try {
+      const answer = await call(tool, args);
+      expect(answer).toMatchObject(change === "read-error" ? { ok: false, code: "receipt_unavailable", retryable: true, details: { check: "receipt-store" } } : REFUSED);
+      expect(answer).not.toHaveProperty("reviewId");
+      expect(publications).toBe(1);
+      expect(fs.readFileSync(receiptFile, "utf8")).toBe(durable);
+    } finally { read.mockRestore(); }
+  });
+});
+
+test("workspace refusals identify the check without disclosing target identities", async () => {
+  const answer = await call("conversation_messages", { transcriptPath: "conversation_foreign.jsonl" });
+  expect(answer).toMatchObject({ ...REFUSED, details: { check: "argument:transcriptPath" } });
+  expect(JSON.stringify(answer)).not.toContain(other);
+  expect(await call("relay_owner_history")).toMatchObject({ ...REFUSED, details: { check: "tool" } });
+});
+
+test("HTTP workspace refusal codes and check names survive form receipt-scope resolution", async () => {
+  const previousControl = process.env.LLV_VIEWER_CONTROL_URL;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({
+    error: "workspace access denied (route-target)", code: "workspace_forbidden", check: "route-target",
+  }, { status: 403 }) });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${server.port}`;
+  try {
+    const controls = productionViewerControlDependencies();
+    service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, controls, dependencies), new MemoryMcpReceiptStore()), dependencies);
+    await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
+      expect(await call("publish_prototype_review", { title: "Choose", questions: formQuestions }))
+        .toMatchObject({ ...REFUSED, details: { check: "route-target" } });
+    });
+  } finally {
+    await server.stop(true);
+    if (previousControl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previousControl;
+  }
+});
+
+test("#3818: HTTP form routes resolve taskless targets from the authenticated seat", async () => {
+  designateCaller({ memberId: member.id, workspaceId: W1 });
+  const registry = new AgentRegistry(path.join(root, "forms-registry.json"));
+  snapshot.conversations.conversation_worker = conversation("conversation_worker", own) as never;
+  const lookup = spyOn(registry, "conversation").mockImplementation(id => snapshot.conversations[id] ?? null);
+  const facts = fixtureAuthority(registry);
+  setAgentRegistryForTests(registry);
+  installSpawnCapabilityResolver(() => "conversation_member");
+  setCallerConversationResolverForTests(() => "conversation_member");
+  let effects = 0;
+  try {
+    for (const route of ["/api/prototype-reviews", "/api/prototype-reviews/scope", "/api/prototype-reviews/read"]) {
+      const handler = workspaceRoute(route, (_request: Request) => { effects++; return Response.json({ ok: true }); });
+      const request = () => new NextRequest(`http://localhost${route}`, { method: "POST",
+        headers: { host: "localhost", "content-type": "application/json", "x-llv-spawn-capability": "a".repeat(43) },
+        body: JSON.stringify({ mode: "publish", clientRequestId: "form" }) });
+      expect((await handler(request())).status).toBe(200);
+      store.removeWorkspaceMember(W1, member.id);
+      const refused = await handler(request());
+      expect(refused.status).toBe(403);
+      expect(await refused.json()).toMatchObject({ code: "workspace_forbidden", check: "route-target" });
+      store.putWorkspaceMember(W1, member.id, "member", owner.id, AT);
+      setCallerConversationResolverForTests(() => "conversation_worker");
+      expect((await handler(request())).status).toBe(403);
+      setCallerConversationResolverForTests(() => "conversation_member");
+    }
+    expect(effects).toBe(3);
+  } finally {
+    lookup.mockRestore(); facts.mockRestore(); installSpawnCapabilityResolver(null); setCallerConversationResolverForTests(null);
+    setAgentRegistryForTests(null); registry.close();
+  }
+});
 
 test("browser access cannot write a membership after its project moves during the login read", async () => {
   const previousHome = process.env.HOME;
@@ -270,6 +498,70 @@ test("named launch and migration accounts cannot escape the workspace pool", asy
   expect(dispatched).toEqual(["/api/conversations/conversation_member/migration"]);
 });
 
+test("where the project has no account list, a member's agent cannot name an account in any tool", async () => {
+  for (const account of ["account-a", "account-zzz"]) {
+    for (const key of ["account", "accountId", "targetAccountId"]) {
+      expect(await call("spawn_agent", { cwd: root, engine: "codex", [key]: account })).toMatchObject(REFUSED);
+    }
+    expect(await call("conversation_action", { conversationId: "conversation_member", action: "select-account", accountId: account })).toMatchObject(REFUSED);
+    expect(await call("conversation_migration", { conversationId: "conversation_member", action: "select-account", accountId: account })).toMatchObject(REFUSED);
+    expect(await call("agent_fleet", { project: own, engine: "codex", account })).toMatchObject(REFUSED);
+  }
+  expect(dispatched).toEqual([]);
+  /* Naming no account stays allowed: Delegatus picks. */
+  expect(await call("spawn_agent", { cwd: root, engine: "codex", title: "Inspect routing", ["prompt"]: "Inspect routing" })).not.toMatchObject(REFUSED);
+  expect(dispatched).toEqual(["/api/spawn"]);
+});
+
+describe("a member's reconfigure of a running conversation through the browser route", () => {
+  let registry: AgentRegistry;
+  let controlled: string[];
+  let id: string;
+  const reconfigure = (accountId: unknown, actor: { kind: "member"; memberId: string }) => conversationHostPOST(new NextRequest("http://localhost/api/conversation-host", {
+    method: "POST", headers: { host: "localhost", "content-type": "application/json" },
+    body: JSON.stringify({ conversationId: id, action: "reconfigure", model: "gpt-6.1-sol", effort: "high", ...(accountId === undefined ? {} : { accountId }) }),
+  }), { actor });
+  beforeEach(() => {
+    registry = new AgentRegistry(path.join(root, "member-reconfigure.json"), undefined, undefined, { sqliteMode: "off" });
+    registry.reconcileConversations([{ engine: "codex", path: path.join(root, "running.jsonl"), accountId: "account-a",
+      launchProfile: emptyLaunchProfile({ cwd: root, project: own, title: "Running", role: "worker", model: "gpt-6.1-sol", effort: "high", fast: false }),
+      turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: AT }]);
+    id = registry.conversationForPath(path.join(root, "running.jsonl"))!.id;
+    setAgentRegistryForTests(registry);
+    controlled = [];
+    setConversationHostDependenciesForTests({ dispatchStructuredControl: async input => {
+      controlled.push(input.reconfiguration?.accountId ?? "");
+      return { status: 200, body: { ok: true } } as never;
+    } });
+  });
+  afterEach(() => { setConversationHostDependenciesForTests(null); setAgentRegistryForTests(null); registry.close(); });
+
+  test("is refused outside the pool and where there is no pool, the same for an account that exists or not, and reaches no host", async () => {
+    for (const pool of [null, ["account-a"]] as const) {
+      if (pool) await setWorkspaceDefaults(store, owner, W1, { accounts: { codex: [...pool] } });
+      const answers = [];
+      for (const account of ["account-b", "account-zzz"]) {
+        const response = await reconfigure(account, { kind: "member", memberId: member.id });
+        answers.push({ status: response.status, body: await response.json() as unknown as { error: string; reason: string; code: string } });
+      }
+      const reason = pool ? "outside_account_list" : "no_account_list";
+      expect(answers[0]).toMatchObject({ status: 409, body: { code: "project_account_refused", reason } });
+      expect([answers[1]!.status, answers[1]!.body.reason]).toEqual([409, reason]);
+      expect(answers[1]!.body.error.replaceAll("account-zzz", "account-b")).toBe(answers[0]!.body.error);
+    }
+    expect(controlled).toEqual([]);
+  });
+
+  test("keeps the account it already runs on, an account of the pool, a change without an account, and the owner", async () => {
+    await setWorkspaceDefaults(store, owner, W1, { accounts: { codex: ["account-c"] } });
+    expect((await reconfigure("account-a", { kind: "member", memberId: member.id })).status).toBe(200);
+    expect((await reconfigure("account-c", { kind: "member", memberId: member.id })).status).toBe(200);
+    expect((await reconfigure(undefined, { kind: "member", memberId: member.id })).status).toBe(200);
+    expect((await reconfigure("account-b", { kind: "member", memberId: owner.id })).status).toBe(200);
+    expect(controlled).toEqual(["account-a", "account-c", "", "account-b"]);
+  });
+});
+
 test("an external caller without a capability keeps project reads while broken capabilities refuse", async () => {
   dependencies.attentionAuthority = () => ({ kind: "unidentified" });
   rebuild();
@@ -282,7 +574,7 @@ test("an external caller without a capability keeps project reads while broken c
   }
 });
 
-for (const delivery of ["empty", "reused", "answer", "dialog-key", "permission"] as const) {
+for (const delivery of ["empty", "reused", "answer", "permission"] as const) {
   test(`a member's ${delivery} input fences an owner conversation before dispatch and after restart`, async () => {
     snapshot.conversations.conversation_member = conversation("conversation_member", own, false) as never;
     store.recordMessageAuthor({ clientMessageId: "reused-id", conversationId: "conversation_elsewhere", memberId: owner.id, at: AT, textDigest: null });
@@ -295,7 +587,7 @@ for (const delivery of ["empty", "reused", "answer", "dialog-key", "permission"]
       completedFileScan: async () => ({ snapshot: { files: [] } }) as never,
       recordOperatorRequest: () => null,
       collectImagePayloads: () => ({ images: [], error: null }),
-      conversationActions: ["answer", "dialog-key", "permission"],
+      conversationActions: ["answer", "permission"],
       applyConversationAction: async () => { await assertFenced(); return { status: 200, body: { ok: true } } as never; },
       enqueueStructuredMessage: async () => { await assertFenced(); return { ok: true, structured: true, outcome: "queued", target: null, operationId: "member-delivery" } as never; },
       deliverConversationMessage: async () => { await assertFenced(); return { ok: true, outcome: "held", target: null }; },
@@ -304,7 +596,7 @@ for (const delivery of ["empty", "reused", "answer", "dialog-key", "permission"]
       expect((await call("get_task", { taskId: "task_1" })).ok).toBe(true);
       const body = { conversationId: "conversation_member", text: "workspace request",
         ...(delivery === "reused" ? { clientMessageId: "reused-id" } : {}),
-        ...(["answer", "dialog-key", "permission"].includes(delivery) ? { action: delivery, key: "Enter", answer: {} } : {}) };
+        ...(["answer", "permission"].includes(delivery) ? { action: delivery, answer: {} } : {}) };
       const response = await conversationHostPOST(new NextRequest("http://localhost/api/conversation-host", {
         method: "POST", headers: { host: "localhost", "content-type": "application/json" }, body: JSON.stringify(body),
       }), { actor: { kind: "member", memberId: member.id } });
@@ -324,12 +616,12 @@ for (const delivery of ["empty", "reused", "answer", "dialog-key", "permission"]
 }
 
 
-for (const action of ["message", "answer", "dialog-key", "permission"]) test(`a failed authority write refuses a member delivery before the host is called: ${action}`, async () => {
+for (const action of ["message", "answer", "permission"]) test(`a failed authority write refuses a member delivery before the host is called: ${action}`, async () => {
   let effects = 0;
   setConversationHostDependenciesForTests({
     completedFileScan: async () => ({ snapshot: { files: [] } }) as never,
     recordOperatorRequest: () => null,
-    conversationActions: ["answer", "dialog-key", "permission"],
+    conversationActions: ["answer", "permission"],
     applyConversationAction: async () => { effects++; return { status: 200, body: { ok: true } } as never; },
     collectImagePayloads: () => ({ images: [], error: null }),
     enqueueStructuredMessage: async () => { effects++; return null; },
@@ -366,7 +658,7 @@ test("a durable member binding stays fenced when its authority store disappears"
 });
 
 test("an unreadable seat file refuses an unbound caller without revealing foreign tasks", async () => {
-  fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"), "{");
+  writeStoredSeatRecord("{");
   expect((await call("get_task", { taskId: "task_0" })).ok).toBe(true);
   snapshot.conversations.conversation_member = conversation("conversation_member", own, false) as never;
   const result = await call("get_task", { taskId: "task_1" });
@@ -496,17 +788,17 @@ test("a real resume preserves its durable workspace instead of accepting a repla
 
 test("the production dispatcher enforces the fence for an authenticated capability", async () => {
   const filename = path.join(root, "registry.json"), sqliteFilename = path.join(root, "registry.sqlite");
-  new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename }).close();
   const capability = "a".repeat(43);
-  const db = new Database(sqliteFilename);
-  const insert = db.query("INSERT INTO registry_rows(collection,row_key,value_json,row_order) VALUES (?, ?, ?, ?)");
-  insert.run("conversations", "conversation_member", JSON.stringify({ ...conversation("conversation_member", own), engine: "codex", createdAt: AT, updatedAt: AT, continuityPaths: [] }), 0);
-  insert.run("receipts", "workspace-launch", JSON.stringify({ launchId: "workspace-launch", conversationId: "conversation_member", spawnCapabilityDigest: createHash("sha256").update(capability).digest("hex") }), 0);
-  db.close();
   const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite", sqliteFilename });
-  setAgentRegistryForTests(registry);
-  installSpawnCapabilityResolver(digest => registry.conversationIdForSpawnCapabilityDigest(digest));
   try {
+    const launchProfile = emptyLaunchProfile({ cwd: root, project: own, title: "Workspace fixture",
+      workspace: { memberId: member.id, workspaceId: W1 } });
+    const caller = registry.ensureForkedConversation("codex", path.join(root, "caller.jsonl"), null, launchProfile);
+    const reservation = registry.beginSpawnRequest({ engine: "codex", cwd: root, conversationId: caller.id,
+      purpose: "resume-successor", launchProfile, spawnCapabilityDigest: createHash("sha256").update(capability).digest("hex") });
+    expect(reservation.kind).toBe("created");
+    setAgentRegistryForTests(registry);
+    installSpawnCapabilityResolver(digest => registry.conversationIdForSpawnCapabilityDigest(digest));
     const production = await createProductionViewerMcpService(false, false, true);
     const read = (project: string) => runAsMcpHttpCaller({ capability }, () => production.callTool("list_tasks", { project }));
     expect(await read(other)).toMatchObject(REFUSED);
@@ -519,22 +811,23 @@ test("the production dispatcher enforces the fence for an authenticated capabili
     expect((await route(request(other))).status).toBe(403);
     expect((await route(request(own))).status).toBe(200);
     expect(served).toBe(1);
-    expect(spawnSync("git", ["init", "-q", root]).status).toBe(0);
+    seedDraftRepository();
     placeProject(store, owner, projectForCwd(root)!, W1);
     const created = await createPipelineFromRequest({ task: "Bound creator", repoDir: root, stages: [], autoStart: false, src: "owner.jsonl" },
       { ...defaultPipelinePorts(), sourcePathAllowed: () => true, conversationIdForPath: () => "conversation_owner" },
-      { briefer: { kind: "agent", conversationId: "conversation_member" } });
+      { briefer: { kind: "agent", conversationId: caller.id } });
     if (!created.pipeline) throw new Error(JSON.stringify(created));
     expect(created.pipeline?.workspace).toEqual({ memberId: member.id, workspaceId: W1 });
   } finally { installSpawnCapabilityResolver(null); setAgentRegistryForTests(null); registry.close(); }
 });
 
 test("a member-created pipeline retains its scope, refuses revoked stage launches and rechecks a held draft edit", async () => {
-  expect(spawnSync("git", ["init", "-q", root]).status).toBe(0);
+  seedDraftRepository();
   const project = projectForCwd(root)!;
   placeProject(store, owner, project, W1);
   const created = await createPipelineFromRequest({ task: "Workspace draft", repoDir: root, stages: [], autoStart: false }, undefined,
     { allowOperatorDraftWithoutLineage: true, workspaceMemberId: member.id });
+  expect(created.error).toBeUndefined();
   expect(created.pipeline).toBeDefined();
   const pipeline = created.pipeline!;
   const workspace = { memberId: member.id, workspaceId: W1 };
@@ -749,10 +1042,11 @@ for (const mode of ["member", "owner", "write-refused", "revoked-during-join", "
 
 
 for (const action of ["update-draft", "add-stage", "override-stage"] as const) test(`a member's ${action} binds an installation pipeline in the edit transaction`, async () => {
-  expect(spawnSync("git", ["init", "-q", root]).status).toBe(0);
+  seedDraftRepository();
   placeProject(store, owner, projectForCwd(root)!, W1);
   const created = await createPipelineFromRequest({ task: "Installation draft", repoDir: root, stages: [], autoStart: false }, undefined,
     { allowOperatorDraftWithoutLineage: true });
+  expect(created.error).toBeUndefined();
   const id = created.pipeline!.id;
   expect(findPipelineRecord(id)?.workspace).toBeUndefined();
   const stage = { id: "build", kind: "run" as const, role: { roleId: "builder" as const }, prompt: "Workspace work", next: null };
@@ -834,3 +1128,433 @@ test("parallel request keys cannot expose another workspace's in-flight or saved
     expect(deliveries).toBe(1); expect(readDeputies()).toHaveLength(1);
   } finally { release.resolve(); recorded.resolve(); await Promise.allSettled([first, collision].filter(Boolean)); factory.mockRestore(); setAgentRegistryForTests(null); registry.close(); }
 });
+
+test("a fenced seat keeps the Telegram tools its record grants; no other fenced caller does", async () => {
+  const seat = "conversation_seat";
+  snapshot.conversations[seat] = conversation(seat, own, false) as never;
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: seat, role: "orchestrator" });
+  rebuild();
+  let requests = 0;
+  const tools = (): Promise<{ ok: boolean }[]> => Promise.all([
+    call("telegram_bot_chats", { clientRequestId: `telegram-${++requests}` }),
+    call("telegram_bot_messages", { chat: "team", clientRequestId: `telegram-${++requests}` }),
+    call("telegram_bot_send", { chat: "team", text: "status", clientRequestId: `telegram-${++requests}` }),
+    call("telegram_bot_reactions", { chat: "team", clientRequestId: `telegram-${++requests}` }),
+    call("telegram_bot_set_reaction", { chat: "team", messageId: 5, reaction: { type: "emoji", emoji: "👍" }, clientRequestId: `telegram-${++requests}` }),
+  ]);
+  const refused = async () => { for (const answer of await tools()) expect(answer).toMatchObject(REFUSED); };
+  const served = async () => { for (const answer of await tools()) expect(answer.ok).toBe(true); };
+  const designate = (key: string, grant: boolean, workspace?: { memberId: string; workspaceId: string }) => {
+    beginOrchestratorSeatIntent({ project: own, mandate: "Run this workspace", clientRequestId: key, mode: "existing", conversationId: seat,
+      ...(workspace ? { workspace } : { workspace: { memberId: member.id, workspaceId: W1 }, workspaceFromMessage: true }), telegramGrant: grant, now: AT });
+    completeOrchestratorSeatIntent({ project: own, clientRequestId: key, conversationId: seat, path: `${seat}.jsonl`, now: AT });
+  };
+  // A conversation a member wrote to that is no seat.
+  store.admitConversationMember(seat, member.id);
+  await refused();
+  // A seat with persisted message authority keeps its Telegram grant.
+  designate("seat-without-grant", false);
+  await refused();
+  designate("seat-with-grant", true);
+  await served();
+  // The grant covers the Telegram tools and no other installation-wide tool.
+  expect(await call("deploy_exact_sha", { sha: "a".repeat(40) })).toMatchObject(REFUSED);
+  expect(await call("account_limits")).toMatchObject(REFUSED);
+  // The seat's worker holds no grant.
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: "conversation_member", role: "builder" });
+  rebuild();
+  await refused();
+  dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: seat, role: "orchestrator" });
+  rebuild();
+  // A seat a person designated for the member stays without the tools.
+  designate("member-seat", true, { memberId: member.id, workspaceId: W1 });
+  await refused();
+  designate("owner-seat-again", true);
+  await served();
+  // A conversation a member launched keeps its binding as the owner's seat, and gets no grant.
+  snapshot.conversations[seat] = conversation(seat, own) as never;
+  await refused();
+  snapshot.conversations[seat] = conversation(seat, own, false) as never;
+  await served();
+  // An unreadable seat record and a lost project both end the grant.
+  const saved = readOrchestratorSeatFile();
+  writeStoredSeatRecord("{");
+  for (const answer of await tools()) expect(answer.ok).toBe(false);
+  writeStoredSeatRecord(saved);
+  await served();
+  store.removeWorkspaceMember(W1, member.id);
+  await refused();
+});
+
+test("an agent author's project label never refuses a permitted transcript, and a foreign transcript stays refused", async () => {
+  const records = [{ role: "user", text: "relayed", author: { kind: "agent", role: "reviewer", project: "Another Project", conversationId: "conversation_foreign" } }];
+  const fenced = withWorkspaceMcpFence({ callTool: async (tool, _input, context) => {
+    const answer = { ok: true, toolName: tool, clientRequestId: null, replayed: false, records } as never;
+    context?.assertResult?.(answer);
+    return answer;
+  } } as McpToolService, dependencies);
+  const permitted = await fenced.callTool("conversation_messages", { clientRequestId: "own-transcript", transcriptPath: "conversation_member.jsonl" });
+  if (!permitted.ok) throw new Error(permitted.error);
+  expect(permitted.records).toHaveLength(1);
+  // The label of a project outside the caller's reach is withheld with its author.
+  expect(JSON.stringify(permitted)).not.toContain("Another Project");
+  expect(await fenced.callTool("conversation_messages", { clientRequestId: "foreign-transcript", transcriptPath: "conversation_foreign.jsonl" })).toMatchObject(REFUSED);
+  expect(await fenced.callTool("conversation_messages", { clientRequestId: "foreign-id", conversationId: "conversation_foreign" })).toMatchObject(REFUSED);
+  // A row that itself belongs to a foreign project still refuses the whole answer.
+  const leaking = withWorkspaceMcpFence({ callTool: async (tool, _input, context) => {
+    const answer = { ok: true, toolName: tool, clientRequestId: null, replayed: false, records: [{ role: "user", text: "x", project: other }] } as never;
+    context?.assertResult?.(answer);
+    return answer;
+  } } as McpToolService, dependencies);
+  expect(await leaking.callTool("conversation_messages", { clientRequestId: "leak", transcriptPath: "conversation_member.jsonl" })).toMatchObject(REFUSED);
+});
+
+test("a native MCP caller can cancel its bounded evidence preparation", async () => {
+  const controller = new AbortController();
+  let dispatched = false;
+  let prepared = false;
+  const fenced = withWorkspaceMcpFence({ callTool: async tool => {
+    dispatched = true;
+    return { ok: true, toolName: tool, clientRequestId: null, replayed: false };
+  } } as McpToolService, { ...dependencies, attentionAuthority: () => ({ kind: "unidentified", conversationId: null }) },
+  async signal => {
+    expect(signal?.aborted).toBe(false);
+    controller.abort(new Error("caller cancelled"));
+    expect(signal?.aborted).toBe(true);
+    prepared = true;
+  });
+  const call = runAsMcpHttpCaller({ nativePeer: {} as never }, () => fenced.callTool(
+    "get_task", { nativeCallerProof: "a".repeat(43) }, { signal: controller.signal },
+  ));
+  const error = await call.then(() => null, reason => reason);
+  expect(error).toBe(controller.signal.reason);
+  expect(prepared).toBe(true);
+  expect(dispatched).toBe(false);
+});
+
+
+test.each(["read", "publish"] as const)("implicit pipeline-task %s receipts replay before workspace admission", async mode => {
+  designateCaller({ memberId: member.id, workspaceId: W1 });
+  const { saveTasks } = await import("@/lib/tasks/store");
+  const { savePipelines, loadPipelinesForList } = await import("@/lib/pipelines/store");
+  saveTasks(dependencies.loadTasks().map(task => ({ ...task, assignments: [], sources: [] })));
+  const effectiveRole = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
+  const pipeline = buildPipeline({ id: "implicit-lane", project: own, task: "Review work", repoDir: root, taskIds: ["task_0"],
+    stages: [{ id: "review", kind: "run", prompt: "Review work", next: null, effectiveRole }], srcPath: null, srcConversationId: null, now: AT });
+  pipeline.runs[0]!.attempts.push({ n: 1, state: "running", conversationId: "conversation_member", startedAt: AT,
+    effectiveRole, launchId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+    completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null });
+  savePipelines([pipeline]);
+  dependencies.listPipelineRecords = loadPipelinesForList;
+  const { reviewScopePOST } = await import("@/lib/prototypeReview/http");
+  const { prototypeWorld } = await import("@/lib/prototypeReview/world");
+  const world = { ...prototypeWorld, caller: () => ({ conversationId: "conversation_member", project: own }),
+    orchestrator: () => "conversation_member" };
+  let scopeCalls = 0, effects = 0;
+  const control = { get: async () => ({}), post: async (url: string, body: Record<string, unknown>) => {
+    if (!url.endsWith("/scope")) { effects++; return { rounds: [], reviewId: "implicit-form" }; }
+    scopeCalls++;
+    const response = await reviewScopePOST(new NextRequest("http://localhost/api/prototype-reviews/scope", {
+      method: "POST", headers: { host: "localhost", "content-type": "application/json", "x-llv-spawn-capability": "a".repeat(43) }, body: JSON.stringify(body),
+    }), world);
+    const scope = await response.json();
+    expect(response.status).toBe(200);
+    expect(scope).toMatchObject({ conversationId: "conversation_member", taskId: "task_0" });
+    return scope;
+  } };
+  setCallerConversationResolverForTests(() => "conversation_member");
+  installSpawnCapabilityResolver(() => "conversation_member");
+  const receiptFile = path.join(root, "implicit-form-receipts.json");
+  const reopen = () => withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(receiptFile)), dependencies);
+  try {
+    service = reopen();
+    await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
+      const tool = mode === "read" ? "read_prototype_review" : "publish_prototype_review";
+      const args = { clientRequestId: "implicit-task-form", ...(mode === "publish" ? { title: "Choose", questions: formQuestions } : {}) };
+      expect(await call(tool, args)).toMatchObject({ ok: true, replayed: false });
+      store.removeWorkspaceMember(W1, member.id);
+      service = reopen();
+      expect(await call(tool, args)).toMatchObject({ ok: true, replayed: true });
+      expect(await call(tool, { ...args, taskId: "task_0" })).toMatchObject({ ok: false, code: "idempotency_conflict" });
+      expect(await call(tool, { ...args, clientRequestId: "fresh-implicit" })).toMatchObject(REFUSED);
+      expect(scopeCalls).toBe(1); expect(effects).toBe(1);
+      const durable = fs.readFileSync(receiptFile, "utf8");
+      const script = `
+        import { createMcpToolService, FileMcpReceiptStore } from ${JSON.stringify(path.resolve("src/lib/mcp/server.ts"))};
+        import { viewerMcpBindings, productionDomainDependencies } from ${JSON.stringify(path.resolve("src/lib/mcp/bindings.ts"))};
+        import { withWorkspaceMcpFence } from ${JSON.stringify(path.resolve("src/lib/mcp/workspaceFence.ts"))};
+        const dependencies = { ...productionDomainDependencies,
+          attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_member", role: "orchestrator" }),
+          authorizedSeats: () => [{ conversationId: "conversation_member", project: ${JSON.stringify(own)}, path: null }],
+          workspaceConversation: () => { throw new Error("replay reached workspace admission"); } };
+        const control = { get: async () => { throw new Error("replay dispatched"); }, post: async () => { throw new Error("replay dispatched"); } };
+        const service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(${JSON.stringify(receiptFile)})), dependencies);
+        console.log(JSON.stringify(await service.callTool(${JSON.stringify(tool)}, ${JSON.stringify(args)})));
+      `;
+      const restarted = spawnSync(process.execPath, ["-e", script], { env: process.env, encoding: "utf8" });
+      expect(restarted.status).toBe(0);
+      expect(JSON.parse(restarted.stdout.trim())).toMatchObject({ ok: true, replayed: true });
+      // Another current seat selecting the same inferred task and key has no
+      // right to this caller's receipt.
+      pipeline.runs[0]!.attempts[0]!.conversationId = "conversation_second";
+      savePipelines([pipeline]);
+      snapshot.conversations.conversation_second = conversation("conversation_second", own) as never;
+      dependencies.attentionAuthority = () => ({ kind: "worker", conversationId: "conversation_second", role: "orchestrator" });
+      dependencies.authorizedSeats = () => [{ conversationId: "conversation_second", project: own, path: null }];
+      expect(await call(tool, args)).toMatchObject(REFUSED);
+      expect(fs.readFileSync(receiptFile, "utf8")).toBe(durable);
+      expect(scopeCalls).toBe(1); expect(effects).toBe(1);
+    });
+  } finally { installSpawnCapabilityResolver(null); setCallerConversationResolverForTests(null); }
+});
+
+
+for (const mode of ["read", "publish"] as const) for (const legacy of [false, true]) test(`project-bound ${mode} receipts refuse a seat in another project after reopening (legacy=${legacy})`, async () => {
+  const { saveTasks } = await import("@/lib/tasks/store");
+  const { reviewScopePOST } = await import("@/lib/prototypeReview/http");
+  const { prototypeWorld } = await import("@/lib/prototypeReview/world");
+  const { authorizedManagerSeats } = await import("@/lib/orchestrator/authority");
+  saveTasks(dependencies.loadTasks().map(task => ({ ...task, assignments: [], sources: [] })));
+  designateCaller({ memberId: member.id, workspaceId: W1 });
+  dependencies.authorizedSeats = () => authorizedManagerSeats({
+    activeSeats: () => Object.values(readOrchestratorSeatFile().seats),
+    revocations: () => readOrchestratorSeatFile().revocations,
+    resolveAlias: id => id,
+    conversationFacts: id => {
+      const row = snapshot.conversations[id];
+      return row ? { superseded: false, hasGeneration: row.generations.length > 0, project: row.projectOwnership?.project ?? null } : null;
+    },
+  });
+  let reads = 0, scopes = 0;
+  const world = { ...prototypeWorld, caller: () => ({ conversationId: "conversation_member", project: snapshot.conversations.conversation_member!.projectOwnership!.project }),
+    stage: () => null, orchestrator: () => "conversation_member" };
+  const controls = { get: async () => ({}), post: async (url: string, body: Record<string, unknown>) => {
+    if (!url.endsWith("/scope")) { reads++; return { rounds: [{ title: "Project Alpha private answer" }] }; }
+    scopes++;
+    const response = await reviewScopePOST(new NextRequest("http://localhost/api/prototype-reviews/scope", {
+      method: "POST", headers: { host: "localhost", "content-type": "application/json", "x-llv-spawn-capability": "a".repeat(43) }, body: JSON.stringify(body),
+    }), world);
+    const result = await response.json();
+    if (!response.ok) throw new Error(String(result.error));
+    return result;
+  } };
+  setCallerConversationResolverForTests(() => "conversation_member");
+  installSpawnCapabilityResolver(() => "conversation_member");
+  try {
+    const receipts = new FileMcpReceiptStore(path.join(root, "project-change-receipts.json"));
+    const bindings = viewerMcpBindings(undefined, controls, dependencies);
+    const tool = mode === "read" ? "read_prototype_review" : "publish_prototype_review";
+    if (legacy) {
+      const admit = bindings[tool].receiptScope!;
+      // Write through the real store using the previous scope encoding.
+      bindings[tool].receiptScope = async (args, context) => { await admit(args, context); return "conversation_member\ntask_0"; };
+    }
+    service = withWorkspaceMcpFence(createMcpToolService(bindings, receipts), dependencies);
+    await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
+      const args = { taskId: "task_0", clientRequestId: "project-change-replay", ...(mode === "publish" ? { title: "Choose", questions: formQuestions } : {}) };
+      expect(await call(tool, args)).toMatchObject({ ok: true, replayed: false });
+      if (legacy) {
+        const original = fs.readFileSync(path.join(root, "project-change-receipts.json"), "utf8");
+        store.removeWorkspaceMember(W1, member.id);
+        expect(await call(tool, args)).toMatchObject(REFUSED);
+        expect(fs.readFileSync(path.join(root, "project-change-receipts.json"), "utf8")).toBe(original);
+        store.putWorkspaceMember(W1, member.id, "member", owner.id, AT);
+      }
+      store.putWorkspaceMember(W2, member.id, "member", owner.id, AT);
+      snapshot.conversations.conversation_member = conversation("conversation_member", other) as never;
+      snapshot.conversations.conversation_member!.generations[0]!.launchProfile!.workspace = { memberId: member.id, workspaceId: W2 };
+      const seats = readOrchestratorSeatFile();
+      const oldSeat = seats.seats[own]!;
+      delete seats.seats[own];
+      seats.seats[other] = { ...oldSeat, project: other, seatEpoch: oldSeat.seatEpoch + 1, workspace: { memberId: member.id, workspaceId: W2 } };
+      writeStoredSeatRecord(seats);
+      expect(dependencies.authorizedSeats!()).toMatchObject([{ conversationId: "conversation_member", project: other }]);
+      expect(conversationWorkspacePrincipal(snapshot, "conversation_member", store)).toEqual({ memberId: member.id, workspaceId: W2 });
+      service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, controls, dependencies), new FileMcpReceiptStore(path.join(root, "project-change-receipts.json"))), dependencies);
+      const durable = fs.readFileSync(path.join(root, "project-change-receipts.json"), "utf8");
+      const replay = await call(tool, args);
+      expect(replay).toMatchObject({ ok: false, code: "tool_failed", error: "prototype access is limited to the caller\'s project" });
+      expect(scopes).toBe(2);
+      expect(JSON.stringify(replay)).not.toContain("Project Alpha private answer");
+      expect(reads).toBe(1);
+      expect(fs.readFileSync(path.join(root, "project-change-receipts.json"), "utf8")).toBe(durable);
+      const script = `
+        import { createMcpToolService, FileMcpReceiptStore } from ${JSON.stringify(path.resolve("src/lib/mcp/server.ts"))};
+        import { viewerMcpBindings, productionDomainDependencies } from ${JSON.stringify(path.resolve("src/lib/mcp/bindings.ts"))};
+        const dependencies = { ...productionDomainDependencies,
+          attentionAuthority: () => ({ kind: "worker", conversationId: "conversation_member", role: "orchestrator" }),
+          authorizedSeats: () => [{ conversationId: "conversation_member", project: ${JSON.stringify(other)}, path: null }],
+          listPipelineRecords: () => [] };
+        const control = { get: async () => { throw new Error("replay dispatched"); }, post: async () => { throw new Error("replay dispatched"); } };
+        const service = createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(${JSON.stringify(path.join(root, "project-change-receipts.json"))}));
+        console.log(JSON.stringify(await service.replayTool(${JSON.stringify(tool)}, ${JSON.stringify(args)})));
+      `;
+      const restarted = spawnSync(process.execPath, ["-e", script], { env: process.env, encoding: "utf8" });
+      expect(restarted.status).toBe(0);
+      expect(JSON.parse(restarted.stdout.trim())).toBeNull();
+    });
+  } finally { installSpawnCapabilityResolver(null); setCallerConversationResolverForTests(null); }
+});
+
+for (const mode of ["read", "publish"] as const) for (const target of ["seat", "task"] as const) test(`unproven project refuses ${mode} ${target} form receipts before storage`, async () => {
+  designateCaller({ memberId: member.id, workspaceId: W1 });
+  let proven = false, effects = 0;
+  const receipts = path.join(root, "unproven-project-receipts.json");
+  const control = { get: async () => ({}), post: async (url: string) => {
+    if (url.endsWith("/scope")) return { conversationId: "conversation_member", taskId: target === "task" ? "task_0" : null, ...(proven ? { project: own } : {}) };
+    effects++; return { rounds: [], reviewId: "proven-form" };
+  } };
+  service = withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(receipts)), dependencies);
+  await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
+    const tool = mode === "read" ? "read_prototype_review" : "publish_prototype_review";
+    const args = { clientRequestId: "unproven-project", ...(target === "task" ? { taskId: "task_0" } : {}), ...(mode === "publish" ? { title: "Choose", questions: formQuestions } : {}) };
+    expect(await call(tool, args)).toMatchObject({ ok: false, code: "prototype_project_unavailable", retryable: true, details: { check: "prototype-project" } });
+    expect(effects).toBe(0);
+    expect(fs.existsSync(receipts)).toBe(false);
+    proven = true;
+    expect(await call(tool, args)).toMatchObject({ ok: true, replayed: false });
+    expect(await call(tool, args)).toMatchObject({ ok: true, replayed: true });
+    expect(effects).toBe(1);
+  });
+});
+
+for (const mode of ["read", "publish"] as const) for (const changed of [false, true]) test(`fresh ${mode} receipts bind HTTP scope to dispatch (project changed=${changed})`, async () => {
+  const { reviewScopePOST, reviewReadPOST, publishPOST } = await import("@/lib/prototypeReview/http");
+  const { prototypeWorld } = await import("@/lib/prototypeReview/world");
+  const { publishPrototype } = await import("@/lib/prototypeReview/store");
+  const { loadSeatRounds } = await import("@/lib/prototypeReview/seatRounds");
+  designateCaller({ memberId: member.id, workspaceId: W1 });
+  let project = own;
+  dependencies.authorizedSeats = () => [{ conversationId: "conversation_member", project, path: null }];
+  await publishPrototype({ clientRequestId: "private-form", title: "Private project Beta answer", questions: formQuestions }, null, { conversationId: "conversation_private" }, other);
+  const original = loadSeatRounds(other);
+  const world = { ...prototypeWorld, caller: () => ({ conversationId: "conversation_member", project }), stage: () => null, orchestrator: () => "conversation_member" };
+  const previousControl = process.env.LLV_VIEWER_CONTROL_URL;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(incoming) {
+    const scope = new URL(incoming.url).pathname.endsWith("/scope");
+    const handler = scope ? reviewScopePOST : mode === "read" ? reviewReadPOST : publishPOST;
+    const response = await handler(new NextRequest(incoming), world);
+    if (scope && changed) project = other;
+    return response;
+  } });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${server.port}`;
+  const control = productionViewerControlDependencies();
+  const file = path.join(root, "fresh-project-receipts.json");
+  const core = createMcpToolService(viewerMcpBindings(undefined, control, dependencies), new FileMcpReceiptStore(file));
+  installSpawnCapabilityResolver(() => "conversation_member");
+  setCallerConversationResolverForTests(() => "conversation_member");
+  try {
+    await runAsMcpHttpCaller({ capability: "a".repeat(43) }, async () => {
+      const tool = mode === "read" ? "read_prototype_review" : "publish_prototype_review";
+      const args = { clientRequestId: "scope-dispatch-project-change", ...(mode === "publish" ? { title: "Choose", questions: formQuestions } : {}) };
+      const answer = await core.callTool(tool, args);
+      expect(answer.ok).toBe(!changed);
+      if (changed) expect(answer).toMatchObject({ ...REFUSED, error: expect.stringContaining("prototype receipt identity changed"), details: { check: "prototype-receipt-scope" } });
+      expect(JSON.stringify(answer)).not.toContain("Private project Beta answer");
+      expect(loadSeatRounds(other)).toEqual(original);
+      project = own;
+      const replay = await core.replayTool!(tool, args);
+      expect(replay).toMatchObject(changed ? { ...REFUSED, replayed: true, details: { check: "prototype-receipt-scope" } } : { ok: true, replayed: true });
+      expect(fs.readFileSync(file, "utf8")).not.toContain("Private project Beta answer");
+    });
+  } finally {
+    await server.stop(true);
+    if (previousControl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previousControl;
+    installSpawnCapabilityResolver(null); setCallerConversationResolverForTests(null);
+  }
+});
+
+
+for (const identity of ["valid", "superseded", "revoked", "conflicting-project", "missing-generation", "wrong-project"] as const)
+  test(`taskless HTTP forms validate current seat authority: ${identity}`, async () => {
+    const { authorizedManagerSeats } = await import("@/lib/orchestrator/authority");
+    const { productionManagerAuthoritySources } = await import("@/lib/orchestrator/managerAuthoritySources");
+    const { POST: publishPOST } = await import("@/app/api/prototype-reviews/route");
+    const { POST: readPOST } = await import("@/app/api/prototype-reviews/read/route");
+    const { POST: scopePOST } = await import("@/app/api/prototype-reviews/scope/route");
+    const handlers = await import("@/lib/prototypeReview/http");
+    const { publishPrototype } = await import("@/lib/prototypeReview/store");
+    const { loadSeatRounds } = await import("@/lib/prototypeReview/seatRounds");
+    designateCaller({ memberId: member.id, workspaceId: W1 });
+    await publishPrototype({ clientRequestId: "private-round", title: "Private seat decision", questions: formQuestions },
+      null, { conversationId: "conversation_member" }, own);
+    if (identity === "superseded") snapshot.conversations.conversation_member!.supersededBy = {
+      conversationId: "conversation_foreign", at: AT, reason: "replaced",
+    } as never;
+    if (identity === "missing-generation") snapshot.conversations.conversation_member!.generations = [];
+    if (identity === "wrong-project") snapshot.conversations.conversation_member!.projectOwnership!.project = other;
+    if (identity === "revoked" || identity === "conflicting-project") {
+      const file = readOrchestratorSeatFile();
+      const seat = file.seats[own]!;
+      if (identity === "revoked") file.revocations.push({ project: own, conversationId: "conversation_member", seatEpoch: seat.seatEpoch, revokedAt: AT });
+      else file.seats[other] = { ...seat, project: other, seatEpoch: seat.seatEpoch + 1 };
+      writeStoredSeatRecord(file);
+    }
+    const registry = new AgentRegistry(path.join(root, "taskless-authority-registry.json"));
+    const lookup = spyOn(registry, "conversation").mockImplementation(id => snapshot.conversations[id] ?? null);
+    const read = spyOn(registry, "readOnlySnapshot").mockImplementation(() => snapshot);
+    const facts = fixtureAuthority(registry);
+    setAgentRegistryForTests(registry);
+    installSpawnCapabilityResolver(() => "conversation_member");
+    setCallerConversationResolverForTests(() => "conversation_member");
+    const previousControl = process.env.LLV_VIEWER_CONTROL_URL;
+    const valid = identity === "valid";
+    const seats = () => authorizedManagerSeats(productionManagerAuthoritySources(registry));
+    const routes = [
+      { path: "/api/prototype-reviews", body: { title: "New seat question", questions: formQuestions }, route: publishPOST, handler: handlers.publishPOST },
+      { path: "/api/prototype-reviews/scope", body: { mode: "publish" }, route: scopePOST, handler: handlers.reviewScopePOST },
+      { path: "/api/prototype-reviews/scope", body: { mode: "read" }, route: scopePOST, handler: handlers.reviewScopePOST },
+      { path: "/api/prototype-reviews/read", body: {}, route: readPOST, handler: handlers.reviewReadPOST },
+    ];
+    const request = (route: typeof routes[number], clientRequestId: string) => new NextRequest(`http://localhost${route.path}`, {
+      method: "POST", headers: { host: "localhost", "content-type": "application/json", "x-llv-spawn-capability": "a".repeat(43) },
+      body: JSON.stringify({ ...route.body, clientRequestId }),
+    });
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: incoming => {
+      const route = routes.find(route => route.path === new URL(incoming.url).pathname);
+      return route ? route.route(new NextRequest(incoming)) : new Response(null, { status: 404 });
+    } });
+    process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${server.port}`;
+    try {
+      expect(seats()).toHaveLength(valid ? 1 : 0);
+      const before = loadSeatRounds();
+      for (const [index, route] of routes.entries()) {
+        const response = await route.route(request(route, `direct-${index}`));
+        const body = await response.json();
+        expect(response.status).toBe(valid ? 200 : 403);
+        if (!valid) {
+          expect(body).toMatchObject({ code: "workspace_forbidden", check: "route-target" });
+          expect(JSON.stringify(body)).not.toContain("Private seat decision");
+          // The handler also fences solo/owner fast paths without a workspace gate.
+          const target = await route.handler(request(route, `handler-${index}`));
+          expect(target.status).toBe(403);
+          expect(await target.json()).toMatchObject({ code: "workspace_forbidden", check: "prototype-seat-authority" });
+        } else if (route.path.endsWith("/read")) expect(JSON.stringify(body)).toContain("Private seat decision");
+      }
+      const domains = { ...dependencies, authorizedSeats: seats };
+      const receipts = new MemoryMcpReceiptStore();
+      const reopen = () => withWorkspaceMcpFence(createMcpToolService(viewerMcpBindings(undefined,
+        productionViewerControlDependencies(), domains), receipts), domains);
+      for (const tool of ["publish_prototype_review", "read_prototype_review"] as const) {
+        const args = { clientRequestId: `mcp-${tool}`, ...(tool === "publish_prototype_review" ? { title: "MCP seat question", questions: formQuestions } : {}) };
+        const answer = await runAsMcpHttpCaller({ capability: "a".repeat(43) }, () => reopen().callTool(tool, args));
+        expect(answer.ok).toBe(valid);
+        if (!valid) {
+          expect(answer).toMatchObject({ ...REFUSED, details: { check: identity === "wrong-project" ? "caller-project" : "route-target" } });
+          expect(JSON.stringify(answer)).not.toContain("Private seat decision");
+        } else {
+          if (tool === "read_prototype_review") expect(JSON.stringify(answer)).toContain("Private seat decision");
+          store.removeWorkspaceMember(W1, member.id);
+          const replay = await runAsMcpHttpCaller({ capability: "a".repeat(43) }, () => reopen().callTool(tool, args));
+          expect(replay).toMatchObject({ ok: true, replayed: true });
+          store.putWorkspaceMember(W1, member.id, "member", owner.id, AT);
+        }
+      }
+      if (!valid) expect(loadSeatRounds()).toEqual(before);
+    } finally {
+      await server.stop(true);
+      if (previousControl === undefined) delete process.env.LLV_VIEWER_CONTROL_URL; else process.env.LLV_VIEWER_CONTROL_URL = previousControl;
+      lookup.mockRestore(); read.mockRestore(); facts.mockRestore();
+      installSpawnCapabilityResolver(null); setCallerConversationResolverForTests(null); setAgentRegistryForTests(null); registry.close();
+    }
+  });

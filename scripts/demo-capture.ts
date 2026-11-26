@@ -12,7 +12,6 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-import { en } from "@/lib/i18n/en";
 
 export const DEMO_FIXED_ISO = "2100-01-02T12:00:00.000Z";
 export const DEMO_TOKEN = "__DEMO_HOME__";
@@ -260,11 +259,7 @@ export const SHOTS: DemoShot[] = [
         { selector: "#question button", text: "Balanced board", minWidth: 420, minHeight: 36 },
         { selector: "#question button", text: "Overview first", minWidth: 420, minHeight: 36 },
       ],
-      /* The no-pane note must not be in the shot. Read from the dictionary, not
-         copied out of it: this literal was "tmux pane unavailable" and went on
-         passing after #1301 renamed the string, asserting the absence of text
-         that no longer existed anywhere. */
-      absentText: [en["question.noPane"] as string],
+      absentText: [],
       pixels: FRAME_PIXELS,
     },
   },

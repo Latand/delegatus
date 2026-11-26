@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,11 +16,11 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-auto-merge-store-"));
 const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
 
-const { MERGE_POLL_MS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, MERGE_REASONS, productionAutoMergePorts, resetAutoMergeForTests, sweepAutoMerge, sweepTaskFinishes } = await import("./autoMerge");
+const { MERGE_POLL_MS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, MERGE_REASONS, mergeAdmission, productionAutoMergePorts, resetAutoMergeForTests, sweepAutoMerge, sweepTaskFinishes } = await import("./autoMerge");
 const { refreshRequest, refreshReservation } = await import("./autoRefresh");
 const { defaultPipelinePorts, normalizeStages, patchPipeline } = await import("@/lib/pipelines/engine");
 const { pipelineRoleLookup } = await import("@/lib/pipelines/roles");
-const { assignPipelineDelivery, buildPipeline, archiveSettledPipelines, loadArchivedPipelinesForOwnership, loadPipelines, loadPipelinesForList, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
+const { takeoverPipelineDelivery, assignPipelineDelivery, buildPipeline, archiveSettledPipelines, loadArchivedPipelinesForOwnership, loadPipelines, loadPipelinesForList, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
 const { mergeOnReviewSetting, resetProjectSettingsForTests, setMergeOnReview } = await import("@/lib/projects/settings");
 const { laneNeed } = await import("@/components/attention/needReason");
 const { pipelineAnswers } = await import("@/components/pipelines/pipelineBlockModel");
@@ -131,6 +132,41 @@ function completedLane(id: string): Pipeline {
   } as unknown as Pipeline;
 }
 
+function gitOnlyFixture(id: string) {
+  const directory = fs.mkdtempSync(path.join(sandbox, "git-only-"));
+  const bare = path.join(directory, "remote.git"), repo = path.join(directory, "repo"), work = `${repo}-pipeline-${id}`;
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
+    cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, GIT_CONFIG_COUNT: "0", GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+      GIT_AUTHOR_EMAIL: "fixture.invalid", GIT_COMMITTER_EMAIL: "fixture.invalid",
+      GIT_AUTHOR_DATE: "2026-11-14T10:00:00Z", GIT_COMMITTER_DATE: "2026-11-14T10:00:00Z" },
+  }).trim();
+  fs.mkdirSync(work);
+  git(directory, "init", "--bare", "--initial-branch=main", bare);
+  git(work, "init", "--initial-branch=main");
+  git(work, "config", "user.name", "Fixture"); git(work, "config", "user.email", "fixture.invalid");
+  fs.writeFileSync(path.join(work, "base.txt"), "base\n");
+  git(work, "add", "base.txt"); git(work, "commit", "-m", "base");
+  const base = git(work, "rev-parse", "HEAD");
+  git(work, "remote", "add", "origin", bare); git(work, "push", "origin", "main");
+  git(work, "checkout", "-b", "delivery");
+  fs.writeFileSync(path.join(work, "change.txt"), "reviewed change\n");
+  git(work, "add", "change.txt"); git(work, "commit", "-m", "reviewed change");
+  const head = git(work, "rev-parse", "HEAD");
+  git(work, "push", "origin", "HEAD:refs/heads/delivery");
+  const lane = completedLane(id);
+  lane.repoDir = repo; lane.worktreeDir = work;
+  lane.baseBranch = "main"; lane.baseRef = base; lane.lastPassedCommit = head; lane.publishedCommit = head;
+  lane.runs[1]!.attempts[0]!.reviewHeadSha = head;
+  lane.delivery = { target: { repository: REPO, remote: bare, branch: "refs/heads/delivery" },
+    disposition: "owner", publish: "enabled", ownerId: id, epoch: 1, active: false, journal: [],
+    operation: { id: "git-only-publication", epoch: 1, sha: head, passedStage: true, state: "settled",
+      result: { ok: true, sha: head, remote: "published" } } };
+  lane.taskIds = [];
+  lane.closedAt = iso(T0);
+  return { directory, bare, work, base, head, git, lane };
+}
+
 test.each(["OPEN", "MERGED", "CLOSED", "read-error"])("a real closed merge record reconciles %s after a fresh process reads it", async terminal => {
   resetAutoMergeForTests();
   savePipelines([completedLane("retained-owner")]);
@@ -220,6 +256,408 @@ describe("global merge admission", () => {
     resetProjectSettingsForTests();
   });
 
+  test("a PR-free implementation fast-forwards and proves the exact reviewed head with Git only", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-landing");
+    try {
+      const taskId = markedTask(fixture.lane);
+      savePipelines([fixture.lane]);
+      const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, pullRequestOf: () => null,
+        cachedState: () => null, setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async () => { throw new Error("Git-only landing must not read the forge"); } });
+      await sweepAutoMerge(ports);
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", gitOnly: true, prNumber: null, reviewedHead: fixture.head });
+      await sweepTaskFinishes(ports);
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", by: "auto-merge", gitOnly: true,
+        reviewedHead: fixture.head, mergedHead: fixture.head });
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.head);
+      expect(loadTasks().find(task => task.id === taskId)?.status).toBe("done");
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
+  test("Git-only landing refuses a passed review that names another commit", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-review-head-mismatch");
+    try {
+      const taskId = markedTask(fixture.lane);
+      fixture.lane.runs[1]!.attempts[0]!.reviewHeadSha = fixture.base;
+      fixture.lane.delivery!.target.prRepository = REPO;
+      savePipelines([fixture.lane]);
+      const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, pullRequestOf: () => null,
+        cachedState: () => null, setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async () => { throw new Error("Git-only landing must not read the forge"); } });
+      await sweepAutoMerge(ports);
+      await sweepAutoMerge(ports);
+      await sweepTaskFinishes(ports);
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
+      expect(loadTasks().find(task => task.id === taskId)?.status).not.toBe("done");
+      expect(loadPipelines()[0]!.merge?.gitOnly).not.toBe(true);
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
+  test.each(["reviewHeadSha", "outputBaseHead", "provenance"] as const)(
+    "F1: linked forge merge binds %s with exact and exception controls", async field => {
+      for (const control of ["mismatch", "exact", "integration", "acceptance"] as const) {
+        resetAutoMergeForTests();
+        setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+        const fixture = gitOnlyFixture("linked-review-capture");
+        try {
+          const taskId = markedTask(fixture.lane);
+          const attempt = fixture.lane.runs[1]!.attempts[0]!;
+          delete attempt.reviewHeadSha;
+          const captured = control === "exact" ? fixture.head : fixture.base;
+          if (field === "provenance") attempt.report = { seq: 1, at: iso(T0), actor: { kind: "operator" },
+            verdict: { status: "pass" }, summary: "Review passed.", calls: 1,
+            provenance: { head: captured, branch: "delivery", uncommitted: [], pullRequest: null, outputs: [] } };
+          else attempt[field] = captured;
+          if (control === "integration") attempt.publicationIntegration = {
+            passedSha: captured, acceptedSha: fixture.head, mainSha: fixture.base,
+          } as typeof attempt.publicationIntegration;
+          if (control === "acceptance") fixture.lane.reviewAcceptances = [{ stageId: "review", attempt: 1,
+            currentHead: fixture.head, clientRequestId: "accept-fixture", expectedRevision: "0".repeat(64),
+            fixStageId: "build", fixAttempt: 1, reviewedHead: captured, actor: { kind: "operator" }, at: iso(T0) }] as Pipeline["reviewAcceptances"];
+          fixture.lane.delivery!.target.pr = 17;
+          fixture.lane.delivery!.target.prRepository = REPO;
+          savePipelines([fixture.lane]);
+          let forgeWrites = 0, clock = T0;
+          const ports = productionAutoMergePorts({ now: () => clock, loadPipelines,
+            pullRequestOf: () => ({ repository: REPO, number: 17 }), cachedState: () => null,
+            setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+            run: async args => {
+              if (args[0] === "pr") return JSON.stringify({ state: forgeWrites ? "MERGED" : "OPEN", isDraft: false,
+                headRefOid: fixture.head, baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+                mergeCommit: forgeWrites ? { oid: fixture.head } : null, mergedAt: forgeWrites ? iso(T0) : null,
+                statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }] });
+              if (args[1]?.includes("/reviews")) return "";
+              if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
+              return "[]";
+            },
+            write: async (_args, _repository, beforeDispatch) => { beforeDispatch?.(); forgeWrites++; return ""; } });
+          for (let poll = 0; poll < 4; poll++) {
+            await sweepAutoMerge(ports);
+            await sweepTaskFinishes(ports);
+            clock += MERGE_SETTLE_MS;
+          }
+          expect(forgeWrites, control).toBe(control === "mismatch" ? 0 : 1);
+          expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
+          expect(loadTasks().find(task => task.id === taskId)?.status === "done", control).toBe(control !== "mismatch");
+        } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+      }
+    });
+
+  test.each([false, true])("F2: durable queued review mismatch=%s never bypasses reservation", async mismatch => {
+    resetAutoMergeForTests();
+    const fixture = gitOnlyFixture("durable-review-proof");
+    try {
+      const taskId = markedTask(fixture.lane);
+      fixture.lane.delivery!.target.pr = 17;
+      let clock = T0, writes = 0;
+      const ports = productionAutoMergePorts({ now: () => clock, loadPipelines,
+        pullRequestOf: () => ({ repository: REPO, number: 17 }), cachedState: () => null,
+        setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async args => {
+          if (args[0] === "pr") return JSON.stringify({ state: writes ? "MERGED" : "OPEN", isDraft: false,
+            headRefOid: fixture.head, baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+            mergeCommit: writes ? { oid: fixture.head } : null, mergedAt: writes ? iso(T0) : null,
+            statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }] });
+          if (args[1]?.includes("/reviews")) return "";
+          if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
+          return "[]";
+        },
+        write: async (_args, _repository, beforeDispatch) => { beforeDispatch?.(); writes++; return ""; } });
+      const admission = mergeAdmission(fixture.lane, clock, ports);
+      if (!("merge" in admission)) throw new Error(admission.reason);
+      fixture.lane.merge = admission.merge;
+      if (mismatch) fixture.lane.runs[1]!.attempts[0]!.reviewHeadSha = fixture.base;
+      savePipelines([fixture.lane]);
+      expect(loadPipelines()[0]!.merge?.state).toBe("queued");
+      resetAutoMergeForTests();
+      for (let poll = 0; poll < 4; poll++) {
+        await sweepAutoMerge(ports);
+        await sweepTaskFinishes(ports);
+        clock += MERGE_SETTLE_MS;
+      }
+      expect(writes).toBe(mismatch ? 0 : 1);
+      expect(loadTasks().find(task => task.id === taskId)?.status === "done").toBe(!mismatch);
+      if (mismatch) expect(loadPipelines()[0]!.merge?.reason).toContain("review evidence does not bind the published commit");
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
+  test("a linked PR can land and finish its task when forge reads are unavailable", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-linked-offline");
+    try {
+      const taskId = markedTask(fixture.lane);
+      fixture.lane.delivery!.target.pr = 17;
+      savePipelines([fixture.lane]);
+      let clock = T0;
+      let forgeReads = 0;
+      const ports = productionAutoMergePorts({ now: () => clock, loadPipelines,
+        pullRequestOf: () => ({ repository: REPO, number: 17 }), cachedState: () => null,
+        setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async () => { forgeReads++; throw Object.assign(new Error("forge unavailable"), { code: "ECONNREFUSED" }); } });
+      for (let attempt = 0; attempt < 4 && loadPipelines()[0]!.merge?.state !== "merged"; attempt++) {
+        await sweepAutoMerge(ports);
+        await sweepTaskFinishes(ports);
+        clock += MERGE_POLL_MS;
+      }
+      expect(forgeReads).toBeGreaterThan(0);
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", gitOnly: true });
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.head);
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", gitOnly: true, reviewedHead: fixture.head, mergedHead: fixture.head });
+      expect(loadTasks().find(task => task.id === taskId)?.status).toBe("done");
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
+  test.each([
+    ["DNS lookup", "error connecting to api.github.com: lookup api.github.com: no such host", "DNS lookup failed"],
+    ["TLS hostname mismatch", "connection failed: tls: failed to verify certificate: x509: certificate is valid for example.invalid, not api.github.com", "certificate verification failed"],
+    ["missing pull request", "gh: pull request not found\nwarning: connection closed", "not found"],
+    ["unreachable network", "dial tcp: ENETUNREACH", "temporarily unavailable"],
+  ])("%s keeps the linked PR's ref and task open", async (_case, stderr, reason) => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-linked-read-refused");
+    const previousPath = process.env.PATH;
+    try {
+      const taskId = markedTask(fixture.lane);
+      fixture.lane.delivery!.target.pr = 17;
+      savePipelines([fixture.lane]);
+      const bin = fs.mkdtempSync(path.join(fixture.directory, "gh-"));
+      const calls = path.join(bin, "calls");
+      fs.writeFileSync(path.join(bin, "gh"), `#!/usr/bin/env bun
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(calls)}, process.argv.slice(2, 4).join(" ") + "\\n");
+process.stderr.write(${JSON.stringify(stderr)});
+process.exit(1);
+`, { mode: 0o700 });
+      process.env.PATH = `${bin}${path.delimiter}${previousPath ?? ""}`;
+      const { githubRunner } = await import("../monitor/githubEvidence");
+      let clock = T0;
+      const ports = productionAutoMergePorts({ now: () => clock, loadPipelines,
+        pullRequestOf: () => ({ repository: REPO, number: 17 }), cachedState: () => null,
+        setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: githubRunner(fixture.work, 30_000, { declared: () => false }) });
+      for (let poll = 0; poll < 3; poll++) {
+        await sweepAutoMerge(ports);
+        await sweepTaskFinishes(ports);
+        clock += MERGE_POLL_MS;
+      }
+      expect({
+        ref: fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main"),
+        task: loadTasks().find(task => task.id === taskId)?.status,
+        calls: fs.readFileSync(calls, "utf8").trim().split("\n"),
+      }).toEqual({ ref: fixture.base, task: "inbox", calls: ["pr view", "pr view", "pr view"] });
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", reason: expect.stringContaining(reason) });
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      fs.rmSync(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["red", "pending", "head", "draft", "closed", "review", "protection"] as const)(
+    "F3: a %s PR observation survives a later endpoint outage and an unavailable retry", async condition => {
+      resetAutoMergeForTests();
+      const fixture = gitOnlyFixture("partial-forge-outage");
+      try {
+        const taskId = markedTask(fixture.lane);
+        fixture.lane.delivery!.target.pr = 17;
+        savePipelines([fixture.lane]);
+        let clock = T0, reads = 0, writes = 0;
+        const unavailable = () => Object.assign(new Error("forge unavailable"), { code: "ECONNREFUSED" });
+        const ports = productionAutoMergePorts({ now: () => clock, loadPipelines,
+          pullRequestOf: () => ({ repository: REPO, number: 17 }), cachedState: () => null,
+          setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+          run: async args => {
+            if (args[0] === "pr" && args[1] === "view" && reads++ === 0) return JSON.stringify({
+              state: condition === "closed" ? "CLOSED" : "OPEN", isDraft: condition === "draft",
+              headRefOid: condition === "head" ? "d".repeat(40) : fixture.head, baseRefName: "main",
+              mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+              statusCheckRollup: [{ __typename: "CheckRun", name: "ci",
+                status: condition === "pending" ? "IN_PROGRESS" : "COMPLETED",
+                conclusion: condition === "red" ? "FAILURE" : "SUCCESS" }] });
+            if (args[1]?.includes("/reviews") && (condition === "review" || condition === "protection"))
+              return condition === "review" ? JSON.stringify({ reviewer: "reviewer", isBot: false, state: "CHANGES_REQUESTED" }) : "";
+            throw unavailable();
+          },
+          write: async () => { writes++; throw new Error("partial outage must refuse writes"); } });
+        for (let poll = 0; poll < 6; poll++) {
+          await sweepAutoMerge(ports);
+          await sweepTaskFinishes(ports);
+          clock += MERGE_SETTLE_MS;
+          // Reload the durable stop without carrying in-memory admission state.
+          resetAutoMergeForTests();
+        }
+        expect(reads).toBeGreaterThan(0);
+        expect(writes).toBe(0);
+        expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
+        expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked" });
+        expect(loadPipelines()[0]!.merge?.gitOnly).not.toBe(true);
+        expect(loadPipelines()[0]!.merge?.reason).toBeTruthy();
+        expect(loadTasks().find(task => task.id === taskId)?.status).not.toBe("done");
+      } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+    });
+
+  test.each(["exact", "mismatch", "integration", "acceptance"] as const)(
+    "F4: offline landing uses the chronological latest review (%s)", async control => {
+      resetAutoMergeForTests();
+      const fixture = gitOnlyFixture("offline-latest-review");
+      try {
+        const taskId = markedTask(fixture.lane);
+        const older = fixture.lane.runs[1]!.attempts[0]!;
+        older.reviewHeadSha = fixture.base;
+        older.completedAt = iso(T0 - 3_000);
+        fixture.lane.stages[1]!.next = "final-review";
+        fixture.lane.stages.splice(1, 0, { ...fixture.lane.stages[1]!, id: "final-review", next: null });
+        const latest = { ...older, reviewHeadSha: control === "mismatch" || control === "integration" ? fixture.base : fixture.head,
+          completedAt: iso(T0 - 1_000) };
+        fixture.lane.runs.splice(1, 0, { stageId: "final-review", attempts: [latest] });
+        if (control === "integration") latest.publicationIntegration = {
+          passedSha: fixture.base, acceptedSha: fixture.head, mainSha: fixture.base,
+        };
+        if (control === "acceptance") {
+          older.state = "skipped";
+          fixture.lane.reviewAcceptances = [{ stageId: "review", attempt: 1, currentHead: fixture.head,
+            clientRequestId: "accept-older-review", expectedRevision: "0".repeat(64), fixStageId: "build", fixAttempt: 1,
+            reviewedHead: fixture.base, actor: { kind: "operator" }, at: iso(T0) }];
+        }
+        savePipelines([fixture.lane]);
+        let clock = T0;
+        const ports = productionAutoMergePorts({ now: () => clock, loadPipelines, pullRequestOf: () => null,
+          cachedState: () => null, setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+          run: async () => { throw new Error("offline landing must use Git only"); },
+          write: async () => { throw new Error("offline landing must not write to the forge"); } });
+        for (let poll = 0; poll < 4; poll++) {
+          await sweepAutoMerge(ports);
+          await sweepTaskFinishes(ports);
+          clock += MERGE_SETTLE_MS;
+        }
+        const expectedHead = control === "mismatch" ? fixture.base : fixture.head;
+        expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(expectedHead);
+        expect(loadTasks().find(task => task.id === taskId)?.status === "done").toBe(control !== "mismatch");
+        if (control !== "mismatch") expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", gitOnly: true,
+          reviewedHead: fixture.head, mergedHead: fixture.head });
+      } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+    });
+
+  test("an offline fork PR lands only in its declared upstream repository", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-fork-upstream");
+    const upstream = path.join(fixture.directory, "upstream.git");
+    try {
+      fixture.git(fixture.directory, "init", "--bare", "--initial-branch=main", upstream);
+      fixture.git(fixture.work, "remote", "add", "upstream", "https://github.com/upstream/widgets.git");
+      fixture.git(fixture.work, "config", `url.${upstream}.insteadOf`, "https://github.com/upstream/widgets.git");
+      fixture.git(fixture.work, "push", "upstream", `${fixture.base}:refs/heads/main`);
+      fixture.lane.delivery!.target.repository = "contributor/widgets";
+      fixture.lane.delivery!.target.remote = fixture.bare;
+      fixture.lane.delivery!.target.pr = 17;
+      fixture.lane.delivery!.target.prRepository = "upstream/widgets";
+      const taskId = markedTask(fixture.lane);
+      savePipelines([fixture.lane]);
+      let clock = T0;
+      const ports = productionAutoMergePorts({ now: () => clock, loadPipelines,
+        pullRequestOf: () => ({ repository: "upstream/widgets", number: 17 }), cachedState: () => null,
+        setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async () => { throw Object.assign(new Error("forge unavailable"), { code: "ECONNREFUSED" }); } });
+      for (let attempt = 0; attempt < 4 && loadPipelines()[0]!.merge?.state !== "merged"; attempt++) {
+        await sweepAutoMerge(ports);
+        await sweepTaskFinishes(ports);
+        clock += MERGE_POLL_MS;
+      }
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", gitOnly: true });
+      expect(fixture.git(upstream, "--git-dir", upstream, "rev-parse", "refs/heads/main")).toBe(fixture.head);
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", repository: "upstream/widgets", gitOnly: true,
+        reviewedHead: fixture.head, mergedHead: fixture.head });
+      expect(loadTasks().find(task => task.id === taskId)?.status).toBe("done");
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
+  test.each(["red", "pending"] as const)("a readable linked PR with %s checks never falls back to Git landing", async condition => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture(`readable-${condition}-checks`);
+    try {
+      fixture.lane.delivery!.target.pr = 17;
+      savePipelines([fixture.lane]);
+      let reads = 0, writes = 0;
+      const ports = productionAutoMergePorts({ now: () => T0, loadPipelines,
+        pullRequestOf: () => ({ repository: REPO, number: 17 }), cachedState: () => null,
+        setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async args => {
+          reads++;
+          if (args[0] === "pr" && args[1] === "view") return JSON.stringify({ state: "OPEN", isDraft: false,
+            headRefOid: fixture.head, baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+            statusCheckRollup: [{ __typename: "CheckRun", name: "privacy", status: condition === "red" ? "COMPLETED" : "IN_PROGRESS",
+              conclusion: condition === "red" ? "FAILURE" : "" }] });
+          if (args[1]?.includes("/reviews")) return "";
+          if (args[1]?.includes("/rules/branches/")) return "[]";
+          if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
+          if (args[1]?.includes("/branches/") && args.at(-1) === ".commit.sha") return fixture.base;
+          if (args[1]?.includes("/branches/")) return "[]";
+          if (args[1]?.includes("/compare/")) return fixture.base;
+          throw new Error(`unexpected forge read ${args.join(" ")}`);
+        },
+        write: async () => { writes++; throw new Error("red or pending checks must hold the merge"); } });
+      await sweepAutoMerge(ports);
+      await sweepTaskFinishes(ports);
+      expect(reads).toBeGreaterThan(0);
+      expect(writes).toBe(0);
+      expect(loadPipelines()[0]!.merge?.gitOnly).not.toBe(true);
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
+  test("a changed delivery owner cannot enter the PR-free landing consumer", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-replaced-owner");
+    try {
+      const taskId = markedTask(fixture.lane);
+      fixture.lane.delivery!.ownerId = "replacement-owner";
+      savePipelines([fixture.lane]);
+      const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, pullRequestOf: () => null,
+        cachedState: () => null, setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async () => { throw new Error("no forge read expected"); } });
+      await sweepAutoMerge(ports);
+      expect(loadPipelines()[0]!.merge).toBeUndefined();
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(fixture.base);
+      await sweepTaskFinishes(ports);
+      expect(loadTasks().find(task => task.id === taskId)?.status).not.toBe("done");
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
+  test("a divergent remote base refuses Git-only landing and keeps its task open", async () => {
+    resetAutoMergeForTests();
+    setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+    const fixture = gitOnlyFixture("git-only-divergent-base");
+    try {
+      const taskId = markedTask(fixture.lane);
+      fixture.git(fixture.work, "checkout", "main");
+      fs.writeFileSync(path.join(fixture.work, "other.txt"), "independent base update\n");
+      fixture.git(fixture.work, "add", "other.txt"); fixture.git(fixture.work, "commit", "-m", "independent base update");
+      const changedBase = fixture.git(fixture.work, "rev-parse", "HEAD");
+      fixture.git(fixture.work, "push", "origin", "main");
+      fixture.git(fixture.work, "checkout", "delivery");
+      savePipelines([fixture.lane]);
+      const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, pullRequestOf: () => null,
+        cachedState: () => null, setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }),
+        run: async () => { throw new Error("no forge read expected"); } });
+      await sweepAutoMerge(ports); await sweepAutoMerge(ports); await sweepTaskFinishes(ports);
+      expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", gitOnly: true, prNumber: null,
+        reason: "Git-only landing refused: the reviewed head cannot fast-forward the current base" });
+      expect(fixture.git(fixture.bare, "--git-dir", fixture.bare, "rev-parse", "refs/heads/main")).toBe(changedBase);
+      expect(loadTasks().find(task => task.id === taskId)?.status).not.toBe("done");
+    } finally { fs.rmSync(fixture.directory, { recursive: true, force: true }); }
+  });
+
   function spentReviewLane(id: string): Pipeline {
     const lane = completedLane(id);
     lane.stages[1]!.onFail = { to: "fix", maxRounds: 2 };
@@ -245,7 +683,7 @@ describe("global merge admission", () => {
     });
     let sweep = Promise.resolve();
     const controller = new FlowPipelineController({
-      now: () => 0, tickPipelines: async () => ({ changed: false }), tickFlows: async () => ({ changed: false }),
+      now: () => 0, tickPipelines: async () => ({ changed: false }),
       sweepAutoMerge: () => { sweep = sweepAutoMerge(ports); },
     }, { maxPasses: 1 });
     let resolve!: () => void, reject!: (error: unknown) => void;
@@ -460,7 +898,7 @@ test("retry-merge clears the persisted read failure and its counter", async () =
     write: async () => { throw new Error("forbidden write"); },
   });
   for (let n = 0; n < 3; n++, clock += MERGE_POLL_MS) await sweepAutoMerge(ports);
-  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", readFailures: 3, reason: "GitHub read authentication failed: HTTP 401: Bad credentials" });
+  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", readFailures: 3, reason: "GitHub read authentication failed: details withheld for privacy" });
   const retried = await patchPipeline(id, { action: "retry-merge" }, { now: () => iso(clock) } as never);
   expect(retried.error).toBeUndefined();
   expect(loadPipelines()[0]!.merge).toMatchObject({ state: "queued", readFailures: 0, reason: null, nextReadAt: null });
@@ -613,7 +1051,7 @@ test.each([[12, 1], [21, 2]])("%s due failures yield to a healthy follower with 
   }
 });
 
-test("a stopped merge is stored, raises lane-merge with its two answers, and retry-merge requeues it; a merge is journaled", async () => {
+test.each(["conflict", "legacy optional failure"])("a stopped %s is stored and retry-merge requeues and merges it", async mode => {
   resetAutoMergeForTests();
   savePipelines([completedLane("pipe-merge")]);
   let clock = T0;
@@ -632,13 +1070,14 @@ test("a stopped merge is stored, raises lane-merge with its two answers, and ret
         return JSON.stringify({
           state: merged ? "MERGED" : "OPEN", isDraft: false, headRefOid: HEAD, baseRefName: "main",
           mergeable: mergeState === "DIRTY" ? "CONFLICTING" : "MERGEABLE", mergeStateStatus: merged ? "UNKNOWN" : mergeState,
-          statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: iso(T0) }],
+          statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: iso(T0) },
+            ...(mode === "legacy optional failure" ? [{ __typename: "CheckRun", name: "optional-audit", status: "COMPLETED", conclusion: "FAILURE" }] : [])],
           mergeCommit: merged ? { oid: "f".repeat(40) } : null, mergedAt: merged ? iso(clock) : null,
         });
       }
       if (args[0] === "api" && args[1] === `repos/${REPO}/pulls/7/reviews?per_page=100`) return "";
       if (args[0] === "api" && args[1] === `repos/${REPO}/rules/branches/main`) return "[]";
-      if (args[0] === "api" && args[1] === `repos/${REPO}/branches/main`) return "[]";
+      if (args[0] === "api" && args[1] === `repos/${REPO}/branches/main`) return JSON.stringify(["ci"]);
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
       if (args[0] === "pr" && args[1] === "merge") { mergeState = "MERGED"; return ""; }
       throw new Error(`unexpected gh ${args.join(" ")}`);
@@ -648,8 +1087,15 @@ test("a stopped merge is stored, raises lane-merge with its two answers, and ret
   ports.write = (args) => ports.run(args);
 
   await sweepAutoMerge(ports);
+  const reason = mode === "legacy optional failure" ? 'check "optional-audit" failed' : MERGE_REASONS.conflict;
+  if (mode === "legacy optional failure") {
+    // Replay a record written by the earlier runner, through the real reader.
+    const lanes = loadPipelines();
+    lanes.find(lane => lane.id === "pipe-merge")!.merge!.reason = reason;
+    savePipelines(lanes);
+  }
   const blocked = loadPipelines().find((pipeline) => pipeline.id === "pipe-merge")!;
-  expect(blocked.merge).toMatchObject({ state: "blocked", reason: MERGE_REASONS.conflict, repository: REPO, prNumber: 7, chain: [HEAD] });
+  expect(blocked.merge).toMatchObject({ state: "blocked", reason, repository: REPO, prNumber: 7, chain: [HEAD] });
 
   const need = laneNeed(blocked);
   expect(need?.cleared).toBeNull();
@@ -679,6 +1125,7 @@ test("a stopped merge is stored, raises lane-merge with its two answers, and ret
   expect(merged.merge).toMatchObject({ state: "merged", by: "auto-merge", mergedHead: HEAD, mergeCommit: "f".repeat(40), method: "squash" });
   expect(calls.filter((args) => args[1] === "merge")).toEqual([["pr", "merge", "7", "--repo", REPO, "--squash", "--match-head-commit", HEAD]]);
 
+  if (mode === "legacy optional failure") expect(merged.merge?.optionalFailedChecks).toEqual(["optional-audit"]);
   refreshLifecycleJournal({ pipelines: [merged] }, { force: true });
   const events = queryLifecycleEvents({ pipelineId: "pipe-merge", limit: 50 }).events;
   expect(events.filter((event) => event.type === "pipeline_merged").map((event) => event.summary)).toEqual([`pull request #7 merged by Delegatus, head ${HEAD} — ship the merge runner`]);
@@ -980,6 +1427,16 @@ for (const kind of ["reverted", "new-head", "wrong-sha", "reverted-deletion", "p
         throw new Error(`unexpected gh ${args.join(" ")}`);
       },
     });
+    if (kind === "unproved-local-output") {
+      // Retained queue entries predate the capture guard. Keep exercising
+      // the landing reader with the original, unproved output capture.
+      const admittedLane = structuredClone(lane);
+      admittedLane.runs[1]!.attempts[0]!.outputBaseHead = graph.head;
+      const admission = mergeAdmission(admittedLane, clock, ports);
+      if (!("merge" in admission)) throw new Error(admission.reason);
+      lane.merge = admission.merge;
+      savePipelines([lane]);
+    }
     await sweepAutoMerge(ports);
     if (initial === "blocked") {
       expect(loadPipelines()[0]!.merge?.state).toBe("blocked");
@@ -1204,7 +1661,7 @@ describe("refresh retry recovery", () => {
     return { waiting, child };
   }
 
-  test.each(["completed", "running", "retired"] as const)("completed refresh refused admission retains the parent seat ask (%s)", async startingState => {
+  test.each(["completed", "running", "retired"] as const)("a successor refused merge admission keeps its predecessor withdrawn (%s)", async startingState => {
     const settingsFile = path.join(sandbox, "project-settings.json");
     const previousSettings = fs.existsSync(settingsFile) ? fs.readFileSync(settingsFile) : null;
     try {
@@ -1233,7 +1690,7 @@ describe("refresh retry recovery", () => {
         await sweepAutoMerge(ports);
         const rows = loadPipelines();
         const parent = rows.find(row => row.id === waiting.id)!;
-        expect(parent.merge!.state).toBe("refreshing");
+        expect(parent.merge!.state).toBe("cancelled");
         expect(workerAsks(parent, rows)).toEqual([]);
         child.state = "completed";
         child.closedAt = iso(T0);
@@ -1267,21 +1724,18 @@ describe("refresh retry recovery", () => {
           stdin: "ignore", stdout: "pipe", stderr: "pipe" });
         const [output, error, code] = await Promise.all([new Response(replay.stdout).text(), new Response(replay.stderr).text(), replay.exited]);
         expectMergeChildSuccess(code, error);
-        expect(JSON.parse(output).state).toBe("blocked");
+        expect(JSON.parse(output).state).toBe("cancelled");
       }
-      let firstKey: string | undefined;
       for (let pass = 0; pass < 2; pass++) {
         await sweepAutoMerge(ports);
         const rows = loadPipelines();
         const parent = rows.find(row => row.id === waiting.id)!;
-        expect(parent.merge!.state).toBe("blocked");
-        expect(parent.merge!.reason).toBe("Refresh was not admitted: lane did not complete after the merge setting was enabled");
+        expect(parent.merge!.state).toBe("cancelled");
+        expect(parent.merge!.reason).toBe(`Merge superseded by delivery owner ${child.id}`);
         expect(rows.find(row => row.id === child.id)!.merge).toBeUndefined();
         for (const lanes of [rows, [...rows].reverse()]) {
           const asks = workerAsks(parent, lanes);
-          expect(asks.map(ask => ask.id)).toEqual([parent.id]);
-          firstKey ??= asks[0]!.key;
-          expect(asks[0]!.key).toBe(firstKey);
+          expect(asks).toEqual([]);
         }
         clock += 60_000;
       }
@@ -1758,4 +2212,61 @@ test("a refresh review that fails at the merge mutation fence refuses dispatch",
   expect(changed).toBe(true);
   expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", reason: MERGE_REASONS.refreshReviewRequired });
   expect(writes).toEqual([]);
+});
+
+
+test.each(["queued", "checking", "waiting-checks", "updating", "refreshing", "blocked"] as const)(
+  "close durably withdraws a %s merge before teardown", async state => {
+    const record = completedLane("close-queue");
+    savePipelines([record]);
+    const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, cachedState: () => null,
+      pullRequestOf: () => ({ repository: REPO, number: 7 }),
+      setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }), log: () => undefined,
+      run: async () => { throw new Error("close fixture does not read the forge"); } });
+    await sweepAutoMerge(ports);
+    const queued = loadPipelines()[0]!;
+    queued.merge!.state = state;
+    if (state === "refreshing") queued.merge!.refresh = refreshReservation(queued, "b".repeat(40), HEAD, T0, "main");
+    queued.merge!.reason = "waiting for repository capacity";
+    queued.merge!.nextReadAt = iso(T0 + MERGE_POLL_MS);
+    savePipelines([queued]);
+    const result = await patchPipeline(record.id, { action: "close" }, { now: () => iso(T0) } as never);
+    expect(result.error).toBeUndefined();
+    expect(loadPipelines()[0]!).toMatchObject({ state: "closed", merge: { state: "cancelled", reason: "Lane is closed", nextReadAt: null } });
+    const child = Bun.spawn([process.execPath, "-e", `
+      const { loadPipelines } = await import("./src/lib/pipelines/store.ts");
+      console.log(JSON.stringify(loadPipelines()[0].merge));
+    `], { cwd: process.cwd(), env: { ...process.env, LLV_STATE_DIR: sandbox }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code, err).toBe(0);
+    expect(JSON.parse(out)).toMatchObject({ state: "cancelled", reason: "Lane is closed", nextReadAt: null });
+  });
+
+
+test("delivery takeover withdraws the old queue entry in the ownership transaction", async () => {
+  savePipelines([]);
+  const target = { repository: PROJECT, remote: `https://github.com/${REPO}.git`, branch: "refs/heads/takeover", pr: 7 };
+  const original = claimedLane("takeover-original", target);
+  savePipelines([original]);
+  const ports = productionAutoMergePorts({ now: () => T0, loadPipelines, cachedState: () => null,
+    pullRequestOf: () => ({ repository: REPO, number: 7 }),
+    setting: () => ({ enabled: true, changedAt: iso(T0 - 7_200_000), changedBy: "operator" }), log: () => undefined,
+    run: async () => { throw new Error("fixture does not read the forge"); } });
+  await sweepAutoMerge(ports);
+  const old = loadPipelines()[0]!;
+  const successor = buildPipeline({ id: "takeover-successor", task: old.task, project: PROJECT, repoDir: old.repoDir,
+    stages: old.stages, srcPath: null, srcConversationId: null, now: iso(T0) });
+  successor.delivery = { ...old.delivery!, disposition: "comparison", journal: [] };
+  savePipelines([old, successor]);
+  const before = loadPipelines();
+  const refused = await takeoverPipelineDelivery(successor.id, old.id, old.delivery!.epoch + 1, "replace delivery", null);
+  expect(refused.status).toBe(409);
+  expect(loadPipelines()).toEqual(before);
+  const result = await takeoverPipelineDelivery(successor.id, old.id, old.delivery!.epoch, "replace delivery", null);
+  expect(result.error).toBeUndefined();
+  expect(loadPipelines().find(row => row.id === old.id)).toMatchObject({
+    delivery: { active: false, publish: "disabled" },
+    merge: { state: "cancelled", reason: `Merge superseded by delivery owner ${successor.id}`, nextReadAt: null },
+  });
+  expect(loadPipelines().find(row => row.id === successor.id)!.delivery).toMatchObject({ active: true, ownerId: successor.id, epoch: old.delivery!.epoch + 1 });
 });

@@ -17,7 +17,7 @@ export function legacyMemoryGenerations(snapshot: Pick<RegistryFile, "conversati
       if (generation.archivedAt || generation.launchProfile.cleanMemory || generation.createdAt >= flippedAt) continue;
       const entry = snapshot.entries[`claude:${generation.id}`];
       if (!entry || entry.artifactPath !== generation.path) continue;
-      const process = entry.structuredHost?.process ?? entry.host?.agent;
+      const process = entry.structuredHost?.process;
       if (process && processIdentityStatus(process) !== "dead") result.add(generation.id);
     }
   }

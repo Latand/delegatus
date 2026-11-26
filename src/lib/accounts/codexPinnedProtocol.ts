@@ -5,24 +5,16 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { fromJSONSchema, type ZodType } from "zod";
-import currentManifest from "./protocol/0.166.0/manifest.json";
-import newestPriorManifest from "./protocol/0.165.0/manifest.json";
-import lastManifest from "./protocol/0.164.0/manifest.json";
-import recentManifest from "./protocol/0.163.0/manifest.json";
-import priorManifest from "./protocol/0.162.1/manifest.json";
-import previousManifest from "./protocol/0.159.0/manifest.json";
-import oldestManifest from "./protocol/0.154.0/manifest.json";
+import { CODEX_PROTOCOL_MANIFESTS, SUPPORTED_CODEX_VERSIONS } from "./codexVersions";
 import { CodexAppServerProtocolError } from "./codexAppServerProtocol";
 import { codexSchemaBreaks } from "./codexSchemaCompatibility";
+import { cacheEntryPath } from "@/lib/configDir";
 import { signalDetachedProcessGroup } from "@/lib/processGroup";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 type Schema = { [key: string]: unknown; properties?: Record<string, Schema | boolean | undefined>; oneOf?: Schema[]; anyOf?: Schema[]; $ref?: string; type?: string | string[]; definitions?: Record<string, Schema> };
-const pins = [
-  currentManifest, newestPriorManifest, lastManifest, recentManifest,
-  priorManifest, previousManifest, oldestManifest,
-].map(manifest => {
+const pins = CODEX_PROTOCOL_MANIFESTS.map(manifest => {
   // Keep the generated object graphs out of webpack's server modules. Each
   // immutable artifact is read once, when a check first needs that schema.
   const loaded: Partial<Record<"stable" | "experimental", Schema>> = {};
@@ -98,12 +90,26 @@ function strictObjects(value: unknown): unknown {
   if (!value || typeof value !== "object") return value;
   const row = value as Schema;
   const result = Object.fromEntries(Object.entries(row).map(([key, child]) => [key, strictObjects(child)]));
+  // An object with its own fields and inline object branches (an MCP
+  // elicitation: server, thread and turn beside a mode branch) is one object.
+  // Closing the outer shape and each branch separately admits no payload, so
+  // each branch is closed over both field sets and the outer shape stays open.
+  const branches = row.oneOf ? "oneOf" : row.anyOf ? "anyOf" : null;
+  const inline = (branch: unknown): branch is Schema => !!branch && typeof branch === "object" && (branch as Schema).type === "object" && !!(branch as Schema).properties;
+  if (row.type === "object" && row.properties && row.additionalProperties === undefined && branches
+    && (result[branches] as unknown[]).every(inline)) {
+    const required = Array.isArray(row.required) ? row.required : [];
+    result[branches] = (result[branches] as Schema[]).map(branch => ({ ...branch,
+      properties: { ...(result.properties as Record<string, unknown>), ...branch.properties },
+      required: [...new Set([...required, ...(Array.isArray(branch.required) ? branch.required : [])])] }));
+    return result;
+  }
   if (row.type === "object" && row.properties && row.additionalProperties === undefined) result.additionalProperties = false;
   return result;
 }
 
 const REMEDY = "Pin the CLI to a supported version, or regenerate with scripts/generate-codex-protocol.ts and review compatibility";
-const supported = () => pins.map(row => row.manifest.version).join(", ");
+const supported = () => SUPPORTED_CODEX_VERSIONS.join(", ");
 
 function protocolAdmissionError(version: string, cause: string): CodexAppServerProtocolError {
   return new CodexAppServerProtocolError(`CLI ${version}; Supported: ${supported()}; cause: ${hardenedRedact(cause).replace(/\s+/g, " ").trim().slice(0, 180)}. ${REMEDY}`);
@@ -125,7 +131,7 @@ export class CodexPinnedProtocol {
   readonly unpinned: CodexUnpinnedCli | null;
   private readonly pin: typeof pins[number];
 
-  constructor(version = currentManifest.version, unpinned: CodexUnpinnedCli | null = null) {
+  constructor(version = SUPPORTED_CODEX_VERSIONS[0]!, unpinned: CodexUnpinnedCli | null = null) {
     const pin = pins.find(row => row.manifest.version === version);
     if (!pin) throw new CodexAppServerProtocolError(`CLI ${version} has no pinned schema. ${REMEDY}. Supported: ${supported()}`);
     this.pin = pin;
@@ -318,8 +324,19 @@ function probeGroupAlive(groupId: number): boolean | null {
   }
 }
 
+/** Where the generator may write so that this process can read the result.
+ * In the Docker install `codex` is an nsenter shim: the CLI runs in the host's
+ * mount namespace, where the container's /tmp does not exist and a same-named
+ * host /tmp does. Only the home directory is mounted at the same path in both,
+ * so the bundle is written under the cache root there. */
+export function codexSchemaScratchRoot(env: Readonly<Record<string, string | undefined>> = process.env): string {
+  return env.LLV_DOCKER_NSENTER_SHIMS === "1" ? cacheEntryPath("codex-schema") : os.tmpdir();
+}
+
 export const generateCodexSchemas = async (binary: string, env: NodeJS.ProcessEnv, options: { timeoutMs?: number } = {}): Promise<{ stable: string; experimental: string }> => {
-  const scratch = await fs.promises.mkdtemp(path.join(os.tmpdir(), "delegatus-codex-schema-"));
+  const root = codexSchemaScratchRoot();
+  await fs.promises.mkdir(root, { recursive: true });
+  const scratch = await fs.promises.mkdtemp(path.join(root, "delegatus-codex-schema-"));
   try {
     const result = { stable: "", experimental: "" };
     for (const name of ["stable", "experimental"] as const) {

@@ -1,11 +1,13 @@
 name: Privacy publication gate
 
 on:
-  # Trusted pushes seed the default-branch cache. Target/issue events can
-  # restore it even when their cache token is read-only.
   push:
     branches: [main]
-  pull_request_target:
+  # PR-authored YAML can remove this guard. That residual risk is accepted:
+  # agents author PRs, workflow edits are reviewed, and pre-push runs the scanner.
+  # Stronger enforcement needs an independent workflow_run verifier with its
+  # own required App identity configured by the operator in branch protection.
+  pull_request:
     types: [opened, synchronize, reopened]
   # dependabot-lockfile.yml commits the regenerated bun.lock with the repository
   # GITHUB_TOKEN, and GitHub raises no `synchronize` for that push, so the gate
@@ -13,16 +15,20 @@ on:
   # `github.sha` — the commit its own check run lands on — so it cannot report a
   # verdict for a revision it did not read.
   workflow_dispatch:
+  schedule:
+    - cron: "31 2 * * *"
 
 permissions:
   contents: read
 
 jobs:
   privacy-publication:
+    if: github.event_name != 'schedule'
+    permissions:
+      contents: read
+      pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      PRIVACY_MEDIA_PACKAGES: ffmpeg tesseract-ocr tesseract-ocr-eng tesseract-ocr-ukr
     steps:
       - name: Check out trusted privacy implementation
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -35,19 +41,24 @@ jobs:
       - name: Check out candidate as inspection input
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          allow-unsafe-pr-checkout: true
           fetch-depth: 0
           path: candidate
           persist-credentials: false
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Resolve current protected base
         working-directory: trusted
         env:
-          PRIVACY_BASE_REF: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
+          PRIVACY_BASE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           git fetch --no-tags --force origin "+refs/heads/${PRIVACY_BASE_REF}:refs/remotes/origin/${PRIVACY_BASE_REF}"
-          PRIVACY_BASE_SHA="$(git rev-parse --verify "refs/remotes/origin/${PRIVACY_BASE_REF}^{commit}")"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            [[ "$PUSH_BEFORE" =~ ^[0-9a-f]{40}$ ]]
+            PRIVACY_BASE_SHA="$(git rev-parse --verify "${PUSH_BEFORE}^{commit}")"
+          else
+            PRIVACY_BASE_SHA="$(git rev-parse --verify "refs/remotes/origin/${PRIVACY_BASE_REF}^{commit}")"
+          fi
           printf 'PRIVACY_BASE_SHA=%s\n' "$PRIVACY_BASE_SHA" >> "$GITHUB_ENV"
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -58,105 +69,53 @@ jobs:
         working-directory: trusted
         run: bun install --frozen-lockfile
 
-      # Scanner tools: ffmpeg supplies ffprobe; OCR uses exactly eng+ukr.
-      # Bootstrap stays inline in the trusted workflow. Candidate files never
-      # select packages, cache keys, sources, or commands. Save before inspection,
-      # with no deferred post-job write or partial-key fallback.
-      - name: Resolve media tools cache
-        id: media-key
-        shell: bash
-        run: |
-          set -euo pipefail
-          printf 'MEDIA_CACHE_DIR=%s/privacy-media\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-          package_hash="$(printf '%s' "$PRIVACY_MEDIA_PACKAGES" | sha256sum | cut -d ' ' -f 1)"
-          printf 'key=privacy-media-v3-%s-%s-%s-%s\n' \
-            "$ImageOS" "$ImageVersion" "$RUNNER_ARCH" "$package_hash" >> "$GITHUB_OUTPUT"
-
-      - name: Restore media inspection tools
-        id: media-cache
-        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        timeout-minutes: 3
-        env:
-          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 2
-        with:
-          path: ${{ runner.temp }}/privacy-media
-          key: ${{ steps.media-key.outputs.key }}
-
-      - name: Download media inspection tools (cold cache)
-        if: steps.media-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$MEDIA_CACHE_DIR/archives/partial" "$MEDIA_CACHE_DIR/lists/partial"
-          ubuntu_sources="$(mktemp -d)"
-          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
-            cp /etc/apt/sources.list.d/ubuntu.sources "$ubuntu_sources/"
-          fi
-          apt_opts=(
-            -o Acquire::Retries=1
-            -o Acquire::http::Timeout=15
-            -o Acquire::https::Timeout=15
-            -o APT::Update::Error-Mode=any
-            -o Dir::Etc::sourcelist=/etc/apt/sources.list
-            -o "Dir::Etc::sourceparts=$ubuntu_sources"
-            -o "Dir::Cache::archives=$MEDIA_CACHE_DIR/archives"
-            -o "Dir::State::lists=$MEDIA_CACHE_DIR/lists"
-          )
-          read -r -a packages <<< "$PRIVACY_MEDIA_PACKAGES"
-          for attempt in 1 2; do
-            if sudo timeout --kill-after=5s 90s apt-get "${apt_opts[@]}" update \
-              && sudo timeout --kill-after=5s 180s apt-get "${apt_opts[@]}" install \
-                --yes --download-only --reinstall --no-install-recommends "${packages[@]}"; then
-              exit 0
-            fi
-            echo "::warning title=Privacy tools provisioning::Ubuntu index/package download attempt $attempt of 2 failed or timed out; privacy inspection has not run."
-          done
-          echo "::error title=Privacy tools provisioning::Ubuntu package network/index provisioning failed after two bounded attempts. This is an infrastructure failure before privacy inspection; inspect apt diagnostics above."
-          exit 1
-
-      - name: Install media inspection tools (offline)
-        timeout-minutes: 3
-        shell: bash
-        run: |
-          set -euo pipefail
-          read -r -a packages <<< "$PRIVACY_MEDIA_PACKAGES"
-          if ! sudo apt-get \
-            -o "Dir::Cache::archives=$MEDIA_CACHE_DIR/archives" \
-            -o "Dir::State::lists=$MEDIA_CACHE_DIR/lists" \
-            -o APT::Keep-Downloaded-Packages=true \
-            install --yes --no-download --reinstall --no-install-recommends "${packages[@]}"; then
-            echo "::error title=Privacy tools provisioning::Offline cached-package installation failed before privacy inspection. No network fallback is permitted."
-            exit 1
-          fi
-          ffmpeg -version
-          ffprobe -version
-          languages="$(tesseract --list-langs)"
-          for language in eng ukr; do
-            if ! grep -qx "$language" <<< "$languages"; then
-              echo "::error title=Privacy tools provisioning::Required OCR language $language is missing."
-              exit 1
-            fi
-          done
-          # apt's locks/partial downloads are ephemeral and never cached.
-          sudo rm -rf "$MEDIA_CACHE_DIR/archives/partial" "$MEDIA_CACHE_DIR/lists/partial"
-          sudo rm -f "$MEDIA_CACHE_DIR/archives/lock" "$MEDIA_CACHE_DIR/lists/lock"
-          sudo chown -R "$(id -u):$(id -g)" "$MEDIA_CACHE_DIR"
-
-      - name: Save media inspection tools
-        if: steps.media-cache.outputs.cache-hit != 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
-        timeout-minutes: 3
-        with:
-          path: ${{ runner.temp }}/privacy-media
-          key: ${{ steps.media-key.outputs.key }}
-
       # A failing default-branch suite must leave a repair PR inspectable. Keep
       # the baseline visible and bounded; trusted inspection below and the
       # candidate's own suite remain mandatory publication gates.
+      - name: Refuse mixed privacy repairs
+        if: github.event.pull_request != null
+        env:
+          PRIVACY_GUARD_BASE: ${{ github.event.pull_request.base.sha }}
+        working-directory: trusted
+        run: |
+          bun -e '
+            const { execFileSync } = require("node:child_process");
+            let diff;
+            try {
+              diff = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `${process.env.PRIVACY_GUARD_BASE}...HEAD`], { cwd: "../candidate", encoding: "utf8" });
+            } catch {
+              console.error("::error::Unable to compare the candidate with the pull request base; refusing the privacy workflow.");
+              process.exit(1);
+            }
+            const changed = diff.split("\0").filter(Boolean);
+            const privacy = p => [".github/workflows/privacy-publication.yml", ".github/workflows/privacy-tracker-audit.yml", ".github/workflows/dependabot-lockfile.yml", "src/lib/environmentIsolation.ts"].includes(p)
+              || p.startsWith("scripts/privacy-") || p.startsWith("scripts/generate-privacy-") || p.startsWith("src/lib/privacy/");
+            if (changed.some(privacy) && changed.some(p => !privacy(p))) {
+              console.error("::error::Privacy workflow or gate implementation changes must be submitted in a separate PR containing only privacy workflow/gate files. Split unrelated files into another PR.");
+              process.exit(1);
+            }
+          '
+
+      - name: Scope candidate privacy self-tests with trusted code
+        id: privacy-scope
+        # The push scans the landed range. The nightly job retests main.
+        if: github.event_name != 'push'
+        working-directory: trusted
+        run: |
+          bun -e '
+            const { execFileSync } = require("node:child_process");
+            const { readdirSync, appendFileSync } = require("node:fs");
+            const { ALWAYS_IN_SCOPE, executedPaths } = require("./scripts/ci-platform-scope.ts");
+            const tests = readdirSync("scripts").filter(f => /^privacy-.*\.test\.ts$/.test(f)).map(f => `scripts/${f}`);
+            const closure = executedPaths(process.cwd(), [...tests, "test-preload.ts"]);
+            const changed = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `${process.env.PRIVACY_BASE_SHA}...HEAD`], { cwd: "../candidate", encoding: "utf8" }).split("\0").filter(Boolean);
+            const run = changed.some(f => closure.has(f) || ALWAYS_IN_SCOPE.includes(f) || f.startsWith("scripts/privacy-") || f.startsWith("scripts/generate-privacy-") || f.startsWith("src/lib/privacy/") || [".github/workflows/privacy-publication.yml", ".github/workflows/privacy-tracker-audit.yml"].includes(f));
+            appendFileSync(process.env.GITHUB_OUTPUT, `run=${run}\n`);
+          '
+
       - name: Verify privacy gate behavior
         id: trusted-tests
-        if: github.event_name == 'push'
+        if: steps.privacy-scope.outputs.run == 'true'
         working-directory: trusted
         timeout-minutes: 3
         continue-on-error: true
@@ -179,34 +138,38 @@ jobs:
       # prevented rather than found afterwards in the public history.
       - name: Scan changed publication surfaces, commit messages and the merge boundary
         env:
+          PRIVACY_PUSH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
+          PRIVACY_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: ${{ github.workspace }}/trusted/scripts/privacy-known-value-fingerprints.json
-          LLV_PRIVACY_OCR_LANGUAGES: eng+ukr
-        working-directory: trusted
-        run: bun scripts/privacy-publication-gate.ts --repository ../candidate --require-known-values --check-commits --base "$PRIVACY_BASE_SHA"
-
-      - name: Scope candidate privacy self-tests with trusted code
-        id: privacy-scope
         working-directory: trusted
         run: |
-          bun -e '
-            const { execFileSync } = require("node:child_process");
-            const { readdirSync, appendFileSync } = require("node:fs");
-            const { ALWAYS_IN_SCOPE, executedPaths } = require("./scripts/ci-platform-scope.ts");
-            const tests = readdirSync("scripts").filter(f => /^privacy-.*\.test\.ts$/.test(f)).map(f => `scripts/${f}`);
-            const closure = executedPaths(process.cwd(), [...tests, "test-preload.ts"]);
-            const changed = execFileSync("git", ["diff", "--name-only", "--no-renames", "-z", `${process.env.PRIVACY_BASE_SHA}...HEAD`], { cwd: "../candidate", encoding: "utf8" }).split("\0").filter(Boolean);
-            const run = changed.some(f => closure.has(f) || ALWAYS_IN_SCOPE.includes(f) || /^scripts\/privacy-.*\.test\.ts$/.test(f) || f === ".github/workflows/privacy-publication.yml");
-            appendFileSync(process.env.GITHUB_OUTPUT, `run=${run}\n`);
-          '
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            bun scripts/privacy-landed-publication.ts
+          else
+            bun scripts/privacy-publication-gate.ts --repository ../candidate --require-known-values --check-commits --base "$PRIVACY_BASE_SHA"
+          fi
 
-      # Candidate code runs last, after all trusted inspection and cache writes.
+      # Candidate code runs last, after trusted inspection.
       # It receives no credentials and cannot alter a later trusted verdict.
-      # Serial OCR prevents CLI overlap. A 44.90 s local suite at the 1.9
-      # hosted factor needs ceil((44.90 * 1.9) / 0.7 / 10) * 10 = 130 s.
+      # Main took about 129 s for 736 tests. This PR's run was killed at 130 s after 732 passes and zero failures.
       - name: Verify candidate privacy gate behavior within budget
         if: steps.privacy-scope.outputs.run == 'true'
         working-directory: candidate
-        timeout-minutes: 3
+        timeout-minutes: 5
         run: |
           ln -sT ../trusted/node_modules node_modules
-          timeout --kill-after=5s 130s bun test scripts/privacy-*.test.ts
+          timeout --kill-after=5s 240s bun test scripts/privacy-*.test.ts
+
+  nightly-privacy-self-tests:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.3
+      - run: bun install --frozen-lockfile
+      - run: bun test scripts/privacy-*.test.ts

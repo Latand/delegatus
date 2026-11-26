@@ -638,7 +638,7 @@ function statePatch(state: ConversationState, entry: Entry, pid: number): Record
     case "waiting-question": return {
       ...running,
       pendingQuestion: {
-        kind: "question", toolUseId: `toolu-question-${pid}`, transcriptPath: entry.path, pid, paneTarget: null, askedAt: new Date(mtime * 1000).toISOString(),
+        kind: "question", toolUseId: `toolu-question-${pid}`, transcriptPath: entry.path, pid, askedAt: new Date(mtime * 1000).toISOString(),
         questions: [{
           question: "Which format should the export endpoint default to?", header: "Format", multiSelect: false,
           options: [
@@ -651,7 +651,7 @@ function statePatch(state: ConversationState, entry: Entry, pid: number): Record
     };
     case "waiting-plan": return {
       ...running,
-      pendingQuestion: { kind: "plan", toolUseId: `toolu-plan-${pid}`, transcriptPath: entry.path, pid, paneTarget: null, askedAt: new Date(mtime * 1000).toISOString(), plan: "1) add the binding column behind a flag\n2) backfill from the seat records\n3) flip reads\n4) drop the legacy lookup" },
+      pendingQuestion: { kind: "plan", toolUseId: `toolu-plan-${pid}`, transcriptPath: entry.path, pid, askedAt: new Date(mtime * 1000).toISOString(), plan: "1) add the binding column behind a flag\n2) backfill from the seat records\n3) flip reads\n4) drop the legacy lookup" },
     };
     case "returned": return { proc: "done", pid: null, activity: "recent", lastTurn: { startedAt: mtime * 1000 - 14 * 60_000, endedAt: mtime * 1000 } };
     case "done": return { proc: null, pid: null, activity: "idle", lastTurn: { startedAt: mtime * 1000 - 25 * 60_000, endedAt: mtime * 1000 } };

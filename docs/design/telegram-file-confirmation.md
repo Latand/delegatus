@@ -63,7 +63,12 @@ installation's saved public address, or its local control origin when none is
 saved, so an agent can relay a clickable link over Telegram. An untrusted
 response cannot choose a different route or origin. It authorizes no send.
 The paired installation owner signs in through the existing Telegram sign-in
-surface. The page follows the operator's choice of 2026-10-27, variant 2
+surface. A browser that cannot confirm yet is told the first missing step
+(`telegram-file-confirmation-auth.md`): no owner, another member, no paired
+Telegram, no linked Telegram, a different linked account, or a session that
+did not come from Telegram. The page offers that step itself and asks the
+server again after each one; it never redirects to the sign-in page on its own.
+The page follows the operator's choice of 2026-10-27, variant 2
 «warning first» of the prototype review: the strongest detector reason is the
 heading (a secret, else a hidden folder, else the folders outside the document
 roots), and a sentence names the agent's request, the chat and, when the
@@ -152,7 +157,8 @@ The existing conversation-window driver contains the rendered cases, one per
 width and language: 390×844 under a touch pointer and 1440×900, en and uk,
 light and dark, in the states pending, details (the fold open), status (the
 dot's popover open), sending (the decision held in flight), sent, rejected,
-expired, uncertain, failed, unavailable and owner sign-in; plus 820×900
+expired, uncertain, failed, unavailable, owner sign-in and the six missing
+steps; plus 820×900
 pending in both languages, and two images and 70-character names at 390 in
 uk. The pending fixture uses a report-named symlink to a hidden credential
 file. Pressing the production answers must post exactly

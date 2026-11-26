@@ -163,7 +163,7 @@ const OVERRIDES: Record<string, unknown> = {
       return Response.json({ pipelineStageRuntime: pipelineStageRuntime(project) });
     }
     if (url === "/api/projects/settings" && method === "PUT") return settingsReply();
-    if (url === "/api/tmux") {
+    if (url === "/api/conversation-host") {
       tmuxCalls.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return { ok: true, status: 200, json: async () => ({ ok: true }), text: async () => "" };
     }

@@ -1,3 +1,4 @@
+import { requestWorkload } from "@/lib/requestWorkload";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { readRequestBody, requestBodyTooLargeMessage } from "@modelcontextprotocol/sdk/server/requestBody.js";
 import crypto from "node:crypto";
@@ -18,6 +19,8 @@ import {
   MCP_HTTP_CLIENT_ID,
   MCP_TOOL_NAMES,
   taskExecutorFailure,
+  taskExecutorReplyLost,
+  isMutatingMcpTool,
   type McpToolName,
   type McpToolService,
 } from "./server";
@@ -256,9 +259,15 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
   request.signal.addEventListener("abort", abandon, { once: true });
   if (request.signal.aborted) abandon();
 
+  for (const message of messages) {
+    if (message.method !== "tools/call") continue;
+    const params = message.params as { name?: unknown; arguments?: { conversationId?: unknown } } | undefined;
+    if (typeof params?.name === "string" && (MCP_TOOL_NAMES as readonly string[]).includes(params.name)) {
+      requestWorkload.receivedTool(params.name as McpToolName, nativePeer, conversationId, params.arguments?.conversationId);
+    }
+  }
   // A stateless single-tool POST cannot observe registrations for other tools.
-  // Discovery, batches, unknown names and other protocol methods keep the full
-  // catalog and the SDK's existing error behavior.
+  // Discovery, batches and unknown names keep the SDK catalog.
   const requested = messages.length === 1 && messages[0]?.method === "tools/call"
     ? (messages[0].params as { name?: unknown } | undefined)?.name : undefined;
   const tools = typeof requested === "string" && (MCP_TOOL_NAMES as readonly string[]).includes(requested)
@@ -269,17 +278,27 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
       try {
         // Keep ingress parsing and executor admission on separate loop turns.
         await new Promise<void>(resolve => setImmediate(resolve));
-        return await viewerTaskExecutor().callHttpTool(requested, body, request,
-          nativePeer ? { nativePeer } : unidentified ? { paginationIdentity: connectionId || crypto.randomUUID() } : { capability }, {
-            signal: registered.get(inflightKey(capability, connectionId, messages[0]?.id))?.signal ?? request.signal,
-          });
+        const signal = registered.get(inflightKey(capability, connectionId, messages[0]?.id))?.signal ?? request.signal;
+        const taskCaller = nativePeer ? { nativePeer } : unidentified ? { paginationIdentity: connectionId || crypto.randomUUID() } : { capability };
+        const callOnce = () => requestWorkload.withTool(requested as McpToolName, () => viewerTaskExecutor().callHttpTool(requested, body, request, taskCaller, { signal }));
+        try { return await callOnce(); }
+        catch (error) {
+          /* The executor stopped before its reply. The receipt under the
+             caller's own key answers the same call once more (#3757). */
+          const keyed = typeof (messages[0]?.params as { arguments?: { clientRequestId?: unknown } } | undefined)?.arguments?.clientRequestId === "string";
+          if (!taskExecutorReplyLost(error) || !isMutatingMcpTool(requested as McpToolName) || !keyed || signal.aborted) throw error;
+          return await callOnce();
+        }
       } catch (error) {
         const args = (messages[0]?.params as { arguments?: unknown } | undefined)?.arguments;
         const result = taskExecutorFailure(requested, args && typeof args === "object" && !Array.isArray(args) ? args as Record<string, unknown> : {}, error);
         return Response.json({ jsonrpc: "2.0", id: messages[0]?.id, result: mcpToolResponse(result, textOnly) });
       }
     }
-    server = createViewerMcpServer(service, tools, textOnly);
+    server = createViewerMcpServer({ callTool: (name, args, context) =>
+      (MCP_TOOL_NAMES as readonly string[]).includes(name)
+        ? requestWorkload.withTool(name as McpToolName, () => service.callTool(name, args, context))
+        : service.callTool(name, args, context) }, tools, textOnly);
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true,
       maxRequestBodySize: MCP_MAX_REQUEST_BODY_BYTES });
     await server.connect(transport);

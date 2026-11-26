@@ -1,3 +1,4 @@
+import { keepReportPicturesSoon } from "@/lib/reportMedia/paths";
 import { operatorTimeZone } from "@/lib/operator/settings";
 import { requestWorkspaceScope, filterWorkspaceRows, workspaceRoute, assertWorkspaceProject } from "@/lib/team/workspaceRoute";
 import fs from "node:fs";
@@ -100,6 +101,7 @@ async function workspacePOST(req: NextRequest): Promise<NextResponse<{ ok: true;
     return { state: persist, result: outcome };
   });
   if (!result.ok) return NextResponse.json({ error: result.error, ...(body.findingKey !== undefined && result.code ? { code: result.code, field: result.field } : {}) }, { status: result.status });
+  if (!result.replay) keepReportPicturesSoon([result.task.text, result.task.details]);
   /* Best-effort GC of stale, unreferenced staged uploads. A dangling reference
      is impossible by construction: `createTask` re-checks `attachmentExists`
      inside the same synchronous `mutateTasksFile` block that persists the task,

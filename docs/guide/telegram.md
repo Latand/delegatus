@@ -9,17 +9,38 @@ system block.
 
 ## The bot
 
-Paste a bot token from @BotFather and choose which chats agents may post to.
+Open **Settings** → **Telegram** from the sidebar's ⋯ menu: the bot token from
+@BotFather goes in **Keys**, which the page's **Bot token** row opens, and the
+same page chooses which chats agents may post to.
 Agents post to those chats and read what the bot receives through the MCP
 server.
 
 - **Photos.** One photo or an album of up to ten (JPEG or PNG, each up to
   10 MB), with a caption for each image.
-- **Report files.** Up to 20 MB (Markdown, text, log, JSON, CSV, HTML, PDF or
-  an image).
-- **Where files come from.** Only from the **Document folders** set in the
-  panel, `handoff/` in your home by default. A text file holding a password or
-  a key is refused.
+- **Report files.** Up to 20 MB (Markdown, text, log, JSON, CSV, HTML, PDF,
+  an image, Excel `.xlsx`, Word `.docx` or PowerPoint `.pptx`).
+- **Where files come from.** Only from the **Document folders** set on that
+  page, `handoff/` in your home by default. Text and Office files holding a
+  detected password or key require the owner's confirmation for that exact
+  file and destination. Office files are decompressed in memory and every
+  entry is scanned, including the text Office shows: runs joined across
+  formatting and XML indentation, with paragraphs, cells and comments kept
+  apart. Text Office does not show in the line (hidden text, either side of a
+  tracked change, field codes, phonetic guides, unselected compatibility
+  alternatives, text boxes) cannot split a shown token. Word imports through
+  `altChunk` or `aFChunk` are refused because their imported format is outside
+  the XML inspection. Word style-based hiding is checked conservatively, and
+  XML parts with more than 30,000 displayed-text pieces are refused before
+  alternative readings can monopolize the Viewer event loop.
+  Excel number-format literals and formula string literals are scanned as text.
+  Embedded Office files,
+  such as a chart's workbook, are opened and scanned the same way, up to two
+  levels deep. Inspection allows up to 4096 entries and 20 MB of expanded
+  content across all levels. An Office file that cannot be fully inspected
+  (encrypted, damaged, malformed XML, unsupported, carrying an archive
+  comment, offering more than six compatibility namespaces in one part, or
+  holding an embedded OLE object) is refused. Confirmation grants no standing
+  permission.
 - **Reports.** The orchestrator can send its reports to one of these chats.
   When the installation's owner replies to a report there, the reply goes to
   that project's orchestrator.
@@ -96,6 +117,12 @@ answers with.
   reply records the decision.
 - Reading the owner's group history through `relay_owner_history` stays behind
   the owner tools switch, off by default.
+  With `action: "media"`, `chat`, `messageId` and your evidence `directory`,
+  it also saves one message's media locally. This requires the paired service's
+  `relay_owner_media` feature; larger files may need repeated calls while
+  `in_progress`. The per-call limit is 2 GiB. History shows media metadata and
+  `editedAt` when the service reports them; `editsReported: false` means edits
+  could not be confirmed from that page.
 
 ### When the install is busy
 

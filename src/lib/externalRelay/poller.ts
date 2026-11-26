@@ -1,8 +1,10 @@
+import { RelayPollDiagnostics, relayPollFailure } from "./pollDiagnostics";
 import { ownerTierFor } from "./profile";
+import { removeOwnerRunDirectory } from "./runDirectory";
 import { ownerTurnDiagnostic } from "./diagnostic";
-import { deliverOwnerLateAnswer, ownerRecoveryRequest } from "./ownerLateDelivery";
-import { ownerFailureAnswer, confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
-import { ownerRelayFailureReplyAuthorized } from "./ownerAuthority";
+import { deliverOwnerLateAnswer, expireOwnerLateAnswer, ownerLateAnswerTerminal, ownerLateAnswerUndeliverable, ownerRecoveryRequest } from "./ownerLateDelivery";
+import { ownerFailureAnswer, confirmOwnerStop, revokeOwnerRuns, type OwnerRunPorts } from "./ownerRun";
+import { effectiveOwnerRunTier, ownerRelayFailureReplyAuthorized, ownerRunIsRequester } from "./ownerAuthority";
 import { changeRun, changeRunAsync, OWNER_RELEASED_CUSTODY_RETENTION_MS, ownerStopPending } from "./store";
 import { sweepConversationsAsync } from "./conversations";
 import { readRelaySwitches } from "./switches";
@@ -15,11 +17,12 @@ import {
 import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { isStagingMode } from "@/lib/staging";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { noteRelayOutcome, relayActivity } from "./activity";
-import { pruneAnswerRecords, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
+import { noteRelayOutcome, relayActivity, relayOutcomeLabel } from "./activity";
+import { pruneAnswerRecords, recordAnswerCompletionRefusal, relayAnswersRoot, settleInterruptedAnswer, type RelayAnswerDelivery } from "./answers";
+import { recordCompletionRefusal } from "./completionRefusal";
 import { discoverRelay, ExternalRelayError, fetchRelayTargets, isUnknownFeatureRefusal, relayCall } from "./client";
 import { requestSchema, RELAY_OWNER_TOOLS, RELAY_TOOLS_ON_DEMAND, type ExternalRelayCompletion } from "./protocol";
-import { RELAY_MEDIA_ANY_DOCUMENT } from "./mediaInputValidation";
+import { RELAY_HISTORY_MEDIA, RELAY_MEDIA_ANY_DOCUMENT } from "./mediaInputValidation";
 import {
   advertisedSlots,
   externalRelayTempRoot,
@@ -33,7 +36,7 @@ import {
   mergeRelayTargets,
   readRelayStore,
   readRunLedger,
-  updateRelayStore,
+  updateRelayStoreAsync,
   type PairedRelay,
   type RunRecord,
 } from "./store";
@@ -64,6 +67,7 @@ type PollerController = {
   descriptorRefreshes?: Map<string, TargetRefresh>;
   forcedDescriptorRefreshes?: Map<string, TargetRefresh>;
   prunedAt?: number;
+  pollDiagnostics?: Map<string, RelayPollDiagnostics>;
 };
 const globalRelay = globalThis as typeof globalThis & {
   __llvExternalRelayPoller?: PollerController;
@@ -74,6 +78,7 @@ const controller: PollerController = (globalRelay.__llvExternalRelayPoller ??= {
   armed: false,
 });
 const loops = controller.loops;
+const pollDiagnostics = controller.pollDiagnostics ??= new Map<string, RelayPollDiagnostics>();
 const targetRefreshes = (controller.targetRefreshes ??= new Map<
   string,
   TargetRefresh
@@ -90,17 +95,19 @@ function waitForPollRetry(loop: PollLoop, ms: number): Promise<void> {
 }
 export function relayPollerStatus(id: string) {
   const loop = loops.get(id);
-  const status = { state: loop ? loop.state : ("paused" as const), ...relayActivity(id) };
+  const status = { state: loop ? loop.state : ("paused" as const), ...relayActivity(id), poll: pollDiagnostics.get(id)?.snapshot() ?? null };
   try {
     const runs = readRunLedger().runs;
-    const alarm = runs.find(run => run.relayId === id && (run.ownerTurn?.quarantinedAt || run.ownerTurn?.lateAnswer?.status === "pending-delivery-context"));
-    if (alarm) return { ...status, lastOutcome: alarm.ownerTurn?.quarantinedAt ? "owner_stop_quarantined" : "pending-delivery-context",
-      lastOutcomeAt: alarm.ownerTurn?.quarantinedAt ?? alarm.startedAt };
+    // Retained custody that needs the operator is reported beside the last
+    // request's own result, which stays readable while the alarm stands.
+    const held = runs.find(run => run.relayId === id && (run.ownerTurn?.quarantinedAt || run.ownerTurn?.lateAnswer?.status === "pending-delivery-context"));
+    const alarm = held ? { alarm: held.ownerTurn?.quarantinedAt ? "owner_stop_quarantined" as const : "pending-delivery-context" as const,
+      alarmAt: held.ownerTurn?.quarantinedAt ?? held.startedAt } : { alarm: null, alarmAt: null };
     const pending = runs.find(run => run.relayId === id && ownerStopPending(run));
-    return { ...status, ...(pending ? { lastOutcome: "owner_stop_pending", lastOutcomeAt: pending.startedAt } : {}) };
+    return { ...status, ...alarm, ...(pending ? { lastOutcome: "owner_stop_pending", lastOutcomeAt: pending.startedAt } : {}) };
   } catch {
     console.error("External relay cancellation custody unreadable; run ledger preserved");
-    return { ...status, lastOutcome: "local_error" };
+    return { ...status, alarm: null, alarmAt: null, lastOutcome: "local_error" };
   }
 }
 export function wakeExternalRelayPoller(id: string) {
@@ -126,21 +133,51 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
       && (run.capacityReleased || run.ownerTurn.confirmed)) continue;
     if (run.ownerTurn?.lateAnswer && !run.completionAccepted && !ownerStopPending(run)) {
       if (relayRequestInFlight(run.requestId) || processMatches(run.ownerPid, run.ownerIdentity) && run.ownerPid !== process.pid) continue;
-      const relay = readRelayStore().relays.find(item => item.id === run.relayId);
-      if (!relay || !ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId)) continue;
-      ownerRecoveries.add(run.requestId);
-      try {
-        const pending = run.ownerTurn.lateAnswer;
-        const sent = await deliverOwnerLateAnswer(relay, run.requestId, pending.body, pending.files,
-          () => ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId));
-        if (sent.delivery === "accepted") {
-          settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", run.conversationId,
-            sent.body.outcome === "answered" ? sent.body.answer : null, true);
-          removeRunDirectory(run.runDir);
-          dropRun(run.requestId);
+      const pending = run.ownerTurn.lateAnswer;
+      if (ownerLateAnswerTerminal(pending)) {
+        // A terminal late answer is never retried. Its row, answer and files
+        // stay for the operator's reconciliation; the sweep only records, once,
+        // that the settled row holds no target slot.
+        if (!run.capacityReleased) changeRun(run.requestId, row => ownerStopPending(row) || relayRequestInFlight(row.requestId) ? row
+          : { ...row, capacityReleased: true });
+        continue;
+      }
+      {
+        // An answer that can never be delivered is written off after its
+        // window, whatever the relay's settings say. A deliverable answer has
+        // no such limit, however long the install was off.
+        if (ownerLateAnswerUndeliverable(run)) { await expireOwnerLateAnswer(run.requestId); continue; }
+        const store = readRelayStore();
+        if (ownerRunIsRequester(run, store)) {
+          await changeRunAsync(run.requestId, row => {
+            const lateAnswer = row.ownerTurn?.lateAnswer;
+            if (!lateAnswer || ownerLateAnswerTerminal(lateAnswer) || row.completionAccepted
+              || ownerStopPending(row) || relayRequestInFlight(row.requestId)) return row;
+            const latest = readRelayStore();
+            if (!ownerRunIsRequester(row, latest)) return row;
+            const attempted = lateAnswer.firstAttemptAt !== undefined || lateAnswer.parts?.some(part => part.firstAttemptAt !== undefined || part.receipt);
+            return { ...row, capacityReleased: true, ownerTurn: { ...row.ownerTurn!,
+              lateAnswer: { ...lateAnswer, status: attempted ? "uncertain" : "refused" } } };
+          }, Date.now() + 5000);
+          continue;
         }
-      } finally { ownerRecoveries.delete(run.requestId); }
-      continue;
+        const relay = store.relays.find(item => item.id === run.relayId);
+        if (!relay || !ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId)) continue;
+        ownerRecoveries.add(run.requestId);
+        try {
+          const sent = await deliverOwnerLateAnswer(relay, run.requestId, pending.body, pending.files,
+            () => ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId));
+          if (sent.delivery === "accepted") {
+            // Failure custody replaces the saved text with the scrubbed notice.
+            settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", run.conversationId,
+              sent.body.outcome === "answered" ? sent.body.answer : null, true,
+              !!(run.ownerTurn.failureReply || run.ownerTurn.diagnostic));
+            removeRunDirectory(run.runDir);
+            dropRun(run.requestId);
+          }
+        } finally { ownerRecoveries.delete(run.requestId); }
+        continue;
+      }
     }
     // Accepted completion already ended execution. Finish abandoned cleanup
     // without controlling a host or sending a second service completion.
@@ -198,11 +235,13 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
       continue;
     }
     if (held.ownerTurn?.lateAnswer) continue;
-    const recoveryRelay = readRelayStore().relays.find(item => item.id === run.relayId);
+    const currentStore = readRelayStore();
+    const canRecoverAsOwner = effectiveOwnerRunTier(held, currentStore) === "owner";
+    const recoveryRelay = currentStore.relays.find(item => item.id === run.relayId);
     const recoveryRequest = recoveryRelay && ownerRecoveryRequest(held, recoveryRelay);
     if (recoveryRelay && recoveryRequest && held.ownerTurn && !held.ownerTurn.restartRetries
       && interruptedOwner && !held.ownerTurn.quarantinedAt
-      && recoveryRelay.paused === false && recoveryRelay.targets.some(target => target.id === run.targetId && target.enabled && target.ownerTier)) {
+      && canRecoverAsOwner) {
       changeRun(run.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, restartRetries: 1 } }));
       ownerRecoveries.add(run.requestId);
       void runClaimedRequest(recoveryRelay, recoveryRequest, undefined, { ownerPorts, ownerRecovery: held })
@@ -210,10 +249,11 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
         .finally(() => ownerRecoveries.delete(run.requestId));
       continue;
     }
-    if (recoveryRelay && recoveryRequest && interruptedOwner && held.ownerTurn?.restartRetries && !held.ownerTurn.quarantinedAt) {
+    if (recoveryRelay && recoveryRequest && interruptedOwner && held.ownerTurn?.restartRetries && !held.ownerTurn.quarantinedAt && canRecoverAsOwner) {
       const request = requestSchema.parse(recoveryRequest);
       const owner = held.ownerTurn.context ?? ownerTierFor({ ownerTier: true }, request);
-      const diagnostic = ownerTurnDiagnostic("exception", "The owner retry was interrupted by another install restart. Resend the request.");
+      const diagnostic = { ...ownerTurnDiagnostic("exception", held.ownerTurn.continuation?.failureReason ?? "The owner retry was interrupted by another install restart. Resend the request.", [recoveryRelay.credential], held.ownerTurn.continuation?.primaryFailure),
+        ...(held.ownerTurn.continuation?.failureReason ? { deliveryFailure: true as const } : {}) };
       const answer = owner && ownerFailureAnswer(request, owner, diagnostic, [recoveryRelay.credential]);
       if (answer) {
         changeRun(run.requestId, row => ({ ...row, ownerTurn: { ...row.ownerTurn!, diagnostic,
@@ -236,7 +276,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     const failureAnswer = request && failureOwner && saved
       ? ownerFailureAnswer(request, failureOwner, held.ownerTurn?.diagnostic ?? ownerTurnDiagnostic("exception", "Owner request could not be completed"), [relay!.credential])
       : null;
-    if (relay && saved && failureAnswer && Date.now() >= Date.parse(saved.until)
+    if (relay && saved && failureAnswer && canRecoverAsOwner && Date.now() >= Date.parse(saved.until)
       && ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId)) {
       const body = { lease_id: run.leaseId, outcome: "answered" as const, answer: failureAnswer,
         duration_ms: Math.max(0, Date.now() - Date.parse(run.startedAt)) };
@@ -244,7 +284,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
       const sent = await deliverOwnerLateAnswer(relay, run.requestId, body, [],
         () => ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId));
       if (sent.delivery === "accepted") {
-        settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", held.conversationId, failureAnswer, true);
+        settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, "accepted", held.conversationId, failureAnswer, true, true);
         removeRunDirectory(run.runDir);
         dropRun(run.requestId);
       }
@@ -267,6 +307,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
         }, Date.now() + 5000);
         if (!claimed) continue;
       }
+      let responseStatus = 0;
       try {
         await relayCall(
           relay.api_base,
@@ -274,7 +315,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
           "POST",
           body,
           relay.credential,
-          { prepareBody: () => {
+          { onResponseStatus: status => { responseStatus = status; }, prepareBody: () => {
             if (answer && !ownerRelayFailureReplyAuthorized(run.relayId, run.targetId, run.requestId))
               throw new ExternalRelayError("cancelled", 401);
             return body;
@@ -282,9 +323,12 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
         );
         delivery = "accepted";
       } catch (error) {
+        if (responseStatus >= 300) recordCompletionRefusal(
+          error instanceof ExternalRelayError ? error : new ExternalRelayError("unreachable"), responseStatus, run.requestId,
+          refusal => recordAnswerCompletionRefusal(run.relayId, run.targetId, run.requestId, refusal));
         // A terminal refusal proves this completion was not accepted; a
         // transient error leaves its delivery uncertain.
-        if (error instanceof ExternalRelayError && [400, 401, 404, 409, 413, 426].includes(error.status)
+        if (error instanceof ExternalRelayError && [400, 401, 404, 409, 413, 415, 422, 426].includes(error.status)
           && !(answer && error.status === 409 && error.code === "already_completed"))
           delivery = "refused";
       }
@@ -297,14 +341,14 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
         if (delivery !== "accepted") {
           // Keep uncertain attempts fenced. A definite refusal leaves the
           // saved reply eligible for late delivery once its deadline passes.
-          settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery, held.conversationId, answer);
+          settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery, held.conversationId, answer, false, true);
           continue;
         }
       }
     }
     removeRunDirectory(run.runDir);
     const current = run.ownerTurn ? readRunLedger().runs.find(r => r.requestId === run.requestId) : undefined;
-    settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery, current?.conversationId, answer);
+    settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery, current?.conversationId, answer, false, true);
     settle();
   }
   await sweepConversationsAsync(readRelayStore().relays, Date.now(), Date.now() + 5_000);
@@ -312,6 +356,7 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
 function removeRunDirectory(directory: string): void {
   if (path.dirname(path.resolve(directory)) === externalRelayTempRoot() && path.basename(directory).startsWith("llv-external-relay-"))
     fs.rmSync(directory, { recursive: true, force: true });
+  else removeOwnerRunDirectory(directory);
 }
 /* A paired relay's targets come from endpoint 6 whenever the settings page
    reads them (at most every 30 s), every 5 min from the claim loop, and once
@@ -394,7 +439,7 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
       return "failed";
     }
     let changed = false;
-    updateRelayStore((store) => ({
+    await updateRelayStoreAsync((store) => ({
       ...store,
       relays: store.relays.map((item) => {
         if (item.id !== id) return item;
@@ -407,7 +452,10 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
     }));
     // A new loop advertises slots from the new list, so a dropped target
     // stops being offered and an added one waits for its settings.
-    if (changed) refreshExternalRelayPollers(id);
+    if (changed) {
+      await revokeOwnerRuns(id);
+      refreshExternalRelayPollers(id);
+    }
     return changed ? "changed" : "unchanged";
   } catch (error) {
     console.error(
@@ -418,14 +466,18 @@ async function refreshTargetsNow(id: string): Promise<TargetRefreshOutcome> {
     return "failed";
   }
 }
+/** Enable only after the paired service releases guest-only isolated routing. */
+export const ISOLATED_GUEST_REQUESTERS_ENABLED = false;
 /** What this install implements of the optional parts of v1 (§A.2 rule 11). */
-export const CLAIM_FEATURES = ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline"];
+export const CLAIM_FEATURES = ["requester_context", "relay_tool_calls", "relay_tool_actions", "request_deadline", "relay_guest_answers",
+  ...(ISOLATED_GUEST_REQUESTERS_ENABLED ? ["relay_isolated_requesters"] : [])];
 export function relayClaimCapabilities(relay?: Pick<PairedRelay, "features">) {
   const switches = readRelaySwitches();
   const rich = switches.rich_media && relay?.features?.includes("relay_rich_messages");
   const features = [...CLAIM_FEATURES,
     ...(relay?.features?.includes(RELAY_TOOLS_ON_DEMAND) ? [RELAY_TOOLS_ON_DEMAND] : []),
     ...(relay?.features?.includes("relay_media_in") ? ["relay_media_in"] : []),
+    ...(relay?.features?.includes("relay_media_in") && relay.features.includes(RELAY_HISTORY_MEDIA) ? [RELAY_HISTORY_MEDIA] : []),
     ...(relay?.features?.includes("relay_media_in") && relay.features.includes(RELAY_MEDIA_ANY_DOCUMENT) ? [RELAY_MEDIA_ANY_DOCUMENT] : []),
     ...(rich ? ["relay_rich_messages", ...(relay?.features?.includes("relay_media_out") ? ["relay_media_out"] : [])] : [])];
   return { kinds: switches.compact ? ["answer", "compact"] : ["answer"],
@@ -477,7 +529,7 @@ async function refreshRelayDescriptorFeaturesNow(id: string, options: { quiet?: 
     const { descriptor } = await discoverRelay(relay.origin);
     const features = descriptor.features ?? [];
     let changed = false;
-    updateRelayStore((store) => ({ ...store, relays: store.relays.map((item) => {
+    await updateRelayStoreAsync((store) => ({ ...store, relays: store.relays.map((item) => {
       if (item.id !== id || JSON.stringify(item.features ?? []) === JSON.stringify(features)) return item;
       changed = true;
       return { ...item, features };
@@ -494,6 +546,8 @@ async function poll(
   relay: PairedRelay,
   loop: PollLoop,
 ) {
+  const diagnostics = pollDiagnostics.get(relay.id) ?? new RelayPollDiagnostics();
+  pollDiagnostics.set(relay.id, diagnostics);
   let backoff = 5000;
   while (!loop.stopped) {
     await refreshRelayTargets(relay.id, TARGETS_REFRESH_IN_LOOP_MS);
@@ -501,6 +555,9 @@ async function poll(
     if (loop.stopped) break;
     await refreshRelayDescriptorFeatures(relay.id, DESCRIPTOR_REFRESH_ON_READ_MS);
     if (loop.stopped) break;
+    let responseStatus: number | undefined;
+    let observed = false;
+    const timeoutMs = (Math.min(25, relay.limits.max_wait_s) + 15) * 1000;
     try {
       const result = await withViewerOperation("telegram.review-polls", () => relayCall<{ request?: unknown }>(
         relay.api_base,
@@ -509,10 +566,16 @@ async function poll(
         relayClaimBody(relay),
         relay.credential,
         {
-          timeoutMs: (Math.min(25, relay.limits.max_wait_s) + 15) * 1000,
+          timeoutMs,
+          signal: AbortSignal.timeout(timeoutMs),
+          detailedErrors: true,
+          onResponseStatus: status => { responseStatus = status; },
           maxBytes: relay.limits.max_response_bytes,
         },
       ));
+      diagnostics.record({ outcome: result.status === 204 || result.status === 200 && !result.body?.request
+        ? "ok-empty" : result.status === 200 ? "claimed" : `http:${result.status}`, status: result.status });
+      observed = true;
       if (!loop.stopped) loop.state = "polling";
       backoff = 5000;
       const current = readRelayStore().relays.find((item) => item.id === relay.id);
@@ -526,12 +589,7 @@ async function poll(
         void run.then(leaseReady, leaseReady);
         const trackedRun = run
           .then((outcome) => {
-            noteRelayOutcome(
-              relay.id,
-              outcome
-                ? `${outcome.outcome}${outcome.outcome === "answered" ? "" : `:${outcome.reason}`}`
-                : "lease_lost",
-            );
+            noteRelayOutcome(relay.id, relayOutcomeLabel(outcome));
           })
           .catch(() => {
             noteRelayOutcome(relay.id, "local_error");
@@ -544,6 +602,7 @@ async function poll(
       }
       if (loop.stopped || !current) break;
     } catch (error) {
+      if (!observed) diagnostics.record(relayPollFailure(error, responseStatus));
       if (loop.stopped) break;
       if (error instanceof ExternalRelayError && error.status === 401) {
         loop.state = "credential_rejected";
@@ -588,6 +647,7 @@ export async function waitForExternalRelayRuns(): Promise<void> {
   while (activeRelayRequests.size) await Promise.allSettled([...activeRelayRequests]);
 }
 async function sweepAndRefresh(): Promise<void> {
+  for (const diagnostics of pollDiagnostics.values()) diagnostics.summarize();
   try {
     await sweepExternalRelayOrphans();
   } catch (error) {
@@ -612,6 +672,7 @@ async function sweepAndRefresh(): Promise<void> {
 export function refreshExternalRelayPollers(changedId?: string): void {
   if (!controller.armed || isStagingMode()) return;
   const relays = readRelayStore().relays;
+  for (const id of pollDiagnostics.keys()) if (!relays.some(relay => relay.id === id)) pollDiagnostics.delete(id);
   for (const [id, loop] of loops)
     if (
       id === changedId ||

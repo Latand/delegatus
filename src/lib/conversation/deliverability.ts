@@ -9,6 +9,7 @@ import { orchestratorRecipientRefusalAsync } from "@/lib/orchestrator/seats";
 import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { livenessProbe, receiptProcessEvidence } from "@/lib/agent/accountLiveness";
 import { registryHostEvidence } from "@/lib/lifecycle/owners";
+import { ORPHANED_HOST_REASON, structuredHostOrphaned } from "@/lib/runtime/orphanedHost";
 
 const OPEN_RECEIPTS = new Set(["starting", "pane-bound", "host-verified", "prompt-delivered", "path-pending"]);
 
@@ -26,13 +27,16 @@ export type ConversationDeliverabilityCondition =
   | "deliverable"
   | "synchronizing"
   | "reclaimed"
+  /** The engine still runs, but the process recorded as its owner is gone,
+      so nothing can reach it. Delivery requires recovery, as for reclaimed. */
+  | "orphaned"
   | "superseded"
   | "unknown";
 
 interface ConversationDeliverabilityRecord {
   conversationId: string | null;
   transcriptPath: string | null;
-  transport: "structured" | "legacy" | null;
+  transport: "structured" | null;
   hostStatus: AgentHostStatus | null;
   pendingAction: "spawn" | "resume" | "handoff" | null;
   processRecorded: boolean;
@@ -42,10 +46,10 @@ interface ConversationDeliverabilityRecord {
 
 export type ConversationDeliverability = ConversationDeliverabilityRecord & (
   | { deliverable: true; condition: "deliverable"; resumeRequired: false }
-  | { deliverable: false; condition: "reclaimed"; resumeRequired: true }
+  | { deliverable: false; condition: "reclaimed" | "orphaned"; resumeRequired: true }
   | {
       deliverable: false;
-      condition: Exclude<ConversationDeliverabilityCondition, "deliverable" | "reclaimed">;
+      condition: Exclude<ConversationDeliverabilityCondition, "deliverable" | "reclaimed" | "orphaned">;
       resumeRequired: false;
     }
 );
@@ -131,9 +135,7 @@ export async function conversationDeliverabilityFromRecord(
 
   const processRecorded = entry.structuredHost?.process !== null
     && entry.structuredHost?.process !== undefined;
-  let transport: ConversationDeliverability["transport"] = null;
-  if (entry.host) transport = "legacy";
-  else if (entry.structuredHost) transport = "structured";
+  const transport: ConversationDeliverability["transport"] = entry.structuredHost ? "structured" : null;
   const base = {
     conversationId: conversation.id,
     transcriptPath: generation.path,
@@ -143,7 +145,7 @@ export async function conversationDeliverabilityFromRecord(
     processRecorded,
   };
 
-  const host = !entry.host && processRecorded ? registryHostEvidence(entry, livenessProbe()) : null;
+  const host = processRecorded ? registryHostEvidence(entry, livenessProbe()) : null;
   if (host?.state === "gone") {
     if (transport === "structured" && hasLiveReceiptCustody(snapshot, conversation.id, generation.path)) {
       return {
@@ -174,14 +176,11 @@ export async function conversationDeliverabilityFromRecord(
       reason: "the durable host record says that no deliverable host remains",
     };
   }
-  if (entry.host) {
-    return {
-      ...base,
-      deliverable: true,
-      condition: "deliverable",
-      resumeRequired: false,
-      reason: "the durable record names a current legacy host",
-    };
+  /* A live engine whose recorded owner process is gone is reachable by no
+     one: its stdio belonged to that owner. It answers
+     orphaned, and a send to it goes through recovery. */
+  if (transport === "structured" && structuredHostOrphaned(entry)) {
+    return { ...base, deliverable: false, condition: "orphaned", resumeRequired: true, reason: ORPHANED_HOST_REASON };
   }
   if (processRecorded
     && host?.state === "alive" && host.pid === entry.structuredHost?.process?.pid
@@ -212,11 +211,20 @@ export async function conversationDeliverabilityFromRecord(
   };
 }
 
+/** Whether delivery starts recovery: the host was reclaimed, or it still runs
+    with nobody owning it. */
+export function deliverabilityRequiresRecovery(condition: ConversationDeliverabilityCondition): boolean {
+  return condition === "reclaimed" || condition === "orphaned";
+}
+
 export function deliverabilityFailureMessage(
   deliverability: Pick<ConversationDeliverability, "condition">,
 ): string {
   if (deliverability.condition === "reclaimed") {
     return "conversation host was reclaimed; automatic resume did not establish a deliverable host";
+  }
+  if (deliverability.condition === "orphaned") {
+    return "conversation host is orphaned: its recorded owner process is gone; recovery did not establish a deliverable host";
   }
   if (deliverability.condition === "synchronizing") {
     return "conversation host ownership is synchronizing; no deliverable process is recorded yet";

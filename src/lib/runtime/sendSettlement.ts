@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { cancelSendFailureNotice, recordSendFailureNotice } from "./sendFailureNotice";
 import { structuredDeliveryHostForConversation } from "./structuredDeliveryController";
 import { processIdentityStatus } from "@/lib/processIdentity";
@@ -12,10 +13,12 @@ import {
   deliveryRegistryEntriesForKey,
   ownsItsSettlement,
   readOnlyConversationLookupFromSnapshot,
+  resolveConversationAlias,
   type AgentRegistry,
   type DeliveryOperationOwner,
   type DeliveryRoute,
   type DeliveryTerminalDisposition,
+  type RegistryConversation,
   type RegistryFile,
 } from "@/lib/agent/registry";
 import { MIGRATION_DELIVERY_CANCELLATION_PREFIX } from "@/lib/accounts/migration/intentLiveness";
@@ -23,19 +26,22 @@ import { sessionKeyId } from "@/lib/agent/sessionKey";
 import { hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
-import { confirmedSend } from "./confirmedSend";
+import { readConfirmedSendEvidence, type ConfirmedSendEvidence } from "./confirmedSend";
 import { admittedMessageTextForms } from "./admittedMessageText";
 import { sameMessageOrigin, type MessageOrigin } from "./messageOrigin";
 import { structuredContentDigest } from "./structuredContent";
 import { runtimeHostClient, readRuntimeSession, type RuntimeHostClient } from "./client";
 import {
   RUNTIME_DELIVERY_DISCARDED_REASON,
+  normalizeRuntimeDeliveryFailure,
   type RuntimeDeliveryMode,
+  type RuntimeDeliveryFailure,
   type RuntimeOperationReceipt,
   type RuntimeReceiptStatus,
 } from "./contracts";
 import { readDeliveryProgress, deliveryProgressPath, ownedDeliveryProgressStore, type DeliveryProgressRecord, type DeliveryProgressSink } from "./deliveryProgress";
 import { readEvidence, readEvidenceSync, readEvidenceWithin, unreadableEvidence, type Evidence } from "./evidence";
+import { DELIVERY_UNVERIFIED_AFTER_ACTUATION } from "./unverifiedDeliveryReasons";
 
 /**
  * Settlement of accepted sends (#1131).
@@ -198,6 +204,7 @@ export interface SendReceipt {
   state: SendReceiptState;
   /** Why it failed, or what it is still waiting on. */
   reason: string | null;
+  primaryFailure?: RuntimeDeliveryFailure;
   acceptedAt: string | null;
   settledAt: string | null;
   /** True when re-sending this instruction could deliver it a second time. */
@@ -365,7 +372,13 @@ export function sendReceiptFor(file: RegistryFile, operationId: string): SendRec
     };
   }
   if (terminalState === "failed") {
-    const reason = attempt ? attempt.terminalReason : delivery?.error ?? owner?.terminalReason ?? null;
+    const storedReason = attempt ? attempt.terminalReason : delivery?.error ?? owner?.terminalReason ?? null;
+    const settledOwner = attempt ?? owner;
+    // Keep the journal's original refusal on the held delivery for internal
+    // recovery predicates, while the durable caller receipt exposes the
+    // classifier's canonical loss reason beside that primary failure.
+    const reason = settledOwner?.terminalDisposition === "lost" && settledOwner.primaryFailure
+      ? SEND_LOST_REASON : storedReason;
     return {
       operationId,
       kind,
@@ -373,9 +386,10 @@ export function sendReceiptFor(file: RegistryFile, operationId: string): SendRec
       clientMessageId,
       state: "failed",
       reason,
+      ...(settledOwner?.primaryFailure ? { primaryFailure: settledOwner.primaryFailure } : {}),
       acceptedAt,
       settledAt: owner?.settledAt ?? null,
-      ...resendGuidance((attempt ?? owner)?.terminalDisposition ?? null, reason),
+      ...resendGuidance(settledOwner?.terminalDisposition ?? null, reason),
       evidence: "delivery-record",
     };
   }
@@ -432,6 +446,7 @@ export function runtimeReceiptForSend(receipt: SendReceipt): RuntimeOperationRec
     kind: receipt.kind,
     status: receipt.state === "in-flight" ? "queued" : receipt.state,
     reason: receipt.reason,
+    ...(receipt.primaryFailure ? { primaryFailure: receipt.primaryFailure } : {}),
     at: receipt.settledAt ?? receipt.acceptedAt ?? new Date(0).toISOString(),
     ...(receipt.acceptedAt ? { admittedAt: receipt.acceptedAt } : {}),
     ...(receipt.resend ? { resend: receipt.resend } : {}),
@@ -461,6 +476,7 @@ export interface JournalVerdict {
   state: "delivered" | "failed";
   disposition: DeliveryTerminalDisposition;
   reason: string | null;
+  primaryFailure?: RuntimeDeliveryFailure;
 }
 
 /**
@@ -480,18 +496,34 @@ export interface JournalVerdict {
 export function journalVerdict(
   status: RuntimeReceiptStatus | null,
   reason: string | null | undefined = null,
+  primaryFailure?: RuntimeDeliveryFailure,
 ): JournalVerdict | null {
   if (status === null) return null;
   if (DELIVERED_RECEIPT_STATUSES.has(status)) {
     return { state: "delivered", disposition: "delivered", reason: null };
   }
+  /* The queue writes `failed` with this reason only when the journal refused
+     the absorbing `uncertain` for a send it had handed to the engine
+     (2026-11-09). It is the same fact: actuation began, so the send keeps its
+     duplicate risk and stays open to a late canonical acknowledgement, never
+     reported as fenced and safe to send again. */
+  if ((status === "failed" || status === "rejected") && typeof reason === "string"
+    && (reason.startsWith(DELIVERY_UNVERIFIED_AFTER_ACTUATION) || reason === SEND_UNVERIFIED_REASON
+      || reason === SEND_UNRECORDED_REASON || reason === SEND_UNSETTLEABLE_REASON)) {
+    return { state: "failed", disposition: "unverified",
+      reason: reason.startsWith(DELIVERY_UNVERIFIED_AFTER_ACTUATION) ? SEND_UNVERIFIED_REASON : reason };
+  }
   if (status === "failed" || status === "rejected") {
+    const primary = normalizeRuntimeDeliveryFailure(primaryFailure)
+      ?? (reason !== SEND_LOST_REASON && reason !== SEND_DISCARDED_REASON && reason !== SEND_SEAT_REVOKED_REASON
+        ? normalizeRuntimeDeliveryFailure({ status, reason: reason ?? null }) : undefined);
     return {
       state: "failed",
       // A discarded uncertain attempt may already have reached the engine.
       // Recovery must retain that duplicate risk before registry projection.
       disposition: reason === SEND_DISCARDED_REASON ? "unverified" : "lost",
       reason: reason === SEND_DISCARDED_REASON || reason === SEND_SEAT_REVOKED_REASON ? reason : SEND_LOST_REASON,
+      ...(primary ? { primaryFailure: primary } : {}),
     };
   }
   if (status === "uncertain") {
@@ -503,18 +535,18 @@ export function journalVerdict(
 /** Canonical evidence acknowledges the original operation without sending it.
     The journal's transaction decides whether acknowledgement or discard won;
     a stale status read cannot make that decision in the Viewer. */
-export async function confirmJournalDelivery(client: RuntimeHostClient, operationId: string): Promise<{
-  operationId: string; verdict: JournalVerdict;
+export async function confirmJournalDelivery(client: RuntimeHostClient, operationId: string, evidence?: ConfirmedSendEvidence | null): Promise<{
+  operationId: string; verdict: JournalVerdict; route: DeliveryRoute | null;
 } | null> {
   let result;
   try {
-    result = await client.transitionOperation(operationId, "delivered", {}, { confirmedDelivery: true, awaitProjection: true });
+    result = await client.transitionOperation(operationId, "delivered", evidence?.turnId ? { turnId: evidence.turnId } : {}, { confirmedDelivery: true, awaitProjection: true });
   } catch {
     result = await client.operationStatus(operationId, { currentRetryLeaf: true });
   }
-  const verdict = journalVerdict(result?.receipt.status ?? null, result?.receipt.reason);
+  const verdict = journalVerdict(result?.receipt.status ?? null, result?.receipt.reason, result?.receipt.primaryFailure);
   return result && verdict && (verdict.state === "delivered" || result.receipt.reason === SEND_DISCARDED_REASON)
-    ? { operationId: result.operationId, verdict } : null;
+    ? { operationId: result.operationId, verdict, route: deliveryRouteOf(result.receipt) } : null;
 }
 
 /**
@@ -528,38 +560,45 @@ export async function confirmJournalDelivery(client: RuntimeHostClient, operatio
 async function fenceOperation(
   client: RuntimeHostClient,
   operationId: string,
-  status: RuntimeReceiptStatus,
+  receipt: RuntimeOperationReceipt,
 ): Promise<JournalVerdict> {
-  if (!OPEN_RECEIPT_STATUSES.has(status)) {
-    /* Not open, not terminal: a send in `delivering` or `applying` is already
-       in an executor's hands. It cannot be proved undelivered, so it is
-       terminalized as `uncertain` — which fences it just as firmly against a
-       SECOND execution while saying nothing about the first. A runtime host
-       from before that transition rejects the word; the operation must stop
-       being open either way, so the fallback keeps the fence and the record
-       keeps the unverified disposition it is read back by. */
+  if (!pristineJournalAdmission(receipt)) {
+    /* Earlier actuation can leave a delivering or requeued receipt. Close it
+       as unverified. Older runtime hosts use the same reason on failed. */
     try {
       await client.transitionOperation(operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
     } catch {
-      await client.transitionOperation(operationId, "failed", { reason: SEND_UNVERIFIED_REASON });
+      try {
+        await client.transitionOperation(operationId, "failed", { reason: SEND_UNVERIFIED_REASON });
+      } catch (error) {
+        const current = await client.operationStatus(operationId);
+        const verdict = journalVerdict(current?.receipt.status ?? null, current?.receipt.reason, current?.receipt.primaryFailure);
+        if (verdict) return verdict;
+        throw error;
+      }
     }
     return { state: "failed", disposition: "unverified", reason: SEND_UNVERIFIED_REASON };
   }
   try {
     await client.transitionOperation(operationId, "failed", { reason: SEND_LOST_REASON },
-      { fromStatuses: ["pending", "queued"] });
+      { fromStatuses: ["pending", "queued"], requirePristineAdmission: true });
     return { state: "failed", disposition: "lost", reason: SEND_LOST_REASON };
   } catch (error) {
     // Acceptance can win between the read and the fence. Its actual outcome
     // must answer the operator before a stale read can call a resend safe.
     const current = await client.operationStatus(operationId, { currentRetryLeaf: true });
-    const verdict = journalVerdict(current?.receipt.status ?? null, current?.receipt.reason);
+    const verdict = journalVerdict(current?.receipt.status ?? null, current?.receipt.reason, current?.receipt.primaryFailure);
     if (verdict) return verdict;
-    if (current && !OPEN_RECEIPT_STATUSES.has(current.receipt.status)) {
-      return fenceOperation(client, current.operationId, current.receipt.status);
+    if (current && !pristineJournalAdmission(current.receipt)) {
+      return fenceOperation(client, current.operationId, current.receipt);
     }
     throw error;
   }
+}
+
+function pristineJournalAdmission(receipt: RuntimeOperationReceipt): boolean {
+  return OPEN_RECEIPT_STATUSES.has(receipt.status) && receipt.revision === 1
+    && receipt.deliveryUnverified !== true && receipt.reason !== "delivery-auto-retry";
 }
 
 /**
@@ -577,6 +616,40 @@ function awaitingRecipientTurn(
   if (!conversation || !generation) return false;
   const entry = file.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
   return Boolean(entry?.structuredHost?.activeTurnRef);
+}
+
+/** The registry publication that a live-turn observation belongs to. Keyed
+ * snapshots include only this send's recipient; unrelated writes cannot keep
+ * an idle recipient from expiring. Compare inside writer admission as well as
+ * after asynchronous evidence reads. */
+function recipientObservation(file: RegistryFile): string {
+  return JSON.stringify([
+    Object.keys(file.conversations).sort().map(id => {
+      const conversation = file.conversations[id]!;
+      const generation = conversation.generations.at(-1);
+      return [id, conversation.engine, generation?.id, generation?.path];
+    }),
+    Object.keys(file.entries).sort().map(key => {
+      const entry = file.entries[key]!;
+      const host = entry.structuredHost;
+      return [key, entry.status, entry.claimOwner, entry.claimEpoch, entry.artifactPath,
+        host && [host.endpoint, host.process, host.writerClaimEpoch, host.activeTurnRef,
+          host.agentStateNativeTurnId, host.agentStateTurnStartedAt, host.activeFlags, host.pendingAttention]];
+    }),
+  ]);
+}
+
+/** Native engines can publish work without a Viewer registry write. Capture
+ * the artifact version before reading turn evidence and compare under writer
+ * admission; parsing fresh evidence happens only after releasing the writer. */
+function recipientTranscriptVersion(file: RegistryFile, conversationId: ViewerConversationId): string {
+  const canonicalId = readOnlyConversationLookupFromSnapshot(file).canonicalConversationId(conversationId);
+  const pathname = file.conversations[canonicalId]?.generations.at(-1)?.path;
+  if (!pathname) return "absent";
+  try {
+    const stat = fs.statSync(pathname, { bigint: true, throwIfNoEntry: false });
+    return stat ? [pathname, stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":") : "absent";
+  } catch { return "unreadable"; }
 }
 
 /** A live host's turn, read under its current generation and writer fence.
@@ -608,9 +681,19 @@ async function recipientStillWorking(
     }
     // A retained journal row alone cannot keep a departed writer alive.
     const writer = entry?.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
-    if (!client?.readSession || !entry?.structuredHost?.process || !writer
-      || processIdentityStatus(writer) !== "alive"
+    if (entry?.artifactPath !== generation.path || !entry?.structuredHost?.process
       || processIdentityStatus(entry.structuredHost.process) !== "alive") return false;
+    if (!client?.readSession || !writer || processIdentityStatus(writer) !== "alive") {
+      if (conversation.engine !== "claude" && conversation.engine !== "codex") return false;
+      // A surviving stdio engine can keep working without its old Viewer's
+      // stream. Its fresh native work renews the wait without replacing it.
+      const { readTranscriptCutEvidence } = await import("./liveness");
+      const work = await readTranscriptCutEvidence(conversation.engine, generation.path);
+      const observed = work.lastWork?.at;
+      return work.verified && work.turn === "busy" && observed !== undefined
+        && observed <= now && observed >= now - (ports.windowMs ?? SEND_SETTLEMENT_WINDOW_MS)
+        && processIdentityStatus(entry.structuredHost.process) === "alive";
+    }
     const session = await readRuntimeSession(client, { conversationId: subject.conversationId });
     const claim = entry.claimOwner ? `${entry.claimOwner}:${entry.structuredHost.writerClaimEpoch}` : null;
     const published = session?.writerStatus?.writerClaim === claim ? session.writerStatus : session;
@@ -625,11 +708,13 @@ async function recipientStillWorking(
   const currentEntry = current.entries[key];
   const currentConversation = registry.conversation(subject.conversationId);
   if (sendReceiptFor(current, subject.operationId)?.state !== "in-flight") return false;
+  if (recipientProvenDead(registry, current, subject.conversationId)) return false;
   // A hand-over during the read is no proof that the successor is idle.
   // Leave the same operation pending for a fresh observation of its owner.
   if (currentConversation?.generations.at(-1)?.id !== generation.id
     || currentEntry?.claimOwner !== entry?.claimOwner
     || currentEntry?.structuredHost?.writerClaimEpoch !== entry?.structuredHost?.writerClaimEpoch
+    || recipientObservation(current) !== recipientObservation(file)
     || (host && structuredDeliveryHostForConversation(subject.conversationId, registry) !== host)) return true;
   if (!evidence.readable || !evidence.value) return false;
   const progress = ports.progress === undefined ? ownedDeliveryProgressStore() : ports.progress;
@@ -650,14 +735,21 @@ async function recipientStillWorking(
  * survived inside its own fix — an accepted send whose only terminal path
  * required the very health it did not have (#1131).
  *
- * `held` is excluded, and stays excluded: a parked delivery is waiting on an
- * account migration by design, its owner is the migration coordinator, and
- * ending it here would drop work that is still going somewhere.
+ * A held reservation has the same settlement bound as every accepted send.
+ * A failed switch keeps its original admission bound even if the recipient
+ * is still working on its current account.
  */
 const SETTLEABLE_DELIVERY_STATES: ReadonlySet<HeldDelivery["state"]> = new Set<HeldDelivery["state"]>([
   "delivery-uncertain",
   "assigned",
+  "held",
 ]);
+
+/** Older held rows can still carry an assignment from before the switch. */
+function pristineReservation(delivery: HeldDelivery): boolean {
+  return delivery.attempts === 0
+    && (delivery.state === "assigned" || (delivery.state === "held" && delivery.assignedAt === null));
+}
 
 /** What the deadline is measured against: an unsettled reservation, or a retry
     attempt's own row, which ages from its OWN admission. */
@@ -666,27 +758,61 @@ interface SettlementSubject {
   conversationId: ViewerConversationId;
   acceptedAt: string;
   settleable: boolean;
+  failedSwitch: boolean;
 }
 
-function settlementSubject(
-  attempt: DeliveryOperationOwner | null,
-  delivery: HeldDelivery | null,
-): SettlementSubject | null {
-  if (attempt) {
-    return {
-      operationId: attempt.command.operationId,
-      conversationId: attempt.conversationId,
-      acceptedAt: attempt.createdAt,
-      settleable: attempt.terminalState === null,
-    };
-  }
-  if (!delivery) return null;
+function settlementSubjectForRow(
+  row: HeldDelivery | DeliveryOperationOwner,
+  conversation: RegistryConversation | null | undefined,
+  file: RegistryFile,
+  ports: SendSettlementPorts = {},
+): SettlementSubject {
+  const reservation = "state" in row ? row : file.heldDeliveries[row.deliveryId];
+  const originalOperationId = reservation?.command.operationId ?? row.command.operationId;
+  const retainedProgress = settlementProgress(ports, originalOperationId);
+  const originalAcceptedAt = reservation ? parseTime(reservation.createdAt) : null;
+  const rowAcceptedAt = parseTime(row.createdAt);
+  const originalSettledAt = parseTime(file.deliveryOperationOwners[originalOperationId]?.settledAt);
+  const retainedFailedSwitch = (retainedProgress?.waitReason === "switch-failed"
+    || retainedProgress?.deadlinePolicy === "failed-switch")
+    && reservation !== undefined
+    && originalAcceptedAt !== null
+    && rowAcceptedAt !== null
+    && rowAcceptedAt <= failedSwitchDeadlineAt(originalAcceptedAt, ports)
+    && (originalSettledAt === null || rowAcceptedAt < originalSettledAt);
+  const failedSwitch = (row.command.kind === "send" || row.command.kind === "steer")
+    && (Boolean(conversation?.switchHold)
+      || ("state" in row && row.state === "held" && conversation?.migration?.phase === "failed-recoverable")
+      || retainedFailedSwitch);
   return {
-    operationId: delivery.command.operationId,
-    conversationId: delivery.conversationId,
-    acceptedAt: acceptedAtOf(delivery),
-    settleable: SETTLEABLE_DELIVERY_STATES.has(delivery.state),
+    operationId: row.command.operationId,
+    conversationId: row.conversationId,
+    acceptedAt: failedSwitch ? reservation?.createdAt ?? row.createdAt
+      : "state" in row ? acceptedAtOf(row) : row.createdAt,
+    settleable: "state" in row ? SETTLEABLE_DELIVERY_STATES.has(row.state) : row.terminalState === null,
+    failedSwitch,
   };
+}
+
+function settlementSubject(file: RegistryFile, operationId: string, ports: SendSettlementPorts = {}): SettlementSubject | null {
+  const row = retryAttemptOwner(file, operationId) ?? deliveryForOperation(file, operationId);
+  return row ? settlementSubjectForRow(row, file.conversations[resolveConversationAlias(file, row.conversationId)], file, ports) : null;
+}
+
+function failedSwitchDeadlineAt(acceptedAt: number, ports: Pick<SendSettlementPorts, "windowMs" | "absoluteDeadline">): number {
+  return Math.min(acceptedAt + (ports.windowMs ?? SEND_SETTLEMENT_WINDOW_MS), ports.absoluteDeadline ?? Infinity);
+}
+
+/** A terminal host row or an exact process identity proven dead. Missing
+ * publication alone is insufficient: startup and account switches publish later. */
+function recipientProvenDead(registry: AgentRegistry, file: RegistryFile, conversationId: ViewerConversationId): boolean {
+  const conversation = registry.conversation(conversationId);
+  const generation = conversation?.generations.at(-1);
+  if (!conversation || !generation) return false;
+  const entry = file.entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })];
+  if (!entry) return false;
+  const process = entry.structuredHost?.process;
+  return process ? processIdentityStatus(process) === "dead" : entry.status === "dead";
 }
 
 /**
@@ -699,11 +825,13 @@ function pastSettlementDeadline(
   ports: SendSettlementPorts,
 ): boolean {
   if (!subject.settleable) return false;
-  const boundary = settlementProgress(ports, subject.operationId);
+  if (recipientProvenDead(registry, file, subject.conversationId)) return true;
   const now = (ports.now ?? Date.now)();
   if (ports.absoluteDeadline !== undefined && now >= ports.absoluteDeadline) return true;
-  if (boundary?.deadlinePolicy === "turn-boundary" && (parseTime(boundary.deadlineAt) ?? 0) > now) return false;
   const acceptedAt = parseTime(subject.acceptedAt);
+  if (subject.failedSwitch) return acceptedAt === null || now >= failedSwitchDeadlineAt(acceptedAt, ports);
+  const boundary = settlementProgress(ports, subject.operationId);
+  if (boundary?.deadlinePolicy === "turn-boundary" && (parseTime(boundary.deadlineAt) ?? 0) > now) return false;
   /* An acceptance time that cannot be parsed can never age, and a send nothing
      can ever end is the silence this issue is about. */
   if (acceptedAt === null) return true;
@@ -718,7 +846,7 @@ function pastSettlementDeadline(
     is running. Null for a subject that is not settleable. */
 export interface SettlementDeadline {
   deadlineAt: string;
-  policy: "settlement-window" | "in-turn-ceiling" | "turn-boundary";
+  policy: NonNullable<DeliveryProgressRecord["deadlinePolicy"]>;
 }
 
 function settlementDeadline(
@@ -726,17 +854,23 @@ function settlementDeadline(
   file: RegistryFile,
   subject: SettlementSubject,
   ports: SendSettlementPorts,
+  now = (ports.now ?? Date.now)(),
 ): SettlementDeadline | null {
   if (!subject.settleable) return null;
   const acceptedAt = parseTime(subject.acceptedAt);
   if (acceptedAt === null) return null;
+  const dead = recipientProvenDead(registry, file, subject.conversationId);
+  if (subject.failedSwitch) {
+    const deadline = failedSwitchDeadlineAt(acceptedAt, ports);
+    return { deadlineAt: new Date(dead ? Math.min(deadline, now) : deadline).toISOString(), policy: "failed-switch" };
+  }
   const inTurn = awaitingRecipientTurn(registry, file, subject.conversationId);
   const span = inTurn
     ? ports.inTurnCeilingMs ?? SEND_SETTLEMENT_IN_TURN_CEILING_MS
     : ports.windowMs ?? SEND_SETTLEMENT_WINDOW_MS;
   const boundary = settlementProgress(ports, subject.operationId);
   const boundaryDeadline = boundary?.deadlinePolicy === "turn-boundary" ? parseTime(boundary.deadlineAt) : null;
-  const ordinaryDeadline = Math.max(acceptedAt + span, boundaryDeadline ?? 0);
+  const ordinaryDeadline = dead ? now : Math.max(acceptedAt + span, boundaryDeadline ?? 0);
   const deadline = ports.absoluteDeadline === undefined ? ordinaryDeadline : Math.min(ordinaryDeadline, ports.absoluteDeadline);
   return { deadlineAt: new Date(deadline).toISOString(), policy: boundaryDeadline !== null && boundaryDeadline >= acceptedAt + span ? "turn-boundary" : inTurn ? "in-turn-ceiling" : "settlement-window" };
 }
@@ -800,7 +934,6 @@ export async function settleDueSends(
       await yieldToRuntime(); checkSelection();
       sliceStarted = performance.now(); sliceCount = 0;
     };
-    const now = (ports.now ?? Date.now)();
     const operations = new Set<string>();
     /* Open sends are never archived: only hot rows can be due (#2761). */
     for (const [, delivery] of hotRegistryRows(file, "heldDeliveries")) {
@@ -820,10 +953,13 @@ export async function settleDueSends(
     for (const operationId of operations) {
       await selectionTurn(); checkSelection();
       const current = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-      const subject = settlementSubject(retryAttemptOwner(current, operationId), deliveryForOperation(current, operationId));
+      const subject = settlementSubject(current, operationId, ports);
       if (!subject) continue;
       result.examined += 1;
-      const deadline = settlementDeadline(registry, current, subject, ports);
+      // A dead recipient's deadline and this comparison use the same clock
+      // sample, even when the sweep has yielded since the row was selected.
+      const now = (ports.now ?? Date.now)();
+      const deadline = settlementDeadline(registry, current, subject, ports, now);
       ports.onDeadline?.(operationId, subject.conversationId, deadline);
       if (deadline && Date.parse(deadline.deadlineAt) > now) continue;
       if (!pastSettlementDeadline(registry, current, subject, ports)) continue;
@@ -871,7 +1007,7 @@ export async function settleDueSends(
 export function sendSettlementDue(operationId: string, ports: SendSettlementPorts = {}): boolean {
   const registry = ports.registry ?? agentRegistry();
   const file = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-  const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
+  const subject = settlementSubject(file, operationId, ports);
   return subject !== null && pastSettlementDeadline(registry, file, subject, ports);
 }
 
@@ -885,11 +1021,16 @@ export function settlementDeadlineForRow(
   row: { delivery: HeldDelivery } | { owner: DeliveryOperationOwner },
   ports: Pick<SendSettlementPorts, "windowMs" | "inTurnCeilingMs"> = {},
 ): SettlementDeadline | null {
-  const subject = "owner" in row ? settlementSubject(row.owner, null) : settlementSubject(null, row.delivery);
-  if (!subject?.settleable) return null;
+  const source = "owner" in row ? row.owner : row.delivery;
+  const conversation = registry.conversation(source.conversationId);
+  const file = registry.deliverySnapshotForOperation(source.command.operationId);
+  const subject = settlementSubjectForRow(source, conversation, file);
+  if (!subject.settleable) return null;
   const acceptedAt = parseTime(subject.acceptedAt);
   if (acceptedAt === null) return null;
-  const conversation = registry.conversation(subject.conversationId);
+  if (subject.failedSwitch) {
+    return { deadlineAt: new Date(failedSwitchDeadlineAt(acceptedAt, ports)).toISOString(), policy: "failed-switch" };
+  }
   const generation = conversation?.generations.at(-1);
   const entry = conversation && generation
     ? registry.conversationDeliverySnapshot({ conversationId: conversation.id }).entries[sessionKeyId({ engine: conversation.engine, sessionId: generation.id })]
@@ -906,7 +1047,7 @@ export function settlementDeadlineForRow(
 export function sendSettlementDeadline(operationId: string, ports: SendSettlementPorts = {}): SettlementDeadline | null {
   const registry = ports.registry ?? agentRegistry();
   const file = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-  const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
+  const subject = settlementSubject(file, operationId, ports);
   return subject ? settlementDeadline(registry, file, subject, ports) : null;
 }
 
@@ -975,6 +1116,77 @@ export async function resolveSendReceipt(
   }
   if (receipt) mirrorReceiptProgress(receipt, ports.progress === undefined ? ownedDeliveryProgressStore() : ports.progress);
   return receipt;
+}
+
+/** A kill fences the sends that were pending when it was submitted, even
+ * while termination itself is queued. A claimed send keeps duplicate risk. */
+export async function fencePendingSends(operationIds: readonly string[], ports: SendSettlementPorts): Promise<void> {
+  const now = (ports.now ?? Date.now)();
+  for (const operationId of operationIds) {
+    ports.assertActive?.();
+    const answer = await resolveSendReceipt(operationId, { ...ports, absoluteDeadline: now });
+    if (answer?.state === "in-flight") throw new Error("kill accepted; pending delivery fencing is still unresolved");
+  }
+}
+
+/** When a live echo looks at its operation again: at once, then while the
+    transcript line and the queue's own terminal write catch up. */
+export const ECHO_SETTLEMENT_DELAYS_MS: readonly number[] = [0, 1_000, 5_000, 15_000];
+
+/**
+ * Settles a send from the engine's own echo of it, after the send had already
+ * ended without proof (2026-11-09).
+ *
+ * A Claude host gives an input 30 seconds to be echoed. A busy turn can absorb
+ * it later than that: the operation ends unverified, and the echo that proves
+ * the engine took it arrives afterwards. The host records that echo, and the
+ * evidence {@link confirmedSend} reads exists from then on, but nothing asked
+ * again: the composer had its terminal answer and the background sweep reads
+ * only open sends. The operation stayed failed while the agent was working on
+ * the message.
+ *
+ * The delivery controller calls this for every echo its hosts report. Only an
+ * ending that kept its duplicate risk is corrected, through the same
+ * {@link resolveSendReceipt} a receipt read runs: canonical evidence, the
+ * journal's own confirmation of the original operation, then the record. It
+ * never writes to the engine and never rearms the queue, so a correction costs
+ * no second delivery. A proven loss, a discard and a delivered send are left as
+ * they are. An operation the queue still holds is looked at again on the next
+ * delay, because the echo can arrive while the queue is writing the ending.
+ */
+export async function settleEchoedSend(
+  operationId: string,
+  ports: SendSettlementPorts & { delaysMs?: readonly number[]; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<SendReceipt | null> {
+  const registry = ports.registry ?? agentRegistry();
+  const client = ports.client === undefined ? runtimeHostClient() : ports.client;
+  const sleep = ports.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  let last: SendReceipt | null = null;
+  let attempt = 0;
+  for (const delay of ports.delaysMs ?? ECHO_SETTLEMENT_DELAYS_MS) {
+    attempt += 1;
+    if (delay > 0) await sleep(delay);
+    ports.assertActive?.();
+    const projected = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
+    if (!projected || projected.state === "delivered") return projected;
+    if (projected.state === "failed" && !projected.duplicateRisk) return projected;
+    if (projected.reason === SEND_DISCARDED_REASON || projected.reason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX)) return projected;
+    if (projected.state === "in-flight") {
+      /* Still the queue's, unless the journal already ended it and the record
+         has not heard yet: only an ending is this function's to correct. An
+         echo of a send in progress is settled by the queue itself within the
+         first delay, so the journal is asked only after that. */
+      if (!client || attempt === 1) { last = projected; continue; }
+      const journal = await readEvidenceWithin(() => client.operationStatus(operationId, { currentRetryLeaf: true }),
+        ports.readMs ?? SEND_SETTLEMENT_READ_MS, "runtime host is unavailable");
+      ports.assertActive?.();
+      const status = journal.readable ? journal.value?.receipt.status ?? null : null;
+      if (status !== "failed" && status !== "uncertain") { last = projected; continue; }
+    }
+    last = await resolveSendReceipt(operationId, ports);
+    if (last?.state === "delivered" || (last?.state === "failed" && !last.duplicateRisk)) return last;
+  }
+  return last;
 }
 
 /**
@@ -1053,6 +1265,7 @@ export async function mirrorSettledReceiptsAsync(
 async function settleSendReceipt(
   operationId: string,
   ports: SendSettlementPorts,
+  observationRetries = 1,
 ): Promise<SendReceipt | null> {
   const registry = ports.registry ?? agentRegistry();
   const snapshot = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
@@ -1068,26 +1281,29 @@ async function settleSendReceipt(
   /* The host's own evidence, bounded: a thread read nobody answers confirms
      nothing, and the journal below still decides what the send may be called. */
   const confirmed = mayConfirm
-    ? await readEvidenceWithin(() => confirmedSend(snapshot, operationId, true), readMs, "host delivery evidence is unavailable")
+    ? await readEvidenceWithin(() => readConfirmedSendEvidence(snapshot, operationId, true), readMs, "host delivery evidence is unavailable")
     : null;
   ports.assertActive?.();
   if (confirmed?.readable && confirmed.value) {
     if (client) {
-      const decision = await readEvidenceWithin(() => confirmJournalDelivery(client, operationId), readMs,
+      const decision = await readEvidenceWithin(() => confirmJournalDelivery(client, operationId, confirmed.value), readMs,
         "canonical delivery acknowledgement is unavailable");
       ports.assertActive?.();
       if (!decision.readable || !decision.value) return projected;
-      const settled = await settleProjection(registry, operationId, projected, decision.value.verdict, "delivery-journal");
+      const settled = await settleProjection(registry, operationId, projected, decision.value.verdict, "delivery-journal",
+        decision.value.route, ports.assertActive);
       const durable = sendReceiptFor(registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true }), operationId);
       if (durable && durable.state !== "in-flight" && durable.state === settled.state && durable.reason === settled.reason) {
+        ports.assertActive?.();
         try { await client.acknowledgeTerminalProjection?.([decision.value.operationId]); }
         catch { /* The retained receipt remains owed for the controller's repair. */ }
       }
       return settled;
     }
+    if (confirmed.value.source !== "canonical") return projected;
     return settleProjection(registry, operationId, projected, {
       state: "delivered", disposition: "delivered", reason: null,
-    }, "delivery-record");
+    }, "delivery-record", null, ports.assertActive);
   }
   if (projected.state !== "in-flight") return projected;
   /* The journal read, keeping whether it happened at all. A socket that is not
@@ -1103,20 +1319,76 @@ async function settleSendReceipt(
   ports.assertActive?.();
   const receipt = journal.readable ? journal.value?.receipt ?? null : null;
   const status = receipt?.status ?? null;
-  const verdict = journalVerdict(status, receipt?.reason);
-  if (verdict) return settleProjection(registry, operationId, projected, verdict, "delivery-journal", deliveryRouteOf(receipt));
+  const verdict = journalVerdict(status, receipt?.reason, receipt?.primaryFailure);
+  if (verdict) return settleProjection(registry, operationId, projected, verdict, "delivery-journal", deliveryRouteOf(receipt), ports.assertActive);
 
   const file = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-  const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
+  const subject = settlementSubject(file, operationId, ports);
   /* Still in flight: the journal's receipt already says how this send is
      reaching a running turn, recorded when its delivery began. */
   if (!subject) return { ...projected, ...routeFields(receipt) };
-  if (await recipientStillWorking(registry, file, subject, client, ports)) {
+  const observedRecipient = subject.failedSwitch ? null : {
+    publication: recipientObservation(file),
+    transcriptVersion: recipientTranscriptVersion(file, subject.conversationId),
+    host: structuredDeliveryHostForConversation(subject.conversationId, registry),
+  };
+  if (observedRecipient && await recipientStillWorking(registry, file, subject, client, ports)) {
     const current = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
     return current ?? projected;
   }
+  let recipientChanged = false;
+  const reobserve = () => observationRetries > 0
+    ? settleSendReceipt(operationId, ports, observationRetries - 1)
+    : Promise.resolve(sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId));
+  // Every ordinary expiry writer, including claimed reservations and retry
+  // owners, must use the observation that justified ending this wait.
+  const canExpire = (): boolean => {
+    ports.assertActive?.();
+    const current = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
+    const currentSubject = settlementSubject(current, operationId, ports);
+    const forced = ports.absoluteDeadline !== undefined && (ports.now ?? Date.now)() >= ports.absoluteDeadline;
+    if (!forced && currentSubject && !recipientProvenDead(registry, current, subject.conversationId)
+      && (currentSubject.failedSwitch !== subject.failedSwitch
+        || (observedRecipient && (recipientObservation(current) !== observedRecipient.publication
+          || recipientTranscriptVersion(current, subject.conversationId) !== observedRecipient.transcriptVersion
+          || structuredDeliveryHostForConversation(subject.conversationId, registry) !== observedRecipient.host)))) {
+      recipientChanged = true;
+      return false;
+    }
+    return currentSubject !== null && currentSubject.conversationId === subject.conversationId
+      && currentSubject.acceptedAt === subject.acceptedAt
+      && pastSettlementDeadline(registry, current, currentSubject, ports);
+  };
+  const settleExpired = async (verdict: JournalVerdict, evidence: SendReceipt["evidence"]) => {
+    const settled = await settleProjection(registry, operationId, projected, verdict, evidence, null, ports.assertActive, canExpire);
+    // Read work only after the admitted writer has released its lock. A second
+    // change leaves the operation pending for the next sweep, bounding replay.
+    return recipientChanged ? reobserve() : settled;
+  };
+  const reserved = deliveryForOperation(file, operationId);
+  // A retry owns its settlement independently of the shared reservation.
+  if (!receipt && reserved && !retryAttemptOwner(file, operationId) && reserved.command.operationId === operationId
+    && pristineReservation(reserved)
+    && pastSettlementDeadline(registry, file, subject, ports)) {
+    const fenced = await registry.deliveryWrite({ label: "delivery.settle-pristine", operationId }, () => {
+      if (!canExpire()) return false;
+      const current = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
+      const row = deliveryForOperation(current, operationId);
+      if (!row || retryAttemptOwner(current, operationId) || row.command.operationId !== operationId
+        || !pristineReservation(row)) return false;
+      // A matching live-turn observation can defer ordinary expiry, but a kill
+      // or proven death fences the selected reservation immediately.
+      registry.recordDeliveryOutcome(row.id, "failed", SEND_LOST_REASON, "lost");
+      return true;
+    });
+    ports.assertActive?.();
+    // Release the writer before obtaining fresh health/transcript evidence.
+    // Repeated handovers defer to the next sweep instead of looping here.
+    if (recipientChanged) return reobserve();
+    if (fenced.acquired && fenced.value) return sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
+  }
   const currentFile = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
-  const currentSubject = settlementSubject(retryAttemptOwner(currentFile, operationId), deliveryForOperation(currentFile, operationId));
+  const currentSubject = settlementSubject(currentFile, operationId, ports);
   const currentReceipt = sendReceiptFor(currentFile, operationId);
   if (currentReceipt && currentReceipt.state !== "in-flight") return currentReceipt;
   if (!currentSubject || !pastSettlementDeadline(registry, currentFile, currentSubject, ports)) return { ...projected, ...routeFields(receipt) };
@@ -1131,14 +1403,14 @@ async function settleSendReceipt(
     /* Nothing was asked and nothing answered: the durable record is the whole
        evidence, and the receipt says so rather than crediting a journal this
        query never reached. */
-    return settleProjection(registry, operationId, projected, unsettleable, "delivery-record");
+    return settleExpired(unsettleable, "delivery-record");
   }
   if (journal.value === null || status === null) {
-    return settleProjection(registry, operationId, projected, {
+    return settleExpired({
       state: "failed",
       disposition: "unverified",
       reason: SEND_UNRECORDED_REASON,
-    });
+    }, "delivery-journal");
   }
   /* The one path that can prove non-execution: the journal still holds the
      operation, so terminalizing it now is what makes "never executed" true
@@ -1149,16 +1421,15 @@ async function settleSendReceipt(
      writes do not would make `queued` permanent exactly as an outage would. So
      it ends the same way an outage does, on the durable record the delivery
      queue reads before it actuates anything. */
-  const journalOperationId = journal.value.operationId;
+  const { operationId: journalOperationId, receipt: journalReceipt } = journal.value;
+  ports.assertActive?.();
+  if (!canExpire()) return recipientChanged ? reobserve() : sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
   const fenced = await readEvidenceWithin(
-    () => fenceOperation(client, journalOperationId, status),
+    () => fenceOperation(client, journalOperationId, journalReceipt),
     readMs,
     "the delivery journal would not accept the fence",
   );
-  return settleProjection(
-    registry,
-    operationId,
-    projected,
+  return settleExpired(
     fenced.readable ? fenced.value : unsettleable,
     fenced.readable ? "delivery-journal" : "delivery-record",
   );
@@ -1168,8 +1439,7 @@ async function settleSendReceipt(
  * Writes one verdict onto the durable record and answers from it.
  *
  * A reservation still in flight is settled; one that is already gone leaves the
- * journal's answer to speak for itself. A `held` reservation is the migration
- * coordinator's, and is left alone.
+ * journal's answer to speak for itself. Held reservations share this fence.
  *
  * Every write waits for the registry's lock off the event loop and keeps it
  * until its commit (incident 2026-10-06): a writer in another process holds
@@ -1186,22 +1456,38 @@ async function settleProjection(
   verdict: JournalVerdict,
   evidence: SendReceipt["evidence"] = "delivery-journal",
   route: DeliveryRoute | null = null,
+  assertActive?: () => void,
+  canSettle?: () => boolean,
 ): Promise<SendReceipt> {
+  /* A background owner's lifetime is checked inside the admitted writer,
+     after the lock wait and before the commit: an owner retired while the
+     write waited for the lock writes nothing. */
+  const write = async (label: string, mutation: () => unknown): Promise<boolean> => {
+    const written = await registry.deliveryWrite({ label, operationId }, () => {
+      assertActive?.();
+      if (canSettle && !canSettle()) return false;
+      mutation();
+      return true;
+    });
+    return written.acquired && written.value;
+  };
+  assertActive?.();
   const file = registry.deliverySnapshotForOperation(operationId);
   /* A retry attempt settles on its OWN row. Its reservation belongs to the
      attempt it replaces and is already terminal from it, so writing this
      verdict there would overwrite what that earlier attempt proved with what
      this one did. */
   if (retryAttemptOwner(file, operationId)) {
-    if (!await registry.settleDeliveryRetryAttemptOffLoop(operationId, verdict.state, verdict.reason, verdict.disposition, route)) {
+    if (!await write("delivery.settle-retry",
+      () => registry.settleDeliveryRetryAttempt(operationId, verdict.state, verdict.reason, verdict.disposition, route, verdict.primaryFailure))) {
       return projected;
     }
     const reconciled = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
     if (reconciled) return { ...reconciled, evidence };
   }
   if (verdict.reason === SEND_DISCARDED_REASON && projected.conversationId?.startsWith("conversation_")) {
-    const written = await registry.recordDeliveryOutcomeForOperationOffLoop(
-      projected.conversationId as ViewerConversationId, operationId, "failed", SEND_DISCARDED_REASON, "unverified");
+    const written = await write("delivery.outcome", () => registry.recordDeliveryOutcomeForOperation(
+      projected.conversationId as ViewerConversationId, operationId, "failed", SEND_DISCARDED_REASON, "unverified"));
     if (!written) return projected;
     return sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId) ?? projected;
   }
@@ -1209,17 +1495,18 @@ async function settleProjection(
   if (delivery && (SETTLEABLE_DELIVERY_STATES.has(delivery.state)
     || (delivery.state === "failed" && verdict.state === "delivered"))) {
     const written = delivery.state === "failed"
-      ? await registry.recordDeliveryOutcomeForOperationOffLoop(delivery.conversationId, operationId,
-        verdict.state, verdict.reason, verdict.disposition, route)
-      : await registry.recordDeliveryOutcomeOffLoop(operationId, delivery.id, verdict.state, verdict.reason, verdict.disposition, route);
+      ? await write("delivery.outcome", () => registry.recordDeliveryOutcomeForOperation(delivery.conversationId, operationId,
+        verdict.state, verdict.reason, verdict.disposition, route, verdict.primaryFailure))
+      : await write("delivery.settle",
+        () => registry.recordDeliveryOutcome(delivery.id, verdict.state, verdict.reason, verdict.disposition, route, verdict.primaryFailure));
     if (!written) return projected;
     const reconciled = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
     if (reconciled) return { ...reconciled, evidence };
   }
   if (verdict.state === "delivered") {
     if (projected.conversationId?.startsWith("conversation_")) {
-      if (!await registry.recordDeliveryOutcomeForOperationOffLoop(projected.conversationId as ViewerConversationId,
-        operationId, "delivered", null, "delivered", route)) return projected;
+      if (!await write("delivery.outcome", () => registry.recordDeliveryOutcomeForOperation(projected.conversationId as ViewerConversationId,
+        operationId, "delivered", null, "delivered", route))) return projected;
       const reconciled = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
       if (reconciled) return { ...reconciled, evidence };
     }
@@ -1229,6 +1516,7 @@ async function settleProjection(
     ...projected,
     state: "failed",
     reason: verdict.reason,
+    ...(verdict.primaryFailure ? { primaryFailure: verdict.primaryFailure } : {}),
     ...resendGuidance(verdict.disposition, verdict.reason),
     evidence,
   };
@@ -1374,13 +1662,14 @@ async function projectCurrentSend(
   ports: SendSettlementPorts,
 ): Promise<Evidence<SendReceipt>> {
   const registry = ports.registry ?? agentRegistry();
-  if (projected.state !== "delivered" && projected.reason !== SEND_DISCARDED_REASON
+  const confirmed = projected.state !== "delivered" && projected.reason !== SEND_DISCARDED_REASON
     && (projected.state === "in-flight" || projected.duplicateRisk)
-    && await confirmedSend(registry.readOnlySnapshot(), operationId)) {
+    ? await readConfirmedSendEvidence(registry.readOnlySnapshot(), operationId) : null;
+  if (confirmed) {
     const client = ports.client === undefined ? runtimeHostClient() : ports.client;
     if (!client) return unreadableEvidence("runtime host socket is unavailable for canonical delivery arbitration");
     const arbitration = await readEvidenceWithin(
-      () => confirmJournalDelivery(client, operationId),
+      () => confirmJournalDelivery(client, operationId, confirmed),
       ports.readMs ?? SEND_SETTLEMENT_READ_MS,
       "canonical delivery arbitration is unavailable",
     );
@@ -1392,6 +1681,7 @@ async function projectCurrentSend(
         ...projected,
         state: "failed",
         reason: verdict.reason,
+        ...(verdict.primaryFailure ? { primaryFailure: verdict.primaryFailure } : {}),
         ...resendGuidance(verdict.disposition, verdict.reason),
         evidence: "delivery-journal",
       } };
@@ -1399,6 +1689,7 @@ async function projectCurrentSend(
     const owner = registry.readOnlySnapshot().deliveryOperationOwners[operationId];
     return { readable: true, value: { ...projected, state: "delivered", reason: null,
       ...(owner?.batchId ? { turnId: owner.batchId } : {}),
+      ...routeFields(arbitration.value?.route),
       duplicateRisk: false, resend: "not-needed", evidence: "delivery-journal" } };
   }
   if (projected.state !== "in-flight") return { readable: true, value: projected };
@@ -1410,7 +1701,7 @@ async function projectCurrentSend(
   );
   if (!journal.readable) return journal;
   const receipt = journal.value?.receipt ?? null;
-  const verdict = journalVerdict(receipt?.status ?? null, receipt?.reason);
+  const verdict = journalVerdict(receipt?.status ?? null, receipt?.reason, receipt?.primaryFailure);
   if (!verdict) return { readable: true, value: { ...projected, evidence: "delivery-journal", ...routeFields(receipt) } };
   if (verdict.state === "delivered") {
     return { readable: true, value: { ...projected, state: "delivered", reason: null,
@@ -1418,7 +1709,7 @@ async function projectCurrentSend(
   }
   return {
     readable: true,
-    value: { ...projected, state: "failed", reason: verdict.reason, ...resendGuidance(verdict.disposition, verdict.reason), evidence: "delivery-journal" },
+    value: { ...projected, state: "failed", reason: verdict.reason, ...(verdict.primaryFailure ? { primaryFailure: verdict.primaryFailure } : {}), ...resendGuidance(verdict.disposition, verdict.reason), evidence: "delivery-journal" },
   };
 }
 

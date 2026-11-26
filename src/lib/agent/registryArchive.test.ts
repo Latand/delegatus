@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { AgentRegistry, normalizeRegistry } from "./registry";
 import { registryConversationsForPath, registryLivenessRows, registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
-import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
+import { ARCHIVE_CANDIDATES, archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
 import { normalizeHostMemory } from "@/lib/runtime/agentMemoryState";
 import { codexHostColumns } from "@/lib/runtime/registry";
 
@@ -647,6 +647,28 @@ test("an archive pass confirms under the lock what it selected before it, and a 
   } finally { db.close(); }
 });
 
+/* registry_rows keeps a copy of every archived row. A search that starts
+   from a field index reads those copies, payload included, before it learns
+   that none of them is hot. */
+test("the candidate search reads registry rows by key from the hot set, never through the retained copies of the archive", () => {
+  const { open,filename } = fixture();
+  const store = open();
+  const db = new Database(filename);
+  try {
+    const selected = archiveCandidates(db,1_000);
+    expect(selected.length).toBeGreaterThan(0);
+    archiveAll(store);
+    expect(archiveCandidates(db,1_000)).toEqual([]);
+    const plan = db.query<{ detail: string }, [number]>(`EXPLAIN QUERY PLAN ${ARCHIVE_CANDIDATES}`).all(1_000).map(row => row.detail);
+    /* Seven collections' branches, each driven by the hot keys. */
+    const driven = plan.flatMap((detail,index) => detail === "SCAN hot" ? [plan[index+1]] : []).slice(-7);
+    expect(driven).toHaveLength(7);
+    for (const detail of driven) expect(detail).toBe("SEARCH r USING INDEX sqlite_autoindex_registry_rows_1 (collection=? AND row_key=?)");
+    /* No part of the search walks one collection's rows, archived copies included. */
+    expect(plan.filter(detail => /^SEARCH \w+ USING (?:COVERING )?INDEX \S+ \(collection=\?\)$/.test(detail))).toEqual([]);
+  } finally { db.close(); }
+});
+
 test("cold independent lineage still denies a forged root grant, and external evidence changes redecide it", () => {
   const { open,filename,initial,conversationId } = fixture();
   const reader = open();
@@ -828,6 +850,9 @@ test("terminal migration history goes cold while draining and referenced intents
     initial.migrationIntents[key] = { id: key,engine: "codex",targetId: "fixture-account",origin: "manual",revision: 1,
       state,createdAt: time,updatedAt: time,requestIds: [key],evidence: null,stoppedAt: state === "stopped" ? time : null };
   }
+  /* A stopped intent whose opt-out sweep is unfinished is found by enumeration, so it stays hot. */
+  initial.migrationIntents["migration-sweeping"] = { ...initial.migrationIntents["migration-stopped"]!,id: "migration-sweeping",
+    requestIds: ["migration-sweeping"],stopSweep: { stampedAt: time,optOut: true } };
   initial.conversations[conversationId(0)]!.migration = { intentId: "migration-referenced",phase: "committed",
     targetId: "fixture-account",revision: 1,error: null,errorCode: null,operationId: "migration-operation",
     sourceGenerationId: id(0),providerReceipt: null,pendingContinuityPaths: [],boardProject: null,
@@ -837,7 +862,7 @@ test("terminal migration history goes cold while draining and referenced intents
   const db = new Database(filename,{ readonly: true });
   try {
     expect(db.query("SELECT row_key FROM registry_hot_rows WHERE collection='migrationIntents' ORDER BY row_key").all())
-      .toEqual([{ row_key: "migration-draining" },{ row_key: "migration-referenced" }]);
+      .toEqual([{ row_key: "migration-draining" },{ row_key: "migration-referenced" },{ row_key: "migration-sweeping" }]);
     expect(db.query("SELECT row_key FROM registry_cold WHERE collection='migrationIntents' ORDER BY row_key").all())
       .toEqual([{ row_key: "migration-complete" },{ row_key: "migration-stopped" }]);
   } finally { db.close(); }

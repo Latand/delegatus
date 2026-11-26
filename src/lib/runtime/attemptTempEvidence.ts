@@ -1,22 +1,45 @@
+import { copyAttemptEvidenceWithinBudget } from "./attemptTempCopy";
+import { attemptTempRemaining, checkAttemptTempDeadline } from "./attemptTempDeadline";
+import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
+import { attemptEvidenceRepository, MAX_ATTEMPT_EVIDENCE_BLOBS, type AttemptEvidenceFallback } from "./attemptEvidenceGit";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { attemptTreeHasNoEvidence } from "./attemptTempFilesystem";
+import { attemptTreeHasNoEvidence, ledgerLinkedEvidence } from "./attemptTempFilesystem";
 import { statePath } from "@/lib/configDir";
 import { fsyncPath, writeJsonDurably } from "@/lib/state/durableJson";
 import { isPreservedMedia } from "@/lib/artifact/evidenceFormats";
+import { attemptEvidenceKey } from "./attemptEvidenceBinding";
 
 const signature = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
 
-/** Preserve existing captures, including legacy roots, before any retirement.
- * Each call inventories the current tree; a crash needs no migration flag.
+export type AttemptEvidenceSelection = {
+  skippedTracked: { count: number; bytes: number };
+  selectionFallback?: AttemptEvidenceFallback;
+};
+type AttemptEvidenceResult = {
+  current: () => boolean;
+  namespaceOnly: boolean;
+  destination?: string;
+  selection?: AttemptEvidenceSelection;
+};
+
+/** Preserve captures and explicit artifacts before ordinary retirement.
+ * Media already stored as a blob by the lane's repository can be omitted.
+ * When the lookup cannot prove that, keep the source media.
  * The returned synchronous fence detects edits during the final owner read. */
-export async function preserveAttemptEvidence(directory: string, original: string, identity: string): Promise<{ current: () => boolean; namespaceOnly: boolean }> {
-  const until = performance.now() + 30_000;
-  const budget = () => { if (performance.now() >= until) throw new Error("attempt evidence preservation deadline exceeded"); };
+export async function preserveAttemptEvidence(directory: string, original: string, identity: string,
+  retention?: { pipelineId: string | null; launchId: string; repoDir?: string; repoCurrent?: () => boolean;
+    register: (destination: string) => void }): Promise<AttemptEvidenceResult> {
+  const until = performance.now() + attemptTempRemaining(30_000);
+  const budget = () => {
+    checkAttemptTempDeadline();
+    if (performance.now() >= until) throw new AttemptTempBudgetDeferred("attempt evidence preservation deadline exceeded; retry next tick");
+  };
   if (fs.realpathSync(directory) !== directory) throw new Error("linked attempt evidence source");
   const source = new Map<string, string>(), saved = new Map<string, string>();
-  const files: string[] = [];
+  const files: Array<{ relative: string; artifact: boolean }> = [];
+  let repositoryCurrent: (() => boolean) | undefined;
   const walk = async (relative: string, artifact = false) => {
     budget();
     const file = path.join(directory, relative), stat = await fs.promises.lstat(file, { bigint: true });
@@ -35,7 +58,7 @@ export async function preserveAttemptEvidence(directory: string, original: strin
       }
     } else if (protectedFile) {
       if (!stat.isFile()) throw new Error("attempt evidence is not a regular file");
-      source.set(relative, signature(stat)); files.push(relative);
+      source.set(relative, signature(stat)); files.push({ relative, artifact });
     }
   };
   const current = () => {
@@ -44,13 +67,15 @@ export async function preserveAttemptEvidence(directory: string, original: strin
       const root = fs.lstatSync(directory);
       if (`${root.dev}:${root.ino}` !== identity) return false;
       for (const [relative, expected] of source) {
+        budget();
         if (signature(fs.lstatSync(path.join(directory, relative), { bigint: true })) !== expected) return false;
       }
       for (const [file, expected] of saved) {
+        budget();
         if (fs.realpathSync(path.dirname(file)) !== path.dirname(file)
           || signature(fs.lstatSync(file, { bigint: true })) !== expected) return false;
       }
-      return true;
+      return repositoryCurrent?.() ?? true;
     } catch { return false; }
   };
   try { await walk(""); }
@@ -60,26 +85,78 @@ export async function preserveAttemptEvidence(directory: string, original: strin
     if (!current()) throw new Error("attempt evidence source changed");
     return { current, namespaceOnly: true };
   }
-  const key = createHash("sha256").update(original).update("\0").update(identity).digest("hex");
+  const key = attemptEvidenceKey(original, identity);
   const destination = statePath("evidence", "attempt-temp", key);
   const evidenceParent = path.dirname(statePath("evidence"));
-  const digest = async (file: string) => {
+  const digest = async (file: string, identifyBlob = false) => {
     budget();
     if (!fs.lstatSync(file).isFile()) throw new Error("attempt evidence is not a regular file");
     if (fs.realpathSync(path.dirname(file)) !== path.dirname(file)) throw new Error("linked attempt evidence parent");
     const hash = createHash("sha256");
     const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
     try {
-      if (!fs.fstatSync(fd).isFile()) throw new Error("attempt evidence is not a regular file");
-      for await (const chunk of fs.createReadStream(file, { fd, autoClose: false })) { budget(); hash.update(chunk); }
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile()) throw new Error("attempt evidence is not a regular file");
+      const blob = identifyBlob ? createHash("sha1").update(`blob ${stat.size}\0`) : undefined;
+      let bytes = 0;
+      for await (const chunk of fs.createReadStream(file, { fd, autoClose: false })) {
+        budget();
+        bytes += chunk.length;
+        hash.update(chunk);
+        blob?.update(chunk);
+      }
+      if (bytes !== stat.size) throw new Error("attempt evidence changed during hashing");
+      return { hash: hash.digest("hex"), blob: blob && { id: blob.digest("hex"), bytes } };
     } finally { fs.closeSync(fd); }
-    return hash.digest("hex");
   };
+  const selection: AttemptEvidenceSelection = { skippedTracked: { count: 0, bytes: 0 } };
+  const digests = new Map<string, Awaited<ReturnType<typeof digest>>>();
+  let tracked = new Set<string>();
+  if (retention?.pipelineId) {
+    const candidates = files.filter(file => !file.artifact);
+    if (candidates.length > MAX_ATTEMPT_EVIDENCE_BLOBS) selection.selectionFallback = "lookup-limit";
+    else if (candidates.length) {
+      const repository = await attemptEvidenceRepository(retention.repoDir, directory, original,
+        () => attemptTempRemaining(until - performance.now()));
+      budget();
+      if (repository.fallback) selection.selectionFallback = repository.fallback;
+      else {
+        let explicitlyLinked: Set<string> | undefined;
+        try { explicitlyLinked = new Set(ledgerLinkedEvidence(original)); }
+        catch { selection.selectionFallback = "evidence-index-unavailable"; }
+        if (explicitlyLinked) {
+          const blobs = new Map<string, { id: string; bytes: number }>();
+          for (const { relative } of candidates) {
+            if (explicitlyLinked.has(relative)) continue;
+            const result = await digest(path.join(directory, relative), true);
+            digests.set(relative, result);
+            if (result.blob) blobs.set(result.blob.id, result.blob);
+          }
+          if (blobs.size) {
+            const result = await repository.contains([...blobs.values()]);
+            budget();
+            if (result.fallback) selection.selectionFallback = result.fallback;
+            else {
+              tracked = result.present;
+              if (tracked.size) repositoryCurrent = () => repository.current() && (retention.repoCurrent?.() ?? true);
+            }
+          }
+        }
+      }
+    }
+  }
   const manifest: Array<{ path: string; savedPath: string; hash: string }> = [];
-  for (const relative of files) {
-    const file = path.join(directory, relative), hash = await digest(file);
+  for (const { relative } of files) {
+    const file = path.join(directory, relative);
+    const { hash, blob } = digests.get(relative) ?? await digest(file);
+    if (blob && tracked.has(blob.id)) {
+      selection.skippedTracked.count++;
+      selection.skippedTracked.bytes += blob.bytes;
+      continue;
+    }
+    if (!manifest.length) retention?.register(destination);
     let savedPath = path.join("files", relative), target = path.join(destination, savedPath);
-    if (fs.existsSync(target) && await digest(target) !== hash) {
+    if (fs.existsSync(target) && (await digest(target)).hash !== hash) {
       savedPath = path.join("versions", hash, relative); target = path.join(destination, savedPath);
     }
     fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
@@ -95,13 +172,13 @@ export async function preserveAttemptEvidence(directory: string, original: strin
       };
       const temporary = path.join(copyRoot, "capture");
       try {
-        await fs.promises.copyFile(file, temporary, fs.constants.COPYFILE_EXCL);
-        if (await digest(temporary) !== hash) throw new Error("attempt evidence copy differs");
+        await copyAttemptEvidenceWithinBudget(file, temporary);
+        if ((await digest(temporary)).hash !== hash) throw new Error("attempt evidence copy differs");
         if (!copyCurrent()) throw new Error("attempt evidence destination changed");
         fsyncPath(temporary); fs.renameSync(temporary, target); fsyncPath(path.dirname(target));
       } finally { if (copyCurrent()) fs.rmSync(copyRoot, { recursive: true, force: true }); }
     }
-    if (await digest(target) !== hash) throw new Error("attempt evidence backup differs");
+    if ((await digest(target)).hash !== hash) throw new Error("attempt evidence backup differs");
     fsyncPath(target);
     for (let parent = path.dirname(target);; parent = path.dirname(parent)) {
       fsyncPath(parent);
@@ -113,6 +190,7 @@ export async function preserveAttemptEvidence(directory: string, original: strin
     manifest.push({ path: relative, savedPath, hash });
   }
   if (!current()) throw new Error("attempt evidence changed during preservation");
-  if (files.length) writeJsonDurably(path.join(destination, "manifest.json"), { original, identity, files: manifest });
-  return { current, namespaceOnly: false };
+  if (manifest.length) writeJsonDurably(path.join(destination, "manifest.json"), { original, identity,
+    pipelineId: retention?.pipelineId ?? null, launchId: retention?.launchId ?? null, ...selection, files: manifest });
+  return { current, namespaceOnly: false, selection, ...(manifest.length ? { destination } : {}) };
 }

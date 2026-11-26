@@ -123,7 +123,7 @@ export function useComposer({ initialText, persistText, submit, disabled = false
 
      The draft is NOT React state of whoever called this hook. A keystroke
      re-rendered the owner of that state, which for the pane composer is the
-     6,000-line `TmuxComposerCore` subtree, once per character. The text lives in
+     6,000-line `ConversationComposerCore` subtree, once per character. The text lives in
      the ref and tells its readers through `subscribeText`: the textarea
      (`ComposerBar`) subscribes to the text itself, and the owner subscribes only
      to the one derived fact it renders from, whether there is anything to send. */

@@ -2,11 +2,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited } from "./signalSandboxContext";
-import { CUSTODY_CLEANUP_MS, identitySchema, readEnvelope, physical, custodyClock } from "../recordedChecks/wire";
+import { CUSTODY_CLEANUP_MS, digest, identitySchema, readEnvelope, physical, custodyClock } from "../recordedChecks/wire";
 
 // Leave one minute of the engines' ten-minute foreground window for startup
 // and printing the final state and tail. Custom waits share this ceiling.
 const MAX_WAIT_MS = 9 * 60_000;
+const COMPLETION_RECHECK_MS = 1000;
 const TAIL_BYTES = 16_384;
 const directory = (log: string) => `${log}.gate`;
 
@@ -47,7 +48,8 @@ export function gateSnapshot(log: string): { state: string; code: number; tail: 
 }
 
 /** Subscribe before checking so a completion racing the first read wakes us.
- * Only the final snapshot reads the tail; log activity does not extend the bound. */
+ * Recheck the exit path if filesystem notifications are lost. Only the final
+ * snapshot reads the tail; log activity does not extend the bound. */
 export async function waitForGate(log: string, timeoutMs = MAX_WAIT_MS): Promise<ReturnType<typeof gateSnapshot>> {
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > MAX_WAIT_MS) throw new Error("invalid wait deadline");
   return observeGate(log, timeoutMs);
@@ -55,36 +57,51 @@ export async function waitForGate(log: string, timeoutMs = MAX_WAIT_MS): Promise
 
 async function observeGate(log: string, timeoutMs: number, signal?: AbortSignal): Promise<ReturnType<typeof gateSnapshot>> {
   const dir = directory(log);
-  if (!fs.existsSync(path.join(dir, "owner.json"))) throw new Error("unknown gate log (no recording ticket)");
+  const ownerFile = path.join(dir, "owner.json");
+  const exitFile = path.join(dir, "exit");
+  if (!fs.existsSync(ownerFile)) throw new Error("unknown gate log (no recording ticket)");
   return await new Promise((resolve, reject) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let watcher: fs.FSWatcher | undefined;
-    const finish = () => {
+    let settled = false;
+    const cleanup = () => {
+      settled = true;
       clearTimeout(timer); watcher?.close(); signal?.removeEventListener("abort", abort);
+    };
+    const fail = (error: unknown) => { if (!settled) { cleanup(); reject(error); } };
+    const finish = () => {
+      if (settled) return;
+      cleanup();
       try { resolve(gateSnapshot(log)); } catch (error) { reject(error); }
     };
-    const abort = () => { clearTimeout(timer); watcher?.close(); signal?.removeEventListener("abort", abort); reject(new Error("gate completion wait cancelled; command result unknown")); };
+    const abort = () => fail(new Error("gate completion wait cancelled; command result unknown"));
     try {
       if (signal?.aborted) { abort(); return; }
+      const owner = JSON.parse(fs.readFileSync(ownerFile, "utf8"));
       signal?.addEventListener("abort", abort, { once: true });
-      watcher = fs.watch(dir, (_event, name) => { if ((!name || name.toString() === "exit") && fs.existsSync(path.join(dir, "exit"))) finish(); });
-      watcher.on("error", error => { clearTimeout(timer); watcher?.close(); signal?.removeEventListener("abort", abort); reject(error); });
+      watcher = fs.watch(dir, (_event, name) => { if ((!name || name.toString() === "exit") && fs.existsSync(exitFile)) finish(); });
+      watcher.on("error", fail);
       const deadline = performance.now() + timeoutMs;
-      const arm = () => {
-        const remaining = Math.max(0, deadline - performance.now());
-        timer = setTimeout(remaining > 2_147_483_647 ? arm : finish, Math.min(remaining, 2_147_483_647));
+      const arm = (initial = false) => {
+        if (settled) return;
+        try {
+          const remaining = Math.max(0, deadline - performance.now());
+          if (remaining === 0 || fs.existsSync(exitFile)) { finish(); return; }
+          const status = cpuOwnerStatus(owner);
+          // A recorder can die without changing any file. Use the same
+          // fallback tick to detect loss of its original identity.
+          if (status === "dead" || (initial && status !== "alive") || cpuOwnerExited(owner)) { finish(); return; }
+          timer = setTimeout(arm, Math.min(remaining, COMPLETION_RECHECK_MS));
+        } catch (error) { fail(error); }
       };
-      arm();
-      // An already finished run returns immediately, including after restart.
-      if (fs.existsSync(path.join(dir, "exit"))) finish();
-      else if (cpuOwnerStatus(JSON.parse(fs.readFileSync(path.join(dir, "owner.json"), "utf8"))) !== "alive") finish();
-    } catch (error) { clearTimeout(timer); watcher?.close(); signal?.removeEventListener("abort", abort); reject(error); }
+      arm(true);
+    } catch (error) { fail(error); }
   });
 }
 
 /** One engine callback, through queueing, execution and cleanup. The recorder
  * pins the original deadline; callers cannot extend it by asking again. */
-export async function waitForGateCompletion(log: string, signal?: AbortSignal): Promise<ReturnType<typeof gateSnapshot>> {
+export function gateCompletionIdentity(log: string) {
   log = path.join(fs.realpathSync(path.dirname(log)), path.basename(log));
   const dir = directory(log);
   const directoryIdentity = physical(dir);
@@ -99,8 +116,17 @@ export async function waitForGateCompletion(log: string, signal?: AbortSignal): 
       || owner.bootEpoch !== cpuOwnerIdentity(process.pid).bootEpoch) throw new Error("gate completion ticket identity changed");
   };
   validate();
-  const remaining = Math.max(0, ticket.deadlineUptimeMs + CUSTODY_CLEANUP_MS - custodyClock());
+  // Foreground recordings have no custody descriptor. Their immutable ticket
+  // and physical directory identify the run across Viewer generations.
+  const runId = digest({ log, ticket });
+  return { runId, deadlineUptimeMs: ticket.deadlineUptimeMs, validate };
+}
+
+export async function waitForGateCompletion(log: string, signal?: AbortSignal, expectedRunId?: string): Promise<ReturnType<typeof gateSnapshot> & { runId: string; reason?: string }> {
+  const { runId, deadlineUptimeMs, validate } = gateCompletionIdentity(log);
+  if (expectedRunId !== undefined && runId !== expectedRunId) throw new Error("gate completion run identity changed");
+  const remaining = Math.max(0, deadlineUptimeMs + CUSTODY_CLEANUP_MS - custodyClock());
   const result = await observeGate(log, remaining, signal);
   validate();
-  return result;
+  return { ...result, runId, ...(!result.state.startsWith("finished") ? { reason: "recorded check deadline and cleanup bound expired without a terminal verdict" } : {}) };
 }

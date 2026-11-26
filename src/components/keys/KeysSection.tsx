@@ -1,10 +1,11 @@
 "use client";
 
-import { Check, ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, MoreHorizontal } from "lucide-react";
+import { Check, ChevronRight, Copy, Eye, EyeOff, MoreHorizontal } from "lucide-react";
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { copyText } from "@/components/feed/CopyButton";
 import { OpenAiServicesList, type ServiceFeature } from "@/components/keys/OpenAiServices";
+import { CHATGPT_SETTINGS_URL, PLAN_USAGE_URL, type PlanStatus } from "@/lib/chatgptPlan/public";
 import { KEYS_CHANGED_EVENT } from "@/components/keys/openKeys";
 import { useCoarsePointer } from "@/hooks/useCoarsePointer";
 import { useLocale } from "@/lib/i18n";
@@ -289,8 +290,8 @@ function DotNote({ entry, dot }: { entry: KeyEntry; dot: ReturnType<typeof useDo
   );
 }
 
-function IconButton({ label, onClick, pressed, children, data, coarse, buttonRef }: {
-  label: string; onClick: () => void; pressed?: boolean; children: ReactNode; data: Record<string, string>; coarse: boolean; buttonRef?: React.Ref<HTMLButtonElement>;
+function IconButton({ label, onClick, pressed, children, data, coarse, buttonRef, disabled }: {
+  label: string; onClick: React.MouseEventHandler<HTMLButtonElement>; pressed?: boolean; disabled?: boolean; children: ReactNode; data: Record<string, string>; coarse: boolean; buttonRef?: React.Ref<HTMLButtonElement>;
 }) {
   return (
     <button
@@ -299,6 +300,7 @@ function IconButton({ label, onClick, pressed, children, data, coarse, buttonRef
       aria-label={label}
       title={label}
       aria-pressed={pressed}
+      disabled={disabled}
       onClick={onClick}
       {...data}
       className={`inline-flex shrink-0 items-center justify-center rounded-control text-muted hover:bg-sunken hover:text-primary ${FOCUS} ${coarse ? "h-11 w-11" : "h-7 w-7"} ${pressed ? "bg-sunken text-primary" : ""}`}
@@ -552,14 +554,14 @@ function KeyRow({ entry, size, staging, owner, focus, focusSeq, optimism }: { en
     </span>
   );
   return (
-    <div data-keys-row={entry.id} data-keys-source={entry.source} className={`flex flex-col ${sheet ? "gap-2 px-4 py-2" : "gap-1 rounded-control px-2 py-1"}`}>
+    <div data-keys-row={entry.id} data-keys-source={entry.source} data-settings-unit="" className={`flex flex-col ${sheet ? "gap-2 px-4 py-2" : "gap-1 rounded-control px-2 py-1"}`}>
       <div className={`flex items-center gap-1 ${sheet ? "min-h-11" : "min-h-[34px]"}`}>
         {coarse ? <span className="-ml-3 flex shrink-0">{statusDot}</span> : null}
         <span className="flex min-w-0 flex-1 flex-col gap-px">
-          <span className={`truncate font-semibold text-primary ${sheet ? "text-body leading-5" : "text-[12px] leading-4"}`}>{name}
+          <span className={`truncate font-semibold text-primary text-body ${sheet ? "leading-5" : "leading-[18px]"}`}>{name}
             {/* The 232 px panel has no room after the masked tail: a key set by a variable says so after its name. */}
-            {entry.source === "env" && owner && !sheet ? <span data-keys-env-tail="" className="text-[11px] font-medium text-muted">{` · ${t("keys.state.envShort")}`}</span> : null}</span>
-          <span className={`flex min-w-0 font-medium text-muted ${sheet ? "text-label leading-4" : "text-[11px] leading-[14px]"}`}>{second}</span>
+            {entry.source === "env" && owner && !sheet ? <span data-keys-env-tail="" className="text-ui font-medium text-muted">{` · ${t("keys.state.envShort")}`}</span> : null}</span>
+          <span className={`flex min-w-0 font-medium text-muted ${sheet ? "text-label leading-4" : "text-ui leading-4"}`}>{second}</span>
         </span>
         {icons}{addButton}
       </div>
@@ -573,6 +575,161 @@ function KeyRow({ entry, size, staging, owner, focus, focusSeq, optimism }: { en
       ) : null}
       {actions.editing ? <ValueField entry={entry} size={size} initialError={actions.editError} onSave={actions.save} onCancel={actions.cancelEdit} /> : null}
       {actions.removal ? <RemoveQuestion size={size} busy={actions.removal === "busy"} failed={actions.removal === "failed"} onRemove={() => void actions.remove()} onCancel={actions.cancelRemove} /> : null}
+    </div>
+  );
+}
+
+const planEndpoint = "/api/chatgpt-plan";
+const openPlanLink = (url: string) => window.open(url, "_blank", "noopener,noreferrer");
+const authorizeLink = (value: string | undefined) => {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    return url.origin === "https://auth.openai.com" && !url.username && !url.password ? url.href : undefined;
+  } catch { return undefined; }
+};
+
+function useChatGPTPlan(open: boolean) {
+  const [status, setStatus] = useState<PlanStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [actionFailed, setActionFailed] = useState(false);
+  const [manualUrl, setManualUrl] = useState<string>();
+  const generation = useRef(0);
+  const writing = useRef(false);
+  const load = useCallback(async () => {
+    const reading = ++generation.current;
+    try {
+      const response = await fetch(planEndpoint, { cache: "no-store" });
+      if (!response.ok) throw new Error("status unavailable");
+      const next: PlanStatus = await response.json();
+      if (reading === generation.current && !writing.current) {
+        setStatus(next);
+        setFailed(false);
+      }
+    } catch {
+      if (reading === generation.current && !writing.current) {
+        setStatus(previous => previous?.state === "connecting" ? previous : { state: "error" });
+        setFailed(true);
+      }
+    }
+  }, []);
+  const connecting = status?.state === "connecting";
+  useEffect(() => {
+    if (!open || busy) return;
+    let stopped = false;
+    let timer: number;
+    const next = () => {
+      timer = window.setTimeout(() => void load().finally(() => { if (connecting && !stopped) next(); }), connecting ? 2_000 : 0);
+    };
+    next();
+    return () => { stopped = true; window.clearTimeout(timer); generation.current++; };
+  }, [open, busy, connecting, load]);
+  const action = async (action: "sign-in" | "enable-plan" | "cancel" | "acknowledge" | "sign-out" | "replace-registration") => {
+    if (writing.current) return;
+    writing.current = true;
+    setBusy(true);
+    setActionFailed(false);
+    setManualUrl(undefined);
+    const signingIn = action === "sign-in" || action === "enable-plan";
+    // Open from the click itself so the asynchronous request survives popup blockers.
+    let tab: Window | null = null;
+    try {
+      if (signingIn) {
+        tab = window.open("about:blank", "_blank");
+        if (tab) tab.opener = null;
+      }
+      const response = await fetch(planEndpoint, action === "sign-out" ? { method: "DELETE" } : {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action }),
+      });
+      if (!response.ok) throw new Error("action refused");
+      if (signingIn) {
+        const url = authorizeLink((await response.json()).authorizeUrl);
+        if (!url) throw new Error("authorization unavailable");
+        if (tab && !tab.closed) tab.location.replace(url); else setManualUrl(url);
+        setStatus({ state: "connecting" });
+      } else if (action === "acknowledge") {
+        setStatus(previous => previous && { ...previous, acknowledged: true });
+      } else if (action === "replace-registration") {
+        await load();
+      } else setStatus(null);
+    } catch {
+      tab?.close();
+      setActionFailed(true);
+    } finally {
+      writing.current = false;
+      setBusy(false);
+    }
+  };
+  return { status, busy, failed, actionFailed, action, manualUrl, load };
+}
+
+const visiblePlanReasons = ["declined", "client_rejected", "account_mismatch", "registration_incomplete",
+  "credential_file", "host_file", "expired", "retry_later", "busy", "not_eligible", "request_invalid", "policy_denied"] as const;
+
+function ChatGPTPlanRow({ size, owner, plan }: { size: Size; owner: boolean; plan: ReturnType<typeof useChatGPTPlan> }) {
+  const { t } = useLocale();
+  const coarse = useCoarsePointer();
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const { status, busy, failed, actionFailed, action, manualUrl, load } = plan;
+  if (!status) return null;
+  const { state, reason } = status;
+  const explanation = visiblePlanReasons.find(candidate => candidate === reason);
+  const sheet = size === "sheet";
+  const connected = state === "connected";
+  const modelMissing = connected && status.planModels?.voiceBackend === false;
+  const authenticationUrl = state === "connecting" ? authorizeLink(status.authorizeUrl) ?? manualUrl : undefined;
+  const canStart = state === "not_connected" || state === "reconnect_required" || state === "plan_disabled";
+  const canSignOut = connected || state === "plan_disabled" || state === "reconnect_required" || state === "plan_limit" || state === "retry_later";
+  const button = `${coarse ? "min-h-11 text-label" : "min-h-7 text-ui"} self-start rounded-control px-2 py-1 font-semibold disabled:opacity-60 ${FOCUS}`;
+  const items = [
+    { label: t("chatgptPlan.manage"), data: "plan-usage", run: () => openPlanLink(PLAN_USAGE_URL) },
+    { label: t("chatgptPlan.signOut"), data: "plan-sign-out", run: () => void action("sign-out") },
+  ];
+  return (
+    <div data-keys-row="chatgpt-plan" data-chatgpt-plan-state={state} data-settings-unit="" className={`flex flex-col ${sheet ? "gap-2 px-4 py-2" : "gap-1 rounded-control px-2 py-1"}`}>
+      <div className={`flex items-center gap-1 ${sheet ? "min-h-11" : "min-h-[34px]"}`}>
+        <div className="flex min-w-0 flex-1 flex-col gap-px">
+          <span className="font-semibold text-body text-primary">{t("chatgptPlan.title")}</span>
+          <span className={`break-words font-medium leading-4 text-muted ${sheet ? "text-label" : "text-ui"}`} role="status">
+            {!owner ? t("chatgptPlan.ownerOnly") : modelMissing ? t("chatgptPlan.modelMissing") : t(`chatgptPlan.state.${state}`)}
+            {owner && status.account?.email ? <> · {status.account.email}</> : null}
+          </span>
+        </div>
+        {owner && canSignOut ? <IconButton label={t("chatgptPlan.menu")} coarse={coarse} disabled={busy}
+          onClick={event => setAnchor(anchor ? null : event.currentTarget)} data={{ "data-chatgpt-plan-menu": "" }}>
+          <MoreHorizontal className="h-4 w-4" aria-hidden />
+        </IconButton> : null}
+      </div>
+      {owner && canSignOut && anchor ? <RowMenu anchor={anchor} items={items} onClose={() => setAnchor(null)} full={!sheet} /> : null}
+      {owner && state === "not_connected" && reason !== "declined" ? <p className="text-ui text-secondary">{t("chatgptPlan.intro")}</p> : null}
+      {owner && explanation ?
+        <p role="status" className="text-ui text-warning">{t(`chatgptPlan.reason.${explanation}`)}</p> : null}
+      {owner && state === "reconnect_required" && reason === "client_rejected" ?
+        <button type="button" className={`${button} border border-border`} disabled={busy} onClick={() => void action("replace-registration")}>
+          {t("chatgptPlan.replaceRegistration")}
+        </button> : null}
+      {owner && canStart ? <button data-chatgpt-plan-start="" type="button" className={`${button} bg-brand text-on-brand`} disabled={busy}
+        onClick={() => void action(state === "plan_disabled" ? "enable-plan" : "sign-in")}>
+        {t(state === "plan_disabled" ? "chatgptPlan.enable" : "chatgptPlan.continue")}
+      </button> : null}
+      {owner && state === "connecting" ? (
+        <div className="flex flex-wrap gap-1">
+          {authenticationUrl ? <a className={`${button} underline`} href={authenticationUrl} target="_blank" rel="noopener noreferrer">{t("chatgptPlan.continue")}</a> : null}
+          <button type="button" className={`${button} border border-border`} disabled={busy} onClick={() => void action("cancel")}>{t("keys.cancel")}</button>
+        </div>
+      ) : null}
+      {owner && connected && !modelMissing && !status.acknowledged ? (
+        <div className="flex flex-col gap-1">
+          <p className="text-ui text-secondary">{t("chatgptPlan.firstUse")}</p>
+          <button type="button" className={`${button} border border-border`} disabled={busy} onClick={() => void action("acknowledge")}>{t("chatgptPlan.acknowledge")}</button>
+        </div>
+      ) : null}
+      {owner && status.revocationConfirmed === false ? (
+        <p className="text-ui text-warning">{t("chatgptPlan.revocation")} <a className="underline" target="_blank" rel="noopener noreferrer" href={CHATGPT_SETTINGS_URL}>{t("chatgptPlan.settings")}</a></p>
+      ) : null}
+      {actionFailed ? <p role="alert" className="text-ui text-warning">{t("chatgptPlan.failed")}</p> : null}
+      {failed ? <p role="alert" className="text-ui text-warning">{t("chatgptPlan.failed")} <button type="button" className="underline" onClick={() => void load()}>{t("keys.retry")}</button></p> : null}
     </div>
   );
 }
@@ -629,6 +786,7 @@ export function KeysMenuPage({ size = "menu", onImport, onOpenService, focusKey 
 }) {
   const { t } = useLocale();
   const { answer, failed, reload, optimism } = useKeys();
+  const plan = useChatGPTPlan(!!answer);
   const [copied, setCopied] = useState<number | null>(null);
   const sheet = size === "sheet";
   const copyAll = async () => {
@@ -645,8 +803,7 @@ export function KeysMenuPage({ size = "menu", onImport, onOpenService, focusKey 
   };
   const row = sheet
     ? "flex min-h-11 w-full items-center gap-3 px-4 text-left text-body font-semibold text-primary active:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
-    : `flex w-full min-h-[30px] items-center gap-2 rounded-control px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-sunken ${FOCUS}`;
-  const glyph = sheet ? "h-[18px] w-[18px] shrink-0 text-secondary" : "h-4 w-4 shrink-0 text-secondary";
+    : `flex w-full min-h-10 items-center gap-2 rounded-control px-2 py-1.5 text-left text-body font-semibold text-primary hover:bg-sunken ${FOCUS}`;
   return (
     <div data-keys-page="" className={`flex flex-col font-normal ${sheet ? "pb-4" : "pb-1"}`}>
       <div className={`flex flex-col empty:hidden ${sheet ? "gap-2 px-4 pt-2" : "gap-1.5 px-2"}`}><Notices answer={answer} failed={failed} reload={() => void reload()} size={size} /></div>
@@ -654,22 +811,22 @@ export function KeysMenuPage({ size = "menu", onImport, onOpenService, focusKey 
         {answer?.keys.map((entry) => (
           <Fragment key={entry.id}>
             <KeyRow entry={entry} size={size} staging={answer.staging} owner={answer.owner} focus={entry.id === focusKey} focusSeq={focusSeq} optimism={optimism} />
-            {entry.id === "openai" && onOpenService ? <OpenAiServicesList size={size} onOpen={onOpenService} /> : null}
+            {entry.id === "openai" ? <ChatGPTPlanRow size={size} owner={answer.owner} plan={plan} /> : null}
+            {entry.id === "openai" && onOpenService ? <OpenAiServicesList size={size} onOpen={onOpenService}
+              planActive={answer.owner && plan.status?.state === "connected" && plan.status.planModels?.voiceBackend !== false} /> : null}
           </Fragment>
         ))}
       </div>
       {answer?.owner ? (
         <div className="mt-1 flex flex-col border-t border-border pt-1">
-          <button type="button" data-keys-copy-all="" className={row} onClick={() => void copyAll()}>
-            {copied === null ? <Copy className={glyph} aria-hidden /> : <Check className={`${glyph} text-success`} aria-hidden />}
+          <button type="button" data-keys-copy-all="" data-settings-unit="" className={row} onClick={() => void copyAll()}>
             <span className="min-w-0 flex-1 truncate">{t("keys.copyAll")}</span>
           </button>
-          {copied !== null ? <p role="status" data-keys-copied-all="" className={`${sheet ? "px-4 pb-1 text-label" : "px-2 pb-1 text-[11px] leading-snug"} font-medium text-success`}>{t("keys.copiedAll", { count: copied })}</p> : null}
+          {copied !== null ? <p role="status" data-keys-copied-all="" className={`${sheet ? "px-4 pb-1 text-label" : "px-2 pb-1 text-ui leading-snug"} font-medium text-success`}>{t("keys.copiedAll", { count: copied })}</p> : null}
           {answer.staging ? null : (
-            <button type="button" data-keys-open-import="" className={row} onClick={onImport}>
-              <ClipboardPaste className={glyph} aria-hidden />
+            <button type="button" data-keys-open-import="" data-settings-unit="" className={row} onClick={onImport}>
               <span className="min-w-0 flex-1 truncate">{t("keys.import")}</span>
-              <ChevronRight className="h-4 w-4 shrink-0 text-muted" aria-hidden />
+              <ChevronRight data-settings-chevron="" className="h-4 w-4 shrink-0 text-muted" aria-hidden />
             </button>
           )}
         </div>

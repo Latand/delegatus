@@ -19,7 +19,9 @@ import type { VoiceToolsView } from "@/lib/voiceTools/contracts";
 const harness = installOnboardingDom();
 installActEnv();
 const { createRoot } = await import("react-dom/client");
-const { VoiceToolsSetting } = await import("./VoiceToolsSetting");
+const { useVoiceTools, VoiceToolPage, VoiceToolRows } = await import("./VoiceToolsSetting");
+const { SettingsWindowHost } = await import("@/components/settings/SettingsWindow");
+const { openSettings } = await import("@/components/settings/openSettings");
 const { translate } = await import("@/lib/i18n/core");
 const { resetLocaleForTests, setLocale } = await import("@/lib/i18n");
 
@@ -87,6 +89,16 @@ function routes(servers: Record<string, Server>) {
 }
 const writes = () => harness.calls.filter(call => call.method === "POST").map(call => call.body);
 
+/* Every server's page at once, each with its «Details» open, so a test reads what its page shows; the rows, with no server. */
+function ToolPages() {
+  const tools = useVoiceTools();
+  return tools.servers.length
+    ? <>{tools.servers.map(([name]) => <VoiceToolPage key={name} name={name} tools={tools} />)}</>
+    : <VoiceToolRows tools={tools} onOpen={() => {}} />;
+}
+const openDetails = async (host: Element) => {
+  for (const toggle of host.querySelectorAll<HTMLElement>("[data-settings-details-toggle][aria-expanded='false']")) await act(async () => toggle.click());
+};
 let mounted: { root: Root; host: HTMLDivElement } | null = null;
 afterEach(async () => {
   if (mounted) { const { root, host } = mounted; await act(async () => root.unmount()); host.remove(); mounted = null; }
@@ -96,14 +108,16 @@ async function mount(): Promise<HTMLDivElement> {
   document.body.append(host);
   const root = createRoot(host);
   mounted = { root, host };
-  await act(async () => root.render(<VoiceToolsSetting />));
+  await act(async () => root.render(<ToolPages />));
   await act(async () => settle());
+  await openDetails(host);
   return host;
 }
 const click = async (element: Element | null | undefined) => {
   expect(element).toBeTruthy();
   await act(async () => (element as HTMLElement).click());
   await act(async () => settle());
+  if (mounted) await openDetails(mounted.host);
 };
 const button = (host: Element, action: string) => host.querySelector<HTMLButtonElement>(`[data-voice-tool-action='${action}']`);
 
@@ -144,13 +158,15 @@ test("a pending proposal shows what will run by name, takes its secret once and 
     entryFile: { path: "/srv/tools/notes server.ts", sha256: "ab".repeat(32) } }) });
   const host = await mount();
   const row = host.querySelector<HTMLElement>("[data-voice-tool-server='spotify']")!;
-  expect(row.querySelector("[data-voice-tool-dry-run-hint]")?.textContent).toBe(translate("en", "voiceCompanion.tools.dryRunHint"));
-  expect(row.querySelector<HTMLInputElement>("input[data-destinations]")?.placeholder).toBe(spotify().secretRecipient);
+  expect(row.querySelector("[data-voice-tool-dry-run-hint] dd")?.textContent).toBe(translate("en", "voiceCompanion.tools.dryRunHint"));
+  /* The field asks in words; the long recipient it may take reads whole in «Details», never cut inside a field. */
+  expect(row.querySelector<HTMLInputElement>("input[data-destinations]")?.placeholder).toBe(translate("en", "settings.voice.destinationsPlaceholder"));
+  expect(row.querySelector("[data-voice-tool-recipient] dd")?.textContent).toBe(spotify().secretRecipient);
   expect(row.dataset.state).toBe("pending");
   expect(row.querySelector("[data-voice-tool-state]")?.textContent).toBe("Waiting for approval");
-  expect(row.querySelector("[data-voice-tool-runs] code")?.textContent).toBe("bun run '/srv/tools/notes server.ts'");
-  expect(row.querySelector("[data-voice-tool-env]")?.textContent).toBe("Environment: NOTES_FORMAT=markdown, NOTES_TOKEN (secret)");
-  expect(row.querySelector("[data-voice-tool-entry]")?.textContent).toBe(`Pinned file: /srv/tools/notes server.ts · SHA-256 ${"ab".repeat(6)}…`);
+  expect(row.querySelector("[data-voice-tool-runs] dd")?.textContent).toBe("bun run '/srv/tools/notes server.ts'");
+  expect(row.querySelector("[data-voice-tool-env]")?.textContent).toBe("EnvironmentNOTES_FORMAT=markdown, NOTES_TOKEN (secret)");
+  expect(row.querySelector("[data-voice-tool-entry]")?.textContent).toBe(`Pinned file/srv/tools/notes server.ts · SHA-256\u00a0${"ab".repeat(6)}…`);
   expect(row.querySelector("[data-voice-tool-dry-run]")?.textContent).toBe("Dry run: not run yet.");
   /* A needed secret holds the dry run and the approval back. */
   expect(row.querySelector("[data-voice-tool-reference='spotify-client-id']")?.hasAttribute("data-missing")).toBe(true);
@@ -172,14 +188,14 @@ test("a pending proposal shows what will run by name, takes its secret once and 
   await click(button(host, "dry-run"));
   expect(writes().at(-1)).toEqual({ action: "dry-run", name: "spotify", digest: digestOf(1) });
   expect(host.querySelector("[data-voice-tool-dry-run]")?.textContent).toMatch(/^Dry run passed .+: 2 tools found\.$/u);
-  expect([...host.querySelectorAll<HTMLInputElement>("[data-voice-tool] input")].map(box => box.checked)).toEqual([false, false]);
+  expect([...host.querySelectorAll<HTMLElement>("[data-voice-tool] [role=switch]")].map(box => box.getAttribute("aria-checked"))).toEqual(["false", "false"]);
   expect([...host.querySelectorAll("[data-voice-tool]")].map(node => node.textContent)).toEqual(["search · reads onlySearch Spotify.", "play · actsStart playback."]);
 });
 
 test("choosing a tool and approving each carry the current digest; the server reads approved", async () => {
   routes({ spotify: spotify({ missingSecrets: [], catalog, lastDryRun: { code: "OK", at: AT, digest: digestOf(500) }, tools: { search: { enabled: false, acts: false }, play: { enabled: false, acts: true } } }) });
   const host = await mount();
-  await click(host.querySelector("[data-voice-tool='play'] input"));
+  await click(host.querySelector("[data-voice-tool='play'] [role=switch]"));
   expect(writes()).toEqual([{ action: "configure", name: "spotify", digest: digestOf(1), tools: { search: { enabled: false, acts: false }, play: { enabled: true, acts: true } } }]);
   const moved = host.querySelector<HTMLElement>("[data-voice-tool-server]")!;
   await click(button(moved, "approve"));
@@ -193,11 +209,11 @@ test("«ask before acting» on an approved server stays approved: one write chan
   routes({ spotify: spotify({ state: "enabled", missingSecrets: [], catalog, lastDryRun: { code: "OK", at: AT, digest: digestOf(500) }, approval: { by: "operator", at: AT, digest: digestOf(1) },
     tools: { search: { enabled: true, acts: false }, play: { enabled: true, acts: true } } }) });
   const host = await mount();
-  const ask = host.querySelector<HTMLInputElement>("[data-voice-tool-ask]")!;
-  expect(ask.checked).toBe(false);
+  const ask = host.querySelector<HTMLElement>("[data-voice-tool-ask]")!;
+  expect(ask.getAttribute("aria-checked")).toBe("false");
   await click(ask);
   expect(writes()).toEqual([{ action: "configure", name: "spotify", digest: digestOf(1), askBeforeActing: true, reapprove: true }]);
-  expect(host.querySelector<HTMLInputElement>("[data-voice-tool-ask]")!.checked).toBe(true);
+  expect(host.querySelector("[data-voice-tool-ask]")!.getAttribute("aria-checked")).toBe("true");
   expect(host.querySelector("[data-voice-tool-state]")?.textContent).toBe("Approved");
 });
 
@@ -206,7 +222,7 @@ test("a refused switch flips back with its reason beside it; a refused re-approv
   const host = await mount();
   refuse.configure = "OPERATOR_REQUIRED";
   await click(host.querySelector("[data-voice-tool-ask]"));
-  expect(host.querySelector<HTMLInputElement>("[data-voice-tool-ask]")!.checked).toBe(false);
+  expect(host.querySelector("[data-voice-tool-ask]")!.getAttribute("aria-checked")).toBe("false");
   const reason = host.querySelector<HTMLElement>("[data-voice-tools-refused]")!;
   expect([reason.dataset.voiceToolsRefused, reason.textContent, reason.getAttribute("role")]).toEqual(["OPERATOR_REQUIRED", translate("en", "voiceCompanion.tools.refused.OPERATOR_REQUIRED"), "alert"]);
   /* Beside the switch, before the action row. */
@@ -216,15 +232,15 @@ test("a refused switch flips back with its reason beside it; a refused re-approv
   refuse.configure = "SELECTION_BOUNDS";
   await click(host.querySelector("[data-voice-tool-ask]"));
   expect(writes().at(-1)).toEqual({ action: "configure", name: "spotify", digest: digestOf(1), askBeforeActing: true, reapprove: true });
-  expect(host.querySelector<HTMLInputElement>("[data-voice-tool-ask]")!.checked).toBe(false);
+  expect(host.querySelector("[data-voice-tool-ask]")!.getAttribute("aria-checked")).toBe("false");
   expect(host.querySelector("[data-voice-tool-state]")?.textContent).toBe("Approved");
   expect(host.querySelector<HTMLElement>("[data-voice-tool-server]")!.dataset.state).toBe("enabled");
   expect(host.querySelector("[data-voice-tools-refused]")?.textContent).toBe(translate("en", "voiceCompanion.tools.refused.SELECTION_BOUNDS"));
   expect([record.servers.spotify.state, record.servers.spotify.askBeforeActing, record.servers.spotify.digest]).toEqual(["enabled", false, digestOf(1)]);
   /* The same for a tool on the approved server. */
   refuse.configure = "SELECTION_BOUNDS";
-  await click(host.querySelector("[data-voice-tool='play'] input"));
-  expect(host.querySelector<HTMLInputElement>("[data-voice-tool='play'] input")!.checked).toBe(false);
+  await click(host.querySelector("[data-voice-tool='play'] [role=switch]"));
+  expect(host.querySelector("[data-voice-tool='play'] [role=switch]")!.getAttribute("aria-checked")).toBe("false");
   expect(host.querySelector("[data-voice-tool-state]")?.textContent).toBe("Approved");
   expect(host.querySelector("[data-voice-tools-refused]")?.textContent).toBe(translate("en", "voiceCompanion.tools.refused.SELECTION_BOUNDS"));
 });
@@ -237,7 +253,8 @@ test("under Run dry run, the hub's limit and a refused tool list read as dry-run
     await click(button(host, "dry-run"));
     const reason = host.querySelector<HTMLElement>("[data-voice-tools-refused]")!;
     expect([reason.dataset.voiceToolsRefused, reason.textContent]).toEqual([code, translate("en", key)]);
-    expect(host.querySelector("[data-voice-tool-actions]")!.compareDocumentPosition(reason) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    /* Above the buttons, so it stands in view where the press was. */
+    expect(reason.compareDocumentPosition(host.querySelector("[data-voice-tool-actions]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   }
   expect(translate("uk", "voiceCompanion.tools.refused.dryRun.BUSY")).not.toBe(translate("en", "voiceCompanion.tools.refused.dryRun.BUSY"));
 });
@@ -261,6 +278,27 @@ test("a failed dry run reads its reason, and a stale digest rereads the record b
   expect(button(host, "remove")).not.toBeNull();
 });
 
+for (const locale of ["en", "uk"] as const) test(`a tool filter that matches nothing says so in a muted line (${locale})`, async () => {
+  const many = { ...catalog, tools: Array.from({ length: 8 }, (_, at) => ({ name: `tool_${at}`, description: `Fixture tool ${at}.`, inputSchema: { type: "object" } })) };
+  routes({ spotify: spotify({ missingSecrets: [], catalog: many, lastDryRun: { code: "OK", at: AT, digest: digestOf(500) } }) });
+  setLocale(locale);
+  try {
+    const host = await mount();
+    const field = host.querySelector<HTMLInputElement>("[data-voice-tool-filter]")!;
+    const filter = async (value: string) => {
+      const propsKey = Object.keys(field).find(key => key.startsWith("__reactProps$"))!;
+      await act(async () => (field as unknown as Record<string, { onChange(event: unknown): void }>)[propsKey]!.onChange({ target: { value } }));
+    };
+    expect(host.querySelector("[data-voice-tool-filter-none]")).toBeNull();
+    await filter("zzzz-no-such-tool");
+    expect(host.querySelectorAll("[data-voice-tool]")).toHaveLength(0);
+    expect(host.querySelector("[data-voice-tool-filter-none]")?.textContent).toBe(translate(locale, "settings.voice.toolFilterNone"));
+    await filter("tool_3");
+    expect(host.querySelector("[data-voice-tool-filter-none]")).toBeNull();
+    expect(host.querySelectorAll("[data-voice-tool]")).toHaveLength(1);
+  } finally { resetLocaleForTests(); localStorage.removeItem("llv_lang"); }
+});
+
 test("an HTTP server shows its URL, a literal header's value and a secret header's name, and the Ukrainian strings cover every visible line", async () => {
   routes({ remote: spotify({ title: "Remote", transport: { type: "http", url: "https://mcp.example.test/v1", headerNames: ["Authorization", "X-Workspace"], headerValues: { "X-Workspace": "studio-a" } },
     missingSecrets: [], secretRefs: ["remote-token"] }) });
@@ -268,8 +306,8 @@ test("an HTTP server shows its URL, a literal header's value and a secret header
   try {
     const host = await mount();
     const row = host.querySelector<HTMLElement>("[data-voice-tool-server='remote']")!;
-    expect(row.querySelector("[data-voice-tool-runs] code")?.textContent).toBe("https://mcp.example.test/v1");
-    expect(row.querySelector("[data-voice-tool-headers]")?.textContent).toBe("Заголовки: Authorization (секрет), X-Workspace=studio-a");
+    expect(row.querySelector("[data-voice-tool-runs] dd")?.textContent).toBe("https://mcp.example.test/v1");
+    expect(row.querySelector("[data-voice-tool-headers]")?.textContent).toBe("ЗаголовкиAuthorization (секрет), X-Workspace=studio-a");
     expect(row.textContent).toContain("Підключається до");
     expect(row.querySelector("[data-voice-tool-state]")?.textContent).toBe("Чекає на схвалення");
     expect(host.textContent).not.toMatch(/Waiting|Approve|Dry run|Secrets/u);
@@ -285,7 +323,7 @@ test("beside Run dry run, a stdio row explains filesystem containment in English
       const host = await mount();
       const row = host.querySelector<HTMLElement>("[data-voice-tool-server='spotify']")!;
       const hint = row.querySelector<HTMLElement>("[data-voice-tool-dry-run-hint]")!;
-      expect(hint.textContent).toBe(hints[locale]);
+      expect(hint.querySelector("dd")?.textContent).toBe(hints[locale]);
       expect(button(row, "dry-run")!.getAttribute("aria-describedby")).toBe(hint.id);
       expect(row.querySelector("[data-voice-tool-actions]")!.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       const remote = host.querySelector<HTMLElement>("[data-voice-tool-server='remote']")!;
@@ -349,6 +387,9 @@ test("unavailable stdio containment shows localized risk and only the explicit c
       const host = await mount();
       expect(host.querySelector("[data-voice-tool-uncontained]")?.textContent).toContain(translate(locale, "voiceCompanion.tools.uncontained.warning"));
       expect(host.querySelector("[data-voice-tool-platform]")?.textContent).toBe(translate(locale, "voiceCompanion.tools.containment.WINDOWS"));
+      /* The platform's reason reads once, in the dry run's own line. */
+      expect(host.querySelector("[data-voice-tool-platform]")?.closest("[data-voice-tool-dry-run]")).not.toBeNull();
+      expect(host.querySelector("[data-voice-tool-server]")!.textContent!.split(translate(locale, "voiceCompanion.tools.containment.WINDOWS")).length).toBe(2);
       expect(writes()).toEqual([]);
       await click(button(host, "confirm-uncontained"));
       expect(writes()).toEqual([{ action: "dry-run", name: "spotify", digest: digestOf(1), confirmUncontained: { reason: "WINDOWS", runId: digestOf(700) } }]);
@@ -360,4 +401,113 @@ test("unavailable stdio containment shows localized risk and only the explicit c
       resetLocaleForTests(); localStorage.removeItem("llv_lang");
     }
   }
+});
+
+/* A tool's page in the Settings window, opened from the section's row as a person opens it. */
+const SECTION_TITLE = translate("en", "voiceCompanion.settings.label");
+const title = () => document.querySelector("[data-settings-title]")?.textContent;
+const listed = () => [...document.querySelectorAll("[data-voice-tools-list] [data-voice-tool-server]")].map(row => row.getAttribute("data-voice-tool-server"));
+const closeWindow = async () => { await click(document.querySelector("[data-settings-close]")); };
+async function openWindow(sub?: { id: string; arg: string; title: string }) {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mounted = { root, host };
+  await act(async () => root.render(<SettingsWindowHost project={null} />));
+  await act(async () => openSettings("voice", sub));
+}
+async function openToolPage(name: string) {
+  await openWindow();
+  await act(async () => settle());
+  await click(document.querySelector(`[data-voice-tools-list] [data-voice-tool-server='${name}'] [data-settings-row='link']`));
+  expect(title()).toBe(spotify().title);
+}
+
+test("Remove on a tool's page returns to the section with the rest of the list, and the keyboard lands on that list", async () => {
+  routes({ spotify: spotify({ state: "disabled", missingSecrets: [] }), calendar: spotify({ title: "Calendar", state: "enabled", missingSecrets: [] }) });
+  await openToolPage("spotify");
+  await click(button(document.body, "remove"));
+  expect(writes()).toEqual([{ action: "remove", name: "spotify", digest: digestOf(1) }]);
+  expect(title()).toBe(SECTION_TITLE);
+  expect(document.querySelector("[data-settings-back]")).toBeNull();
+  expect(listed()).toEqual(["calendar"]);
+  expect(document.activeElement).toBe(document.querySelector("[data-voice-tools]"));
+  await closeWindow();
+});
+
+test("removing the last tool lands on the section's «No tools» line", async () => {
+  routes({ spotify: spotify({ state: "disabled", missingSecrets: [] }) });
+  await openToolPage("spotify");
+  await click(button(document.body, "remove"));
+  expect(title()).toBe(SECTION_TITLE);
+  expect(document.querySelector("[data-voice-tools-status]")?.textContent).toBe(translate("en", "voiceCompanion.tools.empty"));
+  expect(document.activeElement).toBe(document.querySelector("[data-voice-tools]"));
+  await closeWindow();
+});
+
+test("a tool removed elsewhere while its page is open returns there too once a press learns of it", async () => {
+  const { record } = routes({ spotify: spotify({ state: "enabled", missingSecrets: [] }), calendar: spotify({ title: "Calendar", state: "enabled", missingSecrets: [] }) });
+  await openToolPage("spotify");
+  delete record.servers.spotify;
+  await click(document.querySelector("[data-voice-tool-ask]"));
+  expect(title()).toBe(SECTION_TITLE);
+  expect(listed()).toEqual(["calendar"]);
+  await closeWindow();
+});
+
+test("a removal the route refuses stays on the page with its reason", async () => {
+  const { refuse } = routes({ spotify: spotify({ state: "disabled", missingSecrets: [] }) });
+  refuse.remove = "BUSY";
+  await openToolPage("spotify");
+  await click(button(document.body, "remove"));
+  expect(title()).toBe("Spotify");
+  expect(document.querySelector("[data-voice-tools-refused]")?.getAttribute("data-voice-tools-refused")).toBe("BUSY");
+  expect(button(document.body, "remove")).not.toBeNull();
+  await closeWindow();
+});
+
+test("a tool's page opened directly waits on its first read, then draws the tool or the section", async () => {
+  let answer: (response: Response) => void = () => {};
+  harness.setRoute(url => url.startsWith("/api/voice-tools") ? new Promise<Response>(resolve => { answer = resolve; }) : undefined);
+  await openWindow({ id: "tool", arg: "spotify", title: "Spotify" });
+  expect(title()).toBe("Spotify");
+  expect(document.querySelector("[data-settings-scroller]")?.textContent).toBe("");
+  await act(async () => answer(jsonResponse({ version: 1, revision: 1, servers: { spotify: spotify() } })));
+  await act(async () => settle());
+  expect(title()).toBe("Spotify");
+  expect(document.querySelector("[data-settings-scroller] [data-voice-tool-state]")?.textContent).toBe("Waiting for approval");
+  await closeWindow();
+  const current = mounted!; await act(async () => current.root.unmount()); current.host.remove(); mounted = null;
+
+  routes({ calendar: spotify({ title: "Calendar", state: "enabled", missingSecrets: [] }) });
+  await openWindow({ id: "tool", arg: "spotify", title: "Spotify" });
+  await act(async () => settle());
+  expect(title()).toBe(SECTION_TITLE);
+  expect(listed()).toEqual(["calendar"]);
+  await closeWindow();
+});
+
+test("a tool's page opened directly over a failed first read returns to the section's retry", async () => {
+  harness.setRoute(url => url.startsWith("/api/voice-tools") ? jsonResponse({ code: "REGISTRY_UNAVAILABLE" }, 409) : undefined);
+  await openWindow({ id: "tool", arg: "spotify", title: "Spotify" });
+  await act(async () => settle());
+  expect(title()).toBe(SECTION_TITLE);
+  expect(document.querySelector("[data-voice-tools-status]")?.textContent).toBe(translate("en", "voiceCompanion.tools.error"));
+  await closeWindow();
+});
+
+test("a pending tool whose dry run passed reads in its own words, and one that still lacks a secret keeps waiting", async () => {
+  const catalog = { digest: digestOf(9), fetchedAt: AT, tools: [{ name: "search" }] } as unknown as Server["catalog"];
+  const lastDryRun = { code: "OK", at: AT, digest: digestOf(8) } as unknown as Server["lastDryRun"];
+  routes({
+    waiting: spotify({ title: "Waiting", missingSecrets: [], secretRefs: [] }),
+    ready: spotify({ title: "Ready", catalog, lastDryRun, missingSecrets: [], secretRefs: [] }),
+    secret: spotify({ title: "Secret", catalog, lastDryRun }),
+  });
+  const host = await mount();
+  const word = (name: string) => host.querySelector(`[data-voice-tool-server='${name}'] [data-voice-tool-state]`)?.textContent;
+  expect(word("waiting")).toBe(translate("en", "voiceCompanion.tools.state.pending"));
+  expect(word("secret")).toBe(translate("en", "voiceCompanion.tools.state.pending"));
+  expect(word("ready")).toBe(translate("en", "voiceCompanion.tools.state.ready"));
+  expect(word("ready")).not.toBe(word("waiting"));
 });

@@ -90,27 +90,6 @@ function ports(overrides: Partial<QuietPorts> = {}): QuietPorts {
 
 const probe = (p: QuietPorts = ports(), at = Date.now()) => probeQuiet(snapshot, p, at, true);
 
-test.each(["known identity", "missing identity"])("proved standalone turn remains protected after fresh ports lose its transcript: %s", async (shape) => {
-  const now = Date.now(), path = transcript("open"), c = conversation(path), worker = spawn();
-  const identity = shape === "known identity" ? worker.identity : { ...worker.identity, startIdentity: null };
-  f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "live", host: tmuxHost(identity),
-    claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
-  await fallback();
-  expect((await probe(ports(), now)).quiet).toBe(false);
-  rmSync(path);
-  setAgentRegistryForTests(new AgentRegistry(join(f.dir, "registry.json"), undefined, undefined, { sqliteMode: "off" }));
-  const fresh = ports();
-  expect((await probe(fresh, now + 1)).quiet).toBe(false);
-  expect((await probe(fresh, now + FIVE_MINUTES + 2)).quiet).toBe(false);
-  expect((await probe(ports(), now + TWELVE_HOURS)).quiet).toBe(false);
-  writeFileSync(path, transcriptText("settled", new Date(now + TWELVE_HOURS + 1).toISOString()));
-  f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!, status: "idle" });
-  expect((await probe(ports(), now + TWELVE_HOURS + 2)).quiet).toBe(true);
-  rmSync(path);
-  await exit(worker);
-  expect((await probe(ports(), now + TWELVE_HOURS + 3)).quiet).toBe(true);
-});
-
 test("independent controller ordering: own event reaches the journal before its queued running publication during reconnect", async () => {
   const path = transcript("settled"), c = conversation(path), worker = spawn();
   const claim = claimHost(c.key, path, worker.identity, "idle");
@@ -201,35 +180,6 @@ test("a newly admitted native turn holds before its engine event and running pub
   expect((await probe(ports(), Date.now() + TWELVE_HOURS)).quiet).toBe(false);
   publish(c.id, c.key, path, claim.fence, "own-native-turn");
   event(c.id, c.key, "turn-ended", "own-native-turn");
-  expect((await probe()).quiet).toBe(true);
-});
-
-test("an answering standalone owner accepts work over an older completed transcript", async () => {
-  const now = Date.now(), path = transcript("settled", new Date(now - 60_000).toISOString()), c = conversation(path);
-  const child = Bun.spawn([process.execPath, "-e", "process.stdin.once('data', () => { process.stdout.write('WORK_ACCEPTED\\n'); setInterval(() => {}, 1000); });"],
-    { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-  children.push(child);
-  const identity = captureProcessIdentity(child.pid)!;
-  f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "live", host: tmuxHost(identity),
-    claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
-  child.stdin.write("new prompt\n");
-  child.stdin.flush();
-  const reader = child.stdout.getReader();
-  expect(new TextDecoder().decode((await reader.read()).value)).toContain("WORK_ACCEPTED");
-  reader.releaseLock();
-  await fallback();
-  expect(row(c.id)).toMatchObject({ host: "hosted", turn: "running", writerClaim: null });
-  for (const at of [now, now + TWELVE_HOURS]) expect((await probe(ports(), at)).quiet).toBe(false);
-  // A newer bookkeeping record cannot advance the older completion.
-  appendFileSync(path, JSON.stringify({ timestamp: new Date(now + 1_000).toISOString(), type: "session_meta", payload: { id: c.key.sessionId } }) + "\n");
-  expect((await probe()).quiet).toBe(false);
-  writeFileSync(path, transcriptText("settled", new Date(now + 2_000).toISOString()));
-  expect((await probe()).quiet).toBe(false);
-  f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!, status: "idle" });
-  expect((await probe()).quiet).toBe(true);
-  rmSync(path);
-  expect((await probe(ports())).quiet).toBe(false);
-  await exit({ child });
   expect((await probe()).quiet).toBe(true);
 });
 
@@ -456,11 +406,6 @@ async function differentKeySuccessor() {
   return { ...c, a, claimA, pathB, keyB };
 }
 
-function tmuxHost(identity: ProcessIdentity): NonNullable<AgentRegistryEntry["host"]> {
-  return { kind: "tmux", endpoint: "/tmp/fixture.sock", server: identity, paneId: "%1", panePid: identity,
-    windowName: "fixture", agent: identity, argv: ["codex"] };
-}
-
 describe("the successor-epoch case", () => {
   test("B idle with a settled tail is released at once while A's epoch-1 row still claims a turn", async () => {
     const s = await sameKeySuccessor();
@@ -632,107 +577,13 @@ describe("the successor-epoch case", () => {
   });
 });
 
-describe("the tmux successor", () => {
-  /** B recorded with a tmux host: as a tmux launch settles it under its own
-      key at claim epoch 0, or as the tmux observer's upsert records it under
-      A's key, keeping A's structured columns at epoch 1. */
-  async function tmuxSuccessor(under: "own key" | "A's key", status: "idle" | "live", bTail: "settled" | "open" | "unmarked" = "settled", at?: string) {
-    if (under === "own key") {
-      const s = await differentKeySuccessor();
-      const b = spawn();
-      writeFileSync(s.pathB, transcriptText(bTail, at, s.keyB.sessionId));
-      f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(s.keyB)]!, status, host: tmuxHost(b.identity), claimEpoch: 0 });
-      return { id: s.id, key: s.key, claimA: s.claimA, b, bKey: s.keyB };
-    }
-    const path = transcript(bTail, at);
-    const c = conversation(path);
-    const a = spawn();
-    const claimA = claimHost(c.key, path, a.identity, "live", "a-turn");
-    publish(c.id, c.key, path, claimA.fence, "a-turn");
-    release(c.key, claimA);
-    await exit(a);
-    const b = spawn();
-    const entry = f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!;
-    f.registry.upsert({ ...entry, status, host: tmuxHost(b.identity), structuredHost: entry.structuredHost });
-    expect(f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]).toMatchObject({ structuredHost: { writerClaimEpoch: 1 }, host: { kind: "tmux" } });
-    return { id: c.id, key: c.key, claimA, b, bKey: c.key };
-  }
-
-  for (const under of ["own key", "A's key"] as const) {
-    for (const status of ["idle", "live"] as const) {
-      test(`B under ${under} with status ${status}: A's late turn event cannot change B's custody`, async () => {
-        const t = await tmuxSuccessor(under, status);
-        const entry = f.registry.readOnlySnapshot().entries[sessionKeyId(t.bKey)]!;
-        writeFileSync(entry.artifactPath, transcriptText("settled", new Date(Date.parse(entry.updatedAt) + 1).toISOString()));
-        await fallback();
-        event(t.id, t.key, "turn-started", "a-late");
-        expect(row(t.id)).toMatchObject({ writerClaim: null, turn: "running" });
-        expect(await probe()).toMatchObject({ quiet: status === "idle", blockers: { turns: status === "idle" ? 0 : 1 } });
-        f.registry.upsert({ ...entry, status: "idle" });
-        expect((await probe()).quiet).toBe(true);
-      });
-    }
-    test(`B under ${under} with A's fence still on the row waits for its own idle settlement`, async () => {
-      const t = await tmuxSuccessor(under, "live");
-      const entry = f.registry.readOnlySnapshot().entries[sessionKeyId(t.bKey)]!;
-      writeFileSync(entry.artifactPath, transcriptText("settled", new Date(Date.parse(entry.updatedAt) + 1).toISOString()));
-      expect(row(t.id)).toMatchObject({ writerClaim: t.claimA.fence, turn: "running" });
-      expect((await probe()).quiet).toBe(false);
-      f.registry.upsert({ ...entry, status: "idle" });
-      expect(await probe()).toMatchObject({ quiet: true, blockers: { turns: 0 } });
-    });
-    test(`B under ${under} with an open tail holds as turn-open, with or without A's late event`, async () => {
-      const t = await tmuxSuccessor(under, "idle", "open");
-      await fallback();
-      expect(await probe()).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "turn-open" }] } });
-      event(t.id, t.key, "turn-started", "a-late");
-      expect(await probe()).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "turn-open" }] } });
-    });
-  }
-
-  test("a live tmux pane keeps ambiguous custody over a completion preceding its admission", async () => {
-    const path = transcript("settled");
-    const c = conversation(path);
-    const b = spawn();
-    f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "live", host: tmuxHost(b.identity),
-      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
-    await fallback();
-    expect(row(c.id)).toMatchObject({ host: "hosted", turn: "running", writerClaim: null });
-    for (const at of [Date.now(), Date.now() + TWELVE_HOURS]) expect(await probe(ports(), at)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
-    await exit(b);
-    expect((await probe()).quiet).toBe(true);
-  });
-
-  test("B's confirmed host with no turn marker holds until its own completion", async () => {
-    const now = Date.now();
-    const t = await tmuxSuccessor("own key", "idle", "unmarked", new Date(now).toISOString());
-    await fallback();
-    for (const at of [now, now + FIVE_MINUTES, now + TWELVE_HOURS]) {
-      expect(await probe(ports(), at)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolved: 0,
-        turnList: [{ conversationId: t.id, reason: "turn-unread" }] } });
-    }
-    writeFileSync(f.registry.readOnlySnapshot().entries[sessionKeyId(t.bKey)]!.artifactPath,
-      transcriptText("settled", new Date(now + TWELVE_HOURS).toISOString()));
-    expect(await probe(ports(), now + TWELVE_HOURS + 1)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
-  });
-
-  test("a handle this Viewer holds under B's key reporting a turn holds as host-turn", async () => {
-    const t = await tmuxSuccessor("own key", "idle");
-    await fallback();
-    const held = heldHost(t.b.child.pid, { status: "active", activeTurnRef: "b-turn" });
-    const p = ports({ owners: ownerCensusReader(productionLivenessSources, { readEvents: async (after) => f.journal.replay(after), readSession: (query) => f.client.readSession!(query),
-      heldHosts: () => new Map([[sessionKeyId(t.bKey), held.host]]) }) });
-    expect(await probe(p)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "host-turn" }] } });
-  });
-
-  test("control: B structured at epoch 1 under its own key, the copy and A's late event release B", async () => {
-    const s = await differentKeySuccessor();
-    const b = spawn();
-    claimHost(s.keyB, s.pathB, b.identity, "idle");
-    await fallback();
-    event(s.id, s.key, "turn-started", "a-late");
-    expect(await probe()).toMatchObject({ quiet: true, blockers: { turns: 0 } });
-  });
+test("B structured at epoch 1 under its own key: the copy and A's late event release B", async () => {
+  const s = await differentKeySuccessor();
+  const b = spawn();
+  claimHost(s.keyB, s.pathB, b.identity, "idle");
+  await fallback();
+  event(s.id, s.key, "turn-started", "a-late");
+  expect(await probe()).toMatchObject({ quiet: true, blockers: { turns: 0 } });
 });
 
 describe("the delayed predecessor write", () => {
@@ -1001,13 +852,13 @@ describe("R6b and the unknown bounds", () => {
    unreadable: only its own settled tail, its process exiting, or its pid
    naming another process ends it (R8). */
 describe("a proven turn whose evidence is lost", () => {
-  /** A standalone tmux owner over an open turn, held as turn-open. */
+  /** A live host with no writer claim over an open turn, held as turn-open. */
   async function standalone(now: number, observe = true) {
     const path = transcript("open", new Date(now).toISOString());
     const c = conversation(path);
     const b = spawn();
-    f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "live", host: tmuxHost(b.identity),
-      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
+    f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "live", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: columns(b.identity, 0) });
     await fallback();
     const p = ports();
     if (observe) expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ conversationId: c.id, reason: "turn-open" }] } });
@@ -1070,7 +921,7 @@ describe("a proven turn whose evidence is lost", () => {
     rmSync(s.path);
     expect(await probe(s.p, now + 1)).toMatchObject({ quiet: false, blockers: { turns: 1, turnList: [{ reason: "turn-open" }] } });
     const reused = { ...s.b.identity, startIdentity: `${s.b.identity.startIdentity}-reused` };
-    f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(s.key)]!, host: tmuxHost(reused) });
+    f.registry.upsert({ ...f.registry.readOnlySnapshot().entries[sessionKeyId(s.key)]!, structuredHost: columns(reused, 0) });
     expect(await probe(s.p, now + 2)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
   });
 
@@ -1079,8 +930,8 @@ describe("a proven turn whose evidence is lost", () => {
     const path = transcript("unmarked", at(now));
     const c = conversation(path);
     const b = spawn();
-    f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "starting", host: tmuxHost({ ...b.identity, startIdentity: null }),
-      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
+    f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "starting", host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: columns({ ...b.identity, startIdentity: null }, 0) });
     await fallback();
     const p = ports();
     expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { turns: 1, unresolvedBlocking: 0, turnList: [{ reason: "turn-unread" }] } });
@@ -1095,7 +946,7 @@ describe("a proven turn whose evidence is lost", () => {
    that names no writer, and must leave the owner's verdict as it was. */
 describe("independence (R12)", () => {
   type Target = { id: string; key: Key; path: string; fence: string | null; process: ReturnType<typeof spawn>; previous: Key | null };
-  type Fixture = "structured at epoch 1" | "tmux under its own key" | "tmux under its predecessor's key";
+  type Fixture = "structured at epoch 1";
   type State = "settled" | "open" | "gone";
 
   async function target(kind: Fixture, state: State): Promise<Target> {
@@ -1103,20 +954,7 @@ describe("independence (R12)", () => {
     const c = conversation(path);
     const process = spawn();
     let fence: string | null = null;
-    if (kind === "structured at epoch 1") {
-      fence = claimHost(c.key, path, process.identity, "idle").fence;
-    } else if (kind === "tmux under its own key") {
-      f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "live", host: tmuxHost(process.identity),
-        claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
-    } else {
-      const a = spawn();
-      const claimA = claimHost(c.key, path, a.identity, "live", "a-turn");
-      publish(c.id, c.key, path, claimA.fence, "a-turn");
-      release(c.key, claimA);
-      await exit(a);
-      const entry = f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!;
-      f.registry.upsert({ ...entry, status: "live", host: tmuxHost(process.identity), structuredHost: entry.structuredHost });
-    }
+    if (kind === "structured at epoch 1") fence = claimHost(c.key, path, process.identity, "idle").fence;
     if (state === "gone") await exit(process);
     return { ...c, fence, process, previous: null };
   }
@@ -1213,10 +1051,9 @@ describe("independence (R12)", () => {
     else f.journal.executeOperation({ kind: "interrupt", operationId: `op-interrupt-${randomUUID()}`, idempotencyKey: randomUUID(), conversationId: t.id, turnId: null });
   }
 
-  for (const kind of ["structured at epoch 1", "tmux under its own key", "tmux under its predecessor's key"] as const) {
+  for (const kind of ["structured at epoch 1"] as const) {
     for (const state of ["settled", "open", "gone"] as const) {
       for (const perturbation of perturbations) {
-        if (perturbation.writer && kind !== "structured at epoch 1") continue;
         test(`${kind}, ${state}: ${perturbation.name}`, async () => {
           const t = await target(kind, state);
           await perturbation.base?.(t);
@@ -1649,21 +1486,21 @@ describe("each owner's evidence beside another record", () => {
     }
   });
 
-  test("an entry that records a receipt's launched process keeps that receipt's conversation custody (R1, R10)", async () => {
+  test("an entry that records a stored receipt's launched process keeps that receipt's conversation custody (R1, R10)", async () => {
     const path = transcript("settled");
     const host = spawn();
-    const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.dir, transport: "tmux", accountId: "fixture" });
+    const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.dir, transport: "structured", accountId: "fixture" });
     if (begun.kind !== "created") throw new Error("fixture launch receipt unavailable");
-    const launchId = begun.receipt.launchId, evidence = tmuxHost(host.identity);
-    f.registry.bindSpawnPane(launchId, { endpoint: evidence.endpoint, server: evidence.server, paneId: evidence.paneId, panePid: evidence.panePid, target: evidence.paneId });
-    f.registry.markSpawnHostVerified(launchId, evidence);
+    const launchId = begun.receipt.launchId;
     const key = { engine: "codex" as const, sessionId: randomUUID() };
-    const entry = { key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "idle" as const, host: evidence,
-      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null };
+    const entry = { key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "idle" as const, host: null,
+      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: columns(host.identity, 0) };
     expect(f.registry.settleSpawn(launchId, entry).kind).toBe("settled");
-    // The receipt as it stands before its conversation row and its entry are written.
+    // The receipt as an older release stored it: it names the process it launched,
+    // and its conversation row and its entry are not written yet.
     const disk = f.registry.snapshot(), receipt = disk.receipts[launchId]!;
-    expect(receipt).toMatchObject({ state: "completed", verifiedHost: { agent: host.identity } });
+    Object.assign(receipt, { verifiedHost: { kind: "tmux", endpoint: "fixture", server: host.identity, paneId: "%1",
+      panePid: host.identity, windowName: "fixture", agent: host.identity, argv: ["codex"] } });
     delete disk.conversations[receipt.conversationId];
     delete disk.entries[sessionKeyId(key)];
     writeFileSync(f.registry.filename, JSON.stringify(disk));
@@ -1672,46 +1509,13 @@ describe("each owner's evidence beside another record", () => {
     const p = noHandles({ pipelines }), now = Date.now();
     expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
     f.registry.upsert(entry);
-    expect(f.registry.readOnlySnapshot()).toMatchObject({ entries: { [sessionKeyId(key)]: { host: { agent: host.identity } } } });
+    expect(f.registry.readOnlySnapshot()).toMatchObject({ entries: { [sessionKeyId(key)]: { structuredHost: { process: host.identity } } } });
     expect(f.registry.readOnlySnapshot().conversations[receipt.conversationId]).toBeUndefined();
     expect(await probe(p, now)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
     expect(await probe(p, now + TWELVE_HOURS)).toMatchObject({ quiet: false, blockers: { stages: 1 } });
     await exit(host);
     // With the process gone the stage's settled transcript holds it for the bound only.
     expect(await probe(p, now + TWELVE_HOURS + FIVE_MINUTES)).toMatchObject({ quiet: true, blockers: { stages: 0 } });
-  });
-
-  test("an entry that records a receipt's agent beside another pane leaves the receipt's live pane its own owner (R1, R2, R10)", async () => {
-    const path = transcript("open");
-    const agent = spawn(), pane = spawn(), otherPane = spawn();
-    await exit(agent);
-    await exit(otherPane);
-    const begun = beginLegacySpawnFixture(f.registry, { engine: "codex", cwd: f.dir, transport: "tmux", accountId: "fixture" });
-    if (begun.kind !== "created") throw new Error("fixture launch receipt unavailable");
-    const launchId = begun.receipt.launchId, evidence = { ...tmuxHost(agent.identity), panePid: pane.identity };
-    f.registry.bindSpawnPane(launchId, { endpoint: evidence.endpoint, server: evidence.server, paneId: evidence.paneId, panePid: evidence.panePid, target: evidence.paneId });
-    f.registry.markSpawnHostVerified(launchId, evidence);
-    const key = { engine: "codex" as const, sessionId: randomUUID() };
-    const entry = { key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "idle" as const, host: evidence,
-      claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null };
-    expect(f.registry.settleSpawn(launchId, entry).kind).toBe("settled");
-    const disk = f.registry.snapshot(), receipt = disk.receipts[launchId]!;
-    expect(receipt).toMatchObject({ state: "completed", verifiedHost: { agent: agent.identity }, pane: { panePid: pane.identity } });
-    delete disk.conversations[receipt.conversationId];
-    delete disk.entries[sessionKeyId(key)];
-    writeFileSync(f.registry.filename, JSON.stringify(disk));
-    const pipelines = () => [{ id: "lane_pane", task: "Finish the work", state: "running", cursor: { stageId: "stage", state: "running" },
-      runs: [{ stageId: "stage", attempts: [{ n: 1, conversationId: receipt.conversationId }] }] }] as unknown as ReturnType<QuietPorts["pipelines"]>;
-    const p = noHandles({ pipelines }), now = Date.now();
-    const held = { quiet: false, blockers: { turns: 1, stages: 1, turnList: [{ reason: "turn-open" }] } };
-    expect(await probe(p, now)).toMatchObject(held);
-    // The entry records the same agent, gone, beside a pane of its own, gone too.
-    f.registry.upsert({ ...entry, host: { ...evidence, panePid: otherPane.identity } });
-    expect(f.registry.readOnlySnapshot().entries[sessionKeyId(key)]).toMatchObject({ host: { agent: agent.identity, panePid: otherPane.identity } });
-    expect(await probe(p, now)).toMatchObject(held);
-    expect(await probe(p, now + TWELVE_HOURS)).toMatchObject(held);
-    await exit(pane);
-    expect(await probe(p, now)).toMatchObject({ quiet: true, blockers: { turns: 0, stages: 0 } });
   });
 
   test("a round an entry records keeps the round's conversation custody past the unresolved bound (R1, R10)", async () => {
@@ -1827,82 +1631,6 @@ describe("each owner's evidence beside another record", () => {
       expect(await probe(p)).toMatchObject({ quiet: true, blockers: { turns: 0 } });
     });
   });
-});
-
-// The three retained review reproductions, through the production drain seam.
-test("safety comparison: an accepted second standalone prompt keeps custody after the first completion", async () => {
-  const path = transcript("settled", new Date(Date.now() - 60_000).toISOString()), c = conversation(path);
-  const child = Bun.spawn([process.execPath, "-e",
-    "process.stdin.on('data', () => process.stdout.write('WORK_ACCEPTED\\n')); setInterval(() => {}, 1000);"],
-  { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-  children.push(child);
-  const identity = captureProcessIdentity(child.pid)!;
-  f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "live",
-    host: tmuxHost(identity), claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
-  const reader = child.stdout.getReader();
-  const accept = async (text: string) => {
-    child.stdin.write(`${text}\n`);
-    child.stdin.flush();
-    expect(new TextDecoder().decode((await reader.read()).value)).toContain("WORK_ACCEPTED");
-  };
-  await accept("first prompt");
-  const entry = f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!;
-  writeFileSync(path, transcriptText("settled", new Date(Date.parse(entry.updatedAt) + 1).toISOString()));
-  const warm = ports();
-  await probe(warm);
-  await accept("second prompt");
-  await fallback();
-  expect(f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!.updatedAt).toBe(entry.updatedAt);
-  expect(row(c.id)).toMatchObject({ host: "hosted", turn: "running" });
-  for (const p of [warm, ports()]) expect(await probe(p)).toMatchObject({ quiet: false, blockers: { turns: 1 } });
-  // Its own idle settlement ends the ambiguity while the process still lives.
-  writeFileSync(path, transcriptText("settled", new Date(Date.parse(entry.updatedAt) + 2).toISOString()));
-  f.registry.upsert({ ...entry, status: "idle" });
-  expect((await probe(warm)).quiet).toBe(true);
-  f.registry.upsert({ ...entry, status: "live" });
-  expect((await probe(warm)).quiet).toBe(false);
-  await exit({ child });
-  expect((await probe(warm)).quiet).toBe(true);
-});
-
-test("safety comparison: live standalone tmux owner accepts a new turn over an older completed tail", async () => {
-  const path = transcript("settled", new Date(Date.now() - 60_000).toISOString());
-  const c = conversation(path);
-  const child = Bun.spawn([process.execPath, "-e",
-    "process.stdin.once('data', () => { process.stdout.write('WORK_ACCEPTED\\n'); setInterval(() => {}, 1000); });"],
-  { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-  children.push(child);
-  const identity = captureProcessIdentity(child.pid)!;
-  expect(identity).not.toBeNull();
-  f.registry.upsert({ key: c.key, artifactPath: path, cwd: f.dir, accountId: "fixture", status: "live",
-    host: { ...tmuxHost(identity), endpoint: join(f.dir, "fixture.sock") },
-    claimEpoch: 0, claimOwner: null, pendingAction: null, structuredHost: null });
-  child.stdin.write("new prompt\n");
-  child.stdin.flush();
-  const response = await child.stdout.getReader().read();
-  expect(new TextDecoder().decode(response.value)).toContain("WORK_ACCEPTED");
-  await fallback();
-  expect(row(c.id)).toMatchObject({ host: "hosted", turn: "running", hostKind: "tmux-legacy" });
-  expect(productionLivenessSources().probe.pidAlive(child.pid)).toBe(true);
-  expect(await probe()).toMatchObject({ quiet: false, blockers: { turns: 1 } });
-  const admission = Date.parse(f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!.updatedAt);
-  // Fresh output after an old completion supplies no settlement for new work.
-  appendFileSync(path, JSON.stringify({ timestamp: new Date(admission + 1).toISOString(),
-    type: "response_item", payload: { type: "reasoning", summary: [] } }) + "\n");
-  expect(await probe()).toMatchObject({ quiet: false, blockers: { turns: 1 } });
-  // A newer marker still cannot distinguish an accepted unjournaled prompt.
-  appendFileSync(path, JSON.stringify({ timestamp: new Date(admission + 2).toISOString(),
-    type: "event_msg", payload: { type: "task_complete" } }) + "\n");
-  expect((await probe()).quiet).toBe(false);
-  const entry = f.registry.readOnlySnapshot().entries[sessionKeyId(c.key)]!;
-  f.registry.upsert({ ...entry, status: "idle" });
-  expect((await probe()).quiet).toBe(true);
-  // A new admission restores custody while the process still answers.
-  f.registry.upsert({ ...entry, status: "live" });
-  writeFileSync(path, transcriptText("settled", new Date(admission - 1).toISOString()));
-  expect((await probe()).quiet).toBe(false);
-  await exit({ child });
-  expect((await probe()).quiet).toBe(true);
 });
 
 test.each(["minimal", "production"])("safety comparison: compacted deciding start holds under %s retention", async (retention) => {

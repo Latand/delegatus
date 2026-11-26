@@ -200,7 +200,7 @@ for (const change of recoveryChanges) {
       messages.push(message);
       const result = await deliverConversationMessage(message, {
         recover: request => recoverDeadStructuredConversation(request, {
-          registry: fixture.registry, client, transport: () => "structured", park: () => null,
+          registry: fixture.registry, client, transportAvailable: () => true, park: () => null,
           resolveAccount: () => ({ engine: "claude", accountId: "default", kind: "legacy",
             home: fixture.dir, transcriptRoot: fixture.dir, env: { NODE_ENV: "test" } }),
           spawn: async input => {

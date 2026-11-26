@@ -126,7 +126,7 @@ export async function runAsksSweepOnce(): Promise<void> {
       void announceAsk();
     },
   }, sent);
-  if (result.unreadable) console.error("[asks you] operator-asks.json cannot be read; nothing is sent until it reads again");
+  if (result.unreadable) console.error("[asks you] the asks store cannot be read; nothing is sent until it reads again");
 }
 
 const host = globalThis as typeof globalThis & { __llvAsksSweepTimer?: ReturnType<typeof setTimeout> };

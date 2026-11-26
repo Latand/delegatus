@@ -133,7 +133,7 @@ function hostList(ids: readonly string[], hosts: readonly HostReport[], t: TFunc
   return ids.map((id) => hostName(id, hosts, t)).join(", ");
 }
 
-const ENGINE_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", copilot: "Copilot" };
+const ENGINE_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex", copilot: "Copilot", antigravity: "Antigravity" };
 
 /* ------------------------------------------------------------------------ */
 /* Small pieces                                                             */

@@ -312,3 +312,85 @@ test("a scoped host that disappears during memory measurement reconciles without
   expect(result.remaining).toHaveLength(3);
   expect(result.historyIntact).toBe(true);
 });
+
+test("scope retirement reconciles a settled curator released by the runtime through restart", async () => {
+  const directory = root();
+  const first = await sweep(directory, "scope-curator-release");
+  expect(first.terminationErrors).toEqual(["scope retirement target changed: verdict host-idle-or-dead: the host status is unhosted"]);
+  expect(first.attempted).toEqual([session(1)]);
+  expect(first.curation).toMatchObject({ state: "succeeded", failure: null, finalText: "Curation completed" });
+  expect(first.report.failed).toEqual([]);
+  expect(first.report.retired).toMatchObject([{ key: `codex:${session(1)}`, via: "runtime" }]);
+  expect(first.report.gone).toEqual([]);
+  expect(first.scopeReads).toEqual(["delegatus-agent-fixture-1.scope"]);
+  expect(first.remaining).toEqual([]);
+  expect(first.historyIntact).toBe(true);
+  expect(first.signals).toEqual([]);
+  const second = await sweep(directory, "scope-curator-release");
+  expect(second.report.evaluated).toBe(0);
+  expect(second.report.retired).toEqual([]);
+  expect(second.curation).toEqual(first.curation);
+  expect(second.attempted).toEqual([]);
+  expect(second.signals).toEqual([]);
+});
+
+test("scope retirement refuses changed custody after the original curator exits", async () => {
+  const result = await sweep(root(), "scope-curator-release-replaced");
+  expect(result.terminationErrors).toEqual(["scope retirement target changed: process identity"]);
+  expect(result.report.retired).toMatchObject([{ key: `codex:${session(1)}`, via: "runtime" }]);
+  expect(result.report.failed).toEqual([]);
+  expect(result.report.refused).toMatchObject([{ clause: "process-identity", changed: true }]);
+  expect(result.report.gone).toEqual([]);
+  expect(result.remainingRows).toEqual([{ key: `codex:${session(1)}`, claimEpoch: 2, pid: 2_000_001_000 }]);
+  expect(result.historyIntact).toBe(true);
+  expect(result.signals).toEqual([]);
+});
+
+for (const [scenario, reason] of [
+  ["loaded", "agent scope is still loaded or its boot identity differs"],
+  ["unreadable", "fixture scope read failed"],
+  ["live", "scope retirement target changed: verdict host-idle-or-dead: the host status is unhosted"],
+]) test(`scope retirement retains ${scenario} custody and its real cleanup failure`, async () => {
+  const result = await sweep(root(), `scope-curator-release-${scenario}`);
+  expect(result.terminationErrors).toEqual(["scope retirement target changed: verdict host-idle-or-dead: the host status is unhosted"]);
+  expect(result.report.failed).toMatchObject([{ error: scenario === "live" ? reason : `host already exited; cleanup failed: ${reason}` }]);
+  expect(result.report.gone).toEqual([]);
+  expect(result.remaining).toEqual([`codex:${session(1)}`]);
+  expect(result.signals).toMatchObject([{ id: "host-retirement", actionable: true }]);
+  expect(result.curation).toMatchObject({ state: "succeeded", failure: null });
+});
+
+for (const [field, condition] of [["claim", "claimEpoch"], ["owner", "claimOwner"], ["writer", "writerClaimEpoch"]]) {
+  test(`scope retirement rechecks ${field} custody after awaiting scope collection`, async () => {
+    const result = await sweep(root(), `scope-curator-release-read-${field}`);
+    expect(result.report.retired).toMatchObject([{ key: `codex:${session(1)}`, via: "runtime" }]);
+    expect(result.report.failed).toEqual([]);
+    expect(result.report.refused).toMatchObject([{ clause: "process-identity", changed: true, reason: `scope retirement target changed: ${condition}` }]);
+    expect(result.report.gone).toEqual([]);
+    expect(result.remaining).toEqual([`codex:${session(1)}`]);
+    expect(result.historyIntact).toBe(true);
+  });
+}
+
+for (const [field, reason] of [
+  ["boot", "scope boot identity changed during reconciliation"],
+  ["publication", "retirement publication is no longer ready"],
+]) test(`scope retirement rechecks ${field} after awaiting scope collection`, async () => {
+  const result = await sweep(root(), `scope-curator-release-read-${field}`);
+  expect(result.report.failed).toMatchObject([{ error: `host already exited; cleanup failed: ${reason}` }]);
+  expect(result.report.gone).toEqual([]);
+  expect(result.remaining).toEqual([`codex:${session(1)}`]);
+  expect(result.signals).toMatchObject([{ id: "host-retirement", actionable: true }]);
+});
+
+
+test("scope retirement keeps a surviving descendant and never reconciles a partial termination", async () => {
+  const result = await sweep(root(), "scope-curator-release-descendant");
+  expect(result.terminationErrors).toEqual(["scope retirement target changed: verdict host-idle-or-dead: the host status is unhosted"]);
+  expect(result.report.failed).toMatchObject([{ error: "host already exited; cleanup failed: scope retirement target changed: verdict host-idle-or-dead: the host status is unhosted", remaining: [2_000_000_002] }]);
+  expect(result.report.retired).toEqual([]);
+  expect(result.scopeReads).toEqual([]);
+  expect(result.report.gone).toEqual([]);
+  expect(result.remaining).toEqual([`codex:${session(1)}`]);
+  expect(result.signals).toMatchObject([{ id: "host-retirement", actionable: true }]);
+});

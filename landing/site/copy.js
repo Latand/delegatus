@@ -32,7 +32,10 @@
 
   const delegatusSteps = [
     "3. Install the CLI: `bun add -g delegatus-cli`",
-    "4. Start it in the background so it keeps running after this session:",
+    "4. Ask me whether Delegatus should start by itself whenever I log in.",
+    "   If yes, run `~/.bun/bin/delegatus service install`; it starts Delegatus now",
+    "   and at every login and prints how to remove it. If I say no, or the command",
+    "   refuses, start it in the background so it keeps running after this session:",
     "   `mkdir -p ~/.cache/delegatus && nohup ~/.bun/bin/delegatus --no-open > ~/.cache/delegatus/server.log 2>&1 &`",
     "   Wait up to 60 seconds for http://127.0.0.1:8898/ to answer. If it does",
     "   not, show me the last 30 lines of that log.",

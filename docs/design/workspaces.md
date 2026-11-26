@@ -986,6 +986,49 @@ conversations fall back to their latest recorded message author. Owner
 conversations and installation-owned seats without a member binding retain
 their existing reach.
 
+A project's current seat states its own reach, and resolution ends at it. The
+manager authority resolver validates its project, generation, epoch and absence
+of conflicting designations before its persisted designation decides its call permissions independently of human message authors
+and earlier refusals. A member-bound seat retains its workspace restriction;
+an installation-owned seat retains installation authority. Explicit member
+launch bindings remain restrictive even if the conversation becomes a seat.
+Rotations carry the designation's reach. A legacy binding inherited from a
+message remains restrictive while the conversation is the active seat; an
+authorized redesignation or rotation can change that binding. The handover
+parent carries no additional authority. This stable override applies only to
+calls by the seat itself. Existing workers and deeper descendants keep their
+ordinary ancestry, latest-author, project and account restrictions.
+
+An inherited message binding (`workspaceFromMessage`) retains its existing
+Telegram grant while its member still holds the project. Workers and seats
+explicitly designated for a member acquire no such grant. The grant adds no
+chat scoping: it covers the chats the agent route serves. Once a conversation
+leaves the seat map, its launch marker (`workspace.fromMessage`) restores
+ordinary message-authority resolution. Ordinary conversations continue to use
+their launch binding or latest admitted member, including revocation checks.
+
+`publish_prototype_review` and `read_prototype_review` also pass through their
+HTTP workspace fence. Taskless form routes resolve their project from the
+authenticated current seat. A current seat's exact keyed replay reads its
+settled receipt for that caller, project and task before workspace admission,
+including after a restart. An omitted task uses the same pipeline-stage task inference as the
+HTTP scope handler, including when that stage conversation is also a seat.
+Changed arguments conflict; a different caller or a seat in another project
+cannot read that receipt. The HTTP scope supplies the verified project when
+the receipt is written; replay rechecks the current seat project after reading
+it. The actual HTTP read or publication also checks the admitted caller,
+project and task before accessing its target, so a change between scope
+resolution and dispatch cannot put another target's result in that receipt.
+Legacy receipts without a proven project require ordinary HTTP admission.
+A scope response that omits its project is refused before a receipt is stored.
+Pending or retryable publications still use normal recovery and
+admission. New calls retain all workspace checks. MCP and HTTP workspace
+refusals name the failed check without exposing target identities.
+
+A record's agent author carries the sender's project as a label; the result
+scan does not read it as a project key, and the answer withholds an author from
+outside the caller's reach.
+
 Authority resolution shares one lazy seat map across the parent chain. The
 process retains one map for the seats file's path and filesystem identity;
 unchanged files are never reparsed by repeated calls. Each resolution checks

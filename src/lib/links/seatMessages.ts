@@ -58,16 +58,35 @@ function refuse(code: string, message: string): never { throw new SeatMessageRef
 export function seatMessageTextValid(text: string): boolean { return text.length <= 8_000 && !!text.trim() && !/<!--\s*llv:|\[bridge\b/i.test(text); }
 
 /** Resolve and refuse before binding a logical MCP request. `null` is local. */
-export function resolveSeatMessageMachine(machine: string, project: string): LinkedPeer | null {
+export function resolveSeatMessageMachine(machine: string, project: string, options: { exactInstallOnly?: boolean } = {}): LinkedPeer | null {
   const context = linkedContext();
   const wanted = machine.trim().toLowerCase();
-  if (wanted === "here" || wanted === "this machine" || wanted === context.self?.id || wanted === readSelf()?.label.toLowerCase()) return null;
-  const matches = context.links.filter(link => wanted === link.label.toLowerCase() || wanted === link.install || wanted === link.prefix);
-  if (matches.length > 1) refuse("machine_ambiguous", `The machine matches several links: ${matches.map(link => link.label).join(", ")}.`);
+  if (wanted === "here") return null;
+  // A revoked installation ID remains reserved even when another peer has
+  // since adopted that value as its display label.
+  if (UUID.test(wanted) && peerRows().some(peer => peer.state === "revoked" && (peer.id === wanted || peer.install === wanted))) {
+    refuse("link_revoked", `${machine} is no longer linked to this machine.`);
+  }
+  // Full install IDs disambiguate labels and prefixes.
+  const exact = context.links.filter(link => wanted === link.install);
+  // Fresh selectors may be UUID-shaped labels. A previously bound remote
+  // target opts into exact identity so a vanished install cannot resolve to a
+  // different peer whose label happens to equal that install ID.
+  const byName = exact.length === 0 && !options.exactInstallOnly;
+  const matches = byName ? context.links.filter(link => wanted === link.label.trim().toLowerCase() || wanted === link.prefix) : exact;
+  const self = context.self;
+  const selfLabel = readSelf()?.label.trim().toLowerCase();
+  const local = byName && (wanted === "this machine" || wanted === selfLabel || wanted === self?.id);
   if (!matches.length) {
-    const revoked = peerRows().some(peer => peer.state === "revoked" && [peer.id, peer.install, peer.install.slice(0, 8), peer.label.toLowerCase()].includes(wanted));
+    if (local) return null;
+    const revoked = peerRows().some(peer => peer.state === "revoked" && [peer.id, peer.install, peer.install.slice(0, 8), peer.label.trim().toLowerCase()].includes(wanted));
     const previous = wasSeatLinkRevoked(wanted) || rows().some(row => row.link === wanted || row.link.slice(0, 8) === wanted);
     refuse(revoked || previous ? "link_revoked" : "machine_unknown", `${machine} is ${revoked || previous ? "no longer linked" : "not linked"} to this machine.`);
+  }
+  if (local || matches.length > 1) {
+    const installs = matches.map(link => `${link.label} (${link.install})`);
+    if (local && context.self) installs.unshift(`this machine (${context.self.id})`);
+    refuse("machine_ambiguous", `The machine name is ambiguous. Choose an installation by its full ID (${installs.join(", ")}).`);
   }
   const link = matches[0]!;
   if (!link.projects.has(canonicalProject(project))) refuse("project_not_linked", `The project is not shared with ${link.label}; both machines must share it.`);
@@ -75,6 +94,19 @@ export function resolveSeatMessageMachine(machine: string, project: string): Lin
   if (health?.state === "failing" || (link.side === "grant" && Date.now() - (health?.lastCall ?? 0) > 900_000)) refuse("peer_unreachable", `${link.label} has not been reachable recently.`);
   if (!peerSeatMessages(link.key)) refuse("peer_cannot_relay", `${link.label} runs a Delegatus without seat messages; update it.`);
   return link;
+}
+
+/** Return a linked-seat address that resolves back to this exact installation. */
+export function seatMessageMachineAddress(link: LinkedPeer): string {
+  const context = linkedContext();
+  const label = link.label.trim().toLowerCase();
+  const selfLabel = readSelf()?.label.trim().toLowerCase();
+  const collidesWithSelector = label === "here" || label === "this machine" || label === selfLabel || label === context.self?.id;
+  const collidesWithLink = context.links.some(candidate => candidate.install !== link.install && (
+    label === candidate.label.trim().toLowerCase() || label === candidate.install || label === candidate.prefix
+  ));
+  // Labels shaped like an install ID are reserved for exact identity routing.
+  return collidesWithSelector || collidesWithLink || UUID.test(label) ? link.install : link.label;
 }
 
 export function queueSeatMessage(link: LinkedPeer, project: string, text: string, seatConversationId: string, clientMessageId: string, admissionFence?: string) {

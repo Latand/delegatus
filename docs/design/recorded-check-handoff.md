@@ -214,9 +214,10 @@ A fresh independent exact-head review follows implementation/fixes within the al
 
 ## Reporting after a broken recording
 
-Finish direct isolated verification before reporting the stage. A broken receipt
-with zero visited and completed files can be excluded when its producer close
-proof confirms cleanup and every recorded producer is confirmed gone. The
+Finish direct isolated verification before reporting the stage. A refused-admission
+receipt, or a broken receipt with zero visited and completed files, can be excluded
+when its producer close proof confirms cleanup and every recorded producer is
+confirmed gone; the exclusion reason retains visited, completed and failed counts. The
 recorder's verified not-started proof also qualifies once its owners are gone.
 Absent close proof, live processes and unverified identities keep blocking
 pass. A fail report, including a blocked fail, remains available with unknown

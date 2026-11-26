@@ -159,7 +159,7 @@ const ports: PipelinePorts = {
   runtimeSwitchControl: async () => {}, runtimeSwitchOutcome: async () => ({ state: "pending" }),
   runtimeSwitchKilled: async () => false, runtimeSwitchDelivery: async () => ({ state: "pending" }),
   retireRuntimeSwitch: async () => null, cancelRuntimeSwitch: async () => {},
-  deputySeatFor: () => null, createFlow: async () => deny("createFlow"),
+  deputySeatFor: () => null,
 };
 const observations = [];
 console.log("PREPARED", new Date().toISOString());
@@ -200,7 +200,7 @@ for (let round = 0; round < 3; round++) {
         pending = candidate ? candidate.tickPipelinesController(files, ports) : tickPipelines(files, ports);
         return pending as Promise<{ changed: boolean }>;
       },
-      tickFlows: async () => ({ changed: false }), scan: async () => ({ files: [], complete: false }),
+      scan: async () => ({ files: [], complete: false }),
       now: () => 0, log: () => {},
       publishHeartbeat: heartbeat => { phaseEvidence.push({ phase: heartbeat.phase, state: heartbeat.state, ageMs: heartbeat.ageMs }); },
     }, { maxPasses: 1 });

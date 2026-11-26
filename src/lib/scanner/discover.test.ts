@@ -1,4 +1,5 @@
 import { closeAgentRegistryForTests } from "../agent/registry";
+import { injectStateWriteFaultForTests } from "../state/sqliteStateStore";
 import { appendFile, mkdtemp, mkdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import fs, { existsSync } from "node:fs";
 import os from "node:os";
@@ -14,9 +15,21 @@ import { conversationCatalogSnapshot } from "./conversationCatalog";
 import { discoverFiles, discoverFilesWithProjectCatalog, type RawEntry } from "./discover";
 import { projectForCwd } from "./describe";
 import { projectCatalogSnapshotFromRaw } from "./projectCatalog";
+import { projectCatalogDocumentForTests } from "./projectCatalogStore";
 import { PROJECT_RESOLUTION_VERSION, projectResolutionStateKey } from "./projectState";
 import { FILE_CAP, openclawSessionRoots } from "./roots";
 import { DEFAULT_SCHEME_CARDS_PER_PROJECT } from "./schemeWindow";
+
+/** The stored catalog in the legacy file's shape, or null before a scan wrote one. */
+function storedCatalog(stateDir = process.env.LLV_STATE_DIR!) {
+  return projectCatalogDocumentForTests(path.join(stateDir, "project-catalog.json"));
+}
+
+/** The stored catalog as text, to compare one state with a later one or to
+    write it back as a legacy file, which the next read imports. */
+function storedCatalogText(stateDir = process.env.LLV_STATE_DIR!): string {
+  return JSON.stringify(storedCatalog(stateDir));
+}
 
 async function writeFixture(pathname: string, content: string, mtimeSeconds: number): Promise<void> {
   await mkdir(path.dirname(pathname), { recursive: true });
@@ -71,10 +84,11 @@ test("pure project-catalog discovery leaves the state directory unchanged", asyn
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     await discoverFilesWithProjectCatalog(roots, undefined, { persist: false });
-    expect(existsSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"))).toBe(false);
+    expect((storedCatalog() !== null)).toBe(false);
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
@@ -94,6 +108,7 @@ test("request refreshes persist the per-file scanner index", async () => {
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["codex-sessions"], "indexed.jsonl");
@@ -101,7 +116,7 @@ test("request refreshes persist the per-file scanner index", async () => {
 
     await discoverFilesWithProjectCatalog(roots, undefined, { persist: false, persistIndex: true });
 
-    const persisted = JSON.parse(await readFile(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), "utf8"));
+    const persisted = storedCatalog()!;
     expect(Object.keys(persisted.files)).toEqual([transcript]);
     expect(persisted.files[transcript]).toMatchObject({
       size: (await stat(transcript)).size,
@@ -127,6 +142,7 @@ test("a poisoned durable alias source defers only itself in the persist scan", a
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     await mkdir(process.env.LLV_STATE_DIR, { recursive: true });
@@ -153,7 +169,7 @@ test("a poisoned durable alias source defers only itself in the persist scan", a
 
     const aliases = JSON.parse(await readFile(path.join(process.env.LLV_STATE_DIR, "project-aliases.json"), "utf8"));
     expect(aliases.aliases).toEqual({ "legacy-clean": cleanProject });
-    expect(existsSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"))).toBe(true);
+    expect((storedCatalog() !== null)).toBe(true);
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
@@ -162,12 +178,10 @@ test("a poisoned durable alias source defers only itself in the persist scan", a
   }
 });
 
-test("project catalog persistence repairs private modes and atomically replaces symlinks", async () => {
+test("a legacy catalog file is imported once and removed, and a link at its path is never followed", async () => {
   const base = await mkdtemp(path.join(os.tmpdir(), "llv-discover-private-index-"));
   const previousStateDir = process.env.LLV_STATE_DIR;
-  const previousUmask = process.umask(0);
   process.env.LLV_STATE_DIR = path.join(base, "state");
-  const originalRename = fs.renameSync;
   try {
     const roots: Record<RootKey, string> = {
       "codex-sessions": path.join(base, "codex-sessions"),
@@ -175,39 +189,32 @@ test("project catalog persistence repairs private modes and atomically replaces 
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["codex-sessions"], "private.jsonl");
     await writeFixture(transcript, JSON.stringify({ type: "session_meta", payload: { cwd: "/repo/private" } }) + "\n", 1_700_000_000);
-    fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true, mode: 0o777 });
-    fs.chmodSync(process.env.LLV_STATE_DIR, 0o777);
+    fs.mkdirSync(process.env.LLV_STATE_DIR, { recursive: true });
     const indexPath = path.join(process.env.LLV_STATE_DIR, "project-catalog.json");
     fs.writeFileSync(indexPath, "legacy\n", { mode: 0o666 });
-    fs.chmodSync(indexPath, 0o666);
-    let temporaryMode: number | undefined;
-    fs.renameSync = ((source: fs.PathLike, target: fs.PathLike) => {
-      if (target === indexPath) temporaryMode = fs.statSync(source).mode & 0o777;
-      return originalRename(source, target);
-    }) as typeof fs.renameSync;
 
     await discoverFilesWithProjectCatalog(roots, undefined, { persist: false, persistIndex: true });
 
-    expect(fs.statSync(process.env.LLV_STATE_DIR).mode & 0o777).toBe(0o700);
-    expect(temporaryMode).toBe(0o600);
-    expect(fs.statSync(indexPath).mode & 0o777).toBe(0o600);
+    /* An unreadable catalog is a cache that costs one rescan: imported empty, deleted. */
+    expect(existsSync(indexPath)).toBe(false);
+    expect(Object.keys(storedCatalog()!.files)).toEqual([transcript]);
+    expect(fs.statSync(path.join(process.env.LLV_STATE_DIR, "state.sqlite")).mode & 0o777).toBe(0o600);
 
     const sentinelPath = path.join(base, "external-sentinel");
     fs.writeFileSync(sentinelPath, "sentinel\n", { mode: 0o666 });
-    fs.rmSync(indexPath);
     fs.symlinkSync(sentinelPath, indexPath);
+    await writeFixture(path.join(roots["codex-sessions"], "second.jsonl"), JSON.stringify({ type: "session_meta", payload: { cwd: "/repo/second" } }) + "\n", 1_700_000_001);
     await discoverFilesWithProjectCatalog(roots, undefined, { persist: false, persistIndex: true });
 
-    expect(fs.lstatSync(indexPath).isFile()).toBe(true);
-    expect(fs.statSync(indexPath).mode & 0o777).toBe(0o600);
+    expect(fs.lstatSync(indexPath).isSymbolicLink()).toBe(true);
     expect(fs.readFileSync(sentinelPath, "utf8")).toBe("sentinel\n");
+    expect(Object.keys(storedCatalog()!.files).sort()).toEqual([path.join(roots["codex-sessions"], "second.jsonl"), transcript].sort());
   } finally {
-    fs.renameSync = originalRename;
-    process.umask(previousUmask);
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
     closeAgentRegistryForTests();
@@ -225,6 +232,7 @@ test("a non-ENOENT directory failure leaves the completed catalog index authorit
     "claude-tasks": path.join(base, "claude-tasks"),
     "openclaw-sessions": path.join(base, "openclaw"),
     "copilot-sessions": path.join(base, "copilot-sessions"),
+    "antigravity-sessions": path.join(base, "antigravity-sessions"),
   };
   try {
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
@@ -232,7 +240,7 @@ test("a non-ENOENT directory failure leaves the completed catalog index authorit
     await writeFixture(transcript, JSON.stringify({ type: "session_meta", payload: { cwd: "/repo/canonical" } }) + "\n", 1_700_000_000);
     await discoverFilesWithProjectCatalog(roots, undefined, { persist: false, persistIndex: true });
     const indexPath = path.join(process.env.LLV_STATE_DIR, "project-catalog.json");
-    const canonical = await readFile(indexPath, "utf8");
+    const canonical = storedCatalogText();
     await rm(roots["claude-projects"], { recursive: true });
     await writeFile(roots["claude-projects"], "not a directory");
     const diagnostics: string[] = [];
@@ -244,7 +252,7 @@ test("a non-ENOENT directory failure leaves the completed catalog index authorit
     } finally {
       console.error = originalError;
     }
-    expect(await readFile(indexPath, "utf8")).toBe(canonical);
+    expect(storedCatalogText()).toBe(canonical);
     expect(diagnostics).toEqual([expect.stringContaining("read directory failed")]);
     expect(diagnostics[0]).toContain(roots["claude-projects"]);
     await rm(roots["claude-projects"], { force: true });
@@ -260,7 +268,7 @@ test("a non-ENOENT directory failure leaves the completed catalog index authorit
   }
 });
 
-test("project index publication failures preserve the canonical file, clean temps, stay non-fatal, and recover", async () => {
+test("project index publication failures keep the committed catalog, stay non-fatal, and recover", async () => {
   const base = await mkdtemp(path.join(os.tmpdir(), "llv-discover-index-failure-"));
   const previousStateDir = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(base, "state");
@@ -270,71 +278,46 @@ test("project index publication failures preserve the canonical file, clean temp
     "claude-tasks": path.join(base, "claude-tasks"),
     "openclaw-sessions": path.join(base, "openclaw"),
     "copilot-sessions": path.join(base, "copilot-sessions"),
+    "antigravity-sessions": path.join(base, "antigravity-sessions"),
   };
   try {
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const canonicalTranscript = path.join(roots["codex-sessions"], "canonical.jsonl");
     await writeFixture(canonicalTranscript, JSON.stringify({ type: "session_meta", payload: { cwd: "/repo/canonical" } }) + "\n", 1_700_000_000);
     await discoverFilesWithProjectCatalog(roots, undefined, { persist: false, persistIndex: true });
-    const indexPath = path.join(process.env.LLV_STATE_DIR, "project-catalog.json");
-    const canonical = await readFile(indexPath, "utf8");
-    const originalWrite = fs.writeFileSync;
-    const originalRename = fs.renameSync;
+    const canonical = storedCatalogText();
     const originalError = console.error;
     const diagnostics: string[] = [];
-    let failure: "write" | "rename" | null = null;
-    fs.writeFileSync = ((filename: fs.PathOrFileDescriptor, data: string | NodeJS.ArrayBufferView, options?: fs.WriteFileOptions) => {
-      const result = originalWrite(filename, data, options);
-      if (failure === "write" && String(filename).includes(".project-catalog.json.")) {
-        throw new Error("injected project index write failure");
-      }
-      return result;
-    }) as typeof fs.writeFileSync;
-    fs.renameSync = ((source: fs.PathLike, target: fs.PathLike) => {
-      if (failure === "rename" && target === indexPath) {
-        throw new Error("injected project index rename failure");
-      }
-      return originalRename(source, target);
-    }) as typeof fs.renameSync;
     console.error = (...values: unknown[]) => { diagnostics.push(values.map(String).join(" ")); };
-    const tempFiles = () => fs.readdirSync(process.env.LLV_STATE_DIR!)
-      .filter((name) => name.startsWith(".project-catalog.json.") && name.endsWith(".tmp"));
-    const attempt = async (mode: "write" | "rename", filename: string, cwd: string, mtime: number) => {
+    const attempt = async (filename: string, cwd: string, mtime: number) => {
       const transcript = path.join(roots["codex-sessions"], filename);
       await writeFixture(transcript, JSON.stringify({ type: "session_meta", payload: { cwd } }) + "\n", mtime);
-      failure = mode;
+      injectStateWriteFaultForTests({ site: "commit", collection: "project_catalog", times: 1, error: new Error("injected project index write failure") });
       const result = await discoverFilesWithProjectCatalog(roots, undefined, { persist: false, persistIndex: true });
       expect(result.files.some((entry) => entry.path === transcript)).toBe(true);
     };
 
     try {
-      await attempt("write", "write-failed.jsonl", "/repo/write-failed", 1_700_000_001);
-      expect(await readFile(indexPath, "utf8")).toBe(canonical);
-      expect(tempFiles()).toEqual([]);
-
-      await attempt("rename", "rename-failed.jsonl", "/repo/rename-failed", 1_700_000_002);
-      expect(await readFile(indexPath, "utf8")).toBe(canonical);
-      expect(tempFiles()).toEqual([]);
-      expect(diagnostics).toEqual([
-        expect.stringContaining("write temporary index failed"),
+      await attempt("first-failed.jsonl", "/repo/first-failed", 1_700_000_001);
+      expect(storedCatalogText()).toBe(canonical);
+      await attempt("second-failed.jsonl", "/repo/second-failed", 1_700_000_002);
+      expect(storedCatalogText()).toBe(canonical);
+      /* One diagnostic a minute, naming the failure. */
+      expect(diagnostics.filter((line) => line.includes("[project catalog]"))).toEqual([
+        expect.stringContaining("injected project index write failure"),
       ]);
-      expect(diagnostics[0]).toContain("injected project index write failure");
-      expect(diagnostics[0]).toContain(".project-catalog.json.");
     } finally {
-      fs.writeFileSync = originalWrite;
-      fs.renameSync = originalRename;
+      injectStateWriteFaultForTests(null);
       console.error = originalError;
     }
 
     const recovered = await discoverFilesWithProjectCatalog(roots, undefined, { persist: false, persistIndex: true });
     expect(recovered.files).toHaveLength(3);
-    const persisted = JSON.parse(await readFile(indexPath, "utf8"));
-    expect(Object.keys(persisted.files).sort()).toEqual([
+    expect(Object.keys(storedCatalog()!.files).sort()).toEqual([
       canonicalTranscript,
-      path.join(roots["codex-sessions"], "rename-failed.jsonl"),
-      path.join(roots["codex-sessions"], "write-failed.jsonl"),
+      path.join(roots["codex-sessions"], "first-failed.jsonl"),
+      path.join(roots["codex-sessions"], "second-failed.jsonl"),
     ].sort());
-    expect(tempFiles()).toEqual([]);
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
     else process.env.LLV_STATE_DIR = previousStateDir;
@@ -354,6 +337,7 @@ test("an append reparses its file and reuses unchanged persisted summaries", asy
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const unchanged = path.join(roots["claude-projects"], "incremental", "session", "subagents", "agent-unchanged.jsonl");
@@ -405,6 +389,7 @@ test("a same-size transcript rewrite with a newer mtime reparses cwd and project
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["codex-sessions"], "rewritten.jsonl");
@@ -445,6 +430,7 @@ test("larger Codex and Claude rewrites replace cached head metadata", async () =
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const codex = path.join(roots["codex-sessions"], "rewritten.jsonl");
@@ -505,6 +491,7 @@ test("Codex and Claude true appends retain head metadata through repeated EIO an
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const codex = path.join(roots["codex-sessions"], "append-recovery.jsonl");
@@ -534,7 +521,7 @@ test("Codex and Claude true appends retain head metadata through repeated EIO an
       cwd: "/repo/claude-original",
       title: "Claude original",
     });
-    const canonicalIndex = await readFile(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), "utf8");
+    const canonicalIndex = storedCatalogText();
     const canonicalCatalog = structuredClone(conversationCatalogSnapshot());
 
     await writeFixture(codex, codexTranscript("/repo/codex-recovered", "Codex recovered", "larger replacement"), 1_700_000_002);
@@ -556,7 +543,7 @@ test("Codex and Claude true appends retain head metadata through repeated EIO an
     expect(secondFailure.complete).toBe(false);
     expect(firstFailure.files.find((entry) => entry.path === codex)?.cwd).toBe("/repo/codex-original");
     expect(secondFailure.files.find((entry) => entry.path === claude)?.cwd).toBe("/repo/claude-original");
-    expect(await readFile(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), "utf8")).toBe(canonicalIndex);
+    expect(storedCatalogText()).toBe(canonicalIndex);
     expect(conversationCatalogSnapshot()).toEqual(canonicalCatalog);
 
     fs.openSync = originalOpen;
@@ -591,6 +578,7 @@ test("a one-shot transcript read failure stays incomplete and recovers in memory
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["codex-sessions"], "rewritten.jsonl");
@@ -600,7 +588,7 @@ test("a one-shot transcript read failure stays incomplete and recovers in memory
     expect(Buffer.byteLength(alpha)).toBe(Buffer.byteLength(bravo));
     await writeFixture(transcript, alpha, 1_700_000_000);
     await discoverFilesWithProjectCatalog(roots, undefined, { persist: false, persistIndex: true });
-    const canonicalIndex = await readFile(indexPath, "utf8");
+    const canonicalIndex = storedCatalogText();
     const canonicalCatalog = structuredClone(conversationCatalogSnapshot());
     await writeFixture(transcript, bravo, 1_700_000_001);
 
@@ -620,7 +608,7 @@ test("a one-shot transcript read failure stays incomplete and recovers in memory
       fs.openSync = originalOpen;
     }
 
-    const failedIndex = await readFile(indexPath, "utf8");
+    const failedIndex = storedCatalogText();
     expect(failedScan.complete).toBe(false);
     expect(failedIndex).toBe(canonicalIndex);
     expect(conversationCatalogSnapshot()).toEqual(canonicalCatalog);
@@ -659,6 +647,7 @@ test("first-ever repeated transcript read failures publish and persist only afte
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["codex-sessions"], "first.jsonl");
@@ -688,12 +677,12 @@ test("first-ever repeated transcript read failures publish and persist only afte
 
     expect(firstFailure.complete).toBe(false);
     expect(secondFailure.complete).toBe(false);
-    expect(existsSync(indexPath)).toBe(false);
+    expect((storedCatalog() !== null)).toBe(false);
     expect(conversationCatalogSnapshot()).toEqual(publishedBeforeFailure);
 
     const recovered = await discoverFilesWithProjectCatalog(roots, undefined, { persist: false, persistIndex: true });
     expect(recovered.complete).toBe(true);
-    expect(existsSync(indexPath)).toBe(true);
+    expect((storedCatalog() !== null)).toBe(true);
     expect(conversationCatalogSnapshot().map((entry) => entry.path)).toContain(transcript);
     expect(await discoverEntryInFreshProcess(roots, transcript)).toMatchObject({
       cwd: "/repo/first",
@@ -718,6 +707,7 @@ test("a same-size subagent sidecar rewrite with a newer mtime reparses its title
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["claude-projects"], "sidecar", "session", "subagents", "agent-rewritten.jsonl");
@@ -754,6 +744,7 @@ test("a one-shot sidecar read failure stays incomplete and recovers in memory an
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["claude-projects"], "sidecar", "session", "subagents", "agent-x.jsonl");
@@ -765,7 +756,7 @@ test("a one-shot sidecar read failure stays incomplete and recovers in memory an
     await writeFixture(transcript, "{}\n", 1_700_000_000);
     await writeFixture(sidecar, alpha, 1_700_000_000);
     await discoverFilesWithProjectCatalog(roots, undefined, { persist: false, persistIndex: true });
-    const canonicalIndex = await readFile(indexPath, "utf8");
+    const canonicalIndex = storedCatalogText();
     await writeFixture(sidecar, bravo, 1_700_000_001);
 
     const originalRead = fs.readFileSync;
@@ -784,7 +775,7 @@ test("a one-shot sidecar read failure stays incomplete and recovers in memory an
       fs.readFileSync = originalRead;
     }
 
-    const failedIndex = await readFile(indexPath, "utf8");
+    const failedIndex = storedCatalogText();
     const recoveredInMemory = await discoverFilesWithProjectCatalog(roots, undefined, { persist: false, persistIndex: true });
     await writeFile(indexPath, failedIndex);
     const recoveredAfterRestart = await discoverEntryInFreshProcess(roots, transcript);
@@ -813,6 +804,7 @@ test("a corrupt per-file scanner index falls back to a full parse and repairs it
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcript = path.join(roots["claude-projects"], "recovered", "session", "subagents", "agent-child.jsonl");
@@ -824,7 +816,7 @@ test("a corrupt per-file scanner index falls back to a full parse and repairs it
     const recovered = await discoverFilesWithProjectCatalog(roots, undefined, { persist: false, persistIndex: true });
 
     expect(recovered.files.find((entry) => entry.path === transcript)?.title).toBe("Recovered summary");
-    const persisted = JSON.parse(await readFile(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), "utf8"));
+    const persisted = storedCatalog()!;
     expect(persisted.files[transcript]).toMatchObject({ summaryVersion: 4 });
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -843,6 +835,7 @@ test("a pinned discovery identifies only rows outside the global scheme window",
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const transcripts: string[] = [];
@@ -923,7 +916,7 @@ test("an older overlapping scan cannot replace a newer catalog publication", asy
     await Promise.all([olderScan, newerScan]);
 
     expect(conversationCatalogSnapshot().map((entry) => entry.path)).toEqual([freshPath]);
-    const persisted = JSON.parse(await readFile(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), "utf8"));
+    const persisted = storedCatalog()!;
     expect(Object.keys(persisted.files)).toEqual([freshPath]);
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -963,7 +956,7 @@ test("a read-only scan leaves an overlapping durable publication eligible to per
     await Promise.all([durableScan, readOnlyScan]);
 
     expect(conversationCatalogSnapshot().map((entry) => entry.path)).toEqual([readOnlyPath]);
-    const persisted = JSON.parse(await readFile(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), "utf8"));
+    const persisted = storedCatalog()!;
     expect(Object.keys(persisted.files).sort()).toEqual([...durablePaths].sort());
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -1009,6 +1002,7 @@ test("project catalog carries the canonical root for projects outside the capped
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const repo = path.join(base, "catalog-project");
@@ -1055,6 +1049,7 @@ test("archived migration predecessors cannot outvote the current project root", 
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const archivedPaths = [
@@ -1123,6 +1118,7 @@ test("persisted scheme metadata excludes unbounded first-prompt text", async () 
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const marker = "PROMPT_TAIL_MUST_STAY_OUT_OF_SCHEME_STATE";
@@ -1149,7 +1145,7 @@ test("persisted scheme metadata excludes unbounded first-prompt text", async () 
 
     await discoverFilesWithProjectCatalog(roots);
 
-    const persisted = await readFile(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), "utf8");
+    const persisted = storedCatalogText();
     expect(persisted).not.toContain(marker);
     expect(conversationCatalogSnapshot().find((entry) => entry.path === transcriptPath)?.firstPrompt).toBe("");
   } finally {
@@ -1171,6 +1167,7 @@ test("a legacy cached Claude subagent is migrated into the conversation catalog"
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const subagent = path.join(roots["claude-projects"], "legacy-project", "session", "subagents", "agent-child.jsonl");
@@ -1194,7 +1191,7 @@ test("a legacy cached Claude subagent is migrated into the conversation catalog"
     }));
 
     const scan = await discoverFilesWithProjectCatalog(roots);
-    const persisted = JSON.parse(await readFile(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), "utf8"));
+    const persisted = storedCatalog()!;
 
     expect(conversationCatalogSnapshot().map((entry) => entry.path)).toContain(subagent);
     expect(scan.projectCatalog).toContainEqual({
@@ -1224,6 +1221,7 @@ test("project catalog omits task-only residue from a clean state", async () => {
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const taskPath = path.join(roots["claude-tasks"], "orphan-project", "missing-session", "tasks", "task.output");
@@ -1234,7 +1232,7 @@ test("project catalog omits task-only residue from a clean state", async () => {
     expect(scan.complete).toBe(true);
     expect(scan.files.some((entry) => entry.path === taskPath)).toBe(true);
     expect(scan.projectCatalog).toEqual([]);
-    const persisted = JSON.parse(await readFile(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"), "utf8"));
+    const persisted = storedCatalog()!;
     expect(persisted.files[taskPath]).toBeDefined();
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -1255,6 +1253,7 @@ test("a Claude transcript appearing in a previously sessionless project director
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const repository = path.join(base, "late-session-repository");
@@ -1301,6 +1300,7 @@ test("first-ever EIO and EACCES task twin lookups publish only after recovery", 
         "claude-tasks": path.join(base, "claude-tasks"),
         "openclaw-sessions": path.join(base, "openclaw"),
         "copilot-sessions": path.join(base, "copilot-sessions"),
+        "antigravity-sessions": path.join(base, "antigravity-sessions"),
       };
       await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
       const taskPath = path.join(roots["claude-tasks"], "project-a", "session-a", "tasks", "task-a.output");
@@ -1318,14 +1318,14 @@ test("first-ever EIO and EACCES task twin lookups publish only after recovery", 
 
       const failed = await discoverFilesWithProjectCatalog(roots, undefined, { persist: false, persistIndex: true });
       expect(failed.complete).toBe(false);
-      expect(existsSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"))).toBe(false);
+      expect((storedCatalog() !== null)).toBe(false);
       expect(conversationCatalogSnapshot()).toEqual(publishedBefore);
 
       fs.promises.access = originalAccess;
       const recovered = await discoverFilesWithProjectCatalog(roots, undefined, { persist: false, persistIndex: true });
       expect(recovered.complete).toBe(true);
       expect(recovered.files.map((entry) => entry.path)).toContain(taskPath);
-      expect(existsSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"))).toBe(true);
+      expect((storedCatalog() !== null)).toBe(true);
     } finally {
       fs.promises.access = originalAccess;
       if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -1347,6 +1347,7 @@ test("a first-ever ENOTDIR task twin lookup stays incomplete and publishes no du
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const taskPath = path.join(roots["claude-tasks"], "project-a", "session-a", "tasks", "task-a.output");
@@ -1361,7 +1362,7 @@ test("a first-ever ENOTDIR task twin lookup stays incomplete and publishes no du
     const scan = await discoverFilesWithProjectCatalog(roots, undefined, { persist: false, persistIndex: true });
 
     expect(scan.complete).toBe(false);
-    expect(existsSync(path.join(process.env.LLV_STATE_DIR, "project-catalog.json"))).toBe(false);
+    expect((storedCatalog() !== null)).toBe(false);
     expect(conversationCatalogSnapshot()).toEqual(publishedBefore);
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -1380,6 +1381,7 @@ test("project and conversation catalogs retain a project whose only transcript i
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const subagent = path.join(roots["claude-projects"], "project-only-child", "session", "subagents", "agent-child.jsonl");
@@ -1409,6 +1411,7 @@ test("discoverFiles preserves scanner filters, mtime ordering, and the per-proje
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const repository = path.join(base, "recent-project");
@@ -1484,6 +1487,7 @@ test("discoverFiles applies the card cap independently to each visible project",
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const projectA = path.join(base, "project-a");
@@ -1610,6 +1614,7 @@ test("discoverFiles keeps native Codex spawn parents outside the recent cap", as
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
 
@@ -1651,6 +1656,7 @@ test("discoverFilesWithProjectCatalog keeps quiet projects in the recent cap", a
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
 
@@ -1702,6 +1708,7 @@ test("registry launch cwd governs scheme caps and the uncapped project catalog",
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const paths: string[] = [];
@@ -1751,6 +1758,7 @@ test("discoverFilesWithProjectCatalog keeps a selected project inside the scheme
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
 
@@ -1809,6 +1817,7 @@ test("discoverFilesWithProjectCatalog refreshes cached projects when flow state 
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
 
@@ -1876,6 +1885,7 @@ test("current-production catalog records converge two legacy buckets for one rep
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all([...Object.values(roots), stateDir].map((root) => mkdir(root, { recursive: true })));
 
@@ -1958,7 +1968,7 @@ test("current-production catalog records converge two legacy buckets for one rep
     const preview = await discoverFilesWithProjectCatalog(roots);
 
     expect(preview.projectCatalog.some((entry) => entry.project === staleProject || entry.project === staleAlternateProject)).toBe(false);
-    const deferredCatalog = JSON.parse(await readFile(path.join(stateDir, "project-catalog.json"), "utf8"));
+    const deferredCatalog = storedCatalog(stateDir)!;
     expect(deferredCatalog.resolutionVersion).toBe(3);
     expect(deferredCatalog.files[sessionPath].project).toBe(staleProject);
 
@@ -1973,7 +1983,7 @@ test("current-production catalog records converge two legacy buckets for one rep
     });
     expect(scan.files.find((entry) => entry.path === taskPath)?.project).toBe(canonicalProject);
 
-    const persistedCatalog = JSON.parse(await readFile(path.join(stateDir, "project-catalog.json"), "utf8"));
+    const persistedCatalog = storedCatalog(stateDir)!;
     expect(persistedCatalog.files[sessionPath].project).toBe(canonicalProject);
     expect(persistedCatalog.files[taskPath].project).toBe(canonicalProject);
     expect(persistedCatalog.files[codexPath].project).toBe(canonicalProject);
@@ -2001,6 +2011,7 @@ test("an ambiguous legacy project key defers catalog and board migration", async
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all([...Object.values(roots), stateDir].map((root) => mkdir(root, { recursive: true })));
 
@@ -2070,7 +2081,7 @@ test("an ambiguous legacy project key defers catalog and board migration", async
     expect(board.projects[sourceProject]?.prefs.manual).toEqual(["/source"]);
     expect(board.projects[retiredProject]?.prefs.manual).toEqual(["/retired"]);
     expect(board.projects[canonicalProject]).toBeUndefined();
-    const deferredCatalog = JSON.parse(await readFile(path.join(stateDir, "project-catalog.json"), "utf8"));
+    const deferredCatalog = storedCatalog(stateDir)!;
     expect(deferredCatalog.resolutionVersion).toBe(0);
   } finally {
     if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -2089,6 +2100,7 @@ test("demoted archived predecessors rank below live transcripts for the recency 
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
 
@@ -2145,6 +2157,7 @@ test("a live conversation keeps its card past the per-project card cap", async (
       "claude-tasks": path.join(base, "claude-tasks"),
       "openclaw-sessions": path.join(base, "openclaw"),
       "copilot-sessions": path.join(base, "copilot-sessions"),
+      "antigravity-sessions": path.join(base, "antigravity-sessions"),
     };
     await Promise.all(Object.values(roots).map((root) => mkdir(root, { recursive: true })));
     const slug = path.join(roots["claude-projects"], "-repo");

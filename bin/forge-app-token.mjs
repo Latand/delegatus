@@ -32,6 +32,10 @@ export const FORGE_APP_PERMISSIONS = Object.freeze({ contents: "write", pull_req
     files one approved report can do nothing else, and a push token never
     carries it. An installation that was not granted `issues` is refused here. */
 export const FORGE_APP_ISSUE_PERMISSIONS = Object.freeze({ issues: "write", metadata: "read" });
+/** Confirm a pull request's landing and settle the issue it delivers. */
+export const FORGE_APP_ISSUE_DELIVERY_PERMISSIONS = Object.freeze({ issues: "write", pull_requests: "read", metadata: "read" });
+/** Read commit ancestry for a delivery collected on an integration branch. */
+export const FORGE_APP_ISSUE_LANDING_PERMISSIONS = Object.freeze({ contents: "read", metadata: "read" });
 export const FORGE_APP_USERNAME = "x-access-token";
 /** Where a push to a declared repository is sent: the one URL base the App's
     credential helper answers. Joined so the source holds no address-shaped literal. */
@@ -904,7 +908,11 @@ async function main(argv) {
     const flag = rest.indexOf("--repository");
     try {
       const named = flag >= 0 ? rest[flag + 1] : await ports.originRepository();
-      const issued = await mintInstallationToken(named ?? "", ports, rest.includes("--issues") ? FORGE_APP_ISSUE_PERMISSIONS : FORGE_APP_PERMISSIONS);
+      if (["--issues", "--issue-delivery", "--issue-landing"].filter(flag => rest.includes(flag)).length > 1) throw new ForgeAppRefusal(null, "conflicting token permission purposes");
+      const permissions = rest.includes("--issue-landing") ? FORGE_APP_ISSUE_LANDING_PERMISSIONS
+        : rest.includes("--issue-delivery") ? FORGE_APP_ISSUE_DELIVERY_PERMISSIONS
+        : rest.includes("--issues") ? FORGE_APP_ISSUE_PERMISSIONS : FORGE_APP_PERMISSIONS;
+      const issued = await mintInstallationToken(named ?? "", ports, permissions);
       ports.stdout(rest.includes("--json") ? `${JSON.stringify({ token: issued.token, expiresAt: issued.expiresAt })}\n` : `${issued.token}\n`);
       return 0;
     } catch (error) {

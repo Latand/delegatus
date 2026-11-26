@@ -37,50 +37,81 @@ export function formatPaidBalance(balance: string, locale: Locale): string {
 }
 
 /**
- * The paid-spending switch on a Codex account's row. `phone` draws it on the
- * phone card, whose content edge is the card's own padding; the panel aligns
- * it with the row's limits block. It draws only while the account holds paid
- * credits and its tightest window has 5% or less left, or while the switch is on.
+ * The paid-spending line on a Codex account's row: "Credits", the balance in
+ * whole credits and the switch, with the save failure under it. It draws only
+ * while the account holds paid credits and its tightest window has 5% or less
+ * left, or while the switch is on. What spending does while on is the open
+ * row's line (`spendCreditsOnShort`). `phone` takes the sheet's 44 px switch;
+ * `column` is the width of the row's label column, so "Credits" stands in the
+ * column the window labels use.
  */
-export function AccountSpendCredits({ account, state, quota, phone = false }: { account: AccountOption; state: EngineAccountsState; quota: ReconciledQuota | null; phone?: boolean }) {
+export function AccountSpendCredits({ account, state, quota, phone = false, column = "", className = "" }: {
+  account: AccountOption;
+  state: EngineAccountsState;
+  quota: ReconciledQuota | null;
+  phone?: boolean;
+  column?: string;
+  /** The row's type and its last-line slack. */
+  className?: string;
+}) {
   const { t, locale } = useLocale();
   const switchId = useId();
-  const labelId = useId();
   const alertRef = useRef<HTMLParagraphElement>(null);
   const detailRef = useRef<HTMLDivElement>(null);
   const failed = account.spendCreditsError === true;
   const enabled = account.spendCredits === true;
   const wasEnabled = useRef(enabled);
+  // The row's toggle, where focus goes if the switch leaves with the block.
+  const heir = useRef<HTMLElement | null>(null);
+  const shown = state.engine === "codex" && showsCreditsBlock(account, quota);
   // The error sits at the end of the row, which can be below the scroller's
   // fold: bring it fully into view when it appears.
   useEffect(() => {
-    if (failed) alertRef.current?.scrollIntoView?.({ block: "nearest" });
+    if (failed) { heir.current = null; alertRef.current?.scrollIntoView?.({ block: "nearest" }); }
   }, [failed]);
-  // Turning the switch on adds the warning and the balance below it: keep both
-  // whole in the scroller, since the warning is the line that says money is spent.
+  // Turning the switch off above the band unmounts the block with the switch focused: focus stays in the row.
+  useEffect(() => {
+    if (shown || !heir.current) return;
+    const target = heir.current;
+    heir.current = null;
+    if (target.isConnected && (!document.activeElement || document.activeElement === document.body)) target.focus();
+  }, [shown]);
+  // Turning the switch on adds a line to the open row: keep the row whole in
+  // the scroller.
   useEffect(() => {
     if (enabled && !wasEnabled.current) detailRef.current?.scrollIntoView?.({ block: "nearest" });
     wasEnabled.current = enabled;
   }, [enabled]);
-  if (state.engine !== "codex" || !showsCreditsBlock(account, quota)) return null;
+  if (!shown) return null;
   const paid = account.paidCredits;
-  const readAt = paid?.checkedAt && !Number.isNaN(new Date(paid.checkedAt).getTime()) ? formatReadClock(paid.checkedAt) : null;
-  const balance = paid?.balance
-    ? readAt ? t("accounts.paidBalanceRead", { balance: formatPaidBalance(paid.balance, locale), at: readAt }) : t("accounts.paidBalance", { balance: formatPaidBalance(paid.balance, locale) })
-    : t("accounts.paidNone");
-  const text = phone ? "text-label" : "text-[10px] leading-snug";
-  return <div className={`${phone ? "pb-1 pr-2" : "px-3.5 pb-1 pl-[30px]"} ${text}`} data-account-spend-credits={account.id}>
-    <div className="flex min-h-[44px] items-center gap-2 sm:min-h-8">
-      {/* Named by the switch through aria-labelledby, never a <label for>: the
-          blank width of the row must not turn paid spending on. */}
-      <span id={labelId} className="min-w-0 flex-1 text-[12px] font-semibold text-primary">{t("accounts.spendCredits")}</span>
-      <SettingSwitch id={switchId} aria-labelledby={labelId} enabled={enabled} size="responsive"
-        onClick={() => void state.setSpendCredits?.(account.id, !enabled)} />
+  const checkedMinute = quota ? limitsCheckedMinute(quota) : null;
+  const readMs = paid?.checkedAt ? new Date(paid.checkedAt).getTime() : NaN;
+  // A read time earns its words only when it is another minute than the limits' check time. The two clocks
+  // word a date differently (24 hours back against the calendar day), so the instants are compared, not their words.
+  const shownRead = Number.isNaN(readMs) || Math.floor(readMs / 60_000) === checkedMinute ? null : formatReadClock(paid!.checkedAt!);
+  return (
+    <div ref={detailRef} data-account-spend-credits={account.id} className={className}>
+      <div data-account-line className={`flex items-center gap-2 ${phone ? "min-h-11" : "min-h-6"}`}>
+        {/* The switch carries its own name; the word beside it is no <label for>, so the blank width of the row cannot turn paid spending on. */}
+        <span className={`${column} shrink-0 font-semibold text-secondary`}>{t("accounts.credits")}</span>
+        <span className="min-w-0 flex-1 break-words text-muted">
+          <span data-account-balance className="font-bold tabular-nums text-primary">{paid?.balance ? formatPaidBalance(paid.balance, locale) : t("accounts.paidNone")}</span>
+          {shownRead ? ` · ${t("accounts.paidRead", { at: shownRead })}` : ""}
+        </span>
+        <SettingSwitch id={switchId} aria-label={t("accounts.spendCredits")} enabled={enabled} size={phone ? "sheet" : "row"}
+          onClick={(event) => {
+            const hides = enabled && !showsCreditsBlock({ ...account, spendCredits: false }, quota);
+            heir.current = hides ? event.currentTarget.closest("[data-account-row]")?.querySelector<HTMLElement>("[data-account-toggle]") ?? null : null;
+            void state.setSpendCredits?.(account.id, !enabled);
+          }} />
+      </div>
+      {failed ? <p ref={alertRef} role="alert" className="break-words text-danger">{t("accounts.spendCreditsFailed")}</p> : null}
     </div>
-    <div ref={detailRef}>
-      {enabled ? <p className="break-words text-secondary">{t("accounts.spendCreditsOn")}</p> : null}
-      <p className="break-words text-muted">{balance}</p>
-      {failed ? <p ref={alertRef} role="alert" className="mt-1 break-words text-danger">{t("accounts.spendCreditsFailed")}</p> : null}
-    </div>
-  </div>;
+  );
+}
+
+/** The minute the row's limits were first read, the one its "Checked" line shows. */
+function limitsCheckedMinute(quota: ReconciledQuota): number | null {
+  const observed = [quota.session, quota.weekly, ...quota.tiers].flatMap((window) => window?.observedAt != null ? [window.observedAt] : []);
+  return observed.length ? Math.floor(Math.min(...observed) / 60) : null;
 }

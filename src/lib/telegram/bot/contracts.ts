@@ -57,6 +57,11 @@ export type TelegramBotErrorCode =
   | "document_roots_invalid"
   | "confirmation_invalid"
   | "format_invalid"
+  | "reaction_invalid"
+  | "reaction_not_allowed"
+  | "reaction_limit_reached"
+  | "reaction_paid_unsupported"
+  | "reaction_uncertain"
   | "not_enough_rights"
   | "forbidden"
   | "rate_limited"
@@ -161,6 +166,8 @@ export function readTelegramBotRefusals(value: unknown): TelegramBotRefusal[] {
 }
 
 export type TelegramChatBot = Pick<TelegramPostingBot, "name" | "username"> & {
+  /** A paired relay's clone rather than a connected bot: no token of it is stored here. */
+  clone?: { relay: string };
   assigned: boolean;
   member: boolean | null;
   status: TelegramBotMemberStatus | null;
@@ -334,7 +341,7 @@ export type TelegramBotMediaInput = { path: string; caption: string };
 /** What `telegram_bot_send_document` may post: the lowercase extensions it
     accepts, its size bound (Telegram allows 50 MB, this keeps a margin) and
     Telegram's caption limit. */
-export const DOCUMENT_EXTENSIONS = [".md", ".markdown", ".txt", ".log", ".json", ".csv", ".pdf", ".png", ".jpg", ".jpeg", ".html"] as const;
+export const DOCUMENT_EXTENSIONS = [".md", ".markdown", ".txt", ".log", ".json", ".csv", ".pdf", ".png", ".jpg", ".jpeg", ".html", ".xlsx", ".docx", ".pptx"] as const;
 export const DOCUMENT_MAX_BYTES = 20 * 1024 * 1024;
 export const DOCUMENT_CAPTION_MAX_CHARS = 1024;
 export const DOCUMENT_ROOTS_MAX = 16;

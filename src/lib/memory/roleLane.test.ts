@@ -92,11 +92,9 @@ const ports: PipelinePorts = {
     return n ? `conversation_stage_${n}` : null;
   },
   pipelineAdoptionCandidates: () => [],
-  createFlow: async () => ({ error: "no review flows in this suite" }),
   patchFlow: () => ({}),
   closeFlow: async () => ({}),
   getFlow: () => null,
-  findFlow: () => null,
   projectForCwd: () => PROJECT,
   now: () => new Date((clock += 1_000)).toISOString(),
 };

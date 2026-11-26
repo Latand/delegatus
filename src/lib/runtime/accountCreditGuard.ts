@@ -1,6 +1,7 @@
 import { yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { accountManager } from "@/lib/accounts/manager";
+import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { accountCreditGuardBlock } from "@/lib/accounts/creditPolicy";
 import { turboCreditExemptFor } from "@/lib/accounts/turboCreditExemption";
@@ -98,11 +99,9 @@ async function runAccountCreditGuard(registry: AgentRegistry,
   const store = state.store;
   const blockedAccounts = new Set(registry.quotaObservations("codex")
     .filter(row => accountCreditGuardBlock("codex", row.accountId, row.limits)).map(row => row.accountId));
-  const headlessStop = blockedAccounts.size ? import("@/lib/flows/engine")
-    .then(({ enforceHeadlessAccountCreditGuard }) => enforceHeadlessAccountCreditGuard(registry, blockedAccounts)) : Promise.resolve();
   const stops = await Promise.allSettled([...hosts.map(async item => {
     if (item.key.engine !== "codex" || blockedAccounts.size === 0) return;
-    const entry = registry.readOnlySnapshot().entries[sessionKeyId(item.key)];
+    const entry = registry.hostEntry(item.key);
     if (!entry?.artifactPath) return;
     const conversation = registry.conversationForPath(entry.artifactPath);
     const generation = conversation?.generations.at(-1);
@@ -141,7 +140,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     }
     if (!stillBlocked()) return;
     if (!await stop(item.key, item.host)) throw new Error("paid-credit guard could not confirm host termination");
-  }), headlessStop]);
+  })]);
   const failures = stops.filter((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failures.length) throw new AggregateError(failures.map(result => result.reason), "paid-credit guard termination remains pending");
   const { obligations: page, nextCursor, acknowledge } = await store.scanPage();
@@ -169,7 +168,22 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     const migrationSourceIndex = conversation.generations.findIndex(item => item.id === conversation.migration?.sourceGenerationId);
     // Each guard reseat starts at the latest generation. The cut and its
     // continuation identity still belong to the original interrupted turn.
-    if (moved && (!conversation.migration?.creditGuard || sourceIndex < 0 || migrationSourceIndex < sourceIndex)) {
+    const guardReseatIntent = conversation.creditGuardReseat
+      ? registry.migrationIntent(conversation.creditGuardReseat.intentId)
+      : undefined;
+    const retainedGuardLineage = guardReseatIntent?.scope === "conversation"
+      && guardReseatIntent.state === "stopped"
+      && guardReseatIntent.requestIds.includes(`reseat:${conversation.id}:${generation.id}`);
+    const migrationOwner = conversation.migration ? registry.migrationIntent(conversation.migration.intentId) : null;
+    const unrelatedMigrationOwnsRecovery = Boolean(migrationOwner?.state === "draining"
+      && conversation.migration?.intentId !== conversation.creditGuardReseat?.intentId);
+    // An engine-wide drain may already have enrolled this conversation even
+    // after a stopped guard reseat cleared its own migration. Keep the cut owed
+    // until that independent owner settles; otherwise its held-delivery fence
+    // can outlive the delivery when the drain is stopped.
+    if (unrelatedMigrationOwnsRecovery) continue;
+    if (moved && !retainedGuardLineage
+      && (!conversation.migration?.creditGuard || sourceIndex < 0 || migrationSourceIndex < sourceIndex)) {
       await store.update(obligation.id, { state: "discharged", resolvedAt: new Date().toISOString(), resolution: "another runtime selection moved the conversation" });
       continue;
     }
@@ -188,7 +202,7 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     }
     // The stop may have failed after writing its cut. Never create a successor
     // while the source still has a registered or recorded resident host.
-    const entry = registry.readOnlySnapshot().entries[obligation.hostKey];
+    const entry = registry.hostEntry(obligation.hostKey);
     if (entry && entry.status !== "dead" && entry.status !== "unhosted") continue;
     const project = owner?.pipeline.project ?? conversationProjectKey(conversation.projectOwnership, generation.launchProfile);
     const resolve = accountManager.resolveProjectSpawn.bind(accountManager);
@@ -204,6 +218,13 @@ async function runAccountCreditGuard(registry: AgentRegistry,
     }
     if (selection.kind !== "available" || !selection.account.accountId) continue;
     const target = selection.account.accountId;
+    const assertSeatEpoch = () => {
+      if (obligation.seat && !activeOrchestratorSeats().some(seat => seat.project === obligation.seat!.project
+        && seat.seatEpoch === obligation.seat!.seatEpoch && seat.conversationId?.startsWith("conversation_")
+        && registry.canonicalConversationId(seat.conversationId as ViewerConversationId) === conversation.id)) {
+        throw new Error("paid-credit recovery lost orchestrator seat custody");
+      }
+    };
     const authorizeTarget = () => {
       if (!eligible()) throw new Error("paid-credit recovery lost pipeline custody");
       const latest = registry.conversation(conversation.id);
@@ -216,19 +237,26 @@ async function runAccountCreditGuard(registry: AgentRegistry,
         ?? conversationProjectKey(latest?.projectOwnership, latestProfile);
       const selected = resolve("codex", { project: latestProject, model: latestProfile?.model, requestedId: target, requireCapacity: true });
       if (selected.kind !== "available" || selected.account.accountId !== target) throw new Error("paid-credit recovery target is no longer admissible");
+      // Resolve the target before the final seat check. Seat changes share the
+      // account mutation lock held around the eventual registry write.
+      assertSeatEpoch();
     };
     authorizeTarget();
     if (target !== generation.accountId) {
-      await registry.deliveryWriteOrBusy({ label: "account-credit-guard.reseat", operationId: obligation.id }, () => {
-        authorizeTarget();
-        return registry.requestConversationReseat(conversation.id, target, undefined, undefined, true);
-      });
-      requestAccountMigrationTick();
+      const reseated = await withAccountMutationLockAsync(() =>
+        registry.deliveryWriteOrBusy({ label: "account-credit-guard.reseat", operationId: obligation.id }, () => {
+          authorizeTarget();
+          return registry.requestConversationReseat(conversation.id, target, undefined, undefined, true, obligation.id);
+        }), { caller: "account-credit-guard.reseat" });
+      // A stopped attempt on unchanged dead evidence leaves this obligation
+      // owed. Its durable receipt survives hygiene and the next process.
+      if (reseated.migration && !["committed", "rolled-back"].includes(reseated.migration.phase)) requestAccountMigrationTick();
       continue;
     }
     if (obligation.state === "submitted") continue;
     const current = registry.conversation(conversation.id);
-    if (current?.generations.at(-1)?.accountId !== target || moved && current.migration?.phase !== "committed") continue;
+    if (current?.generations.at(-1)?.accountId !== target
+      || moved && current.migration?.phase !== "committed" && !retainedGuardLineage) continue;
     authorizeTarget();
     const deliveries = registry.conversationDeliverySnapshot({ conversationId: conversation.id });
     const newerDelivery = Object.values(deliveries.heldDeliveries).some(delivery => delivery.clientMessageId !== obligation.id

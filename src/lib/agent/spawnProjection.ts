@@ -559,7 +559,7 @@ function spawnCard(
   const completedTurn = receiptLive && hasConfirmedEndedHostTurn(receipt, entry?.structuredHost, probe);
   const live = receiptLive && !completedTurn;
   const terminal = spawn.state === "failed" || spawn.state === "recovered";
-  const recordedHost = entry?.structuredHost?.process ?? entry?.host?.agent ?? entry?.host?.panePid ?? receipt.verifiedHost?.agent;
+  const recordedHost = entry?.structuredHost?.process ?? receipt.verifiedHost?.agent;
   const hostGone = !terminal && !live && !!recordedHost && !identityAlive(recordedHost, probe);
   /* A host that died over an open turn is the zombie the transcript rows read
      as killed (#1487); a placeholder has no transcript turn boundary, so the
@@ -595,14 +595,14 @@ function spawnCard(
   );
   return {
     path: `spawn:${receipt.launchId}`,
-    root: receipt.engine === "codex" ? "codex-sessions" : receipt.engine === "copilot" ? "copilot-sessions" : "claude-projects",
+    root: receipt.engine === "codex" ? "codex-sessions" : receipt.engine === "copilot" ? "copilot-sessions" : receipt.engine === "antigravity" ? "antigravity-sessions" : "claude-projects",
     name: `spawn:${receipt.launchId}`,
     project: attribution.project ?? path.basename(receipt.cwd),
     ...(projectOwnership ? { projectOwnership } : {}),
     cwd: receipt.cwd,
     projectRoot: projectRootForCwd(receipt.cwd) ?? null,
     ...(attribution.worktree ? { worktree: attribution.worktree } : {}),
-    title: receipt.launchProfile.title ?? (receipt.engine === "codex" ? "Codex" : receipt.engine === "copilot" ? "Copilot" : "Claude"),
+    title: receipt.launchProfile.title ?? (receipt.engine === "codex" ? "Codex" : receipt.engine === "copilot" ? "Copilot" : receipt.engine === "antigravity" ? "Antigravity" : "Claude"),
     engine: receipt.engine,
     kind: "session",
     fmt: receipt.engine,

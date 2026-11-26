@@ -132,6 +132,9 @@ export function roleScaffoldBody(definition: RoleDefinition, params: RoleParamVa
   const original = renderScaffold(definition, params, project, deferWorkerLimit);
   const rendered = definition.id === "orchestrator" || original.includes(OPERATOR_CORRECTION_RULE)
     ? original : `${OPERATOR_CORRECTION_RULE}\n\n${original}`;
+  if (definition.id === "merger") {
+    return rendered + "\n\nIf the batch driver is still running after it prints runId, call the native wait_for_check once with that runId and the phase as reason. Keep the turn open. If the first command response precedes the ID, collect its startup output once. The driver owns its forge checks. Report its terminal result or an actionable interruption. While the wait is pending, skip periodic status messages and process, terminal or forge probes. Preserve the original batch on an unknown result.";
+  }
   if (definition.id !== "builder") return rendered;
   const fixRound = params.mode === "apply-fixes";
   const frontend = params.domain === "frontend";
@@ -191,7 +194,7 @@ export function configForParams(definition: RoleDefinition, params: RoleParamVal
 
 function resolveConfig(definition: RoleDefinition, params: RoleParamValues, explicit: ExplicitRoleConfig): { ok: true; value: RoleConfig } | { ok: false; error: string } {
   const config = { ...configForParams(definition, params), ...explicit };
-  if (config.engine !== "claude" && config.engine !== "codex") return { ok: false, error: "engine must be claude or codex" };
+  if (config.engine !== "claude" && config.engine !== "codex" && config.engine !== "antigravity") return { ok: false, error: "engine must be claude, codex or antigravity" };
   const locked = roleEngineRefusal(definition.id, config.engine);
   if (locked) return { ok: false, error: locked };
   const model = validateLaunchModel(config.engine, config.model);
@@ -235,7 +238,7 @@ export function resolveSpawnRole(body: { role?: unknown; roleParams?: unknown; c
   if (!base.ok) return base;
   const explicit: ExplicitRoleConfig = {};
   if (body.engine !== undefined) {
-    if (body.engine !== "claude" && body.engine !== "codex") return { ok: false, error: "engine must be claude or codex" };
+    if (body.engine !== "claude" && body.engine !== "codex" && body.engine !== "antigravity") return { ok: false, error: "engine must be claude, codex or antigravity" };
     if (body.engine !== base.value.config.engine && body.model === undefined) return { ok: false, error: "model is required when overriding a role engine" };
     explicit.engine = body.engine;
   }

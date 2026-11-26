@@ -17,6 +17,7 @@ import { lockLauncherStartup } from "./launcher-lock.mjs";
 import { SERVICE_UNIT, unitRunsLauncher } from "./launcher-service-proof.mjs";
 import { boundedWait, switchDeadline, SWITCH_TIMEOUT_MS, ROLLBACK_TIMEOUT_MS, STOP_TIMEOUT_MS, SWITCH_OVERRUN, writeLauncherRefusal } from "./launcher-deadline.mjs";
 import { stopRecorded } from "./launcher-adoption.mjs";
+import { launcherChildHandoff } from "./launcher-inherited-children.mjs";
 
 export const LAUNCHER_RELAUNCH_PROTOCOL = "delegatus-launcher-relaunch-v1";
 
@@ -43,7 +44,18 @@ function atomic(file, value) {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${process.pid}.tmp`;
   writeFileSync(temporary, value, { mode: 0o600 });
-  renameSync(temporary, file);
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try { renameSync(temporary, file); break; }
+      catch (error) {
+        // NTFS scanners and readers can briefly deny replacing a receipt.
+        // Keep its previous custody facts intact until this bounded retry
+        // commits the new launcher owner.
+        if (process.platform !== "win32" || attempt === 100 || !["EPERM", "EBUSY"].includes(error.code)) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      }
+    }
+  } finally { rmSync(temporary, { force: true }); }
 }
 
 async function guardLauncherTransition(paths, trial, installRoot, owner = { pid: process.pid, identity: readStartIdentity(process.pid) }, recordOwner = undefined, handoff = undefined) {
@@ -55,20 +67,25 @@ async function guardLauncherTransition(paths, trial, installRoot, owner = { pid:
     deadline: trial.state === "rolled-back" ? trial.rollbackDeadlineAt : trial.switchDeadlineAt };
   const child = spawn(process.execPath, [...process.execArgv, join(dirname(fileURLToPath(import.meta.url)), "launcher-rollback-guard.mjs"),
     Buffer.from(JSON.stringify(plan)).toString("base64")], { detached: true, stdio: ["ignore", "pipe", "inherit"] });
-  await new Promise((resolve, reject) => {
+  const closed = new Promise(resolve => child.once("close", resolve));
+  try { await new Promise((resolve, reject) => {
     let settled = false;
     const finish = error => {
       if (settled) return;
       settled = true; clearTimeout(timer);
       child.off("error", failed); child.off("exit", exited); child.stdout?.destroy();
-      if (error) { child.kill("SIGKILL"); reject(error); } else { child.unref(); resolve(); }
+      if (error) reject(error); else { child.unref(); resolve(); }
     };
     const failed = () => finish(new Error("The launcher deadline guard could not start"));
     const exited = () => finish(new Error("The launcher deadline guard exited before readiness"));
     const timer = setTimeout(() => finish(new Error("The launcher deadline guard did not become ready")), 2000);
     child.once("error", failed); child.once("exit", exited);
     child.stdout?.once("data", data => String(data).trim() === "ready" ? finish() : failed());
-  });
+  }); } catch (error) {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await boundedWait(closed, STOP_TIMEOUT_MS, "The launcher deadline guard did not exit after failed readiness");
+    throw error;
+  }
   return child;
 }
 
@@ -460,6 +477,7 @@ export function createRelaunch({ paths, installRoot, entry, release, servingRele
       process.execve(process.execPath, [process.execPath, ...process.execArgv, nextEntry, ...safeArgs], {
         ...inherited, LLV_LAUNCHER_REEXEC: "1", LLV_LAUNCHER_CHECKOUT: installRoot, LLV_LAUNCHER_INSTALL_ROOT: installRoot,
         LLV_LAUNCHER_TRIAL: requestId, LLV_LAUNCHER_DEADLINE_HANDOFF: handoff,
+        ...launcherChildHandoff(guard),
       });
       throw new Error("launcher exec returned without replacing the process");
     } finally {

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { currentConversationFile } from "@/lib/accounts/identity";
 import type { FileEntry } from "@/lib/types";
-import { TmuxComposerCore } from "@/components/TmuxComposer";
+import { ConversationComposerCore } from "@/components/ConversationComposer";
 import {
   getLiveCall,
   getServerLiveCall,
@@ -112,7 +112,7 @@ export function VoiceComposerHost({ files = NO_FILES }: { files?: readonly FileE
            publish (same commit) re-renders this host immediately after. */
         if (!props) return null;
         return (
-          <TmuxComposerCore
+          <ConversationComposerCore
             key={cardId}
             file={currentFiles.get(cardId) ?? props.file}
             viewActive={props.viewActive !== false || liveCall?.conversationId === cardId}

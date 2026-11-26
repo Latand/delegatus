@@ -1,0 +1,905 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-11-12T06:43:59.910705+00:00",
+  "startingMain": "dfc99dce253fe29148b70d5840bf903cd1e47c19",
+  "latestMain": "34b741354731f3c63cc2531c6fee12b1dcd2f911",
+  "latestMainChanges": [
+    "src/lib/loopProfiler.test.ts",
+    "src/lib/loopProfiler.ts",
+    "src/lib/recordedChecks/reader.test.ts",
+    "src/lib/recordedChecks/store.ts"
+  ],
+  "candidateSourceSha256": {
+    "src/lib/forge/autoMerge.ts": "8ceba6371d4a3d9b01a4d39fc2cfb87a60f0a357e6383b9bcf7ed0699fcd3984",
+    "src/lib/forge/autoMerge.test.ts": "f75311fc900ce392757294b028b9eb94403b52c95671504b3cb97065f57b9d76",
+    "src/lib/forge/autoMergeStore.test.ts": "e5dbaae7c28f336e9c0ff0422d693d6b31982eb7f09a9ec197b47823969f835e",
+    "src/lib/forge/autoRefresh.test.ts": "cbe39407b6d9187570a58d5420969594b2549260ddcb9b66d9400fcdded505bc",
+    "src/lib/pipelines/store.ts": "d161d621c0004a27e98d26277a393dcd3e324dd5192c409464b882eaa26e8150",
+    "src/lib/pipelines/mergeSuccessor.ts": "293b1cf781dd8c8aca9a19e55fcde5c253ce1afa86b7ff0f442109ed02e32d85"
+  },
+  "commandVariables": {
+    "GATE": "The immutable gate-slot.sh path supplied by the stage controller.",
+    "SCRATCH_EXPORT": "The repaired source export beneath the stage TMPDIR.",
+    "BASE_EXPORT": "The source export for the main revision named by source.",
+    "TMPDIR": "The stage-owned scratch directory."
+  },
+  "isolation": {
+    "perRun": [
+      "HOME",
+      "XDG_CONFIG_HOME",
+      "LLV_STATE_DIR",
+      "TMPDIR"
+    ],
+    "viewerControlUrl": "http://127.0.0.1:1",
+    "runtime": "Bun 1.4.0",
+    "ownedRunner": "Every file ran separately through gate-slot.sh and wait_for_check; terminal cleanup confirmed.",
+    "preload": "Repository test-preload.ts isolates account roots and removes inherited Git launch hooks."
+  },
+  "setupFailure": {
+    "command": "First shell attempt to create the scratch run-check helper",
+    "exitStatus": 1,
+    "tests": 0,
+    "reason": "Unmatched shell quote; the export was inspected and created with Python before any test ran."
+  },
+  "runs": [
+    {
+      "label": "repro-unit",
+      "source": "starting-main",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/repro-unit.log",
+        "bash",
+        "$BASE_EXPORT/run-check",
+        "repro-unit",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMerge.test.ts",
+        "-t",
+        "merge withdrawal"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 1,
+        "fail": 10,
+        "filtered": 157,
+        "tests": 11,
+        "files": 1,
+        "expectCalls": 65
+      },
+      "logSha256": "ee8da93fc46e34d4e10d7f68bbc3626b7f8316f7ba61b7e98f3e208cf824c829"
+    },
+    {
+      "label": "repro-store",
+      "source": "starting-main",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/repro-store.log",
+        "bash",
+        "$BASE_EXPORT/run-check",
+        "repro-store",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMergeStore.test.ts",
+        "-t",
+        "close durably withdraws"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 6,
+        "filtered": 139,
+        "tests": 6,
+        "files": 1,
+        "expectCalls": 10
+      },
+      "logSha256": "5c6972b9e8606b4955035d2bc9d531ddb58fbd897281c47df1bd7de1fcb08b91",
+      "note": "Five withdrawal failures and one missing-refresh-reservation fixture failure. The valid fixture was rerun immediately."
+    },
+    {
+      "label": "repro-store-valid",
+      "source": "starting-main",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/repro-store-valid.log",
+        "bash",
+        "$BASE_EXPORT/run-check",
+        "repro-store-valid",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMergeStore.test.ts",
+        "-t",
+        "close durably withdraws"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 6,
+        "filtered": 139,
+        "tests": 6,
+        "files": 1,
+        "expectCalls": 12
+      },
+      "logSha256": "3bdd67492a517a21d7683c7327dbff2c46253dd7c722dc8126a18903dec4801c"
+    },
+    {
+      "label": "fix-unit",
+      "source": "intermediate-candidate",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/fix-unit.log",
+        "bash",
+        "$SCRATCH_EXPORT/run-check",
+        "fix-unit",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMerge.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 165,
+        "fail": 3,
+        "filtered": 0,
+        "tests": 168,
+        "files": 1,
+        "expectCalls": 2743
+      },
+      "logSha256": "6d34a4185cc495dfb091b126913df40a113eee3b98b149ec46d1ef0fd4433cf1",
+      "note": "Three older incomplete delivery fixtures were completed before the next run."
+    },
+    {
+      "label": "base-unit-full",
+      "source": "starting-main",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/base-unit-full.log",
+        "bash",
+        "$BASE_EXPORT/run-check",
+        "base-unit-full",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMerge.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 158,
+        "fail": 10,
+        "filtered": 0,
+        "tests": 168,
+        "files": 1,
+        "expectCalls": 2783
+      },
+      "logSha256": "4e5edb7bf5175aa5f7b1e9322b3c6b21b9ba9ccfd7d57ee5028b74d703107529"
+    },
+    {
+      "label": "fix-store-full",
+      "source": "intermediate-candidate",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/fix-store-full.log",
+        "bash",
+        "$SCRATCH_EXPORT/run-check",
+        "fix-store-full",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMergeStore.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 140,
+        "fail": 5,
+        "filtered": 0,
+        "tests": 145,
+        "files": 1,
+        "expectCalls": 1372
+      },
+      "logSha256": "8f12f003c6391bef42113eb952ded18a08e68696ed4d257a5cc1a35692a44450",
+      "note": "Preserved known closed-PR receipt reasons, retained comparison admission diagnostics, and updated superseded-parent expectations to the pinned requirement."
+    },
+    {
+      "label": "base-store-full",
+      "source": "starting-main",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/base-store-full.log",
+        "bash",
+        "$BASE_EXPORT/run-check",
+        "base-store-full",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMergeStore.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 139,
+        "fail": 6,
+        "filtered": 0,
+        "tests": 145,
+        "files": 1,
+        "expectCalls": 1423
+      },
+      "logSha256": "e2cd404793fc4cab6377050d500e30533323f75fbf2f57ac7ac62b18362ede1c"
+    },
+    {
+      "label": "fix-unit-v2",
+      "source": "intermediate-candidate",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/fix-unit-v2.log",
+        "bash",
+        "$SCRATCH_EXPORT/run-check",
+        "fix-unit-v2",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMerge.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 172,
+        "fail": 1,
+        "filtered": 0,
+        "tests": 173,
+        "files": 1,
+        "expectCalls": 2832
+      },
+      "logSha256": "a5f798a9502e6777e9bcb539cc52871a025807cbe25e403cdecb76e51adc07a8",
+      "note": "The contexts race did not reach its hook because repository facts were cached; the final test resets those caches before injecting revocation."
+    },
+    {
+      "label": "fix-store-v2",
+      "source": "intermediate-candidate",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/fix-store-v2.log",
+        "bash",
+        "$SCRATCH_EXPORT/run-check",
+        "fix-store-v2",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMergeStore.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 146,
+        "fail": 0,
+        "filtered": 0,
+        "tests": 146,
+        "files": 1,
+        "expectCalls": 1428
+      },
+      "logSha256": "50c80521177e0a163e37808a01c825af2c8fc38490e729c2b05f1eeba6ba000d"
+    },
+    {
+      "label": "final-unit",
+      "source": "intermediate-candidate",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/final-unit.log",
+        "bash",
+        "$SCRATCH_EXPORT/run-check",
+        "final-unit",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMerge.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 175,
+        "fail": 0,
+        "filtered": 0,
+        "tests": 175,
+        "files": 1,
+        "expectCalls": 2856
+      },
+      "logSha256": "6e3de54b4c3c414c0aecd53389015b85f70718f659a3e7f76269e8eb8283153b"
+    },
+    {
+      "label": "final-store-adjacent",
+      "source": "intermediate-candidate",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/final-store-adjacent.log",
+        "bash",
+        "$SCRATCH_EXPORT/run-check",
+        "final-store-adjacent",
+        "bun",
+        "run",
+        "test",
+        "src/lib/pipelines/store.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 61,
+        "fail": 0,
+        "filtered": 0,
+        "tests": 61,
+        "files": 1,
+        "expectCalls": 382
+      },
+      "logSha256": "1ab448615bcc7fd6b1669033a6660b4e27943e20316b2892e0a2c2b39f4fe3e6"
+    },
+    {
+      "label": "final-refresh-adjacent",
+      "source": "intermediate-candidate",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/final-refresh-adjacent.log",
+        "bash",
+        "$SCRATCH_EXPORT/run-check",
+        "final-refresh-adjacent",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoRefresh.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 272,
+        "fail": 2,
+        "filtered": 0,
+        "tests": 274,
+        "files": 1,
+        "expectCalls": 1226
+      },
+      "logSha256": "ebb95c7a6242d0e638ca10bdc1db6486e7ab9e62432e7150af904a5995a1f7ac",
+      "note": "Updated the close-state expectation and corrected owner identity on replacement fixtures; full base comparison retained."
+    },
+    {
+      "label": "base-refresh-full",
+      "source": "starting-main",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/base-refresh-full.log",
+        "bash",
+        "$BASE_EXPORT/run-check",
+        "base-refresh-full",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoRefresh.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 274,
+        "fail": 0,
+        "filtered": 0,
+        "tests": 274,
+        "files": 1,
+        "expectCalls": 1231
+      },
+      "logSha256": "de73ef1c223e347f9b6f8c36f18628084508f3ad2813720026d585d27b5514f1"
+    },
+    {
+      "label": "verified-runner",
+      "source": "intermediate-candidate",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/verified-runner.log",
+        "bash",
+        "$SCRATCH_EXPORT/run-check",
+        "verified-runner",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMerge.test.ts"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 174,
+        "fail": 1,
+        "filtered": 0,
+        "tests": 175,
+        "files": 1,
+        "expectCalls": 2865
+      },
+      "logSha256": "3799bb0ef3877faefed921785c2b6c68c83a9273daf1e828f049b493b83fc57a",
+      "note": "The no-op assertion counted an unrelated successor admission; the final assertion counts only writes to the withdrawn lane."
+    },
+    {
+      "label": "main-regressions-unit",
+      "source": "starting-main",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/main-regressions-unit.log",
+        "bash",
+        "$BASE_EXPORT/run-check",
+        "main-regressions-unit",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMerge.test.ts",
+        "-t",
+        "merge withdrawal"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 1,
+        "fail": 17,
+        "filtered": 157,
+        "tests": 18,
+        "files": 1,
+        "expectCalls": 117
+      },
+      "logSha256": "0f86994c36f6b4b7a90cbea6cb32e262159eca934f1a6ae5294626e96c51d35c"
+    },
+    {
+      "label": "main-regressions-store",
+      "source": "starting-main",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/main-regressions-store.log",
+        "bash",
+        "$BASE_EXPORT/run-check",
+        "main-regressions-store",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMergeStore.test.ts",
+        "-t",
+        "close durably withdraws|delivery takeover withdraws"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 7,
+        "filtered": 139,
+        "tests": 7,
+        "files": 1,
+        "expectCalls": 16
+      },
+      "logSha256": "36386fbf4f87ca56e224461db457ad08bd33cc918334f2f70aafa1ff82871838"
+    },
+    {
+      "label": "main-regressions-push",
+      "source": "starting-main",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/main-regressions-push.log",
+        "bash",
+        "$BASE_EXPORT/run-check",
+        "main-regressions-push",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoRefresh.test.ts",
+        "-t",
+        "red update rejects changed authority after (comparison|plan|record): completed-peer"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 3,
+        "filtered": 274,
+        "tests": 3,
+        "files": 1,
+        "expectCalls": 3
+      },
+      "logSha256": "6a914119071b2f7232943139e1bca9ade5ac77c850f90a68104aac33181f7c79"
+    },
+    {
+      "label": "accepted-runner",
+      "source": "final-candidate",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/accepted-runner.log",
+        "bash",
+        "$SCRATCH_EXPORT/run-check",
+        "accepted-runner",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMerge.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 175,
+        "fail": 0,
+        "filtered": 0,
+        "tests": 175,
+        "files": 1,
+        "expectCalls": 2866
+      },
+      "logSha256": "f1d4b98637a9f07614b4367a1dc84765d566b85e6149cb5acf24681ce7cf43cd"
+    },
+    {
+      "label": "accepted-store",
+      "source": "intermediate-candidate",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/accepted-store.log",
+        "bash",
+        "$SCRATCH_EXPORT/run-check",
+        "accepted-store",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMergeStore.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 146,
+        "fail": 0,
+        "filtered": 0,
+        "tests": 146,
+        "files": 1,
+        "expectCalls": 1428
+      },
+      "logSha256": "958775dba4bf1656307783be0b942cebead56edb345299f0df40f183f3630e74"
+    },
+    {
+      "label": "accepted-refresh",
+      "source": "final-candidate",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/accepted-refresh.log",
+        "bash",
+        "$SCRATCH_EXPORT/run-check",
+        "accepted-refresh",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoRefresh.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 277,
+        "fail": 0,
+        "filtered": 0,
+        "tests": 277,
+        "files": 1,
+        "expectCalls": 1240
+      },
+      "logSha256": "fec9bc0191c52c20cf1c82c84721893f634f5a935705ab5d01f2ca13e33639f2"
+    },
+    {
+      "label": "accepted-pipeline-store",
+      "source": "final-candidate",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/accepted-pipeline-store.log",
+        "bash",
+        "$SCRATCH_EXPORT/run-check",
+        "accepted-pipeline-store",
+        "bun",
+        "run",
+        "test",
+        "src/lib/pipelines/store.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 61,
+        "fail": 0,
+        "filtered": 0,
+        "tests": 61,
+        "files": 1,
+        "expectCalls": 382
+      },
+      "logSha256": "7df93839893ad2aad439c6038429cbef87a52a8767b38a65cd074f5865cf7500"
+    },
+    {
+      "label": "latest-main-unit",
+      "source": "latest-main",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/latest-main-unit.log",
+        "bash",
+        "$BASE_EXPORT/run-check",
+        "latest-main-unit",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMerge.test.ts",
+        "-t",
+        "merge withdrawal"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 1,
+        "fail": 17,
+        "filtered": 157,
+        "tests": 18,
+        "files": 1,
+        "expectCalls": 117
+      },
+      "logSha256": "831180d1f546f1380e471d86508aa97e217364999dd0a9da1754e217e661d993"
+    },
+    {
+      "label": "latest-main-store",
+      "source": "latest-main",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/latest-main-store.log",
+        "bash",
+        "$BASE_EXPORT/run-check",
+        "latest-main-store",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMergeStore.test.ts",
+        "-t",
+        "close durably withdraws|delivery takeover withdraws"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 7,
+        "filtered": 139,
+        "tests": 7,
+        "files": 1,
+        "expectCalls": 16
+      },
+      "logSha256": "6d3a0dc7cc5a1bfe257ed6580883acc0aeb92440cec3b74e487eb6ded9a8ddfe"
+    },
+    {
+      "label": "latest-main-push",
+      "source": "latest-main",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/latest-main-push.log",
+        "bash",
+        "$BASE_EXPORT/run-check",
+        "latest-main-push",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoRefresh.test.ts",
+        "-t",
+        "red update rejects changed authority after (comparison|plan|record): completed-peer"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 3,
+        "filtered": 274,
+        "tests": 3,
+        "files": 1,
+        "expectCalls": 3
+      },
+      "logSha256": "9d5d8a1a667b9d105edc1147074dde36a44643a1dc73a19aa7931db375371049"
+    },
+    {
+      "label": "offline-store",
+      "source": "final-candidate",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/offline-store.log",
+        "bash",
+        "$SCRATCH_EXPORT/run-check",
+        "offline-store",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMergeStore.test.ts"
+      ],
+      "exitStatus": 0,
+      "counts": {
+        "pass": 146,
+        "fail": 0,
+        "filtered": 0,
+        "tests": 146,
+        "files": 1,
+        "expectCalls": 1428
+      },
+      "logSha256": "7ba81d3392b91ebeafa059bbcda05237954bfb2655b2ca7253301297f4cd98ee"
+    },
+    {
+      "label": "latest-main-offline-store",
+      "source": "latest-main",
+      "command": [
+        "rtk",
+        "proxy",
+        "bash",
+        "$GATE",
+        "--record",
+        "$TMPDIR/latest-main-offline-store.log",
+        "bash",
+        "$BASE_EXPORT/run-check",
+        "latest-main-offline-store",
+        "bun",
+        "run",
+        "test",
+        "src/lib/forge/autoMergeStore.test.ts",
+        "-t",
+        "close durably withdraws|delivery takeover withdraws"
+      ],
+      "exitStatus": 1,
+      "counts": {
+        "pass": 0,
+        "fail": 7,
+        "filtered": 139,
+        "tests": 7,
+        "files": 1,
+        "expectCalls": 16
+      },
+      "logSha256": "55e188a9e283ee51c1af460f6d31d9342378ba3c11baf1b7e99cca6967a108a2"
+    }
+  ],
+  "finalAcceptedCounts": {
+    "pass": 659,
+    "fail": 0,
+    "files": 4
+  },
+  "lint": {
+    "command": [
+      "rtk",
+      "proxy",
+      "bash",
+      "$GATE",
+      "--record",
+      "$TMPDIR/final-lint.log",
+      "bash",
+      "$SCRATCH_EXPORT/run-check",
+      "final-lint",
+      "bun",
+      "node_modules/eslint/bin/eslint.js",
+      "src/lib/forge/autoMerge.ts",
+      "src/lib/forge/autoMerge.test.ts",
+      "src/lib/forge/autoMergeStore.test.ts",
+      "src/lib/forge/autoRefresh.test.ts",
+      "src/lib/pipelines/store.ts",
+      "src/lib/pipelines/mergeSuccessor.ts"
+    ],
+    "exitStatus": 0,
+    "files": 6,
+    "errors": 0,
+    "warnings": 0,
+    "note": "The later close-fixture stub is also checked by the final plain commit hook."
+  },
+  "otherChecks": [
+    {
+      "command": "git diff --check",
+      "exitStatus": 0,
+      "whitespaceErrors": 0
+    },
+    {
+      "command": "od -An -tx1 -N4 /usr/bin/git",
+      "exitStatus": 0,
+      "bytes": "7f 45 4c 46"
+    }
+  ],
+  "publication": "The stage commits locally. The pipeline owns PR creation and the pre-push publication checks; no manual push, typecheck, build, merge or deploy was run.",
+  "privacy": {
+    "command": [
+      "rtk",
+      "proxy",
+      "bash",
+      "$GATE",
+      "--record",
+      "$TMPDIR/privacy-working.log",
+      "bash",
+      "$SCRATCH_EXPORT/run-check",
+      "privacy-working",
+      "env",
+      "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json",
+      "bun",
+      "scripts/privacy-publication-gate.ts",
+      "--repository",
+      ".",
+      "--require-known-values",
+      "--paths",
+      "src/lib/forge/autoMerge.ts",
+      "src/lib/forge/autoMerge.test.ts",
+      "src/lib/forge/autoMergeStore.test.ts",
+      "src/lib/forge/autoRefresh.test.ts",
+      "src/lib/pipelines/store.ts",
+      "src/lib/pipelines/mergeSuccessor.ts",
+      "docs/design/auto-refresh-conflicting-prs.md",
+      "docs/testing/merge-queue-withdrawal.md",
+      "evidence/merge-queue-withdrawal.json"
+    ],
+    "exitStatus": 0,
+    "files": 9,
+    "findings": 0,
+    "result": "PRIVACY GATE: PASS",
+    "note": "Repeated as privacy-final after recording this result; its terminal outcome is also in the stage report."
+  }
+}

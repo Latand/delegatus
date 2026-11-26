@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 
-import { QuestionCard } from "@/components/feed/QuestionCard";
 import { useRuntimeSession, answerRuntime } from "@/hooks/useRuntime";
 import { conversationIdentity } from "@/lib/accounts/identity";
 import { useLocale } from "@/lib/i18n";
@@ -94,12 +93,10 @@ export function ConversationAttention({ file }: { file: FileEntry }) {
   /* Ids dismissed in this mount; the storage read below covers earlier ones. */
   const [dismissedIds, setDismissedIds] = useState<readonly string[]>([]);
 
-  if (!runtime) {
-    return file.pendingQuestion || file.waitingInput ? <QuestionCard file={file} /> : null;
-  }
-  if (runtime.legacy) {
-    return file.pendingQuestion || file.waitingInput ? <QuestionCard file={file} /> : null;
-  }
+  /* A question is answered through the host that asked it. A conversation
+     with no structured host has nothing to deliver an answer to, so it shows
+     no card; the question stays in the transcript. */
+  if (!runtime) return null;
 
   /* When the host died the banner (§5) owns recovery: these cards can never be
      answered (the request died with the host), so they render as inert history

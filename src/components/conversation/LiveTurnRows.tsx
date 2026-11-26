@@ -36,7 +36,7 @@ import {
 import { GlyphIcon } from "@/components/icons";
 import { ImageCard } from "@/components/feed/cards/ImageCard";
 import { StatusIcon } from "@/components/feed/cards/shared";
-import { StreamingMd } from "@/components/feed/markdown";
+import { MdMessageSourceContext, StreamingMd } from "@/components/feed/markdown";
 import { READING_MEASURE } from "@/components/feed/measure";
 import { isToolSchemaLoader, summarizeTool } from "@/components/feed/tools";
 
@@ -427,8 +427,9 @@ function LiveCallRow({ item, tool }: { item: RuntimeLiveTurnItem; tool: RuntimeL
    with prose in response order (issue #1100), each rendered by LiveCallRow.
    What reaches this component is the whole unclaimed overlay; what it paints is
    `liveTurnTail` of it. */
-export function LiveTurnRows({ items, lead = null }: {
+export function LiveTurnRows({ items, lead = null, sourceCwd = null }: {
   items: readonly RuntimeLiveTurnItem[];
+  sourceCwd?: string | null;
   /** A line drawn above the rows, only when there are rows to name. */
   lead?: ReactNode;
 }) {
@@ -475,7 +476,7 @@ export function LiveTurnRows({ items, lead = null }: {
                 {`${t("feed.liveOmittedChars", { chars: item.omittedChars })}\n`}
               </span>
             ) : null}
-            <StreamingMd text={item.text} streaming={item.phase === "streaming"} />
+            <MdMessageSourceContext.Provider value={sourceCwd}><StreamingMd text={item.text} streaming={item.phase === "streaming"} /></MdMessageSourceContext.Provider>
             {item.phase === "streaming" && item === last ? (
               <span data-live-turn-caret={deputyInk ? "deputy" : "seat"} className={`ml-0.5 inline-block h-3.5 w-1.5 animate-pulse rounded-[2px] align-text-bottom ${deputyInk ? "bg-secondary" : "bg-accent"}`} aria-hidden />
             ) : null}

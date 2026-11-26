@@ -4,8 +4,187 @@ import path from "node:path";
 import { writeAuto, initialAuto } from "./selfUpdate/auto";
 import { writeDrain } from "./selfUpdate/drain";
 import { expect, test, spyOn } from "bun:test";
+import { normalizeRegistry } from "./agent/registry";
 import { loopProgressProbe } from "./agent/registryLockHolderFixture";
-import { checkStateDatabasesBeforeStores, createViewerStartupBarrier, registerViewerRuntime, settleInterruptedTransfers, startCurrentReleaseControllers } from "./viewerInstrumentation";
+import { activateViewerRuntimeWhenCurrent, checkStateDatabasesBeforeStores, completeViewerRuntimeActivation, createViewerStartupBarrier, createViewerWorktreeRecovery, prepareRegistryForNativeCallers, registerViewerRuntime, retryWorktreeRecoveryUntilCommitted, settleInterruptedTransfers, startCurrentReleaseControllers } from "./viewerInstrumentation";
+import { acknowledgeHotStateFence, publishHotStateAuthority, readHotStateAuthority, restoreHotStateAuthority } from "./state/hotStateAuthority";
+
+test("legacy worktree catalog refinement cannot delay controller activation or release readiness", async () => {
+  const order: string[] = [];
+  let refinementStarted = false;
+  let finishRefinement!: () => void;
+  const refinement = new Promise<void>(resolve => { finishRefinement = resolve; });
+  await completeViewerRuntimeActivation({
+    initializeOperatorCapability: async () => { order.push("capability"); },
+    runIdentityMigration: async () => { order.push("identity"); },
+    publishHotStateActivation: () => { order.push("hot-state"); },
+    runClaudeLoginRecovery: async () => { order.push("login-recovery"); },
+    startStructuredHosts: null,
+    startControllers: async () => { order.push("controllers"); },
+    publishViewerReleaseReady: () => { order.push("release-ready"); },
+    refineBoard: async () => { refinementStarted = true; await refinement; order.push("catalog-and-board-refinement"); },
+  });
+  expect(order).toEqual([
+    "capability", "identity", "hot-state", "login-recovery", "controllers", "release-ready",
+  ]);
+  expect(refinementStarted).toBeTrue();
+  finishRefinement();
+  await refinement;
+});
+
+test("seat tick actions wait for committed worktree recovery without blocking controller activation", async () => {
+  let finishRecovery!: () => void;
+  const recovery = new Promise<void>(resolve => { finishRecovery = resolve; });
+  let tickStarted = false;
+  await startCurrentReleaseControllers({}, {
+    loadFlowPipelineController: async () => ({ startFlowPipelineController: () => {} }),
+    loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }),
+    loadSeatTick: async () => ({ startSeatTick: () => { tickStarted = true; return true; } }),
+  }, { beforeSeatTick: recovery });
+  expect(tickStarted).toBeFalse();
+  finishRecovery();
+  await recovery;
+  await Promise.resolve();
+  expect(tickStarted).toBeTrue();
+});
+
+test("a failed recovery keeps the seat tick fenced until a same-generation retry commits", async () => {
+  const controller = new AbortController();
+  let attempts = 0;
+  let tickStarted = false;
+  const recovery = retryWorktreeRecoveryUntilCommitted(async () => {
+    attempts++;
+    if (attempts === 1) throw new Error("transaction held");
+    return { folded: 1, leftAlone: 0 };
+  }, controller.signal, () => {}, 0);
+  await startCurrentReleaseControllers({}, {
+    loadFlowPipelineController: async () => ({ startFlowPipelineController: () => {} }),
+    loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }),
+    loadSeatTick: async () => ({ startSeatTick: () => { tickStarted = true; return true; } }),
+  }, { beforeSeatTick: recovery });
+  await Promise.resolve();
+  expect(tickStarted).toBeFalse();
+  await recovery;
+  await Promise.resolve();
+  expect(attempts).toBe(2);
+  expect(tickStarted).toBeTrue();
+});
+
+test.each(["before", "after"] as const)("withdrawing a fence %s acknowledgement starts seat tick once the incumbent's recovery receipt arrives", async withdrawal => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "seat-withdrawal-"));
+  const revision = "a".repeat(40);
+  const scheduled: Array<() => void> = [];
+  const initial = publishHotStateAuthority(directory, "sqlite", revision);
+  const firstReceipt = Promise.withResolvers<{ folded: number; leftAlone: number }>();
+  const resumedReceipt = Promise.withResolvers<{ folded: number; leftAlone: number }>();
+  const resumed = Promise.withResolvers<void>();
+  const log: string[] = [];
+  const poll = async () => {
+    scheduled.shift()!();
+    await new Promise<void>(resolve => setImmediate(resolve));
+  };
+  let ticks = 0;
+  const signals: AbortSignal[] = [];
+  const recovery = createViewerWorktreeRecovery(signal => {
+    signals.push(signal);
+    return signals.length === 1 ? firstReceipt.promise : resumedReceipt.promise;
+  }, () => readHotStateAuthority(directory)?.mode === "sqlite");
+  try {
+    await activateViewerRuntimeWhenCurrent(async () => {
+      await startCurrentReleaseControllers({}, {
+        loadFlowPipelineController: async () => ({ startFlowPipelineController: () => {} }),
+        loadAccountMigrationController: async () => ({ startAccountMigrationController: async () => {} }),
+        loadSeatTick: async () => ({ startSeatTick: () => { ticks++; return true; } }),
+      }, { beforeSeatTick: recovery.committed });
+      void recovery.start().catch(() => {});
+    }, () => true, {
+      schedule: callback => { scheduled.push(callback); return {}; },
+      log: message => { log.push(String(message)); },
+      fenceRequest: () => readHotStateAuthority(directory),
+      onFenceRequested: async fence => {
+        await recovery.quiesce(new Error("fenced"));
+        acknowledgeHotStateFence(directory, fence, {
+          flows: 0, pipelines: 0, pipelinesArchive: 0, workflows: 0,
+        });
+      },
+      resumeWorktreeRecovery: async () => {
+        await recovery.start();
+        resumed.resolve();
+      },
+    });
+    const request = publishHotStateAuthority(directory, "fencing", revision);
+    await poll();
+    expect(signals[0]?.aborted).toBe(true);
+    expect(readHotStateAuthority(directory)?.checkpoint).toBeUndefined();
+    if (withdrawal === "before") expect(restoreHotStateAuthority(directory, initial, request))
+      .toMatchObject({ mode: "sqlite", releaseRevision: revision });
+    firstReceipt.resolve({ folded: 1, leftAlone: 0 });
+    await poll();
+    expect(ticks).toBe(0);
+    if (withdrawal === "after") {
+      const fence = readHotStateAuthority(directory)!;
+      expect(fence.checkpoint).toBeDefined();
+      expect(restoreHotStateAuthority(directory, initial, fence)).toMatchObject({ mode: "sqlite", releaseRevision: revision });
+    }
+    await poll();
+    expect(log).toEqual(withdrawal === "before" ? ["[viewer release] hot-state fence checkpoint failed"] : []);
+    expect(signals).toHaveLength(2);
+    expect(signals[1]?.aborted).toBe(false);
+    expect(ticks).toBe(0);
+    resumedReceipt.resolve({ folded: 0, leftAlone: 0 });
+    await resumed.promise;
+    await poll();
+    expect(ticks).toBe(1);
+    expect(signals).toHaveLength(2);
+  } finally {
+    firstReceipt.resolve({ folded: 0, leftAlone: 0 });
+    resumedReceipt.resolve({ folded: 0, leftAlone: 0 });
+    await recovery.quiesce(new Error("test cleanup"));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("native caller readiness waits through every artifact batch before controllers start", async () => {
+  const order: string[] = [];
+  let finishSecondBatch!: () => void;
+  const secondBatch = new Promise<void>(resolve => { finishSecondBatch = resolve; });
+  let batches = 0;
+  const controller = new AbortController();
+  const registry = {
+    prepareReadOnlySnapshot: async () => {
+      order.push("snapshot");
+      return normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+    },
+    prepareNativeCallerArtifacts: async () => {
+      while (batches < 2) {
+        batches += 1;
+        order.push(`native-batch-${batches}`);
+        if (batches === 2) await secondBatch;
+      }
+      order.push("native-ready");
+    },
+  };
+  const startup = async () => {
+    await prepareRegistryForNativeCallers(registry, controller.signal);
+    order.push("registry-ready");
+    await completeViewerRuntimeActivation({
+      initializeOperatorCapability: async () => {},
+      publishHotStateActivation: () => {},
+      startStructuredHosts: null,
+      startControllers: async () => { order.push("controllers"); },
+      publishViewerReleaseReady: () => { order.push("release-ready"); },
+    });
+  };
+  const activation = startup();
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(order).toEqual(["snapshot", "native-batch-1", "native-batch-2"]);
+  // Reaching the batched store API here represents its full drain; hold the
+  // second slice to prove the first authorized request cannot race readiness.
+  finishSecondBatch();
+  await activation;
+  expect(order).toEqual(["snapshot", "native-batch-1", "native-batch-2", "native-ready", "registry-ready", "controllers", "release-ready"]);
+});
 
 test("retirement cannot checkpoint ahead of the real activation worker or accept its late result", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "activation-retirement-"));
@@ -82,9 +261,10 @@ test("the release owner starts auto-update and the «Готово» sweep with t
     loadCloudEnvironmentController: async () => ({ startCloudEnvironmentController: () => { started.push("cloud"); } }),
     loadLinkedBoardSync: async () => ({ startLinkedBoardSync: () => { started.push("boards"); } }),
     loadDoneSweep: async () => ({ startDoneSweep: () => { started.push("done"); } }),
+    loadMemberRevocations: async () => ({ startMemberRevocationWorker: () => { started.push("revocations"); } }),
     loadAppConnect: async () => ({ startAppConnectPoller: () => { started.push("app-connect"); } }),
   });
-  expect(started).toEqual(["auto", "pipeline", "cloud", "boards", "done", "app-connect"]);
+  expect(started).toEqual(["auto", "pipeline", "cloud", "boards", "done", "revocations", "app-connect"]);
 });
 
 test.each([true, false])("pressure observation starts independently of cleanup with cleanup loader succeeds=%s", async succeeds => {
@@ -167,7 +347,7 @@ test("an install transfer that cannot be settled refuses activation before any l
   const source = registerViewerRuntime.toString();
   const step = source.indexOf("settleInterruptedTransfers()");
   expect(step).toBeGreaterThan(-1);
-  for (const later of ["prepareReadOnlySnapshot", "completeViewerRuntimeActivation(", "startCurrentReleaseControllers"]) {
+  for (const later of ["prepareRegistryForNativeCallers(", "completeViewerRuntimeActivation(", "startCurrentReleaseControllers"]) {
     const at = source.indexOf(later);
     expect(at).toBeGreaterThan(step);
   }

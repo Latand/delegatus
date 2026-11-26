@@ -543,6 +543,7 @@ export function recolorMember(store: TeamStore, actor: Member, target: Member, c
     in the same transaction. */
 export function revokeMember(store: TeamStore, owner: Member, target: Member, nowMs = Date.now()): Member {
   if (target.role === "owner") throw new TeamError("owner_protected", "the owner cannot be revoked", 409);
+  target = store.member(target.id) ?? target;
   if (target.status === "revoked") return target;
   const next: Member = { ...target, status: "revoked", revokedAt: iso(nowMs) };
   store.transaction(() => {
@@ -551,7 +552,8 @@ export function revokeMember(store: TeamStore, owner: Member, target: Member, no
     /* A hand-off or approval issued before the revocation must not sign them
        in after a restore: restoring gives back the membership, not the links. */
     store.consumeChallengesOf(target.id, iso(nowMs));
-    appendTeamEvent(store, { actor: { kind: "member", memberId: owner.id }, action: "member.revoked", subject: { kind: "member", id: target.id, title: target.name }, detail: { sessions: ended.length } }, nowMs);
+    const event = appendTeamEvent(store, { actor: { kind: "member", memberId: owner.id }, action: "member.revoked", subject: { kind: "member", id: target.id, title: target.name }, detail: { sessions: ended.length, stoppedHosts: 0, heldLaunches: 0, pending: true } }, nowMs);
+    store.enqueueMemberRevocation(event, target.id);
   });
   return next;
 }

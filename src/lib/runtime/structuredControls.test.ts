@@ -248,12 +248,8 @@ test("conversation_action answer through the real control boundary never approve
       registry: () => fixture.registry,
       structuredEnabled: () => true,
       dispatchStructuredControl: (request) => dispatchStructuredControl(request, { registry: fixture.registry, client, enabled: () => true, kick: () => {} }),
-      interruptConversation: async () => { throw new Error("unexpected"); },
-      killConversation: async () => { throw new Error("unexpected"); },
       resumeConversation: async () => { throw new Error("unexpected"); },
-      compactConversation: async () => { throw new Error("unexpected"); },
-      answerDialogKey: async () => { throw new Error("unexpected"); },
-      pendingQuestion: async () => ({ kind: "plan", toolUseId: "toolu_old_plan", transcriptPath: fixture.path, pid: 1, paneTarget: null, askedAt: "2026-10-12T09:00:00.000Z" }),
+      pendingQuestion: async () => ({ kind: "plan", toolUseId: "toolu_old_plan", transcriptPath: fixture.path, pid: 1, askedAt: "2026-10-12T09:00:00.000Z" }),
     },
   );
 
@@ -806,6 +802,7 @@ test("structured kill enters the durable runtime command channel", async () => {
   expect(result).toMatchObject({ status: 202, body: { ok: true, structured: true, target: fixture.conversationId } });
   expect(commands).toEqual([{
     kind: "kill",
+    pendingSendIds: [],
     origin: { kind: "operator" },
     operationId: "kill-one",
     idempotencyKey: "kill-one",
@@ -857,6 +854,7 @@ test("structured kill addressed by conversationId enters the durable command cha
   expect(result).toMatchObject({ status: 202, body: { ok: true, structured: true, target: fixture.conversationId } });
   expect(commands).toEqual([{
     kind: "kill",
+    pendingSendIds: [],
     origin: { kind: "operator" },
     operationId: "kill-by-id",
     idempotencyKey: "kill-by-id",
@@ -921,6 +919,24 @@ test("a kill transport timeout after journal admission reports the durable recei
     status: 200,
     body: { ok: true, structured: true, target: fixture.conversationId, operationId: "kill-timeout", receipt: { status: "delivered" } },
   });
+});
+
+test("an owned kill leaves an uncertain acknowledgement for its caller to reconcile", async () => {
+  const fixture = structuredConversation();
+  let commands = 0, reads = 0;
+  const client = {
+    command: async () => {
+      commands++;
+      throw new RuntimeHostUnavailableError("runtime host request timed out");
+    },
+    operationStatus: async () => { reads++; return null; },
+  } as unknown as RuntimeHostClient;
+  const result = await dispatchStructuredControl({
+    path: fixture.path, conversationId: fixture.conversationId, action: "kill", operationId: "owned-fixture-stop",
+    onlyIfIdle: { revision: 1, writerClaim: "fixture-writer" },
+  }, { registry: fixture.registry, client, enabled: () => true, recoverTransportReceipt: false });
+  expect(result).toEqual({ status: 503, body: { error: "runtime host request timed out" } });
+  expect({ commands, reads }).toEqual({ commands: 1, reads: 0 });
 });
 
 test("a kill transport timeout with no durable record stays a retryable failure", async () => {
@@ -1339,30 +1355,6 @@ test("a socket that fails after the host took the reconfigure attributes the swi
   }]);
 });
 
-// A legacy claim remains authoritative when structured metadata survives recovery.
-for (const action of ["interrupt", "kill"]) {
-  test(`${action} yields to the current legacy owner despite stale structured metadata`, async () => {
-    const fixture = structuredConversation();
-    const snapshot = fixture.registry.readOnlySnapshot();
-    const entry = Object.values(snapshot.entries)[0]!;
-    // Preserve both columns without launching or addressing a process.
-    const registry = {
-      conversationForPath: () => fixture.registry.conversationForPath(fixture.path),
-      readOnlySnapshot: () => ({ ...snapshot, entries: {
-        ...snapshot.entries,
-        [`${entry.key.engine}:${entry.key.sessionId}`]: { ...entry, host: { kind: "tmux" } },
-      } }),
-    } as unknown as AgentRegistry;
-    const commands: unknown[] = [];
-    const result = await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action }, {
-      registry, enabled: () => true,
-      client: { command: async (command: unknown) => { commands.push(command); throw new Error("wrong owner"); } } as unknown as RuntimeHostClient,
-    });
-    expect(result).toBeNull();
-    expect(commands).toEqual([]);
-  });
-}
-
 /* ── #1846: a pick is the conversation's intended account ─────────────────── */
 
 /** A client over a real runtime journal in a private SQLite file: what the dispatch writes is what the queue reads. */
@@ -1708,3 +1700,245 @@ test("the pipeline switch adapter recognizes receipt-free native reconfigure suc
     expect(commands).toHaveLength(0);
   } finally { journal.close(); }
 });
+
+
+test("an accepted kill fences held sends even when its termination receipt is still queued", async () => {
+  const fixture = structuredConversation();
+  const conversation = fixture.registry.conversationForPath(fixture.path)!;
+  fixture.registry.commitMigrationIntent({ engine: "codex", targetId: "target", origin: "manual", requestId: "kill-held-switch",
+    expectedRevision: fixture.registry.engineRouting("codex").revision });
+  const held = fixture.registry.holdDelivery(conversation.id, "pending instruction", "kill-held-message");
+  expect(held.state).toBe("held");
+  const client = { command: async () => ({ operationId: "kill-held", receipt: { operationId: "kill-held", status: "queued" }, replayed: false }) } as unknown as RuntimeHostClient;
+  const result = await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action: "kill" }, {
+    registry: fixture.registry, client, operationId: () => "kill-held", kick: () => {}, enabled: () => true,
+  });
+  expect(result?.status).toBe(202);
+  const { sendReceiptFor } = await import("./sendSettlement");
+  expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(held.command.operationId), held.command.operationId))
+    .toMatchObject({ state: "failed", resend: "safe" });
+  expect(fixture.registry.beginDeliveryAttempt(held.id, conversation.generations.at(-1)!.id)).toBeNull();
+});
+
+
+test("a refused kill leaves pending sends intact and an accepted kill excludes later admissions", async () => {
+  for (const accepted of [false, true]) {
+    const fixture = structuredConversation();
+    const conversation = fixture.registry.conversationForPath(fixture.path)!;
+    const before = fixture.registry.holdDelivery(conversation.id, "before kill", `kill-before-${accepted}`);
+    let after: typeof before | undefined;
+    const client = { command: async () => {
+      after = fixture.registry.holdDelivery(conversation.id, "after kill", `kill-after-${accepted}`);
+      return { operationId: "kill-cohort", receipt: { operationId: "kill-cohort", status: accepted ? "queued" : "rejected" }, replayed: false };
+    } } as unknown as RuntimeHostClient;
+    await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action: "kill" }, {
+      registry: fixture.registry, client, operationId: () => "kill-cohort", kick: () => {}, enabled: () => true,
+    });
+    const { sendReceiptFor } = await import("./sendSettlement");
+    expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(before.command.operationId), before.command.operationId)?.state)
+      .toBe(accepted ? "failed" : "in-flight");
+    expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(after!.command.operationId), after!.command.operationId)?.state).toBe("in-flight");
+  }
+});
+
+
+test.each(["replay", "restart", "lost-reply", "delivering-lost-reply", "restart-before-fence", "dead-projection"] as const)(
+  "original-key kill %s fences only its durable admission cohort", async mode => {
+    const fixture = structuredConversation();
+    const conversation = fixture.registry.conversationForPath(fixture.path)!;
+    fixture.registry.commitMigrationIntent({ engine: "codex", targetId: "target", origin: "manual", requestId: `cohort-switch-${mode}`,
+      expectedRevision: fixture.registry.engineRouting("codex").revision });
+    const before = fixture.registry.holdDelivery(conversation.id, "before the kill", `cohort-before-${mode}`);
+    const filename = path.join(sandbox, `kill-cohort-${mode}.sqlite`);
+    let journal = new RuntimeJournal(filename, { structuredHosts: true });
+    let loseReply = mode === "lost-reply" || mode === "delivering-lost-reply" || mode === "restart-before-fence";
+    let later: typeof before | undefined;
+    const client = {
+      command: async (command: RuntimeOperationCommand) => {
+        const result = journal.executeOperation(command);
+        if (!later) later = fixture.registry.holdDelivery(conversation.id, "after admission", `cohort-after-${mode}`);
+        if (loseReply) {
+          loseReply = false;
+          if (mode === "restart-before-fence") throw new Error("response interrupted before fencing");
+          if (mode === "delivering-lost-reply") journal.transitionOperation(command.operationId!, "delivering");
+          throw new RuntimeHostUnavailableError("runtime host request timed out");
+        }
+        return result;
+      },
+      operationStatus: async (id: string) => journal.operationResult(id),
+      transitionOperation: async () => { throw new Error("held sends have no journal operation"); },
+    } as unknown as RuntimeHostClient;
+    const request = { path: fixture.path, conversationId: fixture.conversationId, action: "kill", operationId: `cohort-kill-${mode}` } as const;
+    const deps = { registry: fixture.registry, client, kick: () => {}, enabled: () => true };
+    try {
+      expect((await dispatchStructuredControl(request, deps))?.status).toBe(mode === "restart-before-fence" ? 503 : 202);
+      expect(journal.operationResult(request.operationId)?.receipt.pendingSendIds).toEqual([before.command.operationId]);
+      if (mode !== "replay") { journal.close(); journal = new RuntimeJournal(filename, { structuredHosts: true }); }
+      if (mode === "dead-projection") {
+        const entry = Object.values(fixture.registry.snapshot().entries)[0]!;
+        fixture.registry.upsert({ ...entry, status: "dead", structuredHost: null });
+      }
+      expect((await dispatchStructuredControl(request, deps))?.status).toBe(202);
+      const { sendReceiptFor } = await import("./sendSettlement");
+      expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(before.command.operationId), before.command.operationId))
+        .toMatchObject({ state: "failed", resend: "safe" });
+      expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(later!.command.operationId), later!.command.operationId)?.state)
+        .toBe("in-flight");
+    } finally { journal.close(); }
+  },
+);
+
+test.each(["acknowledged", "lost", "fence-refused"] as const)("kill acknowledgement loss keeps its pending cohort fenced through actual redelivery (%s)", async mode => {
+  const lost = mode !== "acknowledged";
+  const fixture = structuredConversation();
+  const conversation = fixture.registry.conversationForPath(fixture.path)!;
+  const generation = conversation.generations.at(-1)!;
+  const key = { engine: "codex" as const, sessionId: generation.id };
+  const originalEntry = fixture.registry.readOnlySnapshot().entries[`codex:${generation.id}`]!;
+  const held = fixture.registry.holdDelivery(conversation.id, "instruction admitted before kill", `kill-redelivery-message-${mode}`);
+  const filename = path.join(sandbox, `kill-redelivery-${mode}.sqlite`);
+  let journal = new RuntimeJournal(filename, { structuredHosts: true });
+  const client = {
+    command: async (command: RuntimeOperationCommand) => {
+      const admitted = journal.executeOperation(command);
+      if (lost) throw new RuntimeHostUnavailableError("runtime host request timed out");
+      return admitted;
+    },
+    operationStatus: async () => { throw new RuntimeHostUnavailableError("runtime host is unavailable"); },
+  } as unknown as RuntimeHostClient;
+  const { fencePendingSends, sendIsSettled, sendReceiptFor } = await import("./sendSettlement");
+  const port = (): import("./structuredDeliveryQueue").StructuredDeliveryQueuePort => ({
+    fencePendingSends: ids => fencePendingSends(ids, { registry: fixture.registry, client: null }),
+    effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+    status: async id => journal.operationResult(id)?.receipt ?? null,
+    settled: id => sendIsSettled(fixture.registry.deliverySnapshotForOperation(id), id),
+    transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+  });
+  try {
+    const answer = await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action: "kill", operationId: `kill-redelivery-${mode}` },
+      { registry: fixture.registry, client, enabled: () => true, kick: () => {} });
+    expect(answer?.status).toBe(lost ? 503 : 202);
+    journal.close(); journal = new RuntimeJournal(filename, { structuredHosts: true });
+    const later = fixture.registry.holdDelivery(conversation.id, "instruction admitted after kill", `later-kill-message-${mode}`);
+    if (mode === "fence-refused") {
+      let terminated = false;
+      const refused = new StructuredDeliveryQueue({ ...port(), fencePendingSends: async () => { throw new Error("registry writer unavailable"); } },
+        () => null, async () => { terminated = true; return true; });
+      try {
+        await refused.drain();
+        expect(terminated).toBe(false);
+        expect(journal.operationResult(`kill-redelivery-${mode}`)?.receipt.status).toBe("queued");
+        expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(held.command.operationId), held.command.operationId)?.state).toBe("in-flight");
+      } finally { refused.retire(); }
+      journal.close(); journal = new RuntimeJournal(filename, { structuredHosts: true });
+    }
+    const controlQueue = new StructuredDeliveryQueue(port(), () => null, async () => fixture.registry.terminateStructuredHost(key));
+    try { await controlQueue.drain(); } finally { controlQueue.retire(); }
+    expect(journal.operationResult(`kill-redelivery-${mode}`)?.receipt.status).toBe("delivered");
+    expect(fixture.registry.readOnlySnapshot().entries[`codex:${generation.id}`]?.status).toBe("dead");
+    expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(later.command.operationId), later.command.operationId)?.state).toBe("in-flight");
+    fixture.registry.recordDeliveryOutcome(later.id, "failed", "fixture cleanup", "lost");
+    fixture.registry.close();
+    fixture.registry = new AgentRegistry(path.join(sandbox, `${generation.id}.registry.json`), undefined, undefined, { sqliteMode: "off" });
+    expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(held.command.operationId), held.command.operationId))
+      .toMatchObject({ state: "failed", resend: "safe" });
+    // A replacement host is published before a settlement sweep. The earlier
+    // kill must still fence its original instruction after this replacement.
+    fixture.registry.upsert({ ...originalEntry, claimEpoch: originalEntry.claimEpoch + 1, status: "live", pendingAction: null, structuredHost: { ...originalEntry.structuredHost!, writerClaimEpoch: originalEntry.claimEpoch + 1 } });
+    journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: {
+      conversationId: conversation.id, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle", provenance: "structured",
+      artifactPath: generation.path, capabilities: { steer: true, structuredAttention: true },
+    } });
+    const { drainHeldDeliveries } = await import("@/lib/accounts/migration/coordinator");
+    await drainHeldDeliveries(conversation.id, { deliver: async ({ delivery }) => {
+      const result = journal.executeOperation({ kind: "send", operationId: delivery.command.operationId, idempotencyKey: delivery.command.operationId,
+        conversationId: conversation.id, text: delivery.text, policy: "queue" });
+      expect(result.receipt.status).toBe("queued");
+      return "delivery-uncertain";
+    } }, fixture.registry);
+    const { FakeEngineHost, createFakeDeliveryLedger } = await import("./fixtures/fakeEngineHost");
+    const ledger = createFakeDeliveryLedger();
+    const host = new FakeEngineHost(ledger, { status: "idle", sessionKey: generation.id, endpoint: "fixture:replacement", pid: 1,
+      processStartIdentity: "fixture", eventCursor: 0, protocolVersion: "fixture", activeTurnRef: null, pendingAttention: [], activeFlags: [], account: null });
+    const messageQueue = new StructuredDeliveryQueue(port(), () => host);
+    try { await messageQueue.drain(); } finally { messageQueue.retire(); }
+    expect(ledger.writes).toEqual([]);
+    expect(sendReceiptFor(fixture.registry.deliverySnapshotForOperation(held.command.operationId), held.command.operationId)).toMatchObject({ state: "failed", resend: "safe" });
+  } finally { journal.close(); fixture.registry.close(); }
+});
+
+
+for (const mode of ["dispatch", "lost-reply", "recovery"] as const) {
+  test.each(["claim-lost", "signal-refused", "terminated"] as const)(
+    `idle-only retirement preserves its cohort until termination is confirmed (${mode}, %s)`, async outcome => {
+      const fixture = structuredConversation();
+      const conversation = fixture.registry.conversationForPath(fixture.path)!;
+      const generation = conversation.generations.at(-1)!;
+      const held = fixture.registry.holdDelivery(conversation.id, "queued instruction", `idle-cohort-message-${mode}-${outcome}`);
+      const entry = fixture.registry.readOnlySnapshot().entries[`codex:${generation.id}`]!;
+      fixture.registry.upsert({ ...entry, status: "idle", structuredHost: { ...entry.structuredHost!, activeTurnRef: null } });
+      const filename = path.join(sandbox, `idle-cohort-${mode}-${outcome}.sqlite`);
+      let journal = new RuntimeJournal(filename, { structuredHosts: true });
+      const publish = (turn: "idle" | "running") => journal.append({ scope: { type: "session", id: conversation.id }, kind: "session-status", payload: {
+        conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: generation.id }, hostKind: "codex-app-server", host: "hosted", turn,
+        activeTurnId: turn === "running" ? "new-work" : null, writerClaim: "fixture:1", provenance: "structured", artifactPath: generation.path,
+        capabilities: { steer: true, structuredAttention: true },
+      } });
+      publish("idle");
+      const idle = journal.readSession({ conversationId: conversation.id })!;
+      const operationId = `idle-cohort-kill-${mode}-${outcome}`;
+      const command: RuntimeOperationCommand = { kind: "kill", operationId, idempotencyKey: operationId,
+        conversationId: conversation.id, sessionKey: { engine: "codex", sessionId: generation.id },
+        pendingSendIds: [held.command.operationId], onlyIfIdle: { revision: idle.revision, writerClaim: idle.writerClaim! } };
+      const client = {
+        command: async (request: RuntimeOperationCommand) => {
+          const result = journal.executeOperation(request);
+          expect(result.receipt.status).toBe("queued");
+          if (outcome === "claim-lost") publish("running");
+          if (mode === "lost-reply") throw new RuntimeHostUnavailableError("runtime host request timed out");
+          return result;
+        },
+        operationStatus: async (id: string) => journal.operationResult(id),
+      } as unknown as RuntimeHostClient;
+      const { fencePendingSends, sendReceiptFor } = await import("./sendSettlement");
+      const receipt = () => sendReceiptFor(fixture.registry.deliverySnapshotForOperation(held.command.operationId), held.command.operationId);
+      let terminations = 0;
+      let fences = 0;
+      const queue = new StructuredDeliveryQueue({
+        effects: async (kinds, after) => journal.effectBatch(100, kinds, after),
+        status: async id => journal.operationResult(id)?.receipt ?? null,
+        fencePendingSends: async ids => {
+          expect(terminations).toBe(1);
+          fences++;
+          await fencePendingSends(ids, { registry: fixture.registry, client: null });
+        },
+        transition: async (id, status, details, options) => { journal.transitionOperation(id, status, details, options); },
+      }, () => null, async () => {
+        expect(receipt()).toMatchObject({ state: "in-flight" });
+        terminations++;
+        return outcome === "terminated";
+      });
+      try {
+        if (mode === "recovery") {
+          journal.executeOperation(command);
+          if (outcome === "claim-lost") publish("running");
+          journal.close();
+          journal = new RuntimeJournal(filename, { structuredHosts: true });
+        } else {
+          expect((await dispatchStructuredControl({ path: fixture.path, conversationId: fixture.conversationId, action: "kill",
+            operationId, onlyIfIdle: command.onlyIfIdle },
+            { registry: fixture.registry, client, enabled: () => true, kick: () => {} }))?.status).toBe(202);
+        }
+        expect(receipt()).toMatchObject({ state: "in-flight" });
+        await queue.drain();
+        expect(journal.operationResult(operationId)?.receipt).toMatchObject(outcome === "terminated"
+          ? { status: "delivered" } : { status: "failed", reason: "idle-retirement-deferred" });
+        expect(terminations).toBe(outcome === "claim-lost" ? 0 : 1);
+        expect(fences).toBe(outcome === "terminated" ? 1 : 0);
+        expect(receipt()).toMatchObject(outcome === "terminated" ? { state: "failed", resend: "safe" } : { state: "in-flight" });
+        if (outcome === "claim-lost") expect(journal.readSession({ conversationId: conversation.id }))
+          .toMatchObject({ turn: "running", activeTurnId: "new-work" });
+      } finally { queue.retire(); journal.close(); fixture.registry.close(); }
+    },
+  );
+}

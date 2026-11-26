@@ -235,6 +235,7 @@ async function checkoutFixture(options: { ignoreHostname?: boolean; unevaluableA
       ? mkdir(path.join(fixture, "node_modules", "qrcode-terminal"))
       : symlink(path.resolve("node_modules/qrcode-terminal"), path.join(fixture, "node_modules", "qrcode-terminal"), "dir"),
     copyFile(path.resolve("bin/cli.mjs"), path.join(bin, "cli.mjs")),
+    copyFile(path.resolve("bin/launcher-inherited-children.mjs"), path.join(bin, "launcher-inherited-children.mjs")),
     copyFile(path.resolve("bin/telemetry-notice.mjs"), path.join(bin, "telemetry-notice.mjs")),
     copyFile(path.resolve("bin/agent-binaries.mjs"), path.join(bin, "agent-binaries.mjs")),
     options.unevaluableAddress === undefined
@@ -396,7 +397,7 @@ test("the first start keeps a cold Viewer alive beyond fifteen seconds", async (
   expect(await probe("127.0.0.1", port)).toBe(200);
 }, 30_000);
 
-test("a machine that still has the retired systemd unit is told how to move to Docker, and the Viewer still starts", async () => {
+test("a machine that still has the retired systemd unit is told how to migrate, and the Viewer still starts", async () => {
   const fixture = await checkoutFixture();
   await mkdir(fixture.env.TMPDIR!, { recursive: true });
   const unitDir = path.join(fixture.env.XDG_CONFIG_HOME!, "systemd", "user");
@@ -411,13 +412,13 @@ test("a machine that still has the retired systemd unit is told how to move to D
   children.add(child);
   const output = captureOutput(child);
 
-  await output.waitFor("The systemd install of Delegatus is retired: Docker is the only install.", 10_000);
+  await output.waitFor("The legacy Delegatus units are retired. Use delegatus service install for a packaged install, or Docker.", 10_000);
   await output.waitFor("Open http://", 10_000);
   await waitForStatus("127.0.0.1", port, 200, fixture.env.LLV_STATE_DIR!);
   expect(output.text()).toContain("systemctl --user disable --now agent-log-viewer.service\n");
   expect(output.text()).toContain(`rm ${path.join(unitDir, "agent-log-viewer.service")}\n`);
   expect(output.text()).toContain("https://github.com/Latand/delegatus/blob/main/docs/docker.md");
-  expect(output.text().split("systemd install of Delegatus is retired").length).toBe(2);
+  expect(output.text().split("The legacy Delegatus units are retired.").length).toBe(2);
   expect(child.exitCode).toBeNull();
 });
 

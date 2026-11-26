@@ -25,20 +25,6 @@ export interface TaskSendResult {
   failed: number;
 }
 
-export interface TaskSpawnResult {
-  task: BoardTask;
-  target: string | null;
-  path: string | null;
-  panePid: number | null;
-  launchId: string;
-  conversationId: string;
-  initialMessage: "pending" | "queued" | "delivered" | "failed";
-  state: "starting" | "path-pending" | "settled" | "failed" | "conflict";
-  retrySafe: boolean;
-  assignment: "delivered" | "failed" | "spawning" | "handoff" | "linked";
-  error?: string;
-}
-
 type ApiResult<T> = { ok: true; data: T } | { ok: false; error: string; status: number };
 
 async function request<T>(url: string, method: string, body?: unknown): Promise<ApiResult<T>> {
@@ -222,42 +208,5 @@ export async function sendTask(id: string, paths: string[], clientRequestId?: st
     paths,
     ...(clientRequestId ? { clientRequestId } : {}),
   });
-  return res.ok ? res.data : { error: res.error };
-}
-
-/** Everything a fresh task agent can be launched with; effort/fast omitted
-    means the CLI keeps its own defaults. */
-export interface SpawnAgentInput {
-  engine: "claude" | "codex";
-  model?: string;
-  cwd: string;
-  effort?: string;
-  fast?: boolean;
-  clientAttemptId: string;
-}
-
-/** Creates one launch identity for a user gesture. Keep the returned value
-    through retries whose response may have been lost. */
-export function createTaskSpawnGesture(input: Omit<SpawnAgentInput, "clientAttemptId">): SpawnAgentInput {
-  return { ...input, clientAttemptId: newClientRequestId() };
-}
-
-/** Spawns an agent with the task text as the brief; same stale-text guard
-    as sendTask, since the server reads the persisted text as the prompt. */
-export async function spawnTaskAgent(id: string, input: SpawnAgentInput): Promise<TaskSpawnResult | { error: string }> {
-  const textError = await pendingTextError(id);
-  if (textError) return { error: textError };
-  const res = await request<TaskSpawnResult>(`/api/tasks/${encodeURIComponent(id)}/spawn`, "POST", input);
-  return res.ok ? res.data : { error: res.error };
-}
-
-/** Relaunches a failed assignment from its durable receipt shape (#334):
-    engine, directory, model, and pinned account replay server-side, so no
-    transcript path is needed. The server mints a fresh attempt id — a
-    terminal receipt is never replayed. Same stale-text guard as spawn. */
-export async function retryTaskSpawn(id: string, launchId: string): Promise<TaskSpawnResult | { error: string }> {
-  const textError = await pendingTextError(id);
-  if (textError) return { error: textError };
-  const res = await request<TaskSpawnResult>(`/api/tasks/${encodeURIComponent(id)}/spawn`, "POST", { retryOfLaunchId: launchId });
   return res.ok ? res.data : { error: res.error };
 }

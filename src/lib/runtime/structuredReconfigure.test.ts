@@ -213,7 +213,7 @@ test("failed account preflight supersedes an applying predecessor and restores i
     recoverDeadStructuredConversation(request, {
       ...dependencies,
       client: {} as never,
-      transport: () => "structured",
+      transportAvailable: () => true,
       resolveAccount: () => ({
         engine: "codex",
         accountId: "source",
@@ -549,7 +549,7 @@ test("a newer profile reconfigure cannot join a superseded conversation recovery
     const pending = recoverDeadStructuredConversation(request, {
       ...dependencies,
       client: {} as never,
-      transport: () => "structured",
+      transportAvailable: () => true,
       resolveAccount: () => ({
         engine: "codex",
         accountId: "source",
@@ -1549,7 +1549,7 @@ for (const engine of ["claude", "codex"] as const) {
       recoverDeadStructuredConversation(request, {
         ...dependencies,
         client: {} as never,
-        transport: () => "structured",
+        transportAvailable: () => true,
         resolveAccount: () => ({ engine, accountId: "source", kind: "managed", home: path.join(target.cwd, "account"), transcriptRoot: target.cwd, env: { NODE_ENV: "test" } }),
         spawn: async (input) => {
           spawns += 1;

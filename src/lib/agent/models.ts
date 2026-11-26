@@ -14,6 +14,8 @@ export type AgentModelOption = {
   retired?: true;
 };
 
+export const CODEX_GPT62_SOL_MODEL = "gpt-6.2-sol";
+export const CODEX_GPT62_ASTRA_MODEL = "gpt-6.2-astra";
 export const CODEX_ASTRA_MODEL = "gpt-6-astra";
 export const CODEX_GPT61_SOL_MODEL = "gpt-6.1-sol";
 export const CODEX_GPT61_TERRA_MODEL = "gpt-6.1-terra";
@@ -24,11 +26,16 @@ export const CODEX_TERRA_MODEL = "gpt-5.6-terra";
 export const CODEX_LUNA_MODEL = "gpt-5.6-luna";
 
 // Wire admission remains stable when a picker retires an older choice.
-const CODEX_LAUNCH_MODEL_IDS = [CODEX_ASTRA_MODEL, CODEX_GPT61_SOL_MODEL,
+const CODEX_LAUNCH_MODEL_IDS = [CODEX_GPT62_SOL_MODEL, CODEX_GPT62_ASTRA_MODEL, CODEX_ASTRA_MODEL, CODEX_GPT61_SOL_MODEL,
   CODEX_GPT6_SOL_MODEL, CODEX_GPT6_LUNA_MODEL, CODEX_SOL_MODEL,
   CODEX_TERRA_MODEL, CODEX_LUNA_MODEL, CODEX_GPT61_TERRA_MODEL] as const;
 
+/** Models offered by Codex Cloud transports; the existing default stays Sol 6.1. */
+export const CODEX_CLOUD_MODEL_IDS: readonly string[] = [CODEX_GPT62_SOL_MODEL, CODEX_GPT62_ASTRA_MODEL, CODEX_GPT61_SOL_MODEL];
+
 const CODEX_IMAGE_INPUT_MODELS = new Set([
+  CODEX_GPT62_SOL_MODEL,
+  CODEX_GPT62_ASTRA_MODEL,
   CODEX_ASTRA_MODEL,
   CODEX_GPT61_SOL_MODEL,
   CODEX_GPT61_TERRA_MODEL,
@@ -49,18 +56,29 @@ export function codexModelSupportsImages(model: string | null | undefined): bool
 }
 
 export const COPILOT_AUTO_MODEL = "auto";
+export const ANTIGRAVITY_DEFAULT_MODEL = "gemini-4-neon";
 
 /* A Copilot model id as the CLI takes it: dotted, lower case (`gpt-5.4`,
    `claude-sonnet-5`). The CLI is the arbiter of whether the account's plan
    offers it; a refused id fails the spawn with the CLI's own message. */
 const COPILOT_MODEL_ID = /^[a-z0-9][a-z0-9.-]*$/;
+/* An Antigravity model id: base id (`gemini-4-neon`) or combined `agy models`
+   id (`gemini-4-neon-xhigh`). The CLI remains the final arbiter. */
+const ANTIGRAVITY_MODEL_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 
-export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly AgentModelOption[]> = {
+export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot" | "antigravity", readonly AgentModelOption[]> = {
   claude: [
     // Claude Code 2.1.280 resolves the `opus` alias to claude-opus-5-5 on
     // first-party auth, so the alias row names what it launches.
     { id: "opus", label: "Opus 5.5", shortLabel: "Opus 5.5", use: "review" },
-    { id: "fable", label: "Fable", shortLabel: "Fable", use: "general" },
+    // What `fable` runs depends on the installed Claude Code: 2.1.318 resolves
+    // it to claude-fable-5-1, 2.1.321 to claude-fable-5-2. Its label names no
+    // version, and fresh menus offer the pinned Fable 5.2 row instead, which
+    // both releases launch as itself (2.1.318 accepts the id with a warning).
+    // Fable 5.1 is retired: its conversations keep reading and relaunching as 5.1.
+    { id: "fable", label: "Fable", shortLabel: "Fable", use: "general", retired: true },
+    { id: "claude-fable-5-2", label: "Fable 5.2", shortLabel: "Fable 5.2", use: "general" },
+    { id: "claude-fable-5-1", label: "Fable 5.1", shortLabel: "Fable 5.1", use: "general", retired: true },
     { id: "sonnet", label: "Sonnet", shortLabel: "Sonnet", use: "implement" },
     // Pinned id of the Sonnet the `sonnet` alias resolves to in Claude Code
     // 2.1.284. The alias moves when the next Sonnet ships; this row does not.
@@ -73,8 +91,10 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
   ],
   codex: [
     // Catalogue order is independent of the shipped launch fallback below.
-    // Fresh menus offer the first four; the retired rows keep saved
+    // Fresh menus offer the current rows; the retired rows keep saved
     // selections and transcript provenance readable.
+    { id: CODEX_GPT62_SOL_MODEL, label: "GPT-6.2-Sol", shortLabel: "6.2-Sol", use: "review" },
+    { id: CODEX_GPT62_ASTRA_MODEL, label: "GPT-6.2-Astra", shortLabel: "6.2-Astra", use: "review" },
     { id: CODEX_ASTRA_MODEL, label: "GPT-6-Astra", shortLabel: "6-Astra", use: "review" },
     { id: CODEX_GPT61_SOL_MODEL, label: "GPT-6.1-Sol", shortLabel: "6.1-Sol", use: "review" },
     { id: CODEX_GPT61_TERRA_MODEL, label: "GPT-6.1-Terra", shortLabel: "6.1-Terra", use: "implement" },
@@ -95,6 +115,19 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     { id: "claude-haiku-4.5", label: "Claude Haiku 4.5", shortLabel: "Haiku 4.5", use: "general" },
     { id: "gpt-5-mini", label: "GPT-5 mini", shortLabel: "5 mini", use: "general" },
   ],
+  // Measured `agy 1.5.13` ACP `configOptions.model` / `agy models` catalogue
+  // (docs/design/antigravity-engine.md §2.4).
+  antigravity: [
+    { id: ANTIGRAVITY_DEFAULT_MODEL, label: "Gemini 4 Neon", shortLabel: "4 Neon", use: "review" },
+    { id: "gemini-4-argon", label: "Gemini 4 Argon", shortLabel: "4 Argon", use: "implement" },
+    { id: "gemini-4-hydrogen", label: "Gemini 4 Hydrogen", shortLabel: "4 Hydrogen", use: "review" },
+    { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash", shortLabel: "3.8 Flash", use: "general" },
+    { id: "claude-opus-5-5", label: "Claude Opus 5.5", shortLabel: "Opus 5.5", use: "review" },
+    { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5", use: "implement" },
+    { id: "gpt-oss-120b-medium", label: "GPT-OSS 120B (Medium)", shortLabel: "OSS 120B", use: "general" },
+    { id: "gemini-pro-orchestrator-neon", label: "Orchestrator (Neon)", shortLabel: "Orch Neon", use: "review" },
+    { id: "gemini-pro-orchestrator-g1-pro", label: "Orchestrator (Argon)", shortLabel: "Orch Argon", use: "review" },
+  ],
 };
 
 /** The rows a picker offers for `engine`. A retired row is listed only while it
@@ -104,7 +137,7 @@ export const ENGINE_MODELS: Record<"claude" | "codex" | "copilot", readonly Agen
     pinned row. With several current choices (what runs, what is drafted), the
     earlier one decides between an alias and its pinned row. */
 export function listedModels(
-  engine: "claude" | "codex" | "copilot",
+  engine: "claude" | "codex" | "copilot" | "antigravity",
   current?: string | null | readonly (string | null | undefined)[],
 ): readonly AgentModelOption[] {
   const rows = ENGINE_MODELS[engine];
@@ -122,30 +155,46 @@ export type LaunchModelValidation = { model: string } | { error: string };
 
 /** Accepted wire ids, including reviewed models awaiting catalogue presentation.
     Historical catalogue ids remain valid for saved role and pipeline values. */
-export function launchModelIds(engine: "claude" | "codex" | "copilot"): string[] {
+export function launchModelIds(engine: "claude" | "codex" | "copilot" | "antigravity"): string[] {
   return engine === "codex" ? [...CODEX_LAUNCH_MODEL_IDS] : ENGINE_MODELS[engine].map(option => option.id);
 }
 
 /** Validate a fresh-launch model against the reviewed launch ids.
     Resume and migration paths deliberately do not call this helper. */
-export function validateLaunchModel(engine: "claude" | "codex" | "copilot", model: string): LaunchModelValidation {
+export function validateLaunchModel(engine: "claude" | "codex" | "copilot" | "antigravity", model: string): LaunchModelValidation {
   const requested = model.trim();
   const validIds = launchModelIds(engine);
   if (validIds.includes(requested)) return { model: requested };
   if (engine === "copilot" && requested.length <= 128 && COPILOT_MODEL_ID.test(requested)) return { model: requested };
+  if (engine === "antigravity" && requested.length <= 128 && ANTIGRAVITY_MODEL_ID.test(requested)) return { model: requested };
   return {
     error: `invalid ${engine} model id ${JSON.stringify(requested)}; valid ${engine} model ids: ${validIds.join(", ")}`,
   };
 }
 
 /** The shipped fresh-launch fallback; explicit catalogue selections stay available. */
-export function defaultModelFor(engine: "claude" | "codex" | "copilot"): string {
+export function defaultModelFor(engine: "claude" | "codex" | "copilot" | "antigravity"): string {
   if (engine === "copilot") return COPILOT_AUTO_MODEL;
+  if (engine === "antigravity") return ANTIGRAVITY_DEFAULT_MODEL;
   return engine === "codex" ? CODEX_GPT61_SOL_MODEL : "opus";
 }
 
 const CLAUDE_MODEL_FAMILIES = ["fable", "opus", "sonnet", "haiku"] as const;
 export type ClaudeLaunchModel = (typeof CLAUDE_MODEL_FAMILIES)[number];
+
+/** The release each launch alias runs on the installed Claude Code (2.1.321),
+    as its bundled catalogue's `aliases.<family>.default` names it for
+    first-party auth. The context-window registry and the onboarding cost
+    estimate read an alias through this table, so they price and size what the
+    alias launches. Claude Code 2.1.318 and earlier resolve `fable` to
+    claude-fable-5-1 instead; the picker therefore launches Fable 5.2 by its
+    pinned id, which does not depend on the installed alias table. */
+export const CLAUDE_ALIAS_RELEASES: Readonly<Record<ClaudeLaunchModel, string>> = {
+  fable: "claude-fable-5-2",
+  opus: "claude-opus-5-5",
+  sonnet: "claude-sonnet-5-5",
+  haiku: "claude-haiku-5-5",
+};
 
 /**
  * Claude transcripts preserve provider model provenance, including dated ids
@@ -169,10 +218,18 @@ export function normalizeClaudeLaunchModel(value: string | null | undefined): Cl
     id falls back to its family alias (`sonnet`), as normalizeClaudeLaunchModel
     does. */
 export function claudeCatalogModelId(value: string | null | undefined): string | null {
+  return claudePinnedModelId(value) ?? normalizeClaudeLaunchModel(value);
+}
+
+/** The pinned catalogue id a Claude model id names (`claude-fable-5-2`, with or
+    without a dated suffix), or null for an alias or an id the catalogue does
+    not pin. Resume keeps such an id, so a conversation goes on with the release
+    it ran on instead of whatever the family alias names in the installed CLI. */
+export function claudePinnedModelId(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
   const model = value.trim().toLowerCase().replace(/-20\d{6}$/, "");
-  const pinned = ENGINE_MODELS.claude.find((option) => option.id === model);
-  return pinned ? pinned.id : normalizeClaudeLaunchModel(value);
+  const pinned = ENGINE_MODELS.claude.find((option) => option.id === model && /\d/.test(option.id));
+  return pinned ? pinned.id : null;
 }
 
 /* A versioned Claude id as the scanner keeps it (`opus-5-5`, `claude-opus-5`,

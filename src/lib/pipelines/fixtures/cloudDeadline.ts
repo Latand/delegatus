@@ -69,7 +69,11 @@ export async function superviseCloudDeadline(file: string, name: string, expired
       if (exited || events.has("done")) throw new Error(`submission ended inside the held acknowledgement window\n${output}`);
       child.stdin!.write("release\n");
     }
-    await wait(() => events.has("done"), expired ? budgetMs + 10_000 : 15_000, "real deadline did not settle the submission");
+    // Preparation and remaining input delivery also spend the owner's budget.
+    // The independently measured deadline bounds completion after release; a
+    // fixed post-release slice can expire while legitimate work still has time.
+    const remaining = Math.max(0, budgetMs - (performance.now() - armed));
+    await wait(() => events.has("done"), remaining + 5_000, "real deadline did not settle the submission");
     if (expired && events.get("done")! - armed < budgetMs - 200) throw new Error(`submission expired before its stage budget\n${output}`);
     await wait(() => exited, 20_000, "deadline child did not exit after settlement");
     if (code !== 0) throw new Error(`deadline child failed (${code})\n${output}`);

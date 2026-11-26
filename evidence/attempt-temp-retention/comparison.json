@@ -1,0 +1,206 @@
+{
+  "base": "24bbef5f",
+  "measuredAt": "2026-11-04T21:05:59.445Z",
+  "sourceHashes": {
+    "src/lib/runtime/attemptTempRetention.ts": "89d4cf0962bdc38f64483de80f3da937b48e8c041cbe6cd38ed4f5575400e944",
+    "src/lib/runtime/attemptTempFilesystem.ts": "4b200bdc709723154633dcec7af30294d0efe33734c2da31bdc4df0c4f4df10f",
+    "src/lib/runtime/attemptTempProduction.ts": "198ca2e417030c2e1d81687a1fd8898ce4aa7818c7d6095733c75ccf978e3860",
+    "src/lib/runtime/attemptTempProduction.test.ts": "8c914e509d0a4df72d26baa2254cca48152adc03357a59d491fcc49ecd97866f",
+    "src/lib/runtime/attemptTempRetention.fixture.ts": "e7d9932b976a5d3fe387e448c1311b21eb968dbe07396ba23440598283225c1a"
+  },
+  "records": [
+    {
+      "round": 1,
+      "variant": "base",
+      "code": 0,
+      "metrics": {
+        "registryRoots": 727,
+        "checkoutLinks": 1024,
+        "ownedLoad": {
+          "cpuWorkers": 2,
+          "syncedDiskWriters": 1,
+          "writeBytes": 1048576
+        },
+        "hostCpus": 24,
+        "loadBefore": [
+          16.82,
+          21.47,
+          25.11
+        ],
+        "loadAfter": [
+          16.47,
+          21.24,
+          24.99
+        ],
+        "elapsedMs": 8314.250177,
+        "checked": 32,
+        "removed": 32,
+        "removedBytes": 537133056,
+        "errors": 0,
+        "checkoutWalks": 192,
+        "sustainedBytesPerHour": 32227983360
+      }
+    },
+    {
+      "round": 1,
+      "variant": "head",
+      "code": 0,
+      "metrics": {
+        "registryRoots": 727,
+        "checkoutLinks": 1024,
+        "ownedLoad": {
+          "cpuWorkers": 2,
+          "syncedDiskWriters": 1,
+          "writeBytes": 1048576
+        },
+        "hostCpus": 24,
+        "loadBefore": [
+          16.47,
+          21.24,
+          24.99
+        ],
+        "loadAfter": [
+          18.03,
+          21.48,
+          25.05
+        ],
+        "elapsedMs": 2528.9120809999995,
+        "checked": 32,
+        "removed": 32,
+        "removedBytes": 537133056,
+        "errors": 0,
+        "checkoutWalks": 1,
+        "sustainedBytesPerHour": 32227983360
+      }
+    },
+    {
+      "round": 2,
+      "variant": "head",
+      "code": 0,
+      "metrics": {
+        "registryRoots": 727,
+        "checkoutLinks": 1024,
+        "ownedLoad": {
+          "cpuWorkers": 2,
+          "syncedDiskWriters": 1,
+          "writeBytes": 1048576
+        },
+        "hostCpus": 24,
+        "loadBefore": [
+          18.03,
+          21.48,
+          25.05
+        ],
+        "loadAfter": [
+          18.35,
+          21.49,
+          25.03
+        ],
+        "elapsedMs": 2418.473712,
+        "checked": 32,
+        "removed": 32,
+        "removedBytes": 537133056,
+        "errors": 0,
+        "checkoutWalks": 1,
+        "sustainedBytesPerHour": 32227983360
+      }
+    },
+    {
+      "round": 2,
+      "variant": "base",
+      "code": 0,
+      "metrics": {
+        "registryRoots": 727,
+        "checkoutLinks": 1024,
+        "ownedLoad": {
+          "cpuWorkers": 2,
+          "syncedDiskWriters": 1,
+          "writeBytes": 1048576
+        },
+        "hostCpus": 24,
+        "loadBefore": [
+          18.35,
+          21.49,
+          25.03
+        ],
+        "loadAfter": [
+          19.05,
+          21.54,
+          25.01
+        ],
+        "elapsedMs": 8034.7564170000005,
+        "checked": 32,
+        "removed": 32,
+        "removedBytes": 537133056,
+        "errors": 0,
+        "checkoutWalks": 192,
+        "sustainedBytesPerHour": 32227983360
+      }
+    },
+    {
+      "round": 3,
+      "variant": "base",
+      "code": 0,
+      "metrics": {
+        "registryRoots": 727,
+        "checkoutLinks": 1024,
+        "ownedLoad": {
+          "cpuWorkers": 2,
+          "syncedDiskWriters": 1,
+          "writeBytes": 1048576
+        },
+        "hostCpus": 24,
+        "loadBefore": [
+          19.05,
+          21.54,
+          25.01
+        ],
+        "loadAfter": [
+          20.05,
+          21.67,
+          25.02
+        ],
+        "elapsedMs": 8631.405414,
+        "checked": 32,
+        "removed": 32,
+        "removedBytes": 537133056,
+        "errors": 0,
+        "checkoutWalks": 192,
+        "sustainedBytesPerHour": 32227983360
+      }
+    },
+    {
+      "round": 3,
+      "variant": "head",
+      "code": 0,
+      "metrics": {
+        "registryRoots": 727,
+        "checkoutLinks": 1024,
+        "ownedLoad": {
+          "cpuWorkers": 2,
+          "syncedDiskWriters": 1,
+          "writeBytes": 1048576
+        },
+        "hostCpus": 24,
+        "loadBefore": [
+          22.45,
+          22.14,
+          25.15
+        ],
+        "loadAfter": [
+          38.3,
+          25.7,
+          26.27
+        ],
+        "elapsedMs": 14205.033216,
+        "checked": 32,
+        "removed": 32,
+        "removedBytes": 537133056,
+        "errors": 0,
+        "checkoutWalks": 2,
+        "sustainedBytesPerHour": 32227983360
+      }
+    }
+  ],
+  "qualification": "Intermediate source snapshot. Final completion-receipt and quarantine accounting changes still need a fresh authorized verification attempt."
+}

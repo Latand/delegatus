@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -481,21 +481,6 @@ function generatePrivacyPlaceholders(repositoryRoot: string) {
   });
 }
 
-// The four OCR policy cases need identical source-bound media. Generate their
-// fixture once, then give each case a private copy (including the generator
-// and manifests). Each gate invocation still reproduces and verifies it; the
-// dedicated generator tests above retain both real generation passes.
-let placeholderFixture: { directory: string; result: ReturnType<typeof generatePrivacyPlaceholders> } | undefined;
-function installPrivacyPlaceholderFixture(directory: string) {
-  if (!placeholderFixture) {
-    const root = mkdtempSync(join(tmpdir(), "llv-privacy-fixture-"));
-    temporaryDirectories.push(root);
-    placeholderFixture = { directory: root, result: generatePrivacyPlaceholders(root) };
-  }
-  cpSync(placeholderFixture.directory, directory, { recursive: true });
-  return placeholderFixture.result;
-}
-
 function writeFingerprintCatalog(path: string, value: string): void {
   const compact = value.normalize("NFKC").toLocaleLowerCase("en-US").replaceAll(/[^\p{L}\p{N}]/gu, "");
   writeFileSync(path, JSON.stringify({
@@ -618,7 +603,6 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.exitCode).toBe(0);
   }, 15000);
 
-  // OCR-bearing cases run alone, including fixture generation before the CLI.
   // Plain verdict cases retain the four-child pool and a 15 s case deadline
   // (including queue wait); CPU-heavy cases run serially with an 18 s deadline.
   test.serial("blocks an unsafe live raster without provenance using redacted diagnostics", async () => {
@@ -627,7 +611,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const image = join(directory, "capture.png");
     writeFileSync(image, liveCapturePng());
 
-    const result = await runGate([image], installTool(directory, "tesseract"));
+    const result = await runGate([image]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -649,7 +633,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       const image = join(directory, "capture.png");
       writeFileSync(image, compressedLiveCapturePng(metadataType));
 
-      const result = await runGate([image], installTool(directory, "tesseract"));
+      const result = await runGate([image]);
       const output = result.stdout.toString();
 
       expect(result.exitCode).toBe(1);
@@ -673,7 +657,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     writeFileSync(image, contents);
     writeValidProvenance(directory, "capture.png", contents);
 
-    const result = await runGate([image], installTool(directory, "tesseract"));
+    const result = await runGate([image]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -689,7 +673,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     writeFileSync(image, redactedPlaceholderPng());
     writeFileSync(join(directory, "privacy-manifest.json"), JSON.stringify({ schemaVersion: 1, assets: [] }));
 
-    const result = await runGate([image], installTool(directory, "tesseract"));
+    const result = await runGate([image]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nprovenance_invalid: 1\n");
@@ -715,7 +699,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       }],
     }));
 
-    const result = await runGate([image], installTool(directory, "tesseract"));
+    const result = await runGate([image]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nprovenance_invalid: 1\n");
@@ -756,36 +740,16 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const repositoryRoot = mkdtempSync(join(tmpdir(), "llv-privacy-candidate-"));
     temporaryDirectories.push(repositoryRoot);
     const image = join(repositoryRoot, "docs", "acceptance", "issue-290", "readiness-kanban.png");
-    const generation = installPrivacyPlaceholderFixture(repositoryRoot);
+    const generation = generatePrivacyPlaceholders(repositoryRoot);
 
     const result = await runGateArguments(
       ["--repository", repositoryRoot, "--paths", image],
-      installTool(repositoryRoot, "tesseract"),
     );
 
     expect(generation.exitCode).toBe(0);
     expect(generation.stderr.toString()).toBe("");
     expect(result.exitCode).toBe(0);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
-    expect(result.stderr.toString()).toBe("");
-  }, 18000);
-
-  test.serial("detects private text in raster pixels without echoing OCR content", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
-    temporaryDirectories.push(directory);
-    const image = join(directory, "capture.png");
-    const contents = redactedPlaceholderPng();
-    writeFileSync(image, contents);
-    writeValidProvenance(directory, "capture.png", contents);
-    const syntheticHome = ["", "home", "fixture-operator", "private"].join("/");
-
-    const result = await runGate([image], installTool(directory, "tesseract", `printf '%s\\n' '${syntheticHome}'`));
-    const output = result.stdout.toString();
-
-    expect(result.exitCode).toBe(1);
-    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_invalid: 1\n");
-    expect(output).not.toContain(syntheticHome);
-    expect(output).not.toContain(directory);
     expect(result.stderr.toString()).toBe("");
   }, 18000);
 
@@ -1259,6 +1223,38 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     }
   });
 
+  test.concurrent("the manual gate defaults to its committed catalog from another working directory", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-default-"));
+    temporaryDirectories.push(directory);
+    const text = join(directory, "release-notes.md");
+    writeFileSync(text, "Synthetic release evidence.\n");
+    const env = { ...process.env };
+    delete env.LLV_PRIVACY_KNOWN_VALUES;
+    delete env.LLV_PRIVACY_KNOWN_VALUES_FILE;
+    delete env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE;
+    const args = [process.execPath, gate, "--require-known-values", "--paths", text];
+    const green = await runPrivacyTestProcess({ cmd: args, cwd: directory, env, stdout: "pipe", stderr: "pipe" });
+    expect(green.exitCode, green.stdout.toString() + green.stderr.toString()).toBe(0);
+    expect(green.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+    // A configured catalog stays authoritative, including an unreadable one.
+    const red = await runPrivacyTestProcess({ cmd: args, cwd: directory,
+      env: { ...env, LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: join(directory, "missing.json") }, stdout: "pipe", stderr: "pipe" });
+    expect(red.exitCode).toBe(1);
+    expect(red.stdout.toString()).toContain("configuration_error: 1");
+    // A standalone copy without the committed catalog must explain the setup.
+    const scripts = join(directory, "scripts");
+    cpSync(import.meta.dir, scripts, { recursive: true,
+      filter: source => !source.endsWith("privacy-known-value-fingerprints.json") });
+    symlinkSync(join(import.meta.dir, "../src"), join(directory, "src"));
+    symlinkSync(join(import.meta.dir, "../node_modules"), join(directory, "node_modules"));
+    const absent = await runPrivacyTestProcess({
+      cmd: [process.execPath, join(scripts, "privacy-publication-gate.ts"), ...args.slice(2)],
+      cwd: directory, env, stdout: "pipe", stderr: "pipe" });
+    expect(absent.exitCode).toBe(1);
+    expect(absent.stdout.toString()).toContain("configuration_error: 1");
+    expect(absent.stderr.toString()).toContain("Set LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE");
+  }, 15000);
+
   test.concurrent("fails closed when required known-value fingerprints are unavailable", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
@@ -1273,7 +1269,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nconfiguration_error: 1\n");
-    expect(result.stderr.toString()).toBe("");
+    expect(result.stderr.toString()).toContain("Set LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE");
   }, 15000);
 
   test.concurrent("normalizes links, HTML forms, percent encoding, and split tokens", async () => {
@@ -2523,29 +2519,13 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           writeFileSync(credentialPath, `password="${origin}"`);
           expect(scanner.formatPrivacyReport(scanner.inspectPaths([credentialPath], false, true)))
             .toBe("PRIVACY GATE: FAIL\ncredential: 1\n");
-          const toolEnvironment = installTool(directory, "tesseract", 'printf "%s" "$OCR_TEXT"');
-          const savedPath = process.env.PATH;
-          const savedOcr = process.env.OCR_TEXT;
-          const which = Bun.which.bind(Bun);
-          const toolLookup = spyOn(Bun, "which").mockImplementation((command, options) =>
-            command === "tesseract" ? join(directory, "tesseract") : which(command, options));
-          try {
-            Object.assign(process.env, toolEnvironment);
-            for (const channel of ["metadata", "OCR"]) {
-              for (const specimen of cases.filter((c) => ["host", "origin", "discovery", "other subdomain", "percent host"].includes(c.name))) {
-                const publication = join(directory, "publication.png");
-                writeFileSync(publication, pngWithMetadata(channel === "metadata" ? specimen.text : "Synthetic fixture"));
-                process.env.OCR_TEXT = channel === "OCR" ? specimen.text : "";
-                const findings = scanner.inspectPaths([publication], false, false);
-                expect(findings.has("known_value"), `${channel}: ${specimen.name}: ${scanner.formatPrivacyReport(findings)}`).toBe(channel === "metadata" || !specimen.pass);
-                expect(findings.has("provenance_missing")).toBe(true);
-                expect(scanner.formatPrivacyReport(findings)).not.toContain(domain);
-              }
-            }
-          } finally {
-            toolLookup.mockRestore();
-            if (savedPath === undefined) delete process.env.PATH; else process.env.PATH = savedPath;
-            if (savedOcr === undefined) delete process.env.OCR_TEXT; else process.env.OCR_TEXT = savedOcr;
+          for (const specimen of cases.filter((c) => ["host", "origin", "discovery", "other subdomain", "percent host"].includes(c.name))) {
+            const publication = join(directory, "publication.png");
+            writeFileSync(publication, pngWithMetadata(specimen.text));
+            const findings = scanner.inspectPaths([publication], false, false);
+            expect(findings.has("known_value"), specimen.name).toBe(true);
+            expect(findings.has("provenance_missing")).toBe(true);
+            expect(scanner.formatPrivacyReport(findings)).not.toContain(domain);
           }
           const attributed = new Set(fileNotices.map((notice) => `${notice.split(" ")[0].split(":")[1]} ${notice.split(" ")[1]}`));
           // Configuration/path failures cannot silently escape case mapping.
@@ -2703,39 +2683,6 @@ exec "$LLV_TEST_REAL_GIT" "$@"
           expect(result.stdout.toString().includes("known_value:")).toBe(!exactOnly || contiguous);
           expect(result.stderr.toString()).toBe("");
         }, 15000);
-      }
-    }
-
-    for (const exactOnly of [true, false]) {
-      for (const contiguous of [true, false]) {
-        // Hosted OCR peak: 5000.92 ms; 18 s also bounds a stuck case.
-        test.serial(`OCR exactOnly=${exactOnly} contiguous=${contiguous}`, async () => {
-          const directory = mkdtempSync(join(tmpdir(), "llv-privacy-exact-"));
-          temporaryDirectories.push(directory);
-          const generation = installPrivacyPlaceholderFixture(directory);
-          expect(generation.exitCode).toBe(0);
-          const imagePath = "docs/acceptance/issue-290/readiness-kanban.png";
-          const image = join(directory, imagePath);
-          const ocrText = contiguous ? fullWidth(value) : words.join("-");
-          const configuration = join(directory, "known.json");
-          writeFileSync(configuration, JSON.stringify({ schemaVersion: 1, normalization: "nfkc-lower-alnum-v1",
-            fingerprints: [{ length: value.length, sha256: createHash("sha256").update(value).digest("hex"),
-              ...(exactOnly ? { exactOnly: true } : {}) }] }));
-          const result = await runGateArguments(["--repository", directory, "--paths", image], {
-            ...installTool(directory, "tesseract", 'printf "%s" "$OCR_TEXT"'),
-            LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: configuration,
-            OCR_TEXT: ocrText,
-          });
-          expect(result.exitCode).toBe(!exactOnly || contiguous ? 1 : 0);
-          const output = result.stdout.toString();
-          expect(output).toBe(!exactOnly || contiguous
-            ? `PRIVACY GATE: FAIL\nknown_value: 1\n${fileNotice(imagePath, "known_value")}\n` : "PRIVACY GATE: PASS\n");
-          expect(output).not.toContain(imagePath);
-          expect(output).not.toContain(image);
-          expect(output).not.toContain(ocrText);
-          expect(output).not.toContain(value);
-          expect(result.stderr.toString()).toBe("");
-        }, 18000);
       }
     }
 
@@ -2936,202 +2883,13 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   }, 15000);
 
-  test.serial("samples GIF and video frames while keeping decoded content private", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
-    temporaryDirectories.push(directory);
-    const animation = join(directory, "capture.gif");
-    const contents = Buffer.from("deterministic synthetic animation fixture");
-    writeFileSync(animation, contents);
-    writeValidProvenance(directory, "capture.gif", contents);
-    const counter = join(directory, "sample-count");
-    const syntheticHome = ["", "Users", "fixture-person", "records"].join("/");
-    installTool(directory, "ffprobe", `printf '%s' '{"format":{"duration":"8","tags":{}},"streams":[{"duration":"8","nb_frames":"80","tags":{}}]}'`);
-    installTool(directory, "ffmpeg", "printf '%s' 'synthetic-frame'");
-    const environment = installTool(directory, "tesseract", `printf x >> "$FRAME_COUNTER"\nprintf '%s\\n' '${syntheticHome}'`);
-
-    const result = await runGate([animation], { ...environment, FRAME_COUNTER: counter });
-    const output = result.stdout.toString();
-
-    expect(result.exitCode).toBe(1);
-    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_invalid: 1\n");
-    expect(readFileSync(counter, "utf8")).toHaveLength(5);
-    expect(output).not.toContain(syntheticHome);
-    expect(output).not.toContain(directory);
-    expect(result.stderr.toString()).toBe("");
-  }, 18000);
-
-  test.serial("inspects every video stream with class-only diagnostics", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
-    temporaryDirectories.push(directory);
-    const animation = join(directory, "capture.mp4");
-    const contents = Buffer.from("deterministic synthetic multi-stream video fixture");
-    writeFileSync(animation, contents);
-    writeValidProvenance(directory, "capture.mp4", contents);
-    const syntheticHome = ["", "Users", "fixture-person", "second-stream"].join("/");
-    installTool(directory, "ffprobe", `printf '%s' '{"format":{"duration":"8","tags":{}},"streams":[{"duration":"8","nb_frames":"80","tags":{"title":"safe-zero"}},{"duration":"8","nb_frames":"80","tags":{"title":"safe-one"}}]}'`);
-    installTool(directory, "ffmpeg", `case "$*" in *"0:v:1"*) printf '%s' 'private-frame';; *) printf '%s' 'safe-frame';; esac`);
-    const environment = installTool(directory, "tesseract", `frame=$(cat)\nif [ "$frame" = "private-frame" ]; then printf '%s\\n' '${syntheticHome}'; fi`);
-
-    const result = await runGate([animation], environment);
-    const output = result.stdout.toString();
-
-    expect(result.exitCode).toBe(1);
-    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_invalid: 1\n");
-    expect(output).not.toContain(syntheticHome);
-    expect(output).not.toContain(directory);
-    expect(result.stderr.toString()).toBe("");
-  }, 18000);
-
-  test.serial("inspects metadata from every video stream", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
-    temporaryDirectories.push(directory);
-    const animation = join(directory, "capture.mp4");
-    const contents = Buffer.from("deterministic synthetic multi-stream metadata fixture");
-    writeFileSync(animation, contents);
-    writeValidProvenance(directory, "capture.mp4", contents);
-    const syntheticHome = ["", "Users", "fixture-person", "stream-metadata"].join("/");
-    installTool(directory, "ffprobe", `case "$*" in *"v:0"*) printf '%s' '{"format":{"duration":"8"},"streams":[{"duration":"8","nb_frames":"80","tags":{"title":"safe-zero"}}]}';; *) printf '%s' '{"format":{"duration":"8"},"streams":[{"duration":"8","nb_frames":"80","tags":{"title":"safe-zero"}},{"duration":"8","nb_frames":"80","tags":{"title":"${syntheticHome}"}}]}';; esac`);
-    installTool(directory, "ffmpeg", "printf '%s' 'safe-frame'");
-    const environment = installTool(directory, "tesseract");
-
-    const result = await runGate([animation], environment);
-    const output = result.stdout.toString();
-
-    expect(result.exitCode).toBe(1);
-    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_invalid: 1\n");
-    expect(output).not.toContain(syntheticHome);
-    expect(output).not.toContain(directory);
-    expect(result.stderr.toString()).toBe("");
-  }, 18000);
-
-  test.serial("fails closed before sampling excessive video streams", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
-    temporaryDirectories.push(directory);
-    const animation = join(directory, "capture.mp4");
-    const contents = Buffer.from("deterministic synthetic excessive-stream video fixture");
-    writeFileSync(animation, contents);
-    writeValidProvenance(directory, "capture.mp4", contents);
-    const counter = join(directory, "sample-count");
-    const probe = JSON.stringify({
-      format: { duration: "8" },
-      streams: Array.from({ length: 17 }, () => ({ duration: "8", nb_frames: "80", tags: {} })),
-    });
-    installTool(directory, "ffprobe", `printf '%s' '${probe}'`);
-    installTool(directory, "ffmpeg", `printf x >> "$FRAME_COUNTER"\nprintf '%s' 'safe-frame'`);
-    const environment = installTool(directory, "tesseract");
-
-    const result = await runGate([animation], { ...environment, FRAME_COUNTER: counter });
-    const output = result.stdout.toString();
-
-    expect(result.exitCode).toBe(1);
-    expect(output).toBe("PRIVACY GATE: FAIL\ninspection_error: 1\nprovenance_invalid: 1\n");
-    expect(existsSync(counter)).toBe(false);
-    expect(output).not.toContain(directory);
-    expect(result.stderr.toString()).toBe("");
-  }, 18000);
-
-  test.serial("samples representative frame indexes when video duration is unknown", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
-    temporaryDirectories.push(directory);
-    const animation = join(directory, "capture.mp4");
-    const contents = Buffer.from("deterministic synthetic unknown-duration video fixture");
-    writeFileSync(animation, contents);
-    writeValidProvenance(directory, "capture.mp4", contents);
-    const counter = join(directory, "sample-count");
-    const syntheticHome = ["", "Users", "fixture-person", "records"].join("/");
-    installTool(directory, "ffprobe", `printf '%s' '{"format":{"duration":"N/A","tags":{}},"streams":[{"nb_read_frames":"N/A","nb_frames":"240"}]}'`);
-    installTool(directory, "ffmpeg", `printf x >> "$FRAME_COUNTER"\nprintf '%s' 'synthetic-frame'`);
-    const environment = installTool(directory, "tesseract", `printf '%s\n' '${syntheticHome}'`);
-
-    const result = await runGate([animation], { ...environment, FRAME_COUNTER: counter });
-    const output = result.stdout.toString();
-
-    expect(result.exitCode).toBe(1);
-    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_invalid: 1\n");
-    expect(readFileSync(counter, "utf8")).toHaveLength(5);
-    expect(output).not.toContain(syntheticHome);
-    expect(output).not.toContain(directory);
-    expect(result.stderr.toString()).toBe("");
-  }, 18000);
-
-  test.serial("fails closed when protected late video frames cannot be bounded", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
-    temporaryDirectories.push(directory);
-    const animation = join(directory, "capture.mp4");
-    const contents = Buffer.from("deterministic synthetic unbounded long-video fixture");
-    writeFileSync(animation, contents);
-    writeValidProvenance(directory, "capture.mp4", contents);
-    const sampleLog = join(directory, "sample-log");
-    installTool(directory, "ffprobe", `printf '%s' '{"format":{"duration":"N/A"},"streams":[{"nb_read_frames":"N/A","nb_frames":"N/A"}]}'`);
-    installTool(directory, "ffmpeg", `printf '%s\n' "$*" >> "$SAMPLE_LOG"\nprintf '%s' 'synthetic-frame'`);
-    const environment = installTool(directory, "tesseract", "printf '%s' 'synthetic-safe-ocr'");
-
-    const result = await runGate([animation], { ...environment, SAMPLE_LOG: sampleLog });
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\ninspection_error: 1\nprovenance_invalid: 1\n");
-    expect(existsSync(sampleLog)).toBe(false);
-    expect(result.stdout.toString()).not.toContain(directory);
-    expect(result.stderr.toString()).toBe("");
-  }, 18000);
-
-  test.serial("matches a Ukrainian OCR value with configured multilingual language data", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
-    temporaryDirectories.push(directory);
-    const image = join(directory, "capture.png");
-    const contents = redactedPlaceholderPng();
-    writeFileSync(image, contents);
-    writeValidProvenance(directory, "capture.png", contents);
-    const argumentsFile = join(directory, "ocr-arguments");
-    const fingerprints = join(directory, "known-values.json");
-    const ukrainianValue = ["приватна", "назва", "проєкту"].join("-");
-    writeFingerprintCatalog(fingerprints, ukrainianValue);
-    const environment = installTool(directory, "tesseract", `printf '%s' "$*" > "$OCR_ARGUMENTS"\nprintf '%s\n' "$OCR_TEXT"`);
-
-    const result = await runGate([image], {
-      ...environment,
-      LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: fingerprints,
-      LLV_PRIVACY_OCR_LANGUAGES: "eng+ukr",
-      OCR_ARGUMENTS: argumentsFile,
-      OCR_TEXT: ukrainianValue,
-    });
-    const output = result.stdout.toString();
-
-    expect(result.exitCode).toBe(1);
-    expect(output).toBe("PRIVACY GATE: FAIL\nknown_value: 1\nprovenance_invalid: 1\n");
-    expect(readFileSync(argumentsFile, "utf8")).toContain("-l eng+ukr");
-    expect(output).not.toContain(ukrainianValue);
-    expect(output).not.toContain(directory);
-    expect(result.stderr.toString()).toBe("");
-  }, 18000);
-
-  test.serial("fails closed when configured OCR language data is unavailable", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
-    temporaryDirectories.push(directory);
-    const image = join(directory, "capture.png");
-    const contents = redactedPlaceholderPng();
-    writeFileSync(image, contents);
-    writeValidProvenance(directory, "capture.png", contents);
-    const environment = installTool(directory, "tesseract", "exit 1");
-
-    const result = await runGate([image], {
-      ...environment,
-      LLV_PRIVACY_OCR_LANGUAGES: "eng+ukr",
-    });
-
-    expect(result.exitCode).toBe(1);
-    expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\ninspection_error: 1\nprovenance_invalid: 1\n");
-    expect(result.stdout.toString()).not.toContain(directory);
-    expect(result.stderr.toString()).toBe("");
-  }, 18000);
-
   test.serial("detects PNG media renamed with a Markdown extension", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.md");
     writeFileSync(image, liveCapturePng());
 
-    const result = await runGate([image], installTool(directory, "tesseract"));
+    const result = await runGate([image]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe([
@@ -3144,18 +2902,40 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   }, 18000);
 
+  test.serial("reads metadata from multiple video tracks without external tools", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "privacy-video-tags-"));
+    temporaryDirectories.push(directory);
+    const atom = (tag: string, payload: Buffer): Buffer => {
+      const header = Buffer.alloc(8);
+      header.writeUInt32BE(8 + payload.length); header.write(tag, 4, 4, "latin1");
+      return Buffer.concat([header, payload]);
+    };
+    const tag = (type: number, bytes: Buffer) => {
+      const header = Buffer.alloc(8); header.writeUInt32BE(type);
+      return atom("trak", atom("udta", atom("name", atom("data", Buffer.concat([header, bytes])))));
+    };
+    const mailbox = ["fixture", "private.internal"].join("@");
+    const privatePath = ["", "Users", "fixture-person", "metadata"].join("/");
+    const contents = Buffer.concat([atom("ftyp", Buffer.from("isom\0\0\0\0isom")),
+      atom("moov", Buffer.concat([tag(1, Buffer.from(mailbox)), tag(2, Buffer.from(privatePath, "utf16le").swap16())]))]);
+    const video = join(directory, "capture.mp4"); writeFileSync(video, contents);
+    const result = await runGate([video]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout.toString()).toContain("email_address: 1");
+    expect(result.stdout.toString()).toContain("home_path: 1");
+    expect(result.stdout.toString()).toContain("provenance_missing: 1");
+    expect(result.stdout.toString()).not.toContain(privatePath);
+    expect(result.stdout.toString()).not.toContain(mailbox);
+  }, 18000);
+
   test.serial("detects video media renamed with a text extension", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const video = join(directory, "capture.txt");
     const signature = Buffer.from("000000186674797069736f6d0000020069736f6d", "hex");
-    writeFileSync(video, signature);
     const syntheticHome = ["", "home", "fixture-person", "renamed-video"].join("/");
-    installTool(directory, "ffprobe", `printf '%s' '{"format":{"duration":"1"},"streams":[{"duration":"1","nb_frames":"5"}]}'`);
-    installTool(directory, "ffmpeg", "printf '%s' 'synthetic-frame'");
-    const environment = installTool(directory, "tesseract", `printf '%s' '${syntheticHome}'`);
-
-    const result = await runGate([video], environment);
+    writeFileSync(video, Buffer.concat([signature, Buffer.from("\0" + syntheticHome)]));
+    const result = await runGate([video]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -3210,28 +2990,36 @@ exec "$LLV_TEST_REAL_GIT" "$@"
   test("resolves the current protected base tip for long-lived pull requests", () => {
     const workflow = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "privacy-publication.yml"), "utf8");
 
-    expect(workflow).not.toContain("github.event.pull_request.base.sha");
-    expect(workflow).toMatch(
+    const guardStart = workflow.indexOf("- name: Refuse mixed privacy repairs");
+    const baseResolutionStart = workflow.indexOf("- name: Resolve current protected base");
+    expect(guardStart).toBeGreaterThanOrEqual(0);
+    expect(baseResolutionStart).toBeGreaterThanOrEqual(0);
+    const guardEnd = workflow.indexOf("\n      - name:", guardStart + 1);
+    expect(guardEnd).toBeGreaterThan(guardStart);
+    const guard = workflow.slice(guardStart, guardEnd);
+    expect(guard).toContain("PRIVACY_GUARD_BASE: ${{ github.event.pull_request.base.sha }}");
+    const baseResolution = workflow.slice(baseResolutionStart);
+    expect(baseResolution).toMatch(
       /PRIVACY_BASE_REF: \$\{\{[^}]*github\.event\.pull_request\.base\.ref[^}]*\}\}/,
     );
-    expect(workflow).toContain(
+    expect(baseResolution).toContain(
       'git fetch --no-tags --force origin "+refs/heads/${PRIVACY_BASE_REF}:refs/remotes/origin/${PRIVACY_BASE_REF}"',
     );
-    expect(workflow).toContain(
+    expect(baseResolution).toContain(
       'git rev-parse --verify "refs/remotes/origin/${PRIVACY_BASE_REF}^{commit}"',
     );
-    expect(workflow).toContain('printf \'PRIVACY_BASE_SHA=%s\\n\' "$PRIVACY_BASE_SHA" >> "$GITHUB_ENV"');
-    expect(workflow).toContain('--base "$PRIVACY_BASE_SHA"');
+    expect(baseResolution).toContain('printf \'PRIVACY_BASE_SHA=%s\\n\' "$PRIVACY_BASE_SHA" >> "$GITHUB_ENV"');
+    expect(baseResolution).toContain('--base "$PRIVACY_BASE_SHA"');
   });
 
-  test("runs candidate privacy tests last under the 130-second budget", () => {
+  test("runs candidate privacy tests last under the 240-second budget", () => {
     const workflow = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "privacy-publication.yml"), "utf8");
     const trustedCheck = workflow.indexOf("- name: Verify privacy gate behavior");
     const candidateCheck = workflow.indexOf("- name: Verify candidate privacy gate behavior within budget");
 
     expect(trustedCheck).toBeGreaterThanOrEqual(0);
     expect(candidateCheck).toBeGreaterThan(trustedCheck);
-    expect(workflow.slice(candidateCheck)).toContain("timeout --kill-after=5s 130s bun test scripts/privacy-*.test.ts");
+    expect(workflow.slice(candidateCheck)).toContain("timeout --kill-after=5s 240s bun test scripts/privacy-*.test.ts");
   });
 
   test("scopes issue-comment audits to the triggering comment", () => {
@@ -3309,7 +3097,8 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const directory = join(root, "privacy-fixtures");
     mkdirSync(directory);
     const image = join(directory, "synthetic-path.png");
-    const contents = redactedPlaceholderPng();
+    const syntheticHome = ["", "home", "fixture-person", "records"].join("/");
+    const contents = pngWithMetadata(syntheticHome);
     writeFileSync(image, contents);
     const generator = Buffer.from('export const PRIVACY_GENERATOR_RUNTIME = "1.3.3";\nexport const PRIVACY_GENERATOR_VERSION = "fixture-generator-v2";\n');
     writeFileSync(join(directory, "generate-fixture.mjs"), generator);
@@ -3331,11 +3120,9 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     }));
     await runGit(root, ["add", "."]);
     await runGit(root, ["commit", "--quiet", "-m", "candidate exemption"]);
-    const syntheticHome = ["", "home", "fixture-person", "records"].join("/");
 
     const result = await runGateArguments(
       ["--repository", root, "--base", "HEAD^", "--paths", image],
-      installTool(directory, "tesseract", `printf '%s\\n' '${syntheticHome}'`),
     );
     const output = result.stdout.toString();
 
@@ -3391,7 +3178,6 @@ exec "$LLV_TEST_REAL_GIT" "$@"
 
     const result = await runGateArguments(
       ["--repository", root, "--base", "HEAD^", "--paths", image],
-      installTool(root, "tesseract"),
     );
 
     expect(result.exitCode).toBe(1);
@@ -3439,7 +3225,6 @@ exec "$LLV_TEST_REAL_GIT" "$@"
 
     const result = await runGateArguments(
       ["--repository", root, "--paths", image],
-      installTool(directory, "tesseract"),
     );
 
     expect(result.exitCode).toBe(1);
@@ -3464,7 +3249,8 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const directory = join(root, "privacy-fixtures");
     mkdirSync(directory);
     const image = join(directory, "synthetic-path.png");
-    const contents = redactedPlaceholderPng();
+    const syntheticHome = ["", "home", "fixture-person", "records"].join("/");
+    const contents = pngWithMetadata(syntheticHome);
     writeFileSync(image, contents);
     const generator = Buffer.from('export const PRIVACY_GENERATOR_RUNTIME = "1.3.3";\nexport const PRIVACY_GENERATOR_VERSION = "fixture-generator-v2";\n');
     writeFileSync(join(directory, "generate-fixture.mjs"), generator);
@@ -3486,11 +3272,9 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     }));
     await runGit(root, ["add", "."]);
     await runGit(root, ["commit", "--quiet", "-m", "trusted exemption"]);
-    const syntheticHome = ["", "home", "fixture-person", "records"].join("/");
 
     const result = await runGateArguments(
       ["--repository", root, "--base", "HEAD", "--paths", image],
-      installTool(directory, "tesseract", `printf '%s\\n' '${syntheticHome}'`),
     );
     const output = result.stdout.toString();
 
@@ -3542,7 +3326,6 @@ exec "$LLV_TEST_REAL_GIT" "$@"
 
     const result = await runGate(
       [manifestLinkImage, generatorLinkImage],
-      installTool(root, "tesseract"),
     );
 
     expect(result.exitCode).toBe(1);
@@ -3563,7 +3346,6 @@ exec "$LLV_TEST_REAL_GIT" "$@"
 
     const result = await runGate(
       [join(linkedDirectory, "capture.png")],
-      installTool(root, "tesseract"),
     );
 
     expect(result.exitCode).toBe(1);
@@ -3601,7 +3383,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       }],
     }));
 
-    const result = await runGate([image], installTool(root, "tesseract"));
+    const result = await runGate([image]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nprovenance_invalid: 1\n");
@@ -3636,7 +3418,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       }],
     }));
 
-    const result = await runGate([image], installTool(root, "tesseract"));
+    const result = await runGate([image]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nprovenance_invalid: 1\n");
@@ -3667,7 +3449,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       }],
     }));
 
-    const result = await runGate([image], installTool(directory, "tesseract"));
+    const result = await runGate([image]);
 
     expect(result.exitCode).toBe(1);
     expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nprovenance_invalid: 1\n");
@@ -3694,7 +3476,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       else manifest.assets[0].generatorRuntime = runtimeFixture.value;
       writeFileSync(manifestPath, JSON.stringify(manifest));
 
-      const result = await runGate([image], installTool(directory, "tesseract"));
+      const result = await runGate([image]);
 
       expect(result.exitCode).toBe(1);
       expect(result.stdout.toString()).toBe("PRIVACY GATE: FAIL\nprovenance_invalid: 1\n");
@@ -3703,19 +3485,17 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     }, 18000);
   }
 
-  test.serial("classifies private network, resource, and transcript-shaped media text", async () => {
+  test.serial("classifies private network, resource, and transcript-shaped media metadata", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
-    const contents = redactedPlaceholderPng();
-    writeFileSync(image, contents);
-    writeValidProvenance(directory, "capture.png", contents);
     const syntheticAddress = [10, 23, 45, 67].join(".");
     const syntheticIdentifier = ["12345678", "1234", "4abc", "8def", "123456789abc"].join("-");
     const transcriptMarker = ["trans", "cript"].join("") + ": synthetic fixture utterance";
-    const ocr = [syntheticAddress, syntheticIdentifier, transcriptMarker].join("\\n");
-
-    const result = await runGate([image], installTool(directory, "tesseract", `printf '%b\\n' '${ocr}'`));
+    const contents = pngWithMetadata([syntheticAddress, syntheticIdentifier, transcriptMarker].join("\n"));
+    writeFileSync(image, contents);
+    writeValidProvenance(directory, "capture.png", contents);
+    const result = await runGate([image]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -3734,7 +3514,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     expect(result.stderr.toString()).toBe("");
   }, 18000);
 
-  test.serial("scans embedded raster metadata independently from OCR", async () => {
+  test.serial("scans embedded raster metadata", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
     const image = join(directory, "capture.png");
@@ -3743,7 +3523,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     writeFileSync(image, contents);
     writeValidProvenance(directory, "capture.png", contents);
 
-    const result = await runGate([image], installTool(directory, "tesseract"));
+    const result = await runGate([image]);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -3774,7 +3554,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       images.push(image);
     }
 
-    const result = await runGate(images, installTool(root, "tesseract"));
+    const result = await runGate(images);
     const output = result.stdout.toString();
 
     expect(result.exitCode).toBe(1);
@@ -3802,7 +3582,7 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       writeFileSync(image, contents);
       writeValidProvenance(directory, "capture.png", contents);
 
-      const result = await runGate([image], installTool(directory, "tesseract"));
+      const result = await runGate([image]);
       const output = result.stdout.toString();
 
       expect(result.exitCode).toBe(1);
@@ -3816,7 +3596,6 @@ exec "$LLV_TEST_REAL_GIT" "$@"
   test("audits authenticated GitHub issue, PR, comment, review, and media surfaces", async () => {
     const directory = mkdtempSync(join(tmpdir(), "llv-privacy-gate-"));
     temporaryDirectories.push(directory);
-    const originalOcrLanguages = process.env.LLV_PRIVACY_OCR_LANGUAGES;
     const syntheticHome = ["", "home", "fixture-person", "tracker"].join("/");
     const encodedHome = syntheticHome.replaceAll("/", "%2F");
     const syntheticIdentifier = ["12345678", "1234", "4abc", "8def", "123456789abc"].join("-");
@@ -3825,9 +3604,6 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     const passwordInput = ['<form><in', 'put name=token value=synthetic-form-credential-123456></form>'].join("");
     const transcriptMarker = ["trans", "cript"].join("") + ": synthetic fixture utterance";
     const requests: Array<{ authorization: string | null; url: string }> = [];
-    const languageResult = Bun.spawnSync({ cmd: ["tesseract", "--list-langs"], stderr: "pipe", stdout: "pipe" });
-    const ocrLanguage = languageResult.stdout.toString().split(/\r?\n/).find((language) => /^[a-z0-9_]+$/i.test(language) && language !== "osd");
-    process.env.LLV_PRIVACY_OCR_LANGUAGES = ocrLanguage ?? "missing-test-language";
     const fetcher = async (input: string | URL, init?: RequestInit): Promise<Response> => {
       const url = new URL(input);
       requests.push({ authorization: new Headers(init?.headers).get("authorization"), url: url.href });
@@ -3859,39 +3635,34 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       return new Response(null, { status: 404 });
     };
 
-    try {
-      const findings = await auditGithubPublication({
-        apiUrl: "https://api.github.test/",
-        fetcher,
-        number: 456,
-        repo: "example/repository",
-        requireKnownValues: false,
-        token,
-      });
-      const output = formatPrivacyReport(findings);
+    const findings = await auditGithubPublication({
+      apiUrl: "https://api.github.test/",
+      fetcher,
+      number: 456,
+      repo: "example/repository",
+      requireKnownValues: false,
+      token,
+    });
+    const output = formatPrivacyReport(findings);
 
-      expect(output).toBe([
-        "PRIVACY GATE: FAIL",
-        "credential: 1",
-        "home_path: 2",
-        "provenance_missing: 1",
-        "resource_identifier: 1",
-        "transcript_content: 1",
-        "",
-      ].join("\n"));
-      expect(requests).toHaveLength(6);
-      expect(requests.every((request) => request.authorization === `Bearer ${token}`)).toBe(true);
-      expect(requests.some((request) => request.url.includes("/issues/456/comments"))).toBe(true);
-      expect(requests.some((request) => request.url.includes("/pulls/456/comments"))).toBe(true);
-      expect(requests.some((request) => request.url.includes("/pulls/456/reviews"))).toBe(true);
-      expect(output).not.toContain(syntheticHome);
-      expect(output).not.toContain(syntheticIdentifier);
-      expect(output).not.toContain(token);
-      expect(output).not.toContain(directory);
-    } finally {
-      if (originalOcrLanguages === undefined) delete process.env.LLV_PRIVACY_OCR_LANGUAGES;
-      else process.env.LLV_PRIVACY_OCR_LANGUAGES = originalOcrLanguages;
-    }
+    expect(output).toBe([
+      "PRIVACY GATE: FAIL",
+      "credential: 1",
+      "home_path: 2",
+      "provenance_missing: 1",
+      "resource_identifier: 1",
+      "transcript_content: 1",
+      "",
+    ].join("\n"));
+    expect(requests).toHaveLength(6);
+    expect(requests.every((request) => request.authorization === `Bearer ${token}`)).toBe(true);
+    expect(requests.some((request) => request.url.includes("/issues/456/comments"))).toBe(true);
+    expect(requests.some((request) => request.url.includes("/pulls/456/comments"))).toBe(true);
+    expect(requests.some((request) => request.url.includes("/pulls/456/reviews"))).toBe(true);
+    expect(output).not.toContain(syntheticHome);
+    expect(output).not.toContain(syntheticIdentifier);
+    expect(output).not.toContain(token);
+    expect(output).not.toContain(directory);
   });
 
   test("audits only the triggering issue comment when a surface is selected", async () => {
@@ -3995,14 +3766,10 @@ exec "$LLV_TEST_REAL_GIT" "$@"
   });
 
   test("audits extensionless inline Markdown images", async () => {
-    const originalOcrLanguages = process.env.LLV_PRIVACY_OCR_LANGUAGES;
     const syntheticHome = ["", "home", "fixture-person", "extensionless-media"].join("/");
     const media = pngWithCustomMetadata("eXIf", syntheticHome);
     const mediaUrl = "https://github.com/example/repository/rendered/capture";
     const requests: string[] = [];
-    const languageResult = Bun.spawnSync({ cmd: ["tesseract", "--list-langs"], stderr: "pipe", stdout: "pipe" });
-    const ocrLanguage = languageResult.stdout.toString().split(/\r?\n/).find((language) => /^[a-z0-9_]+$/i.test(language) && language !== "osd");
-    process.env.LLV_PRIVACY_OCR_LANGUAGES = ocrLanguage ?? "missing-test-language";
     const fetcher = async (input: string | URL): Promise<Response> => {
       const url = new URL(input);
       requests.push(url.href);
@@ -4016,37 +3783,28 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       return new Response(null, { status: 404 });
     };
 
-    try {
-      const findings = await auditGithubPublication({
-        apiUrl: "https://api.github.test/",
-        fetcher,
-        number: 448,
-        repo: "example/repository",
-        requireKnownValues: false,
-        token: "synthetic-github-audit-token",
-      });
-      const output = formatPrivacyReport(findings);
+    const findings = await auditGithubPublication({
+      apiUrl: "https://api.github.test/",
+      fetcher,
+      number: 448,
+      repo: "example/repository",
+      requireKnownValues: false,
+      token: "synthetic-github-audit-token",
+    });
+    const output = formatPrivacyReport(findings);
 
-      expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_missing: 1\n");
-      expect(requests).toHaveLength(3);
-      expect(requests.at(-1)).toBe(mediaUrl);
-      expect(output).not.toContain(syntheticHome);
-    } finally {
-      if (originalOcrLanguages === undefined) delete process.env.LLV_PRIVACY_OCR_LANGUAGES;
-      else process.env.LLV_PRIVACY_OCR_LANGUAGES = originalOcrLanguages;
-    }
+    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_missing: 1\n");
+    expect(requests).toHaveLength(3);
+    expect(requests.at(-1)).toBe(mediaUrl);
+    expect(output).not.toContain(syntheticHome);
   });
 
   test("audits Markdown images with escaped brackets in their descriptions", async () => {
-    const originalOcrLanguages = process.env.LLV_PRIVACY_OCR_LANGUAGES;
     const syntheticHome = ["", "home", "fixture-person", "escaped-bracket-media"].join("/");
     const media = pngWithCustomMetadata("eXIf", syntheticHome);
     const relativeMedia = "rendered/escaped-bracket-capture";
     const resolvedMedia = `https://github.com/example/repository/${relativeMedia}`;
     const requests: string[] = [];
-    const languageResult = Bun.spawnSync({ cmd: ["tesseract", "--list-langs"], stderr: "pipe", stdout: "pipe" });
-    const ocrLanguage = languageResult.stdout.toString().split(/\r?\n/).find((language) => /^[a-z0-9_]+$/i.test(language) && language !== "osd");
-    process.env.LLV_PRIVACY_OCR_LANGUAGES = ocrLanguage ?? "missing-test-language";
     const fetcher = async (input: string | URL): Promise<Response> => {
       const url = new URL(input);
       requests.push(url.href);
@@ -4063,29 +3821,23 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       return new Response(null, { status: 404 });
     };
 
-    try {
-      const findings = await auditGithubPublication({
-        apiUrl: "https://api.github.test/",
-        fetcher,
-        number: 448,
-        repo: "example/repository",
-        requireKnownValues: false,
-        token: "synthetic-github-audit-token",
-      });
-      const output = formatPrivacyReport(findings);
+    const findings = await auditGithubPublication({
+      apiUrl: "https://api.github.test/",
+      fetcher,
+      number: 448,
+      repo: "example/repository",
+      requireKnownValues: false,
+      token: "synthetic-github-audit-token",
+    });
+    const output = formatPrivacyReport(findings);
 
-      expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_missing: 1\n");
-      expect(requests).toHaveLength(3);
-      expect(requests.at(-1)).toBe(resolvedMedia);
-      expect(output).not.toContain(syntheticHome);
-    } finally {
-      if (originalOcrLanguages === undefined) delete process.env.LLV_PRIVACY_OCR_LANGUAGES;
-      else process.env.LLV_PRIVACY_OCR_LANGUAGES = originalOcrLanguages;
-    }
+    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_missing: 1\n");
+    expect(requests).toHaveLength(3);
+    expect(requests.at(-1)).toBe(resolvedMedia);
+    expect(output).not.toContain(syntheticHome);
   });
 
   test("audits HTML media across quoted and parse-error attribute delimiters", async () => {
-    const originalOcrLanguages = process.env.LLV_PRIVACY_OCR_LANGUAGES;
     const syntheticHome = ["", "home", "fixture-person", "quoted-attribute-media"].join("/");
     const media = pngWithCustomMetadata("eXIf", syntheticHome);
     const mediaPaths = [
@@ -4094,9 +3846,6 @@ exec "$LLV_TEST_REAL_GIT" "$@"
     ];
     const resolvedMedia = mediaPaths.map((mediaPath) => `https://github.com${mediaPath}`);
     const requests: string[] = [];
-    const languageResult = Bun.spawnSync({ cmd: ["tesseract", "--list-langs"], stderr: "pipe", stdout: "pipe" });
-    const ocrLanguage = languageResult.stdout.toString().split(/\r?\n/).find((language) => /^[a-z0-9_]+$/i.test(language) && language !== "osd");
-    process.env.LLV_PRIVACY_OCR_LANGUAGES = ocrLanguage ?? "missing-test-language";
     const fetcher = async (input: string | URL): Promise<Response> => {
       const url = new URL(input);
       requests.push(url.href);
@@ -4116,37 +3865,28 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       return new Response(null, { status: 404 });
     };
 
-    try {
-      const findings = await auditGithubPublication({
-        apiUrl: "https://api.github.test/",
-        fetcher,
-        number: 448,
-        repo: "example/repository",
-        requireKnownValues: false,
-        token: "synthetic-github-audit-token",
-      });
-      const output = formatPrivacyReport(findings);
+    const findings = await auditGithubPublication({
+      apiUrl: "https://api.github.test/",
+      fetcher,
+      number: 448,
+      repo: "example/repository",
+      requireKnownValues: false,
+      token: "synthetic-github-audit-token",
+    });
+    const output = formatPrivacyReport(findings);
 
-      expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 2\nprovenance_missing: 2\n");
-      expect(requests).toHaveLength(4);
-      expect(requests.slice(-2).sort()).toEqual(resolvedMedia.toSorted());
-      expect(output).not.toContain(syntheticHome);
-    } finally {
-      if (originalOcrLanguages === undefined) delete process.env.LLV_PRIVACY_OCR_LANGUAGES;
-      else process.env.LLV_PRIVACY_OCR_LANGUAGES = originalOcrLanguages;
-    }
+    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 2\nprovenance_missing: 2\n");
+    expect(requests).toHaveLength(4);
+    expect(requests.slice(-2).sort()).toEqual(resolvedMedia.toSorted());
+    expect(output).not.toContain(syntheticHome);
   });
 
   test("audits slash-delimited HTML media attributes", async () => {
-    const originalOcrLanguages = process.env.LLV_PRIVACY_OCR_LANGUAGES;
     const syntheticHome = ["", "home", "fixture-person", "slash-attribute-media"].join("/");
     const media = pngWithCustomMetadata("eXIf", syntheticHome);
     const mediaPath = "/user-attachments/assets/slash-capture";
     const resolvedMedia = `https://github.com${mediaPath}`;
     const requests: string[] = [];
-    const languageResult = Bun.spawnSync({ cmd: ["tesseract", "--list-langs"], stderr: "pipe", stdout: "pipe" });
-    const ocrLanguage = languageResult.stdout.toString().split(/\r?\n/).find((language) => /^[a-z0-9_]+$/i.test(language) && language !== "osd");
-    process.env.LLV_PRIVACY_OCR_LANGUAGES = ocrLanguage ?? "missing-test-language";
     const fetcher = async (input: string | URL): Promise<Response> => {
       const url = new URL(input);
       requests.push(url.href);
@@ -4163,29 +3903,23 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       return new Response(null, { status: 404 });
     };
 
-    try {
-      const findings = await auditGithubPublication({
-        apiUrl: "https://api.github.test/",
-        fetcher,
-        number: 448,
-        repo: "example/repository",
-        requireKnownValues: false,
-        token: "synthetic-github-audit-token",
-      });
-      const output = formatPrivacyReport(findings);
+    const findings = await auditGithubPublication({
+      apiUrl: "https://api.github.test/",
+      fetcher,
+      number: 448,
+      repo: "example/repository",
+      requireKnownValues: false,
+      token: "synthetic-github-audit-token",
+    });
+    const output = formatPrivacyReport(findings);
 
-      expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_missing: 1\n");
-      expect(requests).toHaveLength(3);
-      expect(requests.at(-1)).toBe(resolvedMedia);
-      expect(output).not.toContain(syntheticHome);
-    } finally {
-      if (originalOcrLanguages === undefined) delete process.env.LLV_PRIVACY_OCR_LANGUAGES;
-      else process.env.LLV_PRIVACY_OCR_LANGUAGES = originalOcrLanguages;
-    }
+    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_missing: 1\n");
+    expect(requests).toHaveLength(3);
+    expect(requests.at(-1)).toBe(resolvedMedia);
+    expect(output).not.toContain(syntheticHome);
   });
 
   test("audits every extensionless source srcset candidate", async () => {
-    const originalOcrLanguages = process.env.LLV_PRIVACY_OCR_LANGUAGES;
     const syntheticHome = ["", "home", "fixture-person", "srcset-media"].join("/");
     const media = pngWithCustomMetadata("eXIf", syntheticHome);
     const mediaUrls = [
@@ -4193,9 +3927,6 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       "https://github.com/example/repository/rendered/srcset-two",
     ];
     const requests: string[] = [];
-    const languageResult = Bun.spawnSync({ cmd: ["tesseract", "--list-langs"], stderr: "pipe", stdout: "pipe" });
-    const ocrLanguage = languageResult.stdout.toString().split(/\r?\n/).find((language) => /^[a-z0-9_]+$/i.test(language) && language !== "osd");
-    process.env.LLV_PRIVACY_OCR_LANGUAGES = ocrLanguage ?? "missing-test-language";
     const fetcher = async (input: string | URL): Promise<Response> => {
       const url = new URL(input);
       requests.push(url.href);
@@ -4212,37 +3943,28 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       return new Response(null, { status: 404 });
     };
 
-    try {
-      const findings = await auditGithubPublication({
-        apiUrl: "https://api.github.test/",
-        fetcher,
-        number: 448,
-        repo: "example/repository",
-        requireKnownValues: false,
-        token: "synthetic-github-audit-token",
-      });
-      const output = formatPrivacyReport(findings);
+    const findings = await auditGithubPublication({
+      apiUrl: "https://api.github.test/",
+      fetcher,
+      number: 448,
+      repo: "example/repository",
+      requireKnownValues: false,
+      token: "synthetic-github-audit-token",
+    });
+    const output = formatPrivacyReport(findings);
 
-      expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 2\nprovenance_missing: 2\n");
-      expect(requests).toHaveLength(4);
-      expect(requests.slice(-2).sort()).toEqual(mediaUrls.toSorted());
-      expect(output).not.toContain(syntheticHome);
-    } finally {
-      if (originalOcrLanguages === undefined) delete process.env.LLV_PRIVACY_OCR_LANGUAGES;
-      else process.env.LLV_PRIVACY_OCR_LANGUAGES = originalOcrLanguages;
-    }
+    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 2\nprovenance_missing: 2\n");
+    expect(requests).toHaveLength(4);
+    expect(requests.slice(-2).sort()).toEqual(mediaUrls.toSorted());
+    expect(output).not.toContain(syntheticHome);
   });
 
   test("audits relative reference-style Markdown images", async () => {
-    const originalOcrLanguages = process.env.LLV_PRIVACY_OCR_LANGUAGES;
     const syntheticHome = ["", "home", "fixture-person", "reference-media"].join("/");
     const media = pngWithCustomMetadata("eXIf", syntheticHome);
     const relativeMedia = "rendered/reference-capture";
     const resolvedMedia = `https://github.com/example/repository/${relativeMedia}`;
     const requests: string[] = [];
-    const languageResult = Bun.spawnSync({ cmd: ["tesseract", "--list-langs"], stderr: "pipe", stdout: "pipe" });
-    const ocrLanguage = languageResult.stdout.toString().split(/\r?\n/).find((language) => /^[a-z0-9_]+$/i.test(language) && language !== "osd");
-    process.env.LLV_PRIVACY_OCR_LANGUAGES = ocrLanguage ?? "missing-test-language";
     const fetcher = async (input: string | URL): Promise<Response> => {
       const url = new URL(input);
       requests.push(url.href);
@@ -4259,37 +3981,28 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       return new Response(null, { status: 404 });
     };
 
-    try {
-      const findings = await auditGithubPublication({
-        apiUrl: "https://api.github.test/",
-        fetcher,
-        number: 448,
-        repo: "example/repository",
-        requireKnownValues: false,
-        token: "synthetic-github-audit-token",
-      });
-      const output = formatPrivacyReport(findings);
+    const findings = await auditGithubPublication({
+      apiUrl: "https://api.github.test/",
+      fetcher,
+      number: 448,
+      repo: "example/repository",
+      requireKnownValues: false,
+      token: "synthetic-github-audit-token",
+    });
+    const output = formatPrivacyReport(findings);
 
-      expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_missing: 1\n");
-      expect(requests).toHaveLength(3);
-      expect(requests.at(-1)).toBe(resolvedMedia);
-      expect(output).not.toContain(syntheticHome);
-    } finally {
-      if (originalOcrLanguages === undefined) delete process.env.LLV_PRIVACY_OCR_LANGUAGES;
-      else process.env.LLV_PRIVACY_OCR_LANGUAGES = originalOcrLanguages;
-    }
+    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_missing: 1\n");
+    expect(requests).toHaveLength(3);
+    expect(requests.at(-1)).toBe(resolvedMedia);
+    expect(output).not.toContain(syntheticHome);
   });
 
   test("audits escaped reference labels in Markdown images", async () => {
-    const originalOcrLanguages = process.env.LLV_PRIVACY_OCR_LANGUAGES;
     const syntheticHome = ["", "home", "fixture-person", "escaped-reference-media"].join("/");
     const media = pngWithCustomMetadata("eXIf", syntheticHome);
     const mediaPath = "/user-attachments/assets/escaped-reference-capture";
     const resolvedMedia = `https://github.com${mediaPath}`;
     const requests: string[] = [];
-    const languageResult = Bun.spawnSync({ cmd: ["tesseract", "--list-langs"], stderr: "pipe", stdout: "pipe" });
-    const ocrLanguage = languageResult.stdout.toString().split(/\r?\n/).find((language) => /^[a-z0-9_]+$/i.test(language) && language !== "osd");
-    process.env.LLV_PRIVACY_OCR_LANGUAGES = ocrLanguage ?? "missing-test-language";
     const fetcher = async (input: string | URL): Promise<Response> => {
       const url = new URL(input);
       requests.push(url.href);
@@ -4306,37 +4019,28 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       return new Response(null, { status: 404 });
     };
 
-    try {
-      const findings = await auditGithubPublication({
-        apiUrl: "https://api.github.test/",
-        fetcher,
-        number: 448,
-        repo: "example/repository",
-        requireKnownValues: false,
-        token: "synthetic-github-audit-token",
-      });
-      const output = formatPrivacyReport(findings);
+    const findings = await auditGithubPublication({
+      apiUrl: "https://api.github.test/",
+      fetcher,
+      number: 448,
+      repo: "example/repository",
+      requireKnownValues: false,
+      token: "synthetic-github-audit-token",
+    });
+    const output = formatPrivacyReport(findings);
 
-      expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_missing: 1\n");
-      expect(requests).toHaveLength(3);
-      expect(requests.at(-1)).toBe(resolvedMedia);
-      expect(output).not.toContain(syntheticHome);
-    } finally {
-      if (originalOcrLanguages === undefined) delete process.env.LLV_PRIVACY_OCR_LANGUAGES;
-      else process.env.LLV_PRIVACY_OCR_LANGUAGES = originalOcrLanguages;
-    }
+    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_missing: 1\n");
+    expect(requests).toHaveLength(3);
+    expect(requests.at(-1)).toBe(resolvedMedia);
+    expect(output).not.toContain(syntheticHome);
   });
 
   test("audits multiline reference destinations in Markdown images", async () => {
-    const originalOcrLanguages = process.env.LLV_PRIVACY_OCR_LANGUAGES;
     const syntheticHome = ["", "home", "fixture-person", "multiline-reference-media"].join("/");
     const media = pngWithCustomMetadata("eXIf", syntheticHome);
     const mediaPath = "/user-attachments/assets/multiline-reference-capture";
     const resolvedMedia = `https://github.com${mediaPath}`;
     const requests: string[] = [];
-    const languageResult = Bun.spawnSync({ cmd: ["tesseract", "--list-langs"], stderr: "pipe", stdout: "pipe" });
-    const ocrLanguage = languageResult.stdout.toString().split(/\r?\n/).find((language) => /^[a-z0-9_]+$/i.test(language) && language !== "osd");
-    process.env.LLV_PRIVACY_OCR_LANGUAGES = ocrLanguage ?? "missing-test-language";
     const fetcher = async (input: string | URL): Promise<Response> => {
       const url = new URL(input);
       requests.push(url.href);
@@ -4353,36 +4057,27 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       return new Response(null, { status: 404 });
     };
 
-    try {
-      const findings = await auditGithubPublication({
-        apiUrl: "https://api.github.test/",
-        fetcher,
-        number: 448,
-        repo: "example/repository",
-        requireKnownValues: false,
-        token: "synthetic-github-audit-token",
-      });
-      const output = formatPrivacyReport(findings);
+    const findings = await auditGithubPublication({
+      apiUrl: "https://api.github.test/",
+      fetcher,
+      number: 448,
+      repo: "example/repository",
+      requireKnownValues: false,
+      token: "synthetic-github-audit-token",
+    });
+    const output = formatPrivacyReport(findings);
 
-      expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_missing: 1\n");
-      expect(requests).toHaveLength(3);
-      expect(requests.at(-1)).toBe(resolvedMedia);
-      expect(output).not.toContain(syntheticHome);
-    } finally {
-      if (originalOcrLanguages === undefined) delete process.env.LLV_PRIVACY_OCR_LANGUAGES;
-      else process.env.LLV_PRIVACY_OCR_LANGUAGES = originalOcrLanguages;
-    }
+    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_missing: 1\n");
+    expect(requests).toHaveLength(3);
+    expect(requests.at(-1)).toBe(resolvedMedia);
+    expect(output).not.toContain(syntheticHome);
   });
 
   test("fetches entity-encoded GitHub media references for inspection", async () => {
-    const originalOcrLanguages = process.env.LLV_PRIVACY_OCR_LANGUAGES;
     const syntheticHome = ["", "home", "fixture-person", "encoded-media"].join("/");
     const media = pngWithCustomMetadata("eXIf", syntheticHome);
     const requests: string[] = [];
     const encodedMedia = "&#104;&amp;#116;&#116;&#112;&#115;&amp;colon;&sol;&sol;github.com/example/repository/assets/encoded.png";
-    const languageResult = Bun.spawnSync({ cmd: ["tesseract", "--list-langs"], stderr: "pipe", stdout: "pipe" });
-    const ocrLanguage = languageResult.stdout.toString().split(/\r?\n/).find((language) => /^[a-z0-9_]+$/i.test(language) && language !== "osd");
-    process.env.LLV_PRIVACY_OCR_LANGUAGES = ocrLanguage ?? "missing-test-language";
     const fetcher = async (input: string | URL): Promise<Response> => {
       const url = new URL(input);
       requests.push(url.href);
@@ -4396,38 +4091,29 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       return new Response(null, { status: 404 });
     };
 
-    try {
-      const findings = await auditGithubPublication({
-        apiUrl: "https://api.github.test/",
-        fetcher,
-        number: 448,
-        repo: "example/repository",
-        requireKnownValues: false,
-        token: "synthetic-github-audit-token",
-      });
-      const output = formatPrivacyReport(findings);
+    const findings = await auditGithubPublication({
+      apiUrl: "https://api.github.test/",
+      fetcher,
+      number: 448,
+      repo: "example/repository",
+      requireKnownValues: false,
+      token: "synthetic-github-audit-token",
+    });
+    const output = formatPrivacyReport(findings);
 
-      expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_missing: 1\n");
-      expect(requests).toHaveLength(3);
-      expect(requests.at(-1)).toBe("https://github.com/example/repository/assets/encoded.png");
-      expect(output).not.toContain(syntheticHome);
-      expect(output).not.toContain(encodedMedia);
-    } finally {
-      if (originalOcrLanguages === undefined) delete process.env.LLV_PRIVACY_OCR_LANGUAGES;
-      else process.env.LLV_PRIVACY_OCR_LANGUAGES = originalOcrLanguages;
-    }
+    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 1\nprovenance_missing: 1\n");
+    expect(requests).toHaveLength(3);
+    expect(requests.at(-1)).toBe("https://github.com/example/repository/assets/encoded.png");
+    expect(output).not.toContain(syntheticHome);
+    expect(output).not.toContain(encodedMedia);
   });
 
   test("resolves relative GitHub media references before trusted-host inspection", async () => {
-    const originalOcrLanguages = process.env.LLV_PRIVACY_OCR_LANGUAGES;
     const syntheticHome = ["", "home", "fixture-person", "relative-media"].join("/");
     const media = pngWithCustomMetadata("eXIf", syntheticHome);
     const authorizationKey = ["author", "ization"].join("") as "authorization";
     const githubAuthorization = ["Bearer", "synthetic-github-audit-token"].join(" ");
     const requests: Array<{ authorization: string | null; url: string }> = [];
-    const languageResult = Bun.spawnSync({ cmd: ["tesseract", "--list-langs"], stderr: "pipe", stdout: "pipe" });
-    const ocrLanguage = languageResult.stdout.toString().split(/\r?\n/).find((language) => /^[a-z0-9_]+$/i.test(language) && language !== "osd");
-    process.env.LLV_PRIVACY_OCR_LANGUAGES = ocrLanguage ?? "missing-test-language";
     const fetcher = async (input: string | URL, init?: RequestInit): Promise<Response> => {
       const url = new URL(input);
       requests.push({
@@ -4451,33 +4137,28 @@ exec "$LLV_TEST_REAL_GIT" "$@"
       return new Response(null, { status: 404 });
     };
 
-    try {
-      const findings = await auditGithubPublication({
-        apiUrl: "https://api.github.test/",
-        fetcher,
-        number: 448,
-        repo: "example/repository",
-        requireKnownValues: false,
-        token: "synthetic-github-audit-token",
-      });
-      const output = formatPrivacyReport(findings);
+    const findings = await auditGithubPublication({
+      apiUrl: "https://api.github.test/",
+      fetcher,
+      number: 448,
+      repo: "example/repository",
+      requireKnownValues: false,
+      token: "synthetic-github-audit-token",
+    });
+    const output = formatPrivacyReport(findings);
 
-      expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 2\ninspection_error: 1\nprovenance_missing: 2\n");
-      expect(requests).toHaveLength(4);
-      expect(requests).toContainEqual({
-        [authorizationKey]: githubAuthorization,
-        url: "https://github.com/user-attachments/assets/capture.png",
-      });
-      expect(requests).toContainEqual({
-        [authorizationKey]: null,
-        url: "https://raw.githubusercontent.com/example/repository/main/capture.png",
-      });
-      expect(requests.some((request) => request.url.includes("127.0.0.2"))).toBe(false);
-      expect(output).not.toContain(syntheticHome);
-    } finally {
-      if (originalOcrLanguages === undefined) delete process.env.LLV_PRIVACY_OCR_LANGUAGES;
-      else process.env.LLV_PRIVACY_OCR_LANGUAGES = originalOcrLanguages;
-    }
+    expect(output).toBe("PRIVACY GATE: FAIL\nhome_path: 2\ninspection_error: 1\nprovenance_missing: 2\n");
+    expect(requests).toHaveLength(4);
+    expect(requests).toContainEqual({
+      [authorizationKey]: githubAuthorization,
+      url: "https://github.com/user-attachments/assets/capture.png",
+    });
+    expect(requests).toContainEqual({
+      [authorizationKey]: null,
+      url: "https://raw.githubusercontent.com/example/repository/main/capture.png",
+    });
+    expect(requests.some((request) => request.url.includes("127.0.0.2"))).toBe(false);
+    expect(output).not.toContain(syntheticHome);
   });
 
   test("fails the GitHub audit closed when authentication is unavailable", async () => {
@@ -5212,13 +4893,29 @@ describe("mergeBoundaryReview", () => {
   const canonicalIdentity = { email: [`4242+${owner}`, forgeAccountDomain].join("@"), name: "Fixture Maintainer" };
   let fixtureFile = 0;
 
-  async function gitRepo(remote = `https://github.com/${owner}/fixture-repository.git`): Promise<string> {
-    const repo = mkdtempSync(join(tmpdir(), "llv-privacy-merge-"));
+  async function createMergeFixture(remote: string): Promise<string> {
+    const repo = mkdtempSync(join(tmpdir(), "llv-privacy-merge-template-"));
     temporaryDirectories.push(repo);
-    await runGit(repo, ["init", "--quiet", "-b", "main", "."]);
+    await runGit(repo, ["init", "--template=", "--quiet", "-b", "main", "."]);
     if (remote) await runGit(repo, ["remote", "add", "origin", remote]);
     await commit(repo, "chore: baseline", canonicalIdentity);
     await runGit(repo, ["checkout", "--quiet", "-b", "feature"]);
+    return repo;
+  }
+
+  // Each case mutates its own index, refs and objects. Only the identical
+  // repository bootstrap is shared, including whether it has an origin.
+  const mergeFixtures = new Map<string, Promise<string>>();
+  async function gitRepo(remote = `https://github.com/${owner}/fixture-repository.git`): Promise<string> {
+    let ready = mergeFixtures.get(remote);
+    if (!ready) {
+      ready = createMergeFixture(remote);
+      mergeFixtures.set(remote, ready);
+    }
+    const template = await ready;
+    const repo = mkdtempSync(join(tmpdir(), "llv-privacy-merge-"));
+    temporaryDirectories.push(repo);
+    cpSync(template, repo, { recursive: true });
     return repo;
   }
 
@@ -5443,6 +5140,177 @@ describe("mergeBoundaryReview", () => {
     expect(commitMessageFindings(repo, "main").get("email_address")).toBe(1);
   });
 
+  const squashAuthor = { name: "Fixture Contributor", email: ["77+fixture-contributor", forgeAccountDomain].join("@") };
+  const otherMailbox = [squashAuthor.email.split("@")[0], "fixture-publication.dev"].join("@");
+  const squashTrailer = `Co-authored-by: ${squashAuthor.name} <${squashAuthor.email}>`;
+  const squashMessage = `Squash subject\n\n* Original subject\n\n---\n\n${squashTrailer}`;
+  const squashEvidence = (landed: string, addresses = [squashAuthor.email]) =>
+    ({ signedCommits: [landed], squashAddresses: { [landed]: addresses } });
+  const runLandedGate = (repo: string, evidence: unknown) => runPrivacyTestProcess({
+    cmd: [process.execPath, "-e", `
+      import { runPublicationGate } from "./scripts/privacy-publication-gate";
+      const [repository, evidence] = process.argv.slice(1);
+      runPublicationGate(["--repository", repository, "--base", "main", "--check-commits"], JSON.parse(evidence));
+    `, repo, JSON.stringify(evidence)],
+    cwd: join(import.meta.dir, ".."), env: process.env, stderr: "pipe", stdout: "pipe",
+  });
+
+  test("landed squash evidence exempts only the verified commit's trailer for a recorded PR address", async () => {
+    const repo = await gitRepo();
+    await commit(repo, squashMessage, canonicalIdentity);
+    const landed = await head(repo);
+    const evidence = squashEvidence(landed);
+    expect(commitMessageFindings(repo, "main", [], evidence)).toEqual(new Map());
+    expect(commitMessageFindings(repo, "main").get("email_address")).toBe(1);
+    expect(commitMessageFindings(repo, "main", [], { signedCommits: [landed] }).get("email_address")).toBe(1);
+    expect(commitMessageFindings(repo, "main", [], squashEvidence("1".repeat(40))).get("email_address")).toBe(1);
+
+    writeFileSync(join(repo, "published.txt"), squashAuthor.email + "\n");
+    await commit(repo, squashMessage, canonicalIdentity);
+    const next = await head(repo);
+    const nextTip = { ...evidence, signedCommits: [next, landed] };
+    expect(commitMessageFindings(repo, "main", [], nextTip).get("email_address")).toBe(1);
+    const ordinary = await runGateArguments(["--base", "main", "--check-commits"], {}, repo);
+    expect(ordinary.exitCode).toBe(1);
+    expect(ordinary.stdout.toString()).toContain("email_address: 3");
+
+    const gate = await runLandedGate(repo, nextTip);
+    expect(gate.exitCode).toBe(1);
+    expect(gate.stdout.toString()).toContain("email_address: 2");
+    /* The evidence names the first squash only; the next commit carries the
+       same trailer and the address in a file, and both stay attributable. */
+    expect(gate.stdout.toString()).toContain(`commit_message: ${next.slice(0, 12)} message email_address`);
+    expect(gate.stdout.toString()).not.toContain(landed.slice(0, 12));
+    expect(gate.stdout.toString()).not.toContain(squashAuthor.email);
+  });
+
+  test("a recorded PR address passes under any trailer name", async () => {
+    /* GitHub signs the whole edited squash message, so a composed line and an
+       identical handwritten one cannot be told apart; either discloses only
+       the address GitHub would compose from the pull request's commits. */
+    const repo = await gitRepo();
+    await commit(repo, squashMessage.replace(squashAuthor.name, "Another Contributor"), canonicalIdentity);
+    const evidence = squashEvidence(await head(repo));
+    expect(commitMessageFindings(repo, "main", [], evidence)).toEqual(new Map());
+  });
+
+  test.each([
+    ["a forge account trailer no PR commit recorded", squashMessage.replace(squashAuthor.email, squashAuthor.email.replace("77", "78"))],
+    ["the recorded mailbox in prose", `Squash subject\n\nThanks to ${squashAuthor.email} for the review.\n\n${squashTrailer}`],
+    ["the recorded mailbox in a body field", `Squash subject\n\nMailbox: ${squashAuthor.email}\n\n${squashTrailer}`],
+    ["a matching embedded trailer", `Squash subject\n\n* Original subject\n\n${squashTrailer}\n\n---\n\nFinal prose`],
+    ["a different trailer token", squashMessage.replace("Co-authored-by", "Signed-off-by")],
+    ["an encoded separator", squashMessage.replace("@", "%40")],
+    ["a duplicate matching trailer", `${squashMessage}\n${squashTrailer}`],
+    ["a recorded PR identity's private mailbox", `${squashMessage}\nCo-authored-by: ${squashAuthor.name} <${otherMailbox}>`],
+  ])("landed squash evidence leaves %s attributable", async (_case, message) => {
+    const repo = await gitRepo();
+    await commit(repo, message, canonicalIdentity);
+    const landed = await head(repo);
+    const evidence = squashEvidence(landed, [squashAuthor.email, otherMailbox]);
+    const notices: string[] = [];
+    expect(commitMessageFindings(repo, "main", notices, evidence)).toEqual(new Map([["email_address", 1]]));
+    expect(notices).toEqual([`commit_message: ${landed.slice(0, 12)} message email_address`]);
+  });
+
+  test.each([
+    ["an empty line", "", true],
+    ["a line of git whitespace", " \t\r", true],
+    ["a no-break space line", " ", false],
+    ["a byte order mark line", "﻿", false],
+  ])("a recorded trailer after body prose and %s follows git's own trailer parse", async (_case, separator, composed) => {
+    /* Git ends a paragraph only at a line of space, tab or carriage return.
+       Any other invisible line keeps the prose and the trailer one paragraph,
+       which git parses as no trailer at all. */
+    const message = `Squash subject\n\nBody prose\n${separator}\n${squashTrailer}`;
+    const repo = await gitRepo();
+    await commit(repo, message, canonicalIdentity);
+    const evidence = squashEvidence(await head(repo));
+    expect(await identityField(repo, "%(trailers:key=Co-authored-by,valueonly)") !== "").toBe(composed);
+    expect(commitMessageFindings(repo, "main", [], evidence).get("email_address")).toBe(composed ? undefined : 1);
+
+    const gate = await runLandedGate(repo, evidence);
+    expect(gate.exitCode).toBe(composed ? 0 : 1);
+    expect(gate.stdout.toString()).not.toContain(squashAuthor.email);
+  });
+
+  const cutLine = "# ------------------------ >8 ------------------------";
+  test.each([
+    ["between body prose and the trailer, as its own paragraph", `Squash subject\n\nBody prose\n\n${cutLine}\n\n${squashTrailer}`, false, 1],
+    ["inside the paragraph before the trailer", `Squash subject\n\nBody prose\n${cutLine}\n${squashTrailer}`, false, 1],
+    ["after the trailer block", `Squash subject\n\nBody prose\n\n${squashTrailer}\n${cutLine}`, true, undefined],
+    ["between a trailer block and the same trailer", `Squash subject\n\n${squashTrailer}\n\n${cutLine}\n\n${squashTrailer}`, true, 1],
+    ["under another comment character", `Squash subject\n\nBody prose\n\n; ${cutLine.slice(2)}\n\n${squashTrailer}`, true, 1],
+  ])("a recorded trailer and git's cut line %s follow git's own trailer parse", async (_case, message, gitTrailer, finding) => {
+    /* Git stops reading trailers at its scissors line, so nothing after the cut
+       is a trailer whatever its shape. A cut line written with a character the
+       checkout may or may not be configured to comment with grants nothing. */
+    const repo = await gitRepo();
+    await commit(repo, message, canonicalIdentity);
+    const evidence = squashEvidence(await head(repo));
+    expect(await identityField(repo, "%(trailers:key=Co-authored-by,valueonly)") !== "").toBe(gitTrailer);
+    expect(commitMessageFindings(repo, "main", [], evidence).get("email_address")).toBe(finding);
+    const gate = await runLandedGate(repo, evidence);
+    expect(gate.exitCode).toBe(finding ? 1 : 0);
+    expect(gate.stdout.toString()).not.toContain(squashAuthor.email);
+  });
+
+  test("each verified squash of a stack landed in one push keeps its own PR's evidence", async () => {
+    const second = { name: "Second Contributor", email: ["78+second-contributor", forgeAccountDomain].join("@") };
+    const secondTrailer = `Co-authored-by: ${second.name} <${second.email}>`;
+    const repo = await gitRepo();
+    await commitWithIdentities(repo, squashMessage, canonicalIdentity, forgeWebFlowIdentity);
+    const first = await head(repo);
+    await commitWithIdentities(repo, squashMessage, canonicalIdentity, forgeWebFlowIdentity);
+    const neighbour = await head(repo);
+    await commitWithIdentities(repo, `Second squash\n\n* Its commit\n\n---\n\n${secondTrailer}`, canonicalIdentity, forgeWebFlowIdentity);
+    const tip = await head(repo);
+    const both = {
+      signedCommits: [tip, first],
+      squashAddresses: { [first]: [squashAuthor.email], [tip]: [second.email] },
+    };
+
+    const notices: string[] = [];
+    expect(commitMessageFindings(repo, "main", notices, both)).toEqual(new Map([["email_address", 1]]));
+    expect(notices).toEqual([`commit_message: ${neighbour.slice(0, 12)} message email_address`]);
+    const gate = await runLandedGate(repo, both);
+    expect(gate.exitCode).toBe(1);
+    expect(gate.stdout.toString()).toBe(
+      "PRIVACY GATE: FAIL\nemail_address: 2\n"
+      + `commit_message: ${neighbour.slice(0, 12)} message email_address\n`
+      + `merge_boundary: ${neighbour.slice(0, 12)} committer identity composes an attributable `
+      + "Co-authored-by trailer (address withheld)\n",
+    );
+
+    /* One pull request's identities never cover another squash's trailer. */
+    const crossed = { ...both, squashAddresses: { [first]: [second.email], [tip]: [squashAuthor.email] } };
+    expect(commitMessageFindings(repo, "main", [], crossed).get("email_address")).toBe(3);
+
+    const verified = { ...both, signedCommits: [...both.signedCommits, neighbour],
+      squashAddresses: { ...both.squashAddresses, [neighbour]: [squashAuthor.email] } };
+    const passing = await runLandedGate(repo, verified);
+    expect(passing.stdout.toString()).toBe("PRIVACY GATE: PASS\n");
+    expect(passing.exitCode).toBe(0);
+  });
+
+  test("an invisible non-git separator keeps a machine trailer in body prose", () => {
+    const vendor = ["noreply", "vendor.example.com"].join("@");
+    for (const separator of [" ", "﻿", "\v", "\f"]) {
+      const message = `feat: something\n\nBody prose\n${separator}\nCo-Authored-By: Some Model <${vendor}>`;
+      /* Decoded views drop the invisible line and may also see a block; the
+         raw view attributes it, and one attributing view is a finding. */
+      expect(commitMessageAddressReview(message).attributable).toEqual([vendor]);
+    }
+    expect(commitMessageAddressReview(`feat: something\n\nBody prose\n\nCo-Authored-By: Some Model <${vendor}>`))
+      .toEqual({ attributable: [], exempt: [vendor] });
+  });
+
+  test("a role-shaped local part on the forge account host still needs squash evidence", () => {
+    const email = ["noreply", forgeAccountDomain].join("@");
+    const message = `Squash subject\n\nCo-authored-by: Fixture Contributor <${email}>`;
+    expect(commitMessageAddressReview(message)).toEqual({ attributable: [email], exempt: [] });
+  });
+
   test("a vendor no-reply identity stays machine attribution", async () => {
     const repo = await gitRepo();
     const vendor = ["noreply", "vendor.example.com"].join("@");
@@ -5611,6 +5479,19 @@ describe("mergeBoundaryReview", () => {
     expect(result.stdout.toString()).not.toContain(personal);
     expect(result.stdout.toString()).not.toContain(forgeWebFlowIdentity.email);
   }, 15000);
+
+  test("signed landed-tip evidence applies only to the exact forge committer", async () => {
+    const repo = await gitRepo();
+    await commitWithIdentities(repo, "fixture change", canonicalIdentity, forgeWebFlowIdentity);
+    const landed = await head(repo);
+    expect(mergeBoundaryReview(repo, "main").findings.get("email_address")).toBe(1);
+    expect(mergeBoundaryReview(repo, "main", [landed]).findings.size).toBe(0);
+    expect(mergeBoundaryReview(repo, "main", ["a".repeat(40)]).findings.get("email_address")).toBe(1);
+    const person = ["fixture", "private.dev"].join("@");
+    await commitWithIdentities(repo, "fixture change", { name: "Fixture", email: person }, forgeWebFlowIdentity);
+    const next = await head(repo);
+    expect(mergeBoundaryReview(repo, landed, [next]).findings.get("email_address")).toBe(1);
+  });
 
   test.concurrent("a message with a real-looking address still fails behind a forge merge, and is named", async () => {
     /* The narrowed range and the forge exemptions must not carry a person

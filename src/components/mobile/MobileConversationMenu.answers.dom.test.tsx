@@ -40,7 +40,7 @@ Object.assign(globalThis, {
 
 /* The runtime plane is off, so this conversation is a legacy live root: Kill
    posts to `/api/proc` with the SIGTERM→SIGKILL escalation, and Stop/Compact
-   post to `/api/tmux` — the paths whose refusals the rows have to report. */
+   post to `/api/conversation-host` — the paths whose refusals the rows have to report. */
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
 const inert = { enabled: false, connection: "offline" as const, resyncedAt: null, store: emptyStore() };
 mock.module("@/hooks/useRuntime", () => ({

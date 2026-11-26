@@ -12,6 +12,7 @@ import type { AccountContext } from "@/lib/accounts/contracts";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { answerSchema } from "@/lib/externalRelay/protocol";
 import { parseCodexFeatures, setCodexFeatureReaderForTest } from "./codexSpawnPolicy";
+import { claudeKeychainService, readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
 
 // Command/control tests use a fake interpreter and its explicit inventory.
 let restoreFeatureReader: () => void;
@@ -67,6 +68,23 @@ function fixture(engine: "codex" | "claude"): EphemeralAgentRequest {
     hardCapMs: 60_000,
   };
 }
+for (const engine of ["claude", "codex"] as const) test(`private ${engine} context has request-local config and cannot persist a session`, () => {
+  const request = { ...fixture(engine), privateContext: true };
+  fs.writeFileSync(path.join(request.account.home, ".credentials.json"), "{}");
+  fs.writeFileSync(path.join(request.account.home, "memory.md"), "OWNER_MEMORY_CANARY");
+  const built = buildEphemeralCommand(request);
+  const home = engine === "claude" ? built.env.CLAUDE_CONFIG_DIR! : built.env.CODEX_HOME!;
+  expect(home.startsWith(request.runDir + path.sep)).toBe(true);
+  expect(fs.readdirSync(home)).toEqual([engine === "claude" ? ".credentials.json" : "auth.json"]);
+  expect(built.args).toContain(engine === "claude" ? "--no-session-persistence" : "--ephemeral");
+  if (engine === "claude") {
+    expect(built.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe("1");
+    expect(JSON.parse(built.args[built.args.indexOf("--settings") + 1]!)).toMatchObject({ autoMemoryEnabled: false, disableAllHooks: true });
+  } else expect(built.args[built.args.indexOf("memories") - 1]).toBe("--disable");
+  for (const mode of ["start", "resume"] as const) expect(() => buildEphemeralCommand({ ...request,
+    session: { mode, id: "private-session", cwd: request.runDir } })).toThrow("private context cannot resume or persist a session");
+});
+
 test("Codex answer profile is closed and the answer home links only auth", () => {
   const request = fixture("codex");
   fs.writeFileSync(
@@ -80,6 +98,7 @@ test("Codex answer profile is closed and the answer home links only auth", () =>
   expect(args).toContain("--disable plugins");
   expect(args).toContain("web_search=disabled");
   expect(args).toContain("-c project_doc_max_bytes=0");
+  expect(args).toContain("-c skills.include_instructions=false");
   expect(args).toContain("--output-schema");
   expect(args).not.toContain("dangerously");
   expect(args).not.toContain("PERSONAL_MARKER");
@@ -98,6 +117,84 @@ test("Codex answer profile is closed and the answer home links only auth", () =>
     fs.readFileSync(path.join(request.runDir, "catalog.json"), "utf8"),
   );
   expect(catalog).toEqual({ models: [{ slug: "gpt-6-sol", preserved: 1 }] });
+});
+
+for (const kind of ["managed", "legacy"] as const) for (const status of [0, 44, 36, null])
+  test(`private Claude keeps the selected ${kind} credential backend with Keychain status ${status}`, () => {
+    const request = { ...fixture("claude"), privateContext: true };
+    // A Keychain account has no credential file. A hostile inherited override
+    // must not redirect either the managed or legacy account to another item.
+    fs.rmSync(path.join(request.account.home, ".credentials.json"), { force: true });
+    request.account.kind = kind;
+    request.account.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = path.join(root, "other-account");
+    const service = claudeKeychainService(request.account.home);
+    const value = String(status);
+    const calls: string[][] = [];
+    const ports = { platform: "darwin", security: (args: string[]) => {
+      calls.push(args);
+      return args.at(-1) === service
+        ? { status, stdout: status === 0 ? JSON.stringify({ claudeAiOauth: { accessToken: value } }) : "" }
+        : { status: 44, stdout: "" };
+    } };
+    const source = readClaudeCredentials(request.account.home, ports);
+    const built = buildEphemeralCommand(request);
+    const credentialHome = built.env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? built.env.CLAUDE_CONFIG_DIR!;
+    expect(readClaudeCredentials(credentialHome, ports)).toEqual(source);
+    expect(source.state).toBe(status === 0 ? "present" : status === 44 ? "absent" : "unknown");
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toEqual(calls[1]);
+    expect(credentialHome).toBe(request.account.home);
+    expect(built.env.CLAUDE_CONFIG_DIR).toBe(path.join(request.runDir, "claude-home"));
+    expect(fs.readdirSync(built.env.CLAUDE_CONFIG_DIR!)).toEqual([]);
+    expect(fs.existsSync(path.join(request.account.home, ".credentials.json"))).toBe(false);
+    expect(built.args.join(" ")).not.toContain("claudeAiOauth");
+  });
+
+for (const kind of ["managed", "legacy"] as const) test(`private Claude disables inherited telemetry and diagnostic sinks for ${kind} accounts`, () => {
+  const request = fixture("claude");
+  request.account.kind = kind;
+  const sinks = {
+    OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:1", OTEL_LOGS_EXPORTER: "otlp",
+    OTEL_METRICS_EXPORTER: "console", OTEL_TRACES_EXPORTER: "otlp",
+    OTEL_LOG_USER_PROMPTS: "1", OTEL_LOG_RAW_API_BODIES: "1", OTEL_LOG_TOOL_CONTENT: "1",
+    CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1", ANTHROPIC_LOG: "debug", DEBUG: "*", CLAUDE_DEBUG: "1",
+    CLAUDE_CODE_DEBUG_LOG_LEVEL: "debug", CLAUDE_CODE_DEBUG_LOGS_DIR: path.join(root, "owner-debug"),
+    CLAUDE_CODE_DIAGNOSTICS_FILE: path.join(root, "owner-diagnostics"), CLAUDE_CODE_SESSION_LOG: path.join(root, "owner-session"),
+    CLAUDE_CODE_PERFETTO_TRACE: path.join(root, "owner-trace"), CLAUDE_CODE_PROFILE_QUERY: "1", CLAUDE_CODE_PROFILE_STARTUP: "1",
+    CLAUDE_CODE_FRAME_TIMING_LOG: path.join(root, "owner-frames"), CLAUDE_CODE_TERMINAL_RECORDING: "1",
+    CLAUDE_PTY_RECORD: path.join(root, "owner-terminal"), CLAUDE_RUNNER_DEBUG_LOG_PATH: path.join(root, "owner-runner"),
+  };
+  const switches = { CLAUDE_CODE_ENABLE_TELEMETRY: "1", DISABLE_TELEMETRY: "0", DISABLE_ERROR_REPORTING: "0", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "" };
+  Object.assign(request.account.env, sinks, switches);
+  const before = { ...request.account.env };
+  const ordinary = buildEphemeralCommand(request);
+  const guest = buildEphemeralCommand({ ...request, privateContext: true });
+  for (const [key, value] of Object.entries({ ...sinks, ...switches })) expect(ordinary.env[key]).toBe(value);
+  for (const key of Object.keys(sinks)) expect(guest.env[key]).toBeUndefined();
+  expect(guest.env).toMatchObject({ CLAUDE_CODE_ENABLE_TELEMETRY: "0", DISABLE_TELEMETRY: "1",
+    DISABLE_ERROR_REPORTING: "1", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    CLAUDE_SECURESTORAGE_CONFIG_DIR: request.account.home });
+  expect(request.account.env).toEqual(before);
+  const following = buildEphemeralCommand(request);
+  expect(following.env).toEqual(ordinary.env);
+});
+
+test("private Codex drops native persistence and telemetry overrides without changing ordinary profiles", () => {
+  const request = fixture("codex");
+  const overrides = {
+    CODEX_ROLLOUT_TRACE_ROOT: path.join(root, "owner-traces"), CODEX_SQLITE_HOME: path.join(root, "owner-sqlite"),
+    CODEX_TUI_RECORD_SESSION: "1", CODEX_TUI_SESSION_LOG_PATH: path.join(root, "owner-session.log"),
+    RUST_LOG: "trace", OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:1", OTEL_LOGS_EXPORTER: "otlp",
+  };
+  Object.assign(request.account.env, overrides);
+  const ordinary = buildEphemeralCommand(request);
+  const guest = buildEphemeralCommand({ ...request, privateContext: true });
+  for (const [key, value] of Object.entries(overrides)) {
+    expect(ordinary.env[key]).toBe(value);
+    expect(guest.env[key]).toBeUndefined();
+    expect(request.account.env[key]).toBe(value);
+  }
+  expect(guest.env.CODEX_HOME).toBe(path.join(request.runDir, "codex-home"));
 });
 test("the relay answer profile denies newly reported agent features", () => {
   const restore = setCodexFeatureReaderForTest(() => parseCodexFeatures("multi_agent stable true\nmulti_agent_v2 stable true\nfuture_worker experimental true"));
@@ -265,7 +362,7 @@ process.stdout.write(result.subarray(cut));
 });
 test("the native web search is the one tool the relay profile can add", () => {
   const codex = buildEphemeralCommand({ ...fixture("codex"), webSearch: true }).args;
-  expect(codex).toContain("web_search=live");
+  expect(codex).toContain("web_search=cached");
   expect(codex).not.toContain("web_search=disabled");
   for (const feature of ["shell_tool", "unified_exec", "apps", "plugins", "browser_use", "computer_use"])
     expect(codex[codex.indexOf(feature) - 1]).toBe("--disable");
@@ -341,4 +438,23 @@ if (args.includes('--output-last-message')) {
   }
   const failed = await runEphemeralAgent({ ...fixture("claude"), inputFile: path.join(root, "missing-input"), runtime: { command: script } });
   expect((await failed.done).status).not.toBe("done");
+});
+
+for (const action of ["search", "open_page", "incomplete"] as const) test(`native provider evidence and note suppression: ${action}`, async () => {
+  const script = path.join(root, `provider-${action}`);
+  fs.writeFileSync(script, `#!/usr/bin/env bun
+    const a=process.argv;await Bun.stdin.text();
+    console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Before search'}}));
+    console.log(JSON.stringify({type:'item.started',item:{id:'search-item',type:'web_search',action:{type:'other'}}}));
+    if(${JSON.stringify(action)}!=='incomplete')console.log(JSON.stringify({type:'item.completed',item:{id:'search-item',type:'web_search',action:${JSON.stringify(action === "search" ? { type: "search", query: "page" } : { type: "open_page", url: "https://example.org" })}}}));
+    console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'PAGE_NOTE_CANARY'}}));
+    await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));
+  `); fs.chmodSync(script, 0o700);
+  const notes: string[] = [];
+  const request = fixture("codex"); request.key = `provider-${action}`; request.account.accountId = `provider_${action}`;
+  const run = await runEphemeralAgent({ ...request, webSearch: true, runtime: { command: script }, onEvent: event => { if (event.type === "note") notes.push(event.text); } });
+  const result = await run.done;
+  expect(result.status).toBe("done"); expect(notes).toEqual(["Before search"]);
+  if (action === "search") expect(result.providerOpens).toEqual([]);
+  else expect(result.providerOpens).toHaveLength(1);
 });

@@ -33,6 +33,19 @@ export function staleWorkingFixture(directory: string, now: number, stopped = fa
   return { snapshot, receipt, probe, live };
 }
 
+/** Two conversations whose turn ended four minutes ago on a live host: a top-level
+    one and a sub-agent of the live transcript. Both read «finished the turn» on every
+    surface that names a state, so a driver can compare the words. */
+export function recentlyFinishedFiles(now: number): { topLevel: FileEntry; subAgent: FileEntry } {
+  const finished = (name: string, parent: string | null, pid: number): FileEntry => ({
+    path: `/repo/${name}.jsonl`, root: "codex-sessions", name: `${name}.jsonl`, project: "atlas",
+    title: parent ? "Finished sub-agent" : "Finished agent", engine: "codex", kind: "session", fmt: "codex", parent,
+    mtime: now / 1000 - 240, size: 100, activity: "recent", proc: "running", pid, model: "gpt-6.1-sol",
+    pendingQuestion: null, waitingInput: null, conversationId: `conversation_${name}`,
+    lastTurn: { startedAt: now - 600_000, endedAt: now - 240_000 },
+  });
+  return { topLevel: finished("finished", null, 4404), subAgent: finished("finished-sub", "/repo/live.jsonl", 4405) };
+}
 
 /** Server-generated response for both existing rendered-evidence drivers: a
     launch whose live host completed its turn, a launch whose host died over an
@@ -89,12 +102,13 @@ export function staleWorkingResponse(directory: string, now: number) {
     return { quiet: byLaunch(completedLaunch), dead: byLaunch(deadLaunch) };
   };
   const { quiet, dead } = project();
-  const files = [quiet, dead, live];
+  const recent = recentlyFinishedFiles(now);
+  const files = [quiet, dead, live, recent.topLevel, recent.subAgent];
   const at = new Date(now - 60_000).toISOString();
   const task = { id: "stale-working", project: "atlas", status: "done", placement: "unplaced", board: "shown",
     text: "Перевірити стан агентів", createdAt: at, updatedAt: at,
     assignments: files.map(file => ({ path: file.path, conversationId: file.conversationId, engine: file.engine,
       panePid: null, state: "delivered", error: null, at })) };
-  return { quiet, dead, live, sessions, events, project, body: { files, tasks: [task], projectCatalog: [{ project: "atlas", conversations: 3, smt: now / 1000 }],
-    workflows: [], flows: [], pipelines: [], systemHealth: { tmux: { status: "healthy" } } } };
+  return { quiet, dead, live, recent, sessions, events, project, body: { files, tasks: [task], projectCatalog: [{ project: "atlas", conversations: 5, smt: now / 1000 }],
+    workflows: [], flows: [], pipelines: [], systemHealth: {} } };
 }

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { MCP_PROBE_READ_ONLY_ENV } from "@/lib/stateOwnership";
 import { fsyncPath, readJsonCache } from "@/lib/state/durableJson";
 import type { listFilesWithProjectCatalog } from "@/lib/scanner";
 import { primeTranscriptTurnEvidence } from "@/lib/scanner/activity";
@@ -31,6 +32,10 @@ export function setFileScanRunnerForTests(runner: FileScanRunner | null): void {
 
 function configuredFileScanRunner(...args: Parameters<FileScanRunner>): ReturnType<FileScanRunner> {
   return (testFileScanRunner ?? runFileCatalogScan)(...args);
+}
+
+function canPersistFileScan(): boolean {
+  return process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1" && process.env[MCP_PROBE_READ_ONLY_ENV] !== "1";
 }
 
 export type FileScanSnapshot = Awaited<ReturnType<typeof listFilesWithProjectCatalog>>;
@@ -115,7 +120,9 @@ const FILE_SCAN_PIN_CACHE_MAX = 8;
 // genuine unknown activity from a bounded tail.
 // v12: entries may carry the `copilot-sessions` root and the `copilot`
 // engine/format; a pre-Copilot snapshot has no Copilot rows and is rescanned.
-const FILE_SCAN_CACHE_SCHEMA_VERSION = 12 as const;
+// v13: entries may carry the `antigravity-sessions` root and the `antigravity`
+// engine/format; a pre-Antigravity snapshot has no Antigravity rows and is rescanned.
+const FILE_SCAN_CACHE_SCHEMA_VERSION = 13 as const;
 const FILE_SCAN_SNAPSHOT_VERSION = 1 as const;
 const FILE_SCAN_SNAPSHOT_FILE = "files-scan-snapshot.json";
 const FILE_SCAN_PERSISTENCE_DIAGNOSTIC_MS = 60_000;
@@ -178,13 +185,13 @@ function isFileScanSnapshot(value: unknown): value is FileScanSnapshot {
   const filesValid = value.files.every((candidate) => {
     if (!isRecord(candidate)) return false;
     return typeof candidate.path === "string"
-      && (candidate.root === "codex-sessions" || candidate.root === "claude-projects" || candidate.root === "claude-tasks" || candidate.root === "openclaw-sessions" || candidate.root === "copilot-sessions")
+      && (candidate.root === "codex-sessions" || candidate.root === "claude-projects" || candidate.root === "claude-tasks" || candidate.root === "openclaw-sessions" || candidate.root === "copilot-sessions" || candidate.root === "antigravity-sessions")
       && typeof candidate.name === "string"
       && typeof candidate.project === "string"
       && typeof candidate.title === "string"
-      && (candidate.engine === "codex" || candidate.engine === "claude" || candidate.engine === "shell" || candidate.engine === "openclaw" || candidate.engine === "copilot")
+      && (candidate.engine === "codex" || candidate.engine === "claude" || candidate.engine === "shell" || candidate.engine === "openclaw" || candidate.engine === "copilot" || candidate.engine === "antigravity")
       && typeof candidate.kind === "string"
-      && (candidate.fmt === "codex" || candidate.fmt === "claude" || candidate.fmt === "plain" || candidate.fmt === "openclaw" || candidate.fmt === "copilot")
+      && (candidate.fmt === "codex" || candidate.fmt === "claude" || candidate.fmt === "plain" || candidate.fmt === "openclaw" || candidate.fmt === "copilot" || candidate.fmt === "antigravity")
       && (candidate.parent === null || typeof candidate.parent === "string")
       && typeof candidate.mtime === "number" && Number.isFinite(candidate.mtime)
       && typeof candidate.size === "number" && Number.isFinite(candidate.size)
@@ -211,7 +218,7 @@ function isFileScanSnapshot(value: unknown): value is FileScanSnapshot {
 /* The primed evidence above is only meaningful for an engine whose transcript
    the turn reader parses; background-task output logs carry no turn. */
 function isTranscriptEngine(engine: Engine): engine is TranscriptEngine {
-  return engine === "claude" || engine === "codex" || engine === "openclaw" || engine === "copilot";
+  return engine === "claude" || engine === "codex" || engine === "openclaw" || engine === "copilot" || engine === "antigravity";
 }
 
 function persistedTurnState(entry: FileEntry): TurnState | undefined {
@@ -232,9 +239,10 @@ function persistedTurnState(entry: FileEntry): TurnState | undefined {
   return undefined;
 }
 
-function persistedQuestionDraft(entry: FileEntry): Omit<PendingQuestion, "pid" | "paneTarget"> | null {
+function persistedQuestionDraft(entry: FileEntry): Omit<PendingQuestion, "pid"> | null {
   if (!entry.pendingQuestion) return null;
-  const { pid, paneTarget, ...draft } = entry.pendingQuestion;
+  /* An entry persisted by an older release still carries a pane target. */
+  const { pid, paneTarget, ...draft } = entry.pendingQuestion as PendingQuestion & { paneTarget?: unknown };
   void pid;
   void paneTarget;
   return draft;
@@ -306,7 +314,7 @@ function primePersistedFileDerivations(snapshot: FileScanSnapshot): void {
       globalCache<[number, number, FileEntry["pendingWakeup"]]>("wakeup-v2").set(entry.path, [entry.size, mtimeMs, entry.pendingWakeup]);
     }
     if (entry.root === "claude-projects" && entry.path.endsWith(".jsonl")) {
-      globalCache<[number, number, Omit<PendingQuestion, "pid" | "paneTarget"> | null]>(QUESTION_CACHE_NAME)
+      globalCache<[number, number, Omit<PendingQuestion, "pid"> | null]>(QUESTION_CACHE_NAME)
         .set(entry.path, [entry.size, mtimeMs, persistedQuestionDraft(entry)]);
     }
   }
@@ -603,13 +611,13 @@ function fileScanRefreshPromise(
       },
     }, (intent, generationSignal) => {
       return configuredFileScanRunner(intent, {
-        persistIndex: process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1",
+        persistIndex: canPersistFileScan(),
         ...(onResourceSnapshot ? { onResourceSnapshot, resourceBaseline: slot.snapshot } : {}),
       }, generationSignal);
     });
     if (!snapshot.complete) throw new FileScanIncompleteError();
     const membershipAfterScan = await probeFileCatalogMembership(slot);
-    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(snapshot, { epoch: slot.epoch, generation });
+    if (canPersistFileScan()) writePersistedFileScanSnapshot(snapshot, { epoch: slot.epoch, generation });
     slot.snapshot = snapshot;
     slot.snapshotGeneration = Math.max(slot.snapshotGeneration, generation);
     slot.refreshedAt = Date.now();
@@ -689,7 +697,7 @@ function beginPinnedFileScanRefresh(
        callers (their runners cannot reproduce the pin overlay); it still holds
        the process-wide single-generation lease through the coordinator (#287). */
     const pinnedSnapshot = await coordinatedFileScan({ fresh, join: false, exclusive: true, signal: controller.signal }, (intent, signal) => configuredFileScanRunner(intent, {
-      persistIndex: process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1",
+      persistIndex: canPersistFileScan(),
       pin: pinnedPath,
     }, signal));
     if (!pinnedSnapshot.complete) throw new FileScanIncompleteError();
@@ -717,7 +725,7 @@ function beginPinnedFileScanRefresh(
       slot.pinnedSnapshots.delete(oldest);
       slot.pinnedGenerations?.delete(oldest);
     }
-    if (process.env.LLV_RESOURCE_OBSERVATION_WORKER !== "1") writePersistedFileScanSnapshot(globalSnapshot, { epoch: slot.epoch, generation });
+    if (canPersistFileScan()) writePersistedFileScanSnapshot(globalSnapshot, { epoch: slot.epoch, generation });
     slot.snapshot = globalSnapshot;
     slot.snapshotGeneration = Math.max(slot.snapshotGeneration, generation);
     slot.refreshedAt = Date.now();
@@ -917,13 +925,6 @@ function probeFileCatalogMembership(slot: FileScanCacheSlot): Promise<string | n
   const clear = () => { if (slot.membershipProbe === probe) slot.membershipProbe = undefined; };
   void probe.then(clear, clear);
   return probe;
-}
-
-/** The catalog's membership key as the scanner roots hold it now, through the
-    same single probe the generations use; null when it cannot be read. Starts
-    no scan. */
-export function probedFileCatalogMembership(): Promise<string | null> {
-  return probeFileCatalogMembership(globalFileScanSlot());
 }
 
 async function membershipFileScanRefresh(slot: FileScanCacheSlot): Promise<FileScanRefresh | undefined> {

@@ -154,3 +154,18 @@ export function isClaudeTurnWindowMeta(record: Record<string, unknown>): boolean
   const text = claudeUserText(rec(record.message).content).trim();
   return isClaudeInterruptSentinelText(text) || isCommandCaveatText(text) || isTaskNotificationText(text);
 }
+
+/** A native prompt opening. Tool output and harness metadata have UUIDs too;
+ * those identities describe records inside an existing turn. */
+export function isClaudePrompt(record: Record<string, unknown>): boolean {
+  const message = rec(record.message);
+  // A delivered task notification requests another provider turn. Its UUID
+  // is that background turn's opening, even though the work timer omits it.
+  const taskNotification = isTaskNotificationText(claudeUserText(message.content).trim());
+  return record.type === "user" && (message.role === undefined || message.role === "user")
+    && !arr(message.content).some(part => part.type === "tool_result")
+    && record.isCompactSummary !== true && !("interruptedMessageId" in record)
+    && record.interruptedByShutdown !== true
+    && !isClaudeInterruptSentinelText(claudeUserText(message.content).trim())
+    && (!isClaudeTurnWindowMeta(record) || taskNotification);
+}

@@ -4,6 +4,25 @@ import { performanceProcess, createPerformanceSpans } from "./performanceSpans";
 import { createLoopHeapSignals } from "./loopHeapSignals";
 import { MeasuredCache } from "./cacheTelemetry";
 
+test("pending operations expose oldest ages and counts, settlement removes them", async () => {
+  let at = 10;
+  const monitor = createViewerLoopMonitor(() => {}, () => at);
+  const pending = Promise.withResolvers<void>();
+  const a = monitor.run("history.read", () => pending.promise);
+  at = 30;
+  const b = monitor.run("history.read", () => pending.promise);
+  at = 50;
+  const c = monitor.run("files.get", () => pending.promise);
+  at = 100;
+  const snapshot = monitor.pendingOperations();
+  expect(snapshot.count).toBe(3);
+  expect(snapshot.byName).toEqual([{ name: "history.read", count: 2, oldestAgeMs: 90 }, { name: "files.get", count: 1, oldestAgeMs: 50 }]);
+  expect(snapshot.oldest[0]).toEqual({ name: "history.read", ageMs: 90 });
+  pending.resolve(); await Promise.all([a, b, c]);
+  expect(monitor.pendingOperations().count).toBe(0);
+  monitor.stop();
+});
+
 test("one injected memory read feeds gap and retained samples with detached cache and Bun counters", () => {
   let at = 0, reads = 0;
   const usage = { rss: 9000, heapUsed: 2000, heapTotal: 4000, external: 500, arrayBuffers: 100,
@@ -137,6 +156,35 @@ test.each(["viewer", "runtime-host"])("the default %s loop sink quiets package d
     else process.env.LLV_STATE_OWNER = previousOwner;
     if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
     else process.env.LLV_QUIET_DIAGNOSTICS = previous;
+  }
+});
+
+test.each(["viewer", "runtime-host"])("%s summary retains request drops through ordinary monitor ticks", role => {
+  const previousOwner = process.env.LLV_STATE_OWNER;
+  const lines: string[] = [];
+  let at = 0;
+  const spans = createPerformanceSpans(() => at);
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, spans);
+  try {
+    process.env.LLV_STATE_OWNER = role;
+    const requestId = (index: number) => ["00000000", "0000", "4000", "8000", index.toString(16).padStart(12, "0")].join("-");
+    for (let i = 0; i < 257; i++) spans.request(requestId(i), "snapshot");
+    const lastRequest = requestId(256);
+    for (let i = 0; i < 17; i++) spans.event("rpc.receive", lastRequest, i);
+
+    for (at = 10; at <= 60_000; at += 10) monitor.tick();
+
+    const summary = lines.find(line => line.startsWith("[performance summary] "));
+    expect(summary).toBeDefined();
+    expect(JSON.parse(summary!.slice("[performance summary] ".length))).toMatchObject({
+      role,
+      monotonic: 60_000,
+      requests: { dropped: 2, droppedOverflow: 2, droppedExpired: 0 },
+    });
+  } finally {
+    monitor.stop();
+    if (previousOwner === undefined) delete process.env.LLV_STATE_OWNER;
+    else process.env.LLV_STATE_OWNER = previousOwner;
   }
 });
 
@@ -310,4 +358,30 @@ test.each(["viewer", "runtime-host"] as const)("%s without the bounded choice, a
   expect(gaps(firstWindow)).toHaveLength(25 * 60);
   expect(summaries(firstWindow)).toHaveLength(25);
   for (const summary of summaries(firstWindow)) expect(summary).not.toHaveProperty("loopGapsWithheld");
+});
+
+test("a loop-gap reports the cooperative slices resumed inside it and what still waits", async () => {
+  const { yieldToRuntime } = await import("./cooperative");
+  /* Settle whatever earlier tests left queued, so the counts below are this test's own. */
+  await yieldToRuntime();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  let at = 0;
+  const lines: string[] = [];
+  const monitor = createViewerLoopMonitor(line => lines.push(line), () => at, createPerformanceSpans(() => at));
+  try {
+    at = 10; monitor.tick();
+    /* Five slices resume between two ticks, and three more jobs are still waiting at the second. */
+    for (let slice = 0; slice < 5; slice += 1) await yieldToRuntime();
+    const waiting = Array.from({ length: 3 }, () => yieldToRuntime());
+    at = 1_020; monitor.tick();
+    const gap = JSON.parse(lines[0]!.slice("[viewer loop-gap] ".length));
+    expect(gap.gapMs).toBe(1_000);
+    expect(gap.cooperative).toMatchObject({ resumed: 5, depth: 3, maxDepth: 3 });
+    expect(gap.cooperative.turns).toBeGreaterThanOrEqual(5);
+    await Promise.all(waiting);
+    /* The next gap counts from the previous tick, never from the start of the process. */
+    at = 2_030; monitor.tick();
+    const next = JSON.parse(lines[1]!.slice("[viewer loop-gap] ".length));
+    expect(next.cooperative).toMatchObject({ resumed: 3, depth: 0 });
+  } finally { monitor.stop(); }
 });

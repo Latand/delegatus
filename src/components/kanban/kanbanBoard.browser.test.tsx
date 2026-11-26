@@ -45,7 +45,8 @@ import { measureStageChain, stageChainFailures, wideStageChainFailures, type Sta
 import { sampleAnswer, sampleMemory, sampleRule, sampleScope } from "@/lib/memory/profile.fixture";
 import { createProfileService } from "@/lib/memory/profileService";
 import type { MemoryProfileView, ProfileRow } from "@/lib/memory/profileTypes";
-import type { RoleMemoryProjectView, RuleRevisionView, RuleView } from "@/lib/memory/roleTypes";
+import { PROFILE_PROMPT_VERSION, profileView } from "@/lib/memory/profile";
+import type { RoleMemoryProjectView, RuleRevisionView, RuleView, ScopeView } from "@/lib/memory/roleTypes";
 import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profileModel";
 
 /*
@@ -67,7 +68,29 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
    opened before the next case starts, and sizes the deadline for a loaded
    machine. Launch through `chromium` from the harness so the case owns them. */
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
+/** The share a "used / total" reading names, in percent. */
+const usedShare = (value: string): number | null => {
+  const ratio = /^([\d.,]+) (GiB|MiB) \/ ([\d.,]+) (GiB|MiB)$/.exec(value.trim());
+  if (!ratio) return null;
+  const gib = (amount: string, unit: string) => Number(amount.replace(",", ".")) / (unit === "MiB" ? 1024 : 1);
+  return (100 * gib(ratio[1]!, ratio[2]!)) / gib(ratio[3]!, ratio[4]!);
+};
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
+/** Where a memory-profile block keeps its frames: under MEMORY_PROFILE_OUT when set, otherwise under .artifacts. */
+const memoryOut = (name: string) => process.env.MEMORY_PROFILE_OUT ? path.resolve(process.env.MEMORY_PROFILE_OUT, name) : path.resolve(".artifacts", name);
+
+describe("public provisioning step", () => {
+  browserTest("provisioning step and age fit the desktop board", async () => {
+    const { captureProvisioningStepGeometry, ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const server = await chromium.launchServer({ ...LAUNCH, env: sockets.env });
+    const browser = await chromium.connect(server.wsEndpoint());
+    try {
+      expect(server.process().pid).toBeGreaterThan(0);
+      expect(await captureProvisioningStepGeometry(browser, path.join(process.env.LLV_EVIDENCE_DIR!, "provision-board"), [768, 1440])).toBe(32);
+    } finally { await browser.close(); await server.close(); sockets.close(); }
+  }, 120_000);
+});
 
 describe("accepted queued creation continuity", () => {
   browserTest("real create, missing catalogs, reload and terminal readback at desktop widths", async () => {
@@ -98,7 +121,7 @@ describe("independent creation lock", () => {
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/team": { mode: "solo", me: null, members: [], methods: {} },
       "/fixture/config": { task: "Independent accepted work", repoDir: "/fixture/repo", project: "atlas", autoStart: false, stages: [] },
-      "/api/files": { files: [], pipelines: [], tasks: [], flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: 1 }], systemHealth: { tmux: { status: "healthy" } } },
+      "/api/files": { files: [], pipelines: [], tasks: [], flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: 1 }], systemHealth: {} },
       "/api/tasks": { tasks: [] },
       "/api/pipelines": async (request: Request) => {
         if (request.method !== "POST") return Response.json({ pipelines: [] });
@@ -204,8 +227,9 @@ describe("per-account paid spending", () => {
           const toggle = row.getByRole("switch");
           await toggle.waitFor();
           expect(await toggle.isChecked()).toBe(false);
-          expect(await row.innerText()).toMatch(/12[.,]50/);
-          expect(await row.innerText()).not.toMatch(/\d{4}-\d{2}-\d{2}T|\.000|\dZ\b/);
+          // Whole credits: 12.50 reads as 13, with no fraction.
+          expect(await row.innerText()).toMatch(/\b13\b/);
+          expect(await row.innerText()).not.toMatch(/12[.,]50|\d{4}-\d{2}-\d{2}T|\.000|\dZ\b/);
           await Promise.all([page.waitForResponse(response => response.url().endsWith("/spend-credits") && response.ok()), toggle.click()]);
           await page.waitForFunction(() => document.querySelector('[data-account-spend-credits] [role="switch"]')?.getAttribute("aria-checked") === "true");
           refuse = true;
@@ -214,7 +238,7 @@ describe("per-account paid spending", () => {
           expect(await toggle.isChecked()).toBe(true);
           const geometry = await row.evaluate(element => {
             const outer = element.getBoundingClientRect();
-            const rects = [...element.querySelectorAll("p, label")].flatMap(child => {
+            const rects = [...element.querySelectorAll("p, span")].flatMap(child => {
               const range = document.createRange(); range.selectNodeContents(child);
               return [...range.getClientRects()].map(rect => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom }));
             });
@@ -241,7 +265,7 @@ describe("per-account paid spending", () => {
     } finally { await browser.close(); server.stop(); }
   }, 120_000);
 
-  browserTest("an exhausted account on paid credits names the reading day, says the limit once and keeps an amber corner", async () => {
+  browserTest("an exhausted account on paid credits names the reading day, says the limit once and reads red from its number", async () => {
     const out = path.resolve(".artifacts/account-spend-credits-exhausted"); fs.mkdirSync(out, { recursive: true });
     // Thirty hours back is an earlier calendar day in any time zone the browser runs in.
     const lastNight = new Date(Date.now() - 30 * 3_600_000);
@@ -266,11 +290,12 @@ describe("per-account paid spending", () => {
           const facts = await row.evaluate((element, [iso, bcp47]) => {
             const read = new Date(iso!).toLocaleDateString(bcp47, { day: "numeric", month: "short" });
             const text = element.textContent ?? "";
-            const chip = [...element.querySelectorAll<HTMLElement>("button span")].find(node => /^\d+%$/.test(node.textContent ?? ""));
-            return { text, read, chip: chip?.style.color ?? "" };
+            const number = element.querySelector<HTMLElement>("[data-limit-number]");
+            return { text, read, chip: number?.style.color ?? "" };
           }, [lastNight.toISOString(), locale === "uk" ? "uk-UA" : "en-US"]);
           expect(facts.text).toContain(`${facts.read}`);
-          expect(facts.chip).toBe(switchOn ? "var(--color-warning)" : "var(--color-danger)");
+          // One colour rule, read from the number: a spent window is red whether or not credits carry the account.
+          expect(facts.chip).toBe("var(--color-danger)");
           if (switchOn) {
             const limitLine = locale === "uk" ? "Ліміт плану вичерпано" : "Past its plan limit";
             expect(facts.text.split(limitLine)).toHaveLength(2);
@@ -289,6 +314,35 @@ describe("per-account paid spending", () => {
   }, 240_000);
 });
 
+describe("account row", () => {
+  /* The accounts dialog: every state of the chosen row at 640, 900, 1170 and 1440 px, in both languages and both
+     schemes, then the keyboard and reduced motion. `LLV_ACCOUNT_ROW_OUT=<dir>` keeps the frames and `readings.json`;
+     `LLV_ACCOUNT_ROW_ONLY=<substring,…>` and `LLV_ACCOUNT_ROW_WIDTHS=<px,…>` rerun a subset. */
+  browserTest("the dialog's rows hold every state at every width, language and scheme, with the keyboard and reduced motion", async () => {
+    const { accountRowRoutes, captureAccountRowFrames, captureAccountRowKeyboard, captureAccountRowReveal } = await import("@/components/accountRowFrames");
+    const out = path.resolve(process.env.LLV_ACCOUNT_ROW_OUT ?? ".artifacts/account-row", "dialog"); fs.mkdirSync(out, { recursive: true });
+    const rows = accountRowRoutes();
+    const server = await serveEvidenceFixture(out, undefined, rows.routes);
+    // The desktop's scrollbars are part of the width a row has.
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    try {
+      // `LLV_ACCOUNT_ROW_CASE=reveal` runs only the case of a row opened below the fold.
+      if (process.env.LLV_ACCOUNT_ROW_CASE === "reveal") {
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 520 })).toEqual([]);
+        return;
+      }
+      const only = process.env.LLV_ACCOUNT_ROW_ONLY?.split(",");
+      const { frames, failures } = await captureAccountRowFrames({ browser, base: server.base, out, routes: rows, surface: "dialog", widths: process.env.LLV_ACCOUNT_ROW_WIDTHS?.split(",").map(Number) ?? [640, 900, 1170, 1440], height: 900, only });
+      expect(failures).toEqual([]);
+      expect(frames).toBeGreaterThan(0);
+      if (!only) {
+        expect(await captureAccountRowKeyboard({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 900 })).toEqual([]);
+        expect(await captureAccountRowReveal({ browser, base: server.base, out, routes: rows, surface: "dialog", width: 900, height: 520 })).toEqual([]);
+      }
+    } finally { await browser.close(); server.stop(); }
+  }, 7_200_000);
+});
+
 describe("GitHub App connection forms", () => {
   browserTest("GitHub links and confirmation fit the desktop Decisions column", async () => {
     await withAppConnectBrowserTemp(async () => {
@@ -298,6 +352,65 @@ describe("GitHub App connection forms", () => {
     });
   }, 180_000);
 });
+
+/* The timeline's geometry reading, shared by every case that frames the chart: text ranges cut by a scroll edge,
+   a pinned bar or the window, control hit tests, bars and stage rows. */
+async function timelineGeometry(target: Locator) {
+  return target.evaluate(element => {
+    const failures: string[] = [];
+    const viewport = element.getBoundingClientRect();
+    const scroller = element.querySelector<HTMLElement>("[data-timeline-scroll]");
+    const scrollBox = scroller?.getBoundingClientRect();
+    const clip = scrollBox && scroller ? { top: scrollBox.top, left: scrollBox.left, right: scrollBox.left + scroller.clientWidth, bottom: scrollBox.top + scroller.clientHeight } : null;
+    const labelWidth = element.querySelector(".bt-axis-label")?.getBoundingClientRect().width ?? 0;
+    const axis = element.querySelector<HTMLElement>(".bt-axis")?.offsetHeight ?? 0;
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (!node.textContent?.trim()) continue;
+      const range = document.createRange(); range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (!rect.width || !rect.height) continue;
+        if (rect.right <= 0 || rect.left >= innerWidth || rect.bottom <= 0 || rect.top >= innerHeight) continue;
+        if (clip && node.parentElement?.closest(".bt-row") && (rect.bottom <= clip.top + axis || rect.top >= clip.bottom)) continue;
+        if (clip && node.parentElement?.closest(".bt-row") && (rect.top < clip.top + axis - 1 || rect.bottom > clip.bottom + 1)) failures.push(node.textContent);
+        // Tick labels outside the horizontal view are intentionally scrolled away.
+        if (node.parentElement?.closest(".bt-tick") && (rect.left < (clip?.left ?? 0) + labelWidth || rect.right > innerWidth)) continue;
+        for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+          const style = getComputedStyle(parent);
+          if (/(hidden|clip|auto|scroll)/.test(style.overflow + style.overflowX + style.overflowY)) {
+            const box = parent.getBoundingClientRect();
+            if (rect.left < box.left - 1 || rect.right > box.right + 1 || rect.top < box.top - 1 || rect.bottom > box.bottom + 1) failures.push(node.textContent);
+          }
+        }
+        if (rect.left < -1 || rect.right > innerWidth + 1 || rect.top < -1 || rect.bottom > innerHeight + 1) failures.push(node.textContent);
+      }
+    }
+    const controls = [...element.querySelectorAll("button")].filter(button => {
+      const box = button.getBoundingClientRect();
+      if (clip && button.closest(".bt-row") && (box.bottom <= clip.top + axis || box.top >= clip.bottom)) return false;
+      return box.top >= viewport.top && box.bottom <= viewport.bottom && box.left >= 0 && box.right <= innerWidth;
+    }).map(button => {
+      const box = button.getBoundingClientRect();
+      return { text: button.getAttribute("aria-label") ?? button.textContent, width: box.width, height: box.height,
+        hit: [[box.left + box.width / 2, box.top + box.height / 2], [box.left + 1, box.top + box.height / 2], [box.right - 1, box.top + box.height / 2], [box.left + box.width / 2, box.top + 1], [box.left + box.width / 2, box.bottom - 1]]
+          .every(([x, y]) => button.contains(document.elementFromPoint(x!, y!))) };
+    });
+    const bars = [...element.querySelectorAll<HTMLElement>("[data-timeline-bar]")].map(bar => ({ left: bar.offsetLeft, width: bar.offsetWidth }));
+    const now = element.querySelector<HTMLElement>(".bt-now")?.offsetLeft ?? null;
+    const stageRows = [...element.querySelectorAll<HTMLElement>(".bt-stage")].map(row => ({ earlier: row.dataset.earlier === "1",
+      lane: row.querySelector<HTMLElement>(".bt-lane")!.offsetHeight, label: row.querySelector<HTMLElement>(".bt-label")!.offsetHeight, row: row.offsetHeight }));
+    const visibleRows = [...element.querySelectorAll(".bt-row")].filter(row => {
+      const box = row.getBoundingClientRect(); return clip && box.top >= clip.top + axis - 1 && box.bottom <= clip.top + scroller!.clientHeight + 1;
+    }).map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt") ?? row.getAttribute("data-timeline-group-row") ?? `fold:${row.getAttribute("data-timeline-fold")}`);
+    const labelRects = [...element.querySelectorAll(".bt-row:not(.bt-fold) .bt-label")].slice(0, 3).map(label => {
+      const box = label.getBoundingClientRect();
+      return { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) };
+    });
+    return { failures: [...new Set(failures)], controls, bars, now, stageRows, text: element.textContent, scrollTop: scroller?.scrollTop, scrollLeft: scroller?.scrollLeft,
+      visibleRows, labelRects, scrollHeight: scroller?.scrollHeight, clientHeight: scroller?.clientHeight, bounds: { top: viewport.top, bottom: viewport.bottom, left: viewport.left, right: viewport.right } };
+  });
+}
 
 describe("board timeline hybrid", () => {
   browserTest("real board and phone timeline, folds, zoom, history and empty states in every locale and theme", async () => {
@@ -413,60 +526,7 @@ describe("board timeline hybrid", () => {
               }
               throw new Error("timeline scroll geometry did not settle");
             });
-            const geometry = await target.evaluate(element => {
-              const failures: string[] = [];
-              const viewport = element.getBoundingClientRect();
-              const scroller = element.querySelector<HTMLElement>("[data-timeline-scroll]");
-              const scrollBox = scroller?.getBoundingClientRect();
-              const clip = scrollBox && scroller ? { top: scrollBox.top, left: scrollBox.left, right: scrollBox.left + scroller.clientWidth, bottom: scrollBox.top + scroller.clientHeight } : null;
-              const labelWidth = element.querySelector(".bt-axis-label")?.getBoundingClientRect().width ?? 0;
-              const axis = element.querySelector<HTMLElement>(".bt-axis")?.offsetHeight ?? 0;
-              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-              while (walker.nextNode()) {
-                const node = walker.currentNode;
-                if (!node.textContent?.trim()) continue;
-                const range = document.createRange(); range.selectNodeContents(node);
-                for (const rect of range.getClientRects()) {
-                  if (!rect.width || !rect.height) continue;
-                  if (rect.right <= 0 || rect.left >= innerWidth || rect.bottom <= 0 || rect.top >= innerHeight) continue;
-                  if (clip && node.parentElement?.closest(".bt-row") && (rect.bottom <= clip.top + axis || rect.top >= clip.bottom)) continue;
-                  if (clip && node.parentElement?.closest(".bt-row") && (rect.top < clip.top + axis - 1 || rect.bottom > clip.bottom + 1)) failures.push(node.textContent);
-                  // Tick labels outside the horizontal view are intentionally scrolled away.
-                  if (node.parentElement?.closest(".bt-tick") && (rect.left < (clip?.left ?? 0) + labelWidth || rect.right > innerWidth)) continue;
-                  for (let parent = node.parentElement; parent; parent = parent.parentElement) {
-                    const style = getComputedStyle(parent);
-                    if (/(hidden|clip|auto|scroll)/.test(style.overflow + style.overflowX + style.overflowY)) {
-                      const box = parent.getBoundingClientRect();
-                      if (rect.left < box.left - 1 || rect.right > box.right + 1 || rect.top < box.top - 1 || rect.bottom > box.bottom + 1) failures.push(node.textContent);
-                    }
-                  }
-                  if (rect.left < -1 || rect.right > innerWidth + 1 || rect.top < -1 || rect.bottom > innerHeight + 1) failures.push(node.textContent);
-                }
-              }
-              const controls = [...element.querySelectorAll("button")].filter(button => {
-                const box = button.getBoundingClientRect();
-                if (clip && button.closest(".bt-row") && (box.bottom <= clip.top + axis || box.top >= clip.bottom)) return false;
-                return box.top >= viewport.top && box.bottom <= viewport.bottom && box.left >= 0 && box.right <= innerWidth;
-              }).map(button => {
-                const box = button.getBoundingClientRect();
-                return { text: button.getAttribute("aria-label") ?? button.textContent, width: box.width, height: box.height,
-                  hit: [[box.left + box.width / 2, box.top + box.height / 2], [box.left + 1, box.top + box.height / 2], [box.right - 1, box.top + box.height / 2], [box.left + box.width / 2, box.top + 1], [box.left + box.width / 2, box.bottom - 1]]
-                    .every(([x, y]) => button.contains(document.elementFromPoint(x!, y!))) };
-              });
-              const bars = [...element.querySelectorAll<HTMLElement>("[data-timeline-bar]")].map(bar => ({ left: bar.offsetLeft, width: bar.offsetWidth }));
-              const now = element.querySelector<HTMLElement>(".bt-now")?.offsetLeft ?? null;
-              const stageRows = [...element.querySelectorAll<HTMLElement>(".bt-stage")].map(row => ({ earlier: row.dataset.earlier === "1",
-                lane: row.querySelector<HTMLElement>(".bt-lane")!.offsetHeight, label: row.querySelector<HTMLElement>(".bt-label")!.offsetHeight, row: row.offsetHeight }));
-              const visibleRows = [...element.querySelectorAll(".bt-row")].filter(row => {
-                const box = row.getBoundingClientRect(); return clip && box.top >= clip.top + axis - 1 && box.bottom <= clip.top + scroller!.clientHeight + 1;
-              }).map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")!);
-              const labelRects = [...element.querySelectorAll(".bt-label")].slice(0, 3).map(label => {
-                const box = label.getBoundingClientRect();
-                return { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) };
-              });
-              return { failures: [...new Set(failures)], controls, bars, now, stageRows, text: element.textContent, scrollTop: scroller?.scrollTop, scrollLeft: scroller?.scrollLeft,
-                visibleRows, labelRects, scrollHeight: scroller?.scrollHeight, clientHeight: scroller?.clientHeight, bounds: { top: viewport.top, bottom: viewport.bottom, left: viewport.left, right: viewport.right } };
-            });
+            const geometry = await timelineGeometry(target);
             const capture = await page.screenshot({ path: path.join(out, `${name}.png`) });
             const paintDifference: number[] = [];
             // A frozen label must keep its actual painted words when time is
@@ -496,39 +556,44 @@ describe("board timeline hybrid", () => {
           await frame("board", page.locator(phone ? "[data-phone-kanban-tabs]" : '[data-bar="project"]'));
           await toggle.click();
           const chart = page.locator("[data-board-timeline]"); await chart.waitFor();
+          // Tasks without a live agent sit in the chart's closed groups; this case reads them all, so the groups are opened and kept open.
+          // A task is collapsed by default; this case reads the first task's stages, so its expansion is stored here.
+          await page.evaluate(key => { const stored = JSON.parse(localStorage.getItem(key)!); stored.expanded = { ...stored.expanded, "timeline-task-0": true, "group:needs-you": true, "group:still": true, "group:still-long": true }; localStorage.setItem(key, JSON.stringify(stored)); }, timelineStorageKey("atlas"));
+          await page.reload(); await chart.waitFor();
           const first = page.locator('[data-timeline-task="timeline-task-0"]');
           await page.locator('[data-timeline-task="timeline-task-0"][data-expanded="1"]').waitFor();
           expect(await first.locator("[data-timeline-expand]").evaluate(element => getComputedStyle(element).fontWeight)).toBe("600");
-          expect(await first.locator("[data-timeline-strip]").count()).toBe(5);
+          // One window wide: of the task's five observed turns the oldest, 96 hours back, lies outside the 1-day window and is not drawn.
+          expect(await first.locator("[data-timeline-strip]").count()).toBe(4);
           const strip = await first.locator("[data-timeline-strip]").evaluateAll(parts => parts.map(part => ({ height: part.getBoundingClientRect().height, color: getComputedStyle(part).backgroundColor })));
           expect(strip.every(part => part.height === 4)).toBe(true);
           expect(new Set(strip.map(part => part.color)).size).toBe(2);
-          expect(strip[0]!.color).toBe(strip[1]!.color);
-          expect(strip[1]!.color).not.toBe(strip[3]!.color);
           const longStage = chart.locator(`[data-timeline-attempt='${JSON.stringify(["timeline-lane-0", "builder", 1])}']`);
           await longStage.getByText(translate(lang, "timeline.lastTurn", { duration: lang === "uk" ? "2 хв" : "2m" }), { exact: true }).waitFor();
-          await longStage.getByText(translate(lang, "timeline.elapsed", { duration: lang === "uk" ? "72 год 36 хв" : "72h 36m" }), { exact: true }).waitFor();
+          await longStage.getByText(translate(lang, "timeline.elapsed", { duration: lang === "uk" ? "3 д" : "3d" }), { exact: true }).waitFor();
+          // The stage bar is clipped to the window, so the known work is compared in time, from the unclipped bounds each bar carries.
           const knownWorkFraction = await longStage.evaluate(row => {
             const elapsed = row.querySelector<HTMLElement>("[data-timeline-bar]")!;
             const work = row.querySelector<HTMLElement>("[data-timeline-work]")!;
-            return work.offsetWidth / elapsed.offsetWidth;
+            return (Number(work.dataset.endMs) - Number(work.dataset.startMs)) / (Number(elapsed.dataset.endMs) - Number(elapsed.dataset.startMs));
           });
           expect(knownWorkFraction).toBeLessThan(0.01);
           const runtimeLabels = await chart.locator(".bt-runtime").allTextContents();
           expect(runtimeLabels.every(label => !/\b(builder|reviewer)\b/.test(label))).toBe(true);
+          // Stages that ended before the window are one line; opening it lists them, each with its paging control. Open here so the rows, and their frozen labels, do not change with the scale.
+          const foldedLine = page.locator('[data-timeline-fold-expand][aria-expanded="false"]').first();
+          await foldedLine.waitFor();
+          for (const fold of await page.locator('[data-timeline-fold-expand][aria-expanded="false"]').all()) await fold.click();
           await frame("default");
           const timeScroll = page.locator("[data-timeline-scroll]");
-          await timeScroll.evaluate(element => {
-            const now = element.querySelector<HTMLElement>(".bt-axis .bt-now")!.offsetLeft;
-            const label = element.querySelector<HTMLElement>(".bt-axis-label")?.offsetWidth ?? 0;
-            element.scrollLeft = now - (element.clientWidth - label) + 16;
-          });
-          await frame("pan-edge");
           await page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true }).click();
           await page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true }).click();
-          const recentLeft = await timeScroll.evaluate(element => element.scrollLeft);
+          // The earlier-stage control pages the window back; the axis's «now» label then returns it.
+          const viewStart = () => timeScroll.getAttribute("data-view-start").then(Number);
+          const recentStart = await viewStart();
           await page.locator(".bt-earlier").first().click();
-          expect(await timeScroll.evaluate(element => element.scrollLeft)).toBeLessThan(recentLeft);
+          expect(await viewStart()).toBeLessThan(recentStart);
+          await page.locator("[data-timeline-back]").waitFor();
           await frame("history");
           await page.getByRole("button", { name: translate(lang, "timeline.zoomIn"), exact: true }).click();
           await page.getByRole("button", { name: translate(lang, "timeline.zoomOut"), exact: true }).click();
@@ -565,7 +630,7 @@ describe("board timeline hybrid", () => {
             await frame(`scroll-page-${pageIndex}`);
             await timeScroll.evaluate(element => element.scrollTop += element.clientHeight - 44);
           }
-          const allRows = await chart.locator(".bt-row").evaluateAll(rows => rows.map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")!));
+          const allRows = await chart.locator(".bt-row").evaluateAll(rows => rows.map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt") ?? row.getAttribute("data-timeline-group-row")!));
           expect([...seenRows].sort()).toEqual(allRows.sort());
           payload = records(lang, "unknown"); await page.reload(); await chart.waitFor(); expect(await first.getAttribute("data-expanded")).toBe("1");
           await chart.locator(".bt-stage").first().getByText(translate(lang, "timeline.elapsed", { duration: translate(lang, "timeline.unknownTime") }), { exact: true }).waitFor();
@@ -586,7 +651,7 @@ describe("board timeline hybrid", () => {
           const memberTask = { ...agentTask, assignments: [{ path: live.path, conversationId: live.conversationId, panePid: null,
             state: "delivered" as const, error: null, at: iso(1) }] };
           payload = { ...payload, files: [live], tasks: [memberTask], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 1, smt: now / 1000 }] };
-          await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+          await page.evaluate(key => localStorage.setItem(key, JSON.stringify({ view: "board", hours: 24, expanded: { "timeline-task-0": true, "group:needs-you": true, "group:still": true, "group:still-long": true } })), timelineStorageKey("atlas"));
           await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
           expect(await first.getAttribute("data-expanded")).toBe("1");
           expect(await chart.locator("[data-timeline-bar]").count()).toBe(1);
@@ -604,10 +669,14 @@ describe("board timeline hybrid", () => {
             history.state = state;
             history.cursor = state === "completed" ? null : { stageId: "builder", state: "running", input: null, activatedBy: null };
             payload.pipelines = [history];
-            await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+            await page.evaluate(key => localStorage.setItem(key, JSON.stringify({ view: "board", hours: 24, expanded: { "group:needs-you": true, "group:still": true, "group:still-long": true } })), timelineStorageKey("atlas"));
             await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
             await first.waitFor();
-            expect(await first.getAttribute("data-expanded")).toBe("1");
+            // A lane parked on a decision still has its stage running: the card counts the agent as working, so the chart lifts it into the working group.
+            // The kanban does not count the conversation of a completed lane as working, so the chart keeps that task in its group. Both start collapsed.
+            expect(await first.getAttribute("data-expanded")).toBe("0");
+            expect(await first.getAttribute("data-timeline-group") === "working").toBe(state !== "completed");
+            await first.locator("[data-timeline-expand]").click();
             expect(await chart.locator('[data-live="1"] [data-timeline-bar]').count()).toBe(1);
             expect(await chart.locator('[data-live="0"] [data-timeline-bar]').count()).toBe(1);
             // Only the later native turn is known; the old attempt remains an elapsed outline.
@@ -631,7 +700,7 @@ describe("board timeline hybrid", () => {
           for (const state of ["ended-turn", "dead-host"] as const) {
             payload.files = [{ ...live, proc: state === "dead-host" ? "killed" : "running", activity: state === "dead-host" ? "live" : "idle",
               lastTurn: { startedAt: now - 12 * 60_000, endedAt: state === "ended-turn" ? now - 10 * 60_000 : null } }];
-            await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+            await page.evaluate(key => localStorage.setItem(key, JSON.stringify({ view: "board", hours: 24, expanded: { "group:needs-you": true, "group:still": true, "group:still-long": true } })), timelineStorageKey("atlas"));
             await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
             expect(await first.getAttribute("data-expanded")).toBe("0");
             const idleWord = translate(lang, "timeline.idle");
@@ -662,7 +731,7 @@ describe("board timeline hybrid", () => {
           history.state = "paused";
           prior.suspension = { reason: "pause", detail: "Host stopped", requestedAt: iso(10), stoppedAt: iso(9) };
           payload.files = [];
-          await page.evaluate(key => localStorage.removeItem(key), timelineStorageKey("atlas"));
+          await page.evaluate(key => localStorage.setItem(key, JSON.stringify({ view: "board", hours: 24, expanded: { "group:needs-you": true, "group:still": true, "group:still-long": true } })), timelineStorageKey("atlas"));
           await page.reload(); await toggle.waitFor(); await toggle.click(); await chart.waitFor();
           expect(await first.getAttribute("data-expanded")).toBe("0");
           // A confirmed stop reads as stopped in the collapsed row, never as running.
@@ -768,6 +837,1444 @@ describe("board timeline hybrid", () => {
         sources: Object.fromEntries(sources.map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])), now, readings }, null, 2) + "\n");
       await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
     }
+  }, 600_000);
+
+  /*
+   * #scroll: the chart follows the gesture. A chart of 30 tasks (collapsed and
+   * with every task expanded) is driven by real touch input through CDP and by
+   * real wheel, key and scrollbar input, next to a plain scroller given the same
+   * gesture. Numbers land in $LLV_EVIDENCE_DIR/timeline-scroll-<label>.json
+   * (label: LLV_TIMELINE_SCROLL_LABEL) before any assertion runs.
+   */
+  browserTest("chart follows touch, trackpad, wheel and key scrolling without jumps", async () => {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const label = process.env.LLV_TIMELINE_SCROLL_LABEL ?? "run";
+    const evidence = process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts/board-timeline-scroll");
+    const out = path.resolve(".artifacts/board-timeline-scroll"); fs.mkdirSync(out, { recursive: true }); fs.mkdirSync(evidence, { recursive: true });
+    const now = Date.parse("2026-10-26T13:20:00Z");
+    const iso = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+    const titles = ["Експорт CSV на великих проєктах з вибором колонок і кодування", "Зберегти фільтри пошуку", "Відновити оплату карткою після відмови банку та повторної спроби", "Перевірити контраст підказок",
+      "Доставка сповіщень", "Пошук у логах агентів за часом і за роллю виконавця у вибраному проєкті"];
+    const records = (count: number) => {
+      const tasks: BoardTask[] = Array.from({ length: count }, (_, index) => ({ id: `scroll-task-${index}`, project: "atlas", text: `${titles[index % titles.length]} ${index + 1}`,
+        status: "assigned" as const, placement: "unplaced" as const, assignments: [], createdAt: iso(1600), updatedAt: iso(1) }));
+      const pipelines: Pipeline[] = tasks.map((task, index) => {
+        const stageIds = ["builder", "reviewer", "fix"];
+        const stages = stageIds.map((id, stageIndex) => {
+          const role = { roleId: stageIndex === 1 ? "reviewer" as const : "builder" as const };
+          const resolved = resolvePipelineRole({ role, engine: stageIndex === 1 ? "codex" : "claude", model: stageIndex === 1 ? "gpt-6-astra" : "fable", effort: "high", access: stageIndex === 1 ? "read-only" : "read-write" }, "run", pipelineRoleLookup);
+          if (!resolved.role) throw new Error(resolved.error);
+          return { id, kind: "run" as const, role, effectiveRole: resolved.role, next: stageIds[stageIndex + 1] ?? null, "prompt": "{{task}}" };
+        });
+        const lane = buildPipeline({ id: `scroll-lane-${index}`, task: task.text, taskIds: [task.id], project: task.project, repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: iso(1500 - index * 40), stages });
+        const running = index % 3 === 0;
+        lane.state = running ? "running" : "needs_decision";
+        lane.cursor = { stageId: "fix", state: running ? "running" : "pending", input: null, activatedBy: null };
+        lane.runs.forEach((run, stageIndex) => {
+          const start = 1490 - index * 40 - stageIndex * 100 + (index === count - 1 ? -1480 + 6 + stageIndex * 100 : 0);
+          const live = stageIndex === 2 && running;
+          run.attempts.push({ n: 1, state: stageIndex < 2 ? "passed" : running ? "running" : "needs_decision", effectiveRole: structuredClone(stages[stageIndex]!.effectiveRole), launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+            startedAt: iso(Math.max(start, 6)), completedAt: live ? null : iso(Math.max(start - 80, 1)), input: null, output: null, activatedBy: null, verdict: null, error: null });
+        });
+        return lane;
+      });
+      return { ...filesReadSummary([], pipelines), files: [] as FileEntry[], tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 0, smt: now / 1000 }], projectCwds: { atlas: "/fixture/atlas" } };
+    };
+    let payload = records(30);
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(payload), "/api/tasks": () => Response.json({ tasks: payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const report: Record<string, unknown> = { label, now, ranToEnd: false, abort: null as string | null, rows: {} as Record<string, number>, touch: [] as unknown[], control: [] as unknown[], desktop: [] as unknown[], refresh: [] as unknown[], rest: [] as unknown[] };
+    const failures: string[] = [];
+    const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
+    const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+    /* Records, per animation frame, where the chart is, and every script write to its position or height. */
+    const install = (page: Page) => page.evaluate(() => {
+      const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
+      const rec = { on: false, frames: [] as { top: number; left: number; h: number }[], writes: [] as string[], touched: null as { kind: string; element: string; at: string; under: string[]; underKind: string } | null };
+      (window as unknown as { __rec: typeof rec }).__rec = rec;
+      // What a point lands on: a mark of the chart (segment, line, stage bar), a row's title, the bare lane or track, or anything else.
+      const classify = (el: Element | null) => {
+        const element = el ? `${el.tagName.toLowerCase()}${el.classList.length ? `.${[...el.classList].join(".")}` : ""}` : "none";
+        const kind = !el ? "none" : el.closest("[data-timeline-segment], [data-timeline-line], [data-timeline-bar]") ? "mark" : el.closest(".bt-title, .bt-stage-name") ? "title" : el.matches(".bt-lane, .bt-track") ? "bare" : "other";
+        return { kind, element };
+      };
+      (window as unknown as { __classify: typeof classify }).__classify = classify;
+      // The element each touch really started on, as the page's own event reports it.
+      document.addEventListener("touchstart", event => {
+        if (!rec.on) return;
+        const point = event.touches[0]!, stack = document.elementsFromPoint(point.clientX, point.clientY);
+        rec.touched = { ...classify(event.target as Element), at: `${Math.round(point.clientX * 10) / 10},${Math.round(point.clientY * 10) / 10}`, under: stack.slice(0, 3).map(el => classify(el).element), underKind: classify(stack[0] ?? null).kind };
+      }, true);
+      const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+      Object.defineProperty(scroller, "scrollTop", { configurable: true, get() { return descriptor.get!.call(this); },
+        set(value) { if (rec.on) rec.writes.push(`scrollTop=${value}`); descriptor.set!.call(this, value); } });
+      new MutationObserver(() => { if (rec.on) rec.writes.push(`style=${scroller.getAttribute("style")}`); }).observe(scroller, { attributes: true, attributeFilter: ["style"] });
+      const loop = () => { if (rec.on) rec.frames.push({ top: scroller.scrollTop, left: scroller.scrollLeft, h: scroller.clientHeight }); requestAnimationFrame(loop); };
+      requestAnimationFrame(loop);
+    });
+    const startRec = (page: Page) => page.evaluate(() => { const rec = (window as unknown as { __rec: { on: boolean; frames: unknown[]; writes: string[]; touched: unknown } }).__rec; rec.frames = []; rec.writes = []; rec.touched = null; rec.on = true; });
+    const stopRec = (page: Page) => page.evaluate(() => { const rec = (window as unknown as { __rec: { on: boolean; frames: { top: number; left: number; h: number }[]; writes: string[]; touched: { kind: string; element: string; at: string; under: string[]; underKind: string } | null } }).__rec; rec.on = false; return rec; });
+    const series = (frames: { top: number }[]) => {
+      let maxJump = 0, backRun = 0, maxBack = 0, last = 0;
+      for (let index = 1; index < frames.length; index++) {
+        const delta = frames[index]!.top - frames[index - 1]!.top;
+        maxJump = Math.max(maxJump, Math.abs(delta));
+        if (!delta) continue;
+        if (last && Math.sign(delta) !== last) backRun = 0;
+        // A reversal is the length of a run against the direction of the finger's first leg (positive = chart moving down the list).
+        last = Math.sign(delta); if (delta < 0) { backRun += -delta; maxBack = Math.max(maxBack, backRun); } else backRun = 0;
+      }
+      return { maxJump: Math.round(maxJump * 10) / 10, maxBackwardRun: Math.round(maxBack * 10) / 10 };
+    };
+    const position = (page: Page) => page.evaluate(() => { const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!; return { top: s.scrollTop, left: s.scrollLeft, h: s.clientHeight, sh: s.scrollHeight }; });
+    const cuts = (page: Page) => page.evaluate(() => {
+      const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = s.getBoundingClientRect(), axis = s.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
+      const top = box.top + axis, bottom = box.top + s.clientHeight, cut: string[] = [];
+      for (const row of s.querySelectorAll<HTMLElement>(".bt-row")) {
+        const rect = row.getBoundingClientRect();
+        if (rect.bottom <= top + 0.5 || rect.top >= bottom - 0.5) continue;
+        if (rect.top < top - 0.5 || rect.bottom > bottom + 0.5) cut.push(`${row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt")}:${Math.round(rect.top - top)}..${Math.round(rect.bottom - bottom)}`);
+      }
+      return cut;
+    });
+    const settle = async (page: Page) => { await sleep(700); await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))); };
+    const open = async (phone: boolean, expandedAll: boolean, hold = 0) => {
+      payload = records(30);
+      const opened = await openFixture(browser, "about:blank", { width: phone ? 390 : 1440, height: phone ? 844 : 900 }, "light", "uk", "reduce", phone);
+      const { page, context, pageErrors } = opened;
+      await context.addInitScript(({ stored }) => {
+        localStorage.setItem("llv:board-timeline:v1:atlas", JSON.stringify(stored));
+        localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: true }, placement: "top", height: null, width: null }));
+      }, { stored: { view: "timeline", hours: 24, expanded: { ...Object.fromEntries(payload.tasks.map(task => [task.id, expandedAll])), "group:needs-you": true, "group:still": true, "group:still-long": true } } });
+      await page.clock.setFixedTime(new Date(now));
+      await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+      if (phone) { const tab = page.locator('[data-phone-kanban-tab="timeline"]'); await tab.waitFor(); if (await tab.getAttribute("aria-selected") !== "true") await tab.click(); }
+      else { const toggle = page.locator("[data-board-timeline-toggle]"); await toggle.waitFor(); if (await toggle.getAttribute("aria-pressed") !== "true") await toggle.click(); }
+      await page.locator("[data-timeline-scroll]").waitFor();
+      await page.waitForFunction(() => (document.querySelector("[data-timeline-scroll]") as HTMLElement | null)?.style.height !== undefined);
+      await settle(page); void hold;
+      return { page, context, pageErrors };
+    };
+    /* Where a finger can start on a row with a lane, each point proved by the element under it: a mark (a segment, a line or a stage bar that
+       shows inside the lane), a title, and a bare spot of the lane or track. A kind with no such point on any whole row in view is an error. */
+    const geometry = (page: Page) => page.evaluate(() => {
+      const classify = (window as unknown as { __classify: (el: Element | null) => { kind: string; element: string } }).__classify;
+      const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = s.getBoundingClientRect(), axis = s.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
+      // On the phone group heading rows and fold rows carry a title and no lane; only a row with a lane has a bar line to touch.
+      const rows = [...s.querySelectorAll<HTMLElement>(".bt-row")].filter(row => { if (!row.querySelector(".bt-lane")) return false; const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + s.clientHeight + 1; });
+      if (!rows.length) throw new Error(`no whole row with a lane in view: scroller ${box.top}+${s.clientHeight}, axis ${axis}, scrollTop ${s.scrollTop}`);
+      const order = rows.map((_, index) => index).sort((a, b) => Math.abs(a - rows.length / 2) - Math.abs(b - rows.length / 2));
+      // A fingertip is a few pixels wide and the browser hands a touch to a control within its reach, so a start on a mark or on bare lane
+      // keeps at least 6 px from every button of the chart that shows in the scroller (a button cut off by the scroller's edge is not reachable)
+      // and from the scroller's top and bottom edges, and the point with the most room wins; a title is the label button's own text and needs none.
+      const view = { left: box.left, right: box.left + s.clientWidth, top: axis, bottom: box.top + s.clientHeight };
+      const controls = [...s.querySelectorAll<HTMLElement>("button, a[href], [role='button']")].map(control => control.getBoundingClientRect())
+        .map(rect => ({ left: Math.max(rect.left, view.left), right: Math.min(rect.right, view.right), top: Math.max(rect.top, view.top), bottom: Math.min(rect.bottom, view.bottom) }))
+        .filter(rect => rect.right > rect.left && rect.bottom > rect.top);
+      const room = (at: { x: number; y: number }) => Math.min(30, at.y - view.top, view.bottom - at.y, ...controls.map(rect => Math.hypot(Math.max(rect.left - at.x, 0, at.x - rect.right), Math.max(rect.top - at.y, 0, at.y - rect.bottom))));
+      const pick = (kind: "mark" | "title" | "bare") => {
+        let best: { x: number; y: number; row: number; room: number } | null = null;
+        for (const index of order) {
+          const row = rows[index]!, lane = row.querySelector<HTMLElement>(".bt-lane")!.getBoundingClientRect();
+          const candidates: { x: number; y: number }[] = [];
+          if (kind === "mark") {
+            // A phone task row draws its marks at the foot of the lane, about 10 px above the next row's button, which the browser hands a touch to
+            // from that close: the points tried are the upper part of a mark at its centre and at both ends of the part that shows, where the button's
+            // corner is farther away, and the one with the most room wins.
+            const marks = [...row.querySelectorAll<HTMLElement>("[data-timeline-segment], [data-timeline-line], [data-timeline-bar]")].map(mark => mark.getBoundingClientRect())
+              .map(rect => ({ rect, from: Math.max(rect.left, lane.left, view.left + 2), to: Math.min(rect.right, lane.right, view.right - 2) })).filter(mark => mark.to - mark.from >= 3 && mark.rect.height > 0);
+            for (const mark of marks) for (const dy of [Math.min(0.5, mark.rect.height / 2), Math.min(2, mark.rect.height / 2), mark.rect.height / 2]) for (const x of [(mark.from + mark.to) / 2, mark.from + 0.5, mark.to - 0.5]) candidates.push({ x, y: mark.rect.top + dy });
+          } else if (kind === "title") {
+            const title = row.querySelector<HTMLElement>(".bt-title, .bt-stage-name")?.getClientRects()[0];
+            if (title) for (const dx of [24, 12, title.width / 2, 4]) candidates.push({ x: title.left + Math.min(dx, title.width - 1), y: title.top + title.height / 2 });
+          } else {
+            const track = row.querySelector<HTMLElement>(".bt-track")?.getBoundingClientRect();
+            const xs = Array.from({ length: Math.floor((view.right - view.left - 24) / 6) + 1 }, (_, step) => view.left + 12 + step * 6).sort((a, b) => Math.abs(a - (view.left + view.right) / 2) - Math.abs(b - (view.left + view.right) / 2));
+            for (const y of [lane.top + lane.height / 2, track ? track.top + track.height / 2 : null]) if (y !== null) for (const x of xs) candidates.push({ x, y });
+          }
+          for (const at of candidates) {
+            if (classify(document.elementFromPoint(at.x, at.y)).kind !== kind) continue;
+            if (kind === "title") return { x: Math.round(at.x * 10) / 10, y: Math.round(at.y * 10) / 10, row: index, room: 0 };
+            const spare = room(at);
+            if (spare >= 6 && (!best || spare > best.room)) best = { x: Math.round(at.x * 10) / 10, y: Math.round(at.y * 10) / 10, row: index, room: Math.round(spare * 10) / 10 };
+          }
+        }
+        if (best) return best;
+        throw new Error(`no start point on a ${kind} on any of ${rows.length} whole rows with a lane in view (scrollTop ${s.scrollTop})`);
+      };
+      const label = pick("title"), bar = pick("mark"), empty = pick("bare");
+      return { label, bar, empty, visibleRows: rows.length, rowHeights: rows.map(r => Math.round(r.getBoundingClientRect().height)) };
+    });
+    try {
+      for (const mode of ["collapsed", "expanded"] as const) {
+        const { page, context, pageErrors } = await open(true, mode === "expanded");
+        try {
+          const cdp = await context.newCDPSession(page);
+          const touch = (type: "touchStart" | "touchMove" | "touchEnd", x: number, y: number) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: type === "touchEnd" ? [] : [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }] });
+          await install(page);
+          const rowCount = await page.locator("[data-board-timeline] .bt-row").count();
+          (report.rows as Record<string, number>)[mode] = rowCount;
+          check(rowCount >= 28, `${mode}: chart has ${rowCount} rows, at least 28 needed`);
+          const rest: { mode: string; atOpen: string[]; zoomOut?: string[]; toggled?: string[] } = { mode, atOpen: await cuts(page) };
+          // A plain scroller beside the chart gets each gesture too, as the reference for what a finger moves.
+          await page.evaluate(() => {
+            const box = document.createElement("div"); box.id = "scroll-control"; box.style.cssText = "position:fixed;left:0;top:420px;width:390px;height:300px;overflow:auto;background:#fff;z-index:99999;border:2px solid #06c;visibility:hidden";
+            const inner = document.createElement("div"); inner.style.cssText = "width:3000px;height:4000px;background:repeating-linear-gradient(#eee 0 40px,#ccc 40px 80px)"; box.append(inner); document.body.append(box);
+          });
+          const shapes: { name: string; legs: [number, number][]; step: number; starts: ("bar" | "label" | "empty")[]; holds: number[] }[] = [
+            { name: "drag200", legs: [[0, -200]], step: 4, starts: ["bar", "label", "empty"], holds: [0, 700] },
+            { name: "drag30", legs: [[0, -30]], step: 3, starts: ["bar", "label", "empty"], holds: [0] },
+            { name: "slow60", legs: [[0, -60]], step: 1, starts: ["bar", "label", "empty"], holds: [0] },
+            { name: "wobble", legs: [[0, -40], [0, 12], [0, -40], [0, 12], [0, -40]], step: 3, starts: ["bar", "label", "empty"], holds: [0, 700] },
+            { name: "drag200down", legs: [[0, 200]], step: 4, starts: ["bar", "label", "empty"], holds: [0] },
+          ];
+          const reference: Record<string, number> = {};
+          for (const shape of shapes) {
+            await page.evaluate(() => { const b = document.getElementById("scroll-control")!; b.style.visibility = "visible"; b.scrollTop = 1000; });
+            await touch("touchStart", 200, 600); await sleep(100);
+            let y = 600; for (const [, dy] of shape.legs) { const n = Math.ceil(Math.abs(dy) / shape.step); for (let i = 0; i < n; i++) { y += dy / n; await touch("touchMove", 200, y); await sleep(16); } await sleep(60); }
+            await sleep(350); await touch("touchEnd", 0, 0); await sleep(900);
+            reference[shape.name] = await page.evaluate(() => document.getElementById("scroll-control")!.scrollTop - 1000);
+            await page.evaluate(() => { document.getElementById("scroll-control")!.style.visibility = "hidden"; });
+            (report.control as unknown[]).push({ mode, shape: shape.name, moved: reference[shape.name] });
+          }
+          for (const shape of shapes) for (const start of shape.starts) for (const hold of shape.holds) {
+            await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 400; });
+            await settle(page);
+            const g = await geometry(page), at = g[start], before = await position(page);
+            await startRec(page);
+            await touch("touchStart", at.x, at.y); await sleep(hold);
+            let x = at.x, y = at.y; const marks: number[] = [];
+            for (const [dx, dy] of shape.legs) {
+              const n = Math.ceil(Math.hypot(dx, dy) / shape.step);
+              for (let i = 0; i < n; i++) { x += dx / n; y += dy / n; await touch("touchMove", x, y); await sleep(16); }
+              await sleep(60); marks.push((await position(page)).top - before.top);
+            }
+            await sleep(350); await touch("touchEnd", 0, 0); await sleep(900);
+            const recorded = await stopRec(page); const after = await position(page); const stats = series(recorded.frames);
+            const moved = after.top - before.top, heights = [...new Set(recorded.frames.map(frame => frame.h))];
+            const touched = recorded.touched, entry = { mode, shape: shape.name, start, hold, startAt: { x: at.x, y: at.y }, touched, before: before.top, moved, expected: -shape.legs.reduce((sum, [, dy]) => sum + dy, 0), control: reference[shape.name], afterEachLeg: marks, movedX: after.left - before.left,
+              heights, scriptWrites: recorded.writes.length, writes: recorded.writes.slice(0, 3), ...stats };
+            (report.touch as unknown[]).push(entry);
+            const tag = `${mode}/${shape.name}/${start}/hold${hold}`;
+            const expectedKind = { bar: "mark", label: "title", empty: "bare" }[start];
+            // The browser hands a touch to a button within about 13 px of it, and a phone task row draws its marks about 10 px above the next row's
+            // label button: there the page's event names that button while the finger is over the mark (under), and the report says so.
+            const retargeted = start === "bar" && touched?.kind === "other" && touched.element === "button.bt-disclosure" && touched.underKind === "mark";
+            (entry as Record<string, unknown>).retargetedToButton = retargeted;
+            check(touched?.kind === expectedKind || retargeted, `${tag}: the touch started on ${touched ? `${touched.element} (${touched.kind}), the finger over ${touched.under[0]}` : "nothing, no touchstart reached the page"}, expected a ${expectedKind} at ${at.x},${at.y}`);
+            check(recorded.writes.length === 0, `${tag}: ${recorded.writes.length} script writes to scrollTop or height during the gesture`);
+            check(heights.length === 1, `${tag}: viewport height took ${heights.length} values`);
+            if (shape.name === "drag200") check(Math.abs(moved - 185) <= 10, `${tag}: moved ${moved}, expected 185±10`);
+            if (shape.name === "drag200down") check(Math.abs(moved + 185) <= 10, `${tag}: moved ${moved}, expected -185±10`);
+            if (shape.name === "drag30") check(moved >= 0 && moved <= 30, `${tag}: moved ${moved}, expected at most 30`);
+            if (shape.name === "slow60") check(moved > 0 && moved <= 62 && Math.abs(moved - reference.slow60!) <= 10, `${tag}: moved ${moved}, a plain scroller moved ${reference.slow60}`);
+            if (shape.name === "wobble") check(stats.maxBackwardRun <= 14 && Math.abs(moved - reference.wobble!) <= 10, `${tag}: moved ${moved} (plain ${reference.wobble}), largest reversal ${stats.maxBackwardRun}, finger's own 12`);
+            check(stats.maxJump <= 40, `${tag}: largest one-frame jump ${stats.maxJump}`);
+            if (shape.name === "drag200" && hold === 0 && start === "label") await page.screenshot({ path: path.join(evidence, `timeline-scroll-${label}-phone-${mode}-after-drag200.png`) });
+          }
+          // A data refresh while the user has scrolled leaves the position where the user put it.
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          const before = await position(page), g = await geometry(page);
+          await touch("touchStart", g.label.x, g.label.y);
+          for (let i = 0; i < 40; i++) { await touch("touchMove", g.label.x, g.label.y - i * 3); await sleep(16); }
+          await touch("touchEnd", 0, 0); await sleep(900);
+          const placed = await position(page); const cutsBefore = await cuts(page);
+          await startRec(page);
+          payload = records(31); payload.tasks[3]!.updatedAt = iso(0);
+          await page.evaluate(() => { for (const name of ["llv:tasks-changed", "llv:files-changed", "llv:pipelines-changed"]) window.dispatchEvent(new Event(name)); });
+          await page.waitForFunction(() => document.querySelectorAll("[data-timeline-task]").length >= 31, undefined, { timeout: 15_000 }).catch(() => undefined);
+          await sleep(1200);
+          const recorded = await stopRec(page); const refreshed = await position(page);
+          const rows31 = await page.locator("[data-timeline-task]").count();
+          (report.refresh as unknown[]).push({ mode, phone: true, scrolledFrom: before.top, placedAt: placed.top, afterRefreshTop: refreshed.top, heightBefore: placed.h, heightAfter: refreshed.h, taskRows: rows31, writes: recorded.writes.length, cutsAtPlacement: cutsBefore });
+          check(rows31 >= 31, `${mode}: the refresh did not reach the chart (${rows31} task rows)`);
+          check(refreshed.top === placed.top && refreshed.h === placed.h && recorded.writes.length === 0, `${mode}: refresh moved the position ${placed.top}→${refreshed.top} or height ${placed.h}→${refreshed.h} (${recorded.writes.length} writes)`);
+          // Layout changes still fit whole rows: zoom, and expand/collapse of a task.
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          await page.getByRole("button", { name: translate("uk", "timeline.zoomOut"), exact: true }).click(); await settle(page);
+          rest.zoomOut = await cuts(page);
+          await page.locator("[data-timeline-expand]").nth(2).click(); await settle(page);
+          rest.toggled = await cuts(page);
+          (report.rest as unknown[]).push(rest);
+          check(rest.atOpen.length === 0 && rest.zoomOut!.length === 0 && rest.toggled!.length === 0, `${mode}: rows cut at rest after open/zoom/toggle: ${JSON.stringify(rest)}`);
+          await page.screenshot({ path: path.join(evidence, `timeline-scroll-${label}-phone-${mode}-rest.png`) });
+          check(pageErrors.length === 0, `${mode}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+      for (const mode of ["collapsed", "expanded"] as const) {
+        const { page, context, pageErrors } = await open(false, mode === "expanded");
+        try {
+          await install(page);
+          const scroller = page.locator("[data-timeline-scroll]");
+          const box = (await scroller.boundingBox())!;
+          const wheelPoint = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+          await page.evaluate(() => {
+            const control = document.createElement("div"); control.id = "scroll-control"; const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
+            control.style.cssText = `position:fixed;left:0;top:0;width:${s.clientWidth}px;height:${s.clientHeight}px;overflow:auto;visibility:hidden;z-index:99999`;
+            const inner = document.createElement("div"); inner.style.cssText = "height:6000px"; control.append(inner); document.body.append(control);
+          });
+          const rest: { mode: string; atOpen: string[]; zoomOut?: string[]; toggled?: string[] } = { mode, atOpen: await cuts(page) };
+          const wheelOnce = async (delta: number, target: "chart" | "control") => {
+            await page.evaluate(target => { const c = document.getElementById("scroll-control")!; c.style.visibility = target === "control" ? "visible" : "hidden"; c.scrollTop = 0; if (target === "chart") document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; }, target);
+            await settle(page);
+            await page.mouse.move(wheelPoint.x, wheelPoint.y);
+            const before = target === "chart" ? (await position(page)).top : 0;
+            if (target === "chart") await startRec(page);
+            await page.mouse.wheel(0, delta); await sleep(900);
+            const writes = target === "chart" ? (await stopRec(page)).writes : [];
+            const top = target === "chart" ? (await position(page)).top : await page.evaluate(() => document.getElementById("scroll-control")!.scrollTop);
+            return { moved: top - before, writes: writes.length };
+          };
+          for (const delta of [40, 100]) {
+            const chart = await wheelOnce(delta, "chart"), control = await wheelOnce(delta, "control");
+            (report.desktop as unknown[]).push({ mode, input: `wheel ${delta}`, moved: chart.moved, control: control.moved, scriptWrites: chart.writes });
+            check(chart.writes === 0, `${mode}: wheel ${delta} wrote scrollTop or height ${chart.writes} times`);
+            check(Math.abs(chart.moved - control.moved) <= 4 && (delta !== 40 || Math.abs(chart.moved - 40) <= 6), `${mode}: wheel ${delta} moved ${chart.moved}, a plain scroller moved ${control.moved}`);
+          }
+          await page.evaluate(() => { document.getElementById("scroll-control")!.style.visibility = "hidden"; });
+          // Arrow keys: one row at a time, each landing on a row's top edge below the pinned axis.
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          await scroller.focus();
+          const edges = await page.evaluate(() => {
+            const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, top = s.getBoundingClientRect().top + s.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
+            return [...s.querySelectorAll<HTMLElement>(".bt-row")].map(row => Math.round(row.getBoundingClientRect().top - top + s.scrollTop));
+          });
+          let previous = 0; const stepped: number[] = [];
+          for (let press = 0; press < 3; press++) {
+            await startRec(page); await page.keyboard.press("ArrowDown"); await sleep(500);
+            const recorded = await stopRec(page); const top = (await position(page)).top; stepped.push(top - previous);
+            check(edges.some(edge => Math.abs(edge - top) <= 1), `${mode}: arrow down ${press + 1} landed at ${top}, not on a row edge`);
+            check(top > previous && edges.filter(edge => edge > previous + 1 && edge < top - 1).length === 0, `${mode}: arrow down ${press + 1} moved ${previous}→${top}, more than one row`);
+            previous = top; void recorded;
+          }
+          const upTop = (await (async () => { await page.keyboard.press("ArrowUp"); await sleep(500); return (await position(page)).top; })());
+          check(edges.some(edge => Math.abs(edge - upTop) <= 1) && upTop < previous, `${mode}: arrow up landed at ${upTop} from ${previous}`);
+          (report.desktop as unknown[]).push({ mode, input: "arrow down x3 then up", steps: stepped, upTop, firstRowEdges: edges.slice(0, 6) });
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page); await scroller.focus();
+          const pageHeight = (await position(page)).h;
+          await page.keyboard.press("PageDown"); await sleep(600);
+          const paged = (await position(page)).top;
+          (report.desktop as unknown[]).push({ mode, input: "PageDown", moved: paged, clientHeight: pageHeight });
+          check(paged > pageHeight * 0.5 && paged <= pageHeight, `${mode}: PageDown moved ${paged} of a ${pageHeight}px viewport`);
+          await page.keyboard.press("PageUp"); await sleep(600);
+          check((await position(page)).top < paged, `${mode}: PageUp did not scroll back`);
+          // The scrollbar: a click on its track below the thumb pages the chart. (A synthesized press on the
+          // thumb itself starts no drag in headless Chromium, with or without this change, so the track is the input.)
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          const gutter = await scroller.evaluate(element => (element as HTMLElement).offsetWidth - element.clientWidth);
+          check(gutter >= 12, `${mode}: scrollbar gutter is ${gutter}px, so the scrollbar is not exercised`);
+          const barX = box.x + box.width - gutter / 2;
+          await startRec(page);
+          await page.mouse.move(barX, box.y + box.height - 60); await sleep(150);
+          await page.mouse.down(); await sleep(60); await page.mouse.up(); await sleep(700);
+          const dragged = await stopRec(page); const thumbTop = (await position(page)).top;
+          (report.desktop as unknown[]).push({ mode, input: "scrollbar track click", moved: thumbTop, scriptWrites: dragged.writes.length, writes: dragged.writes.slice(0, 3) });
+          check(thumbTop > 0 && dragged.writes.length === 0, `${mode}: scrollbar track click moved ${thumbTop} with ${dragged.writes.length} script writes`);
+          // A refresh while scrolled leaves the position.
+          const placed = await position(page);
+          await startRec(page);
+          payload = records(31); payload.tasks[3]!.updatedAt = iso(0);
+          await page.evaluate(() => { for (const name of ["llv:tasks-changed", "llv:files-changed", "llv:pipelines-changed"]) window.dispatchEvent(new Event(name)); });
+          await page.waitForFunction(() => document.querySelectorAll("[data-timeline-task]").length >= 31, undefined, { timeout: 15_000 }).catch(() => undefined);
+          await sleep(1200);
+          const recorded = await stopRec(page); const refreshed = await position(page);
+          (report.refresh as unknown[]).push({ mode, phone: false, placedAt: placed.top, afterRefreshTop: refreshed.top, heightBefore: placed.h, heightAfter: refreshed.h, writes: recorded.writes.length });
+          check(refreshed.top === placed.top && refreshed.h === placed.h && recorded.writes.length === 0, `${mode} desktop: refresh moved ${placed.top}→${refreshed.top}, height ${placed.h}→${refreshed.h}, ${recorded.writes.length} writes`);
+          await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+          await settle(page);
+          await page.getByRole("button", { name: translate("uk", "timeline.zoomOut"), exact: true }).click(); await settle(page);
+          rest.zoomOut = await cuts(page);
+          (report.rest as unknown[]).push({ phone: false, ...rest });
+          check(rest.atOpen.length === 0 && rest.zoomOut!.length === 0, `${mode} desktop: rows cut at rest ${JSON.stringify(rest)}`);
+          await page.screenshot({ path: path.join(evidence, `timeline-scroll-${label}-desktop-${mode}.png`) });
+          check(pageErrors.length === 0, `${mode} desktop: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+      report.ranToEnd = true;
+    } catch (error) {
+      // A report with no failures only means the case ran to its end when ranToEnd is true and abort is null.
+      report.abort = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      throw error;
+    } finally {
+      // Per mode and start kind: how many gestures ran and what each one's touchstart reported (element: count), with the element the finger was over.
+      const starts: Record<string, { gestures: number; targets: Record<string, number>; fingerOver: Record<string, number>; retargetedToButton: number }> = {};
+      for (const entry of report.touch as { mode: string; start: string; touched: { element: string; under: string[] } | null; retargetedToButton?: boolean }[]) {
+        const group = (starts[`${entry.mode}/${entry.start}`] ??= { gestures: 0, targets: {}, fingerOver: {}, retargetedToButton: 0 });
+        const target = entry.touched?.element ?? "none", over = entry.touched?.under[0] ?? "none";
+        group.gestures++; group.targets[target] = (group.targets[target] ?? 0) + 1; group.fingerOver[over] = (group.fingerOver[over] ?? 0) + 1;
+        if (entry.retargetedToButton) group.retargetedToButton++;
+      }
+      report.starts = starts;
+      report.failures = failures;
+      fs.writeFileSync(path.join(evidence, `timeline-scroll-${label}.json`), JSON.stringify(report, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
+/*
+ * The manager's view of the chart (docs/design/board-timeline-manager-view.md): 28 tasks shaped like the
+ * production snapshot the critique read, in the groups the board's own rules put them in. Times are hours
+ * before the clock (`start`, `lastEnd`) or after it (`due`). The records go through the real model and the
+ * real chart; the expectations below read the fixture's own table, never the chart's output.
+ */
+type ManagerSpec = {
+  n: number; status: "assigned" | "blocked"; start: number; laneAt?: number; attempts: number; stages?: number; lastEnd: number | null; due: number; slips: number;
+  hold?: "operator" | "pr" | "external" | "worker" | "resource" | "task" | "postponed";
+  lane: "paused" | "needs_decision" | "running" | "completed" | null; final?: "failed" | "needs_decision" | "passed" | "running" | "pending";
+  minutes?: number; working?: "stage" | "stage-ended" | "agent"; agent?: number; stopped?: boolean; noEnd?: boolean; neverStarted?: boolean;
+  /** Hours before the clock at which the running attempt began, instead of the table's own. */
+  lastBegin?: number;
+  /** The standalone agent works now, but its transcript tail and launch facts name no start. */
+  startUnknown?: boolean;
+};
+const MANAGER_SPECS: ManagerSpec[] = [
+  { n: 1, status: "blocked", start: 340, attempts: 1, minutes: 8, lastEnd: 340, due: 4, slips: 6, hold: "pr", lane: "paused", final: "failed" },
+  { n: 2, status: "blocked", start: 287, laneAt: 287, attempts: 0, lastEnd: null, due: 8, slips: 4, hold: "postponed", lane: "paused" },
+  { n: 3, status: "blocked", start: 183, attempts: 4, lastEnd: 91, due: 32, slips: 3, hold: "operator", lane: "needs_decision", final: "needs_decision" },
+  { n: 4, status: "blocked", start: 183, attempts: 5, lastEnd: 90, due: 74, slips: 2, hold: "operator", lane: "needs_decision", final: "needs_decision" },
+  { n: 5, status: "blocked", start: 179, attempts: 6, lastEnd: 178, due: 32, slips: 2, hold: "external", lane: "needs_decision", final: "needs_decision" },
+  { n: 6, status: "assigned", start: 178, attempts: 12, lastEnd: 40, due: 8, slips: 6, lane: "paused", final: "failed" },
+  { n: 7, status: "assigned", start: 177, attempts: 14, stages: 2, lastEnd: 84, due: 32, slips: 4, lane: "paused", final: "failed", stopped: true },
+  { n: 8, status: "blocked", start: 155, attempts: 23, stages: 2, lastEnd: 60, due: -96, slips: 2, hold: "postponed", lane: "paused", final: "failed" },
+  { n: 9, status: "blocked", start: 155, attempts: 2, lastEnd: 91, due: 8, slips: 4, hold: "pr", lane: "needs_decision", final: "needs_decision" },
+  { n: 10, status: "blocked", start: 143, attempts: 3, lastEnd: 120, due: 74, slips: 2, hold: "operator", lane: "paused", final: "failed" },
+  { n: 11, status: "blocked", start: 119, attempts: 2, lastEnd: 118, due: -92, slips: 0, hold: "postponed", lane: "paused", final: "failed" },
+  { n: 12, status: "blocked", start: 118, attempts: 3, lastEnd: 117.5, due: 8, slips: 1, hold: "external", lane: "paused", final: "failed", noEnd: true },
+  { n: 13, status: "blocked", start: 87, attempts: 4, lastEnd: 83, due: 8, slips: 4, hold: "worker", lane: "paused", final: "pending", neverStarted: true },
+  { n: 14, status: "assigned", start: 87, attempts: 4, lastEnd: 83, due: 8, slips: 3, lane: "paused", final: "failed" },
+  { n: 15, status: "blocked", start: 84, attempts: 2, lastEnd: 83, due: 4, slips: 9, hold: "task", lane: "paused", final: "failed" },
+  { n: 16, status: "blocked", start: 83, attempts: 12, lastEnd: 40, due: 10, slips: 2, hold: "resource", lane: "paused", final: "failed" },
+  { n: 17, status: "assigned", start: 40, attempts: 13, stages: 3, lastEnd: null, due: 8, slips: 0, lane: "running", final: "running", working: "stage" },
+  { n: 18, status: "blocked", start: 22, attempts: 3, lastEnd: null, due: 8, slips: 4, hold: "resource", lane: "running", final: "running", working: "stage" },
+  { n: 19, status: "blocked", start: 19, attempts: 2, lastEnd: 14.5, due: 10, slips: 0, hold: "task", lane: "paused", final: "failed" },
+  { n: 20, status: "assigned", start: 18.6, attempts: 9, stages: 2, lastEnd: 12.5, due: 4, slips: 0, lane: "paused", final: "failed" },
+  { n: 21, status: "assigned", start: 16, attempts: 1, lastEnd: 15, due: 28, slips: 0, lane: "completed", final: "passed", agent: 2.5 },
+  { n: 22, status: "blocked", start: 11.5, attempts: 1, minutes: 3, lastEnd: 11.5, due: 32, slips: 0, hold: "external", lane: "needs_decision", final: "needs_decision" },
+  { n: 23, status: "assigned", start: 11, attempts: 7, stages: 2, lastEnd: null, due: 1, slips: 0, lane: "running", final: "running", working: "stage-ended" },
+  { n: 24, status: "assigned", start: 1.1, attempts: 1, lastEnd: null, due: 58, slips: 0, lane: "running", final: "running", working: "stage" },
+  { n: 25, status: "assigned", start: 0.8, attempts: 1, lastEnd: null, due: 10, slips: 0, lane: "running", final: "running", working: "stage" },
+  { n: 26, status: "assigned", start: 0.5, attempts: 0, lastEnd: null, due: 32, slips: 0, lane: null, agent: 0.5 },
+  { n: 27, status: "assigned", start: 2, attempts: 0, lastEnd: null, due: 32, slips: 0, lane: null, agent: 2 },
+  { n: 28, status: "assigned", start: 0.3, attempts: 0, lastEnd: null, due: 32, slips: 0, lane: null, agent: 0.3 },
+];
+const MANAGER_NOW = Date.parse("2026-11-13T08:10:00Z");
+const MANAGER_GROUPS = { working: [17, 18, 21, 24, 25, 26, 27, 28], needs: [3, 4, 5, 9, 10, 22], still: [6, 8, 16, 19, 20, 23], long: [1, 2, 7, 11, 12, 13, 14, 15] };
+const MANAGER_TITLES: Record<"en" | "uk", string[]> = {
+  en: ["Temporary files pile up between runs", "One source of truth for agent state", "Project and work in one call", "Balance and spend in API mode", "Search filters survive a reload",
+    "New control engines for long sessions with a careful hand-over between releases", "Export the report to a spreadsheet", "Notification delivery after an outage", "Retry policy for failed uploads",
+    "Check tooltip contrast in dark mode", "Import history from the old tracker", "Rename the project without losing links", "Pin a conversation to the top of its list",
+    "Show the account that spent the quota", "Short names for stage roles", "Restore card payments after a bank refusal and a repeated attempt with the new limits",
+    "Agent log search by time and by role", "Calendar sync for due dates", "Faster first screen on a slow network", "Keyboard order inside the sheet",
+    "Plan the release notes", "Archive finished work after a week", "Draft area keeps the typed answer", "Voice input in the composer", "Unread badge on the tab",
+    "Diff view for large files", "Hide the finished lanes", "Settings page for notifications"],
+  uk: ["Тимчасові файли накопичуються між запусками", "Одне джерело правди про стан агента", "Проєкт і робота одним викликом", "Баланс і витрати в API-режимі", "Фільтри пошуку не губляться після оновлення",
+    "Нові рушії керування довгими сесіями з обережною передачею між випусками", "Експорт звіту в таблицю", "Доставка сповіщень після збою", "Повтор для невдалих вивантажень",
+    "Перевірити контраст підказок у темній темі", "Імпорт історії зі старого трекера", "Перейменувати проєкт без втрати посилань", "Закріпити розмову вгорі списку",
+    "Показати акаунт, що витратив квоту", "Короткі назви ролей етапів", "Відновити оплату карткою після відмови банку та повторної спроби з новими лімітами",
+    "Пошук у логах агентів за часом і за роллю", "Синхронізація календаря для строків", "Швидший перший екран на повільній мережі", "Порядок клавіатури всередині аркуша",
+    "Спланувати нотатки до випуску", "Архівувати завершену роботу через тиждень", "Чернетка зберігає набрану відповідь", "Голосовий ввід у полі повідомлення", "Лічильник непрочитаного на вкладці",
+    "Перегляд змін для великих файлів", "Сховати завершені лінії", "Сторінка налаштувань сповіщень"],
+};
+
+async function managerRecords(lang: "en" | "uk", mutate?: (spec: ManagerSpec) => ManagerSpec) {
+  const { buildPipeline } = await import("@/lib/pipelines/store");
+  const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+  const { filesReadSummary } = await import("@/lib/filesReadSummary");
+  const hours = (ago: number) => new Date(MANAGER_NOW - ago * 3_600_000).toISOString();
+  const tasks: BoardTask[] = [], pipelines: Pipeline[] = [], files: FileEntry[] = [];
+  /** What each task's records say about when its work ran, for the expectations. */
+  const truth: Record<string, { startMs: number | null; segments: { startMs: number; endMs: number | null }[] }> = {};
+  const stageIds = ["builder", "reviewer", "fix"];
+  const workingFile = (id: string, ago: number, extra: Partial<FileEntry> = {}): FileEntry => ({ path: `/fixture/${id}.jsonl`, conversationId: id, project: "atlas", projectName: "Atlas",
+    root: "codex-sessions", name: `${id}.jsonl`, title: id, kind: "session", fmt: "codex", parent: null, engine: "claude", model: "fable", mtime: MANAGER_NOW / 1000, size: 100,
+    proc: "running", activity: "live", pendingQuestion: null, waitingInput: null, lastTurn: { startedAt: MANAGER_NOW - ago * 3_600_000, endedAt: null },
+    agentActivity: { lastRecordAt: MANAGER_NOW, checking: false, check: null }, ...extra } as FileEntry);
+  for (const base of MANAGER_SPECS) {
+    const spec = mutate ? mutate(base) : base;
+    const id = `mgr-task-${spec.n}`;
+    const title = MANAGER_TITLES[lang][spec.n - 1]!;
+    const hold = spec.hold ? { kind: spec.hold, note: spec.hold, since: hours(spec.start), by: "agent" as const, ...(spec.hold === "postponed" ? { until: hours(2) } : {}) } : undefined;
+    const task: BoardTask = { id, project: "atlas", text: title, status: spec.status, placement: "unplaced", assignments: [], createdAt: hours(spec.start + 1), updatedAt: hours(1),
+      dueAt: new Date(MANAGER_NOW + spec.due * 3_600_000).toISOString(), dueTz: "UTC", ...(spec.slips ? { dueHistory: { firstAt: hours(spec.start), slips: spec.slips } } : {}), ...(hold ? { hold } : {}) } as BoardTask;
+    tasks.push(task);
+    truth[id] = { startMs: null, segments: [] };
+    if (spec.lane) {
+      const stages = stageIds.map((stageId, stageIndex) => {
+        const role = { roleId: stageIndex === 1 ? "reviewer" as const : "builder" as const };
+        const resolved = resolvePipelineRole({ role, engine: stageIndex === 1 ? "codex" : "claude", model: stageIndex === 1 ? "gpt-6-astra" : "fable", effort: "high", access: stageIndex === 1 ? "read-only" : "read-write" }, "run", pipelineRoleLookup);
+        if (!resolved.role) throw new Error(resolved.error);
+        return { id: stageId, kind: "run" as const, role, effectiveRole: resolved.role, next: stageIds[stageIndex + 1] ?? null, prompt: "{{task}}" };
+      });
+      const lane = buildPipeline({ id: `mgr-lane-${spec.n}`, task: title, taskIds: [id], project: "atlas", repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: hours(spec.laneAt ?? spec.start + 0.02), stages });
+      lane.state = spec.lane; lane.createdAt = hours(spec.laneAt ?? spec.start + 0.02);
+      const used = Math.min(3, spec.stages ?? 3);
+      let lastStage = 0, lastState: string = spec.final ?? "failed";
+      for (let index = 0; index < spec.attempts; index++) {
+        const last = index === spec.attempts - 1;
+        const minutes = spec.minutes ?? 5 + (index * 7) % 21;
+        const running = last && spec.final === "running";
+        const lastBegin = running ? spec.lastBegin ?? ({ 17: 0.7, 18: 0.5, 23: 0.9 } as Record<number, number>)[spec.n] ?? spec.start : (spec.lastEnd ?? 0) + minutes / 60;
+        const fraction = spec.attempts === 1 ? 0 : index / (spec.attempts - 1);
+        const begin = spec.start + fraction * (lastBegin - spec.start);
+        const stageIndex = index % used, run = lane.runs[stageIndex]!;
+        lastStage = stageIndex;
+        const state = last ? spec.final ?? "failed" : spec.stopped && index === 3 ? "running" : "passed";
+        lastState = state;
+        const started = !(last && spec.neverStarted);
+        const completed = !(running || last && spec.neverStarted || spec.noEnd && index === 1 || spec.stopped && index === 3);
+        const attempt = { n: run.attempts.length + 1, state, effectiveRole: structuredClone(stages[stageIndex]!.effectiveRole), launchId: null, conversationId: null, sessionId: null, agentPath: null, paneId: null, flowId: null,
+          startedAt: started ? hours(begin) : null, completedAt: started && completed ? hours(begin - minutes / 60) : null, input: null, output: null, activatedBy: null, verdict: null, error: null } as unknown as Pipeline["runs"][number]["attempts"][number];
+        if (spec.stopped && index === 3) attempt.suspension = { reason: "pause", detail: "Host stopped", requestedAt: hours(begin - 0.2), stoppedAt: hours(begin - 0.25) } as never;
+        run.attempts.push(attempt);
+        if (started) {
+          const end = running ? null : spec.stopped && index === 3 ? MANAGER_NOW - (begin - 0.25) * 3_600_000 : completed ? MANAGER_NOW - (begin - minutes / 60) * 3_600_000 : null;
+          const startMs = MANAGER_NOW - begin * 3_600_000;
+          // A running attempt with no working file is waiting: only its start is evidenced. One whose turn ended works up to that turn's end.
+          truth[id]!.segments.push({ startMs, endMs: running ? !spec.working ? null : spec.working === "stage-ended" ? MANAGER_NOW - 12 * 60_000 : MANAGER_NOW : spec.stopped && index === 3 ? MANAGER_NOW - (begin - 0.25) * 3_600_000 : end });
+          truth[id]!.startMs = Math.min(truth[id]!.startMs ?? Infinity, startMs);
+        }
+        if (running && spec.working) {
+          const fileId = `mgr-file-${spec.n}`;
+          const file = spec.working === "stage" ? workingFile(fileId, Math.max(begin, 0.05))
+            : workingFile(fileId, 0.4, { lastTurn: { startedAt: MANAGER_NOW - 0.4 * 3_600_000, endedAt: MANAGER_NOW - 12 * 60_000 }, activity: "idle", agentActivity: { lastRecordAt: MANAGER_NOW - 12 * 60_000, checking: false, check: null } } as Partial<FileEntry>);
+          attempt.conversationId = fileId; attempt.agentPath = file.path; files.push(file);
+          task.assignments.push({ path: file.path, conversationId: fileId, panePid: null, state: "linked", error: null, at: hours(0.5) });
+        }
+      }
+      lane.cursor = spec.lane === "completed" ? null : { stageId: stageIds[lastStage]!, state: lastState as never, input: null, activatedBy: null };
+      if (spec.lane === "completed") lane.closedAt = hours(spec.lastEnd ?? 0);
+      if (spec.lane === "paused") lane.pausedAt = hours(spec.lastEnd ?? spec.start);
+      if (!spec.attempts) lane.runs.forEach(run => { run.attempts = []; });
+      if (!truth[id]!.startMs && spec.attempts === 0) truth[id]!.startMs = MANAGER_NOW - (spec.laneAt ?? spec.start) * 3_600_000;
+      pipelines.push(lane);
+    }
+    if (spec.agent !== undefined) {
+      const fileId = `mgr-agent-${spec.n}`;
+      const file = workingFile(fileId, spec.agent, spec.startUnknown ? { lastTurn: null } : {});
+      files.push(file);
+      task.assignments.push({ path: file.path, conversationId: fileId, panePid: null, state: "delivered", error: null, at: hours(spec.agent) });
+      if (!spec.startUnknown) {
+        const startMs = MANAGER_NOW - spec.agent * 3_600_000;
+        truth[id]!.segments.push({ startMs, endMs: MANAGER_NOW });
+        truth[id]!.startMs = Math.min(truth[id]!.startMs ?? Infinity, startMs);
+      }
+    }
+  }
+  return { payload: { ...filesReadSummary([], pipelines), files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: files.length, smt: MANAGER_NOW / 1000 }], projectCwds: { atlas: "/fixture/atlas" } }, truth };
+}
+
+describe("board timeline manager view", () => {
+  const evidenceDirectory = () => path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "board-timeline-manager");
+  const SIZES = [{ width: 390, height: 844 }, { width: 720, height: 900 }, { width: 1024, height: 768 }, { width: 1200, height: 800 }, { width: 1440, height: 900 }];
+  const GROUP_KEYS = { "group:needs-you": true, "group:still": true, "group:still-long": true };
+  const idOf = (n: number) => `mgr-task-${n}`;
+  const settleChart = (page: Page) => page.evaluate(async () => {
+    let previous = "", stable = 0;
+    for (let frame = 0; frame < 40; frame++) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      const scroll = document.querySelector<HTMLElement>("[data-timeline-scroll]");
+      const current = scroll ? [scroll.scrollTop, scroll.clientHeight, scroll.scrollHeight, scroll.clientWidth].join(":") : "absent";
+      stable = current === previous ? stable + 1 : 0;
+      previous = current;
+      if (stable >= 3) return;
+    }
+    throw new Error("timeline scroll geometry did not settle");
+  });
+  const readRows = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".bt-row")].map(row => ({
+    task: row.getAttribute("data-timeline-task"), attempt: row.getAttribute("data-timeline-attempt"), group: row.getAttribute("data-timeline-group"), groupRow: row.getAttribute("data-timeline-group-row"),
+    expanded: row.getAttribute("data-expanded"), dueAt: row.getAttribute("data-due-at"), height: row.getBoundingClientRect().height,
+    label: row.querySelector(".bt-label")?.textContent ?? "", since: row.querySelector("[data-timeline-since]")?.textContent ?? null,
+    due: [...row.querySelectorAll<HTMLElement>("[data-timeline-due]")].map(node => ({ tone: node.dataset.timelineDue, edge: node.dataset.timelineDueEdge ?? null, words: node.textContent ?? "" })),
+    flags: row.querySelectorAll("[data-timeline-flag]").length, clipped: row.querySelectorAll("[data-timeline-clipped]").length, line: row.querySelectorAll("[data-timeline-line]").length,
+    segments: row.querySelectorAll("[data-timeline-segment]").length, ticks: row.querySelectorAll("[data-timeline-tick]").length, strips: row.querySelectorAll("[data-timeline-strip]").length,
+  })));
+  type ManagerRow = Awaited<ReturnType<typeof readRows>>[number];
+  const managerTest = process.env.LLV_TIMELINE_DENSITY_ONLY === "1" ? test.skip : browserTest;
+
+  async function openManager(browser: Browser, base: string, options: { width: number; height: number; lang: "en" | "uk"; theme: "light" | "dark"; seat: boolean; stored: unknown }) {
+    const phone = options.width === 390;
+    const opened = await openFixture(browser, "about:blank", { width: options.width, height: options.height }, options.theme, options.lang, "reduce", phone, 1, new Date(MANAGER_NOW));
+    const { page, context, pageErrors } = opened;
+    await context.addInitScript(({ lang, theme, seat, stored }) => {
+      localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme);
+      // Seeded once: a reload keeps what the page itself stored.
+      if (localStorage.getItem("llv:kanban-seat:v2") === null) localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: !seat }, placement: "top", height: null, width: null }));
+      if (localStorage.getItem("llv:board-timeline:v1:atlas") === null) localStorage.setItem("llv:board-timeline:v1:atlas", JSON.stringify(stored));
+    }, { lang: options.lang, theme: options.theme, seat: options.seat, stored: options.stored });
+    await page.goto(`${base}?scenario=board-timeline#p=atlas`);
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, options.theme);
+    return { page, context, pageErrors, phone };
+  }
+
+  managerTest("working tasks on top, two closed groups, due dates, one window, room beside the seat panel; frames in both languages and themes", async () => {
+    const { timelineWindow, dueMark, clipSpan, HOUR } = await import("@/lib/board/taskTimelineView");
+    const out = path.join(os.tmpdir(), `llv-manager-${process.pid}`); fs.mkdirSync(out, { recursive: true });
+    const evidence = evidenceDirectory(); fs.mkdirSync(evidence, { recursive: true });
+    let current = await managerRecords("en");
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(current.payload), "/api/tasks": () => Response.json({ tasks: current.payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        current = await managerRecords(lang);
+        const truth = current.truth;
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+        const days = (hours: number) => lang === "uk" ? `${Math.floor(hours / 24)} д` : `${Math.floor(hours / 24)}d`;
+        for (const theme of ["light", "dark"] as const) for (const { width, height } of SIZES) {
+          const tag = `${width}-${lang}-${theme}`;
+          // `LLV_TIMELINE_ONLY=1440-uk-light,390-en-dark` runs only those combinations; without it every one runs.
+          if (process.env.LLV_TIMELINE_ONLY && !process.env.LLV_TIMELINE_ONLY.split(",").includes(tag)) continue;
+          const phone = width === 390;
+          const frameOf = (page: Page, pageErrors: string[]) => async (state: string, target?: Locator, strict = true) => {
+            await settleChart(page).catch(() => undefined);
+            const geometry = await timelineGeometry(target ?? page.locator("[data-board-timeline]"));
+            await page.screenshot({ path: path.join(evidence, `${tag}-${state}.png`) });
+            readings.push({ name: `${tag}-${state}`, width, height, lang, theme, state, failures: geometry.failures, controls: geometry.controls.length, visibleRows: geometry.visibleRows.length, scrollHeight: geometry.scrollHeight, clientHeight: geometry.clientHeight });
+            check(pageErrors.length === 0, `${tag}-${state}: page errors ${pageErrors.join(" | ")}`);
+            if (strict) {
+              check(geometry.failures.length === 0, `${tag}-${state}: text cut by an edge: ${JSON.stringify(geometry.failures.slice(0, 5))}`);
+              check(geometry.controls.every(control => control.hit), `${tag}-${state}: a control is covered: ${JSON.stringify(geometry.controls.filter(control => !control.hit).map(control => control.text))}`);
+              for (const control of geometry.controls) check(control.width >= (phone ? 44 : 24) && control.height >= (phone ? 44 : 24), `${tag}-${state}: control ${control.text} is ${control.width}×${control.height}`);
+            }
+          };
+          const lateWords = (hours: number) => t("timeline.overdueBy", { duration: days(Math.abs(hours)) });
+          // The words, flags and edges of every due date, against the window the scale draws.
+          const checkDue = async (page: Page, rows: ManagerRow[], hours: number, where: string) => {
+            const view = timelineWindow(MANAGER_NOW, hours, null);
+            const tasks = rows.filter(row => row.task);
+            check(tasks.length === 28, `${where}: ${tasks.length} task rows, 28 expected`);
+            for (const row of tasks) {
+              const spec = MANAGER_SPECS[Number(row.task!.replace("mgr-task-", "")) - 1]!;
+              const mark = dueMark(new Date(MANAGER_NOW + spec.due * HOUR).toISOString(), MANAGER_NOW, view, 800)!;
+              check(row.due.length === 1, `${where}: ${row.task} shows ${row.due.length} due marks`);
+              const shown = row.due[0];
+              if (!shown) continue;
+              check(shown.tone === (spec.due < 0 ? "overdue" : "due"), `${where}: ${row.task} tone ${shown.tone}`);
+              check((mark.place === "in") === (row.flags === 1 && shown.edge === null), `${where}: ${row.task} place ${mark.place}, flags ${row.flags}, edge ${shown.edge}`);
+              if (mark.place !== "in") check(shown.edge === (mark.place === "before" ? "left" : "right"), `${where}: ${row.task} edge ${shown.edge}, expected ${mark.place}`);
+              if (spec.due < 0) check(shown.words.includes(lateWords(-spec.due)), `${where}: ${row.task} words «${shown.words}» lack «${lateWords(-spec.due)}»`);
+              else check(!shown.words.includes(t("timeline.overdueBy", { duration: "" }).trim()), `${where}: ${row.task} reads overdue`);
+              const stem = lang === "uk" ? "переносили" : "moved";
+              check(spec.slips ? shown.words.includes(t("timeline.slips", { count: spec.slips })) : !shown.words.includes(stem), `${where}: ${row.task} slip words «${shown.words}» against ${spec.slips}`);
+            }
+            check(tasks.filter(row => row.due[0]?.tone === "overdue").length === 2, `${where}: overdue rows ${tasks.filter(row => row.due[0]?.tone === "overdue").length}, 2 expected`);
+            check(tasks.filter(row => row.due[0]?.words.includes(lang === "uk" ? "переносили" : "moved")).length === 16, `${where}: rows with slip words`);
+            void page;
+          };
+          // An attempt with a start and no end draws the same 3 px tick in its expanded stage row (brief §6).
+          const stageTicks = async (page: Page, taskId: string) => {
+            const toggleRow = page.locator(`[data-timeline-task="${taskId}"] [data-timeline-expand]`);
+            const wasOpen = await toggleRow.getAttribute("aria-expanded") === "true";
+            if (!wasOpen) { await toggleRow.click(); await settleChart(page); }
+            const ticks = await page.evaluate(id => {
+              const task = document.querySelector(`[data-timeline-task="${id}"]`)!, found: number[] = [];
+              for (let row = task.nextElementSibling; row && row.hasAttribute("data-timeline-attempt"); row = row.nextElementSibling) {
+                for (const tick of row.querySelectorAll<HTMLElement>("[data-timeline-tick]")) found.push(Number(tick.dataset.startMs));
+              }
+              return found;
+            }, taskId);
+            if (!wasOpen) { await toggleRow.click(); await settleChart(page); }
+            return ticks;
+          };
+          const checkWindow = async (page: Page, rows: ManagerRow[], hours: number, where: string) => {
+            const view = timelineWindow(MANAGER_NOW, hours, null);
+            const fit = await page.evaluate(() => { const s = document.querySelector<HTMLElement>("[data-timeline-scroll]")!; return { scrollWidth: s.scrollWidth, clientWidth: s.clientWidth, lane: document.querySelector<HTMLElement>(".bt-lane")!.offsetWidth, labels: document.querySelector<HTMLElement>(".bt-label")!.offsetWidth }; });
+            check(fit.scrollWidth <= fit.clientWidth + 1, `${where}: the chart is ${fit.scrollWidth}px wide in ${fit.clientWidth}px`);
+            for (const row of rows.filter(row => row.task)) {
+              const expected = truth[row.task!]!;
+              const known = expected.segments.filter(segment => segment.endMs === null || clipSpan(segment.startMs, Math.min(segment.endMs, MANAGER_NOW), view, fit.lane) !== null);
+              const spans = expected.segments.filter(segment => segment.endMs !== null && clipSpan(segment.startMs, Math.min(segment.endMs, MANAGER_NOW), view, fit.lane) !== null).length;
+              const ticks = expected.segments.filter(segment => segment.endMs === null && clipSpan(segment.startMs, segment.startMs, view, fit.lane, 3) !== null).length;
+              check(row.segments === spans + ticks && row.ticks === ticks, `${where}: ${row.task} draws ${row.segments} segments (${row.ticks} ticks), expected ${spans}+${ticks} of ${known.length}`);
+              const started = expected.startMs !== null;
+              check(row.line === (started && expected.startMs! <= MANAGER_NOW ? 1 : 0), `${where}: ${row.task} thin line ${row.line}`);
+              check(row.clipped === (started && expected.startMs! < view.start ? 1 : 0), `${where}: ${row.task} clipped marks ${row.clipped}`);
+              check(!/\b(4[8-9]|[5-9]\d|\d{3,})\s?(год|h)\b/.test(row.label), `${where}: ${row.task} writes two days or more in hours: ${row.label}`);
+            }
+          };
+
+          // 1. Fresh storage, seat folded: the kanban's own numbers, then the chart's defaults.
+          const A = await openManager(browser, served.base, { width, height, lang, theme, seat: false, stored: { view: "board", hours: 24, expanded: {} } });
+          try {
+            const { page, pageErrors } = A;
+            const frame = frameOf(page, pageErrors);
+            const toggle = page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : "[data-board-timeline-toggle]");
+            await page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : "[data-bar=\"project\"]").first().waitFor();
+            await page.locator(phone ? "[data-phone-tab-working]" : ".kb .live[data-count]").first().waitFor();
+            const green = await page.evaluate(isPhone => [...document.querySelectorAll<HTMLElement>(isPhone ? "[data-phone-tab-working]" : ".kb .live[data-count]")]
+              .reduce((sum, node) => sum + Number(isPhone ? node.getAttribute("data-phone-tab-working") : node.getAttribute("data-count")), 0), phone);
+            await frame("board", page.locator(phone ? "[data-phone-kanban-tabs]" : '[data-bar="project"]'), false);
+            // The bar gives its Timeline toggle up on a narrow desktop; the chart opens from its stored view there.
+            if (await toggle.isVisible()) await toggle.click();
+            else { await page.evaluate(() => { const key = "llv:board-timeline:v1:atlas"; localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key)!), view: "timeline" })); }); await page.reload(); }
+            const chart = page.locator("[data-board-timeline]"); await chart.waitFor();
+            await page.locator("[data-timeline-task]").first().waitFor();
+            await settleChart(page);
+            let rows = await readRows(page);
+            const working = rows.filter(row => row.group === "working");
+            check(green === 8, `${tag}: the kanban's green numbers sum to ${green}, 8 expected`);
+            check(JSON.stringify(working.map(row => row.task).sort()) === JSON.stringify(MANAGER_GROUPS.working.map(idOf).sort()), `${tag}: top rows ${working.map(row => row.task)}`);
+            check(rows.findIndex(row => row.groupRow) >= working.length, `${tag}: a group row sits above a working row`);
+            check(working.every(row => row.expanded === "0"), `${tag}: a working task is expanded on fresh storage`);
+            check(JSON.stringify(rows.filter(row => row.groupRow).map(row => [row.groupRow, row.expanded])) === JSON.stringify([["needs-you", "0"], ["still", "0"]]), `${tag}: groups on fresh storage ${JSON.stringify(rows.filter(row => row.groupRow).map(row => [row.groupRow, row.expanded]))}`);
+            const header = await chart.locator("[data-timeline-count]").innerText();
+            check(header.includes(t("kanban.columnWorking", { count: green })) && header.includes(t("timeline.needsCount", { count: 6 })) && header.includes(t("timeline.stillCount", { count: 14 })), `${tag}: header «${header}»`);
+            // The count of overdue tasks and the greatest lateness sit in the header, whatever is folded (the two overdue tasks are 96 h and 92 h late).
+            const overdueWords = t("timeline.group.overdue", { count: 2, duration: days(96) });
+            check(header.includes(overdueWords), `${tag}: header lacks «${overdueWords}»: «${header}»`);
+            check(lang === "uk" || ((await page.locator("body").innerText()).match(/need(s)? you/gi)?.length ?? 0) <= 1, `${tag}: «needs you» is on the screen twice`);
+            check(Number(await chart.locator("[data-timeline-count]").getAttribute("data-working")) === green, `${tag}: the header's working number differs from the kanban's ${green}`);
+            const closedStill = rows.find(row => row.groupRow === "still")!;
+            check(closedStill.label.includes(t("timeline.group.still", { count: 14 })) && closedStill.label.includes(t("timeline.group.longCount", { days: 3, count: 8 })) && closedStill.label.includes(overdueWords), `${tag}: closed «Stopped» row «${closedStill.label}»`);
+            check(rows.find(row => row.groupRow === "needs-you")!.label.includes(t("timeline.group.needs", { count: 6 })), `${tag}: closed needs-you row`);
+            const sorted = (list: ManagerRow[]) => list.every((row, index) => index === 0 || Date.parse(list[index - 1]!.dueAt!) <= Date.parse(row.dueAt!));
+            check(sorted(working), `${tag}: the top rows are not in due order`);
+            // First screen on fresh storage: every working task is one collapsed row, so no stage row and no fold line is drawn.
+            const firstScreen = await page.evaluate(() => {
+              const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = scroller.getBoundingClientRect();
+              const axis = scroller.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
+              const whole = (row: Element) => { const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + scroller.clientHeight + 1; };
+              return { working: [...scroller.querySelectorAll('[data-timeline-group="working"]')].filter(whole).length,
+                groups: [...scroller.querySelectorAll("[data-timeline-group-row]")].filter(whole).map(row => row.getAttribute("data-timeline-group-row")),
+                stageRows: scroller.querySelectorAll("[data-timeline-attempt]").length, folds: scroller.querySelectorAll("[data-timeline-fold]").length };
+            });
+            readings.push({ name: `${tag}-first-screen`, ...firstScreen });
+            check(firstScreen.stageRows === 0 && firstScreen.folds === 0, `${tag}: ${firstScreen.stageRows} stage rows and ${firstScreen.folds} fold lines on the first screen of collapsed tasks`);
+            // Measured on the fixture: all 8 working tasks and both groups fit at 1024 and 1440, five working tasks at 390.
+            check(firstScreen.working >= (width >= 1024 ? 8 : 5), `${tag}: first screen shows ${firstScreen.working} working tasks`);
+            check(width < 1024 || (firstScreen.groups.includes("needs-you") && firstScreen.groups.includes("still")), `${tag}: groups on the first screen ${JSON.stringify(firstScreen.groups)}`);
+            await frame("default");
+            // Expanding a task is remembered: the same frame after a reload still shows it open, and nothing else changed.
+            const expandedTask = working[0]!.task!;
+            await page.locator(`[data-timeline-task="${expandedTask}"] [data-timeline-expand]`).click();
+            await settleChart(page);
+            check(await page.locator(`[data-timeline-task="${expandedTask}"]`).getAttribute("data-expanded") === "1", `${tag}: ${expandedTask} did not expand`);
+            await frame("expanded");
+            await page.reload(); await chart.waitFor(); await page.locator("[data-timeline-task]").first().waitFor(); await settleChart(page);
+            rows = await readRows(page);
+            check(JSON.stringify(rows.filter(row => row.group === "working").map(row => [row.task, row.expanded])) === JSON.stringify(working.map(row => [row.task, row.task === expandedTask ? "1" : "0"])), `${tag}: expansion after a reload ${JSON.stringify(rows.filter(row => row.group === "working").map(row => [row.task, row.expanded]))}`);
+            await frame("expanded-reload");
+            await page.locator(`[data-timeline-task="${expandedTask}"] [data-timeline-expand]`).click();
+            await settleChart(page);
+            // 2. Open the three groups: every task is listed, in due order inside each group.
+            for (const key of ["needs-you", "still"]) await page.locator(`[data-timeline-group-row="${key}"] button`).click();
+            await page.locator('[data-timeline-group-row="still-long"] button').click();
+            await settleChart(page);
+            rows = await readRows(page);
+            const byGroup = (name: string) => rows.filter(row => row.group === name);
+            check(byGroup("needs-you").length === 6 && byGroup("still").length === 6 && byGroup("still-long").length === 8, `${tag}: group sizes ${byGroup("needs-you").length}/${byGroup("still").length}/${byGroup("still-long").length}`);
+            for (const name of ["needs-you", "still", "still-long"]) check(sorted(byGroup(name)), `${tag}: ${name} is not in due order`);
+            check(JSON.stringify(rows.filter(row => row.groupRow).map(row => row.label.includes(t("timeline.group.stillLong", { days: 3, count: 8 })))) === "[false,false,true]", `${tag}: nested line label`);
+            check(MANAGER_GROUPS.needs.every(n => byGroup("needs-you").some(row => row.task === idOf(n))) && MANAGER_GROUPS.still.every(n => byGroup("still").some(row => row.task === idOf(n))) && MANAGER_GROUPS.long.every(n => byGroup("still-long").some(row => row.task === idOf(n))), `${tag}: a task is in the wrong group`);
+            const scroller = page.locator("[data-timeline-scroll]");
+            await scroller.evaluate(element => { element.scrollTop = 0; });
+            await settleChart(page);
+            await frame("groups-open-top");
+            await scroller.evaluate(element => { element.scrollTop = (element.scrollHeight - element.clientHeight) / 2; });
+            await frame("groups-open-middle");
+            await scroller.evaluate(element => { element.scrollTop = element.scrollHeight; });
+            await frame("groups-open-end");
+            await scroller.evaluate(element => { element.scrollTop = 0; });
+            await settleChart(page);
+            // 3. Folds are remembered.
+            await page.reload(); await chart.waitFor(); await page.locator("[data-timeline-task]").first().waitFor(); await settleChart(page);
+            rows = await readRows(page);
+            check(rows.filter(row => row.groupRow).length === 3 && rows.filter(row => row.groupRow).every(row => row.expanded === "1") && rows.filter(row => row.group === "working").every(row => row.expanded === "0"), `${tag}: folds were not kept across a reload`);
+            // 4. Due dates and the window at 1 day, 6 hours and 1 week.
+            const scaleButton = (name: "zoomIn" | "zoomOut") => page.getByRole("button", { name: t(`timeline.${name}`), exact: true });
+            await checkDue(page, rows, 24, `${tag} 1d`); await checkWindow(page, rows, 24, `${tag} 1d`);
+            const row1 = rows.find(row => row.task === idOf(1))!;
+            check(row1.since === t("timeline.since", { start: lang === "uk" ? "30.10" : "30/10", duration: days(340) }), `${tag}: row 1 start words «${row1.since}»`);
+            check(row1.clipped === 1 && row1.line === 1, `${tag}: row 1 is not clipped at the left edge`);
+            for (const hours of [12, 6]) { await scaleButton("zoomIn").click(); await settleChart(page); if (hours === 6) { rows = await readRows(page); await checkDue(page, rows, 6, `${tag} 6h`); await checkWindow(page, rows, 6, `${tag} 6h`); check((await stageTicks(page, idOf(12))).length === 0, `${tag} 6h: task 12 stage row draws a tick for a start outside the window`); await frame("zoom-6h"); } }
+            for (const hours of [12, 24, 72, 168]) { await scaleButton("zoomOut").click(); await settleChart(page); if (hours === 168) { rows = await readRows(page); await checkDue(page, rows, 168, `${tag} 1w`); await checkWindow(page, rows, 168, `${tag} 1w`); const unknownEnd = truth[idOf(12)]!.segments.filter(segment => segment.endMs === null).map(segment => segment.startMs); const drawn = await stageTicks(page, idOf(12)); check(unknownEnd.length === 1 && drawn.length === 1 && drawn[0] === unknownEnd[0], `${tag} 1w: task 12 stage-row ticks ${JSON.stringify(drawn)}, expected ${JSON.stringify(unknownEnd)}`); await frame("zoom-1w"); } }
+            const r12 = rows.find(row => row.task === idOf(12))!, r13 = rows.find(row => row.task === idOf(13))!;
+            check(r12.ticks === 1 && r13.ticks === 0 && r13.segments === 3, `${tag}: end-unknown tick ${r12.ticks}, never-started tick ${r13.ticks}, segments ${r13.segments}`);
+            for (const hours of [72, 24]) { await scaleButton("zoomIn").click(); void hours; }
+            await settleChart(page);
+            // 5. Paging back on purpose, and back to now.
+            const viewStart = () => scroller.getAttribute("data-view-start").then(Number);
+            const liveStart = await viewStart();
+            const restAxisHeight = await page.locator(".bt-axis").evaluate(axis => axis.getBoundingClientRect().height);
+            await page.locator(`[data-timeline-task="${idOf(1)}"] [data-timeline-expand]`).click();
+            await settleChart(page);
+            const foldLine = page.locator(`[data-timeline-fold="${idOf(1)}"] [data-timeline-fold-expand]`);
+            check(await foldLine.count() === 1 && await foldLine.getAttribute("aria-expanded") === "false", `${tag}: task 1 does not fold its earlier stages`);
+            await foldLine.click(); await settleChart(page);
+            const earlier = page.locator(".bt-earlier").first();
+            await earlier.scrollIntoViewIfNeeded();
+            await earlier.click();
+            await settleChart(page);
+            check(await viewStart() < liveStart && await page.locator("[data-timeline-back]").count() === 1, `${tag}: paging did not move the window back`);
+            await page.locator(`[data-timeline-task="${idOf(1)}"]`).scrollIntoViewIfNeeded();
+            // The return control sits in the axis's time-label row and the axis keeps its height; no label is under it, cut by an edge or left out.
+            check(Math.abs(await page.locator(".bt-axis").evaluate(axis => axis.getBoundingClientRect().height) - restAxisHeight) <= 0.5, `${tag}: the axis changed height while paged`);
+            const axisLabels = await page.evaluate(() => {
+              const back = document.querySelector<HTMLElement>("[data-timeline-back]")!.getBoundingClientRect(), scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
+              const edge = scroller.getBoundingClientRect().left + scroller.clientWidth, range = document.createRange();
+              const labels = [...scroller.querySelectorAll<HTMLElement>(".bt-axis .bt-tick, .bt-axis .bt-day")].map(label => { range.selectNodeContents(label); const box = range.getBoundingClientRect(); return { right: box.right, top: box.top, bottom: box.bottom, left: box.left }; });
+              return { labels: labels.length, covered: labels.filter(box => box.left < back.right && box.right > back.left && box.top < back.bottom && box.bottom > back.top).length, cut: labels.filter(box => box.right > edge + 0.5).length };
+            });
+            check(axisLabels.labels >= 2 && axisLabels.covered === 0 && axisLabels.cut === 0, `${tag}: paged axis has ${axisLabels.labels} labels, ${axisLabels.covered} under the return control, ${axisLabels.cut} cut`);
+            await frame("paged");
+            check((await chart.locator("[data-timeline-back]").innerText()).includes(t("timeline.now")), `${tag}: the return control lacks the now label`);
+            await page.locator("[data-timeline-back]").click(); await settleChart(page);
+            check(await viewStart() === liveStart && await page.locator("[data-timeline-back]").count() === 0, `${tag}: the return control did not bring the window back`);
+          } finally { await A.context.close(); }
+
+          // 6. Seat panel expanded on desktop: a minimum chart height, the page scrolls under the panel.
+          if (!phone) {
+            const stored = { view: "timeline", hours: 24, expanded: { ...Object.fromEntries(Array.from({ length: 28 }, (_, index) => [idOf(index + 1), false])), ...GROUP_KEYS } };
+            const B = await openManager(browser, served.base, { width, height, lang, theme, seat: true, stored });
+            try {
+              const { page, pageErrors } = B;
+              const frame = frameOf(page, pageErrors);
+              await page.locator("[data-timeline-task]").first().waitFor(); await settleChart(page);
+              await frame("seat-top", undefined, false);
+              const measures = () => page.evaluate(() => {
+                const frameBox = document.querySelector<HTMLElement>(".board-frame")!.getBoundingClientRect(), pageBox = document.querySelector<HTMLElement>(".kb-page")!;
+                const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!;
+                const strip = document.querySelector<HTMLElement>(".seat-return")?.getBoundingClientRect() ?? null;
+                const overlap = strip ? Math.max(0, Math.min(strip.bottom, frameBox.bottom) - Math.max(strip.top, frameBox.top)) : 0;
+                return { frame: frameBox.height, frameBottom: frameBox.bottom, pageScrolls: pageBox.scrollHeight - pageBox.clientHeight, pageTop: pageBox.scrollTop, chartViewport: scroller.clientHeight, innerHeight, stripOverlap: overlap };
+              });
+              const atTop = await measures();
+              check(atTop.frame >= 439, `${tag}: the chart frame is ${atTop.frame}px beside the seat panel`);
+              check(atTop.pageScrolls > 0, `${tag}: the page does not scroll under the seat panel`);
+              check(atTop.chartViewport >= 150, `${tag}: only ${atTop.chartViewport}px of rows beside the seat panel`);
+              await page.evaluate(() => { const pageBox = document.querySelector<HTMLElement>(".kb-page")!; pageBox.scrollTop = pageBox.scrollHeight; });
+              await settleChart(page);
+              await frame("seat-page-end");
+              await page.evaluate(() => { const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!; scroller.scrollTop = scroller.scrollHeight; });
+              await frame("seat-chart-end");
+              const atEnd = await measures();
+              check(atEnd.frameBottom <= atEnd.innerHeight + 1 && atEnd.stripOverlap <= 1, `${tag}: the chart's end is cut by the window (${atEnd.frameBottom} of ${atEnd.innerHeight}) or covered by the return strip (${atEnd.stripOverlap}px)`);
+              // Every row is reachable: step the chart from its top to its end and collect the whole rows it shows.
+              const scrollerOf = page.locator("[data-timeline-scroll]");
+              await scrollerOf.evaluate(element => { element.scrollTop = 0; });
+              const seen = new Set<string>(); let previous = -1;
+              for (let step = 0; step < 40; step++) {
+                const state = await scrollerOf.evaluate(element => {
+                  const box = element.getBoundingClientRect(), axis = element.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
+                  const ids = [...element.querySelectorAll<HTMLElement>(".bt-row")].filter(row => { const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + element.clientHeight + 1; })
+                    .map(row => row.getAttribute("data-timeline-task") ?? row.getAttribute("data-timeline-attempt") ?? row.getAttribute("data-timeline-group-row") ?? `fold:${row.getAttribute("data-timeline-fold")}`);
+                  const before = element.scrollTop; element.scrollTop += element.clientHeight - 60;
+                  return { ids, before, after: element.scrollTop };
+                });
+                state.ids.forEach(id => seen.add(id));
+                await settleChart(page);
+                if (state.before === previous && state.after === state.before) break;
+                previous = state.before;
+              }
+              const allRows = await readRows(page);
+              check(seen.size === allRows.length, `${tag}: ${seen.size} of ${allRows.length} rows reached beside the seat panel`);
+            } finally { await B.context.close(); }
+          }
+        }
+      }
+    } finally {
+      fs.writeFileSync(path.join(evidence, "readings.json"), JSON.stringify({ now: MANAGER_NOW, failures, readings }, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 3_000_000);
+
+  /*
+   * The seven defects the installed-version check found (docs/design/board-timeline-manager-view.md §20), each on the
+   * fixture shape that reproduces it: an open stage with no agent (task 10), a recent overdue task among those waiting
+   * for the operator (22), an agent with seconds in its elapsed time (26) and one with no known start (27), and a due
+   * date on the window's right edge (25). Frames: $LLV_EVIDENCE_DIR/board-timeline-waiting/<width>-<lang>-<theme>-<state>.png.
+   */
+  managerTest("waiting reads as the thin line, overdue notes share one ink, minute durations, a live row without a start, the return control on the axis, the right-edge flag", async () => {
+    const { timelineWindow, HOUR } = await import("@/lib/board/taskTimelineView");
+    const out = path.join(os.tmpdir(), `llv-waiting-${process.pid}`); fs.mkdirSync(out, { recursive: true });
+    const evidence = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "board-timeline-waiting"); fs.mkdirSync(evidence, { recursive: true });
+    const edge = timelineWindow(MANAGER_NOW, 6, null).end;
+    const mutate = (spec: ManagerSpec): ManagerSpec => spec.n === 10 ? { ...spec, final: "running", lastBegin: 120 }
+      : spec.n === 22 ? { ...spec, due: -(24 * 60 + 46) / 3600 }
+        : spec.n === 25 ? { ...spec, due: (edge - MANAGER_NOW) / HOUR }
+          : spec.n === 26 ? { ...spec, agent: 0.5 + 39 / 3600 }
+            : spec.n === 27 ? { ...spec, startUnknown: true } : spec;
+    let current = await managerRecords("en", mutate);
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(current.payload), "/api/tasks": () => Response.json({ tasks: current.payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        current = await managerRecords(lang, mutate);
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+        for (const theme of ["light", "dark"] as const) for (const { width, height } of [{ width: 390, height: 844 }, { width: 1000, height: 700 }, { width: 1200, height: 800 }, { width: 1440, height: 900 }]) {
+          const tag = `${width}-${lang}-${theme}`;
+          if (process.env.LLV_TIMELINE_ONLY && !process.env.LLV_TIMELINE_ONLY.split(",").includes(tag)) continue;
+          const phone = width === 390;
+          const A = await openManager(browser, served.base, { width, height, lang, theme, seat: false, stored: { view: "board", hours: 24, expanded: {} } });
+          try {
+            const { page, pageErrors } = A;
+            const toggle = page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : "[data-board-timeline-toggle]");
+            await page.locator(phone ? '[data-phone-kanban-tab="timeline"]' : "[data-bar=\"project\"]").first().waitFor();
+            if (await toggle.isVisible()) await toggle.click();
+            else { await page.evaluate(() => { const key = "llv:board-timeline:v1:atlas"; localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key)!), view: "timeline" })); }); await page.reload(); }
+            const chart = page.locator("[data-board-timeline]"); await chart.waitFor();
+            await page.locator("[data-timeline-task]").first().waitFor();
+            await settleChart(page);
+            const scroller = page.locator("[data-timeline-scroll]");
+            const scaleButton = (name: "zoomIn" | "zoomOut") => page.getByRole("button", { name: t(`timeline.${name}`), exact: true });
+            const taskRow = (n: number) => page.locator(`[data-timeline-task="${idOf(n)}"]`);
+            // Bring a row to the top of the chart, under the pinned axis, so a frame shows it whole.
+            const show = async (selector: string) => {
+              await page.evaluate(sel => {
+                const scrollBox = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, row = document.querySelector<HTMLElement>(sel);
+                if (!row) return;
+                const axis = scrollBox.querySelector<HTMLElement>(".bt-axis")!.offsetHeight;
+                scrollBox.scrollTop = row.getBoundingClientRect().top - scrollBox.getBoundingClientRect().top + scrollBox.scrollTop - axis;
+              }, selector);
+              await settleChart(page);
+            };
+            const frame = async (state: string, strict = true) => {
+              await settleChart(page).catch(() => undefined);
+              const geometry = await timelineGeometry(chart);
+              await page.screenshot({ path: path.join(evidence, `${tag}-${state}.png`) });
+              readings.push({ name: `${tag}-${state}`, width, height, lang, theme, state, failures: geometry.failures, controls: geometry.controls.length });
+              check(pageErrors.length === 0, `${tag}-${state}: page errors ${pageErrors.join(" | ")}`);
+              if (strict) {
+                check(geometry.failures.length === 0, `${tag}-${state}: text cut by an edge: ${JSON.stringify(geometry.failures.slice(0, 5))}`);
+                check(geometry.controls.every(control => control.hit), `${tag}-${state}: a control is covered: ${JSON.stringify(geometry.controls.filter(control => !control.hit).map(control => control.text))}`);
+                for (const control of geometry.controls) check(control.width >= (phone ? 44 : 24) && control.height >= (phone ? 44 : 24), `${tag}-${state}: control ${control.text} is ${control.width}×${control.height}`);
+              }
+            };
+            // F1: every overdue note reads in the danger ink of an overdue due word; F3, F4: words and minutes.
+            const noteInk = async (state: string) => {
+              const ink = await page.evaluate(() => {
+                const probe = document.createElement("i"); probe.style.color = "var(--color-danger)"; document.body.append(probe);
+                const danger = getComputedStyle(probe).color; probe.remove();
+                const due = document.querySelector<HTMLElement>('[data-timeline-due="overdue"]');
+                const notes = [...document.querySelectorAll<HTMLElement>(".bt-overdue-note")].map(note => ({ text: note.textContent ?? "", color: getComputedStyle(note).color, weight: getComputedStyle(note).fontWeight }));
+                return { danger, due: due ? getComputedStyle(due).color : null, notes };
+              });
+              check(ink.notes.length >= 1, `${tag}-${state}: no overdue note on screen`);
+              for (const note of ink.notes) {
+                check(note.color === ink.danger && (ink.due === null || note.color === ink.due), `${tag}-${state}: note «${note.text}» is ${note.color}, danger ${ink.danger}, due word ${ink.due}`);
+                check(!note.text.includes(" · до "), `${tag}-${state}: ambiguous maximum in «${note.text}»`);
+                check(note.text.includes(t("timeline.group.overdue", { count: 0, duration: "" }).split("·")[1]!.trim().split(" ")[0]!), `${tag}-${state}: note «${note.text}» lacks the maximum word`);
+              }
+              return ink.notes.map(note => note.text);
+            };
+            const noSeconds = async (state: string) => {
+              const texts = await page.evaluate(() => { const root = document.querySelector<HTMLElement>("[data-board-timeline]")!;
+                return [root.innerText, ...[...root.querySelectorAll<HTMLElement>("[title]")].map(node => node.title)]; });
+              const seconds = lang === "uk" ? /\d+\s?с(?![\p{L}])/u : /\d+s\b/;
+              for (const text of texts) check(!seconds.test(text), `${tag}-${state}: seconds in «${text.slice(0, 120)}»`);
+            };
+            // F5: the live mark of task 27 stands on the now line and claims no duration.
+            const liveMarks = (state: string, count: number, scope = taskRow(27)) => scope.evaluate((row, expected) => {
+              const marks = [...row.querySelectorAll<HTMLElement>("[data-timeline-live]")];
+              const now = row.querySelector<HTMLElement>(".bt-lane .bt-now");
+              const lane = row.querySelector<HTMLElement>(".bt-lane");
+              if (!now || !lane) return `no now line (${marks.length} marks)`;
+              const nowX = now.getBoundingClientRect().left;
+              const bad = marks.filter(mark => Math.abs(mark.getBoundingClientRect().right - nowX) > 1 || mark.getBoundingClientRect().width > 10.5);
+              return marks.length === expected && !bad.length && !row.querySelector("[data-timeline-segment]") && !row.querySelector("[data-timeline-line]") ? "" : `${marks.length} marks (${expected} expected), ${bad.length} off the now line or wide, ${row.querySelectorAll("[data-timeline-segment]").length} segments`;
+            }, count).then(problem => check(problem === "", `${tag}-${state}: task 27 live mark: ${problem}`));
+            const rowsOf = (rows: ManagerRow[], n: number) => rows.find(row => row.task === idOf(n))!;
+
+            // 1. Fresh storage: collapsed, groups closed.
+            let rows = await readRows(page);
+            const notesClosed = await noteInk("default");
+            check(notesClosed.length >= 3, `${tag}-default: ${notesClosed.length} overdue notes, the header and two closed groups expected`);
+            await noSeconds("default");
+            const r27 = rowsOf(rows, 27), r26 = rowsOf(rows, 26);
+            check(r27.since === t("timeline.startUnknown") && r27.line === 0 && r27.segments === 0, `${tag}-default: task 27 reads «${r27.since}», line ${r27.line}, segments ${r27.segments}`);
+            check(!r27.label.includes(t("timeline.elapsed", { duration: "" }).trim()) && r27.label.includes(t("mobile2.kanban.agents", { count: 1 })) && r27.label.includes(t("kanban.graphState.running")), `${tag}-default: task 27 label «${r27.label}»`);
+            await liveMarks("default", 1);
+            check((r26.since ?? "").endsWith(` · ${lang === "uk" ? "30 хв" : "30m"}`), `${tag}-default: task 26 reads «${r26.since}»`);
+            check(await page.locator("[data-flag-head=\"left\"]").count() === 0, `${tag}-default: a flag inside the lane points its head left`);
+            const restAxis = await page.locator(".bt-axis").evaluate(axis => axis.getBoundingClientRect().height);
+            await show('[data-timeline-task="mgr-task-27"]');
+            await frame("default");
+
+            // 2. «Waiting for you» open: the recent overdue task, in minutes.
+            await page.locator('[data-timeline-group-row="needs-you"] button').click(); await settleChart(page);
+            rows = await readRows(page);
+            const r22 = rowsOf(rows, 22);
+            check(r22.due[0]?.tone === "overdue" && r22.due[0].words.includes(t("timeline.overdueBy", { duration: lang === "uk" ? "24 хв" : "24m" })), `${tag}-needs-open: task 22 reads «${r22.due[0]?.words}»`);
+            await noteInk("needs-open"); await noSeconds("needs-open");
+            await show('[data-timeline-task="mgr-task-22"]');
+            await frame("needs-open");
+
+            // 3. «Stopped» open, its nested line closed: the note leads the nested row's meta.
+            await page.locator('[data-timeline-group-row="still"] button').click(); await settleChart(page);
+            await noteInk("still-open"); await noSeconds("still-open");
+            const nested = await page.locator('[data-timeline-group-row="still-long"] .bt-overdue-note').count();
+            check(nested === 1, `${tag}-still-open: the nested line carries ${nested} overdue notes`);
+            await page.locator('[data-timeline-group-row="still-long"] button').click(); await settleChart(page);
+            // Task 23's work ends with its observed turn (12 min ago); the thin line goes on to the clock.
+            const ends23 = await taskRow(23).locator("[data-timeline-segment]").evaluateAll(nodes => nodes.map(node => Number((node as HTMLElement).dataset.endMs)));
+            check(ends23.length > 0 && Math.max(...ends23) === MANAGER_NOW - 12 * 60_000, `${tag}-still-open: task 23 work ends ${JSON.stringify(ends23.slice(-2))}, expected ${MANAGER_NOW - 12 * 60_000}`);
+            await show('[data-timeline-group-row="still"]');
+            await frame("still-open");
+
+            // 4. Waiting: task 10 open. No thick segment of its idle open stage reaches the clock at 1 day, 3 days or 1 week.
+            const waiting = async (state: string, hours: number, ticks: number) => {
+              const segs = await taskRow(10).locator("[data-timeline-segment]").evaluateAll(nodes => nodes.map(node => { const el = node as HTMLElement; return { tick: "timelineTick" in el.dataset, start: Number(el.dataset.startMs), end: el.dataset.endMs ? Number(el.dataset.endMs) : null }; }));
+              check(segs.every(segment => segment.tick || segment.end! < MANAGER_NOW - 100 * HOUR), `${tag}-${state}: task 10 draws work past its last turn: ${JSON.stringify(segs)}`);
+              check(segs.filter(segment => segment.tick).length === ticks, `${tag}-${state}: task 10 ticks ${segs.filter(segment => segment.tick).length}, expected ${ticks} at ${hours} h`);
+            };
+            await taskRow(10).locator("[data-timeline-expand]").click(); await settleChart(page);
+            await waiting("expanded-waiting", 24, 0);
+            const stageRows10 = await page.evaluate(id => { const out: { ticks: number; bar: boolean; live: number }[] = [];
+              for (let row = document.querySelector(`[data-timeline-task="${id}"]`)!.nextElementSibling; row && row.hasAttribute("data-timeline-attempt"); row = row.nextElementSibling) out.push({ ticks: row.querySelectorAll("[data-timeline-tick]").length, bar: !!row.querySelector("[data-timeline-bar]"), live: row.querySelectorAll("[data-timeline-live]").length });
+              return out; }, idOf(10));
+            check(stageRows10.every(row => row.ticks === 0 && row.live === 0), `${tag}-expanded-waiting: stage rows ${JSON.stringify(stageRows10)}`);
+            await show('[data-timeline-task="mgr-task-10"]');
+            await frame("expanded-waiting");
+
+            // 5. A live row without a start, opened: the agent's stage row carries the mark and the unknown elapsed word.
+            await taskRow(27).locator("[data-timeline-expand]").click(); await settleChart(page);
+            const stage27 = await page.evaluate(id => { const row = document.querySelector(`[data-timeline-task="${id}"]`)!.nextElementSibling!; return { attempt: row.hasAttribute("data-timeline-attempt"), text: row.querySelector(".bt-label")?.textContent ?? "", marks: row.querySelectorAll("[data-timeline-live]").length }; }, idOf(27));
+            check(stage27.attempt && stage27.marks === 1 && stage27.text.includes(t("timeline.elapsed", { duration: t("timeline.unknownTime") })), `${tag}-expanded-live: stage row ${JSON.stringify(stage27)}`);
+            await show('[data-timeline-task="mgr-task-27"]');
+            await frame("expanded-live");
+            await taskRow(27).locator("[data-timeline-expand]").click(); await settleChart(page);
+
+            // 6. A running stage: its segment ends on the now line.
+            await taskRow(17).locator("[data-timeline-expand]").click(); await settleChart(page);
+            const live17 = await taskRow(17).locator("[data-timeline-segment]").evaluateAll(nodes => nodes.map(node => Number((node as HTMLElement).dataset.endMs)));
+            check(live17.length > 0 && live17.at(-1) === MANAGER_NOW, `${tag}-running: task 17 last segment ends ${live17.at(-1)}, clock ${MANAGER_NOW}`);
+            await show('[data-timeline-task="mgr-task-17"]');
+            await frame("running");
+            await taskRow(17).locator("[data-timeline-expand]").click(); await settleChart(page);
+
+            // 7. Zooms: 3 days and 1 week keep the waiting line, the mark and the notes; 6 hours puts the due flag on the edge.
+            await scaleButton("zoomOut").click(); await settleChart(page);
+            await liveMarks("zoom-3d", 1); await waiting("zoom-3d", 72, 0); await noteInk("zoom-3d"); await noSeconds("zoom-3d");
+            await show('[data-timeline-task="mgr-task-10"]'); await frame("zoom-3d");
+            await scaleButton("zoomOut").click(); await settleChart(page);
+            await liveMarks("zoom-1w", 1); await waiting("zoom-1w", 168, 1); await noteInk("zoom-1w"); await noSeconds("zoom-1w");
+            await show('[data-timeline-task="mgr-task-10"]'); await frame("zoom-1w");
+            for (let step = 0; step < 4; step++) { await scaleButton("zoomIn").click(); await settleChart(page); }
+            await liveMarks("zoom-6h", 1); await noteInk("zoom-6h"); await noSeconds("zoom-6h");
+            const flag = await taskRow(25).evaluate(row => { const lane = row.querySelector<HTMLElement>(".bt-lane")!.getBoundingClientRect(), pole = row.querySelector<HTMLElement>("[data-timeline-flag]")!;
+              const box = pole.getBoundingClientRect(), words = row.querySelector<HTMLElement>("[data-timeline-due]")!.getBoundingClientRect();
+              return { inside: box.left >= lane.left - 0.01 && box.right <= lane.right + 0.01, head: pole.dataset.flagHead ?? null, wordsInside: words.left >= lane.left - 1 && words.right <= lane.right + 1 }; });
+            check(flag.inside && flag.head === "left" && flag.wordsInside, `${tag}-zoom-6h: task 25 flag ${JSON.stringify(flag)}`);
+            await show('[data-timeline-task="mgr-task-25"]');
+            await frame("zoom-6h");
+            for (let step = 0; step < 2; step++) { await scaleButton("zoomOut").click(); await settleChart(page); }
+
+            // 8. Paged back: the axis keeps its height and the return control sits inside it, over no label.
+            await page.reload(); await chart.waitFor(); await page.locator("[data-timeline-task]").first().waitFor(); await settleChart(page);
+            const viewStart = () => scroller.getAttribute("data-view-start").then(Number);
+            const liveStart = await viewStart();
+            await taskRow(1).locator("[data-timeline-expand]").click(); await settleChart(page);
+            await page.locator(`[data-timeline-fold="${idOf(1)}"] [data-timeline-fold-expand]`).click(); await settleChart(page);
+            const earlier = page.locator(".bt-earlier").first();
+            await earlier.scrollIntoViewIfNeeded(); await earlier.click(); await settleChart(page);
+            check(await viewStart() < liveStart && await page.locator("[data-timeline-back]").count() === 1, `${tag}-paged: paging did not move the window back`);
+            const axisNow = () => page.evaluate(() => {
+              const axis = document.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect(), back = document.querySelector<HTMLElement>("[data-timeline-back]")?.getBoundingClientRect() ?? null;
+              const scrollBox = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, edge = scrollBox.getBoundingClientRect().left + scrollBox.clientWidth, range = document.createRange();
+              const labels = [...document.querySelectorAll<HTMLElement>(".bt-axis .bt-tick, .bt-axis .bt-day")].map(label => { range.selectNodeContents(label); const box = range.getBoundingClientRect(); return { left: box.left, right: box.right, top: box.top, bottom: box.bottom }; });
+              return { height: axis.height, back: back && { left: back.left, right: back.right, top: back.top, bottom: back.bottom, width: back.width, height: back.height }, axis: { top: axis.top, bottom: axis.bottom, left: axis.left, right: axis.right },
+                labels: labels.length, covered: back ? labels.filter(box => box.left < back.right && box.right > back.left && box.top < back.bottom && box.bottom > back.top).length : 0, cut: labels.filter(box => box.right > edge + 0.5).length };
+            });
+            const pagedAxis = await axisNow();
+            check(Math.abs(pagedAxis.height - restAxis) <= 0.5, `${tag}-paged: the axis is ${pagedAxis.height}px paged and ${restAxis}px at rest`);
+            check(!!pagedAxis.back && pagedAxis.back.left >= pagedAxis.axis.left - 0.5 && pagedAxis.back.right <= pagedAxis.axis.right + 0.5 && pagedAxis.back.top >= pagedAxis.axis.top - 0.5 && pagedAxis.back.bottom <= pagedAxis.axis.bottom + 0.5, `${tag}-paged: the return control lies outside the axis ${JSON.stringify(pagedAxis)}`);
+            check(pagedAxis.labels >= 2 && pagedAxis.covered === 0 && pagedAxis.cut === 0, `${tag}-paged: axis has ${pagedAxis.labels} labels, ${pagedAxis.covered} under the return control, ${pagedAxis.cut} cut`);
+            check(!!pagedAxis.back && pagedAxis.back.height >= (phone ? 44 : 24) - 0.5 && pagedAxis.back.width >= (phone ? 44 : 24), `${tag}-paged: the return control is ${pagedAxis.back?.width}×${pagedAxis.back?.height}`);
+            check((await chart.locator("[data-timeline-back]").innerText()).includes(t("timeline.now")), `${tag}-paged: the return control lacks the now label`);
+            await page.locator("[data-timeline-back]").focus();
+            check(await page.evaluate(() => document.activeElement?.hasAttribute("data-timeline-back") === true), `${tag}-paged: keyboard focus does not reach the return control`);
+            await page.locator(`[data-timeline-task="${idOf(1)}"]`).scrollIntoViewIfNeeded();
+            await frame("paged");
+            await page.locator("[data-timeline-back]").click(); await settleChart(page);
+            check(await viewStart() === liveStart && await page.locator("[data-timeline-back]").count() === 0, `${tag}-back-to-now: the window did not return`);
+            const backAxis = await axisNow();
+            check(Math.abs(backAxis.height - restAxis) <= 0.5, `${tag}-back-to-now: the axis is ${backAxis.height}px, ${restAxis}px at rest`);
+            await frame("back-to-now");
+          } catch (error) { failures.push(`${tag}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          } finally { await A.context.close(); }
+        }
+      }
+    } finally {
+      fs.writeFileSync(path.join(evidence, "readings.json"), JSON.stringify({ now: MANAGER_NOW, failures, readings }, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 3_000_000);
+
+  /*
+   * Rows per screen and heights, on the fixture above with every task collapsed and every group open (all 28 tasks listed).
+   * `LLV_TIMELINE_DENSITY_LABEL=before` records the same readings on the base, where the chart has no groups: the whole
+   * file is copied there and `LLV_TIMELINE_DENSITY_ONLY=1` skips the cases that need the new chart.
+   */
+  browserTest("rows per screen and heights at 390, 1024 and 1440 hold or improve on the base", async () => {
+    const label = process.env.LLV_TIMELINE_DENSITY_LABEL ?? "after";
+    const out = path.join(os.tmpdir(), `llv-density-${process.pid}`); fs.mkdirSync(out, { recursive: true });
+    const evidence = evidenceDirectory(); fs.mkdirSync(evidence, { recursive: true });
+    let current = await managerRecords("en");
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(current.payload), "/api/tasks": () => Response.json({ tasks: current.payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const result: Record<string, { rows: number; taskRows: number; taskMedian: number; taskMax: number; head: number; chartHeight: number; tall?: string[] }> = {};
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        current = await managerRecords(lang);
+        for (const theme of ["light", "dark"] as const) for (const { width, height } of [SIZES[0]!, SIZES[2]!, SIZES[4]!]) {
+          const stored = { view: "timeline", hours: 24, expanded: { ...Object.fromEntries(Array.from({ length: 28 }, (_, index) => [idOf(index + 1), false])), ...GROUP_KEYS } };
+          const { page, context } = await openManager(browser, served.base, { width, height, lang, theme, seat: false, stored });
+          try {
+            await page.locator("[data-timeline-task]").first().waitFor(); await settleChart(page);
+            await page.evaluate(() => { document.querySelector<HTMLElement>("[data-timeline-scroll]")!.scrollTop = 0; });
+            await settleChart(page);
+            const reading = await page.evaluate(() => {
+              const scroller = document.querySelector<HTMLElement>("[data-timeline-scroll]")!, box = scroller.getBoundingClientRect(), axis = scroller.querySelector<HTMLElement>(".bt-axis")!.getBoundingClientRect().bottom;
+              const all = [...scroller.querySelectorAll<HTMLElement>(".bt-row")];
+              const whole = all.filter(row => { const rect = row.getBoundingClientRect(); return rect.top >= axis - 1 && rect.bottom <= box.top + scroller.clientHeight + 1; });
+              const tasks = all.filter(row => row.hasAttribute("data-timeline-task")).map(row => row.getBoundingClientRect().height).sort((a, b) => a - b);
+              return { rows: whole.length, taskRows: whole.filter(row => row.hasAttribute("data-timeline-task")).length, taskMedian: tasks[Math.floor(tasks.length / 2)]!, taskMax: tasks.at(-1)!, tall: all.filter(row => row.hasAttribute("data-timeline-task") && row.getBoundingClientRect().height > 67).map(row => `${row.getAttribute("data-timeline-task")}:${Math.round(row.getBoundingClientRect().height)}`),
+                head: document.querySelector<HTMLElement>(".bt-head")!.getBoundingClientRect().height, chartHeight: scroller.clientHeight, total: all.length, tasks: tasks.length };
+            });
+            expect(reading.tasks).toBe(28);
+            result[`${width}-${lang}-${theme}`] = reading;
+            await page.screenshot({ path: path.join(evidence, `density-${label}-${width}-${lang}-${theme}.png`) });
+          } finally { await context.close(); }
+        }
+      }
+    } finally {
+      fs.writeFileSync(path.join(evidence, `density-${label}.json`), JSON.stringify({ label, now: MANAGER_NOW, conditions: "seat folded, 1 day, every task collapsed, every group open", readings: result }, null, 2) + "\n");
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    if (label === "after") {
+      for (const [name, reading] of Object.entries(result)) {
+        const width = Number(name.split("-")[0]);
+        expect(reading.taskMax).toBeLessThanOrEqual(width === 390 ? 91 : 67);
+        expect(reading.head).toBeLessThanOrEqual(width === 390 ? 100 : width === 1024 ? 60 : 45);
+      }
+      const beforeFile = path.join(evidence, "density-before.json");
+      if (fs.existsSync(beforeFile)) {
+        const before = JSON.parse(fs.readFileSync(beforeFile, "utf8")).readings as typeof result;
+        for (const [name, reading] of Object.entries(result)) {
+          expect(reading.taskRows).toBeGreaterThanOrEqual(before[name]!.taskRows);
+          expect(reading.taskMedian).toBeLessThanOrEqual(before[name]!.taskMedian + 0.5);
+          expect(reading.taskMax).toBeLessThanOrEqual(before[name]!.taskMax + 0.5);
+          expect(reading.head).toBeLessThanOrEqual(before[name]!.head + 0.5);
+        }
+      }
+    }
+  }, 900_000);
+});
+
+/*
+ * Attempt rows of the chart open their conversation and say how long the agent worked
+ * (Build 7 … Build 11 of one stage: a 25-hour calendar span that holds under an hour of turns,
+ * a stage whose transcript cannot be read, and one working now). The work-time route answers from
+ * the table below, never from the chart; the expectations read the same table.
+ */
+describe("board timeline attempt rows: open the conversation, show real working time", () => {
+  const NOW = Date.parse("2026-11-22T10:30:00Z");
+  const H = 3_600_000, MIN = 60_000;
+  const ago = (hours: number) => NOW - hours * H;
+  // Attempt number → calendar span in hours before the clock, and the turn windows its transcript holds (null: no readable transcript).
+  const ATTEMPTS: Array<{ n: number; from: number; to: number | null; turns: Array<[number, number | null]> | null }> = [
+    { n: 7, from: 53, to: 51, turns: [[52.9, 52.5], [52.2, 51.9]] },
+    { n: 8, from: 49, to: 23.9, turns: [[48.9, 48.65], [30, 29.5], [24.2, 24]] },
+    { n: 9, from: 22, to: 19, turns: null },
+    { n: 10, from: 17, to: 8, turns: [[16.9, 12.4], [11, 9.5]] },
+    { n: 11, from: 1.5, to: null, turns: [[1.4, null]] },
+  ];
+  const workMs = (spec: (typeof ATTEMPTS)[number]) => spec.turns?.reduce((sum, [from, to]) => sum + (ago(to ?? 0) - ago(from)), 0) ?? null;
+  const conversationOf = (n: number) => `conversation_build_${n}`;
+
+  async function records(lang: "en" | "uk") {
+    const { buildPipeline } = await import("@/lib/pipelines/store");
+    const { pipelineRoleLookup, resolvePipelineRole } = await import("@/lib/pipelines/roles");
+    const { filesReadSummary } = await import("@/lib/filesReadSummary");
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const title = lang === "uk" ? "Графік: рядки спроб відкривають розмову" : "Chart: attempt rows open the conversation";
+    const role = { roleId: "builder" as const };
+    const resolved = resolvePipelineRole({ role, engine: "codex", model: "gpt-6.2-astra", effort: "high", access: "read-write" }, "run", pipelineRoleLookup);
+    if (!resolved.role) throw new Error(resolved.error);
+    const lane = buildPipeline({ id: "attempt-lane", task: title, taskIds: ["attempt-task"], project: "atlas", repoDir: "/fixture/atlas", srcPath: null, srcConversationId: null, now: iso(ago(54)),
+      stages: [{ id: "build", kind: "run", role, effectiveRole: resolved.role, next: null, prompt: "{{task}}" }] });
+    lane.state = "running"; lane.createdAt = iso(ago(54));
+    lane.cursor = { stageId: "build", state: "running", input: null, activatedBy: null };
+    const file = { path: "/fixture/build-11.jsonl", conversationId: conversationOf(11), project: "atlas", projectName: "Atlas", root: "codex-sessions", name: "build-11.jsonl", title: "Build 11", kind: "session", fmt: "codex",
+      parent: null, engine: "codex", model: "gpt-6.2-astra", mtime: NOW / 1000, size: 100, proc: "running", activity: "live", pendingQuestion: null, waitingInput: null,
+      lastTurn: { startedAt: ago(1.4), endedAt: null }, agentActivity: { lastRecordAt: NOW, checking: false, check: null } } as unknown as FileEntry;
+    for (const spec of ATTEMPTS) {
+      lane.runs[0]!.attempts.push({ n: spec.n, state: spec.to === null ? "running" : "passed", effectiveRole: structuredClone(resolved.role), launchId: null, conversationId: conversationOf(spec.n), sessionId: null,
+        agentPath: `/fixture/build-${spec.n}.jsonl`, paneId: null, flowId: null, startedAt: iso(ago(spec.from)), completedAt: spec.to === null ? null : iso(ago(spec.to)), input: null, output: null, activatedBy: null, verdict: null, error: null } as unknown as Pipeline["runs"][number]["attempts"][number]);
+    }
+    const task = { id: "attempt-task", project: "atlas", text: title, status: "assigned", placement: "unplaced", createdAt: iso(ago(55)), updatedAt: iso(ago(1)),
+      dueAt: iso(NOW + 8 * H), dueTz: "UTC", assignments: [{ path: file.path, conversationId: file.conversationId, panePid: null, state: "linked", error: null, at: iso(ago(1.5)) }] } as unknown as BoardTask;
+    return { payload: { ...filesReadSummary([], [lane]), files: [file], tasks: [task], pipelines: [lane], flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 1, smt: NOW / 1000 }], projectCwds: { atlas: "/fixture/atlas" } }, task, lane };
+  }
+
+  browserTest("a stage row opens its conversation, and its working time is the sum of its turns, with the calendar span labelled apart; 1440 and 390, uk and en", async () => {
+    const { timelineDuration } = await import("@/lib/board/taskTimelineView");
+    const out = path.join(os.tmpdir(), `llv-attempt-rows-${process.pid}`); fs.mkdirSync(out, { recursive: true });
+    const evidence = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "board-timeline-attempt-rows"); fs.mkdirSync(evidence, { recursive: true });
+    let current = await records("en");
+    const asked: string[] = [];
+    const served = await serveEvidenceFixture(out, undefined, {
+      "/api/files": () => Response.json(current.payload),
+      "/api/tasks": () => Response.json({ tasks: current.payload.tasks }),
+      "/api/board/work-time": (request: Request) => {
+        const id = new URL(request.url).searchParams.get("conversationId") ?? "";
+        asked.push(id);
+        const spec = ATTEMPTS.find(candidate => conversationOf(candidate.n) === id);
+        const work = spec?.turns ? { windows: spec.turns.map(([from, to]) => [ago(from), to === null ? null : ago(to)]), lastRecordAt: NOW, complete: true } : null;
+        return Response.json({ work: { [id]: work } });
+      },
+    });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const failures: string[] = [];
+    const readings: unknown[] = [];
+    const check = (ok: boolean, detail: string) => { if (!ok) failures.push(detail); };
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        current = await records(lang);
+        const t = (key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+        for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+          const tag = `${width}-${lang}-${theme}`;
+          const phone = width === 390;
+          asked.length = 0;
+          const opened = await openFixture(browser, "about:blank", { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone, 1, new Date(NOW));
+          const { page, context, pageErrors } = opened;
+          try {
+            await context.addInitScript(({ stored }) => {
+              localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: true }, placement: "top", height: null, width: null }));
+              localStorage.setItem("llv:board-timeline:v1:atlas", JSON.stringify(stored));
+            }, { stored: { view: "timeline", hours: 72, expanded: { "attempt-task": true } } });
+            await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+            await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+            await page.locator("[data-timeline-attempt]").first().waitFor();
+            await page.waitForFunction(() => document.querySelectorAll("[data-timeline-work-time='loading']").length === 0);
+            const rows = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-timeline-attempt]")].map(row => {
+              const label = row.querySelector<HTMLElement>(".bt-label")!, box = label.getBoundingClientRect();
+              const bar = row.querySelector<HTMLElement>("[data-timeline-bar]");
+              const work = [...row.querySelectorAll<HTMLElement>("[data-timeline-work]")].reduce((sum, node) => sum + node.offsetWidth, 0);
+              return { key: row.dataset.timelineAttempt!, openable: row.dataset.openable ?? null, role: label.getAttribute("role"), tabindex: label.tabIndex, height: box.height, width: box.width,
+                work: row.querySelector("[data-timeline-work-time]")?.textContent ?? "", state: row.querySelector("[data-timeline-work-time]")?.getAttribute("data-timeline-work-time") ?? "",
+                wall: row.querySelector("[data-timeline-wall]")?.textContent ?? "", fills: row.querySelectorAll("[data-timeline-work]").length, fillWidth: work, barWidth: bar?.offsetWidth ?? 0 };
+            }));
+            check(rows.length === ATTEMPTS.length, `${tag}: ${rows.length} attempt rows, ${ATTEMPTS.length} expected`);
+            for (const [index, spec] of ATTEMPTS.entries()) {
+              const row = rows[index];
+              if (!row) continue;
+              const ms = workMs(spec);
+              const expectedWork = ms === null ? t("timeline.workUnknown") : t("timeline.worked", { duration: timelineDuration(ms, lang, t as never) });
+              check(row.work === expectedWork, `${tag}: attempt ${spec.n} work «${row.work}», expected «${expectedWork}»`);
+              check(row.state === (ms === null ? "unknown" : "known"), `${tag}: attempt ${spec.n} state ${row.state}`);
+              const wall = t("timeline.elapsed", { duration: spec.to === null ? timelineDuration(NOW - ago(spec.from), lang, t as never) : timelineDuration((spec.from - spec.to) * H, lang, t as never) });
+              check(row.wall === wall, `${tag}: attempt ${spec.n} calendar span «${row.wall}», expected «${wall}»`);
+              check(!row.wall.includes(t("timeline.worked", { duration: "" }).trim()) && !row.work.includes(t("timeline.elapsed", { duration: "" }).trim()), `${tag}: attempt ${spec.n} mixes the two figures`);
+              check(row.openable === "1" && row.role === "button" && row.tabindex === 0, `${tag}: attempt ${spec.n} is not a control (${row.openable}, ${row.role}, ${row.tabindex})`);
+              check(row.height >= (phone ? 44 : 24), `${tag}: attempt ${spec.n} target ${row.width}×${row.height}`);
+              check(ms === null ? row.fills === 0 : row.fills > 0, `${tag}: attempt ${spec.n} draws ${row.fills} work fills`);
+              // The fill is the turn time, not the calendar span: a 25 h attempt of under an hour of turns fills a sliver of its bar.
+              if (spec.n === 8) check(row.barWidth > 0 && row.fillWidth / row.barWidth < 0.1, `${tag}: attempt 8 fill ${row.fillWidth} of ${row.barWidth}`);
+            }
+            check(ATTEMPTS.every(spec => asked.includes(conversationOf(spec.n))), `${tag}: work-time asked for ${asked.join(",")}`);
+            const geometry = await timelineGeometry(page.locator("[data-board-timeline]"));
+            check(geometry.failures.length === 0, `${tag}: text cut by an edge: ${JSON.stringify(geometry.failures.slice(0, 5))}`);
+            check(pageErrors.length === 0, `${tag}: page errors ${pageErrors.join(" | ")}`);
+            const scroller = page.locator("[data-timeline-scroll]");
+            await page.screenshot({ path: path.join(evidence, `${tag}-rows.png`) });
+            // Every row shows its open cue at rest, and on a desktop all five rows are one height (the calendar span stays on the meta line; the phone sets name and state on one line).
+            const cues = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-timeline-attempt]")].map(row => {
+              const cue = row.querySelector<SVGElement>("[data-timeline-open-cue]"), box = cue?.getBoundingClientRect(), name = row.querySelector(".bt-stage-name span")!.getBoundingClientRect();
+              return { shown: !!box && box.width > 0 && box.height > 0, afterName: !!box && box.left >= name.right - 0.5, height: row.querySelector(".bt-label")!.getBoundingClientRect().height };
+            }));
+            check(cues.length === ATTEMPTS.length && cues.every(cue => cue.shown && cue.afterName), `${tag}: open cue at rest ${JSON.stringify(cues)}`);
+            check(phone || new Set(cues.map(cue => Math.round(cue.height))).size === 1, `${tag}: stage row heights ${cues.map(cue => cue.height).join(",")}`);
+            // A hover tint (a pointer) and a pressed tint (any input) wash the row; the press ends off the row so it opens nothing.
+            const stage = scroller.locator(`[data-timeline-attempt*="9]"]`);
+            const tint = () => stage.evaluate(node => getComputedStyle(node).backgroundColor);
+            const rest = await tint();
+            if (!phone) {
+              await stage.hover();
+              const hovered = await tint();
+              check(hovered !== rest, `${tag}: hover leaves the row at ${hovered}`);
+              await page.screenshot({ path: path.join(evidence, `${tag}-hover.png`) });
+            }
+            const box = (await stage.boundingBox())!;
+            await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+            await page.mouse.down();
+            const pressed = await tint();
+            check(pressed !== rest, `${tag}: press leaves the row at ${pressed}`);
+            await page.screenshot({ path: path.join(evidence, `${tag}-pressed.png`) });
+            await page.mouse.move(box.x + box.width / 2, Math.max(1, box.y - 40));
+            await page.mouse.up();
+            await page.mouse.move(1, 1);
+            // The legend names the outline as the stage's calendar span and the fill as the agent's working time, whole at this width.
+            const legend = page.locator(".bt-legend");
+            await legend.scrollIntoViewIfNeeded();
+            const legendRead = await legend.evaluate(node => {
+              const range = document.createRange(); range.selectNodeContents(node);
+              const box = range.getBoundingClientRect(), host = node.getBoundingClientRect();
+              return { text: node.textContent ?? "", whole: box.left >= host.left - 0.5 && box.right <= host.right + 0.5 && box.right <= window.innerWidth && box.bottom <= window.innerHeight + 0.5 };
+            });
+            check(legendRead.text === t("timeline.legend"), `${tag}: legend «${legendRead.text}»`);
+            check(legendRead.text.includes(lang === "uk" ? "товста лінія — етапи йшли (календарний час)" : "Thick line: stages ran (calendar time)"), `${tag}: legend does not name the thick task segment`);
+            check(legendRead.whole, `${tag}: legend cut by an edge`);
+            await legend.screenshot({ path: path.join(evidence, `${tag}-legend.png`) });
+            readings.push({ name: tag, rows, legend: legendRead, failures: geometry.failures });
+            // A tap on a bar opens the conversation the attempt recorded (no card holds it, so the board addresses it by its link).
+            await scroller.locator(`[data-timeline-attempt*="8]"] [data-timeline-bar]`).click();
+            await page.waitForFunction(id => decodeURIComponent(location.hash).includes(id), conversationOf(8));
+            await page.screenshot({ path: path.join(evidence, `${tag}-opened-recorded.png`) });
+            await page.evaluate(() => { location.hash = "#p=atlas"; });
+            // The live attempt's conversation is on the board: its window opens, and the keyboard does the same.
+            await page.locator(`[data-timeline-attempt*="11]"] .bt-label`).focus();
+            await page.keyboard.press("Enter");
+            // The board holds this conversation, so it opens it itself (the agent window on a desktop, the phone's own surface otherwise).
+            await page.waitForFunction(id => document.body.outerHTML.includes(id), conversationOf(11));
+            await page.waitForTimeout(600);
+            await page.screenshot({ path: path.join(evidence, `${tag}-opened-live.png`) });
+          } catch (error) {
+            failures.push(`${tag}: ${error instanceof Error ? error.message : String(error)}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(evidence, "readings.json"), JSON.stringify(readings, null, 1));
+    } finally {
+      await browser.close(); if (fd !== null) fs.closeSync(fd); served.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
+/* The «Графік» toggle is the last segment of the header's panel group: Orchestrator, the recent
+   agents' clock and the chart read as one segmented control, pressed or not. Every frame is the
+   header at the exact width, in both languages and themes, with the chart shown and hidden, and
+   after a click (the focus the press leaves). The readings compare the segments' own computed
+   height, radius, border and fill. `LLV_HEADER_FRAMES_PHASE=before` names the frames of a run on
+   the base. */
+describe("board header chart toggle", () => {
+  const phase = process.env.LLV_HEADER_FRAMES_PHASE ?? "after";
+  const segmentReadings = (page: Page) => page.evaluate(() => {
+    const group = document.querySelector<HTMLElement>('.bar[data-bar="project"] [data-bar-group="panels"]');
+    if (!group) return null;
+    const chart = group.querySelector<HTMLElement>("[data-board-timeline-toggle]");
+    const segments = [group.querySelector<HTMLElement>("[data-orchestrator-toggle]"), group.querySelector<HTMLElement>("[data-bar-recent-toggle]"), chart];
+    const read = (node: HTMLElement | null) => {
+      if (!node) return null;
+      const style = getComputedStyle(node), box = node.getBoundingClientRect(), label = node.querySelector<HTMLElement>("[data-fit-label]");
+      const text = label && getComputedStyle(label).display !== "none" ? label.textContent : null;
+      const range = document.createRange(); range.selectNodeContents(node);
+      return { pressed: node.getAttribute("aria-pressed"), x: box.x, y: box.y, width: box.width, height: box.height, radius: [style.borderTopLeftRadius, style.borderTopRightRadius, style.borderBottomRightRadius, style.borderBottomLeftRadius],
+        border: [style.borderTopWidth, style.borderRightWidth, style.borderBottomWidth, style.borderLeftWidth], borderColor: style.borderTopColor, background: style.backgroundColor, color: style.color,
+        shadow: style.boxShadow, outline: style.outlineStyle === "none" ? "none" : `${style.outlineWidth} ${style.outlineColor}`, font: `${style.fontSize}/${style.fontWeight}`, text,
+        icon: (() => { const svg = node.querySelector("svg"); if (!svg) return null; const r = svg.getBoundingClientRect(); return { y: r.y + r.height / 2 - (box.y + box.height / 2), width: r.width }; })(),
+        cut: range.getBoundingClientRect().right > box.right + 0.5 || range.getBoundingClientRect().left < box.left - 0.5 };
+    };
+    return { bar: document.querySelector<HTMLElement>('.bar[data-bar="project"]')!.getBoundingClientRect().toJSON(), orchestrator: read(segments[0]!), recent: read(segments[1]!), chart: read(chart) };
+  });
+
+  browserTest("the chart toggle is the third segment of the panel group in every state", async () => {
+    const evidence = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "board-header-chart-toggle"); fs.mkdirSync(evidence, { recursive: true });
+    const out = path.join(os.tmpdir(), `llv-header-chart-${process.pid}`); fs.mkdirSync(out, { recursive: true });
+    let current = await managerRecords("en");
+    const served = await serveEvidenceFixture(out, undefined, { "/api/files": () => Response.json(current.payload), "/api/tasks": () => Response.json({ tasks: current.payload.tasks }) });
+    const fd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], ...(fd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${fd}` } }) });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        current = await managerRecords(lang);
+        for (const theme of ["dark", "light"] as const) for (const { width, height } of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }]) for (const shown of [false, true]) {
+          const tag = `${width}-${lang}-${theme}-${shown ? "chart" : "board"}`;
+          const { page, context, pageErrors } = await openFixture(browser, "about:blank", { width, height }, theme, lang, "reduce", false, 1, new Date(MANAGER_NOW));
+          try {
+            await context.addInitScript(({ lang, theme, shown }) => {
+              localStorage.setItem("llv_lang", lang); localStorage.setItem("llv-theme", theme);
+              if (localStorage.getItem("llv:kanban-seat:v2") === null) localStorage.setItem("llv:kanban-seat:v2", JSON.stringify({ collapsed: { atlas: false }, placement: "top", height: null, width: null }));
+              if (localStorage.getItem("llv:board-timeline:v1:atlas") === null) localStorage.setItem("llv:board-timeline:v1:atlas", JSON.stringify({ view: shown ? "timeline" : "board", hours: 24, expanded: {} }));
+            }, { lang, theme, shown });
+            await page.goto(`${served.base}?scenario=board-timeline#p=atlas`);
+            await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+            const toggle = page.locator("[data-board-timeline-toggle]");
+            await toggle.waitFor({ timeout: 20_000 });
+            await page.waitForFunction(() => document.querySelector("[data-board-timeline-toggle]")?.getAttribute("aria-pressed") !== null);
+            const bar = page.locator('.bar[data-bar="project"]');
+            const frame = async (state: string) => {
+              const box = (await bar.boundingBox())!;
+              const reading = await segmentReadings(page);
+              await page.screenshot({ path: path.join(evidence, `${phase}-${tag}-${state}.png`), clip: { x: Math.max(0, box.x + box.width - 560), y: box.y, width: Math.min(560, box.width), height: box.height }, animations: "disabled" });
+              readings.push({ name: `${phase}-${tag}-${state}`, reading });
+              return reading;
+            };
+            const rest = await frame("rest");
+            const check = (ok: boolean, detail: string) => { if (!ok) failures.push(`${tag}: ${detail}`); };
+            check(pageErrors.length === 0, `page errors ${pageErrors.join(" | ")}`);
+            check(!!rest?.chart && !!rest.recent && !!rest.orchestrator, "a segment is missing");
+            if (rest?.chart && rest.recent && rest.orchestrator) {
+              check(rest.chart.pressed === String(shown), `aria-pressed ${rest.chart.pressed}`);
+              for (const name of ["orchestrator", "recent"] as const) check(rest[name]!.height === rest.chart.height && rest[name]!.y === rest.chart.y, `${name} height ${rest[name]!.height} at ${rest[name]!.y} against the chart's ${rest.chart.height} at ${rest.chart.y}`);
+              check(Math.abs(rest.chart.x - (rest.recent.x + rest.recent.width)) < 1.01, `the chart segment sits ${rest.chart.x - (rest.recent.x + rest.recent.width)} px from the clock`);
+              check(rest.chart.radius.join(" ") === `0px ${rest.orchestrator.radius[0]} ${rest.orchestrator.radius[0]} 0px`, `chart radius ${rest.chart.radius.join(" ")}`);
+              check(rest.recent.radius.join(" ") === "0px 0px 0px 0px", `the clock's radius ${rest.recent.radius.join(" ")} is not square inside the group`);
+              check(rest.chart.border.join(" ") === `${rest.chart.border[0]} ${rest.chart.border[1]} ${rest.chart.border[2]} 0px`, `chart border ${rest.chart.border.join(" ")}`);
+              check(rest.chart.outline === "none" && rest.chart.shadow === "none", `chart resting outline ${rest.chart.outline}, shadow ${rest.chart.shadow}`);
+              check(Math.abs(rest.chart.icon!.y - rest.orchestrator.icon!.y) <= 1 && rest.chart.icon!.width === rest.orchestrator.icon!.width, "chart icon is not aligned with the orchestrator's");
+              check(!rest.chart.cut && (rest.chart.text === null) === (rest.orchestrator.text === null), `the chart's label is ${rest.chart.text} beside the orchestrator's ${rest.orchestrator.text} (cut: ${rest.chart.cut})`);
+            }
+            await toggle.click();
+            await page.mouse.move(0, 300);
+            await frame("pressed-by-click");
+            await toggle.click();
+            await frame("toggled-back");
+            /* The focus ring of each segment stays inside the group: after a click and a key (the state
+               the operator's frame showed) on the chart, and by Tab on every segment. */
+            const insideGroup = (name: string, node: NonNullable<Awaited<ReturnType<typeof segmentReadings>>>["chart"], at: string) => {
+              if (!node) { check(false, `${at}: ${name} is missing`); return; }
+              const layers = node.shadow.replace(/(?:rgba?|color)\([^)]*\)/g, "c").split(",").map(layer => layer.trim()).filter(layer => layer !== "none");
+              check(layers.length > 0 && layers.every(layer => layer.includes("inset")), `${at}: ${name} focus shadow "${node.shadow}" is not drawn inside the segment`);
+              check(node.outline === "none", `${at}: ${name} focus outline ${node.outline}`);
+              check(node.shadow !== rest?.[name === "chart" ? "chart" : name === "clock" ? "recent" : "orchestrator"]?.shadow, `${at}: ${name} shows no focus indicator`);
+              check(node.height === rest?.chart?.height && node.y === rest?.chart?.y, `${at}: ${name} spans ${node.height} at ${node.y}, the group ${rest?.chart?.height} at ${rest?.chart?.y}`);
+            };
+            await toggle.click();
+            await page.keyboard.press("ArrowDown");
+            await page.mouse.move(0, 300);
+            const keyed = await frame("focus-after-click-and-key");
+            check(await page.evaluate(() => document.activeElement?.hasAttribute("data-board-timeline-toggle") === true && document.activeElement.matches(":focus-visible")), "the chart toggle is not in focus-visible after click and key");
+            insideGroup("chart", keyed?.chart ?? null, "click+key");
+            await page.locator("[data-orchestrator-toggle]").focus();
+            await page.keyboard.press("Shift+Tab"); await page.keyboard.press("Tab");
+            for (const [name, key, selector] of [["orchestrator", "orchestrator", "[data-orchestrator-toggle]"], ["clock", "recent", "[data-bar-recent-toggle]"], ["chart", "chart", "[data-board-timeline-toggle]"]] as const) {
+              if (name !== "orchestrator") await page.keyboard.press("Tab");
+              check(await page.evaluate(selector => document.activeElement?.matches(`${selector}:focus-visible`) === true, selector), `Tab did not reach ${name} with focus-visible`);
+              const tabbed = await frame(`focus-tab-${name}`);
+              insideGroup(name, tabbed?.[key] ?? null, `Tab ${name}`);
+            }
+          } finally { await context.close(); }
+        }
+      }
+      fs.writeFileSync(path.join(evidence, `${phase}-readings.json`), JSON.stringify(readings, null, 2));
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); served.stop(); if (fd !== null) fs.closeSync(fd); }
   }, 600_000);
 });
 
@@ -1248,12 +2755,16 @@ describe("where a stage ran", () => {
     const out = path.resolve(".artifacts/stage-place");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch({ ...LAUNCH, env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env }).catch(error => {
+      server.stop(); sockets.close(); throw error;
+    });
     const failures: string[] = [];
     try {
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 1000]) {
         const key = `${lang}-${theme}-${width}`;
-        const words = lang === "uk" ? { cloud: "хмара", local: "локально", cause: "перенесено на цю машину" } : { cloud: "cloud", local: "local", cause: "moved to this machine" };
+        const words = lang === "uk" ? { cloud: "хмара", local: "локально · збій хмари", cause: "після збою" } : { cloud: "cloud", local: "local · cloud failed", cause: "failure" };
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stage-place`, { width, height: 1000 }, theme, lang, "reduce", false);
         try {
           const lane = card("t-stage-place");
@@ -1295,7 +2806,117 @@ describe("where a stage ran", () => {
           if (pageErrors.length) failures.push(`${key} page errors: ${pageErrors.join("; ")}`);
         } finally { await context.close(); }
       }
-    } finally { await browser.close(); server.stop(); }
+    } finally { await browser.close(); server.stop(); sockets.close(); }
+    expect(failures).toEqual([]);
+  }, 300_000);
+});
+
+describe("a stage the controller moved off Codex says who moved it and why", () => {
+  /* After two Codex cybersecurity refusals the controller moves the stage to
+     Claude Opus by itself. The lane's graph-edit line names the controller in
+     the interface language and states the refusal as visible text. */
+  browserTest("the card's graph-edit line names the controller and the refusal with no hover, in both languages and themes", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "codex-refusal-move");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env }).catch(error => {
+      server.stop(); sockets.close(); throw error;
+    });
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 1000]) {
+        const key = `${lang}-${theme}-${width}`;
+        const who = translate(lang, "kanban.graph.editedByController");
+        const cause = translate(lang, "kanban.graph.edit.cause.codex-cybersecurity-refusal");
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=codex-refusal-move`, { width, height: 1000 }, theme, lang, "reduce", false);
+        try {
+          const line = page.locator(`${card("t-codex-refusal")} .graph-edit`);
+          await line.waitFor({ timeout: 10_000 });
+          await line.scrollIntoViewIfNeeded();
+          const read = await line.evaluate((element) => {
+            const holder = element.closest(".card")!.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            const text = range.getBoundingClientRect();
+            return {
+              text: (element as HTMLElement).innerText, cause: (element as HTMLElement).dataset.graphEditCause ?? null,
+              inside: text.left >= holder.left - 0.5 && text.right <= holder.right + 0.5 && text.bottom <= holder.bottom + 0.5 && text.bottom <= innerHeight && text.right <= innerWidth,
+              /* Nothing of the line is cut off: no ellipsis, no clipped overflow. */
+              whole: element.scrollWidth <= element.clientWidth + 0.5 && element.scrollHeight <= element.clientHeight + 0.5,
+            };
+          });
+          if (!read.text.includes(who)) failures.push(`${key} actor: «${read.text}»`);
+          if (!read.text.includes(cause)) failures.push(`${key} cause: «${read.text}»`);
+          if (read.text.includes("pipeline-controller")) failures.push(`${key} raw actor id: «${read.text}»`);
+          if (read.cause !== "codex-cybersecurity-refusal") failures.push(`${key} cause attribute ${read.cause}`);
+          if (!read.inside) failures.push(`${key} the line leaves its card`);
+          if (!read.whole) failures.push(`${key} the line is cut off`);
+          await page.screenshot({ path: path.join(out, `${key}-card.png`) });
+          await line.screenshot({ path: path.join(out, `${key}-line.png`) });
+          if (pageErrors.length) failures.push(`${key} page errors: ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); sockets.close(); }
+    expect(failures).toEqual([]);
+  }, 300_000);
+});
+
+describe("Cloud stage task link", () => {
+  browserTest("a stage that ran in the cloud opens its cloud task from its pane, and a stage that moved local offers none, in both languages and themes", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "cloud-task-link");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env }).catch(error => {
+      server.stop(); sockets.close(); throw error;
+    });
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 1000]) {
+        const key = `${lang}-${theme}-${width}`;
+        const word = lang === "uk" ? "Відкрити хмарну задачу" : "Open cloud task";
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stage-place`, { width, height: 1000 }, theme, lang, "reduce", false);
+        try {
+          await page.click(`${card("t-stage-place")} [data-graph-toggle]`);
+          const link = page.locator('.gsheet .pane[data-stage="implement"] a[data-open-cloud="implement"]');
+          await link.waitFor({ timeout: 10_000 });
+          await link.scrollIntoViewIfNeeded();
+          const read = await link.evaluate((element) => {
+            const pane = element.closest(".pane")!.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            const text = range.getBoundingClientRect(), box = element.getBoundingClientRect();
+            return {
+              text: (element as HTMLElement).innerText.trim(), href: element.getAttribute("href"), target: element.getAttribute("target"), rel: element.getAttribute("rel"),
+              aria: element.getAttribute("aria-label"), height: box.height,
+              inside: text.left >= pane.left && text.right <= pane.right && text.top >= pane.top && text.bottom <= pane.bottom && text.bottom <= innerHeight && text.right <= innerWidth,
+              conversationButton: !!element.closest(".pane")!.querySelector("[data-open-conversation]"),
+            };
+          });
+          if (read.text !== word) failures.push(`${key} text «${read.text}»`);
+          if (read.href !== "https://example.com/cloud/tasks/task_7f3a9c21" || read.target !== "_blank" || !read.rel?.includes("noopener")) failures.push(`${key} link ${JSON.stringify(read)}`);
+          if (!/implement/i.test(read.aria ?? "")) failures.push(`${key} aria «${read.aria}»`);
+          if (read.height < 28) failures.push(`${key} target ${read.height}px`);
+          if (!read.inside) failures.push(`${key} the label leaves its pane`);
+          if (read.conversationButton) failures.push(`${key} a cloud stage also draws a conversation button`);
+          /* The stage that moved to this machine has no cloud task to open. */
+          const review = await page.locator('.gsheet .pane[data-stage="review"] [data-open-cloud]').count();
+          if (review !== 0) failures.push(`${key} the moved-local stage offers a cloud link`);
+          await page.screenshot({ path: path.join(out, `${key}-pane.png`) });
+          /* Opening it asks the browser for a new tab and leaves the board where it is. */
+          const popup = context.waitForEvent("page", { timeout: 5_000 }).catch(() => null);
+          await page.route("https://example.com/**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<title>cloud task</title>" }));
+          await link.click();
+          const opened = await popup;
+          if (!opened) failures.push(`${key} the link opened no tab`);
+          else { if (!opened.url().startsWith("https://example.com/cloud/tasks/task_7f3a9c21")) failures.push(`${key} opened ${opened.url()}`); await opened.close(); }
+          if (pageErrors.length) failures.push(`${key} page errors: ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); sockets.close(); }
     expect(failures).toEqual([]);
   }, 300_000);
 });
@@ -2261,30 +3882,28 @@ describe("subscription API consent", () => {
           await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
           await page.locator(phone ? '[data-mobile2-menu-row="ping"]' : "[data-rail-menu-ping]").click();
           const section = page.locator("[data-subscription-api]"); await section.waitFor();
-          expect(await section.locator("h3").innerText()).toBe(translate(lang, "subscriptionApi.title"));
           const toggle = section.getByRole("switch");
           await toggle.waitFor({ state: "visible" });
           expect(await toggle.isChecked()).toBe(false);
           const geometry = await section.evaluate(element => {
             const panel = element.closest("[data-telemetry-settings]")!;
-            const button = element.querySelector("input")!;
-            const label = button.closest("label")!;
-            const box = label.getBoundingClientRect(), edge = panel.getBoundingClientRect();
+            const box = element.querySelector("[role=switch]")!.getBoundingClientRect(), edge = panel.getBoundingClientRect();
             return { visible: box.top >= edge.top && box.bottom <= edge.bottom, overflow: element.scrollWidth > element.clientWidth, scrolls: panel.scrollHeight > panel.clientHeight };
           });
           expect(geometry.visible).toBe(true); expect(geometry.overflow).toBe(false);
-          expect(await section.innerText()).toContain("api.anthropic.com/api/oauth/usage");
+          await page.locator("[data-settings-details-toggle]").click();
+          expect(await page.locator("[data-settings-details]").innerText()).toContain("api.anthropic.com/api/oauth/usage");
           await page.screenshot({ path: path.join(out, `${phone ? "phone" : "desktop"}-${lang}-${theme}.png`) });
           await toggle.click();
-          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-subscription-api] input')?.checked === true);
+          await page.waitForFunction(() => document.querySelector('[data-subscription-api] [role=switch]')?.getAttribute("aria-checked") === "true");
           await toggle.click();
-          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-subscription-api] input')?.checked === false);
+          await page.waitForFunction(() => document.querySelector('[data-subscription-api] [role=switch]')?.getAttribute("aria-checked") === "false");
           expect(pageErrors).toEqual([]);
           readings.push({ lang, theme, viewport, ...geometry });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/subscription-api", { recursive: true });
-      const sources = ["src/components/telemetry/SubscriptionApiSetting.tsx", "src/components/telemetry/TelemetrySettings.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+      const sources = ["src/components/settings/PrivacySection.tsx", "src/components/telemetry/TelemetrySettings.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
       fs.writeFileSync("evidence/subscription-api/readings.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
         revision: process.env.LLV_EVIDENCE_REVISION ?? "working-tree", recordedAt: new Date().toISOString(),
         command: "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<browser> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'subscription API consent'",
@@ -2314,7 +3933,7 @@ describe("telemetry opt-outs", () => {
             await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
             await page.locator(phone ? '[data-mobile2-menu-row="ping"]' : "[data-rail-menu-ping]").click();
           } else {
-            await page.locator("[data-telemetry-notice]").getByRole("button", { name: translate(lang, "headerMenu.ping"), exact: true }).click();
+            await page.locator("[data-telemetry-notice]").getByRole("button", { name: translate(lang, "settings.section.privacy"), exact: true }).click();
           }
           const dialog = page.locator("[data-telemetry-settings]"); await dialog.waitFor();
           const toggle = dialog.getByRole("switch", { name: translate(lang, "telemetry.label"), exact: true });
@@ -2322,10 +3941,12 @@ describe("telemetry opt-outs", () => {
           expect(await toggle.isDisabled()).toBe(off);
           expect(await toggle.isChecked()).toBe(!off);
           const { telemetryNotice } = await import("../../../bin/telemetry-notice.mjs");
-          expect((await dialog.innerText()).includes(telemetryNotice[lang])).toBe(!off);
+          await page.locator("[data-settings-details-toggle]").click();
+          const inDetails = (await dialog.innerText()).replace(/\s+/g, " ");
+          expect(inDetails.includes(telemetryNotice[lang].match(/DO_NOT_TRACK=1/)![0])).toBe(!off);
           const name = `${phone ? "phone" : "desktop"}-${lang}-${theme}-${off ? "off" : "on"}`;
-          await dialog.screenshot({ path: path.join(out, `${name}-settings.png`) });
-          await dialog.getByRole("button", { name: translate(lang, "telemetry.close"), exact: true }).click();
+          await page.screenshot({ path: path.join(out, `${name}-settings.png`) });
+          await page.locator(phone ? "[data-mobile2-sheet='settings'] [data-mobile2-close]" : "[data-settings-close]").click();
           if (!off) await page.locator("[data-telemetry-notice]").waitFor();
           const noticeCount = await page.locator("[data-telemetry-notice]").count();
           expect(noticeCount).toBe(off ? 0 : 1);
@@ -2345,7 +3966,7 @@ describe("telemetry opt-outs", () => {
 
 describe("swarm release rules", () => {
   browserTest("consent, refused save and read-only scope fit both languages, themes and viewports", async () => {
-    const out = path.resolve(".artifacts/swarm-rules"); fs.mkdirSync(out, { recursive: true });
+    const out = memoryOut("swarm-rules"); fs.mkdirSync(out, { recursive: true });
     let receiving = false, refuse = false;
     const rules = sampleMemory();
     const publicRule = { ...rules.scopes[0].active[0], id: "r_0000000000000088", rule: "Read the project instruction files before changing code.", why: "" };
@@ -2378,7 +3999,7 @@ describe("swarm release rules", () => {
           expect(await toggle.isEnabled()).toBe(true);
           expect(await toggle.isChecked()).toBe(false);
           await setting.scrollIntoViewIfNeeded();
-          expect(await setting.innerText()).toContain(translate(lang, "telemetry.swarm.description"));
+          expect(await setting.innerText()).toContain(translate(lang, "settings.privacy.swarmHint"));
           const geometry = await setting.evaluate(element => {
             const box = element.getBoundingClientRect(), dialog = element.closest("[role=dialog]")!.getBoundingClientRect();
             const lines = [...element.querySelectorAll("label,p")].flatMap(text => {
@@ -2408,26 +4029,26 @@ describe("swarm release rules", () => {
           const saved = page.waitForResponse(response => new URL(response.url()).pathname === "/api/telemetry" && response.request().method() === "PUT");
           await toggle.click();
           expect((await saved).status()).toBe(200);
-          await page.waitForFunction(() => document.querySelector<HTMLInputElement>("[data-swarm-setting] input")?.checked === true && !document.querySelector("[data-telemetry-settings] [role=alert]"));
+          await page.waitForFunction(() => document.querySelector("[data-swarm-setting] [role=switch]")?.getAttribute("aria-checked") === "true" && !document.querySelector("[data-telemetry-settings] [role=alert]"));
           expect(receiving).toBe(true);
           await page.reload();
           await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().waitFor();
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-settings")));
           await toggle.waitFor(); expect(await toggle.isChecked()).toBe(true);
           await page.goto(`${server.base}?scenario=memory-profile&rolememory=1`);
-          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
-          const swarm = page.locator('[data-rules-swarm="swarm:builder"]');
+          /* The swarm level is a row of its own, after the role's other rows; its pane is read only. */
+          await page.locator('[data-profile-level="swarm:builder"]').waitFor();
+          const order = await page.locator("[data-profile-level]").evaluateAll(rows => { const scopes = rows.map(row => row.getAttribute("data-profile-level")); const at = scopes.indexOf("swarm:builder"); return at > scopes.indexOf("role:*:builder") && at > scopes.indexOf("role:garden:builder"); });
+          expect(order).toBe(true);
+          await page.locator('[data-profile-level="swarm:builder"]').click();
+          const swarm = page.locator('[data-rules-section="swarm"]');
           await swarm.waitFor(); await swarm.scrollIntoViewIfNeeded();
           expect(await swarm.innerText()).toContain(publicRule.rule);
+          expect(await swarm.innerText()).toContain(translate(lang, "roleMemory.swarmPublic"));
           expect(await swarm.locator("[data-learned-rule-delete]").count()).toBe(0);
-          const order = await page.locator('[data-rules-section="role"]').evaluate(element => {
-            const local = element.querySelector("[data-rules-every-project]")!, shared = element.querySelector("[data-rules-swarm]")!;
-            return !!(local.compareDocumentPosition(shared) & Node.DOCUMENT_POSITION_FOLLOWING);
-          });
-          expect(order).toBe(true);
           await page.screenshot({ path: path.join(out, `rules-${tag}.png`) });
           expect(pageErrors).toEqual([]);
-          readings.push({ lang, theme, width, ...geometry, refusedVisible, order, readOnly: true, openingScroll: "dialog starts at top; swarm setting scrolled into view", rulesScroll: "All rules; swarm section scrolled into view" });
+          readings.push({ lang, theme, width, ...geometry, refusedVisible, order, readOnly: true, openingScroll: "dialog starts at top; swarm setting scrolled into view", rulesScroll: "swarm level selected; its pane at the top" });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/swarm-rules", { recursive: true });
@@ -2444,7 +4065,7 @@ describe("memory profile", () => {
   browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && !!process.env.MEMORY_PROFILE_BENCHMARK)("CLI timings reach the visible page", async () => {
     // Explicit private input is supplied only for an opt-in local timing run. No source text is captured.
     const input = JSON.parse(fs.readFileSync(process.env.MEMORY_PROFILE_BENCHMARK!, "utf8")) as { rules: RoleMemoryProjectView };
-    const out = path.resolve(".artifacts/memory-profile"); fs.mkdirSync(out, { recursive: true });
+    const out = memoryOut("memory-profile"); fs.mkdirSync(out, { recursive: true });
     const rows = new Map<string, ProfileRow>();
     const service = createProfileService({ rules: () => input.rules, read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: MEMORY_PROFILE_MODEL, prepare: prepareProfileCaller });
     const server = await serveEvidenceFixture(out, undefined, {
@@ -2490,7 +4111,7 @@ describe("memory profile", () => {
     } finally { await browser.close(); server.stop(); }
   });
   browserTest("summary, slices and states render at desktop and phone widths in both locales and schemes", async () => {
-    const out = path.resolve(".artifacts/memory-profile"); fs.mkdirSync(out, { recursive: true });
+    const out = memoryOut("memory-profile"); fs.mkdirSync(out, { recursive: true });
     const rules = sampleMemory();
     const rows = new Map<string, ProfileRow>();
     let calls = 0;
@@ -2540,25 +4161,29 @@ describe("memory profile", () => {
           const geometry = await page.evaluate(() => {
             const profile = document.querySelector<HTMLElement>("[data-memory-profile]")!;
             const window = document.querySelector<HTMLElement>("[data-rules-window]")!;
-            const headline = profile.querySelector<HTMLElement>("[data-profile-ready] > h3")!;
+            const headline = profile.querySelector<HTMLElement>("[data-profile-ready] h3")!;
             const summarize = profile.querySelector<HTMLElement>("[data-profile-summarize]")!;
-            const headlineRect = headline.getBoundingClientRect();
-            const card = headline.parentElement!.getBoundingClientRect();
-            const chipHeights = [...profile.querySelectorAll<HTMLElement>("[data-profile-pill]")].map(chip => Math.round(chip.getBoundingClientRect().height));
+            const headlineRect = headline.getBoundingClientRect(), column = profile.getBoundingClientRect();
             const summarizeRect = summarize.getBoundingClientRect();
-            const pills = [...profile.querySelectorAll<HTMLElement>("[data-profile-pill] > span")];
-            return { overflow: profile.scrollWidth - profile.clientWidth, fullWidthHeadline: Math.abs(headlineRect.left - (card.left + 17)) <= 1 && Math.abs(headlineRect.right - (card.right - 17)) <= 1, maxChipHeight: Math.max(...chipHeights), left: window.getBoundingClientRect().left, right: window.getBoundingClientRect().right,
-              headlineButtonOverlap: headlineRect.left < summarizeRect.right && headlineRect.right > summarizeRect.left && headlineRect.top < summarizeRect.bottom && headlineRect.bottom > summarizeRect.top,
-              truncatedPills: pills.filter(pill => pill.scrollWidth > pill.clientWidth).length, pills: pills.map(pill => ({ width: pill.getBoundingClientRect().width, maxWidth: getComputedStyle(pill).maxWidth })) };
+            return { overflow: profile.scrollWidth - profile.clientWidth, headlineWithinColumn: headlineRect.left >= column.left && headlineRect.right <= column.right, left: window.getBoundingClientRect().left, right: window.getBoundingClientRect().right,
+              headlineButtonOverlap: headlineRect.left < summarizeRect.right && headlineRect.right > summarizeRect.left && headlineRect.top < summarizeRect.bottom && headlineRect.bottom > summarizeRect.top };
           });
           expect(geometry.overflow).toBeLessThanOrEqual(1); expect(geometry.left).toBeGreaterThanOrEqual(0); expect(geometry.right).toBeLessThanOrEqual(width);
           expect(geometry.headlineButtonOverlap).toBe(false);
-          expect(geometry.fullWidthHeadline).toBe(true);
-          expect(geometry.maxChipHeight).toBeLessThanOrEqual(30);
-          expect(geometry.truncatedPills).toBeGreaterThan(0);
-          readings.push({ width, scheme, lang, geometry });
-          await page.locator("[data-profile-slice] button").last().scrollIntoViewIfNeeded();
-          await page.locator("[data-profile-slice] button").last().click();
+          expect(geometry.headlineWithinColumn).toBe(true);
+          /* A level's pills live under its subtitle in the pane; the first level opens beside the list, or behind a row on a phone. */
+          if (width === 390) await page.locator("[data-profile-level]").first().click();
+          await page.locator("[data-profile-pill]").first().waitFor();
+          const pills = await page.evaluate(() => {
+            const spans = [...document.querySelectorAll<HTMLElement>("[data-level-pane] [data-profile-pill] > span")];
+            return { maxChipHeight: Math.max(...[...document.querySelectorAll<HTMLElement>("[data-level-pane] [data-profile-pill]")].map(chip => Math.round(chip.getBoundingClientRect().height))), truncated: spans.filter(span => span.scrollWidth > span.clientWidth).length };
+          });
+          expect(pills.maxChipHeight).toBeLessThanOrEqual(30);
+          expect(pills.truncated).toBeGreaterThan(0);
+          readings.push({ width, scheme, lang, geometry, pills });
+          if (width === 390) await page.locator("[data-level-back]").click();
+          await page.locator("[data-profile-level]").last().scrollIntoViewIfNeeded();
+          await page.locator("[data-profile-level]").last().click();
           await page.locator("[data-rules-section]").waitFor();
           await page.screenshot({ path: path.join(out, `rules-${width}-${scheme}-${lang}.png`) });
           expect(pageErrors).toEqual([]);
@@ -2586,8 +4211,8 @@ describe("memory profile", () => {
 });
 
 describe("memory profile window: one top, whole rows, level order, named topic", () => {
-  browserTest("the window top and header hold across Profile and All rules, no rule row is cut, levels keep the All rules order, a topic drill names its topic", async () => {
-    const out = path.resolve(".artifacts/memory-profile-window"); fs.mkdirSync(out, { recursive: true });
+  browserTest("the window top, header and height hold across levels, no rule row is cut and nothing inside a pane scrolls, levels keep their order, a topic names itself once", async () => {
+    const out = memoryOut("memory-profile-window"); fs.mkdirSync(out, { recursive: true });
     const rules = sampleMemory();
     /* The store lists every-project first; the page must put this project's level ahead of it. */
     rules.scopes = [rules.scopes[1]!, rules.scopes[0]!, ...rules.scopes.slice(2)];
@@ -2641,33 +4266,41 @@ describe("memory profile window: one top, whole rows, level order, named topic",
             seen.push({ state: next, top: profile.top, header: profile.header });
             await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile-${next}.png`) });
             if (next === "ready") {
-              const names = await page.locator("[data-profile-slice]").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-profile-slice") + ":" + node.querySelector("p, h4")!.textContent));
+              /* The levels keep the order the rules page used, whatever order the store lists them in. */
+              const order = await page.locator("[data-profile-level]").evaluateAll(rows => rows.map(row => row.getAttribute("data-profile-level")));
+              expect(order).toEqual(["role:garden:builder", "role:*:builder", "project:garden", "machine"]);
+              const names = await page.locator("[data-profile-level]").evaluateAll(rows => rows.map(row => row.querySelector("span span")!.textContent ?? ""));
               expect(names[0]).toContain(translate(lang, "memoryProfile.thisProject")); expect(names[1]).toContain(translate(lang, "memoryProfile.everyProject"));
-              expect(names.slice(2).map(name => name.split(":")[0])).toEqual(["project", "machine"]);
-              await page.locator("[data-profile-pill], [data-memory-profile] section > div button").first().scrollIntoViewIfNeeded();
-              await page.getByText(lang === "uk" ? "Ізольовані тести" : "Isolated tests", { exact: false }).first().click();
-              const heading = await page.locator("[data-rules-section] h3").first().innerText();
+              /* A topic names itself once, over one section per level. */
+              await page.locator('[data-profile-topic="0"]').scrollIntoViewIfNeeded();
+              await page.locator('[data-profile-topic="0"]').click();
+              const heading = await page.locator('[data-level-pane="topic"] h3').first().innerText();
               expect(heading).toBe(lang === "uk" ? "Ізольовані тести" : "Isolated tests");
+              expect(await page.locator('[data-level-pane="topic"]').innerText()).toContain(heading);
+              expect((await page.locator('[data-level-pane="topic"]').innerText()).split(heading).length - 1).toBe(1);
               await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-topic.png`) });
-              await page.getByRole("button", { name: new RegExp(translate(lang, "memoryProfile.back")) }).click();
+              if (phone) await page.locator("[data-level-back]").click();
             }
-            await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
-            await page.locator("[data-rules-section]").first().waitFor();
+            /* A level's rules: one pane beside the list, or one screen behind a row. */
+            await page.locator("[data-profile-level]").first().click();
+            await page.locator("[data-level-pane] [data-rules-section]").waitFor();
             const rulesPage = await measureWindow(page);
-            seen.push({ state: `${next}:rules`, top: rulesPage.top, header: rulesPage.header });
+            seen.push({ state: `${next}:level`, top: rulesPage.top, header: rulesPage.header });
             if (!phone) {
-              expect(rulesPage.top).toBe(profile.top); expect(rulesPage.header).toBe(profile.header);
-              await page.locator("[data-learned-rule]").first().locator("button").first().click();
-              await page.locator("[data-rule-versions] summary").first().click();
-              /* With a rule and its earlier text open, each card shows its rows whole from the top: none starts above or ends below the card's edge. */
-              const sliced = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-rules-section] > div")].flatMap(scroller => {
-                scroller.scrollTop = 0;
-                const band = scroller.getBoundingClientRect();
-                return [...scroller.querySelectorAll<HTMLElement>("[data-learned-rule]")].filter(row => { const r = row.getBoundingClientRect(); return r.top < band.top - 1 || (r.top < band.bottom && r.bottom > band.bottom + 1 && scroller.scrollHeight <= scroller.clientHeight + 1); }).map(row => row.getAttribute("data-learned-rule"));
-              }));
-              expect(sliced).toEqual([]);
+              /* Choosing a level moves none of the window's edges. */
+              expect(rulesPage.top).toBe(profile.top); expect(rulesPage.header).toBe(profile.header); expect(rulesPage.bottom).toBe(profile.bottom);
             }
-            await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-allrules-${next}.png`) });
+            await page.locator("[data-learned-rule]").first().locator("button").first().click();
+            await page.locator("[data-rule-versions] summary").first().click();
+            /* With a rule and its earlier text open, the pane shows its rows whole from the top, and nothing inside it scrolls on its own. */
+            const sliced = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-level-pane]")].flatMap(scroller => {
+              scroller.scrollTop = 0;
+              const band = scroller.getBoundingClientRect();
+              const nested = [...scroller.querySelectorAll<HTMLElement>("*")].filter(node => /auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1).map(node => `nested:${node.tagName}`);
+              return [...nested, ...[...scroller.querySelectorAll<HTMLElement>("[data-learned-rule]")].filter(row => { const r = row.getBoundingClientRect(); return r.top < band.top - 1 || (r.top < band.bottom && r.bottom > band.bottom + 1 && scroller.scrollHeight <= scroller.clientHeight + 1); }).map(row => row.getAttribute("data-learned-rule")!)];
+            }));
+            expect(sliced).toEqual([]);
+            await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-level-${next}.png`) });
             expect(pageErrors).toEqual([]);
           } finally { await context.close(); }
         }
@@ -2696,7 +4329,7 @@ function richMemory(): RoleMemoryProjectView {
 
 describe("memory profile window: opening under slow data", () => {
   browserTest("a cached profile is readable while the first full rules response is still held", async () => {
-    const out = path.resolve(".artifacts/memory-profile-cold-open"); fs.mkdirSync(out, { recursive: true });
+    const out = memoryOut("memory-profile-cold-open"); fs.mkdirSync(out, { recursive: true });
     const rules = richMemory();
     let releaseRules!: () => void;
     let gate = Promise.resolve();
@@ -2728,23 +4361,26 @@ describe("memory profile window: opening under slow data", () => {
           expect(await topic.isDisabled()).toBe(true);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
           await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile-before-rules.png`) });
-          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
+          /* The levels and the topic are held with the rules; the window says why. */
           await page.locator("[data-rules-window-loading]").waitFor();
+          expect(await page.locator("[data-profile-level]").evaluateAll(rows => rows.length > 0 && rows.every(row => (row as HTMLButtonElement).disabled))).toBe(true);
+          expect(await page.locator("[data-level-pane]").count()).toBe(0);
           releaseRules();
-          await page.locator("[data-rules-section]").first().waitFor();
-          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-all-rules.png`) });
-          await page.getByRole("button", { name: translate(lang, "memoryProfile.profile"), exact: true }).click();
-          await page.locator("[data-profile-ready]").waitFor();
+          await page.waitForFunction(() => document.querySelector("[data-profile-level]") && !document.querySelector("[data-profile-level]:disabled"));
           expect(await topic.isDisabled()).toBe(false);
           expect(await page.locator("[data-profile-summarize]").count()).toBe(1);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile-after-rules.png`) });
+          if (width === 390) await page.locator("[data-profile-level]").first().click();
+          await page.locator("[data-level-pane] [data-rules-section]").waitFor();
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-level.png`) });
           expect(posts).toBe(0); expect(pageErrors).toEqual([]);
         } finally { releaseRules(); await context.close(); }
       }
     } finally { releaseRules?.(); await browser.close(); await server.stop(); }
   }, 60_000);
 
-  browserTest("the first slow rules answer opens both tabs after a poll tick", async () => {
-    const out = path.resolve(".artifacts/memory-profile-slow-first"); fs.mkdirSync(out, { recursive: true });
+  browserTest("the first slow rules answer draws the list and the selected level after a poll tick", async () => {
+    const out = memoryOut("memory-profile-slow-first"); fs.mkdirSync(out, { recursive: true });
     const rules = richMemory();
     let answeredFirst!: () => void;
     let began!: () => void;
@@ -2780,8 +4416,8 @@ describe("memory profile window: opening under slow data", () => {
           expect(reads).toBe(1);
           expect(await page.locator("[data-rules-window-loading]").count()).toBe(0);
           await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-profile.png`) });
-          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
-          await page.locator("[data-rules-section]").first().waitFor();
+          if (width === 390) await page.locator("[data-profile-level]").first().click();
+          await page.locator("[data-level-pane] [data-rules-section]").first().waitFor();
           await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-rules.png`) });
           expect(posts).toBe(0); expect(pageErrors).toEqual([]);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -2791,7 +4427,7 @@ describe("memory profile window: opening under slow data", () => {
   }, 60_000);
 
   browserTest("opened from the menu row with the rules already read, the body draws before the held rules and profile answers, one profile request goes out and Summarize waits for its answer, with each role's costume beside its name in every state", async () => {
-    const out = path.resolve(".artifacts/memory-profile-opening"); fs.mkdirSync(out, { recursive: true });
+    const out = memoryOut("memory-profile-opening"); fs.mkdirSync(out, { recursive: true });
     const rules = richMemory();
     let rulesReads = 0, rulesAnswered = 0, profileAnswered = 0;
     const profileReads: string[] = [];
@@ -2831,7 +4467,7 @@ describe("memory profile window: opening under slow data", () => {
           release();
           await page.locator("[data-profile-summarize]").waitFor();
           expect(profileReads).toEqual(["GET"]);
-          const slices = await page.locator("[data-profile-slice]").evaluateAll(nodes => nodes.map(node => ({ kind: node.getAttribute("data-profile-slice"), label: node.querySelector("h4, p")!.textContent ?? "", costume: node.querySelector("img[data-role-avatar]")?.getAttribute("data-role-avatar") ?? null })));
+          const slices = await page.locator("[data-profile-level]").evaluateAll(nodes => nodes.map(node => ({ kind: node.getAttribute("data-profile-level")!.split(":")[0]!, label: node.querySelector("span span")!.textContent ?? "", costume: node.querySelector("img[data-role-avatar]")?.getAttribute("data-role-avatar") ?? null })));
           for (const slice of slices) expect(slice.costume !== null).toBe(slice.kind === "role" || slice.kind === "swarm");
           /* Repeated roles across scopes each wear their own costume. */
           const byRole = slices.filter(slice => slice.kind === "role" || slice.kind === "swarm").map(slice => slice.costume);
@@ -2839,13 +4475,17 @@ describe("memory profile window: opening under slow data", () => {
           for (const id of ["merger", "orchestrator"]) expect(byRole.filter(costume => costume === id).length).toBe(2);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
           await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-loaded.png`) });
-          await page.getByRole("button", { name: translate(lang, "memoryProfile.allRules"), exact: true }).click();
-          await page.locator("[data-rules-section]").first().waitFor();
-          /* The curator's history summary and each pass wear the curator; the swarm heading wears its role. */
+          /* A level opens beside the list, or on its own screen on a phone. */
+          const openLevel = async (scope: string) => {
+            if (await page.locator("[data-level-back]").count()) await page.locator("[data-level-back]").click();
+            await page.locator(`[data-profile-level="${scope}"]`).click();
+            await page.locator("[data-level-pane] [data-rules-section]").first().waitFor();
+          };
+          await openLevel("role:garden:builder");
+          /* The curator's history summary and each pass wear the curator. */
           await page.locator("[data-curation-history] summary").click();
           expect(await costumes(page, "[data-curation-history] summary")).toEqual(["curator"]);
           expect(await costumes(page, "[data-curation-pass]")).toEqual(["curator", "curator"]);
-          expect(await costumes(page, "[data-rules-swarm]")).toEqual(["builder"]);
           for (const row of await page.locator("[data-learned-rule] button[aria-expanded]").all()) await row.click();
           for (const summary of await page.locator("[data-rule-versions] summary").all()) await summary.click();
           const provenance = await page.locator("[data-rule-provenance]").evaluateAll(nodes => nodes.flatMap(node => [...node.querySelectorAll("img[data-role-avatar]")].map(img => img.getAttribute("data-role-avatar"))));
@@ -2854,12 +4494,397 @@ describe("memory profile window: opening under slow data", () => {
           expect(provenance).toEqual(expect.arrayContaining(["architect", "curator"]));
           expect(earlierLines.sort()).toEqual(["curator", "merger"]);
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-allrules.png`) });
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-level.png`) });
+          /* The swarm heading wears its role. */
+          await openLevel("swarm:builder");
+          expect(await costumes(page, '[data-rules-section="swarm"] h3')).toEqual(["builder"]);
+          await page.screenshot({ path: path.join(out, `${width}-${scheme}-${lang}-swarm.png`) });
           expect(pageErrors).toEqual([]);
         } finally { release(); await context.close(); }
       }
     } finally { await browser.close(); server.stop(); }
   });
+});
+
+/* S7: the memory profile window as variant 5 draws it, the levels on the left and the chosen level's rules on the right, on the real window and
+   the real components. Each state is rendered at desktop and phone widths in both languages and themes; every frame is read by `measureS7` and
+   written to manifest.json beside the frames. */
+type S7Data = "rich" | "many" | "empty" | "paused-source" | "paused-override";
+type S7Profile = "ready" | "none" | "running" | "error" | "stale" | "reading";
+type S7State = {
+  id: string; data?: S7Data; profile?: S7Profile; focus?: string; coldRules?: boolean; endScroll?: boolean; edge?: boolean; wide?: boolean;
+  /* Elements that name the state: each is whole inside the window and inside its scroller on the first screen. `last:` takes the last match. */
+  define: (phone: boolean) => string[];
+  act?: (page: Page, helpers: { phone: boolean; openLevel: (scope: string) => Promise<void> }) => Promise<void>;
+  topicIds?: string[];
+};
+const S7_BUILDER = "role:garden:builder", S7_EVERY = "role:*:builder", S7_REVIEWER = "role:garden:reviewer", S7_ARCHITECT = "role:garden:architect", S7_SWARM = "swarm:builder", S7_PROJECT = "project:garden";
+const S7_TOPIC_IDS = ["b-a", "p-1"];
+const HEADLINES: Record<string, [string, string]> = {
+  [S7_BUILDER]: ["Builders prove each change with a named check", "Білдери доводять кожну зміну названою перевіркою"], [S7_EVERY]: ["Habits that hold in every repository: name the check, keep the evidence beside the finding, and say which readers no check reached", "Звички, що працюють у кожному репозиторії: назвати перевірку, тримати докази поруч із зауваженням і сказати, яких читачів жодна перевірка не охопила"],
+  [S7_REVIEWER]: ["Reviewers hold the evidence to one bar", "Рев’юери тримають докази на одній планці"], [S7_SWARM]: ["Public guidance shipped with the product", "Публічні поради, що йдуть разом із продуктом"],
+  [S7_PROJECT]: ["How this project is tested", "Як тестують цей проєкт"], machine: ["How this machine runs checks", "Як ця машина запускає перевірки"],
+};
+const scrollPaneToRow = (page: Page, row: "middle" | "end") => page.evaluate((target) => {
+  const pane = document.querySelector<HTMLElement>("[data-level-pane]")!;
+  if (target === "end") { pane.scrollTop = pane.scrollHeight; return; }
+  const rows = [...pane.querySelectorAll<HTMLElement>("[data-learned-rule]")];
+  pane.scrollTop += rows[Math.floor(rows.length / 2)]!.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+}, row);
+const S7_STATES: S7State[] = [
+  { id: "default", edge: true, wide: true, define: phone => phone ? ["[data-memory-profile] [data-profile-ready] h3", `[data-profile-level="${S7_BUILDER}"]`] : ["[data-memory-profile] [data-profile-ready] h3", "[data-level-pane] h3", "[data-level-pane] [data-rules-count]"] },
+  { id: "level", define: () => ["[data-level-pane] h3", "[data-level-pane] [data-rules-count]"], act: async (page, { openLevel }) => { await openLevel(S7_BUILDER); } },
+  { id: "earlier", wide: true, define: () => ['[data-rule-versions="b-export-format"][open] summary', "[data-rule-revert]"], act: async (page, { openLevel }) => {
+    await openLevel(S7_BUILDER);
+    await page.locator('[data-learned-rule="b-export-format"] > div > button').first().click();
+    await page.locator('[data-rule-versions="b-export-format"] summary').click();
+  } },
+  { id: "archived", wide: true, define: () => ["[data-rules-history]", '[data-left-rule="r-merged"] [data-rule-counterpart]', '[data-left-rule-restore="r-budget"]'], act: async (page, { openLevel }) => {
+    await openLevel(S7_REVIEWER);
+    await page.locator("[data-rules-history]").click();
+    await page.locator("[data-left-rule]").nth(3).waitFor();
+    await page.evaluate(() => { const pane = document.querySelector<HTMLElement>("[data-level-pane]")!; pane.scrollTop += document.querySelector("[data-rules-history]")!.getBoundingClientRect().top - pane.getBoundingClientRect().top; });
+  } },
+  { id: "archived-only", define: () => ["[data-level-pane] h3", "[data-rules-history]"], act: async (page, { openLevel }) => { await openLevel(S7_ARCHITECT); } },
+  { id: "empty-level", endScroll: true, define: () => ["[data-level-pane] h3", "[data-level-pane] p"], act: async (page, { openLevel }) => { await openLevel("machine"); } },
+  { id: "long", edge: true, define: () => ['[data-learned-rule="b-long"]', '[data-learned-rule="b-path"]'], act: async (page, { openLevel }) => { await openLevel(S7_BUILDER); } },
+  { id: "long-open", edge: true, define: () => ['[data-learned-rule="b-long"][data-open]', '[data-learned-rule="b-path"][data-open]'], act: async (page, { openLevel }) => {
+    await openLevel(S7_BUILDER);
+    for (const id of ["b-long", "b-path"]) await page.locator(`[data-learned-rule="${id}"] > div > button`).first().click();
+  } },
+  { id: "many-rest", data: "many", wide: true, define: phone => phone ? ["[data-profile-ready] h3", `[data-profile-level="${S7_BUILDER}"]`] : ["[data-level-pane] h3", "[data-level-pane] [data-rules-count]"] },
+  { id: "many-middle", data: "many", define: () => ["[data-level-pane] ol > li:nth-child(21)"], act: async (page, { openLevel }) => { await openLevel(S7_BUILDER); await scrollPaneToRow(page, "middle"); } },
+  { id: "many-end", data: "many", endScroll: true, define: () => ["last:[data-level-pane] ol > li"], act: async (page, { openLevel }) => { await openLevel(S7_BUILDER); await scrollPaneToRow(page, "end"); } },
+  { id: "many-list-end", data: "many", endScroll: true, define: () => ["last:[data-memory-profile] [data-profile-level]"], act: async (page) => {
+    await page.evaluate(() => { const list = document.querySelector<HTMLElement>("[data-memory-profile]")!; list.scrollTop = list.scrollHeight; });
+  } },
+  { id: "topic", topicIds: S7_TOPIC_IDS, define: () => ['[data-level-pane="topic"] h3', '[data-level-pane="topic"] [data-rules-section]'], act: async (page) => { await page.locator('[data-profile-topic="0"]').click(); await page.locator('[data-level-pane="topic"]').waitFor(); await page.evaluate(() => { for (const scroller of document.querySelectorAll<HTMLElement>("[data-memory-profile], [data-level-pane]")) scroller.scrollTop = 0; }); } },
+  { id: "focus", focus: "b-export-format", define: () => ['[data-learned-rule="b-export-format"][data-open][data-focused]'] },
+  { id: "focus-departed", focus: "r-merged", define: () => ['[data-left-rule="r-merged"][data-focused]', '[data-rules-history][aria-expanded="true"]'] },
+  { id: "swarm", define: () => ["[data-level-pane] h3", '[data-learned-rule="sw-1"]'], act: async (page, { openLevel }) => { await openLevel(S7_SWARM); } },
+  { id: "undo", define: () => ["[data-rules-undo]", "[data-rules-undo-button]"], act: async (page, { openLevel }) => {
+    await openLevel(S7_BUILDER);
+    await page.locator('[data-learned-rule-delete="b-a"]').click();
+    await page.locator("[data-rules-undo]").waitFor();
+  } },
+  { id: "profile-reading", profile: "reading", define: () => ["[data-memory-profile] h3[role=status]"] },
+  { id: "profile-none", profile: "none", define: () => ["[data-memory-profile] h3", "[data-profile-summarize]"] },
+  { id: "profile-running", profile: "running", define: () => ["[data-memory-profile] h3", "p[role=status]"] },
+  { id: "profile-error", profile: "error", define: () => ["[data-memory-profile] [role=alert]", "[data-profile-summarize]"] },
+  { id: "profile-stale", profile: "stale", define: () => ["[data-profile-stale]", "[data-profile-summarize]"] },
+  { id: "profile-empty", data: "empty", define: () => ["[data-memory-profile] h3", `[data-profile-level="${S7_PROJECT}"]`] },
+  { id: "profile-paused-source", data: "paused-source", define: () => ["[data-rules-window-off]", "[data-memory-profile] h3"] },
+  { id: "profile-paused-override", data: "paused-override", define: () => ["[data-rules-window-off]", "[data-memory-profile] h3"] },
+  { id: "profile-cold", coldRules: true, define: () => ["[data-rules-window-loading]", "[data-profile-ready] h3", "[data-profile-level]"] },
+];
+
+/** Reads one frame: every violation the variant's gates name, as short strings. */
+const measureS7 = (page: Page, args: { phone: boolean; scopes: Record<string, { active: string[]; left: string[] }>; total: number; topicIds?: string[]; endScroll: boolean; cold: boolean; expectCurrent: boolean }) => page.evaluate((args) => {
+  const out: string[] = [];
+  const checked = { texts: 0, scrollers: 0, rules: 0, removes: 0, rows: 0, levelGaps: 0, departedTone: 0, emptySaid: 0, insets: 0 };
+  const win = document.querySelector<HTMLElement>("[data-rules-window]")!;
+  const box = win.getBoundingClientRect();
+  const clips = (element: Element) => { const found: HTMLElement[] = []; for (let node = element.parentElement; node; node = node.parentElement) if (getComputedStyle(node).overflowX !== "visible") found.push(node); return found; };
+  /* Text cut sideways by a clipping ancestor or the viewport, except where the text is drawn with an ellipsis. */
+  const walker = document.createTreeWalker(win, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const parent = node.parentElement, text = (node.textContent ?? "").trim();
+    if (!parent || !text || parent.closest("svg") || getComputedStyle(parent).textOverflow === "ellipsis" || parent.closest("[class*=truncate]")) continue;
+    const range = document.createRange(); range.selectNodeContents(node);
+    checked.texts++;
+    const limits = [...clips(parent).map(ancestor => ancestor.getBoundingClientRect()), { left: 0, right: innerWidth }];
+    for (const rect of range.getClientRects()) if (rect.width > 1 && limits.some(limit => rect.left < limit.left - 1 || rect.right > limit.right + 1)) { out.push(`cut:${text.slice(0, 30)}`); break; }
+  }
+  const scrollers = [...win.querySelectorAll<HTMLElement>("[data-memory-profile], [data-level-pane]")];
+  checked.scrollers = scrollers.length;
+  /* A word cut through by the top of its scroller. */
+  if (!args.endScroll) for (const scroller of scrollers) {
+    const band = scroller.getBoundingClientRect(), texts = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+    for (let node = texts.nextNode(); node; node = texts.nextNode()) {
+      if (!(node.textContent ?? "").trim() || node.parentElement?.closest("svg")) continue;
+      const range = document.createRange(); range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if (rect.height > 1 && rect.width > 1 && rect.top < band.top - 1 && rect.bottom > band.top + 1) { out.push(`cut-top:${(node.textContent ?? "").trim().slice(0, 24)}`); break; }
+    }
+  }
+  if (!args.endScroll) for (const scroller of scrollers) {
+    const band = scroller.getBoundingClientRect();
+    for (const row of scroller.querySelectorAll<HTMLElement>("[data-learned-rule], [data-left-rule], [data-profile-level], [data-profile-topic], [data-rules-undo]")) {
+      const rect = row.getBoundingClientRect();
+      if (rect.height && rect.top < band.top - 1 && rect.bottom > band.top + 1) out.push(`slice:${row.getAttribute("data-learned-rule") ?? row.getAttribute("data-left-rule") ?? row.getAttribute("data-profile-level") ?? "row"}`);
+    }
+  }
+  const seen = new Set<string>();
+  for (const row of win.querySelectorAll<HTMLElement>("[data-learned-rule]")) {
+    const id = row.getAttribute("data-learned-rule")!;
+    checked.rules++;
+    const text = row.querySelector("button > span")?.textContent ?? "";
+    if (seen.has(text)) out.push(`repeat:${id}`); seen.add(text);
+    const remove = row.querySelector("[data-learned-rule-delete]"), label = row.querySelector("button > span");
+    if (!remove || !label) continue;
+    const range = document.createRange(); range.selectNodeContents(label);
+    const line = range.getClientRects()[0], at = remove.getBoundingClientRect();
+    checked.removes++;
+    if (line && Math.abs(at.top + at.height / 2 - (line.top + line.height / 2)) > 2) out.push(`x:${id}`);
+  }
+  /* A closed rule keeps to two lines, and an archived one too: the clamp is the closed row's defining element in the `long` state. */
+  for (const [selector, label, lineHeight] of [["[data-learned-rule]:not([data-open])", "button > span", 17], ["[data-left-rule]", ":scope > span > span", 16]] as const) {
+    for (const row of win.querySelectorAll<HTMLElement>(selector)) {
+      const text = row.querySelector<HTMLElement>(label);
+      if (!text) continue;
+      const lines = Math.round(text.getBoundingClientRect().height / lineHeight);
+      if (text.getBoundingClientRect().height > lineHeight * 2 + 1) out.push(`clamp:${row.getAttribute("data-learned-rule") ?? row.getAttribute("data-left-rule")}:${lines}`);
+    }
+  }
+  /* The header's sentence shows whole: no ellipsis, and its text range stays inside the line and clear of the × beside it. */
+  const starts = win.querySelector<HTMLElement>("[data-rules-starts]"), closeBox = win.querySelector<HTMLElement>("[data-rules-window-close]")?.getBoundingClientRect();
+  if (starts) {
+    const range = document.createRange(); range.selectNodeContents(starts);
+    if (getComputedStyle(starts).textOverflow === "ellipsis" || starts.scrollWidth > starts.clientWidth + 1) out.push("starts-cut");
+    for (const line of range.getClientRects()) if (closeBox && line.right > closeBox.left + 0.5 && line.bottom > closeBox.top && line.top < closeBox.bottom) out.push("starts-under-close");
+  }
+  /* A heading that wraps keeps its count on the line of its last word. */
+  for (const heading of win.querySelectorAll<HTMLElement>("[data-rules-section] h3")) {
+    const count = heading.parentElement?.querySelector<HTMLElement>("[data-rules-count]");
+    if (!count) continue;
+    const range = document.createRange(); range.selectNodeContents(heading);
+    const lines = [...range.getClientRects()], last = lines[lines.length - 1]!, at = count.getBoundingClientRect();
+    if (Math.abs(at.left - last.right) > 12 || at.top < last.top - 2 || at.bottom > last.bottom + 2) out.push("count-detached");
+  }
+  /* On the phone, the room between one level row's last line and the next row's label is one, whether the row carries a summary line or not. */
+  if (args.phone) {
+    const rows = [...win.querySelectorAll<HTMLElement>("[data-profile-level]")];
+    const gaps: number[] = [];
+    for (const [index, row] of rows.entries()) {
+      const next = rows[index + 1];
+      if (!next) continue;
+      const lines = [...row.querySelectorAll<HTMLElement>("span.min-w-0 > span")].filter(line => line.textContent?.trim());
+      const label = next.querySelector<HTMLElement>("span.min-w-0 > span");
+      if (!lines.length || !label) continue;
+      const a = document.createRange(), b = document.createRange(); a.selectNodeContents(lines[lines.length - 1]!); b.selectNodeContents(label);
+      const rects = [...a.getClientRects()]; gaps.push(b.getClientRects()[0]!.top - rects[rects.length - 1]!.bottom);
+    }
+    checked.levelGaps = gaps.length;
+    if (gaps.length > 1 && Math.max(...gaps) - Math.min(...gaps) > 2) out.push(`level-gaps:${gaps.map(gap => Math.round(gap)).join(",")}`);
+  }
+  /* A rule that has left and is the one asked about stands out from its neighbours in the history. */
+  const departed = [...win.querySelectorAll<HTMLElement>("[data-left-rule]")], chosen = departed.find(row => row.hasAttribute("data-focused"));
+  if (chosen) {
+    const others = departed.filter(row => row !== chosen).map(row => getComputedStyle(row).backgroundColor);
+    checked.departedTone = others.length;
+    /* The hover tint is what a pointer passing over any row leaves; the chosen row has to read as more than that. */
+    const hover = document.createElement("span"); hover.className = "bg-sunken"; document.body.append(hover);
+    const hoverTone = getComputedStyle(hover).backgroundColor; hover.remove();
+    const tone = getComputedStyle(chosen).backgroundColor;
+    if (others.includes(tone) || tone === hoverTone) out.push("departed-focus-unmarked");
+  }
+  /* A profile with no rules says so once: the pane beside the list stays quiet where the list already says it. */
+  if (!args.phone && args.total === 0) {
+    const said = win.querySelector("[data-memory-profile] h3")?.textContent?.trim().toLowerCase() ?? "";
+    const pane = win.querySelector<HTMLElement>("[data-level-pane]")?.textContent?.toLowerCase().replace(/[.\s]+/g, " ") ?? "";
+    checked.emptySaid = 1;
+    if (said && pane.includes(said.replace(/[.\s]+/g, " ").trim())) out.push("empty-said-twice");
+  }
+  /* A selected level or focused rule lands above its scroller's bottom fade: the fade is the last 28 px of the scroller. */
+  for (const scroller of scrollers) {
+    const band = scroller.getBoundingClientRect();
+    for (const row of scroller.querySelectorAll<HTMLElement>("[aria-current=true], [data-focused]")) {
+      const rect = row.getBoundingClientRect();
+      if (rect.height && rect.bottom > band.bottom - 28 + 1 && rect.top < band.bottom) out.push(`under-fade:${row.getAttribute("data-profile-level") ?? row.getAttribute("data-profile-topic") ?? row.getAttribute("data-learned-rule") ?? row.getAttribute("data-left-rule") ?? "row"}:${Math.round(rect.bottom - (band.bottom - 28))}`);
+    }
+  }
+  /* On the phone the back link, the heading and the first rule's dot start where the curator line does. */
+  if (args.phone) {
+    const edge = (element: Element | null | undefined) => { if (!element) return null; const range = document.createRange(); range.selectNodeContents(element); return range.getClientRects()[0]?.left ?? null; };
+    const reference = win.querySelector("[data-curation-history] summary")?.getBoundingClientRect().left ?? null, rulesPane = win.querySelector<HTMLElement>("[data-level-pane]");
+    if (reference !== null && rulesPane) {
+      const readings: [string, number | null][] = [["back", edge(rulesPane.querySelector("[data-level-back]"))], ["heading", edge(rulesPane.querySelector("h3"))], ["dot", rulesPane.querySelector("[data-learned-rule] > span[aria-hidden]")?.getBoundingClientRect().left ?? null]];
+      checked.insets = readings.length;
+      for (const [name, left] of readings) if (left !== null && Math.abs(left - reference) > 1) out.push(`inset:${name}:${left.toFixed(1)}/${reference.toFixed(1)}`);
+    }
+  }
+  if (document.documentElement.scrollWidth > innerWidth) out.push("page-overflow");
+  const title = document.getElementById("rules-window-title")!, titleBox = title.getBoundingClientRect();
+  if (title.scrollWidth > title.clientWidth + 1 || titleBox.left < 0 || titleBox.right > innerWidth || titleBox.top < 0 || titleBox.bottom > innerHeight) out.push("title");
+  for (const scroller of scrollers) for (const node of scroller.querySelectorAll<HTMLElement>("*")) if (/auto|scroll/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight + 1) out.push(`nested:${node.tagName.toLowerCase()}`);
+  const pane = win.querySelector<HTMLElement>("[data-level-pane]"), key = pane?.getAttribute("data-level-pane");
+  if (pane && key && !args.cold) {
+    const held = args.scopes[key];
+    for (const row of pane.querySelectorAll("[data-learned-rule]")) if (!(key === "topic" ? args.topicIds ?? [] : held?.active ?? []).includes(row.getAttribute("data-learned-rule")!)) out.push(`foreign:${row.getAttribute("data-learned-rule")}`);
+    for (const row of pane.querySelectorAll("[data-left-rule]")) if (!(held?.left ?? []).includes(row.getAttribute("data-left-rule")!)) out.push(`foreign-left:${row.getAttribute("data-left-rule")}`);
+  }
+  const rows = [...win.querySelectorAll<HTMLElement>("[data-profile-level]")];
+  checked.rows = rows.length;
+  if (!args.cold && rows.length) {
+    let sum = 0;
+    for (const row of rows) {
+      const scope = row.getAttribute("data-profile-level")!, count = Number(row.querySelector("span.tabular-nums")?.textContent);
+      sum += count;
+      if (count !== args.scopes[scope]?.active.length) out.push(`count:${scope}`);
+      if (key === scope) { const heading = pane?.querySelector("[data-rules-count]"); if (Number(heading?.textContent ?? 0) !== count) out.push(`heading-count:${scope}`); }
+    }
+    if (sum !== args.total) out.push(`total:${sum}/${args.total}`);
+  }
+  if (!args.phone && args.expectCurrent && win.querySelectorAll("[data-memory-profile] [aria-current=true]").length !== 1) out.push("current");
+  if (args.phone) {
+    for (const row of win.querySelectorAll<HTMLElement>("[data-profile-level], [data-profile-topic]")) {
+      if (!row.querySelector("svg")) out.push(`chevron:${row.getAttribute("data-profile-level") ?? row.getAttribute("data-profile-topic")}`);
+      if (row.getBoundingClientRect().height < 44 - 0.5) out.push(`target:${row.getAttribute("data-profile-level") ?? row.getAttribute("data-profile-topic")}`);
+    }
+    const back = win.querySelector<HTMLElement>("[data-level-back]"), heading = pane?.querySelector("h3");
+    if (back && heading) {
+      const a = document.createRange(), b = document.createRange(); a.selectNodeContents(back); b.selectNodeContents(heading);
+      if (Math.abs(a.getClientRects()[0]!.left - b.getClientRects()[0]!.left) > 1) out.push("back-align");
+    }
+  }
+  return { violations: out, checked, top: Math.round(box.top), height: Math.round(box.height), header: Math.round(win.querySelector("header")!.getBoundingClientRect().height) };
+}, args);
+
+describe("memory profile window: levels on the left, rules on the right", () => {
+  browserTest("every state at desktop and phone widths in both languages and themes keeps whole rows, one scroller per pane and the window's edges", async () => {
+    const out = memoryOut("s7-levels"); fs.mkdirSync(out, { recursive: true });
+    const at = "2026-10-11T00:01:00.000Z";
+    const rule = (id: string, text: string, roleId: string | null = "builder", extra: Partial<RuleView> = {}): RuleView => ({ ...sampleRule(id, text), roleId, ...extra });
+    const gone = (id: string, text: string, reason: NonNullable<RuleView["reason"]>, roleId = "reviewer", extra: Partial<RuleView> = {}): RuleView => ({ ...rule(id, text, roleId), state: "archived", reason, ...extra });
+    const scopeOf = (scope: string, active: RuleView[], left: RuleView[] = []): ScopeView => ({ ...sampleScope(scope, active), left });
+    const longText = "Before a change reaches review, name the check that proves it and run that check on the base and on the branch with the same isolation, so that a red result on one side and a green one on the other is a finding and never a guess. Keep both results next to the finding they belong to, record which reader of the stored scope each result covers, and say plainly which readers no check reached. When the change touches a write path, list every producer, consumer, copy and default that reaches it, and name what each of them passes, because a check on the submitted values alone misses the defaults, the copies and the parent paths that carry the same data to the same record by another route.";
+    const pathText = `src/lib/memory/${"a-very-long-directory-name-without-spaces/".repeat(3)}final-file.test.ts`;
+    const earlier = (id: string, text: string, revisedBy: RuleRevisionView) => ({ id, rule: text, why: "An earlier write placed guidance with the wrong readers.", hints: [], createdAt: "2026-01-01", revisedBy });
+    const curation = { lastAt: at, nextAt: null, newLessons: 0, passes: [{ id: "pass-1", state: "succeeded" as const, claimedAt: at, endedAt: at, failure: null, counts: { calls: 1, changed: 2, rewritten: 1, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 } }] };
+    const rich = (): RoleMemoryProjectView => ({ project: "garden", enabled: true, curation, scopes: [
+      /* The store lists a level's rules oldest first and the pane shows them newest first, so the rule the frames open is last here. */
+      scopeOf(S7_BUILDER, [
+        rule("b-a", "Run each touched test file by path under isolated state."), rule("b-b", "Read the current scope revision before proposing a stored rewrite."),
+        rule("b-long", longText), rule("b-path", pathText),
+        rule("b-export-format", "Name the export format in the first line of the report.", "builder", { revisedBy: { by: "curator", at }, versions: [earlier("b-export-format-v1", "State the export format in the report.", { by: "curator", at }), earlier("b-export-format-v2", "Mention the export format.", { by: "agent", at, roleId: "reviewer" })] }),
+      ]),
+      scopeOf(S7_EVERY, [rule("be-1", "Keep a fix round to the handed findings."), rule("be-2", "Give a browser started from a stage a short temporary directory.")]),
+      scopeOf(S7_REVIEWER, [rule("r-1", "Judge the 390 px Ukrainian frame first.", "reviewer"), rule("r-2", "Check that a test turns red with the bug put back.", "reviewer")], [
+        gone("r-del", "A rule the operator removed.", "deleted"), gone("r-merged", "A rule that merged into another one.", "deleted", "reviewer", { state: "merged", reason: undefined, mergedInto: "r-1" }),
+        gone("r-task", "A rule that recorded one completed task.", "task-specific", "reviewer", { where: "this project" }), gone("r-budget", "A rule that left when the scope reached its bound.", "budget"),
+      ]),
+      scopeOf(S7_ARCHITECT, [], [gone("a-gone", "A design rule the curator archived.", "stale", "architect")]),
+      { ...scopeOf(S7_SWARM, [rule("sw-1", "Name the file a change reaches before changing it.")]), kind: "swarm", roleId: "builder" },
+      scopeOf(S7_PROJECT, [rule("p-1", "Run the test files you touched by path.", null)], [gone("p-0", "A project rule the curator archived.", "task-specific", "builder")]),
+      scopeOf("machine", []),
+    ] });
+    const ROLES = ["builder", "reviewer", "architect", "merger", "orchestrator", "maintainer", "verifier", "visual-critic", "curator", "deployer"];
+    const many = (): RoleMemoryProjectView => ({ project: "garden", enabled: true, curation, scopes: [
+      ...ROLES.flatMap(roleId => [
+        scopeOf(`role:garden:${roleId}`, roleId === "builder" ? Array.from({ length: 40 }, (_, index) => rule(`m-${index}`, `Rule ${index + 1} of 40: name the check that proves a change before writing the change itself.`)) : [rule(`${roleId}-here`, `A ${roleId} rule for this project.`, roleId)]),
+        scopeOf(`role:*:${roleId}`, [rule(`${roleId}-all`, `A ${roleId} rule for every project.`, roleId)]),
+      ]).map(entry => ({ ...entry, kind: "role" as const, roleId: entry.scope.split(":")[2]! })),
+      scopeOf(S7_PROJECT, [rule("p-1", "Run the test files you touched by path.", null)]), scopeOf("machine", [rule("mc-1", "Give a browser a short temporary directory.", null)]),
+    ] });
+    const empty = (): RoleMemoryProjectView => ({ project: "garden", enabled: true, curation, scopes: [scopeOf(S7_PROJECT, []), scopeOf("machine", [])] });
+    const dataOf = (kind: S7Data): RoleMemoryProjectView => kind === "many" ? many() : kind === "empty" ? empty() : kind === "rich" ? rich() : { ...rich(), enabled: false, ...(kind === "paused-source" ? { pausedBy: "memorySource" as const } : {}) };
+    /* The profile as the service stores it: one overall summary and one per level that holds rules, topics pointing at rules by their place in the basis. */
+    const profileOf = (view: RoleMemoryProjectView, lang: "en" | "uk", kind: S7Profile): MemoryProfileView => {
+      const T = (english: string, ukrainian: string) => lang === "uk" ? ukrainian : english;
+      const active = view.scopes.filter(entry => entry.active.length);
+      const ids = active.flatMap(entry => entry.active.map(item => item.id));
+      const basisOf = (rules: RuleView[]) => rules.map(({ id, changedAt }) => ({ id, changedAt }));
+      const part = (scope: string, basis: RuleView[], headline: string, text: string, topics: { title: string; text?: string; rules: number[] }[]) => ({ scope, model: "sample", promptVersion: PROFILE_PROMPT_VERSION, hash: scope, basis: basisOf(basis), createdAt: at, durationMs: 1, answer: { headline, text, topics } });
+      const place = (...names: string[]) => names.map(name => ids.indexOf(name) + 1).filter(Boolean);
+      const row: ProfileRow = { project: "garden", locale: lang, model: "sample", promptVersion: PROFILE_PROMPT_VERSION, parts: active.length ? [
+        part("overall", active.flatMap(entry => entry.active), T("Agents check before they change", "Агенти перевіряють, перш ніж змінювати"), T("Builders prove each change with a named check, reviewers hold the evidence to the same bar, and every level keeps its rules short and checkable.", "Білдери доводять кожну зміну названою перевіркою, рев’юери тримають докази на тій самій планці, а кожен рівень зберігає короткі й перевірні правила."), [
+          { title: T("Isolated tests", "Ізольовані тести"), text: T("Tests run apart from live state.", "Тести йдуть окремо від живого стану."), rules: place("b-a", "p-1") },
+          { title: T("Review evidence", "Докази для рев’ю"), text: T("A finding keeps the proof beside it.", "Зауваження зберігає доказ поруч."), rules: place("r-1", "r-2", "b-b") },
+          { title: T("Shared wording", "Спільні формулювання"), rules: place("be-1") },
+        ]),
+        ...active.map(entry => { const [headline, headlineUk] = HEADLINES[entry.scope] ?? [`Rules of ${entry.scope}`, `Правила рівня ${entry.scope}`]; return part(entry.scope, entry.active, T(headline, headlineUk), T("What this level keeps, in one short paragraph for the pane's subtitle.", "Що зберігає цей рівень, одним коротким абзацом для підзаголовка панелі."), [{ title: T("A pill topic", "Тема-пігулка"), rules: [1] }]); }),
+      ] : [] };
+      const view2 = profileView({ project: "garden", enabled: view.enabled, scopes: view.scopes }, lang, "sample", row);
+      if (kind === "none") { view2.overall = null; view2.slices.forEach(slice => { slice.summary = null; }); view2.run = null; }
+      if (kind === "running") { view2.overall = null; view2.slices.forEach(slice => { slice.summary = null; }); view2.run = { state: "running", startedAt: at, errors: [] }; }
+      if (kind === "error") view2.run = { state: "failed", startedAt: at, errors: [{ scope: "overall", code: "account" }] };
+      if (kind === "stale") { view2.stale = true; view2.changes = { added: 2, rewritten: 1, removed: 1 }; }
+      return view2;
+    };
+    const mode = { data: "rich" as S7Data, profile: "ready" as S7Profile, lang: "en" as "en" | "uk", rules: rich(), profileGate: Promise.resolve(), rulesGate: Promise.resolve() };
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/role-memory": async (request: Request) => {
+        await mode.rulesGate;
+        if (request.method === "POST") {
+          const body = await request.json() as { action: string; ruleId: string };
+          if (body.action === "delete") mode.rules = { ...mode.rules, scopes: mode.rules.scopes.map(entry => { const found = entry.active.find(item => item.id === body.ruleId); return found ? { ...entry, active: entry.active.filter(item => item !== found), left: [{ ...found, state: "archived" as const, reason: "deleted" as const }, ...entry.left] } : entry; }) };
+        }
+        return Response.json(mode.rules);
+      },
+      "/api/role-memory/profile": async (request: Request) => {
+        await mode.profileGate;
+        if (request.method !== "GET") return Response.json({}, { status: 405 });
+        const lang = new URL(request.url).searchParams.get("locale") === "uk" ? "uk" : "en";
+        return Response.json(profileOf(mode.rules, lang, mode.profile));
+      },
+    });
+    const browser = await chromium.launch(LAUNCH);
+    const frames: unknown[] = [], failures: string[] = [], edges = new Map<string, Set<string>>();
+    const pairs = [["en", "light"], ["en", "dark"], ["uk", "light"], ["uk", "dark"]] as const;
+    try {
+      /* Desktop, 1000 px and phone widths take every state in every pair; the widths between them take the states that carry their own layout, in two pairs. */
+      const plan: { width: number; height: number; pairs: readonly (readonly ["en" | "uk", "light" | "dark"])[]; only?: (state: S7State) => boolean }[] = [
+        { width: 1440, height: 900, pairs }, { width: 390, height: 844, pairs },
+        { width: 1000, height: 700, pairs },
+        { width: 768, height: 800, pairs: [["uk", "light"], ["en", "dark"]], only: state => !!state.edge },
+        { width: 640, height: 800, pairs: [["uk", "light"], ["en", "dark"]], only: state => !!state.edge },
+      ];
+      /* S7_SMOKE=1 renders a handful of states in one pair, to read the gates before the full matrix runs. */
+      const smoke = process.env.S7_SMOKE === "1";
+      /* S7_FRAMES=state@width,… renders only those states at those widths, in every pair the plan gives that width. */
+      const wanted = process.env.S7_FRAMES ? new Set(process.env.S7_FRAMES.split(",")) : null;
+      const smokeStates = ["default", "earlier", "archived", "many-end", "topic", "undo", "profile-reading", "profile-cold"];
+      for (const { width, height, pairs: sets, only } of smoke ? plan.slice(0, 2).map(entry => ({ ...entry, pairs: [["en", "light"]] as const })) : plan) for (const [lang, scheme] of sets) for (const state of S7_STATES.filter(item => (!only || only(item)) && (!wanted || wanted.has(`${item.id}@${width}`)) && (!smoke || smokeStates.includes(item.id)))) {
+        const phone = width === 390;
+        mode.data = state.data ?? "rich"; mode.profile = state.profile ?? "ready"; mode.lang = lang; mode.rules = dataOf(mode.data);
+        let release = () => {};
+        mode.profileGate = Promise.resolve(); mode.rulesGate = Promise.resolve();
+        if (state.profile === "reading") mode.profileGate = new Promise<void>(resolve => { release = resolve; });
+        if (state.coldRules) mode.rulesGate = new Promise<void>(resolve => { release = resolve; });
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-profile&rolememory=1${state.focus ? `&focus=${state.focus}` : ""}`, { width, height }, scheme, lang, "reduce", phone);
+        try {
+          await page.locator("[data-rules-window]").waitFor();
+          if (state.coldRules) await page.locator("[data-rules-window-loading]").waitFor();
+          else if (state.profile === "reading") await page.locator("[data-memory-profile] h3[role=status]").waitFor();
+          /* A phone opened on a rule lands on that level's screen, with no list mounted. */
+          else if (phone && state.focus) await page.locator("[data-level-pane] [data-rules-section]").waitFor();
+          else await page.locator("[data-profile-level]:not(:disabled)").first().waitFor();
+          const openLevel = async (scope: string) => {
+            if (phone && await page.locator("[data-level-back]").count()) await page.locator("[data-level-back]").click();
+            await page.locator(`[data-profile-level="${scope}"]`).click();
+            await page.locator(`[data-level-pane="${scope}"]`).waitFor();
+          };
+          await state.act?.(page, { phone, openLevel });
+          await page.waitForTimeout(250);
+          const scopes = Object.fromEntries(mode.rules.scopes.map(entry => [entry.scope, { active: entry.active.map(item => item.id), left: entry.left.map(item => item.id) }]));
+          const read = await measureS7(page, { phone, scopes, total: mode.rules.scopes.reduce((sum, entry) => sum + entry.active.length, 0), topicIds: state.topicIds, endScroll: !!state.endScroll, cold: !!state.coldRules, expectCurrent: !state.coldRules });
+          const defining = await page.evaluate((selectors) => selectors.map(selector => {
+            const last = selector.startsWith("last:"), query = last ? selector.slice(5) : selector;
+            const found = [...document.querySelectorAll<HTMLElement>(query)], element = last ? found.at(-1) : found[0];
+            if (!element) return { selector, whole: false };
+            const rect = element.getBoundingClientRect(), win = document.querySelector("[data-rules-window]")!.getBoundingClientRect();
+            const scroller = element.closest("[data-level-pane], [data-memory-profile]")?.getBoundingClientRect();
+            const within = (outer: { top: number; bottom: number; left: number; right: number }) => rect.top >= outer.top - 1 && rect.bottom <= outer.bottom + 1 && rect.left >= outer.left - 1 && rect.right <= outer.right + 1;
+            return { selector, whole: rect.height > 0 && within(win) && within({ top: 0, bottom: innerHeight, left: 0, right: innerWidth }) && (!scroller || within(scroller)) };
+          }), state.define(phone));
+          const frame = `${state.id}-${width}-${lang}-${scheme}.png`;
+          await page.screenshot({ path: path.join(out, frame) });
+          const issues = [...read.violations, ...defining.filter(item => !item.whole).map(item => `defining:${item.selector}`), ...pageErrors.map(error => `pageerror:${error}`)];
+          /* The modal keeps keyboard focus inside the window. */
+          for (let press = 0; press < 30; press++) await page.keyboard.press("Tab");
+          if (!await page.evaluate(() => !!document.activeElement && !!document.activeElement.closest("[data-rules-window]"))) issues.push("modal");
+          const edge = `${width}`; if (!phone) { (edges.get(edge) ?? edges.set(edge, new Set()).get(edge)!).add(`${read.top}/${read.height}/${read.header}`); }
+          frames.push({ file: frame, state: state.id, width, height, lang, theme: scheme, window: { top: read.top, height: read.height, header: read.header }, checked: read.checked, defining: state.define(phone), violations: issues });
+          if (issues.length) failures.push(`${frame}: ${issues.join(", ")}`);
+        } finally { release(); await context.close(); }
+      }
+      /* One top, one height and one header height at a width, whatever state or level is shown. */
+      for (const [width, readings] of edges) if (readings.size !== 1) failures.push(`window edges differ at ${width}: ${[...readings].join(" | ")}`);
+    } finally {
+      fs.writeFileSync(path.join(out, "manifest.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "memory profile window: levels on the left, rules on the right", states: S7_STATES.map(state => state.id), frames, failures }, null, 2) + "\n");
+      await browser.close(); server.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 3_600_000);
 });
 
 describe("finding recurrence (#2648)", () => {
@@ -3104,7 +5129,8 @@ describe("shipped role defaults rendered evidence", () => {
     const browser = await chromium.launch(LAUNCH);
     const cases: Record<string, unknown>[] = [];
     try {
-      for (const locale of ["en", "uk"] as const) for (const width of [1280, 390]) {
+      /* 740 and 700 are the two sides of the table's own floor, 668 px (the fixture pads the table by 24 px a side). */
+      for (const locale of ["en", "uk"] as const) for (const width of [1280, 1024, 740, 700, 660, 390]) {
         const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=role-defaults&mapping=1`, { width, height: 844 }, "light", locale, "reduce", width === 390);
         try {
           await page.locator('[data-mapping-row="reviewer"]').waitFor();
@@ -3146,14 +5172,101 @@ describe("shipped role defaults rendered evidence", () => {
           }
           const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
           expect(overflow).toBeFalse();
+          /* The engine choice in each row, measured: three engines inside their own cell and clear of the model
+             select (the table), a visible and spoken state on a not-ready engine (the card), and no model name
+             cut by the select's arrow. */
+          const layout = await page.locator("[data-agent-mapping]").getAttribute("data-mapping-layout");
+          expect(layout).toBe(width >= 740 ? "table" : "card");
+          const geometry = await page.evaluate(() => {
+            const ARROW = 24;
+            const canvas = document.createElement("canvas").getContext("2d")!;
+            return Array.from(document.querySelectorAll<HTMLElement>("[data-mapping-row]")).map((row) => {
+              const group = row.querySelector<HTMLElement>("[role=radiogroup]")!;
+              const cell = group.parentElement!.getBoundingClientRect();
+              const box = group.getBoundingClientRect();
+              const select = row.querySelector<HTMLSelectElement>("select")!;
+              const selectBox = select.getBoundingClientRect();
+              const style = getComputedStyle(select);
+              canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+              const label = select.selectedOptions[0]?.textContent ?? "";
+              const room = select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - ARROW;
+              /* The room left by the widest label this select offers, not only the one it shows. */
+              const widest = Math.max(...Array.from(select.options).map((option) => canvas.measureText(option.textContent ?? "").width));
+              const agy = row.querySelector<HTMLElement>("[data-engine-segment=antigravity]")!;
+              return {
+                id: row.dataset.mappingRow!,
+                groupOverCell: Math.round((box.right - cell.right) * 10) / 10,
+                selectClear: Math.round((selectBox.left - box.right) * 10) / 10,
+                segmentsInside: Array.from(group.querySelectorAll("button")).every((button) => button.getBoundingClientRect().right <= box.right + 0.5),
+                label,
+                labelRoom: Math.round((room - canvas.measureText(label).width) * 10) / 10,
+                optionRoom: Math.round((room - widest) * 10) / 10,
+                agyLabel: agy.getAttribute("aria-label"),
+                agyDot: agy.querySelector("[data-engine-state-dot]") !== null,
+              };
+            });
+          });
+          const notReady = translate(locale, "onboarding.agents.blocked", { engine: "Antigravity" });
+          for (const row of geometry) {
+            if (layout === "table") {
+              expect(row.groupOverCell).toBeLessThanOrEqual(0);
+              expect(row.segmentsInside).toBe(true);
+              expect(row.selectClear).toBeGreaterThanOrEqual(0);
+              expect(row.labelRoom).toBeGreaterThanOrEqual(0);
+              expect(row.optionRoom).toBeGreaterThanOrEqual(0);
+            }
+            /* The visual critic is locked to Claude: its other segments say so instead. */
+            expect(row.agyLabel).toBe(row.id === "visual-critic" ? translate(locale, "onboarding.agents.engineLocked", { role: translate(locale, "onboarding.agents.role.visualCritic"), engine: "Claude" }) : notReady);
+            expect(row.agyDot).toBe(true);
+          }
           expect(pageErrors).toEqual([]);
-          cases.push({ locale, width, rows, overflow, pageErrors });
+          cases.push({ locale, width, layout, rows, geometry, overflow, pageErrors });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/role-defaults", { recursive: true });
       fs.writeFileSync("evidence/role-defaults/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
-  }, 120_000);
+  }, 240_000);
+
+  browserTest("an Antigravity row on its longest model keeps every label clear of the select's arrow", async () => {
+    const out = path.resolve(".artifacts/role-defaults-agy");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const cases: Record<string, unknown>[] = [];
+    try {
+      for (const locale of ["en", "uk"] as const) for (const width of [1280, 1024, 740, 700]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=role-defaults&mapping=1&agy=1`, { width, height: 844 }, "light", locale, "reduce", false);
+        try {
+          const row = page.locator('[data-mapping-row="builder"]');
+          await row.waitFor();
+          expect(await page.locator("[data-agent-mapping]").getAttribute("data-mapping-layout")).toBe(width >= 740 ? "table" : "card");
+          expect(await row.locator("[data-engine-segment=antigravity]").getAttribute("aria-checked")).toBe("true");
+          const reading = await row.evaluate((node) => {
+            const ARROW = 24;
+            const select = node.querySelector<HTMLSelectElement>("select")!;
+            const style = getComputedStyle(select);
+            const canvas = document.createElement("canvas").getContext("2d")!;
+            canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+            const room = select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - ARROW;
+            return {
+              selected: select.selectedOptions[0]?.textContent ?? "",
+              selectWidth: select.getBoundingClientRect().width,
+              labels: Array.from(select.options).map((option) => ({ label: option.textContent ?? "", room: Math.round((room - canvas.measureText(option.textContent ?? "").width) * 10) / 10 })),
+            };
+          });
+          expect(reading.selected).toBe("GPT-OSS 120B (Medium)");
+          expect(reading.labels.length).toBeGreaterThanOrEqual(9);
+          for (const entry of reading.labels) expect(entry.room).toBeGreaterThanOrEqual(0);
+          expect(pageErrors).toEqual([]);
+          await row.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(out, `${locale}-${width}-agy-row.png`) });
+          cases.push({ locale, width, ...reading, pageErrors });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync("evidence/role-defaults/agy-rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", cases }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 240_000);
 });
 
 describe("linked boards M3 remote agents", () => {
@@ -3269,6 +5382,94 @@ describe("self-update reload notice", () => {
    The last state arrives while a "Check now" is held: its late answer, and
    then a late refusal of a second check, both carry the old installation and
    neither brings back the old revision, its badge or the Update button. */
+describe("administrator self-update policy", () => {
+  browserTest("administrator notice and hidden controls at 390px and desktop", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { idleCheck, idleUpdate, stoppedProcess } = await import("@/lib/selfUpdate/types");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "administrator-self-update");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "server"));
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const at = "2030-01-01T00:00:00.000Z";
+    const revision = { version: "2.0.0", sha: "a".repeat(40), short: "aaaaaaa", date: at };
+    const snapshot = { selfUpdateDisabled: true, mode: "checkout", unsupportedReason: null, installed: revision,
+      serving: { web: revision, runtimeHost: revision }, available: revision, check: idleCheck(), update: idleUpdate(), busy: null,
+      processes: { web: stoppedProcess(), runtimeHost: stoppedProcess() },
+      meta: { branch: "main", remote: "https://github.com/example/fixture.git", checkout: null, pollMinutes: 60, serverTime: at } };
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [390, 1440]) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 700 }, colorScheme: theme, reducedMotion: "reduce",
+          ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          await context.addInitScript(({ lang, snapshot }) => {
+            localStorage.setItem("llv_lang", lang);
+            let installed = window.EventSource;
+            Object.defineProperty(window, "EventSource", { configurable: true, get: () => installed, set: (Source: typeof EventSource) => {
+              installed = class extends Source {
+                constructor(url: string | URL) {
+                  super(url);
+                  if (String(url).startsWith("/api/self-update/events")) Object.assign(this, {
+                    addEventListener: (type: string, listener: (event: { data: string }) => void) => {
+                      if (type === "state") queueMicrotask(() => listener({ data: JSON.stringify(snapshot) }));
+                    },
+                  });
+                }
+              } as typeof EventSource;
+            } });
+          }, { lang, snapshot });
+          const page = await context.newPage();
+          await page.clock.setFixedTime(new Date(at));
+          const pageErrors: string[] = [];
+          page.on("pageerror", error => pageErrors.push(error.message));
+          await page.goto(server.base);
+          await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
+          const dialog = page.locator("[data-self-update-dialog]");
+          const notice = dialog.locator("[data-section='updates-disabled']");
+          await notice.waitFor();
+          expect(await notice.innerText()).toContain(translate(lang, "selfUpdate.refusal.updates-disabled"));
+          expect(await dialog.locator("[data-action]").count()).toBe(0);
+          const measure = () => notice.evaluate(element => {
+            const texts: { text: string; whole: boolean }[] = [];
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              if (!node.textContent?.trim()) continue;
+              let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+              for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left + parent.clientLeft); right = Math.min(right, box.left + parent.clientLeft + parent.clientWidth); }
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top + parent.clientTop); bottom = Math.min(bottom, box.top + parent.clientTop + parent.clientHeight); }
+              }
+              const range = document.createRange(); range.selectNodeContents(node);
+              texts.push({ text: node.textContent, whole: [...range.getClientRects()].every(r => r.left >= left - 1 && r.right <= right + 1 && r.top >= top - 1 && r.bottom <= bottom + 1) });
+            }
+            const heading = element.querySelector("h2")!.getBoundingClientRect(), body = element.querySelector("p")!.getBoundingClientRect();
+            return { texts, overlap: heading.bottom > body.top, horizontalOverflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          const opening = await measure();
+          expect(opening.texts.every(t => t.whole)).toBe(true); expect(opening.overlap).toBe(false); expect(opening.horizontalOverflow).toBe(false);
+          await dialog.press("PageDown");
+          const paged = await measure();
+          expect(paged.texts.every(t => t.whole)).toBe(true);
+          const frame = `${width}-${lang}-${theme}.png`;
+          await dialog.screenshot({ path: path.join(out, frame) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, width, height: phone ? 844 : 700, opening, paged, final: await measure(), frame, pageErrors });
+        } finally { await context.close(); }
+      }
+      const sourceDigests = Object.fromEntries(["src/components/selfUpdate/SelfUpdateView.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"]
+        .map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]));
+      const record = { capturedAt: new Date().toISOString(), command: "LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern 'administrator self-update policy' (isolated roots, gate-slot.sh)", sourceDigests, readings };
+      fs.mkdirSync("evidence/administrator-self-update", { recursive: true });
+      fs.writeFileSync("evidence/administrator-self-update/rendered.json", JSON.stringify(record, null, 2) + "\n");
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify(record, null, 2) + "\n");
+    } finally { await browser.close(); sockets.close(); server.stop(); }
+  }, 180_000);
+});
+
 describe("Updates dialog first state", () => {
   browserTest("pending, error and loaded states and their controls on desktop and phone in en and uk", async () => {
     const out = path.resolve(".artifacts/updates-dialog-first-state");
@@ -3464,7 +5665,7 @@ describe("Updates dialog first state", () => {
    Framed at 1440 and 390, light and dark, en and uk. */
 describe("self-update confirmation modal", () => {
   browserTest("variant 1 on desktop and phone, light and dark, en and uk", async () => {
-    const out = path.resolve(".artifacts/self-update-confirm");
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "self-update-confirm");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch(LAUNCH);
@@ -3678,6 +5879,238 @@ describe("self-update confirmation modal", () => {
         } finally { await context.close(); }
       }
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 600_000);
+
+  /* A confirmed Update answered with a refusal (409 naming the required checks
+     that failed) or admitted with a warning (202 naming the optional checks
+     that failed). The confirmation scrolls the dialog to the Update card, which
+     sits below the header whenever the content stacks in one column, so the
+     outcome is drawn in that card at every size and has to be whole on the
+     first screen, once, without scrolling: measured from its text rects
+     against the dialog's own scroll container at 390x844, 390x640, the
+     landscape 844x390 (the dialog's phone query matches by height too), the
+     800x650 desktop window (a scrolling dialog in one column, where the header
+     is off screen after the scroll) and 1440x900. The install action's
+     confirmation (Restart launcher, offered above the header while a built
+     revision waits for the older launcher) answers the same two ways through
+     the same admission, and its card, which it scrolls to, shows the answer on
+     every layout, and keeps it beside the new-version banner when the
+     relaunched Viewer answers without the action. A second action started while Update's answer is out must
+     not move it: Check now's failure stays in the header and Update's refusal
+     stays in the card, whichever answer comes back first. */
+  browserTest("a confirmed Update's refusal and optional-check warning stay in view once, on phones and desktop, in both locales and themes", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "self-update-action-outcome");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const { CHECKOUT_STEPS, idleCheck, idleUpdate, stoppedProcess } = await import("@/lib/selfUpdate/types");
+    const { mobileLayoutViewport } = await import("@/lib/attention/eligibility");
+    const old = "36accb1".padEnd(40, "1"), target = "e7893bc".padEnd(40, "e");
+    const at = "2026-10-11T12:34:20.000Z";
+    const revision = (sha: string) => ({ sha, short: sha.slice(0, 7), version: "1.11.0", date: "2026-10-11T09:00:00.000Z" });
+    const proc = (pid: number) => ({ ...stoppedProcess(), state: "healthy" as const, pid, startedAt: at, lastHealthAt: at, lastHealthOk: true, revision: old.slice(0, 7), tail: [] });
+    const initial = {
+      mode: "checkout", unsupportedReason: null, installed: revision(old), serving: { web: revision(old), runtimeHost: revision(old) },
+      available: revision(target), check: { ...idleCheck(), state: "update-available", at, nextPollAt: at, relation: "behind", behind: 1 },
+      update: idleUpdate(CHECKOUT_STEPS), busy: null, processes: { web: { ...proc(4141), port: 8899 }, runtimeHost: proc(4242) },
+      meta: { branch: "main", remote: "https://github.com/example/delegatus", checkout: "/fixture/checkout", pollMinutes: 60, serverTime: at },
+      workEvidence: { state: "ready", since: at, at, error: null, phases: null },
+      resumeWork: { turns: 0, stages: 0, turnList: [], stageList: [], unreadable: null },
+    };
+    const running = { ...initial, busy: "update", update: { ...idleUpdate(CHECKOUT_STEPS), state: "running", trigger: "operator", target, targetShort: target.slice(0, 7), targetVersion: "1.11.0", startedAt: at,
+      steps: idleUpdate(CHECKOUT_STEPS).steps.map((step, index) => ({ ...step, state: index === 0 ? "running" : "pending", startedAt: index === 0 ? at : null })) } };
+    /* The built revision waits for the older launcher's restart: the install card offers it above the header. */
+    const awaitingLauncher = { ...initial, action: { id: "restart-service", button: true, unit: "delegatus.service" } };
+    const requiredRefusal = { code: "deployment-refused", detail: "red", green: { state: "red", detail: "typecheck", checks: ["privacy-publication", "typecheck"] }, snapshot: initial };
+    const readings: Record<string, unknown>[] = [];
+    try {
+      const sizes = [{ width: 390, height: 844 }, { width: 390, height: 640 }, { width: 844, height: 390 }, { width: 800, height: 650 }, { width: 1440, height: 900 }];
+      for (const lang of ["uk", "en"] as const) for (const { width, height } of sizes) for (const scheme of ["light", "dark"] as const) {
+        /* The dialog's own decision, not a width: a landscape phone is a phone. */
+        const phone = mobileLayoutViewport({ width, height });
+        const context = await browser.newContext({ viewport: { width, height }, colorScheme: scheme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        const page = await context.newPage();
+        const pageErrors: string[] = [];
+        page.on("pageerror", error => pageErrors.push(error.message));
+        try {
+          await page.addInitScript(({ lang, initial, running, awaitingLauncher }) => {
+            localStorage.setItem("llv_lang", lang);
+            const streams: { listeners: Record<string, ((event: { data: string }) => void)[]> }[] = [];
+            let Source = window.EventSource;
+            Object.defineProperty(window, "EventSource", { configurable: true,
+              get: () => Source,
+              set: (Next: typeof EventSource) => { Source = class extends Next {
+                constructor(url: string | URL) {
+                  super(url);
+                  if (String(url).startsWith("/api/self-update/events") && !String(url).includes("readOnly")) {
+                    const stream = { listeners: {} as Record<string, ((event: { data: string }) => void)[]> };
+                    streams.push(stream);
+                    Object.assign(this, { addEventListener: (type: string, listener: (event: { data: string }) => void) => { (stream.listeners[type] ??= []).push(listener); } });
+                  }
+                }
+              } as typeof EventSource; },
+            });
+            /* Each POST has its own answer and can be held until the driver releases it. */
+            const answers: Record<string, { status: number; body: unknown }> = { update: { status: 202, body: running }, check: { status: 200, body: initial }, action: { status: 202, body: awaitingLauncher } };
+            const holds: Record<string, { on: boolean; release: () => void }> = { update: { on: false, release: () => {} }, check: { on: false, release: () => {} }, action: { on: false, release: () => {} } };
+            const gate = (name: string) => holds[name]!.on ? new Promise<void>(done => { holds[name]!.release = () => done(); }) : Promise.resolve();
+            const reply = (name: string) => gate(name).then(() => new Response(JSON.stringify(answers[name]!.body), { status: answers[name]!.status, headers: { "content-type": "application/json" } }));
+            const interceptFetch = (next: typeof fetch) => ((input: RequestInfo | URL, init?: RequestInit) => {
+              const url = input instanceof Request ? input.url : String(input);
+              const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+              const pathname = new URL(url, location.href).pathname;
+              if (pathname === "/api/self-update/update" && method === "POST") return reply("update");
+              if (pathname === "/api/self-update/check" && method === "POST") return reply("check");
+              if (pathname === "/api/self-update/action" && method === "POST") return reply("action");
+              if (pathname === "/api/self-update") return Promise.resolve(new Response(JSON.stringify(initial), { status: 200, headers: { "content-type": "application/json" } }));
+              return next(input, init);
+            }) as typeof fetch;
+            let fetcher = interceptFetch(window.fetch);
+            Object.defineProperty(window, "fetch", { configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => { fetcher = interceptFetch(next); },
+            });
+            Object.assign(window, {
+              selfUpdateEmit: (data: unknown) => { for (const stream of streams) for (const listener of stream.listeners.state ?? []) listener({ data: JSON.stringify(data) }); return streams.length; },
+              selfUpdateAnswer: (name: string, status: number, body: unknown) => { answers[name] = { status, body }; },
+              selfUpdateHold: (name: string, on: boolean) => { holds[name]!.on = on; if (!on) holds[name]!.release(); },
+            });
+          }, { lang, initial, running, awaitingLauncher });
+          await page.goto(server.base);
+          await page.waitForSelector("[data-phone-card], [data-mobile2-shell], [data-mobile-shell], [data-kanban-board]", { timeout: 15_000 }).catch(() => {});
+          await page.evaluate(() => window.dispatchEvent(new Event("llv:open-self-update")));
+          const dialog = page.locator("[data-self-update-dialog]");
+          await dialog.waitFor();
+          const emit = (snapshot: unknown) => page.evaluate(snapshot => (window as unknown as { selfUpdateEmit(value: unknown): number }).selfUpdateEmit(snapshot), snapshot);
+          for (let attempt = 0; attempt < 30; attempt++) {
+            if (await emit(initial)) break;
+            await page.waitForTimeout(100);
+          }
+          await dialog.locator('[data-action="update"]:not([disabled])').waitFor({ timeout: 5_000 }).catch(async () => {
+            throw new Error(JSON.stringify({ dialog: await dialog.innerText().catch(() => "missing"), pageErrors }));
+          });
+          const answer = (name: string, status: number, body: unknown) => page.evaluate(({ name, status, body }) => (window as unknown as { selfUpdateAnswer(name: string, status: number, body: unknown): void }).selfUpdateAnswer(name, status, body), { name, status, body });
+          const hold = (name: string, on: boolean) => page.evaluate(({ name, on }) => (window as unknown as { selfUpdateHold(name: string, on: boolean): void }).selfUpdateHold(name, on), { name, on });
+          const settled = () => page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+          /* The outcome line that names `needle`, as the person sees it: how many copies are drawn, whether its
+             text is whole inside the dialog's own scroll container (not the content inside it), and which section holds it. */
+          const read = (selector: string, needle: string) => dialog.evaluate((root, { selector, needle }) => {
+            const drawn = (element: HTMLElement) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
+            const all = [...root.querySelectorAll<HTMLElement>(selector)].filter(element => (element.textContent ?? "").includes(needle));
+            const copies = all.filter(drawn);
+            const element = copies[0] ?? all[0]!;
+            let port: HTMLElement | null = element.parentElement;
+            while (port && !/auto|scroll/.test(getComputedStyle(port).overflowY)) port = port.parentElement;
+            const box = port!.getBoundingClientRect();
+            const range = document.createRange(); range.selectNodeContents(element);
+            const rects = [...range.getClientRects()].map(rect => ({ top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right }));
+            const view = { top: Math.max(box.top, 0), bottom: Math.min(box.bottom, window.innerHeight), left: Math.max(box.left, 0), right: Math.min(box.right, window.innerWidth) };
+            return {
+              copies: copies.length, inDom: all.length,
+              text: (element.textContent ?? "").replace(/\s+/g, " ").trim(),
+              rects, port: view,
+              whole: rects.length > 0 && rects.every(rect => rect.top >= view.top && rect.bottom <= view.bottom && rect.left >= view.left && rect.right <= view.right),
+              section: element.closest("[data-section]")?.getAttribute("data-section") ?? null,
+            };
+          }, { selector, needle });
+          /* «Update» and the install card's «Restart launcher» ask the same question and apply the same way. */
+          const confirmVia = async (via: "update" | "install-action") => {
+            await dialog.locator(`[data-action="${via}"]:not([disabled])`).click();
+            const confirmation = page.locator("[data-team-dialog='self-update-confirm']");
+            await confirmation.locator('[data-action="confirm-apply"]').click();
+            await confirmation.waitFor({ state: "detached" });
+          };
+          const confirmUpdate = () => confirmVia("update");
+          /* The confirmation's own scroll to its card settles first. */
+          const show = async (status: number, body: unknown, selector: string, needle: string, label: string, via: "update" | "install-action" = "update") => {
+            await answer(via === "update" ? "update" : "action", status, body);
+            await emit(via === "update" ? initial : awaitingLauncher);
+            await confirmVia(via);
+            await dialog.locator(`${selector}:visible`).first().waitFor();
+            await settled();
+            const reading = await read(selector, needle);
+            const name = `${lang}-${width}x${height}-${scheme}-${label}`;
+            expect(reading.copies, `${name} is drawn once`).toBe(1);
+            expect(reading.inDom, `${name} is in the page once`).toBe(1);
+            expect(reading.text, `${name} names the checks`).toContain(needle);
+            expect(reading.whole, `${name} is whole inside the scroll container without scrolling: ${JSON.stringify(reading)}`).toBe(true);
+            /* Each action's outcome is in the card of the button just pressed, on every layout. */
+            const section = via === "install-action" ? "install-action" : "update";
+            expect(reading.section, `${name} sits in the ${section} section`).toBe(section);
+            await page.screenshot({ path: path.join(out, `${name}.png`) });
+            readings.push({ lang, width, height, scheme, label, phone, ...reading, frame: `${name}.png` });
+          };
+          await show(409, requiredRefusal, '[data-error="action"]', "privacy-publication, typecheck", "required-ci-refusal");
+          await show(202, { ...running, optionalCheckFailures: ["Windows (native)", "Minimum macOS SQLite"] }, '[data-warning="optional-checks"]', "Windows (native), Minimum macOS SQLite", "optional-ci-warning");
+          await show(409, { ...requiredRefusal, snapshot: awaitingLauncher }, '[data-error="action"]', "privacy-publication, typecheck", "launcher-required-ci-refusal", "install-action");
+          await show(202, { ...awaitingLauncher, optionalCheckFailures: ["Windows (native)", "Minimum macOS SQLite"] }, '[data-warning="optional-checks"]', "Windows (native), Minimum macOS SQLite", "launcher-optional-ci-warning", "install-action");
+
+          /* The launcher's restart relaunches the Viewer. The snapshot that answers afterwards comes from another
+             web process and carries no action (the relaunch-capable launcher needs none), so the install card keeps
+             only its answer. The answer stays once, and it is whole on the first screen beside the new-version banner. */
+          {
+            const name = `${lang}-${width}x${height}-${scheme}-launcher-warning-after-relaunch`;
+            await emit({ ...initial, processes: { ...initial.processes, web: { ...proc(5151), port: 8899 } } });
+            await dialog.locator('[data-banner="reload"]').waitFor();
+            await settled();
+            const warning = await read('[data-warning="optional-checks"]', "Windows (native), Minimum macOS SQLite");
+            const banner = await read('[data-banner="reload"]', old.slice(0, 7));
+            expect(warning.copies, `${name}: the warning is drawn once`).toBe(1);
+            expect(warning.inDom, `${name}: the warning is in the page once`).toBe(1);
+            expect(warning.section, `${name}: the warning stays in the install card`).toBe("install-action");
+            expect(warning.whole, `${name}: the warning is whole beside the banner without scrolling: ${JSON.stringify(warning)}`).toBe(true);
+            expect(banner.copies, `${name}: the new-version banner is drawn once`).toBe(1);
+            expect(banner.whole, `${name}: the banner is whole with the warning: ${JSON.stringify(banner)}`).toBe(true);
+            expect(await dialog.locator('[data-action="install-action"]').count(), `${name}: the restart action is gone`).toBe(0);
+            await page.screenshot({ path: path.join(out, `${name}.png`) });
+            readings.push({ lang, width, height, scheme, label: "launcher-warning-after-relaunch", phone, warning, banner, frame: `${name}.png` });
+            await emit(initial);
+          }
+
+          /* A second action while Update's answer is out: Update is confirmed and held, Check now is pressed
+             (it scrolls to the header), the person goes back to the Update card, and the answers come back in
+             either order. Update's refusal stays in the card; Check now's failure stays in the header. */
+          for (const order of ["update-first", "check-first"] as const) {
+            const name = `${lang}-${width}x${height}-${scheme}-interleaved-${order}`;
+            await answer("update", 409, requiredRefusal);
+            await answer("check", 500, {});
+            await hold("update", true);
+            await hold("check", true);
+            await emit(initial);
+            await confirmUpdate();
+            await dialog.locator('[data-action="check"]:not([disabled])').click();
+            const releaseCheck = async () => { await hold("check", false); await dialog.locator('[data-error="action"]', { hasText: "500" }).waitFor({ state: "attached" }); };
+            const releaseUpdate = async () => { await hold("update", false); await dialog.locator('[data-error="action"]', { hasText: "privacy-publication, typecheck" }).waitFor({ state: "attached" }); };
+            if (order === "check-first") await releaseCheck();
+            await dialog.evaluate(root => root.querySelector("[data-section='update']")!.scrollIntoView({ block: "start" }));
+            await settled();
+            await releaseUpdate();
+            if (order === "update-first") await releaseCheck();
+            await settled();
+            /* Update's refusal is read where the person is looking: the Update card, back on screen. */
+            await dialog.evaluate(root => root.querySelector("[data-section='update']")!.scrollIntoView({ block: "start" }));
+            await settled();
+            const refused = await read('[data-error="action"]', "privacy-publication, typecheck");
+            const failed = await read('[data-error="action"]', "500");
+            expect(refused.copies, `${name}: Update's refusal is drawn once`).toBe(1);
+            expect(refused.inDom, `${name}: Update's refusal is in the page once`).toBe(1);
+            expect(refused.section, `${name}: Update's refusal sits in the Update card`).toBe("update");
+            expect(refused.whole, `${name}: Update's refusal is whole on its card's first screen: ${JSON.stringify(refused)}`).toBe(true);
+            expect(failed.copies, `${name}: Check now's failure is drawn once`).toBe(1);
+            expect(failed.inDom, `${name}: Check now's failure is in the page once`).toBe(1);
+            expect(failed.section, `${name}: Check now's failure stays in the header`).toBe("header");
+            await page.screenshot({ path: path.join(out, `${name}.png`) });
+            readings.push({ lang, width, height, scheme, label: `interleaved-${order}`, phone, refused, failed, frame: `${name}.png` });
+            await hold("update", false);
+            await hold("check", false);
+            await answer("check", 200, initial);
+            await emit(initial);
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
     } finally { await browser.close(); server.stop(); }
   }, 600_000);
 });
@@ -6094,13 +8527,12 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
    * production frames, and compared.
    *
    * Gated here:
-   *   - the eight-stage sheet: header, graph direction, one pane per stage at
-   *     the prototype's pane width, four waiting stages each with an unsent
-   *     first message and no composer, the live stage focused. Each stage is
-   *     drawn once (#2148): while the graph is shown it is the navigation, so
-   *     the chip strip is drawn only with the graph hidden;
-   *   - the retry sheet: attempt tabs on Implement and Verify, the loop on the
-   *     graph's fail edge;
+   *   - the eight-stage sheet (redesign S2: stages as tabs): the waits-on line,
+   *     eight tabs over one pane, four waiting stages each with an unsent first
+   *     message and no composer once selected, the live stage selected and
+   *     focused; the graph is off until asked for;
+   *   - the retry sheet: attempt tabs on Implement and Verify, the loop as one
+   *     rule line, and on the graph's fail edge once the graph is shown;
    *   - a waiting node on a card opens its first message; Save sends the
    *     stage's wiring token with the words and the digest the read returned; a
    *     stage another client saves between that read and the write is refused by
@@ -6128,9 +8560,11 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
 
   interface SheetMeasure {
     title: string;
-    progress: string;
-    navChips: number;
+    /** The head's waits-on line. */
+    waits: string;
+    tabs: number;
     loops: string[];
+    rules: string[];
     graphDir: string | null;
     graphNodes: number;
     /** The lane's controls in the sheet's head (#2148), and nothing else of them. */
@@ -6146,11 +8580,12 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
     const text = (element: Element | null | undefined) => element?.textContent?.replace(/\s+/g, " ").trim() ?? "";
     return {
       title: text(sheet.querySelector("header h2")),
-      progress: text(sheet.querySelector("header .progress")),
-      navChips: sheet.querySelectorAll(".navchip").length,
+      waits: text(sheet.querySelector("header .gs-waits")),
+      tabs: sheet.querySelectorAll('[role="tab"]').length,
       /* The loop is the chip strip's loop chip, or the graph's fail edge: a
          strip under the failing stage since #2277, an edge label in the prototype. */
-      loops: [...sheet.querySelectorAll(".gs-nav .ploop, .gs-graph .pelabel.fail, .gs-graph .pstrip")].map(text),
+      loops: [...sheet.querySelectorAll(".gs-rule, .gs-graph .pelabel.fail, .gs-graph .pstrip")].map(text),
+      rules: [...sheet.querySelectorAll(".gs-rule")].map(text),
       graphDir: sheet.querySelector<HTMLElement>(".gs-graph .pgraph")?.dataset.dir ?? null,
       graphNodes: sheet.querySelectorAll(".gs-graph .pnode").length,
       headControls: [...sheet.querySelectorAll<HTMLElement>(".lane-bar button")].map((button) => (button.closest("header") ? "" : "outside:") + (button.getAttribute("aria-label") ?? text(button))),
@@ -6158,7 +8593,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
       panes: [...sheet.querySelectorAll<HTMLElement>(".pane[data-stage]")].map((pane) => ({
         stage: pane.dataset.stage ?? "",
         width: Math.round(pane.getBoundingClientRect().width),
-        folded: pane.classList.contains("folded"),
+        folded: false,
         attempts: [...pane.querySelectorAll(".attempts button")].map(text),
         draft: Boolean(pane.querySelector(".msg.user.draft")),
         status: pane.querySelector(".bstatus") ? text(pane.querySelector(".bstatus")) : null,
@@ -6267,57 +8702,49 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
             failures.push(`stages ${scheme}: the sheet did not open`);
             return;
           }
-          /* The graph is shown and is the navigation: no chip strip beside it. */
-          if (sheet.panes.length !== 8 || sheet.navChips !== 0) failures.push(`stages ${scheme}: ${sheet.panes.length} panes, ${sheet.navChips} chips`);
-          if (sheet.graphDir !== "LR" || sheet.graphNodes !== 8) failures.push(`stages ${scheme}: graph ${sheet.graphDir} ${sheet.graphNodes}`);
-          if (JSON.stringify(sheet.headControls) !== JSON.stringify(["Collapse finished", "Expand all", "Previous stage", "Next stage"])) failures.push(`stages ${scheme}: head controls ${JSON.stringify(sheet.headControls)}`);
-          const waiting = sheet.panes.filter((pane) => pane.draft);
-          if (waiting.map((pane) => pane.stage).join() !== "review-ui,verify,docs,merge") failures.push(`stages ${scheme}: waiting panes ${JSON.stringify(waiting)}`);
-          if (waiting.some((pane) => pane.status !== "First message · not sent yet" || pane.composerDisabled !== null)) failures.push(`stages ${scheme}: waiting panes ${JSON.stringify(waiting)}`);
-          if (waiting.some((pane) => !pane.added?.startsWith("Added when it starts: previous stage output · pinned task · spec · "))) failures.push(`stages ${scheme}: added-at-start lines ${JSON.stringify(waiting.map((pane) => pane.added))}`);
-          if (sheet.panes.filter((pane) => !pane.draft).some((pane) => !pane.reader)) failures.push(`stages ${scheme}: a started pane holds no conversation ${JSON.stringify(sheet.panes)}`);
+          /* The stages are tabs over one pane, the graph is off, and the head says whom the lane waits on. */
+          if (sheet.panes.length !== 1 || sheet.tabs !== 8) failures.push(`stages ${scheme}: ${sheet.panes.length} panes, ${sheet.tabs} tabs`);
+          if (sheet.graphNodes !== 0) failures.push(`stages ${scheme}: the graph is drawn at open (${sheet.graphNodes} nodes)`);
+          if (JSON.stringify(sheet.headControls) !== JSON.stringify(["Previous stage", "Next stage"])) failures.push(`stages ${scheme}: head controls ${JSON.stringify(sheet.headControls)}`);
           if (sheet.focusedPane !== "build-ui") failures.push(`stages ${scheme}: focus on ${sheet.focusedPane}`);
-          if (!sheet.progress.startsWith("8 stages · ")) failures.push(`stages ${scheme}: progress ${sheet.progress}`);
-        });
-        await prototype("sheet=t-upload", scheme, `prototype stages ${scheme}`, async (page) => {
-          await page.waitForSelector(".gsheet .pane[data-stage]", { timeout: 10_000 });
-          await page.waitForTimeout(500);
-          frames[`stages-${scheme}`] = { ...frames[`stages-${scheme}`], prototype: await measureSheet(page) };
-          await shot(page, "prototype", "stages", scheme);
+          if (sheet.waits !== "Stage 4 of 8 · waiting on the Builder (Build ui)") failures.push(`stages ${scheme}: waits-on ${sheet.waits}`);
+          if (!sheet.panes[0]?.reader) failures.push(`stages ${scheme}: the live pane holds no conversation ${JSON.stringify(sheet.panes)}`);
+          /* Each waiting stage, selected, holds its unsent first message and no composer. */
+          for (const waitingStage of ["review-ui", "verify", "docs", "merge"]) {
+            await page.click(`.gsheet [role="tab"][data-tab-stage="${waitingStage}"]`);
+            await page.waitForTimeout(250);
+            const pane = (await measureSheet(page))?.panes[0];
+            if (!pane || pane.stage !== waitingStage || !pane.draft || pane.status !== "First message · not sent yet" || pane.composerDisabled !== null) failures.push(`stages ${scheme}: waiting pane ${waitingStage} ${JSON.stringify(pane)}`);
+            else if (!pane.added?.startsWith("Added when it starts: previous stage output · pinned task · spec · ")) failures.push(`stages ${scheme}: added-at-start line ${JSON.stringify(pane.added)}`);
+          }
         });
       }
 
       await production("light", "stages retry", async (page) => {
         await openStages(page, "t-search");
-        /* The graph's node reaches its pane and opens its conversation in the
-           agent window over the sheet (docs/design/task-card-no-inline-conversations.md §4);
-           closing the window comes back to the sheet on that pane. */
+        /* The graph, shown, is a second way to select a stage: its node selects the tab and opens no window. */
+        await page.click(".gsheet [data-sheet-graph]");
+        await page.waitForSelector(".gsheet .gs-graph .pnode", { timeout: 10_000 });
         await page.click('.gsheet .gs-graph .pnode[data-stage="implement"]');
-        await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming]) [data-kanban-reader]", { timeout: 10_000 });
-        await page.keyboard.press("Escape");
-        await page.waitForSelector("[data-agent-window]", { state: "detached" });
-        await page.waitForTimeout(700);
+        await page.waitForTimeout(500);
+        if (await page.locator("[data-agent-window]").count()) failures.push("stages retry: a graph node opened the agent window");
         const sheet = await measureSheet(page);
         await shot(page, "production", "stages-retry", "light");
         frames["stages-retry"] = { production: sheet };
-        const byStage = new Map(sheet?.panes.map((pane) => [pane.stage, pane] as const));
         /* One attempt caption everywhere since #2277. */
-        if (JSON.stringify(byStage.get("implement")?.attempts) !== JSON.stringify(["attempt 1 · passed", "attempt 2 · passed"])) failures.push(`stages retry: implement tabs ${JSON.stringify(byStage.get("implement")?.attempts)}`);
-        if (JSON.stringify(byStage.get("verify")?.attempts) !== JSON.stringify(["attempt 1 · failed", "attempt 2 · running"])) failures.push(`stages retry: verify tabs ${JSON.stringify(byStage.get("verify")?.attempts)}`);
-        if (sheet?.loops.length !== 1) failures.push(`stages retry: loops ${JSON.stringify(sheet?.loops)}`);
-        /* Hidden, the graph gives way to the chips, whose loop chip says the rounds. */
+        if (JSON.stringify(sheet?.panes[0]?.attempts) !== JSON.stringify(["attempt 1 · passed", "attempt 2 · passed"])) failures.push(`stages retry: implement tabs ${JSON.stringify(sheet?.panes[0]?.attempts)}`);
+        await page.click('.gsheet [role="tab"][data-tab-stage="verify"]');
+        await page.waitForTimeout(300);
+        const verify = await measureSheet(page);
+        if (JSON.stringify(verify?.panes[0]?.attempts) !== JSON.stringify(["attempt 1 · failed", "attempt 2 · running"])) failures.push(`stages retry: verify tabs ${JSON.stringify(verify?.panes[0]?.attempts)}`);
+        /* The rule line under the tabs and the graph's own fail-edge label each say the loop once. */
+        if (verify?.rules.length !== 1 || verify.loops.length !== 2) failures.push(`stages retry: loops ${JSON.stringify(verify?.loops)}`);
+        /* Hidden, the graph gives way to the tabs alone, and the rule line says the rounds. */
         await page.click(".gsheet [data-sheet-graph]");
         await page.waitForTimeout(300);
-        const chips = await measureSheet(page);
-        if (chips?.navChips !== 4 || chips.graphNodes !== 0 || chips.loops.length !== 1) failures.push(`stages retry, graph hidden: ${JSON.stringify({ navChips: chips?.navChips, graphNodes: chips?.graphNodes, loops: chips?.loops })}`);
+        const tabs = await measureSheet(page);
+        if (tabs?.tabs !== 4 || tabs.graphNodes !== 0 || tabs.loops.length !== 1) failures.push(`stages retry, graph hidden: ${JSON.stringify({ tabs: tabs?.tabs, graphNodes: tabs?.graphNodes, loops: tabs?.loops })}`);
       });
-      await prototype("sheet=t-search:implement", "light", "prototype stages retry", async (page) => {
-        await page.waitForSelector(".gsheet .pane[data-stage]", { timeout: 10_000 });
-        await page.waitForTimeout(500);
-        frames["stages-retry"] = { ...frames["stages-retry"], prototype: await measureSheet(page) };
-        await shot(page, "prototype", "stages-retry", "light");
-      });
-
       await production("light", "stage details and save", async (page) => {
         const section = `${card("t-links")} .pblock`;
         await page.locator(section).evaluate((element) => element.scrollIntoView({ block: "center" }));
@@ -6441,10 +8868,8 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
 
       await production("light", "changed elsewhere", async (page) => {
         await openStages(page, "t-upload");
-        /* The node opens the first message in the agent window; closed, the pane edits it. */
-        await page.click('.gsheet .gs-graph .pnode[data-stage="docs"]');
-        await page.locator("[data-agent-window] [data-stage-detail]").press("Escape");
-        await page.waitForSelector("[data-agent-window]", { state: "detached" });
+        /* The tab selects the waiting stage, and its pane edits the first message. */
+        await page.click('.gsheet [role="tab"][data-tab-stage="docs"]');
         await page.waitForTimeout(600);
         const pane = '.gsheet .pane[data-stage="docs"]';
         await page.click(`${pane} [data-draft-edit]`);
@@ -6577,13 +9002,13 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
           };
         }, reader);
         await shot(page, "production", "stages-reader", "light");
-        await page.focus('.gsheet .pane[data-stage="build-ui"]');
+        await page.focus('.gsheet [role="tab"][data-tab-stage="build-ui"]');
         await page.keyboard.press("ArrowRight");
         await page.waitForTimeout(700);
         const stepped = await page.evaluate(() => ({
-          focused: (document.activeElement as HTMLElement | null)?.dataset.stage ?? null,
-          /* The graph marks the stage in focus while it is the navigation. */
-          current: document.querySelector<HTMLElement>(".gsheet .gs-graph .pnode.selected")?.dataset.stage ?? null,
+          focused: (document.activeElement as HTMLElement | null)?.dataset.tabStage ?? null,
+          /* The tab list walks the lane: the next tab is selected. */
+          current: document.querySelector<HTMLElement>('.gsheet [role="tab"][aria-selected="true"]')?.dataset.tabStage ?? null,
         }));
         await page.keyboard.press("/");
         await page.waitForTimeout(200);
@@ -6617,27 +9042,7 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
     const stages = (key: string) => frames[key] as { production?: SheetMeasure | null; prototype?: SheetMeasure | null } | undefined;
     const comparison: Record<string, unknown> = {};
     if (PROTOTYPE) {
-      for (const key of ["stages-light", "stages-dark", "stages-retry"]) {
-        const frame = stages(key);
-        if (!frame?.production || !frame.prototype) {
-          failures.push(`${key}: the prototype frame was not measured`);
-          continue;
-        }
-        const { production: ours, prototype: theirs } = frame;
-        const widths = { production: ours.panes.map((pane) => pane.width), prototype: theirs.panes.map((pane) => pane.width) };
-        const drafts = { production: ours.panes.filter((pane) => pane.draft).map((pane) => pane.stage), prototype: theirs.panes.filter((pane) => pane.draft).map((pane) => pane.stage) };
-        const attempts = { production: ours.panes.map((pane) => pane.attempts), prototype: theirs.panes.map((pane) => pane.attempts) };
-        /* #2148 draws each stage once: with the graph shown the prototype's chip
-           strip and its "Stage k of n" bar are gone, so the chip count and the
-           loop's place are recorded here and not compared. */
-        comparison[key] = { panes: [ours.panes.length, theirs.panes.length], navChips: [ours.navChips, theirs.navChips], loops: [ours.loops.length, theirs.loops.length], graphDir: [ours.graphDir, theirs.graphDir], graphNodes: [ours.graphNodes, theirs.graphNodes], widths, drafts, attempts };
-        if (ours.panes.length !== theirs.panes.length) failures.push(`${key}: structure ${JSON.stringify(comparison[key])}`);
-        if (ours.graphDir !== theirs.graphDir || ours.graphNodes !== theirs.graphNodes) failures.push(`${key}: graph ${ours.graphDir}/${ours.graphNodes}, prototype ${theirs.graphDir}/${theirs.graphNodes}`);
-        const widthDelta = Math.max(0, ...widths.production.map((width, index) => Math.abs(width - (widths.prototype[index] ?? width))));
-        if (widthDelta > 2) failures.push(`${key}: pane widths ${widths.production}, prototype ${widths.prototype}`);
-        if (JSON.stringify(drafts.production) !== JSON.stringify(drafts.prototype)) failures.push(`${key}: waiting panes ${JSON.stringify(drafts)}`);
-        if (JSON.stringify(attempts.production) !== JSON.stringify(attempts.prototype)) failures.push(`${key}: attempt tabs ${JSON.stringify(attempts)}`);
-      }
+      /* The sheet's frames are no longer compared with the prototype of the side-by-side lane: redesign S2 drew them as tabs. */
       const detail = frames["stage-details"] as { production?: { status: string; edit: boolean; composerDisabled: boolean } | null; prototype?: { status: string; edit: boolean; composerDisabled: boolean } | null } | undefined;
       if (!detail?.production || !detail.prototype) failures.push("stage-details: the prototype frame was not measured");
       else {
@@ -6652,6 +9057,535 @@ describe("#1695 K5b the Stages sheet and pipeline actions", () => {
     fs.writeFileSync(path.join(EVIDENCE, "k5b.json"), `${JSON.stringify({ prototypeCompared: Boolean(PROTOTYPE), boardWidth, frames, comparison, flows, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
+});
+
+describe("redesign S2 the Stages window as tabs", () => {
+  /*
+   * Rendered evidence for the Stages window drawn as tabs over one stage
+   * (docs/design/redesign-2026-11/s2-build-brief.md): the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=stageshapes`, one lane per graph
+   * shape, with the production stylesheet, in Chromium:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "redesign S2"
+   *
+   * Every shape is opened at 1440 and 1100 px (the strip's row layout) and at
+   * 1099, 820, 760 and 700 px (its grid, narrowest before the phone rules) in English and Ukrainian, light and dark; the
+   * popover, the graph, a selected conditional tab and a selected detached tab
+   * are framed on the lanes that have them, at 1440 (the strip's row) and 820
+   * (its grid), in both languages and themes. Gated, from text ranges: every
+   * tab name whole and
+   * never ellipsized; no scroller in the strip; the waits-on line whole on the
+   * first screen; the popover inside the head and over no text; every rule line
+   * whole; one tab panel, one pane and at most one reader; a conditional tab's
+   * word that differs from the waiting word; a skipped tab's mark that differs
+   * from a waiting tab's; a detached tab that stands on the line of the step tabs
+   * in its grid row, at the same height, so it never reads as a third line of the
+   * cell above; a selected detached tab's pane that says «off the chain» and keeps
+   * its ⋯; a rule line in one grammar in every state (never the fail edge's technical
+   * sentence); a tab that carries rounds with its count in digits and marks of four
+   * shapes; the graph whole inside the sheet and its steps in reading order; a parked
+   * stage's pane with the stop's reason, its question and where to answer; a skipped
+   * stage's pane that says «skipped» and draws no empty box; a pane that names every
+   * source of a shared fix, and none for a detached stage. Frames and the manifest go
+   * to $LLV_EVIDENCE_DIR. `LLV_S2_SHAPES` and `LLV_S2_WIDTHS` (comma lists) narrow a
+   * local run while the driver is worked on; the evidence run leaves them unset.
+   */
+  const OUT = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "redesign-s2-stages");
+  type Frame = { file: string; lane: string; width: number; lang: string; scheme: string; state: string; failures: string[] };
+
+  /** The sheet read from text ranges, so a fractional cut shows. */
+  const readSheet = (page: Page) => page.evaluate(() => {
+    const sheet = document.querySelector<HTMLElement>("[data-stages-sheet]");
+    if (!sheet) return null;
+    const box = sheet.getBoundingClientRect();
+    const ranges = (root: Element) => {
+      const found: DOMRect[] = [];
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.textContent?.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) if (rect.width > 0 && rect.height > 0) found.push(rect);
+      }
+      return found;
+    };
+    const cut = (element: Element, within: DOMRect) => ranges(element).some((rect) => rect.left < within.left - 0.5 || rect.right > within.right + 0.5);
+    const tabs = [...sheet.querySelectorAll<HTMLElement>('[role="tab"]')];
+    const strip = sheet.querySelector<HTMLElement>('[role="tablist"]');
+    const waits = sheet.querySelector<HTMLElement>(".gs-waits");
+    const pop = sheet.querySelector<HTMLElement>(".gs-waits-pop");
+    const header = sheet.querySelector<HTMLElement>("header, .gs-tools");
+    return {
+      width: Math.round(box.width),
+      viewport: window.innerWidth,
+      tabs: tabs.map((tab) => {
+        const name = tab.querySelector<HTMLElement>(".slbl")!;
+        const rects = ranges(name);
+        return {
+          stage: tab.dataset.tabStage ?? "",
+          kind: tab.dataset.tabKind ?? "",
+          state: tab.dataset.tabState ?? "",
+          word: tab.dataset.tabWord ?? null,
+          selected: tab.getAttribute("aria-selected") === "true",
+          name: name.textContent ?? "",
+          clipped: name.scrollWidth > name.clientWidth + 1 || getComputedStyle(name).textOverflow === "ellipsis" && name.scrollWidth > name.clientWidth,
+          outside: rects.some((rect) => rect.right > (strip?.getBoundingClientRect().right ?? 1e9) + 0.5 || rect.left < (strip?.getBoundingClientRect().left ?? -1e9) - 0.5),
+          skipMark: Boolean(tab.querySelector(".stab-skip")),
+          dots: tab.querySelector<HTMLElement>(".sdots")?.dataset.dots ?? null,
+          count: tab.querySelector("[data-dots-count]")?.textContent ?? null,
+          marks: [...tab.querySelectorAll<HTMLElement>(".sdot")].map((dot) => `${[...dot.classList].find((name) => name !== "sdot")}=${getComputedStyle(dot, "::before").content}`),
+          returned: tab.querySelector(".pret")?.textContent ?? null,
+          ariaLabel: tab.getAttribute("aria-label") ?? "",
+          top: Math.round(tab.getBoundingClientRect().top * 10) / 10,
+          height: Math.round(tab.getBoundingClientRect().height * 10) / 10,
+          unitTop: Math.round((tab.closest(".gs-unit")?.getBoundingClientRect().top ?? 0) * 10) / 10,
+        };
+      }),
+      stripScrolls: strip ? strip.scrollWidth > strip.clientWidth + 1 : false,
+      /* The tabs are the grid only when the one line would overflow: the row is measured as it would stand, then restored. */
+      layout: strip?.dataset.layout ?? null,
+      inlineFits: (() => {
+        if (!strip) return null;
+        const applied = strip.dataset.layout;
+        strip.dataset.layout = "row";
+        const fits = strip.scrollWidth <= strip.clientWidth + 1 && getComputedStyle(strip).display === "flex";
+        if (applied) strip.dataset.layout = applied;
+        return fits;
+      })(),
+      waits: waits ? { text: waits.textContent ?? "", cut: cut(waits, box), height: Math.round(waits.getBoundingClientRect().height) } : null,
+      pop: pop ? { text: pop.textContent ?? "", inHead: Boolean(header && pop.getBoundingClientRect().top >= header.getBoundingClientRect().top - 1 && pop.getBoundingClientRect().bottom <= (waits?.getBoundingClientRect().bottom ?? 0) + pop.getBoundingClientRect().height + 8), cut: cut(pop, box) } : null,
+      rules: [...sheet.querySelectorAll<HTMLElement>(".gs-rule")].map((rule) => ({ text: rule.textContent ?? "", cut: cut(rule, box) || rule.scrollWidth > rule.clientWidth + 1, arc: rule.dataset.arcState ?? "rest", back: rule.dataset.ruleBack === "1", shape: rule.dataset.ruleShape ?? "" })),
+      pane: (() => {
+        const pane = sheet.querySelector<HTMLElement>(".pane");
+        const state = pane?.querySelector<HTMLElement>(".pstate");
+        const menu = pane?.querySelector<HTMLElement>("[data-pane-menu]");
+        const menuBox = menu?.getBoundingClientRect();
+        const away = pane?.querySelector<HTMLElement>(".pane-conv.away");
+        return {
+          text: (pane as HTMLElement | null)?.innerText ?? "",
+          sub: pane?.querySelector(".pane-sub")?.textContent ?? "",
+          stop: pane?.querySelector("[data-lane-stop]")?.textContent ?? null,
+          hint: pane?.querySelector("[data-answer-hint]")?.textContent ?? null,
+          hintKind: pane?.querySelector<HTMLElement>("[data-answer-hint]")?.dataset.answerKind ?? null,
+          prole: pane?.querySelector(".prole")?.textContent ?? "",
+          height: Math.round(pane?.getBoundingClientRect().height ?? 0),
+          laneHeight: Math.round(sheet.querySelector<HTMLElement>(".lane")?.getBoundingClientRect().height ?? 0),
+          placeholder: pane?.querySelector("textarea")?.getAttribute("placeholder") ?? null,
+          /* The composer under the conversation stands whole inside the sheet. */
+          composer: (() => {
+            const rect = pane?.querySelector("textarea")?.getBoundingClientRect();
+            return rect ? { top: Math.round(rect.top), bottom: Math.round(rect.bottom), whole: rect.top >= box.top && rect.bottom <= box.bottom } : null;
+          })(),
+          /* A parked pane's one primary control, read whole: in the sheet, on its first screen, enabled. */
+          answers: [...(pane?.querySelectorAll<HTMLButtonElement>("[data-pane-answer]") ?? [])].map((button) => {
+            const rect = button.getBoundingClientRect();
+            const sheetBox = sheet.getBoundingClientRect();
+            return { action: button.dataset.paneAnswer ?? "", text: button.textContent ?? "", disabled: button.disabled, whole: rect.width > 0 && rect.height > 0 && rect.left >= sheetBox.left && rect.right <= sheetBox.right && rect.top >= sheetBox.top && rect.bottom <= sheetBox.bottom };
+          }),
+          /* The conversation inside the pane draws no frame of its own: the pane's rule carries the attention colour. */
+          innerRing: Boolean(pane && [...pane.querySelectorAll<HTMLElement>(".pane-attention-ring")].some((ring) => getComputedStyle(ring).display !== "none")),
+          question: pane?.querySelector("[data-stage-question]")?.textContent ?? null,
+          boxedEmpty: Boolean(away && getComputedStyle(away).borderTopStyle === "dashed"),
+          stage: pane?.dataset.stage ?? "", state: state?.textContent ?? "", menu: Boolean(menuBox && menuBox.width > 0 && menuBox.height > 0 && menuBox.right <= box.right + 0.5 && menuBox.left >= box.left - 0.5) };
+      })(),
+      graph: (() => {
+        const canvas = sheet.querySelector<HTMLElement>(".gs-graph");
+        if (!canvas) return null;
+        const within = canvas.getBoundingClientRect();
+        return {
+          dir: canvas.dataset.sheetGraphCanvas ?? "",
+          scrollsSideways: canvas.scrollWidth > canvas.clientWidth + 1,
+          scrollsDown: canvas.scrollHeight > canvas.clientHeight + 1,
+          /* No node or strip text is cut with an ellipsis: every text element of the graph shows whole. */
+          truncated: [...canvas.querySelectorAll<HTMLElement>(".pnode *, .pstrip *")].filter((element) => element.children.length === 0 && (element.textContent ?? "").trim() && element.scrollWidth > element.clientWidth + 1).map((element) => `${element.closest("[data-stage],[data-strip]")?.getAttribute("data-stage") ?? element.closest("[data-strip]")?.getAttribute("data-strip")}: ${element.textContent}`),
+          strips: [...canvas.querySelectorAll<HTMLElement>(".pstrip[data-strip]")].map((strip) => ({
+            id: strip.dataset.strip ?? "", fired: Number(strip.dataset.stripFired ?? 0), max: Number(strip.dataset.stripMax ?? 0),
+            dots: strip.querySelector<HTMLElement>(".sdots")?.dataset.dots ?? "", text: strip.textContent ?? "",
+          })),
+          /* A wire never runs behind a stage it neither leaves nor enters. */
+          crossings: (() => {
+            const boxes = [...canvas.querySelectorAll<HTMLElement>(".pnode[data-stage]")].map((node) => ({ id: node.dataset.stage ?? "", rect: node.getBoundingClientRect() }));
+            const found: string[] = [];
+            for (const path of canvas.querySelectorAll<SVGPathElement>("path.pedge[data-edge]")) {
+              const [from, , to] = (path.getAttribute("data-edge") ?? "").split(":");
+              const origin = path.ownerSVGElement!.getBoundingClientRect();
+              const matrix = path.ownerSVGElement!.getScreenCTM();
+              const length = path.getTotalLength();
+              for (let at = 0; at <= length; at += 3) {
+                const point = path.getPointAtLength(at);
+                const x = matrix ? point.x * matrix.a + matrix.e : origin.left + point.x;
+                const y = matrix ? point.y * matrix.d + matrix.f : origin.top + point.y;
+                const hit = boxes.find((box) => box.id !== from && box.id !== to && x > box.rect.left + 1 && x < box.rect.right - 1 && y > box.rect.top + 1 && y < box.rect.bottom - 1);
+                if (hit) { found.push(`${path.getAttribute("data-edge")} crosses ${hit.id}`); break; }
+              }
+            }
+            return found;
+          })(),
+          /* Every text range of the graph inside the canvas's left and right edges, so a node cut mid-label shows. */
+          textCut: ranges(canvas).some((rect) => rect.right > within.right + 0.5 || rect.left < within.left - 0.5),
+          nodes: [...canvas.querySelectorAll<HTMLElement>(".pnode[data-stage]")].map((node) => ({ stage: node.dataset.stage ?? "", text: node.innerText, top: Math.round(node.getBoundingClientRect().top), left: Math.round(node.getBoundingClientRect().left) })),
+        };
+      })(),
+      panels: sheet.querySelectorAll('[role="tabpanel"]').length,
+      panes: sheet.querySelectorAll(".pane").length,
+      readers: sheet.querySelectorAll("[data-kanban-reader]").length,
+      paneWidth: Math.round(sheet.querySelector<HTMLElement>(".pane")?.getBoundingClientRect().width ?? 0),
+      lane: Math.round(sheet.querySelector<HTMLElement>(".lane")?.getBoundingClientRect().width ?? 0),
+      title: sheet.querySelector("header h2")?.textContent ?? "",
+      titleCut: (() => { const h2 = sheet.querySelector<HTMLElement>("header h2"); return h2 ? h2.scrollWidth > h2.clientWidth + 1 : false; })(),
+    };
+  });
+
+  /** A frame is taken with the pointer off the sheet, so no tab wears the hover of the click that selected it. */
+  const frame = async (page: Page, file: string) => {
+    await page.mouse.move(2, 2);
+    await page.waitForTimeout(80);
+    await page.screenshot({ path: file });
+  };
+
+  const boardReady = (page: Page) => page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 20_000 });
+
+  const check = (frame: string, read: NonNullable<Awaited<ReturnType<typeof readSheet>>>, expectStrip: boolean, failures: string[]) => {
+    if (expectStrip && !read.tabs.length) failures.push(`${frame}: no tabs`);
+    if (!expectStrip && read.tabs.length) failures.push(`${frame}: a single stage drew ${read.tabs.length} tab(s)`);
+    for (const tab of read.tabs) {
+      if (tab.clipped || tab.outside) failures.push(`${frame}: tab ${tab.stage} "${tab.name}" is cut`);
+      if (tab.word && !tab.ariaLabel) failures.push(`${frame}: tab ${tab.stage} has no label`);
+    }
+    /* A detached stage is the first line of its own cell: on the line of the step tabs in its row, at their height, so it is not a third line of the cell above it. */
+    const steps = read.tabs.filter((tab) => tab.kind === "step");
+    for (const tab of read.tabs.filter((candidate) => candidate.kind === "detached")) {
+      const row = steps.filter((step) => Math.abs(step.unitTop - tab.unitTop) <= 1);
+      if (Math.abs(tab.top - tab.unitTop) > 1) failures.push(`${frame}: detached tab ${tab.stage} sits ${tab.top - tab.unitTop} px below its cell's top`);
+      for (const step of row) if (Math.abs(step.top - tab.top) > 1) failures.push(`${frame}: detached tab ${tab.stage} top ${tab.top} is off the step tabs' line ${step.top}`);
+      const shortest = Math.min(...steps.map((step) => step.height));
+      if (steps.length && tab.height < shortest - 1) failures.push(`${frame}: detached tab ${tab.stage} is ${tab.height} px high, the shortest step tab ${shortest}`);
+    }
+    if (read.stripScrolls) failures.push(`${frame}: the tab strip scrolls`);
+    if (!read.waits || read.waits.cut) failures.push(`${frame}: the waits-on line is cut or missing`);
+    if (read.rules.some((rule) => rule.cut)) failures.push(`${frame}: a rule line is cut`);
+    /* The tabs have one panel; a lane of one stage has no tabs and holds its pane in a plain region. */
+    if (read.panels !== (expectStrip ? 1 : 0) || read.panes !== 1) failures.push(`${frame}: ${read.panels} panels and ${read.panes} panes`);
+    if (read.readers > 1) failures.push(`${frame}: ${read.readers} readers mounted`);
+    if (Math.abs(read.paneWidth - read.lane) > 26) failures.push(`${frame}: the pane spans ${read.paneWidth} of ${read.lane}`);
+    if (read.titleCut) failures.push(`${frame}: the title is cut`);
+    /* One grammar in every state: the fail edge's technical sentence never reaches a rule line. */
+    for (const rule of read.rules) if (/Fail edge|Ребро невдачі|runs again|знову запускається|Used \d+ of|Використано \d+ з/.test(rule.text)) failures.push(`${frame}: a rule line reads the technical sentence: ${rule.text}`);
+    /* A tab that carries rounds shows its own fix's rounds: one mark for each round of the budget, the count in digits, marks of distinct shapes, and no ✕ on the name of a stage at work. */
+    for (const tab of read.tabs) {
+      if (!tab.dots || /^\d+\/\d+$/.test(tab.dots)) continue;
+      const marks = tab.dots.split(" ");
+      const used = marks.filter((kind) => kind !== "left").length;
+      const budget = Number(tab.count?.split("/")[1]);
+      if (tab.count !== `${used}/${marks.length}` || budget !== marks.length) failures.push(`${frame}: tab ${tab.stage} carries rounds "${tab.dots}" and says "${tab.count}"`);
+      if (["running", "reviewing", "committing"].includes(tab.state) && marks[0] === "bad") failures.push(`${frame}: tab ${tab.stage} is at work and starts with a ✕: ${tab.dots}`);
+      const kinds = new Map(tab.marks.map((mark) => mark.split("=") as [string, string]));
+      if (new Set(kinds.values()).size !== kinds.size) failures.push(`${frame}: tab ${tab.stage} draws two round kinds with one shape: ${tab.marks.join(" ")}`);
+    }
+    /* The tab strip chooses its layout by fit: the grid only where the one line would overflow. */
+    if (read.layout === "grid" && read.inlineFits && read.viewport >= 700) failures.push(`${frame}: the tabs are the grid although one line fits`);
+    if (read.layout === "row" && read.inlineFits === false && read.viewport >= 700) failures.push(`${frame}: the tabs stay one line and overflow`);
+    /* The graph stays whole inside its canvas, and its steps read in order along the layout. */
+    if (read.graph) {
+      if (read.graph.scrollsSideways || read.graph.textCut) failures.push(`${frame}: the graph is cut at the canvas's side (${read.graph.dir}, scrolls ${read.graph.scrollsSideways}, text cut ${read.graph.textCut})`);
+      /* A graph laid out left to right has its whole height on show; one column may scroll. */
+      if (read.graph.dir === "LR" && read.graph.scrollsDown) failures.push(`${frame}: the left-to-right graph is cut at the canvas's bottom`);
+      for (const text of read.graph.truncated) failures.push(`${frame}: a graph text is cut: ${text}`);
+      for (const crossing of read.graph.crossings) failures.push(`${frame}: a wire runs behind a stage: ${crossing}`);
+      for (const strip of read.graph.strips) {
+        const [from, , to] = strip.id.split(":");
+        const target = read.tabs.find((tab) => tab.stage === to);
+        const source = read.tabs.find((tab) => tab.stage === from);
+        /* A fix the lane goes on to is never «back»; only an earlier step is. */
+        if (target && target.kind !== "step" && /back to|назад до/.test(strip.text)) failures.push(`${frame}: the row for ${to} reads «back»: ${strip.text}`);
+        /* The graph row and the tab draw one set of rounds, and the source tab wears the count. */
+        if (target?.dots && !/^\d+\/\d+$/.test(target.dots) && target.kind === "conditional" && strip.dots !== target.dots) failures.push(`${frame}: ${to}: the graph row draws "${strip.dots}" and its tab "${target.dots}"`);
+        if (strip.fired > 0 && source && source.returned?.replace("↺", "") !== `${strip.fired}/${strip.max}`) failures.push(`${frame}: ${from} failed ${strip.fired} of ${strip.max} and its tab says "${source.returned}"`);
+        if (strip.max > 0 && strip.dots && !/^\d+\/\d+$/.test(strip.dots) && strip.dots.split(" ").length !== strip.max) failures.push(`${frame}: the row for ${to} draws ${strip.dots.split(" ").length} marks for a budget of ${strip.max}`);
+      }
+      const steps = read.tabs.filter((tab) => tab.kind === "step").map((tab) => read.graph!.nodes.find((node) => node.stage === tab.stage)).filter(Boolean) as Array<{ stage: string; top: number; left: number }>;
+      const at = (node: { top: number; left: number }) => (read.graph!.dir === "TB" ? node.top : node.left);
+      for (let index = 1; index < steps.length; index += 1) if (at(steps[index]!) < at(steps[index - 1]!)) failures.push(`${frame}: step ${steps[index]!.stage} stands before ${steps[index - 1]!.stage} in the graph`);
+      if (read.graph.dir === "TB") {
+        const lastStep = Math.max(...steps.map((node) => node.top));
+        for (const node of read.graph.nodes.filter((entry) => !steps.some((step) => step.stage === entry.stage))) if (node.top < lastStep) failures.push(`${frame}: ${node.stage}, which only a failure reaches, stands between the steps of the lane`);
+      }
+    }
+    /* A rule at rest says «back to» only for a target that reads earlier; a conditional or detached stage after its source is forward. */
+    for (const rule of read.rules) {
+      if (rule.arc === "rest" && !rule.back && rule.shape !== "self" && /back to|назад до/.test(rule.text)) failures.push(`${frame}: a forward rule reads «back»: ${rule.text}`);
+      if (rule.arc === "rest" && rule.back && rule.shape !== "self" && !/back to|назад до/.test(rule.text)) failures.push(`${frame}: a rule back to an earlier step does not say so: ${rule.text}`);
+    }
+  };
+
+  const ALL_SHAPES = [
+    { slug: "fix-skipped", strip: true }, { slug: "fix-taken", strip: true }, { slug: "return-loop", strip: true }, { slug: "visual-gate", strip: true },
+    { slug: "shared-fix", strip: true }, { slug: "returning-fix", strip: true }, { slug: "prototype", strip: true }, { slug: "recheck", strip: true },
+    { slug: "skipped", strip: true }, { slug: "parked-publication", strip: false }, { slug: "parked-question", strip: true }, { slug: "single", strip: false },
+    { slug: "eight", strip: true }, { slug: "chain", strip: true },
+  ] as const;
+  const ONLY_SHAPES = process.env.LLV_S2_SHAPES ? process.env.LLV_S2_SHAPES.split(",") : null;
+  const SHAPES = ALL_SHAPES.filter((shape) => !ONLY_SHAPES || ONLY_SHAPES.includes(shape.slug));
+
+  /* 700 and 760 sit between the phone rules (699) and 820: the 4-column grid is narrowest there. */
+  const ALL_WIDTHS = [1440, 1100, 1099, 820, 760, 700] as const;
+  const ONLY_WIDTHS = process.env.LLV_S2_WIDTHS ? process.env.LLV_S2_WIDTHS.split(",").map(Number) : null;
+  const WIDTHS = ALL_WIDTHS.filter((width) => !ONLY_WIDTHS || ONLY_WIDTHS.includes(width));
+
+  browserTest("every graph shape opens as tabs over one pane, whole, at 1440, 1100, 1099, 820, 760 and 700 px, in both languages and themes", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const frames: Frame[] = [];
+    const failures: string[] = [];
+    const wordsSeen = new Map<string, Set<string>>();
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          for (const width of WIDTHS) {
+            const opened = await openFixture(browser, `${server.base}?scenario=stageshapes&lang=${lang}`, { width, height: width >= 1100 ? 900 : 1000 }, scheme, lang);
+            try {
+              await boardReady(opened.page);
+              for (const shape of SHAPES) {
+                const label = `${shape.slug}-${width}-${lang}-${scheme}`;
+                const task = card(`t-shape-${shape.slug}`);
+                await opened.page.waitForSelector(`${task} [data-open-stages]`, { state: "attached", timeout: 10_000 });
+                await opened.page.locator(`${task} [data-open-stages]`).first().evaluate((element) => (element as HTMLElement).click());
+                await opened.page.waitForSelector("[data-stages-sheet] .pane[data-stage]", { timeout: 10_000 });
+                await opened.page.waitForTimeout(350);
+                const read = await readSheet(opened.page);
+                const local: string[] = [];
+                if (!read) { local.push(`${label}: the sheet did not open`); failures.push(...local); continue; }
+                check(label, read, shape.strip, local);
+                /* A parked stage's pane gives the stop's reason and its one primary action: an answer box for a question, a visible Retry otherwise (skip stays in the ⋯). A stage that waits on the operator shows no working footer, and its conversation draws no ring of its own inside the pane's frame. */
+                if (shape.slug === "parked-publication" || shape.slug === "parked-question" || shape.slug === "returning-fix") {
+                  if (!read.pane.stop && shape.slug !== "returning-fix") local.push(`${label}: the parked stage's pane gives no stop reason`);
+                  if (!read.pane.hint) local.push(`${label}: the parked stage's pane does not say where to answer`);
+                  if (/(працює…|working…)/.test(read.pane.text)) local.push(`${label}: the parked stage's pane shows a working footer`);
+                  if (read.pane.innerRing) local.push(`${label}: the parked pane's conversation draws a second ring inside the pane's frame`);
+                  const retry = lang === "en" ? /Retry|Review again/ : /Повторити|Ще одне ревʼю/;
+                  if (shape.slug === "parked-question") {
+                    if (read.pane.answers.length) local.push(`${label}: a question's pane offers a retry button beside its composer`);
+                    if (read.pane.hintKind !== "question") local.push(`${label}: a question's pane does not point to the composer: ${read.pane.hint}`);
+                    if (!read.pane.placeholder || /agent will start|агент запуститься/.test(read.pane.placeholder) || !(lang === "en" ? /answer/i : /відповід/i).test(read.pane.placeholder)) local.push(`${label}: the composer's placeholder is not an answer's: ${read.pane.placeholder}`);
+                  } else {
+                    const [answer, ...extra] = read.pane.answers;
+                    if (!answer || extra.length) local.push(`${label}: the parked pane offers ${read.pane.answers.length} primary buttons, not one`);
+                    else if (answer.disabled || !answer.whole || !retry.test(answer.text)) local.push(`${label}: the parked pane's primary button is not a whole, enabled Retry: ${JSON.stringify(answer)}`);
+                  }
+                }
+                if (shape.slug === "parked-question" && !read.pane.question) local.push(`${label}: the parked stage's pane does not show its question`);
+                /* A review loop's role and its loop name are two words apart. */
+                if (/(review loop|цикл рев.ю)/.test(read.pane.prole) && !/·/.test(read.pane.prole)) local.push(`${label}: the role and the loop name run together: ${read.pane.prole}`);
+                /* The rule lines keep one grammar: «If X fails → Y», never a second form. */
+                for (const rule of read.rules) if (/, тоді|, then /.test(rule.text) || !/→/.test(rule.text)) local.push(`${label}: a rule line leaves the one grammar: ${rule.text}`);
+                /* A return the budget has spent says so everywhere: the park reason and the counts come from one budget. */
+                if (shape.slug === "returning-fix") {
+                  const visual = read.tabs.find((tab) => tab.stage === "visual");
+                  const rule = read.rules.find((entry) => /Visual/.test(entry.text));
+                  if (visual?.returned?.replace("↺", "") !== "2/2") local.push(`${label}: Visual's tab says "${visual?.returned}" while its rounds are spent`);
+                  if (!rule || !/(2 of 2|2 з 2)/.test(rule.text)) local.push(`${label}: Visual's rule line does not say 2 of 2: ${rule?.text}`);
+                }
+                for (const tab of read.tabs) if (tab.word) wordsSeen.set(tab.word, new Set([...(wordsSeen.get(tab.word) ?? []), tab.stage]));
+                const file = `${label}-sheet.png`;
+                await frame(opened.page, path.join(OUT, file));
+                frames.push({ file, lane: shape.slug, width, lang, scheme, state: "sheet", failures: local });
+                failures.push(...local);
+                if (shape.slug === "skipped") {
+                  /* The skipped stage's pane says so, names no starter, and draws no empty box in place of a conversation. */
+                  await opened.page.click('[data-stages-sheet] [role="tab"][data-tab-stage="deliver"]');
+                  await opened.page.waitForTimeout(250);
+                  const skippedRead = await readSheet(opened.page);
+                  const skippedFailures: string[] = [];
+                  const word = lang === "en" ? "skipped" : "пропущено";
+                  if (!skippedRead || skippedRead.pane.stage !== "deliver") skippedFailures.push(`${label}: the skipped tab did not select`);
+                  else {
+                    check(`${label}-skipped`, skippedRead, shape.strip, skippedFailures);
+                    /* «Skipped» is said once, by the pane's status; the sub-line says what the lane did, and the pane is as tall as what it says. */
+                    const said = skippedRead.pane.text.toLowerCase().split(word).length - 1;
+                    if (said !== 1) skippedFailures.push(`${label}: the skipped pane says «${word}» ${said} times: ${skippedRead.pane.text.slice(0, 160)}`);
+                    if (!skippedRead.pane.sub) skippedFailures.push(`${label}: the skipped pane's sub-line is empty`);
+                    if (skippedRead.pane.height > 320) skippedFailures.push(`${label}: the skipped pane is ${skippedRead.pane.height} px high, an empty box`);
+                    if (/started by|запустив/.test(skippedRead.pane.text)) skippedFailures.push(`${label}: the skipped pane names a starter`);
+                    if (skippedRead.pane.boxedEmpty) skippedFailures.push(`${label}: the skipped pane draws an empty dashed box`);
+                    if (/No conversation recorded|Розмову не записано/.test(skippedRead.pane.text)) skippedFailures.push(`${label}: the skipped pane says no conversation was recorded`);
+                  }
+                  const skippedFile = `${label}-skipped-stage.png`;
+                  await frame(opened.page, path.join(OUT, skippedFile));
+                  frames.push({ file: skippedFile, lane: shape.slug, width, lang, scheme, state: "skipped-stage", failures: skippedFailures });
+                  failures.push(...skippedFailures);
+                  if (read.tabs.find((tab) => tab.selected)) {
+                    await opened.page.click(`[data-stages-sheet] [role="tab"][data-tab-stage="${read.tabs.find((tab) => tab.selected)!.stage}"]`);
+                    await opened.page.waitForTimeout(150);
+                  }
+                }
+                if (shape.slug === "recheck") {
+                  /* Review ran twice and its second attempt is the re-check a spent budget handed back: its attempts row says so. */
+                  const initial = read.tabs.find((tab) => tab.selected)?.stage;
+                  await opened.page.click('[data-stages-sheet] [role="tab"][data-tab-stage="review"]');
+                  await opened.page.waitForTimeout(250);
+                  const picked = await readSheet(opened.page);
+                  const pickFailures: string[] = [];
+                  const rows = await opened.page.locator("[data-stages-sheet] .pane .attempts [data-attempt]").allInnerTexts();
+                  const word = lang === "en" ? "re-check" : "повторна перевірка";
+                  if (!picked || picked.tabs.find((tab) => tab.selected)?.stage !== "review") pickFailures.push(`${label}: the Review tab did not select`);
+                  else check(`${label}-review`, picked, shape.strip, pickFailures);
+                  if (rows.length < 2 || !rows.some((row) => row.includes(word))) pickFailures.push(`${label}: Review's attempts row has no «${word}» attempt: ${rows.join(" | ")}`);
+                  if (rows.length && rows[0]!.includes(word)) pickFailures.push(`${label}: the first attempt reads as a re-check`);
+                  const pickFile = `${label}-review-recheck.png`;
+                  await frame(opened.page, path.join(OUT, pickFile));
+                  frames.push({ file: pickFile, lane: shape.slug, width, lang, scheme, state: "review-recheck", failures: pickFailures });
+                  failures.push(...pickFailures);
+                  if (initial) {
+                    await opened.page.click(`[data-stages-sheet] [role="tab"][data-tab-stage="${initial}"]`);
+                    await opened.page.waitForTimeout(150);
+                  }
+                }
+                if (width === 1440 || width === 820) {
+                  /* The popover, in the head and over no text. */
+                  await opened.page.click("[data-stages-sheet] .gs-waits");
+                  await opened.page.waitForSelector("[data-stages-sheet] .gs-waits-pop");
+                  const popRead = await readSheet(opened.page);
+                  const popFailures: string[] = [];
+                  if (!popRead?.pop || popRead.pop.cut || !popRead.pop.text) popFailures.push(`${label}: the popover is cut or empty`);
+                  /* One duration per surface, at one precision in both languages: whole minutes, never seconds; a stage at work started minutes ago, as its footer says, not hours. */
+                  if (popRead?.pop && /\b\d+ ?(с|s)\b/.test(popRead.pop.text)) popFailures.push(`${label}: the popover counts seconds: ${popRead.pop.text}`);
+                  if (popRead?.pop && /(працює над|works on)/.test(popRead.pop.text) && /\b\d+ ?(год|h)\b/.test(popRead.pop.text)) popFailures.push(`${label}: the popover counts hours for a stage that started minutes ago: ${popRead.pop.text}`);
+                  const popFile = `${label}-popover.png`;
+                  await frame(opened.page, path.join(OUT, popFile));
+                  frames.push({ file: popFile, lane: shape.slug, width, lang, scheme, state: "popover", failures: popFailures });
+                  failures.push(...popFailures);
+                  await opened.page.keyboard.press("Escape");
+                  await opened.page.waitForSelector("[data-stages-sheet] .gs-waits-pop", { state: "detached" });
+                  if (!(await opened.page.evaluate(() => document.querySelector("[data-stages-sheet]") !== null))) failures.push(`${label}: Escape closed the whole sheet while the popover was open`);
+                  /* A conditional tab and a detached tab, each selected, on the lanes that have one. */
+                  for (const kind of ["conditional", "detached"] as const) {
+                    const other = read.tabs.find((tab) => tab.kind === kind);
+                    if (!other) continue;
+                    await opened.page.click(`[data-stages-sheet] [role="tab"][data-tab-stage="${other.stage}"]`);
+                    await opened.page.waitForTimeout(250);
+                    const picked = await readSheet(opened.page);
+                    const pickFailures: string[] = [];
+                    if (!picked || picked.tabs.find((tab) => tab.selected)?.stage !== other.stage) pickFailures.push(`${label}: the ${other.kind} tab did not select`);
+                    else {
+                      check(`${label}-${other.kind}`, picked, shape.strip, pickFailures);
+                      if (picked.pane.stage !== other.stage) pickFailures.push(`${label}: the ${other.kind} tab's pane is ${picked.pane.stage}`);
+                      if (!picked.pane.menu) pickFailures.push(`${label}: the ${other.kind} tab's pane has no whole ⋯`);
+                      /* What starts the stage is said once and does not contradict its tab: a detached stage is not «first» or «last»; a shared fix names every source. */
+                      if (other.kind === "detached" && /Starts first|Стартує першим|first stage|перший етап|last stage|останній етап/.test(picked.pane.text)) pickFailures.push(`${label}: the detached tab's pane says it starts first or ends last: ${picked.pane.text.slice(0, 160)}`);
+                      if (other.kind === "conditional" && (shape.slug === "shared-fix" || shape.slug === "eight")) {
+                        const need = shape.slug === "shared-fix" ? ["Review", "Visual"] : ["Review", "Slice critic"];
+                        for (const name of need) if (!picked.pane.text.includes(name)) pickFailures.push(`${label}: the shared fix's pane does not name its source ${name}`);
+                      }
+                      const words = { ifNeeded: lang === "en" ? "if needed" : "за потреби", notNeeded: lang === "en" ? "not needed" : "не знадобився", offChain: lang === "en" ? "off the chain" : "поза ланцюжком", notRun: lang === "en" ? "never ran" : "не запускався" } as const;
+                      if (other.word && !picked.pane.state.includes(words[other.word as keyof typeof words])) pickFailures.push(`${label}: the ${other.kind} tab's pane says «${picked.pane.state}», not «${words[other.word as keyof typeof words]}»`);
+                    }
+                    const pickFile = `${label}-${other.kind}-tab.png`;
+                    await frame(opened.page, path.join(OUT, pickFile));
+                    frames.push({ file: pickFile, lane: shape.slug, width, lang, scheme, state: `${other.kind}-tab`, failures: pickFailures });
+                    failures.push(...pickFailures);
+                  }
+                  /* The graph, beside the tabs. */
+                  await opened.page.click("[data-stages-sheet] [data-sheet-graph]");
+                  await opened.page.waitForSelector("[data-stages-sheet] .gs-graph .pnode", { timeout: 10_000 });
+                  await opened.page.waitForTimeout(250);
+                  const graphRead = await readSheet(opened.page);
+                  const graphFailures: string[] = [];
+                  if (!graphRead?.graph) graphFailures.push(`${label}: the graph did not open`);
+                  else {
+                    check(`${label}-graph`, graphRead, shape.strip, graphFailures);
+                    /* A stage that has not run is «if needed» in its node, as in its tab and pane, never «waiting · not started». */
+                    const optionalWords = { ifNeeded: lang === "en" ? "if needed" : "за потреби", notNeeded: lang === "en" ? "not needed" : "не знадобився", offChain: lang === "en" ? "off the chain" : "поза ланцюжком", notRun: lang === "en" ? "never ran" : "не запускався" } as const;
+                    for (const tab of graphRead.tabs.filter((entry) => entry.word)) {
+                      const node = graphRead.graph?.nodes.find((entry) => entry.stage === tab.stage);
+                      /* A docked fix has no node of its own: its row under its source carries it. */
+                      if (node && (!node.text.includes(optionalWords[tab.word as keyof typeof optionalWords]) || /not started|не почато/.test(node.text))) graphFailures.push(`${label}-graph: ${tab.stage}'s node says "${node?.text.replace(/\n/g, " | ")}", not «${optionalWords[tab.word as keyof typeof optionalWords]}»`);
+                    }
+                  }
+                  const graphFile = `${label}-graph.png`;
+                  await frame(opened.page, path.join(OUT, graphFile));
+                  frames.push({ file: graphFile, lane: shape.slug, width, lang, scheme, state: "graph", failures: graphFailures });
+                  failures.push(...graphFailures);
+                }
+                await opened.page.keyboard.press("Escape");
+                await opened.page.waitForSelector("[data-stages-sheet]", { state: "detached" });
+              }
+            } finally { await opened.context.close(); }
+            if (opened.pageErrors.length) failures.push(`${lang}-${scheme}-${width}: page errors ${opened.pageErrors.join(" | ")}`);
+          }
+        }
+      }
+      /* A conditional stage that never ran reads «if needed» while the lane is open and «not needed» once it ended. */
+      const seen = (word: string) => [...(wordsSeen.get(word) ?? [])];
+      const whole = !ONLY_SHAPES && !ONLY_WIDTHS;
+      if (whole && !seen("ifNeeded").length) failures.push("no lane drew an «if needed» tab");
+      if (whole && !seen("notNeeded").length) failures.push("no lane drew a «not needed» tab");
+      if (whole && !seen("offChain").length && !seen("notRun").length) failures.push("no lane drew a detached tab");
+      /* Every state the brief names is framed in both languages and themes at the strip's row width and at the grid width. */
+      for (const lang of whole ? ["en", "uk"] : []) {
+        for (const scheme of ["light", "dark"]) {
+          for (const width of [1440, 820]) {
+            for (const state of ["popover", "graph", "conditional-tab", "detached-tab", "skipped-stage"]) {
+              if (!frames.some((frame) => frame.state === state && frame.lang === lang && frame.scheme === scheme && frame.width === width)) failures.push(`no ${state} frame at ${width} px in ${lang} ${scheme}`);
+            }
+          }
+          for (const width of [1100, 1099]) {
+            if (!frames.some((frame) => frame.state === "sheet" && frame.lang === lang && frame.scheme === scheme && frame.width === width)) failures.push(`no sheet frame at ${width} px in ${lang} ${scheme}`);
+          }
+        }
+      }
+      const manifest = { driver: "src/components/kanban/kanbanBoard.browser.test.tsx", describe: "redesign S2 the Stages window as tabs", scenario: "stageshapes", widths: WIDTHS, frames, failures };
+      fs.writeFileSync(path.join(OUT, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 3_600_000);
+
+  browserTest("a 1440 × 700 window keeps a parked stage's stop, its one primary action and its composer whole on the first screen, in both languages and themes", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser: Browser = await chromium.launch(LAUNCH);
+    const frames: Frame[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        for (const scheme of ["light", "dark"] as const) {
+          const opened = await openFixture(browser, `${server.base}?scenario=stageshapes&lang=${lang}`, { width: 1440, height: 700 }, scheme, lang);
+          try {
+            await boardReady(opened.page);
+            for (const slug of ["parked-publication", "parked-question", "returning-fix", "fix-taken", "skipped"] as const) {
+              const label = `${slug}-1440x700-${lang}-${scheme}`;
+              await opened.page.waitForSelector(`${card(`t-shape-${slug}`)} [data-open-stages]`, { state: "attached", timeout: 10_000 });
+              await opened.page.locator(`${card(`t-shape-${slug}`)} [data-open-stages]`).first().evaluate((element) => (element as HTMLElement).click());
+              await opened.page.waitForSelector("[data-stages-sheet] .pane[data-stage]", { timeout: 10_000 });
+              await opened.page.waitForTimeout(350);
+              const read = await readSheet(opened.page);
+              const local: string[] = [];
+              if (!read) { failures.push(`${label}: the sheet did not open`); continue; }
+              check(label, read, slug !== "parked-publication", local);
+              /* The sheet's own height is its window's: the stop, the primary button and the composer are inside it, whole, without scrolling the pane. */
+              const box = await opened.page.evaluate(() => { const sheet = document.querySelector("[data-stages-sheet]")!.getBoundingClientRect(); return { top: sheet.top, bottom: sheet.bottom }; });
+              if (box.bottom > 700.5) local.push(`${label}: the sheet runs past the window: ${box.bottom}`);
+              if (slug === "parked-question" && (!read.pane.composer?.whole || read.pane.hintKind !== "question")) local.push(`${label}: the question's composer or pointer is not whole in the window: ${JSON.stringify(read.pane.composer)} ${read.pane.hintKind}`);
+              if ((slug === "parked-publication" || slug === "returning-fix") && !(read.pane.answers.length === 1 && read.pane.answers[0]!.whole && !read.pane.answers[0]!.disabled)) local.push(`${label}: the primary button is not whole in the window: ${JSON.stringify(read.pane.answers)}`);
+              if (slug === "skipped") {
+                await opened.page.click('[data-stages-sheet] [role="tab"][data-tab-stage="deliver"]');
+                await opened.page.waitForTimeout(250);
+              }
+              const file = `${label}-sheet.png`;
+              await frame(opened.page, path.join(OUT, file));
+              frames.push({ file, lane: slug, width: 1440, lang, scheme, state: "sheet-h700", failures: local });
+              failures.push(...local);
+              await opened.page.keyboard.press("Escape");
+              await opened.page.waitForSelector("[data-stages-sheet]", { state: "detached" });
+            }
+          } finally { await opened.context.close(); }
+          if (opened.pageErrors.length) failures.push(`${lang}-${scheme}-h700: page errors ${opened.pageErrors.join(" | ")}`);
+        }
+      }
+      fs.writeFileSync(path.join(OUT, "manifest-h700.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", describe: "redesign S2 the Stages window as tabs", scenario: "stageshapes", viewport: "1440x700", frames, failures }, null, 2)}\n`);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 1_800_000);
 });
 
 describe("#1695 K6a account chips and pickers", () => {
@@ -8740,6 +11674,8 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
   const PHONE = { name: "390", width: 390, height: 844 } as const;
   const PANEL = "[data-rail-menu-panel]";
   const SHEET = "[data-mobile2-sheet='menu']";
+  const WINDOW = "[data-settings-window]";
+  const WINDOW_SHEET = "[data-mobile2-sheet='settings']";
   const TODAY_SHEET_PX = 743;
   /* docs/design/header-menu.md: 360 px for every desktop state, 560 px for the Settings page with its voice and memory source rows. */
   const DESKTOP_PX = 360;
@@ -8873,7 +11809,8 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
     }, selector);
 
     async function capture(page: Page, at: { frame: string; width: number; scheme: Scheme; lang: "en" | "uk" }, surface: State["surface"], state: string, now: Memory) {
-      const selector = surface === "desktop" ? PANEL : SHEET;
+      const windowOpen = await page.locator(`${WINDOW}, ${WINDOW_SHEET}`).count() > 0;
+      const selector = windowOpen ? surface === "desktop" ? WINDOW : WINDOW_SHEET : surface === "desktop" ? PANEL : SHEET;
       await page.waitForTimeout(160);
       const reading = await read(page, selector);
       const tag = `${surface} ${at.frame} ${at.scheme} ${at.lang} ${state}`;
@@ -8888,8 +11825,9 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
       if (!reading.inside) failures.push(`${tag}: leaves the window ${JSON.stringify(reading.box)}`);
       if (reading.scrolls) failures.push(`${tag}: scrolls`);
       if (reading.cut.length) failures.push(`${tag}: cut labels ${JSON.stringify(reading.cut)}`);
-      if (surface === "desktop" && reading.box[3] > desktopBound(state) + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than ${desktopBound(state)}`);
-      if (surface === "phone" && reading.box[3] > TODAY_SHEET_PX + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than today's ${TODAY_SHEET_PX}`);
+      /* The window has its own height; these bounds are the menu's. */
+      if (!windowOpen && surface === "desktop" && reading.box[3] > desktopBound(state) + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than ${desktopBound(state)}`);
+      if (!windowOpen && surface === "phone" && reading.box[3] > TODAY_SHEET_PX + 0.5) failures.push(`${tag}: ${reading.box[3]} px is taller than today's ${TODAY_SHEET_PX}`);
       /* The project rules' page carries «Asks you» and its own wording, which is not this menu's. */
       if (state !== "rules" && /\bJev\b|decisions|2026-10|\$\d+\.\d{3}/.test(reading.text)) failures.push(`${tag}: a banned word in ${JSON.stringify(reading.text.slice(0, 200))}`);
     }
@@ -8952,9 +11890,14 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await capture(page, at, "desktop", "stop-started", now);
           } else await capture(page, at, "desktop", `rest-${now}`, now);
           await page.locator("[data-rail-menu-settings]").click();
-          await page.locator("[data-rail-menu-back]").waitFor();
+          await page.locator(WINDOW).waitFor();
           await agrees(page, tag, now);
           await capture(page, at, "desktop", now === "working" ? "settings" : `settings-${now}`, now);
+          if (now === "working") {
+            await page.locator("[data-settings-section-row='roles']").click();
+            await page.locator("[data-rail-menu-agent-mapping]").waitFor();
+            await capture(page, at, "desktop", "roles", now);
+          }
           await page.locator("[data-rail-menu-memory]").click();
           await page.locator("[data-memory-page]").waitFor();
           await agrees(page, tag, now);
@@ -8967,12 +11910,11 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
           if (now === "noKey") {
             /* «Open Keys» turns the menu to «Keys» with the OpenRouter key's field open: one place keys are entered. */
             await page.locator("[data-memory-enter-key]").click();
-            if (!await page.locator(`${PANEL} [data-header-menu-page='keys'] [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
+            if (!await page.locator(`${WINDOW} [data-header-menu-page='keys'] [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
             await capture(page, at, "desktop", "memory-noKey-keys", now);
             await refuseKey(page, tag, lang);
             await capture(page, at, "desktop", "keys-invalid", now);
-            await page.locator("[data-rail-menu-back]").click();
-          } else await page.locator("[data-rail-menu-back]").click();
+          }
           await page.locator("[data-rail-menu-keys]").click();
           await page.locator("[data-keys-page] [data-keys-row]").first().waitFor();
           await capture(page, at, "desktop", now === "noKey" ? "keys-missing" : now === "working" ? "keys" : `keys-${now}`, now);
@@ -8983,18 +11925,18 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await capture(page, at, "desktop", "keys-replace", now);
             /* Escape first closes the open field, then the menu onto ⋯, where Enter opens it again. */
             await page.keyboard.press("Escape");
-            if (await page.locator("[data-keys-field]").count() || !await page.locator(PANEL).count()) failures.push(`${tag}: Escape in the field did not close only the field`);
+            if (await page.locator("[data-keys-field]").count() || !await page.locator(WINDOW).count()) failures.push(`${tag}: Escape in the field did not close only the field`);
             await page.keyboard.press("Escape");
-            if (await page.locator(PANEL).count() || !await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-menu"))) failures.push(`${tag}: Escape from the keys page did not close the menu onto ⋯`);
+            if (await page.locator(WINDOW).count() || !await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-menu"))) failures.push(`${tag}: Escape from the keys page did not close the menu onto ⋯`);
             await page.keyboard.press("Enter");
-            /* Once per frame: «Install ping» opens the product's dialog, which keeps the install ping and subscription API consent. */
+            /* Once per frame: the section keeps the install ping and subscription API consent, and neither memory nor the keys. */
             await page.locator("[data-rail-menu-settings]").click();
             await page.locator("[data-rail-menu-ping]").click();
             const dialog = page.locator("[data-telemetry-settings]");
             if (!await dialog.waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Install ping» did not open the dialog`);
             else {
               if (await dialog.locator("[data-memory-page], [data-memory-setting], [data-keys-page]").count()) failures.push(`${tag}: the ping's dialog still draws memory or the keys`);
-              if ((await dialog.locator("#telemetry-title").textContent())?.trim() !== translate(lang, "headerMenu.ping")) failures.push(`${tag}: the dialog is not titled «${translate(lang, "headerMenu.ping")}»`);
+              if ((await page.locator(`${WINDOW} [data-settings-title]`).textContent())?.trim() !== translate(lang, "settings.section.privacy")) failures.push(`${tag}: the section is not titled «${translate(lang, "settings.section.privacy")}»`);
               await page.screenshot({ path: path.join(out, `desktop-${frame.name}-${scheme}-${lang}-dialog-ping.png`) });
             }
           }
@@ -9025,7 +11967,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await capture(page, at, "phone", "rest", now);
             /* By keyboard: a page opens with focus on its back row, and back returns it to the row that opened it. */
             const focused = () => page.evaluate(() => document.activeElement?.getAttribute("data-mobile2-menu-row") ?? document.activeElement?.tagName);
-            for (const opener of ["settings", "help"]) {
+            for (const opener of ["help"]) {
               await page.locator(`${SHEET} [data-mobile2-menu-row="${opener}"]`).focus();
               await page.keyboard.press("Enter");
               if (await focused() !== "back") failures.push(`${tag}: ${opener} opened with focus on ${await focused()}`);
@@ -9040,31 +11982,40 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).click();
           }
           await page.locator(`${SHEET} [data-mobile2-menu-row="settings"]`).click();
-          await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).waitFor();
+          await page.locator(`${WINDOW_SHEET} [data-settings-section-row="general"]`).waitFor();
           await agrees(page, tag, now);
           await capture(page, at, "phone", now === "working" ? "settings" : `settings-${now}`, now);
+          const section = (id: string) => page.locator(`${WINDOW_SHEET} [data-settings-section-row="${id}"]`).click();
+          const back = () => page.locator(`${WINDOW_SHEET} [data-settings-back]`).click();
           if (now === "working") {
-            /* On the phone the question is a page of Settings; Cancel returns to it. */
-            await page.locator(`${SHEET} [data-mobile2-menu-row="stop-all"]`).click();
-            await page.locator(`${SHEET} [data-stop-all-go]`).waitFor();
+            /* On the phone the question is a page of General; Cancel returns to it. */
+            await section("general");
+            await capture(page, at, "phone", "general", now);
+            await page.locator(`${WINDOW_SHEET} [data-mobile2-menu-row="stop-all"]`).click();
+            await page.locator(`${WINDOW_SHEET} [data-stop-all-go]`).waitFor();
             await capture(page, at, "phone", "stop-ask", now);
-            await page.locator(`${SHEET} [data-stop-all-cancel]`).click();
-            await page.locator(`${SHEET} [data-mobile2-menu-row="memory"]`).waitFor();
+            await page.locator(`${WINDOW_SHEET} [data-stop-all-cancel]`).click();
+            await page.locator(`${WINDOW_SHEET} [data-mobile2-menu-row="stop-all"]`).waitFor();
+            await back();
+            await section("roles");
+            await page.locator(`${WINDOW_SHEET} [data-header-menu-workers]`).waitFor();
+            await capture(page, at, "phone", "roles", now);
+            await back();
           }
-          await page.locator(`${SHEET} [data-mobile2-menu-row="memory"]`).click();
+          await section("memory");
           await page.locator("[data-memory-page]").waitFor();
           await agrees(page, tag, now);
           await capture(page, at, "phone", `memory-${now}`, now);
           if (now === "noKey") {
             await page.locator("[data-memory-enter-key]").click();
-            if (!await page.locator(`${SHEET} [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
+            if (!await page.locator(`${WINDOW_SHEET} [data-keys-field='openrouter'] input`).waitFor({ timeout: 5_000 }).then(() => true, () => false)) failures.push(`${tag}: «Open Keys» did not open «Keys» on the OpenRouter key`);
             await capture(page, at, "phone", "memory-noKey-keys", now);
             await refuseKey(page, tag, lang);
             await capture(page, at, "phone", "keys-invalid", now);
           }
           if (now === "working" || now === "noKey") {
-            await page.locator(`${SHEET} [data-mobile2-menu-row="back"]`).click();
-            await page.locator(`${SHEET} [data-mobile2-menu-row="keys"]`).click();
+            await back();
+            await section("keys");
             await page.locator("[data-keys-page] [data-keys-row]").first().waitFor();
             await capture(page, at, "phone", now === "noKey" ? "keys-missing" : "keys", now);
           }
@@ -14656,6 +17607,44 @@ describe("#2187 a completed lane's automatic merge, and the project's merge sett
     return out;
   });
 
+  browserTest("optional check failures remain a readable merge note after landing", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/merge-notes-bundle"));
+    // A relative temp path keeps Chromium's Unix socket below its path limit.
+    const browser = await chromium.launch({ ...LAUNCH, env: { ...process.env,
+      TMPDIR: path.relative(process.cwd(), process.env.TMPDIR ?? os.tmpdir()) || "." } });
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const width of [1440]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `${width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=merge-states&optional=1`, { width, height: 900 }, scheme, lang);
+        try {
+          const lane = page.locator('[data-pipeline="p-merge-done"]');
+          const note = lane.locator('[data-merge-note="optional-failures"]');
+          await note.waitFor({ state: "visible", timeout: 30_000 });
+          await note.scrollIntoViewIfNeeded();
+          const expected = translate(lang, "pipelineBlock.merge.optionalFailures", { names: "Minimum macOS SQLite, Windows (native), build" });
+          expect(await note.textContent()).toBe(expected);
+          expect(await lane.locator('[data-merge-state]').getAttribute('data-merge-state')).toBe("merged");
+          const geometry = await note.evaluate(element => {
+            const box = element.getBoundingClientRect();
+            return { width: box.width, height: box.height, clientWidth: element.clientWidth, scrollWidth: element.scrollWidth,
+              clientHeight: element.clientHeight, scrollHeight: element.scrollHeight, left: box.left, right: box.right };
+          });
+          expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+          expect(geometry.scrollHeight).toBeLessThanOrEqual(geometry.clientHeight + 1);
+          expect(geometry.left).toBeGreaterThanOrEqual(0);
+          expect(geometry.right).toBeLessThanOrEqual(width);
+          await lane.screenshot({ path: path.join(OUT, `optional-failures-${label}.png`) });
+          expect(pageErrors).toEqual([]);
+          readings[label] = { text: expected, state: "merged", geometry };
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); }
+    fs.writeFileSync(path.join(EVIDENCE, "optional-failures.json"), `${JSON.stringify({ readings }, null, 2)}\n`);
+  }, 600_000);
+
   browserTest("each merge state says its words at 1440, en and uk, and the ⋯ carries the setting row on and off", async () => {
     fs.mkdirSync(OUT, { recursive: true });
     fs.mkdirSync(EVIDENCE, { recursive: true });
@@ -19988,6 +22977,188 @@ describe("model glyphs in place of the stage dot", () => {
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 1_500_000);
+
+  browserTest("every Antigravity model draws its own glyph in every state, light and dark, desktop and phone; an unknown model keeps the dot", async () => {
+    /*
+     * Antigravity's catalogue over `?scenario=model-glyphs-agy`: nine one-stage
+     * lanes at work (the Gemini 4 elements, Flash, both orchestrators, GPT-OSS,
+     * and the two Claude models Antigravity serves), a draft of the same nine
+     * waiting, and two lanes that settle them; a tenth stage on an unknown
+     * model keeps its dot. Stage ids are the glyph kinds, so each reading is
+     * checked against the kind its stage must draw.
+     */
+    const EVIDENCE_AGY = path.resolve("evidence/model-glyphs/antigravity");
+    fs.mkdirSync(EVIDENCE_AGY, { recursive: true });
+    const out = path.resolve(".artifacts/model-glyphs-agy");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const base = `${server.base}?scenario=model-glyphs-agy`;
+    const browser = await chromium.launch(LAUNCH);
+    const frames: Record<string, unknown> = {};
+    const shots: string[] = [];
+    const failures: string[] = [];
+    const KINDS = ["neon", "argon", "hydrogen", "flash", "opus", "sonnet", "oss", "orch-neon", "orch-argon"] as const;
+    const RUN_AGY = card("t-glyphs-agy-run");
+    const REST_AGY = card("t-glyphs-agy");
+    type AgyWant = Record<string, readonly [kind: string, reading: string, live: boolean]>;
+    const every = (reading: string, live: boolean): AgyWant => Object.fromEntries(KINDS.map((kind) => [kind, [kind, reading, live] as const]));
+    const SETTLED_AGY: Record<string, AgyWant> = {
+      "p-glyphs-agy-settled": { neon: ["neon", "passed", false], argon: ["argon", "passed", false], hydrogen: ["hydrogen", "failed", false], flash: ["flash", "needs", false], oss: ["oss", "waiting", false] },
+      "p-glyphs-agy-settled-more": { opus: ["opus", "passed", false], sonnet: ["sonnet", "passed", false], "orch-neon": ["orch-neon", "failed", false], "orch-argon": ["orch-argon", "needs", false] },
+    };
+    const lane = (id: string) => `.pblock[data-pipeline="${id}"]`;
+    const shot = async (target: Page | ReturnType<Page["locator"]>, name: string) => {
+      const file = path.join(EVIDENCE_AGY, `${name}.png`);
+      await target.screenshot({ path: file });
+      shots.push(file);
+    };
+    const BADGE_HOSTS_AGY = new Set(["pb-pill", "navchip", "pstrip", "pane-strip"]);
+    const gate = (label: string, reading: Reading, want: AgyWant, { motion = true, dot = false } = {}) => {
+      frames[label] = reading;
+      const { glyphs, dots } = reading;
+      if (!glyphs.length) failures.push(`${label}: no glyph was drawn`);
+      for (const glyph of glyphs) {
+        const size = 14 * glyph.scale;
+        if (Math.abs(glyph.width - size) > 0.6 || Math.abs(glyph.height - size) > 0.6) failures.push(`${label}: ${glyph.kind} on ${glyph.stage} is ${glyph.width}×${glyph.height} px at scale ${glyph.scale}`);
+        if (!glyph.inside) failures.push(`${label}: ${glyph.kind} on ${glyph.stage} sticks out of its ${glyph.host}`);
+        if (glyph.live && motion && (!glyph.figure.length || glyph.halo !== "mg-halo")) failures.push(`${label}: running ${glyph.kind} does not move (${JSON.stringify([glyph.figure, glyph.halo])})`);
+        if (!glyph.live && (glyph.figure.length || glyph.halo !== "none")) failures.push(`${label}: idle ${glyph.kind} on ${glyph.stage} moves`);
+        const settled = glyph.reading === "passed" || glyph.reading === "failed" || glyph.reading === "needs";
+        if ((settled && BADGE_HOSTS_AGY.has(glyph.host ?? "")) !== Boolean(glyph.badge)) failures.push(`${label}: ${glyph.kind} reading ${glyph.reading} on a ${glyph.host} has badge ${glyph.badge}`);
+        if (glyph.stage === "fix") failures.push(`${label}: the unknown model drew a glyph`);
+        if (glyph.twin) failures.push(`${label}: ${glyph.kind} on ${glyph.stage} is drawn beside an engine mark as well`);
+        if (glyph.stage && glyph.stage !== glyph.kind) failures.push(`${label}: stage ${glyph.stage} draws ${glyph.kind}`);
+      }
+      for (const [stage, [kind, state, live]] of Object.entries(want)) {
+        const mine = glyphs.filter((glyph) => glyph.stage === stage);
+        if (!mine.length) failures.push(`${label}: ${stage} drew no glyph`);
+        if (mine.some((glyph) => glyph.kind !== kind || glyph.reading !== state || glyph.live !== live)) failures.push(`${label}: ${stage} should read ${JSON.stringify([kind, state, live])}, reads ${JSON.stringify(mine.map((glyph) => [glyph.kind, glyph.reading, glyph.live]))}`);
+      }
+      if (dot && !dots.some((entry) => entry.stage === "fix")) failures.push(`${label}: the unknown model kept no dot ${JSON.stringify(dots)}`);
+    };
+    const ready = async (page: Page) => {
+      await page.waitForSelector(`${REST_AGY} ${lane("p-glyphs-agy-settled-more")}`, { state: "attached", timeout: 30_000 });
+      await page.waitForSelector(`${RUN_AGY} ${lane("p-glyph-agy-orch-argon")}`, { state: "attached", timeout: 30_000 });
+    };
+    const specimens = async (page: Page, name: string) => {
+      /* Every kind, enlarged to 64 px in each of the five readings, drawn with the page's own CSS and tokens. */
+      await page.evaluate((kinds) => {
+        const sample = document.querySelector<HTMLElement>(".mglyph[data-glyph]");
+        if (!sample) return;
+        const sheet = document.createElement("div");
+        sheet.id = "agy-specimens";
+        sheet.style.cssText = "position:fixed;inset:20px;z-index:99999;background:var(--surface-card);padding:16px;display:grid;grid-template-columns:repeat(5,96px);gap:14px;align-content:start;justify-content:start;border:1px solid var(--border-default,#ccc)";
+        for (const kind of kinds) {
+          const source = document.querySelector<HTMLElement>(`.mglyph[data-glyph="${kind}"]`);
+          if (!source) continue;
+          for (const reading of ["running", "waiting", "passed", "failed", "needs"]) {
+            const clone = source.cloneNode(true) as HTMLElement;
+            clone.style.setProperty("--glyph-size", "64px");
+            clone.dataset.glyphState = reading;
+            clone.dataset.live = reading === "running" ? "1" : "";
+            if (reading !== "running") clone.removeAttribute("data-live");
+            clone.querySelector(".mg-badge")?.remove();
+            if (reading === "passed" || reading === "failed" || reading === "needs") {
+              const badge = document.createElement("span");
+              badge.className = "mg-badge";
+              badge.style.setProperty("--stage-tone", reading === "passed" ? "var(--color-success)" : reading === "failed" ? "var(--color-danger)" : "var(--color-warning)");
+              clone.append(badge);
+            }
+            const cell = document.createElement("div");
+            cell.style.cssText = "display:grid;place-items:center;height:96px";
+            cell.append(clone);
+            sheet.append(cell);
+          }
+        }
+        document.body.append(sheet);
+      }, KINDS);
+      await page.waitForTimeout(400);
+      await shot(page, name);
+      await page.evaluate(() => document.getElementById("agy-specimens")?.remove());
+    };
+
+    const desktop = async (scheme: Scheme, lang: "en" | "uk") => {
+      const suffix = `${lang === "uk" ? "uk-" : ""}${scheme}`;
+      const opened = await openFixture(browser, base, { width: 1440, height: 1200 }, scheme, lang, "no-preference", false, 2);
+      const { page } = opened;
+      try {
+        await ready(page);
+        await page.locator(RUN_AGY).evaluate((element) => element.scrollIntoView({ block: "start" }));
+        await page.waitForTimeout(700);
+        gate(`desktop-card-running-${suffix}`, await readGlyphs(page, RUN_AGY), every("running", true));
+        gate(`desktop-card-waiting-${suffix}`, await readGlyphs(page, `${REST_AGY} ${lane("p-glyphs-agy-wait")}`), every("waiting", false));
+        for (const [id, want] of Object.entries(SETTLED_AGY)) gate(`desktop-card-${id}-${suffix}`, await readGlyphs(page, `${REST_AGY} ${lane(id)}`), want, { dot: id === "p-glyphs-agy-settled-more" });
+        await shot(page.locator(RUN_AGY), `desktop-card-running-${suffix}`);
+        await page.locator(REST_AGY).evaluate((element) => element.scrollIntoView({ block: "start" }));
+        await page.waitForTimeout(300);
+        await shot(page.locator(REST_AGY), `desktop-card-waiting-settled-${suffix}`);
+        if (lang === "en") await specimens(page, `specimens-${suffix}`);
+        if (opened.pageErrors.length) failures.push(`desktop ${suffix}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`desktop ${suffix}: ${(error as Error).message.split("\n")[0]}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    const phone = async (scheme: Scheme) => {
+      const opened = await openFixture(browser, base, { width: 390, height: 844 }, scheme, "en", "no-preference", true, 2);
+      const { page } = opened;
+      let step = "the board";
+      try {
+        await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+        const tab = page.locator('[data-phone-kanban-tab="assigned"]');
+        if (await tab.count()) await tab.first().click();
+        for (const task of ["t-glyphs-agy-run", "t-glyphs-agy"]) {
+          step = `the task screen of ${task}`;
+          const phoneCard = page.locator(`[data-phone-card="task:${task}"]`).first();
+          await phoneCard.waitFor({ timeout: 10_000 });
+          await phoneCard.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(400);
+          await phoneCard.evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector("[data-phone-task-body] .pblock", { timeout: 10_000 });
+          await page.evaluate(() => { for (const fold of document.querySelectorAll<HTMLElement>('[data-phone-task-body] [data-passed-fold][aria-expanded="false"]')) fold.click(); });
+          await page.waitForTimeout(600);
+          const body = "[data-phone-task-body]";
+          if (task === "t-glyphs-agy-run") gate(`phone-task-running-${scheme}`, await readGlyphs(page, body), every("running", true));
+          else {
+            gate(`phone-task-waiting-${scheme}`, await readGlyphs(page, `${body} ${lane("p-glyphs-agy-wait")}`), every("waiting", false));
+            for (const [id, want] of Object.entries(SETTLED_AGY)) gate(`phone-task-${id}-${scheme}`, await readGlyphs(page, `${body} ${lane(id)}`), want, { dot: id === "p-glyphs-agy-settled-more" });
+          }
+          const tall = await page.evaluate((selector) => { const element = document.querySelector(selector); return element ? element.scrollHeight - element.clientHeight : 0; }, body);
+          await page.setViewportSize({ width: 390, height: 844 + Math.max(0, tall) });
+          await page.waitForTimeout(300);
+          await shot(page, `phone-task-${task === "t-glyphs-agy-run" ? "running" : "waiting-settled"}-${scheme}`);
+          await page.setViewportSize({ width: 390, height: 844 });
+          await page.waitForTimeout(200);
+          await page.locator("[data-mobile2-back]").first().evaluate((element) => (element as HTMLElement).click());
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 10_000 });
+        }
+        if (opened.pageErrors.length) failures.push(`phone ${scheme}: page errors ${opened.pageErrors.join(" | ")}`);
+      } catch (error) {
+        failures.push(`phone ${scheme}, ${step}: ${(error as Error).message.split("\n")[0]}`);
+      } finally {
+        await opened.context.close();
+      }
+    };
+
+    try {
+      for (const scheme of ["light", "dark"] as const) {
+        await desktop(scheme, "en");
+        await desktop(scheme, "uk");
+        await phone(scheme);
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    const kindsSeen = new Set(Object.values(frames).flatMap((reading) => (reading as Reading).glyphs.map((glyph) => glyph.kind)));
+    for (const kind of KINDS) if (!kindsSeen.has(kind)) failures.push(`no frame drew ${kind}`);
+    const record = { viewport: { desktop: "1440x1200", phone: "390x844" }, deviceScaleFactor: 2, screenshots: shots.map((file) => path.relative(process.cwd(), file)), frames, failures };
+    fs.writeFileSync(path.join(EVIDENCE_AGY, "readings.json"), `${JSON.stringify(record, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
 });
 
 describe("seat panel carries no internal noise", () => {
@@ -21468,6 +24639,7 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
   }, 900_000);
 
   browserTest("standing instructions fit the panel while edited, saved and reopened on desktop and phone", async () => {
+    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
     fs.mkdirSync(SHOTS, { recursive: true });
     const out = path.resolve(".artifacts/seat-tick-instructions");
     fs.mkdirSync(out, { recursive: true });
@@ -21491,7 +24663,11 @@ describe("#2396 the seat tick's board cards: the notice names the setting and op
           putRequests += 1;
           const body = await request.json() as { reason?: string; enabled?: boolean };
           if ((body.reason?.length ?? 0) > 500) {
-            return Response.json({ error: `instructions (reason) are ${body.reason!.length} characters; the limit is 500. Nothing was stored — shorten the instructions and send them again` }, { status: 400 });
+            const refusal = applySeatTickSettingsChange(defaultSeatTickSettings("atlas"), { reason: body.reason }, {
+              at: "2026-11-01T10:00:00.000Z", actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
+            });
+            if (refusal.ok) throw new Error("Expected the production instructions limit to refuse the overage");
+            return Response.json({ error: refusal.error }, { status: 400 });
           }
           if (body.enabled === false && !body.reason?.trim()) {
             return Response.json({ error: "instructions (reason) are required when the tick is disabled or its wake interval changes. Write what the seat should do and when it should stop; a quiet tick without instructions is indistinguishable from a broken one" }, { status: 400 });
@@ -25647,10 +28823,13 @@ describe("floating voice companion", () => {
         try {
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
           const dialog = page.locator("[data-voice-companion-settings]");
-          const memory = page.locator("[data-call-memory]");
-          await memory.waitFor();
-          await page.waitForFunction(() => !document.querySelector("[data-call-memory] [role=status]")?.textContent?.includes("…"));
-          await memory.scrollIntoViewIfNeeded();
+          /* The switch stands on the section; the remembered calls are a page behind their row. */
+          const open = page.locator("[data-call-memory-row-open] [data-settings-row='link']");
+          await open.waitFor();
+          await open.scrollIntoViewIfNeeded();
+          await open.click();
+          const memory = page.locator("[data-call-memory]").last();
+          await page.locator("[data-call-memory-list]").waitFor({ state: "attached" });
           const read = await memory.evaluate((element,configuredWidth) => {
             const dialog = element.closest<HTMLElement>("[role=dialog]")!;
             const list = element.querySelector<HTMLElement>("[data-call-memory-list]")!;
@@ -25673,7 +28852,8 @@ describe("floating voice companion", () => {
             await page.waitForFunction(count => document.querySelectorAll("[data-call-memory-row]").length === count,read.rowCount - 1);
           } else await page.screenshot({ path:path.join(out,`${label}.png`) });
           if (state === "three") { await memory.getByRole("button",{ name:translate(lang,"voiceCompanion.memory.forgetAll"),exact:true }).click(); await page.waitForFunction(() => document.querySelectorAll("[data-call-memory-row]").length === 0); }
-          const toggle = memory.getByRole("switch"); await toggle.click(); await page.waitForFunction(() => !(document.querySelector("[data-call-memory] input") as HTMLInputElement)?.checked); expect(await toggle.isChecked()).toBe(false);
+          await page.locator("[data-settings-back]").click();
+          const toggle = page.locator("[data-call-memory] [role=switch]"); await toggle.click(); await page.waitForFunction(() => document.querySelector("[data-call-memory] [role=switch]")?.getAttribute("aria-checked") === "false"); expect(await toggle.isChecked()).toBe(false);
           expect(pageErrors).toEqual([]); measurements.push({ label,...read, cleared:true,switch:false });
           expect(await dialog.isVisible()).toBe(true);
         } finally { await context.close(); }
@@ -25745,7 +28925,18 @@ describe("floating voice companion", () => {
           textWidth: Math.round(canvas.measureText(selected).width), room: Math.round(room), truncated: canvas.measureText(selected).width > room, background: style.backgroundColor };
       });
       const button = section.querySelector<HTMLElement>("[data-voice-devices-allow]");
-      const controls = [...section.querySelectorAll<HTMLElement>("select, button")].map((node) => Math.round(node.getBoundingClientRect().height));
+      const controls = [...section.querySelectorAll<HTMLElement>("select, button")].map((node) => {
+        const box = node.getBoundingClientRect();
+        if (!node.matches("button") || box.height >= 24) return Math.round(box.height);
+        /* An inline link keeps its line's height: its target is what a thumb or a pointer reaches around it. */
+        node.scrollIntoView({ block: "nearest" });
+        const now = node.getBoundingClientRect();
+        const x = now.left + now.width / 2, y = now.top + now.height / 2;
+        let up = 0, down = 0;
+        while (up < 40 && node.contains(document.elementFromPoint(x, y - (up + 1)))) up += 1;
+        while (down < 40 && node.contains(document.elementFromPoint(x, y + (down + 1)))) down += 1;
+        return up + down + 1;
+      });
       /* Every text range of the section against the dialog's visible box and the window. */
       const outside: string[] = [];
       const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
@@ -25760,7 +28951,7 @@ describe("floating voice companion", () => {
         }
       }
       return { kinds, button: button ? { text: button.textContent, height: Math.round(button.getBoundingClientRect().height), left: button.getBoundingClientRect().left, right: button.getBoundingClientRect().right } : null,
-        controls, outside, title: section.querySelector("h3")?.textContent ?? null,
+        controls, outside, title: section.querySelector("[data-settings-section]")?.textContent ?? null,
         sideways: document.documentElement.scrollWidth - width, dialogSideways: dialog.scrollWidth - dialog.clientWidth,
         dialogBackground: getComputedStyle(dialog).backgroundColor, stored: { input: localStorage.getItem("llvVoiceInputDevice"), output: localStorage.getItem("llvVoiceOutputDevice") } };
     }, configuredWidth);
@@ -26022,7 +29213,7 @@ describe("floating voice companion", () => {
       pending: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example",
         translate(lang, "voiceCompanion.tools.secretValue", { name: "SPOTIFY_CLIENT_ID" }), "SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback"],
         foot: [translate(lang, "voiceCompanion.tools.secretNeeded"), translate(lang, "voiceCompanion.tools.dryRun.none"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.reject")] }),
-      review: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+      review: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.ready"), "spotify-mcp-example"],
         tools: ["skip"], foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve"), ...dryRun(lang)] }),
       failed: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "--notes", "/srv/delegatus/mcp-servers/notes/server.ts", "NOTES_FORMAT=markdown"],
         foot: [translate(lang, "voiceCompanion.tools.dryRun.TIMEOUT"), ...dryRun(lang)] }),
@@ -26036,7 +29227,7 @@ describe("floating voice companion", () => {
         foot: [translate(lang, "voiceCompanion.tools.refused.SELECTION_BOUNDS"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable")] }),
       "dry-run-busy": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
         foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.refused.dryRun.BUSY")] }),
-      "destination-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+      "destination-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.ready"), "spotify-mcp-example"],
         tools: ["skip"], foot: [translate(lang, "voiceCompanion.tools.refused.SECRET_DESTINATION"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve")] }),
       "destination-result": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
         foot: [translate(lang, "voiceCompanion.tools.dryRun.SECRET_DESTINATION"), ...dryRun(lang)] }),
@@ -26062,6 +29253,13 @@ describe("floating voice companion", () => {
           const section = page.locator("[data-voice-tools]");
           await section.waitFor();
           await page.waitForFunction(() => !document.querySelector("[data-voice-tools-status]")?.textContent?.includes("…"));
+          /* The server's page, with its record open behind «Details». */
+          const listed = page.locator("[data-voice-tools] [data-voice-tool-server] [data-settings-row='link']");
+          if (await listed.count()) {
+            await listed.first().scrollIntoViewIfNeeded();
+            if (phone) await listed.first().tap(); else await listed.first().click();
+            await page.locator("[data-settings-details-toggle]").last().click();
+          }
           const row = page.locator("[data-voice-tool-server]").first();
           if (refusedPress[state]) {
             const control = page.locator(refusedPress[state]);
@@ -26082,24 +29280,34 @@ describe("floating voice companion", () => {
             else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : part === "secrets" ? "[data-voice-tool-reference]" : part === "tools" ? "[data-voice-tool-tools]" : "[data-voice-tool-server] > :last-child", part === "head"] as const);
             await page.screenshot({ path: path.join(out, `${label}-${part}.png`) });
             const read = await page.evaluate(({ words, phone, part }) => {
-              const dialog = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!;
+              const dialog = document.querySelector<HTMLElement>("[data-settings-scroller], [data-mobile2-sheet-body]")!;
               const box = dialog.getBoundingClientRect();
-              const section = document.querySelector<HTMLElement>("[data-voice-tools]")!;
+              const section = document.querySelector<HTMLElement>("[data-voice-tools], [data-voice-companion-settings] > [data-voice-tool-server]")!;
               const inside = (rect: DOMRect) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.right <= innerWidth + 0.5;
               const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
               let outside = 0;
+              const outsideText: string[] = [];
               for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-                if (!node.textContent?.trim()) continue;
+                /* A literal too long for its column is elided by its own clip, and a row's label by its truncate. */
+                if (!node.textContent?.trim() || node.parentElement!.closest(".truncate")) continue;
                 const range = document.createRange(); range.selectNodeContents(node);
-                for (const rect of range.getClientRects()) if (rect.width > 0 && !inside(rect)) outside++;
+                for (const rect of range.getClientRects()) if (rect.width > 0 && !inside(rect)) { outside++; outsideText.push(`${node.textContent?.slice(0, 40)} ${Math.round(rect.right)}>${Math.round(box.right)}`); }
               }
-              /* Each defining phrase: every text range of it inside the dialog's visible box and the window; a short word on one line. */
+              /* Each defining phrase, brought into view as a person scrolling to it would: every text range of it inside the page's visible box and the window; a short word on one line. */
               const shown = words.map(word => {
                 const searchRoot = part === "tools" ? section.querySelector("[data-voice-tool-tools]") ?? section : section;
+                /* A literal is one value across its parts. */
+                const literal = [...searchRoot.querySelectorAll<HTMLElement>("[data-settings-literal]")].find(element => element.textContent?.includes(word));
+                if (literal) {
+                  literal.scrollIntoView({ block: "nearest" });
+                  const rect = literal.getBoundingClientRect();
+                  return rect.top >= Math.max(0, box.top) - 0.5 && rect.bottom <= Math.min(innerHeight, box.bottom) + 0.5 && inside(rect);
+                }
                 const all = document.createTreeWalker(searchRoot, NodeFilter.SHOW_TEXT);
                 for (let node = all.nextNode(); node; node = all.nextNode()) {
                   const at = node.textContent?.indexOf(word) ?? -1;
                   if (at < 0) continue;
+                  node.parentElement!.scrollIntoView({ block: "nearest" });
                   const range = document.createRange(); range.setStart(node, at); range.setEnd(node, at + word.length);
                   const rects = [...range.getClientRects()].filter(rect => rect.width > 0);
                   return rects.length > 0 && rects.every(rect => rect.top >= Math.max(0, box.top) - 0.5 && rect.bottom <= Math.min(innerHeight, box.bottom) + 0.5 && inside(rect))
@@ -26111,12 +29319,12 @@ describe("floating voice companion", () => {
                 const rect = (control.closest("label") ?? control).getBoundingClientRect();
                 return rect.height < (phone ? 44 : 24) - 0.5;
               }).map(control => control.outerHTML.slice(0, 80));
-              return { viewportOverflow: document.documentElement.scrollWidth > innerWidth + 1, dialogOverflow: dialog.scrollWidth > dialog.clientWidth + 1, outside, shown, small,
-                background: getComputedStyle(dialog).backgroundColor, rows: section.querySelectorAll("[data-voice-tool-server]").length };
+              return { viewportOverflow: document.documentElement.scrollWidth > innerWidth + 1, dialogOverflow: dialog.scrollWidth > dialog.clientWidth + 1, outside, outsideText, shown, small,
+                background: getComputedStyle(dialog.closest("[role=dialog]")!).backgroundColor, rows: section.querySelectorAll("[data-voice-tool-server]").length };
             }, { words, phone, part });
             measurements.push({ label: `${label}-${part}`, ...read });
             if (read.viewportOverflow || read.dialogOverflow) failures.push(`${label}: scrolls sideways`);
-            if (read.outside) failures.push(`${label}: ${read.outside} text box(es) outside the dialog`);
+            if (read.outside) failures.push(`${label}: ${read.outside} text box(es) outside the dialog: ${read.outsideText.slice(0, 3).join(" | ")}`);
             read.shown.forEach((whole, at) => { if (!whole) failures.push(`${label}-${part}: «${words[at]}» is not whole on screen`); });
             if (read.small.length) failures.push(`${label}: small targets ${read.small.join(" | ")}`);
           }
@@ -26126,16 +29334,16 @@ describe("floating voice companion", () => {
             expect(await ask.isChecked()).toBe(state === "approved-ask");
             if (lang === "en" && scheme === "light") {
               if (phone) await ask.tap(); else await ask.click();
-              await page.waitForFunction(checked => (document.querySelector("[data-voice-tool-ask]") as HTMLInputElement | null)?.checked === checked && !(document.querySelector("[data-voice-tool-ask]") as HTMLInputElement).disabled, state !== "approved-ask");
+              await page.waitForFunction(checked => document.querySelector("[data-voice-tool-ask]")?.getAttribute("aria-checked") === String(checked) && !(document.querySelector("[data-voice-tool-ask]") as HTMLButtonElement | null)?.disabled, state !== "approved-ask");
               expect(await page.locator("[data-voice-tool-state]").getAttribute("data-voice-tool-state")).toBe("enabled");
               await page.locator("[data-voice-tool-actions]").evaluate(element => element.scrollIntoView({ block: "end" }));
               await page.screenshot({ path: path.join(out, `${label}-flipped.png`) });
             }
           }
           if (state === "review" && lang === "en" && scheme === "light") {
-            const play = page.locator("[data-voice-tool='play'] input");
+            const play = page.locator("[data-voice-tool='play'] [role=switch]");
             if (phone) await play.tap(); else await play.click();
-            await page.waitForFunction(() => (document.querySelector("[data-voice-tool='play'] input") as HTMLInputElement | null)?.checked === true && !(document.querySelector("[data-voice-tool='play'] input") as HTMLInputElement).disabled);
+            await page.waitForFunction(() => document.querySelector("[data-voice-tool='play'] [role=switch]")?.getAttribute("aria-checked") === "true" && !(document.querySelector("[data-voice-tool='play'] [role=switch]") as HTMLButtonElement | null)?.disabled);
             const approve = page.locator("[data-voice-tool-action='approve']");
             await approve.scrollIntoViewIfNeeded();
             if (phone) await approve.tap(); else await approve.click();
@@ -26192,14 +29400,14 @@ describe("floating voice companion", () => {
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
           const dialog = page.locator("[data-voice-companion-settings]");
           await dialog.locator("[data-voice-companion-enable]").waitFor();
-          await page.waitForFunction(() => !document.querySelector("[data-call-memory] [role=status]")?.textContent?.includes("…"));
-          const control = press === "enable" ? dialog.locator("[data-voice-companion-enable]") : dialog.locator("[data-call-memory] input[role=switch]");
+          await page.waitForFunction(() => !document.querySelector("[data-call-memory-status]")?.textContent?.includes("…"));
+          const control = press === "enable" ? dialog.locator("[data-voice-companion-enable]") : dialog.locator("[data-call-memory] [role=switch]");
           const before = await control.isChecked();
           if (width === 390) await control.tap(); else await control.click();
           await page.waitForSelector("[data-voice-companion-setting-error]", { timeout: 10_000 });
           const reading = await page.evaluate(() => {
             const line = document.querySelector<HTMLElement>("[data-voice-companion-setting-error]")!;
-            const scroller = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
+            const scroller = document.querySelector<HTMLElement>("[data-settings-scroller], [data-mobile2-sheet-body]")!.getBoundingClientRect();
             const range = document.createRange(); range.selectNodeContents(line);
             const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
             const cut = rects.filter((rect) => rect.top < Math.max(0, scroller.top) - 0.5 || rect.bottom > Math.min(innerHeight, scroller.bottom) + 0.5 || rect.left < scroller.left - 0.5 || rect.right > scroller.right + 0.5).length;
@@ -28067,11 +31275,11 @@ describe("floating voice companion", () => {
        board's 24-hour form: the whole-account note, one line a window, the reading time. */
     const planLines = (page: Page, lang: "en" | "uk") => page.evaluate((lang) => {
       const loaded = (window as unknown as { voiceCompanion: { loaded: number } }).voiceCompanion.loaded;
-      const time = (seconds: number) => new Intl.DateTimeFormat(lang, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(seconds * 1000));
       const date = (seconds: number) => new Intl.DateTimeFormat(lang, { day: "numeric", month: lang === "uk" ? "long" : "short" }).format(new Date(seconds * 1000));
+      /* One line: what each window used, and when the fuller one, the week, resets. */
       return lang === "uk"
-        ? ["План Pro, увесь акаунт разом з агентами", `5\u00a0год 23%, оновлення ${time(loaded + 7_200)}`, `тиждень 77%, оновлення ${date(loaded + 4 * 86_400)}`, `Станом на ${time(loaded)}.`]
-        : ["Pro plan, the whole account with its agents", `5\u00a0h 23%, resets ${time(loaded + 7_200)}`, `week 77%, resets ${date(loaded + 4 * 86_400)}`, `As of ${time(loaded)}.`];
+        ? [`План Pro, увесь акаунт: використано 5\u00a0год 23%, тиждень 77% · оновлення ${date(loaded + 4 * 86_400)}`]
+        : [`Pro plan, whole account: 5\u00a0h 23%, week 77% used · resets ${date(loaded + 4 * 86_400)}`];
     }, lang);
     /* The way the operator reaches the rows: the header's ⋯, its Settings page, then «Voice Delegatus», which opens the dialog. */
     const openSettings = async (page: Page) => {
@@ -28095,58 +31303,61 @@ describe("floating voice companion", () => {
           await openSettings(page);
           const section = page.locator("[data-voice-companion-setting]");
           expect(await section.locator("[data-voice-companion-enable]").isChecked(), `${label}: the switch is off`).toBe(false);
-          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap], [data-voice-companion-backend]").count(), `${label}: no further row while off`).toBe(0);
+          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap-row], [data-voice-companion-backend]").count(), `${label}: no further row while off`).toBe(0);
           await page.screenshot({ path: path.join(HANDOFF, `settings-off-${label}.png`) });
           await section.locator("[data-voice-companion-enable]").click();
           await section.locator("[data-voice-companion-key]").waitFor({ timeout: 10_000 });
           if (viewport.width > 639) await page.waitForSelector('[data-voice-companion][data-mode="official-realtime"]', { timeout: 10_000 });
           expect((await writes(page)).settings, `${label}: the switch wrote one setting`).toEqual([{ enabled: true }]);
-          /* The key: where it comes from, and «Open Keys»; no field here, since keys are entered in one place. */
-          const keyStatus = (await section.locator("[data-voice-companion-key-status]").innerText()).trim();
-          expect(keyStatus.startsWith(translate(lang, "voiceCompanion.settings.key.missing")), `${label}: no key yet`).toBe(true);
+          /* The key: where it comes from, and a row that opens «Keys»; no field here, since keys are entered in one place. */
+          const keyStatus = (await section.locator("[data-voice-companion-key] [data-settings-row-value]").innerText()).trim();
+          expect(keyStatus, `${label}: no key yet`).toBe(translate(lang, "settings.voice.keyWord.missing"));
           expect(await section.locator("[data-voice-companion-key] input").count(), `${label}: no key field`).toBe(0);
-          expect((await section.locator("[data-voice-companion-open-keys]").innerText()).trim(), `${label}: the way to «Keys»`).toBe(translate(lang, "keys.open"));
-          /* The cap and the month's usage. */
-          const cap = section.locator("[data-voice-companion-cap] input");
+          expect(await section.locator("[data-voice-companion-key]").innerText(), `${label}: the way to «Keys»`).toContain(translate(lang, "settings.opensKeys"));
+          /* The cap and the month's usage, on the cap's page. */
+          const monthWord = lang === "uk" ? "жовтень" : "October";
+          const usageWords = (cap: string) => translate(lang, "voiceCompanion.settings.usage", { month: monthWord, spent: "$3.40", cap });
+          expect(await section.locator("[data-voice-companion-cap-row]").innerText(), `${label}: the month's usage on its row`).toContain(translate(lang, "settings.voice.usedThisMonth", { spent: "$3.40" }));
+          await section.locator("[data-voice-companion-cap-row] [data-settings-row='link']").click();
+          const cap = page.locator("[data-voice-companion-cap-input]");
           expect(await cap.inputValue(), `${label}: the default cap`).toBe("20");
-          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: the month's usage`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: lang === "uk" ? "жовтень" : "October", spent: "$3.40", cap: "$20.00" }));
           await cap.fill("35");
           await cap.press("Enter");
           await page.waitForFunction(() => (window as unknown as { voiceCompanion: Voice }).voiceCompanion.settingsWrites.length === 2, null, { timeout: 10_000 });
           expect((await writes(page)).settings[1], `${label}: the cap was written`).toEqual({ monthlyCapUsd: 35 });
-          await section.locator("[data-voice-companion-usage]", { hasText: "$35.00" }).waitFor({ timeout: 10_000 });
-          expect(await section.locator("[data-voice-companion-usage]").innerText(), `${label}: usage against the new cap`).toBe(translate(lang, "voiceCompanion.settings.usage", { month: lang === "uk" ? "жовтень" : "October", spent: "$3.40", cap: "$35.00" }));
-          const lastCall = await section.locator("[data-voice-companion-last-call]").innerText();
-          expect(lastCall, `${label}: the last call is in settings`).toContain("$0.40 · 7:51");
+          await page.locator("[data-voice-companion-usage]", { hasText: "$35.00" }).waitFor({ timeout: 10_000 });
+          expect(await page.locator("[data-voice-companion-usage]").innerText(), `${label}: usage against the new cap`).toBe(usageWords("$35.00"));
+          const lastCall = await page.locator("[data-voice-companion-last-call]").innerText();
+          expect(lastCall, `${label}: the last call is in settings`).toContain(`$0.40 · ${translate(lang, "voiceCompanion.usage.minutes", { n: 7 })} ${translate(lang, "voiceCompanion.usage.seconds", { n: 51 })}`.replaceAll(" ", "\u00a0").replace("$0.40\u00a0·\u00a0", "$0.40 · "));
           expect(lastCall, `${label}: localized last call`).toContain(lang === "uk" ? "Остання розмова:" : "Last call:");
           await page.screenshot({ path: path.join(HANDOFF, `settings-real-${label}.png`) });
-          /* On is a real voice and never a demo: one two-option choice, the API chosen by default, its key and cap under it. */
+          await page.locator("[data-settings-back]").click();
+          /* On is a real voice and never a demo: one choice, the API chosen by default, its key and cap under it. */
+          const backendSelect = section.locator("[data-voice-backend-select]");
           const choices = await section.evaluate((node) => ({
-            choice: [...node.querySelectorAll<HTMLInputElement>("[role='radiogroup'][data-voice-companion-backend] input[type='radio']")].map((radio) => [radio.value, radio.checked, radio.closest("label")?.textContent ?? ""]),
-            controls: node.querySelectorAll("input, button, select").length,
+            choice: [...node.querySelector<HTMLSelectElement>("[data-voice-backend-select]")!.options].map((option) => [option.value, option.selected, option.textContent]),
             demoWords: /demo|демо/iu.test(node.textContent ?? ""),
           }));
-          /* Enable, backend radios, key and cap, memory controls, two device selects and Telegram timers. */
-          expect(choices, `${label}: the switch, the choice with the API chosen, the way to the key and the cap`).toEqual({ choice: [["api", true, translate(lang, "voiceCompanion.settings.backend.api")], ["codex", false, translate(lang, "voiceCompanion.settings.backend.codex")]], controls: 10, demoWords: false });
+          expect(choices, `${label}: the choice with the API chosen`).toEqual({ choice: [["api", true, translate(lang, "voiceCompanion.settings.backend.api")], ["codex", false, translate(lang, "voiceCompanion.settings.backend.codex")]], demoWords: false });
           const dialog = await page.evaluate(() => {
-            const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
+            const box = document.querySelector<HTMLElement>("[data-settings-window], [data-mobile2-sheet='settings']")!.getBoundingClientRect();
             const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
             const cut = [...section.querySelectorAll<HTMLElement>("button, label, legend, p, span")].filter((node) => node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflow !== "visible").map((node) => node.innerText.slice(0, 30));
             return { insideViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sectionWidth: Math.round(section.getBoundingClientRect().width), overflowsDialog: section.scrollWidth > section.clientWidth + 1, cut };
           });
           expect([dialog.insideViewport, dialog.overflowsDialog, dialog.cut], `${label}: the rows fit the dialog`).toEqual([true, false, []]);
           await page.screenshot({ path: path.join(HANDOFF, `settings-on-${label}.png`) });
-          const monthSpend = await section.locator("[data-voice-companion-usage]").innerText();
+          const monthSpend = await section.locator("[data-voice-companion-cap-row]").innerText();
           /* Codex V3 chosen: the key and the cap close, nothing asks for a key, and the last Codex call shows with the
              plan window of the account it ran on, which is the whole account's use. */
-          await section.locator("[data-voice-backend='codex'] input[type='radio']").click();
+          await backendSelect.selectOption("codex");
           await section.locator("[data-voice-companion-codex]").waitFor({ timeout: 10_000 });
           expect((await writes(page)).settings.at(-1), `${label}: the choice was written`).toEqual({ backend: "codex" });
-          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap]").count(), `${label}: no key and no cap on Codex`).toBe(0);
+          expect(await section.locator("[data-voice-companion-key], [data-voice-companion-cap-row]").count(), `${label}: no key and no cap on Codex`).toBe(0);
           const codexLastCall = await section.locator("[data-voice-companion-codex] [data-voice-companion-last-call]").innerText();
-          expect(codexLastCall, `${label}: the last Codex call`).toBe(lang === "uk" ? "Остання розмова: 7:51 · 10 жовтня." : "Last call: 7:51 · Oct 10.");
+          expect(codexLastCall, `${label}: the last Codex call`).toBe(lang === "uk" ? "Остання розмова: 7\u00a0хв\u00a051\u00a0с · 10 жовтня." : "Last call: 7\u00a0min\u00a051\u00a0s · Oct 10.");
           const codexPlan = await section.locator("[data-voice-companion-plan]").evaluate((block) => {
-            const lines = [...block.children] as HTMLElement[];
+            const lines = [block as HTMLElement];
             /* Every number joined to its unit stays on one line box, and each window reads as one line. */
             const parted = [...block.querySelectorAll<HTMLElement>("[data-plan-window]")].flatMap((line) => {
               const node = line.firstChild!;
@@ -28161,22 +31372,19 @@ describe("floating voice companion", () => {
               lines: lines.map((line) => line.textContent ?? ""),
               windowLines: [...block.querySelectorAll<HTMLElement>("[data-plan-window]")].map((line) => Math.round(line.getBoundingClientRect().height / parseFloat(getComputedStyle(line).lineHeight))),
               figures: [...block.querySelectorAll<HTMLElement>("[data-plan-figure]")].map((figure) => ({ text: figure.textContent, weight: Number(getComputedStyle(figure).fontWeight), color: getComputedStyle(figure).color })),
-              muted: getComputedStyle(lines[0]!).color, lastMuted: getComputedStyle(lines.at(-1)!).color,
+              muted: getComputedStyle(lines[0]!).color,
               parted, twelveHour: /AM|PM/u.test(block.textContent ?? ""),
             };
           });
-          expect(codexPlan.lines, `${label}: the plan window, one line a window`).toEqual(await planLines(page, lang));
+          expect(codexPlan.lines, `${label}: the plan in one line`).toEqual(await planLines(page, lang));
           expect([codexPlan.parted, codexPlan.windowLines, codexPlan.twelveHour], `${label}: no window name split, each window one line, 24-hour times`).toEqual([[], [1, 1], false]);
           expect(codexPlan.figures.map((figure) => [figure.text, figure.weight >= 600, figure.color !== codexPlan.muted]), `${label}: the figures read at a glance`).toEqual([["23%", true, true], ["77%", true, true]]);
-          expect(codexPlan.lastMuted, `${label}: the reading time is muted`).toBe(codexPlan.muted);
           const codexRows = await section.evaluate((node) => ({
-            controls: node.querySelectorAll("input, button, select").length,
-            keyWords: /\bkey\b|ключ|OpenAI|\$/iu.test(node.querySelector("[data-voice-companion-codex]")?.textContent ?? ""),
+            keyWords: /\bkey\b|ключ|OpenAI|\$/iu.test(node.textContent ?? ""),
           }));
-          /* Enable, backend radios, memory controls, two device selects and Telegram timers. */
-          expect(codexRows, `${label}: the switch and the choice alone, and no word of a key`).toEqual({ controls: 8, keyWords: false });
+          expect(codexRows, `${label}: no word of a key anywhere on the page`).toEqual({ keyWords: false });
           const codexDialog = await page.evaluate(() => {
-            const box = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!.getBoundingClientRect();
+            const box = document.querySelector<HTMLElement>("[data-settings-window], [data-mobile2-sheet='settings']")!.getBoundingClientRect();
             const section = document.querySelector<HTMLElement>("[data-voice-companion-setting]")!;
             const cut = [...section.querySelectorAll<HTMLElement>("button, label, legend, p, span")].filter((node) => node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflow !== "visible").map((node) => node.innerText.slice(0, 30));
             return { insideViewport: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, overflowsDialog: section.scrollWidth > section.clientWidth + 1, cut };
@@ -28239,11 +31447,12 @@ describe("floating voice companion", () => {
           const row = env.page.locator('[data-voice-companion-key][data-key-source="env"]');
           await row.waitFor({ timeout: 10_000 });
           expect(await row.locator("input").count(), `environment key, ${lang}: no field`).toBe(0);
-          expect((await row.locator("[data-voice-companion-key-status] span").first().innerText()).trim(), `environment key, ${lang}`).toBe(translate(lang, "voiceCompanion.settings.key.env"));
+          expect((await row.locator("[data-settings-row-value]").innerText()).trim(), `environment key, ${lang}`).toBe(translate(lang, "settings.voice.keyWord.env"));
+          expect(await row.locator("[data-settings-dot]").getAttribute("aria-label"), `environment key, ${lang}: the variable is named`).toContain("OPENAI_API_KEY");
           await env.page.screenshot({ path: path.join(HANDOFF, `settings-env-key-${lang}.png`) });
           await row.locator("[data-voice-companion-open-keys]").click();
           await env.page.waitForSelector("[data-voice-companion-settings]", { state: "detached", timeout: 10_000 });
-          const openai = env.page.locator("[data-rail-menu-panel] [data-header-menu-page='keys'] [data-keys-row='openai']");
+          const openai = env.page.locator("[data-settings-window] [data-header-menu-page='keys'] [data-keys-row='openai']");
           await openai.waitFor({ timeout: 10_000 });
           expect((await openai.locator("[data-keys-env-tail]").innerText()).trim(), `environment key, ${lang}: «Keys» says the variable sets it`).toBe(`· ${translate(lang, "keys.state.envShort")}`);
           expect(await env.page.evaluate(() => document.activeElement?.getAttribute("data-keys-eye")), `environment key, ${lang}: focus on the OpenAI key's eye`).toBe("openai");
@@ -29834,7 +33043,8 @@ describe("compact card menu and overflow menus: today and built", () => {
         await openCardMenu(page, "t-links");
         const rest = await capture(page, where, MENU, "card", "rest");
         if (BUILT) {
-          /* The words that used to be a tooltip: under the Hide cell, and under the two ends of the priority row. */
+          /* The words that used to be a tooltip: under the Hide cell. The two ends of the priority row are the Inbox's, so this
+             In progress card's row says nothing under them. */
           const words = await page.evaluate(() => {
             const menu = document.querySelector<HTMLElement>(".kb .menu");
             const whole = (selector: string) => {
@@ -29848,7 +33058,7 @@ describe("compact card menu and overflow menus: today and built", () => {
           });
           said[keyOf(where)] = words;
           if (!words.hide?.startsWith(`${t("kanban.menu.cell.hide")}: `)) failures.push(`${keyOf(where)} card rest: no line under the Hide cell (${JSON.stringify(words.hide)})`);
-          if (words.high !== t("kanban.priorityHint.high") || words.low !== t("kanban.priorityHint.low")) failures.push(`${keyOf(where)} card rest: the priority row does not say what its ends do (${JSON.stringify([words.high, words.low])})`);
+          if (words.high !== null || words.low !== null) failures.push(`${keyOf(where)} card rest: an In progress card's priority row carries the Inbox's hints (${JSON.stringify([words.high, words.low])})`);
           bounded(where, [rest, ...await walk(page, where, "card")]);
         }
         /* Taps to eight frequent actions, counted from the closed menu. */
@@ -31697,7 +34907,9 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
             if (meter.bar === null) continue;
             const percent = /(\d+(?:[.,]\d+)?)\s*%/.exec(meter.value);
             const amount = /(\d+(?:[.,]\d+)?)\s*GiB/.exec(meter.value);
-            const named = percent ? Number(percent[1]!.replace(",", ".")) : amount && TOTAL_GIB[meter.label] ? (100 * Number(amount[1]!.replace(",", "."))) / TOTAL_GIB[meter.label]! : null;
+            /* The memory lines name used of total ("23 GiB / 32 GiB"). */
+            const named = percent ? Number(percent[1]!.replace(",", ".")) : usedShare(meter.value)
+              ?? (amount && TOTAL_GIB[meter.label] ? (100 * Number(amount[1]!.replace(",", "."))) / TOTAL_GIB[meter.label]! : null);
             if (named === null) fail(`the line "${meter.label}" has a bar and no reading to compare it with: "${meter.value}"`);
             else if (Math.abs(named - meter.bar) > 2) fail(`"${meter.label} ${meter.value}" stands beside a bar drawn at ${meter.bar}%`);
           }
@@ -31955,6 +35167,94 @@ describe("disk warning destinations", () => {
   }, 180_000);
 });
 
+/* RAM and swap stand once each, on their meters, as used of the total; /tmp
+   adds one line and a memory pressure episode its warning. */
+describe("memory pressure on the System block", () => {
+  browserTest("RAM, swap and /tmp stand once each and fit, calm and warning, at every density in both languages and themes", async () => {
+    const out = path.resolve(process.env.LLV_MEMORY_PRESSURE_PNG_DIR ?? ".artifacts/memory-pressure");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(fs.mkdtempSync(path.join(process.env.TMPDIR ?? os.tmpdir(), "llv-memory-")));
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const readings: unknown[] = [];
+    try {
+      for (const density of ["line", "detail", "full"] as const)
+        for (const state of ["calm", "swap", "tmp"] as const)
+          for (const lang of ["en", "uk"] as const)
+            for (const scheme of ["light", "dark"] as const) {
+              const size = density === "full" ? { width: 390, height: 844 } : { width: 1280, height: 800 };
+              const frame = `${density}-${state}-${lang}-${scheme}`;
+              const { context, page, pageErrors } = await openFixture(browser,
+                `${server.base}?disk-density=${density}&memory=${state}`, size, scheme, lang, "reduce", density === "full");
+              try {
+                await page.waitForSelector("[data-memory-pressure]");
+                const block = page.locator("[data-resources-footer]");
+                const reading = await block.evaluate((footer) => {
+                  /* The ink of every text node, held against the window and every box that clips it. */
+                  const cut: string[] = [];
+                  const walker = document.createTreeWalker(footer, NodeFilter.SHOW_TEXT);
+                  while (walker.nextNode()) {
+                    const node = walker.currentNode;
+                    if (!node.textContent?.trim()) continue;
+                    const range = document.createRange(); range.selectNodeContents(node);
+                    for (const rect of range.getClientRects()) {
+                      if (!rect.width || !rect.height) continue;
+                      if (rect.left < 0 || rect.right > innerWidth || rect.top < 0 || rect.bottom > innerHeight) cut.push(node.textContent);
+                      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                        const style = getComputedStyle(parent);
+                        if (!/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) continue;
+                        const box = parent.getBoundingClientRect();
+                        if (rect.left < box.left - 1 || rect.right > box.right + 1 || rect.top < box.top - 1.5 || rect.bottom > box.bottom + 1.5) cut.push(node.textContent);
+                      }
+                    }
+                  }
+                  const box = footer.getBoundingClientRect();
+                  return {
+                    text: (footer as HTMLElement).innerText.replace(/\s+/g, " ").trim(),
+                    width: box.width, height: box.height, cut,
+                    overflows: footer.scrollWidth > footer.clientWidth + 1 || document.documentElement.scrollWidth > innerWidth,
+                    meters: [...footer.querySelectorAll<HTMLElement>("[data-meter-line]")].map((line) => {
+                      const track = line.querySelector<HTMLElement>("[data-meter-bar]");
+                      const fill = track?.firstElementChild as HTMLElement | null;
+                      return { label: line.querySelector("[data-meter-label]")?.textContent ?? "", value: line.querySelector("[data-meter-value]")?.textContent ?? "",
+                        bar: track && fill ? (100 * fill.getBoundingClientRect().width) / track.getBoundingClientRect().width : null };
+                    }),
+                    statuses: footer.querySelectorAll('[role="status"]').length,
+                  };
+                });
+                const times = (part: string) => reading.text.split(part).length - 1;
+                const swapUsed = state === "swap" ? "6.0 GiB" : "1.0 GiB";
+                const tmpUsed = state === "tmp" ? "5.5 GiB" : "1.2 GiB";
+                const ofTotal = (used: string, total: string) => density === "full"
+                  ? translate(lang, "resources.usedOfTotalInWords", { used, total }) : translate(lang, "resources.usedOfTotal", { used, total });
+                for (const fact of [ofTotal("23 GiB", "32 GiB"), ofTotal(swapUsed, "8.0 GiB"), translate(lang, "resources.usedOfTotal", { used: tmpUsed, total: "16 GiB" })])
+                  expect({ frame, fact, times: times(fact) }).toEqual({ frame, fact, times: 1 });
+                /* One RAM name, one swap name and one /tmp name outside the warning sentence. */
+                expect({ frame, ram: times(translate(lang, "resources.ram")) }).toEqual({ frame, ram: 1 });
+                expect(reading.text).not.toContain(translate(lang, "resources.free", { amount: "9.0 GiB" }));
+                expect({ frame, cut: reading.cut, overflows: reading.overflows }).toEqual({ frame, cut: [], overflows: false });
+                const warning = translate(lang, "resources.memoryHigh");
+                expect({ frame, warned: reading.text.includes(warning), statuses: reading.statuses }).toEqual({ frame, warned: state !== "calm", statuses: state === "calm" ? 0 : 1 });
+                if (state === "swap") expect(reading.text).toContain(translate(lang, "resources.memorySwapHigh", { percent: "50" }));
+                if (state === "tmp") expect(reading.text).toContain(translate(lang, "resources.memoryTmpHigh", { amount: "4 GB" }));
+                if (density !== "full") {
+                  expect(reading.meters.map((meter) => meter.label)).toEqual([translate(lang, "resources.ram"), translate(lang, "resources.swap"), "/tmp"]);
+                  for (const meter of reading.meters) expect(Math.abs(meter.bar! - usedShare(meter.value)!)).toBeLessThanOrEqual(3);
+                }
+                expect(pageErrors).toEqual([]);
+                await block.screenshot({ path: path.join(out, `${frame}.png`) });
+                readings.push({ frame, ...reading });
+              } finally { await context.close(); }
+            }
+      expect(readings).toHaveLength(36);
+      const record = path.resolve("evidence/memory-pressure/system-block.json");
+      fs.mkdirSync(path.dirname(record), { recursive: true });
+      fs.writeFileSync(record, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); sockets.close(); server.stop(); }
+  }, 300_000);
+});
+
 /* A worker slot wait reads as a free worker, and a resource hold carries its
    note on the card, so a queued lane never reads as a memory shortage. Cards
    at 1440 and 390 in en and uk go to LLV_HOLD_KINDS_PNG_DIR. */
@@ -32018,6 +35318,186 @@ describe("queued hold kinds on the card", () => {
       fs.mkdirSync("evidence/hold-kinds", { recursive: true });
       fs.writeFileSync("evidence/hold-kinds/rendered.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", scenario: "hold-kinds", cases }, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
+  }, 180_000);
+});
+
+describe("Waiting status hint", () => {
+  browserTest("phone Waiting hold receipt follows the saved status and Undo restores the previous row", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "hold-receipt-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    const server = await serveEvidenceFixture(scratch);
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    try {
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [320, 390, 440]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width, height: 844 }, theme, locale, "reduce", true);
+        try {
+          await page.locator('[data-phone-kanban-tab="assigned"]').click();
+          await page.locator('[data-phone-card="task:hold-editor-entry"]').click();
+          await page.locator("[data-phone-task-status-pill]").click();
+          await page.locator('[data-phone-task-status="blocked"]').click();
+          const editor = page.locator("[data-hold-editor]");
+          await editor.locator("select").selectOption("resource");
+          await editor.locator("input").fill("Wait for memory");
+          await page.evaluate(() => {
+            const state = (window as unknown as { evidence: { taskPatchGate: Promise<void> | null; releaseTaskPatch?: () => void } }).evidence;
+            state.taskPatchGate = new Promise(resolve => { state.releaseTaskPatch = resolve; });
+          });
+          await editor.locator('button[type="submit"]').click();
+          await page.waitForFunction(() => (window as unknown as { evidence: { taskPatches: unknown[] } }).evidence.taskPatches.length === 1);
+          const receipt = page.locator("[data-mobile2-receipt]");
+          expect(await receipt.count()).toBe(0);
+          await page.evaluate(() => {
+            (window as unknown as { evidence: { releaseTaskPatch: () => void } }).evidence.releaseTaskPatch();
+          });
+          await receipt.waitFor();
+          expect(await receipt.textContent()).toContain(translate(locale, "mobile2.kanban.moved", { column: translate(locale, "kanban.status.inbox") }));
+          await page.locator('[data-phone-task-status-pill="inbox"]').waitFor();
+          expect(await receipt.evaluate(node => node.getBoundingClientRect().left >= 0 && node.getBoundingClientRect().right <= innerWidth)).toBe(true);
+          if (width === 390 && process.env.LLV_EVIDENCE_DIR) {
+            await page.screenshot({ path: path.join(process.env.LLV_EVIDENCE_DIR, `hold-phone-saved-${locale}-${theme}.png`) });
+          }
+          await receipt.locator('[data-mobile2-receipt-undo="undo"]').click();
+          await page.locator('[data-phone-task-status-pill="assigned"]').waitFor();
+          await page.waitForFunction(() => (window as unknown as { evidence: { taskWrites: { answeredAt: number }[] } }).evidence.taskWrites[1]?.answeredAt > 0);
+          const undo = await page.evaluate(() => (window as unknown as { evidence: { taskPatches: { body: unknown }[] } }).evidence.taskPatches[1]!.body);
+          expect(undo).toMatchObject({ status: "assigned", restoreHold: null, expectedRevision: expect.any(String) });
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  browserTest("desktop Waiting editor keeps a refused clear draft and closes after a successful clear", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "hold-clear-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    const server = await serveEvidenceFixture(scratch);
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    try {
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width: 1440, height: 844 }, theme, locale, "reduce");
+        try {
+          page.setDefaultTimeout(8000);
+          const row = page.locator(card("hold-slot-note"));
+          await row.waitFor({ state: "visible" });
+          await row.focus();
+          await row.press("s");
+          await page.locator('.menu [data-menu-item="hold"]').press("Enter");
+          const editor = row.locator("[data-hold-editor]");
+          const note = editor.locator("input").first();
+          await note.fill("Keep this local draft");
+          await page.evaluate(() => {
+            (window as unknown as { evidence: { refuseNextTaskPatch: boolean } }).evidence.refuseNextTaskPatch = true;
+          });
+          const clear = editor.getByRole("button", { name: translate(locale, "kanban.hold.clear") });
+          await clear.click();
+          await page.locator("[data-kanban-receipt].error").waitFor();
+          expect(await note.inputValue()).toBe("Keep this local draft");
+          expect(await row.evaluate(node => node.closest<HTMLElement>(".column")?.dataset.status)).toBe("blocked");
+          if (process.env.LLV_EVIDENCE_DIR) {
+            await page.screenshot({ path: path.join(process.env.LLV_EVIDENCE_DIR, `hold-clear-refused-${locale}-${theme}.png`) });
+          }
+          await clear.click();
+          await page.locator('.column[data-status="inbox"] .card[data-id="task:hold-slot-note"]').waitFor();
+          await editor.waitFor({ state: "detached" });
+          if (process.env.LLV_EVIDENCE_DIR) {
+            await page.screenshot({ path: path.join(process.env.LLV_EVIDENCE_DIR, `hold-clear-saved-${locale}-${theme}.png`) });
+          }
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  browserTest("Waiting explains the operator action on desktop and phone in both languages and themes", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "waiting-status-hint");
+    fs.mkdirSync(out, { recursive: true });
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "waiting-hint-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+    let browser: Browser | undefined;
+    try {
+      server = await serveEvidenceFixture(scratch);
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width, height: 844 }, theme, locale, "reduce", phone);
+        try {
+          if (phone) {
+            await page.locator('[data-phone-kanban-tab="blocked"]').click();
+            await page.locator('[data-phone-card="task:hold-slot"]').click();
+            await page.locator("[data-phone-task-status-pill]").click();
+          } else {
+            const row = page.locator(card("hold-slot"));
+            await row.focus();
+            await row.press("s");
+          }
+          const expected = locale === "en" ? "Waiting for your decision, access or a setting you control"
+            : "Очікує на ваше рішення, доступ або налаштування";
+          const panel = page.locator(phone ? "[data-phone-task-status-sheet]" : ".kb .menu");
+          const hint = panel.getByText(expected, { exact: true });
+          await hint.waitFor({ state: "visible" });
+          expect(await hint.evaluate(node => node.scrollWidth <= node.clientWidth + 1 && node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+          expect(pageErrors).toEqual([]);
+          await page.screenshot({ path: path.join(out, `${width}-${locale}-${theme}.png`) });
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser?.close();
+      server?.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 180_000);
+
+  browserTest("opening the Waiting editor brings its reason and both actions into view at desktop widths", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "waiting-editor-"));
+    const sockets = ownedBrowserSocketEnvironment();
+    let server: Awaited<ReturnType<typeof serveEvidenceFixture>> | undefined;
+    let browser: Browser | undefined;
+    try {
+      server = await serveEvidenceFixture(scratch);
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const locale of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [915, 1440]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=hold-kinds`,
+          { width, height: 844 }, theme, locale, "reduce");
+        try {
+          const collapsed = page.locator('[data-seat-collapse][aria-expanded="false"]');
+          if (await collapsed.count()) await collapsed.click();
+          const row = page.locator(card("hold-editor-entry"));
+          await row.focus();
+          await page.keyboard.press("s");
+          await page.locator('.menu [role="menuitemradio"]', { hasText: translate(locale, "kanban.status.blocked") }).click();
+          const editor = page.locator(`${card("hold-editor-entry")} [data-hold-editor]`);
+          await editor.waitFor();
+          const fields = [editor.locator("input").first(), editor.locator("button[type=submit]"), editor.getByRole("button", { name: translate(locale, "kanban.hold.cancel") })];
+          const bounds = await Promise.all(fields.map(async element => element.boundingBox()));
+          expect(bounds.every(box => !!box && box.y >= 0 && box.y + box.height <= 844)).toBe(true);
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser?.close();
+      server?.stop();
+      sockets.close();
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
   }, 180_000);
 });
 
@@ -35750,7 +39230,7 @@ describe("role avatars: Delegatus in each role's costume on answers, internal ca
  */
 describe("Celestia clone creation in the relay card", () => {
   browserTest("empty, list, form, waiting and created states on desktop and phone, light and dark, uk and en", async () => {
-    const out = path.resolve(".artifacts/celestia-clone-create");
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "celestia-clone-create");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
     const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
@@ -35838,7 +39318,7 @@ describe("Celestia clone creation in the relay card", () => {
               return win;
             }) as unknown as typeof window.open;
             Object.assign(window, { cloneFake: {
-              withClones: () => { fake.relay.targets = [target("league", names[0]!), target("beta", names[1]!, { engine: "codex-cloud", model: "gpt-6.1-sol", effort: null })]; },
+              withClones: () => { fake.relay.targets = [target("league", names[0]!, { grantStatus: "suspended" }), target("beta", names[1]!, { engine: "codex-cloud", model: "gpt-6.1-sol", effort: null, grantStatus: "active" })]; },
               create: (name: string) => {
                 fake.relay.targets = [...fake.relay.targets, target("fresh", name, { engine: null, model: null, effort: null, answered_by: "install" })];
                 fake.status = { status: "created", target_id: "fresh", username: (fake.relay.cloneRequest as { username?: string } | undefined)?.username };
@@ -35884,13 +39364,13 @@ describe("Celestia clone creation in the relay card", () => {
 
           await page.evaluate(() => (window as unknown as Fake).cloneFake.withClones());
           await frame("list", "[data-external-relay-target='beta']");
-          expect(await card.locator("[data-external-relay-target='beta']").textContent()).toContain("Codex Cloud · GPT-6.1 Sol");
+          expect(await card.locator("[data-external-relay-target='beta']").textContent()).toContain("Codex Cloud · GPT-6.1-Sol");
           expect(await card.locator("[data-clone-open]").textContent()).toBe(translate(lang, "externalRelay.clone.create"));
 
-          for (const [id, key] of [["beta", "externalRelay.target.ownerTierCloudHint"], ["league", "externalRelay.target.ownerTierHint"]] as const) {
+          for (const [id, status] of [["beta", "active"], ["league", "suspended"]] as const) {
             const target = card.locator(`[data-external-relay-target='${id}']`);
             await target.locator("[data-external-relay-target-fold]").click();
-            expect(await target.locator("[data-external-relay-owner-tier-hint]").textContent()).toBe(translate(lang, key));
+            expect(await target.locator(`[data-external-relay-grant-status='${status}']`).textContent()).toBe(translate(lang, `externalRelay.target.grant.${status}`));
             await frame(`${id === "beta" ? "cloud" : "local"}-settings`, `[data-external-relay-target='${id}'][data-open]`);
             await target.locator("[data-external-relay-target-fold]").click();
           }
@@ -35922,7 +39402,7 @@ describe("Celestia clone creation in the relay card", () => {
           await card.locator("[data-external-relay-target='fresh'][data-fresh] [data-external-relay-fresh]").waitFor({ timeout: 15_000 });
           await card.locator("[data-external-relay-target='fresh'] [data-external-relay-answered-by='install']").waitFor({ timeout: 15_000 });
           /* The new clone takes the Cloud default, answered here. */
-          await card.locator("[data-external-relay-target='fresh'] [data-external-relay-running]", { hasText: "Codex Cloud · GPT-6.1 Sol" }).waitFor({ timeout: 15_000 });
+          await card.locator("[data-external-relay-target='fresh'] [data-external-relay-running]", { hasText: "Codex Cloud · GPT-6.1-Sol" }).waitFor({ timeout: 15_000 });
           expect(await page.evaluate(() => (window as unknown as Fake).cloneFake.fresh())).toMatchObject({ engine: "codex-cloud", model: "gpt-6.1-sol", answered_by: "install" });
           expect(await card.locator("[data-external-relay-no-account], [data-external-relay-running].text-warning").count()).toBe(0);
           await frame("created", "[data-clone-created]");
@@ -37084,9 +40564,9 @@ describe("stale working status", () => {
           expect(await surface.locator('[data-card-status="running"]').count()).toBe(1);
           expect(await live.locator('[data-card-status="running"]').count()).toBe(1);
           expect(await live.locator(".bg-success").count()).toBe(1);
-          /* The phone's words: «готово» for the launch whose turn ended, the
+          /* One word with the phone: «готово» for the launch whose turn ended, the
              killed reading for the host that died over its open turn. */
-          expect(await quiet.locator(".state").innerText()).toContain(word("kanban.memberState.launchDone"));
+          expect(await quiet.locator(".state").innerText()).toContain(word("kanban.memberState.done"));
           expect(await dead.locator(".state").innerText()).toContain(word("kanban.memberState.killed"));
           const reading: Record<string, unknown> = { quiet: await quiet.innerText(), dead: await dead.innerText(), live: await live.innerText() };
           await surface.screenshot({ path: path.join(out, "task.png") });
@@ -37097,7 +40577,7 @@ describe("stale working status", () => {
           await agentWindow.locator('[data-turn-status="running"] [role="timer"]').waitFor();
           expect(await agentWindow.locator('[data-turn-status="running"] [role="timer"]').count()).toBe(1);
           await agentWindow.screenshot({ path: path.join(out, "live-reader.png") });
-          for (const [name, row, state] of [["quiet", quiet, "kanban.memberState.launchDone"], ["dead", dead, "kanban.memberState.killed"]] as const) {
+          for (const [name, row, state] of [["quiet", quiet, "kanban.memberState.done"], ["dead", dead, "kanban.memberState.killed"]] as const) {
             await scrim.click({ position: { x: 2, y: 2 } });
             await row.click();
             await agentWindow.waitFor();
@@ -37112,6 +40592,33 @@ describe("stale working status", () => {
             expect(placeholder).not.toBe(word("composer.placeholderSpawn"));
             await agentWindow.screenshot({ path: path.join(out, `${name}-reader.png`) });
             reading[`${name}Window`] = { state: await header.innerText(), launchChips: 0, placeholder };
+          }
+          /* A turn that ended four minutes ago on a live host, top level and sub-agent: the tile, the reader's
+             header and the open-agents rail read the phone's word, and none of them cuts it. */
+          const returnedWord = word("kanban.memberState.returned");
+          for (const [name, file] of [["finished", response.recent.topLevel], ["finishedSub", response.recent.subAgent]] as const) {
+            await scrim.click({ position: { x: 2, y: 2 } }).catch(() => undefined);
+            const tile = surface.locator(`[data-member="${file.path}"]`);
+            await tile.waitFor();
+            const tileState = tile.locator(".state");
+            expect((await tileState.innerText()).trim()).toBe(returnedWord);
+            await tile.click();
+            await agentWindow.waitFor();
+            const header = agentWindow.locator(".ch-state").first();
+            expect((await header.innerText()).trim()).toContain(returnedWord);
+            const rail = page.locator('[data-open-agent-jump][aria-current="true"]').first();
+            const fits = await page.evaluate(([tilePath]) => {
+              const cut = (cell: Element | null) => cell ? (cell as HTMLElement).scrollWidth > (cell as HTMLElement).clientWidth + 0.5 : null;
+              return {
+                tile: cut(document.querySelector(`[data-member="${tilePath}"] .state`)),
+                header: cut(document.querySelector("[data-agent-window-frame] .ch-state")),
+              };
+            }, [file.path]);
+            expect(fits).toEqual({ tile: false, header: false });
+            const railLabel = (await rail.getAttribute("aria-label")) ?? "";
+            expect(railLabel).toContain(returnedWord);
+            await agentWindow.screenshot({ path: path.join(out, `${name}-reader.png`) });
+            reading[`${name}Window`] = { tileWord: (await tileState.innerText()).trim(), headerWord: (await header.innerText()).trim(), rail: railLabel, ...fits };
           }
           expect(pageErrors).toEqual([]);
           readings[`${lang}-${scheme}`] = reading;
@@ -38544,9 +42051,64 @@ describe("pipeline from a PR or issue link", () => {
 });
 
 describe("saved decision delivery", () => {
+  browserTest("waiting forms can be withdrawn from Decisions with retry after refusal", async () => {
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "form-withdrawal");
+    fs.mkdirSync(out, { recursive: true });
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const readings: unknown[] = [];
+    try {
+      const served = await serveEvidenceFixture(out);
+      try {
+        for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+          const phone = width === 390;
+          const { context, page, pageErrors } = await openFixture(browser, `${served.base}?decisions=1`, { width, height: phone ? 844 : 900 }, scheme, lang, "reduce", phone);
+          try {
+            if (phone) {
+              await page.locator("[data-mobile2-seat-open]").click();
+              await page.locator("[data-decision-strip]").click();
+            }
+            const scope = page.locator(phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]');
+            await scope.locator('[data-decision-list="3"]').waitFor();
+            expect(await scope.locator("[data-decision-tab-count]").textContent()).toBe("3");
+            await page.evaluate(() => {
+              const original = window.fetch;
+              let refused = false;
+              window.fetch = Object.assign(async (input: Parameters<typeof original>[0], init?: Parameters<typeof original>[1]) => {
+                if (!refused && String(input) === "/api/attention/dismissals") {
+                  refused = true;
+                  return new Response(JSON.stringify({ error: "private backend failure" }), { status: 503 });
+                }
+                return original(input, init);
+              }, original);
+            });
+            await scope.locator("[data-decision-withdraw]").click();
+            await scope.locator("[data-decision-withdraw-error]").waitFor();
+            expect(await scope.textContent()).not.toContain("private backend failure");
+            expect(await scope.locator("[data-decision-list]").getAttribute("data-decision-list")).toBe("3");
+            const prefix = `${lang}-${scheme}-${width}`;
+            await page.screenshot({ path: path.join(out, `${prefix}-refused.png`) });
+            for (const remaining of [2, 1, 0]) {
+              await scope.locator("[data-decision-withdraw]").click();
+              await scope.locator(`[data-decision-list="${remaining}"]`).waitFor();
+            }
+            await page.waitForFunction(() => !document.querySelector("[data-decision-tab-count]"));
+            await page.screenshot({ path: path.join(out, `${prefix}-cleared.png`) });
+            expect(pageErrors).toEqual([]);
+            readings.push({ width, lang, scheme, before: 3, after: 0, frames: [`${prefix}-refused.png`, `${prefix}-cleared.png`] });
+          } finally { await context.close(); }
+        }
+      } finally { served.stop(); }
+      fs.writeFileSync(path.join(out, "results.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
+    } finally { await browser.close(); sockets.close(); }
+  }, 240_000);
+
   browserTest("C: the Decisions badge and panel retain saved answers until delivery", async () => {
-    const out = path.resolve(".artifacts/answer-delivery/frames"); fs.mkdirSync(out, { recursive: true });
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "answer-delivery/frames"); fs.mkdirSync(out, { recursive: true });
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: sockets.env });
     const readings: unknown[] = [];
     const savedIds = [`pr_${"e".repeat(32)}`, `pr_${"d".repeat(32)}`, `pr_${"c".repeat(32)}`];
     try {
@@ -38563,8 +42125,10 @@ describe("saved decision delivery", () => {
             await page.locator("[data-kanban-seat] [data-orchestrator-panel]").waitFor({ state: "attached" });
             await page.locator('[data-kanban-seat] [data-feed-state="items"]').waitFor();
           }
-          expect(await page.locator("[data-decision-strip]").count()).toBe(0);
-          expect(await page.locator("[data-decision-tab-count]").count()).toBe(0);
+          if (phone) expect(await page.locator("[data-decision-strip]").getAttribute("data-decision-strip")).toBe("3");
+          else expect(await page.locator("[data-decision-strip]").count()).toBe(0);
+          if (phone) expect(await page.locator("[data-decision-tab-count]").count()).toBe(0);
+          else expect(await page.locator("[data-decision-tab-count]").first().textContent()).toBe("3");
           const snapshot = await page.evaluate(async () => (await fetch("/api/projects/decisions?project=atlas")).json());
           expect(snapshot.decisions.map((entry: { id: string }) => entry.id).sort()).toEqual([...savedIds].sort());
           const frames: string[] = [];
@@ -38601,7 +42165,7 @@ describe("saved decision delivery", () => {
             await page.locator('[data-decision-column] [data-decision-tab="decisions"]').click();
             const column = page.locator('[data-decision-column="decisions"]');
             await column.locator('[data-decision-list="3"]').waitFor();
-            expect(await column.locator("[data-decision-tab-count]").count()).toBe(0);
+            expect(await column.locator("[data-decision-tab-count]").textContent()).toBe("3");
             expect(await column.locator("[data-decision-list-empty]").count()).toBe(0);
             const ids = await column.locator("[data-decision-review], [data-decision-row]").evaluateAll(nodes => nodes.map(n => n.getAttribute("data-decision-review") ?? n.getAttribute("data-decision-row")));
             expect(ids).toEqual(savedIds);
@@ -38629,6 +42193,7 @@ describe("saved decision delivery", () => {
               await column.locator(`[data-decision-review="${id}"], [data-decision-row="${id}"]`).first().waitFor({ state: "detached" });
             }
             await column.locator("[data-decision-list-empty]").waitFor();
+            await page.waitForFunction(() => !document.querySelector("[data-decision-column] [data-decision-tab-count]"));
             expect(await column.locator("[data-decision-tab-count]").count()).toBe(0);
             const posts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts);
             expect(posts).toHaveLength(3);
@@ -38640,12 +42205,12 @@ describe("saved decision delivery", () => {
             }
           }
           expect(pageErrors).toEqual([]);
-          readings.push({ width, lang, scheme, waitingCount: 0, savedRecords: phone ? 1 : snapshot.decisions.length, afterRetry: phone ? "receipt sent" : 0, frames });
+          readings.push({ width, lang, scheme, waitingCount: 3, savedRecords: phone ? 1 : snapshot.decisions.length, afterRetry: phone ? "receipt sent" : 0, frames });
         } finally { await context.close(); served.stop(); }
       }
       fs.mkdirSync("evidence/answer-delivery", { recursive: true });
       fs.writeFileSync("evidence/answer-delivery/panel.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2) + "\n");
-    } finally { await browser.close(); }
+    } finally { await browser.close(); sockets.close(); }
   }, 180_000);
 });
 
@@ -39211,7 +42776,7 @@ describe("finished work leaves In progress", () => {
         file.attentionDismissal = { at: ended, by: { kind: "system", rule: "container-finished" } } as FileEntry["attentionDismissal"];
       }
     }
-    const payload = { files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 3, smt: now / 1000 }], projectCwds: { atlas: "/fixture" }, systemHealth: { tmux: { status: "healthy" } } };
+    const payload = { files, tasks, pipelines, flows: [], workflows: [], projectCatalog: [{ project: "atlas", displayName: "Atlas", conversations: 3, smt: now / 1000 }], projectCwds: { atlas: "/fixture" }, systemHealth: {} };
     const server = await serveEvidenceFixture(out, undefined, { "/api/files": payload, "/api/tasks": { tasks } });
     const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
     let browser: Browser | null = null;
@@ -39631,6 +43196,31 @@ describe("team workspaces slice (a)", () => {
             if (!await page.locator("[data-workspace-delete]").isEnabled()) failures.push(`${tag} D7: Delete stays disabled on an empty workspace`);
             await frame(page, tag, "D7-empty", [["[data-workspace-empty]", words(lang, "workspaces.page.empty")], ["[data-workspace-delete]", words(lang, "workspaces.delete")]]);
             if (pageErrors.length) failures.push(`${tag} D6: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* D8 (workspaces W1): the line on a workspace's page naming the projects without an account list, one line for both engines here, each name a link.
+           The owner and the workspace's manager read it; a plain member and a page whose pool read fails read nothing. */
+        for (const [who, query, shown] of [["owner", "", true], ["manager", "&manager=1", true], ["member", "&member=1", false], ["unreadable", "&poolrefused=harbor-docs", false]] as const) {
+          const { context, page, pageErrors } = await open(`scenario=workspaces-page&rail=1&page=client&nopool=acme-ledger,harbor-docs${query}`);
+          try {
+            await page.locator("[data-workspace-title]").waitFor();
+            if (shown) {
+              await page.locator("[data-workspace-account-list-note]").first().waitFor();
+              const projects = "Acme Ledger, Harbor Docs";
+              /* Both engines lack a list in the same projects: one line names both, and each project leads to its own view. */
+              if (await page.locator("[data-workspace-account-list-note]").count() !== 1) failures.push(`${tag} D8 ${who}: the engines are not told in one line`);
+              const links = await page.locator("[data-workspace-account-list-note] a").evaluateAll((nodes) => nodes.map((node) => [node.textContent, node.getAttribute("href")]));
+              if (JSON.stringify(links) !== JSON.stringify([["Acme Ledger", "/#p=acme-ledger"], ["Harbor Docs", "/#p=harbor-docs"]])) failures.push(`${tag} D8 ${who}: the project names do not lead to their views ${JSON.stringify(links)}`);
+              await frame(page, tag, `D8-${who}`, [
+                ["[data-workspace-account-list-note='both']", words(lang, "workspaces.page.noAccountListBoth", { projects })],
+              ]);
+            } else {
+              /* Both pool reads have had every chance to answer before the absence is read. */
+              await page.waitForTimeout(600);
+              if (await page.locator("[data-workspace-account-list-note]").count()) failures.push(`${tag} D8 ${who}: a line stands where none belongs`);
+              await frame(page, tag, `D8-${who}`, [["[data-workspace-title]", names[lang].client]]);
+            }
+            if (pageErrors.length) failures.push(`${tag} D8 ${who}: page errors ${pageErrors.join("; ")}`);
           } finally { await context.close(); }
         }
       }
@@ -40285,6 +43875,28 @@ describe("team workspaces slice (b)", () => {
   }, 600_000);
 });
 
+/* The one Settings window (docs/design/settings-redo/build-brief.md §7): every state of Privacy, Telegram and Voice on
+   real components, at 1440, 900 and a short 1000 × 700, in both languages and themes. `LLV_SETTINGS_WINDOW_ONLY=<substring,…>`
+   reruns a subset and `LLV_SETTINGS_WINDOW_OUT` says where its frames go. */
+describe("the Settings window", () => {
+  browserTest("every state renders whole on the desktop, with its numbers read", async () => {
+    const { captureSettingsWindowFrames, serveEvidenceFixture } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.resolve(process.env.LLV_SETTINGS_WINDOW_OUT ?? ".artifacts/settings-window", "desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+    }).catch(error => { if (tempFd !== null) fs.closeSync(tempFd); server.stop(); throw error; });
+    const subset = (process.env.LLV_SETTINGS_WINDOW_ONLY ?? "").split(",").map((part) => part.trim()).filter(Boolean);
+    try {
+      const { readings, failures } = await captureSettingsWindowFrames(browser, server.base, out, false, subset.length ? (frame) => subset.some((part) => frame.includes(part)) : undefined);
+      expect(readings.length).toBeGreaterThan(0);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 3_000_000);
+});
+
 // docs/design/telegram-multi-bot.md: keep multiple bots inside the Telegram panel.
 describe("Telegram multiple bots", () => {
   browserTest("Telegram multiple bots settings and refused chats", async () => {
@@ -40378,8 +43990,9 @@ describe("the sound map's one control: «Agent typing»", () => {
               await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
               await page.locator('[data-mobile2-open="menu"]').first().click();
               await page.locator("[data-mobile2-sheet='menu'] [data-mobile2-menu-row='settings']").click();
-              await page.locator("[data-mobile2-sheet='menu'] [data-testid='sound-settings-trigger']").click();
-              panel = "[data-mobile2-sheet='menu'] [data-testid='sound-settings']";
+              await page.locator("[data-mobile2-sheet='settings'] [data-settings-section-row='general']").click();
+              await page.locator("[data-mobile2-sheet='settings'] [data-testid='sound-settings-trigger']").click();
+              panel = "[data-mobile2-sheet='settings'] [data-testid='sound-settings']";
             } else {
               await page.locator("[data-kanban-board]").waitFor({ timeout: 30_000 });
               await openBoardMenu(page);
@@ -42358,6 +45971,612 @@ describe("installer guide: old state, project search, newcomer clarity", () => {
   }, 600_000);
 });
 
+describe("first-run guide: variant 1 on the real components", () => {
+  type Lang = "en" | "uk";
+  /* One frame set per state: the fixture's `firstrun` token, the surface it draws and the lines that define it. */
+  type Spec = { token: string; label: Record<Lang, string>; bot?: "none" | "fallback"; narrowOnly?: boolean; phoneOnly?: boolean };
+  const SPECS: Spec[] = [
+    { token: "engines-both", label: { en: "Engines · both connected", uk: "Рушії · обидва підключені" } },
+    { token: "engines-claude-only", label: { en: "Engines · Claude only, Codex not installed", uk: "Рушії · лише Claude, Codex не встановлено" } },
+    { token: "engines-codex-only", label: { en: "Engines · Codex only, Claude signed out", uk: "Рушії · лише Codex, Claude без входу" } },
+    { token: "engines-signed-out", label: { en: "Engines · both installed, signed out", uk: "Рушії · обидва встановлені, без входу" } },
+    { token: "engines-no-cli", label: { en: "Engines · no agent CLI", uk: "Рушії · жодного CLI" } },
+    { token: "orchestrator-one-press", label: { en: "Orchestrator · one press, both engines", uk: "Оркестратор · одне натискання, обидва рушії" } },
+    { token: "orchestrator-claude-only", label: { en: "Orchestrator · Claude only", uk: "Оркестратор · лише Claude" } },
+    { token: "orchestrator-codex-only", label: { en: "Orchestrator · Codex only", uk: "Оркестратор · лише Codex" } },
+    /* Onboarding v2, slice 1 (docs/design/onboarding-v2.md §12.2). A first visit opens the guide by itself with the install
+       notice not yet dismissed: the notice is the guide's own line, the footer's buttons are whole and Continue takes the
+       press (A9). With no engine the Orchestrator step names what is missing and claims no runtime (A5). */
+    { token: "first-visit", label: { en: "First visit · the install notice inside the guide", uk: "Перший візит · сповіщення про встановлення всередині майстра" } },
+    { token: "first-visit-orchestrator", label: { en: "First visit · Continue pressed twice: no engine, no project", uk: "Перший візит · «Продовжити» двічі: немає рушія, немає проєкту" } },
+    { token: "first-visit-dismissed", label: { en: "First visit · Got it pressed in the guide", uk: "Перший візит · натиснуто «Зрозуміло» в майстрі" } },
+    { token: "first-visit-closed", label: { en: "First visit · the guide closed, the notice at the foot of the window", uk: "Перший візит · майстер закрито, сповіщення внизу вікна" } },
+    { token: "orchestrator-no-engine", label: { en: "Orchestrator · project chosen, both engines signed out", uk: "Оркестратор · проєкт вибрано, обидва рушії без входу" } },
+    { token: "later-memory-before", label: { en: "Later · Memory, no orchestrator yet", uk: "Пізніше · Пам’ять, оркестратора ще немає" } },
+    { token: "later-memory-after", label: { en: "Later · Memory, orchestrator exists", uk: "Пізніше · Пам’ять, оркестратор є" } },
+    { token: "later-telegram-later", label: { en: "Later · Telegram, no bot connected", uk: "Пізніше · Telegram, бота не підключено" }, bot: "none" },
+    { token: "telegram-numbered", label: { en: "Telegram step · a bot is connected", uk: "Крок Telegram · бота підключено" }, bot: "fallback" },
+    { token: "form-board", label: { en: "First task · the seat on the phone's board", uk: "Перша задача · місце на дошці телефона" }, phoneOnly: true },
+    { token: "form-greeting", label: { en: "First task · the greeting", uk: "Перша задача · привітання" }, narrowOnly: true },
+    { token: "form-decisions", label: { en: "First task · the Decisions form", uk: "Перша задача · форма в «Рішеннях»" } },
+    { token: "form-needs-you", label: { en: "First task · Needs you", uk: "Перша задача · «Чекають на вас»" } },
+    { token: "settings-memory-before", label: { en: "Settings · Delegatus memory, no orchestrator", uk: "Налаштування · пам’ять Delegatus, без оркестратора" } },
+    { token: "settings-memory-after", label: { en: "Settings · Delegatus memory, orchestrator exists", uk: "Налаштування · пам’ять Delegatus, оркестратор є" } },
+  ];
+  /* The states of onboarding v2, slice 1. */
+  const SLICE_1 = (token: string) => token.startsWith("first-visit") || token === "orchestrator-no-engine";
+  /* The named widths in both languages and themes; 645 and 900 stand between them, in English and Ukrainian, light.
+     860 is the first width of the guide's desktop layout, drawn for the slice 1 states. */
+  const WIDTHS: Array<{ width: number; themes: Array<"light" | "dark">; tokens?: (token: string) => boolean }> = [
+    { width: 1440, themes: ["light", "dark"] },
+    { width: 390, themes: ["light", "dark"] },
+    { width: 900, themes: ["light"] },
+    { width: 645, themes: ["light"] },
+    { width: 860, themes: ["light"], tokens: SLICE_1 },
+  ];
+  /* Names, product words and code a Ukrainian line may keep in Latin letters. */
+  const LATIN = /^(?:Claude|Code|Codex|Copilot|GitHub|Delegatus|Telegram|Opus|GPT-6\.1-Sol|Sol|README|CLI|CSV|API|Max|Pro|atlas|atlas-api|src\/billing|curl|fsSL|https|bash|sh|install\.sh|claude\.ai|chatgpt\.com|codex|Account|A|B|Report|Bot|Team|Reports|OpenCode|Go|Messages|repo|uk|en|low|medium|high|xhigh|BotFather|team-reports|id|delegatus\.org)$/;
+
+  /* What one frame reads of the lines that define it, in the page. */
+  const MEASURE = (args: { defining: string[] }) => {
+    const out = { missing: [] as string[], offFirstScreen: [] as string[] };
+    const within = (rect: DOMRect, box: { left: number; right: number; top: number; bottom: number }, slack = 0.5) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
+    const screen = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+    const clippers = (node: Element) => {
+      const boxes: DOMRect[] = [];
+      for (let up = node.parentElement; up && up !== document.documentElement; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") boxes.push(up.getBoundingClientRect());
+      }
+      return boxes;
+    };
+    /* Text kept for screen readers only (an sr-only legend) is never drawn. */
+    const unseen = (node: Node, root: Element) => {
+      for (let up = node.parentElement; up && up !== root.parentElement; up = up.parentElement) {
+        const box = up.getBoundingClientRect();
+        if (getComputedStyle(up).clip.startsWith("rect") || box.width <= 1 || box.height <= 1) return true;
+      }
+      return false;
+    };
+    const lines = (element: Element) => {
+      const found: Array<{ node: Text; rect: DOMRect; text: string }> = [];
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const node = walker.currentNode as Text;
+        const text = node.textContent?.trim();
+        if (!text || !(node.parentElement?.getClientRects().length) || unseen(node, element)) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) if (rect.width > 0.5 && rect.height > 0.5) found.push({ node, rect, text });
+      }
+      return found;
+    };
+    for (const selector of args.defining) {
+      const element = document.querySelector(selector);
+      if (!element) { out.missing.push(selector); continue; }
+      const own = lines(element);
+      if (!own.length) { out.missing.push(`${selector} (no text)`); continue; }
+      const boxes = clippers(element);
+      if (!own.every((line) => within(line.rect, screen) && boxes.every((box) => within(line.rect, box)))) out.offFirstScreen.push(selector);
+    }
+    return out;
+  };
+
+  /* The guide's first screen as it opens: the filled buttons a person sees, and
+     every text line a scroll edge, the footer or the window cuts part-way. */
+  const FIRST_SCREEN = () => {
+    const dialog = document.querySelector("[data-onboarding-dialog]");
+    if (!dialog) return { filled: [] as string[], cut: [] as string[] };
+    const screen = new DOMRect(0, 0, innerWidth, innerHeight);
+    const boxesOf = (node: Element) => {
+      const boxes = [screen];
+      for (let up = node.parentElement; up && up !== document.documentElement; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        if (style.overflowX !== "visible" || style.overflowY !== "visible") boxes.push(up.getBoundingClientRect());
+      }
+      return boxes;
+    };
+    const overlap = (a: DOMRect, b: DOMRect) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
+    const inside = (a: DOMRect, b: DOMRect) => a.left >= b.left - 0.5 && a.right <= b.right + 0.5 && a.top >= b.top - 0.5 && a.bottom <= b.bottom + 0.5;
+    const filled = [...dialog.querySelectorAll<HTMLElement>("button")].filter((button) => {
+      if (!button.getClientRects().length || !/(^|\s)bg-brand(\s|$)/.test(button.className)) return false;
+      const rect = button.getBoundingClientRect();
+      return boxesOf(button).every((box) => overlap(rect, box));
+    }).map((button) => button.textContent?.trim() ?? "");
+    const cut: string[] = [];
+    const walker = document.createTreeWalker(dialog, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      if (!node.textContent?.trim() || !(node.parentElement?.getClientRects().length)) continue;
+      const style = getComputedStyle(node.parentElement!);
+      if (style.visibility === "hidden" || style.clip.startsWith("rect")) continue;
+      const boxes = boxesOf(node.parentElement!);
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width <= 0.5 || rect.height <= 0.5) continue;
+        /* Seen at all, yet not whole: part of the line is past an edge. */
+        if (boxes.every((box) => overlap(rect, box)) && !boxes.every((box) => inside(rect, box))) cut.push(node.textContent.trim().slice(0, 50));
+      }
+    }
+    return { filled, cut };
+  };
+
+  /* The same lines once each is scrolled into view: cut, covered, the line ends and the targets. */
+  const INSPECT = (args: { selector: string; coarse: boolean; lang: Lang; latin: string }) => {
+    const latinAllowed = new RegExp(args.latin);
+    const report = { cut: [] as string[], covered: [] as string[], ellipsis: [] as string[], small: [] as string[], oneLetterEnds: [] as string[], latin: [] as string[], texts: [] as string[] };
+    const element = document.querySelector(args.selector);
+    if (!element) return report;
+    const within = (rect: DOMRect, box: { left: number; right: number; top: number; bottom: number }, slack = 0.5) => rect.left >= box.left - slack && rect.right <= box.right + slack && rect.top >= box.top - slack && rect.bottom <= box.bottom + slack;
+    const boxes: DOMRect[] = [];
+    for (let up = element.parentElement; up && up !== document.documentElement; up = up.parentElement) {
+      const style = getComputedStyle(up);
+      if (style.overflowX !== "visible" || style.overflowY !== "visible") boxes.push(up.getBoundingClientRect());
+    }
+    const screen = { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+    const unseen = (node: Node) => {
+      for (let up = node.parentElement; up && up !== element.parentElement; up = up.parentElement) {
+        const box = up.getBoundingClientRect();
+        if (getComputedStyle(up).clip.startsWith("rect") || box.width <= 1 || box.height <= 1) return true;
+      }
+      return false;
+    };
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const words: Array<{ text: string; top: number; block: Element }> = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      const value = node.textContent ?? "";
+      if (!value.trim() || !(node.parentElement?.getClientRects().length) || unseen(node)) continue;
+      report.texts.push(value.trim());
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width <= 0.5 || rect.height <= 0.5) continue;
+        if (!within(rect, screen) || boxes.some((box) => !within(rect, box))) report.cut.push(value.trim().slice(0, 60));
+        for (const x of [rect.left + 1, (rect.left + rect.right) / 2, rect.right - 1]) {
+          const hit = document.elementFromPoint(x, (rect.top + rect.bottom) / 2);
+          if (hit && !element.contains(hit) && !hit.contains(element)) { report.covered.push(`${value.trim().slice(0, 40)} under ${hit.tagName.toLowerCase()}.${String(hit.className).slice(0, 40)}`); break; }
+        }
+      }
+      const block = node.parentElement!.closest("p, li, label, span, div, button, h2, code") ?? node.parentElement!;
+      for (const match of value.matchAll(/\S+/g)) {
+        const word = document.createRange();
+        word.setStart(node, match.index!);
+        word.setEnd(node, match.index! + match[0].length);
+        const rect = word.getClientRects()[0];
+        if (rect) words.push({ text: match[0], top: Math.round(rect.top), block });
+        if (args.lang === "uk" && !node.parentElement!.closest("code")) for (const piece of match[0].split(/[\s·,;:()?!«»"—]+/)) {
+          const part = piece.replace(/\.+$/, "");
+          if (/^[A-Za-z][A-Za-z0-9./-]*$/.test(part) && !latinAllowed.test(part)) report.latin.push(part);
+        }
+      }
+    }
+    /* A Ukrainian line never ends on a one-letter word. */
+    if (args.lang === "uk") for (let index = 0; index < words.length - 1; index += 1) {
+      const word = words[index]!, next = words[index + 1]!;
+      if (/^[вузіайоВУЗІАЙО]$/.test(word.text) && next.top > word.top + 2 && next.block === word.block) report.oneLetterEnds.push(`${word.text} ${next.text}`);
+    }
+    for (const node of element.querySelectorAll<HTMLElement>(".truncate")) if (node.scrollWidth > node.clientWidth + 1) report.ellipsis.push(node.textContent?.trim().slice(0, 60) ?? "");
+    if (args.coarse) for (const control of element.querySelectorAll<HTMLElement>("button, a[href], select, input")) {
+      const box = control.getBoundingClientRect();
+      if (box.width && box.height && Math.min(box.width, box.height) < 44) report.small.push(`${(control.textContent || control.getAttribute("aria-label") || "").trim().slice(0, 30)} ${Math.round(box.width)}×${Math.round(box.height)}`);
+    }
+    return report;
+  };
+
+  /* Every visible text line of the surface the frame is about: no two lines from different nodes overlap. */
+  const OVERLAPS = (selector: string) => {
+    const anchor = document.querySelector(selector);
+    const root = anchor?.closest('[role="dialog"], [data-decision-column], [data-orchestrator-panel], [data-mobile2-sheet], [data-attention-panel]') ?? anchor?.parentElement ?? null;
+    if (!root) return { overlaps: [] as string[], sideways: 0 };
+    const rects: Array<{ rect: DOMRect; node: Text }> = [];
+    /* Only what is drawn: a line a clipping ancestor hides, or text kept for screen readers, is not on screen. */
+    const clips = new Map<Element, DOMRect[]>();
+    const clipsOf = (element: Element) => {
+      let found = clips.get(element);
+      if (found) return found;
+      found = [];
+      for (let up: Element | null = element; up && up !== document.documentElement; up = up.parentElement) {
+        const style = getComputedStyle(up);
+        const box = up.getBoundingClientRect();
+        if (box.width <= 1 || box.height <= 1) found.push(new DOMRect(0, 0, 0, 0));
+        else if (up !== element && (style.overflowX !== "visible" || style.overflowY !== "visible")) found.push(box);
+      }
+      clips.set(element, found);
+      return found;
+    };
+    const shown = (rect: DOMRect, element: Element) => clipsOf(element).every((box) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5);
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      if (!node.textContent?.trim() || !(node.parentElement?.getClientRects().length)) continue;
+      const style = getComputedStyle(node.parentElement!);
+      if (style.visibility === "hidden" || Number(style.opacity) === 0 || style.clip.startsWith("rect")) continue;
+      /* The body of a closed <details> keeps its boxes and draws nothing. */
+      if (node.parentElement!.closest("details:not([open])") && !node.parentElement!.closest("summary")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) if (rect.width > 1 && rect.height > 1 && rect.bottom > 0 && rect.top < innerHeight && shown(rect, node.parentElement!)) rects.push({ rect, node });
+    }
+    const overlaps: string[] = [];
+    for (let i = 0; i < rects.length; i += 1) for (let j = i + 1; j < rects.length; j += 1) {
+      const a = rects[i]!, b = rects[j]!;
+      if (a.node === b.node) continue;
+      const x = Math.min(a.rect.right, b.rect.right) - Math.max(a.rect.left, b.rect.left);
+      const y = Math.min(a.rect.bottom, b.rect.bottom) - Math.max(a.rect.top, b.rect.top);
+      if (x > 2 && y > 2) overlaps.push(`«${a.node.textContent!.trim().slice(0, 30)}» × «${b.node.textContent!.trim().slice(0, 30)}»`);
+    }
+    const scrollers = [root, ...root.querySelectorAll<HTMLElement>("*")].filter((node) => { const style = getComputedStyle(node); return style.overflowX === "auto" || style.overflowX === "scroll"; });
+    const sideways = Math.max(document.documentElement.scrollWidth - innerWidth, ...scrollers.map((node) => node.scrollWidth - node.clientWidth));
+    return { overlaps: overlaps.slice(0, 12), sideways };
+  };
+
+  /* Every Ukrainian line of a surface, in or out of view: none ends on a one-letter word. */
+  const LINE_ENDS = (selector: string) => {
+    const root = document.querySelector(selector);
+    if (!root) return [] as string[];
+    const words: Array<{ text: string; top: number; block: Element }> = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text;
+      const value = node.textContent ?? "";
+      if (!value.trim() || !(node.parentElement?.getClientRects().length) || node.parentElement.closest("code, [aria-hidden=true]")) continue;
+      const block = node.parentElement!.closest("p, li, label, div, button, h2") ?? node.parentElement!;
+      for (const match of value.matchAll(/\S+/g)) {
+        const range = document.createRange();
+        range.setStart(node, match.index!);
+        range.setEnd(node, match.index! + match[0].length);
+        const rect = range.getClientRects()[0];
+        if (rect) words.push({ text: match[0], top: Math.round(rect.top), block });
+      }
+    }
+    const found: string[] = [];
+    for (let index = 0; index < words.length - 1; index += 1) {
+      const word = words[index]!, next = words[index + 1]!;
+      if (/^[вузіайоясВУЗІАЙОЯС]$/.test(word.text) && next.top > word.top + 2 && next.block === word.block) found.push(`${word.text} ${next.text}`);
+    }
+    return found;
+  };
+
+  /* The install notice against the guide's footer: where each is, every word of a footer button measured from its
+     text range against the notice's box, and what a press in the middle of those words would land on. */
+  const NOTICE_AND_FOOTER = () => {
+    const dialog = document.querySelector("[data-onboarding-dialog]");
+    const line = dialog?.querySelector("[data-telemetry-guide-notice]") ?? null;
+    const footer = dialog?.querySelector("footer") ?? null;
+    const box = line?.getBoundingClientRect() ?? null;
+    const fixed = [...document.querySelectorAll("[data-telemetry-notice]")].map((node) => node.getBoundingClientRect());
+    const over = (rect: DOMRect, other: DOMRect) => Math.min(rect.right, other.right) - Math.max(rect.left, other.left) > 0.5 && Math.min(rect.bottom, other.bottom) - Math.max(rect.top, other.top) > 0.5;
+    const buttons = [...(footer?.querySelectorAll<HTMLElement>("button") ?? [])].filter((button) => button.getClientRects().length).map((button) => {
+      const range = document.createRange();
+      range.selectNodeContents(button);
+      const words = [...range.getClientRects()].filter((rect) => rect.width > 0.5 && rect.height > 0.5);
+      return {
+        text: button.textContent?.trim() ?? "",
+        words: words.length,
+        underNotice: words.some((rect) => [...(box ? [box] : []), ...fixed].some((notice) => over(rect, notice))),
+        outside: words.some((rect) => rect.left < -0.5 || rect.top < -0.5 || rect.right > innerWidth + 0.5 || rect.bottom > innerHeight + 0.5),
+        taken: words.some((rect) => { const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2); return !hit || !button.contains(hit); }),
+      };
+    });
+    return {
+      lines: document.querySelectorAll("[data-telemetry-guide-notice]").length,
+      inGuide: Boolean(line),
+      fixed: fixed.length,
+      words: line?.querySelector("p")?.textContent ?? "",
+      actions: [...(line?.querySelectorAll("button") ?? [])].map((button) => button.textContent?.trim() ?? ""),
+      /* The line ends where the footer starts, inside the dialog. */
+      gap: box && footer ? Math.round((footer.getBoundingClientRect().top - box.bottom) * 10) / 10 : null,
+      buttons,
+    };
+  };
+
+  /* The defining lines of each state, by selector: the ones the frame is about. */
+  const DEFINING = (token: string, phone: boolean): string[] => {
+    if (token === "engines-both") return ['[data-onboarding-current="engines"] h2 + p', '[data-onboarding-engine="claude"] [data-onboarding-engine-header]', '[data-onboarding-engine="codex"] [data-onboarding-engine-header]'];
+    if (token === "engines-claude-only") return ['[data-onboarding-current="engines"] h2 + p', '[data-onboarding-install="codex"]', "[data-onboarding-recheck]", '[data-onboarding-engine="codex"] [data-onboarding-engine-header]'];
+    if (token === "engines-codex-only") return ['[data-onboarding-engine="claude"] [data-onboarding-engine-header]', "[data-onboarding-claude-signin]"];
+    if (token === "engines-signed-out") return ["[data-onboarding-engines-note]", '[data-onboarding-engine="claude"] [data-onboarding-engine-header]'];
+    if (token === "engines-no-cli") return ["[data-onboarding-engines-note]", '[data-onboarding-install="claude"]', '[data-onboarding-install="codex"]', "[data-onboarding-recheck]", '[data-onboarding-engine="copilot"] [data-onboarding-engine-header]'];
+    if (token === "orchestrator-one-press") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-create]"];
+    if (token === "orchestrator-claude-only") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-roles]", "[data-onboarding-orchestrator-create]"];
+    if (token === "orchestrator-codex-only") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-advice]", "[data-onboarding-orchestrator-roles]", "[data-onboarding-orchestrator-create]"];
+    if (token === "first-visit") return ["[data-telemetry-guide-notice]", "[data-onboarding-primary]", '[data-onboarding-current="engines"] h2'];
+    if (token === "first-visit-orchestrator") return ["[data-onboarding-orchestrator-no-engine]", '[data-onboarding-orchestrator-go="engines"]', "[data-telemetry-guide-notice]", "[data-onboarding-primary]", "[data-onboarding-orchestrator-no-project]", '[data-onboarding-orchestrator-go="project"]'];
+    if (token === "first-visit-dismissed") return ["[data-onboarding-primary]", '[data-onboarding-current="engines"] h2'];
+    if (token === "first-visit-closed") return ["[data-telemetry-notice] p", "[data-telemetry-notice]"];
+    if (token === "orchestrator-no-engine") return ["[data-onboarding-orchestrator-no-engine]", '[data-onboarding-orchestrator-go="engines"]', "[data-onboarding-primary]"];
+    if (token === "later-memory-before") return ["[data-memory-source-line]", "[data-onboarding-memory-go]"];
+    if (token === "later-memory-after") return ["[data-memory-source-line]"];
+    if (token === "later-telegram-later") return ["[data-onboarding-telegram]", "[data-onboarding-primary]"];
+    if (token === "telegram-numbered") return ["[data-onboarding-report-chat]", "[data-onboarding-primary]"];
+    if (token === "settings-memory-before" || token === "settings-memory-after") return ["[data-memory-source-line]"];
+    if (token === "form-decisions") return phone ? ["[data-prototype-question=first]"] : ["[data-prototype-question=first]"];
+    if (token === "form-needs-you") return ["[data-needs-you-row]"];
+    if (token === "form-board") return ["[data-mobile2-seat-card]"];
+    return phone ? ["[data-mobile2-title-text]", "[data-mobile2-chat-state]"] : ["[data-decision-strip]"];
+  };
+
+  browserTest("every state of the first-run guide is whole at 1440, 390 and between, in English and Ukrainian, light and dark", async () => {
+    const out = path.resolve(path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "first-run-guide"));
+    const only = (process.env.LLV_FIRST_RUN_FRAMES ?? "").split(",").map((term) => term.trim()).filter(Boolean);
+    const wanted = (name: string) => !only.length || only.some((term) => name.includes(term));
+    const frames = path.join(out, "frames");
+    if (!only.length) fs.rmSync(frames, { recursive: true, force: true });
+    fs.mkdirSync(frames, { recursive: true });
+    const served = await serveEvidenceFixture(fs.mkdtempSync(path.join(os.tmpdir(), "first-run-guide-")));
+    let browser: Browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown>[] = [];
+    const failures: string[] = [];
+    const notes: string[] = [];
+    const { telemetryNotice } = await import("../../../bin/telemetry-notice.mjs");
+    try {
+      for (const { width, themes, tokens } of WIDTHS) for (const theme of themes) for (const lang of width === 1440 || width === 390 ? ["en", "uk"] as Lang[] : ["en", "uk"] as Lang[]) for (const spec of SPECS) {
+        const name = `${spec.token}-${lang}-${theme}-${width}`;
+        if (!wanted(name) || (tokens && !tokens(spec.token))) continue;
+        /* The greeting alone is a frame only where the column cannot stand beside the chat; the board is the phone's. */
+        if (spec.narrowOnly && width >= 1170) continue;
+        if (spec.phoneOnly && width >= 640) continue;
+        if (!browser.isConnected()) browser = await chromium.launch(LAUNCH);
+        const phone = width < 640;
+        const form = spec.token.startsWith("form-");
+        const settings = spec.token.startsWith("settings-");
+        /* Where an orchestrator exists the board behind the dialog carries it; before one, the fresh install. */
+        const seated = spec.token === "later-memory-after" || spec.token === "settings-memory-after";
+        const scenario = form || seated ? "orchestrator-first-walk" : "orchestrator-first&guide=installer";
+        const firstVisit = spec.token.startsWith("first-visit");
+        const noEngine = spec.token === "first-visit-orchestrator" || spec.token === "orchestrator-no-engine";
+        const url = `${served.base}?scenario=${scenario}&firstrun=${spec.token}${spec.bot ? `&bot=${spec.bot}` : ""}#p=atlas`;
+        const { context, page, pageErrors } = await openFixture(browser, url, { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone, 1, new Date("2026-11-11T10:00:00Z"));
+        const at = name;
+        const file = (suffix = "") => path.join(frames, `${name}${suffix}.png`);
+        try {
+          await page.waitForSelector("[data-kanban-board], [data-mobile-shell], main", { timeout: 60_000 });
+          const goStep = async (step: string) => {
+            const target = page.locator(`[data-onboarding-step=${step}]`);
+            if (!(await target.isVisible())) await page.locator("[data-onboarding-step-list-toggle]").click();
+            await target.click();
+          };
+          const chooseProject = async () => {
+            await goStep("project");
+            await page.locator("[data-onboarding-project]").first().click();
+          };
+          let shell = false;
+          if (!form && !settings) {
+            /* A first visit opens the guide on the step the guide itself chooses; every other state is opened on Engines. */
+            await page.evaluate((step) => window.dispatchEvent(new CustomEvent("llv:open-onboarding", { detail: { mode: "guide", step } })), firstVisit ? null : "engines");
+            await page.waitForSelector("[data-onboarding-dialog]");
+            await page.waitForFunction(() => document.querySelector("[data-onboarding-engine=claude]")?.getAttribute("data-engine-state") !== "loading");
+            if (firstVisit) {
+              await page.waitForSelector("[data-onboarding-dialog] [data-telemetry-guide-notice]", { timeout: 30_000 });
+              if (spec.token === "first-visit-orchestrator") {
+                /* The newcomer's own walk, by real presses: the notice no longer takes them. */
+                for (const step of ["project", "orchestrator"]) {
+                  await page.locator("[data-onboarding-primary]").click({ timeout: 5_000 });
+                  await page.waitForSelector(`[data-onboarding-current="${step}"]`, { timeout: 5_000 });
+                }
+                await page.waitForSelector("[data-onboarding-orchestrator-no-engine]", { timeout: 30_000 });
+              } else if (spec.token === "first-visit-dismissed") {
+                await page.locator("[data-telemetry-guide-notice] button").last().click({ timeout: 5_000 });
+                await page.waitForSelector("[data-telemetry-guide-notice]", { state: "detached", timeout: 5_000 });
+              } else if (spec.token === "first-visit-closed") {
+                await page.locator(`[data-onboarding-dialog] button[aria-label="${translate(lang, "onboarding.close")}"]`).click({ timeout: 5_000 });
+                await page.waitForSelector("[data-onboarding-dialog]", { state: "detached", timeout: 5_000 });
+                await page.waitForSelector("[data-telemetry-notice]", { timeout: 5_000 });
+              }
+            } else if (spec.token.startsWith("orchestrator-")) {
+              await chooseProject();
+              await goStep("orchestrator");
+              await page.waitForSelector("[data-onboarding-orchestrator-create]:not([disabled]), [data-onboarding-orchestrator-signin], [data-onboarding-orchestrator-go]", { timeout: 30_000 });
+              if (spec.token === "orchestrator-no-engine") await page.waitForSelector("[data-onboarding-orchestrator-no-engine]", { timeout: 30_000 });
+              else if (spec.token !== "orchestrator-one-press") await page.waitForSelector("[data-onboarding-orchestrator-roles]", { timeout: 30_000 });
+            } else if (spec.token.startsWith("later-memory")) {
+              await goStep("memory");
+              await page.waitForFunction(() => { const row = document.querySelector("[data-memory-source-state]"); return row && row.getAttribute("data-memory-source-state") !== "loading"; });
+            } else if (spec.token === "later-telegram-later") {
+              await chooseProject();
+              await goStep("telegram");
+            } else if (spec.token === "telegram-numbered") {
+              await chooseProject();
+              /* The bot read has answered once the counter reads four steps: Telegram is a numbered step only with a bot. */
+              await page.waitForFunction(() => /\b4\b/.test(document.querySelector("[data-onboarding-dialog] footer span, [data-onboarding-step-list-toggle]")?.textContent ?? ""), null, { timeout: 30_000 });
+              await goStep("telegram");
+              await page.waitForSelector("[data-onboarding-report-chat]", { timeout: 30_000 });
+            }
+          } else if (form) {
+            const mobileShell = (await page.locator("[data-mobile2-open]").count()) > 0;
+            if (spec.token === "form-needs-you") {
+              await page.locator(mobileShell ? '[data-mobile2-open="attention"]' : "button:has([data-attention-chip-label])").first().click();
+              await page.waitForSelector("[data-needs-you-row]", { timeout: 30_000 });
+            } else if (mobileShell && spec.token !== "form-board") {
+              /* The seat card opens the seat's conversation; the strip under its bar opens the form in a sheet. */
+              await page.locator("[data-mobile2-seat-open]").first().click();
+              await page.waitForSelector("[data-mobile2-title-text]", { timeout: 30_000 });
+              if (spec.token === "form-decisions") {
+                await page.locator("[data-decision-strip]").first().click();
+                await page.waitForSelector("[data-prototype-question=first]", { timeout: 30_000 });
+              }
+            } else if (!mobileShell && spec.token === "form-decisions") {
+              /* Wide enough, the column stands beside the chat; narrower, the strip under the seat's bar opens the form. */
+              await page.waitForSelector("[data-prototype-question=first], [data-decision-strip]", { timeout: 30_000 });
+              if (!(await page.locator("[data-prototype-question=first]").count())) await page.locator("[data-decision-strip]").first().click();
+              await page.waitForSelector("[data-prototype-question=first]", { timeout: 30_000 });
+            } else if (!mobileShell && spec.token === "form-greeting") {
+              await page.waitForSelector("[data-decision-strip]", { timeout: 30_000 });
+            }
+            shell = mobileShell;
+          } else if (settings) {
+            await page.evaluate(() => window.dispatchEvent(new CustomEvent("delegatus:open-settings-window", { detail: { section: "memory" } })));
+            await page.waitForSelector("[data-header-menu-memory-source]", { timeout: 30_000 });
+            await page.waitForFunction(() => document.querySelector("[data-memory-source-state]")?.getAttribute("data-memory-source-state") !== "loading");
+          }
+          await page.waitForTimeout(300);
+          const defining = DEFINING(spec.token, shell);
+          const first = await page.evaluate(MEASURE, { defining });
+          for (const selector of first.missing) failures.push(`${name}: ${selector} is missing`);
+          /* Below 860 px the Orchestrator step's facts are whole on the first screen. */
+          if (spec.token.startsWith("orchestrator-") && width < 860) for (const selector of first.offFirstScreen) failures.push(`${name}: ${selector} is not whole on the first screen`);
+          /* Slice 1: the notice, the footer's button, and each missing prerequisite with its way are on the first screen at every width. */
+          if (SLICE_1(spec.token)) for (const selector of first.offFirstScreen) failures.push(`${name}: ${selector} is not whole on the first screen`);
+          let slice1: Record<string, unknown> | null = null;
+          if (SLICE_1(spec.token)) {
+            const notice = await page.evaluate(NOTICE_AND_FOOTER);
+            slice1 = { notice };
+            const inGuide = spec.token === "first-visit" || spec.token === "first-visit-orchestrator";
+            const both = [translate(lang, "settings.section.privacy"), translate(lang, "telemetry.dismiss")];
+            if (inGuide) {
+              if (notice.lines !== 1 || !notice.inGuide) failures.push(`${name}: ${notice.lines} notice lines, inside the guide: ${notice.inGuide}`);
+              if (notice.fixed) failures.push(`${name}: the fixed notice is drawn while the guide is open`);
+              if (notice.words.replaceAll("\u00a0", " ") !== telemetryNotice[lang]) failures.push(`${name}: the notice reads «${notice.words}»`);
+              if (notice.actions.join("|") !== both.join("|")) failures.push(`${name}: the notice's actions are ${notice.actions.join(" | ")}`);
+              if (notice.gap === null || Math.abs(notice.gap) > 0.5) failures.push(`${name}: the notice ends ${notice.gap}px from the footer`);
+            } else if (spec.token === "first-visit-closed") {
+              if (notice.lines || notice.fixed !== 1) failures.push(`${name}: after closing, ${notice.lines} lines in a guide and ${notice.fixed} fixed notices`);
+              const fixedActions = await page.locator("[data-telemetry-notice] button").allInnerTexts();
+              if (fixedActions.map((text) => text.trim()).join("|") !== both.join("|")) failures.push(`${name}: the fixed notice's actions are ${fixedActions.join(" | ")}`);
+            } else if (notice.lines || notice.fixed) failures.push(`${name}: ${notice.lines + notice.fixed} notices where none is owed`);
+            if (spec.token !== "first-visit-closed") {
+              if (!notice.buttons.length) failures.push(`${name}: the guide's footer has no button`);
+              for (const button of notice.buttons) {
+                if (!button.words) failures.push(`${name}: footer button «${button.text}» draws no words`);
+                if (button.underNotice) failures.push(`${name}: footer button «${button.text}» lies under the notice`);
+                if (button.outside) failures.push(`${name}: footer button «${button.text}» leaves the window`);
+                if (button.taken) failures.push(`${name}: a press on footer button «${button.text}» lands on something else`);
+              }
+            }
+            if (noEngine) {
+              const claims = await page.evaluate(() => ({
+                runsOn: document.querySelectorAll("[data-onboarding-orchestrator-runs-on]").length,
+                plan: document.querySelectorAll("[data-onboarding-orchestrator-plan], [data-onboarding-cost]").length,
+                named: document.querySelector("[data-onboarding-orchestrator-no-engine]")?.textContent ?? "",
+                project: document.querySelector("[data-onboarding-orchestrator-no-project]")?.textContent ?? null,
+                changes: [...document.querySelectorAll("[data-onboarding-orchestrator-change]")].map((button) => button.getAttribute("data-onboarding-orchestrator-change") ?? ""),
+                ways: [...document.querySelectorAll("[data-onboarding-orchestrator-go]")].map((button) => `${button.getAttribute("data-onboarding-orchestrator-go")}:${button.textContent?.trim()}`),
+                step: document.querySelector("[data-onboarding-orchestrator]")?.textContent ?? "",
+              }));
+              slice1.claims = { named: claims.named, project: claims.project, changes: claims.changes, ways: claims.ways };
+              if (claims.runsOn || claims.plan || /Opus|Sol/.test(claims.step)) failures.push(`${name}: the step still claims a runtime or a plan with no engine`);
+              if (claims.named !== translate(lang, "onboarding.orchestrator.noEngine")) failures.push(`${name}: the Runs on row reads «${claims.named}»`);
+              if (claims.step.split(translate(lang, "onboarding.orchestrator.noEngine")).length !== 2) failures.push(`${name}: the missing engine is not said exactly once`);
+              /* Each missing prerequisite is said once, in its own row, with the one action that leads to its step; a row with nothing chosen offers no Change. */
+              const noProject = spec.token === "first-visit-orchestrator";
+              const ways = [...(noProject ? [`project:${translate(lang, "onboarding.orchestrator.goProject")}`] : []), `engines:${translate(lang, "onboarding.orchestrator.goEngines")}`];
+              if (claims.ways.join("|") !== ways.join("|")) failures.push(`${name}: the ways out are ${claims.ways.join(" | ")}`);
+              const saidProject = claims.step.split(translate(lang, "onboarding.orchestrator.noProject")).length - 1;
+              if (noProject ? claims.project !== translate(lang, "onboarding.orchestrator.noProject") || saidProject !== 1 : claims.project !== null || saidProject !== 0) failures.push(`${name}: the Project row reads «${claims.project}», the missing project said ${saidProject} times`);
+              if (claims.changes.join("|") !== (noProject ? "" : "project")) failures.push(`${name}: Change is offered on ${claims.changes.join(" | ") || "no row"}`);
+            }
+          }
+          if (!form && !settings) {
+            const firstScreen = await page.evaluate(FIRST_SCREEN);
+            if (firstScreen.filled.length > 1 || (spec.token === "telegram-numbered" && firstScreen.filled.length !== 1)) failures.push(`${name}: ${firstScreen.filled.length} filled buttons on the first screen: ${firstScreen.filled.join(" | ")}`);
+            if (spec.token === "telegram-numbered" && firstScreen.cut.length) failures.push(`${name}: lines cut on the first screen: ${firstScreen.cut.join(" | ")}`);
+            else if (firstScreen.cut.length) notes.push(`${name}: lines cut on the first screen: ${firstScreen.cut.join(" | ")}`);
+          }
+          if (spec.token === "engines-signed-out" || spec.token === "engines-no-cli") {
+            if (first.offFirstScreen.includes("[data-onboarding-engines-note]")) failures.push(`${name}: the no-engine warning is not whole on the first screen`);
+          }
+          if (spec.token === "telegram-numbered") {
+            const contradicted = await page.evaluate((words) => document.body.innerText.includes(words), lang === "uk" ? "Не підключено" : "Not connected");
+            if (contradicted) failures.push(`${name}: the page says Telegram is not connected while a bot is`);
+          }
+          /* Beside the facts the advice starts in the value column, on the line of «Codex»; on a phone and in the middle it keeps the full width. */
+          if (spec.token === "orchestrator-codex-only") {
+            const starts = await page.evaluate(() => {
+              const left = (el: Element | null) => { const r = el?.getBoundingClientRect(); return r ? Math.round(r.left * 10) / 10 : null; };
+              return { advice: left(document.querySelector("[data-onboarding-orchestrator-advice] > span")), value: left(document.querySelector("[data-onboarding-orchestrator-runs-on]")), label: left(document.querySelector("[data-onboarding-orchestrator-runs-on]")?.parentElement?.previousElementSibling ?? null) };
+            });
+            if (starts.advice === null || starts.value === null) failures.push(`${name}: the advice or the Runs on value is missing`);
+            else if (width >= 860 && Math.abs(starts.advice - starts.value) > 1.5) failures.push(`${name}: the advice starts at ${starts.advice}px but the value column at ${starts.value}px`);
+            else if (width < 860 && starts.label !== null && starts.advice > starts.label + 1.5) failures.push(`${name}: the advice is indented to ${starts.advice}px below 860 px (label at ${starts.label}px)`);
+          }
+          /* With an orchestrator the board behind the dialog has it: no draft panel asks to create one, and the guide's first three steps are ticks. */
+          if (seated) {
+            const behind = await page.evaluate((draft) => ({
+              draft: document.body.innerText.includes(draft),
+              none: document.querySelectorAll("[data-orchestrator-badge=draft]").length > 0,
+            }), translate(lang, "orchPanel.draftTitle").replace("{project}", "atlas"));
+            if (behind.draft) failures.push(`${name}: the board behind still asks to create the orchestrator`);
+            if (behind.none) failures.push(`${name}: the board behind says the orchestrator does not exist yet`);
+            if (spec.token === "later-memory-after") {
+              const ticks = await page.evaluate(() => [...document.querySelectorAll("[data-onboarding-dialog] [data-step-mark=done]")].length);
+              if (width >= 640 && ticks < 3) failures.push(`${name}: ${ticks} settled steps in the guide, expected at least 3`);
+            }
+          }
+          if (spec.token === "settings-memory-after") {
+            const line = await page.evaluate(() => document.querySelector("[data-memory-source-line]")?.textContent ?? "");
+            if (!line.includes(translate(lang, "memorySource.limit"))) failures.push(`${name}: the Settings memory line does not say the import spends the plan's limit`);
+          }
+          if (spec.token.startsWith("engines-")) {
+            const rechecks = await page.evaluate((label) => [...document.querySelectorAll<HTMLElement>("[data-onboarding-dialog] button")].filter((button) => button.getClientRects().length && button.textContent?.trim() === label).length, translate(lang, "onboarding.engines.recheck"));
+            if (rechecks > 1) failures.push(`${name}: ${rechecks} Check again buttons`);
+          }
+          await page.screenshot({ path: file() });
+          const reading: Record<string, unknown> = { frame: name, width, lang, theme, token: spec.token, label: spec.label[lang], defining, offFirstScreen: first.offFirstScreen, ...(slice1 ?? {}) };
+          for (const selector of defining) {
+            if (first.missing.includes(selector)) continue;
+            if (first.offFirstScreen.includes(selector)) {
+              await page.locator(selector).first().evaluate((node) => node.scrollIntoView({ block: "nearest" }));
+              await page.waitForTimeout(150);
+              await page.screenshot({ path: file(`-scrolled-${defining.indexOf(selector) + 1}`) });
+              notes.push(`${name}: ${selector} is off the first screen`);
+            }
+            await page.locator(selector).first().evaluate((node) => node.scrollIntoView({ block: "nearest" }));
+            await page.waitForTimeout(100);
+            const inspected = await page.evaluate(INSPECT, { selector, coarse: phone, lang, latin: LATIN.source });
+            const where = `${name} ${selector}`;
+            if (inspected.cut.length) failures.push(`${where}: cut: ${inspected.cut.join(" | ")}`);
+            if (inspected.covered.length) failures.push(`${where}: covered: ${inspected.covered.join(" | ")}`);
+            if (inspected.ellipsis.length) failures.push(`${where}: ellipsis: ${inspected.ellipsis.join(" | ")}`);
+            if (inspected.small.length) failures.push(`${where}: targets under 44 px: ${inspected.small.join(" | ")}`);
+            if (inspected.oneLetterEnds.length) failures.push(`${where}: a line ends on a one-letter word: ${inspected.oneLetterEnds.join(" | ")}`);
+            if (inspected.latin.length) failures.push(`${where}: Latin words in Ukrainian: ${[...new Set(inspected.latin)].join(", ")}`);
+            reading[selector] = { texts: inspected.texts };
+          }
+          if (lang === "uk") {
+            const ends = await page.evaluate(LINE_ENDS, form ? "main, body" : settings ? "[role=dialog]" : spec.token === "first-visit-closed" ? "[data-telemetry-notice]" : "[data-onboarding-dialog]");
+            if (ends.length) failures.push(`${name}: lines end on a one-letter word: ${ends.join(" | ")}`);
+          }
+          const surfaceCheck = await page.evaluate(OVERLAPS, defining[0]!);
+          if (surfaceCheck.overlaps.length) failures.push(`${name}: text overlaps: ${surfaceCheck.overlaps.join(" | ")}`);
+          if (surfaceCheck.sideways > 1) failures.push(`${name}: scrolls sideways by ${surfaceCheck.sideways}px`);
+          /* The audit's press on Continue was refused: the notice took it. Here it lands, with the notice still shown. */
+          if (spec.token === "first-visit") {
+            await page.locator("[data-onboarding-primary]").click({ timeout: 5_000 });
+            await page.waitForSelector('[data-onboarding-current="project"]', { timeout: 5_000 });
+            const after = await page.evaluate(NOTICE_AND_FOOTER);
+            reading.afterContinue = after;
+            if (!after.inGuide || after.fixed) failures.push(`${name}: after Continue the notice is not the guide's line`);
+            for (const button of after.buttons) if (button.underNotice || button.outside || button.taken) failures.push(`${name}: after Continue, footer button «${button.text}» is not whole and pressable`);
+            await page.screenshot({ path: file("-pressed-continue") });
+          }
+          /* Each row's own action leads to its step: Project first, then back by Continue, then Engines. */
+          if (spec.token === "first-visit-orchestrator") {
+            await page.locator('[data-onboarding-orchestrator-go="project"]').click({ timeout: 5_000 });
+            await page.waitForSelector('[data-onboarding-current="project"]', { timeout: 5_000 });
+            await page.screenshot({ path: file("-pressed-go-project") });
+            await page.locator("[data-onboarding-primary]").click({ timeout: 5_000 });
+            await page.waitForSelector("[data-onboarding-orchestrator-no-engine]", { timeout: 30_000 });
+          }
+          if (noEngine) {
+            await page.locator('[data-onboarding-orchestrator-go="engines"]').click({ timeout: 5_000 });
+            await page.waitForSelector('[data-onboarding-current="engines"]', { timeout: 5_000 });
+            await page.screenshot({ path: file("-pressed-go-engines") });
+          }
+          if (pageErrors.length) failures.push(`${name}: page errors: ${pageErrors.join(" | ")}`);
+          readings.push({ ...reading, overlaps: surfaceCheck.overlaps, sideways: surfaceCheck.sideways, pageErrors });
+        } catch (error) {
+          failures.push(`${at}: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}`);
+          await page.screenshot({ path: file("-failed") }).catch(() => {});
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+    fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify({ frames: readings, notes, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 5_400_000);
+});
+
 describe("new task default deadline", () => {
   browserTest("default, picked and reset deadlines render in both languages and themes", async () => {
     const out = path.resolve(".artifacts/task-due-composer/desktop");
@@ -43884,4 +48103,1366 @@ describe("MCP engine refusal card", () => {
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
     } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
   }, 180_000);
+});
+
+describe("cold conversation link", () => {
+  /*
+   * A pasted `#c=` link whose conversation the plain catalog does not carry asks
+   * for a scope of its own, and that cold scope can be the server's controlled
+   * 503 (docs/design/cold-conversation-opening.md). In the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=cold-link`, in Chromium:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "cold conversation link"
+   *
+   * Each run opens one link, changes the hash to a second one, and lets the second
+   * scope answer 503 once before it is available: frame 1 is the link opening
+   * (the scope has not answered), frame 2 the link retrying (the 503 arrived),
+   * frame 3 the conversation opened at its latest message. The first link's
+   * scope is released afterwards and must never open or be asked again. The
+   * notice is measured from text ranges against every other text on screen, for
+   * its contrast, and the reader for its scroll position.
+   *
+   * Frames go to `$LLV_EVIDENCE_DIR/cold-conversation-link/`, measurements to
+   * `evidence/cold-conversation-link/rendered.json`. `LLV_COLD_LINK_ONLY` takes a
+   * comma-separated list of run names (`1440x900-en-light`) to rerun some of them.
+   */
+  const OUT = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "cold-conversation-link");
+  const EVIDENCE = path.resolve("evidence/cold-conversation-link");
+  const FIRST = "conversation_cold-link-first";
+  const SECOND = "conversation_cold-link-second";
+  const VIEWPORTS = [
+    { width: 1440, height: 900 },
+    { width: 1200, height: 800 },
+    { width: 1000, height: 700 },
+    { width: 700, height: 800 },
+    { width: 390, height: 844 },
+  ];
+  const MIN_CONTRAST = 4.5;
+
+  type NoticeReading = {
+    state: string | null;
+    text: string;
+    inViewport: boolean;
+    whole: boolean;
+    overlaps: string[];
+    contrast: number;
+    box: { left: number; top: number; right: number; bottom: number };
+  };
+
+  /** The notice, measured from its text range and its pill, against every other text drawn on screen. */
+  const readNotice = (page: Page, state: "opening" | "retrying") => page.evaluate((expected) => {
+    const host = document.querySelector<HTMLElement>(`[data-link-pending-notice="${expected}"]`);
+    if (!host) return null;
+    const pill = host;
+    const pillBox = pill.getBoundingClientRect();
+    const textRange = document.createRange();
+    textRange.selectNodeContents(pill);
+    const textBoxes = [...textRange.getClientRects()].filter((rect) => rect.width > 0);
+    const rgba = (css: string): [number, number, number, number] => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
+      const context = canvas.getContext("2d", { willReadFrequently: true })!;
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = css;
+      context.fillRect(0, 0, 1, 1);
+      const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+      return [r!, g!, b!, a! / 255];
+    };
+    const over = (top: number[], below: number[]) => {
+      const alpha = top[3]! + below[3]! * (1 - top[3]!);
+      return [0, 1, 2].map((i) => (top[i]! * top[3]! + below[i]! * below[3]! * (1 - top[3]!)) / alpha).concat(alpha);
+    };
+    const luminance = (c: number[]) => {
+      const [r, g, b] = c.slice(0, 3).map((v) => { const s = v! / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; });
+      return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+    };
+    const style = getComputedStyle(pill);
+    const canvas = rgba(getComputedStyle(document.body).backgroundColor);
+    const backdrop = over(rgba(style.backgroundColor), canvas.some(Number.isNaN) || canvas[3] === 0 ? [255, 255, 255, 1] : canvas);
+    const text = over(rgba(style.color), backdrop);
+    const [hi, lo] = [luminance(text), luminance(backdrop)].sort((a, b) => b - a);
+    /* The notice owns its strip: no visible text range of any other element, in the board, the sidebar, an open
+       conversation or a field, may share a pixel with it. */
+    const overlaps: string[] = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const element = node.parentElement;
+      if (!element || host.contains(element) || !node.textContent?.trim()) continue;
+      if (!element.checkVisibility({ visibilityProperty: true, opacityProperty: true })) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      for (const rect of range.getClientRects()) {
+        if (rect.width <= 0) continue;
+        /* Only the part of the text a person can see counts: each ancestor that clips its content cuts the range to its box. */
+        let [left, top, right, bottom] = [rect.left, rect.top, rect.right, rect.bottom];
+        for (let ancestor: HTMLElement | null = element; ancestor && ancestor !== document.documentElement; ancestor = ancestor.parentElement) {
+          const { overflowX, overflowY } = getComputedStyle(ancestor);
+          if (overflowX === "visible" && overflowY === "visible") continue;
+          const box = ancestor.getBoundingClientRect();
+          if (overflowX !== "visible") { left = Math.max(left, box.left); right = Math.min(right, box.right); }
+          if (overflowY !== "visible") { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
+        }
+        const x = Math.min(right, pillBox.right) - Math.max(left, pillBox.left);
+        const y = Math.min(bottom, pillBox.bottom) - Math.max(top, pillBox.top);
+        if (right - left <= 0 || bottom - top <= 0 || x <= 0.5 || y <= 0.5) continue;
+        overlaps.push((node.textContent ?? "").trim().slice(0, 40));
+      }
+    }
+    return {
+      state: host.getAttribute("data-link-pending-notice"),
+      text: pill.textContent ?? "",
+      inViewport: pillBox.left >= 0 && pillBox.top >= 0 && pillBox.right <= innerWidth && pillBox.bottom <= innerHeight,
+      whole: textBoxes.length > 0 && textBoxes.every((rect) => rect.left >= pillBox.left - 0.5 && rect.right <= pillBox.right + 0.5 && rect.top >= pillBox.top - 0.5 && rect.bottom <= pillBox.bottom + 0.5),
+      overlaps: [...new Set(overlaps)],
+      contrast: Math.round(((hi! + 0.05) / (lo! + 0.05)) * 100) / 100,
+      box: { left: Math.round(pillBox.left), top: Math.round(pillBox.top), right: Math.round(pillBox.right), bottom: Math.round(pillBox.bottom) },
+    };
+  }, state) as Promise<NoticeReading | null>;
+
+  /** The opened conversation's reader: its latest message is on screen and the feed rests at its end. */
+  const readOpened = (page: Page) => page.evaluate(() => {
+    const scrollers = [...document.querySelectorAll<HTMLElement>("[data-log-feed-scroller]")]
+      .filter((element) => /Latest message|Останнє повідомлення/.test(element.textContent ?? ""));
+    const scroller = scrollers.find((element) => element.checkVisibility({ visibilityProperty: true })) ?? null;
+    if (!scroller) return { scrollers: scrollers.length, visible: false, atEnd: false, latestInView: false, gap: -1 };
+    const frame = scroller.getBoundingClientRect();
+    const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+    let latest: DOMRect | null = null;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!/Latest message|Останнє повідомлення/.test(node.textContent ?? "")) continue;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      latest = range.getBoundingClientRect();
+    }
+    const gap = Math.round(scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop);
+    return {
+      scrollers: scrollers.length,
+      visible: frame.width > 0 && frame.height > 0 && frame.bottom > 0 && frame.top < innerHeight,
+      atEnd: gap <= 2,
+      latestInView: Boolean(latest && latest.top >= Math.max(frame.top, 0) - 1 && latest.bottom <= Math.min(frame.bottom, innerHeight) + 1),
+      gap,
+    };
+  });
+
+  const coldLink = (page: Page) => page.evaluate(() => (window as unknown as { __coldLink: { calls: string[] } }).__coldLink.calls);
+  const pass = (page: Page, call: "fail" | "release", id: string) => page.evaluate(([name, target]) => (window as unknown as { __coldLink: Record<string, (id: string) => void> }).__coldLink[name!]!(target!), [call, id]);
+  const scopeCalls = (calls: string[], id: string) => calls.filter((call) => call.includes(`path=${id}`));
+
+  browserTest("a link whose scope is unavailable shows opening, retrying, then the conversation, in every width, language and theme", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const bundle = fs.mkdtempSync(path.join(os.tmpdir(), "cold-link-"));
+    const server = await serveEvidenceFixture(bundle);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const key = `${viewport.width}x${viewport.height}-${lang}-${scheme}`;
+        if (process.env.LLV_COLD_LINK_ONLY && !process.env.LLV_COLD_LINK_ONLY.split(",").includes(key)) continue;
+        let step = "opening the first link";
+        const fail = (message: string) => failures.push(`${key}: ${message}`);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cold-link#c=${FIRST}`, viewport, scheme, lang, "no-preference", viewport.width === 390);
+        const reading: Record<string, unknown> = {};
+        const shot = (name: string) => page.screenshot({ path: path.join(OUT, `${key}-${name}.png`) });
+        try {
+          await page.waitForFunction((id) => (window as unknown as { __coldLink?: { calls: string[] } }).__coldLink?.calls.some((call) => call.includes(`path=${id}`)), FIRST, { timeout: 30_000 });
+          step = "changing the hash to the second link";
+          const changedAt = (await coldLink(page)).length;
+          await page.evaluate((id) => { location.hash = `#c=${id}`; }, SECOND);
+          await page.waitForFunction((id) => (window as unknown as { __coldLink: { calls: string[] } }).__coldLink.calls.some((call) => call.includes(`path=${id}`)), SECOND, { timeout: 30_000 });
+
+          /* Frame 1: the scope has not answered; the link says it is opening. */
+          step = "waiting for the opening notice";
+          await page.waitForSelector('[data-link-pending-notice="opening"]', { timeout: 15_000 });
+          const opening = await readNotice(page, "opening");
+          reading.opening = opening;
+          await shot("1-opening");
+
+          /* Frame 2: the server's first 503 for the link's scope has arrived. */
+          step = "waiting for the retrying notice";
+          await pass(page, "fail", SECOND);
+          await page.waitForSelector('[data-link-pending-notice="retrying"]', { timeout: 15_000 });
+          const retrying = await readNotice(page, "retrying");
+          reading.retrying = retrying;
+          await shot("2-retrying");
+          for (const [name, notice] of [["opening", opening], ["retrying", retrying]] as const) {
+            if (!notice) { fail(`the ${name} notice was not drawn`); continue; }
+            if (!notice.text.trim()) fail(`the ${name} notice has no text`);
+            if (!notice.inViewport) fail(`the ${name} notice leaves the viewport ${JSON.stringify(notice.box)}`);
+            if (!notice.whole) fail(`the ${name} notice's text leaves its pill`);
+            if (notice.overlaps.length) fail(`the ${name} notice covers text: ${notice.overlaps.join(" | ")}`);
+            if (notice.contrast < MIN_CONTRAST) fail(`the ${name} notice reads ${notice.contrast}:1`);
+          }
+          if (opening && retrying && opening.text === retrying.text) fail("opening and retrying read the same");
+
+          /* The first link is released while the second is pending: it never opens and is never asked again. */
+          await pass(page, "release", FIRST);
+          await page.waitForTimeout(2_500);
+          const onFirst = await page.locator(`[data-kanban-reader="${FIRST}"]`).count();
+          if (onFirst) fail("the replaced link opened after its scope became available");
+          const afterChange = (await coldLink(page)).slice(changedAt);
+          if (scopeCalls(afterChange, FIRST).length) fail(`the replaced link's scope was asked again: ${scopeCalls(afterChange, FIRST).join(" ")}`);
+
+          /* Frame 3: the second scope answers; the conversation opens at its latest message. */
+          step = "waiting for the conversation to open";
+          await pass(page, "release", SECOND);
+          await page.waitForFunction(() => document.querySelector("[data-link-pending-notice]") === null
+            && [...document.querySelectorAll("[data-log-feed-scroller]")].some((element) => /Latest message|Останнє повідомлення/.test(element.textContent ?? "")), undefined, { timeout: 30_000 });
+          await page.waitForTimeout(600);
+          const opened = await readOpened(page);
+          reading.opened = opened;
+          await shot("3-opened");
+          if (!opened.visible) fail("the opened conversation's reader is not on screen");
+          if (!opened.atEnd) fail(`the reader does not rest at its latest message (${opened.gap} px short)`);
+          if (!opened.latestInView) fail("the latest message is not in view");
+          const hash = await page.evaluate(() => location.hash);
+          if (hash !== `#c=${SECOND}`) fail(`the hash is ${hash}`);
+          const calls = await coldLink(page);
+          reading.calls = calls.length;
+          if (calls.some((call) => call.includes("path=%2F"))) fail(`a request pinned a transcript path: ${calls.filter((call) => call.includes("path=%2F")).join(" ")}`);
+          if (await page.locator("[data-stale-focus-notice]").count()) fail("the not-found notice appeared");
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          fail(`${step}: ${error instanceof Error ? error.message.split("\n")[0]! : String(error)}`);
+          await page.screenshot({ path: path.join(OUT, `${key}-failed.png`) }).catch(() => {});
+          reading.calls = await coldLink(page).catch(() => null);
+        } finally { await context.close(); }
+        readings[key] = reading;
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      fs.rmSync(bundle, { recursive: true, force: true });
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "rendered.json"), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=cold-link", readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 1_500_000);
+});
+
+
+describe("hidden lane visibility", () => {
+  browserTest("the desktop keeps a roundless hidden decision cleared and restores it with Undo", async () => {
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "hidden-lane");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/attention/needsYouPanel.fixture.tsx");
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    let browser: Browser | undefined;
+    const readings: unknown[] = [];
+    try {
+      browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+      for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const { page, context } = await openFixture(browser, `${server.base}?scenario=hidden-lane&lang=${lang}`, { width: 1440, height: 900 }, scheme, lang, "reduce");
+        try {
+          await page.clock.setFixedTime(new Date("2026-09-24T10:00:00.000Z"));
+          await page.reload();
+          const card = page.locator('[data-kanban-board] .card[data-id="task:t-visibility"]');
+          await card.waitFor();
+          await card.scrollIntoViewIfNeeded();
+          expect(await card.locator('[data-chronology-kind="lane-cleared"]').count()).toBe(1);
+          expect(await page.locator('[data-needs-you-row="lane-visibility"]').count()).toBe(0);
+          await page.screenshot({ path: path.join(out, `${lang}-${scheme}-hidden.png`) });
+          await card.locator("[data-menu]").click();
+          await page.locator('.menu [data-cm-item="undoFlag"]').click();
+          await page.waitForFunction(() => !document.querySelector('[data-id="task:t-visibility"] [data-chronology-kind="lane-cleared"]'));
+          await page.locator("[data-attention-count]").click();
+          await page.locator('[data-needs-you-row="lane-visibility"]').waitFor();
+          expect(await page.locator('[data-needs-you-row="lane-visibility"]').count()).toBe(1);
+          await page.screenshot({ path: path.join(out, `${lang}-${scheme}-restored.png`) });
+          readings.push({ lang, scheme, hiddenRows: 0, restoredRows: 1, action: "undoFlag" });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
+    } finally { await browser?.close(); sockets.close(); server.stop(); }
+  }, 180_000);
+});
+
+describe("seat tick summary arrives before panel details", () => {
+  browserTest("closed state and held, loaded and failed panels at phone and desktop sizes", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { seatTickSettingsAnswer } = await import("@/lib/monitor/seatTickSettingsAnswer");
+    const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const baseline = process.env.LLV_TICK_BASELINE === "1";
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", baseline ? "tick-before-frames" : "tick-after-frames");
+    fs.mkdirSync(out, { recursive: true });
+    const now = new Date("2026-11-12T10:00:00Z");
+    const actor = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    writeSeatTickSettings("atlas", { ...defaultSeatTickSettings("atlas"), enabled: true, wakeIntervalMinutes: 10,
+      reason: "Review queued work", updatedAt: now.toISOString(), monitorPrompt: "Review the next queued task. ".repeat(500) });
+    const full = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime() });
+    const summary = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime(), summary: true });
+    let release: (() => void) | undefined;
+    let held = Promise.resolve();
+    let calls: string[] = [];
+    let notifyPanel!: () => void;
+    let enteredPanel = Promise.resolve();
+    let fail = false;
+    let refuseWrite = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        if (request.method === "PUT" && refuseWrite) return Response.json({ error: "Cadence held for review" }, { status: 400 });
+        const small = new URL(request.url).searchParams.get("view") === "summary";
+        calls.push(small ? "summary" : "panel");
+        if (small) return Response.json(summary);
+        notifyPanel();
+        await held;
+        return Response.json(fail ? { error: "fixture panel unavailable" } : full, { status: fail ? 500 : 200 });
+      },
+      "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
+    });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [320, 390, 1000, 1440]) for (const outcome of baseline ? ["baseline"] : ["loaded", "failed", "refused"]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        if (outcome === "refused" && width <= 390) continue;
+        calls = []; fail = outcome === "failed"; refuseWrite = outcome === "refused";
+        held = new Promise<void>(resolve => { release = resolve; });
+        enteredPanel = new Promise<void>(resolve => { notifyPanel = resolve; });
+        const phone = width <= 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver`,
+          { width, height: phone ? 844 : 700 }, theme, lang, "reduce", phone, 1, now);
+        const tag = `${width}-${lang}-${theme}-${outcome}`;
+        const frame = async (state: string) => {
+          await page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 1000; } });
+          // Long panels scroll. Frame complete lines at both ends instead of
+          // treating a native scroll crop as a truncated label.
+          const scroll = state === "panel-ready" || state === "panel-end" || state === "panel-write-refused" ? await page.evaluate((end) => {
+            const scroller = document.querySelector<HTMLElement>('[data-mobile2-sheet="tick"] [data-mobile2-sheet-body], [data-seat-tick-popover]');
+            if (!scroller) return null;
+            const box = scroller.getBoundingClientRect();
+            const top = box.top + scroller.clientTop, bottom = top + scroller.clientHeight;
+            const lines: Array<{ top: number; bottom: number }> = [];
+            const walker = document.createTreeWalker(scroller, NodeFilter.SHOW_TEXT);
+            let node: Node | null;
+            while ((node = walker.nextNode())) {
+              if (!node.textContent?.trim() || !node.parentElement?.checkVisibility()) continue;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const r of range.getClientRects()) if (r.width && r.height) lines.push({ top: r.top + scroller.scrollTop, bottom: r.bottom + scroller.scrollTop });
+            }
+            const maximum = scroller.scrollHeight - scroller.clientHeight;
+            const desired = end ? maximum : 0;
+            let chosen = desired;
+            for (let distance = 0; distance <= maximum; distance++) {
+              const offset = end ? maximum - distance : distance;
+              const cuts = lines.some(line => (line.top < top + offset - 0.5 && line.bottom > top + offset + 0.5)
+                || (line.top < bottom + offset - 0.5 && line.bottom > bottom + offset + 0.5));
+              if (!cuts) { chosen = offset; break; }
+            }
+            scroller.scrollTop = chosen;
+            return { desired, actual: scroller.scrollTop, maximum };
+          }, state === "panel-end" || state === "panel-write-refused") : null;
+          const geometry = await page.evaluate(() => {
+            const control = document.querySelector<HTMLElement>('[role="slider"][data-seat-tick-switch]');
+            const row = control?.closest<HTMLElement>("[data-seat-tick-row]");
+            const panel = document.querySelector<HTMLElement>("[data-seat-tick-popover], [data-testid=mobile-seat-tick-sheet]");
+            const roots = panel ? [panel] : [row ?? control].filter(Boolean) as HTMLElement[];
+            const cuts: string[] = [];
+            const clipDetails: unknown[] = [];
+            const ranges: Array<{ text: string; left: number; top: number; right: number; bottom: number }> = [];
+            for (const root of roots) {
+              const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+              let node: Node | null;
+              while ((node = walker.nextNode())) {
+                if (!node.textContent?.trim() || !node.parentElement?.checkVisibility()) continue;
+                const range = document.createRange(); range.selectNodeContents(node);
+                for (const r of range.getClientRects()) {
+                  if (r.bottom <= 0 || r.top >= innerHeight || r.width === 0 || r.height === 0) continue;
+                  let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+                  for (let ancestor: HTMLElement | null = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                    const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
+                    if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left); right = Math.min(right, box.right); }
+                    if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
+                  }
+                  // Wholly scrolled-away rows are outside the visible surface.
+                  if (r.bottom <= top || r.top >= bottom) continue;
+                  const text = node.textContent!.trim().slice(0, 80);
+                  if (r.left < left - 0.5 || r.right > right + 0.5 || r.top < top - 0.5 || r.bottom > bottom + 0.5) { cuts.push(text); clipDetails.push({ text, glyph: { left: r.left, top: r.top, right: r.right, bottom: r.bottom }, clip: { left, top, right, bottom } }); }
+                  ranges.push({ text, left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+                }
+              }
+            }
+            const overlaps: string[] = [];
+            for (let a = 0; a < ranges.length; a++) for (let b = a + 1; b < ranges.length; b++) {
+              const x = ranges[a]!, y = ranges[b]!;
+              if (Math.min(x.right, y.right) - Math.max(x.left, y.left) > 0.5 && Math.min(x.bottom, y.bottom) - Math.max(x.top, y.top) > 0.5) overlaps.push(`${x.text} / ${y.text}`);
+            }
+            const rect = control?.getBoundingClientRect();
+            return { cuts, clipDetails, overlaps, word: control?.querySelector("[data-seat-tick-face]")?.textContent, visibleText: ranges.map(r => r.text),
+              controlOnFirstScreen: !!rect && rect.top >= 0 && rect.bottom <= innerHeight,
+              pageOverflow: document.documentElement.scrollWidth > innerWidth, scrollbarGutter: innerWidth - document.documentElement.clientWidth,
+              panelScrollbarGutter: panel ? panel.offsetWidth - panel.clientWidth - parseFloat(getComputedStyle(panel).borderLeftWidth) - parseFloat(getComputedStyle(panel).borderRightWidth) : null,
+              fields: panel ? [...panel.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea")].filter(input => input.checkVisibility()).map(input => ({ value: input.value, placeholder: input.placeholder, width: input.clientWidth, height: input.clientHeight })) : [] };
+          });
+          await page.screenshot({ path: path.join(out, `${tag}-${state}.png`) });
+          readings.push({ width, height: phone ? 844 : 700, lang, theme, state, outcome, calls: [...calls], scroll, ...geometry, pageErrors });
+          fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+          const target = page.locator("[data-seat-tick-popover]:visible, [data-testid=mobile-seat-tick-sheet]:visible, [data-seat-tick-row]:visible").first();
+          if (await target.count()) await target.screenshot({ path: path.join(out, `${tag}-${state}-detail.png`) });
+          if (!baseline) {
+            expect(geometry.cuts, `${tag} ${state} clipped text`).toEqual([]);
+            expect(geometry.overlaps, `${tag} ${state} overlapping text`).toEqual([]);
+          }
+          expect(geometry.pageOverflow).toBe(false);
+          expect(pageErrors).toEqual([]);
+          return geometry;
+        };
+        try {
+          await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+          await page.evaluate(() => document.fonts.ready);
+          if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+          else {
+            await page.locator("[data-kanban-seat]").waitFor();
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+          }
+          const control = page.locator('[role="slider"][data-seat-tick-switch]:visible').first();
+          if (baseline) {
+            await enteredPanel;
+            await frame("waiting-for-panel");
+            continue;
+          }
+          await control.waitFor();
+          await page.waitForFunction(() => document.querySelector('[role="slider"][data-seat-tick-switch]')?.getAttribute("aria-valuenow") === "3");
+          expect(calls.every(call => call === "summary")).toBe(true);
+          expect((await frame("closed-ready")).controlOnFirstScreen).toBe(true);
+          if (refuseWrite) {
+            await control.focus();
+            await page.keyboard.press("ArrowLeft");
+            await page.keyboard.press("Enter");
+          } else await control.click();
+          await page.locator(phone ? "[data-testid=mobile-seat-tick-sheet]" : "[data-seat-tick-popover]").waitFor();
+          await enteredPanel;
+          expect(calls.filter(call => call === "panel").length).toBe(1);
+          await frame("panel-pending");
+          if (phone) {
+            for (const key of ["Tab", "Tab", "Shift+Tab"]) {
+              await page.keyboard.press(key);
+              expect(await page.evaluate(() => !!document.activeElement?.closest('[data-mobile2-sheet="tick"]'))).toBe(true);
+            }
+            expect(await page.evaluate(() => !!document.elementFromPoint(8, 8)?.closest("[data-mobile2-scrim]"))).toBe(true);
+          }
+          const answered = page.waitForResponse(response => response.url().includes("/api/monitor/seat-tick/settings") && !response.url().includes("view=summary"));
+          release!();
+          await answered;
+          if (fail) {
+            await page.locator("[data-seat-tick-summary]:visible").filter({ hasText: translate(lang, "seatTick.summary.unreadable") }).waitFor();
+            expect(await page.locator("[data-seat-tick-interval]:visible").count()).toBe(0);
+            await frame("panel-failed");
+          } else {
+            await page.locator("[data-seat-tick-interval]:visible").waitFor();
+            if (refuseWrite) {
+              await frame("panel-write-refused");
+              expect(await page.locator("[data-seat-tick-error]:visible").innerText()).toBe("Cadence held for review");
+            } else {
+              await frame("panel-ready");
+              await frame("panel-end");
+            }
+          }
+        } finally { release?.(); await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { release?.(); await browser.close(); sockets.close(); server.stop(); }
+  }, 600_000);
+});
+
+describe("seat tick toggle shows its state in the card's first frame", () => {
+  browserTest("the seat answer's summary paints the toggle while its own read is still held, at phone, tablet and desktop widths", async () => {
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const { seatTickSettingsAnswer } = await import("@/lib/monitor/seatTickSettingsAnswer");
+    const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "tick-first-frame");
+    fs.mkdirSync(out, { recursive: true });
+    const now = new Date("2026-11-12T10:00:00Z");
+    const actor = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+    /* The seat answer carries the stored record (every ten minutes, a stop that is not the default). */
+    writeSeatTickSettings("atlas", { ...defaultSeatTickSettings("atlas"), enabled: true, wakeIntervalMinutes: 10,
+      reason: "Review queued work", updatedAt: now.toISOString() });
+    const seed = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime(), summary: true, skipJournal: true });
+    /* The separate read answers later with the record as it then stands: the default hour. */
+    writeSeatTickSettings("atlas", defaultSeatTickSettings("atlas"));
+    const refreshed = seatTickSettingsAnswer("atlas", false, actor, { now: () => now.getTime(), summary: true });
+    let release!: () => void;
+    let held = Promise.resolve();
+    let notifyAsked!: () => void;
+    let asked = Promise.resolve();
+    let summaryCalls = 0;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/__seat-tick-seed": seed,
+      "/api/monitor/seat-tick/settings": async () => {
+        summaryCalls += 1;
+        notifyAsked();
+        await held;
+        return Response.json(refreshed);
+      },
+      "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "codex", model: "gpt-6.1-sol", effort: "high" } }] },
+    });
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    /* Every distinct state the switch is drawn in, in order, from its first appearance. */
+    const watch = `(() => {
+      const states = []; window.__tickStates = states;
+      const read = () => {
+        const control = document.querySelector('[role="slider"][data-seat-tick-switch]');
+        if (!control) return;
+        const state = { value: control.getAttribute("aria-valuenow"), face: control.querySelector("[data-seat-tick-face]")?.textContent ?? null };
+        const last = states[states.length - 1];
+        if (!last || last.value !== state.value || last.face !== state.face) states.push(state);
+      };
+      new MutationObserver(read).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    })();`;
+    try {
+      for (const width of [390, 900, 1440]) for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        summaryCalls = 0;
+        held = new Promise<void>(resolve => { release = resolve; });
+        asked = new Promise<void>(resolve => { notifyAsked = resolve; });
+        const phone = width <= 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver&tickSeed=1`,
+          { width, height: phone ? 844 : 700 }, theme, lang, "reduce", phone, 1, now);
+        const tag = `${width}-${lang}-${theme}`;
+        try {
+          await context.addInitScript(watch);
+          await page.reload();
+          await page.addStyleTag({ content: "[data-attention-toast] { display: none !important; }" });
+          await page.evaluate(() => document.fonts.ready);
+          if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+          else {
+            await page.locator("[data-kanban-seat]").waitFor();
+            if (await page.locator('[data-kanban-seat][data-collapsed="1"]').count()) await page.locator("[data-kanban-seat] [data-seat-collapse]").click();
+          }
+          const control = page.locator('[role="slider"][data-seat-tick-switch]:visible').first();
+          await control.waitFor();
+          await asked;
+          /* The card is drawn and the toggle's own read has not answered. */
+          const placeholder = translate(lang, "seatTick.chip.loading");
+          const first = await page.evaluate(() => (window as unknown as { __tickStates: Array<{ value: string | null; face: string | null }> }).__tickStates[0]);
+          expect(first, `${tag} first drawn state`).toEqual({ value: "3", face: expect.not.stringContaining(placeholder) });
+          expect(first?.face).toBeTruthy();
+          const geometry = await page.evaluate(() => {
+            const slider = document.querySelector<HTMLElement>('[role="slider"][data-seat-tick-switch]')!;
+            const row = slider.closest<HTMLElement>("[data-seat-tick-row], [data-orchestrator-controls]") ?? slider;
+            const cuts: string[] = [];
+            const ranges: Array<{ text: string; left: number; top: number; right: number; bottom: number }> = [];
+            const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+            let node: Node | null;
+            while ((node = walker.nextNode())) {
+              if (!node.textContent?.trim() || !node.parentElement?.checkVisibility()) continue;
+              const range = document.createRange(); range.selectNodeContents(node);
+              for (const r of range.getClientRects()) {
+                if (!r.width || !r.height) continue;
+                let left = 0, top = 0, right = innerWidth, bottom = innerHeight;
+                for (let ancestor: HTMLElement | null = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                  const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) { left = Math.max(left, box.left); right = Math.min(right, box.right); }
+                  if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) { top = Math.max(top, box.top); bottom = Math.min(bottom, box.bottom); }
+                }
+                const text = node.textContent!.trim().slice(0, 80);
+                if (r.left < left - 0.5 || r.right > right + 0.5 || r.top < top - 0.5 || r.bottom > bottom + 0.5) cuts.push(text);
+                ranges.push({ text, left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+              }
+            }
+            const overlaps: string[] = [];
+            for (let a = 0; a < ranges.length; a++) for (let b = a + 1; b < ranges.length; b++) {
+              const x = ranges[a]!, y = ranges[b]!;
+              if (Math.min(x.right, y.right) - Math.max(x.left, y.left) > 0.5 && Math.min(x.bottom, y.bottom) - Math.max(x.top, y.top) > 0.5) overlaps.push(`${x.text} / ${y.text}`);
+            }
+            const rect = slider.getBoundingClientRect();
+            return { cuts, overlaps, face: slider.querySelector("[data-seat-tick-face]")?.textContent, value: slider.getAttribute("aria-valuenow"),
+              onFirstScreen: rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth, pageOverflow: document.documentElement.scrollWidth > innerWidth };
+          });
+          await page.screenshot({ path: path.join(out, `${tag}-held.png`) });
+          await (page.locator("[data-seat-tick-row]:visible, [data-orchestrator-controls]:visible").first()).screenshot({ path: path.join(out, `${tag}-held-detail.png`) });
+          expect(geometry.cuts, `${tag} clipped text`).toEqual([]);
+          expect(geometry.overlaps, `${tag} overlapping text`).toEqual([]);
+          expect(geometry.onFirstScreen, `${tag} toggle on the first screen`).toBe(true);
+          expect(geometry.pageOverflow).toBe(false);
+          expect(summaryCalls).toBeGreaterThanOrEqual(1);
+          /* The held read then refreshes what the seat answer seeded: the hour. */
+          release();
+          await page.waitForFunction(() => document.querySelector('[role="slider"][data-seat-tick-switch]')?.getAttribute("aria-valuenow") === "2");
+          await page.screenshot({ path: path.join(out, `${tag}-refreshed.png`) });
+          const states = await page.evaluate(() => (window as unknown as { __tickStates: unknown[] }).__tickStates);
+          expect((states as Array<{ face: string | null }>).some(state => state.face === placeholder), `${tag} no placeholder frame`).toBe(false);
+          readings.push({ width, height: phone ? 844 : 700, lang, theme, first, geometry, states, summaryCalls, pageErrors });
+          fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+          expect(pageErrors).toEqual([]);
+        } finally { release?.(); await context.close(); }
+      }
+    } finally { release?.(); await browser.close(); sockets.close(); server.stop(); }
+  }, 600_000);
+});
+
+
+describe("Relay targets answered by another install", () => {
+  browserTest("answer sources and explicit per-clone moves in English and Ukrainian", async () => {
+    const out = process.env.LLV_EVIDENCE_DIR ? path.join(process.env.LLV_EVIDENCE_DIR, "relay-answer-source") : path.resolve(".artifacts/relay-answer-source");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const readings: unknown[] = [];
+    try {
+      for (const width of [390, 1440]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: 900 }, colorScheme: scheme, ...(phone ? { isMobile: true, hasTouch: true } : {}) });
+        try {
+          await context.addInitScript(({ lang }) => {
+            localStorage.setItem("llv_lang", lang);
+            const names = lang === "uk" ? ["Спільний клон", "Місцевий клон", "Клон сервісу"] : ["Shared clone", "Local clone", "Service clone"];
+            const targets = names.map((name, i) => ({ id: `clone-${i}`, name, answered_by: i === 1 ? "install" : "service", answered_elsewhere: i === 0,
+              engine: "codex-cloud", model: "gpt-6.1-sol", fallback: "service", enabled: true, effort: null, project: null, concurrency: 1, hardCapMinutes: 30 }));
+            const relay = { id: "fixture-relay", origin: "https://relay.example", name: "Relay", description: "", paused: false,
+              owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null }, pairedAt: "2026-11-17T12:00:00Z", targets };
+            const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } });
+            let refusals = 0;
+            const writes: unknown[] = [];
+            Object.assign(window, { relayOwnershipWrites: writes });
+            let fetcher = window.fetch;
+            Object.defineProperty(window, "fetch", { configurable: true, get: () => fetcher, set: (next: typeof fetch) => {
+              fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
+                const url = new URL(String(input), location.origin);
+                if (url.pathname === "/api/external-relay") return json({ relays: [relay], pending: [], status: [{ id: relay.id, state: { state: "polling" }, running: {} }] });
+                if (url.pathname === "/api/external-relay/known") return json({ known: [] });
+                if (url.pathname.startsWith("/api/external-relay/")) {
+                  if (init?.method === "PATCH" && url.pathname.endsWith("/targets/clone-0")) {
+                    const patch = JSON.parse(String(init.body)); writes.push(patch);
+                    // The first confirmed move meets the relay's refusal; the clone stays with the other install.
+                    if (refusals++ === 0) return new Response(JSON.stringify({ error: "answered_elsewhere" }), { status: 409, headers: { "content-type": "application/json" } });
+                    Object.assign(targets[0]!, { answered_by: "install", answered_elsewhere: false });
+                    return json({ target: targets[0] });
+                  }
+                  return json({ error: "not_found" });
+                }
+                return next(input, init);
+              }) as typeof fetch;
+            } });
+          }, { lang });
+          const page = await context.newPage();
+          await page.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
+          await page.goto(server.base);
+          await page.waitForSelector(phone ? "[data-mobile2-shell], [data-mobile-shell], [data-phone-card]" : "[data-kanban-board]");
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-external-relay-settings")));
+          const rows = page.locator("[data-external-relay-target]");
+          await rows.first().waitFor();
+          expect(await page.locator("[data-external-relay-release-elsewhere]").textContent()).toBe(lang === "en"
+            ? "Switching on moves it here from the other install." : "Увімкнення перенесе його сюди з іншої інсталяції.");
+          expect(await page.getByText(lang === "en" ? "Answered by this install" : "Відповідає ця інсталяція", { exact: true }).count()).toBe(1);
+          const labels = await page.locator("[data-external-relay-answer-source]").allTextContents();
+          expect(labels).toEqual(lang === "en" ? ["Answered by another install", "Answered by this install", "Answered by the service"]
+            : ["Відповідає інша інсталяція", "Відповідає ця інсталяція", "Відповідає сервіс"]);
+          const geometry = await rows.evaluateAll((rows, phone) => rows.map(row => {
+            const label = row.querySelector<HTMLElement>("[data-external-relay-answer-source]")!;
+            const control = row.querySelector<HTMLElement>("[data-external-relay-answered-by]")!;
+            const box = control.getBoundingClientRect();
+            const edgeHits = [[box.left + 1, box.top + box.height / 2], [box.right - 1, box.top + box.height / 2], [box.left + box.width / 2, box.top + 1], [box.left + box.width / 2, box.bottom - 1]].every(([x, y]) => control.contains(document.elementFromPoint(x!, y!)));
+            const range = document.createRange(); range.selectNodeContents(row.querySelector("[data-external-relay-target-fold]")!);
+            const text = range.getBoundingClientRect(); const own = row.getBoundingClientRect();
+            return { label: label.textContent, clipped: label.scrollWidth > label.clientWidth + 1, width: box.width, height: box.height, edgeHits,
+              clearTop: text.top - own.top, clearBottom: own.bottom - text.bottom,
+              phone, touch: navigator.maxTouchPoints > 0, coarse: matchMedia("(pointer: coarse)").matches };
+          }), phone);
+          fs.writeFileSync(path.join(out, "latest-geometry.json"), JSON.stringify({ width, lang, scheme, geometry }, null, 2));
+          await page.screenshot({ path: path.join(out, `${lang}-${scheme}-${width}.png`), fullPage: true });
+          for (const row of geometry) {
+            expect(row.clipped).toBe(false); expect(row.edgeHits).toBe(true);
+            expect(row.clearTop).toBeGreaterThanOrEqual(4); expect(row.clearBottom).toBeGreaterThanOrEqual(4);
+            if (phone) { expect(row.width).toBeGreaterThanOrEqual(44); expect(row.height).toBeGreaterThanOrEqual(44); expect(row.touch && row.coarse).toBe(true); }
+          }
+          const frame = `${lang}-${scheme}-${width}.png`;
+          const control = rows.first().locator("[data-external-relay-answered-by]");
+          const press = () => phone ? control.tap() : control.click();
+          const writes = () => page.evaluate(() => (window as unknown as { relayOwnershipWrites: unknown[] }).relayOwnershipWrites);
+          const nativeDialogs: string[] = [];
+          page.on("dialog", dialog => { nativeDialogs.push(dialog.message()); void dialog.dismiss(); });
+          const confirmation = page.locator("[data-external-relay-move-confirm]");
+          await press();
+          await confirmation.waitFor();
+          const text = (await confirmation.textContent()) ?? "";
+          expect(text).toContain(lang === "en" ? "from the other install to this install" : "з іншої інсталяції до цієї");
+          expect(text).toContain(lang === "en" ? "Shared clone" : "Спільний клон");
+          const goLabel = lang === "en" ? "Move here" : "Перенести сюди";
+          const cancelLabel = lang === "en" ? "Cancel" : "Скасувати";
+          expect(await confirmation.locator("button").allTextContents()).toEqual([cancelLabel, goLabel]);
+          const confirmBox = await confirmation.evaluate(el => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, inside: r.left >= 0 && r.right <= innerWidth }; });
+          expect(confirmBox.inside).toBe(true);
+          await page.screenshot({ path: path.join(out, `confirm-${frame}`), fullPage: true });
+          await (phone ? confirmation.locator("[data-external-relay-move-cancel]").tap() : confirmation.locator("[data-external-relay-move-cancel]").click());
+          await confirmation.waitFor({ state: "detached" });
+          expect(await writes()).toEqual([]);
+          const go = () => phone ? confirmation.locator("[data-external-relay-move-go]").tap() : confirmation.locator("[data-external-relay-move-go]").click();
+          const refusedNotice = page.locator("[data-external-relay-move-refused]");
+          await press();
+          await confirmation.waitFor();
+          await go();
+          await refusedNotice.waitFor();
+          await confirmation.waitFor({ state: "detached" });
+          expect(await writes()).toEqual([{ answered_by: "install", confirmTakeover: true }]);
+          expect(await refusedNotice.textContent()).toBe(lang === "en"
+            ? "Not moved. Switch off “Answered by this install” on the other install first, then switch it on here."
+            : "Не перенесено. Спочатку вимкніть «Відповідає ця інсталяція» на іншій інсталяції, потім увімкніть тут.");
+          expect(await refusedNotice.getAttribute("role")).toBe("alert");
+          expect(await page.locator("[data-external-relay-target='clone-0'] [data-external-relay-answered-by]").getAttribute("aria-checked")).toBe("false");
+          expect(await page.locator("[data-external-relay-release-elsewhere]").count()).toBe(0);
+          expect(await page.locator("[data-external-relay] [role=alert]").count()).toBe(1);
+          await refusedNotice.scrollIntoViewIfNeeded();
+          const refusedBox = await refusedNotice.evaluate(el => {
+            const range = document.createRange(); range.selectNodeContents(el.querySelector("span")!);
+            const text = range.getBoundingClientRect(); const own = el.getBoundingClientRect();
+            const row = el.closest("[data-external-relay-target]")!.getBoundingClientRect();
+            const next = el.closest("[data-external-relay-target]")!.nextElementSibling?.getBoundingClientRect() ?? null;
+            return { inside: own.left >= 0 && own.right <= innerWidth && own.top >= 0 && own.bottom <= innerHeight,
+              textWhole: text.left >= own.left && text.right <= own.right && text.top >= own.top && text.bottom <= own.bottom,
+              inRow: own.bottom <= row.bottom + 1, clearOfNext: next === null || own.bottom <= next.top + 1, scrollClipped: el.scrollWidth > el.clientWidth + 1 };
+          });
+          expect(refusedBox).toEqual({ inside: true, textWhole: true, inRow: true, clearOfNext: true, scrollClipped: false });
+          await page.screenshot({ path: path.join(out, `refused-${frame}`), fullPage: true });
+          await press();
+          await confirmation.waitFor();
+          expect(await refusedNotice.count()).toBe(0);
+          await go();
+          await page.waitForFunction(() => document.querySelector("[data-external-relay-target='clone-0'] [data-external-relay-answered-by]")?.getAttribute("aria-checked") === "true");
+          expect(await writes()).toEqual([{ answered_by: "install", confirmTakeover: true }, { answered_by: "install", confirmTakeover: true }]);
+          expect(nativeDialogs).toEqual([]);
+          readings.push({ frame, width, lang, scheme, geometry });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "rendered.json"), JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings }, null, 2));
+    } finally { await browser.close(); server.stop(); sockets.close(); }
+  }, 300_000);
+});
+
+describe("relay requester enrolment on the board", () => {
+  browserTest("renders the enrolment states at desktop and phone widths", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "relay-requester-enrolment");
+    fs.mkdirSync(out, { recursive: true });
+    const build = fs.mkdtempSync(path.join(os.tmpdir(), "requester-board-"));
+    const server = await serveEvidenceFixture(build);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const readings: { frame: string; width: number; overflow: boolean; shortControls: number; splitTimes: number; danglingSeparators: number }[] = [];
+    try {
+      for (const width of [1440, 1000, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const phone = width === 390;
+        const context = await browser.newContext({ viewport: { width, height: phone ? 844 : width === 1000 ? 700 : 900 },
+          colorScheme: scheme, reducedMotion: "reduce", ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          await context.addInitScript(locale => {
+            localStorage.setItem("llv_lang", locale);
+            const network = window.fetch.bind(window);
+            let fetcher = network;
+            Object.defineProperty(window, "fetch", {
+              configurable: true,
+              get: () => fetcher,
+              set: (next: typeof fetch) => {
+                fetcher = ((input: RequestInfo | URL, init?: RequestInit) => {
+                  const url = new URL(input instanceof Request ? input.url : String(input), location.origin);
+                  return url.pathname.startsWith("/api/external-relay") ? network(input, init) : next(input, init);
+                }) as typeof fetch;
+              },
+            });
+          }, lang);
+          const project = "Workshop";
+          const label = lang === "uk" ? "Рецензент збірки" : "Build reviewer";
+          const scope = { relay: "fixture-relay", target: "fixture-clone" };
+          const target = { id: scope.target, name: "Workshop clone", answered_by: "install", fallback: "none",
+            enabled: true, engine: "codex", model: "gpt-5.4", effort: null, project, concurrency: 1, hardCapMinutes: 30 };
+          const relay = { id: scope.relay, origin: "https://relay.example", name: "Chat relay", description: "",
+            owner: { namespace: "telegram", id: "owner", display_name: "Owner", handle: null }, paused: false, targets: [target] };
+          const at = "2026-10-01T08:00:00Z";
+          const expiresAt = "2030-10-01T08:10:00Z";
+          let status: "empty" | "waiting" | "candidate" | "entries" | "other-session" = "empty";
+          const proposalId = "a".repeat(48);
+          await context.route("**/api/external-relay**", async route => {
+            const req = route.request();
+            const url = new URL(req.url());
+            const send = (json: unknown, status = 200) => route.fulfill({ status, json });
+            if (url.pathname === "/api/external-relay") return send({ relays: [relay], pending: [], status: [] });
+            if (url.pathname === "/api/external-relay/known") return send({ known: [] });
+            if (url.pathname !== "/api/external-relay/trusted-requesters") return send({}, 404);
+            // An agent's confirm proposal: the owner's preview names the candidate the code bound.
+            if (url.searchParams.get("proposal") === proposalId) return send({
+              operation: { action: "confirm", ...scope, entryId: "fixture-proposed" }, targetName: target.name, project, label,
+              status: "candidate", candidate: { name: "Demo participant", chatTitle: "Workshop group", at } });
+            if (req.method() === "POST") {
+              const { confirmed, operation } = req.postDataJSON();
+              expect(confirmed).toBe(true);
+              if (operation.action === "start_enrolment") {
+                expect(operation.label).toBe(label);
+                status = "waiting";
+                return send({ issued: { code: "SAMPLE-ONLY", expiresAt } });
+              }
+              if (operation.action === "confirm") status = "entries";
+              if (operation.action === "remove") status = "empty";
+              return send({ issued: null });
+            }
+            return send({ ...scope, targetName: target.name, project, revision: status === "entries" ? 1 : 0, canStart: true,
+              entries: status === "entries" ? [{ id: "fixture-entry", label, kind: "requester", tier: "requester", project, active: true, addedAt: at }] : [],
+              pending: status === "waiting" || status === "candidate" ? { id: "fixture-entry", label, status, expiresAt,
+                candidate: status === "candidate" ? { name: "Demo participant", chatTitle: "Workshop group", at } : null } : null,
+              otherSession: status === "other-session" ? { expiresAt } : null,
+              history: [],
+            });
+          });
+          const page = await context.newPage();
+          await page.goto(server.base);
+          await page.locator(phone ? "[data-mobile2-shell], [data-mobile-shell], [data-phone-card]" : "[data-kanban-board]").first().waitFor();
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-external-relay-settings")));
+          const row = page.locator(`[data-external-relay-target="${target.id}"]`);
+          await row.locator("[data-external-relay-target-fold]").click();
+          const panel = row.locator("[data-trusted-requesters]");
+          const frame = async (name: string, shown = panel) => {
+            const filename = `${width}-${lang}-${scheme}-${name}.png`;
+            const measurement = await shown.evaluate((element, phone) => ({
+              overflow: element.scrollWidth > element.clientWidth + 1,
+              shortControls: phone ? [...element.querySelectorAll("button, input")]
+                .filter(control => control.getBoundingClientRect().height < 44).length : 0,
+              // A date and time renders as one line box, never split across lines.
+              splitTimes: [...element.querySelectorAll("[data-requester-time]")]
+                .filter(time => time.getClientRects().length !== 1).length,
+              // No rendered line ends in a separator dot: a wrap never strands a "·" before the next line.
+              danglingSeparators: (() => {
+                const glyphs: { block: Element; char: string; top: number; left: number; right: number }[] = [];
+                const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                  const text = node.textContent ?? "";
+                  const block = node.parentElement?.closest("p, li, summary, div") ?? element;
+                  for (let index = 0; index < text.length; index += 1) {
+                    if (/\s/.test(text[index]!)) continue;
+                    const range = document.createRange();
+                    range.setStart(node, index);
+                    range.setEnd(node, index + 1);
+                    const rect = range.getBoundingClientRect();
+                    if (rect.width > 0) glyphs.push({ block, char: text[index]!, top: Math.round(rect.top), left: rect.left, right: rect.right });
+                  }
+                }
+                return glyphs.filter(dot => dot.char === "·"
+                  && !glyphs.some(other => other.block === dot.block && other.top === dot.top && other.left >= dot.right - 0.5)).length;
+              })(),
+            }), phone);
+            expect(measurement).toEqual({ overflow: false, shortControls: 0, splitTimes: 0, danglingSeparators: 0 });
+            // A time reads as date and hour:minute, never with seconds.
+            const times = await shown.locator("[data-requester-time]").allTextContents();
+            for (const text of times) expect(text).not.toMatch(/\d{1,2}:\d{2}:\d{2}/);
+            await shown.screenshot({ path: path.join(out, filename) });
+            readings.push({ frame: filename, width, ...measurement });
+          };
+          const action = (name: "start_enrolment" | "confirm" | "remove") =>
+            translate(lang, `externalRelay.requesters.action.${name}`);
+          await panel.getByText(translate(lang, "externalRelay.requesters.empty"), { exact: true }).waitFor();
+          await frame("1-empty");
+          await panel.getByRole("textbox").fill(label);
+          await panel.getByRole("button", { name: action("start_enrolment") }).click();
+          await panel.getByRole("alertdialog").getByRole("button", { name: action("start_enrolment") }).click();
+          await panel.locator("[data-requester-code]").waitFor();
+          // The code is the emphasised element of its box, and a copy control sits beside it, 44 px on a phone.
+          const code = panel.locator("[data-requester-code]");
+          expect(await code.evaluate(element => parseFloat(getComputedStyle(element).fontSize) > parseFloat(getComputedStyle(element.closest("[data-requester-pending]")!).fontSize)
+            && parseFloat(getComputedStyle(element).fontSize) > parseFloat(getComputedStyle(element.previousElementSibling ?? element.parentElement!).fontSize))).toBe(true);
+          const copy = panel.locator("[data-requester-code] + button");
+          expect(await copy.count()).toBe(1);
+          if (phone) expect((await copy.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+          await frame("2-code");
+          status = "candidate";
+          await panel.getByText("Demo participant", { exact: false }).waitFor();
+          await frame("3-candidate");
+          await panel.getByRole("button", { name: action("confirm") }).click();
+          await panel.getByText(translate(lang, "externalRelay.requesters.reach"), { exact: true }).waitFor();
+          expect(await panel.getByRole("alertdialog").locator("[data-requester-candidate]").textContent()).toContain("Demo participant · Workshop group");
+          await panel.getByRole("alertdialog").getByRole("button", { name: action("confirm") }).click();
+          await panel.getByText(label, { exact: true }).waitFor();
+          await frame("4-entries");
+          await panel.getByRole("button", { name: action("remove") }).click();
+          await panel.locator('[data-requester-confirm="remove"]').waitFor();
+          // One Remove button, no add form, and the confirmation sits inside the entry it removes.
+          expect(await panel.getByRole("button", { name: action("remove") }).count()).toBe(1);
+          expect(await panel.getByRole("textbox").count()).toBe(0);
+          expect(await panel.locator('li [data-requester-confirm="remove"]').count()).toBe(1);
+          await frame("5-remove-confirmation");
+          await panel.getByRole("alertdialog").getByRole("button", { name: action("remove") }).click();
+          await panel.getByText(translate(lang, "externalRelay.requesters.empty"), { exact: true }).waitFor();
+          status = "other-session";
+          await row.locator("[data-external-relay-target-fold]").click();
+          await row.locator("[data-external-relay-target-fold]").click();
+          await panel.locator('[data-requester-pending="other-session"]').waitFor();
+          expect(await panel.getByRole("textbox").count()).toBe(0);
+          await frame("6-other-session");
+          await page.evaluate(id => { window.location.hash = `relay-requester=${id}`; }, proposalId);
+          const proposed = page.locator("[data-requester-proposal]");
+          const dialog = proposed.locator('[data-requester-confirm="confirm"]');
+          await dialog.waitFor();
+          // One approval panel: the proposal and the relay settings beside it keep distinct keys.
+          expect(await proposed.count()).toBe(1);
+          expect(await dialog.locator("[data-requester-candidate]").textContent()).toContain("Demo participant · Workshop group");
+          await dialog.getByText(translate(lang, "externalRelay.requesters.verify"), { exact: true }).waitFor();
+          await dialog.getByText(translate(lang, "externalRelay.requesters.reach"), { exact: true }).waitFor();
+          await dialog.getByText(translate(lang, "externalRelay.requesters.proposedBy"), { exact: true }).waitFor();
+          await frame("7-proposal-confirm", proposed);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
+      expect(readings).toHaveLength(84);
+    } finally {
+      await browser.close();
+      server.stop();
+      sockets.close();
+      fs.rmSync(build, { recursive: true, force: true });
+    }
+  }, 180_000);
+});
+
+describe("one set of hints and one row of controls: priority hints belong to the Inbox, the pane's «…» keeps its line, the command has one copy", () => {
+  /*
+   * Rendered evidence for what the phone and the desktop disagreed on in the
+   * 2.3.0 frames, over the existing fixture, desktop 1440×900 (and 1024 and
+   * 1272 for the stage pane), en and uk, light and dark:
+   *
+   *   - the card menu's priority hints («Top of the Inbox» / «Bottom of the
+   *     Inbox») stand under the row on an Inbox card and nowhere else; an
+   *     In progress card's levels keep their plain titles;
+   *   - the identity row of a stage pane holds the context chip, and the «…» and
+   *     the speaker stay on its first line, in one group at the row's end;
+   *   - an expanded command has one copy control, ending its meta row, clear of
+   *     the output's own control;
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=… bun test \
+   *     src/components/kanban/kanbanBoard.browser.test.tsx -t "one set of hints"
+   *
+   * Readings go to `evidence/shared-states-and-hints/readings.json`; frames to
+   * `.artifacts/shared-states-and-hints/`, which is not committed.
+   */
+  const OUT = path.resolve(".artifacts/shared-states-and-hints");
+  const EVIDENCE = path.resolve("evidence/shared-states-and-hints");
+  const SCHEMES_HERE = ["light", "dark"] as const;
+  const LANGS_HERE = ["en", "uk"] as const;
+
+  browserTest("the Inbox card says what its priority ends do; an In progress card says nothing there", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/shared-states-and-hints-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of LANGS_HERE) for (const scheme of SCHEMES_HERE) {
+        const t = (key: string) => translate(lang, key as never);
+        const label = `desktop-1440-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=task-priority`, VIEWPORT, scheme, lang);
+        try {
+          await page.waitForSelector(card("t-prio-notes"), { timeout: 30_000 });
+          const fold = page.locator("[data-seat-collapse]");
+          if (await fold.count()) await fold.first().click();
+          await page.mouse.move(0, 0);
+          const read = () => page.evaluate(() => {
+            const menu = document.querySelector<HTMLElement>(".menu");
+            const frame = menu?.getBoundingClientRect();
+            const ends = [...document.querySelectorAll<HTMLElement>(".menu [data-cm-end]")].map((end) => {
+              const box = end.getBoundingClientRect();
+              return { id: end.getAttribute("data-cm-end"), text: (end.textContent ?? "").trim(), whole: !!frame && box.height > 0 && box.left >= frame.left && box.right <= frame.right + 0.5 && box.bottom <= frame.bottom + 0.5 };
+            });
+            const levels = [...document.querySelectorAll<HTMLElement>('.menu [data-cm-segments="priority"] [role="menuitemradio"]')].map((item) => ({ cap: (item.querySelector(".cm-cap")?.textContent ?? "").trim(), title: item.getAttribute("title") }));
+            return { ends, levels, endsLine: Boolean(document.querySelector('.menu [data-cm-ends="priority"]')) };
+          });
+          /* Inbox: the hints stand under the row, whole. */
+          await page.locator(`${card("t-prio-notes")} [data-menu]`).click();
+          await page.waitForSelector(".menu", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          const inbox = await read();
+          await page.locator(".menu").screenshot({ path: path.join(OUT, `${label}-inbox-menu.png`) });
+          readings[`${label}-inbox`] = inbox;
+          const hints = inbox.ends.map((end) => [end.id, end.text]);
+          if (JSON.stringify(hints) !== JSON.stringify([["priority:high", t("kanban.priorityHint.high")], ["priority:low", t("kanban.priorityHint.low")]])) failures.push(`${label}: the Inbox card's hints read ${JSON.stringify(hints)}`);
+          if (inbox.ends.some((end) => !end.whole)) failures.push(`${label}: an Inbox hint is cut ${JSON.stringify(inbox.ends)}`);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(".menu", { state: "detached", timeout: 10_000 });
+          /* In progress: no hint line, and each level keeps its own title. */
+          await page.locator(`${card("t-prio-search")} [data-menu]`).click();
+          await page.waitForSelector(".menu", { timeout: 10_000 });
+          await page.waitForTimeout(300);
+          const progress = await read();
+          await page.locator(".menu").screenshot({ path: path.join(OUT, `${label}-in-progress-menu.png`) });
+          readings[`${label}-in-progress`] = progress;
+          if (progress.ends.length || progress.endsLine) failures.push(`${label}: an In progress card carries hints ${JSON.stringify(progress.ends)}`);
+          const plain = ["high", "normal", "low"].map((level) => t(`kanban.priority.${level}`));
+          if (JSON.stringify(progress.levels.map((level) => level.cap)) !== JSON.stringify(plain)) failures.push(`${label}: the levels read ${JSON.stringify(progress.levels)}`);
+          if (progress.levels.some((level) => level.title !== level.cap)) failures.push(`${label}: a level's title is not its own label ${JSON.stringify(progress.levels)}`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "hints.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 600_000);
+
+  browserTest("a stage pane's «…» stays on the first line with the context chip; a command has one copy control", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/shared-states-and-hints-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const width of [1024, 1272, 1440]) for (const lang of LANGS_HERE) for (const scheme of SCHEMES_HERE) {
+        const t = (key: string) => translate(lang, key as never);
+        const label = `stages-${width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages&paneid=ctx`, { width, height: 900 }, scheme, lang);
+        try {
+          await page.waitForSelector("[data-kanban-board] .card[data-id]", { state: "attached", timeout: 30_000 });
+          await page.waitForTimeout(700);
+          await page.locator(`${card("t-upload")} .pblock`).evaluate((element) => element.scrollIntoView({ block: "center" }));
+          await page.click(`${card("t-upload")} [data-open-stages]`);
+          await page.waitForSelector(".gsheet .pane[data-stage] .ch-meta.pane-id", { timeout: 15_000 });
+          await page.waitForTimeout(800);
+          await page.mouse.move(0, 0);
+          await page.screenshot({ path: path.join(OUT, `${label}.png`) });
+
+          /* The window draws the selected stage's pane only: read each started stage by selecting its tab, one identity row per pane. */
+          const readRows = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>(".gsheet .pane[data-stage]")].flatMap((pane) => {
+            const row = pane.querySelector<HTMLElement>(".ch-meta.pane-id");
+            const menu = row?.querySelector<HTMLElement>("[data-reader-menu]");
+            const chips = row?.querySelector<HTMLElement>(".ch-chips");
+            const controls = row?.querySelector<HTMLElement>(".ch-controls");
+            if (!row || !menu || !chips || !controls || !row.querySelector(".ch-model")) return [];
+            const rowBox = row.getBoundingClientRect();
+            const menuBox = menu.getBoundingClientRect();
+            const controlsBox = controls.getBoundingClientRect();
+            const chipBoxes = [...chips.children].map((child) => child.getBoundingClientRect()).filter((box) => box.height > 0);
+            const lines = new Set(chipBoxes.map((box) => Math.round(box.top / 4))).size;
+            return [{
+              stage: pane.getAttribute("data-stage"), rowHeight: Math.round(rowBox.height * 10) / 10, rowWidth: Math.round(rowBox.width), chipLines: lines,
+              menuOnFirstLine: menuBox.top - rowBox.top <= 4, controlsTopFromRow: Math.round((controlsBox.top - rowBox.top) * 10) / 10, menuTopFromRow: Math.round((menuBox.top - rowBox.top) * 10) / 10,
+              controlsAtEnd: Math.abs(controlsBox.right - rowBox.right) <= 1, menuInside: menuBox.right <= rowBox.right + 0.5 && menuBox.left >= rowBox.left,
+              ctx: Boolean(row.querySelector("[data-ctx-chip]")), chipsWidth: Math.round(chips.getBoundingClientRect().width), controlsWidth: Math.round(controlsBox.width),
+            }];
+          }));
+          const stageIds = await page.$$eval('.gsheet [role="tab"][data-tab-stage]', (tabs) => tabs.map((tab) => (tab as HTMLElement).dataset.tabStage ?? ""));
+          const rows: Awaited<ReturnType<typeof readRows>> = [];
+          for (const stage of stageIds) {
+            await page.click(`.gsheet [role="tab"][data-tab-stage="${stage}"]`);
+            await page.waitForSelector(`.gsheet [role="tab"][data-tab-stage="${stage}"][aria-selected="true"]`, { timeout: 10_000 });
+            await page.waitForTimeout(300);
+            rows.push(...await readRows());
+          }
+          readings[label] = { rows };
+          if (width === 1024 && lang === "en" && scheme === "light") {
+            /* The red path: a pane's identity row narrowed until its chips wrap. The old structure, one wrapping row of loose siblings, drops «…» to a line of its own there; the structure in the tree keeps it on the first line. */
+            const startedStage = rows[0]?.stage;
+            if (startedStage) await page.click(`.gsheet [role="tab"][data-tab-stage="${startedStage}"]`);
+            const narrowed = await page.evaluate((narrow) => {
+              const style = Object.assign(document.createElement("style"), { textContent: `.gsheet .pane[data-stage] .ch-meta.pane-id { width: ${narrow}px !important; max-width: ${narrow}px !important; }` });
+              document.head.append(style);
+              const tops = () => [...document.querySelectorAll<HTMLElement>(".gsheet .pane[data-stage] .ch-meta.pane-id")].flatMap((row) => {
+                const menu = row.querySelector<HTMLElement>("[data-reader-menu]");
+                return menu && row.querySelector(".ch-model") ? [Math.round((menu.getBoundingClientRect().top - row.getBoundingClientRect().top) * 10) / 10] : [];
+              });
+              const current = tops();
+              const old = Object.assign(document.createElement("style"), { textContent: ".kb .pane .ch-meta.pane-id { flex-wrap: wrap !important; } .kb .pane .ch-meta.pane-id > .ch-chips, .kb .pane .ch-meta.pane-id > .ch-controls { display: contents !important; }" });
+              document.head.append(old);
+              const wrapped = tops();
+              old.remove();
+              style.remove();
+              return { current, wrapped };
+            }, 280);
+            readings[`${label}-narrow-structure`] = narrowed;
+            if (!narrowed.wrapped.some((top) => top > 4)) failures.push(`${label}: with the old structure «…» stays on the first line in a narrowed row, so the check cannot fail (${JSON.stringify(narrowed)})`);
+            if (!narrowed.current.length || narrowed.current.some((top) => top > 4)) failures.push(`${label}: «…» leaves the first line of a narrowed row (${JSON.stringify(narrowed)})`);
+          }
+          if (rows.length < 3) failures.push(`${label}: only ${rows.length} started panes with an identity row across the tabs`);
+          for (const row of rows) {
+            if (!row.menuOnFirstLine) failures.push(`${label} ${row.stage}: «…» is not on the first line (${JSON.stringify(row)})`);
+            if (!row.controlsAtEnd || !row.menuInside) failures.push(`${label} ${row.stage}: the controls leave the row's end (${JSON.stringify(row)})`);
+            if (row.chipLines === 1 && row.rowHeight > 32) failures.push(`${label} ${row.stage}: a row whose chips fit is ${row.rowHeight}px tall`);
+            /* Item (d) is defined by a context chip in the row: a started pane without one proves nothing about it. */
+            if (!row.ctx) failures.push(`${label} ${row.stage}: the started pane has no context chip in its identity row`);
+          }
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+
+          if (width === 1440) {
+            /* The window holds one pane under its tabs: select the first started stage again for the frame and the command below. */
+            if (rows[0]?.stage) await page.click(`.gsheet [role="tab"][data-tab-stage="${rows[0].stage}"]`);
+            await page.waitForTimeout(300);
+            await page.screenshot({ path: path.join(OUT, `${label}-pane-start.png`) });
+
+            /* The command's one copy control, in the first started pane's conversation. */
+            /* The conversation folds its calls into one group row; open it, then the command's own row. */
+            const group = page.locator('.gsheet .pane[data-stage] [data-tool-row="group"]').first();
+            await group.scrollIntoViewIfNeeded();
+            await group.click();
+            const toolRow = page.locator('.gsheet .pane[data-stage] [data-tool-row]:not([data-tool-row="group"])').filter({ hasText: "rg --files" }).first();
+            await toolRow.waitFor({ timeout: 10_000 });
+            await toolRow.scrollIntoViewIfNeeded();
+            await toolRow.click();
+            await page.waitForSelector('.gsheet [data-command-copy="meta"]', { timeout: 10_000 });
+            await page.waitForTimeout(300);
+            const copy = await page.evaluate((labels) => {
+              const meta = document.querySelector<HTMLElement>('.gsheet [data-command-copy="meta"]')!;
+              const body = meta.closest<HTMLElement>(".rounded-surface") ?? meta.parentElement!.parentElement!;
+              const buttons = [...body.querySelectorAll<HTMLElement>("button")];
+              const command = buttons.filter((button) => button.getAttribute("aria-label") === labels.command);
+              const output = buttons.filter((button) => [labels.output, labels.stderr].includes(button.getAttribute("aria-label") ?? ""));
+              const pre = [...body.querySelectorAll<HTMLElement>("pre")].find((element) => (element.textContent ?? "").includes("rg --files"))!;
+              const preBox = pre.getBoundingClientRect();
+              const cmdBox = command[0]?.getBoundingClientRect();
+              const outBox = output[0]?.getBoundingClientRect();
+              const overlap = (a: DOMRect, b: DOMRect) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+              return {
+                commandCopies: command.length, outputCopies: output.length, endsMetaRow: meta.contains(command[0] ?? null),
+                inPre: pre.contains(command[0] ?? null), overlapsCommand: cmdBox ? overlap(cmdBox, preBox) : null,
+                gap: cmdBox && outBox ? Math.round((outBox.top - cmdBox.bottom) * 10) / 10 : null, commandLine: Math.round(preBox.height * 10) / 10,
+                cmdSize: cmdBox ? [Math.round(cmdBox.width), Math.round(cmdBox.height)] : null,
+                /* Two icons stacked in one block share a right edge. */
+                edgeDelta: cmdBox && outBox ? Math.round(Math.abs(cmdBox.right - outBox.right) * 10) / 10 : null,
+                /* The command's own row: the dot between its duration and its counter sits evenly between them. */
+                dot: (() => {
+                  const row = [...document.querySelectorAll<HTMLElement>('.gsheet [data-tool-row]:not([data-tool-row="group"])')].find((element) => (element.textContent ?? "").includes("rg --files") && element.querySelector("[data-context-tokens] [aria-hidden]"));
+                  const tokens = row?.querySelector<HTMLElement>("[data-context-tokens]");
+                  const dot = tokens?.querySelector<HTMLElement>("[aria-hidden]");
+                  const duration = tokens?.previousElementSibling;
+                  const number = tokens?.lastElementChild;
+                  if (!dot || !duration || !number) return null;
+                  const before = dot.getBoundingClientRect().left - duration.getBoundingClientRect().right;
+                  const after = number.getBoundingClientRect().left - dot.getBoundingClientRect().right;
+                  return { before: Math.round(before * 10) / 10, after: Math.round(after * 10) / 10 };
+                })(),
+              };
+            }, { command: t("tools.copyCommand"), output: t("tools.copyOutput"), stderr: t("tools.copyStderr") });
+            readings[`${label}-copy`] = copy;
+            if (copy.commandCopies !== 1 || !copy.endsMetaRow || copy.inPre) failures.push(`${label}: the command's copy is not one control ending its meta row ${JSON.stringify(copy)}`);
+            if (copy.overlapsCommand) failures.push(`${label}: the command's copy overlaps the command ${JSON.stringify(copy)}`);
+            if (copy.outputCopies >= 1 && (copy.gap === null || copy.gap < copy.commandLine)) failures.push(`${label}: the command's copy and the output's are ${copy.gap}px apart, under the command's line ${copy.commandLine}px`);
+            if (copy.outputCopies >= 1 && (copy.edgeDelta === null || copy.edgeDelta > 1)) failures.push(`${label}: the command's copy and the output's end ${copy.edgeDelta}px apart, not on one right edge`);
+            if (copy.dot && Math.abs(copy.dot.before - copy.dot.after) > 1) failures.push(`${label}: the dot sits ${copy.dot.before}px after the duration and ${copy.dot.after}px before the counter`);
+            const body = page.locator('.gsheet [data-command-copy="meta"]').first().locator("xpath=ancestor::div[contains(@class,'rounded-surface')][1]");
+            await body.screenshot({ path: path.join(OUT, `${label}-command-copy.png`) });
+          }
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "panes.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+
+  browserTest("the seat reads waiting in its head, its reader header and its open-agents entry while idle with no form open, and working while its turn runs", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const server = await serveEvidenceFixture(path.resolve(".artifacts/shared-states-and-hints-bundle"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const lang of LANGS_HERE) for (const scheme of SCHEMES_HERE) for (const host of ["1044", "running"] as const) {
+        const t = (key: string) => translate(lang, key as never);
+        const label = `desktop-1440-${lang}-${scheme}-seat-${host === "running" ? "running" : "idle"}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&seathost=${host}`, VIEWPORT, scheme, lang);
+        try {
+          await page.waitForSelector("[data-kanban-seat] [data-seat-window]", { timeout: 30_000 });
+          await page.waitForSelector("[data-kanban-seat] [data-orchestrator-badge]", { timeout: 30_000 });
+          await page.locator("[data-attention-toast-dismiss]").click({ timeout: 3_000 }).catch(() => { /* No toast on this face. */ });
+          await page.locator("[data-kanban-seat] [data-seat-window]").click();
+          await page.waitForSelector('[data-agent-window] [data-kanban-reader="conversation_orchestrator"] .ch-state', { timeout: 15_000 });
+          await page.mouse.move(0, 0);
+          await page.waitForTimeout(700);
+          const read = await page.evaluate(() => {
+            const words = (element: Element | null | undefined) => (element?.textContent ?? "").replace(/\s+/g, " ").trim();
+            const whole = (element: HTMLElement | null) => {
+              if (!element) return false;
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              const text = range.getBoundingClientRect();
+              const frame = element.getBoundingClientRect();
+              return text.width > 0 && text.left >= frame.left - 0.5 && text.right <= frame.right + 0.5 && element.scrollWidth <= element.clientWidth + 1;
+            };
+            const head = document.querySelector<HTMLElement>("[data-kanban-seat] [data-orchestrator-badge]");
+            const header = document.querySelector<HTMLElement>('[data-agent-window] [data-kanban-reader="conversation_orchestrator"] .ch-state');
+            const rail = document.querySelector<HTMLElement>('[data-agent-window] [data-open-agent="conversation_orchestrator"] [data-open-agent-jump]');
+            return {
+              head: words(head), header: words(header), headerWhole: whole(header), headerTone: header?.className ?? "",
+              rail: rail?.getAttribute("title") ?? "", railDot: rail?.querySelector(".or-dot")?.className ?? "",
+            };
+          });
+          readings[label] = read;
+          await page.locator('[data-agent-window] [data-kanban-reader="conversation_orchestrator"]').first().screenshot({ path: path.join(OUT, `${label}-reader.png`) });
+          await page.locator("[data-kanban-seat] .seat-head").first().screenshot({ path: path.join(OUT, `${label}-head.png`) });
+          const word = host === "running" ? t("orchPanel.badgeWorking") : t("orchPanel.badgeWaiting");
+          const rowWord = word;
+          if (!read.head.includes(word)) failures.push(`${label}: the seat's head reads «${read.head}», «${word}» expected`);
+          if (!read.header.startsWith(rowWord)) failures.push(`${label}: the reader header reads «${read.header}», «${rowWord}» expected`);
+          if (!read.rail.includes(rowWord)) failures.push(`${label}: the open-agents entry reads «${read.rail}», «${rowWord}» expected`);
+          if (host !== "running" && !/\d+\s?(m|хв)/.test(read.header)) failures.push(`${label}: the reader header names no age «${read.header}»`);
+          if (host !== "running" && !read.headerTone.includes("tone-neutral")) failures.push(`${label}: the waiting header is not in the quiet tone (${read.headerTone})`);
+          if (!read.headerWhole) failures.push(`${label}: the reader header's words are cut (${read.header})`);
+          const done = t("kanban.memberState.done");
+          if (read.header.startsWith(done) || read.rail.includes(done)) failures.push(`${label}: a seat surface reads «${done}» (${JSON.stringify(read)})`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(EVIDENCE, "seat.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+    expect(failures).toEqual([]);
+  }, 900_000);
+});
+
+describe("a closed conversation leaves the address", () => {
+  /*
+   * F5 reopens the conversation the operator is on and shows the board once
+   * they have closed it: the hash a reload reads names the open conversation
+   * only while it is open. In the real Viewer over
+   * `issue1695Evidence.fixture.tsx?scenario=loose`, in Chromium:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "a closed conversation leaves the address"
+   *
+   * Each run opens `#c=<id>` (frame 1), reloads (frame 2: the conversation is
+   * back), closes it, and reloads again (frame 3: the board, an address that
+   * names no conversation). The desktop closes with the window's ✕ and again
+   * with Escape; the phone (390 px, touch) closes with ‹. The history length
+   * does not grow on a close: the entry is rewritten, so Back cannot return
+   * to the closed conversation.
+   *
+   * Frames go to `$LLV_EVIDENCE_DIR/closed-conversation-address/`, readings to
+   * `evidence/closed-conversation-address/rendered.json`. `LLV_CLOSED_ADDRESS_ONLY`
+   * takes a comma-separated list of run names (`1440x900-en-light-x`) to rerun some.
+   */
+  const OUT = path.join(process.env.LLV_EVIDENCE_DIR ?? path.resolve(".artifacts"), "closed-conversation-address");
+  const EVIDENCE = path.resolve("evidence/closed-conversation-address");
+  const ID = "conversation_export-review";
+  const VIEWPORTS = [
+    { width: 1440, height: 900, phone: false },
+    { width: 1000, height: 700, phone: false },
+    { width: 390, height: 844, phone: true },
+  ];
+
+  /** What a person sees of the conversation: its reader (the window or the phone's screen) with text, whole in the viewport. */
+  const readConversation = (page: Page, phone: boolean) => page.evaluate(({ id, onPhone }) => {
+    const reader = document.querySelector<HTMLElement>(onPhone ? '[data-mobile2-screen="chat"]' : `[data-agent-window-frame] [data-kanban-reader="${id}"]`);
+    if (!reader || !reader.checkVisibility({ visibilityProperty: true })) return { visible: false, text: "", inViewport: false };
+    const box = reader.getBoundingClientRect();
+    return {
+      visible: box.width > 0 && box.height > 0,
+      text: (reader.textContent ?? "").trim().slice(0, 80),
+      inViewport: box.left >= -0.5 && box.top >= -0.5 && box.right <= innerWidth + 0.5 && box.bottom <= innerHeight + 0.5,
+    };
+  }, { id: ID, onPhone: phone });
+
+  /** The board a reload lands on: drawn, with its own text, and no conversation open over it. */
+  const readBoard = (page: Page, phone: boolean) => page.evaluate(({ id, onPhone }) => {
+    const board = document.querySelector<HTMLElement>(onPhone ? "[data-phone-kanban]" : "[data-kanban-board]");
+    const box = board?.getBoundingClientRect();
+    return {
+      drawn: Boolean(board && box && box.width > 0 && box.height > 0 && board.checkVisibility({ visibilityProperty: true })),
+      text: (board?.textContent ?? "").trim().slice(0, 80),
+      windowOpen: document.querySelector("[data-agent-window-frame]") !== null,
+      screenOpen: document.querySelector('[data-mobile2-screen="chat"]') !== null,
+      readerOnScreen: [...document.querySelectorAll<HTMLElement>(`[data-agent-window-frame] [data-kanban-reader="${id}"]`)].some((element) => element.checkVisibility({ visibilityProperty: true })),
+      notice: document.querySelector("[data-stale-focus-notice]") !== null,
+      hash: location.hash,
+      entries: history.length,
+    };
+  }, { id: ID, onPhone: phone });
+
+  const settled = async (page: Page, phone: boolean) => {
+    await page.waitForFunction((onPhone) => onPhone ? Boolean(document.querySelector('[data-mobile2-screen="chat"]')) : Boolean(document.querySelector("[data-agent-window-frame] [data-kanban-reader]")), phone, { timeout: 30_000 });
+    await page.waitForTimeout(500);
+  };
+
+  for (const way of ["close", "escape"] as const) browserTest(`F5 reopens the open conversation and shows the board once it is closed (${way})`, async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    fs.mkdirSync(EVIDENCE, { recursive: true });
+    const bundle = fs.mkdtempSync(path.join(os.tmpdir(), "closed-address-"));
+    const server = await serveEvidenceFixture(bundle);
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    try {
+      for (const viewport of VIEWPORTS) {
+        if (viewport.phone && way === "escape") continue;
+        for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+          const key = `${viewport.width}x${viewport.height}-${lang}-${scheme}-${viewport.phone ? "back" : way}`;
+          if (process.env.LLV_CLOSED_ADDRESS_ONLY && !process.env.LLV_CLOSED_ADDRESS_ONLY.split(",").includes(key)) continue;
+          let step = "opening the link";
+          const fail = (message: string) => failures.push(`${key}: ${message}`);
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=loose#c=${ID}`, viewport, scheme, lang, "no-preference", viewport.phone);
+          const reading: Record<string, unknown> = {};
+          const shot = (name: string) => page.screenshot({ path: path.join(OUT, `${key}-${name}.png`) });
+          try {
+            await settled(page, viewport.phone);
+            reading.opened = await readConversation(page, viewport.phone);
+            await shot("1-open");
+
+            step = "reloading on the open conversation";
+            await page.reload();
+            await settled(page, viewport.phone);
+            const reopened = await readConversation(page, viewport.phone);
+            reading.reopened = reopened;
+            await shot("2-reloaded-open");
+            if (!reopened.visible || !reopened.text) fail("F5 did not reopen the open conversation");
+            if (!reopened.inViewport) fail("the reopened conversation leaves the viewport");
+            if (await page.evaluate(() => location.hash) !== `#c=${ID}`) fail("the reload changed the address of the open conversation");
+
+            step = "closing it";
+            const before = await page.evaluate(() => history.length);
+            if (viewport.phone) await page.locator("[data-mobile2-back]").click();
+            else if (way === "escape") await page.keyboard.press("Escape");
+            else await page.locator(`[data-agent-window-frame] [data-reader-close]`).first().click();
+            await page.waitForFunction((onPhone) => onPhone ? !document.querySelector('[data-mobile2-screen="chat"]') : !document.querySelector("[data-agent-window-frame]"), viewport.phone, { timeout: 15_000 });
+            await page.waitForTimeout(300);
+            const closed = await readBoard(page, viewport.phone);
+            reading.closed = closed;
+            await shot("3-closed");
+            if (/#[cf]=/.test(closed.hash)) fail(`the address still names the conversation: ${closed.hash}`);
+            if (closed.entries > before) fail(`closing added history entries (${before} → ${closed.entries})`);
+
+            step = "reloading after the close";
+            await page.reload();
+            await page.waitForFunction((onPhone) => document.querySelector(onPhone ? "[data-phone-kanban]" : "[data-kanban-board]") !== null, viewport.phone, { timeout: 30_000 });
+            await page.waitForTimeout(800);
+            const board = await readBoard(page, viewport.phone);
+            reading.board = board;
+            await shot("4-reloaded-board");
+            if (!board.drawn || !board.text) fail("the board is not drawn after the reload");
+            if (board.windowOpen || board.screenOpen || board.readerOnScreen) fail("the closed conversation came back after the reload");
+            if (/#[cf]=/.test(board.hash)) fail(`the address names the conversation after the reload: ${board.hash}`);
+            if (board.notice) fail("a not-found notice appeared");
+            if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+          } catch (error) {
+            fail(`${step}: ${error instanceof Error ? error.message.split("\n")[0]! : String(error)}`);
+            await page.screenshot({ path: path.join(OUT, `${key}-failed.png`) }).catch(() => {});
+          } finally { await context.close(); }
+          readings[key] = reading;
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      fs.rmSync(bundle, { recursive: true, force: true });
+    }
+    if (!process.env.LLV_CLOSED_ADDRESS_ONLY) fs.writeFileSync(path.join(EVIDENCE, `rendered-${way}.json`), `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", fixture: "issue1695Evidence.fixture.tsx?scenario=loose", readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 1_500_000);
+});
+
+describe("ChatGPT plan settings", () => {
+  browserTest("ChatGPT plan settings render the Keys and Voice states in both languages and themes", async () => {
+    const { captureChatGPTPlanFrames } = await import("@/components/kanban/issue1695BrowserHarness");
+    await captureChatGPTPlanFrames(false);
+  }, 300_000);
 });

@@ -147,7 +147,7 @@ test("v2 multi-link reconstruction equals the full-summary client state, retaini
     tasks: [{ id: "t1", text: "Task", details: "complete editor text", assignments: [], prototypeReview: { status: "waiting", rounds: [1] } }],
     flows: [{ id: "f1", state: "waiting" }], workflows: [{ id: "w1", members: ["t1"] }],
     seatDecisions: [{ id: "s1", state: "waiting" }], prototypeReviewNotices: [{ id: "r1", state: "open" }],
-    workLinks: { tasks: { t1: { pr: 4 } }, pipelines: {} }, systemHealth: { tmux: { status: "healthy" } },
+    workLinks: { tasks: { t1: { pr: 4 } }, pipelines: {} }, systemHealth: {},
     projectCatalog: [{ project: "p", conversations: 2 }], projectAliases: { old: "p" },
     conversationAliases: { old: "new" }, launchRoutes: { "spawn:x": "new" }, pipelinesError: "temporary store refusal",
   } as Json;

@@ -7,6 +7,148 @@ import { codexSchemaBreaks } from "./codexSchemaCompatibility";
 const read = (version: string, name: string) => JSON.parse(fs.readFileSync(path.join(import.meta.dir, "protocol", version, `${name}.json`), "utf8"));
 
 describe("reviewed pins", () => {
+  const validator = (schema: { definitions: object }, ref: string) => new Ajv({ strict: false }).compile({ $ref: ref, definitions: schema.definitions });
+
+  test.each(["stable", "experimental"])("0.171.0 scopes MCP elicitations and drops the project position (%s)", name => {
+    const previous = read("0.170.0", name), current = read("0.171.0", name);
+    expect(codexSchemaBreaks(previous, current)).toEqual(name === "stable" ? [
+      "McpServerElicitationRequestParams.environmentId: added inside a server request",
+      "v2.Project.position: removed",
+      "v2.Project.position: became optional",
+    ] : [
+      "CurrentTimeReadParams: definition removed",
+      "CurrentTimeReadResponse: definition removed",
+      "McpServerElicitationRequestParams.environmentId: added inside a server request",
+    ]);
+    const elicitation = { serverName: "docs", threadId: "thread", turnId: null, mode: "url", message: "Open", url: "https://example.invalid", elicitationId: "e" };
+    const before = validator(previous, "#/definitions/McpServerElicitationRequestParams"), after = validator(current, "#/definitions/McpServerElicitationRequestParams");
+    expect(before(elicitation)).toBeTrue();
+    expect(after(elicitation)).toBeTrue();
+    expect(after({ ...elicitation, environmentId: "remote" })).toBeTrue();
+    const methods = (schema: typeof current) => schema.definitions.ServerRequest.oneOf.map((row: { properties: { method: { enum: string[] } } }) => row.properties.method.enum[0]);
+    expect(methods(previous).includes("currentTime/read")).toBe(name === "experimental");
+    expect(methods(current)).not.toContain("currentTime/read");
+    // Every other change is additive or an annotation.
+    for (const key of ["McpServerElicitationRequestParams", "ServerRequest", "CurrentTimeReadParams", "CurrentTimeReadResponse"]) {
+      if (key in previous.definitions) current.definitions[key] = previous.definitions[key];
+    }
+    current.definitions.v2.Project = previous.definitions.v2.Project;
+    expect(codexSchemaBreaks(previous, current)).toEqual([]);
+  });
+
+  test.each(["stable", "experimental"])("0.172.0 renames the saved realtime input item (%s)", name => {
+    const previous = read("0.171.0", name), current = read("0.172.0", name);
+    expect(codexSchemaBreaks(previous, current)).toEqual(["v2.ThreadRealtimeItem.oneOf: variant type=\"sessionEndInputSaved\" removed or changed"]);
+    const before = validator(previous, "#/definitions/v2/ThreadRealtimeItemCompletedNotification");
+    const after = validator(current, "#/definitions/v2/ThreadRealtimeItemCompletedNotification");
+    // The only item Delegatus reads is unchanged.
+    const segment = { threadId: "thread", item: { id: "segment", realtimeSessionId: "call", type: "transcriptSegment", role: "assistant", text: "Done." } };
+    expect(before(segment)).toBeTrue();
+    expect(after(segment)).toBeTrue();
+    const saved = { id: "saved", realtimeSessionId: "call", input: "hello", input_item_id: "input", source_event_ids: ["event"] };
+    expect(before({ threadId: "thread", item: { ...saved, type: "sessionEndInputSaved" } })).toBeTrue();
+    expect(after({ threadId: "thread", item: { ...saved, type: "sessionEndInputSaved" } })).toBeFalse();
+    expect(after({ threadId: "thread", item: { ...saved, type: "sessionInputSaved", reason: "sessionEnd" } })).toBeTrue();
+    current.definitions.v2.ThreadRealtimeItem = previous.definitions.v2.ThreadRealtimeItem;
+    expect(codexSchemaBreaks(previous, current)).toEqual([]);
+  });
+
+  test.each(["stable", "experimental"])("0.170.0 changes recovered answer display (%s)", name => {
+    const previous = read("0.169.0", name), current = read("0.170.0", name);
+    expect(codexSchemaBreaks(previous, current)).toEqual([
+      "v2.AgentMessageDisplay.properties: removed",
+      "v2.AgentMessageDisplay.action: became optional",
+      "v2.AgentMessageDisplay: type changed",
+    ]);
+    const compile = (schema: typeof current) => new Ajv({ strict: false }).compile({
+      $ref: "#/definitions/v2/ItemCompletedNotification", definitions: schema.definitions,
+    });
+    const completion = (display: object | null) => ({
+      threadId: "thread", turnId: "turn", completedAtMs: 1,
+      item: { type: "agentMessage", id: "answer", text: "done", moderation: { moderated: true, display } },
+    });
+    const before = compile(previous), after = compile(current);
+    const legacy = completion({ action: "show" });
+    expect(before(legacy)).toBeTrue();
+    expect(after(legacy)).toBeFalse();
+    expect(before(completion(null))).toBeTrue();
+    expect(after(completion(null))).toBeTrue();
+    for (const display of [
+      { version: 1, mode: "show", trustedContacts: "skip" },
+      { version: 1, mode: "hide", replacement: { kind: "wellbeingPromptHelpline" } },
+      { version: 1, mode: "block", reason: { kind: "cyber" } },
+    ]) {
+      expect(before(completion(display))).toBeFalse();
+      expect(after(completion(display))).toBeTrue();
+    }
+    expect(after(completion({ version: 1, mode: "show" }))).toBeFalse();
+    expect(after(completion({ version: 2, mode: "show", trustedContacts: "skip" }))).toBeFalse();
+    // The other changes are additive or annotations.
+    current.definitions.v2.AgentMessageDisplay = previous.definitions.v2.AgentMessageDisplay;
+    expect(codexSchemaBreaks(previous, current)).toEqual([]);
+  });
+
+  test.each(["stable", "experimental"])("0.168.0 extends 0.167.0 additively (%s)", name => {
+    expect(codexSchemaBreaks(read("0.167.0", name), read("0.168.0", name))).toEqual([]);
+  });
+
+  for (const previous of ["0.167.0", "0.168.0"]) test.each(["stable", "experimental"])(`0.169.0 needs its own pin above ${previous} (%s)`, name => {
+    const before = read(previous, name), current = read("0.169.0", name);
+    expect(codexSchemaBreaks(before, current)).toEqual([
+      'ClientRequest.oneOf[method="account/gatewayOAuth/read"].params: type changed',
+      'ClientRequest.oneOf[method="account/gatewayOAuth/read"].params.anyOf: added',
+      'ClientRequest.oneOf[method="account/gatewayOAuth/login"].params: type changed',
+    ]);
+    // The diagnostic is bounded to three paths. Compare each changed method
+    // separately so neither the login union nor the audio change is hidden.
+    for (const method of ["account/gatewayOAuth/read", "account/gatewayOAuth/login"]) {
+      const isolate = (schema: typeof current) => ({ definitions: { ClientRequest: {
+        oneOf: schema.definitions.ClientRequest.oneOf.filter((row: { properties: { method: { enum: string[] } } }) => row.properties.method.enum.includes(method)),
+      } } });
+      expect(codexSchemaBreaks(isolate(before), isolate(current))).toEqual([
+        `ClientRequest.oneOf[method="${method}"].params: type changed`,
+        `ClientRequest.oneOf[method="${method}"].params.anyOf: added`,
+      ]);
+    }
+    const withoutGatewayChanges = structuredClone(current);
+    withoutGatewayChanges.definitions.ClientRequest = before.definitions.ClientRequest;
+    expect(codexSchemaBreaks(before, withoutGatewayChanges)).toEqual([
+      'v2.FunctionCallOutputContentItem.oneOf[type="input_audio"].audio_url: removed',
+      'v2.FunctionCallOutputContentItem.oneOf[type="input_audio"].audio_url: became optional',
+      'v2.FunctionCallOutputContentItem.oneOf[type="input_audio"].anyOf: added',
+    ]);
+    const compile = (schema: typeof current) => new Ajv({ strict: false }).compile({
+      $ref: "#/definitions/v2/FunctionCallOutputContentItem", definitions: schema.definitions,
+    });
+    const old = compile(before), accepts = compile(current);
+    const url = { type: "input_audio", audio_url: "data:audio/wav;base64,AA==" };
+    expect(old(url)).toBeTrue();
+    expect(accepts(url)).toBeTrue();
+    expect(old({ type: "input_audio", file_id: "stored-audio" })).toBeFalse();
+    expect(accepts({ type: "input_audio", file_id: "stored-audio" })).toBeTrue();
+    expect(accepts({ ...url, file_id: "stored-audio" })).toBeTrue();
+    for (const audio of [{ type: "input_audio" }, { type: "input_audio", file_id: 7 }, { type: "input_audio", audio_url: 7 }]) expect(accepts(audio)).toBeFalse();
+  });
+
+  test.each(["stable", "experimental"])("0.167.0 human command approvals need their reviewed server-request contract (%s)", name => {
+    const previous = read("0.166.0", name), current = read("0.167.0", name);
+    expect(codexSchemaBreaks(previous, current)).toEqual([
+      "CommandExecutionApprovalKind.enum: removed",
+      "CommandExecutionApprovalKind: type changed",
+      "CommandExecutionApprovalKind.oneOf: added",
+    ]);
+    const compile = (schema: typeof current) => new Ajv({ strict: false }).compile({
+      $ref: "#/definitions/CommandExecutionApprovalKind", definitions: schema.definitions,
+    });
+    const before = compile(previous), after = compile(current);
+    for (const kind of ["command", "writeStdin"]) {
+      expect(before(kind)).toBeTrue();
+      expect(after(kind)).toBeTrue();
+    }
+    expect(before("humanCommand")).toBeFalse();
+    expect(after("humanCommand")).toBeTrue();
+    expect(after("unknownCommand")).toBeFalse();
+  });
   test.each(["stable", "experimental"])("0.165.0 extends 0.164.0 additively (%s)", name => {
     const previous = read("0.164.0", name), current = read("0.165.0", name);
     expect(codexSchemaBreaks(previous, current)).toEqual([]);

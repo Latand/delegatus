@@ -23,8 +23,10 @@ import {
   beginOrchestratorSeatIntent,
   completeOrchestratorSeatIntent,
   orchestratorSeatFor,
+  readOrchestratorSeatFile,
   revokedOrchestratorSeatConversationsOrUnknown,
 } from "./seats";
+import { writeStoredSeatRecord } from "./seatStoreFixture";
 
 /**
  * THE MORNING NOBODY COULD RAISE AN ORCHESTRATOR (#1757).
@@ -614,11 +616,10 @@ test("REGRESSION (#1757): a seat that was ALREADY provisional rolls back to the 
   /* The shape a seat standing on a stillborn conversation when this recovery
      ships has: an active provisional seat, a revocation naming the predecessor
      it superseded, and no `rollbacks` entry — because nothing wrote one. */
-  const file = path.join(sandbox, "orchestrator-seats.json");
-  const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as { rollbacks: Record<string, unknown> };
+  const parsed = readOrchestratorSeatFile();
   expect(Object.keys(parsed.rollbacks)).toContain(PROJECT);
   parsed.rollbacks = {};
-  fs.writeFileSync(file, JSON.stringify(parsed), "utf8");
+  writeStoredSeatRecord(parsed);
 
   settlement = { kind: "failed", error: "structured spawn transport failed: runtime host timed out" };
 

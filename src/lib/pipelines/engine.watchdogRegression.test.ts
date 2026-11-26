@@ -32,7 +32,8 @@ test.each([0, 267])("an outstanding stage Git command copies no retained history
     peer.state = "closed"; peer.closedAt = "2026-10-14T00:00:00.000Z"; peer.cursor = null;
     peer.delivery = undefined; peer.publication = "internal";
     peer.runs.forEach(run => { run.attempts = Array.from({ length: 8 }, (_, i) => ({ ...structuredClone(run.attempts[0]!),
-      n: i + 1, state: "passed", output: "retained evidence ".repeat(256) })); });
+      n: i + 1, accounting: { ...run.attempts[0]!.accounting!, repeatReason: i ? "unknown" as const : null },
+      state: "passed", output: "retained evidence ".repeat(256) })); });
     return peer;
   });
   savePipelines([owner, ...history]);

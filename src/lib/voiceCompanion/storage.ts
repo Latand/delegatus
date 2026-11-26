@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { configFilePath, statePath } from "@/lib/configDir";
 import { withFileTransaction, withFileTransactionSync } from "@/lib/state/fileTransaction";
 import type { CompanionEvent, CompanionPlan, CompanionUsage, Delivery, Locale, Proposal } from "./contract";
+import type { PlanBilling } from "@/lib/chatgptPlan/public";
 import type { BackendTokens } from "./usage";
 import type { DelegationCode } from "./delegationOutcome";
 import type { OperatorInput } from "./gate";
@@ -34,11 +35,14 @@ export interface CompanionSettings {
   /** A mint whose answer was lost may have opened a provider session nobody
    * can name; no new voice session starts until the operator releases it. */
   uncertainSession: boolean;
+  planBilling?: PlanBilling;
   lastSession?: { usd: number; seconds: number; endedAt: number; incomplete: boolean };
   /** The latest Codex call that ended: its length and the plan window it left. */
   lastCodexSession?: { seconds: number; endedAt: number; plan: CompanionPlan | null };
 }
 export interface StoredProposal {
+  /** The continuation owns reconciliation; this row remains as the original send binding. */
+  adoptedBy?: string;
   admittedAt?: number;
   proposal: Proposal;
   sourceText: string;
@@ -70,11 +74,13 @@ export interface StoredProposal {
   publishedReceipt?: { clientMessageId: string; operationId: string };
 }
 export type SessionStarter = { memberId: string } | { operator: true };
-/** A report owed to the voice. Kept until every part is handed to the provider,
- * committed with the scan position that found it, so a failed hand-off resumes
- * at the first part not handed and never repeats one that was. */
+/** Speech committed with the scan position that found it. Handed reports remain
+ * recoverable until a journalled output reply acknowledges their handoffs. */
 export interface ReportSpeech { reportId: string; project: string; status: string; text: string; parts?: string[]; handed: number;
-  kind?: "message"; at?: string | null;
+  kind?: "message" | "resume" | "notice";
+  resumeOf?: { part: string; item: string };
+  resumePoint?: import("./callResume").ResumePoint;
+  at?: string | null;
   /** The operator asked to hear a report this call already relayed once more. */
   reread?: boolean }
 export interface StoredSession {
@@ -85,6 +91,9 @@ export interface StoredSession {
   spokenReports?: string[];
   /** Reports owed to the voice, oldest first. */
   reportSpeech?: ReportSpeech[];
+  /** Completely handed reports awaiting a durable voice reply. */
+  speechInFlight?: ReportSpeech[];
+  droppedAt?: number;
   endedAt?: number;
   authority?: "live-model";
   providerId?: string;

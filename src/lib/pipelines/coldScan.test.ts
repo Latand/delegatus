@@ -34,12 +34,10 @@ test("a tick answers 200 and advances pipelines while the shared cold scan is he
     return { files: [], projectCatalog: [], complete: true };
   });
   let pipelines = 0;
-  let flows = 0;
   const messages: string[] = [];
   const controller = new FlowPipelineController({
     scan: controllerFileScan,
     tickPipelines: async () => { pipelines += 1; return { changed: false }; },
-    tickFlows: async () => { flows += 1; return { changed: false }; },
     log: (message) => { messages.push(message); },
   }, { maxPasses: 1 });
   const pending = POST.withDependencies(request(), () => controller.tick());
@@ -49,21 +47,18 @@ test("a tick answers 200 and advances pipelines while the shared cold scan is he
     new Promise<null>((resolve) => { timeout = setTimeout(() => resolve(null), 250); }),
   ]);
   clearTimeout(timeout);
-  const flowsBeforeRelease = flows;
   release();
   await pending;
   expect(early?.status).toBe(200);
   expect(pipelines).toBe(1);
-  expect(flowsBeforeRelease).toBe(0);
   expect(messages.some((message) => message.includes("skipped") && message.includes("scanning"))).toBe(true);
   // The detached generation must finish and become usable on the next tick.
   await new Promise<void>((resolve) => setTimeout(resolve, 20));
   await controller.tick();
-  expect(flows).toBe(1);
   expect(scans).toBe(1);
 });
 
-test("incomplete derivation is deferred and a later complete generation resumes flows", async () => {
+test("incomplete derivation is deferred and a later complete generation resumes pipelines", async () => {
   resetFilesRouteCacheForTests();
   setFileCatalogMembershipProbeForTests(async () => "fixture");
   let complete = false;
@@ -72,21 +67,17 @@ test("incomplete derivation is deferred and a later complete generation resumes 
     scans += 1;
     return { files: [], projectCatalog: [], complete };
   });
-  let flows = 0;
   const controller = new FlowPipelineController({
     scan: controllerFileScan,
     tickPipelines: async () => ({ changed: false }),
-    tickFlows: async () => { flows += 1; return { changed: false }; },
     log: () => {},
   }, { maxPasses: 1 });
   expect((await POST.withDependencies(request(), () => controller.tick())).status).toBe(200);
   await new Promise<void>((resolve) => setTimeout(resolve, 20));
-  expect(flows).toBe(0);
   complete = true;
   await controller.tick();
   await new Promise<void>((resolve) => setTimeout(resolve, 20));
   await controller.tick();
-  expect(flows).toBe(1);
   expect(scans).toBe(2);
 });
 
@@ -132,11 +123,9 @@ test("a cancelled cold-scan reader does not poison ticks or retryable MCP admiss
 
   const messages: string[] = [];
   let pipelines = 0;
-  let flows = 0;
   const controller = new FlowPipelineController({
     scan: controllerFileScan,
     tickPipelines: async () => { pipelines += 1; return { changed: false }; },
-    tickFlows: async () => { flows += 1; return { changed: false }; },
     log: (message) => { messages.push(message); },
   }, { maxPasses: 1 });
   const firstTick = await POST.withDependencies(request(), () => controller.tick());
@@ -144,7 +133,6 @@ test("a cancelled cold-scan reader does not poison ticks or retryable MCP admiss
   expect(firstTick.status).toBe(200);
   expect(secondTick.status).toBe(200);
   expect(pipelines).toBe(2);
-  expect(flows).toBe(0);
   expect(messages.some((message) => message.includes("scan phase failed"))).toBe(false);
   expect(fileScanCacheStatus().inFlight).toBe(true);
 
@@ -172,6 +160,5 @@ test("a cancelled cold-scan reader does not poison ticks or retryable MCP admiss
     retryable: false,
   });
   await controller.tick("watchdog");
-  expect(flows).toBe(1);
   expect(scans).toBe(2);
 });

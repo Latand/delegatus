@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { admittedAs, lexicalAllowedRoots, realAllowedRootsSync, realpathAdmitted, resolveLocal, type AllowedRoots } from "@/lib/artifact/localFile";
+import { admittedAs, lexicalAllowedRoots, readablePlace, realAllowedRootsSync, realpathAdmitted, resolveLocal, type AllowedRoots } from "@/lib/artifact/localFile";
 
 import type { AlbumVia } from "./extract";
 import type { AlbumSeenStore } from "./seen";
@@ -13,7 +13,8 @@ import { indexTranscripts, readInlineImage, transcriptImages, type IndexedImage 
  * A task's album: every picture its agents looked at, were handed or named,
  * across all its conversations and pipeline stages, newest first. A picture
  * named by path is kept only while the file exists under a root the artifact
- * route serves; one whose bytes live in the transcript is always drawable.
+ * route serves, or while the report picture store keeps a copy of it; one
+ * whose bytes live in the transcript is always drawable.
  */
 
 /** The newest pictures an album holds; older ones are left out. */
@@ -112,7 +113,9 @@ async function collect(taskId: string, deps: TaskAlbumDeps, budget: number): Pro
 
 /** The drawable pictures, newest first, capped. */
 function drawable(taskId: string, collected: Collected[]): Array<Collected & { src: string; file: string | null }> {
-  const lexical = lexicalAllowedRoots();
+  // Inline pictures are served from their admitted transcript; project-file
+  // roots are needed only for a picture that actually names a local file.
+  let lexical: AllowedRoots | null = null;
   let realRoots: AllowedRoots | null = null;
   const real = () => (realRoots ??= realAllowedRootsSync());
   const ordered = [...collected].sort((a, b) => b.image.ts - a.image.ts || a.image.key.localeCompare(b.image.key));
@@ -120,7 +123,11 @@ function drawable(taskId: string, collected: Collected[]): Array<Collected & { s
   for (const entry of ordered) {
     if (out.length >= ALBUM_MAX_IMAGES) break;
     const file = entry.image.path ? resolveLocal(entry.image.path) : null;
-    if (file && drawableFile(file, lexical, real)) {
+    /* A kept copy stands for a picture that is gone. The address keeps the
+       picture's own path: the route finds the copy by it, and with it the
+       project a workspace member is checked against. */
+    const place = file ? readablePlace(file, lexical ??= lexicalAllowedRoots()) : null;
+    if (file && place && drawableFile(place, lexical ??= lexicalAllowedRoots(), real)) {
       out.push({ ...entry, file, src: `/api/artifact?${new URLSearchParams({ path: file }).toString()}` });
     } else if (entry.image.inline) {
       out.push({ ...entry, file: null, src: `/api/tasks/${encodeURIComponent(taskId)}/album/image?id=${albumImageId(entry.image.key)}` });

@@ -51,28 +51,8 @@ export function GET(): Response {
   const releaseReady = startup.releaseReady && (!startup.servesTraffic
     || ((structuredHostStartup === null || structuredHostStartup.state === "ready")
       && structuredDeliveryController !== "unavailable"));
-  if (startup.servesTraffic && structuredDeliveryController === "unavailable") {
-    return Response.json(
-      {
-        error: "structured delivery controller is unavailable",
-        releaseReady,
-        structuredDeliveryController,
-        structuredHostStartup,
-      },
-      { status: 503, headers: { "cache-control": "no-store" } },
-    );
-  }
-  if (startup.servesTraffic && structuredHostStartup?.state === "failed") {
-    return Response.json(
-      {
-        error: "structured host startup adoption is retrying after a failed pass",
-        releaseReady,
-        structuredDeliveryController,
-        structuredHostStartup,
-      },
-      { status: 503, headers: { "cache-control": "no-store" } },
-    );
-  }
+  // Admission uses the durable deployment owner. Promotion still requires
+  // releaseReady, which includes serving-time adoption and delivery readiness.
   return Response.json(
     {
       capability: "viewer-deployments",

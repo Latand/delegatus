@@ -60,11 +60,26 @@ through `thread/shellCommand`, each with a checked command exit, so source bytes
 do not consume the model context. Before the check turn, `thread/revert` removes
 only the upload history while retaining its files. Cloud clones the configured checkout, imports
 the bundle, checks out that head detached, verifies its tree,
-sets the same comparison base, installs frozen dependencies, and invokes:
+sets the same comparison base, and reuses the environment setup's dependencies.
+`scripts/cloud-check-dependencies.ts` requires identical `package.json`,
+`bun.lock`, `bunfig.toml` and declared patch bytes in setup and candidate, and
+checks installed package names and versions against the lockfile, including
+dev dependencies and nested packages. It copies the installation into the
+isolated checkout so checks cannot mutate the setup copy. Missing or stale
+setup fails with category `environment` before the gate; there is no dependency
+resolution or install in this preparation step. The command then invokes:
 
 ```sh
 bun scripts/local-gate.ts pre-push --admitted
 ```
+
+Completed per-file publication checkpoints are reusable by local retries on the
+same machine when the candidate tree, comparison base, and check inputs match.
+Each Cloud attempt creates its candidate checkout under a unique temporary
+workspace and removes that workspace during cleanup. A later Cloud attempt
+starts cold and reruns its selected files; it cannot claim checkpoints from the
+previous hosted workspace. Its receipt still binds the exact head, tree, base,
+and check inputs, so changed candidates receive independent verdicts.
 
 Checks get isolated HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR before the
 runner starts. Hook skipping, SSH dispatch and recursive Cloud dispatch are disabled. Cloud
@@ -127,6 +142,12 @@ locally once. A successful retry is decisive and needs no local run. Account
 limits do not permit this fallback; return no verdict and retain the existing
 publication retry/park behavior.
 
+Publication deadline expiry is separate from a provider capacity limit. The
+bound turn receives one interrupt and bounded cleanup checks the exact command
+record. A valid bound command receipt may decide the check; a missing, refused
+or still-running command record remains a timeout refusal and never permits
+local fallback.
+
 Interrupt timed-out work and give Cloud time to record termination. After a
 connection loss, reconnect once to interrupt the old job where possible. A
 confirmed transport outage still follows the retry and single local fallback
@@ -156,8 +177,9 @@ and repair behavior.
 
 The policy also places browser drivers in Cloud, including kanban and phone.
 Use the existing drivers, installed Chromium through `CHROME_BIN`, and the same
-language/theme cases. A Cloud time-limit interruption follows the confirmed
-retry and local fallback rule above. Browser frames remain required evidence
+language/theme cases. A confirmed Cloud capacity limit follows the retry and
+local fallback rule above. A publication deadline timeout remains a refusal
+unless a valid bound command receipt is available. Browser frames remain required evidence
 for visual claims. This slice changes the pre-push heavy half; explicit browser
 check dispatch remains subsequent work. Read-only Cloud stages share the
 connection and retain their own stage-result policy.
@@ -167,3 +189,13 @@ records, isolation, cancellation and fallback semantics. Add provider-specific
 limit codes as those responses are verified. Unknown errors fail closed; do not
 classify an account allowance as Cloud capacity. Do not replace these checks
 with an agent summary or a second, weaker Cloud-only plan.
+
+## Session deadlines and remote cleanup
+
+A local hosted-session deadline retains its typed cause when an RPC is pending.
+Publication reports category `timeout` with the bound task reference. A fresh
+connection gets at most ten seconds to interrupt the bound turn once and read
+its terminal state; a refusal, missing identity or missing terminal observation
+records remote cleanup as unresolved. Neither confirmed interruption nor
+unresolved cleanup supplies a gate receipt or authorizes publication. Other
+provider refusal and transport fallback policies retain their existing meaning.

@@ -162,7 +162,7 @@ export function AccountBadge({
     migrationBaselineRef.current = migrationProjectionKey(file.migration);
     try {
       const profile = effectiveProfile(file);
-      const response = await fetch("/api/tmux", {
+      const response = await fetch("/api/conversation-host", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({

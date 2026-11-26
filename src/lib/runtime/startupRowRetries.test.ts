@@ -147,3 +147,41 @@ test("legacy quarantine notices are reused, reopened and resolved under their or
     expect(loadTasks(file).find(task => task.id === taskId)?.status).toBe("done");
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+/* A host that outlived the Viewer owning it, and that
+   startup could not re-adopt, is an alarm for the seat that owns the project,
+   naming the conversation. An inbox card wakes no seat; an assigned one does. */
+test("a quarantined orphan raises an assigned card naming its conversation, and resolves it", async () => {
+  const key = "claude:25300000-0000-0000-0000-000000000081";
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-retry-orphan-"));
+  const entry = { key: { engine: "claude", sessionId: key.slice(7) }, cwd: directory } as never;
+  const file = statePath("tasks.json");
+  const conversationId = "conversation_25300000-0000-4000-8000-000000000081";
+  try {
+    const row = { key, attempts: 3, reason: "incumbent-owned" as const, nextAt: 60000, quarantined: true };
+    await startupRowNotice(entry, row, () => {}, { orphaned: true, conversationIds: [conversationId] });
+    const tasks = loadTasks(file).filter(task => task.text.includes(key));
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.status).toBe("assigned");
+    expect(tasks[0]!.text).toContain(conversationId);
+    expect(tasks[0]!.text).toContain("incumbent-owned");
+    await startupRowNotice(entry, row, () => {}, { orphaned: true, conversationIds: [conversationId] });
+    expect(loadTasks(file).filter(task => task.text.includes(key))).toHaveLength(1);
+    await startupRowNotice(entry, null);
+    expect(loadTasks(file).find(task => task.id === tasks[0]!.id)?.status).toBe("done");
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("retry discovery loads only durable records and forgets a cleared row on restart", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "startup-retry-discovery-"));
+  try {
+    const writer = new StartupRowRetries(directory);
+    await writer.failed(KEY, "adoption-failed", 1000);
+    fs.writeFileSync(path.join(directory, "unfinished.tmp"), "partial");
+    const recovered = new StartupRowRetries(directory);
+    expect(await recovered.discover()).toEqual([KEY]);
+    expect(recovered.get(KEY)).toMatchObject({ reason: "adoption-failed", nextAt: 2000 });
+    await recovered.clear(KEY);
+    expect(await new StartupRowRetries(directory).discover()).toEqual([]);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});

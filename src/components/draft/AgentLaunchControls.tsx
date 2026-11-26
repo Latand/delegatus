@@ -38,7 +38,7 @@ import type { CopilotModelEntry } from "@/lib/agent/copilotModels";
  * its per-draft sessionStorage keys and a transient surface keeps nothing.
  */
 
-export type LaunchEngine = "claude" | "codex" | "copilot";
+export type LaunchEngine = "claude" | "codex" | "copilot" | "antigravity";
 export type { SpeedChoice };
 
 /** Secret-free slice of one stored account that a launch selector needs. */
@@ -57,14 +57,13 @@ const ENGINES: { key: LaunchEngine; label: string }[] = [
   { key: "claude", label: "Claude" },
   { key: "codex", label: "Codex" },
   { key: "copilot", label: "Copilot" },
+  { key: "antigravity", label: "Antigravity" },
 ];
 
 /** The engines a surface offers when it names none: every surface launches
-    Claude and Codex. Copilot is offered only where a surface opts in — the
-    agent draft — because pipeline stages and orchestrator seats do not run it
-    yet (docs/design/copilot-engine.md, slice 4). */
+    Claude and Codex. Copilot and Antigravity are offered on agent drafts. */
 export const DEFAULT_LAUNCH_ENGINES: readonly LaunchEngine[] = ["claude", "codex"];
-export const AGENT_LAUNCH_ENGINES: readonly LaunchEngine[] = ["claude", "codex", "copilot"];
+export const AGENT_LAUNCH_ENGINES: readonly LaunchEngine[] = ["claude", "codex", "copilot", "antigravity"];
 
 export function launchEngineLabel(engine: LaunchEngine): string {
   return ENGINES.find((entry) => entry.key === engine)?.label ?? engine;
@@ -95,8 +94,13 @@ export function launchAccountSection(raw: unknown): LaunchAccountCatalog[LaunchE
 
 /** Both engine sections of one `/api/accounts` body. */
 export function launchAccountCatalogOf(body: unknown): LaunchAccountCatalog {
-  const raw = body as { claude?: unknown; codex?: unknown; copilot?: unknown } | null;
-  return { claude: launchAccountSection(raw?.claude), codex: launchAccountSection(raw?.codex), copilot: launchAccountSection(raw?.copilot) };
+  const raw = body as { claude?: unknown; codex?: unknown; copilot?: unknown; antigravity?: unknown } | null;
+  return {
+    claude: launchAccountSection(raw?.claude),
+    codex: launchAccountSection(raw?.codex),
+    copilot: launchAccountSection(raw?.copilot),
+    antigravity: launchAccountSection(raw?.antigravity),
+  };
 }
 
 /**
@@ -120,7 +124,7 @@ export function resolveLaunchAccountId(
 }
 
 /** Asks every mounted catalog to read `/api/accounts` again. */
-const CATALOG_REFRESH_EVENT = "llv:launch-accounts-refresh";
+export const CATALOG_REFRESH_EVENT = "llv:launch-accounts-refresh";
 
 /** The stored-account catalog for both engines; null until `/api/accounts`
     answers, and null forever if it never does (the selector simply stays out
@@ -249,7 +253,7 @@ export function useAgentLaunchDraft(options: {
 
   const [engine, setEngineState] = useState<LaunchEngine>(() => {
     const stored = read("engine");
-    if (stored === "codex" || stored === "claude" || stored === "copilot") return stored;
+    if (stored === "codex" || stored === "claude" || stored === "copilot" || stored === "antigravity") return stored;
     return options.initialEngine ?? "claude";
   });
   const [model, setModelState] = useState(() => read("model") || options.initialModel || defaultModelFor(engine));

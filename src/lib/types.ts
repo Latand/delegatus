@@ -1,7 +1,6 @@
 import type { Flow, FlowAnnotation, ReviewVerdict } from "@/lib/flows/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
-import type { TmuxEndpointHealth } from "@/lib/tmux";
 import type { Workflow } from "@/lib/workflows/types";
 import type { TurnState } from "@/lib/accounts/migration/contracts";
 import type { PendingPermissionRequest } from "@/lib/runtime/permissionRequests";
@@ -12,17 +11,18 @@ export type RootKey =
   | "claude-projects"
   | "claude-tasks"
   | "openclaw-sessions"
-  | "copilot-sessions";
+  | "copilot-sessions"
+  | "antigravity-sessions";
 
-export type Engine = "codex" | "claude" | "shell" | "openclaw" | "copilot";
+export type Engine = "codex" | "claude" | "shell" | "openclaw" | "copilot" | "antigravity";
 export type Activity = "live" | "recent" | "stalled" | "idle";
-export type Fmt = "codex" | "claude" | "plain" | "openclaw" | "copilot";
+export type Fmt = "codex" | "claude" | "plain" | "openclaw" | "copilot" | "antigravity";
 
 /** The engines that write a structured transcript the Viewer parses — every
     `Engine` except `"shell"`, whose background tasks are plain output logs.
     Named once so the readers that must switch on the dialect (title and search
     text, turn state, model, effort, the feed) all agree on the same set. */
-export type TranscriptEngine = Extract<Engine, "codex" | "claude" | "openclaw" | "copilot">;
+export type TranscriptEngine = Extract<Engine, "codex" | "claude" | "openclaw" | "copilot" | "antigravity">;
 
 declare const epochSecondsBrand: unique symbol;
 /**
@@ -152,11 +152,7 @@ export interface FileEntry {
   agentActivity?: import("./lifecycle/agentActivity").AgentActivityFacts;
   /** Current registry transport for this exact conversation. Presentation only;
       controls resolve and fence ownership again when the operator acts. */
-  controlHost?: { conversationId: string; transport: "legacy" | "structured" };
-  /** Current canonical root owner for a shared Claude child. The selected
-      conversation keeps its own identity; parentPath binds this projection to
-      the scanner parent, even when the root has advanced to a new generation. */
-  rootControlHost?: { conversationId: string; transport: "legacy" | "structured"; parentPath: string };
+  controlHost?: { conversationId: string; transport: "structured" };
   path: string;
   root: RootKey;
   /** Path relative to its root. */
@@ -491,7 +487,6 @@ export interface FilesResponse {
   /** Resolved PR and issue links of the carried pipelines and tasks (#2059). */
   workLinks?: import("@/lib/forge/workLinks").FilesWorkLinks;
   systemHealth: {
-    tmux: TmuxEndpointHealth;
     registry?: Omit<
       import("@/lib/agent/registry").AgentRegistryStorageDiagnostics,
       "mirrorAgeMs" | "writerRatePerSecond"
@@ -583,7 +578,6 @@ export interface PendingQuestion {
   toolUseId: string;
   transcriptPath: string;
   pid: number;
-  paneTarget: string | null;
   askedAt: string;
   questions?: PendingQuestionItem[];
   plan?: string;
@@ -754,6 +748,8 @@ export interface LimitsPayload {
   codex: EngineLimits | null;
   /** Optional on legacy browser/test payloads; the server now always sends it. */
   copilot?: EngineLimits | null;
+  /** Active Antigravity 5-hour quota exhaustion window, or null when not exhausted. */
+  antigravity?: EngineLimits | null;
   /** The Claude account whose values appear in this payload. */
   claudeAccountId: string | null;
   /** The account whose Codex values appear in this payload. The server always
@@ -762,7 +758,14 @@ export interface LimitsPayload {
   codexAccountId: string | null;
   /** The Copilot account whose latest transcript snapshot appears here. */
   copilotAccountId?: string | null;
-  provenance: { claude: LimitsProvenance; codex: LimitsProvenance; copilot?: LimitsProvenance };
+  /** The Antigravity account whose latest quota observation appears here. */
+  antigravityAccountId?: string | null;
+  provenance: {
+    claude: LimitsProvenance;
+    codex: LimitsProvenance;
+    copilot?: LimitsProvenance;
+    antigravity?: LimitsProvenance;
+  };
   /** ISO timestamp from the first failed refresh behind this fallback payload. */
   staleSince?: string | null;
 }
@@ -791,6 +794,10 @@ export interface BurndownSeries {
       e.g. a Codex plan that reports only a weekly limit. The chart then names
       that reason instead of the generic "no history yet" (issue #606). */
   windowUnreported?: boolean;
+  /** The newest observation of this window, even when it falls before the
+      current window (the quota was read, then the window rolled over). The chart
+      tells "reset since the last reading" from "never observed" by it. */
+  lastReading?: LimitSample | null;
 }
 
 /** Both windows' burndown series for one engine. */
@@ -821,9 +828,6 @@ export interface ResourcesSystem {
   capturedAt: string;
 }
 
-/** One tmux pane hosting an agent CLI, with its whole process tree's memory.
-    `path` is null for orphans — panes running an agent the scanner could not
-    match to any transcript; they are still killable via their target. */
 /** How many structured hosts one resources payload may carry. The footer polls
     this list, so the bound belongs to the payload rather than to any one
     producer: the registry read, the process scan and the served rows all stop
@@ -831,15 +835,15 @@ export interface ResourcesSystem {
 export const RESOURCE_STRUCTURED_HOST_LIMIT = 512;
 
 export interface ResourceSession {
+  agentState?: import("./agentState/model").AgentStateDisplay;
   target: string;
-  /** Root pid of the attributed tree: the tmux pane for a legacy row, the host
-      process itself for a structured one. */
+  /** Root pid of the attributed tree: the host process itself. */
   panePid: number;
   /** Transport that owns this row. Absent on observations persisted before
       structured hosts were listed, which only ever held tmux panes. */
   kind?: "tmux" | "structured";
   path: string | null;
-  engine: "claude" | "codex" | "copilot" | null;
+  engine: "claude" | "codex" | "copilot" | "antigravity" | null;
   /** Several live panes claim the same stable conversation identity. */
   hostConflict?: boolean;
   title: string | null;
@@ -904,14 +908,19 @@ export type ResourcesViewerUnavailable = "not-the-viewer" | "measurement-failed"
 
 /** GET /api/resources response. `system` is null when no platform probe worked. */
 export interface ResourcesPayload {
+  agentState?: import("./agentState/model").AgentStateMetrics;
   /** Free space on the volumes Delegatus writes to, and the open pressure episode. */
   diskPressure?: import("./state/diskPressure").DiskPressure;
+  /** RAM and swap use, the tmpfs /tmp, and the open memory pressure episode. */
+  memoryPressure?: import("./state/memoryPressure").MemoryPressure;
   /** The last worktree sweep, counts and bytes per reason. */
   worktreeSweep?: ReturnType<typeof import("./pipelines/worktreeSweep").worktreeSweepStatus>;
   /** Release retention counts, reclaimed cache bytes and errors. */
   releaseRetention?: ReturnType<typeof import("./selfUpdate/retention").releaseRetentionStatus>;
   /** Temp cleanup's Git and inspection holds, with counts and bytes. */
   tempSweep?: ReturnType<typeof import("./tempSweep").tempSweepStatus>;
+  /** Files-response result cleanup: removed and kept counts with bytes. */
+  filesResponseSweep?: ReturnType<typeof import("./scanner/filesResponseResults").filesResponseSweepStatus>;
   system: ResourcesSystem | null;
   sessions: ResourceSession[];
   /** When the session table was captured. The system block carries its own

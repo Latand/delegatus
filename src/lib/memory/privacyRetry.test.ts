@@ -469,3 +469,38 @@ test.each(["deferral", "exhaustion"] as const)("lease revocation remains decisiv
     }))).rejects.toBeInstanceOf(OperationLeaseExpiredError);
   } finally { now.mockRestore(); }
 });
+
+test("a busy terminal cache fence retries within the original window", async () => {
+  store();
+  expect(await withoutStoredLessonsAsync(privateText)).toBe("[learned rule]");
+  const source = fs.readFileSync(path.join(import.meta.dir, "privacy.ts"), "utf8");
+  const offset = source.indexOf("if (stateDir() !== root || storedLessonRevision() !== revision)");
+  expect(offset).toBeGreaterThan(0);
+  const location = `privacy.ts:${source.slice(0, offset).split("\n").length}:`;
+  let clock = 0, injected = 0;
+  const now = spyOn(performance, "now").mockImplementation(() => clock);
+  const pause = spyOn(timers, "setTimeout").mockImplementation(async <T = void>(ms: number | undefined, value?: T): Promise<T> => {
+    clock += Number(ms); return value as T;
+  });
+  const worker = spyOn(TaskPageWorker.prototype, "privacy");
+  const log = spyOn(console, "warn").mockImplementation(() => {});
+  const stat = fs.statSync;
+  const read = spyOn(fs, "statSync").mockImplementation(new Proxy(stat, {
+    apply(target, thisArg, args) {
+      if (!injected && String(args[0]) === path.join(process.env.LLV_STATE_DIR!, "state.sqlite")
+        && (new Error().stack ?? "").includes(location)) {
+        injected++;
+        throw Object.assign(new Error(privateText), { code: "SQLITE_BUSY" });
+      }
+      return Reflect.apply(target, thisArg, args);
+    },
+  }));
+  try {
+    expect(await withoutStoredLessonsAsync(privateText)).toBe("[learned rule]");
+    expect(injected).toBe(1);
+    expect(pause).toHaveBeenCalledTimes(1);
+    expect(clock).toBe(1_000);
+    expect(worker).not.toHaveBeenCalled();
+    expect(log.mock.calls.flat().join("\n")).not.toContain(privateText);
+  } finally { read.mockRestore(); worker.mockRestore(); log.mockRestore(); pause.mockRestore(); now.mockRestore(); }
+});

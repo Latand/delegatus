@@ -30,6 +30,12 @@ function exhausted(window: Window): PrivacyRetryExhausted {
   return new PrivacyRetryExhausted(window.lastFailure ?? "window-exhausted",
     `retry window exhausted after 180 seconds during ${window.exhaustedPhase ?? window.phase}; privacy worker requests ${window.requests} (${seconds("privacy worker request")} s), composition ${seconds("composition")} s, backoff ${seconds("backoff")} s, revision reruns ${window.reruns}`);
 }
+/** Nested filters can finish before their outer preparation rejects a late
+ * result. Such a result must not seed the completed cache. */
+export function privacyPreparationHasTime(): boolean {
+  const window = context.getStore()?.window;
+  return !window || performance.now() < window.deadline;
+}
 export function privacyRevisionRerun(): void { const window = context.getStore()?.window; if (window) window.reruns++; }
 export function privacyFailureObserved(failure: PrivacyFailure): void {
   const window = context.getStore()?.window;

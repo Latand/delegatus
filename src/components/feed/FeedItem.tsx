@@ -18,7 +18,7 @@ import { MESSAGE_ACTION } from "./actionStyles";
 import { SelectedContextBadge } from "../SelectedContextBadge";
 import { CopyButton } from "./CopyButton";
 import { InboxImageCard } from "./InboxImage";
-import { md, mdBlocks, mdImages } from "./markdown";
+import { MdMessageSourceContext, md, mdBlocks, mdImages } from "./markdown";
 import { MemoryOnMessage } from "./MemoryOnMessage";
 import { BUBBLE_MEASURE, READING_MEASURE } from "./measure";
 import { UserMessageRow } from "./UserMessageRow";
@@ -145,11 +145,12 @@ export function cardAvatarRole(peer: string, t: TFunction): FrameRole | null {
 /* Mobile v2 (#1439, lane 4): the engine mark is the only avatar left on the
    phone — a 16 px glyph in secondary colour beside the engine's name in the
    message header (README §5). Proper nouns, so no locale entry. */
-export const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw" | "copilot", string> = {
+export const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw" | "copilot" | "antigravity", string> = {
   claude: "Claude",
   codex: "Codex",
   copilot: "Copilot",
   openclaw: "OpenClaw",
+  antigravity: "Antigravity",
 };
 
 /* Memoized: feed items are immutable after buildFeed, so a pane re-render
@@ -158,6 +159,7 @@ export const ENGINE_LABEL: Record<"codex" | "claude" | "openclaw" | "copilot", s
    so a resolved map re-renders exactly the memoized consumers. */
 interface FeedItemProps {
   item: Item;
+  sourceCwd?: string | null;
   speakText?: string; speakId?: string;
   /** Phone only: this seat row is the first after a parallel self's block, so
       its header also says which seat head it continues (null: the head has no
@@ -185,7 +187,7 @@ function ProvenanceFeedItem(props: FeedItemProps) {
   return <FeedItemBody {...props} provenance={provenance} />;
 }
 
-function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, provenance }: FeedItemProps & { provenance: ProvenanceLookup }) {
+function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, provenance, sourceCwd = null }: FeedItemProps & { provenance: ProvenanceLookup }) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
   /* Inside a deputy's block (docs/design/ghost-seat.md §6.2) the prose row is
@@ -252,7 +254,7 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
             {resumesAsk ? <span data-seat-continues className="min-w-0 truncate">{`· ${t("deputy.resumes", { ask: quoteHead(resumesAsk) })}`}</span> : null}
           </div>
           <div className={`w-full whitespace-pre-wrap break-words text-title leading-[1.45]${deputyInk ? " text-secondary" : ""}`}>
-            <div className="contents" data-tts-body>{mdBlocks(item.text)}</div>
+            <div className="contents" data-tts-body><MdMessageSourceContext.Provider value={sourceCwd}>{mdBlocks(item.text)}</MdMessageSourceContext.Provider></div>
           </div>
           <div data-mobile-message-actions className="-mx-3 -my-1.5 flex h-11 items-center">
             {speakText ? <SpeakButton text={speakText} answerId={speakId} /> : null}
@@ -303,7 +305,7 @@ function FeedItemBody({ item: sourceItem, speakText, speakId, resumesAsk, proven
               <CopyButton text={item.text} label={tr("feed.copyMd")} className={MESSAGE_ACTION} />
             </span>
           </div>
-          <div className="contents" data-tts-body>{mdBlocks(item.text)}</div>
+          <div className="contents" data-tts-body><MdMessageSourceContext.Provider value={sourceCwd}>{mdBlocks(item.text)}</MdMessageSourceContext.Provider></div>
         </div>
       </div>
     );

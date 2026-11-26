@@ -8,7 +8,7 @@ export { COMPANION_TOOLS } from "./tools";
 
 /** Verified 2026-10-06 against /api/docs/guides/live, /guides/live-delegation and the create schema. */
 export const LIVE_API_VERSION = "v1/live";
-export const LIVE_MODEL = "gpt-live-1";
+export const LIVE_MODEL = "gpt-live-1.1";
 export const LIVE_BACKEND_MODEL = "gpt-6-luna";
 /** Masculine / Natural in the official GPT-Live voice table, observed 2026-10-09.
  * https://developers.openai.com/api/docs/guides/live-conversations#voice-options */
@@ -93,7 +93,17 @@ export function backendRequest(input: readonly BackendItem[], options: { final?:
   const added = options.tools?.servers.length ? options.tools : null;
   return { model: LIVE_BACKEND_MODEL, instructions: `${BACKEND_INSTRUCTIONS}${added ? ` ${ADDED_TOOL_RULES}` : ""}\n\n${interfaceLanguage(options.locale ?? "en")}`, input,
     tools: added ? [...COMPANION_TOOLS, ...snapshotBackendTools(added)] : COMPANION_TOOLS,
-    tool_choice: options.final ? "none" as const : "auto" as const, parallel_tool_calls: false, max_output_tokens: BACKEND_MAX_OUTPUT_TOKENS, service_tier: "default",
-    reasoning: { effort: "none" }, store: false };
+    tool_choice: options.final ? "none" as const : "auto" as const, parallel_tool_calls: false, max_output_tokens: BACKEND_MAX_OUTPUT_TOKENS, service_tier: "default", store: false, stream: true,
+    reasoning: { effort: "none" } };
 }
 export type BackendRequest = ReturnType<typeof backendRequest>;
+
+export const PLAN_TOOL_NAMESPACE = "delegatus";
+
+/** The plan route takes stateless history and namespaced tools. The API-key
+ * request keeps its original limits and flat tools, including after fallback. */
+export function planBackendRequest(input: readonly BackendItem[], options: Parameters<typeof backendRequest>[1] = {}) {
+  const { max_output_tokens: _max, service_tier: _tier, tools, ...request } = backendRequest(input, options);
+  return { ...request, input: input.map(item => item.type === "function_call" ? { ...item, namespace: PLAN_TOOL_NAMESPACE } : item),
+    tools: [{ type: "namespace", name: PLAN_TOOL_NAMESPACE, description: "Voice Delegatus tools", tools }] };
+}

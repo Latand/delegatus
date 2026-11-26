@@ -1,11 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { checkEnvironment } from "./gate-cache";
 import { runPrivacyTestProcess } from "./privacy-test-process";
+import { commitInputs } from "./privacy-publication-gate";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -18,7 +19,7 @@ const catalogValue = "synthetic catalog phrase";
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "privacy-commits-")); roots.push(root);
   const repo = join(root, "repo"); mkdirSync(repo);
-  const env = { ...process.env };
+  const env = checkEnvironment(process.env);
   for (const key of Object.keys(env)) if (key.startsWith("GIT_") || key.startsWith("LLV_PRIVACY_")) delete env[key];
   for (const [key, name] of [["HOME", "home"], ["XDG_CONFIG_HOME", "config"], ["TMPDIR", "tmp"], ["LLV_STATE_DIR", "state"]]) {
     env[key] = join(root, name); mkdirSync(env[key]!);
@@ -47,7 +48,8 @@ function fixture() {
     cmd: [process.execPath, gate, "--repository", repo, "--base", base, "--require-known-values", "--check-commits", ...(added ? ["--added-lines"] : []), ...extra],
     env, cwd: join(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe",
   });
-  return { root, repo, env, git, write, commit, scan, rebase: () => { base = git("rev-parse", "HEAD"); } };
+  return { root, repo, env, git, write, commit, scan, inputs: () => [...commitInputs(repo, base)],
+    rebase: () => { base = git("rev-parse", "HEAD"); } };
 }
 
 function refuses(result: Awaited<ReturnType<typeof runPrivacyTestProcess>>, finding: string) {
@@ -146,6 +148,101 @@ test("a merge resolution is inspected relative to its first parent", async () =>
   refuses(await f.scan(), "home_path");
 });
 
+test("a base merge scans zero imported paths regardless of import size", async () => {
+  const f = fixture(); f.git("branch", "lane");
+  for (let n = 0; n < 40; n++) f.write(`import-${n}.txt`, `${catalogValue}\n`);
+  f.commit(); f.rebase();
+  f.git("checkout", "lane"); f.git("merge", "--no-ff", "-m", "Synthetic base merge", "main");
+  expect(f.inputs()).toHaveLength(0);
+  passes(await f.scan());
+  passes(await f.scan([], false));
+});
+
+test("a base merge keeps a known value introduced only by conflict resolution", async () => {
+  const f = fixture(); f.git("branch", "lane");
+  f.write("content.txt", "published version\n"); f.commit(); f.rebase();
+  f.git("checkout", "lane"); f.write("content.txt", "lane version\n"); f.commit();
+  // Create the conflicted index through Git, then record the actual resolution.
+  const merge = Bun.spawnSync(["git", "-c", "core.hooksPath=/dev/null", "merge", "--no-commit", "--no-ff", "main"],
+    { cwd: f.repo, env: f.env, stdout: "pipe", stderr: "pipe" });
+  expect(merge.exitCode).toBe(1);
+  expect(f.git("ls-files", "-u")).not.toBe("");
+  f.write("content.txt", `${catalogValue}\n`); f.commit("Synthetic resolution");
+  const resolution = f.git("rev-parse", "HEAD");
+  f.write("content.txt", "safe final version\n"); f.commit();
+  const result = await f.scan(); refuses(result, "known_value");
+  expect(result.stdout.toString()).toContain(`commit_content: ${resolution.slice(0, 12)}`);
+});
+
+test("a base merge keeps an ordinary lane commit even when the merge removes its value", async () => {
+  const f = fixture(); f.git("branch", "lane");
+  f.write("published.txt", "safe\n"); f.commit(); f.rebase();
+  f.git("checkout", "lane"); f.write("lane.txt", `${catalogValue}\n`); f.commit();
+  const lane = f.git("rev-parse", "HEAD");
+  f.git("merge", "--no-commit", "--no-ff", "main");
+  f.git("rm", "lane.txt"); f.commit("Synthetic base merge");
+  const result = await f.scan(); refuses(result, "known_value");
+  expect(result.stdout.toString()).toContain(`commit_content: ${lane.slice(0, 12)}`);
+});
+
+test("an unpublished merged parent keeps its known value after merge removal", async () => {
+  const f = fixture(); f.git("branch", "lane"); f.git("checkout", "-qb", "side");
+  f.write("side.txt", `${catalogValue}\n`); f.commit();
+  const side = f.git("rev-parse", "HEAD");
+  f.git("checkout", "lane"); f.write("lane.txt", "safe\n"); f.commit();
+  f.git("merge", "--no-commit", "--no-ff", "side");
+  f.git("rm", "-f", "side.txt"); f.commit("Synthetic side merge");
+  const result = await f.scan(); refuses(result, "known_value");
+  expect(result.stdout.toString()).toContain(`commit_content: ${side.slice(0, 12)}`);
+});
+
+for (const location of ["lane", "merge"] as const) for (const field of ["message", "author", "committer"] as const) test(`a base merge keeps the unpublished ${field} known value in the ${location}`, async () => {
+  const f = fixture(); f.git("branch", "lane");
+  f.write("published.txt", "safe\n"); f.commit(); f.rebase();
+  f.git("checkout", "lane");
+  const key = field === "author" ? "GIT_AUTHOR_NAME" : "GIT_COMMITTER_NAME";
+  const previous = f.env[key];
+  if (location === "lane" && field !== "message") f.env[key] = catalogValue;
+  f.commit(location === "lane" && field === "message" ? `Synthetic ${catalogValue}` : "Synthetic lane change");
+  if (location === "lane") f.env[key] = previous;
+  if (location === "merge" && field !== "message") f.env[key] = catalogValue;
+  const unpublished = f.git("rev-parse", "HEAD");
+  f.git("merge", "--no-ff", "-m", location === "merge" && field === "message" ? `Synthetic ${catalogValue}` : "Synthetic base merge", "main");
+  f.env[key] = previous;
+  const result = await f.scan(); refuses(result, "known_value");
+  expect(result.stdout.toString()).toContain((location === "lane" ? unpublished : f.git("rev-parse", "HEAD")).slice(0, 12));
+});
+
+test("a merge into the published first parent keeps resolution content and bounds paths", async () => {
+  const f = fixture(); f.git("checkout", "-qb", "lane");
+  f.write("lane.txt", "safe\n"); f.commit();
+  f.git("checkout", "main");
+  for (let n = 0; n < 40; n++) f.write(`import-${n}.txt`, `${catalogValue}\n`);
+  f.commit(); f.rebase();
+  f.git("merge", "--no-commit", "--no-ff", "lane");
+  f.write("resolution.txt", `${catalogValue}\n`); f.commit("Synthetic batch merge");
+  expect(f.inputs().map(input => input.path).sort()).toEqual(["lane.txt", "resolution.txt"]);
+  refuses(await f.scan(), "known_value");
+});
+
+test("an octopus base merge bounds published paths and keeps every unpublished parent", async () => {
+  const f = fixture(); f.git("branch", "lane"); f.git("checkout", "-qb", "side");
+  f.write("side.txt", `${catalogValue}\n`); f.commit();
+  const side = f.git("rev-parse", "HEAD");
+  f.git("checkout", "main");
+  for (let n = 0; n < 40; n++) f.write(`import-${n}.txt`, `${catalogValue}\n`);
+  f.commit(); f.rebase();
+  f.git("checkout", "lane"); f.write("lane.txt", "safe\n"); f.commit();
+  f.git("merge", "--no-commit", "--no-ff", "main", "side");
+  f.git("rm", "-f", "side.txt");
+  f.write("resolution.txt", `${catalogValue}\n`); f.commit("Synthetic octopus merge");
+  const merge = f.git("rev-parse", "HEAD");
+  expect(f.git("rev-list", "--parents", "-1", "HEAD").split(" ")).toHaveLength(4);
+  expect(f.inputs().map(input => input.path).sort()).toEqual(["lane.txt", "resolution.txt", "side.txt"]);
+  const result = await f.scan(); refuses(result, "known_value");
+  for (const commit of [side, merge]) expect(result.stdout.toString()).toContain(`commit_content: ${commit.slice(0, 12)}`);
+});
+
 for (const kind of ["utf16", "binary-attribute", "disguised-binary"] as const) test(`historical ${kind} blobs are inspected before a later deletion`, async () => {
   const f = fixture();
   if (kind === "binary-attribute") f.write(".gitattributes", "*.txt -diff\n");
@@ -180,6 +277,54 @@ for (const attributeState of ["dirty removal", "later committed removal"] as con
   refuses(await f.scan(), "known_value");
 });
 
+test("Git without check-attr --source reads historical attributes outside a cone sparse checkout", async () => {
+  const f = fixture();
+  const git = Bun.which("git", { PATH: f.env.PATH });
+  if (!git) throw new Error("fixture requires Git");
+  const bin = join(f.root, "bin");
+  mkdirSync(bin);
+  writeFileSync(join(bin, "git"), `#!/bin/sh
+check_attr=
+for arg do
+  case "$arg" in
+    check-attr) check_attr=yes ;;
+    -h)
+      if [ "$check_attr" = yes ]; then
+        echo 'usage: git check-attr [--cached] [--stdin] [-z] <attr>'
+        exit 129
+      fi ;;
+    --source|--source=*) if [ "$check_attr" = yes ]; then exit 129; fi ;;
+  esac
+done
+exec "$FIXTURE_GIT" "$@"
+`, { mode: 0o700 });
+  f.env.FIXTURE_GIT = git;
+  f.env.PATH = `${bin}:${f.env.PATH}`;
+  const marker = join(f.root, "index-hook-ran");
+  f.env.FIXTURE_INDEX_HOOK_MARKER = marker;
+  writeFileSync(join(f.repo, ".git", "hooks", "post-index-change"),
+    '#!/bin/sh\n: > "$FIXTURE_INDEX_HOOK_MARKER"\n', { mode: 0o700 });
+
+  mkdirSync(join(f.repo, "excluded"));
+  f.write("excluded/.gitattributes", "*.txt -diff\n");
+  f.write("excluded/data.txt", `synthetic catalog\n${"\n".repeat(10)}safe text\n${"\n".repeat(10)}end\n`);
+  f.commit();
+  passes(await f.scan());
+  f.rebase();
+  f.git("sparse-checkout", "init", "--cone");
+  f.git("sparse-checkout", "set", "included");
+  mkdirSync(join(f.repo, "excluded"), { recursive: true });
+  f.write("excluded/data.txt", `synthetic catalog\n${"\n".repeat(20)}phrase\n`);
+  f.git("add", "--sparse", "excluded/data.txt");
+  f.commit();
+  expect(f.inputs().map(input => ({ path: input.path, kind: input.kind }))).toEqual([{ path: "excluded/data.txt", kind: "blob" }]);
+  const index = f.git("ls-files", "--stage");
+
+  refuses(await f.scan(), "known_value");
+  expect(f.git("ls-files", "--stage")).toBe(index);
+  expect(existsSync(marker)).toBe(false);
+});
+
 test("new symbolic links are refused even when removed before HEAD", async () => {
   const f = fixture();
   f.git("update-index", "--add", "--cacheinfo", "120000", f.git("hash-object", "-w", "content.txt"), "link");
@@ -191,6 +336,9 @@ test("new symbolic links are refused even when removed before HEAD", async () =>
 test("missing known-value configuration is refused in added-lines mode", async () => {
   const f = fixture();
   delete f.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE; delete f.env.LLV_PRIVACY_KNOWN_VALUES_FILE;
+  // The CLI has a committed default catalog; this case explicitly models a
+  // caller that opts out so the missing-configuration refusal stays covered.
+  f.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE = "";
   refuses(await f.scan(), "configuration_error");
 });
 
@@ -221,19 +369,13 @@ function png(withLiveSource = true) {
     chunk("tEXt", Buffer.from(`Description\0${home}`)), ...(withLiveSource ? [chunk("tEXt", Buffer.from("capture-source\0live-fixture"))] : []), chunk("IDAT", deflateSync(Buffer.from([0, 0, 0, 0]))), chunk("IEND", Buffer.alloc(0))]);
 }
 
-test("historical image blobs retain metadata, OCR and provenance checks", async () => {
+test("historical image blobs retain metadata and provenance checks", async () => {
   const f = fixture();
-  const bin = join(f.root, "bin"); mkdirSync(bin);
-  const tesseract = join(bin, "tesseract");
-  const trace = join(f.root, "ocr-calls");
-  writeFileSync(tesseract, `#!/bin/sh\nprintf 'call\\n' >> '${trace}'\nprintf '%s\\n' '${mailbox}'\n`); chmodSync(tesseract, 0o755);
-  f.env.PATH = `${bin}:${f.env.PATH}`;
   f.write("image.png", png()); f.commit();
   f.write("duplicate.png", png()); f.commit();
   f.git("rm", "image.png", "duplicate.png"); f.commit();
   const result = await f.scan();
-  for (const finding of ["home_path", "email_address", "provenance_missing", "media_live_source"]) refuses(result, finding);
-  expect(readFileSync(trace, "utf8")).toBe("call\n");
+  for (const finding of ["home_path", "provenance_missing", "media_live_source"]) refuses(result, finding);
 });
 
 test("explicit paths cannot replace the pushed selection", async () => {
@@ -284,16 +426,14 @@ test("a historical image cannot borrow a later manifest", async () => {
   refuses(await f.scan(), "provenance_invalid");
 });
 
-test("unavailable OCR can be deferred locally while metadata and provenance still refuse", async () => {
+test("metadata and provenance checks work with only Git installed", async () => {
   const f = fixture(); const bin = join(f.root, "only-git"); mkdirSync(bin);
   const nativeGit = Bun.which("git", { PATH: checkEnvironment(process.env).PATH ?? "" });
   if (!nativeGit) throw new Error("Git fixture executable is unavailable");
   symlinkSync(nativeGit, join(bin, "git")); f.env.PATH = bin;
   f.write("image.png", png()); f.commit();
-  refuses(await f.scan(), "tool_unavailable");
-  const deferred = await f.scan(["--defer-unavailable-media"]);
-  refuses(deferred, "home_path"); refuses(deferred, "provenance_missing");
-  expect(deferred.stdout.toString()).not.toContain("tool_unavailable:");
+  const result = await f.scan();
+  refuses(result, "home_path"); refuses(result, "provenance_missing");
 });
 
 for (const name of [":(exclude)*.txt", "[abc].txt", "-leading.txt"]) test(`commit paths are literal: ${name}`, async () => {
@@ -318,9 +458,6 @@ test("approved fixture media passes from its own commit snapshot", async () => {
     expectedFindingClasses: ["home_path"],
   }] }));
   f.commit(); f.rebase();
-  const bin = join(f.root, "bin"); mkdirSync(bin);
-  const tesseract = join(bin, "tesseract"); writeFileSync(tesseract, "#!/bin/sh\nexit 0\n"); chmodSync(tesseract, 0o755);
-  f.env.PATH = `${bin}:${f.env.PATH}`;
   f.git("rm", image); f.commit(); f.write(image, bytes); f.commit(); f.git("rm", image); f.commit();
   passes(await f.scan());
 });

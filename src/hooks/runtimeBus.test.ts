@@ -593,7 +593,7 @@ describe("runtimeBus reconnect", () => {
     expect(h.bus.getState().store.sessions.conv_a?.host).toBe("hosted");
     expect(h.sources[1]!.url).toContain("after=100");
     const session = h.bus.getState().store.sessions.conv_a!;
-    expect(capabilitiesFor(target, { session, uiState: deriveSessionState(session, false), attentions: [], receipts: session.recentReceipts, legacy: false, structuredControlsEnabled: true }, { runtimeEnabled: true }).controls.send.state).toBe("enabled");
+    expect(capabilitiesFor(target, { session, uiState: deriveSessionState(session, false), attentions: [], receipts: session.recentReceipts, structuredControlsEnabled: true }, { runtimeEnabled: true }).controls.send.state).toBe("enabled");
   });
 
   test("reconnect installs the complete newer snapshot and resumes beyond it", async () => {
