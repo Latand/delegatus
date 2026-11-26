@@ -22,7 +22,8 @@ import { SeatSchematic } from "./TourSchematics";
  * Step 3, Orchestrator (#2166 §3.3): the step the guide ends on. It says in
  * one sentence and three lines what the orchestrator does, names the project
  * and the runtime it will start on, each with Change, and owns the one filled
- * button, "Create the orchestrator".
+ * button, "Create the orchestrator". A project or an engine it lacks is said
+ * in that row, with the way to its step in place of Change.
  *
  * Create spawns nothing here. It hands the project's own create draft a
  * request with `confirm`, and the draft presses its own Confirm once it is
@@ -214,14 +215,18 @@ function StepBody({ project, connected, enginesSettled, checkMinutes, onGoEngine
     </p>
   );
 
+  /* A prerequisite the step lacks is said in its own row, where the value would stand, and the row's action leads to its step. */
+  const missing = (text: string, marker: { "data-onboarding-orchestrator-no-project": "" } | { "data-onboarding-orchestrator-no-engine": "" }) => (
+    <span className="inline-flex min-w-0 items-center gap-1.5 text-warning" {...marker}>
+      <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      <span className="min-w-0">{text}</span>
+    </span>
+  );
+
   let action: React.ReactNode;
   if (!project) {
-    action = (
-      <div className="flex flex-col items-start gap-2 max-sm:items-stretch">
-        {warning(t("onboarding.orchestrator.noProject"))}
-        <button type="button" data-onboarding-orchestrator-go="project" onClick={onGoProject} className={secondary}>{t("onboarding.orchestrator.goProject")}</button>
-      </div>
-    );
+    /* The Project row says it, with the way to Project, on the first screen at every width. */
+    action = null;
   } else if (held) {
     action = (
       <div className="flex flex-col items-start gap-2 max-sm:items-stretch">
@@ -276,24 +281,26 @@ function StepBody({ project, connected, enginesSettled, checkMinutes, onGoEngine
       {/* Below 860 px the facts come first: what it will run on is the question, the picture is not. */}
       <div className="flex flex-col gap-2 max-[859px]:order-1">
         <div className="flex flex-col divide-y divide-border rounded-[10px] border border-border px-3">
-          {fact(
+          {project ? fact(
             t("onboarding.orchestrator.project"),
-            project ? (
-              <>
-                {project.name}
-                {project.cwd ? <span className="ml-1.5 font-mono text-[11px] text-muted">{project.cwd}</span> : null}
-              </>
-            ) : <span className="text-muted">—</span>,
+            <>
+              {project.name}
+              {project.cwd ? <span className="ml-1.5 font-mono text-[11px] text-muted">{project.cwd}</span> : null}
+            </>,
             onGoProject,
             "project",
+          ) : fact(
+            t("onboarding.orchestrator.project"),
+            missing(t("onboarding.orchestrator.noProject"), { "data-onboarding-orchestrator-no-project": "" }),
+            onGoProject,
+            "project",
+            undefined,
+            t("onboarding.orchestrator.goProject"),
           )}
           <div>
             {noEngine ? fact(
               t("orchPanel.runsOn"),
-              <span className="inline-flex min-w-0 items-center gap-1.5 text-warning" data-onboarding-orchestrator-no-engine="">
-                <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                <span className="min-w-0">{t("onboarding.orchestrator.noEngine")}</span>
-              </span>,
+              missing(t("onboarding.orchestrator.noEngine"), { "data-onboarding-orchestrator-no-engine": "" }),
               onGoEngines,
               "engines",
               undefined,

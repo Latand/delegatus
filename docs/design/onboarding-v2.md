@@ -1067,7 +1067,9 @@ step to the list and touches none of the files that pull request rewrites.
   A5: the "Runs on" row carries the statement and the way ("Connect Claude or
   Codex first.", "Go to Engines"), so both are on the first screen at every
   width; the plan sentence and the cost estimate, which named the same
-  runtime, are not drawn; a missing project keeps its own line. Frames: the
+  runtime, are not drawn; a missing project is said the same way in the
+  "Project" row ("Pick a project first.", "Go to Project"), and no block
+  below the step's notes repeats it. Frames: the
   states `first-visit*` and `orchestrator-no-engine` of the kanban driver's
   guide block.
 

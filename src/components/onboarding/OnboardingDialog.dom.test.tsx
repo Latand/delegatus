@@ -660,8 +660,16 @@ test("#2166: step 3 says what is missing: a project, an engine, or a signed-in a
   let root = createRoot(host);
   flushSync(() => root.render(<OnboardingDialog mode="guide" initialStep="orchestrator" marker={null} projects={[]} onClose={() => {}} />));
   await until(() => (host.textContent ?? "").includes("Pick a project first."));
-  expect(host.querySelector("[data-onboarding-orchestrator-go=project]")).not.toBeNull();
+  /* The Project row says it and leads to Project; with nothing chosen it offers no Change, and nothing below repeats it. */
+  expect(host.querySelector("[data-onboarding-orchestrator-no-project]")?.textContent).toBe("Pick a project first.");
+  expect((host.querySelector("[data-onboarding-orchestrator]")?.textContent ?? "").split("Pick a project first.").length - 1).toBe(1);
+  expect([...host.querySelectorAll("[data-onboarding-orchestrator-go]")].map((button) => `${button.getAttribute("data-onboarding-orchestrator-go")}:${button.textContent}`)).toEqual(["project:Go to Project"]);
+  expect(host.querySelector("[data-onboarding-orchestrator-change=project]")).toBeNull();
+  /* The engine is connected, so its row still reads the runtime, with Change. */
+  expect(host.querySelector("[data-onboarding-orchestrator-change=runs-on]")).not.toBeNull();
   expect(host.querySelector("[data-onboarding-orchestrator-create]")).toBeNull();
+  flushSync(() => (host.querySelector("[data-onboarding-orchestrator-go=project]") as HTMLElement).click());
+  expect(host.querySelector("[data-onboarding-step=project]")?.getAttribute("aria-current")).toBe("step");
   flushSync(() => root.unmount());
 
   answerAccounts({ claude: { active: "", cli: "found", accounts: [] }, codex: { active: "", cli: "found", accounts: [] } });
@@ -726,10 +734,12 @@ test("the orchestrator step with no engine claims no runtime: the Runs on row na
   for (const claim of ["Opus", "account Main", "Claude plan", "API cost estimate"]) expect(step().textContent).not.toContain(claim);
   expect(host.querySelector("[data-onboarding-cost]")).toBeNull();
   expect(host.querySelector("[data-onboarding-permissions]")).not.toBeNull();
-  /* Both blockers are stated, each once, each with its way. */
+  /* Both blockers are stated the same way: each once, in its own row, with the one action that leads to its step. No row with nothing chosen reads Change. */
   expect(occurrences("Connect Claude or Codex first.")).toBe(1);
   expect(occurrences("Pick a project first.")).toBe(1);
-  expect([...host.querySelectorAll("[data-onboarding-orchestrator-go]")].map((button) => `${button.getAttribute("data-onboarding-orchestrator-go")}:${button.textContent}`)).toEqual(["engines:Go to Engines", "project:Go to Project"]);
+  expect(host.querySelector("[data-onboarding-orchestrator-no-project]")?.textContent).toBe("Pick a project first.");
+  expect([...host.querySelectorAll("[data-onboarding-orchestrator-go]")].map((button) => `${button.getAttribute("data-onboarding-orchestrator-go")}:${button.textContent}`)).toEqual(["project:Go to Project", "engines:Go to Engines"]);
+  expect(host.querySelector("[data-onboarding-orchestrator-change]")).toBeNull();
   expect(host.querySelector("[data-onboarding-orchestrator-create]")).toBeNull();
   expect(host.querySelector("[data-onboarding-primary]")?.textContent).toBe("Finish without it");
   flushSync(() => (host.querySelector("[data-onboarding-orchestrator-go=engines]") as HTMLElement).click());
@@ -745,6 +755,8 @@ test("the orchestrator step with no engine claims no runtime: the Runs on row na
   await until(() => Boolean(named()));
   expect(occurrences("Connect Claude or Codex first.")).toBe(1);
   expect(step().textContent).not.toContain("Pick a project first.");
+  expect(host.querySelector("[data-onboarding-orchestrator-no-project]")).toBeNull();
+  expect(host.querySelector("[data-onboarding-orchestrator-change=project]")?.textContent).toBe("Change");
   expect(host.querySelector("[data-onboarding-orchestrator-runs-on]")).toBeNull();
   expect(host.querySelector("[data-onboarding-orchestrator-signin]")).toBeNull();
   expect(host.querySelectorAll("[data-onboarding-orchestrator-go]").length).toBe(1);

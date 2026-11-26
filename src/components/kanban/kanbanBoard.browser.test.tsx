@@ -46134,7 +46134,7 @@ describe("first-run guide: variant 1 on the real components", () => {
     if (token === "orchestrator-claude-only") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-roles]", "[data-onboarding-orchestrator-create]"];
     if (token === "orchestrator-codex-only") return ["[data-onboarding-orchestrator-runs-on]", "[data-onboarding-orchestrator-advice]", "[data-onboarding-orchestrator-roles]", "[data-onboarding-orchestrator-create]"];
     if (token === "first-visit") return ["[data-telemetry-guide-notice]", "[data-onboarding-primary]", '[data-onboarding-current="engines"] h2'];
-    if (token === "first-visit-orchestrator") return ["[data-onboarding-orchestrator-no-engine]", '[data-onboarding-orchestrator-go="engines"]', "[data-telemetry-guide-notice]", "[data-onboarding-primary]", "[data-onboarding-orchestrator-warning]", '[data-onboarding-orchestrator-go="project"]'];
+    if (token === "first-visit-orchestrator") return ["[data-onboarding-orchestrator-no-engine]", '[data-onboarding-orchestrator-go="engines"]', "[data-telemetry-guide-notice]", "[data-onboarding-primary]", "[data-onboarding-orchestrator-no-project]", '[data-onboarding-orchestrator-go="project"]'];
     if (token === "first-visit-dismissed") return ["[data-onboarding-primary]", '[data-onboarding-current="engines"] h2'];
     if (token === "first-visit-closed") return ["[data-telemetry-notice] p", "[data-telemetry-notice]"];
     if (token === "orchestrator-no-engine") return ["[data-onboarding-orchestrator-no-engine]", '[data-onboarding-orchestrator-go="engines"]', "[data-onboarding-primary]"];
@@ -46268,8 +46268,8 @@ describe("first-run guide: variant 1 on the real components", () => {
           for (const selector of first.missing) failures.push(`${name}: ${selector} is missing`);
           /* Below 860 px the Orchestrator step's facts are whole on the first screen. */
           if (spec.token.startsWith("orchestrator-") && width < 860) for (const selector of first.offFirstScreen) failures.push(`${name}: ${selector} is not whole on the first screen`);
-          /* Slice 1: the notice, the footer's button, the missing engine and its way are on the first screen at every width. */
-          if (SLICE_1(spec.token)) for (const selector of first.offFirstScreen) if (!selector.includes("warning") && !selector.includes('go="project"')) failures.push(`${name}: ${selector} is not whole on the first screen`);
+          /* Slice 1: the notice, the footer's button, and each missing prerequisite with its way are on the first screen at every width. */
+          if (SLICE_1(spec.token)) for (const selector of first.offFirstScreen) failures.push(`${name}: ${selector} is not whole on the first screen`);
           let slice1: Record<string, unknown> | null = null;
           if (SLICE_1(spec.token)) {
             const notice = await page.evaluate(NOTICE_AND_FOOTER);
@@ -46301,15 +46301,22 @@ describe("first-run guide: variant 1 on the real components", () => {
                 runsOn: document.querySelectorAll("[data-onboarding-orchestrator-runs-on]").length,
                 plan: document.querySelectorAll("[data-onboarding-orchestrator-plan], [data-onboarding-cost]").length,
                 named: document.querySelector("[data-onboarding-orchestrator-no-engine]")?.textContent ?? "",
+                project: document.querySelector("[data-onboarding-orchestrator-no-project]")?.textContent ?? null,
+                changes: [...document.querySelectorAll("[data-onboarding-orchestrator-change]")].map((button) => button.getAttribute("data-onboarding-orchestrator-change") ?? ""),
                 ways: [...document.querySelectorAll("[data-onboarding-orchestrator-go]")].map((button) => `${button.getAttribute("data-onboarding-orchestrator-go")}:${button.textContent?.trim()}`),
                 step: document.querySelector("[data-onboarding-orchestrator]")?.textContent ?? "",
               }));
-              slice1.claims = { named: claims.named, ways: claims.ways };
+              slice1.claims = { named: claims.named, project: claims.project, changes: claims.changes, ways: claims.ways };
               if (claims.runsOn || claims.plan || /Opus|Sol/.test(claims.step)) failures.push(`${name}: the step still claims a runtime or a plan with no engine`);
               if (claims.named !== translate(lang, "onboarding.orchestrator.noEngine")) failures.push(`${name}: the Runs on row reads «${claims.named}»`);
               if (claims.step.split(translate(lang, "onboarding.orchestrator.noEngine")).length !== 2) failures.push(`${name}: the missing engine is not said exactly once`);
-              const ways = [`engines:${translate(lang, "onboarding.orchestrator.goEngines")}`, ...(spec.token === "first-visit-orchestrator" ? [`project:${translate(lang, "onboarding.orchestrator.goProject")}`] : [])];
+              /* Each missing prerequisite is said once, in its own row, with the one action that leads to its step; a row with nothing chosen offers no Change. */
+              const noProject = spec.token === "first-visit-orchestrator";
+              const ways = [...(noProject ? [`project:${translate(lang, "onboarding.orchestrator.goProject")}`] : []), `engines:${translate(lang, "onboarding.orchestrator.goEngines")}`];
               if (claims.ways.join("|") !== ways.join("|")) failures.push(`${name}: the ways out are ${claims.ways.join(" | ")}`);
+              const saidProject = claims.step.split(translate(lang, "onboarding.orchestrator.noProject")).length - 1;
+              if (noProject ? claims.project !== translate(lang, "onboarding.orchestrator.noProject") || saidProject !== 1 : claims.project !== null || saidProject !== 0) failures.push(`${name}: the Project row reads «${claims.project}», the missing project said ${saidProject} times`);
+              if (claims.changes.join("|") !== (noProject ? "" : "project")) failures.push(`${name}: Change is offered on ${claims.changes.join(" | ") || "no row"}`);
             }
           }
           if (!form && !settings) {
@@ -46395,7 +46402,14 @@ describe("first-run guide: variant 1 on the real components", () => {
             for (const button of after.buttons) if (button.underNotice || button.outside || button.taken) failures.push(`${name}: after Continue, footer button «${button.text}» is not whole and pressable`);
             await page.screenshot({ path: file("-pressed-continue") });
           }
-          /* The row's own action leads to Engines. */
+          /* Each row's own action leads to its step: Project first, then back by Continue, then Engines. */
+          if (spec.token === "first-visit-orchestrator") {
+            await page.locator('[data-onboarding-orchestrator-go="project"]').click({ timeout: 5_000 });
+            await page.waitForSelector('[data-onboarding-current="project"]', { timeout: 5_000 });
+            await page.screenshot({ path: file("-pressed-go-project") });
+            await page.locator("[data-onboarding-primary]").click({ timeout: 5_000 });
+            await page.waitForSelector("[data-onboarding-orchestrator-no-engine]", { timeout: 30_000 });
+          }
           if (noEngine) {
             await page.locator('[data-onboarding-orchestrator-go="engines"]').click({ timeout: 5_000 });
             await page.waitForSelector('[data-onboarding-current="engines"]', { timeout: 5_000 });
