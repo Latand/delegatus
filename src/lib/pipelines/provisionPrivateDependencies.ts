@@ -16,7 +16,7 @@ type PrivateInstallDirectory = { claim: string; inputs: string; device: string; 
 export type PrivateInstallReceipt = PrivateInstallDirectory & { mode: "staged" | "handoff" | "in-place" | "copied"; workspaceDigest?: string };
 export type PrivateInstallIntent = PrivateInstallDirectory & { nonceDigest: string };
 export type PrivateInstallEffect = "private-scratch" | "private-install" | "private-marker" | "private-publish" | "private-cleanup"
-  | "private-copy" | "create-modules-directory" | "install-in-place" | "private-git-exclude";
+  | "private-copy" | "create-modules-directory" | "install-in-place";
 
 type PrivateInstallPorts = {
   beforeEffect(effect: PrivateInstallEffect): Promise<void>;
@@ -228,50 +228,6 @@ async function verifyWorkspaceDirectories(checkout: string, expected: string[][]
   }
 }
 
-async function workspaceExcludeFile(checkout: string): Promise<string> {
-  const dotGit = path.join(checkout, ".git");
-  const info = await fs.lstat(dotGit);
-  let gitDirectory: string;
-  if (info.isDirectory()) gitDirectory = dotGit;
-  else if (info.isFile()) {
-    const pointer = await fileBytes(dotGit, 4096);
-    const match = /^gitdir: (.+)\s*$/i.exec(pointer.toString());
-    if (!match) throw new UnverifiedPrivateInstall();
-    gitDirectory = path.resolve(checkout, match[1]!);
-  } else throw new UnverifiedPrivateInstall();
-  const commonFile = path.join(gitDirectory, "commondir");
-  const common = await entry(commonFile);
-  if (common) {
-    if (!common.isFile()) throw new UnverifiedPrivateInstall();
-    gitDirectory = path.resolve(gitDirectory, (await fileBytes(commonFile, 4096)).toString().trim());
-  }
-  const infoDirectory = path.join(gitDirectory, "info");
-  const infoStat = await entry(infoDirectory);
-  if (infoStat && !infoStat.isDirectory()) throw new UnverifiedPrivateInstall();
-  if (!infoStat) await fs.mkdir(infoDirectory, { mode: 0o700 });
-  return path.join(infoDirectory, "exclude");
-}
-
-async function ignoreWorkspaceModuleDirectories(checkout: string, members: string[], permit: (effect: PrivateInstallEffect) => Promise<void>): Promise<void> {
-  if (!members.length) return;
-  const file = await workspaceExcludeFile(checkout);
-  const patterns = members.map(member => `/${member}/node_modules/`);
-  let current = "";
-  try { current = (await fileBytes(file, 1024 * 1024)).toString(); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  const additions = patterns.filter(pattern => !current.split(/\r?\n/).includes(pattern));
-  if (!additions.length) return;
-  await permit("private-git-exclude");
-  const flags = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW;
-  const handle = await fs.open(file, flags, 0o600);
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) throw new UnverifiedPrivateInstall();
-    const prefix = stat.size === 0 ? "" : current.endsWith("\n") ? "" : "\n";
-    await handle.writeFile(`${prefix}${additions.join("\n")}\n`);
-  } finally { await handle.close(); }
-}
-
 async function bindWorkspaceModules(checkout: string, member: string, scratch: string, nonce: string,
   permit: (effect: PrivateInstallEffect) => Promise<void>): Promise<{ directory: FileHandle; identity: string[] }> {
   const parent = await openWorkspace(checkout, member);
@@ -284,16 +240,28 @@ async function bindWorkspaceModules(checkout: string, member: string, scratch: s
     const proof = (identity: BigIntStats) => sha256(JSON.stringify([
       nonce, member, String(owner.dev), String(owner.ino), String(identity.dev), String(identity.ino),
     ]));
+    const ignoreModules = async (directoryFd: number) => {
+      const file = path.join(descriptorPath(directoryFd), ".gitignore");
+      try {
+        await fs.writeFile(file, "*\n", { flag: "wx" });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if ((await fileBytes(file, 16)).toString() !== "*\n") throw new UnverifiedPrivateInstall();
+      }
+    };
     if (await entry(target)) {
       modules = await fs.open(target, directoryFlags);
       const existing = await fileBytes(path.join(descriptorPath(modules.fd), INTENT), 4096);
       if (existing.toString() !== proof(await modules.stat({ bigint: true }))) throw new UnverifiedPrivateInstall();
+      await permit("private-marker");
+      await ignoreModules(modules.fd);
     } else {
       await permit("create-modules-directory");
       const staged = await fs.mkdtemp(path.join(scratch, "workspace-"));
       modules = await fs.open(staged, directoryFlags);
       const created = await modules.stat({ bigint: true });
       await fs.writeFile(path.join(descriptorPath(modules.fd), INTENT), proof(created), { flag: "wx" });
+      await ignoreModules(modules.fd);
       const current = await openWorkspace(checkout, member);
       try {
         if (!sameDirectory(owner, await current.stat({ bigint: true }))
@@ -561,7 +529,6 @@ async function installInPlace({ checkout, target, scratch, claim, manifest, inpu
 }): Promise<boolean> {
   if (original && (!prior || prior.inputs !== inputs || prior.device !== String(original.dev) || prior.inode !== String(original.ino))) return false;
   const members = await workspaceMembers(checkout, manifest);
-  await ignoreWorkspaceModuleDirectories(checkout, members, permit);
   let directoryFd: number | undefined;
   if (!original) {
     await permit("create-modules-directory");

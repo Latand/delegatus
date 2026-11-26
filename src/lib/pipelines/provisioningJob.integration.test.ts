@@ -1007,6 +1007,9 @@ linuxInstall.each([
 ] as const)("the production %s install preserves checkout custody in %s", (inputKind, mode) =>
   withControllerAuditState(async () => {
     const { h, git, repo, root } = await realWorktreeLane("relative-install-custody", BUILD_ONLY as never);
+    const commonGitDir = (await git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")).trim();
+    const commonExclude = path.join(commonGitDir, "info", "exclude");
+    const commonExcludeBefore = fs.existsSync(commonExclude) ? fs.readFileSync(commonExclude) : null;
     const firstPermit = latch(), release = latch();
     const requestedPackage = latch(), sendPackage = latch();
     const during = mode === "replace-during-write" || mode === "replace-during-rerun";
@@ -1167,6 +1170,8 @@ linuxInstall.each([
         expect(JSON.parse(fs.readFileSync(path.join(rootModules, "fixture-local", "package.json"), "utf8")).name).toBe("fixture-local");
         expect((await git(lane.worktreeDir, "ls-files", "--others", "--exclude-standard", "-z")).trim()).toBe("");
         if (inputKind === "workspace" && mode === "unchanged") {
+          expect(fs.existsSync(commonExclude) ? fs.readFileSync(commonExclude) : null).toEqual(commonExcludeBefore);
+          expect(fs.readFileSync(path.join(lane.worktreeDir, "packages", "fixture", "node_modules", ".gitignore"), "utf8")).toBe("*\n");
           const settledHead = await git(lane.worktreeDir, "rev-parse", "HEAD");
           const readonly = await commitPipelineStage(lane, "read-only-fixture", false, h.ports.exec, [], settledHead.trim());
           expect(readonly.ok, readonly.ok ? "" : readonly.error).toBe(true);
