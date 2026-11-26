@@ -14,6 +14,8 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ROLE_MEMORY_BOUND, type RoleMemoryScopeRow, CURATION_NEW_LESSONS, type CuratorPassView } from "../roleTypes";
 
 import { selectImportBatch, importBatchScopes, type ImportBatch } from "../importCuration";
+import { roleMemoryEnabled } from "../settings";
+import { activeLegatusProject, evidenceScopes, LEGATUS_SCOPE, selectDecisionEvidence, type DecisionEvidenceRef } from "./decisionEvidence";
 
 export interface CuratorPass extends CuratorPassView {
   kind: "pass";
@@ -32,6 +34,7 @@ export interface CuratorPass extends CuratorPassView {
   launchBody?: Record<string, unknown>;
   finalText?: string;
   importBatch?: ImportBatch;
+  decisionEvidence?: DecisionEvidenceRef[];
   budgetSweepCandidates?: Record<string, string[]>;
   budgetSweep?: { scope: string; candidates: number; restored: number; integrated: number; remaining: number }[];
 }
@@ -78,7 +81,7 @@ export function validCurationOperation(value: unknown): value is CurationOperati
     && !!row.counts && countFields.every(field => integer(row.counts[field])) && row.counts.calls === 1
     && !!row.maintenance && [row.maintenance.counts, row.maintenance.knownValues, row.maintenance.cleanup].every(value => value === "pending" || value === "complete");
 }
-type Row = CurationOperation | CuratorPass | ProjectRow | NoAccountWarning | { kind: "machine"; current: string | null; budgetSweepAttemptedAt?: string; budgetSweepEndedAt?: string; budgetSweepCompletedAt?: string } | { kind: "conversation"; conversationId: string; pass: string };
+type Row = CurationOperation | CuratorPass | ProjectRow | NoAccountWarning | { kind: "machine"; current: string | null; decisionsThrough?: string; decisionsScannedAt?: string; budgetSweepAttemptedAt?: string; budgetSweepEndedAt?: string; budgetSweepCompletedAt?: string } | { kind: "conversation"; conversationId: string; pass: string };
 const key = (row: Row) => row.kind === "operation" ? `o:${row.id}` : row.kind === "pass" ? `r:${row.id}` : row.kind === "project" ? `p:${row.project}` : row.kind === "no-account-warning" ? `w:${row.project}` : row.kind === "machine" ? "machine" : `c:${row.conversationId}`;
 const seed = { collection: "role_memory_curation", schemaVersion: 1, migrationId: "role-memory-curation-v1", key, loadRecords: (): Row[] => [] };
 const cache = new Map<string, SqliteStateCollection<Row>>();
@@ -432,13 +435,15 @@ function* curationStatusSteps(project: string, now = Date.now(), setting = effec
   const urgent = summary.urgent || sweepDue;
   const batch = selectImportBatch(project);
   fence?.value("import:" + project, () => selectImportBatch(project), batch);
-  const active = summary.active || !!batch || sweepPending;
+  const hasMemoryWork = summary.active || !!batch || sweepPending;
+  const decisionsAt = machine?.kind === "machine" ? machine.decisionsScannedAt : undefined;
+  const active = hasMemoryWork || roleMemoryEnabled() && !!activeLegatusProject();
   const lastPassId = projectRows(project, fence).flatMap(row => row.passes).at(-1);
   const lastPass = lastPassId ? observedPass(lastPassId, fence) : null;
   const importing = !!batch && (!lastPass || lastPass.state === "succeeded");
   // Failed/no-op passes spend the durable interval. A new over-bound
   // revision requests immediate integration, without reopening the same claim.
-  const anchor = [lastAt, lastClaimAt].filter((at): at is string => !!at).sort().at(-1);
+  const anchor = [lastAt, lastClaimAt, ...(!hasMemoryWork ? [decisionsAt] : [])].filter((at): at is string => !!at).sort().at(-1);
   const eligibleAt = anchor ? Date.parse(anchor) + setting.intervalMs : now;
   const due = setting.enabled && active && (urgent || importing || now >= eligibleAt);
   const trigger = urgent ? "pressure" : !anchor ? "initial" : pressure ? "pressure" : newLessons >= CURATION_NEW_LESSONS ? "new-lessons" : "interval";
@@ -588,10 +593,19 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
   // The engines position never claims an ordinary pass (§4.9).
   if (input.importOnly && !importBatch) return null;
   const machine = curationCollection()?.get("machine");
+  const claimedAt = new Date(input.now).toISOString();
+  const decisionsThrough = machine?.kind === "machine" ? machine.decisionsThrough : undefined;
+  // A new installation starts with the ordinary interval. Existing passes
+  // advance a machine-wide cutoff because any project can host the curator.
+  const firstWindow = new Date(input.now - setting.intervalMs).toISOString();
+  const after = decisionsThrough ?? (prior?.lastAt && prior.lastAt > firstWindow ? prior.lastAt : firstWindow);
+  const decisionEvidence = input.importOnly || !roleMemoryEnabled() ? undefined
+    : withViewerOperation("memory.curation-admission", () => selectDecisionEvidence(after, claimedAt));
   const sweepRevision = roleMemoryCollection()?.revision();
   const sweepCandidates: Record<string, string[]> | undefined = !input.importOnly && !(machine?.kind === "machine" && machine.budgetSweepCompletedAt) ? {} : undefined;
   if (sweepCandidates) for (const { id, scope } of budgetArchiveCandidates()) (sweepCandidates[scope] ??= []).push(id);
-  const scopes = [...new Set([...passScopes(project), ...Object.keys(sweepCandidates ?? {}), ...(importBatch ? importBatchScopes(importBatch) : [])])];
+  const scopes = [...new Set([...passScopes(project), ...Object.keys(sweepCandidates ?? {}), ...(importBatch ? importBatchScopes(importBatch) : []),
+    ...(decisionEvidence?.length ? [LEGATUS_SCOPE, ...evidenceScopes(decisionEvidence)] : [])])];
   const claimRevisions: Record<string, number> = Object.fromEntries(scopes.map(scope => [scope, 0]));
   for (const row of curationScopes(project)) {
     const scope = row.revisionScope ?? canonicalScope(row.scope);
@@ -607,15 +621,17 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
     const last = held?.passes.at(-1);
     const completed = last ? passMetadata(last) : null;
     if (held && !status.urgent && !(importBatch && completed?.state === "succeeded") && input.now < Math.max(Date.parse(held.lastClaimAt), held.lastAt ? Date.parse(held.lastAt) : 0) + setting.intervalMs) return null;
-    const claimedAt = new Date(input.now).toISOString();
+    if ((machine?.kind === "machine" ? machine.decisionsThrough : undefined) !== decisionsThrough) return null;
     const id = `curate_${createHash("sha256").update(`${project}:${claimedAt}`).digest("hex").slice(0, 24)}`;
     if (tx.get(`r:${id}`)) return null;
     const pass: CuratorPass = { kind: "pass", id, project, repoDir: input.repoDir, scopes, clientAttemptId: id, claimedAt, state: "claimed", endedAt: null, failure: null, conversationId: null, launchId: null, transcriptPath: null, launchedAt: null,
       ...(completed?.failure === "no-account" ? { noAccountEpisode: completed.noAccountEpisode ?? completed.id } : {}),
       ...(importBatch ? { importBatch } : {}),
+      ...(decisionEvidence ? { decisionEvidence } : {}),
       ...(sweepCandidates ? { budgetSweepCandidates: sweepCandidates } : {}),
       counts: { calls: 0, changed: 0, rewritten: 0, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 } };
     tx.put(pass); tx.put({ ...(machine?.kind === "machine" ? machine : {}), kind: "machine", current: id,
+      ...(decisionEvidence ? { decisionsScannedAt: claimedAt } : {}),
       ...(sweepCandidates ? { budgetSweepAttemptedAt: claimedAt } : {}) });
     tx.put({ kind: "project", project, current: id, lastClaimAt: claimedAt, claimRevisions, lastAt: held?.kind === "project" ? held.lastAt : null, passes: [...(held?.kind === "project" ? held.passes : []), id] });
     return pass;
@@ -653,6 +669,8 @@ export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass 
     }
     if (!passIsLive(next)) {
       const machine = tx.get("machine"); if (machine?.kind === "machine" && machine.current === id) tx.put({ ...machine, current: null,
+        ...(next.state === "succeeded" && held.decisionEvidence && held.claimedAt > (machine.decisionsThrough ?? "")
+          ? { decisionsThrough: held.claimedAt } : {}),
         ...(held.budgetSweepCandidates ? { budgetSweepEndedAt: next.endedAt ?? held.claimedAt } : {}),
         ...(next.state === "succeeded" && held.budgetSweepCandidates ? { budgetSweepCompletedAt: next.endedAt ?? held.claimedAt } : {}) });
       const projectKey = canonicalProject(held.project), stored = tx.get(`p:${projectKey}`);

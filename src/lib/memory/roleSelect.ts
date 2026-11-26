@@ -21,9 +21,11 @@ const points = (text: string) => [...text].length;
 const failure = (reason: string): ShadowSelection => ({ selector: "whole", selectorVersion: "1", reason, scores: [], shadowIds: [] });
 export function alwaysOn(rules: readonly RoleMemoryRule[]): Set<string> {
   let reserved = 0;
-  return new Set(rules.filter(rule => {
+  const kept = rules.filter(rule => rule.keptByOperatorAt);
+  const typed = rules.filter(rule => !rule.keptByOperatorAt && rule.source?.origin === "decision" && rule.source.author === "typed");
+  return new Set([...kept, ...typed].filter(rule => {
     const length = points(ruleLine(rule)) + (reserved ? 1 : 0);
-    if (!rule.keptByOperatorAt || reserved + length > 3_000) return false;
+    if (reserved + length > 3_000) return false;
     reserved += length;
     return true;
   }).map(rule => rule.id));
@@ -58,7 +60,6 @@ async function bm25(rules: readonly RoleMemoryRule[], brief: string, checkpoint:
 }
 
 export async function packRoleSelection(scopes: Scopes, rules: RoleMemoryRule[], scores: number[], threshold: number, signal: AbortSignal, checkpoint: Checkpoint = cooperativeSlice(signal)): Promise<Pick<ShadowSelection, "scores" | "shadowIds">> {
-  // Layers arrive in slice 3; operator-kept rules already exist today.
   const protectedIds = alwaysOn(rules);
   const selected = new Set(protectedIds);
   const byteCount = await learnedRulesByteCounter(scopes, protectedIds, checkpoint);

@@ -124,6 +124,7 @@ async function engineMemory(start: MemoryEngineStart, clean: boolean) {
 const deliveryLedgerIndexes = declaredIndexes([
   `CREATE INDEX IF NOT EXISTS files_hash ON files(hash)`,
   `CREATE INDEX IF NOT EXISTS deliveries_attempt ON deliveries(json_extract(body,'$.attempt.pipelineId'), json_extract(body,'$.attempt.stageId'), json_extract(body,'$.attempt.attempt'), json_extract(body,'$.conversationId'))`,
+  `CREATE INDEX IF NOT EXISTS deliveries_conversation ON deliveries(json_extract(body,'$.conversationId'))`,
 ]);
 const indexPreparations = new Map<string, Promise<void>>();
 
@@ -281,6 +282,19 @@ export function deliveredRuleIds(attempt: NonNullable<MemoryEngineStart["attempt
     return new Set(rows.flatMap(row => (JSON.parse(row.body) as MemoryDelivery).rules.map(rule => rule.id)));
   } finally { db.close(); }
 }
+/** Conversation-level evidence includes starts outside pipelines. */
+export function deliveredRuleToConversation(conversationId: string, id: string, hash: string): boolean {
+  const filename = statePath("role-memory", "delivery.sqlite");
+  if (!fs.existsSync(filename)) return false;
+  const Database = sqliteDatabase();
+  const db = new Database(filename, { readonly: true });
+  try {
+    return !!db.query(`SELECT 1 FROM deliveries d CROSS JOIN json_each(d.body,'$.rules') rule
+      WHERE json_extract(d.body,'$.conversationId')=? AND json_extract(rule.value,'$.id')=?
+        AND json_extract(rule.value,'$.hash')=? LIMIT 1`).get(conversationId, id, hash);
+  } finally { db.close(); }
+}
+
 export function engineMemoryVersion(hash: string): Buffer | null {
   if (!/^[a-f0-9]{64}$/.test(hash)) throw Error("invalid engine memory hash");
   const filename = statePath("role-memory", "delivery.sqlite");

@@ -7236,6 +7236,16 @@ export class AgentRegistry {
     }, { skipColdKeyInitialization: true });
   }
 
+  /** Terminal owners retain the admitted message and its server-stamped origin. */
+  recentTerminalDeliveryOwners(conversationId: ViewerConversationId): DeliveryOperationOwner[] {
+    return this.readKeyed(file => {
+      const ids = conversationIdsResolvingTo(file, resolveConversationAlias(file, conversationId));
+      return ids.flatMap(id => registryKeysMatchingBounded(file, "deliveryOperationOwners", [
+        { field: "conversationId", value: id }, { field: "custodyState", value: "terminal" },
+      ], DELIVERY_OPERATION_OWNER_TERMINAL_LIMIT).map(key => clone(file.deliveryOperationOwners[key]!)));
+    }, { skipColdKeyInitialization: true });
+  }
+
   heldDeliveryById(id: string): HeldDelivery | undefined {
     return this.readKeyed(file => {
       const row = file.heldDeliveries[id];
@@ -8350,7 +8360,7 @@ export class AgentRegistry {
       const memoryProject = designatedSeatMembership?.containerId
         ?? explicitProject ?? existingConversation?.projectOwnership?.project ?? profile.project;
       if (designatedSeatMembership && memoryProject
-        && (memoryRole === "orchestrator" || memoryRole === "maintainer")) {
+        && (memoryRole === "orchestrator" || memoryRole === "maintainer" || memoryRole === "legatus")) {
         /* Designation is an explicit role transition. A conversation adopted
            from a stage must shed that stage's selector and clean-memory flag.
            The role label alone is insufficient: pipeline stages may use the
@@ -8359,7 +8369,7 @@ export class AgentRegistry {
         profile.learnedRules = { project: memoryProject, roleId: memoryRole };
       } else if (roleIsClean(memoryRole)) {
         profile.cleanMemory = true;
-      } else if ((memoryRole === "orchestrator" || memoryRole === "maintainer")
+      } else if ((memoryRole === "orchestrator" || memoryRole === "maintainer" || memoryRole === "legatus")
         && !profile.cleanMemory && !profile.learnedRules && memoryProject) {
         profile.learnedRules = { project: memoryProject, roleId: memoryRole };
       } else if (!designatedSeatMembership && !memoryRole) {

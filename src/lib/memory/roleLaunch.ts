@@ -25,7 +25,7 @@ const hashRule = (text: string) => createHash("sha256").update(text).digest("hex
     memory fence and selector. */
 export function roleMemoryProfileForIdentity(
   profile: LaunchProfile | null | undefined,
-  roleId: "orchestrator" | "maintainer" | null | undefined,
+  roleId: "orchestrator" | "maintainer" | "legatus" | null | undefined,
   project: string | null | undefined,
   designatedSeat = false,
   /** Proven from the durable record (operatorRootConversation): the selector is re-derived for Delegatus mode. */
@@ -37,7 +37,6 @@ export function roleMemoryProfileForIdentity(
     return next.learnedRules === profile.learnedRules ? profile : next;
   }
   if (!profile || !roleId || !project || project === "*") return profile;
-  if (roleId !== "orchestrator" && roleId !== "maintainer") return profile;
   if (!designatedSeat) return profile;
   return {
     ...profile,
@@ -58,6 +57,13 @@ export function memoryStartIdentity(registry: AgentRegistry, conversationId: str
 /** The selector survives in receipts; only engine options carry its text.
  * A ledger refusal stops a start: a successfully started attempt must have evidence. */
 export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, "cleanMemory" | "learnedRules"> & Partial<Pick<LaunchProfile, "title" | "goal">> | null | undefined, start?: MemoryEngineStart): Promise<string | undefined> {
+  const block = await launchMemory(profile, start);
+  if (profile?.learnedRules?.roleId !== "legatus" || profile.cleanMemory || !roleMemoryEnabled()) return block;
+  const guidance = "For each form, search_memory with the form's project and subject. Open a relevant rule before citing it. Decide each form using your judgment. When a remembered rule guided the choice, cite at most one rule and keep the reason to one line.";
+  return [block, guidance].filter(Boolean).join("\n\n");
+}
+
+async function launchMemory(profile: Parameters<typeof learnedRulesForLaunchProfile>[0], start?: MemoryEngineStart): Promise<string | undefined> {
   const marker = profile?.learnedRules;
   const clean = profile?.cleanMemory === true;
   const select = () => {

@@ -1710,7 +1710,7 @@ export class RegisteredSuccessorProvider implements SuccessorProviderPort {
       const conversation = input.conversationId
         ? registry.conversation(input.conversationId as ViewerConversationId)
         : null;
-      const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
+      const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer" || conversation?.agentRole === "legatus"
         ? conversation.agentRole
         : null;
       const seatMembership = conversation

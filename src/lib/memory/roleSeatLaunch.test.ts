@@ -8,7 +8,7 @@ afterAll(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 const { AgentRegistry } = await import("@/lib/agent/registry");
 const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
 
-test.each(["orchestrator", "maintainer"])("%s admission carries a text-free role selector", role => {
+test.each(["orchestrator", "maintainer", "legatus"])("%s admission carries a text-free role selector", role => {
   const registry = new AgentRegistry(path.join(sandbox, `${role}.json`), undefined, undefined, { sqliteMode: "off" });
   const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: sandbox, role, explicitProject: "seat-project", transport: "structured" });
   if (begun.kind !== "created") throw new Error("fixture admission failed");

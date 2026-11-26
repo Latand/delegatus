@@ -946,10 +946,14 @@ export function otherProjectRoleRules(scope: string): RoleMemoryRule[] {
 /** Search only active membership, projecting rule text before decoding. CROSS
  * JOIN keeps scopes and active ids ahead of rule lookups; otherwise SQLite can
  * start from every historical rule. Histories and versions stay out of recall. */
-export function activeRoleRuleRows(input: { project?: string; terms?: string[]; id?: string; limit: number }): Pick<RoleMemoryRule, "id" | "scope" | "rule" | "changedAt">[] {
+export function activeRoleRuleRows(input: { project?: string; reader?: "legatus"; terms?: string[]; id?: string; limit: number }): Pick<RoleMemoryRule, "id" | "scope" | "rule" | "changedAt">[] {
   if (!roleMemoryCollection()) return [];
   const project = input.project ? canonicalProject(input.project) : null;
-  const scopes = roleScopeKeys().filter(scope => !project || scope === "machine" || isCrossProjectRoleScope(scope) || canonicalProject(scopeProject(scope) ?? "") === project);
+  const scopes = roleScopeKeys().filter(scope => {
+    const resolved = canonicalScope(scope);
+    if (input.reader && scopeRole(resolved) && scopeRole(resolved) !== input.reader) return false;
+    return !project || resolved === "machine" || isCrossProjectRoleScope(resolved) || scopeProject(resolved) === project;
+  });
   if (!scopes.length) return [];
   // Succession can leave a rule's original scope on the row after its active
   // membership has joined the canonical scope. Admit that recorded alias family.

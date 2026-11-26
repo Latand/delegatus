@@ -10,12 +10,13 @@ import path from "node:path";
 import { canonicalProject } from "@/lib/projects/aliases";
 import { ROLE_IDS } from "@/lib/roles/types";
 import { roleIsClean } from "../eligibility";
-import { swarmRulesEnabled } from "../settings";
+import { roleMemoryEnabled, swarmRulesEnabled } from "../settings";
 import { swarmRulesForRole } from "../swarmPack";
 import { archivedRule, lettersAndDigits, scopeChars } from "../roleConsolidate";
 import { taskIdentifier } from "../roleStage";
 import { assertGenericRule, problemInput } from "../roleProblems";
 import { canonicalScope, joinMovedScopes, newRuleId, refreshLessonKnownValues, lessonKnownValuesFile, roleMemoryCollection, RoleMemoryRefusal, versionedRule, rulePrivacyHints } from "../roleStore";
+import { decisionRuleSource, LEGATUS_SCOPE } from "./decisionEvidence";
 import { scopeKind, scopeProject, scopeRole, isCrossProjectRoleScope } from "../roleScopes";
 import { lessonText, lessonTextLength, ROLE_MEMORY_BOUND, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type CuratorReason, type RoleMemoryRule, type RoleMemoryRow, type RoleMemoryScopeRow, type ProblemInput } from "../roleTypes";
 import { patchPass, readPass, readPassAuthority, passIsLive, curationCollection, curationOperationId, validCurationOperation, type CurationOperation, type CuratorPass } from "./store";
@@ -30,6 +31,7 @@ export interface CurationApply {
   adopt?: { candidate: string; occurrences: string[]; parts: { to: string; rule: string; why: string }[]; note: string }[];
   drop?: { candidate: string; occurrences: string[]; reason: CuratorReason; where?: string; note: string; forRoom?: boolean }[];
   defer?: { candidate: string; occurrences: string[] }[];
+  adoptDecision?: { evidence: string; quote?: string; to: string; rule: string; why: string; note: string }[];
   restore?: string[];
   problem?: (ProblemInput & { id: string; note: string })[];
 }
@@ -85,7 +87,7 @@ function reaches(to: string, from: string) {
     || isCrossProjectRoleScope(to) && scopeKind(from) === "role" && scopeRole(to) === scopeRole(from);
 }
 function noRoleReader(role: string | null) {
-  return role && (!(ROLE_IDS as readonly string[]).includes(role) || roleIsClean(role));
+  return role && role !== "legatus" && (!(ROLE_IDS as readonly string[]).includes(role) || roleIsClean(role));
 }
 function evidence(repo: string | null, where: string | undefined) {
   if (!repo || !where) return refuse("CURATE_EVIDENCE", "in-code and in-instructions require a repository file, optionally with a line");
@@ -170,6 +172,23 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       if (protectedOperation && rule.keptByOperatorAt) refuse("CURATE_KEPT", "the operator returned this rule; keep it whole and active");
       dispositions.add(id); touched.add(id); return work.get(id)!;
     };
+    if (input.adoptDecision?.length && !roleMemoryEnabled()) refuse("CURATE_DECISION", "role memory is switched off");
+    for (const item of input.adoptDecision ?? []) {
+      const ref = fresh.decisionEvidence?.find(ref => ref.id === item.evidence);
+      if (!ref) refuse("CURATE_DECISION", "decision evidence must belong to this pass");
+      const source = decisionRuleSource(ref, item.quote);
+      if (!source) refuse("CURATE_DECISION", "the operator evidence changed or is unavailable");
+      if (item.to !== LEGATUS_SCOPE && (!("reviewId" in ref) || item.to !== `project:${source.project}`)) {
+        refuse("CURATE_SCOPE", "a decision belongs to Legatus or to its form's project");
+      }
+      target(item.to);
+      if (created.has(ref.id) || tx.get(`r:${ref.id}`)) refuse("CURATE_DECISION", "this decision evidence already has a rule");
+      const row: RoleMemoryRule = { kind: "rule", id: ref.id, scope: item.to, state: "active",
+        ...text(item.rule, item.why), note: note(item.note), source, createdAt: now, changedAt: now };
+      created.set(row.id, row);
+      work.set(row.id, row);
+      placeholders[`decision:${ref.id}`] = row.id;
+    }
     const importRows = prepareImportEdits(fresh, input, now, { work, created, placeholders, get: tx.get, target, text, note, evidence: where => evidence(fresh.repoDir, where) });
     for (const id of input.restore ?? []) {
       if (work.has(id)) refuse("CURATE_PARTITION", "restore ids must be distinct archived rules");

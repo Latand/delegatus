@@ -73,7 +73,7 @@ test("an upgrade builds delivery indexes off-loop before the first writer", asyn
   const check = new Database(filename, { readonly: true });
   try {
     expect(check.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM deliveries").get()!.count).toBe(4_000);
-    expect(check.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='index'").all().map(row => row.name)).toEqual(expect.arrayContaining(["files_hash", "deliveries_attempt"]));
+    expect(check.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='index'").all().map(row => row.name)).toEqual(expect.arrayContaining(["files_hash", "deliveries_attempt", "deliveries_conversation"]));
     expect(progressed).toBe(true);
   } finally { check.close(); }
 });

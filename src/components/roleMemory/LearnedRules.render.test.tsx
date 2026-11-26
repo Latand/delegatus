@@ -538,3 +538,12 @@ test("the window is a modal: Tab wraps within it and Escape closes it once", asy
     expect(closed).toHaveLength(1);
   });
 });
+
+test("the existing rule row shows the source of a remembered decision", () => {
+  const remembered: RuleView = { ...rule("r_remembered"), roleId: null, stageId: "decision", decisionAuthor: "voice" };
+  const seatLesson = rule("r_seat", "Keep the related form decisions together.", "legatus");
+  const opened = (focusRule: string) => renderToStaticMarkup(<RuleSection kind="project" title="Project"
+    scope={{ ...scope(100), active: [remembered, seatLesson] }} focusRule={focusRule} onDelete={() => {}} onRestore={() => {}} />);
+  expect(opened(remembered.id)).toContain(translate("en", "roleMemory.decision.voice"));
+  expect(opened(seatLesson.id)).toContain(translate("en", "roleMemory.legatus"));
+});

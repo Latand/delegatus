@@ -3910,7 +3910,7 @@ async function adoptStructuredHostsPass(
             assertActive();
             return registry.ensureConversation(entry.key.engine, entry.artifactPath, entry.accountId);
           })));
-        const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
+        const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer" || conversation?.agentRole === "legatus"
           ? conversation.agentRole
           : null;
         const memberships = conversation ? startupHostSnapshot(registry, entry.key, true).memberships[conversation.id] : undefined;
@@ -3999,7 +3999,7 @@ async function adoptStructuredHostsPass(
             assertActive();
             return registry.ensureConversation(entry.key.engine, entry.artifactPath, entry.accountId);
           })));
-        const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer"
+        const memoryRole = conversation?.agentRole === "orchestrator" || conversation?.agentRole === "maintainer" || conversation?.agentRole === "legatus"
           ? conversation.agentRole
           : null;
         const memberships = conversation ? startupHostSnapshot(registry, entry.key, true).memberships[conversation.id] : undefined;
