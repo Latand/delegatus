@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { useRuntime } from "@/hooks/useRuntime";
+import { useRuntimeSelector } from "@/hooks/useRuntime";
 import type { RuntimeSnapshot, ViewerDeploymentStatus } from "@/lib/runtime/contracts";
 import { Z } from "@/components/layers";
 
@@ -15,10 +15,11 @@ function deployPillEnabled(): boolean {
   return (typeof process !== "undefined" ? process.env?.NEXT_PUBLIC_LLV_SHOW_DEPLOY_PILL : undefined) === "1";
 }
 
-export function DeploymentStatusPill() {
-  const { enabled, store } = useRuntime();
+export const DeploymentStatusPill = memo(function DeploymentStatusPill() {
   const isMobile = useIsMobile();
   const show = !isMobile && deployPillEnabled();
+  const enabled = useRuntimeSelector(state => state.enabled, false, Object.is, show);
+  const liveDeployments = useRuntimeSelector(state => state.store.deployments, null, Object.is, show && enabled);
   const [snapshotDeployments, setSnapshotDeployments] = useState<ViewerDeploymentStatus[]>([]);
   useEffect(() => {
     if (enabled || !show) return;
@@ -35,7 +36,7 @@ export function DeploymentStatusPill() {
     const timer = window.setInterval(() => void load(), 3_000);
     return () => { active = false; window.clearInterval(timer); };
   }, [enabled, show]);
-  const deployments = enabled ? Object.values(store.deployments) : snapshotDeployments;
+  const deployments = enabled && liveDeployments ? Object.values(liveDeployments) : snapshotDeployments;
   const deployment = [...deployments].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
   if (!show || !deployment) return null;
   const label = deployment.phase.replaceAll("-", " ");
@@ -56,4 +57,4 @@ export function DeploymentStatusPill() {
       Viewer deploy · {label} · {deployment.revision.slice(0, 7)}
     </div>
   );
-}
+});

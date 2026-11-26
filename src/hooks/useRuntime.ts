@@ -27,7 +27,7 @@ import { INGRESS_BOUNDARIES, INGRESS_STOP_REASONS, type IngressBoundary, type In
 
 import { awaitingReplies, type ReplyPolicy } from "@/lib/audio/fleetCues";
 
-import { getRuntimeBus, isRuntimeUiEnabled, type RuntimeBus, type RuntimeBusState } from "./runtimeBus";
+import { getRuntimeBus, isRuntimeUiEnabled, WITH_RUNTIME_ACTIVITY, type RuntimeBus, type RuntimeBusState, type RuntimeSubscription } from "./runtimeBus";
 
 const INERT: RuntimeBusState = {
   store: emptyStore(),
@@ -50,6 +50,7 @@ export function useRuntimeSelector<T>(
   inert: T,
   equal: (left: T, right: T) => boolean = Object.is,
   active = true,
+  interest?: RuntimeSubscription,
 ): T {
   const enabled = isRuntimeUiEnabled();
   const bus: RuntimeBus | null = enabled && typeof window !== "undefined" ? getRuntimeBus() : null;
@@ -66,8 +67,8 @@ export function useRuntimeSelector<T>(
   }, [bus]);
 
   const subscribe = useCallback(
-    (listener: () => void) => (bus && active ? bus.subscribe(listener) : () => {}),
-    [bus, active],
+    (listener: () => void) => (bus && active ? bus.subscribe(listener, interest) : () => {}),
+    [bus, active, interest],
   );
   const getSnapshot = useCallback(() => {
     if (!bus) return inertRef.current;
@@ -96,7 +97,7 @@ export function useRuntimeBusState(active = true): RuntimeBusState {
   }, [bus]);
 
   const subscribe = useCallback(
-    (listener: () => void) => (bus && active ? bus.subscribe(listener) : () => {}),
+    (listener: () => void) => (bus && active ? bus.subscribe(listener, WITH_RUNTIME_ACTIVITY) : () => {}),
     [bus, active],
   );
   const getSnapshot = useCallback(() => (bus ? bus.getState() : INERT), [bus]);

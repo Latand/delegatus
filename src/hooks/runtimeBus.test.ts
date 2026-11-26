@@ -329,6 +329,43 @@ describe("runtimeBus join", () => {
     expect(h.bus.getState().store.cursor).toBe(101);
   });
 
+  test("heartbeat and duplicate traffic refresh liveness without publishing another conversation frame", async () => {
+    h.bus.start();
+    await flush();
+    const stream = h.sources[0]!;
+    stream.open();
+    h.clock.advance(16);
+    let publications = 0, observations = 0;
+    const unsubscribe = h.bus.subscribe(() => { publications++; });
+    const stopObserving = h.bus.subscribe(() => { observations++; }, { activity: true });
+    try {
+      const initial = h.bus.getState().store;
+      stream.named("heartbeat", { publishedSeq: 100 });
+      expect(h.bus.getState().lastEventAt).toBe(h.clock.now());
+      h.clock.advance(16);
+      expect(h.bus.getState().store).toBe(initial);
+      expect(publications).toBe(0);
+      expect(observations).toBe(1);
+
+      const event = sessionEvent(101, 2, "running", "t1");
+      stream.message(event);
+      h.clock.advance(16);
+      expect(publications).toBe(1);
+      const applied = h.bus.getState().store;
+      stream.message(event);
+      expect(h.bus.getState().lastEventAt).toBe(h.clock.now());
+      h.clock.advance(16);
+      expect(h.bus.getState().store).toBe(applied);
+      expect(publications).toBe(1);
+      expect(observations).toBe(3);
+      stream.named("heartbeat", { publishedSeq: 101 });
+      stream.message(sessionEvent(102, 3, "running", "t2"));
+      h.clock.advance(16);
+      expect(publications).toBe(2);
+      expect(observations).toBe(4);
+    } finally { unsubscribe(); stopObserving(); h.bus.stop(); }
+  });
+
   test("a 128-event replay converges synchronously with one subscriber publication", async () => {
     h.bus.start();
     await flush();

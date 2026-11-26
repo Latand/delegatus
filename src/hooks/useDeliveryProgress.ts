@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
 import type { DeliveryProgressRecord } from "@/lib/runtime/deliveryProgress";
 
@@ -16,8 +16,9 @@ export const DELIVERY_PROGRESS_POLL_MS = 3_000;
  * answer, and a hidden tab reads nothing until it is shown again.
  */
 
-const subscribers = new Map<string, number>();
-const listeners = new Set<() => void>();
+const subscribers = new Map<string, Set<() => void>>();
+const observations = new Map<string, { record?: DeliveryProgressRecord; at: number }>();
+const retired = new Set<string>();
 export interface DeliveryProgressReading {
   records: ReadonlyMap<string, DeliveryProgressRecord>;
   /** When the records were read, so "next check in" is measured from a clock
@@ -25,12 +26,13 @@ export interface DeliveryProgressReading {
   readAt: number;
 }
 
-let reading: DeliveryProgressReading = { records: new Map(), readAt: 0 };
 let timer: ReturnType<typeof setInterval> | null = null;
 let inFlight: AbortController | null = null;
 
-function emit(): void {
-  for (const listener of listeners) listener();
+function emit(ids: Iterable<string>): void {
+  const affected = new Set<() => void>();
+  for (const id of ids) for (const listener of subscribers.get(id) ?? []) affected.add(listener);
+  for (const listener of affected) listener();
 }
 
 async function poll(): Promise<void> {
@@ -49,13 +51,15 @@ async function poll(): Promise<void> {
       const body = await response.json() as { records?: DeliveryProgressRecord[] };
       if (inFlight !== controller || controller.signal.aborted || !Array.isArray(body.records)) return;
       // Publish each answer immediately, even while another batch is pending.
-      const records = new Map([...reading.records].filter(([id]) => subscribers.has(id)));
-      for (const id of batch) records.delete(id);
-      for (const record of body.records) {
-        if (subscribers.has(record.operationId)) records.set(record.operationId, record);
+      // Keep a parked reader's last successful observation until another poll can replace it.
+      for (const id of retired) observations.delete(id);
+      retired.clear();
+      const returned = new Map(body.records.map(record => [record.operationId, record]));
+      const at = Date.now();
+      for (const id of batch) {
+        if (subscribers.has(id)) observations.set(id, { record: returned.get(id), at });
       }
-      reading = { records, readAt: Date.now() };
-      emit();
+      emit(batch);
     }));
   } catch {
     /* Unreachable or aborted: the last answer stands. */
@@ -68,9 +72,15 @@ function onVisible(): void {
   if (document.visibilityState === "visible") void poll();
 }
 
-function subscribeOperations(operationIds: readonly string[]): () => void {
+function subscribeOperations(operationIds: readonly string[], listener: () => void): () => void {
+  if (!operationIds.length || typeof document === "undefined") return () => {};
   const fresh = operationIds.filter((id) => !subscribers.has(id));
-  for (const id of operationIds) subscribers.set(id, (subscribers.get(id) ?? 0) + 1);
+  for (const id of operationIds) {
+    retired.delete(id);
+    const listeners = subscribers.get(id) ?? new Set<() => void>();
+    listeners.add(listener);
+    subscribers.set(id, listeners);
+  }
   if (!timer) {
     timer = setInterval(() => void poll(), DELIVERY_PROGRESS_POLL_MS);
     document.addEventListener?.("visibilitychange", onVisible);
@@ -78,9 +88,12 @@ function subscribeOperations(operationIds: readonly string[]): () => void {
   if (fresh.length > 0) void poll();
   return () => {
     for (const id of operationIds) {
-      const count = (subscribers.get(id) ?? 1) - 1;
-      if (count <= 0) subscribers.delete(id);
-      else subscribers.set(id, count);
+      const listeners = subscribers.get(id);
+      listeners?.delete(listener);
+      if (!listeners?.size) {
+        subscribers.delete(id);
+        if (observations.has(id)) retired.add(id);
+      }
     }
     if (subscribers.size === 0 && timer) {
       clearInterval(timer);
@@ -91,29 +104,51 @@ function subscribeOperations(operationIds: readonly string[]): () => void {
   };
 }
 
-function subscribeRecords(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => { listeners.delete(listener); };
-}
-
 const EMPTY: DeliveryProgressReading = { records: new Map(), readAt: 0 };
 
-/**
- * What the delivery queue recorded about these unsettled operations, read
- * while `active` and the page is visible.
- */
+/** A batch that answered another operation leaves this snapshot and its read clock intact. */
+function selection(ids: string[]) {
+  let previous = EMPTY;
+  return {
+    subscribe: (listener: () => void) => subscribeOperations(ids, listener),
+    read() {
+      let readAt = 0, count = 0, changed = false;
+      for (const id of ids) {
+        const current = observations.get(id);
+        if (!current) continue;
+        readAt = Math.max(readAt, current.at);
+        if (current.record) {
+          count++;
+          if (previous.records.get(id) !== current.record) changed = true;
+        }
+      }
+      if (!changed && readAt === previous.readAt && count === previous.records.size) return previous;
+      const records = new Map<string, DeliveryProgressRecord>();
+      for (const id of ids) {
+        const record = observations.get(id)?.record;
+        if (record) records.set(id, record);
+      }
+      previous = { records, readAt };
+      return previous;
+    },
+  };
+}
+
+/** What the delivery queue recorded about these unsettled operations, read
+ * while `active` and the page is visible. */
 export function useDeliveryProgress(operationIds: readonly string[], active: boolean): DeliveryProgressReading {
   const key = active ? [...new Set(operationIds)].filter(Boolean).sort().join("\n") : "";
-  useEffect(() => {
-    if (!key || typeof window === "undefined") return;
-    return subscribeOperations(key.split("\n"));
-  }, [key]);
-  const current = useSyncExternalStore(subscribeRecords, () => reading, () => EMPTY);
-  return key ? current : EMPTY;
+  const scoped = useMemo(() => selection(key ? key.split("\n") : []), [key]);
+  return useSyncExternalStore(scoped.subscribe, scoped.read, () => EMPTY);
 }
 
 /** Tests only. */
 export function resetDeliveryProgressPollerForTests(next: ReadonlyMap<string, DeliveryProgressRecord> = new Map(), readAt = 0): void {
-  reading = { records: next, readAt };
-  emit();
+  observations.clear();
+  retired.clear();
+  for (const id of new Set([...subscribers.keys(), ...next.keys()])) {
+    observations.set(id, { record: next.get(id), at: readAt });
+    if (!subscribers.has(id)) retired.add(id);
+  }
+  emit(subscribers.keys());
 }

@@ -2,6 +2,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from "
 import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
+import { Profiler } from "react";
+import { setRuntimeBusForTests, type RuntimeBusState } from "@/hooks/runtimeBus";
 
 import { emptyStore } from "@/components/runtime/runtimeModel";
 import type { BranchGroup } from "@/components/projectModel";
@@ -21,10 +23,12 @@ import type { FileEntry } from "@/lib/types";
  */
 
 const actualRuntimeHooks = await import("@/hooks/useRuntime");
+const readRealBus = actualRuntimeHooks.useRuntimeBusState;
+let exerciseBus = false;
 const inertRuntime = { enabled: false, connection: "offline" as const, resyncedAt: null, store: emptyStore() };
 mock.module("@/hooks/useRuntime", () => ({
   ...actualRuntimeHooks,
-  useRuntimeBusState: () => ({ ...inertRuntime, lastEventAt: null }),
+  useRuntimeBusState: () => exerciseBus ? readRealBus() : ({ ...inertRuntime, lastEventAt: null }),
   useRuntime: () => inertRuntime,
   useRuntimeSession: () => null,
   useRuntimeReceiptsForArtifact: () => [],
@@ -250,4 +254,39 @@ test("a layout-resizing keyboard (resizes-content honored) needs no inset (#983)
   await settle();
 
   expect(shell().style.paddingBottom).toBe("");
+});
+
+
+test("a foreign session frame keeps the focused phone conversation and its field at rest", async () => {
+  const listeners = new Set<() => void>();
+  let state: RuntimeBusState = { enabled: true, structuredHostsEnabled: true, connection: "live", resyncedAt: null, lastEventAt: 1, store: emptyStore() };
+  exerciseBus = true;
+  setRuntimeBusForTests({ getState: () => state, start() {}, stop() {}, refresh: async () => true,
+    subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    subscribeFilesRevision: () => () => {} });
+  let commits = 0;
+  const root = mount(<Profiler id="phone focus" onRender={() => { commits++; }}>{view()}</Profiler>);
+  try {
+    await settle();
+    const field = dom.document.querySelector("textarea")!;
+    field.focus();
+    await settle();
+    const before = commits;
+    flushSync(() => {
+      state = { ...state, lastEventAt: 2, store: { ...state.store, cursor: 1, scopeHeads: { "session:foreign": 2 } } };
+      for (const listener of listeners) listener();
+    });
+    expect(commits).toBe(before);
+    expect(dom.document.activeElement).toBe(field);
+    flushSync(() => {
+      state = { ...state, connection: "offline" };
+      for (const listener of listeners) listener();
+    });
+    expect(commits).toBeGreaterThan(before);
+    expect(dom.document.activeElement).toBe(field);
+  } finally {
+    flushSync(() => root.unmount());
+    exerciseBus = false;
+    setRuntimeBusForTests(null);
+  }
 });

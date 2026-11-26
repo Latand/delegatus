@@ -10,12 +10,16 @@
  */
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { Window } from "happy-dom";
+import { Profiler } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
 import { en } from "@/lib/i18n/en";
+import { ConnectionPill } from "@/components/ConnectionPill";
+import { DeploymentStatusPill } from "@/components/runtime/DeploymentStatusPill";
+import { emptyStore } from "@/components/runtime/runtimeModel";
 
-import { setRuntimeBusForTests, setRuntimeUiEnabledForTests, type RuntimeBus } from "./runtimeBus";
+import { setRuntimeBusForTests, setRuntimeUiEnabledForTests, type RuntimeBus, type RuntimeBusState } from "./runtimeBus";
 import { deriveServerReach, nextReachBoundary, OFFLINE_AFTER_MS, RECONNECT_FLOOR_MS, ServerReachProvider, useDerivedServerReach, type ServerReach } from "./serverReach";
 
 const T = Date.UTC(2100, 0, 2, 14, 2);
@@ -178,6 +182,47 @@ test("hook: a stream really reconnecting shows the line with its last event's ti
     const lastEvent = new Date(2100, 0, 2, 14, 2).getTime();
     const host = await barAfterFloor("reconnecting", lastEvent);
     expect(host.querySelector("[data-reach-line]")!.textContent).toBe("reconnecting · showing 14:02");
+  } finally {
+    setRuntimeBusForTests(null);
+    setRuntimeUiEnabledForTests(false);
+  }
+});
+
+test("foreign session frames leave the connection announcer, deployment pill and phone banner at rest", async () => {
+  const listeners = new Set<() => void>();
+  let state: RuntimeBusState = { store: emptyStore(), enabled: true, structuredHostsEnabled: true, connection: "live",
+    lastEventAt: T, resyncedAt: null };
+  setRuntimeBusForTests({ getState: () => state, subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    subscribeFilesRevision: () => () => {}, start() {}, stop() {}, refresh: async () => true });
+  const commits = { connection: 0, deployment: 0, phone: 0 };
+  try {
+    const host = render({ kind: "ok", lastGoodAt: null }, <>
+      <Profiler id="connection" onRender={() => { commits.connection++; }}><ConnectionPill compact /></Profiler>
+      <Profiler id="deployment" onRender={() => { commits.deployment++; }}><DeploymentStatusPill /></Profiler>
+      <Profiler id="phone" onRender={() => { commits.phone++; }}><MobileBannerSlot screen="board" arrival={null} /></Profiler>
+    </>);
+    const liveRegion = host.querySelector('[data-connection="live"] [aria-live="polite"]')!;
+    expect(liveRegion).not.toBeNull();
+    const before = { ...commits };
+    const announcement = liveRegion.textContent;
+    let announcements = 0;
+    const observer = new dom.MutationObserver(records => { announcements += records.length; });
+    observer.observe(dom.document.querySelector('[data-connection="live"] [aria-live="polite"]')!, { childList: true, characterData: true, subtree: true });
+    const publish = (patch: Partial<RuntimeBusState>) => flushSync(() => {
+      state = { ...state, ...patch };
+      for (const listener of listeners) listener();
+    });
+    publish({ lastEventAt: T + 1, store: { ...state.store, cursor: 1, scopeHeads: { "session:foreign": 2 } } });
+    expect(host.querySelector('[data-connection="live"] [aria-live="polite"]')).toBe(liveRegion);
+    await Bun.sleep(0);
+    observer.disconnect();
+    expect(liveRegion.textContent).toBe(announcement);
+    expect(announcements).toBe(0);
+    expect(commits).toEqual(before);
+    publish({ connection: "offline" });
+    expect(host.querySelector('[data-connection="offline"]')).not.toBeNull();
+    expect(commits.connection).toBeGreaterThan(before.connection);
+    expect(commits.phone).toBeGreaterThan(before.phone);
   } finally {
     setRuntimeBusForTests(null);
     setRuntimeUiEnabledForTests(false);

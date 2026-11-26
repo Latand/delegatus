@@ -110,9 +110,16 @@ export interface RuntimeBusDeps {
   clearInterval: (handle: ReturnType<typeof setInterval>) => void;
 }
 
+export interface RuntimeSubscription {
+  /** Include health observations that only advance the last-event clock. */
+  activity?: boolean;
+}
+
+export const WITH_RUNTIME_ACTIVITY: RuntimeSubscription = { activity: true };
+
 export interface RuntimeBus {
   getState(): RuntimeBusState;
-  subscribe(listener: () => void): () => void;
+  subscribe(listener: () => void, interest?: RuntimeSubscription): () => void;
   /** Notified with the new files revision every time a `files.revision` event
    *  is applied — useFiles debounces a pure GET off this. */
   subscribeFilesRevision(listener: (revision: number) => void): () => void;
@@ -136,6 +143,8 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
   };
 
   const listeners = new Set<() => void>();
+  const activityListeners = new Set<() => void>();
+  let generalQueued = false;
   const filesListeners = new Set<(revision: number) => void>();
   let emitQueued = false;
 
@@ -163,13 +172,26 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
   let unsubscribeVisibility: (() => void) | null = null;
   const snapshotReads = new Set<AbortController>();
 
-  function emit(): void {
-    if (emitQueued || listeners.size === 0) return;
+  function emit(general = true): void {
+    if (!activityListeners.size && (!general || !listeners.size)) return;
+    generalQueued ||= general;
+    if (emitQueued) return;
     emitQueued = true;
     deps.setTimeout(() => {
+      const publishGeneral = generalQueued;
+      generalQueued = false;
       emitQueued = false;
-      for (const listener of listeners) listener();
+      if (publishGeneral) for (const listener of listeners) listener();
+      for (const listener of activityListeners) {
+        if (!publishGeneral || !listeners.has(listener)) listener();
+      }
     }, SUBSCRIBER_NOTIFY_MS);
+  }
+
+  function recordActivity(at: number): void {
+    if (state.lastEventAt === at) return;
+    state = { ...state, lastEventAt: at };
+    emit(false);
   }
 
   function setState(patch: Partial<RuntimeBusState>): void {
@@ -362,7 +384,7 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
     // Named control frames (heartbeat carries no event id, reset closes the stream).
     es.addEventListener("heartbeat", () => {
       if (myGen !== generation) return;
-      setState({ lastEventAt: deps.now() });
+      recordActivity(deps.now());
       confirmHealthy();
     });
     es.addEventListener("fault", (ev) => {
@@ -389,19 +411,18 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
     } catch {
       return;
     }
-    setState({ lastEventAt: deps.now() });
+    const at = deps.now();
     const result = applyEvent(state.store, env);
     if (result.outcome === "applied") {
-      setState({ store: result.store });
+      setState({ store: result.store, lastEventAt: at });
       confirmHealthy();
       if (result.filesBumped) {
         for (const listener of filesListeners) listener(result.store.filesRevision);
       }
-    } else if (result.outcome === "duplicate") {
-      confirmHealthy();
     } else {
-      // Revision gap: the reducer never mutated. Resnapshot to converge.
-      void join(true);
+      recordActivity(at);
+      if (result.outcome === "duplicate") confirmHealthy();
+      else void join(true);
     }
   }
 
@@ -564,9 +585,10 @@ export function createRuntimeBus(deps: RuntimeBusDeps): RuntimeBus {
 
   return {
     getState: () => state,
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+    subscribe(listener, interest) {
+      const target = interest?.activity ? activityListeners : listeners;
+      target.add(listener);
+      return () => { target.delete(listener); };
     },
     subscribeFilesRevision(listener) {
       filesListeners.add(listener);
