@@ -267,7 +267,9 @@ test("a resumed turn delivers a missing message once and never credits an absent
 test("a linked sticker refreshes its newly available description after its ID was seen", () => {
   const request = requestSchema.parse(sampleRequest);
   const trigger = request.input.conversation[0]!;
-  const sticker = { ...trigger, id: "linked-sticker", text: "", kind: "sticker", sticker_emoji: "⭐️", sticker_format: "tgs" };
+  const sticker: ExternalRelayRequest["input"]["conversation"][number] = {
+    ...trigger, id: "linked-sticker", text: "", kind: "sticker", sticker_emoji: "⭐️", sticker_format: "tgs",
+  };
   const firstRequest = { ...request, input: { ...request.input, respond_to: sticker.id, conversation: [sticker] } };
   const record = { seen: [], staticDigest: null } as unknown as RelayConversation;
   const first = conversationTurnPrompt(firstRequest, record, "[round]");
