@@ -362,6 +362,11 @@ function scanFdTargetsUnder(underDir: string, visit: (target: string, pid: numbe
   parseFdEntries(runCapture("lsof", ["-w", "+D", underDir, "-Fpfan"]), visit);
 }
 
+async function resourceScanFdTargetsUnder(underDir: string, visit: (target: string, pid: number, writable: () => boolean) => void): Promise<void> {
+  if (!underDir || !fs.existsSync(underDir)) return;
+  parseFdEntries(await runCaptureAsync("lsof", ["-w", "+D", underDir, "-Fpfan"]), visit);
+}
+
 function scanFdTargetsFor(paths: string[], visit: (target: string, pid: number, writable: () => boolean) => void): void {
   const unique = [...new Set(paths.filter(Boolean))];
   if (unique.length === 0) return;
@@ -403,6 +408,7 @@ export const portableBackend: ProcBackend = {
   processMemory,
   ppidMap,
   scanFdTargetsUnder,
+  resourceScanFdTargetsUnder,
   scanFdTargetsFor,
   pidWritesPath,
   pidHoldsPath,

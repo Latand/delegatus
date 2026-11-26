@@ -1303,16 +1303,27 @@ describe("kill-target allowlist", () => {
 
 describe("resource recurring reads", () => {
   test.skipIf(process.platform === "win32").each([
-    ["portable", "vm_stat"],
-    ["portable", "vm.swapusage"],
-    ["portable", "ps"],
-    ["portable", "lsof"],
-    ["portable", "rss"],
-    ["portable", "kern.boottime"],
-    ["windows", "powershell.exe"],
-  ])("%s production read keeps a held %s probe off the event loop", async (backend, probe) => {
+    { backend: "portable", probe: "vm_stat", fallback: false, serving: false },
+    { backend: "portable", probe: "vm.swapusage", fallback: false, serving: false },
+    { backend: "portable", probe: "ps", fallback: false, serving: false },
+    { backend: "portable", probe: "lsof", fallback: false, serving: false },
+    { backend: "portable", probe: "rss", fallback: false, serving: false },
+    { backend: "portable", probe: "kern.boottime", fallback: false, serving: false },
+    { backend: "windows", probe: "powershell.exe", fallback: false, serving: false },
+    { backend: "portable", probe: "ps", fallback: true, serving: false },
+    { backend: "portable", probe: "lsof", fallback: true, serving: false },
+    { backend: "windows", probe: "powershell.exe", fallback: true, serving: false },
+    { backend: "portable", probe: "vm_stat", fallback: false, serving: true },
+  ])("$backend production read keeps a held $probe probe off the event loop (scanner fallback: $fallback, serving: $serving)", async ({ backend, probe, fallback, serving }) => {
     const directory = mkdtempSync(path.join(os.tmpdir(), "resource-held-probe-"));
     const fixture = path.join(import.meta.dir, "resources.heldProbe.fixture.ts");
+    const isolatedHome = path.join(directory, "home");
+    const isolatedTemp = path.join(directory, "tmp");
+    mkdirSync(isolatedHome, { recursive: true });
+    mkdirSync(isolatedTemp, { recursive: true });
+    const heldFile = path.join(isolatedTemp, `claude-${process.getuid?.() ?? 0}`, "project", "session", "tasks", "held.output");
+    if (fallback) mkdirSync(path.dirname(heldFile), { recursive: true });
+    if (fallback) writeFileSync(heldFile, "fixture output");
     for (const command of ["vm_stat", "sysctl", "ps", "lsof", "powershell.exe"]) {
       writeFileSync(path.join(directory, command),
         `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(fixture)} command ${command} "$@"\n`, { mode: 0o755 });
@@ -1320,6 +1331,8 @@ describe("resource recurring reads", () => {
     const child = Bun.spawn([process.execPath, fixture], {
       env: {
         ...process.env,
+        HOME: isolatedHome,
+        TMPDIR: isolatedTemp,
         PATH: `${directory}${path.delimiter}${process.env.PATH ?? ""}`,
         LLV_STATE_DIR: path.join(directory, "state"),
         LLV_STATE_OWNER: "viewer",
@@ -1328,6 +1341,10 @@ describe("resource recurring reads", () => {
         PORT: "1",
         LLV_TEST_PROBE_DIR: directory,
         LLV_TEST_HELD_PROBE: probe,
+        LLV_TEST_REAL_FILE_SCAN: fallback ? "1" : undefined,
+        LLV_TEST_HELD_FILE_PATH: heldFile,
+        LLV_TEST_SERVING_RELEASE: serving ? "1" : undefined,
+        LLV_FILE_SCANNER_WORKER_DISABLED: fallback ? "1" : undefined,
       },
       stdout: "pipe",
       stderr: "pipe",

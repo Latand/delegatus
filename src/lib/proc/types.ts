@@ -120,6 +120,9 @@ export interface ProcBackend {
    * closes over it. The thunk is only valid within its visit call.
    */
   scanFdTargetsUnder(underDir: string, visit: (target: string, pid: number, writable: () => boolean) => void): void;
+  /** Async counterpart for resource-path scans that must not wait for lsof on
+      the Viewer event loop. Backends without subprocess probes can omit it. */
+  resourceScanFdTargetsUnder?(underDir: string, visit: (target: string, pid: number, writable: () => boolean) => void): Promise<void>;
 
   /**
    * Visits every open-file fd currently open for any of the given, explicit

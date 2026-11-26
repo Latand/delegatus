@@ -245,6 +245,10 @@ function scanFdTargetsUnder(_underDir: string, visit: (target: string, pid: numb
   scanAllFdTargets(visit);
 }
 
+async function resourceScanFdTargetsUnder(underDir: string, visit: (target: string, pid: number, writable: () => boolean) => void): Promise<void> {
+  scanFdTargetsUnder(underDir, visit);
+}
+
 /** paths is unused for the same reason as scanFdTargetsUnder: the whole-/proc
     walk is already as cheap as a scoped one, so callers filter by target. */
 function scanFdTargetsFor(_paths: string[], visit: (target: string, pid: number, writable: () => boolean) => void): void {
@@ -313,6 +317,7 @@ export const linuxBackend: ProcBackend = {
   ppidMap,
   resourcePpidMap,
   scanFdTargetsUnder,
+  resourceScanFdTargetsUnder,
   scanFdTargetsFor,
   pidWritesPath,
   pidHoldsPath,

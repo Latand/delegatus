@@ -26,7 +26,7 @@ import { describeFile } from "./describe";
 import { durableServiceTierIndexForPaths, entryEffort, entryEffortResult, entryServiceTier } from "./effort";
 import { linkEntries } from "./links";
 import { entryModelsResult } from "./model";
-import { agentProcesses, outputHolders } from "./process";
+import { agentProcesses, outputHolders, resourceAgentProcesses, resourceOutputHolders } from "./process";
 import { goalFor, planFor } from "./plan";
 import { pendingQuestionFor } from "./questions";
 import { pendingWakeupFor } from "./wakeup";
@@ -344,12 +344,17 @@ async function listFilesInternal(
     : { files: await discoverFiles(undefined, demote ?? archivedTranscriptPaths(), pin, hosted), projectCatalog: [], complete: true };
   if (options.signal?.aborted) throw new DOMException("file scan cancelled", "AbortError");
   const entries = scan.files;
-  if (options.fresh) agentProcesses(true);
+  if (options.fresh) {
+    if (stagedResourceScope) await resourceAgentProcesses(true);
+    else agentProcesses(true);
+  }
   // The /proc fd scan is only needed to attribute background-task outputs to a
   // live pid. When the shortlist has no such entries, skip the scan entirely;
   // activity() only consults holders on the same claude-tasks/.output path.
   const needsHolders = entries.some((entry) => entry.root === "claude-tasks" && entry.path.endsWith(".output"));
-  const holders = needsHolders ? outputHolders() : NO_HOLDERS;
+  const holders = needsHolders
+    ? stagedResourceScope ? await resourceOutputHolders() : outputHolders()
+    : NO_HOLDERS;
   const durableTiers = await durableServiceTierIndexForPaths(entries.map(entry => entry.path));
   const invalidTails = new Set<string>();
   const hydrateEntry = (entry: FileEntry) => {

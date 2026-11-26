@@ -318,6 +318,7 @@ async function resourceProcessMemory(pids: Iterable<number>): Promise<Map<number
  */
 function scanFdTargetsUnder(): void {}
 function scanFdTargetsFor(): void {}
+async function resourceScanFdTargetsUnder(): Promise<void> {}
 function pidWritesPath(): boolean {
   return false;
 }
@@ -344,6 +345,7 @@ export const windowsBackend: ProcBackend = {
   processMemory,
   ppidMap,
   scanFdTargetsUnder,
+  resourceScanFdTargetsUnder,
   scanFdTargetsFor,
   pidWritesPath,
   pidHoldsPath,

@@ -11,6 +11,7 @@ const HELPER_PID = HOST_PID + 1;
 const directory = process.env.LLV_TEST_PROBE_DIR!;
 const heldProbe = process.env.LLV_TEST_HELD_PROBE!;
 const viewerPid = Number(process.env.LLV_TEST_PROBE_VIEWER_PID);
+const realFileScan = process.env.LLV_TEST_REAL_FILE_SCAN === "1";
 
 async function command(name: string, args: string[]): Promise<void> {
   let probe = name;
@@ -30,7 +31,7 @@ async function command(name: string, args: string[]): Promise<void> {
     "vm.swapusage": "total = 1M used = 0M",
     "kern.boottime": "{ sec = 100, usec = 0 }",
     ps: `${viewerPid} 1 ?? bun viewer.ts\n${HOST_PID} ${viewerPid} ?? codex app-server\n${HELPER_PID} ${HOST_PID} ?? helper`,
-    lsof: `p${HOST_PID}\nn${directory}`,
+    lsof: `p${HOST_PID}\nn${process.env.LLV_TEST_HELD_FILE_PATH ?? directory}`,
     rss: `${viewerPid} 1024\n${HOST_PID} 512\n${HELPER_PID} 256`,
     "powershell.exe": [
       "ProcessId,ParentProcessId,CommandLine,WorkingSetSize,UserModeTime,KernelModeTime,Created",
@@ -61,6 +62,13 @@ function releaseProbe(started: string): void {
   writeFileSync(path.join(directory, started.replace("started-", "release-")), "");
 }
 
+function releaseHeldProbes(): void {
+  assert.deepEqual(markers("expired-"), [], `${heldProbe} blocked the Viewer until the watchdog released it`);
+  for (const started of markers("started-")) {
+    writeFileSync(path.join(directory, started.replace("started-", "release-")), "");
+  }
+}
+
 async function exerciseProductionRead(): Promise<void> {
   process.env.LLV_TEST_PROBE_VIEWER_PID = String(process.pid);
   const { procBackend } = await import("./proc");
@@ -83,8 +91,19 @@ async function exerciseProductionRead(): Promise<void> {
   }
   agentRegistry().readOnlySnapshot();
   setFileCatalogMembershipProbeForTests(async () => null);
-  setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: true }));
-  writeFileSync(statePath("viewer-release.json"), JSON.stringify({ endpoint: "http://127.0.0.1:2" }));
+  if (!realFileScan) setFileScanRunnerForTests(async () => ({ files: [], projectCatalog: [], complete: true }));
+  writeFileSync(statePath("viewer-release.json"), JSON.stringify({
+    endpoint: process.env.LLV_TEST_SERVING_RELEASE === "1" ? "http://127.0.0.1:1" : "http://127.0.0.1:2",
+    revision: "a".repeat(40),
+    hotStateBackend: "sqlite-v1",
+  }));
+  if (process.env.LLV_TEST_SERVING_RELEASE === "1") writeFileSync(statePath("hot-state-authority.json"), JSON.stringify({
+    schemaVersion: 1,
+    epoch: 1,
+    mode: "sqlite",
+    releaseRevision: "a".repeat(40),
+    updatedAt: new Date(0).toISOString(),
+  }));
   Object.defineProperty(process, "platform", { value: procBackend.name === "portable" ? "darwin" : "win32" });
   procBackend.processIdentity = (pid) => pid === HOST_PID ? "fixture-start" : null;
   procBackend.readEnvVar = (pid, name) => pid === HOST_PID && name === "LLV_STRUCTURED_HOST" ? statePath() : null;
@@ -97,12 +116,17 @@ async function exerciseProductionRead(): Promise<void> {
     const started = await startedProbe();
     assert.deepEqual(markers("expired-"), [], `${heldProbe} blocked before its start acknowledgment could be observed`);
     const start = performance.now();
-    const hold = Bun.sleep(HOLD_MS);
+    const hold = Bun.sleep(HOLD_MS).then(() => {
+      if (process.env.LLV_TEST_SERVING_RELEASE === "1") releaseHeldProbes();
+    });
     const [pending, heartbeatAt] = await Promise.all([
       readResourcesWithDiagnostic(false, { waitMs: WAIT_MS }).then((read) => ({ read, at: performance.now() - start })),
       Bun.sleep(HEARTBEAT_MS).then(() => performance.now() - start),
     ]);
     assert.equal(pending.read.diagnostic.status, "pending");
+    if (process.env.LLV_TEST_SERVING_RELEASE === "1") {
+      assert.deepEqual(markers("release-"), [], "serving Viewer returned pending after the held probe was released");
+    }
     assert.match(pending.read.diagnostic.collectorId, /^in-process:/);
     assert.equal(pending.read.payload.sessionsStale, true);
     assert.deepEqual(pending.read.payload.sessions, []);
@@ -110,7 +134,7 @@ async function exerciseProductionRead(): Promise<void> {
     assert.ok(heartbeatAt < WAIT_MS, `25 ms heartbeat fired after ${heartbeatAt.toFixed(1)} ms`);
     assert.ok(pending.at < WAIT_MS * 2, `75 ms read returned after ${pending.at.toFixed(1)} ms`);
     await hold;
-    releaseProbe(started);
+    if (process.env.LLV_TEST_SERVING_RELEASE !== "1") releaseHeldProbes();
 
     // Darwin's separate Viewer-tree RSS sample uses the same command. A
     // synchronous Viewer-tree read cannot observe its own start marker.

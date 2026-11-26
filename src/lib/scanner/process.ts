@@ -52,6 +52,22 @@ export function outputHolders(fresh = false): Map<string, number> {
   return holders;
 }
 
+export async function resourceOutputHolders(fresh = false): Promise<Map<string, number>> {
+  const now = Date.now();
+  if (!fresh && outputMemo && now - outputMemo.at < HOLDERS_TTL_MS) return outputMemo.map;
+  const holders = new Map<string, number>();
+  const visit = (target: string, pid: number) => {
+    if (target.endsWith(".output") && !holders.has(target)) holders.set(target, pid);
+  };
+  if (procBackend.resourceScanFdTargetsUnder) {
+    await procBackend.resourceScanFdTargetsUnder(ROOTS["claude-tasks"], (target, pid) => visit(target, pid));
+  } else {
+    procBackend.scanFdTargetsUnder(ROOTS["claude-tasks"], (target, pid) => visit(target, pid));
+  }
+  outputMemo = { at: Date.now(), map: holders };
+  return holders;
+}
+
 function realpathSafe(pathname: string): string | null {
   try {
     return fs.realpathSync(pathname);

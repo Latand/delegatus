@@ -37,8 +37,8 @@ test("an unrecognised override falls back to the platform default", () => {
 });
 
 test("every backend answers the whole contract", () => {
-  /* Resources use async discovery for the command-backed platforms. Linux
-     retains its existing agent-process scan. */
+  /* Resources use async process and file-holder discovery on every backend;
+     Linux retains its direct /proc implementation. */
   const methods = [...Object.keys(linuxBackend), "resourceListProcesses"].sort();
   expect(Object.keys(windowsBackend).sort()).toEqual(methods);
   expect(Object.keys(portableBackend).sort()).toEqual(methods);

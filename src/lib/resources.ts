@@ -2701,10 +2701,47 @@ export async function readResourcesWithDiagnostic(fresh = false, options: Resour
   const deadline = !fresh && options.waitMs !== undefined ? performance.now() + options.waitMs : undefined;
   const read = await withViewerSection(await resourcesReader().read(fresh, options), deadline);
   /* Loaded here, never by the collector worker that imports this module. */
-  const [{ readDiskPressure }, { worktreeSweepStatus }, { tempSweepStatus }, { releaseRetentionStatus }, { filesResponseSweepStatus }] = await Promise.all([import("@/lib/state/diskPressure"), import("@/lib/pipelines/worktreeSweep"), import("@/lib/tempSweep"), import("@/lib/selfUpdate/retention"), import("@/lib/scanner/filesResponseResults")]);
+  const [
+    { readDiskPressure, readDiskPressureInHelper },
+    { worktreeSweepStatus },
+    { tempSweepStatus },
+    { releaseRetentionStatus },
+    { filesResponseSweepStatus },
+  ] = await Promise.all([
+    import("@/lib/state/diskPressure"),
+    import("@/lib/pipelines/worktreeSweep"),
+    import("@/lib/tempSweep"),
+    import("@/lib/selfUpdate/retention"),
+    import("@/lib/scanner/filesResponseResults"),
+  ]);
   const { readAgentStateMetrics } = await import("@/lib/agentState/store");
   const { agentRegistry } = await import("@/lib/agent/registry");
   const { servingAgentStateService } = await import("@/lib/agentState/service");
   servingAgentStateService()?.observeResourceSample(read.payload.sessions, Date.parse(read.payload.sessionsCapturedAt ?? ""));
-  return { ...read, payload: { ...read.payload, agentState: readAgentStateMetrics(agentRegistry()), diskPressure: await readDiskPressure(), worktreeSweep: worktreeSweepStatus(), tempSweep: tempSweepStatus(), releaseRetention: releaseRetentionStatus(), filesResponseSweep: filesResponseSweepStatus() } };
+  let pressure: Awaited<ReturnType<typeof readDiskPressure>>;
+  if (deadline === undefined) pressure = await readDiskPressure();
+  else {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = readDiskPressure();
+    try {
+      pressure = await Promise.race([
+        refresh,
+        new Promise<Awaited<ReturnType<typeof readDiskPressure>>>(resolve => {
+          timer = setTimeout(() => { void readDiskPressureInHelper({ readOnly: true }).then(resolve); }, Math.max(0, deadline - performance.now()));
+        }),
+      ]);
+    } finally { clearTimeout(timer); }
+  }
+  return {
+    ...read,
+    payload: {
+      ...read.payload,
+      agentState: readAgentStateMetrics(agentRegistry()),
+      diskPressure: pressure,
+      worktreeSweep: worktreeSweepStatus(),
+      tempSweep: tempSweepStatus(),
+      releaseRetention: releaseRetentionStatus(),
+      filesResponseSweep: filesResponseSweepStatus(),
+    },
+  };
 }
