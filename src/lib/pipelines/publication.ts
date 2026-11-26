@@ -6,6 +6,10 @@ const RUNNER_DEADLINE = /^NEW .*<runner error> runner did not finish \(124\)$/;
 export const PUBLICATION_MEMORY_DEFERRAL = "publication memory admission deferred before checks started";
 
 export function decisiveRefusal(line: string, allowFrozenInstall = false): boolean {
+  // A comparator that has already matched a failure against the base prints
+  // both diagnostics. A later deadline must not turn that evidence into a refusal.
+  if ((line.startsWith("PRE-EXISTING ") && line.endsWith("(base: FAIL; head: FAIL; non-blocking note)"))
+    || line.startsWith("Base diagnostic ")) return false;
   const member = /^pre-push: ([^;:]{1,60}): failed \(([^)]*)\)/.exec(line);
   const otherCheckFailed = member && !["touched tests", "Linux tests"].includes(member[1]!) && member[2] !== "124"
     && !(allowFrozenInstall && member[1] === "frozen install");

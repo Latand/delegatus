@@ -176,6 +176,14 @@ test("an ordinary touched-test exit has no capacity evidence", () => {
   expect(publicationDeadlineOnly("pre-push: touched tests: failed (1)")).toBe(false);
 });
 
+test("paired ownership diagnostics preserve a later publication deadline", () => {
+  const existing = "PRE-EXISTING src/work.test.ts: <ownership error> owned runner: surviving owned processes: head fixture (the base run of this file is broken the same way) (base: FAIL; head: FAIL; non-blocking note)";
+  const base = "  Base diagnostic src/work.test.ts: <ownership error> owned runner: surviving owned processes: base fixture";
+  const deadline = "owned runner: deadline expired";
+  expect(publicationDeadlineKind([existing, base, deadline].join("\n"))).toBe("execution");
+  expect(publicationDeadlineKind([existing, base, deadline, "NEW src/other.test.ts: <ownership error> owned runner: surviving owned processes: new fixture"].join("\n"))).toBeNull();
+});
+
 test.each([
   "NEW src/work.test.ts: named assertion", "PRIVACY GATE: FAIL", "pre-push: types: failed (1)",
   "owned runner: budget cleanup failed: child tree could not be stopped",
