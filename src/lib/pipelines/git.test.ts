@@ -436,7 +436,7 @@ for (const advanceRemote of [false, true]) {
     const deliveryBranch = "feature/held-pr";
     try {
       (await git(repo, "config", "user.name", "Fixture"));
-      (await git(repo, "config", "user.email", "noreply"));
+      (await git(repo, "config", "user.email", fixtureNoreply));
       (await git(repo, "config", "commit.gpgSign", "false"));
       (await git(root, "init", "--bare", "--initial-branch=main", origin));
       (await git(repo, "remote", "add", "origin", origin));
@@ -510,7 +510,7 @@ for (const held of [false, true]) {
     const { root, repo } = (await isolatedIdentityRepo());
     try {
       (await git(repo, "config", "user.name", "Fixture"));
-      (await git(repo, "config", "user.email", "noreply"));
+      (await git(repo, "config", "user.email", fixtureNoreply));
       (await git(repo, "config", "commit.gpgSign", "false"));
       const origin = path.join(root, "origin.git");
       (await git(root, "init", "--bare", "--initial-branch=main", origin));
