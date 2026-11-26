@@ -7863,7 +7863,9 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
   test.each(["lost append reply", "blocked file revision", "revoked during reconciliation", "writer replaced during reconciliation",
     "lost proof before retry", "proof unavailable through expiry", "budget expired during proof",
     "delayed append with successor projection", "late append after absent receipt",
-    "deadline expires during prompt admission", "deadline expires at first prompt socket write"] as const)(
+    "deadline expires during prompt admission", "deadline expires at first prompt socket write",
+    "eligibility withdrawn during first-command authorization",
+    "eligibility withdrawn before deadline failure transaction"] as const)(
     "settles the original launch after %s", async (fault) => {
       const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ack-"));
       const sessionId = ["00000000", "0000", "4000", "8000", "000000000021"].join("-");
@@ -7890,6 +7892,10 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
       const lateAppendCommitted = publicationLatch();
       const deadlineAdmission = publicationLatch();
       const allowDeadlineAdmission = publicationLatch();
+      const stagedCommandReceived = publicationLatch();
+      const allowStagedCommand = publicationLatch();
+      const deadlineFailureRead = publicationLatch();
+      const allowDeadlineFailureRead = publicationLatch();
       let expireDuringAdmission = false;
       let recoveryAuthorizationCalls = 0;
       let projectionReady = false;
@@ -7903,7 +7909,8 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
       let lateAppendHeld = false;
       let loseProof = fault === "lost proof before retry" || fault === "late append after absent receipt" || fault === "proof unavailable through expiry"
         || fault === "budget expired during proof" || fault === "deadline expires during prompt admission"
-        || fault === "deadline expires at first prompt socket write";
+        || fault === "deadline expires at first prompt socket write" || fault === "eligibility withdrawn during first-command authorization";
+      loseProof ||= fault === "eligibility withdrawn before deadline failure transaction";
       let recoveryTime = 0;
       let expireOnRead = 0;
       async function loseReply(signal: AbortSignal | undefined) {
@@ -8097,6 +8104,54 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
             expect(journal.operationResult(`spawn_message_${launchId}`)).toBeNull();
             expect(host.sent).toHaveLength(0);
             expect(journal.readSession({ conversationId })?.host).not.toBe("hosted");
+          } else if (fault === "eligibility withdrawn during first-command authorization") {
+            let attemptEligible = true;
+            recoveryTime = expiresAt - 600_000;
+            const originalCommand = activeClient.command.bind(activeClient);
+            activeClient.command = (command, authorizeBeforeWrite, admissionDeadline) => {
+              if (command.operationId !== `spawn_message_${launchId}`) return originalCommand(command, authorizeBeforeWrite, admissionDeadline);
+              stagedCommandReceived.resolve();
+              return allowStagedCommand.promise.then(() => originalCommand(command, authorizeBeforeWrite, admissionDeadline));
+            };
+            const recovering = recoverStagedStructuredLaunch(launchId, registry, activeClient, {
+              now: () => recoveryTime, eligible: () => attemptEligible,
+            });
+            await stagedCommandReceived.promise;
+            attemptEligible = false;
+            allowStagedCommand.resolve();
+            await recovering;
+            expect(registry.spawnReceipt(launchId)).toMatchObject({ state: "path-pending" });
+            expect(journal.operationResult(launchId)?.receipt.status).not.toBe("failed");
+            expect(journal.operationResult(`spawn_message_${launchId}`)).toBeNull();
+            expect(host.sent).toHaveLength(0);
+          } else if (fault === "eligibility withdrawn before deadline failure transaction") {
+            let attemptEligible = true;
+            recoveryTime = recovery.nextTryAt;
+            const originalCommand = activeClient.command.bind(activeClient);
+            activeClient.command = (command, authorizeBeforeWrite, admissionDeadline) => {
+              if (command.operationId === `spawn_message_${launchId}`) recoveryTime = expiresAt;
+              return originalCommand(command, authorizeBeforeWrite, admissionDeadline);
+            };
+            const originalOperationStatus = activeClient.operationStatus.bind(activeClient);
+            let launchStatusReads = 0;
+            activeClient.operationStatus = async (operationId, options) => {
+              if (operationId === launchId && ++launchStatusReads === 2) {
+                deadlineFailureRead.resolve();
+                await allowDeadlineFailureRead.promise;
+              }
+              return originalOperationStatus(operationId, options);
+            };
+            const recovering = recoverStagedStructuredLaunch(launchId, registry, activeClient, {
+              now: () => recoveryTime, eligible: () => attemptEligible,
+            });
+            await deadlineFailureRead.promise;
+            attemptEligible = false;
+            allowDeadlineFailureRead.resolve();
+            await recovering;
+            expect(registry.spawnReceipt(launchId)).toMatchObject({ state: "path-pending" });
+            expect(journal.operationResult(launchId)?.receipt.status).not.toBe("failed");
+            expect(journal.operationResult(`spawn_message_${launchId}`)).toBeNull();
+            expect(host.sent).toHaveLength(0);
           } else {
             await recoverStagedStructuredLaunch(launchId, registry, activeClient, { now: () => recoveryTime });
             await recoverStagedStructuredLaunch(launchId, registry, activeClient, { now: () => recoveryTime + 60_000 });
@@ -8107,7 +8162,9 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
             expect(host.sent.map((item) => item.id)).toEqual([`spawn_message_${launchId}`]);
             expect(journal.operationResult(`spawn_message_${launchId}`)?.receipt.status).toBe("delivered");
             expect(initialAppends).toBe(2);
-          } else if (fault !== "deadline expires during prompt admission" && fault !== "deadline expires at first prompt socket write") {
+          } else if (fault !== "deadline expires during prompt admission" && fault !== "deadline expires at first prompt socket write"
+            && fault !== "eligibility withdrawn during first-command authorization"
+            && fault !== "eligibility withdrawn before deadline failure transaction") {
             expect(registry.spawnReceipt(launchId)).toMatchObject({
               state: "failed", error: expect.stringContaining("staged host projection reconciliation timed out"),
             });
@@ -8128,10 +8185,14 @@ describe.each(["claude", "codex"] as const)("%s staged host publication", (engin
         expect(committed).toBeTrue();
         if (fault !== "lost proof before retry" && fault !== "late append after absent receipt" && fault !== "budget expired during proof") {
           expect(initialAppends).toBe(fault === "deadline expires during prompt admission"
-            || fault === "deadline expires at first prompt socket write" ? 2 : 1);
+            || fault === "deadline expires at first prompt socket write"
+            || fault === "eligibility withdrawn during first-command authorization"
+            || fault === "eligibility withdrawn before deadline failure transaction" ? 2 : 1);
         }
       } finally {
         invalidation.resolve();
+        allowStagedCommand.resolve();
+        allowDeadlineFailureRead.resolve();
         const key = registry.spawnReceipt(launchId)?.key;
         if (key) await releaseStructuredDeliveryHost(key, host);
         await host.release();

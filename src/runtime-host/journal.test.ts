@@ -3098,6 +3098,59 @@ test("Unix socket host isolates a singleton writer and serves a fake Viewer clie
   fence.release();
 });
 
+test.each(["new send", "existing receipt"] as const)("staged first-prompt deadline is enforced after the socket frame arrives (%s)", async scenario => {
+  const dir = sandbox("staged-admission-deadline");
+  const filename = path.join(dir, "runtime.sqlite");
+  let clock = 1_000;
+  const journal = new RuntimeJournal(filename, { structuredHosts: true, now: () => clock });
+  const runtime = new RuntimeHost(journal, undefined, undefined, true);
+  const socketPath = path.join(dir, "runtime.sock");
+  let received!: () => void;
+  let continueHandler!: () => void;
+  const frameReceived = new Promise<void>(resolve => { received = resolve; });
+  const handlerGate = new Promise<void>(resolve => { continueHandler = resolve; });
+  const server = serveRuntimeHost(socketPath, { handle: async (request, options) => {
+    if (request.method === "staged-launch-command") {
+      received();
+      await handlerGate;
+    }
+    return runtime.handle(request, options);
+  } });
+  const conversationId = "staged-admission-deadline";
+  const command = () => ({ kind: "send" as const, operationId: "spawn_message_staged-launch-deadline",
+    idempotencyKey: "spawn_message_staged-launch-deadline", conversationId, text: "first prompt", policy: "queue" as const });
+  let admittedBefore = false;
+  try {
+    await new Promise<void>(resolve => server.once("listening", resolve));
+    const outgoing = command();
+    const client = new UnixRuntimeHostClient(socketPath, 2_000);
+    let beforeCount = 0;
+    if (scenario === "existing receipt") {
+      journal.executeOperation(outgoing);
+      beforeCount = journal.effectBatch(100, ["runtime.send"]).length;
+    }
+    const deadline = 1_010;
+    const sent = client.command(outgoing, () => { admittedBefore = clock < deadline; }, deadline);
+    await frameReceived;
+    expect(admittedBefore).toBeTrue();
+    clock = deadline;
+    continueHandler();
+    if (scenario === "new send") {
+      await expect(sent).rejects.toMatchObject({ code: "STAGED_LAUNCH_DEADLINE" });
+      expect(journal.operationResult("spawn_message_staged-launch-deadline")).toBeNull();
+      expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(0);
+    } else {
+      expect(await sent).toMatchObject({ operationId: "spawn_message_staged-launch-deadline", replayed: true });
+      expect(journal.effectBatch(100, ["runtime.send"])).toHaveLength(beforeCount);
+    }
+  } finally {
+    continueHandler();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    journal.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("runtime socket keeps command capacity beyond 64 concurrent SSE waits", async () => {
   const dir = sandbox("socket-command-capacity");
   const socketPath = path.join(dir, "runtime.sock");

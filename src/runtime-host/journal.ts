@@ -107,6 +107,14 @@ const startupEffectWriteTriggers = [
 
 export class RuntimeJournalFault extends RuntimeDataCorruptionError {}
 
+export class RuntimeJournalAdmissionDeadlineError extends Error {
+  readonly code = "STAGED_LAUNCH_DEADLINE";
+  constructor() {
+    super("staged launch publication deadline expired before the first prompt");
+    this.name = "RuntimeJournalAdmissionDeadlineError";
+  }
+}
+
 export const RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT = 128;
 export const RUNTIME_SNAPSHOT_TERMINAL_DEPLOYMENT_LIMIT = 50;
 export const RUNTIME_SNAPSHOT_STALE_EDGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -818,8 +826,10 @@ export class RuntimeJournal {
     }
   }
 
-  executeOperation(command: RuntimeOperationCommand): RuntimeOperationResult {
-    return this.executeOperationWithLineage(command);
+  executeOperation(command: RuntimeOperationCommand, options: { admissionDeadline?: number } = {}): RuntimeOperationResult {
+    return this.executeOperationWithLineage(command, undefined, options.admissionDeadline === undefined ? undefined : () => {
+      if (this.now() >= options.admissionDeadline!) throw new RuntimeJournalAdmissionDeadlineError();
+    });
   }
 
   private executeOperationWithLineage(

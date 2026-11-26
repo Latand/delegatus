@@ -1144,7 +1144,7 @@ export interface RuntimeSocketRequest {
   /** Opt in to serial reuse; older listeners close after the answer. */
   keepAlive?: boolean;
   id: string;
-  method: "runtime-host-health" | "files-revision" | "session-read" | "startup-session-evidence" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-transition-pristine" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-reconcile" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
+  method: "runtime-host-health" | "files-revision" | "session-read" | "startup-session-evidence" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "staged-launch-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-transition-pristine" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-reconcile" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 

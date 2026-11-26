@@ -176,7 +176,7 @@ export interface RuntimeHostClient {
       An incumbent without that method refuses it; callers never retry append. */
   appendSessionFenced?(event: RuntimeEventInput & { expectedSessionRevision: number | null }, options?: RuntimeReadOptions): Promise<unknown>;
   operation(event: RuntimeEventInput): Promise<unknown>;
-  command(command: RuntimeOperationCommand, authorizeBeforeWrite?: () => void): Promise<RuntimeOperationResult>;
+  command(command: RuntimeOperationCommand, authorizeBeforeWrite?: () => void, admissionDeadline?: number): Promise<RuntimeOperationResult>;
   operationStatus(operationId: string, options?: RuntimeReadOptions & { currentRetryLeaf?: boolean }): Promise<RuntimeOperationResult | null>;
   claimDeliveryAction(operationId: string, action: RuntimeDeliveryAction): Promise<RuntimeDeliveryActionClaim>;
   retryOperation(operationId: string, nextIdempotencyKey?: string, options?: RuntimeRetryOptions): Promise<RuntimeOperationResult>;
@@ -300,11 +300,18 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
     return this.call("append-session-fenced", { event }, options.timeoutMs ?? this.timeoutMs, options.signal);
   }
   operation(event: RuntimeEventInput): Promise<unknown> { return this.call("operation", { event }); }
-  command(command: RuntimeOperationCommand, authorizeBeforeWrite?: () => void): Promise<RuntimeOperationResult> {
+  command(command: RuntimeOperationCommand, authorizeBeforeWrite?: () => void, admissionDeadline?: number): Promise<RuntimeOperationResult> {
     // Older hosts silently discard new command fields. A separate wire method
-    // makes them refuse recovery before admitting an unfenced operation.
+    // makes them refuse staged publication if they cannot enforce its cutoff.
     const guarded = command.kind === "send" && command.onlyIfIdle
       || command.kind === "kill" && command.providerRecovery;
+    if (admissionDeadline !== undefined) {
+      if (command.kind !== "send" || !command.operationId?.startsWith("spawn_message_")
+        || !Number.isSafeInteger(admissionDeadline) || admissionDeadline < 0) {
+        throw new Error("staged launch command requires a first-message send and a valid admission deadline");
+      }
+      return this.call("staged-launch-command", { command, admissionDeadline }, this.timeoutMs, undefined, false, authorizeBeforeWrite) as Promise<RuntimeOperationResult>;
+    }
     return this.call(guarded ? "guarded-command" : "command", { command }, this.timeoutMs, undefined, false, authorizeBeforeWrite) as Promise<RuntimeOperationResult>;
   }
   operationStatus(operationId: string, options: RuntimeReadOptions & { currentRetryLeaf?: boolean } = {}): Promise<RuntimeOperationResult | null> {

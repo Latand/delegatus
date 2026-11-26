@@ -6,7 +6,7 @@ import { isStructuredHostKind, parseRuntimeScope, RUNTIME_RECEIPT_STATUSES, STAR
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
 import { consumeRuntimeEvent, RuntimeConsumerDeferredError, type RuntimeConsumerPorts } from "@/lib/runtime/consumers";
 
-import { RuntimeJournal } from "./journal";
+import { RuntimeJournal, RuntimeJournalAdmissionDeadlineError } from "./journal";
 import type { ViewerDeploymentCoordinator } from "./deployment";
 import type { McpHealthProbeAdmissions } from "./mcpHealthProbeAdmission";
 import { PreserializedJson } from "./preserializedJson";
@@ -224,13 +224,21 @@ export class RuntimeHost {
         result = request.method === "operation" && event.operationId
           ? { operationId: event.operationId, state: "accepted", seq: appended.seq, revision: appended.revision }
           : appended;
-      } else if (request.method === "command" || request.method === "guarded-command") {
+      } else if (request.method === "command" || request.method === "guarded-command" || request.method === "staged-launch-command") {
         const command = request.params?.command as RuntimeOperationCommand;
-        if (request.method === "guarded-command" && !(command?.kind === "send" && command.onlyIfIdle
-          || command?.kind === "kill" && command.onlyIfIdle && command.providerRecovery)) {
+        const guarded = (command?.kind === "send" && command.onlyIfIdle)
+          || (command?.kind === "kill" && command.onlyIfIdle && command.providerRecovery);
+        if (request.method === "guarded-command" && !guarded) {
           throw new Error("guarded runtime command requires a recovery fence");
         }
-        result = this.journal.executeOperation(command);
+        if (request.method === "staged-launch-command") {
+          const deadline = request.params?.admissionDeadline;
+          if (command?.kind !== "send" || !command.operationId?.startsWith("spawn_message_")
+            || typeof deadline !== "number" || !Number.isSafeInteger(deadline) || deadline < 0) {
+            throw new Error("staged launch command requires a first-message send and a valid admission deadline");
+          }
+          result = this.journal.executeOperation(command, { admissionDeadline: deadline });
+        } else result = this.journal.executeOperation(command);
         setImmediate(() => { void this.recoverConsumersBestEffort(); });
       } else if (request.method === "operation-status") {
         const currentRetryLeaf = request.params?.currentRetryLeaf;
@@ -406,7 +414,8 @@ export class RuntimeHost {
       } else throw new Error("runtime request method is unsupported");
       return { id: request.id, ok: true, result };
     } catch (error) {
-      const code = error instanceof RuntimeIdempotencyConflictError || error instanceof DeploymentAdmissionClosedError ? error.code : runtimeDataCorruptionCode(error);
+      const code = error instanceof RuntimeIdempotencyConflictError || error instanceof DeploymentAdmissionClosedError
+        || error instanceof RuntimeJournalAdmissionDeadlineError ? error.code : runtimeDataCorruptionCode(error);
       return {
         id: request.id,
         ok: false,

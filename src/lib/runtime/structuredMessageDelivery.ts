@@ -147,6 +147,8 @@ export interface StructuredMessageDependencies {
   authorizeDispatch?: () => void | Promise<void>;
   /** Synchronous authority check at the socket write, after connection admission. */
   authorizeBeforeWrite?: () => void;
+  /** Runtime journal fence for a staged launch's first prompt admission. */
+  admissionDeadline?: number;
   /** Controller-only eligibility, checked after runtime reads and before admission. */
   idleContinuationAllowed?: () => boolean | Promise<boolean>;
   /** The actuation section a caller already holds for this conversation (the migration drain), handed down
@@ -2247,7 +2249,7 @@ export async function enqueueStructuredMessage(
         ...(request.selectedContext ? { selectedContext: request.selectedContext } : {}),
         ...(request.origin ? { origin: request.origin } : {}),
         ...(request.roleMemoryRevision ? { roleMemoryRevision: request.roleMemoryRevision } : {}),
-      }, dependencies.authorizeBeforeWrite);
+      }, dependencies.authorizeBeforeWrite, dependencies.admissionDeadline);
       return commandResult;
     }, dependencies.actuationLease ?? null);
     if (admitted === "caller-revoked") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt authorization revoked", status: 403 };

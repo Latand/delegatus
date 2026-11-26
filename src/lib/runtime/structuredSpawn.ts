@@ -444,9 +444,15 @@ export class StructuredInitialMessageTimeoutError extends Error {
 }
 
 const STAGED_LAUNCH_DEADLINE_CODE = "STAGED_LAUNCH_DEADLINE";
+const STAGED_LAUNCH_AUTHORITY_LOST_CODE = "STAGED_LAUNCH_AUTHORITY_LOST";
 function stagedLaunchDeadlineError(): Error {
   return Object.assign(new Error("staged launch publication deadline expired before the first prompt"), {
     code: STAGED_LAUNCH_DEADLINE_CODE,
+  });
+}
+function stagedLaunchAuthorityLostError(): Error {
+  return Object.assign(new Error("staged launch lost ownership before its first prompt"), {
+    code: STAGED_LAUNCH_AUTHORITY_LOST_CODE,
   });
 }
 
@@ -1874,6 +1880,7 @@ export interface StructuredSpawnInput {
   firstMessageAdmissionGuardAsync?: () => Promise<void>;
   /** Synchronous launch fence repeated by the runtime client at socket write. */
   firstMessageBeforeWrite?: () => void;
+  firstMessageAdmissionDeadline?: number;
   /** Recovery must leave unbound durable work to the next serving owner. */
   admissionActive?: () => void;
   /** Bounded no-write retry budget for setup custody, independent of the
@@ -2886,6 +2893,7 @@ async function defaultDeliverFirst(input: StructuredSpawnInput, artifactPath: st
     ...(input.firstMessageAdmissionGuardAsync ? { admissionGuardAsync: input.firstMessageAdmissionGuardAsync } : {}),
     authorizeDispatch: input.authorize,
     authorizeBeforeWrite: input.firstMessageBeforeWrite,
+    admissionDeadline: input.firstMessageAdmissionDeadline,
   });
   if (!delivered?.ok) {
     const message = delivered?.error ?? "structured spawn first-message delivery was unavailable";
@@ -3052,7 +3060,7 @@ type StagedContinuation = {
   host: SpawnedStructuredHost;
   owns: () => Promise<boolean>;
   publish: (eligible?: () => boolean) => Promise<void>;
-  deliver: (eligible?: () => boolean, deadlineExpired?: () => boolean) => Promise<void | "held">;
+  deliver: (eligible?: () => boolean, deadlineExpired?: () => boolean, admissionDeadline?: number) => Promise<void | "held">;
 };
 const stagedStore = process as typeof process & {
   __llvStagedContinuations?: Map<string, StagedContinuation>;
@@ -3295,7 +3303,7 @@ export async function recoverStagedStructuredLaunch(
           if (current()) await persist({ ...recovery, phase: "unpublished", reason: "publication budget expired before the first prompt" });
           return read();
         }
-        const outcome = await continuation.deliver(canPublishOrDispatch, deadlineExpired);
+        const outcome = await continuation.deliver(canPublishOrDispatch, deadlineExpired, publicationDeadline);
         if (current()) {
           recovery = outcome === "held"
             ? { ...recovery, phase: "unpublished", reason: "first message held before dispatch" }
@@ -3336,13 +3344,16 @@ export async function recoverStagedStructuredLaunch(
           authorizeDispatch: () => {
             options.assertActive?.();
             curatorAuthorize();
-            if (!canPublishOrDispatch()) throw stagedLaunchDeadlineError();
+            if (deadlineExpired()) throw stagedLaunchDeadlineError();
+            if (!current()) throw stagedLaunchAuthorityLostError();
           },
           authorizeBeforeWrite: () => {
             options.assertActive?.();
             curatorAuthorize();
-            if (!canPublishOrDispatch()) throw stagedLaunchDeadlineError();
+            if (deadlineExpired()) throw stagedLaunchDeadlineError();
+            if (!current()) throw stagedLaunchAuthorityLostError();
           },
+          admissionDeadline: publicationDeadline,
         });
         if (!result?.ok) {
           const reason = result?.error ?? "original first-message admission failed";
@@ -3358,10 +3369,14 @@ export async function recoverStagedStructuredLaunch(
       }
       return read();
     } catch (error) {
+      if ((error as { code?: string } | null)?.code === STAGED_LAUNCH_AUTHORITY_LOST_CODE) return read();
       if ((error as { code?: string } | null)?.code === STAGED_LAUNCH_DEADLINE_CODE) {
         const failed = await failStagedResume(launchId, registry, client,
           "staged launch publication deadline expired before the first prompt", {
             ...options.reap, assertActive: options.assertActive,
+            recoveryFence: (file, latest) => deadlineExpired()
+              && matches(latest, receipt.key ? file.entries[sessionKeyId(receipt.key)] : null)
+              && (options.reap?.recoveryFence?.(file, latest) ?? true),
           });
         return failed.receipt ?? read();
       }
@@ -3823,11 +3838,15 @@ export async function spawnStructuredConversation(
       return unregister;
     };
     const recovery: StagedLaunchRecovery = { phase: "unpublished", startedAt: now(), checks: 0, nextTryAt: now(), reason: "host publication pending" };
+    const publicationDeadline = recovery.startedAt + (input.receipt.purpose === "resume-successor"
+      ? RESUME_PUBLICATION_BOUND_MS : STAGED_RECOVERY_BUDGET_MS);
+    const launchDeadlineExpired = () => now() >= publicationDeadline;
     await writeStagedRecovery(input.registry, operationId, recovery);
     const deliverCurrentFirst = async (
       eligible: () => boolean = () => true,
       deliver: typeof deliverFirst = deliverFirst,
-      deadlineExpired: () => boolean = () => false,
+      deadlineExpired: () => boolean = launchDeadlineExpired,
+      admissionDeadline = publicationDeadline,
     ): Promise<void | "held"> => {
       await input.authorize?.();
       let deliveryInput = input;
@@ -3840,7 +3859,7 @@ export async function spawnStructuredConversation(
       const revision = deliveryInput.roleMemoryRevision;
       const authorizeAdmission = () => {
         if (deadlineExpired()) throw stagedLaunchDeadlineError();
-        if (!ownsLaunch() || !eligible()) throw new Error("staged launch lost ownership before its first prompt");
+        if (!ownsLaunch() || !eligible()) throw stagedLaunchAuthorityLostError();
         if (revision && roleMemoryRevisionToken() !== revision) throw new RoleMemoryChanged();
       };
       const authorizeAdmissionAsync = async () => {
@@ -3851,7 +3870,8 @@ export async function spawnStructuredConversation(
       return await deliver({ ...deliveryInput, authorize: authorizeDispatch,
         firstMessageAdmissionGuard: authorizeAdmission,
         firstMessageAdmissionGuardAsync: authorizeAdmissionAsync,
-        firstMessageBeforeWrite: authorizeAdmission }, identity.path);
+        firstMessageBeforeWrite: authorizeAdmission,
+        firstMessageAdmissionDeadline: admissionDeadline }, identity.path);
     };
     const continuation: StagedContinuation = {
       host,
@@ -3861,7 +3881,7 @@ export async function spawnStructuredConversation(
         binding.unregister = await publishAuthorized(eligible);
         if (eligible?.() !== false && ownsLaunch()) forgetUnpublishedHost();
       },
-      deliver: (eligible, deadlineExpired) => deliverCurrentFirst(eligible, deliverFirst, deadlineExpired),
+      deliver: (eligible, deadlineExpired, admissionDeadline) => deliverCurrentFirst(eligible, deliverFirst, deadlineExpired, admissionDeadline),
     };
     stagedContinuations.set(operationId, continuation);
     forgetUnpublishedHost = retainUnpublishedStructuredLaunchHost({ key, host, registry: input.registry,
@@ -3901,7 +3921,7 @@ export async function spawnStructuredConversation(
         await writeStagedRecovery(input.registry, operationId, { ...recovery, reason: "first message held before dispatch" });
         // The injected delivery seam reports the hold; recovery retries via
         // the real durable queue while refreshing the prompt and revision.
-        continuation.deliver = (eligible, deadlineExpired) => deliverCurrentFirst(eligible, defaultDeliverFirst, deadlineExpired);
+        continuation.deliver = (eligible, deadlineExpired, admissionDeadline) => deliverCurrentFirst(eligible, defaultDeliverFirst, deadlineExpired, admissionDeadline);
       }
       clearDurableSetupTimeout();
       (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, input.receipt.launchId, input.receipt.admissionOwner ?? processIdentity())));
