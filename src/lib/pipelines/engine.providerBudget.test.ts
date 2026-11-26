@@ -1,5 +1,116 @@
-import { expect, test, fs, tickPipelines, loadPipelines, savePipelines, patchPipeline, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, providerQuotaRecord, stampPipelinePrompt, providerRecoveryHarness } from "./engine.fixture";
+import { expect, test, fs, tickPipelines, loadPipelines, savePipelines, patchPipeline, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, providerQuotaRecord, stampPipelinePrompt, providerRecoveryHarness, pipelineRevision, engineModule } from "./engine.fixture";
 
+async function parkedProviderErrorFixture(name: string, receiptState: "completed" | "path-pending" = "completed") {
+  const f = await providerRecoveryHarness("codex", "other", "Provider refused the turn");
+  const transcript = stageTranscript(`provider-cut-${name}`, [{ type: "event_msg", timestamp: new Date(f.now()).toISOString(),
+    payload: { type: "task_complete", error: { message: "Provider refused the turn", codex_error_info: "other" } } }]);
+  readFixtures(f.h, { "/codex/stage-1.jsonl": transcript });
+  let resident = true;
+  let stop: Awaited<ReturnType<typeof f.h.ports.stopStageAgent>> = { outcome: "stopped" };
+  let stopped = () => { resident = false; };
+  let pending = false;
+  f.h.ports.conversationHostProcess = async () => ({ state: resident ? "alive" : "gone", pid: 1234 });
+  f.h.ports.stageHostResident = async () => resident;
+  f.h.ports.conversationDeliveryOutstanding = () => pending;
+  const stops: Parameters<typeof f.h.ports.stopStageAgent>[] = [];
+  f.h.ports.stopStageAgent = async (target, options) => {
+    stops.push([target, options]);
+    if (stop.outcome === "stopped") stopped();
+    return stop;
+  };
+
+  await tickPipelines([], f.h.ports);
+  const lane = loadPipelines()[0]!;
+  const attempt = lane.runs[0]!.attempts[0]!;
+  expect(lane.state).toBe("needs_decision");
+  expect(attempt.verdict).toBeNull();
+  expect(attempt.error).toContain("stage cut by provider error after 0 tries");
+  if (!attempt.conversationId || !attempt.launchId) throw new Error("expected a bound stage launch");
+  const { conversationId } = attempt;
+  f.h.ports.spawnReceipt = launchId => launchId === attempt.launchId ? {
+    launchId, state: receiptState, conversationId,
+    sessionId: receiptState === "completed" ? attempt.sessionId : null,
+    "transcript": receiptState === "completed" ? attempt.agentPath : null, paneId: null,
+  } : null;
+  const recover = (action: "retry-stage" | "resolve-decision") => patchPipeline(lane.id, {
+    action, expectedStageId: "plan", expectedAttempt: 1,
+    ...(action === "resolve-decision" ? { expectedRevision: pipelineRevision(lane), clientRequestId: "answer-provider-cut",
+      answer: "Resume the stage with these instructions." } : {}),
+  }, f.h.ports);
+  return { f, lane, attempt, transcript, stops, recover, resident: () => resident,
+    setPending: () => { pending = true; },
+    setStop: (result: typeof stop) => { stop = result; },
+    afterStop: (callback: () => void) => { const prior = stopped; stopped = () => { prior(); callback(); }; },
+  };
+}
+
+for (const action of ["retry-stage", "resolve-decision"] as const) {
+  test(`${action} releases an idle host after a terminal provider error`, async () => {
+    const fixture = await parkedProviderErrorFixture(action);
+    const result = await fixture.recover(action);
+    expect(result.error).toBeUndefined();
+    expect(result.pipeline?.cursor).toMatchObject({ stageId: "plan", state: "pending" });
+    expect(fixture.stops).toEqual([[
+      { stageId: "plan", attempt: 1, conversationId: "conversation_stage_1", launchId: "launch-1", agentPath: "/codex/stage-1.jsonl", paneId: null },
+      expect.objectContaining({ onlyIfIdle: true, requireIdleEvidence: true, providerRecovery: {
+        pipelineId: fixture.lane.id, stageId: "plan", attempt: 1, turnTs: fixture.f.now(), controlGeneration: null,
+      } }),
+    ]]);
+    expect(fixture.resident()).toBe(false);
+    if (action === "resolve-decision") {
+      expect(result.decisionAnswer).toMatchObject({ stageId: "plan", attempt: 1, nextAttempt: 2, question: fixture.attempt.error,
+        answer: "Resume the stage with these instructions." });
+      const replay = await fixture.recover(action);
+      expect(replay).toMatchObject({ decisionAnswer: result.decisionAnswer, replayed: true });
+      expect(fixture.stops).toHaveLength(1);
+    }
+    delete fixture.f.h.ports.resolveProjectSpawn;
+    await tickPipelines([], fixture.f.h.ports);
+    await tickPipelines([], fixture.f.h.ports);
+    expect(fixture.f.h.spawnInputs).toHaveLength(2);
+    expect(loadPipelines()[0]!.runs[0]!.attempts.map(({ n, state, verdict }) => ({ n, state, verdict }))).toEqual([
+      { n: 1, state: "needs_decision", verdict: null }, { n: 2, state: "running", verdict: null },
+    ]);
+  });
+
+  test.each(["busy", "unconfirmed", "queued-delivery", "delivery-after-stop", "prompt-after-stop"] as const)(
+    `${action} keeps the provider park when its stop is unsafe (%s)`, async scenario => {
+      const fixture = await parkedProviderErrorFixture(`${action}-${scenario}`);
+      if (scenario === "busy") fixture.setStop({ outcome: "deferred" });
+      if (scenario === "unconfirmed") fixture.setStop({ outcome: "unconfirmed", operationId: "fixture-stop", detail: "queued" });
+      if (scenario === "queued-delivery") fixture.setPending();
+      if (scenario === "delivery-after-stop") fixture.afterStop(fixture.setPending);
+      if (scenario === "prompt-after-stop") fixture.afterStop(() => {
+        fs.appendFileSync(fixture.transcript, JSON.stringify({ type: "event_msg", timestamp: new Date(fixture.f.now() + 1).toISOString(),
+          payload: { type: "user_message", message: "Continue the previous attempt" } }) + "\n");
+      });
+      const result = await fixture.recover(action);
+      expect(result).toEqual({ status: 409, error: expect.stringContaining(action) });
+      expect(fixture.stops).toHaveLength(scenario === "queued-delivery" ? 0 : 1);
+      const current = loadPipelines()[0]!;
+      expect(pipelineRevision(current)).toBe(pipelineRevision(fixture.lane));
+      expect(current.runs[0]!.attempts).toHaveLength(1);
+      expect(current.decisionAnswers).toBeUndefined();
+    },
+  );
+}
+
+test("a report from a settled provider cut directs the seat to retry", async () => {
+  const { f, lane, attempt } = await parkedProviderErrorFixture("report");
+  const report = await engineModule.reportStageCompletion({ verdict: "pass", summary: "Stage finished" },
+    { kind: "agent", role: "builder", conversationId: attempt.conversationId }, f.h.ports);
+  expect(report).toMatchObject({ status: 409, code: "STAGE_REPORT_SETTLED", error: expect.stringContaining("retry-stage") });
+  expect(pipelineRevision(loadPipelines()[0]!)).toBe(pipelineRevision(lane));
+});
+
+test("an explicit launch retry uses the idle fence for a provider-cut attempt with a path-pending receipt", async () => {
+  const { f, lane, stops } = await parkedProviderErrorFixture("path-pending", "path-pending");
+  f.h.ports.claimSpawnRetry = () => { throw new Error("the cut already proves this launch ran"); };
+  const result = await patchPipeline(lane.id, { action: "retry-stage", stageId: "plan", launchId: "launch-1" }, f.h.ports);
+  expect(result.pipeline?.cursor).toMatchObject({ stageId: "plan", state: "pending" });
+  expect(stops).toHaveLength(1);
+  expect(stops[0]?.[1]).toMatchObject({ onlyIfIdle: true, requireIdleEvidence: true });
+});
 
 
 for (const engine of ["claude", "codex"] as const) {
