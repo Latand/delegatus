@@ -75,6 +75,11 @@ for await (const line of createInterface({ input: process.stdin })) {
     }
     if (process.argv.includes("--oversize")) { process.stdout.write("x".repeat(9 * 1024 * 1024)); continue; }
   }
+  if (kind === "memory") {
+    fs.appendFileSync(path.join(directory, "requests"), kind + "\n");
+    process.stdout.write(JSON.stringify({ report: { ram: { usedBytes: 1, totalBytes: 2 }, swap: { usedBytes: 0, totalBytes: 0 }, tmp: null } }) + "\n");
+    continue;
+  }
   if (kind === "maintenance") {
     fs.appendFileSync(path.join(directory, "requests"), kind + "\n");
     fs.writeFileSync(path.join(directory, "maintenance-deadline"), String(deadline));
