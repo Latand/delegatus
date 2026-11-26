@@ -7,6 +7,52 @@ import { codexSchemaBreaks } from "./codexSchemaCompatibility";
 const read = (version: string, name: string) => JSON.parse(fs.readFileSync(path.join(import.meta.dir, "protocol", version, `${name}.json`), "utf8"));
 
 describe("reviewed pins", () => {
+  const validator = (schema: { definitions: object }, ref: string) => new Ajv({ strict: false }).compile({ $ref: ref, definitions: schema.definitions });
+
+  test.each(["stable", "experimental"])("0.171.0 scopes MCP elicitations and drops the project position (%s)", name => {
+    const previous = read("0.170.0", name), current = read("0.171.0", name);
+    expect(codexSchemaBreaks(previous, current)).toEqual(name === "stable" ? [
+      "McpServerElicitationRequestParams.environmentId: added inside a server request",
+      "v2.Project.position: removed",
+      "v2.Project.position: became optional",
+    ] : [
+      "CurrentTimeReadParams: definition removed",
+      "CurrentTimeReadResponse: definition removed",
+      "McpServerElicitationRequestParams.environmentId: added inside a server request",
+    ]);
+    const elicitation = { serverName: "docs", threadId: "thread", turnId: null, mode: "url", message: "Open", url: "https://example.invalid", elicitationId: "e" };
+    const before = validator(previous, "#/definitions/McpServerElicitationRequestParams"), after = validator(current, "#/definitions/McpServerElicitationRequestParams");
+    expect(before(elicitation)).toBeTrue();
+    expect(after(elicitation)).toBeTrue();
+    expect(after({ ...elicitation, environmentId: "remote" })).toBeTrue();
+    const methods = (schema: typeof current) => schema.definitions.ServerRequest.oneOf.map((row: { properties: { method: { enum: string[] } } }) => row.properties.method.enum[0]);
+    expect(methods(previous).includes("currentTime/read")).toBe(name === "experimental");
+    expect(methods(current)).not.toContain("currentTime/read");
+    // Every other change is additive or an annotation.
+    for (const key of ["McpServerElicitationRequestParams", "ServerRequest", "CurrentTimeReadParams", "CurrentTimeReadResponse"]) {
+      if (key in previous.definitions) current.definitions[key] = previous.definitions[key];
+    }
+    current.definitions.v2.Project = previous.definitions.v2.Project;
+    expect(codexSchemaBreaks(previous, current)).toEqual([]);
+  });
+
+  test.each(["stable", "experimental"])("0.172.0 renames the saved realtime input item (%s)", name => {
+    const previous = read("0.171.0", name), current = read("0.172.0", name);
+    expect(codexSchemaBreaks(previous, current)).toEqual(["v2.ThreadRealtimeItem.oneOf: variant type=\"sessionEndInputSaved\" removed or changed"]);
+    const before = validator(previous, "#/definitions/v2/ThreadRealtimeItemCompletedNotification");
+    const after = validator(current, "#/definitions/v2/ThreadRealtimeItemCompletedNotification");
+    // The only item Delegatus reads is unchanged.
+    const segment = { threadId: "thread", item: { id: "segment", realtimeSessionId: "call", type: "transcriptSegment", role: "assistant", text: "Done." } };
+    expect(before(segment)).toBeTrue();
+    expect(after(segment)).toBeTrue();
+    const saved = { id: "saved", realtimeSessionId: "call", input: "hello", input_item_id: "input", source_event_ids: ["event"] };
+    expect(before({ threadId: "thread", item: { ...saved, type: "sessionEndInputSaved" } })).toBeTrue();
+    expect(after({ threadId: "thread", item: { ...saved, type: "sessionEndInputSaved" } })).toBeFalse();
+    expect(after({ threadId: "thread", item: { ...saved, type: "sessionInputSaved", reason: "sessionEnd" } })).toBeTrue();
+    current.definitions.v2.ThreadRealtimeItem = previous.definitions.v2.ThreadRealtimeItem;
+    expect(codexSchemaBreaks(previous, current)).toEqual([]);
+  });
+
   test.each(["stable", "experimental"])("0.170.0 changes recovered answer display (%s)", name => {
     const previous = read("0.169.0", name), current = read("0.170.0", name);
     expect(codexSchemaBreaks(previous, current)).toEqual([

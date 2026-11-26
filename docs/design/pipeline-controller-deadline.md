@@ -19,6 +19,14 @@ effect fences. Expiring a scheduler pass does not revoke those executors.
 Already dispatched external effects retain their downstream reservation keys;
 the next pass reconciles those receipts before another dispatch.
 
+Provisioning has an independent, persisted deadline for each step. Expiry
+revokes the step permit and cancels its commands and leased toolchain worker.
+A detached checkout writer retains its kernel fence through process exit.
+The successor probes that fence and verifies the Git registration before
+adopting the checkout or admitting another add. An expired slot remains
+eligible for reconciliation even while a legacy job holds the ordinary lane
+walk. See [pipeline controller jobs](pipeline-controller-jobs.md).
+
 A reserved stage activation also leaves the pass lease as one executor, from
 its owner claim through Git setup, current role-memory filtering, dispatch and
 final receipt binding. The awaiting pass may expire, while the active activation

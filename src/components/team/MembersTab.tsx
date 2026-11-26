@@ -9,7 +9,8 @@ import { MEMBER_COLOR_HEX, MEMBER_COLORS, type MemberColor, type TeamView } from
 import { passkeyFeedback, passkeyFeedbackText, passkeyUnavailableText } from "@/lib/team/passkeyFeedback";
 
 import { MemberAvatar } from "./MemberAvatar";
-import { errorText, TelegramCodeForm, type TelegramState } from "./SignInCard";
+import { errorText } from "./SignInCard";
+import { TelegramStep } from "./TelegramStep";
 import { refreshTeamView } from "./teamClient";
 import { useWorkspaces } from "./workspacesClient";
 import { BUTTON, Field, INPUT, loopbackLink, relativeTime, TeamDialog, teamRequest } from "./ui";
@@ -344,7 +345,6 @@ function MemberDialog({ member, stored, view, onDraw, onClose }: { member: TeamM
   const [supportsPasskeys, setSupportsPasskeys] = useState(false);
   const [confirmRevoke, setConfirmRevoke] = useState(false);
   const [passkeys, setPasskeys] = useState<{ available: boolean; address?: string | null; passkeys: PasskeyRow[] } | null>(null);
-  const [telegram, setTelegram] = useState<{ id: string; proof: string; url: string; codeSent?: boolean } | null>(null);
 
   const loadPasskeys = useCallback(async () => {
     if (!self) return;
@@ -380,43 +380,6 @@ function MemberDialog({ member, stored, view, onDraw, onClose }: { member: TeamM
     }
     await refreshTeamView();
     onDraw(member.id, field, undefined);
-  };
-
-  /* Linking Telegram: open the bot, press Start, and type back the code it
-     sends — the same step as signing in, so a forwarded link binds nothing. */
-  const settleTelegram = useCallback(async (state: TelegramState, message?: string) => {
-    if (state.state === "waiting" || state.state === "code_sent") return;
-    setTelegram(null);
-    if (message) setError(message);
-    else if (state.state === "taken") setError(t("team.error.telegramTaken"));
-    else if (state.state !== "linked") setError(t("team.signIn.expired"));
-    await refreshTeamView();
-  }, [t]);
-
-  useEffect(() => {
-    if (!telegram || telegram.codeSent) return;
-    let alive = true;
-    let timer: number | undefined;
-    const poll = async () => {
-      const answer = await teamRequest<TelegramState>(`/api/team/session/telegram/${telegram.id}`, { body: { proof: telegram.proof } });
-      if (!alive) return;
-      if (answer.ok && answer.body.state === "code_sent") {
-        setTelegram((current) => (current?.id === telegram.id ? { ...current, codeSent: true } : current));
-        return;
-      }
-      if (answer.ok && answer.body.state !== "waiting") return void settleTelegram(answer.body);
-      timer = window.setTimeout(poll, 3_000);
-    };
-    timer = window.setTimeout(poll, 3_000);
-    return () => { alive = false; window.clearTimeout(timer); };
-  }, [telegram, settleTelegram]);
-
-  const linkTelegram = async () => {
-    setError(null);
-    const answer = await teamRequest<{ id: string; proof: string; url: string }>("/api/team/session/telegram", { body: { purpose: "link" } });
-    if (!answer.ok) return setError(answer.code === "telegram_unavailable" ? t("team.telegram.unavailable") : errorText(t, answer));
-    setTelegram(answer.body);
-    window.open(answer.body.url, "_blank", "noopener");
   };
 
   const addPasskey = async () => {
@@ -507,16 +470,8 @@ function MemberDialog({ member, stored, view, onDraw, onClose }: { member: TeamM
                 <span className="min-w-0 flex-1 truncate text-ui text-primary">{member.telegram.username ? `@${member.telegram.username}` : member.telegram.firstName}</span>
                 <button type="button" className={BUTTON.text} onClick={() => void teamRequest("/api/team/telegram", { method: "DELETE" }).then(() => refreshTeamView())}>{t("team.telegram.unlink")}</button>
               </div>
-            ) : telegram?.codeSent ? (
-              <TelegramCodeForm id={telegram.id} proof={telegram.proof} onError={setError} onState={(state, message) => void settleTelegram(state, message)} />
-            ) : telegram ? (
-              <p className="flex items-center gap-2 text-ui text-secondary" aria-live="polite">
-                <span className="h-1.5 w-1.5 rounded-full bg-accent motion-safe:animate-pulse" aria-hidden />{t("team.telegram.waiting")}
-              </p>
             ) : (
-              <button type="button" className={`${BUTTON.small} self-start`} onClick={() => void linkTelegram()} data-team-link-telegram="">
-                <Send className="h-3.5 w-3.5" aria-hidden />{t("team.telegram.link")}
-              </button>
+              <TelegramStep purpose="link" onMessage={setError} onDone={() => void refreshTeamView()} />
             )}
           </div>
         ) : null}

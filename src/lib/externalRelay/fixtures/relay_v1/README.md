@@ -155,7 +155,7 @@ distinct request identities and advisory poll publications.
 
 | File | Bytes | SHA-256 |
 |---|---:|---|
-| `install_owner_private_loop.json` | 7146 | `495e43237f086390d2e64caf4ac21e1bc3ba7241af8f4107065fdaecf4fe41b5` |
+| `install_owner_private_loop.json` | 5008 | `02195c28f0f323a6233ddf544d07d540297e29c75400ff109da838f747676a29` |
 
 The ordinary test compares each complete captured payload to its stored case. Set
 `LLV_RELAY_PRIVATE_LOOP_OUTPUT` to a scratch file to export it through the

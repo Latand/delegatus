@@ -33,7 +33,7 @@ import { cancelRecordedHost } from "@/lib/recordedChecks/service";
 import { recordedHostHeld } from "@/lib/recordedChecks/store";
 import { withRecordedHostFence } from "@/lib/recordedChecks/hostFence";
 import { wakeRecordedChecks } from "@/lib/recordedChecks/signal";
-import { providerRecoveryAttempt, providerRecoveryTurnProven } from "@/lib/pipelines/hostRetirement";
+import { providerRecoveryAttempt, readProviderRecoveryTurnProof } from "@/lib/pipelines/hostRetirement";
 import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { runtimeIdleKillMatches } from "./contracts";
@@ -1349,6 +1349,7 @@ export async function bindStructuredDeliveryQueue(
       let capturedRetirement: { root: ProcessIdentity; claimEpoch: number } | null = null;
       let controllerCapture: StructuredTerminationCapture | null = null;
       let recoveryStartedAt: string | null = null;
+      let recoveryTurnCurrent: (() => boolean) | null = null;
       let pipelineReader: Awaited<ReturnType<typeof pipelineRetirementReader>> | null = null;
       const recoveryTarget = () => ({ conversationId, sessionId: expectedKey.sessionId, engine: expectedKey.engine,
         agentPath: registry.readOnlySnapshot().entries[sessionKeyId(expectedKey)]?.artifactPath ?? null });
@@ -1356,6 +1357,7 @@ export async function bindStructuredDeliveryQueue(
         if (!onlyIfIdle) return true;
         if (!authority || stopped || state.activeQueue !== queue) return false;
         recoveryStartedAt = null;
+        recoveryTurnCurrent = null;
         try { pipelineReader = await pipelineRetirementReader(); }
         catch { pipelineReader = null; return false; }
         if (providerRecovery) {
@@ -1364,7 +1366,9 @@ export async function bindStructuredDeliveryQueue(
             const pipeline = findPipelineRecord(providerRecovery.pipelineId);
             const attempt = providerRecoveryAttempt(pipeline ? [pipeline] : [], providerRecovery, recoveryTarget(),
               id => resolveConversationAlias(snapshot, id as ViewerConversationId));
-            if (!attempt || !await providerRecoveryTurnProven(attempt, providerRecovery)) return false;
+            if (!attempt) return false;
+            recoveryTurnCurrent = await readProviderRecoveryTurnProof(attempt, providerRecovery);
+            if (!recoveryTurnCurrent) return false;
             recoveryStartedAt = attempt.startedAt;
           } catch { return false; }
         }
@@ -1396,7 +1400,8 @@ export async function bindStructuredDeliveryQueue(
           const pipeline = providerRecovery ? findPipelineRecord(providerRecovery.pipelineId) : null;
           const recoveryAttempt = providerRecovery
             ? providerRecoveryAttempt(pipeline ? [pipeline] : [], providerRecovery, recoveryTarget(), resolve) : null;
-          if (providerRecovery && (!recoveryAttempt || !recoveryStartedAt || recoveryAttempt.startedAt !== recoveryStartedAt)) return false;
+          if (providerRecovery && (!recoveryAttempt || !recoveryStartedAt || recoveryAttempt.startedAt !== recoveryStartedAt
+            || recoveryTurnCurrent?.() !== true)) return false;
           const target: RetirementTarget = {
             conversations: conversationIdsResolvingTo(snapshot, resolve(conversationId) as ViewerConversationId),
             sessionId: expectedKey.sessionId, agentPath: entry?.artifactPath ?? null,

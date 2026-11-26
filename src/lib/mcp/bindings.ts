@@ -1,3 +1,4 @@
+import { publicProvisioningPipeline } from "@/lib/pipelines/provisioningRecord";
 import { prototypeStageForConversation, prototypeProjectReceiptScope, PROTOTYPE_RECEIPT_SCOPE_HEADER } from "@/lib/prototypeReview/world";
 import { existingTeamStore } from "@/lib/team/store";
 import { workspaceDirectory } from "@/lib/team/workspaces";
@@ -2899,7 +2900,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     revision: recordRevision(result.pipeline),
     changedFields: changedFieldNames(beforeFields, result.pipeline),
     taskIds: result.pipeline.taskIds,
-    ...(fullAnswer(args) ? { pipeline: result.pipeline } : { omittedRecordCount: 1 }),
+    ...(fullAnswer(args) ? { pipeline: publicProvisioningPipeline(result.pipeline) } : { omittedRecordCount: 1 }),
     ...answerHint(args, "get_pipeline(pipelineId, full:true) or pipeline_action with full:true returns the full record."),
     ...(result.pipeline.delivery && (fullAnswer(args) || action === "publish" || action === "set-delivery-remote" || action === "takeover" || action === "retry-stage" || beforeFields.get("delivery") !== JSON.stringify(result.pipeline.delivery)) ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(action === "attach-link" || action === "detach-link" ? { workLinks: pipelineWorkLinks(result.pipeline), ...(result.unchanged ? { unchanged: true } : {}) } : {}),
@@ -6478,7 +6479,7 @@ async function getPipeline(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
   /* Full reads retain the saved record plus the same explicit runtime result
      as compact and stage reads, without rewriting historical storage. */
   const definitions = new Map(pipeline.stages.map(stage => [stage.id, stage]));
-  const projected = { ...pipeline, runs: pipeline.runs.map(run => ({ ...run,
+  const projected = { ...publicProvisioningPipeline(pipeline), runs: pipeline.runs.map(run => ({ ...run,
     attempts: run.attempts.map(attempt => ({ ...attempt, execution: stageExecution(definitions.get(run.stageId) ?? {}, attempt) })),
   })) };
   /* The digests a guarded graph edit names as expectedStageDigest. */

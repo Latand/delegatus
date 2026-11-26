@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Pipeline } from "./types";
 import { prepareLockedDependencies } from "./lockedDependencies";
 
-const inputs = ["package.json", "bun.lock", "bun.lockb", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", ".npmrc", ".yarnrc.yml"];
+export const worktreeDependencyInputs = ["package.json", "bun.lock", "bun.lockb", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", ".npmrc", ".yarnrc.yml"] as const;
 const unsupported = new Set(["ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EXDEV", "EINVAL"]);
 async function entry(file: string) {
   try { return await fs.lstat(file); }
@@ -17,15 +17,18 @@ async function input(file: string): Promise<Buffer | null> {
 /** Only identical, non-workspace dependency graphs can borrow an installation.
  * Local links and patches need their own install in the checkout they describe. */
 export async function matchingDependencyInputs(source: string, lane: string): Promise<boolean> {
-  for (const file of inputs) {
+  for (const file of worktreeDependencyInputs) {
     const left = await input(path.join(source, file)), right = await input(path.join(lane, file));
     if (left === null ? right !== null : right === null || !left.equals(right)) return false;
   }
   const manifestBytes = await input(path.join(lane, "package.json"));
   if (!manifestBytes) return false;
-  const manifest = JSON.parse(manifestBytes.toString());
-  return !manifest.workspaces && !manifest.patchedDependencies
-    && !/(?:"(?:file|link|workspace):|"\.{1,2}\/)/.test(manifestBytes.toString());
+  return !hasCheckoutRelativeDependencies(manifestBytes.toString());
+}
+
+export function hasCheckoutRelativeDependencies(manifest: string): boolean {
+  const content = JSON.parse(manifest);
+  return Boolean(content.workspaces || content.patchedDependencies || /"\s*(?:file:|link:|workspace:|\.{1,2}\/)/.test(manifest));
 }
 
 /** clonefile on APFS and FICLONE on supporting Linux filesystems. FORCE is
@@ -51,6 +54,28 @@ async function cloneTree(source: string, target: string, root: string, destinati
 }
 
 export type DependencySharing = "shared-install" | "clone" | "copy" | "private-install" | "unchanged";
+
+/** The caller owns scratch and publishes only after rechecking its inputs. */
+export async function stageWorktreeDependencyCopy(source: string, scratch: string,
+  beforeCopy: () => Promise<void>, copyFile = fs.copyFile): Promise<string | null> {
+  const root = await fs.realpath(source);
+  const before = await fs.stat(root, { bigint: true });
+  if (!before.isDirectory()) return null;
+  for (const clone of [true, false]) {
+    const staged = path.join(scratch, clone ? "clone" : "copy");
+    await beforeCopy();
+    try {
+      await cloneTree(root, staged, root, staged, copyFile, undefined, clone);
+    } catch (error) {
+      if (!unsupported.has((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      continue;
+    }
+    const after = await fs.stat(source, { bigint: true });
+    if (before.dev === after.dev && before.ino === after.ino && before.ctimeNs === after.ctimeNs) return staged;
+    return null;
+  }
+  return null;
+}
 /** Called before a writer starts, including a stage whose access was changed
  * after provisioning. A private install or an unrelated link is preserved. */
 export function isolateWorktreeDependencies(pipeline: Pick<Pipeline, "repoDir" | "worktreeDir">): void {

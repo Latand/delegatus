@@ -2034,14 +2034,22 @@ exit 1
       setupState: (directory) => {
         initializeHotStateFixture(directory, previous);
         const authority = readHotStateAuthority(directory)!;
-        originalAuthority = markViewerReleaseReady(
+        const ready = markViewerReleaseReady(
           directory,
           markHotStateActivationReady(directory, authority),
         );
+        // Model a predecessor whose release authority was durable before the
+        // process exited. Its dead owner lets the adapter finish the owned
+        // rollback-mirror checkpoint in this crash-recovery fixture.
+        originalAuthority = publishHotStateAuthority(directory, "sqlite", previous.revision, {
+          activationReadyAt: ready.activationReadyAt,
+          releaseReadyAt: ready.releaseReadyAt,
+          activationOwner: { pid: 2_147_483_647, startIdentity: null, bootEpoch: null },
+        });
       },
       dockerScript,
     });
-    expect(crashed.code).toBe(86);
+    expect(crashed.code, crashed.stderr).toBe(86);
     expect(crashed.target).toEqual(previous);
     expect(crashed.authority).toMatchObject({ mode: "sqlite", releaseRevision: candidate.revision });
     expect(crashed.releaseSwitchIntentExists).toBe(true);

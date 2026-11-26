@@ -8,7 +8,7 @@ import { statePath } from "@/lib/configDir";
 import { reportMediaRoot } from "@/lib/reportMedia/lookup";
 import { execFile } from "node:child_process";
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { attemptReferencesClear, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
+import { attemptReferencesClear, containerMountHold, blockedSubtrees, measureAttemptAllocation, inspectAttemptTree, attemptTempUtilityImage, removeAttemptTree, repositoryReferencesAttemptTemp, RepositoryLinkInventory,
   RETAINED_CHECKOUT_READ_MAX_AGE_MS, type RetainedCheckoutReads } from "./attemptTempFilesystem";
 import { withAttemptTempDeadline } from "./attemptTempDeadline";
 import { AttemptTempBudgetDeferred } from "./attemptTempDiagnostics";
@@ -1028,6 +1028,19 @@ fi
   const previous = process.env.PATH; process.env.PATH = bin + path.delimiter + (previous ?? "");
   try { expect(await attemptReferencesClear(directory, directory, { ownNamespace: null, processes: [] })).toBeTrue(); }
   finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
+});
+
+test("the shared container rule: an ancestor mounted at its own path holds nothing, a mounted root, a subtree, an alias or an unknown destination holds", () => {
+  const home = "/srv/fixture-home", root = `${home}/state/scratch/llv-stage-abcdef`;
+  const hold = (...mounts: Array<{ source: string; destination: string | null }>) => containerMountHold([root], mounts);
+  expect(hold()).toBeNull();
+  expect(hold({ source: home, destination: home }, { source: "/", destination: "/" })).toBeNull();
+  expect(hold({ source: root, destination: "/data" })).toBe("container_mount_reference");
+  expect(hold({ source: `${root}/cache`, destination: `${root}/cache` })).toBe("container_mount_reference");
+  expect(hold({ source: home, destination: "/workspace" })).toBe("container_mount_reference");
+  expect(hold({ source: home, destination: null })).toBe("container_mount_reference");
+  expect(hold({ source: "/srv/other", destination: "/srv/other" })).toBeNull();
+  expect(containerMountHold([root], null)).toBe("container_inventory_unknown");
 });
 
 test.skipIf(process.platform !== "linux")("a container bind through a physical parent alias retains scratch", async () => {

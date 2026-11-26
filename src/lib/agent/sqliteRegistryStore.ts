@@ -2790,8 +2790,10 @@ export class SqliteAgentRegistryStore {
   }
 
   private journalIsBounded(coldIds: ReadonlyMap<RowCollection, ReadonlyMap<string, number>>): boolean {
-    const journal = this.db.query<{ first: number; last: number }, []>(
-      "SELECT COALESCE(MIN(seq),0) AS first,COALESCE(MAX(seq),0) AS last FROM registry_changes").get()!;
+    // Separate aggregates let SQLite seek each end of the sequence in the pinned transaction.
+    const journal = this.db.query<{ first: number; last: number }, []>(`
+      SELECT (SELECT COALESCE(MIN(seq),0) FROM registry_changes) AS first,
+             (SELECT COALESCE(MAX(seq),0) FROM registry_changes) AS last`).get()!;
     if (journal.first === 0 || journal.first > this.snapshotChangeId + 1 || journal.last <= this.snapshotChangeId) return false;
     if (journal.last - this.snapshotChangeId > PREPARED_REPLAY_CHANGES) return false;
     const version = this.db.query<{ archive_id: number }, [string, string]>("SELECT archive_id FROM registry_cold WHERE collection=? AND row_key=?");
