@@ -26763,8 +26763,8 @@ describe("«Готово» above the report log", () => {
  * busy is 27. Every state at every desktop width the slice names and one
  * between each pair, in uk and en, light and dark: the header button at N and
  * at zero (muted, no number), the panel with form rows only and no «Готово»,
- * and the seat's decisions tab and strip equal to the panel's own section for
- * the board's project. Frames go to LLV_EVIDENCE_DIR (else .artifacts); the
+ * and the seat's decisions tab, strip and folded-seat chip equal to the
+ * panel's own section for the board's project. Frames go to LLV_EVIDENCE_DIR (else .artifacts); the
  * readings are committed under evidence/needs-you-forms/.
  */
 describe("«Needs you» counts the forms that wait", () => {
@@ -26838,10 +26838,23 @@ describe("«Needs you» counts the forms that wait", () => {
           check(button.tabTitle === (forms ? `(${forms}) Delegatus` : "Delegatus"), `the tab title reads «${button.tabTitle}»`);
           check(!button.overflow, "the page scrolls sideways");
           /* The seat's own decisions on the board's project: the column tab's badge and the strip, whichever the seat draws. */
-          const decisions = await page.evaluate(() => ({
-            strip: document.querySelector<HTMLElement>("[data-orchestrator-panel] [data-decision-strip]")?.dataset.decisionStrip ?? null,
-            tab: document.querySelector<HTMLElement>('[data-decision-tab="decisions"] [data-decision-tab-count]')?.dataset.decisionTabCount ?? null,
-          }));
+          /* The folded seat draws the chip in their place: its count, its words, and whether it names a stuck delivery. */
+          const decisions = await page.evaluate(() => {
+            const chip = document.querySelector<HTMLElement>("[data-orchestrator-panel] [data-prototype-notice-chip]");
+            const word = chip?.querySelector("[data-prototype-notice-chip-word]") ?? null;
+            const range = word ? document.createRange() : null;
+            range?.selectNodeContents(word!);
+            const ink = range?.getBoundingClientRect() ?? null;
+            const box = chip?.getBoundingClientRect() ?? null;
+            return {
+              strip: document.querySelector<HTMLElement>("[data-orchestrator-panel] [data-decision-strip]")?.dataset.decisionStrip ?? null,
+              tab: document.querySelector<HTMLElement>('[data-decision-tab="decisions"] [data-decision-tab-count]')?.dataset.decisionTabCount ?? null,
+              chip: chip ? {
+                count: chip.dataset.prototypeNoticeChip ?? null, word: word?.textContent ?? null, text: chip.textContent, stuck: chip.hasAttribute("data-prototype-notice-chip-stuck"),
+                whole: Boolean(ink && box && ink.left >= box.left - 0.5 && ink.right <= box.right + 0.5 && ink.left >= 0 && ink.right <= innerWidth && ink.top >= 0 && ink.bottom <= innerHeight),
+              } : null,
+            };
+          });
           await page.screenshot({ path: path.join(out, `${frame}-closed.png`) });
 
           /* Opened from the button: docked beside the board where it has room, else under the button. */
@@ -26891,6 +26904,13 @@ describe("«Needs you» counts the forms that wait", () => {
           const section = Number(open.sections.find((entry) => entry[0] === "delegatus")?.[1] ?? 0);
           check(forms === 0 || decisions.strip !== null || decisions.tab !== null, "the seat draws neither the strip nor the tab's badge");
           check([decisions.strip, decisions.tab].every((shown) => shown === null || shown === String(section)), `the strip reads ${decisions.strip} and the tab ${decisions.tab} beside the panel's ${section}`);
+          /* The folded seat's chip names what waits as every surface does and counts the same; a stuck answer alone reads as a stuck delivery with no number. */
+          if (decisions.chip) {
+            const chip = decisions.chip;
+            if (section) check(chip.count === String(section) && chip.word === t("decisions.waiting", { count: section }) && !chip.stuck, `the seat's chip reads «${chip.text}» (${chip.count}) beside the panel's ${section}`);
+            else check(chip.count === "0" && chip.stuck && chip.word === t("proto.notice.undelivered") && !/\d/.test(chip.text ?? ""), `with nothing waiting the seat's chip reads «${chip.text}» (${chip.count})`);
+            check(chip.whole, "the seat's chip words are cut");
+          }
           await page.screenshot({ path: path.join(out, `${frame}-open.png`) });
           let end: unknown = null;
           if (open.scrolls) {

@@ -26,7 +26,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": "5"
+        "tab": "5",
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "docked",
@@ -87,7 +94,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": "5"
+        "tab": "5",
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "docked",
@@ -148,7 +162,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": "5"
+        "tab": "5",
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "docked",
@@ -209,7 +230,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": "5"
+        "tab": "5",
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "docked",
@@ -270,7 +298,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -331,7 +366,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -392,7 +434,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -453,7 +502,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -514,7 +570,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -575,7 +638,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -636,7 +706,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -697,7 +774,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -758,7 +842,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -819,7 +910,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -880,7 +978,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -941,7 +1046,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1002,7 +1114,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1063,7 +1182,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1124,7 +1250,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1185,7 +1318,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1246,7 +1386,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1307,7 +1454,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1368,7 +1522,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1429,7 +1590,14 @@
       },
       "decisions": {
         "strip": "5",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1490,7 +1658,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Рішення не доставлено",
+          "text": "Рішення не доставлено",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "docked",
@@ -1533,7 +1708,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Рішення не доставлено",
+          "text": "Рішення не доставлено",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "docked",
@@ -1576,7 +1758,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Decision not delivered",
+          "text": "Decision not delivered",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "docked",
@@ -1619,7 +1808,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Decision not delivered",
+          "text": "Decision not delivered",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "docked",
@@ -1662,7 +1858,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Рішення не доставлено",
+          "text": "Рішення не доставлено",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1705,7 +1908,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Рішення не доставлено",
+          "text": "Рішення не доставлено",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1748,7 +1958,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Decision not delivered",
+          "text": "Decision not delivered",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1791,7 +2008,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Decision not delivered",
+          "text": "Decision not delivered",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1834,7 +2058,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Рішення не доставлено",
+          "text": "Рішення не доставлено",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1877,7 +2108,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Рішення не доставлено",
+          "text": "Рішення не доставлено",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1920,7 +2158,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Decision not delivered",
+          "text": "Decision not delivered",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -1963,7 +2208,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Decision not delivered",
+          "text": "Decision not delivered",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2006,7 +2258,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Рішення не доставлено",
+          "text": "Рішення не доставлено",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2049,7 +2308,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Рішення не доставлено",
+          "text": "Рішення не доставлено",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2092,7 +2358,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Decision not delivered",
+          "text": "Decision not delivered",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2135,7 +2408,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Decision not delivered",
+          "text": "Decision not delivered",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2178,7 +2458,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Рішення не доставлено",
+          "text": "Рішення не доставлено",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2221,7 +2508,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Рішення не доставлено",
+          "text": "Рішення не доставлено",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2264,7 +2558,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Decision not delivered",
+          "text": "Decision not delivered",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2307,7 +2608,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Decision not delivered",
+          "text": "Decision not delivered",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2350,7 +2658,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Рішення не доставлено",
+          "text": "Рішення не доставлено",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2393,7 +2708,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Рішення не доставлено",
+          "text": "Рішення не доставлено",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2436,7 +2758,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Decision not delivered",
+          "text": "Decision not delivered",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2479,7 +2808,14 @@
       },
       "decisions": {
         "strip": null,
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "0",
+          "word": "Decision not delivered",
+          "text": "Decision not delivered",
+          "stuck": true,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2522,7 +2858,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": "14"
+        "tab": "14",
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "docked",
@@ -2585,7 +2928,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": "14"
+        "tab": "14",
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "docked",
@@ -2648,7 +2998,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": "14"
+        "tab": "14",
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "docked",
@@ -2711,7 +3068,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": "14"
+        "tab": "14",
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "docked",
@@ -2774,7 +3138,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2837,7 +3208,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2900,7 +3278,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -2963,7 +3348,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3026,7 +3418,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3089,7 +3488,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3152,7 +3558,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3215,7 +3628,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3278,7 +3698,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3341,7 +3768,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3404,7 +3838,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3467,7 +3908,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3530,7 +3978,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3593,7 +4048,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3656,7 +4118,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3719,7 +4188,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3782,7 +4258,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3845,7 +4328,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3908,7 +4398,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",
@@ -3971,7 +4468,14 @@
       },
       "decisions": {
         "strip": "14",
-        "tab": null
+        "tab": null,
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true
+        }
       },
       "panel": {
         "placement": "overlay",

@@ -53,6 +53,20 @@
           "lastWhole": true
         }
       },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 5,
         "strip": {
@@ -110,6 +124,20 @@
         "right": 560,
         "end": {
           "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
         }
       },
       "seat": {
@@ -171,6 +199,20 @@
           "lastWhole": true
         }
       },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 116,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 5,
         "strip": {
@@ -228,6 +270,20 @@
         "right": 560,
         "end": {
           "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 116,
+            "height": 44
+          }
         }
       },
       "seat": {
@@ -289,6 +345,20 @@
           "lastWhole": true
         }
       },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 5,
         "strip": {
@@ -346,6 +416,20 @@
         "right": 475,
         "end": {
           "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
         }
       },
       "seat": {
@@ -407,6 +491,20 @@
           "lastWhole": true
         }
       },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 116,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 5,
         "strip": {
@@ -464,6 +562,20 @@
         "right": 475,
         "end": {
           "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 116,
+            "height": 44
+          }
         }
       },
       "seat": {
@@ -525,6 +637,20 @@
           "lastWhole": true
         }
       },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 5,
         "strip": {
@@ -582,6 +708,20 @@
         "right": 390,
         "end": {
           "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Потрібні ви · 5",
+          "text": "Потрібні ви · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
         }
       },
       "seat": {
@@ -643,6 +783,20 @@
           "lastWhole": true
         }
       },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 116,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 5,
         "strip": {
@@ -702,6 +856,20 @@
           "lastWhole": true
         }
       },
+      "board": {
+        "badge": "5",
+        "chip": {
+          "count": "5",
+          "word": "Needs you · 5",
+          "text": "Needs you · 5",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 116,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 5,
         "strip": {
@@ -729,6 +897,20 @@
         "overflow": false
       },
       "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Не доставлено",
+          "text": "Не доставлено",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 125,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 0,
         "strip": null
@@ -752,6 +934,20 @@
         "overflow": false
       },
       "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Не доставлено",
+          "text": "Не доставлено",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 125,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 0,
         "strip": null
@@ -775,6 +971,20 @@
         "overflow": false
       },
       "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Not delivered",
+          "text": "Not delivered",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 114,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 0,
         "strip": null
@@ -798,6 +1008,20 @@
         "overflow": false
       },
       "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Not delivered",
+          "text": "Not delivered",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 114,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 0,
         "strip": null
@@ -821,6 +1045,20 @@
         "overflow": false
       },
       "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Не доставлено",
+          "text": "Не доставлено",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 125,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 0,
         "strip": null
@@ -844,6 +1082,20 @@
         "overflow": false
       },
       "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Не доставлено",
+          "text": "Не доставлено",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 125,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 0,
         "strip": null
@@ -867,6 +1119,20 @@
         "overflow": false
       },
       "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Not delivered",
+          "text": "Not delivered",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 114,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 0,
         "strip": null
@@ -890,6 +1156,20 @@
         "overflow": false
       },
       "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Not delivered",
+          "text": "Not delivered",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 114,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 0,
         "strip": null
@@ -913,6 +1193,20 @@
         "overflow": false
       },
       "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Не доставлено",
+          "text": "Не доставлено",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 125,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 0,
         "strip": null
@@ -936,6 +1230,20 @@
         "overflow": false
       },
       "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Не доставлено",
+          "text": "Не доставлено",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 125,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 0,
         "strip": null
@@ -959,6 +1267,20 @@
         "overflow": false
       },
       "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Not delivered",
+          "text": "Not delivered",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 114,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 0,
         "strip": null
@@ -982,6 +1304,20 @@
         "overflow": false
       },
       "sheet": null,
+      "board": {
+        "badge": null,
+        "chip": {
+          "count": "0",
+          "word": "Not delivered",
+          "text": "Not delivered",
+          "stuck": true,
+          "whole": true,
+          "target": {
+            "width": 114,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 0,
         "strip": null
@@ -1035,6 +1371,20 @@
         "right": 560,
         "end": {
           "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 129,
+            "height": 44
+          }
         }
       },
       "seat": {
@@ -1096,6 +1446,20 @@
           "lastWhole": true
         }
       },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 129,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 14,
         "strip": {
@@ -1153,6 +1517,20 @@
         "right": 560,
         "end": {
           "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
         }
       },
       "seat": {
@@ -1214,6 +1592,20 @@
           "lastWhole": true
         }
       },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 14,
         "strip": {
@@ -1271,6 +1663,20 @@
         "right": 475,
         "end": {
           "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 129,
+            "height": 44
+          }
         }
       },
       "seat": {
@@ -1332,6 +1738,20 @@
           "lastWhole": true
         }
       },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 129,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 14,
         "strip": {
@@ -1389,6 +1809,20 @@
         "right": 475,
         "end": {
           "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
         }
       },
       "seat": {
@@ -1450,6 +1884,20 @@
           "lastWhole": true
         }
       },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 14,
         "strip": {
@@ -1507,6 +1955,20 @@
         "right": 390,
         "end": {
           "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 129,
+            "height": 44
+          }
         }
       },
       "seat": {
@@ -1568,6 +2030,20 @@
           "lastWhole": true
         }
       },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Потрібні ви · 14",
+          "text": "Потрібні ви · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 129,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 14,
         "strip": {
@@ -1627,6 +2103,20 @@
           "lastWhole": true
         }
       },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
+        }
+      },
       "seat": {
         "section": 14,
         "strip": {
@@ -1684,6 +2174,20 @@
         "right": 390,
         "end": {
           "lastWhole": true
+        }
+      },
+      "board": {
+        "badge": "14",
+        "chip": {
+          "count": "14",
+          "word": "Needs you · 14",
+          "text": "Needs you · 14",
+          "stuck": false,
+          "whole": true,
+          "target": {
+            "width": 122,
+            "height": 44
+          }
         }
       },
       "seat": {

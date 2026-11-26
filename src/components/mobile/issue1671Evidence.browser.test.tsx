@@ -8458,8 +8458,8 @@ describe("attention cues stay off the main thread beside the composer", () => {
  * Normal is 9, empty is 0 (the badge is not drawn), busy is 27. At 560, 390
  * and one width between, in uk and en, light and dark: the badge, its name,
  * and the sheet with form rows only, no «Dismiss» and no «Готово», scrolled to
- * its last row; then the board's own seat, whose strip counts what the sheet
- * lists for that project. Frames go to LLV_EVIDENCE_DIR (else .artifacts);
+ * its last row; then the project board, whose ⚠ badge and seat card chip,
+ * and the opened seat's strip, count what the sheet lists for that project. Frames go to LLV_EVIDENCE_DIR (else .artifacts);
  * readings are committed under evidence/needs-you-forms/.
  */
 describe("«Needs you» on the phone counts the forms that wait", () => {
@@ -8574,6 +8574,32 @@ describe("«Needs you» on the phone counts the forms that wait", () => {
           /* The board's own seat: its strip counts what the sheet lists for that project; an answer stuck in delivery is in neither. */
           const section = Number((sheet?.sections as Array<[string, number]> | undefined)?.find((entry) => entry[0] === "delegatus")?.[1] ?? 0);
           await page.goto(`${server.base}?lang=${lang}&scenario=forms&forms=${forms}`);
+          /* The project board before the seat opens: the seat card's chip counts what the sheet lists for the project and names it
+             as the bar does; an answer stuck in delivery alone reads as a stuck delivery with no number. */
+          await page.locator("[data-mobile2-seat-card]").first().waitFor({ timeout: 20_000 });
+          await page.locator("[data-mobile2-seat-card] [data-prototype-notice-chip]").first().waitFor({ timeout: 10_000 }).catch(() => {});
+          await page.waitForTimeout(300);
+          const card = await page.evaluate(() => {
+            const chip = document.querySelector<HTMLElement>("[data-mobile2-seat-card] [data-prototype-notice-chip]");
+            const word = chip?.querySelector("[data-prototype-notice-chip-word]") ?? null;
+            const range = document.createRange();
+            if (word) range.selectNodeContents(word);
+            const ink = word ? range.getBoundingClientRect() : null;
+            const box = chip?.getBoundingClientRect() ?? null;
+            return {
+              badge: document.querySelector("[data-mobile2-attention-count]")?.getAttribute("data-mobile2-attention-count") ?? null,
+              chip: chip ? {
+                count: chip.dataset.prototypeNoticeChip ?? null, word: word?.textContent ?? null, text: chip.textContent, stuck: chip.hasAttribute("data-prototype-notice-chip-stuck"),
+                whole: Boolean(ink && ink.left >= 0 && ink.right <= innerWidth && ink.top >= 0 && ink.bottom <= innerHeight),
+                target: box ? { width: Math.round(box.width), height: Math.round(box.height) } : null,
+              } : null,
+            };
+          });
+          if (section) check(card.chip?.count === String(section) && card.chip.word === t("decisions.waiting", { count: section }) && !card.chip.stuck, `the seat card's chip reads «${card.chip?.text ?? "nothing"}» (${card.chip?.count}) beside the sheet's ${section}`);
+          else check(!card.chip || (card.chip.count === "0" && card.chip.stuck && card.chip.word === t("proto.notice.undeliveredShort") && !/\d/.test(card.chip.text ?? "")), `with nothing waiting the seat card's chip reads «${card.chip?.text}» (${card.chip?.count})`);
+          check(card.badge === (section ? String(section) : null), `the project board's badge reads ${card.badge} beside the sheet's ${section}`);
+          check(!card.chip || (card.chip.whole && (card.chip.target?.height ?? 0) >= 44), `the seat card's chip is cut or small: ${JSON.stringify(card.chip?.target)}`);
+          await page.screenshot({ path: path.join(out, `${frame}-board.png`) });
           await page.locator("[data-mobile2-seat-open]").first().click({ timeout: 20_000 });
           const pane = await page.locator('[data-testid="mobile-focused-pane"]').waitFor({ timeout: 10_000 }).then(() => true, () => false);
           await page.waitForTimeout(300);
@@ -8590,7 +8616,7 @@ describe("«Needs you» on the phone counts the forms that wait", () => {
           check(!strip || strip.whole, "the seat's strip is cut");
           await page.screenshot({ path: path.join(out, `${frame}-seat.png`) });
           check(errors.length === 0, `page errors ${JSON.stringify(errors)}`);
-          readings.push({ frame, state, forms, width, lang, scheme, bar, sheet, seat: { section, strip } });
+          readings.push({ frame, state, forms, width, lang, scheme, bar, sheet, board: card, seat: { section, strip } });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/needs-you-forms", { recursive: true });
