@@ -20,8 +20,8 @@ async function readConsent(): Promise<boolean> {
 
 type AttributionStatus = Pick<OperatorSettingsResponse, "commitAttribution" | "commitAccount">;
 
-async function attributionStatus(signal: AbortSignal, enabled?: boolean): Promise<AttributionStatus> {
-  const response = await fetch("/api/operator/settings", {
+async function attributionStatus(signal: AbortSignal, enabled?: boolean, refreshAccount = false): Promise<AttributionStatus> {
+  const response = await fetch(`/api/operator/settings${refreshAccount ? "?refreshCommitAccount=1" : ""}`, {
     cache: "no-store",
     signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]),
     ...(enabled === undefined ? {} : {
@@ -50,14 +50,14 @@ function CommitAttributionRow() {
     if (pending.current || signal.aborted) return;
     pending.current = true;
     try {
-      const next = await attributionStatus(signal, enabled);
+      const next = await attributionStatus(signal, enabled, enabled === undefined);
       if (!signal.aborted) setStatus(next);
     } catch {
       if (signal.aborted) return;
       setFailed(true);
       // A write may have persisted before its reply was lost.
       try {
-        const stored = enabled === undefined ? null : await attributionStatus(signal);
+        const stored = enabled === undefined ? null : await attributionStatus(signal, undefined, true);
         if (!signal.aborted) setStatus(stored);
       } catch { if (!signal.aborted) setStatus(null); }
     } finally {
@@ -72,7 +72,7 @@ function CommitAttributionRow() {
     const controller = new AbortController();
     lifetime.current = controller;
     pending.current = true;
-    void attributionStatus(controller.signal).then(
+    void attributionStatus(controller.signal, undefined, true).then(
       next => { if (!controller.signal.aborted) setStatus(next); },
       () => { if (!controller.signal.aborted) setFailed(true); },
     ).finally(() => {

@@ -6,7 +6,7 @@ import { updateOperatorSettings } from "@/lib/operator/settings";
 import { fixtureForgeAccount, fixtureNoreply, seedForgeCommitAccount } from "@/test-helpers/forgeCommitAccount";
 import { realExec } from "@/lib/workflows/provision";
 import { controllerCommitIdentityEnv } from "./controllerCommitIdentity";
-import { DELEGATUS_COAUTHOR, REPOSITORY_IDENTITY, repositoryCommitIdentity, repositoryPublicationSource } from "./repositoryCommitIdentity";
+import { DELEGATUS_COAUTHOR, REPOSITORY_IDENTITY, repositoryCommitIdentity, repositoryPublicationSource, verifyRepositoryCommitRange } from "./repositoryCommitIdentity";
 import { prepareStageGitGuard } from "./stageAttemptGuard";
 import { agentCodexPublicationPolicy, agentPublicationIdentityEnv } from "./agentPublicationIdentity";
 import { withAgentConfigSandbox } from "@/lib/runtime/agentConfigSandbox";
@@ -103,6 +103,41 @@ test.each(["local", "global", "included", "worktree"] as const)("repository iden
     expect(identity).toEqual({ policy: "repository", env: { GIT_AUTHOR_NAME: "Repository Fixture", GIT_AUTHOR_EMAIL: fixtureNoreply,
       GIT_COMMITTER_NAME: "Repository Fixture", GIT_COMMITTER_EMAIL: fixtureNoreply }, coauthor: DELEGATUS_COAUTHOR });
     expect(await f.run(["config", "--local", "--list"])).toBe(before);
+  } finally { f.close(); }
+});
+
+test("publication verification skips published upstream history despite a stale local base", async () => {
+  const f = await fixture();
+  const remote = path.join(f.root, "remote.git");
+  const foreign = path.join(f.root, "foreign");
+  try {
+    await f.run(["init", "-q", "--bare", "--initial-branch=main", remote], f.source, f.root);
+    await f.run(["config", "user.name", "Fixture Owner"]);
+    await f.run(["config", "user.email", fixtureNoreply]);
+    fs.writeFileSync(path.join(f.repo, "tracked.txt"), "base\n");
+    await f.run(["add", "tracked.txt"]);
+    await f.run(["commit", "-qm", "base"]);
+    await f.run(["remote", "add", "origin", remote]);
+    await f.run(["push", "origin", "main"]);
+    await f.run(["checkout", "-qb", "topic"]);
+    await f.run(["clone", remote, foreign], f.source, f.root);
+    await f.run(["config", "user.name", "Foreign Fixture"], f.source, foreign);
+    await f.run(["config", "user.email", ["foreign", "example.invalid"].join("@")], f.source, foreign);
+    await f.run(["commit", "--allow-empty", "-qm", "main advances"], f.source, foreign);
+    await f.run(["push", "origin", "main"], f.source, foreign);
+    await f.run(["fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"]);
+    await f.run(["merge", "--no-ff", "origin/main", "-m", "merge main"], {
+      ...f.source, GIT_AUTHOR_NAME: "Fixture Owner", GIT_AUTHOR_EMAIL: fixtureNoreply,
+      GIT_COMMITTER_NAME: "Fixture Owner", GIT_COMMITTER_EMAIL: fixtureNoreply,
+    });
+
+    expect(await verifyRepositoryCommitRange(f.repo, "main..topic", fixtureNoreply, realExec)).toBeNull();
+    const bad = await realExec("git", ["commit", "--allow-empty", "-m", "private identity"], f.repo, {
+      ...f.source, GIT_AUTHOR_NAME: "Fixture Owner", GIT_AUTHOR_EMAIL: ["private", "example.invalid"].join("@"),
+      GIT_COMMITTER_NAME: "Fixture Owner", GIT_COMMITTER_EMAIL: ["private", "example.invalid"].join("@"),
+    });
+    expect(bad.code, bad.stderr).toBe(0);
+    expect(await verifyRepositoryCommitRange(f.repo, "main..topic", fixtureNoreply, realExec)).toContain("installation owner's noreply mailbox");
   } finally { f.close(); }
 });
 

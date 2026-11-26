@@ -93,9 +93,11 @@ test("the swarm line names the anonymous counts, and the rows hold no native che
 test.each(["en", "uk"] as const)("%s: attribution defaults on, persists off, and reads back a refused write", async locale => {
   setLocale(locale);
   const setting: { value: boolean | null } = { value: null };
+  const reads: string[] = [];
   let refused = false;
   globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
-    if (url !== "/api/operator/settings") return Response.json({ enabled: false });
+    if (String(url).startsWith("/api/operator/settings")) reads.push(String(url));
+    else return Response.json({ enabled: false });
     if (init?.method === "PUT") {
       if (refused) return Response.json({}, { status: 403 });
       setting.value = JSON.parse(String(init.body)).commitAttribution;
@@ -111,6 +113,7 @@ test.each(["en", "uk"] as const)("%s: attribution defaults on, persists off, and
   const checked = () => toggle.getAttribute("aria-checked");
   expect(toggle.getAttribute("aria-label")).toBe(translate(locale, "settings.privacy.commitAttribution"));
   expect(checked()).toBe("true");
+  expect(reads[0]).toBe("/api/operator/settings?refreshCommitAccount=1");
   expect(document.querySelector("[data-commit-account]")?.textContent).toContain("fixture-lane");
   await act(async () => { toggle.click(); });
   expect(setting.value).toBe(false);
@@ -123,7 +126,7 @@ test.each(["en", "uk"] as const)("%s: attribution defaults on, persists off, and
 });
 
 test("Privacy shows how to enable commits when the GitHub account is unresolved", async () => {
-  globalThis.fetch = (async (url: unknown) => url === "/api/operator/settings"
+  globalThis.fetch = (async (url: unknown) => String(url).startsWith("/api/operator/settings")
     ? Response.json({ commitAttribution: null, commitAccount: { state: "unresolved" } })
     : Response.json({ enabled: false })) as unknown as typeof fetch;
   const host = document.createElement("div"); document.body.append(host); root = createRoot(host);

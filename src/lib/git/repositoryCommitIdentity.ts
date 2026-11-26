@@ -42,11 +42,17 @@ export function validRepositoryAuthorName(name: string): boolean {
 /** Verify the literal author and committer mailboxes of every commit a direct
  * workflow push would introduce. Git's mailmap and display names are ignored. */
 export async function verifyRepositoryCommitRange(cwd: string, range: string, email: string, exec: ExecPort = realExec): Promise<string | null> {
+  // A stale local base can leave already-published main commits in this range.
+  // Filter those commits by reachability from the delivery remote's tracking refs.
   const list = await exec("git", ["rev-list", range], cwd, { GIT_NO_REPLACE_OBJECTS: "1" }, { timeoutMs: 10_000 });
   if (list.code !== 0 || list.stdout && !list.stdout.trim().split(/\r?\n/).every(sha => /^[0-9a-f]{40}$/i.test(sha))) {
     return "publication refused because new commit identities could not be verified (values withheld)";
   }
   for (const sha of list.stdout.trim().split(/\r?\n/).filter(Boolean)) {
+    const published = await exec("git", ["for-each-ref", `--contains=${sha}`, "--count=1", "--format=%(refname)", "refs/remotes/origin/"], cwd,
+      { GIT_NO_REPLACE_OBJECTS: "1" }, { timeoutMs: 5_000 });
+    if (published.code !== 0) return "publication refused because new commit identities could not be verified (values withheld)";
+    if (published.stdout.trim()) continue;
     const identity = await exec("git", ["show", "-s", "--no-use-mailmap", "--format=%ae%n%ce", sha], cwd,
       { GIT_NO_REPLACE_OBJECTS: "1" }, { timeoutMs: 5_000 });
     if (identity.code !== 0 || identity.stdout.replace(/\r?\n$/, "") !== `${email}\n${email}`) {

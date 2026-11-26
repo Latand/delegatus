@@ -104,7 +104,7 @@ function harness(options: { setting?: Partial<MergeOnReviewSetting>; required?: 
   const pipelines = new Map(options.lanes.map((pipeline) => [pipeline.id, structuredClone(pipeline)]));
   const prs = new Map(options.prs.map((pr) => [pr.number, pr]));
   const prOf = new Map(options.lanes.map((pipeline, index) => [pipeline.id, options.prs[index]!.number]));
-  const commits = new Map<string, { parents: string[]; committer: string }>();
+  const commits = new Map<string, { parents: string[]; committer?: string; identity?: { name: string; email: string } }>();
   const tasks = new Map((options.tasks ?? []).map((id) => [id, "assigned"]));
   let setting: MergeOnReviewSetting = { enabled: true, changedAt: iso(T0 - 3_600_000), changedBy: "operator", ...options.setting };
   let mergeRefusal: string | null = null;
@@ -1590,6 +1590,23 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
     h.commits.set(HEAD_X, { parents: [HEAD_A, MAIN_1], committer: "web-flow" });
     await h.sweep();
     expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
+  });
+
+  test.each(["owner", "unrelated"] as const)("a two-parent refresh by the %s committer %s review eligibility", async committer => {
+    const completed = lane("L1");
+    completed.delivery = completedDelivery(completed);
+    const h = harness({ lanes: [completed], prs: [openPr(11)] });
+    let refreshes = 0;
+    Object.assign(h.ports, { startRefresh: async () => { refreshes += 1; return {}; } });
+    await h.sweep();
+    h.prs.get(11)!.head = HEAD_B;
+    h.commits.set(HEAD_B, { parents: [HEAD_A, MAIN_1], identity: {
+      name: "Fixture", email: committer === "owner" ? fixtureNoreply : "someone@example.invalid",
+    } });
+    h.advance(MERGE_POLL_MS);
+    await h.sweep();
+    expect(refreshes).toBe(committer === "owner" ? 1 : 0);
+    if (committer === "unrelated") expect(h.merge("L1")).toMatchObject({ state: "blocked", reason: MERGE_REASONS.headChanged });
   });
 
   test("pending required checks time out at 90 min, and not before", async () => {

@@ -353,11 +353,16 @@ if [ "$hook" = pre-push ]; then
       active_owner_email="\${active_owner_account}@\${active_owner_domain}"
       [ "$active_owner_email" = "$expected_author_email" ] || stage_refuse 'installation owner account changed after stage launch'
       [ "$expected_committer_email" = "$active_owner_email" ] || stage_refuse 'installation owner committer identity changed after stage launch'
-      case "$old" in *[!0]*) introduced=$(git rev-list "$new" --not "$old") || stage_refuse ;;
+      case "$old" in *[!0]*) introduced=$(git rev-list "$new" --not "$old" "$base") || stage_refuse ;;
         *) introduced=$(git rev-list "$new" --not "$base") || stage_refuse ;; esac
       for made in $introduced; do
+        # A stage may merge current origin history after launch. Its commits
+        # remain subject to the imported-history receipt check below, but their
+        # authorship is not owned by this stage.
+        published=$(git for-each-ref --contains="$made" --count=1 --format='%(refname)' refs/remotes/origin/) || stage_refuse "$made"
+        [ -z "$published" ] || continue
         [ "$(git show -s --no-use-mailmap --format=%ae%n%ce "$made")" = "$expected_author_email
-$expected_committer_email" ] || stage_refuse "$made"
+$expected_committer_email" ] || stage_refuse 'unpublished commit identity must match the installation owner noreply address'
       done
     fi
     if [ "$new" != "$lane_head" ]; then

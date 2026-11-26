@@ -234,6 +234,48 @@ test("the stage push hook admits safe owner commits and refuses private history 
   }
 });
 
+test("a stage merge of current foreign-identity origin history can push while new private commits remain refused", async () => {
+  const f = await fixture();
+  const previousState = process.env.LLV_STATE_DIR;
+  const stateDir = path.join(f.root, "state");
+  process.env.LLV_STATE_DIR = stateDir;
+  seedForgeCommitAccount(stateDir);
+  try {
+    const fakeBin = path.join(f.root, "bin");
+    await fs.mkdir(fakeBin);
+    await fs.writeFile(path.join(fakeBin, "gh"), "#!/bin/sh\nprintf '%s\\n' '1042+fixture-lane'\n", { mode: 0o700 });
+    f.env.PATH = `${fakeBin}:${f.env.PATH}`;
+    const source = { ...f.env, HOME: f.root, LLV_STATE_DIR: stateDir };
+    const identity = await repositoryPublicationSource(f.lane, source, realExec, "lane");
+    Object.assign(f.env, identity, agentPublicationIdentityEnv({ ...source, ...identity }));
+
+    await f.git(f.foreign, "commit", "--allow-empty", "-m", "foreign main update");
+    await f.git(f.foreign, "push", "origin", "main");
+    await f.own("fetch", "origin", "main");
+    await f.own("merge", "--no-ff", "origin/main", "-m", "merge current main");
+    const merged = await f.own("rev-parse", "HEAD");
+    await f.push();
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(merged);
+
+    const privateEmail = ["personal", "example.invalid"].join("@");
+    const tree = await realExec("git", ["write-tree"], f.lane, f.env);
+    expect(tree.code, tree.stderr).toBe(0);
+    const privateCommit = await realExec("git", ["commit-tree", tree.stdout.trim(), "-p", merged, "-m", "unpublished private identity"], f.lane, {
+      ...f.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: privateEmail, GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: privateEmail,
+    });
+    expect(privateCommit.code, privateCommit.stderr).toBe(0);
+    await f.own("update-ref", "refs/heads/private-probe", privateCommit.stdout.trim());
+    const denied = await realExec("git", ["push", "origin", "refs/heads/private-probe:refs/heads/pipeline/proof"], f.lane, f.env);
+    expect(denied.code).not.toBe(0);
+    expect(denied.stderr).toContain("stage push refused");
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(merged);
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR;
+    else process.env.LLV_STATE_DIR = previousState;
+    await f.close();
+  }
+});
+
 test("a restarted preparation cannot reclaim its superseded worktree binding", async () => {
   const f = await fixture();
   const review = `stage-proof-review-restart-${nextFixture}`;

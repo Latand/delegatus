@@ -688,10 +688,13 @@ async function machineRefreshParent(merge: PipelineMerge, head: string, ports: A
     "{parents: [.parents[].sha], identity: .commit.committer}"]);
   const commit = JSON.parse(raw) as { parents?: unknown; identity?: { name?: unknown; email?: unknown } };
   const identity = controllerCommitIdentityEnv();
+  const owner = await resolveForgeCommitAccount();
+  const ownerEmail = owner ? ownerNoreplyAddress(owner) : null;
   const parents = Array.isArray(commit.parents) ? commit.parents : [];
   return parents.length === 2 && parents[0] === merge.chain.at(-1)
     && typeof parents[1] === "string" && /^[0-9a-f]{40}$/i.test(parents[1])
-    && commit.identity?.name === identity.GIT_COMMITTER_NAME && commit.identity?.email === identity.GIT_COMMITTER_EMAIL
+    && ((commit.identity?.name === identity.GIT_COMMITTER_NAME && commit.identity?.email === identity.GIT_COMMITTER_EMAIL)
+      || (ownerEmail !== null && commit.identity?.email === ownerEmail))
     ? parents[1] : null;
 }
 
