@@ -1,3 +1,5 @@
+import manifest172 from "./protocol/0.172.0/manifest.json";
+import manifest171 from "./protocol/0.171.0/manifest.json";
 import manifest170 from "./protocol/0.170.0/manifest.json";
 import manifest169 from "./protocol/0.169.0/manifest.json";
 import manifest168 from "./protocol/0.168.0/manifest.json";
@@ -12,7 +14,7 @@ import oldestManifest from "./protocol/0.154.0/manifest.json";
 
 /** Retained reviewed schemas, including historical compatibility fixtures. */
 export const CODEX_PROTOCOL_MANIFESTS = [
-  manifest170, manifest169, manifest168, currentManifest, latestPriorManifest, newestPriorManifest, lastManifest, recentManifest,
+  manifest172, manifest171, manifest170, manifest169, manifest168, currentManifest, latestPriorManifest, newestPriorManifest, lastManifest, recentManifest,
   priorManifest, previousManifest, oldestManifest,
 ];
 
