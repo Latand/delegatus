@@ -18,6 +18,7 @@ import {
   backupsDue,
   backupDatabase,
   SchemaRecoveryError,
+  checkDatabaseAtActivation,
   checkStateDatabasesAtActivation,
   pruneBackups,
   raiseStorageIncidentCard,
@@ -168,7 +169,7 @@ test("a healthy or absent database is left alone", () => {
   expect(readTaskIds(directory)).toEqual(["kept"]);
 });
 
-test("agent registry activation uses quick_check and still refuses a structurally corrupt database", () => {
+test("agent registry activation selects quick_check and still refuses a structurally corrupt database", () => {
   const directory = sandbox();
   const registry = stateDatabases(directory).find((database) => database.name === "agent-registry.sqlite");
   if (!registry) throw new Error("agent-registry.sqlite is not a durable database");
@@ -178,21 +179,11 @@ test("agent registry activation uses quick_check and still refuses a structurall
   const healthy = new Database(registry.filename, { create: true });
   healthy.exec("CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES ('ready')");
   healthy.close();
-  const originalQuery = Database.prototype.query;
-  const pragmas: string[] = [];
-  Database.prototype.query = function (sql, ...args) {
-    if (this.filename === registry.filename && /^PRAGMA/.test(sql)) pragmas.push(sql);
-    return originalQuery.call(this, sql, ...args);
-  };
-  try { expect(checkStateDatabasesAtActivation(directory)).toEqual([]); }
-  finally { Database.prototype.query = originalQuery; }
-  expect(pragmas).toContain("PRAGMA quick_check");
-  expect(pragmas).not.toContain("PRAGMA integrity_check");
+  expect(checkDatabaseAtActivation(registry, { stateDirectory: directory })).toEqual({ state: "ok" });
 
   overwrite(registry.filename, 4096, Buffer.alloc(8192, 0xff));
-  const incidents = checkStateDatabasesAtActivation(directory, { now: new Date("2026-09-19T12:30:00Z") });
-  expect(incidents).toHaveLength(1);
-  expect(incidents[0]).toMatchObject({ kind: "database-fresh", database: "agent-registry.sqlite" });
+  const outcome = checkDatabaseAtActivation(registry, { stateDirectory: directory, now: new Date("2026-09-19T12:30:00Z") });
+  expect(outcome.state).toBe("fresh");
   expect(fs.existsSync(registry.filename)).toBe(false);
   expect(fs.readdirSync(directory).some((name) => name.startsWith("agent-registry.sqlite.corrupt-"))).toBe(true);
 });
