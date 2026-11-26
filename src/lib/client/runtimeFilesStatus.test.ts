@@ -4,7 +4,8 @@ import { emptyStore, type RuntimeSession } from "@/components/runtime/runtimeMod
 import type { RuntimeBusState } from "@/hooks/runtimeBus";
 import { createFilesClientCache } from "@/hooks/useFiles";
 import type { FileEntry } from "@/lib/types";
-import { catalogPositions, currentConversationFile, firstFileAtPath, indexedConversationFile } from "@/lib/accounts/identity";
+import { catalogPositions, currentConversationFile, firstFileAtPath, indexedConversationFile, withoutArchivedPredecessors } from "@/lib/accounts/identity";
+import { createCatalogSelection } from "./catalogOverlay";
 
 import { createRuntimeFilesStatusProjection } from "./runtimeFilesStatus";
 
@@ -456,4 +457,55 @@ test("switching pinned catalog representations preserves both labels and the hel
     expect(project(raw,ended).files[0]).toBe(first.files[0]);
     expect(project(relabeled,ended).files[0]).toBe(second.files[0]);
   } finally {cache.dispose();}
+});
+
+test("another project's settlement reads no row of the open project, and a neighbour's replaces its one row by position", async () => {
+  const cache = await catalog();
+  try {
+    const read = new Set<string>();
+    const watched = (entry: FileEntry) => new Proxy(entry, {
+      get(target, key, receiver) {
+        if (target.project === "demo") read.add(target.path);
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const row = (name: string, project: string, extra: Partial<FileEntry> = {}) => watched({ ...file, path: "/sessions/" + name, name, conversationId: name, project, ...extra });
+    const source = [row("editor", "demo"), row("neighbour", "demo"), row("idle", "demo"), row("foreign", "elsewhere"),
+      row("older", "demo", { conversationId: "editor", migratedTo: "/sessions/editor" })];
+    const raw = { ...cache.read(), files: source };
+    const sessions = (turns: Record<string, "running" | "idle">): RuntimeBusState => {
+      const state = runtime();
+      state.store.sessions = Object.fromEntries(Object.entries(turns).map(([id, turn]) => [id, { ...session, conversationId: id,
+        artifactPath: "/sessions/" + id, turn, activeTurnId: turn === "running" ? "turn" : null, settledTurnId: turn === "idle" ? "turn" : null }]));
+      return state;
+    };
+    const project = createRuntimeFilesStatusProjection();
+    const current = createCatalogSelection(withoutArchivedPredecessors);
+    const open = createCatalogSelection((rows) => rows.filter((entry) => entry.project === "demo"));
+    let state = sessions({ neighbour: "running", foreign: "running" });
+    const admitted = open(current(project(raw, state).files));
+    expect(admitted.map((entry) => entry.name)).toEqual(["editor", "neighbour", "idle"]);
+    function publish(id: string, turns: Record<string, "running" | "idle">) {
+      const after = sessions(turns);
+      /* The reducer keeps every untouched record. */
+      for (const other of Object.keys(after.store.sessions)) if (other !== id) after.store.sessions[other] = state.store.sessions[other]!;
+      project.updateRuntime(after, { before: state.store, after: after.store, conversations: new Set([id]),
+        paths: new Set(["/sessions/" + id]), deliveries: new Set(), operations: new Set(), flows: new Set(), deployments: false });
+      state = after;
+      return open(current(project(raw, after).files));
+    }
+
+    read.clear();
+    expect(publish("foreign", { neighbour: "running", foreign: "idle" })).toBe(admitted);
+    expect([...read]).toEqual([]);
+
+    const next = publish("neighbour", { neighbour: "idle", foreign: "idle" });
+    expect([...read]).toEqual(["/sessions/neighbour"]);
+    expect(next).not.toBe(admitted);
+    expect(next[1]).toMatchObject({ name: "neighbour", authoritativeTurn: { state: "idle" } });
+    expect(next[0]).toBe(admitted[0]!);
+    expect(next[2]).toBe(admitted[2]!);
+    /* The array on screen keeps its own row. */
+    expect(admitted[1]!.authoritativeTurn).toBeUndefined();
+  } finally { cache.dispose(); }
 });

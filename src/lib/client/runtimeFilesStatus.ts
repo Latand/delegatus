@@ -2,6 +2,7 @@ import type { RuntimeSession } from "@/components/runtime/runtimeModel";
 import type { RuntimeBusState, RuntimeFrame } from "@/hooks/runtimeBus";
 import type { FilesData } from "@/hooks/useFiles";
 import { catalogPositions, shareCatalogPositions } from "@/lib/accounts/identity";
+import { recordReplacedRows } from "@/lib/client/catalogOverlay";
 import type { FileEntry } from "@/lib/types";
 
 type Status = Pick<RuntimeSession, "conversationId" | "sessionKey" | "artifactPath" | "turn" | "activeTurnId" | "settledTurnId">
@@ -251,6 +252,7 @@ export function createRuntimeFilesStatusProjection() {
         }
       }
       const previous = files;
+      const replaced: number[] = [];
       let overlays = priorArray?.overlays ?? 0;
       for (const position of indices()) {
         const file = data.files[position]!;
@@ -264,9 +266,12 @@ export function createRuntimeFilesStatusProjection() {
         if (files === previous) files = previous.slice();
         overlays += Number(row !== file) - Number(previous[position] !== file);
         files[position] = row;
+        replaced.push(position);
       }
       if (overlays === 0) files = data.files;
       shareCatalogPositions(data.files, files);
+      /* Readers of the array this scope published before follow by position. */
+      if (sameCatalog && priorArray) recordReplacedRows(priorArray.value, files, replaced);
       arrays.set(data.files, { revision, value: files, overlays });
     }
     const result = cached?.value.files === files ? cached.value : files === data.files ? data : { ...data, files };

@@ -13,6 +13,7 @@ import { BOARD_CLOCK_MS, useNowSeconds } from "@/hooks/useNowSeconds";
 import { selectionInOrder, viewBus } from "@/hooks/viewPresenceBus";
 import { GLOBAL_RUNTIME_GATES } from "@/hooks/runtimeSubscriptions";
 import { activeDeliveryConversations } from "./runtime/activeDeliveries";
+import { createCatalogReading } from "@/lib/client/catalogOverlay";
 import { useRuntimeSelector } from "@/hooks/useRuntime";
 import { DelegatusBadge } from "@/components/brand/BrandMark";
 import { ProjectAccounts } from "@/components/ProjectAccounts";
@@ -590,7 +591,8 @@ function ProjectDashboardView({
   /* Runtime receipts bridge the scan interval: a queued send immediately keeps
      its target on the board, then the next files poll carries the new turn. */
   // Collapse protection is queried only for files on this project's board.
-  const projectConversationIds = useMemo(() => new Set(files.flatMap(file => file.conversationId ? [file.conversationId] : [])), [files]);
+  const readConversationIds = useMemo(() => createCatalogReading(rows => new Set(rows.flatMap(file => file.conversationId ? [file.conversationId] : []))), []);
+  const projectConversationIds = useMemo(() => readConversationIds(files), [files, readConversationIds]);
   const deliveryInterest = useMemo(() => ({ keys: { deliveries: projectConversationIds } }), [projectConversationIds]);
   const activeDeliveryConversationIds = useRuntimeSelector(
     state => {

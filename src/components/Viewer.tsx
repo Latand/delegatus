@@ -7,6 +7,7 @@ import { catalogPositions, firstFileAtPath, formatConversationHash, isArchivedPr
 import { navigateToFragment, NOTIFICATION_OPEN_MESSAGE, setFragmentNavigator } from "@/lib/navigation/fragmentNavigation";
 import { createTraversalFence, FOCUS_HISTORY_STATE_KEY, focusEntryFor, parseFocusHistoryState, recordFocusNavigation, recordProjectNavigation, releaseFocusNavigation, retargetRecordedProject, setFocusHistoryOwner } from "@/lib/navigation/focusHistory";
 import { onAccountPanelRequest } from "@/lib/accounts/openPanel";
+import { createCatalogSelection } from "@/lib/client/catalogOverlay";
 import { useFleetCues } from "@/hooks/useFleetCues";
 import { useWorkCues } from "@/hooks/useWorkCues";
 import { useArchivedProjects } from "@/hooks/useArchivedProjects";
@@ -341,10 +342,13 @@ function ViewerApp() {
   const openedRow = catalogPin ? firstFileAtPath(allFiles, catalogPin.path) : undefined;
   const [lastOpenedRow, setLastOpenedRow] = useState<FileEntry | null>(null);
   if (openedRow && openedRow !== lastOpenedRow) setLastOpenedRow(openedRow);
+  const selectCurrentGenerations = useMemo(() => createCatalogSelection(withoutArchivedPredecessors), []);
   const files = useMemo(() => {
-    const folded = withoutArchivedPredecessors(allFiles);
+    const folded = selectCurrentGenerations(allFiles);
     const pinnedPath = catalogPin?.path;
-    if (!pinnedPath || folded.some((file) => file.path === pinnedPath)) return folded;
+    if (!pinnedPath
+      || catalogPositions(allFiles).byPath.get(pinnedPath)?.some((position) => !isArchivedPredecessor(allFiles[position]!))
+      || folded.some((file) => file.path === pinnedPath)) return folded;
     const pinned = firstFileAtPath(allFiles, pinnedPath);
     if (!pinned) {
       return catalogPin?.hydrated && lastOpenedRow?.path === pinnedPath ? [...folded, lastOpenedRow] : folded;
@@ -356,7 +360,7 @@ function ViewerApp() {
     const standing = pinned.conversationId ? folded.find((file) => file.conversationId === pinned.conversationId) : undefined;
     if (!standing) return [...folded, pinned];
     return isArchivedPredecessor(standing) ? folded.map((file) => file === standing ? pinned : file) : folded;
-  }, [allFiles, catalogPin, lastOpenedRow]);
+  }, [selectCurrentGenerations, allFiles, catalogPin, lastOpenedRow]);
   /* The paths the plain catalog carries: the payload without the rows only a
      pin admitted. */
   const unpinnedPaths = useMemo(() => {
@@ -441,19 +445,17 @@ function ViewerApp() {
     localStorage.setItem(PROJECT_KEY, owner);
     mobileNav.retargetProject(owner, null, location.href);
   }, [isMobile, project, phoneTopKey, tasks, pipelines, allFiles, mobileNav]);
-  const dashboardFilesRef = useRef<{ project: string; files: FileEntry[] } | null>(null);
+  /* One selection per project: another project's row reads nothing of this one,
+     and a replaced row of this one is swapped in by position (#4285). */
+  const selectDashboard = useMemo(
+    () => createCatalogSelection((rows) => rows.filter((file) => projectKey(file) === dashboardProject)),
+    [dashboardProject],
+  );
   const dashboardFiles = useMemo(() => {
     if (dashboardProject === OVERVIEW) return [];
-    const selected = files.filter((file) => projectKey(file) === dashboardProject);
-    const previous = dashboardFilesRef.current;
-    const stable = previous?.project === dashboardProject
-      && previous.files.length === selected.length
-      && selected.every((file, index) => file === previous.files[index])
-      ? previous.files
-      : selected;
-    dashboardFilesRef.current = { project: dashboardProject, files: stable };
-    return stable;
-  }, [files, dashboardProject]);
+    const selected = selectDashboard(files);
+    return selected;
+  }, [files, dashboardProject, selectDashboard]);
   /* Every certified answer refreshes the names this browser remembers, so
      the next cold start names the project before its first answer (#2071). */
   useEffect(() => {

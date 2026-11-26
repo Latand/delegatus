@@ -17,7 +17,8 @@ export function instrumentComposerIsolation(source: string, filename: string): s
   if (filenameOnly === "useFiles.ts") {
     return source + "\nglobalThis.__isolationCertifiedSize = path => filesClientCache.read().files.find(row => row.path === path)?.size;\n";
   }
-  if (!filenameOnly || (!components[filenameOnly] && filenameOnly !== "KanbanSeat.tsx" && filenameOnly !== "runtimeFilesStatus.ts")) return source;
+  const probed = ["KanbanSeat.tsx", "runtimeFilesStatus.ts", "catalogOverlay.ts"];
+  if (!filenameOnly || (!components[filenameOnly] && !probed.includes(filenameOnly))) return source;
   function insert(marker: string, code: string) {
     if (source.split(marker).length !== 2) throw Error(`isolation instrumentation needs one ${marker} in ${filenameOnly}`);
     source = source.replace(marker, marker + "\n" + code);
@@ -25,13 +26,18 @@ export function instrumentComposerIsolation(source: string, filename: string): s
   const register = () => '\n;(globalThis.__composerIsolationModules ??= new Set()).add(' + JSON.stringify(filenameOnly) + ');\n';
   const count = (name: string) => `if (window.isolationCounters) window.isolationCounters.${name}++;`;
   if (filenameOnly === "Viewer.tsx") {
-    insert("const selected = files.filter((file) => projectKey(file) === dashboardProject);", `
-      if (window.isolationCounters) {
-        window.isolationCounters.dashboardFilterVisits += selected.length;
-        window.isolationCounters.dashboardFilterArrays++;
+    insert("const selected = selectDashboard(files);", `
+      if (globalThis.__isolationShown !== selected) {
+        if (globalThis.__isolationShown) { ${count("projectArraysPublished")} }
+        globalThis.__isolationShown = selected;
       }`);
-    insert("dashboardFilesRef.current = { project: dashboardProject, files: stable };",
-      'if (stable !== previous?.files) { ' + count("projectArraysPublished") + ' }');
+  }
+  /* Every row an array filter reads: all of them on a full read, only the replaced ones otherwise. */
+  const filtered = (row: string) => `if (${row}.project === "atlas") { ${count("dashboardFilterVisits")} }`;
+  if (filenameOnly === "catalogOverlay.ts") {
+    insert("const row = source[position]!;", filtered("row"));
+    insert("const answer = select(source);", `for (const row of source) { ${filtered("row")} }
+    ${count("dashboardFilterArrays")}`);
   }
   if (components[filenameOnly]) {
     const [name, counter] = components[filenameOnly]!;
