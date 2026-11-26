@@ -19575,9 +19575,9 @@ function backgroundBoundReportable({ pipeline, stageId, attempt }: StageCompleti
   const step = stepBackgroundWait(wait, wait.tasks.map(task => ({ ...task, startedAt: 0, expiresAt: null })),
     wait.silentSince, wait.until, "");
   const handoffTimedOut = attempt.error?.includes(BACKGROUND_CONTINUATION_HANDOFF_TIMEOUT) === true;
-  const expectedBackgroundPark = [step.reason, step.reason + BACKGROUND_REPORT_AFTER_PARK,
+  const expectedBackgroundPark = step.expired && [step.reason, step.reason + BACKGROUND_REPORT_AFTER_PARK,
     "background work could not be verified at its persisted park-at time" + BACKGROUND_REPORT_AFTER_PARK].includes(attempt.error ?? "");
-  if ((!step.expired || !expectedBackgroundPark) && !handoffTimedOut || pipeline.stateDetail !== attempt.error) return false;
+  if (!expectedBackgroundPark && !handoffTimedOut || pipeline.stateDetail !== attempt.error) return false;
   const generation = ports.conversationGeneration?.(attempt.conversationId);
   if (!generation || generation.engine !== attempt.effectiveRole.engine
     || generation.sessionId !== attempt.sessionId || generation.agentPath !== attempt.agentPath) return false;
