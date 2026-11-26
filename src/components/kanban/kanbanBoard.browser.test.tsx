@@ -20521,7 +20521,7 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
     "t-search": { state: "two providers", marks: [["claude", "num", 1], ["codex", "num", 1]], pop: [/193m tokens|193\sмлн токенів/, /≈2.1%/, /≈1%/, /≈1.2%/, /≈0.4%/, /usage rate|темпом/, /226/] },
     "t-export": { state: "several accounts", marks: [["claude", "tiny", 0], ["codex", "num", 2]], pop: [/≈0.4%/, /≈4.2%/, /≈2.1%/, /≈1%/] },
     "t-links": { state: "tiny", marks: [["claude", "tiny", 0]], pop: [/≈0[.,]3%/] },
-    "t-interrupt": { state: "large, estimate with incomplete history", marks: [["claude", "floor", 2], ["codex", "num", 4]], pop: [/≈12.4%/, /≈21.3%/, /≈12.9%/] },
+    "t-interrupt": { state: "large, estimate with incomplete history", marks: [["claude", "floor", 2], ["codex", "num", 4]], pop: [/≥12.4%/, /≈21.3%/, /≈12.9%/] },
     "t-disk": { state: "plan unreported", marks: [["claude", "tokens", null], ["codex", "num", 1]], pop: [/Claude 41/, /(reported account plan is needed|потрібен план акаунта)/, /≈1%/] },
   } as const;
   const popReading = (page: Page, id: string) => page.evaluate((id) => {
@@ -20571,7 +20571,30 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
       /* Another card's title and anything outside the cards (the sidebar, the seat) must stay readable; other text of a neighbouring card is reported only. */
       if (hit) (node.parentElement.closest(".title, h3") || !node.parentElement.closest("[data-kanban-card]") ? foreign : foreignCards).push(node.nodeValue.trim().slice(0, 40));
     }
-    return { box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom, height: r.height }, viewport: { width: innerWidth, height: innerHeight }, lines, clipped, labels, outside, overlapsTimeline, overlapsTitle, numX, foreign, foreignCards, bg: getComputedStyle(pop).backgroundColor };
+    /* How far the bubble stands from its own card (0 when they overlap or touch), whether it stays in the board and out of the seat, and the card's own text it cuts at its edge. */
+    const cardRect = host?.getBoundingClientRect();
+    const gap = cardRect ? Math.max(0, cardRect.left - r.right, r.left - cardRect.right, cardRect.top - r.bottom, r.top - cardRect.bottom) : null;
+    const board = host?.closest("[data-kanban-board]")?.getBoundingClientRect();
+    const inBoard = board ? r.left >= board.left - 0.5 && r.right <= board.right + 0.5 && r.top >= board.top - 0.5 && r.bottom <= board.bottom + 0.5 : null;
+    const inSeat = [...document.querySelectorAll<HTMLElement>("[data-kanban-seat]")].some((el) => { const b = el.getBoundingClientRect(); return b.left < r.right - 0.5 && r.left < b.right - 0.5 && b.top < r.bottom - 0.5 && r.top < b.bottom - 0.5; });
+    const cut: string[] = [];
+    if (host) {
+      const own = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+      const piece = document.createRange();
+      for (let node = own.nextNode(); node; node = own.nextNode()) {
+        if (!node.nodeValue?.trim() || !node.parentElement) continue;
+        piece.selectNodeContents(node);
+        for (const rect of piece.getClientRects()) {
+          if (rect.width <= 0 || rect.height <= 0) continue;
+          const b = shown(node.parentElement, rect);
+          if (!b) continue;
+          const hit = b.left < r.right - 0.5 && r.left < b.right - 0.5 && b.top < r.bottom - 0.5 && r.top < b.bottom - 0.5;
+          const whole = b.left >= r.left - 0.5 && b.right <= r.right + 0.5 && b.top >= r.top - 0.5 && b.bottom <= r.bottom + 0.5;
+          if (hit && !whole) cut.push(node.nodeValue.trim().slice(0, 40));
+        }
+      }
+    }
+    return { box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom, height: r.height }, viewport: { width: innerWidth, height: innerHeight }, lines, clipped, labels, outside, overlapsTimeline, overlapsTitle, numX, foreign, foreignCards, gap, inBoard, inSeat, cut, bg: getComputedStyle(pop).backgroundColor };
   }, id);
   const COUNTING = "t-merge-a";
   const WIDTHS = [1440, 1280, 820, 390, 320, 360, 440] as const;
@@ -20656,7 +20679,7 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               if (!/(±30%|plan budget|бюджетом плану)/.test(text) || !/API/.test(text)) failures.push(`${label} ${id}: missing estimate basis or API total`);
               if (pop.clipped) failures.push(`${label} ${id}: ${pop.clipped} popover lines are cut`);
               if (pop.outside) failures.push(`${label} ${id}: ${pop.outside} account lines or bars leave the bubble`);
-              if (pop.overlapsTitle) failures.push(`${label} ${id}: the popover covers card title text`);
+              /* The card's own title may sit under the bubble when that is the only place that covers no other card's text (the placement judges it last). */
               if (width >= 1000 && pop.foreign.length) failures.push(`${label} ${id}: the popover covers text of other cards or the sidebar: ${pop.foreign.join(" | ")}`);
               /* The fixture's 80-character label cannot share a line with its figure: it is printed whole, on lines of its own. */
               if (pop.lines.length > 12) failures.push(`${label} ${id}: the compact popover renders ${pop.lines.length} rows`);
@@ -20773,8 +20796,9 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
         const rects = [...range.getClientRects()];
         return { text: el.innerText.replace(/\s+/g, " ").trim(), lines: new Set(rects.map((b) => Math.round(b.top))).size, top: el.getBoundingClientRect().top, bottom: el.getBoundingClientRect().bottom };
       });
-      const providers = [...root.querySelectorAll<HTMLElement>("[data-spend-provider]")].map((el) => ({ engine: el.dataset.spendProvider!, kind: el.dataset.kind!, text: el.innerText.replace(/\s+/g, " ").trim(), basis: el.querySelector(".pop-basis")?.textContent ?? null }));
-      return { rows, providers, height: root.getBoundingClientRect().height, text: root.innerText.replace(/\s+/g, " ").trim() };
+      const providers = [...root.querySelectorAll<HTMLElement>("[data-spend-provider]")].map((el) => ({ engine: el.dataset.spendProvider!, kind: el.dataset.kind!, text: el.innerText.replace(/\s+/g, " ").trim(), basis: el.querySelector(".pop-basis")?.textContent ?? null, reasons: el.querySelectorAll("[data-spend-reason]").length }));
+      const brokenIds = [...root.querySelectorAll<HTMLElement>(".model-id")].filter((el) => { const range = document.createRange(); range.selectNodeContents(el); return new Set([...range.getClientRects()].map((b) => Math.round(b.top))).size > 1; }).map((el) => el.textContent ?? "");
+      return { rows, providers, brokenIds, height: root.getBoundingClientRect().height, text: root.innerText.replace(/\s+/g, " ").trim() };
     }, scope);
     const judge = (label: string, id: string, got: Awaited<ReturnType<typeof shape>>, guest: boolean) => {
       if (/30m|cache/i.test(got.text)) failures.push(`${label} ${id}: a pricing assumption is printed: ${got.text}`);
@@ -20784,6 +20808,14 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
         const figure = /(\d+(?:[.,]\d+)?\s?(?:m|млн|bn|млрд))\s(?:tokens|токенів)/.exec(p.text);
         if (figure && p.text.split(figure[0]).length - 1 > 1) failures.push(`${label} ${id}: ${p.engine} prints ${figure[0]} more than once: ${p.text}`);
         if (guest && p.kind !== "tokens" && !(p.basis && /≈/.test(p.basis) && /%/.test(p.basis))) failures.push(`${label} ${id}: a guest's ${p.engine} has no share and basis: ${p.text}`);
+      }
+      if (/≈\s\$|≈\s\d/.test(got.text)) failures.push(`${label} ${id}: the ≈ sign is spaced from its figure in one place and not another: ${got.text}`);
+      if (/Budget \$|Бюджет \$/.test(got.text)) failures.push(`${label} ${id}: the budget line reads like a plan price: ${got.text}`);
+      if (/\$900/.test(got.text) && !/(Plan week ≈\$900–\$2,300 at API prices|Тиждень плану ≈\$900–\$2\D300 за цінами API) \(/.test(got.text)) failures.push(`${label} ${id}: the budget line does not name its unit: ${got.text}`);
+      if (got.brokenIds.length) failures.push(`${label} ${id}: a model id breaks across lines: ${got.brokenIds.join(", ")}`);
+      for (const p of got.providers) {
+        if (p.kind === "tokens" && p.reasons < 1) failures.push(`${label} ${id}: ${p.engine} has tokens and no share and prints no reason: ${p.text}`);
+        if (p.kind === "floor" && (/≈\d/.test(p.text.replace(/≈\$\d[\d,.]*/g, "")) || !/≥\d/.test(p.text))) failures.push(`${label} ${id}: a floor provider's lines do not print «≥» alone: ${p.text}`);
       }
       if (guest && got.rows.length) failures.push(`${label} ${id}: account lines reached a guest`);
       for (const row of got.rows) if (row.lines > 2) failures.push(`${label} ${id}: an account takes ${row.lines} lines: ${row.text}`);
@@ -20810,8 +20842,12 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               const got = await shape(page, `[data-spend-pop="${id}"]`);
               readings.push({ label, id, name, popover: pop, shape: got });
               judge(label, id, got, false);
-              if (pop.overlapsTitle) failures.push(`${label} ${id}: the popover covers its own card's title`);
               if (pop.foreign.length) failures.push(`${label} ${id}: the popover covers another card's title or text outside the cards: ${pop.foreign.join(" | ")}`);
+              if (pop.foreignCards.length) failures.push(`${label} ${id}: the popover covers text of another card: ${pop.foreignCards.join(" | ")}`);
+              if (pop.gap === null || pop.gap > 1) failures.push(`${label} ${id}: the popover stands ${pop.gap}px from its own card`);
+              if (pop.inBoard === false) failures.push(`${label} ${id}: the popover leaves the board (the sidebar's side)`);
+              if (pop.inSeat) failures.push(`${label} ${id}: the popover stands over the seat pane`);
+              if (pop.cut.length) failures.push(`${label} ${id}: the popover leaves fragments of its own card's text at its edge: ${pop.cut.join(" | ")}`);
               if (pop.box.left < 0 || pop.box.top < 0 || pop.box.right > pop.viewport.width || pop.box.bottom > pop.viewport.height) failures.push(`${label} ${id}: the popover leaves the window`);
               if (id === "t-search" && width === 1440 && lang === "en" && pop.box.height > 240) failures.push(`${label} ${id}: the compact popover is ${pop.box.height}px tall`);
               await page.screenshot({ path: path.join(out, `${label}-${name}-popover.png`) });

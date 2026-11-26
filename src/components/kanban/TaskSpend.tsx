@@ -9,7 +9,7 @@ import { TooltipBubble } from "@/components/TooltipBubble";
 import type { SpendBudget, SpendRange, TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
 import { useLocale, type Locale, type TFunction } from "@/lib/i18n";
 
-import { chooseSpendPlacement, spendCandidates, windowTextBoxes, type SpendKind } from "./spendPopoverPlacement";
+import { chooseSpendPlacement, settleSpendPlacement, spendCandidates, windowTextBoxes, type Box, type SpendKind } from "./spendPopoverPlacement";
 import { useTaskSpend } from "./taskSpendSummaries";
 
 const ENGINE_NAME = { claude: "Claude", codex: "Codex" } as const;
@@ -95,18 +95,34 @@ function Marks({ summary }: { summary: TaskSpendSummary }) {
   );
 }
 
+/** The sign stands against its figure here, as it does in the share: «≈$196», «≈12.4%». */
 function usd(value: number, locale: Locale): string {
-  return value > 0 && value < 0.01 ? `<$${decimalCents(0.01, locale)}` : money(value, locale);
+  return value > 0 && value < 0.01 ? `<$${decimalCents(0.01, locale)}` : money(value, locale).replace("≈ ", "≈");
 }
 
 const decimalCents = (value: number, locale: Locale) =>
   new Intl.NumberFormat(intlLocale(locale), { maximumFractionDigits: 2 }).format(value);
 
-/** The share as the headline prints it, with its range at the same precision: «≈1.5% of week (1–2.6%)». */
-function shareText(pp: number, range: SpendRange | null, locale: Locale, t: TFunction): string {
+/**
+ * The share as the headline prints it, with its range at the same precision: «≈1.5% of week (1–2.6%)».
+ * A lower bound prints as «≥12.4% of week», never a two-sided range.
+ */
+function shareText(pp: number, range: SpendRange | null, locale: Locale, t: TFunction, floor = false): string {
   const bound = (value: number) => decimal(Math.round(value * 10) / 10, locale);
+  if (floor) return t("taskSpend.share", { value: `≥${decimal(Math.floor(pp * 10 + 1e-9) / 10, locale)}%` });
   const span = range ? ` (${bound(range.low)}–${bound(range.high)}%)` : "";
   return `${t("taskSpend.share", { value: pp < 0.1 ? "<0.1%" : `≈${estimatePercent(pp, locale)}` })}${span}`;
+}
+
+/** Model ids stay whole: a line breaks between ids, never inside one. */
+function ModelIds({ models }: { models: readonly string[] }) {
+  return <>{models.map((model, at) => <span key={model}>{at > 0 ? ", " : null}<span className="model-id">{model}</span></span>)}</>;
+}
+
+/** A message that names models around a `{models}` slot, with each id kept whole. */
+function withModels(template: (models: string) => string, models: readonly string[]) {
+  const [before = "", after = ""] = template("\u0000").split("\u0000");
+  return <>{before}<ModelIds models={models} />{after}</>;
 }
 
 function SpendProvider({ provider }: { provider: TaskSpendProvider }) {
@@ -115,13 +131,16 @@ function SpendProvider({ provider }: { provider: TaskSpendProvider }) {
   const kind = providerKind(provider);
   const partial = provider.apiUsd !== null && provider.unpricedTokens > 0;
   const api = provider.apiUsd === null
-    ? (provider.unpricedModels.length ? t("taskSpend.noApiModels", { models: provider.unpricedModels.join(", ") }) : t("taskSpend.noApi"))
+    ? (provider.unpricedModels.length ? withModels(models => t("taskSpend.noApiModels", { models }), provider.unpricedModels) : t("taskSpend.noApi"))
     : t(provider.apiPricedTokens < provider.tokens ? "taskSpend.partialApi" : "taskSpend.api", { value: usd(provider.apiUsd, locale) });
   const accounts = provider.accounts ?? [];
   const several = accounts.length > 1;
   const budget = provider.basis && provider.basis !== "measured" ? budgetText(provider.budgets, locale, t) : null;
   /* A guest has no account lines, so the provider's own share leads its basis line. */
-  const guestShare = provider.accounts === null ? (kind === "tokens" ? null : shareText(provider.weeklyPp, provider.range, locale, t)) : null;
+  const guestShare = provider.accounts === null ? (kind === "tokens" ? null : shareText(provider.weeklyPp, provider.range, locale, t, kind === "floor")) : null;
+  /* Tokens with no share say why: a missing plan or budget has its own line, otherwise the model has no price to weigh them by. */
+  const noShare = kind === "tokens" && !provider.issues.some(issue => issue !== "historicalPriceCoverage")
+    ? t(provider.unpricedModels.length || provider.apiUsd === null ? "taskSpend.noShare.unpriced" : "taskSpend.noShare.other") : null;
   const basis = provider.basis ? [guestShare, t(`taskSpend.basis.${provider.basis}`), budget].filter(Boolean).join(" · ") : null;
   return (
     <span className="pop-block" data-spend-provider={provider.engine} data-kind={kind}>
@@ -142,16 +161,17 @@ function SpendProvider({ provider }: { provider: TaskSpendProvider }) {
         const parts = [
           label,
           plan,
-          hasShare ? shareText(account.weeklyPp!, account.range, locale, t) : t("taskSpend.tokens", { tokens: compact(account.tokens, locale) }),
+          hasShare ? shareText(account.weeklyPp!, account.range, locale, t, kind === "floor") : t("taskSpend.tokens", { tokens: compact(account.tokens, locale) }),
           several && account.apiUsd !== null ? usd(account.apiUsd, locale) : null,
         ].filter(Boolean);
         return <span key={account.key} className="pop-sub meter-note" data-spend-account={account.key}>{parts.join(" · ")}</span>;
       })}
       {basis ? <span className="pop-sub meter-note pop-basis">{basis}</span> : null}
-      {[...new Set(provider.issues)].map(issue => <span key={issue} className="pop-sub meter-note">{t(`taskSpend.issue.${issue}`)}</span>)}
+      {noShare ? <span className="pop-sub meter-note" data-spend-reason="">{noShare}</span> : null}
+      {[...new Set(provider.issues)].map(issue => <span key={issue} className="pop-sub meter-note" data-spend-reason="">{t(`taskSpend.issue.${issue}`)}</span>)}
       {partial ? <span className="pop-sub meter-note">
         {t("taskSpend.unpriced", { tokens: compact(provider.unpricedTokens, locale) })}
-        {provider.unpricedModels.length > 0 ? <> ({provider.unpricedModels.join(", ")})</> : null}
+        {provider.unpricedModels.length > 0 ? <> (<ModelIds models={provider.unpricedModels} />)</> : null}
       </span> : null}
     </span>
   );
@@ -181,10 +201,11 @@ export function TaskSpendMarks({ taskId, interactive }: { taskId: string; intera
   const ref = useRef<HTMLSpanElement>(null);
   const pressed = useRef(false);
   const kind = useRef<SpendKind | null>(null);
+  const ownText = useRef<{ card: Box; boxes: Box[] } | null>(null);
   const bubbleId = useId();
   const [open, setOpen] = useState(false);
   useEffect(() => {
-    if (!open) { kind.current = null; return; }
+    if (!open) { kind.current = null; ownText.current = null; return; }
     const away = (event: PointerEvent) => {
       if (!ref.current?.contains(event.target as Node)) setOpen(false);
     };
@@ -223,15 +244,37 @@ export function TaskSpendMarks({ taskId, interactive }: { taskId: string; intera
             const card = ref.current?.closest<HTMLElement>("[data-kanban-card]");
             if (!card) return null;
             const anchor = ref.current!.getBoundingClientRect();
-            const input = { viewport: { width: window.innerWidth, height: window.innerHeight }, card: card.getBoundingClientRect(), anchor };
+            const board = card.closest<HTMLElement>("[data-kanban-board]")?.getBoundingClientRect();
+            const seat = [...document.querySelectorAll<HTMLElement>("[data-kanban-seat]")].map(el => el.getBoundingClientRect()).filter(box => box.width > 0 && box.height > 0);
+            const input = {
+              viewport: { width: window.innerWidth, height: window.innerHeight }, card: card.getBoundingClientRect(), anchor,
+              bounds: board, avoid: seat.filter(box => box.bottom <= anchor.top + 1 || box.top >= anchor.bottom - 1),
+            };
             const sizeAt = (maxWidth: number) => { bubble.style.maxWidth = `${maxWidth}px`; const box = bubble.getBoundingClientRect(); return { width: box.width, height: box.height }; };
             const candidates = spendCandidates(input, sizeAt);
+            const frame = { card: input.card, area: {
+              left: Math.max(8, board?.left ?? 8), top: Math.max(8, board?.top ?? 8),
+              right: Math.min(input.viewport.width - 8, board?.right ?? Infinity), bottom: Math.min(input.viewport.height - 8, board?.bottom ?? Infinity),
+            } };
             /* The covered text is measured once per opening; a scroll or resize keeps that choice. */
-            kind.current ??= chooseSpendPlacement(candidates, windowTextBoxes(card, bubble))?.kind ?? "over";
-            const chosen = candidates.find(c => c.kind === kind.current) ?? candidates[0];
-            if (!chosen) return null;
+            if (!kind.current) {
+              const text = windowTextBoxes(card, bubble);
+              kind.current = chooseSpendPlacement(candidates, { ...text, anchor }, frame)?.kind ?? "over";
+              ownText.current = { card: input.card, boxes: [...text.own, ...text.ownTitle] };
+            }
+            const raw = candidates.find(c => c.kind === kind.current) ?? candidates[0];
+            if (!raw) return null;
+            /* The card's own text moves with the card: the lines it cut when the choice was made are cut again from the card's box now. */
+            const measured = ownText.current;
+            const shift = measured ? { x: input.card.left - measured.card.left, y: input.card.top - measured.card.top } : { x: 0, y: 0 };
+            const lines = (measured?.boxes ?? []).map(b => ({ left: b.left + shift.x, right: b.right + shift.x, top: b.top + shift.y, bottom: b.bottom + shift.y }));
+            const chosen = settleSpendPlacement(raw, lines, frame);
             bubble.style.maxWidth = `${chosen.maxWidth}px`;
-            return { left: chosen.left, top: chosen.top, maxWidth: chosen.maxWidth };
+            const widened = chosen.width > raw.width + 0.5 ? chosen.width : undefined;
+            const taller = chosen.height > raw.height + 0.5 ? chosen.height : undefined;
+            if (widened) bubble.style.width = `${widened}px`;
+            if (taller) bubble.style.minHeight = `${taller}px`;
+            return { left: chosen.left, top: chosen.top, maxWidth: Math.max(chosen.maxWidth, chosen.width), width: widened, minHeight: taller };
           }}>
           <span data-spend-pop={taskId}>
             <span className="pop-title">

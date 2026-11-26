@@ -192,8 +192,8 @@ test("a lower bound's scale fills from the displayed estimate", async () => {
   const host = await mount(<><TaskSpendMarks taskId="floor46" interactive /><TaskSpendMarks taskId="floor146" interactive /></>);
   expect(marks(host, "floor46")).toEqual([["claude", "floor", 1]]);
   expect(marks(host, "floor146")).toEqual([["claude", "floor", 2]]);
-  expect((await open("floor46")).textContent).toContain("≈4.6% of week (3.2–6%)");
-  expect((await open("floor146")).textContent).toContain("≈14.6% of week (10.2–19%)");
+  expect((await open("floor46")).textContent).toContain("≥4.6% of week");
+  expect((await open("floor146")).textContent).toContain("≥14.6% of week");
 });
 
 test("the compact card popover shows a separate estimate for each subscription", async () => {
@@ -280,10 +280,11 @@ test("a lower bound and an unreported plan have distinct explanations in Ukraini
   await mount(<><TaskSpendMarks taskId="large" interactive /><PhoneTaskSpend taskId="large" headingClass="h" />
     <TaskSpendMarks taskId="norate" interactive /><PhoneTaskSpend taskId="norate" headingClass="h" /></>);
   const large = await open("large");
-  expect(large.textContent).toContain("≈12,4% тижня (8,7–16,1%)");
+  expect(large.textContent).toContain("≥12,4% тижня");
+  expect(large.querySelector("[data-spend-provider='claude'] [data-spend-account]")!.textContent).not.toMatch(/≈|\(/);
   expect(large.querySelector(".pop-warn")!.textContent).toContain("Нижня межа: роботу до початку обліку не пораховано");
   const phone = document.querySelector("[data-phone-task-spend='large']")!.textContent!;
-  expect(phone).toContain("≈12,4% тижня (8,7–16,1%)");
+  expect(phone).toContain("≥12,4% тижня");
   expect(phone).not.toContain("5 годин");
   const norate = await open("norate");
   const claude = norate.querySelector("[data-spend-provider='claude']")!;
@@ -319,7 +320,7 @@ test("each figure prints once per provider, with no pricing assumption on the ca
   await mount(<><TaskSpendMarks taskId="two" interactive /><TaskSpendMarks taskId="single" interactive /><PhoneTaskSpend taskId="single" headingClass="h" /></>);
   for (const text of [(await open("single")).textContent!, document.querySelector("[data-phone-task-spend='single']")!.textContent!]) {
     expect(text.match(/45m tokens/g)).toHaveLength(1);
-    expect(text.match(/≈ \$/g)).toHaveLength(1);
+    expect(text.match(/≈\$/g)).toHaveLength(1);
     expect(text.match(/Estimate/g)).toHaveLength(1);
     expect(text).toContain("Workstation · Pro · ≈1.4% of week (1–1.8%)");
     expect(text).not.toMatch(/cache|30m|account week/);
@@ -327,8 +328,8 @@ test("each figure prints once per provider, with no pricing assumption on the ca
   /* Several accounts of one provider give each its own dollars and share, and Codex's line carries no cache note. */
   const two = (await open("two")).textContent!;
   expect(two).not.toMatch(/cache|30m/);
-  expect(two).toContain("A · Max · ≈2.1% of week (1.5–2.7%) · ≈ $13");
-  expect(two).toContain("B · Max · ≈1% of week (0.7–1.3%) · ≈ $6.1");
+  expect(two).toContain("A · Max · ≈2.1% of week (1.5–2.7%) · ≈$13");
+  expect(two).toContain("B · Max · ≈1% of week (0.7–1.3%) · ≈$6.1");
 });
 
 test("the phone's face is passive, and its task screen lists the numbers; a refused read draws nothing", async () => {
@@ -351,16 +352,20 @@ test("unpriced models and plans without a fixed limit keep the tokens and explai
   const noLimit = (await open("noFixedLimit")).textContent!;
   expect(noLimit).toContain("100m tokens");
   expect(noLimit).toContain("plan has no fixed limit");
-  expect(noLimit).toContain("≈ $10 at API prices");
+  expect(noLimit).toContain("≈$10 at API prices");
   /* With no price at all the provider's line says so once, with the model, and nothing repeats it. */
   const unpriced = (await open("unpriced")).textContent!;
   expect(unpriced).toContain("Claude 100m tokens · No API price (fixture-model)");
   expect(unpriced.match(/100m tokens/g)).toHaveLength(1);
   expect(unpriced).not.toMatch(/API price unavailable|No API price for/);
+  /* Tokens with no share say why, once, and a model id stays whole. */
+  expect(unpriced).toContain("No share: the model has no price to weigh it");
+  expect(document.querySelectorAll("[data-spend-pop='unpriced'] [data-spend-reason]")).toHaveLength(1);
+  expect(document.querySelector("[data-spend-pop='unpriced'] .model-id")!.textContent).toBe("fixture-model");
   const partial = (await open("partial")).textContent!;
   expect(partial).toContain("≈1.2% of week (0.8–2%)");
-  expect(partial).toContain("Budget $900–$2,300 a week (measured)");
-  expect(partial).toContain("≈ $10 at API prices for priced tokens");
+  expect(partial).toContain("Plan week ≈$900–$2,300 at API prices (measured)");
+  expect(partial).toContain("≈$10 at API prices for priced tokens");
   expect(partial).toContain("No API price for 100m tokens (fixture-model)");
   expect(partial).toContain("Some expired tokens lack a separable API price history");
   for (const text of [noLimit, unpriced, partial]) {

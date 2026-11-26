@@ -2291,6 +2291,8 @@
 /* The popover: the state dot's bubble, with a provider block per engine. */
 .spend-pop { width: max-content; max-width: min(320px, calc(100vw - 24px)); text-align: left; }
 :is(.spend-pop, .phone-spend) .pop-sub { overflow-wrap: anywhere; }
+/* A model id is one word: a line breaks between ids, not at a hyphen inside one. */
+:is(.spend-pop, .phone-spend) .model-id { white-space: nowrap; }
 .spend-pop .pop-title { display: block; font-weight: 600; margin-bottom: 4px; }
 .spend-pop .pop-total { font-weight: 400; color: var(--color-muted); }
 .spend-pop .pop-row { display: flex; align-items: flex-start; gap: 5px; }
