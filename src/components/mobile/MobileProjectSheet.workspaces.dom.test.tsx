@@ -106,11 +106,14 @@ const sheetProps = {
   onClose: () => {},
 };
 
-function Harness({ initial, selected = "voice-lab", leave = () => {}, crowned = [] }: { initial: string; selected?: string; leave?: (path: string) => void; crowned?: string[] }) {
+function Harness({ initial, selected = "voice-lab", leave = () => {}, crowned = [], catalog = [] }: {
+  initial: string; selected?: string; leave?: (path: string) => void; crowned?: string[];
+  catalog?: React.ComponentProps<typeof MobileProjectSheet>["projectCatalog"];
+}) {
   const view = useWorkspaces();
   const [current, setCurrent] = useState(initial);
   if (view?.mode !== "team") return null;
-  return <MobileProjectSheet {...sheetProps} crownedProjects={new Set(crowned)} selected={selected} onToggleCrown={(project, on) => crowns.push([project, on])} workspace={{ view, chosen: current, choose: setCurrent, place: placeProject, leave }} />;
+  return <MobileProjectSheet {...sheetProps} projectCatalog={catalog} crownedProjects={new Set(crowned)} selected={selected} onToggleCrown={(project, on) => crowns.push([project, on])} workspace={{ view, chosen: current, choose: setCurrent, place: placeProject, leave }} />;
 }
 
 async function render(element: React.ReactElement): Promise<HTMLElement> {
@@ -163,6 +166,25 @@ test("without workspaces the sheet is today's", async () => {
   expect(host.querySelector("[data-mobile2-workspace]")).toBeNull();
   expect(host.querySelector("[data-mobile2-workspace-section]")).toBeNull();
   expect(projects(host)).toEqual(["__overview__", "bench-tmp", "scratch-notes", "shop-app", "shop-backend", "voice-lab"]);
+});
+
+test("the service project is omitted from phone rows and workspace counts while regular projects stay selectable", async () => {
+  const selected: string[] = [];
+  const host = await render(<MobileProjectSheet {...sheetProps} projectCatalog={[
+    { project: "legatus:fixture-install", smt: 2_000, conversations: 1 },
+  ]} selected="voice-lab" onSelect={project => selected.push(project)} />);
+  expect(projects(host)).not.toContain("legatus:fixture-install");
+  expect(projects(host)).toContain("shop-app");
+  await click(host.querySelector("[data-mobile2-project='shop-app']"));
+  expect(selected).toEqual(["shop-app"]);
+
+  await act(async () => { root?.unmount(); });
+  root = null;
+  dom.document.body.replaceChildren();
+  setWorkspacesForTests(teamView(false));
+  const grouped = await render(<Harness initial="all" catalog={[{ project: "legatus:fixture-install", smt: 2_000, conversations: 1 }]} />);
+  await click(grouped.querySelector("[data-mobile2-workspace]"));
+  expect(grouped.querySelector("[data-mobile2-workspace-option='all']")?.textContent).toContain("5 projects");
 });
 
 describe("a chosen workspace", () => {

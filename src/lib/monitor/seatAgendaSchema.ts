@@ -20,12 +20,20 @@ function waitingForm(row: "OLD" | "NEW"): string {
 const current = waitingForm("NEW");
 const previous = waitingForm("OLD");
 const id = (form: string) => `json_extract((${form}), '$.id')`;
+const reopenedEpisode = (form: string) => `CASE
+  WHEN OLD.collection = 'tasks' AND json_extract(OLD.value_json, '$.status') = 'done'
+    THEN ${id(form)} || ':' || coalesce(json_extract(OLD.value_json, '$.doneAt'), json_extract(OLD.value_json, '$.updatedAt'))
+  ELSE ${id(form)} END`;
 const insert = `INSERT INTO seat_agenda(id, kind, target, source_project, ref, task_id, text)
   SELECT 'legatus-question:' || ${id(current)}, 'legatus-question', '', json_extract(NEW.value_json, '$.project'),
     ${id(current)}, json_extract((${current}), '$.taskId'), ''
   WHERE ${id(current)} IS NOT NULL ON CONFLICT(id) DO NOTHING;`;
+const insertUpdated = `INSERT INTO seat_agenda(id, kind, target, source_project, ref, task_id, text)
+  SELECT 'legatus-question:' || ${reopenedEpisode(current)}, 'legatus-question', '', json_extract(NEW.value_json, '$.project'),
+    ${id(current)}, json_extract((${current}), '$.taskId'), ''
+  WHERE ${id(current)} IS NOT NULL ON CONFLICT(id) DO NOTHING;`;
 const retire = `UPDATE seat_agenda SET pending = 0
-  WHERE id = 'legatus-question:' || ${id(previous)} AND pending = 1`;
+  WHERE ref = ${id(previous)} AND kind = 'legatus-question' AND pending = 1`;
 
 export const seatAgendaSchema = [
   `CREATE TABLE IF NOT EXISTS seat_agenda (
@@ -37,9 +45,9 @@ export const seatAgendaSchema = [
   `CREATE TRIGGER IF NOT EXISTS seat_agenda_form_insert AFTER INSERT ON state_rows
     WHEN NEW.collection IN ('tasks', 'seat-decisions')
     BEGIN ${insert} END`,
-  `CREATE TRIGGER IF NOT EXISTS seat_agenda_form_update AFTER UPDATE OF value_json ON state_rows
+  `CREATE TRIGGER IF NOT EXISTS seat_agenda_form_update_episode AFTER UPDATE OF value_json ON state_rows
     WHEN NEW.collection IN ('tasks', 'seat-decisions') AND ${id(previous)} IS NOT ${id(current)}
-    BEGIN ${retire}; ${insert} END`,
+    BEGIN ${retire}; ${insertUpdated} END`,
   `CREATE TRIGGER IF NOT EXISTS seat_agenda_form_delete AFTER DELETE ON state_rows
     WHEN OLD.collection IN ('tasks', 'seat-decisions')
     BEGIN ${retire}; END`,

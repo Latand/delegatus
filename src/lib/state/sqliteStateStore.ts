@@ -918,6 +918,9 @@ function openRawDatabase(filename: string): Database {
         if (!taskDueIndexCurrent(db)) db.exec("DROP INDEX IF EXISTS state_rows_task_due");
         if (!names.has("task_time_pending")) db.exec("DROP INDEX IF EXISTS state_rows_task_legacy_stamp");
         for (const index of outdatedTaskList) db.exec(`DROP INDEX IF EXISTS ${index}`);
+        // Replace the pre-episode form projection. Its old trigger would also
+        // insert the stable form id when a completed task is reopened.
+        db.exec("DROP TRIGGER IF EXISTS seat_agenda_form_update");
         for (const sql of stateSchema) db.exec(sql);
         installTaskTimes(db);
         if (!names.has("pipeline_request_receipts")) backfillPipelineRequestReceipts(db);

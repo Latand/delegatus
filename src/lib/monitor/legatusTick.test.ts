@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { NextRequest } from "next/server";
 import { fs, path, SANDBOX, NOW, MINUTE, harness, runSeatTickCheck } from "./seatTickController.fixture";
 import { ensureLegatusProject } from "@/lib/orchestrator/legatusSeat";
@@ -10,7 +11,8 @@ import { conversationHostPOST } from "@/app/api/conversation-host/handlers";
 import { productionDomainDependencies, viewerMcpBindings } from "@/lib/mcp/bindings";
 import { publishPrototype } from "@/lib/prototypeReview/store";
 import { questions } from "@/lib/prototypeReview/questionnaire.fixture";
-import { saveTasks } from "@/lib/tasks/store";
+import { loadTasks, saveTasks } from "@/lib/tasks/store";
+import { initializeStateCollectionsAsync } from "@/lib/state/sqliteStateStore";
 import { readSeatTickSettings, defaultSeatTickSettings } from "./seatTickSettings";
 import { acknowledgeSeatAgenda, legatusMessageReceipt, pendingSeatAgenda, recordOperatorLaunch } from "./seatAgenda";
 
@@ -90,6 +92,18 @@ test("a Legatus direct send to a project seat enters the same agenda", () => iso
   expect(pendingSeatAgenda(DESTINATION, 10)).toMatchObject([{ text: "Check the destination backlog", urgent: 0 }]);
 }));
 
+test("malformed action fields cannot route a Legatus text send around the seat agenda", () => isolated(async project => {
+  designate(project, LEGATUS);
+  designate(DESTINATION, WORKER);
+  for (const action of [null, "unsupported-action"]) {
+    const response = await conversationHostPOST(request("/api/conversation-host", "POST", {
+      conversationId: WORKER, clientMessageId: `malformed-action-${String(action)}`, text: "Bypass the agenda", action,
+    }));
+    expect(response.status).toBe(400);
+  }
+  expect(pendingSeatAgenda(DESTINATION, 10)).toEqual([]);
+}));
+
 test("an ordinary Legatus message waits for the destination's wake and an urgent one queues as its wake", () => isolated(async project => {
   designate(project, LEGATUS);
   const destination = designate(DESTINATION, WORKER);
@@ -165,4 +179,34 @@ test("forms from different projects and an operator launch coalesce behind one L
   expect((await check()).rig.sent).toHaveLength(0);
   options.now! += MINUTE;
   expect((await check()).record?.reasons).toEqual(["interval"]);
+}, true));
+
+test("reopening a completed task creates one new waiting-form episode", () => isolated(async project => {
+  const taskId = "task-reopened-form";
+  saveTasks([{ id: taskId, project: "another-project", status: "inbox", placement: "unplaced", text: "Review the reopened form",
+    assignments: [], createdAt: AT, updatedAt: AT }]);
+  const round = await publishPrototype({ clientRequestId: "reopen-form", title: "Choose a path", questions }, taskId, { conversationId: WORKER });
+  expect(pendingSeatAgenda(project, 10)).toHaveLength(1);
+
+  const legacy = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+  try {
+    legacy.exec("DROP TRIGGER IF EXISTS seat_agenda_form_update_episode; CREATE TRIGGER seat_agenda_form_update AFTER UPDATE OF value_json ON state_rows BEGIN SELECT 1; END");
+  } finally { legacy.close(); }
+  await initializeStateCollectionsAsync(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), []);
+
+  const waiting = loadTasks()[0]!;
+  const doneAt = new Date(Date.parse(round.createdAt) + 60_000).toISOString();
+  saveTasks([{ ...waiting, status: "done", doneAt, updatedAt: doneAt }]);
+  expect(pendingSeatAgenda(project, 10)).toEqual([]);
+
+  const completed = loadTasks()[0]!;
+  const reopened = { ...completed, status: "inbox" as const, updatedAt: new Date(Date.parse(round.createdAt) + 120_000).toISOString() };
+  delete reopened.doneAt;
+  saveTasks([reopened]);
+  const episode = pendingSeatAgenda(project, 10);
+  expect(episode).toHaveLength(1);
+  expect(episode[0]).toMatchObject({ kind: "legatus-question", ref: round.id, task_id: taskId });
+  const reopenedAgain = loadTasks()[0]!;
+  saveTasks([reopenedAgain]);
+  expect(pendingSeatAgenda(project, 10).map(row => row.id)).toEqual(episode.map(row => row.id));
 }, true));

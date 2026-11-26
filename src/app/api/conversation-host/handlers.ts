@@ -241,7 +241,11 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     return NextResponse.json({ error: "pid, path, or conversationId is required" }, { status: 400 });
   }
 
+  const hasAction = Object.prototype.hasOwnProperty.call(body, "action");
   const explicitAction = typeof body.action === "string" ? body.action : "";
+  if (hasAction && (!explicitAction || (explicitAction !== "reconfigure" && !dependencies.conversationActions.includes(explicitAction)))) {
+    return NextResponse.json({ error: "action must be a supported conversation action" }, { status: 400 });
+  }
   if (dependencies.conversationActions.includes(explicitAction)) {
     /* Answering an agent's question is a person acting: in team mode it
        needs a member, and the audit names them (sign-in-and-team §7.1). */
@@ -329,7 +333,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
     return NextResponse.json({ ok: false, outcome: "failed", code: NO_STRUCTURED_HOST_CODE, error: NO_STRUCTURED_HOST_ERROR }, { status: 409 });
   }
 
-  if (caller && currentLegatusSeat(caller) && body.action === undefined) {
+  if (caller && currentLegatusSeat(caller) && !hasAction) {
     const registry = agentRegistry();
     const byId = conversationId ? registry.conversation(conversationId as `conversation_${string}`) : null;
     const byPath = filePath ? registry.conversationForPath(filePath) : null;

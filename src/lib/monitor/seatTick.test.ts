@@ -1575,6 +1575,20 @@ test("board movement clears the retry guard, so a reason that starts working aga
   expect(decision.cards).toEqual([]);
 });
 
+test("an interval wake carries every fitting Legatus message and credits only those shown", () => {
+  const messages = ["one", "two"].map((id, seq) => ({ seq: seq + 1, id: `message-${id}`,
+    kind: "legatus-message" as const, target: PROJECT, source_project: "legatus:fixture", ref: id,
+    task_id: null, text: `Review ${id}`, sender: CONVERSATION, urgent: 0 as const, pending: 1 as const }));
+  const decision = seatTickDecision(input({ pipelines: [lane()], seatAgenda: messages,
+    state: stateWith({ lastWakeAt: new Date(NOW - 61 * MINUTE).toISOString() }) }));
+  expect(decision.verdict.kind).toBe("wake");
+  if (decision.verdict.kind !== "wake") return;
+  expect(decision.verdict.items.filter(item => item.kind === "agenda").map(item => item.id)).toEqual(["message-one", "message-two"]);
+  expect(decision.verdict.items.length).toBeLessThanOrEqual(DEFAULT_SEAT_TICK_POLICY.itemsPerWake);
+  const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: "fp-1", eventsThrough: 0 })!;
+  expect(commit.itemsShown).toEqual(expect.arrayContaining(messages.map(message => `seat-agenda:${message.id}`)));
+});
+
 test("the wake commit records the wake, and only the commit advances lastWakeAt", () => {
   const decision = seatTickDecision(input({
     pipelines: [lane()],

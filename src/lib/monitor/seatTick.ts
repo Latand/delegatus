@@ -1151,12 +1151,15 @@ export function seatTickDecision(input: SeatTickCheckInput): SeatTickDecision {
   if (!agenda.length || !input.seat || !input.settings.enabled) return { ...decision, cards };
   const agendaVerdict = agendaWake(agenda, input.policy.itemsPerWake);
   if (decision.verdict.kind === "wake" && !decision.verdict.catchUp) {
-    // Add one message ahead of the ordinary agenda. Its decisions may have
-    // advanced cursors for the items it already selected, so keep that page.
-    const items = [agendaVerdict.items[0]!, ...decision.verdict.items];
+    // Add as many queued Legatus messages as fit; only items carried in this
+    // verdict receive delivery credit. Keep the ordinary page within budget.
+    const available = Math.max(0, input.policy.itemsPerWake - agendaVerdict.items.length);
+    const ordinaryItems = decision.verdict.items.slice(0, available);
+    const items = [...agendaVerdict.items, ...ordinaryItems];
     return { ...decision, cards, verdict: { ...decision.verdict, items,
       reasons: [...decision.verdict.reasons, ...agendaVerdict.reasons],
-      deferred: decision.verdict.deferred + agenda.length - 1 } };
+      deferred: decision.verdict.deferred + Math.max(0, agenda.length - agendaVerdict.items.length)
+        + decision.verdict.items.length - ordinaryItems.length } };
   }
   if ((decision.verdict.kind === "quiet" || decision.verdict.kind === "proactive")
     && seatTickWakeDue(input.state.lastWakeAt ?? input.seat.designatedAt ?? null, input.now, input.settings.wakeIntervalMs)) {

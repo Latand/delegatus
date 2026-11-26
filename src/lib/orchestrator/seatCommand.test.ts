@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 
 import { AccountAdmissionChangedError, AccountMutationBusyError, withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { foreignAccountHolder } from "@/lib/accounts/accountMutation.fixture";
@@ -97,6 +98,21 @@ test("Legatus uses a local service key and replays the designation without launc
   expect(projectAliasKeys(project)).toEqual([project]);
   expect(mutateBoard(project, 0, []).ok).toBe(false);
   expect(boardFor(project).revision).toBe(0);
+});
+
+test("Legatus designation and same-key replay leave a connected Telegram grant with the orchestrator seat", async () => {
+  const session = saveTelegramSession(randomBytes(32).toString("hex"));
+  writeTelegramConnection({ version: 1, status: "connected", credentialRef: session.credentialRef,
+    identity: null, lastHealthCheckAt: AT, errorCode: null, identityIdUpgradedAt: null });
+  const { deps, recorded } = dependencies({ resolveProject: undefined });
+  const request = { cwd: sandbox, clientRequestId: "legatus-designation-telegram" };
+  const first = await executeLegatusSeatRequest(request, deps);
+  expect(first.status, JSON.stringify(first.body)).toBe(200);
+  expect(recorded.spawns).toHaveLength(1);
+  expect(recorded.spawns[0]).not.toHaveProperty("mcpServers");
+  expect(orchestratorSeatFor(first.body.project as string).active?.telegramGrant).toBe(false);
+  expect((await executeLegatusSeatRequest(request, deps)).body).toMatchObject({ project: first.body.project, replayed: true });
+  expect(recorded.spawns).toHaveLength(1);
 });
 
 for (const shared of [false, true]) test(`completed seat replay awaits registry identity publication without blocking the Viewer (shared=${shared})`, async () => {
