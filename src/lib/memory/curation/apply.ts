@@ -310,7 +310,9 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
       const next = work.get(id)!;
       const edited = next.rule !== rule || next.why !== why;
       const saved = edited ? versionedRule(tx, row, next, { by: "curator", at: now }) : null;
-      tx.put({ ...next, versions: saved?.updated.versions ?? row.versions, revisedBy: touched.has(id) ? { by: "curator", at: now } : row.revisedBy, changedAt: now, curatedAt: now });
+      tx.put({ ...next, versions: saved?.updated.versions ?? row.versions,
+        revisedBy: saved?.updated.revisedBy ?? (touched.has(id) && row.revisedBy?.by !== "agent" ? { by: "curator", at: now } : row.revisedBy),
+        changedAt: now, curatedAt: now });
       prior.set(id, { id, version: saved?.version ?? null, fields });
     }
     for (const row of created.values()) tx.put({ ...row, curatedAt: now, changedAt: now });
@@ -456,7 +458,9 @@ export function revertCuratorPass(id: string, now = new Date().toISOString(), op
            erases a departure; undoing a restore records the rule leaving again. */
         const leaves = prior.fields.state === "archived" && row.state !== "archived";
         const departures = leaves ? [...row.departures ?? [], { at: now, reason: prior.fields.reason ?? "undone", curated: !!row.curatedAt }] : row.departures;
-        tx.put({ ...prior.fields, ...(departures ? { departures } : {}), rule: version.rule, why: version.why, hints: version.hints, versions: updated.versions, revisedBy: { by: "operator", at: now, ...(prior.version ? { revertedTo: version.id } : {}) }, changedAt: now });
+        tx.put({ ...prior.fields, ...(departures ? { departures } : {}), rule: version.rule, why: version.why, hints: version.hints,
+          versions: updated.versions, revisedBy: { by: "operator", at: now, ...(prior.version ? { revertedTo: version.id } : {}) },
+          ...(prior.version ? { wordingRevision: updated.wordingRevision } : {}), changedAt: now });
       }
       for (const rule of history.created ?? []) if (eligible.has(rule)) {
         const row = tx.get(`r:${rule}`); if (row?.kind === "rule") tx.put(archivedRule(row, now, "undone"));

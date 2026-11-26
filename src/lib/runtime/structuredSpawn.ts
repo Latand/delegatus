@@ -37,6 +37,7 @@ import { claudeSettingsPath } from "@/lib/accounts/claude";
 import { claudeValidityFromLimitRead } from "@/lib/accounts/spawnHealth";
 import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { learnedRulesForLaunchProfile, memoryStartIdentity } from "@/lib/memory/roleLaunch";
+import { confirmMemoryDelivery } from "@/lib/memory/deliveryLedger";
 import { sessionOriginFor } from "@/lib/agent/pluginAllowlist";
 import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
@@ -3760,6 +3761,7 @@ export async function spawnStructuredConversation(
       }
     });
     host = await withinDurableSetup(startingHost);
+    await confirmMemoryDelivery(input.receipt.conversationId, memoryStartIdentity(input.registry, input.receipt.conversationId).attempt);
     await withinDurableSetup(retainHost(host));
     assertMemberCurrent();
     if (host.viewerMcpTransport) (await input.registry.deliveryWriteOrBusy({ label: "registry.setReceiptViewerMcpTransport" }, input.registry.setReceiptViewerMcpTransport.bind(input.registry, input.receipt.launchId, host.viewerMcpTransport)));

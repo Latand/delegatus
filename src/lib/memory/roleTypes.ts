@@ -149,6 +149,8 @@ export interface RoleMemoryRule {
   versionOf?: string;
   versions?: string[];
   revisedBy?: RuleRevision;
+  /** Provenance of the current wording; metadata-only moves never change it. */
+  wordingRevision?: RuleRevision;
   curatedAt?: string;
   keptByOperatorAt?: string;
   note?: string;

@@ -41,6 +41,7 @@ export interface MemoryEngineStart {
 type Selection = Pick<ReturnType<typeof learnedRulesSnapshot>, "block" | "scopes" | "rules"> & { reason?: string; shadowIds?: string[]; removed?: import("./roleSelection").SelectionRemoval[]; evidence?: import("./roleSelectionProvider").SelectionEvidence };
 export interface MemoryDelivery {
   schemaVersion: 1;
+  confirmed?: boolean;
   conversationId: string;
   attempt?: MemoryEngineStart["attempt"];
   engine: MemoryEngineStart["engine"];
@@ -227,7 +228,7 @@ export async function recordMemoryDelivery(start: MemoryEngineStart, clean: bool
             // Select after asynchronous admission; rules and their ordered metadata
             // are captured together, including omissions at the byte ceiling.
             const selection = select();
-            const row: MemoryDelivery = { schemaVersion: 1, conversationId: start.conversationId, ...(start.attempt ? { attempt: start.attempt } : {}), engine: start.engine, at: new Date().toISOString(), scopes: selection?.scopes ?? [], rules: selection?.rules ?? [], bytes: Buffer.byteLength(selection?.block ?? ""), ...(selection?.reason ? { reason: selection.reason, shadowIds: selection.shadowIds, removed: selection.removed } : {}), engineMemory: files.map(({ kind, hash, bytes, loadedBytes }) => ({ kind, hash, bytes, loadedBytes })) };
+            const row: MemoryDelivery = { schemaVersion: 1, confirmed: false, conversationId: start.conversationId, ...(start.attempt ? { attempt: start.attempt } : {}), engine: start.engine, at: new Date().toISOString(), scopes: selection?.scopes ?? [], rules: selection?.rules ?? [], bytes: Buffer.byteLength(selection?.block ?? ""), ...(selection?.reason ? { reason: selection.reason, shadowIds: selection.shadowIds, removed: selection.removed } : {}), engineMemory: files.map(({ kind, hash, bytes, loadedBytes }) => ({ kind, hash, bytes, loadedBytes })) };
             if (selection?.evidence) row.evidence = selection.evidence;
             const body = JSON.stringify(row);
             if (Buffer.byteLength(body) > 256 * 1024) throw Error("memory delivery metadata exceeds ledger limit");
@@ -256,6 +257,33 @@ export async function recordMemoryDelivery(start: MemoryEngineStart, clean: bool
   });
 }
 
+/** Prepared memory is not delivery proof until the host start call succeeds. */
+export async function confirmMemoryDelivery(conversationId: string, attempt?: MemoryEngineStart["attempt"]): Promise<void> {
+  const filename = statePath("role-memory", "delivery.sqlite");
+  if (!fs.existsSync(filename)) return;
+  await waitForStateLock("memory.delivery-confirm", () => stateLockAttempt("memory.delivery-confirm", () => {
+    const Database = sqliteDatabase();
+    const db = new Database(filename);
+    try {
+      db.exec("PRAGMA busy_timeout=0");
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const rows = db.query<{ sequence: number; body: string }, [string]>("SELECT sequence,body FROM deliveries WHERE json_extract(body,'$.conversationId')=? ORDER BY sequence DESC").all(conversationId);
+        const row = rows.find(item => {
+          const delivery = JSON.parse(item.body) as MemoryDelivery;
+          return !delivery.confirmed && JSON.stringify(delivery.attempt ?? null) === JSON.stringify(attempt ?? null);
+        });
+        if (row) {
+          const delivery = JSON.parse(row.body) as MemoryDelivery;
+          delivery.confirmed = true;
+          db.query("UPDATE deliveries SET body=? WHERE sequence=?").run(JSON.stringify(delivery), row.sequence);
+        }
+        db.exec("COMMIT");
+      } catch (error) { db.exec("ROLLBACK"); throw error; }
+    } finally { db.close(); }
+  }));
+}
+
 /** Private analysis seam. A sequence cursor never materializes the full ledger. */
 export function memoryDeliveries(after = 0, limit = 100): { sequence: number; delivery: MemoryDelivery }[] {
   if (!Number.isSafeInteger(after) || after < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) throw Error("invalid memory delivery page");
@@ -279,7 +307,7 @@ export function deliveredRuleIds(attempt: NonNullable<MemoryEngineStart["attempt
     const rows = db.query<{ body: string }, [string, string, number, string]>(`SELECT body FROM deliveries
       WHERE json_extract(body,'$.attempt.pipelineId')=? AND json_extract(body,'$.attempt.stageId')=?
       AND json_extract(body,'$.attempt.attempt')=? AND json_extract(body,'$.conversationId')=?`).all(attempt.pipelineId, attempt.stageId, attempt.attempt, conversationId);
-    return new Set(rows.flatMap(row => (JSON.parse(row.body) as MemoryDelivery).rules.map(rule => rule.id)));
+    return new Set(rows.flatMap(row => { const delivery = JSON.parse(row.body) as MemoryDelivery; return delivery.confirmed ? delivery.rules.map(rule => rule.id) : []; }));
   } finally { db.close(); }
 }
 /** Conversation-level evidence includes starts outside pipelines. */
@@ -290,7 +318,7 @@ export function deliveredRuleToConversation(conversationId: string, id: string, 
   const db = new Database(filename, { readonly: true });
   try {
     return !!db.query(`SELECT 1 FROM deliveries d CROSS JOIN json_each(d.body,'$.rules') rule
-      WHERE json_extract(d.body,'$.conversationId')=? AND json_extract(rule.value,'$.id')=?
+      WHERE json_extract(d.body,'$.confirmed')=1 AND json_extract(d.body,'$.conversationId')=? AND json_extract(rule.value,'$.id')=?
         AND json_extract(rule.value,'$.hash')=? LIMIT 1`).get(conversationId, id, hash);
   } finally { db.close(); }
 }

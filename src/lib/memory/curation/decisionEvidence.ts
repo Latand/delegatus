@@ -79,14 +79,13 @@ function messageEvidence(owner: DeliveryOperationOwner, project: string): Eviden
   };
 }
 
-/** Read text only from the current local review rows. Replicas have no
- * server-attributed actor and cannot enter this query. SQL caps the rows before
- * any round bodies enter JavaScript, including on a catch-up pass. */
-function recentForms(after: string, through: string): Evidence[] {
+/** Read current local review rows in bounded SQL pages. Replicas have no
+ * server-attributed actor and cannot enter this query. */
+function recentForms(after: string, through: string, reviewed: ReadonlySet<string>): Evidence[] {
   const filename = statePath("state.sqlite");
   if (!databaseFileIdentity(filename)) return [];
   const db = sharedStateReadonlyDatabase(filename);
-  const rows = db.query<{ body: string }, [string, string, number]>(`
+  const query = db.query<{ body: string }, [string, string, number, number]>(`
     WITH rounds(body) AS (
       SELECT value_json FROM state_rows WHERE collection='seat-decisions'
       UNION ALL
@@ -115,17 +114,31 @@ function recentForms(after: string, through: string): Evidence[] {
         END AS priority
       FROM rounds
       WHERE json_extract(body, '$.decision.decidedBy.kind') IN ('operator', 'member')
+        AND NOT EXISTS (SELECT 1 FROM state_rows adopted WHERE adopted.collection='role_memory'
+          AND json_extract(adopted.value_json, '$.kind')='rule'
+          AND json_extract(adopted.value_json, '$.source.origin')='decision'
+          AND json_extract(adopted.value_json, '$.source.reviewId')=json_extract(body, '$.id'))
     )
     SELECT body FROM answered WHERE at > ? AND at <= ?
-      ORDER BY priority, at DESC, json_extract(body, '$.id') LIMIT ?
-    `).all(after, through, DECISION_BATCH_LIMIT + 1);
-  return rows.flatMap(({ body }) => {
-    const evidence = formEvidence(JSON.parse(body) as PrototypeReviewRound);
-    return evidence ? [evidence] : [];
-  });
+      ORDER BY priority, at DESC, json_extract(body, '$.id') LIMIT ? OFFSET ?
+    `);
+  const evidence: Evidence[] = [];
+  let offset = 0;
+  while (evidence.length <= DECISION_BATCH_LIMIT) {
+    const rows = query.all(after, through, DECISION_BATCH_LIMIT, offset);
+    if (!rows.length) break;
+    offset += rows.length;
+    for (const { body } of rows) {
+      const item = formEvidence(JSON.parse(body) as PrototypeReviewRound);
+      if (item && !reviewed.has(item.ref.id)) evidence.push(item);
+      if (evidence.length > DECISION_BATCH_LIMIT) break;
+    }
+    if (rows.length < DECISION_BATCH_LIMIT) break;
+  }
+  return evidence;
 }
 
-function recentMessages(project: string, after: string, through: string): Evidence[] {
+function recentMessages(project: string, after: string, through: string, reviewed: ReadonlySet<string>): Evidence[] {
   const seat = orchestratorSeatFor(project).active;
   const former = previousOrchestratorSeats(project).filter(item => item.heldTo > after);
   const recipients = [
@@ -136,7 +149,7 @@ function recentMessages(project: string, after: string, through: string): Eviden
   return recipients.flatMap(({ conversationId, heldFrom, heldTo }) =>
     agentRegistry().recentTerminalDeliveryOwners(conversationId as ViewerConversationId).flatMap(owner => {
       const evidence = messageEvidence(owner, project);
-      if (!evidence || evidence.ref.at <= after || evidence.ref.at > through
+      if (!evidence || reviewed.has(evidence.ref.id) || evidence.ref.at <= after || evidence.ref.at > through
         || (heldFrom && owner.createdAt < heldFrom) || (heldTo && owner.createdAt > heldTo)) return [];
       const key = owner.deliveryId;
       if (seen.has(key)) return [];
@@ -145,12 +158,11 @@ function recentMessages(project: string, after: string, through: string): Eviden
     }));
 }
 
-export function selectDecisionEvidence(after: string, through: string): { refs: DecisionEvidenceRef[]; hasMore: boolean } {
+export function selectDecisionEvidence(after: string, through: string, reviewedIds: readonly string[] = []): { refs: DecisionEvidenceRef[]; hasMore: boolean } {
   const project = legatusProject();
-  const rules = roleMemoryCollection();
-  const selected = [...recentForms(after, through), ...(project ? recentMessages(project, after, through) : [])]
+  const reviewed = new Set(reviewedIds);
+  const selected = [...recentForms(after, through, reviewed), ...(project ? recentMessages(project, after, through, reviewed) : [])]
     .sort((a, b) => a.rank - b.rank || b.ref.at.localeCompare(a.ref.at) || a.ref.id.localeCompare(b.ref.id))
-    .filter(({ ref }) => !rules?.get(`r:${ref.id}`))
     .slice(0, DECISION_BATCH_LIMIT + 1);
   return { refs: selected.slice(0, DECISION_BATCH_LIMIT).map(({ ref }) => ref), hasMore: selected.length > DECISION_BATCH_LIMIT };
 }

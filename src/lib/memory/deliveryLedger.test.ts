@@ -7,7 +7,7 @@ import path from "node:path";
 import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
 import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 import { learnedRulesForLaunchProfile } from "./roleLaunch";
-import { DELIVERY_LEDGER_STARTS, engineMemoryVersion, memoryDeliveries, prepareDeliveryLedgerIndexes, type MemoryEngineStart } from "./deliveryLedger";
+import { confirmMemoryDelivery, deliveredRuleToConversation, DELIVERY_LEDGER_STARTS, engineMemoryVersion, memoryDeliveries, prepareDeliveryLedgerIndexes, type MemoryEngineStart } from "./deliveryLedger";
 import { learnedRulesSnapshot, leaveLessons, recordLessonRequest, roleMemoryCollection } from "./roleStore";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-delivery-test-"));
 let draw = 0;
@@ -101,6 +101,18 @@ test("each start records ordered ids, exact bytes and scope revisions without ru
   expect(memoryDeliveries()).toHaveLength(2);
   expect(fs.statSync(path.join(process.env.LLV_STATE_DIR!, "role-memory", "delivery.sqlite")).mode & 0o777).toBe(0o600);
   expect(() => memoryDeliveries(0, 101)).toThrow("page");
+});
+
+test("prepared selections cannot prove delivery until the successful host start confirms them", async () => {
+  lesson("Verify durable acknowledgement ownership before replaying stored receipts.");
+  const input = start();
+  await learnedRulesForLaunchProfile(profile, input);
+  const selected = memoryDeliveries()[0]!.delivery.rules[0]!;
+  expect(memoryDeliveries()[0]!.delivery.confirmed).toBe(false);
+  expect(deliveredRuleToConversation(input.conversationId, selected.id, selected.hash)).toBe(false);
+  await confirmMemoryDelivery(input.conversationId, input.attempt);
+  expect(memoryDeliveries()[0]!.delivery.confirmed).toBe(true);
+  expect(deliveredRuleToConversation(input.conversationId, selected.id, selected.hash)).toBe(true);
 });
 
 test("same-instant rewrites remain reconstructable from permanent rule versions", async () => {

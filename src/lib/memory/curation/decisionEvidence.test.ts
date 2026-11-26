@@ -14,6 +14,7 @@ import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAutho
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { GET as searchMemory, POST as openMemory } from "@/app/api/search/memory/route";
 import { legatusDecisionRule } from "../legatusCitation";
+import { confirmMemoryDelivery } from "../deliveryLedger";
 import { learnedRulesForLaunchProfile, roleMemoryProfileForIdentity } from "../roleLaunch";
 import { alwaysOn } from "../roleSelect";
 import { leaveLessonForSeat } from "../roleStage";
@@ -143,7 +144,7 @@ test("curation ranks operator answers, attributes literal quotes, runs privacy h
   expect(later.decisionEvidence).toEqual([]);
 });
 
-test("a Legatus rewrite drops typed priority while the earlier version keeps its attribution", () => {
+test("Legatus rewrites keep version authorship and curator moves preserve current wording provenance", () => {
   lesson();
   const round = form(30);
   answer(round, 0, words, 1);
@@ -158,6 +159,10 @@ test("a Legatus rewrite drops typed priority while the earlier version keeps its
   leaveLessonForSeat({ project: serviceProject, roleId: "legatus", conversationId: conversation }, {
     rewrite: { id: ref.id, rule: replacement, why: "The earlier choice was overturned by the seat." },
   }, at(4));
+  const secondReplacement = "Review the current choice before relying on a remembered preference.";
+  leaveLessonForSeat({ project: serviceProject, roleId: "legatus", conversationId: conversation }, {
+    rewrite: { id: ref.id, rule: secondReplacement, why: "A later answer changed the remembered condition." },
+  }, at(5));
 
   const current = activeRule(ref.id);
   expect(current.source).toMatchObject({ origin: "decision", author: "typed" });
@@ -166,7 +171,24 @@ test("a Legatus rewrite drops typed priority while the earlier version keeps its
   const view = projectView(serviceProject).scopes.find(scope => scope.scope === LEGATUS_SCOPE)!.active.find(item => item.id === ref.id)!;
   expect(view).not.toHaveProperty("decisionAuthor");
   expect(view.revisedBy).toMatchObject({ by: "agent", roleId: "legatus" });
-  expect(view.versions).toEqual([expect.objectContaining({ decisionAuthor: "typed", rule })]);
+  expect(view.versions).toEqual([
+    expect.objectContaining({ decisionAuthor: "typed", rule }),
+    expect.objectContaining({ rule: replacement, revisedBy: expect.objectContaining({ by: "agent" }) }),
+  ]);
+  expect(view.versions?.[1]).not.toHaveProperty("decisionAuthor");
+  const destination = projectScope(formProject);
+  const sourceScope = roleMemoryCollection()?.get(`s:${LEGATUS_SCOPE}`);
+  expect(pass.scopes).toContain(destination);
+  expect(pass.scopes).toContain(LEGATUS_SCOPE);
+  const moveInput = { scopes: [
+    { scope: LEGATUS_SCOPE, revision: sourceScope?.kind === "scope" ? sourceScope.revision : 0,
+      order: sourceScope?.kind === "scope" ? sourceScope.active.filter(id => id !== ref.id) : [] },
+    order(destination, ref.id)[0]!,
+  ],
+    move: [{ id: ref.id, to: destination, note: "Keep the decision at its source project." }] };
+  applyCuration(pass, moveInput, at(6));
+  expect(activeRule(ref.id).revisedBy).toMatchObject({ by: "agent" });
+  expect(alwaysOn([activeRule(ref.id)])).not.toContain(ref.id);
 });
 
 test("a failed first curator pass retries from the original decision scan boundary", () => {
@@ -183,7 +205,7 @@ test("a failed first curator pass retries from the original decision scan bounda
 
 test("a successful 50-item curator batch leaves overflow eligible and deduplicates adopted evidence", () => {
   startSeat();
-  const rounds = Array.from({ length: 51 }, (_, i) => form(100 + i));
+  const rounds = Array.from({ length: 52 }, (_, i) => form(100 + i));
   rounds.forEach((round, i) => answer(round, 0, `typed choice ${i}`, i + 1));
   const first = claimPass({ project: serviceProject, now: START + 60, repoDir: null })!;
   expect(first.decisionEvidence).toHaveLength(50);
@@ -196,6 +218,20 @@ test("a successful 50-item curator batch leaves overflow eligible and deduplicat
   }, at(61));
   patchPass(first.id, { state: "succeeded", endedAt: at(62) });
 
+  const next = claimPass({ project: serviceProject, now: START + CURATION_INTERVAL_MS + 100, repoDir: null })!;
+  expect(next.decisionEvidence).toHaveLength(2);
+  expect(next.decisionEvidence?.[0]).toMatchObject({ reviewId: rounds[1]!.id });
+  expect(next.decisionEvidence?.[1]).toMatchObject({ reviewId: rounds[0]!.id });
+  expect(next.decisionEvidenceHasMore).toBe(false);
+});
+
+test("successful discarded batches advance through reviewed forms without starving overflow", () => {
+  startSeat();
+  const rounds = Array.from({ length: 51 }, (_, i) => form(200 + i));
+  rounds.forEach((round, i) => answer(round, 0, `typed discarded choice ${i}`, i + 1));
+  const first = claimPass({ project: serviceProject, now: START + 60, repoDir: null })!;
+  expect(first.decisionEvidence).toHaveLength(50);
+  patchPass(first.id, { state: "succeeded", endedAt: at(61) });
   const next = claimPass({ project: serviceProject, now: START + CURATION_INTERVAL_MS + 100, repoDir: null })!;
   expect(next.decisionEvidence).toHaveLength(1);
   expect(next.decisionEvidence?.[0]).toMatchObject({ reviewId: rounds[0]!.id });
@@ -310,6 +346,7 @@ test("Legatus lessons use their own scope and a decision cites one delivered or 
   const output = await learnedRulesForLaunchProfile(profile, { engine: "codex", conversationId: "conversation_rotated", cwd: sandbox, home: sandbox });
   expect(output).toContain(`[${own.id}]`);
   expect(output).toContain(`[${ref.id}]`);
+  await confirmMemoryDelivery("conversation_rotated");
   expect(legatusDecisionRule(formProject, "conversation_rotated", ref.id)).toBe(ref.id);
   deleteRule(ref.id, at(4));
   expect(() => legatusDecisionRule(formProject, conversation, ref.id)).toThrow("active rule readable");

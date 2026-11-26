@@ -560,3 +560,14 @@ test.each(["typed", "voice", "clicked"] as const)("archived decision rows and pr
     expect(row.textContent!.split(label).length - 1).toBe(2);
   });
 });
+
+test("an agent rewrite version shows its current wording author without the original typed label", () => {
+  const revised: RuleView = { ...rule("r_legatus_rewrite"), roleId: "legatus", stageId: "decision",
+    revisedBy: { by: "agent", at: "2026-10-08T00:00:00.000Z", roleId: "legatus" },
+    versions: [{ id: "v_legatus_rewrite", rule: "The revised wording.", why: "It follows the latest answer.", hints: [],
+      createdAt: "2026-10-08T00:00:00.000Z", revisedBy: { by: "agent", at: "2026-10-08T00:00:00.000Z", roleId: "legatus" } }] };
+  const html = renderToStaticMarkup(<RuleSection kind="project" title="Project" scope={{ ...scope(100), active: [revised] }}
+    focusRule={revised.id} onDelete={() => {}} onRestore={() => {}} />);
+  expect(html).toContain("rewritten by Legatus");
+  expect(html).not.toContain(translate("en", "roleMemory.decision.typed"));
+});

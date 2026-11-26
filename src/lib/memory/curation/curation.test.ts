@@ -37,7 +37,7 @@ import { loadTasks } from "@/lib/tasks/store";
 import { admitReservedLaunch } from "@/lib/tasks/launchMembership";
 import { groupHideState } from "@/lib/tasks/groupHide";
 import { commitTaskMembership } from "@/lib/tasks/membership";
-import { recordMemoryDelivery } from "../deliveryLedger";
+import { confirmMemoryDelivery, recordMemoryDelivery } from "../deliveryLedger";
 import { projectedScopeRows, projectViewRowsCooperatively } from "../roleViewSource";
 
 const PROJECT = "curation-fixture";
@@ -2138,6 +2138,7 @@ test.each(["unapplied", "applied"])("emergency retention credits application mar
   recordLessonRequest({ ...incomingSource, at: at(2000) });
   await recordMemoryDelivery({ engine: "codex", conversationId: incomingSource.conversationId, attempt: incomingSource, cwd: dir, nativeMemoryEnabled: false }, false,
     () => learnedRulesSnapshot(PROJECT, "builder"));
+  await confirmMemoryDelivery(incomingSource.conversationId, incomingSource);
   const incoming = leaveLessons({ source: incomingSource, request: incomingSource, lessons: [{ scope: "role", rule: "Preserve new conditions until the curator can integrate them with existing guidance.", why }], none: null, applied: applied ? [ids[0]] : [], now: at(2000) }).left[0];
   expect(incoming.archived).toEqual([ids[applied ? 1 : 0]]);
   expect(row(ids[applied ? 0 : 1]).state).toBe("active");

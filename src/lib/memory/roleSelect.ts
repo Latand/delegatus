@@ -26,7 +26,7 @@ export function alwaysOn(rules: readonly RoleMemoryRule[]): Set<string> {
   // the current wording, so the old typed decision no longer gives that text
   // operator priority.
   const typed = rules.filter(rule => !rule.keptByOperatorAt && rule.source?.origin === "decision" && rule.source.author === "typed"
-    && rule.revisedBy?.by !== "agent");
+    && !rule.wordingRevision && rule.revisedBy?.by !== "agent");
   return new Set([...kept, ...typed].filter(rule => {
     const length = points(ruleLine(rule)) + (reserved ? 1 : 0);
     if (reserved + length > 3_000) return false;

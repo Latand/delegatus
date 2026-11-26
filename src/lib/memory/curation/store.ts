@@ -82,7 +82,7 @@ export function validCurationOperation(value: unknown): value is CurationOperati
     && !!row.counts && countFields.every(field => integer(row.counts[field])) && row.counts.calls === 1
     && !!row.maintenance && [row.maintenance.counts, row.maintenance.knownValues, row.maintenance.cleanup].every(value => value === "pending" || value === "complete");
 }
-type Row = CurationOperation | CuratorPass | ProjectRow | NoAccountWarning | { kind: "machine"; current: string | null; decisionsThrough?: string; decisionsScannedAt?: string; budgetSweepAttemptedAt?: string; budgetSweepEndedAt?: string; budgetSweepCompletedAt?: string } | { kind: "conversation"; conversationId: string; pass: string };
+type Row = CurationOperation | CuratorPass | ProjectRow | NoAccountWarning | { kind: "machine"; current: string | null; decisionsThrough?: string; decisionReviewedIds?: string[]; decisionsScannedAt?: string; budgetSweepAttemptedAt?: string; budgetSweepEndedAt?: string; budgetSweepCompletedAt?: string } | { kind: "conversation"; conversationId: string; pass: string };
 const key = (row: Row) => row.kind === "operation" ? `o:${row.id}` : row.kind === "pass" ? `r:${row.id}` : row.kind === "project" ? `p:${row.project}` : row.kind === "no-account-warning" ? `w:${row.project}` : row.kind === "machine" ? "machine" : `c:${row.conversationId}`;
 const seed = { collection: "role_memory_curation", schemaVersion: 1, migrationId: "role-memory-curation-v1", key, loadRecords: (): Row[] => [] };
 const cache = new Map<string, SqliteStateCollection<Row>>();
@@ -602,7 +602,8 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
   const firstWindow = new Date(input.now - setting.intervalMs).toISOString();
   const after = decisionsThrough ?? firstWindow;
   const decisionSelection = input.importOnly || !roleMemoryEnabled() ? undefined
-    : withViewerOperation("memory.curation-admission", () => selectDecisionEvidence(after, claimedAt));
+    : withViewerOperation("memory.curation-admission", () => selectDecisionEvidence(after, claimedAt,
+      machine?.kind === "machine" ? machine.decisionReviewedIds ?? [] : []));
   const decisionEvidence = decisionSelection?.refs;
   const sweepRevision = roleMemoryCollection()?.revision();
   const sweepCandidates: Record<string, string[]> | undefined = !input.importOnly && !(machine?.kind === "machine" && machine.budgetSweepCompletedAt) ? {} : undefined;
@@ -674,8 +675,9 @@ export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass 
     }
     if (!passIsLive(next)) {
       const machine = tx.get("machine"); if (machine?.kind === "machine" && machine.current === id) tx.put({ ...machine, current: null,
-        ...(next.state === "succeeded" && held.decisionEvidence && !held.decisionEvidenceHasMore && held.claimedAt > (machine.decisionsThrough ?? "")
-          ? { decisionsThrough: held.claimedAt } : {}),
+        ...(next.state === "succeeded" && held.decisionEvidence ? held.decisionEvidenceHasMore
+          ? { decisionReviewedIds: [...new Set([...(machine.decisionReviewedIds ?? []), ...held.decisionEvidence.map(ref => ref.id)])] }
+          : { decisionsThrough: held.claimedAt, decisionReviewedIds: [] } : {}),
         ...(held.budgetSweepCandidates ? { budgetSweepEndedAt: next.endedAt ?? held.claimedAt } : {}),
         ...(next.state === "succeeded" && held.budgetSweepCandidates ? { budgetSweepCompletedAt: next.endedAt ?? held.claimedAt } : {}) });
       const projectKey = canonicalProject(held.project), stored = tx.get(`p:${projectKey}`);
