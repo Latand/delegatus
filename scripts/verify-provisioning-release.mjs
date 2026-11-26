@@ -129,6 +129,14 @@ export async function verifyProvisioningRelease(origin, sandbox, env) {
   return { ...baseline, heldReplies };
 }
 
+export function firstStageFixtureReady(lane, label) {
+  const attempts = lane.runs?.find(run => run.stageId === "build")?.attempts?.length ?? 0;
+  // Checkout readiness is persisted before the controller schedules the first attempt.
+  if (attempts === 0 && lane.state === "running") return false;
+  if (attempts !== 1) throw new Error(`${label} fixture expected one first-stage attempt, observed ${attempts} (${lane.state})`);
+  return true;
+}
+
 async function verifyFixtureLane(origin, checkout, remote, git, env, holdReply) {
   await git(checkout, "add", ".");
   await git(checkout, "-c", "user.name=Provisioning Fixture", "-c", "user.email=noreply", "commit", "-m", "provisioning fixture");
@@ -168,6 +176,8 @@ async function verifyFixtureLane(origin, checkout, remote, git, env, holdReply) 
   let faultEntry;
   let interrupted = false;
   let faultVerified = false;
+  let awaitingFirstStage = false;
+  const label = holdReply ?? "release";
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     const response = await fetch(`${origin}/api/pipelines/${encodeURIComponent(laneId)}`, { headers, signal: AbortSignal.timeout(5_000) });
@@ -218,9 +228,12 @@ async function verifyFixtureLane(origin, checkout, remote, git, env, holdReply) 
       && !(holdReply && faultVerified && lane.provisioningStep.reason === "toolchain-reply-lost")) {
       throw new Error(`provisioning fixture interrupted at ${lane.provisioningStep.step} (${lane.provisioningStep.reason})`);
     }
-    if (lane && lane.state !== "provisioning" && !lane.provisioningStep && lane.lastPassedCommit === planned) {
+    const checkoutReady = lane && lane.state !== "provisioning" && !lane.provisioningStep && lane.lastPassedCommit === planned;
+    if (checkoutReady) {
       if (holdReply && !faultVerified) throw new Error(`${holdReply} fixture never verified the held reply transition`);
-      if (lane.runs?.[0]?.attempts?.length !== 1) throw new Error(`${holdReply ?? "release"} fixture did not start exactly one first-stage child`);
+      awaitingFirstStage = !firstStageFixtureReady(lane, label);
+    }
+    if (checkoutReady && !awaitingFirstStage) {
       if (holdReply) {
         const events = (await readFile(eventsFile, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
         const adds = events.filter(event => event.type === "worktree-add" && event.pipelineId === laneId);
@@ -241,6 +254,7 @@ async function verifyFixtureLane(origin, checkout, remote, git, env, holdReply) 
     }
     await new Promise(resolve => setTimeout(resolve, 150));
   }
+  if (awaitingFirstStage) throw new Error(`${label} fixture did not record its first-stage attempt inside 60 s`);
   throw new Error("release fixture did not consume its cold provisioning receipt inside 60 s");
 }
 

@@ -22,6 +22,7 @@ import {
 } from "./verify-viewer-runtime";
 import { isOperatorOwnedDirectory, setStateOwnershipPathsForTests } from "../src/lib/stateOwnership";
 import { recordProvisionFixtureEvent, waitForProvisionFixtureReply } from "../src/lib/pipelines/provisionFixtureSupervisor";
+import { firstStageFixtureReady } from "./verify-provisioning-release.mjs";
 
 /* What this file is defending is the shape of the check rather than its
    verdict: the verdict is produced by CI, under the pinned interpreter, on a
@@ -171,6 +172,15 @@ test("provisioning release tracing runs only for a completed App Router build", 
   expect(hasBuiltPipelineRoute(root)).toBe(false);
   fs.writeFileSync(path.join(root, ".next/BUILD_ID"), "fixture-build\n");
   expect(hasBuiltPipelineRoute(root)).toBe(true);
+});
+
+test("the provisioning fixture waits for the first attempt after checkout readiness", () => {
+  const runs = [{ stageId: "build", attempts: [] }];
+  expect(firstStageFixtureReady({ state: "running", runs }, "cache-permit")).toBe(false);
+  expect(() => firstStageFixtureReady({ state: "completed", runs }, "cache-permit")).toThrow("observed 0 (completed)");
+  expect(firstStageFixtureReady({ state: "running", runs: [{ stageId: "build", attempts: [{ n: 1 }] }] }, "cache-permit")).toBe(true);
+  expect(() => firstStageFixtureReady({ state: "running", runs: [{ stageId: "build", attempts: [{ n: 1 }, { n: 2 }] }] }, "cache-permit"))
+    .toThrow("observed 2 (running)");
 });
 
 test.each(["check-ignore", "cache-permit"] as const)("private release fixture supervisor holds the %s reply", async reply => {
