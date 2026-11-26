@@ -5511,6 +5511,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/resources") {
     const diskRole = new URLSearchParams(location.search).get("disk-role");
     const diskWarning = new URLSearchParams(location.search).get("disk-level") === "warning";
+    /* `memory=calm|swap|tmp`: RAM, swap and a tmpfs /tmp, quiet or over one warning line. */
+    const memory = new URLSearchParams(location.search).get("memory");
+    const swapUsed = (memory === "swap" ? 6 : 1) * 1024 ** 3;
     const host = (target: string, title: string, over: Record<string, unknown>) => ({
       target, panePid: 4_100, kind: "structured", path: null, engine: "claude", title, project: LEDGER, activity: "idle", lastActiveAt: iso(6 * 60 * MIN), cwd: "/repo/ledger",
       rssBytes: 600 * 1024 ** 2, swapBytes: 0, procCount: 3, model: "opus", role: "builder", conversationId: null, stage: "implement", ownership: "owned", seat: false, turnBusy: false, ...over,
@@ -5530,7 +5533,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           ? [{ kind: "state", bytes: 2.1 * 1024 ** 3, measuredAt: iso(0) }, { kind: "worktrees", bytes: 187 * 1024 ** 3, measuredAt: iso(0) }, { kind: "temp", bytes: 15 * 1024 ** 3, measuredAt: iso(0) }]
           : [{ kind: "worktrees", bytes: 90 * 1024 ** 3, measuredAt: iso(0) }],
       } } : {}),
-      system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed: 1024 ** 3, capturedAt: iso(30) },
+      system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed, capturedAt: iso(30) },
+      ...(memory ? { memoryPressure: {
+        at: iso(0), swapWarnPercent: 50, tmpWarnBytes: 4e9,
+        episode: memory === "calm" ? null : iso(MIN), reasons: memory === "calm" ? [] : [memory],
+        ram: { usedBytes: 23 * 1024 ** 3, totalBytes: 32 * 1024 ** 3 }, swap: { usedBytes: swapUsed, totalBytes: 8 * 1024 ** 3 },
+        tmp: { usedBytes: (memory === "tmp" ? 5.5 : 1.2) * 1024 ** 3, totalBytes: 16 * 1024 ** 3, tmpfs: true, view: "host" },
+      } } : {}),
       sessions: RAIL ? [
         host("host-ledger-build", "Reconciling the ledger export", { activity: "live", lastActiveAt: iso(20), rssBytes: 1_400 * 1024 ** 2, turnBusy: true }),
         host("host-harbor-index", "Indexed the handbook", { project: "harbor-docs", cwd: "/repo/harbor", engine: "codex", model: "gpt-5.6", role: "reviewer", stage: "review" }),

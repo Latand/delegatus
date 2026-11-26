@@ -1545,6 +1545,8 @@ export function pipelineTaskLinkError(
   tasks: readonly BoardTask[],
   options: { allowMissing?: boolean } = {},
 ): string | null {
+  const resolveProject = projectAliasResolver();
+  const project = resolveProject(pipeline.project);
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
   for (const taskId of taskIds) {
     const task = tasksById.get(taskId);
@@ -1552,7 +1554,7 @@ export function pipelineTaskLinkError(
       if (options.allowMissing) continue;
       return `task not found: ${taskId}`;
     }
-    if (task.project !== pipeline.project) return `task project does not match pipeline project: ${taskId}`;
+    if (resolveProject(task.project) !== project) return `task project does not match pipeline project: ${taskId}`;
   }
   return null;
 }

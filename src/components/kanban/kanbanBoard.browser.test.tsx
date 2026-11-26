@@ -68,6 +68,13 @@ import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profile
    opened before the next case starts, and sizes the deadline for a loaded
    machine. Launch through `chromium` from the harness so the case owns them. */
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
+/** The share a "used / total" reading names, in percent. */
+const usedShare = (value: string): number | null => {
+  const ratio = /^([\d.,]+) (GiB|MiB) \/ ([\d.,]+) (GiB|MiB)$/.exec(value.trim());
+  if (!ratio) return null;
+  const gib = (amount: string, unit: string) => Number(amount.replace(",", ".")) / (unit === "MiB" ? 1024 : 1);
+  return (100 * gib(ratio[1]!, ratio[2]!)) / gib(ratio[3]!, ratio[4]!);
+};
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 /** Where a memory-profile block keeps its frames: under MEMORY_PROFILE_OUT when set, otherwise under .artifacts. */
 const memoryOut = (name: string) => process.env.MEMORY_PROFILE_OUT ? path.resolve(process.env.MEMORY_PROFILE_OUT, name) : path.resolve(".artifacts", name);
@@ -34900,7 +34907,9 @@ describe("the left sidebar: one tidy panel with a compact system block", () => {
             if (meter.bar === null) continue;
             const percent = /(\d+(?:[.,]\d+)?)\s*%/.exec(meter.value);
             const amount = /(\d+(?:[.,]\d+)?)\s*GiB/.exec(meter.value);
-            const named = percent ? Number(percent[1]!.replace(",", ".")) : amount && TOTAL_GIB[meter.label] ? (100 * Number(amount[1]!.replace(",", "."))) / TOTAL_GIB[meter.label]! : null;
+            /* The memory lines name used of total ("23 GiB / 32 GiB"). */
+            const named = percent ? Number(percent[1]!.replace(",", ".")) : usedShare(meter.value)
+              ?? (amount && TOTAL_GIB[meter.label] ? (100 * Number(amount[1]!.replace(",", "."))) / TOTAL_GIB[meter.label]! : null);
             if (named === null) fail(`the line "${meter.label}" has a bar and no reading to compare it with: "${meter.value}"`);
             else if (Math.abs(named - meter.bar) > 2) fail(`"${meter.label} ${meter.value}" stands beside a bar drawn at ${meter.bar}%`);
           }
@@ -35156,6 +35165,94 @@ describe("disk warning destinations", () => {
       fs.writeFileSync(record, JSON.stringify(readings, null, 2) + "\n");
     } finally { await browser.close(); server.stop(); }
   }, 180_000);
+});
+
+/* RAM and swap stand once each, on their meters, as used of the total; /tmp
+   adds one line and a memory pressure episode its warning. */
+describe("memory pressure on the System block", () => {
+  browserTest("RAM, swap and /tmp stand once each and fit, calm and warning, at every density in both languages and themes", async () => {
+    const out = path.resolve(process.env.LLV_MEMORY_PRESSURE_PNG_DIR ?? ".artifacts/memory-pressure");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(fs.mkdtempSync(path.join(process.env.TMPDIR ?? os.tmpdir(), "llv-memory-")));
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env });
+    const readings: unknown[] = [];
+    try {
+      for (const density of ["line", "detail", "full"] as const)
+        for (const state of ["calm", "swap", "tmp"] as const)
+          for (const lang of ["en", "uk"] as const)
+            for (const scheme of ["light", "dark"] as const) {
+              const size = density === "full" ? { width: 390, height: 844 } : { width: 1280, height: 800 };
+              const frame = `${density}-${state}-${lang}-${scheme}`;
+              const { context, page, pageErrors } = await openFixture(browser,
+                `${server.base}?disk-density=${density}&memory=${state}`, size, scheme, lang, "reduce", density === "full");
+              try {
+                await page.waitForSelector("[data-memory-pressure]");
+                const block = page.locator("[data-resources-footer]");
+                const reading = await block.evaluate((footer) => {
+                  /* The ink of every text node, held against the window and every box that clips it. */
+                  const cut: string[] = [];
+                  const walker = document.createTreeWalker(footer, NodeFilter.SHOW_TEXT);
+                  while (walker.nextNode()) {
+                    const node = walker.currentNode;
+                    if (!node.textContent?.trim()) continue;
+                    const range = document.createRange(); range.selectNodeContents(node);
+                    for (const rect of range.getClientRects()) {
+                      if (!rect.width || !rect.height) continue;
+                      if (rect.left < 0 || rect.right > innerWidth || rect.top < 0 || rect.bottom > innerHeight) cut.push(node.textContent);
+                      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+                        const style = getComputedStyle(parent);
+                        if (!/(auto|scroll|hidden|clip)/.test(style.overflow + style.overflowX + style.overflowY)) continue;
+                        const box = parent.getBoundingClientRect();
+                        if (rect.left < box.left - 1 || rect.right > box.right + 1 || rect.top < box.top - 1.5 || rect.bottom > box.bottom + 1.5) cut.push(node.textContent);
+                      }
+                    }
+                  }
+                  const box = footer.getBoundingClientRect();
+                  return {
+                    text: (footer as HTMLElement).innerText.replace(/\s+/g, " ").trim(),
+                    width: box.width, height: box.height, cut,
+                    overflows: footer.scrollWidth > footer.clientWidth + 1 || document.documentElement.scrollWidth > innerWidth,
+                    meters: [...footer.querySelectorAll<HTMLElement>("[data-meter-line]")].map((line) => {
+                      const track = line.querySelector<HTMLElement>("[data-meter-bar]");
+                      const fill = track?.firstElementChild as HTMLElement | null;
+                      return { label: line.querySelector("[data-meter-label]")?.textContent ?? "", value: line.querySelector("[data-meter-value]")?.textContent ?? "",
+                        bar: track && fill ? (100 * fill.getBoundingClientRect().width) / track.getBoundingClientRect().width : null };
+                    }),
+                    statuses: footer.querySelectorAll('[role="status"]').length,
+                  };
+                });
+                const times = (part: string) => reading.text.split(part).length - 1;
+                const swapUsed = state === "swap" ? "6.0 GiB" : "1.0 GiB";
+                const tmpUsed = state === "tmp" ? "5.5 GiB" : "1.2 GiB";
+                const ofTotal = (used: string, total: string) => density === "full"
+                  ? translate(lang, "resources.usedOfTotalInWords", { used, total }) : translate(lang, "resources.usedOfTotal", { used, total });
+                for (const fact of [ofTotal("23 GiB", "32 GiB"), ofTotal(swapUsed, "8.0 GiB"), translate(lang, "resources.usedOfTotal", { used: tmpUsed, total: "16 GiB" })])
+                  expect({ frame, fact, times: times(fact) }).toEqual({ frame, fact, times: 1 });
+                /* One RAM name, one swap name and one /tmp name outside the warning sentence. */
+                expect({ frame, ram: times(translate(lang, "resources.ram")) }).toEqual({ frame, ram: 1 });
+                expect(reading.text).not.toContain(translate(lang, "resources.free", { amount: "9.0 GiB" }));
+                expect({ frame, cut: reading.cut, overflows: reading.overflows }).toEqual({ frame, cut: [], overflows: false });
+                const warning = translate(lang, "resources.memoryHigh");
+                expect({ frame, warned: reading.text.includes(warning), statuses: reading.statuses }).toEqual({ frame, warned: state !== "calm", statuses: state === "calm" ? 0 : 1 });
+                if (state === "swap") expect(reading.text).toContain(translate(lang, "resources.memorySwapHigh", { percent: "50" }));
+                if (state === "tmp") expect(reading.text).toContain(translate(lang, "resources.memoryTmpHigh", { amount: "4 GB" }));
+                if (density !== "full") {
+                  expect(reading.meters.map((meter) => meter.label)).toEqual([translate(lang, "resources.ram"), translate(lang, "resources.swap"), "/tmp"]);
+                  for (const meter of reading.meters) expect(Math.abs(meter.bar! - usedShare(meter.value)!)).toBeLessThanOrEqual(3);
+                }
+                expect(pageErrors).toEqual([]);
+                await block.screenshot({ path: path.join(out, `${frame}.png`) });
+                readings.push({ frame, ...reading });
+              } finally { await context.close(); }
+            }
+      expect(readings).toHaveLength(36);
+      const record = path.resolve("evidence/memory-pressure/system-block.json");
+      fs.mkdirSync(path.dirname(record), { recursive: true });
+      fs.writeFileSync(record, JSON.stringify(readings, null, 2) + "\n");
+    } finally { await browser.close(); sockets.close(); server.stop(); }
+  }, 300_000);
 });
 
 /* A worker slot wait reads as a free worker, and a resource hold carries its
