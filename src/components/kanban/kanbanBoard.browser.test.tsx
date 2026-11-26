@@ -2804,6 +2804,58 @@ describe("where a stage ran", () => {
   }, 300_000);
 });
 
+describe("a stage the controller moved off Codex says who moved it and why", () => {
+  /* After two Codex cybersecurity refusals the controller moves the stage to
+     Claude Opus by itself. The lane's graph-edit line names the controller in
+     the interface language and states the refusal as visible text. */
+  browserTest("the card's graph-edit line names the controller and the refusal with no hover, in both languages and themes", async () => {
+    const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "codex-refusal-move");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const { ownedBrowserSocketEnvironment } = await import("./issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ ...LAUNCH, env: sockets.env }).catch(error => {
+      server.stop(); sockets.close(); throw error;
+    });
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 1000]) {
+        const key = `${lang}-${theme}-${width}`;
+        const who = translate(lang, "kanban.graph.editedByController");
+        const cause = translate(lang, "kanban.graph.edit.cause.codex-cybersecurity-refusal");
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=codex-refusal-move`, { width, height: 1000 }, theme, lang, "reduce", false);
+        try {
+          const line = page.locator(`${card("t-codex-refusal")} .graph-edit`);
+          await line.waitFor({ timeout: 10_000 });
+          await line.scrollIntoViewIfNeeded();
+          const read = await line.evaluate((element) => {
+            const holder = element.closest(".card")!.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            const text = range.getBoundingClientRect();
+            return {
+              text: (element as HTMLElement).innerText, cause: (element as HTMLElement).dataset.graphEditCause ?? null,
+              inside: text.left >= holder.left - 0.5 && text.right <= holder.right + 0.5 && text.bottom <= holder.bottom + 0.5 && text.bottom <= innerHeight && text.right <= innerWidth,
+              /* Nothing of the line is cut off: no ellipsis, no clipped overflow. */
+              whole: element.scrollWidth <= element.clientWidth + 0.5 && element.scrollHeight <= element.clientHeight + 0.5,
+            };
+          });
+          if (!read.text.includes(who)) failures.push(`${key} actor: «${read.text}»`);
+          if (!read.text.includes(cause)) failures.push(`${key} cause: «${read.text}»`);
+          if (read.text.includes("pipeline-controller")) failures.push(`${key} raw actor id: «${read.text}»`);
+          if (read.cause !== "codex-cybersecurity-refusal") failures.push(`${key} cause attribute ${read.cause}`);
+          if (!read.inside) failures.push(`${key} the line leaves its card`);
+          if (!read.whole) failures.push(`${key} the line is cut off`);
+          await page.screenshot({ path: path.join(out, `${key}-card.png`) });
+          await line.screenshot({ path: path.join(out, `${key}-line.png`) });
+          if (pageErrors.length) failures.push(`${key} page errors: ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); server.stop(); sockets.close(); }
+    expect(failures).toEqual([]);
+  }, 300_000);
+});
+
 describe("Cloud stage task link", () => {
   browserTest("a stage that ran in the cloud opens its cloud task from its pane, and a stage that moved local offers none, in both languages and themes", async () => {
     const out = path.resolve(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "cloud-task-link");

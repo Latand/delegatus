@@ -5658,6 +5658,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "kanban.graph.roundsAria": { one: "{count} раунд рев'ю, останній {verdict}", few: "{count} раунди рев'ю, останній {verdict}", many: "{count} раундів рев'ю, останній {verdict}", other: "{count} раундів рев'ю, останній {verdict}" },
   "kanban.graph.edited": "Граф змінив {who} {age}: {change}",
   "kanban.graph.editedByOperator": "оператор",
+  "kanban.graph.editedByController": "контролер конвеєра",
+  "kanban.graph.edit.cause.codex-cybersecurity-refusal": "перенесено на Claude Opus після двох відмов Codex через кіберризик",
   "kanban.graph.edit.add-stage": "додано {stage}",
   "kanban.graph.edit.remove-stage": "прибрано {stage}",
   "kanban.graph.edit.reorder-stage": "переставлено етапи",

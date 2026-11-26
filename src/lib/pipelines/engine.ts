@@ -206,7 +206,7 @@ import { projectIdentityFromRemote, localRepositoryProjectId } from "@/lib/proje
 import { mergeOnReviewEnabled } from "@/lib/projects/settings";
 import { ensurePipelineForTask, isTaskSpawnPipelineParams, type TaskPipelineSpawnParams, type TaskSpawnPipelineParams } from "./taskBinding";
 import { assignmentHoldsIdentity } from "@/lib/tasks/membership";
-import { MAX_DECISION_ANSWER_CHARS } from "./types";
+import { MAX_DECISION_ANSWER_CHARS, PIPELINE_CONTROLLER_ROLE } from "./types";
 import { lanePullRequest, mergeAdmission, mergeEligible, nudgeAutoMerge } from "@/lib/forge/autoMerge";
 import { forgeCacheView, nudgeForgeSweep } from "@/lib/forge/cache";
 import { cachedKindOf, canonicalRepository, pipelineRepository } from "@/lib/forge/resolve";
@@ -3933,15 +3933,18 @@ function codexCybersecurityRefusal(condition: ProviderCondition): boolean {
 }
 
 /** The engine's own hand on a runtime move it makes without an operator request. */
-const PIPELINE_CONTROLLER_ACTOR: PauseResumeActor = { kind: "agent", role: "pipeline-controller", conversationId: null };
+const PIPELINE_CONTROLLER_ACTOR: PauseResumeActor = { kind: "agent", role: PIPELINE_CONTROLLER_ROLE, conversationId: null };
 
-/** Codex attempts of this stage, up to and including `attempt`, that Codex
-    refused as a cybersecurity risk. Manual retries count too: the stage's
-    history in this lane decides when it leaves Codex. */
+/** Cybersecurity refusals Codex gave this stage, in attempts up to and
+    including `attempt`. Each refused turn opens one wait, so an attempt the
+    agent kept working in after a refusal counts every refusal it received.
+    Manual retries count too: the stage's history in this lane decides when it
+    leaves Codex. */
 function codexRefusalsOfStage(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): number {
   return (runFor(pipeline, stage.id)?.attempts ?? []).filter(item => !item.historical && item.n <= attempt.n
-    && item.effectiveRole.engine === "codex"
-    && item.providerRecoveries?.some(entry => codexCybersecurityRefusal(entry.condition))).length;
+    && item.effectiveRole.engine === "codex")
+    .reduce((count, item) => count + (item.providerRecoveries ?? [])
+      .filter(entry => entry.action === "wait" && codexCybersecurityRefusal(entry.condition)).length, 0);
 }
 
 /** Rewrite the stage onto the role's Claude equivalent at Opus. Every later
@@ -3973,6 +3976,7 @@ function moveRefusedStageToClaudeOpus(pipeline: Pipeline, stage: PipelineStage, 
   if (pinned) delete stage.account;
   recordGraphEdit(pipeline, ports, PIPELINE_CONTROLLER_ACTOR, {
     action: "override-stage", stageId: stage.id, ...reach, ...(pinned ? { accountOverride: null } : {}),
+    cause: "codex-cybersecurity-refusal",
     summary: `moved stage ${stage.id} to Claude ${resolved.role.model} ${resolved.role.effort} after Codex refused it twice as a cybersecurity risk${pinned ? "; the Codex account pin was cleared" : ""}${reach.effect === "pending-next-attempt" ? `; applies from attempt ${reach.appliesFromAttempt}` : ""}`,
   });
   return null;
@@ -15445,7 +15449,7 @@ function recordGraphEdit(
   pipeline: Pipeline,
   ports: PipelinePorts,
   actor: PauseResumeActor | null,
-  edit: Pick<PipelineGraphEdit, "action" | "stageId" | "effect" | "appliesFromAttempt" | "accountOverride" | "summary">,
+  edit: Pick<PipelineGraphEdit, "action" | "stageId" | "effect" | "appliesFromAttempt" | "accountOverride" | "summary" | "cause">,
 ): PipelineGraphEdit {
   const edits = pipeline.graphEdits ?? [];
   const recorded: PipelineGraphEdit = {

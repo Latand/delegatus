@@ -8,6 +8,7 @@ const REFUSAL_NOTICE = "This content was flagged for possible cybersecurity risk
 /** Hosts the refused attempts keep until the controller stops them idle-only. */
 function refusalHosts(f: RefusalHarness) {
   const fixtures: Record<string, string> = {};
+  const transcripts = new Map<string, Record<string, unknown>[]>();
   const resident = new Set<string>();
   const stops: number[] = [];
   let busy = false;
@@ -24,36 +25,48 @@ function refusalHosts(f: RefusalHarness) {
     resident.delete(target.conversationId ?? "");
     return { outcome: "stopped" };
   };
-  /** The attempt's turn ends on a terminal Codex refusal. */
+  /** The attempt's open turn ends on a terminal Codex refusal: its first
+      turn, or the turn the agent continued in after an earlier refusal. */
   const refuse = (attempt: StageAttempt, errorClass: string, message: string, later: (at: () => string) => Record<string, unknown>[] = () => []) => {
     resident.add(attempt.conversationId!);
     f.advance(1_000);
-    const startedAt = f.h.ports.now();
+    const rows = transcripts.get(attempt.agentPath!) ?? [{ type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_started" } }];
     f.advance(1_000);
     const refusal = { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_complete", error: {
       ...(message ? { message } : {}), codex_error_info: errorClass,
     } } };
     const at = () => { f.advance(1_000); return f.h.ports.now(); };
-    fixtures[attempt.agentPath!] = stageTranscript(`codex-refusal-${attempt.n}`, [
-      { type: "event_msg", timestamp: startedAt, payload: { type: "task_started" } }, refusal, ...later(at),
-    ]);
+    rows.push(refusal, ...later(at));
+    write(attempt, rows);
+  };
+  const write = (attempt: StageAttempt, rows: Record<string, unknown>[]) => {
+    transcripts.set(attempt.agentPath!, rows);
+    fixtures[attempt.agentPath!] = stageTranscript(`codex-refusal-${attempt.n}`, rows);
     readFixtures(f.h, fixtures);
   };
+  /** The attempt's agent keeps writing after its last refusal. */
+  const work = (attempt: StageAttempt, later: (at: () => string) => Record<string, unknown>[]) => {
+    const at = () => { f.advance(1_000); return f.h.ports.now(); };
+    write(attempt, [...transcripts.get(attempt.agentPath!)!, ...later(at)]);
+  };
   /** While the refused host is still busy nothing is stopped or relaunched. */
-  const settle = async (id: string) => {
+  const busyPass = async (id: string) => {
     const before = { spawns: f.h.spawnInputs.length, stops: stops.length };
     busy = true;
     f.h.setConversationActive(true);
     await engineModule.recoverPipelineProviderTurn(id, f.h.ports);
     await tickPipelines([], f.h.ports);
     expect({ spawns: f.h.spawnInputs.length, stops: stops.length }).toEqual(before);
+  };
+  const settle = async (id: string) => {
+    await busyPass(id);
     busy = false;
     f.h.setConversationActive(false);
     f.advance(30_000);
     await engineModule.recoverPipelineProviderTurn(id, f.h.ports);
     for (let tick = 0; tick < 4; tick++) await tickPipelines([], f.h.ports);
   };
-  return { refuse, settle, stops, resident };
+  return { refuse, work, busyPass, settle, stops, resident };
 }
 
 const latest = () => loadPipelines()[0]!.runs[0]!.attempts.at(-1)!;
@@ -114,7 +127,7 @@ test.each([
   expect(secondRead.stage).toMatchObject({ engine: "claude", model: "opus", effort: "high" });
   expect(moved.graphEdits?.at(-1)).toMatchObject({
     action: "override-stage", stageId, effect: "pending-next-attempt", appliesFromAttempt: second.n + 1,
-    actor: { kind: "agent", role: "pipeline-controller", conversationId: null },
+    actor: { kind: "agent", role: "pipeline-controller", conversationId: null }, cause: "codex-cybersecurity-refusal",
     summary: `moved stage ${stageId} to Claude opus high after Codex refused it twice as a cybersecurity risk; applies from attempt ${second.n + 1}`,
   });
   const opus = latest();
@@ -175,6 +188,28 @@ test.each(["launch", "provider"] as const)("an Opus attempt that cannot run afte
   expect(latest()).toMatchObject({ n: 4, effectiveRole: { engine: "claude", model: "opus" } });
 });
 
+test("the move to Claude Opus clears a Codex account pin so the project's Claude selection applies", async () => {
+  const f = await providerRecoveryHarness("codex", "other", REFUSAL_NOTICE, null, true);
+  const hosts = refusalHosts(f);
+  const id = loadPipelines()[0]!.id;
+  const stageId = loadPipelines()[0]!.cursor!.stageId;
+  expect(loadPipelines()[0]!.stages[0]!.account).toBe(LIMITED_ACCOUNT);
+  hosts.refuse(latest(), "other", REFUSAL_NOTICE);
+  await hosts.settle(id);
+  // The fresh Codex attempt still binds the pin.
+  expect(loadPipelines()[0]!.stages[0]!.account).toBe(LIMITED_ACCOUNT);
+  expect(latest().definition?.account).toBe(LIMITED_ACCOUNT);
+  hosts.refuse(latest(), "other", REFUSAL_NOTICE);
+  await hosts.settle(id);
+  const moved = loadPipelines()[0]!;
+  expect(moved.stages[0]!.account).toBeUndefined();
+  expect(moved.graphEdits?.at(-1)).toMatchObject({
+    action: "override-stage", stageId, accountOverride: null, cause: "codex-cybersecurity-refusal",
+    summary: `moved stage ${stageId} to Claude opus high after Codex refused it twice as a cybersecurity risk; the Codex account pin was cleared; applies from attempt 3`,
+  });
+  expect(latest()).toMatchObject({ n: 3, state: "running", effectiveRole: { engine: "claude", model: "opus" }, definition: { account: null } });
+});
+
 test("a second refusal whose move to Claude cannot be made parks the Codex attempt and releases its idle host", async () => {
   const f = await providerRecoveryHarness("codex", "other", REFUSAL_NOTICE);
   const hosts = refusalHosts(f);
@@ -212,25 +247,45 @@ test("a second refusal whose move to Claude cannot be made parks the Codex attem
   expect(retry).toMatchObject({ pipeline: { state: "running", cursor: { stageId, state: "pending" } } });
 });
 
-test("operator work after a Codex refusal keeps the attempt and its host; nothing is relaunched", async () => {
+test("operator work after a Codex refusal keeps the attempt and its host; a second refusal of that attempt moves the stage to Claude Opus", async () => {
   const f = await providerRecoveryHarness("codex", "other", REFUSAL_NOTICE);
   const hosts = refusalHosts(f);
   const id = loadPipelines()[0]!.id;
   const source = latest();
+  // The refusal is recorded while the host is still busy.
+  hosts.refuse(source, "other", REFUSAL_NOTICE);
+  await hosts.busyPass(id);
+  expect(latest().providerRecoveries!.map(item => [item.action, item.condition.label])).toEqual([["wait", "Codex cybersecurity refusal"]]);
   // The operator answers the refused turn and the agent works on it.
-  hosts.refuse(source, "other", REFUSAL_NOTICE, at => [
+  hosts.work(source, at => [
     { type: "event_msg", timestamp: at(), payload: { type: "user_message", message: "Continue without the flagged step" } },
     { type: "event_msg", timestamp: at(), payload: { type: "task_started" } },
     { type: "event_msg", timestamp: at(), payload: { type: "agent_message", message: "Continuing the stage" } },
   ]);
-  await hosts.settle(id);
+  await hosts.busyPass(id);
+  for (let tick = 0; tick < 3; tick++) { f.advance(30_000); await hosts.busyPass(id); }
   expect(hosts.stops).toEqual([]);
   expect(hosts.resident.has(source.conversationId!)).toBe(true);
   expect(f.h.spawnInputs).toHaveLength(1);
   const lane = loadPipelines()[0]!;
+  expect(lane.state).toBe("running");
   expect(lane.stages[0]!.effectiveRole.engine).toBe("codex");
-  expect(latest()).toMatchObject({ n: source.n, effectiveRole: { engine: "codex" } });
+  expect(latest()).toMatchObject({ n: source.n, state: "running", effectiveRole: { engine: "codex" } });
   expect(latest().providerRecoveries?.some(item => item.action === "relaunch" || item.action === "switch") ?? false).toBe(false);
+
+  // Codex refuses the continued turn of the same attempt: that is the
+  // stage's second refusal, so it leaves Codex now.
+  hosts.refuse(source, "other", REFUSAL_NOTICE);
+  await hosts.settle(id);
+  expect(hosts.stops).toEqual([source.n]);
+  const moved = loadPipelines()[0]!;
+  expect(moved.stages[0]!.effectiveRole).toMatchObject({ engine: "claude", model: "opus" });
+  const refused = moved.runs[0]!.attempts.find(item => item.n === source.n)!;
+  expect(refused.providerRecoveries!.map(item => item.action)).toEqual(["wait", "wait", "switch", "relaunch"]);
+  expect(moved.graphEdits?.at(-1)).toMatchObject({ action: "override-stage", cause: "codex-cybersecurity-refusal", appliesFromAttempt: source.n + 1 });
+  expect(latest()).toMatchObject({ n: source.n + 1, state: "running", effectiveRole: { engine: "claude", model: "opus" } });
+  expect(f.h.spawnInputs).toHaveLength(2);
+  expect(f.h.spawnInputs.at(-1)!.role).toMatchObject({ engine: "claude", model: "opus" });
 });
 
 // A parked retry's confirmation wait goes with its chain when the next chain,
