@@ -113,6 +113,10 @@ const messageSchema = z.object({
   sent_at: time,
   text: boundedString(20000),
   reply_to: id.nullable(),
+  kind: z.literal("sticker").optional().catch(undefined),
+  sticker_emoji: boundedString(128).optional(),
+  sticker_format: z.enum(["webp", "tgs", "webm"]).optional(),
+  media_description: boundedString(4000).optional(),
 });
 // requester_context (relay.md §A.8): who asked, the chat's short-term memory
 // and the service's tools for the requester's role. All optional, so a request
