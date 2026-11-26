@@ -1695,6 +1695,97 @@ test.skipIf(process.platform !== "linux")("a stray holding a Unix socket stays",
   expect(report.held).toEqual([expect.objectContaining({ path: directory, reason: "socket" })]);
 });
 
+/** A process of this user that refuses inspection: it enters `directory`, which
+ * it reads from stdin so its command line names nothing, takes `command` as its
+ * kernel name and clears its dumpable flag (PR_SET_NAME is 15, PR_SET_DUMPABLE 4). */
+async function refusingHolder(directory: string, command: string, extraArgs: string[] = []): Promise<ChildProcess> {
+  const script = "import ctypes,os,sys,time; c=ctypes.CDLL(None); os.chdir(sys.stdin.readline().rstrip('\\n'))\n"
+    + "c.prctl(15, sys.argv[1].encode(), 0, 0, 0); c.prctl(4, 0, 0, 0, 0); print('ready', flush=True); time.sleep(60)";
+  const holder = spawn("python3", ["-I", "-c", script, command, ...extraArgs], { stdio: ["pipe", "pipe", "ignore"], cwd: tempRoot() });
+  children.push(holder);
+  holder.stdin!.end(directory + "\n");
+  const [line] = await once(holder.stdout!, "data") as [Buffer];
+  expect(line.toString().trim()).toBe("ready");
+  return holder;
+}
+const refusalTests = test.skipIf(process.platform !== "linux" || process.getuid?.() === 0);
+const exited = (child: ChildProcess) => new Promise<void>(resolve => {
+  if (child.exitCode !== null || child.signalCode !== null) return resolve();
+  child.once("exit", () => resolve()); child.kill("SIGKILL");
+});
+
+refusalTests("a live process that refuses inspection keeps the stray it works in", async () => {
+  const root = tempRoot();
+  const directory = strayFixture(root, "rev-refusing-holder");
+  const holder = await refusingHolder(directory, "python3");
+  const proc = fixtureProcRoot([holder])!;
+  // The kernel refuses this user the holder's links: only its record remains.
+  expect(() => fs.readlinkSync(`/proc/${holder.pid}/cwd`)).toThrow();
+  const scan = scanProcesses(proc);
+  expect(scan.processes).toEqual([]);
+  expect(scan.uninspectable).toEqual([expect.objectContaining({ pid: holder.pid, command: "python3", namespace: null })]);
+  const options = { ...strayOptions(root), scan: undefined, procRoot: proc };
+  const report = await sweepStaleTempDirs(options);
+  expect(report.removed).toEqual([]);
+  expect(report.held).toEqual([expect.objectContaining({ path: directory, reason: "process-scan-unverified" })]);
+  expect(fs.existsSync(path.join(directory, "file.txt"))).toBeTrue();
+  // The same tree goes once the holder is gone, so the hold was the holder.
+  await exited(holder);
+  expect((await sweepStaleTempDirs({ ...strayOptions(root), scan: undefined, procRoot: fixtureProcRoot([]) })).removed.map(row => row.path)).toEqual([directory]);
+});
+
+refusalTests("a refusing process holds the stray its command line names, even a known daemon", async () => {
+  const root = tempRoot();
+  const named = strayFixture(root, "rev-named-by-daemon");
+  const other = strayFixture(root, "rev-unnamed");
+  const holder = await refusingHolder(tempRoot(), "ssh-agent", ["-a", path.join(named, "agent.sock")]);
+  const report = await sweepStaleTempDirs({ ...strayOptions(root), scan: undefined, procRoot: fixtureProcRoot([holder]) });
+  expect(report.held).toEqual([expect.objectContaining({ path: named, reason: "process_reference" })]);
+  // A known daemon that names nothing leaves the other stray its proof, and the proof counts it.
+  expect(report.removed.map(row => row.path)).toEqual([other]);
+  expect(report.removed[0]!.proof).toMatchObject({ processes: 0, uninspectable: 1 });
+  expect(fs.existsSync(named)).toBeTrue();
+});
+
+refusalTests("an unknown refusing process that appears after the rename restores the stray", async () => {
+  const root = tempRoot();
+  const directory = strayFixture(root, "review-late-refusal");
+  const refused = { pid: 4242, namespace: null, stamped: false, command: "python3", paths: [], references: ["python3"] };
+  const report = await sweepStaleTempDirs({ ...strayOptions(root), scan: undefined, currentScan: () =>
+    fs.readdirSync(root).some(name => name.startsWith(".delegatus-trash-")) ? { ...noProcesses, uninspectable: [refused] } : noProcesses });
+  expect(report.removed).toEqual([]);
+  expect(report.held).toEqual([expect.objectContaining({ path: directory, reason: "process-scan-unverified" })]);
+  expect(fs.existsSync(path.join(directory, "file.txt"))).toBeTrue();
+  expect(fs.readdirSync(root).filter(name => name.startsWith("."))).toEqual([]);
+});
+
+test.skipIf(process.platform !== "linux")("the scan records a refused process only when it can still hold something of this user", () => {
+  const proc = tempRoot();
+  const refused = (pid: number, state: string, comm: string) => {
+    const base = path.join(proc, String(pid));
+    fs.mkdirSync(path.join(base, "ns"), { recursive: true });
+    fs.writeFileSync(path.join(base, "stat"), `${pid} (${comm}) ${state} 1 1 1 0\n`);
+    fs.writeFileSync(path.join(base, "comm"), `${comm}\n`);
+    fs.writeFileSync(path.join(base, "cmdline"), `${comm}\0/tmp/named-by-${pid}\0`);
+  };
+  refused(11, "S", "odd (name) Z");
+  refused(12, "Z", "zombie");
+  fs.mkdirSync(path.join(proc, "13", "ns"), { recursive: true }); // exited: no links at all
+  const readlink = fs.readlinkSync;
+  const spy = spyOn(fs, "readlinkSync").mockImplementation(((file: fs.PathLike, options?: never) => {
+    const match = /\/(11|12)\/ns\/mnt$/.exec(String(file));
+    if (match) throw Object.assign(new Error("refused"), { code: "EACCES" });
+    return readlink(file, options);
+  }) as typeof fs.readlinkSync);
+  try {
+    expect(scanProcesses(proc).uninspectable).toEqual([{ pid: 11, namespace: null, stamped: false, command: "odd (name) Z",
+      paths: ["/tmp/named-by-11"], references: ["odd (name) Z", "/tmp/named-by-11"] }]);
+    // Another user's process cannot work inside a private tree of this one.
+    const uid = spyOn(process, "getuid").mockReturnValue((process.getuid!() + 1) as never);
+    try { expect(scanProcesses(proc).uninspectable).toBeUndefined(); } finally { uid.mockRestore(); }
+  } finally { spy.mockRestore(); }
+});
+
 /** Mountinfo of a fake namespace layout: the stray root's filesystem is
  * device 0:77, and a container process in namespace mnt:[2] sees part or all
  * of it at another destination. */

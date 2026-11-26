@@ -40,8 +40,9 @@ import { identitiesInUse, mappedFileIdentity, treeHoldsIdentity } from "@/lib/pr
  *   direct child of those two roots of any name: owned by this service's uid,
  *   private mode, every write in its tree older than 12 h
  *   (`LLV_TEMP_STRAY_MAX_AGE_HOURS`), no reference from any process in any
- *   mount namespace, including through a bind mount, no socket inside, and not
- *   on the keep-list of system, session and harness entries
+ *   mount namespace, including through a bind mount, no process of this user
+ *   that refuses inspection outside {@link UNINSPECTABLE_DAEMONS}, no socket
+ *   inside, and not on the keep-list of system, session and harness entries
  *   (`isStrayTempName`). A tree a Delegatus agent was seen using is recorded by
  *   inode in `temp-provenance.json` and goes first. Removals use the same
  *   journaled trash, and each journal line carries its proof.
@@ -205,7 +206,39 @@ export type ScannedProcess = {
   mapped?: string[];
 };
 
-export type ProcessScan = { ownNamespace: string | null; processes: ScannedProcess[]; unverified?: boolean };
+/** A process of this user whose `/proc` links refuse inspection (the kernel
+ * clears its dumpable flag, or it asked for that itself). Its command line is
+ * world-readable; where it works and what it holds open are unknown. */
+export type UninspectableProcess = ScannedProcess & { command: string };
+
+export type ProcessScan = { ownNamespace: string | null; processes: ScannedProcess[]; unverified?: boolean;
+  uninspectable?: UninspectableProcess[] };
+
+/** Programs, by the kernel's process name, that run as the login user, refuse
+ * inspection as part of how they work and never work inside a temp tree of
+ * ours: the user service manager and its PAM helper, the key agents and the
+ * smart card daemon, an input daemon and a login session's SSH server. Their
+ * presence leaves the stray pass its proof; their command lines are still
+ * matched. Any other uninspectable process of this user may be standing in a
+ * stray, so no stray is removed while it runs. */
+export const UNINSPECTABLE_DAEMONS: ReadonlySet<string> = new Set([
+  "systemd", "(sd-pam)", "ssh-agent", "gpg-agent", "scdaemon", "gnome-keyring-d", "xinput", "sshd", "sshd-session",
+]);
+
+/** The record of a refused process, or null when it holds nothing of ours: it
+ * exited, it is a zombie, or another user owns it (and so cannot work inside a
+ * private tree of this user). */
+function uninspectableProcess(base: string, pid: number): UninspectableProcess | null {
+  const read = (file: string) => { try { return fs.readFileSync(path.join(base, file), "utf8"); } catch { return ""; } };
+  try { if (fs.statSync(base).uid !== process.getuid?.()) return null; }
+  catch { return null; }
+  // The state letter follows the parenthesised name, which may itself hold parentheses.
+  const stat = read("stat");
+  if (/^[ZXx]/.test(stat.slice(stat.lastIndexOf(")") + 1).trimStart())) return null;
+  const references = read("cmdline").split("\0").filter(Boolean);
+  return { pid, namespace: null, stamped: false, command: read("comm").trim(),
+    paths: references.filter(token => token.startsWith("/") && processPathWithinLimits(token)), references };
+}
 
 export function processPathWithinLimits(file: string): boolean {
   return Buffer.byteLength(file) < 4096 && file.split(path.sep).every(name => Buffer.byteLength(name) <= 255);
@@ -232,11 +265,18 @@ export function scanProcesses(procRoot = "/proc", extraRoots: readonly string[] 
     return fallback;
   }
   const processes: ScannedProcess[] = [];
+  const uninspectable: UninspectableProcess[] = [];
   for (const name of entries) {
     if (!/^\d+$/.test(name)) continue;
     const base = path.join(procRoot, name);
-    const namespace = readLink(path.join(base, "ns", "mnt"));
-    if (!namespace) continue;
+    let namespace: string;
+    try { namespace = fs.readlinkSync(path.join(base, "ns", "mnt")); }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const refused = code === "EACCES" || code === "EPERM" ? uninspectableProcess(base, Number(name)) : null;
+      if (refused) uninspectable.push(refused);
+      continue;
+    }
     const paths = new Set<string>();
     const cwd = readLink(path.join(base, "cwd"));
     if (cwd) paths.add(cwd);
@@ -284,7 +324,8 @@ export function scanProcesses(procRoot = "/proc", extraRoots: readonly string[] 
     }
     processes.push({ pid: Number(name), namespace, stamped, ...(cwd ? { cwd } : {}), paths: [...paths], references, procDirectory: base, mapped: [...mapped] });
   }
-  return { ownNamespace: readLink(path.join(procRoot, "self", "ns", "mnt")), processes };
+  return { ownNamespace: readLink(path.join(procRoot, "self", "ns", "mnt")), processes,
+    ...(uninspectable.length ? { uninspectable } : {}) };
   });
 }
 
@@ -483,10 +524,12 @@ export function aliasedReferenceHold(candidate: string, via: string, scan: Proce
   const physical = path.join(mount.root, path.relative(mount.point, candidate));
   const byNamespace = new Map<string, ScannedProcess[]>();
   for (const proc of scan.processes) {
-    if (!proc.namespace || (!proc.paths.length && !proc.references?.length)) continue;
-    const list = byNamespace.get(proc.namespace) ?? [];
+    if (!proc.paths.length && !proc.references?.length) continue;
+    // A process whose namespace link is refused answers by its own mount table.
+    const key = proc.namespace ?? `pid:${proc.pid}`;
+    const list = byNamespace.get(key) ?? [];
     list.push(proc);
-    byNamespace.set(proc.namespace, list);
+    byNamespace.set(key, list);
   }
   for (const processes of byNamespace.values()) {
     let rows: MountRow[] | null = null;
@@ -584,6 +627,8 @@ export function readTempProvenance(file: string): TempProvenanceRow[] {
 export type TempSweepProof = {
   newestWriteAt: string; entries: number; uid: number | null; mode: string; identity: string;
   processes: number; namespaces: number;
+  /** Processes of this user that refused inspection, all of them known daemons. */
+  uninspectable: number;
   ledger?: Pick<TempProvenanceRow, "firstSeenAt" | "lastSeenAt" | "evidence">;
 };
 
@@ -1137,10 +1182,10 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   const unreadByIdentity = (observed: ProcessScan) => {
     let unread = unreadScans.get(observed);
     if (!unread) {
-      unreadScans.set(observed, unread = { ownNamespace: observed.ownNamespace, processes: observed.processes.filter(proc => {
+      unreadScans.set(observed, unread = { ownNamespace: observed.ownNamespace, processes: [...observed.processes.filter(proc => {
         if (!proc.procDirectory) return true;
         try { fs.statSync(`${proc.procDirectory}/root`); return false; } catch { return true; }
-      }) });
+      }), ...observed.uninspectable ?? []] });
     }
     return unread;
   };
@@ -1195,11 +1240,13 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
   const strayHold = (root: TempSweepRoot, original: string, reachable: string, observed: ProcessScan): ReferenceHold | null => {
     const current = root.via ? reachable.slice(root.via.length) : reachable;
     const holds = pathHolds(root, original, current);
-    if (observed.processes.some(proc => processUsesTemp(proc, holds))) return "process_reference";
+    const refused = observed.uninspectable ?? [];
+    if ([...observed.processes, ...refused].some(proc => processUsesTemp(proc, holds))) return "process_reference";
     if (observed.unverified) return "process-scan-unverified";
     const protection = options.conversationProtection?.();
     if ((protection?.held ?? options.conversationCwds?.() ?? []).some(holds)) return "conversation_reference";
-    return reachedBy(root, observed, reachable, original, current);
+    return reachedBy(root, observed, reachable, original, current)
+      ?? (refused.some(proc => !UNINSPECTABLE_DAEMONS.has(proc.command)) ? "process-scan-unverified" : null);
   };
   const trashHolds = (root: TempSweepRoot, trash: string, original: string, bytes = 0, removalBegan = false) => {
     if (!namespaceStill(root.anchor, procRoot)) return true;
@@ -1486,6 +1533,7 @@ export async function sweepStaleTempDirs(options: TempSweepOptions): Promise<Tem
           removal.proof = { newestWriteAt: new Date(finalInspection.newestMs).toISOString(), entries: finalInspection.entries,
             uid, mode: (current.mode & 0o7777).toString(8), identity, processes: freshScan.processes.length,
             namespaces: new Set(freshScan.processes.map(proc => proc.namespace)).size,
+            uninspectable: freshScan.uninspectable?.length ?? 0,
             ...(ledger ? { ledger: { firstSeenAt: ledger.firstSeenAt, lastSeenAt: ledger.lastSeenAt, evidence: ledger.evidence } } : {}) };
           report.stray!.removed++;
           report.stray!.removedBytes += bytes;
