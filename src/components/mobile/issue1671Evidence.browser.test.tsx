@@ -68,6 +68,19 @@ describe("Claude native admission receipts on the phone", () => {
   }, 240_000);
 });
 
+describe("public provisioning step", () => {
+  browserTest("provisioning step and age fit the phone board", async () => {
+    const { captureProvisioningStepGeometry, ownedBrowserSocketEnvironment } = await import("@/components/kanban/issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const server = await chromium.launchServer({ headless: true, executablePath: process.env.CHROME_BIN, env: sockets.env, args: ["--no-sandbox"] });
+    const browser = await chromium.connect(server.wsEndpoint());
+    try {
+      expect(server.process().pid).toBeGreaterThan(0);
+      expect(await captureProvisioningStepGeometry(browser, path.join(process.env.LLV_EVIDENCE_DIR!, "provision-phone"), [390])).toBe(16);
+    } finally { await browser.close(); await server.close(); sockets.close(); }
+  }, 120_000);
+});
+
 describe("accepted queued creation continuity", () => {
   browserTest("real create, missing catalogs, reload and terminal readback on the phone", async () => {
     const { captureAcceptedCreation, ownedBrowserSocketEnvironment } = await import("@/components/kanban/issue1695BrowserHarness");

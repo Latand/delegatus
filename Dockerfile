@@ -174,6 +174,7 @@ COPY --from=build /app/.githooks/pre-push ./.githooks/pre-push
 COPY --from=build /app/vendor ./vendor
 COPY --from=build /app/scripts/runtime-host-viewer-adapter.ts ./scripts/runtime-host-viewer-adapter.ts
 COPY --from=build /app/scripts/runtime-host-healthcheck.ts ./scripts/runtime-host-healthcheck.ts
+COPY --from=build /app/scripts/verify-provisioning-release.mjs ./scripts/verify-provisioning-release.mjs
 COPY --from=build /app/scripts/gate-slot.sh /app/scripts/owned-runner.ts /app/scripts/cpu-admission.ts /app/scripts/cpu-admission-lock.ts /app/scripts/test-child-guardian.ts ./scripts/
 COPY --from=build /app/node_modules ./node_modules
 

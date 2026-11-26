@@ -3,7 +3,7 @@ import { spyOn } from "bun:test";
 import { CpuAdmissionQueue, CPU_QUEUE_SPACING_MS } from "@/lib/runtime/cpuAdmission";
 import { DEFAULT_CPU_PRESSURE_POLICY } from "@/lib/runtime/cpuPressure";
 import { currentOperationLease } from "@/lib/operationLease";
-import { FlowPipelineController } from "./controller";
+import { FLOW_PIPELINE_WATCHDOG_MS, FlowPipelineController } from "./controller";
 import { settlePipelineControllerJobs } from "./controllerJobs";
 import { tickPipelinesController } from "./controllerPass";
 import { requestPipelineTick } from "./controllerSignal";
@@ -510,3 +510,164 @@ async function auditColdProvisioning(admission: "direct" | "queued", base: "pinn
     fs.rmSync(f.root, { recursive: true, force: true });
   }
 }
+
+test.skipIf(process.env.LLV_WARM_PROVISION_CAMPAIGN !== "1")("seven-stage warm provisioning under state contention", () =>
+  withControllerAuditState(async () => {
+    const { h, git, repo, root } = await realWorktreeLane("warm-provision-campaign", BUILD_ONLY as never);
+    const job = await import("./provisioningJob").catch(() => null);
+    const { prepareLockedDependencies } = await import("./lockedDependencies");
+    const { removeProvisioningFixture, seedProvisioningPackage } = await import("../../../scripts/verify-provisioning-release.mjs");
+    const fixtureHold = latch();
+    const clocks: { step: string; status: string; since: number; at: number; deadline: number; reason?: string; finished?: number }[] = [];
+    const collisions: { plannedMs: number; grantedAt: number; heldMs: number }[] = [];
+    const wakes = new Set<ReturnType<typeof setTimeout>>();
+    let closeSupply: (() => Promise<void>) | undefined;
+    let unregister: (() => void) | undefined;
+    let watchdog: ReturnType<typeof setInterval> | undefined;
+    let ticking: Promise<void> | undefined;
+    let useRelease: Promise<void> | undefined;
+    let startAt = 0, firstChild: number | null = null, callbacks = 0, additions = 0, firstLostAt: number | null = null;
+    let applied = false, lossSeen = false;
+    const elapsed = () => Date.now() - startAt;
+    const interval = async (plannedMs: number) => {
+      const entered = latch();
+      const active = withPipelineMutation(async () => {
+        const grantedAt = elapsed(), start = performance.now();
+        entered.resolve();
+        await Bun.sleep(plannedMs);
+        collisions.push({ plannedMs, grantedAt, heldMs: performance.now() - start });
+      });
+      await until(Promise.race([entered.promise, active]), 5_000);
+      return active;
+    };
+    const layout = Array.from({ length: 7 }, (_, i) => ({
+      id: `step-${i + 1}`, kind: "run", role: { roleId: "builder" }, engine: "codex",
+      access: "read-write", prompt: "Return the fixture verdict for {{task}}.",
+      next: i < 6 ? `step-${i + 2}` : null,
+    })) as typeof BUILD_ONLY;
+    const controller = new FlowPipelineController({
+      tickPipelines: entries => tickPipelinesController(entries, h.ports),
+      scan: async () => ({ files: [], complete: false }), log: () => {},
+    });
+    try {
+      closeSupply = await seedProvisioningPackage(repo, root, process.env, process.execPath);
+      await git(repo, "add", ".");
+      await git(repo, "commit", "-m", "seven-stage warm fixture inputs");
+      await git(repo, "push", "origin", "main");
+      const sha = await git(repo, "rev-parse", "HEAD");
+      const warm = path.join(root, "warm-cache");
+      await git(repo, "worktree", "add", "-b", "fixture-warm-cache", warm, sha);
+      expect(await prepareLockedDependencies(warm, { repository: repo })).toBe(true);
+      const graph = fs.realpathSync(path.join(warm, "node_modules"));
+      const receiptPath = path.join(graph, "..", "installed.json");
+      const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+      const sample = loadPipelines()[0]!;
+      const peers = Array.from({ length: 27 }, (_, index) => {
+        const peer = structuredClone(sample);
+        const id = `warm-peer-${String(index).padStart(2, "0")}`;
+        Object.assign(peer, pipelineIdentity(id, id, repo), { id, task: id, state: index < 24 ? "needs_decision" : "paused",
+          pausedState: index < 24 ? null : "running", cursor: null, delivery: undefined });
+        peer.runs.forEach(run => { run.attempts = []; });
+        return peer;
+      });
+      savePipelines(peers);
+      h.ports.now = () => new Date().toISOString();
+      const legacyExec = h.ports.provisionExec!;
+      let target = "";
+      const holdFirst = async () => {
+        if (lossSeen) return;
+        lossSeen = true;
+        firstLostAt = elapsed();
+        await fixtureHold.promise;
+      };
+      if (job) {
+        delete h.ports.provisionExec;
+        h.ports.provisionToolchainReply = async (id, type) => {
+          if (id === target && type === "checkIgnoredModules") await holdFirst();
+        };
+        h.ports.observeProvisioningCheckpoint = (id, step, at) => {
+          if (id !== target || clocks.length >= 4096) return;
+          const last = clocks.at(-1);
+          if (last) last.finished = at - startAt;
+          if (step) clocks.push({ step: step.step, status: step.status, since: step.since - startAt,
+            at: at - startAt, deadline: step.deadlineAt - startAt, reason: step.reason });
+          if (!applied && step?.step === "applyingCheckout") {
+            applied = true;
+            useRelease = interval(445);
+            void useRelease.catch(() => {});
+          }
+        };
+      } else {
+        h.ports.provisionExec = async (command, args, cwd, signal, options) => {
+          const result = await legacyExec(command, args, cwd, signal, options);
+          if (command === "git" && args[0] === "worktree" && args[1] === "add") additions++;
+          if (command === "git" && args[0] === "check-ignore" && args.at(-1) === "node_modules") await holdFirst();
+          return result;
+        };
+      }
+      const admit = h.ports.spawnAgent;
+      h.ports.spawnAgent = async (input, reserve) => {
+        callbacks++;
+        const spawned = await admit(input, reserve);
+        const child = Bun.spawn([process.execPath, "-e", "console.log(Date.now())"], {
+          cwd: input.cwd, stdout: "pipe", stderr: "ignore", timeout: 3_000,
+        });
+        const [code, output] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+        expect(code).toBe(0);
+        firstChild = Number(output.trim()) - startAt;
+        return spawned;
+      };
+      const accepted = await createPipelineFromRequest({ task: "Recover a seven-stage warm checkout", repoDir: repo,
+        publication: "internal", stages: layout as never }, h.ports);
+      startAt = Date.now();
+      const lane = accepted.pipeline!;
+      target = lane.id;
+      unregister = registerPipelineTick(() => (ticking = controller.tick()));
+      h.ports.scheduleTick = delay => {
+        const timer = setTimeout(() => {
+          wakes.delete(timer);
+          requestPipelineTick();
+        }, delay);
+        wakes.add(timer);
+      };
+      watchdog = setInterval(requestPipelineTick, FLOW_PIPELINE_WATCHDOG_MS);
+      const initialCollisions = (async () => {
+        for (const delay of [13, 94, 209]) await interval(delay);
+      })();
+      void initialCollisions.catch(() => {});
+      const cpuStart = process.cpuUsage();
+      requestPipelineTick();
+      while (firstChild === null && elapsed() < 60_000) await Bun.sleep(20);
+      const last = await findControllerPipeline(lane.id);
+      const cpu = process.cpuUsage(cpuStart);
+      const cutoff = elapsed();
+      await initialCollisions;
+      await useRelease;
+      const matchingGraph = firstChild === null ? null : fs.realpathSync(path.join(lane.worktreeDir, "node_modules")) === graph;
+      console.log("warm-provision-sample " + JSON.stringify({
+        side: job ? "candidate" : "base", utc: new Date(startAt).toISOString(), firstChild, cutoff,
+        laneId: lane.id, firstLostAt, callbacks, nativeAdds: job ? undefined : additions, lanes: { decision: 24, paused: 3, stages: 7 },
+        seedReceiptBytes: fs.statSync(receiptPath).size, executables: receipt.executables?.length, cliLinks: receipt.cliLinks?.length,
+        lastStep: last?.provisioningJob?.step ?? null, lastState: last?.state ?? null,
+        controllerUserUs: cpu.user, controllerSystemUs: cpu.system, clocks, collisions, matchingGraph,
+      }));
+      expect(lossSeen).toBe(true);
+      if (job) {
+        expect(firstChild).not.toBeNull();
+        expect(firstChild!).toBeLessThan(60_000);
+        expect(callbacks).toBe(1);
+        expect(matchingGraph).toBe(true);
+      } else expect(firstChild).toBeNull();
+    } finally {
+      unregister?.();
+      clearInterval(watchdog);
+      for (const timer of wakes) clearTimeout(timer);
+      fixtureHold.resolve();
+      await ticking?.catch(() => {});
+      await job?.settleProvisioningJobsForTests();
+      await settlePipelineControllerJobs();
+      await settlePipelineStopReadLanes();
+      await closeSupply?.();
+      await removeProvisioningFixture(root);
+    }
+  }), 95_000);
