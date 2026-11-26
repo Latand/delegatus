@@ -11,11 +11,12 @@ const INSTALL_FILES = new Set<string>(["package.json", "bun.lock", "bun.lockb", 
 const MARKER = ".delegatus-install-receipt.json";
 const INTENT = ".delegatus-install-intent.json";
 const MAX_INPUT_BYTES = 8 * 1024 * 1024;
+const MAX_WORKSPACE_OUTPUT_ENTRIES = 200_000;
 type PrivateInstallDirectory = { claim: string; inputs: string; device: string; inode: string };
 export type PrivateInstallReceipt = PrivateInstallDirectory & { mode: "staged" | "handoff" | "in-place" | "copied"; workspaceDigest?: string };
 export type PrivateInstallIntent = PrivateInstallDirectory & { nonceDigest: string };
 export type PrivateInstallEffect = "private-scratch" | "private-install" | "private-marker" | "private-publish" | "private-cleanup"
-  | "private-copy" | "create-modules-directory" | "install-in-place";
+  | "private-copy" | "create-modules-directory" | "install-in-place" | "private-git-exclude";
 
 type PrivateInstallPorts = {
   beforeEffect(effect: PrivateInstallEffect): Promise<void>;
@@ -146,31 +147,129 @@ async function workspaceIdentity(member: string, parent: FileHandle, modules: Fi
   return [member, String(owner.dev), String(owner.ino), String(target.dev), String(target.ino), sha256(manifest)];
 }
 
+async function workspaceOutputDigest(member: string, parent: FileHandle, modules: FileHandle): Promise<string> {
+  const digest = createHash("sha256");
+  const root = descriptorPath(modules.fd);
+  const visit = async (directory: string, relative = "") => {
+    const names = (await fs.readdir(directory)).sort();
+    for (const name of names) {
+      const child = path.join(directory, name);
+      const childRelative = relative ? `${relative}/${name}` : name;
+      const stat = await fs.lstat(child, { bigint: true });
+      if (++entries > MAX_WORKSPACE_OUTPUT_ENTRIES) throw new UnverifiedPrivateInstall();
+      const type = stat.isDirectory() ? "d" : stat.isFile() ? "f" : stat.isSymbolicLink() ? "l" : "?";
+      const link = stat.isSymbolicLink() ? await fs.readlink(child) : null;
+      digest.update(JSON.stringify([childRelative, type, link]));
+      if (stat.isSymbolicLink()) {
+        const after = await entry(child);
+        if (after?.dev !== stat.dev || after.ino !== stat.ino) throw new UnverifiedPrivateInstall();
+      } else if (stat.isDirectory()) await visit(child, childRelative);
+      else if (!stat.isFile()) throw new UnverifiedPrivateInstall();
+    }
+  };
+  let entries = 0;
+  await visit(root);
+  return sha256(JSON.stringify([member, await workspaceIdentity(member, parent, modules), digest.digest("hex")]));
+}
+
+async function currentWorkspaceOutputDigest(checkout: string): Promise<string> {
+  const manifest = await fileBytes(path.join(checkout, "package.json"), MAX_INPUT_BYTES);
+  const identities: string[][] = [];
+  for (const member of await workspaceMembers(checkout, manifest.toString())) {
+    const parent = await openWorkspace(checkout, member);
+    try {
+      const target = path.join(descriptorPath(parent.fd), "node_modules");
+      const modules = await fs.open(target, directoryFlags);
+      try {
+        const output = await workspaceOutputDigest(member, parent, modules);
+        const current = await openWorkspace(checkout, member);
+        try {
+          if (!sameDirectory(await parent.stat({ bigint: true }), await current.stat({ bigint: true }))
+            || !sameDirectory(await modules.stat({ bigint: true }), await entry(target))) throw new UnverifiedPrivateInstall();
+        } finally { await current.close(); }
+        identities.push([member, output]);
+      } finally { await modules.close(); }
+    } finally { await parent.close(); }
+  }
+  return sha256(JSON.stringify(identities));
+}
+
 export async function verifyPrivateWorkspaceInstall(checkout: string, digest: string): Promise<boolean> {
   try {
+    return await currentWorkspaceOutputDigest(checkout) === digest;
+  } catch (error) {
+    if (error instanceof UnverifiedPrivateInstall || error instanceof SyntaxError || workspacePathChanged(error)) return false;
+    throw error;
+  }
+}
+
+async function verifyWorkspaceDirectories(checkout: string, expected: string[][]): Promise<boolean> {
+  try {
     const manifest = await fileBytes(path.join(checkout, "package.json"), MAX_INPUT_BYTES);
-    const identities: string[][] = [];
-    for (const member of await workspaceMembers(checkout, manifest.toString())) {
+    const members = await workspaceMembers(checkout, manifest.toString());
+    if (members.length !== expected.length) return false;
+    for (let index = 0; index < members.length; index++) {
+      const member = members[index]!;
       const parent = await openWorkspace(checkout, member);
       try {
         const target = path.join(descriptorPath(parent.fd), "node_modules");
         const modules = await fs.open(target, directoryFlags);
         try {
           const identity = await workspaceIdentity(member, parent, modules);
-          const current = await openWorkspace(checkout, member);
-          try {
-            if (!sameDirectory(await parent.stat({ bigint: true }), await current.stat({ bigint: true }))
-              || !sameDirectory(await modules.stat({ bigint: true }), await entry(target))) return false;
-          } finally { await current.close(); }
-          identities.push(identity);
+          if (JSON.stringify(identity) !== JSON.stringify(expected[index])) return false;
+          if (!sameDirectory(await modules.stat({ bigint: true }), await entry(target))) return false;
         } finally { await modules.close(); }
       } finally { await parent.close(); }
     }
-    return sha256(JSON.stringify(identities)) === digest;
+    return true;
   } catch (error) {
     if (error instanceof UnverifiedPrivateInstall || error instanceof SyntaxError || workspacePathChanged(error)) return false;
     throw error;
   }
+}
+
+async function workspaceExcludeFile(checkout: string): Promise<string> {
+  const dotGit = path.join(checkout, ".git");
+  const info = await fs.lstat(dotGit);
+  let gitDirectory: string;
+  if (info.isDirectory()) gitDirectory = dotGit;
+  else if (info.isFile()) {
+    const pointer = await fileBytes(dotGit, 4096);
+    const match = /^gitdir: (.+)\s*$/i.exec(pointer.toString());
+    if (!match) throw new UnverifiedPrivateInstall();
+    gitDirectory = path.resolve(checkout, match[1]!);
+  } else throw new UnverifiedPrivateInstall();
+  const commonFile = path.join(gitDirectory, "commondir");
+  const common = await entry(commonFile);
+  if (common) {
+    if (!common.isFile()) throw new UnverifiedPrivateInstall();
+    gitDirectory = path.resolve(gitDirectory, (await fileBytes(commonFile, 4096)).toString().trim());
+  }
+  const infoDirectory = path.join(gitDirectory, "info");
+  const infoStat = await entry(infoDirectory);
+  if (infoStat && !infoStat.isDirectory()) throw new UnverifiedPrivateInstall();
+  if (!infoStat) await fs.mkdir(infoDirectory, { mode: 0o700 });
+  return path.join(infoDirectory, "exclude");
+}
+
+async function ignoreWorkspaceModuleDirectories(checkout: string, members: string[], permit: (effect: PrivateInstallEffect) => Promise<void>): Promise<void> {
+  if (!members.length) return;
+  const file = await workspaceExcludeFile(checkout);
+  const patterns = members.map(member => `/${member}/node_modules/`);
+  let current = "";
+  try { current = (await fileBytes(file, 1024 * 1024)).toString(); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  const additions = patterns.filter(pattern => !current.split(/\r?\n/).includes(pattern));
+  if (!additions.length) return;
+  await permit("private-git-exclude");
+  const flags = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW;
+  const handle = await fs.open(file, flags, 0o600);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new UnverifiedPrivateInstall();
+    const prefix = stat.size === 0 ? "" : current.endsWith("\n") ? "" : "\n";
+    await handle.writeFile(`${prefix}${additions.join("\n")}\n`);
+  } finally { await handle.close(); }
 }
 
 async function bindWorkspaceModules(checkout: string, member: string, scratch: string, nonce: string,
@@ -462,6 +561,7 @@ async function installInPlace({ checkout, target, scratch, claim, manifest, inpu
 }): Promise<boolean> {
   if (original && (!prior || prior.inputs !== inputs || prior.device !== String(original.dev) || prior.inode !== String(original.ino))) return false;
   const members = await workspaceMembers(checkout, manifest);
+  await ignoreWorkspaceModuleDirectories(checkout, members, permit);
   let directoryFd: number | undefined;
   if (!original) {
     await permit("create-modules-directory");
@@ -523,8 +623,7 @@ async function installInPlace({ checkout, target, scratch, claim, manifest, inpu
       workspaces.push(binding.directory);
       identities.push(binding.identity);
     }
-    const workspaceDigest = members.length ? sha256(JSON.stringify(identities)) : undefined;
-    const workspacesMatch = () => workspaceDigest === undefined || verifyPrivateWorkspaceInstall(checkout, workspaceDigest);
+    const workspacesMatch = () => verifyWorkspaceDirectories(checkout, identities);
     const cache = await fs.open(scratch, directoryFlags);
     try {
       await permit("install-in-place");
@@ -534,6 +633,7 @@ async function installInPlace({ checkout, target, scratch, claim, manifest, inpu
         { NODE_ENV: "development", BUN_INSTALL_CACHE_DIR: path.join(scratch, "cache"), TMPDIR: scratch },
         { timeoutMs: budgetMs, inheritFd: boundDirectoryFd, additionalInheritedFds: [cache.fd, ...workspaces.map(directory => directory.fd)] });
       if (installed.code !== 0 || !sameDirectory(identity, await entry(target))) return false;
+      const workspaceDigest = members.length ? await currentWorkspaceOutputDigest(checkout) : undefined;
       const retained = JSON.parse((await fileBytes(path.join(anchored, INTENT), 4096)).toString());
       if (retained.claim !== intent!.claim || retained.nonce !== nonce) return false;
       await permit("private-marker");

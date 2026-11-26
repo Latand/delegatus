@@ -8,6 +8,7 @@ import { BUILD_ONLY, createPipelineFromRequest, expect, fs, path, realWorktreeLa
 import { latch, until, withControllerAuditState } from "./fixtures/ownedStageControl";
 import { findControllerPipeline, savePipelines, withPipelineMutation } from "./store";
 import { settleProvisioningJobsForTests } from "./provisioningJob";
+import { commitPipelineStage } from "./git";
 import { removeProvisioningFixture, seedProvisioningPackage } from "../../../scripts/verify-provisioning-release.mjs";
 
 async function driveProvisioning(ports: Parameters<typeof tickPipelinesController>[1], done: () => Promise<boolean>) {
@@ -1002,7 +1003,7 @@ linuxInstall.each([
   ["file", "unchanged"], ["workspace", "unchanged"], ["file", "replace-before-write"],
   ["file", "resume"], ["file", "replace-on-rerun"], ["file", "replace-during-write"], ["file", "replace-during-rerun"],
   ["workspace", "resume"], ["workspace", "replace-before-write"], ["workspace", "replace-during-write"],
-  ["workspace", "replace-before-apply"], ["workspace", "resume-after-receipt"],
+  ["workspace", "replace-before-apply"], ["workspace", "resume-after-receipt"], ["workspace", "remove-workspace-output"],
 ] as const)("the production %s install preserves checkout custody in %s", (inputKind, mode) =>
   withControllerAuditState(async () => {
     const { h, git, repo, root } = await realWorktreeLane("relative-install-custody", BUILD_ONLY as never);
@@ -1011,6 +1012,7 @@ linuxInstall.each([
     const during = mode === "replace-during-write" || mode === "replace-during-rerun";
     const beforeApply = mode === "replace-before-apply";
     const afterReceipt = mode === "resume-after-receipt";
+    const removeWorkspaceOutput = mode === "remove-workspace-output";
     const interrupted = afterReceipt || mode === "resume" || mode === "replace-on-rerun" || mode === "replace-during-rerun";
     const replaced = during || beforeApply || mode === "replace-before-write" || mode === "replace-on-rerun";
     let wall = Date.now(), monotonic = 0;
@@ -1043,7 +1045,7 @@ linuxInstall.each([
         dependencies: { ...(inputKind === "file" ? remote : {}), "fixture-local": inputKind === "file" ? "file:./packages/fixture" : "workspace:*" },
         ...(inputKind === "workspace" ? { workspaces: ["packages/*"] } : {}),
       }));
-      fs.appendFileSync(path.join(repo, ".gitignore"), "node_modules\n");
+      fs.appendFileSync(path.join(repo, ".gitignore"), "/node_modules/\n");
       const freeze = Bun.spawn([process.execPath, "--no-env-file", "install", "--lockfile-only", "--ignore-scripts"], {
         cwd: repo, env: packageEnv, stdout: "ignore", stderr: "pipe", timeout: 5_000,
       });
@@ -1087,6 +1089,8 @@ linuxInstall.each([
       };
       let foreignInode: bigint | undefined;
       let receiptHeld = false;
+      let retainedWorkspaceModulesInode: bigint | undefined;
+      const workspaceProbe = path.join(lane.worktreeDir, "packages", "fixture", "node_modules", ".receipt-probe");
       const replace = () => {
         fs.renameSync(target, target + ".previous");
         fs.mkdirSync(path.join(target, "fixture-local"), { recursive: true });
@@ -1100,6 +1104,10 @@ linuxInstall.each([
           await release.promise;
         }
         if (id === lane.id && type === "privateReceipt" && beforeApply) replace();
+        if (id === lane.id && type === "privateReceipt" && removeWorkspaceOutput && fs.existsSync(workspaceProbe)) {
+          retainedWorkspaceModulesInode = fs.statSync(target, { bigint: true }).ino;
+          fs.unlinkSync(workspaceProbe);
+        }
         if (id === lane.id && type === "ready" && inputKind === "file" && mode === "unchanged" && !unrelated) {
           unrelated = Bun.spawn(["python3", "-c",
             "import ctypes,sys; assert ctypes.CDLL(None).prctl(4,0,0,0,0)==0; print('ready',flush=True); sys.stdin.read(1)"],
@@ -1112,6 +1120,7 @@ linuxInstall.each([
         }
         if (id !== lane.id || type !== "dispatch" || effect !== "install-in-place") return;
         installs++;
+        if (removeWorkspaceOutput) fs.symlinkSync(root, workspaceProbe);
         if (interrupted && !afterReceipt && installs === 1) {
           firstPermit.resolve();
           await release.promise;
@@ -1149,13 +1158,32 @@ linuxInstall.each([
       });
       const row = (await findControllerPipeline(lane.id))!;
       const marker = path.join(rootModules, ".delegatus-install-receipt.json");
-      if (!replaced) {
+      if (!replaced && !removeWorkspaceOutput) {
         expect(row.state, row.stateDetail ?? "").toBe("running");
         expect(installs).toBe(interrupted && !afterReceipt ? 2 : 1);
         expect(launches).toBe(1);
         if (retainedInode !== undefined) expect(fs.statSync(target, { bigint: true }).ino).toBe(retainedInode);
         expect(fs.existsSync(marker)).toBe(true);
         expect(JSON.parse(fs.readFileSync(path.join(rootModules, "fixture-local", "package.json"), "utf8")).name).toBe("fixture-local");
+        expect((await git(lane.worktreeDir, "ls-files", "--others", "--exclude-standard", "-z")).trim()).toBe("");
+        if (inputKind === "workspace" && mode === "unchanged") {
+          const settledHead = await git(lane.worktreeDir, "rev-parse", "HEAD");
+          const readonly = await commitPipelineStage(lane, "read-only-fixture", false, h.ports.exec, [], settledHead.trim());
+          expect(readonly.ok, readonly.ok ? "" : readonly.error).toBe(true);
+          fs.writeFileSync(path.join(lane.worktreeDir, "stage-output.txt"), "stage output\n");
+          const writable = await commitPipelineStage(lane, "writable-fixture", true, h.ports.exec);
+          expect(writable.ok, writable.ok ? "" : writable.error).toBe(true);
+          const committed = await git(lane.worktreeDir, "show", "--format=", "--name-only", "HEAD");
+          expect(committed.trim()).toBe("stage-output.txt");
+          expect((await git(lane.worktreeDir, "ls-files", "--others", "--exclude-standard", "-z")).trim()).toBe("");
+        }
+      } else if (removeWorkspaceOutput) {
+        expect(row).toMatchObject({ state: "needs_decision", stateDetail: "private-install-unverified" });
+        expect(installs).toBe(1);
+        expect(launches).toBe(0);
+        expect(fs.existsSync(marker)).toBe(true);
+        expect(fs.statSync(target, { bigint: true }).ino).toBe(retainedWorkspaceModulesInode!);
+        expect(fs.existsSync(workspaceProbe)).toBe(false);
       } else {
         expect(row).toMatchObject({ state: "needs_decision", stateDetail: "private-install-unverified" });
         expect(installs).toBe(interrupted ? 2 : 1);
