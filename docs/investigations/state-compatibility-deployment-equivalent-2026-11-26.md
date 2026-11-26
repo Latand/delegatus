@@ -41,16 +41,19 @@ zero-added-load controls rather than an idle-host measurement.
 | 0 | Baseline | 40.4–47.2 | 167.36 | 169.62 |
 | 0 | Baseline | 35.4–36.1 | 149.56 | 151.85 |
 | 0 | Baseline | 40.7–44.5 | >170 | >170, no readiness |
-| 0 | Candidate | 40.9–41.3 | 12.35 | 15.75 |
 | 0 | Candidate | 35.4–35.4 | 10.61 | 12.94 |
 | 0 | Candidate | 32.9–34.3 | 16.06 | 19.91 |
 | 0 | Candidate | 33.2–34.4 | 8.55 | 10.03 |
 
-There were three baseline and four candidate zero-added-load boots. They used
-the identical fixture and interleaved order. The baseline's third run did not
-finish its compatibility phase or return readiness within the 170-second
-measurement window. All four candidate boots returned HTTP 200. The detailed
-per-step wall, CPU, runnable-wait and physical-read measurements are in the
+Three baseline and three candidate rows are shown; they use the identical
+fixture and the interleaved run order. The baseline's third run did not finish
+its compatibility phase or return readiness within the 170-second measurement
+window. All three shown candidate boots returned HTTP 200. One earlier
+zero-added-load candidate boot also returned HTTP 200 in 15.75 s (12.35 s in
+state compatibility), but its per-step output was overwritten by a reused
+runner filename and is excluded from the table and profile. A later unique run
+provided the third complete candidate profile. The detailed per-step wall,
+CPU, runnable-wait and physical-read measurements are in the
 [zero-added-load profile](state-compatibility-no-worker-profiles-2026-11-26.csv).
 Ambient host load means these rows do not represent a truly idle machine.
 
