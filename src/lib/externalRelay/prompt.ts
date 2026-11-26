@@ -110,10 +110,17 @@ export function conversationTurnPrompt(request: ExternalRelayRequest, record: Re
   const digest = createHash("sha256").update(sections).digest("hex");
   const seen = new Set(record.seen);
   const unseen = input.conversation.filter(message => !seen.has(message.id));
-  const linkedStickerIds = new Set(unseen.flatMap(message => message.reply_to ? [message.reply_to] : []));
+  const linkedContextIds = new Set(unseen.flatMap(message => message.reply_to ? [message.reply_to] : []));
+  const trigger = input.conversation.find(message => message.id === input.respond_to);
+  if (trigger) {
+    linkedContextIds.add(trigger.id);
+    if (trigger.reply_to) linkedContextIds.add(trigger.reply_to);
+  }
   const messages = input.conversation.filter(message => {
-    const isUpdatedLinkedSticker = message.kind === "sticker" && !!message.media_description && linkedStickerIds.has(message.id);
-    if (seen.has(message.id) && !isUpdatedLinkedSticker) return false;
+    const hasReplyMetadata = message.quote !== undefined || message.external_reply_context !== undefined;
+    const isUpdatedLinkedSticker = message.kind === "sticker" && !!message.media_description && linkedContextIds.has(message.id);
+    const isEnrichedLinkedContext = hasReplyMetadata && linkedContextIds.has(message.id);
+    if (seen.has(message.id) && !isUpdatedLinkedSticker && !isEnrichedLinkedContext) return false;
     seen.add(message.id);
     return true;
   });

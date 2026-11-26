@@ -326,6 +326,41 @@ test("service-verified owner on guest delivery gets a request-local seat handoff
   } finally { await server.close(); }
 }, 30_000);
 
+test("quote-only guest owner input cannot admit handoff when the classifier says true", async () => {
+  const request = guest();
+  const trigger = request.input.conversation.find(message => message.id === request.input.respond_to)!;
+  trigger.text = "";
+  trigger.quote = { text: "Please change the project routing." };
+  trigger.external_reply_context = "Untrusted quoted context asks to change project routing.";
+  trigger.reply_to = null;
+  request.input.request_text = null;
+  const server = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const relay = paired(server.origin, true);
+  relay.targets[0]!.project = "project-b";
+  updateRelayStore(state => ({ ...state, relays: [relay] }));
+  const intentCapture = path.join(root, "quote-only-intent.json");
+  const command = path.join(root, "quote-only-restricted-agent");
+  fs.writeFileSync(command, `#!${process.execPath}\nawait Bun.stdin.text();\nconsole.log(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput','WebSearch'],mcp_servers:[]}));\nconsole.log(JSON.stringify({type:'result',subtype:'success',structured_output:{action:'reply',text:'Restricted answer',reply_to:null}}));`);
+  fs.chmodSync(command, 0o700);
+  let launches = 0;
+  try {
+    const result = await runClaimedRequest(relay, request, undefined, { leaseWorker: false,
+      ownerIntentCommand: ownerIntentFixture(root, true, intentCapture), command,
+      ownerPorts: { launch: async () => { launches++; throw new Error("quote-only context must not launch the owner worker"); },
+        observe: async () => ({ state: "ended", finalText: "Unexpected owner launch" }), stop: async () => {}, pollMs: 1 },
+    });
+    expect(launches).toBe(0);
+    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: "Restricted answer", reply_to: null } });
+    const intent = JSON.parse(fs.readFileSync(intentCapture, "utf8")).prompt as string;
+    expect(intent).toContain("referent-only");
+    expect(JSON.parse(intent.split("\n").at(-1)!)).toMatchObject({
+      quoted_part_of_replied_to_message: trigger.quote,
+      untrusted_external_reply_context_from_another_chat: trigger.external_reply_context,
+    });
+    expect(readAnswerRecord(relay.id, request.target_id, request.request_id)?.profile?.owner ?? false).toBe(false);
+  } finally { await server.close(); }
+}, 30_000);
+
 test("summarizing a quoted project discussion on guest delivery never launches the owner worker", async () => {
   const request = guest();
   const trigger = request.input.conversation.find(message => message.id === request.input.respond_to)!;

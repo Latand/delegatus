@@ -115,7 +115,7 @@ const messageSchema = z.object({
   reply_to: id.nullable(),
   quote: z.object({
     text: boundedString(12000).refine(value => value.length > 0),
-    position: z.number().int().nonnegative().optional(),
+    position: z.number().min(0).refine(Number.isInteger).optional(),
   }).optional().catch(undefined),
   external_reply_context: boundedString(12000).optional().catch(undefined),
   kind: z.literal("sticker").optional().catch(undefined),

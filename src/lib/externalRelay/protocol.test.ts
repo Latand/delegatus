@@ -72,6 +72,8 @@ test("reply metadata is optional and each malformed field is discarded independe
   expect(parse({ ...row, quote, external_reply_context: longest })).toStrictEqual({ ...row, quote, external_reply_context: longest });
   const withoutPosition = { ...row, quote: { text: "Q" }, external_reply_context: "" };
   expect(parse(withoutPosition)).toStrictEqual(withoutPosition);
+  const firstAboveSafeInteger = { ...row, quote: { text: "Q", position: 9007199254740992 } };
+  expect(parse(firstAboveSafeInteger)).toStrictEqual(firstAboveSafeInteger);
   expect(parse(row)).toStrictEqual(row);
 
   for (const invalid of [null, "quote", {}, { text: 1 }, { text: "" }, { text: longest + "!" },

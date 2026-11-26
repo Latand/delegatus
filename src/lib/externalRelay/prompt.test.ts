@@ -324,6 +324,33 @@ test("a linked sticker refreshes its newly available description after its ID wa
     .toEqual([expect.objectContaining({ id: "legacy-followup" })]);
 });
 
+test("resumed turns re-emit enriched quote metadata on the trigger and explicit parent only", () => {
+  const request = requestSchema.parse(sampleRequest);
+  const template = request.input.conversation[0]!;
+  const parent = { ...template, id: "enriched-parent", text: "Earlier reply", reply_to: null,
+    quote: { text: "Earlier fragment", position: 9007199254740992 } };
+  const trigger = { ...template, id: "enriched-trigger", text: "Follow-up", reply_to: parent.id,
+    external_reply_context: "Untrusted outside context" };
+  const legacy = { ...template, id: "legacy-row", text: "Already delivered", reply_to: null };
+  const followup = { ...template, id: "later-followup", text: "Another question", reply_to: legacy.id };
+  const record = { seen: [parent.id, trigger.id, legacy.id], staticDigest: null } as unknown as RelayConversation;
+
+  request.input.respond_to = trigger.id;
+  request.input.conversation = [legacy, parent, trigger];
+  const resumed = conversationTurnPrompt(request, record, "[round]");
+  expect(section(resumed.prompt, "conversation")).toEqual([
+    expect.objectContaining({ id: parent.id, quoted_part_of_replied_to_message: parent.quote }),
+    expect.objectContaining({ id: trigger.id, untrusted_external_reply_context_from_another_chat: trigger.external_reply_context }),
+  ]);
+  expect(resumed.seen).toEqual(record.seen);
+
+  request.input.respond_to = followup.id;
+  request.input.conversation = [legacy, followup];
+  const legacyResume = conversationTurnPrompt(request, record, "[round]");
+  expect(section(legacyResume.prompt, "conversation")).toEqual([followup]);
+  expect(legacyResume.seen).toEqual([...record.seen, followup.id]);
+});
+
 test("negotiated conversation turns trust only the formatting section alongside the answer frame", () => {
   const request = richRequest();
   const record = { seen: [], staticDigest: null } as unknown as RelayConversation;
