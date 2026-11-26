@@ -212,12 +212,13 @@ test("seat delivery refusal leaves one card and a new claim retries the same dir
   const pending = await reply(original);
   expect(pending.text).toContain("unconfirmed");
   expect(newTasks()).toHaveLength(1);
+  if (!initial) throw new Error("Expected the first directive delivery attempt");
   const completed = await reply({ ...original, request_id: "retry-directive" });
   expect(completed.buttons).toEqual(pending.buttons);
   expect(newTasks()).toHaveLength(1);
   expect(directives).toHaveLength(1);
-  expect(directives[0]?.clientMessageId).toBe(initial?.clientMessageId);
-  expect(directives[0]?.text).toBe(initial?.text);
+  expect(directives[0]?.clientMessageId).toBe(initial.clientMessageId);
+  expect(directives[0]?.text).toBe(initial.text);
 });
 
 test("a claimed private task consumes live authorization after the heartbeat, with no access for a guest or anonymous author", async () => {
