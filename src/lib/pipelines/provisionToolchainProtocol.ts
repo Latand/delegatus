@@ -14,7 +14,7 @@ export function validCacheFence(value: unknown): value is DependencyCacheFence {
 
 export const PROVISION_FRAME_LIMIT = 4096;
 
-function validPrivateDirectory(value: unknown): value is Omit<PrivateInstallReceipt, "mode"> {
+function validPrivateDirectory(value: unknown): value is Pick<PrivateInstallReceipt, "claim" | "inputs" | "device" | "inode"> {
   if (!value || typeof value !== "object") return false;
   const row = value as Partial<PrivateInstallReceipt>;
   return typeof row.claim === "string" && /^[a-f0-9-]{36}$/.test(row.claim) && typeof row.inputs === "string" && /^[a-f0-9]{64}$/.test(row.inputs)
@@ -22,7 +22,10 @@ function validPrivateDirectory(value: unknown): value is Omit<PrivateInstallRece
 }
 
 export function validPrivateReceipt(value: unknown): value is PrivateInstallReceipt {
-  return validPrivateDirectory(value) && ["staged", "handoff", "in-place", "copied"].includes((value as PrivateInstallReceipt).mode);
+  if (!validPrivateDirectory(value)) return false;
+  const { mode, workspaceDigest } = value as PrivateInstallReceipt;
+  return ["staged", "handoff", "in-place", "copied"].includes(mode) && (workspaceDigest === undefined
+    || (mode === "in-place" && typeof workspaceDigest === "string" && /^[a-f0-9]{64}$/.test(workspaceDigest)));
 }
 
 export function validPrivateIntent(value: unknown): value is PrivateInstallIntent {

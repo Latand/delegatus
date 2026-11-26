@@ -170,12 +170,13 @@ export interface RuntimeHostClient {
   snapshotBytes?(signal?: AbortSignal, options?: { voiceBodiesFor?: string[]; timeoutMs?: number }): Promise<Uint8Array>;
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay>;
   waitEvents(after: number, timeoutMs?: number, signal?: AbortSignal): Promise<RuntimeReplay>;
+  append(event: RuntimeEventInput, authorize: () => void): Promise<unknown>;
   append(event: RuntimeEventInput): Promise<unknown>;
   /** The RPC itself requires the host's transactional session revision fence.
       An incumbent without that method refuses it; callers never retry append. */
-  appendSessionFenced?(event: RuntimeEventInput & { expectedSessionRevision: number }, options?: RuntimeReadOptions): Promise<unknown>;
+  appendSessionFenced?(event: RuntimeEventInput & { expectedSessionRevision: number | null }, options?: RuntimeReadOptions): Promise<unknown>;
   operation(event: RuntimeEventInput): Promise<unknown>;
-  command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult>;
+  command(command: RuntimeOperationCommand, authorizeBeforeWrite?: () => void, admissionDeadline?: number): Promise<RuntimeOperationResult>;
   operationStatus(operationId: string, options?: RuntimeReadOptions & { currentRetryLeaf?: boolean }): Promise<RuntimeOperationResult | null>;
   claimDeliveryAction(operationId: string, action: RuntimeDeliveryAction): Promise<RuntimeDeliveryActionClaim>;
   retryOperation(operationId: string, nextIdempotencyKey?: string, options?: RuntimeRetryOptions): Promise<RuntimeOperationResult>;
@@ -292,17 +293,26 @@ export class UnixRuntimeHostClient implements RuntimeHostClient {
   }
   events(after: number, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("events", { after }, this.timeoutMs, signal) as Promise<RuntimeReplay>; }
   waitEvents(after: number, timeoutMs = 15_000, signal?: AbortSignal): Promise<RuntimeReplay> { return this.call("wait", { after, timeoutMs }, timeoutMs + 1_000, signal) as Promise<RuntimeReplay>; }
-  append(event: RuntimeEventInput): Promise<unknown> { return this.call("append", { event }); }
-  appendSessionFenced(event: RuntimeEventInput & { expectedSessionRevision: number }, options: RuntimeReadOptions = {}): Promise<unknown> {
+  append(event: RuntimeEventInput, authorize?: () => void): Promise<unknown> {
+    return this.call("append", { event }, this.timeoutMs, undefined, false, authorize);
+  }
+  appendSessionFenced(event: RuntimeEventInput & { expectedSessionRevision: number | null }, options: RuntimeReadOptions = {}): Promise<unknown> {
     return this.call("append-session-fenced", { event }, options.timeoutMs ?? this.timeoutMs, options.signal);
   }
   operation(event: RuntimeEventInput): Promise<unknown> { return this.call("operation", { event }); }
-  command(command: RuntimeOperationCommand): Promise<RuntimeOperationResult> {
+  command(command: RuntimeOperationCommand, authorizeBeforeWrite?: () => void, admissionDeadline?: number): Promise<RuntimeOperationResult> {
     // Older hosts silently discard new command fields. A separate wire method
-    // makes them refuse recovery before admitting an unfenced operation.
+    // makes them refuse staged publication if they cannot enforce its cutoff.
     const guarded = command.kind === "send" && command.onlyIfIdle
       || command.kind === "kill" && command.providerRecovery;
-    return this.call(guarded ? "guarded-command" : "command", { command }) as Promise<RuntimeOperationResult>;
+    if (admissionDeadline !== undefined) {
+      if (command.kind !== "send" || !command.operationId?.startsWith("spawn_message_")
+        || !Number.isSafeInteger(admissionDeadline) || admissionDeadline < 0) {
+        throw new Error("staged launch command requires a first-message send and a valid admission deadline");
+      }
+      return this.call("staged-launch-command", { command, admissionDeadline }, this.timeoutMs, undefined, false, authorizeBeforeWrite) as Promise<RuntimeOperationResult>;
+    }
+    return this.call(guarded ? "guarded-command" : "command", { command }, this.timeoutMs, undefined, false, authorizeBeforeWrite) as Promise<RuntimeOperationResult>;
   }
   operationStatus(operationId: string, options: RuntimeReadOptions & { currentRetryLeaf?: boolean } = {}): Promise<RuntimeOperationResult | null> {
     return this.call("operation-status", {

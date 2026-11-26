@@ -275,6 +275,13 @@ export type PipelineAttemptDefinition = {
 
 export type PipelineGraphEditAction = "add-stage" | "remove-stage" | "reorder-stage" | "set-edge" | "override-stage";
 
+/** The actor role of a graph edit the controller makes without an operator request. */
+export const PIPELINE_CONTROLLER_ROLE = "pipeline-controller";
+
+/** Why the controller made a graph edit by itself. */
+export const PIPELINE_GRAPH_EDIT_CAUSES = ["codex-cybersecurity-refusal"] as const;
+export type PipelineGraphEditCause = typeof PIPELINE_GRAPH_EDIT_CAUSES[number];
+
 /** One accepted graph edit, as the pipeline's own journal keeps it. */
 export type PipelineGraphEdit = {
   /** Increments per pipeline, and keeps incrementing past trimmed entries. */
@@ -296,6 +303,9 @@ export type PipelineGraphEdit = {
   /** An account value explicitly set or cleared by this override. */
   accountOverride?: string | null;
   summary: string;
+  /** Set on a controller edit: the condition that made it. A record from a
+      later release can carry a cause this one does not name. */
+  cause?: PipelineGraphEditCause;
   runtimeSwitch?: { attempt: number; id: string };
 };
 
