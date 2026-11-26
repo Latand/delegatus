@@ -35,6 +35,11 @@ async function until(check: () => boolean, timeout = 5_000) {
   while (Date.now() < deadline) { if (check()) return; await Bun.sleep(20); }
   throw new Error("owned runner probe exceeded its bounded wait");
 }
+function publishedPid(marker: string): number | undefined {
+  if (!fs.existsSync(marker)) return;
+  const value = fs.readFileSync(marker, "utf8");
+  return /^\d+$/.test(value) ? Number(value) : undefined;
+}
 // Hide both systemd executables, or point the real client at an absent private
 // bus. Neither case changes the machine's manager or cgroup mount.
 function portableFixture(manager: "missing" | "unreachable") {
@@ -146,8 +151,8 @@ test("portable lifetime", async () => {
       if (!fs.existsSync(record)) throw new Error(diagnostic);
       owned = JSON.parse(fs.readFileSync(record, "utf8"));
       if (heldShutdown) {
-        expect(fs.existsSync(portableOwner)).toBe(true);
-        portableRunner = captureProcessIdentity(Number(fs.readFileSync(portableOwner, "utf8")));
+        await until(() => publishedPid(portableOwner) !== undefined);
+        portableRunner = captureProcessIdentity(publishedPid(portableOwner)!);
         expect(processIdentityStatus(portableRunner)).toBe("alive");
         expect(portableRunner.pid).not.toBe(runner.pid!);
       }
@@ -166,8 +171,8 @@ test("portable lifetime", async () => {
         expect(fs.existsSync(shutdownTail)).toBe(false);
         expect(closed).toBe(false);
         fs.writeFileSync(shutdownRelease, "publish");
-        await until(() => fs.existsSync(shutdownTail), 5_000);
-        expect(fs.readFileSync(shutdownTail, "utf8")).toBe(String(portableRunner!.pid));
+        await until(() => publishedPid(shutdownTail) !== undefined, 5_000);
+        expect(publishedPid(shutdownTail)).toBe(portableRunner!.pid);
       }
       // On SIGKILL, exit only accounts for the dispatcher. Close also waits
       // for the runner and guardians that inherited its diagnostic pipe.
