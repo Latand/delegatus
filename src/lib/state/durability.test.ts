@@ -180,7 +180,7 @@ test("agent registry quick_check leaves logical index damage for backup integrit
   healthy.exec("CREATE TABLE registry_meta(key TEXT PRIMARY KEY, value TEXT); CREATE TABLE retained(value TEXT); CREATE INDEX retained_value ON retained(value)");
   healthy.query("INSERT INTO registry_meta VALUES (?, ?)").run("revision", "1");
   healthy.query("INSERT INTO retained VALUES (?)").run("indexed-key");
-  const page = Number(healthy.query<{ pageno: number }, [string]>("SELECT pageno FROM dbstat WHERE name = ?").get("retained_value")?.pageno);
+  const page = Number(healthy.query<{ rootpage: number }, [string]>("SELECT rootpage FROM sqlite_master WHERE name = ?").get("retained_value")?.rootpage);
   const pageSize = Number(healthy.query<{ page_size: number }, []>("PRAGMA page_size").get()?.page_size);
   healthy.close();
 
