@@ -1,5 +1,7 @@
 "use client";
 
+import { SecretRequestAttentionRow } from "@/components/decisions/SecretRequestCard";
+
 import { ChevronDown, ChevronRight, MessageCircleQuestionMark, GalleryHorizontalEnd, PanelRight, PictureInPicture2, TriangleAlert, Undo2, X } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
 
@@ -303,6 +305,7 @@ function NeedsYouRow({ entry, pipelines, focused, onOpen, onDismiss }: {
   const { t } = useLocale();
   if (entry.kind === "update") return <AutoDrainDecision key={entry.decision.id} decision={entry.decision} />;
   if (entry.kind === "prototype") return <PrototypeRow entry={entry} onOpen={onOpen} />;
+  if (entry.kind === "secret-request") return <SecretRequestAttentionRow notice={entry.notice} onOpen={onOpen} />;
   const role = needsYouEntryRole(entry, pipelines);
   const since = needsYouEntrySince(entry);
   const { title, line, question, options, recommended } = needsYouRowText(t, entry);

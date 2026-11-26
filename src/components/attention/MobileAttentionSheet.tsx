@@ -1,5 +1,8 @@
 "use client";
 
+import { SecretRequestAttentionRow } from "@/components/decisions/SecretRequestCard";
+import { openOperatorDecisions } from "@/components/decisions/decisionSurface";
+
 import { Filter, MessageCircleQuestionMark, GalleryHorizontalEnd, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -142,6 +145,11 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
   const open = (entry: MobileAttentionEntry) => {
     if (entry.kind === "update") { openSelfUpdate(); return; }
     if (entry.kind === "prototype") { onOpenPrototype?.(entry.notice); return; }
+    if (entry.kind === "secret-request") {
+      onClose();
+      openOperatorDecisions({ project: entry.notice.project, reviewId: entry.notice.id });
+      return;
+    }
     if (entry.kind === "conversation") onOpenConversation(entry.item);
     else onOpenPipeline?.(entry.row);
   };
@@ -159,7 +167,8 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
     const since = needsYouEntrySince(entry);
     return since === null ? (entry.kind === "pipeline" ? entry.row.seconds : null) : Math.max(0, now - since);
   };
-  const rowTitle = (entry: MobileAttentionEntry) => (entry.kind === "update" ? t("selfUpdate.auto.decision.title") : entry.kind === "prototype" ? entry.notice.title : entry.kind === "conversation" ? cleanTitle(entry.item.file.title, 90) : entry.row.task);
+  const rowTitle = (entry: Extract<MobileAttentionEntry, { kind: "conversation" | "pipeline" }>) =>
+    entry.kind === "conversation" ? cleanTitle(entry.item.file.title, 90) : entry.row.task;
   const sections = needsYouSections(entries, current, order);
   const titled = sections.length > 1;
   const dismissible = needsYouDismissibleCount(entries);
@@ -168,6 +177,7 @@ export function MobileAttentionSheet({ entries, now, onOpenConversation, onOpenP
   const row = (entry: MobileAttentionEntry) => {
     // The card keeps the sheet's content gutter; a bare card ran edge to edge.
     if (entry.kind === "update") return <div key={entry.id} className="px-4 py-1"><AutoDrainDecision key={entry.decision.id} decision={entry.decision} /></div>;
+    if (entry.kind === "secret-request") return <SecretRequestAttentionRow key={entry.id} notice={entry.notice} onOpen={() => open(entry)} />;
     /* A prototype review leaves the list by its choice, so the row has no «Dismiss». */
     /* Its chevron stands in the same column as theirs: an unseen «Dismiss»
        holds the place the others give to the real one. */

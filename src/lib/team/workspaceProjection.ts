@@ -31,6 +31,7 @@ export function workspaceFiles(scope: Scope, source: FilesResponse): FilesRespon
     conversationAliases: Object.fromEntries(Object.entries(source.conversationAliases ?? {}).filter(([, to]) => ids.has(to))),
     launchRoutes: Object.fromEntries(Object.entries(source.launchRoutes ?? {}).filter(([, to]) => ids.has(to))),
     prototypeReviewNotices: source.prototypeReviewNotices?.filter(row => row.taskId !== null && taskIds.has(row.taskId)),
+    // Secret request notices stay on the owner board, even for shared projects.
     seatDecisions: source.seatDecisions?.filter(row => allowed(row.project)),
     systemHealth: {},
     ...(source.readProjection ? { readProjection: source.readProjection } : {}),

@@ -31,6 +31,7 @@ import type { FileEntry } from "@/lib/types";
 
 import { advanceAttentionCycle, attentionExpiries, attentionId, type AttentionItem } from "./attention";
 import { AttentionHost } from "./attention/AttentionHost";
+import { openOperatorDecisions } from "./decisions/decisionSurface";
 import { PrototypeReviewHost } from "./prototypeReview/PrototypeReviewHost";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
@@ -288,7 +289,7 @@ function ViewerApp() {
   /* The link that has waited long enough to be announced, held by identity: a
      new link starts its own wait. */
   const [pendingNoticeFor, setPendingNoticeFor] = useState<ConversationHash | null>(null);
-  const { systemHealth, files: polledFiles, pinOverlayPaths, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, archivedProjects: serverArchivedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks: polledTasks, seatDecisions, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, retainedCatalogPin(catalogPin), wantsHashPin));
+  const { systemHealth, files: polledFiles, pinOverlayPaths, requestScope, projectCatalog: polledProjectCatalog, projectAliases, projectDisplayNames: polledProjectDisplayNames, crownedProjects: serverCrownedProjects, archivedProjects: serverArchivedProjects, projectCwds, flows: polledFlows, pipelines: polledPipelines, pipelinesError, workflows, tasks: polledTasks, seatDecisions, secretRequestNotices, conversationAliases, launchRoutes, workLinks, loaded, cached = false, scopeCertified, catalogFailures, failingSince, lastSuccessAt } = useFiles(project, filesRequestPin(pendingHash, retainedCatalogPin(catalogPin), wantsHashPin));
   /* A dismissal is drawn the moment a card's Dismiss is clicked: layered over
      the polled rows here, the one place they are read, so the cards, the
      phone's ⚠ count and the queue stop flagging it in the same frame
@@ -1115,7 +1116,7 @@ function ViewerApp() {
     }
     publishBlockerNames({ projects: projectDisplayNames, conversations, tasks: taskTitles, cards });
   }, [updateBlockers, updateDecision, wantedNames, allFiles, tasks, projectDisplayNames]);
-  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions), [files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions]);
+  const needsYou = useMemo(() => buildNeedsYouQueue(files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions, secretRequestNotices), [files, pipelines, clock, closingPipelines, updateDecision, tasks, seatDecisions, secretRequestNotices]);
   /* «Готово» (docs/design/done-section.md §5): finished work still waiting to
      be accepted counts with the decisions on the header, the panel, the tab
      title and the phone's badge, until it is accepted. The rail's ⏸, «Dismiss
@@ -1524,6 +1525,7 @@ function ViewerApp() {
     (entry: MobileAttentionEntry) => {
       if (entry.kind === "update") { openSelfUpdate(); return; }
       if (entry.kind === "prototype") { openPrototypeEntry(entry.notice); return; }
+      if (entry.kind === "secret-request") { openOperatorDecisions({ project: entry.notice.project, reviewId: entry.id }); return; }
       if (entry.kind === "conversation") {
         if (entry.item.project !== project) applyProject(entry.item.project);
         requestFocus(entry.item.file.path);
@@ -2074,7 +2076,7 @@ function ViewerApp() {
         onOpen={openCaptionTarget}
       />
       {/* A task's prototype review, opened from its card or from the orchestrator's notice. */}
-      <PrototypeReviewHost tasks={tasks} seatDecisions={seatDecisions} />
+      <PrototypeReviewHost tasks={tasks} seatDecisions={seatDecisions} secretRequestNotices={secretRequestNotices} />
       {/* #1054: the global "find my messages" palette. Mounted here so one
           surface serves every board and both form factors; it renders nothing
           until the header button or `/` opens it, and a selected row leaves

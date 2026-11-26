@@ -749,6 +749,130 @@ export async function openFixture(
   return { context, page, pageErrors };
 }
 
+export async function captureSecretRequestCards(browser: Browser, out: string, phone: boolean) {
+  fs.mkdirSync(out, { recursive: true });
+  const bundle = fs.mkdtempSync(path.join(process.cwd(), ".secret-request-fixture-"));
+  const server = await serveEvidenceFixture(bundle);
+  const readings: unknown[] = [];
+  const failures: string[] = [];
+  const envId = `sr_${"2".repeat(32)}`;
+  const dummy = "demo-value-only";
+  const changedPath = "/workspace/atlas/integrations/report-service/local/.env";
+  try {
+    for (const width of phone ? [390] : [800, 1440]) {
+      for (const language of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const tag = `${width}-${language}-${scheme}`;
+        const fixture = `${server.base}?decisions=secrets&lang=${language}`;
+        const { context, page, pageErrors } = await openFixture(browser, fixture, { width, height: phone ? 844 : 900 }, scheme,
+          language, "reduce", phone, 1, new Date("2026-11-26T18:00:00Z"));
+        const frame = (name: string) => page.screenshot({ path: path.join(out, `${tag}-${name}.png`) });
+        const strip = page.locator('[data-decision-strip="3"]');
+        try {
+          if (phone) await page.locator("[data-mobile2-seat-open]").click();
+          else {
+            const seat = page.locator("[data-kanban-seat]");
+            await seat.waitFor();
+            for (let index = 0; index < 3 && await page.locator("[data-attention-toast-dismiss]").count(); index++) {
+              await page.locator("[data-attention-toast-dismiss]").first().click();
+            }
+            if (await seat.getAttribute("data-collapsed") === "1") await seat.locator("[data-seat-collapse]").click();
+            await page.locator('[data-decision-strip="3"], [data-decision-tab-count="3"]').first().waitFor();
+            if (!await strip.isVisible()) await page.locator('[data-report-log-toggle="open"]').click();
+          }
+          await strip.waitFor();
+          expect((await strip.textContent())?.trim()).toBe(translate(language, "decisions.waiting", { count: 3 }));
+          await frame("01-strip");
+          await strip.click();
+          const scope = page.locator(phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]');
+          const card = scope.locator("[data-secret-request]");
+          const field = card.locator("input");
+          const save = card.locator("[data-secret-save]");
+          const geometry = async (state: string) => {
+            await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+            const reading = await card.evaluate(node => {
+              const boundary = node.closest("[data-decision-list]")!.getBoundingClientRect();
+              const box = node.getBoundingClientRect();
+              const decline = node.parentElement!.querySelector("[data-secret-decline]")!.getBoundingClientRect();
+              const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+              let clipped = 0;
+              for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                if (!text.textContent?.trim()) continue;
+                const range = document.createRange();
+                range.selectNode(text);
+                for (const line of range.getClientRects()) {
+                  if (line.left < box.left - 1 || line.right > box.right + 1) clipped++;
+                }
+              }
+              return { width: box.width, height: box.height, clipped, overflow: node.scrollWidth - node.clientWidth,
+                top: box.top, declineBottom: decline.bottom, listTop: boundary.top, listBottom: boundary.bottom,
+                actionsVisible: box.top >= boundary.top - 1 && decline.bottom <= Math.min(boundary.bottom, innerHeight) + 1 };
+            });
+            readings.push({ tag, state, ...reading });
+            expect(reading.clipped).toBe(0);
+            expect(reading.overflow).toBeLessThanOrEqual(1);
+            expect(reading.actionsVisible, JSON.stringify({ tag, state, ...reading })).toBe(true);
+          };
+          await card.waitFor();
+          expect(await card.getAttribute("data-secret-request")).toBe(`sr_${"1".repeat(32)}`);
+          expect(await scope.locator("[data-decision-tab-count]").textContent()).toBe("3");
+          await geometry("file");
+          await frame("02-file");
+          await scope.locator(`[data-decision-row="${envId}"]`).click();
+          await scope.locator(`[data-secret-request="${envId}"]`).waitFor();
+          await geometry("env");
+          await frame("03-env");
+          await field.fill(dummy);
+          await card.locator('button[aria-pressed="false"]').click();
+          expect(await field.getAttribute("type")).toBe("text");
+          await frame("04-revealed-demo");
+
+          const received = Promise.withResolvers<{ type: string | undefined; revision: string | undefined; intact: boolean }>();
+          const respond = Promise.withResolvers<void>();
+          await page.route(`**/api/secret-requests/${envId}/value`, async route => {
+            const request = route.request();
+            received.resolve({ type: request.headers()["content-type"], revision: request.headers()["x-llv-secret-revision"],
+              intact: request.postDataBuffer()?.equals(Buffer.from(dummy)) ?? false });
+            await respond.promise;
+            await route.fulfill({ status: 409, json: { code: "secret_destination_changed", secretRequests: await page.evaluate(async () => {
+              window.dispatchEvent(new Event("fixture-secret-destination-changed"));
+              const response = await fetch("/api/projects/decisions?project=atlas");
+              return (await response.json()).secretRequests;
+            }) } });
+          });
+          try {
+            await save.click();
+            expect(await received.promise).toEqual({ type: "application/octet-stream", revision: "b".repeat(64), intact: true });
+            expect(await field.inputValue()).toBe("");
+            expect(await field.getAttribute("type")).toBe("password");
+            expect(await save.isDisabled()).toBe(true);
+            await frame("05-saving");
+          } finally { respond.resolve(); }
+          await card.getByRole("alert").waitFor();
+          expect(await card.locator("[data-secret-destination]").textContent()).toBe(changedPath);
+          expect(await field.inputValue()).toBe("");
+          expect((await card.innerHTML()).includes(dummy)).toBe(false);
+          await geometry("refused");
+          await frame("06-refused");
+          expect(pageErrors).toEqual([]);
+          if (language === "en" && scheme === "light") {
+            await page.goto(`${fixture}&project=atlas&secretRequest=${envId}`);
+            await page.locator(`[data-secret-request="${envId}"] input[type="password"]`).waitFor();
+          }
+        } catch (error) {
+          await frame("failed").catch(() => {});
+          failures.push(`${tag}: ${error instanceof Error ? error.message : String(error)}`);
+        } finally { await context.close(); }
+      }
+    }
+    fs.writeFileSync(path.join(out, `${phone ? "phone" : "desktop"}-geometry.json`), JSON.stringify(readings, null, 2) + "\n");
+    expect(failures, failures.join("\n")).toEqual([]);
+    return readings.length;
+  } finally {
+    server.stop();
+    fs.rmSync(bundle, { recursive: true, force: true });
+  }
+}
+
 /** Finished-frame lifetime, shared by the existing board and phone drivers.
  * Serve the real state copy after deleting this case's capture directory. */
 export async function captureDoneFrames(browser: Browser, phone: boolean) {

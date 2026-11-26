@@ -125,7 +125,7 @@ export function findWalkAnchor(stop: WalkStop, root: ParentNode = document): HTM
   const all = [...root.querySelectorAll<HTMLElement>(`[data-walk-anchor="${ANCHOR[stop]}"]`)];
   const anchor = all.find(visible) ?? null;
   if (!anchor || stop !== 1) return anchor;
-  const composer = anchor.querySelector<HTMLElement>("[data-orchestrator-conversation] form");
+  const composer = anchor.querySelector<HTMLElement>("[data-orchestrator-conversation] > form");
   return composer && visible(composer) ? composer : anchor;
 }
 

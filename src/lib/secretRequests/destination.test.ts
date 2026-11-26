@@ -224,3 +224,26 @@ test("refuses a path tracked by an enclosing worktree behind a nested repository
   project = projectForCwd(folder)!;
   await rejects(entry, "secret_destination_tracked", true);
 });
+
+test("on Darwin an enclosing index vetoes a nested dotenv case alias regardless of core.ignorecase", async () => {
+  git("init");
+  git("config", "core.ignorecase", "false");
+  const inner = path.join(folder, "inner");
+  fs.mkdirSync(inner);
+  fs.writeFileSync(path.join(inner, ".ENV"), "NAME=original\n");
+  git("add", "--", "inner/.ENV");
+  git("-C", inner, "init");
+  git("-C", inner, "config", "core.ignorecase", "true");
+  fs.writeFileSync(path.join(inner, ".gitignore"), ".env\n");
+  resetProjectDirectoryCacheForTests();
+  project = projectForCwd(folder)!;
+
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
+  try {
+    await expect(resolveSecretDestination(project, { kind: "env", path: path.join(inner, ".env"), key: "NAME" }))
+      .rejects.toMatchObject({ code: "secret_destination_tracked" });
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
+});

@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -72,6 +73,13 @@ async function readPayload(route: string, init: RequestInit = {}, status = 200, 
   return { response, body };
 }
 
+async function ownerBrowserHeaders() {
+  const navigation = await readPayload("/", { headers: { accept: "text/html" } }, 200, "text/html");
+  const cookie = navigation.response.headers.getSetCookie().find(value => value.startsWith("llv_operator="))?.split(";", 1)[0];
+  if (!cookie) throw new Error("The built Viewer did not open an operator browser session");
+  return { origin, cookie, "sec-fetch-site": "same-origin" };
+}
+
 function assertNoCredentials(body: string): void {
   if (!spawnCapability) throw new Error("the built server did not create its agent capability");
   if (body.includes(spawnCapability)) throw new Error("served payload contains the agent capability");
@@ -142,6 +150,7 @@ beforeAll(async () => {
       NEXT_TELEMETRY_DISABLED: "1",
       PORT: String(port),
       LLV_STATE_DIR: stateDir,
+      LLV_SECRET_ROOTS: path.join(sandbox, "project"),
       HOME: sandbox,
       XDG_CONFIG_HOME: path.join(sandbox, ".config"),
       TMPDIR: sandbox,
@@ -267,7 +276,7 @@ test("the built «Keys» routes answer the list without a value, and a value onl
   /* docs/design/keys-settings.md §9: the list carries masked values for the page and nothing for any other caller.
      Without a build there is no server to ask; «the production build exists» above is the test that fails for it. */
   if (!built) return;
-  const page = { origin, "sec-fetch-site": "same-origin", "content-type": "application/json" };
+  const page = { ...await ownerBrowserHeaders(), "content-type": "application/json" };
   const { body: plainText } = await readPayload("/api/keys");
   assertNoCredentials(plainText);
   expect(JSON.parse(plainText)).toMatchObject({ owner: false, keys: expect.arrayContaining([{ id: "openrouter", variable: "OPENROUTER_API_KEY", source: "file", masked: null }]) });
@@ -300,3 +309,51 @@ test("the retired legacy orchestrator route is absent from the real build", asyn
   const { body: status } = await readPayload("/api/orchestrator", { headers: { origin, "sec-fetch-site": "same-origin" } }, 404, "text/html");
   assertNoCredentials(status);
 });
+
+test("the built Decisions and board routes withhold request details and never carry an entered value", async () => {
+  if (!built) return;
+  const project = "secret-fixture";
+  const directory = path.join(sandbox, "project");
+  const destination = path.join(directory, "entry");
+  fs.mkdirSync(directory);
+  const original = [process.env.LLV_STATE_DIR, process.env.LLV_SECRET_ROOTS];
+  process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+  process.env.LLV_SECRET_ROOTS = directory;
+  const { createSecretRequest } = await import("@/lib/secretRequests/store");
+  const canary = randomBytes(24).toString("hex");
+  let request;
+  try {
+    request = await createSecretRequest({ project, requester: {
+      conversationId: "fixture-seat", role: "orchestrator", title: "Fixture seat", engine: "codex", model: null,
+      seat: { conversationId: "fixture-seat", title: "Fixture seat" },
+    } }, { clientRequestId: "fixture-entry", purpose: "Provision this fixture", destination: { kind: "file", path: destination } });
+  } finally {
+    (["LLV_STATE_DIR", "LLV_SECRET_ROOTS"] as const).forEach((key, index) => {
+      if (original[index] === undefined) delete process.env[key];
+      else process.env[key] = original[index];
+    });
+  }
+  const owner = await ownerBrowserHeaders();
+  const decisions = `/api/projects/decisions?project=${project}`;
+  expect(JSON.parse((await readPayload(decisions)).body)).not.toHaveProperty("secretRequests");
+  const pending = await readPayload(decisions, { headers: owner });
+  expect(JSON.parse(pending.body)).toMatchObject({ secretRequests: [{ id: request.id, destination: { path: destination } }] });
+  const board = "/api/files?view=summary";
+  const displayed = await readPayload(board, { headers: owner });
+  expect(JSON.parse(displayed.body).secretRequestNotices).toEqual([{ id: request.id, project, createdAt: request.createdAt, expiresAt: request.expiresAt }]);
+  const bootstrap = path.join(sandbox, "state", "board-summary-bootstrap.bin");
+  if (fs.existsSync(bootstrap)) expect(fs.readFileSync(bootstrap).includes(request.id)).toBe(false);
+  const publicBoard = await readPayload(board, { headers: { "if-none-match": displayed.response.headers.get("etag")! } });
+  expect(JSON.parse(publicBoard.body)).not.toHaveProperty("secretRequestNotices");
+  const saved = await readPayload(`/api/secret-requests/${request.id}/value`, {
+    method: "POST", body: Buffer.from(canary), headers: { ...owner,
+      "content-type": "application/octet-stream", "x-llv-secret-revision": request.destinationRevision },
+  });
+  const after = await readPayload(decisions, { headers: owner });
+  for (const { body } of [saved, after]) {
+    expect(body.includes(canary)).toBe(false);
+    expect(JSON.parse(body)).toMatchObject({ secretRequests: [] });
+  }
+  expect(fs.readFileSync(destination).includes(canary)).toBe(true);
+  expect(JSON.parse((await readPayload(board, { headers: owner })).body)).not.toHaveProperty("secretRequestNotices");
+}, 45_000);

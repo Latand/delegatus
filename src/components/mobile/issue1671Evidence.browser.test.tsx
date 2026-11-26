@@ -15889,3 +15889,15 @@ describe("ChatGPT plan settings", () => {
     await captureChatGPTPlanFrames(true);
   }, 300_000);
 });
+
+describe("secure secret input slice 2", () => {
+  browserTest("renders and submits the secret request through the phone Decisions sheet", async () => {
+    const { captureSecretRequestCards, ownedBrowserSocketEnvironment } = await import("@/components/kanban/issue1695BrowserHarness");
+    const sockets = ownedBrowserSocketEnvironment();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, env: sockets.env, args: ["--no-sandbox"] });
+    try {
+      const out = path.join(process.env.LLV_EVIDENCE_DIR ?? ".artifacts", "secret-input-slice2");
+      expect(await captureSecretRequestCards(browser, out, true)).toBe(12);
+    } finally { await browser.close(); sockets.close(); }
+  }, 240_000);
+});
