@@ -121,3 +121,21 @@ test.each(["transcript", "launch", "message", "report-admission"] as const)("con
   expect(await f.report()).toMatchObject({ code: "STAGE_REPORT_SETTLED" });
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.report).toBeUndefined();
 });
+
+test("receipt-only stage report cannot undo an operator pause during recovery", async () => {
+  const f = await confirmationPark();
+  f.delivered();
+  const read = f.h.ports.durableTurnEvidence;
+  let reads = 0;
+  f.h.ports.durableTurnEvidence = async (...args) => {
+    const evidence = await read(...args);
+    if (++reads === 2) {
+      const paused = await engineModule.patchPipeline(loadPipelines()[0]!.id, { action: "pause" }, f.h.ports, { kind: "operator" });
+      expect(paused.error).toBeUndefined();
+    }
+    return evidence;
+  };
+  expect(await f.report()).toMatchObject({ code: "STAGE_REPORT_SETTLED" });
+  expect(loadPipelines()[0]).toMatchObject({ state: "paused" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.report).toBeUndefined();
+});

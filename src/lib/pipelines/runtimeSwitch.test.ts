@@ -2697,6 +2697,27 @@ test("#3976: a turn ending before its tier cut settles from its original complet
   expect(h.continuations).toHaveLength(0);
 });
 
+test("#3976: a report accepted before a native cut cannot settle the continuation", async () => {
+  const h = await inPlaceHarness();
+  h.answer("armed");
+  await h.request({ applyNowCut: "boundary" });
+  await tickPipelines([], h.ports);
+  expect(await reportStageCompletion({ verdict: "pass", summary: "Completed before the cut" },
+    { kind: "agent", role: "builder", conversationId: STAGE_CONVERSATION }, h.ports)).toMatchObject({ report: { verdict: { status: "pass" } } });
+  h.advance(2000);
+  h.cutState("cut");
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.continuations).toHaveLength(1);
+  const afterCut = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(afterCut.state).toBe("running");
+  expect(afterCut.verdict).toBeNull();
+  h.setTurn({ turn: "terminal", message: null, lastRecordAt: h.wallClock() + 1 });
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.verdict).toBeNull();
+});
+
 test.each(["fresh", "legacy", "legacy with a later cut"] as const)("#3976: retained uncut tier settlement (%s)", async shape => {
   const h = await inPlaceHarness();
   h.answer("armed");

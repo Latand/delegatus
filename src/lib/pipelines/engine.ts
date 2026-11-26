@@ -3715,7 +3715,10 @@ function providerAccountRecovered(pipeline: Pipeline, attempt: PipelineStageAtte
 }
 
 function reportTurnFinished(attempt: PipelineStageAttempt, durable: StageTurnEvidence | null | undefined): boolean {
-  return Boolean(attempt.report && durable?.turn === "terminal"
+  const reportAt = Date.parse(attempt.report?.at ?? "");
+  const crossedCut = (attempt.runtimeSwitches ?? []).some(record => record.cutAt && Date.parse(record.cutAt) > reportAt);
+  return Boolean(attempt.report && !crossedCut
+    && durable?.turn === "terminal"
     && (durable.lastRecordAt ?? durable.terminalProviderMessage?.ts ?? durable.message?.ts ?? 0) >= unixMs(attempt.report.at));
 }
 
@@ -19411,6 +19414,9 @@ async function resolveStageCompletionTarget(
         && stageId === recoveryEvidence.stageId && attempt.n === recoveryEvidence.attempt
         && stageCompletionRuntimeFence(attempt) === recoveryEvidence.runtimeFence);
       if (target?.attempt.launchId === recoveryEvidence.launchId
+        && target.pipeline.state === recoveryEvidence.pipelineState
+        && (target.pipeline.controlGeneration ?? null) === recoveryEvidence.controlGeneration
+        && deliveryUnverifiedAttempt(target.pipeline, target.attempt)
         && sameSpawnReceiptFence(ports.spawnReceipt(target.attempt.launchId), recoveryEvidence.receipt)
         && (ports.sourcePathAllowed(recoveryEvidence.path) || stagedDeliveryPathPending(recoveryEvidence.receipt, recoveryEvidence.path))) {
         recoverable.set(target, recoveryEvidence.path);
@@ -19452,6 +19458,8 @@ type StageCompletionRecoveryEvidence = {
   attempt: number;
   launchId: string;
   runtimeFence: string;
+  pipelineState: Pipeline["state"];
+  controlGeneration: string | null;
   path: string;
   receipt: ReturnType<PipelinePorts["spawnReceipt"]>;
 };
@@ -19559,6 +19567,7 @@ export async function reportStageCompletion(
   const recoveryEvidence: StageCompletionRecoveryEvidence | null = previewed.recoveryPath && preview.attempt.launchId && recoveryReceipt
     ? { pipelineId: preview.pipeline.id, stageId: preview.stageId, attempt: preview.attempt.n,
       launchId: preview.attempt.launchId, runtimeFence: previewRuntimeFence,
+      pipelineState: preview.pipeline.state, controlGeneration: preview.pipeline.controlGeneration ?? null,
       path: previewed.recoveryPath, receipt: recoveryReceipt }
     : null;
   const heldWork = await backgroundWorkRefusal(previewed.recoveryPath
