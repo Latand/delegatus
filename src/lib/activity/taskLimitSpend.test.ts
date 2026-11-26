@@ -562,7 +562,7 @@ test("an API-only price promotion does not invalidate meter calibration and lega
   expect(estimateVersionAtTime(before)).not.toBe(estimateVersionAtTime(after));
   const version = meterVersion();
   expect(meterVersion()).toBe(version);
-  expect(meterCost("gpt-6.2-sol","standard","codex",{input:0,cacheRead:0,cacheWrite:1_000_000,cacheWrite1h:0,output:0,reasoning:0})).toBe(2);
+  expect(meterCost("gpt-6.2-sol","standard","codex",{requests:0,input:0,cacheRead:0,cacheWrite:1_000_000,cacheWrite1h:0,output:0,reasoning:0})).toBe(2);
   const hour = Math.floor(USAGE_NOW/HOUR), day = new Date(hour*HOUR).toISOString().slice(0,10);
   const h = {hour,conversation:"fixture",model:"gpt-6.2-sol",tier:"ultrafast",account:"codex:a",engine:"codex",pipeline:null,role:"builder",
     requests:1,input:1_000_000,cache_read:0,cache_write:0,cache_write_1h:0,output:0,reasoning:0};

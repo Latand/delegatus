@@ -611,9 +611,10 @@ export function buildTaskSpend(lang: Lang): Record<string, TaskSpendSummary> {
     tokenCost(model[engine], "standard", { ...emptyTokens(), cacheRead: tokens });
   const account = (engine: SpendEngine, id: "main" | "work", label: string, plan: string, pp: number, sessionPp: number | null = null): TaskSpendAccount => {
     const tokens = Math.round(pp * (engine === "claude" ? 410_000 : 380_000));
+    const apiUsd = apiPrice(engine, tokens);
     return {
       key: `${engine}:${id}`, label, plan, planTier: null, weeklyPp: pp, tokens,
-      basis: "measured", range: range(pp), budget: null, apiUsd: apiPrice(engine, tokens),
+      basis: "measured", range: range(pp), budget: null, apiUsd, apiPricedTokens: apiUsd === null ? 0 : tokens,
       week: { usedPercent: engine === "claude" ? WEEK.claude[id] : WEEK.codex.main, taskPp: pp }, sessionPp,
     };
   };
