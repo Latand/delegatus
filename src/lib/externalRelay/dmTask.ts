@@ -153,7 +153,8 @@ export async function recoverPendingDmTaskDeliveries(
       throw error;
     }
     const receipt = pending.receipt;
-    const requestContext = receipt.phase !== "choice" ? receipt.requestContext : undefined;
+    if (receipt.phase === "choice") continue;
+    const requestContext = receipt.requestContext;
     const relay = relays.find(item => item.id === pending.relayId);
     if (!relay || !requestContext || receipt.phase === "submitted") continue;
     const request = {
