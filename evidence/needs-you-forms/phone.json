@@ -52,6 +52,14 @@
         "end": {
           "lastWhole": true
         }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Потрібні ви · 5",
+          "whole": true
+        }
       }
     },
     {
@@ -102,6 +110,14 @@
         "right": 560,
         "end": {
           "lastWhole": true
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Потрібні ви · 5",
+          "whole": true
         }
       }
     },
@@ -154,6 +170,14 @@
         "end": {
           "lastWhole": true
         }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Needs you · 5",
+          "whole": true
+        }
       }
     },
     {
@@ -204,6 +228,14 @@
         "right": 560,
         "end": {
           "lastWhole": true
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Needs you · 5",
+          "whole": true
         }
       }
     },
@@ -256,6 +288,14 @@
         "end": {
           "lastWhole": true
         }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Потрібні ви · 5",
+          "whole": true
+        }
       }
     },
     {
@@ -306,6 +346,14 @@
         "right": 475,
         "end": {
           "lastWhole": true
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Потрібні ви · 5",
+          "whole": true
         }
       }
     },
@@ -358,6 +406,14 @@
         "end": {
           "lastWhole": true
         }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Needs you · 5",
+          "whole": true
+        }
       }
     },
     {
@@ -408,6 +464,14 @@
         "right": 475,
         "end": {
           "lastWhole": true
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Needs you · 5",
+          "whole": true
         }
       }
     },
@@ -460,6 +524,14 @@
         "end": {
           "lastWhole": true
         }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Потрібні ви · 5",
+          "whole": true
+        }
       }
     },
     {
@@ -510,6 +582,14 @@
         "right": 390,
         "end": {
           "lastWhole": true
+        }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Потрібні ви · 5",
+          "whole": true
         }
       }
     },
@@ -562,6 +642,14 @@
         "end": {
           "lastWhole": true
         }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Needs you · 5",
+          "whole": true
+        }
       }
     },
     {
@@ -613,6 +701,14 @@
         "end": {
           "lastWhole": true
         }
+      },
+      "seat": {
+        "section": 5,
+        "strip": {
+          "count": "5",
+          "text": "Needs you · 5",
+          "whole": true
+        }
       }
     },
     {
@@ -632,7 +728,11 @@
         "target": null,
         "overflow": false
       },
-      "sheet": null
+      "sheet": null,
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
     },
     {
       "frame": "empty-560-uk-dark",
@@ -651,7 +751,11 @@
         "target": null,
         "overflow": false
       },
-      "sheet": null
+      "sheet": null,
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
     },
     {
       "frame": "empty-560-en-light",
@@ -670,7 +774,11 @@
         "target": null,
         "overflow": false
       },
-      "sheet": null
+      "sheet": null,
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
     },
     {
       "frame": "empty-560-en-dark",
@@ -689,7 +797,11 @@
         "target": null,
         "overflow": false
       },
-      "sheet": null
+      "sheet": null,
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
     },
     {
       "frame": "empty-475-uk-light",
@@ -708,7 +820,11 @@
         "target": null,
         "overflow": false
       },
-      "sheet": null
+      "sheet": null,
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
     },
     {
       "frame": "empty-475-uk-dark",
@@ -727,7 +843,11 @@
         "target": null,
         "overflow": false
       },
-      "sheet": null
+      "sheet": null,
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
     },
     {
       "frame": "empty-475-en-light",
@@ -746,7 +866,11 @@
         "target": null,
         "overflow": false
       },
-      "sheet": null
+      "sheet": null,
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
     },
     {
       "frame": "empty-475-en-dark",
@@ -765,7 +889,11 @@
         "target": null,
         "overflow": false
       },
-      "sheet": null
+      "sheet": null,
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
     },
     {
       "frame": "empty-390-uk-light",
@@ -784,7 +912,11 @@
         "target": null,
         "overflow": false
       },
-      "sheet": null
+      "sheet": null,
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
     },
     {
       "frame": "empty-390-uk-dark",
@@ -803,7 +935,11 @@
         "target": null,
         "overflow": false
       },
-      "sheet": null
+      "sheet": null,
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
     },
     {
       "frame": "empty-390-en-light",
@@ -822,7 +958,11 @@
         "target": null,
         "overflow": false
       },
-      "sheet": null
+      "sheet": null,
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
     },
     {
       "frame": "empty-390-en-dark",
@@ -841,7 +981,11 @@
         "target": null,
         "overflow": false
       },
-      "sheet": null
+      "sheet": null,
+      "seat": {
+        "section": 0,
+        "strip": null
+      }
     },
     {
       "frame": "busy-560-uk-light",
@@ -891,6 +1035,14 @@
         "right": 560,
         "end": {
           "lastWhole": true
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Потрібні ви · 14",
+          "whole": true
         }
       }
     },
@@ -943,6 +1095,14 @@
         "end": {
           "lastWhole": true
         }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Потрібні ви · 14",
+          "whole": true
+        }
       }
     },
     {
@@ -993,6 +1153,14 @@
         "right": 560,
         "end": {
           "lastWhole": true
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Needs you · 14",
+          "whole": true
         }
       }
     },
@@ -1045,6 +1213,14 @@
         "end": {
           "lastWhole": true
         }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Needs you · 14",
+          "whole": true
+        }
       }
     },
     {
@@ -1095,6 +1271,14 @@
         "right": 475,
         "end": {
           "lastWhole": true
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Потрібні ви · 14",
+          "whole": true
         }
       }
     },
@@ -1147,6 +1331,14 @@
         "end": {
           "lastWhole": true
         }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Потрібні ви · 14",
+          "whole": true
+        }
       }
     },
     {
@@ -1197,6 +1389,14 @@
         "right": 475,
         "end": {
           "lastWhole": true
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Needs you · 14",
+          "whole": true
         }
       }
     },
@@ -1249,6 +1449,14 @@
         "end": {
           "lastWhole": true
         }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Needs you · 14",
+          "whole": true
+        }
       }
     },
     {
@@ -1299,6 +1507,14 @@
         "right": 390,
         "end": {
           "lastWhole": true
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Потрібні ви · 14",
+          "whole": true
         }
       }
     },
@@ -1351,6 +1567,14 @@
         "end": {
           "lastWhole": true
         }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Потрібні ви · 14",
+          "whole": true
+        }
       }
     },
     {
@@ -1402,6 +1626,14 @@
         "end": {
           "lastWhole": true
         }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Needs you · 14",
+          "whole": true
+        }
       }
     },
     {
@@ -1452,6 +1684,14 @@
         "right": 390,
         "end": {
           "lastWhole": true
+        }
+      },
+      "seat": {
+        "section": 14,
+        "strip": {
+          "count": "14",
+          "text": "Needs you · 14",
+          "whole": true
         }
       }
     }

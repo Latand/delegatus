@@ -26762,9 +26762,10 @@ describe("«Готово» above the report log", () => {
  * lanes' waits, and N waiting forms. Normal is the operator's 9, empty is 0,
  * busy is 27. Every state at every desktop width the slice names and one
  * between each pair, in uk and en, light and dark: the header button at N and
- * at zero (muted, no number), the panel with form rows only and no «Готово».
- * Frames go to LLV_EVIDENCE_DIR (else .artifacts); the readings are committed
- * under evidence/needs-you-forms/.
+ * at zero (muted, no number), the panel with form rows only and no «Готово»,
+ * and the seat's decisions tab and strip equal to the panel's own section for
+ * the board's project. Frames go to LLV_EVIDENCE_DIR (else .artifacts); the
+ * readings are committed under evidence/needs-you-forms/.
  */
 describe("«Needs you» counts the forms that wait", () => {
   browserTest("the header button and its panel hold only waiting forms at 1440–664 in uk and en, light and dark", async () => {
@@ -26836,6 +26837,11 @@ describe("«Needs you» counts the forms that wait", () => {
           check(button.foreign.length === 0, `the button sits on ${JSON.stringify(button.foreign)}`);
           check(button.tabTitle === (forms ? `(${forms}) Delegatus` : "Delegatus"), `the tab title reads «${button.tabTitle}»`);
           check(!button.overflow, "the page scrolls sideways");
+          /* The seat's own decisions on the board's project: the column tab's badge and the strip, whichever the seat draws. */
+          const decisions = await page.evaluate(() => ({
+            strip: document.querySelector<HTMLElement>("[data-orchestrator-panel] [data-decision-strip]")?.dataset.decisionStrip ?? null,
+            tab: document.querySelector<HTMLElement>('[data-decision-tab="decisions"] [data-decision-tab-count]')?.dataset.decisionTabCount ?? null,
+          }));
           await page.screenshot({ path: path.join(out, `${frame}-closed.png`) });
 
           /* Opened from the button: docked beside the board where it has room, else under the button. */
@@ -26881,6 +26887,10 @@ describe("«Needs you» counts the forms that wait", () => {
           check(open.empty === (forms ? null : t("attention.empty")), `the empty line reads «${open.empty}»`);
           check(open.firstWhole !== false, "the first row is whole");
           check(!open.overflow, "the page scrolls sideways with the panel open");
+          /* The tab and the strip count what the panel lists for that project: an answer stuck in delivery is in neither. */
+          const section = Number(open.sections.find((entry) => entry[0] === "delegatus")?.[1] ?? 0);
+          check(forms === 0 || decisions.strip !== null || decisions.tab !== null, "the seat draws neither the strip nor the tab's badge");
+          check([decisions.strip, decisions.tab].every((shown) => shown === null || shown === String(section)), `the strip reads ${decisions.strip} and the tab ${decisions.tab} beside the panel's ${section}`);
           await page.screenshot({ path: path.join(out, `${frame}-open.png`) });
           let end: unknown = null;
           if (open.scrolls) {
@@ -26892,7 +26902,7 @@ describe("«Needs you» counts the forms that wait", () => {
             await page.screenshot({ path: path.join(out, `${frame}-end.png`) });
           }
           check(pageErrors.length === 0, `page errors ${JSON.stringify(pageErrors)}`);
-          readings.push({ frame, state, forms, width, lang, scheme, button: { ...button, foreign: button.foreign.length }, panel: open, end });
+          readings.push({ frame, state, forms, width, lang, scheme, button: { ...button, foreign: button.foreign.length }, decisions, panel: open, end });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/needs-you-forms", { recursive: true });

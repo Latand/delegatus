@@ -24,6 +24,10 @@
         "tabTitle": "(9) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "5",
+        "tab": "5"
+      },
       "panel": {
         "placement": "docked",
         "title": "Потрібні ви · 9",
@@ -80,6 +84,10 @@
         "foreign": 0,
         "tabTitle": "(9) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "5",
+        "tab": "5"
       },
       "panel": {
         "placement": "docked",
@@ -138,6 +146,10 @@
         "tabTitle": "(9) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "5",
+        "tab": "5"
+      },
       "panel": {
         "placement": "docked",
         "title": "Needs you · 9",
@@ -194,6 +206,10 @@
         "foreign": 0,
         "tabTitle": "(9) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "5",
+        "tab": "5"
       },
       "panel": {
         "placement": "docked",
@@ -252,6 +268,10 @@
         "tabTitle": "(9) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "5",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Потрібні ви · 9",
@@ -308,6 +328,10 @@
         "foreign": 0,
         "tabTitle": "(9) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "5",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -366,6 +390,10 @@
         "tabTitle": "(9) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "5",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you · 9",
@@ -422,6 +450,10 @@
         "foreign": 0,
         "tabTitle": "(9) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "5",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -480,6 +512,10 @@
         "tabTitle": "(9) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "5",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Потрібні ви · 9",
@@ -536,6 +572,10 @@
         "foreign": 0,
         "tabTitle": "(9) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "5",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -594,6 +634,10 @@
         "tabTitle": "(9) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "5",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you · 9",
@@ -650,6 +694,10 @@
         "foreign": 0,
         "tabTitle": "(9) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "5",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -708,6 +756,10 @@
         "tabTitle": "(9) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "5",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Потрібні ви · 9",
@@ -764,6 +816,10 @@
         "foreign": 0,
         "tabTitle": "(9) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "5",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -822,6 +878,10 @@
         "tabTitle": "(9) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "5",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you · 9",
@@ -878,6 +938,10 @@
         "foreign": 0,
         "tabTitle": "(9) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "5",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -936,6 +1000,10 @@
         "tabTitle": "(9) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "5",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Потрібні ви · 9",
@@ -992,6 +1060,10 @@
         "foreign": 0,
         "tabTitle": "(9) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "5",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -1050,6 +1122,10 @@
         "tabTitle": "(9) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "5",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you · 9",
@@ -1106,6 +1182,10 @@
         "foreign": 0,
         "tabTitle": "(9) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "5",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -1164,6 +1244,10 @@
         "tabTitle": "(9) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "5",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Потрібні ви · 9",
@@ -1220,6 +1304,10 @@
         "foreign": 0,
         "tabTitle": "(9) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "5",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -1278,6 +1366,10 @@
         "tabTitle": "(9) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "5",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you · 9",
@@ -1334,6 +1426,10 @@
         "foreign": 0,
         "tabTitle": "(9) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "5",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -1392,6 +1488,10 @@
         "tabTitle": "Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": null,
+        "tab": null
+      },
       "panel": {
         "placement": "docked",
         "title": "Потрібні ви",
@@ -1430,6 +1530,10 @@
         "foreign": 0,
         "tabTitle": "Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": null,
+        "tab": null
       },
       "panel": {
         "placement": "docked",
@@ -1470,6 +1574,10 @@
         "tabTitle": "Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": null,
+        "tab": null
+      },
       "panel": {
         "placement": "docked",
         "title": "Needs you",
@@ -1508,6 +1616,10 @@
         "foreign": 0,
         "tabTitle": "Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": null,
+        "tab": null
       },
       "panel": {
         "placement": "docked",
@@ -1548,6 +1660,10 @@
         "tabTitle": "Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": null,
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Потрібні ви",
@@ -1586,6 +1702,10 @@
         "foreign": 0,
         "tabTitle": "Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": null,
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -1626,6 +1746,10 @@
         "tabTitle": "Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": null,
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you",
@@ -1664,6 +1788,10 @@
         "foreign": 0,
         "tabTitle": "Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": null,
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -1704,6 +1832,10 @@
         "tabTitle": "Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": null,
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Потрібні ви",
@@ -1742,6 +1874,10 @@
         "foreign": 0,
         "tabTitle": "Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": null,
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -1782,6 +1918,10 @@
         "tabTitle": "Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": null,
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you",
@@ -1820,6 +1960,10 @@
         "foreign": 0,
         "tabTitle": "Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": null,
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -1860,6 +2004,10 @@
         "tabTitle": "Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": null,
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Потрібні ви",
@@ -1898,6 +2046,10 @@
         "foreign": 0,
         "tabTitle": "Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": null,
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -1938,6 +2090,10 @@
         "tabTitle": "Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": null,
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you",
@@ -1976,6 +2132,10 @@
         "foreign": 0,
         "tabTitle": "Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": null,
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -2016,6 +2176,10 @@
         "tabTitle": "Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": null,
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Потрібні ви",
@@ -2054,6 +2218,10 @@
         "foreign": 0,
         "tabTitle": "Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": null,
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -2094,6 +2262,10 @@
         "tabTitle": "Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": null,
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you",
@@ -2132,6 +2304,10 @@
         "foreign": 0,
         "tabTitle": "Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": null,
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -2172,6 +2348,10 @@
         "tabTitle": "Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": null,
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Потрібні ви",
@@ -2210,6 +2390,10 @@
         "foreign": 0,
         "tabTitle": "Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": null,
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -2250,6 +2434,10 @@
         "tabTitle": "Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": null,
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you",
@@ -2289,6 +2477,10 @@
         "tabTitle": "Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": null,
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you",
@@ -2327,6 +2519,10 @@
         "foreign": 0,
         "tabTitle": "(27) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "14",
+        "tab": "14"
       },
       "panel": {
         "placement": "docked",
@@ -2387,6 +2583,10 @@
         "tabTitle": "(27) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "14",
+        "tab": "14"
+      },
       "panel": {
         "placement": "docked",
         "title": "Потрібні ви · 27",
@@ -2445,6 +2645,10 @@
         "foreign": 0,
         "tabTitle": "(27) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "14",
+        "tab": "14"
       },
       "panel": {
         "placement": "docked",
@@ -2505,6 +2709,10 @@
         "tabTitle": "(27) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "14",
+        "tab": "14"
+      },
       "panel": {
         "placement": "docked",
         "title": "Needs you · 27",
@@ -2563,6 +2771,10 @@
         "foreign": 0,
         "tabTitle": "(27) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "14",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -2623,6 +2835,10 @@
         "tabTitle": "(27) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "14",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Потрібні ви · 27",
@@ -2681,6 +2897,10 @@
         "foreign": 0,
         "tabTitle": "(27) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "14",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -2741,6 +2961,10 @@
         "tabTitle": "(27) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "14",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you · 27",
@@ -2799,6 +3023,10 @@
         "foreign": 0,
         "tabTitle": "(27) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "14",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -2859,6 +3087,10 @@
         "tabTitle": "(27) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "14",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Потрібні ви · 27",
@@ -2917,6 +3149,10 @@
         "foreign": 0,
         "tabTitle": "(27) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "14",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -2977,6 +3213,10 @@
         "tabTitle": "(27) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "14",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you · 27",
@@ -3035,6 +3275,10 @@
         "foreign": 0,
         "tabTitle": "(27) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "14",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -3095,6 +3339,10 @@
         "tabTitle": "(27) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "14",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Потрібні ви · 27",
@@ -3153,6 +3401,10 @@
         "foreign": 0,
         "tabTitle": "(27) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "14",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -3213,6 +3465,10 @@
         "tabTitle": "(27) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "14",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you · 27",
@@ -3271,6 +3527,10 @@
         "foreign": 0,
         "tabTitle": "(27) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "14",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -3331,6 +3591,10 @@
         "tabTitle": "(27) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "14",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Потрібні ви · 27",
@@ -3389,6 +3653,10 @@
         "foreign": 0,
         "tabTitle": "(27) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "14",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -3449,6 +3717,10 @@
         "tabTitle": "(27) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "14",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you · 27",
@@ -3507,6 +3779,10 @@
         "foreign": 0,
         "tabTitle": "(27) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "14",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",
@@ -3567,6 +3843,10 @@
         "tabTitle": "(27) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "14",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Потрібні ви · 27",
@@ -3626,6 +3906,10 @@
         "tabTitle": "(27) Delegatus",
         "overflow": false
       },
+      "decisions": {
+        "strip": "14",
+        "tab": null
+      },
       "panel": {
         "placement": "overlay",
         "title": "Needs you · 27",
@@ -3684,6 +3968,10 @@
         "foreign": 0,
         "tabTitle": "(27) Delegatus",
         "overflow": false
+      },
+      "decisions": {
+        "strip": "14",
+        "tab": null
       },
       "panel": {
         "placement": "overlay",

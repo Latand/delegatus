@@ -37,9 +37,13 @@ export function newestDecisionsFirst(decisions: readonly OperatorDecisionView[])
   return [...decisions].reverse().sort((a, b) => at(b) - at(a));
 }
 
-/** How many decisions wait in a project: the page's one poll already counts them. */
+/** How many decisions wait in a project: the page's one poll already counts
+    them. An answered form whose delivery needs attention waits on nobody: it
+    stays in the list as its record with Retry and leaves this count, the same
+    rule as `needsYouHolds` (needs-you-restructure.md §3), so the tab, the strip
+    and the seat chip agree with the header. */
 export function useOpenDecisionCount(project: string): number {
-  return usePrototypeNoticesFor(project).length;
+  return usePrototypeNoticesFor(project).filter((notice) => !notice.undelivered).length;
 }
 
 export function DecisionList({ project, active = true, focus, touch = false, initial }: {

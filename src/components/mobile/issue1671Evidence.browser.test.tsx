@@ -8458,8 +8458,9 @@ describe("attention cues stay off the main thread beside the composer", () => {
  * Normal is 9, empty is 0 (the badge is not drawn), busy is 27. At 560, 390
  * and one width between, in uk and en, light and dark: the badge, its name,
  * and the sheet with form rows only, no «Dismiss» and no «Готово», scrolled to
- * its last row. Frames go to LLV_EVIDENCE_DIR (else .artifacts); readings are
- * committed under evidence/needs-you-forms/.
+ * its last row; then the board's own seat, whose strip counts what the sheet
+ * lists for that project. Frames go to LLV_EVIDENCE_DIR (else .artifacts);
+ * readings are committed under evidence/needs-you-forms/.
  */
 describe("«Needs you» on the phone counts the forms that wait", () => {
   browserTest("the ⚠ badge and its sheet hold only waiting forms at 560–390 in uk and en, light and dark", async () => {
@@ -8570,8 +8571,26 @@ describe("«Needs you» on the phone counts the forms that wait", () => {
           } else {
             await page.screenshot({ path: path.join(out, `${frame}-bar.png`) });
           }
+          /* The board's own seat: its strip counts what the sheet lists for that project; an answer stuck in delivery is in neither. */
+          const section = Number((sheet?.sections as Array<[string, number]> | undefined)?.find((entry) => entry[0] === "delegatus")?.[1] ?? 0);
+          await page.goto(`${server.base}?lang=${lang}&scenario=forms&forms=${forms}`);
+          await page.locator("[data-mobile2-seat-open]").first().click({ timeout: 20_000 });
+          const pane = await page.locator('[data-testid="mobile-focused-pane"]').waitFor({ timeout: 10_000 }).then(() => true, () => false);
+          await page.waitForTimeout(300);
+          const strip = await page.evaluate(() => {
+            const node = document.querySelector<HTMLElement>("[data-decision-strip]");
+            if (!node) return null;
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            const ink = range.getBoundingClientRect();
+            return { count: node.dataset.decisionStrip ?? null, text: node.textContent, whole: ink.left >= 0 && ink.right <= innerWidth && ink.top >= 0 && ink.bottom <= innerHeight };
+          });
+          check(pane, "the seat's conversation never opened");
+          check((strip?.count ?? null) === (section ? String(section) : null), `the seat's strip reads ${strip?.count ?? "nothing"} beside the sheet's ${section}`);
+          check(!strip || strip.whole, "the seat's strip is cut");
+          await page.screenshot({ path: path.join(out, `${frame}-seat.png`) });
           check(errors.length === 0, `page errors ${JSON.stringify(errors)}`);
-          readings.push({ frame, state, forms, width, lang, scheme, bar, sheet });
+          readings.push({ frame, state, forms, width, lang, scheme, bar, sheet, seat: { section, strip } });
         } finally { await context.close(); }
       }
       fs.mkdirSync("evidence/needs-you-forms", { recursive: true });
