@@ -3,7 +3,8 @@ import type { CleanerController } from "@/lib/cleaner/run";
 import { statePath } from "@/lib/configDir";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerReleaseTraffic";
 import { readDiskPressure } from "./diskPressure";
-import { productionDiskPressureActions, reconcileDiskPressure, type DiskPressureActions } from "./diskPressureActions";
+import { productionDiskPressureActions, productionMemoryPressureActions, reconcileDiskPressure, type DiskPressureActions } from "./diskPressureActions";
+import { observeMemoryPressureReport, reconcileMemoryPressure, type MemoryPressureActions, type MemoryReading } from "./memoryPressure";
 
 const host = globalThis as typeof globalThis & { __delegatusDiskPressureTimer?: ReturnType<typeof setTimeout> };
 
@@ -35,6 +36,8 @@ export function startDiskPressureWatch(ports: {
   cleaner?: CleanerController;
   automatic?: (pressure: Awaited<ReturnType<typeof readDiskPressure>>) => Promise<void>;
   now?: () => number;
+  memoryActions?: MemoryPressureActions;
+  readMemory?: () => Promise<MemoryReading | null>;
 } = {}): void {
   if (host.__delegatusDiskPressureTimer || (!ports.observe && process.env.LLV_STATE_OWNER !== "viewer")) return;
   const cleaner = ports.cleaner;
@@ -68,7 +71,22 @@ export function startDiskPressureWatch(ports: {
   let trafficSince = cleaner && actions.active()
     ? releaseTrafficSince(watchStartedAt) ?? watchStartedAt
     : null;
+  const readMemory = ports.readMemory ?? (ports.actions || process.env.NODE_ENV === "test" ? undefined : async () =>
+    (await import("@/lib/pipelines/worktreeSweepWorker")).readMemoryReadingOffThread());
+  const memoryActions = ports.memoryActions ?? productionMemoryPressureActions(actions);
+  let readingMemory = false;
+  /* Memory is read on the same 30 s beat, off this thread. Neither a slow read
+     nor a failed one delays the disk observation, and one runs at a time. */
+  const requestMemoryObservation = () => {
+    if (!readMemory || readingMemory) return;
+    readingMemory = true;
+    void readMemory().then(async reading => {
+      if (reading) await reconcileMemoryPressure(observeMemoryPressureReport(reading, new Date(now()).toISOString()), memoryActions);
+    }).catch(error => console.error("[memory pressure] observation failed", error instanceof Error ? error.message : String(error)))
+      .finally(() => { readingMemory = false; });
+  };
   const observe = ports.observe ?? (async () => {
+    requestMemoryObservation();
     if (cleaner) {
       if (!actions.active()) trafficSince = null;
       else if (process.env.PORT?.trim()) trafficSince = releaseTrafficSince(now()) ?? trafficSince ?? now();

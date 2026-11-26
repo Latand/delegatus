@@ -3687,6 +3687,12 @@ function failInitialSpawnReceiptForDelivery(file: RegistryFile, delivery: HeldDe
   if (delivery.state !== "failed") return;
   const receipt = initialSpawnReceiptOf(file, delivery);
   if (!receipt || ["completed", "failed", "conflicted"].includes(receipt.state)) return;
+  // Deadline admission already proved no journal command was created. Keep
+  // that staged identity live until its reaper settles the original runtime
+  // operation and fences projection cleanup. Other terminal delivery causes
+  // retain the existing immediate receipt behavior.
+  if (receipt.transport === "structured" && stagedLaunchRecovery(receipt)
+    && delivery.error?.startsWith("staged launch publication deadline expired")) return;
   receipt.state = "failed";
   receipt.error = delivery.error ?? "initial prompt delivery failed";
   markFailedLaunchReporting(receipt);

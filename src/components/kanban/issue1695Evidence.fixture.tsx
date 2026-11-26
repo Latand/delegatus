@@ -1910,6 +1910,23 @@ const stagePlacePipelines: Pipeline[] = STAGE_PLACE ? [pipeline("lane-stage-plac
     { stageId: "review", attempts: [attempt(1, "running", null, { definition: { runtime: "claude-cloud" }, cloud: { phase: "failed", fallback: { at: iso(5 * MIN), reason: "Claude Cloud session can write to GitHub; read-only access was not proven, so no assignment was sent. Connect GitHub read-only for this account (docs/design/claude-code-cloud.md, setup step 2)" } } })] },
   ],
   { stageId: "review", state: "running", input: null, activatedBy: null })] : [];
+/* `?scenario=codex-refusal-move`: Codex refused the review stage twice as a cybersecurity risk, so the
+   controller moved the stage to Claude Opus; its third attempt runs there and the card says why. */
+const CODEX_REFUSAL_MOVE = SCENARIO === "codex-refusal-move";
+const codexRefusalPipelines: Pipeline[] = CODEX_REFUSAL_MOVE ? [pipeline("lane-codex-refusal", L("Harden the upload token check", "Посилити перевірку токена завантаження"), "t-codex-refusal", "running",
+  [stage("implement", "builder", "review"), stage("review", "builder", null)],
+  [
+    { stageId: "implement", attempts: [attempt(1, "passed", null, { completedAt: iso(40 * MIN) })] },
+    { stageId: "review", attempts: [
+      attempt(1, "failed", null, { effectiveRole: role("builder", "codex"), completedAt: iso(30 * MIN), error: "stage cut by Codex cybersecurity refusal" }),
+      attempt(2, "failed", null, { effectiveRole: role("builder", "codex"), completedAt: iso(20 * MIN), error: "stage cut by Codex cybersecurity refusal" }),
+      attempt(3, "running", null, { startedAt: iso(19 * MIN) }),
+    ] },
+  ],
+  { stageId: "review", state: "running", input: null, activatedBy: null },
+  { graphEdits: [{ seq: 1, at: iso(20 * MIN), actor: { kind: "agent", role: "pipeline-controller", conversationId: null }, action: "override-stage",
+    stageId: "review", pipelineState: "running", effect: "pending-next-attempt", appliesFromAttempt: 3, cause: "codex-cybersecurity-refusal",
+    summary: "moved stage review to Claude opus high after Codex refused it twice as a cybersecurity risk; applies from attempt 3" }] })] : [];
 /* `?scenario=stageshapes` (redesign S2): one lane per graph shape the Stages window must draw, each on a task of
    its own, with invented stage ids and text (`stageShapes.fixture.ts`, which the phone's fixture reads too). */
 const STAGE_SHAPES = SCENARIO === "stageshapes";
@@ -1930,6 +1947,7 @@ const shapeTasks = (): BoardTask[] => stageShapeLanes.map((entry, index) => task
 const pipelines: Pipeline[] = [
   ...shapePipelines,
   ...stagePlacePipelines,
+  ...codexRefusalPipelines,
   ...cloudChecksPipelines,
   ...wallPipelines,
   ...unstartedPipelines,
@@ -2312,6 +2330,7 @@ const tasks: BoardTask[] = [
     task("t-finish-hold", "assigned", L("Merge when the review passes", "Мердж, коли ревʼю пройдено"), L("The setting, the runner, and its docs.", "Налаштування, мердж і документація."), 50 * MIN),
     task("t-finish-done", "done", L("Conversation: wider agent replies", "Ширші відповіді агентів"), "", 75 * MIN),
   ] : []),
+  ...(CODEX_REFUSAL_MOVE ? [task("t-codex-refusal", "assigned", L("Harden the upload token check", "Посилити перевірку токена завантаження"), "", 5 * MIN)] : []),
   ...(STAGE_PLACE ? [task("t-stage-place", "assigned", L("Run a stage in Claude Code cloud", "Запустити етап у хмарі Claude Code"), "", 5 * MIN)] : []),
   ...(CLOUD_CHECKS ? [task("t-cloud-checks", "assigned", L("Run heavy checks in Codex Cloud", "Важкі перевірки в Codex Cloud"), "", 5 * MIN)] : []),
   ...(ARCS ? [task("t-arcs", "assigned", "Draw a fail edge as a return arc under the row", "An edge at rest, one fired once, a spent budget in flight, a lane parked on a spent budget, and two edges into one stage.", 3 * MIN)] : []),
@@ -4316,15 +4335,20 @@ if (COLD_LINK) (window as unknown as { __coldLink: typeof coldLink }).__coldLink
    a minute after Create). It answers only the routes each state reads, with invented data: the accounts and the tools of each
    engine state, the factory role catalog, the bot (`&bot=`), the memory source with or without an orchestrator, and for the
    form states the seat's transcript, its decision with one question that cannot be skipped, and its "Needs you" notice.
-   States: engines-both|claude-only|codex-only|signed-out|no-cli, orchestrator-one-press|claude-only|codex-only,
+   States: engines-both|claude-only|codex-only|signed-out|no-cli, orchestrator-one-press|claude-only|codex-only|no-engine,
    later-memory-before|memory-after|telegram-later, telegram-numbered, form-greeting|decisions|needs-you,
-   settings-memory-before|memory-after. */
+   settings-memory-before|memory-after, first-visit*.
+   `first-visit*` is a first visit (docs/design/onboarding-v2.md §12.2): no agent tool, and the install notice not yet
+   dismissed. `orchestrator-no-engine` has both tools installed and signed out. */
 const FIRST_RUN = params.get("firstrun") ?? "";
 const FIRST_RUN_FORM = FIRST_RUN.startsWith("form-");
+const FIRST_VISIT = FIRST_RUN.startsWith("first-visit");
+/* What `/api/telemetry` answers on a first visit; a write is kept. */
+const firstVisitTelemetry = { enabled: true, locked: false, noticeDismissed: false, swarmRules: false };
 const FIRST_RUN_ENGINES: "both" | "claude-only" | "codex-only" | "signed-out" | "no-cli" =
   FIRST_RUN === "engines-claude-only" || FIRST_RUN === "orchestrator-claude-only" ? "claude-only"
   : FIRST_RUN === "engines-codex-only" || FIRST_RUN === "orchestrator-codex-only" ? "codex-only"
-  : FIRST_RUN === "engines-signed-out" ? "signed-out" : FIRST_RUN === "engines-no-cli" ? "no-cli" : "both";
+  : FIRST_RUN === "engines-signed-out" || FIRST_RUN === "orchestrator-no-engine" ? "signed-out" : FIRST_RUN === "engines-no-cli" || FIRST_VISIT ? "no-cli" : "both";
 /* An orchestrator exists for the memory import once the guide was reopened after Create, and on the seat's own board.
    The driver draws those states over `scenario=orchestrator-first-walk`, so the board behind the dialog carries the seat too. */
 const FIRST_RUN_SEATED = FIRST_RUN_FORM || FIRST_RUN === "later-memory-after" || FIRST_RUN === "settings-memory-after";
@@ -4388,13 +4412,19 @@ function firstRunSeatTranscript(): string {
 if (FIRST_RUN_FORM) seatRounds.push({ id: FIRST_RUN_REVIEW_ID, taskId: null, project: PROJECT, title: FIRST_RUN_TITLE, createdAt: iso(68), source: { conversationId: orchestrator.conversationId ?? null }, variants: [],
   questions: FIRST_RUN_QUESTIONS, telegramPost: { key: "first-run", state: "failed", reason: "no_relay", at: iso(68) } });
 /* What the routes behind the guide answer for a first-run state; null falls through to the board fixture. */
-function firstRunAnswer(url: URL, method: string): Response | null {
+function firstRunAnswer(url: URL, method: string, init?: RequestInit): Response | null {
   const path = url.pathname;
   if (path === "/api/onboarding" && !FIRST_RUN_FORM) {
     /* Once an orchestrator exists, the guide's first three steps are settled: the numbers turn into ticks. */
     const steps = FIRST_RUN_SEATED ? { engines: "done", project: "done", orchestrator: "done" } : {};
     const marker = { schemaVersion: 1, completedAt: null, dismissedAt: null, reason: null, steps, lastHealth: null, walk: "done" };
     return json(method === "PUT" ? { marker } : { marker, legacyState: false, seatTickCheckMinutes: 5 });
+  }
+  /* Antigravity as the slice 1 states have it: not installed on a first visit, installed and signed out beside the other two. */
+  if (path === "/api/accounts/antigravity" && (FIRST_VISIT || FIRST_RUN === "orchestrator-no-engine")) return json(FIRST_VISIT ? { cli: "missing", accounts: [] } : { cli: "found", accounts: [{ auth: "signed_out", plan: null }] });
+  if (path === "/api/telemetry" && FIRST_VISIT) {
+    if (method === "PUT") Object.assign(firstVisitTelemetry, JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+    return json(firstVisitTelemetry);
   }
   if (path === "/api/accounts" && method === "GET") return json(FIRST_RUN_ACCOUNTS);
   if (path === "/api/accounts/cli") return json({ claude: FIRST_RUN_ACCOUNTS.claude.cli, codex: FIRST_RUN_ACCOUNTS.codex.cli });
@@ -4426,7 +4456,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (SCENARIO === "account-row" && /^\/api\/(?:accounts|transfer\/accounts|account-project-bindings|limits\/history)/.test(url.pathname)) return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
   if (FIRST_RUN) {
-    const answered = firstRunAnswer(url, method);
+    const answered = firstRunAnswer(url, method, init);
     if (answered) return answered;
   }
   /* The lane review case answers these from the driver's own server, through
@@ -5481,6 +5511,9 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/api/resources") {
     const diskRole = new URLSearchParams(location.search).get("disk-role");
     const diskWarning = new URLSearchParams(location.search).get("disk-level") === "warning";
+    /* `memory=calm|swap|tmp`: RAM, swap and a tmpfs /tmp, quiet or over one warning line. */
+    const memory = new URLSearchParams(location.search).get("memory");
+    const swapUsed = (memory === "swap" ? 6 : 1) * 1024 ** 3;
     const host = (target: string, title: string, over: Record<string, unknown>) => ({
       target, panePid: 4_100, kind: "structured", path: null, engine: "claude", title, project: LEDGER, activity: "idle", lastActiveAt: iso(6 * 60 * MIN), cwd: "/repo/ledger",
       rssBytes: 600 * 1024 ** 2, swapBytes: 0, procCount: 3, model: "opus", role: "builder", conversationId: null, stage: "implement", ownership: "owned", seat: false, turnBusy: false, ...over,
@@ -5500,7 +5533,13 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           ? [{ kind: "state", bytes: 2.1 * 1024 ** 3, measuredAt: iso(0) }, { kind: "worktrees", bytes: 187 * 1024 ** 3, measuredAt: iso(0) }, { kind: "temp", bytes: 15 * 1024 ** 3, measuredAt: iso(0) }]
           : [{ kind: "worktrees", bytes: 90 * 1024 ** 3, measuredAt: iso(0) }],
       } } : {}),
-      system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed: 1024 ** 3, capturedAt: iso(30) },
+      system: { ramTotal: 32 * 1024 ** 3, ramAvailable: 9 * 1024 ** 3, swapTotal: 8 * 1024 ** 3, swapUsed, capturedAt: iso(30) },
+      ...(memory ? { memoryPressure: {
+        at: iso(0), swapWarnPercent: 50, tmpWarnBytes: 4e9,
+        episode: memory === "calm" ? null : iso(MIN), reasons: memory === "calm" ? [] : [memory],
+        ram: { usedBytes: 23 * 1024 ** 3, totalBytes: 32 * 1024 ** 3 }, swap: { usedBytes: swapUsed, totalBytes: 8 * 1024 ** 3 },
+        tmp: { usedBytes: (memory === "tmp" ? 5.5 : 1.2) * 1024 ** 3, totalBytes: 16 * 1024 ** 3, tmpfs: true, view: "host" },
+      } } : {}),
       sessions: RAIL ? [
         host("host-ledger-build", "Reconciling the ledger export", { activity: "live", lastActiveAt: iso(20), rssBytes: 1_400 * 1024 ** 2, turnBusy: true }),
         host("host-harbor-index", "Indexed the handbook", { project: "harbor-docs", cwd: "/repo/harbor", engine: "codex", model: "gpt-5.6", role: "reviewer", stage: "review" }),
